@@ -41,10 +41,22 @@ Current generated counts:
 npm run check
 ```
 
+On macOS:
+
+```bash
+npm run check
+```
+
 ## Regenerate From Live GitLab
 
 ```powershell
 node src/cli.mjs run --repo D:\deepbankV2 --source live-gitlab --gitlab-host gitlab.daikuan.qihoo.net --gitlab-project songrongxin/deepbankv2 --out D:\QbotTestAgent\outputs\deepbank-live-all-issues --state D:\QbotTestAgent\state\issue-monitor-snapshot-live-all.json
+```
+
+On macOS:
+
+```bash
+node src/cli.mjs run --repo /path/to/deepbankV2 --source live-gitlab --gitlab-host gitlab.daikuan.qihoo.net --gitlab-project songrongxin/deepbankv2 --out outputs/deepbank-live-all-issues --state state/issue-monitor-snapshot-live-all.json
 ```
 
 ## Monitor Issue Changes
@@ -52,3 +64,16 @@ node src/cli.mjs run --repo D:\deepbankV2 --source live-gitlab --gitlab-host git
 ```powershell
 node src/cli.mjs monitor --repo D:\deepbankV2 --source live-gitlab --gitlab-host gitlab.daikuan.qihoo.net --gitlab-project songrongxin/deepbankv2 --out D:\QbotTestAgent\outputs\monitor-live-check --state D:\QbotTestAgent\state\issue-monitor-snapshot-live-all.json
 ```
+
+On macOS:
+
+```bash
+node src/cli.mjs monitor --repo /path/to/deepbankV2 --source live-gitlab --gitlab-host gitlab.daikuan.qihoo.net --gitlab-project songrongxin/deepbankv2 --out outputs/monitor-live-check --state state/issue-monitor-snapshot-live-all.json
+```
+
+## Pre-Test Readiness
+
+- Confirm `npm run check` passes on the machine that will generate or review artifacts.
+- Confirm live GitLab reads are available before claiming current issue coverage.
+- Keep generated temp outputs, credentials, tokens, `.env` files, and `node_modules` out of commits.
+- If live GitLab is unavailable, report the run as blocked or degraded instead of reusing old snapshots as current data.
