@@ -1,0 +1,13 @@
+{
+  "name": "qbot-test-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local QBot / Deepbank v2 test agent team runner.",
+  "scripts": {
+    "check": "node --check src/cli.mjs && node test/smoke.mjs",
+    "run": "node src/cli.mjs run",
+    "monitor": "node src/cli.mjs monitor",
+    "generate": "node src/cli.mjs generate"
+  }
+}

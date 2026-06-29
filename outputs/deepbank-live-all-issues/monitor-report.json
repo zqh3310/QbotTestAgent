@@ -1,0 +1,20 @@
+{
+  "agent": "gitlab-issue-monitor",
+  "source_mode": "live-gitlab",
+  "source_timestamp": "2026-06-29T11:30:26.735Z",
+  "state_file": "D:\\QbotTestAgent\\state\\issue-monitor-snapshot-live-all.json",
+  "baseline_initialized": false,
+  "new_issues": [],
+  "changed_issues": [],
+  "closed_or_reopened_issues": [],
+  "removed_issues": [],
+  "module_impact": {},
+  "test_plan_decision": {
+    "required": false,
+    "reason": "No material issue delta detected.",
+    "recommended_agents": [
+      "issue-intelligence-analyst"
+    ]
+  },
+  "blockers": []
+}

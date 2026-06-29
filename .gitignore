@@ -1,0 +1,16 @@
+node_modules/
+package-lock.json
+
+# Keep only the reviewed final delivery package in git.
+outputs/*
+!outputs/deepbank-live-all-issues/
+!outputs/deepbank-live-all-issues/**
+
+# Keep only the live full-issue monitor baseline.
+state/*
+!state/issue-monitor-snapshot-live-all.json
+
+# Local probes and editor noise.
+*.log
+.DS_Store
+Thumbs.db

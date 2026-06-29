@@ -1,0 +1,2824 @@
+{
+  "generated_at": "2026-06-29T11:30:26.735Z",
+  "issue_count": 132,
+  "entries": {
+    "1": {
+      "iid": 1,
+      "title": "refactor(e2e): 拆分 e2e 支撑模块并收敛目录边界",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "kind/refactor",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T11:22:57.003Z",
+      "content_hash": "766cb2891f30478d",
+      "modules": [
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "2": {
+      "iid": 2,
+      "title": "design(repo): 建立 deepbankv2 的 GitLab 治理与 repo-managed hooks 基础设施",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T10:42:36.646Z",
+      "content_hash": "358efe139ee3fd0b",
+      "modules": [
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "3": {
+      "iid": 3,
+      "title": "Build unified Codex and Claude Code skill infrastructure",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/e2e",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T10:42:36.679Z",
+      "content_hash": "492cdfca55e48326",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "4": {
+      "iid": 4,
+      "title": "Design cross-agent issue/MR development skills for Codex and Claude Code",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T10:42:36.714Z",
+      "content_hash": "45da6f557bb5bc9c",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "5": {
+      "iid": 5,
+      "title": "release-http: agent turn never closes after assistant result",
+      "state": "closed",
+      "labels": [
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T10:46:59.746Z",
+      "content_hash": "62a21e49982f8491",
+      "modules": [
+        "assistant",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "6": {
+      "iid": 6,
+      "title": "Design issue-intake skill for cross-agent GitLab issue creation",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:05.021Z",
+      "content_hash": "b466ff8b92022509",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "7": {
+      "iid": 7,
+      "title": "Design issue-implement skill for issue-driven implementation",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:06.125Z",
+      "content_hash": "c489118adc76a78f",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "8": {
+      "iid": 8,
+      "title": "Design mr-delivery skill for GitLab merge request delivery",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:07.855Z",
+      "content_hash": "975b4e0a67f6affe",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "9": {
+      "iid": 9,
+      "title": "Design review-address skill for GitLab MR review feedback",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:09.577Z",
+      "content_hash": "4f8bfa9feec0c656",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "10": {
+      "iid": 10,
+      "title": "Design agent-governance-maintenance skill for context and GitLab workflow assets",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:11.039Z",
+      "content_hash": "67340d5faed2da4d",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "11": {
+      "iid": 11,
+      "title": "Harden agent context for multi-turn sessions and runtime boundaries",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:47.885Z",
+      "content_hash": "f1494d4a141db978",
+      "modules": [
+        "runtime",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "12": {
+      "iid": 12,
+      "title": "Build GitLab desktop release workflow and explicit release skill with stable/alpha artifact support",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/scripts",
+        "area/skills",
+        "kind/release",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:48.876Z",
+      "content_hash": "1d98e32e47da3b5e",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "13": {
+      "iid": 13,
+      "title": "Refine GitLab workflow skills with maintainer-grade issue/MR judgment rules",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:46:04.984Z",
+      "content_hash": "b4ae7f18d15c9729",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "14": {
+      "iid": 14,
+      "title": "Enforce resolved MR discussions before merge",
+      "state": "closed",
+      "labels": [
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:50.506Z",
+      "content_hash": "09e0727ec43852ac",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "15": {
+      "iid": 15,
+      "title": "接入标准 OAuth2 / Lingxi OAuth2 SSO，并完成组织信息落库绑定",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:51.984Z",
+      "content_hash": "307d80369c3ef893",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "16": {
+      "iid": 16,
+      "title": "Complete desktop release GitLab Release page integration for internal-first alpha/stable publish",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/release",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:52.719Z",
+      "content_hash": "5b3c03db68f849e3",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "17": {
+      "iid": 17,
+      "title": "design: 冻结 Deepbank vs Teams 的能力边界，删减 Teams 原生域重复实现",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/electron",
+        "area/preload",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:53.543Z",
+      "content_hash": "742ae02628cb610e",
+      "modules": [
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "18": {
+      "iid": 18,
+      "title": "云端 agent runtime 打通：单个 ADK runtime server pod 的项目任务远端执行链路",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:54.225Z",
+      "content_hash": "932b127669bae9da",
+      "modules": [
+        "runtime",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "19": {
+      "iid": 19,
+      "title": "release: remote-server-only desktop release 环境矩阵、客户端配置与发布隔离",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/scripts",
+        "area/server",
+        "kind/release",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:54.797Z",
+      "content_hash": "ab3021a4d61149ab",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "20": {
+      "iid": 20,
+      "title": "design: 建设独立 Deepbank remote control-plane server，集中 PG/API/配置与鉴权",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/scripts",
+        "area/server",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:55.417Z",
+      "content_hash": "9e6ed2a30c52d6d4",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "21": {
+      "iid": 21,
+      "title": "design: deepbankv2 agent runtime family 切换抽象，支持 Claude Code / Codex SDK",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:11.778Z",
+      "content_hash": "eb9376bbd441e6f3",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "22": {
+      "iid": 22,
+      "title": "feature: deepbankv2 以独立 Electron 进程嵌入 360Teams，替换 deepbank(v1) 入口",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/electron",
+        "area/preload",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-27T09:05:41.060Z",
+      "content_hash": "9f5ae87bf8142490",
+      "modules": [
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "23": {
+      "iid": 23,
+      "title": "design: migrate Config Center shared config to remote control-plane PG",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/e2e",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:56.923Z",
+      "content_hash": "7ba2ca39e56e118a",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "24": {
+      "iid": 24,
+      "title": "docs: align desktop-release skill with env-scoped remote release workflow",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/scripts",
+        "kind/docs",
+        "kind/release",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:57.490Z",
+      "content_hash": "25a214e5ff5a8a88",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "25": {
+      "iid": 25,
+      "title": "feature: 建设 k8s dev 集成环境，支持本地 Electron 访问远端依赖",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T09:01:31.914Z",
+      "content_hash": "bda10b8b27862943",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "26": {
+      "iid": 26,
+      "title": "release: provision live dev remote-control-plane descriptor for desktop release",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "kind/release",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:58.847Z",
+      "content_hash": "e4ad6ca4533e644c",
+      "modules": [
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "27": {
+      "iid": 27,
+      "title": "chore: tighten agent governance skill handoffs",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:59.376Z",
+      "content_hash": "5158dd559940dd6f",
+      "modules": [
+        "skills_mcp",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "28": {
+      "iid": 28,
+      "title": "docs: Deepbank v2 milestone 1 live progress tracker",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/repo",
+        "kind/docs",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:23:44.783Z",
+      "content_hash": "4244df7159170c03",
+      "modules": [
+        "context_governance"
+      ],
+      "material": false
+    },
+    "29": {
+      "iid": 29,
+      "title": "feature: 真实身份与 WS 鉴权",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/electron",
+        "area/preload",
+        "area/server",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:44:59.923Z",
+      "content_hash": "e12f33fec4807617",
+      "modules": [
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "30": {
+      "iid": 30,
+      "title": "feature: 平台 Anthropic / LLM 连接接入",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/preload",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:00.728Z",
+      "content_hash": "1c93b73c33231022",
+      "modules": [
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "31": {
+      "iid": 31,
+      "title": "feature: SkillHub 技能市场与 runtime 打通",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/preload",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:01.375Z",
+      "content_hash": "b35d72fc51dd6252",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "32": {
+      "iid": 32,
+      "title": "refactor: transcript 文件化存储，移除 sessions.messages 兼容层",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/server",
+        "area/test",
+        "kind/refactor",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:01.930Z",
+      "content_hash": "51873e5c6b209d0f",
+      "modules": [
+        "projects",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "33": {
+      "iid": 33,
+      "title": "feature: 项目 assets 同步与 workspace mirror",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/feature",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-28T04:15:38.490Z",
+      "content_hash": "5b98d2f69ff8d8d6",
+      "modules": [
+        "runtime",
+        "projects",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "34": {
+      "iid": 34,
+      "title": "feature: 自动化 / 知识闭环",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-28T18:27:38.190Z",
+      "content_hash": "ca70251929893f01",
+      "modules": [
+        "projects",
+        "automation",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "35": {
+      "iid": 35,
+      "title": "feature: 用户级资源隔离与项目成员权限",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/db",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:02.633Z",
+      "content_hash": "b2760a73868efce6",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "36": {
+      "iid": 36,
+      "title": "feature: QFIN 品牌化 Electron UI 适配与素材归档",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/electron",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:03.428Z",
+      "content_hash": "90a54980efad3c85",
+      "modules": [
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "37": {
+      "iid": 37,
+      "title": "Multica 当前私有化部署态说明（升级/改造基线）",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/selfhost",
+        "kind/docs",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:04.885Z",
+      "content_hash": "2436946642288146",
+      "modules": [
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "38": {
+      "iid": 38,
+      "title": "Strengthen issue skills with status label and MR checklist gates",
+      "state": "closed",
+      "labels": [
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:05.717Z",
+      "content_hash": "f48cdb813b42171f",
+      "modules": [
+        "skills_mcp"
+      ],
+      "material": true
+    },
+    "39": {
+      "iid": 39,
+      "title": "refactor: 去除业务 IPC fallback，统一本地开发为独立服务，并补 transport case matrix",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/server",
+        "kind/refactor",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:06.423Z",
+      "content_hash": "2e553a8575c25552",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "40": {
+      "iid": 40,
+      "title": "chore: refine desktop-release skill for dev-first env-scoped release workflow",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:07.023Z",
+      "content_hash": "3f67a23a5fb53394",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "41": {
+      "iid": 41,
+      "title": "design: 补齐 desktop-release 的 Windows 客户端构建 lane，默认仍走 dev-targeted env-scoped 流程",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:07.619Z",
+      "content_hash": "69815b1d2fc26978",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "42": {
+      "iid": 42,
+      "title": "Add electron-local-startup skill for local Electron bootstrap paths",
+      "state": "closed",
+      "labels": [
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:08.820Z",
+      "content_hash": "a6f9ea2d5f65591a",
+      "modules": [
+        "skills_mcp",
+        "uiux"
+      ],
+      "material": true
+    },
+    "43": {
+      "iid": 43,
+      "title": "design: agent-friendly Deepbank Electron UI/UX audit framework",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/scripts",
+        "area/test",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:09.413Z",
+      "content_hash": "3a97a06b2f850b14",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "44": {
+      "iid": 44,
+      "title": "design: Deepbank 横向治理 skill 体系（架构漂移审计 / 产品方向审计）",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:10.195Z",
+      "content_hash": "8e5461403a9206d5",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "45": {
+      "iid": 45,
+      "title": "release: 补齐 Windows distribution lane，与 mac 双 profile 对齐",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/release",
+        "priority/high",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-06-28T09:07:18.170Z",
+      "content_hash": "dfb552ccc8fcfaeb",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "46": {
+      "iid": 46,
+      "title": "enhancement: make workflow skills issue-ready with explicit enhancement routing and stable glab lookups",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/repo",
+        "area/skills",
+        "kind/enhancement",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:10.786Z",
+      "content_hash": "64f8ee5944e3b6de",
+      "modules": [
+        "skills_mcp",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "47": {
+      "iid": 47,
+      "title": "release: dev-default unsigned functional desktop release for mac and Windows",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/release",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:12.673Z",
+      "content_hash": "0ca5fe3d84a6ca7a",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "48": {
+      "iid": 48,
+      "title": "design: institutionalize context and skill governance for long-lived agentic operation",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T03:32:23.871Z",
+      "content_hash": "76148d449b366f40",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "49": {
+      "iid": 49,
+      "title": "design: codify expected-state contracts and human-in-the-loop mismatch handling across governance skills",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:13.229Z",
+      "content_hash": "8ad2b5b663343c2f",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "50": {
+      "iid": 50,
+      "title": "design(test): establish the test-regression skill family for Codex and Claude Code",
+      "state": "closed",
+      "labels": [
+        "area/repo",
+        "area/skills",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:13.742Z",
+      "content_hash": "4137fb81640bcf8a",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "51": {
+      "iid": 51,
+      "title": "外部依赖：调整 GitLab 服务端上传限制，避免 mac/win 安装包被拆成 part 包",
+      "state": "opened",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "dependency/external",
+        "kind/external-dependency",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-29T08:55:36.282Z",
+      "content_hash": "c3b746daea251deb",
+      "modules": [
+        "projects",
+        "e2e_release",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "52": {
+      "iid": 52,
+      "title": "test(uiux): Deepbank Electron 主功能并行 UI/UX 回归与修复编排",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:14.244Z",
+      "content_hash": "bc76a021205fa6a0",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "53": {
+      "iid": 53,
+      "title": "test(uiux/artifact-panel): 成果区与文件预览 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/ui",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:14.804Z",
+      "content_hash": "87e18cf4ed4a7824",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "material": true
+    },
+    "54": {
+      "iid": 54,
+      "title": "test(uiux/assistant-thread): assistant thread 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:15.334Z",
+      "content_hash": "e9f0d4786c38a269",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "55": {
+      "iid": 55,
+      "title": "test(uiux/projects): 项目、workspace、成员、任务结果 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/projects",
+        "area/ui",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:15.840Z",
+      "content_hash": "3bc1d15a829b2729",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "56": {
+      "iid": 56,
+      "title": "test(uiux/auth-shell): auth shell 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/scripts",
+        "area/ui",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:16.367Z",
+      "content_hash": "16d3d33afe11354b",
+      "modules": [
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "57": {
+      "iid": 57,
+      "title": "test(uiux/sidebar-nav): 侧栏导航、会话与工作区入口 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:16.937Z",
+      "content_hash": "e8fc9ebd456dbef9",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "58": {
+      "iid": 58,
+      "title": "test(uiux/experts-skills): 专家、技能市场与安装/召唤 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:17.538Z",
+      "content_hash": "234cd33fe4c5c8cc",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "59": {
+      "iid": 59,
+      "title": "test(uiux/experts-skills): 专家、技能 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:18.096Z",
+      "content_hash": "cc1b540ca28fc186",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "60": {
+      "iid": 60,
+      "title": "chore: add external dependency issue workflow",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/skills",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:18.634Z",
+      "content_hash": "c9dd777c33629e06",
+      "modules": [
+        "skills_mcp",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "61": {
+      "iid": 61,
+      "title": "chore: align agent context and product docs with milestone final-state contract",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "kind/chore",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:19.176Z",
+      "content_hash": "9ae6998624947d88",
+      "modules": [
+        "context_governance"
+      ],
+      "material": true
+    },
+    "62": {
+      "iid": 62,
+      "title": "test(uiux/ask-modal): AskUserQuestion 交互 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:19.880Z",
+      "content_hash": "ff630dd44446c082",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "63": {
+      "iid": 63,
+      "title": "test(e2e/local-real): fail fast when ADK source prerequisites are missing",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:20.461Z",
+      "content_hash": "4eadc2edf8bf95a0",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "64": {
+      "iid": 64,
+      "title": "design: Lingxi OAuth2 三方资源聚合父项（LLM Connections / MCPHub / SkillHub）",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/preload",
+        "area/repo",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:22:48.949Z",
+      "content_hash": "c8ea954f41a8ffb2",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "65": {
+      "iid": 65,
+      "title": "feature: remote control server 聚合 Deepbank 平台 LLM connections",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T11:22:50.528Z",
+      "content_hash": "9f7ea7f1e5093dbc",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux"
+      ],
+      "material": true
+    },
+    "66": {
+      "iid": 66,
+      "title": "外部依赖: Deepbank 平台 LLM connections API 支持 Lingxi OAuth2",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/server",
+        "dependency/external",
+        "kind/external-dependency",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:26:12.364Z",
+      "content_hash": "ead125436a6eaea7",
+      "modules": [
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "67": {
+      "iid": 67,
+      "title": "feature: remote control server 聚合 MCPHub 用户 MCP 元信息",
+      "state": "opened",
+      "labels": [
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:22:55.231Z",
+      "content_hash": "eca267bd9edab3c7",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux"
+      ],
+      "material": true
+    },
+    "68": {
+      "iid": 68,
+      "title": "外部依赖: MCPHub 用户 MCP 元信息 API 支持 Lingxi OAuth2",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/server",
+        "dependency/external",
+        "kind/external-dependency",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:26:13.774Z",
+      "content_hash": "e42baff23be57c8a",
+      "modules": [
+        "skills_mcp",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "69": {
+      "iid": 69,
+      "title": "feature: remote control server 聚合 SkillHub 用户技能资源",
+      "state": "opened",
+      "labels": [
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:22:57.658Z",
+      "content_hash": "24744c18cd271715",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "uiux"
+      ],
+      "material": true
+    },
+    "70": {
+      "iid": 70,
+      "title": "外部依赖: SkillHub 用户技能资源 API 支持 Lingxi OAuth2",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/server",
+        "area/skills",
+        "dependency/external",
+        "kind/external-dependency",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:26:14.922Z",
+      "content_hash": "a25e9eb62cafc326",
+      "modules": [
+        "skills_mcp",
+        "compliance",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "71": {
+      "iid": 71,
+      "title": "test(uiux/config-center): 配置中心、LLM/provider、角色/场景 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:22.067Z",
+      "content_hash": "7071843aa1c05eee",
+      "modules": [
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "72": {
+      "iid": 72,
+      "title": "bug(uiux/sidebar-brand): logo 与展开侧栏对比度漏检和修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T05:04:35.272Z",
+      "content_hash": "4cdb6bbdbf3d7c7f",
+      "modules": [
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "73": {
+      "iid": 73,
+      "title": "chore: automate milestone #1 tracker maintenance and note compression",
+      "state": "closed",
+      "labels": [
+        "area/repo",
+        "area/scripts",
+        "kind/chore",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:57:29.827Z",
+      "content_hash": "4974150d4e9423ef",
+      "modules": [
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "74": {
+      "iid": 74,
+      "title": "test(uiux/cross-sweep): 跨 viewport / local-release 验证扫尾回归",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:23.727Z",
+      "content_hash": "0e4fcef5e274776b",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "75": {
+      "iid": 75,
+      "title": "test(uiux/assistant-config): 助手设置 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:24.456Z",
+      "content_hash": "2036ccf1d7efac63",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "76": {
+      "iid": 76,
+      "title": "test(uiux/connectors): MCP / connectors 配置 回归与修复",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:25.100Z",
+      "content_hash": "805940417f0a2a16",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "77": {
+      "iid": 77,
+      "title": "bug(uiux/cross-sweep-residual): merged lanes still emit artifact/thread/skills findings",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/skills",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:25.670Z",
+      "content_hash": "d0ea73c277db428b",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "78": {
+      "iid": 78,
+      "title": "design(uiux): Deepbank Electron 视觉系统统一与设计治理编排",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/repo",
+        "area/skills",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T10:57:45.857Z",
+      "content_hash": "659a1949a039fe27",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "79": {
+      "iid": 79,
+      "title": "design(uiux/governance): 视觉审查 skill、issue-intake 与 GitLab 契约",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/skills",
+        "kind/design",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:26.162Z",
+      "content_hash": "454a01142c4d8e9d",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "80": {
+      "iid": 80,
+      "title": "enhancement(uiux/foundation): 主题 token、字体、色板与层级语义统一",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-28T13:46:16.801Z",
+      "content_hash": "6adc6379560b95dc",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "material": true
+    },
+    "81": {
+      "iid": 81,
+      "title": "enhancement(uiux/primitives): 共享组件原语与状态表达标准化",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-28T13:46:18.096Z",
+      "content_hash": "c2b7caba42b54211",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "material": true
+    },
+    "82": {
+      "iid": 82,
+      "title": "enhancement(uiux/app-shell): 登录壳、侧栏、状态条与全局骨架统一",
+      "state": "opened",
+      "labels": [
+        "area/electron",
+        "area/ui",
+        "kind/enhancement",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T10:57:45.825Z",
+      "content_hash": "cdec2a4f47af2044",
+      "modules": [
+        "uiux"
+      ],
+      "material": true
+    },
+    "83": {
+      "iid": 83,
+      "title": "enhancement(uiux/assistant-workbench): thread、composer、artifact、AskUserQuestion 统一",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/ui",
+        "kind/enhancement",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T08:05:17.999Z",
+      "content_hash": "27c18e636d17fc32",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "material": true
+    },
+    "84": {
+      "iid": 84,
+      "title": "enhancement(uiux/projects-workspace): 项目列表与 workspace 视觉体系统一",
+      "state": "opened",
+      "labels": [
+        "area/projects",
+        "area/ui",
+        "kind/enhancement",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-28T18:00:07.280Z",
+      "content_hash": "032a7787afaa7465",
+      "modules": [
+        "projects",
+        "uiux"
+      ],
+      "material": true
+    },
+    "85": {
+      "iid": 85,
+      "title": "enhancement(uiux/experts-skills): 专家与技能市场视觉体系统一",
+      "state": "opened",
+      "labels": [
+        "area/skills",
+        "area/ui",
+        "kind/enhancement",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T10:42:36.809Z",
+      "content_hash": "ca0ffa4fce27644c",
+      "modules": [
+        "skills_mcp",
+        "uiux"
+      ],
+      "material": true
+    },
+    "86": {
+      "iid": 86,
+      "title": "enhancement(uiux/config-surfaces): AssistantConfig、ConfigCenter、Connectors 统一",
+      "state": "opened",
+      "labels": [
+        "area/skills",
+        "area/ui",
+        "kind/enhancement",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T03:32:23.782Z",
+      "content_hash": "0b869d0e91a78164",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "uiux"
+      ],
+      "material": true
+    },
+    "87": {
+      "iid": 87,
+      "title": "test(uiux/audit-convergence): 可访问性残差与审计误报治理",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T08:05:17.904Z",
+      "content_hash": "203b015dac3b8caa",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "88": {
+      "iid": 88,
+      "title": "refactor(runtime): conditionally retire Codex OpenAI-compatible protocol proxy",
+      "state": "opened",
+      "labels": [
+        "area/electron",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/refactor",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T11:23:00.570Z",
+      "content_hash": "923c184e5e3d8cd7",
+      "modules": [
+        "runtime",
+        "uiux"
+      ],
+      "material": true
+    },
+    "89": {
+      "iid": 89,
+      "title": "bug(release/mac): packaged DMG misses Claude darwin binary and expert summon opens broken chat layout",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/scripts",
+        "area/skills",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:26.705Z",
+      "content_hash": "a621313c3960411d",
+      "modules": [
+        "assistant",
+        "runtime",
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "90": {
+      "iid": 90,
+      "title": "feature(uiux/assets): 基于 assets/lib/ui 重建组件体系与主题系统",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:27.243Z",
+      "content_hash": "05c7fa37ad2ef48d",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "91": {
+      "iid": 91,
+      "title": "bug(remote-runtime): keep raw ADK artifacts out of chat transcripts",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/bug",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T13:45:27.855Z",
+      "content_hash": "ee6f869fe4ae27ec",
+      "modules": [
+        "assistant",
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "92": {
+      "iid": 92,
+      "title": "design(projects): orchestrate GitLab repo-based project module productization",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-06-29T10:42:38.971Z",
+      "content_hash": "8eb868824dd7f378",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "93": {
+      "iid": 93,
+      "title": "feature(projects/gitlab): define GitLab-backed project domain model and API contract",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/preload",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T19:27:01.344Z",
+      "content_hash": "875d80fb4eb087c8",
+      "modules": [
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "94": {
+      "iid": 94,
+      "title": "feature(projects/gitlab): implement GitLab repo/file/branch/MR adapter and .deepbank/project.yaml",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T19:27:01.374Z",
+      "content_hash": "063b992d7a89ffce",
+      "modules": [
+        "runtime",
+        "projects",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "95": {
+      "iid": 95,
+      "title": "feature(projects/gitlab): map plans, activity, and members to GitLab issues/events/members",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T19:27:01.407Z",
+      "content_hash": "c2aac90201d121a9",
+      "modules": [
+        "projects",
+        "uiux"
+      ],
+      "material": true
+    },
+    "96": {
+      "iid": 96,
+      "title": "feature(runtime/projects): provision project runtimes with ADK workspace repos",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T19:27:01.434Z",
+      "content_hash": "ad926e94afd77588",
+      "modules": [
+        "runtime",
+        "projects",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "97": {
+      "iid": 97,
+      "title": "feature(skills/projects): materialize repo-owned Claude/Codex skills and MCP config",
+      "state": "closed",
+      "labels": [
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T11:22:49.759Z",
+      "content_hash": "fe38d38d4c6af8fa",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects"
+      ],
+      "material": true
+    },
+    "98": {
+      "iid": 98,
+      "title": "enhancement(ui/projects): build GitLab-backed project workbench views and actions",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/enhancement",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T19:27:01.473Z",
+      "content_hash": "0b86de1a0e878a61",
+      "modules": [
+        "assistant",
+        "projects",
+        "uiux"
+      ],
+      "material": true
+    },
+    "99": {
+      "iid": 99,
+      "title": "external(projects/gitlab): support Lingxi OAuth2 to GitLab token exchange",
+      "state": "opened",
+      "labels": [
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "dependency/external",
+        "kind/external-dependency",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T11:26:17.118Z",
+      "content_hash": "475afadd6c9131da",
+      "modules": [
+        "runtime",
+        "projects",
+        "compliance"
+      ],
+      "material": true
+    },
+    "100": {
+      "iid": 100,
+      "title": "test(projects/gitlab): cover GitLab-backed project productization with contract/e2e/state validation",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/test",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T09:53:17.270Z",
+      "content_hash": "2006ed0c657fad23",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "101": {
+      "iid": 101,
+      "title": "test(runtime-features): build Claude Code and Codex feature-regression matrix",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T06:10:25.011Z",
+      "content_hash": "691501dd177f943f",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "102": {
+      "iid": 102,
+      "title": "test(runtime-features/surface): extract Claude Code and Codex SDK feature surfaces",
+      "state": "closed",
+      "labels": [
+        "area/runtime",
+        "area/scripts",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:11.579Z",
+      "content_hash": "8bf06826e44fe28f",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "103": {
+      "iid": 103,
+      "title": "test(runtime-features/contracts): add raw-to-Deepbank normalization fixture tests",
+      "state": "closed",
+      "labels": [
+        "area/runtime",
+        "area/server",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:11.609Z",
+      "content_hash": "d3e9c68927d22d9e",
+      "modules": [
+        "runtime"
+      ],
+      "material": true
+    },
+    "104": {
+      "iid": 104,
+      "title": "test(runtime-features/claude-code): cover AskUserQuestion, tools, permissions, hooks, subagents",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/server",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:12.118Z",
+      "content_hash": "42e7080d896763a6",
+      "modules": [
+        "assistant",
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "105": {
+      "iid": 105,
+      "title": "test(runtime-features/codex): cover streamed SDK items, structured output, MCP, approvals, subagents",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/server",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T23:01:52.733Z",
+      "content_hash": "add57ed8da0b23b1",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "106": {
+      "iid": 106,
+      "title": "test(runtime-features/harness): add controlled prompt case registry and raw capture artifacts",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:11.693Z",
+      "content_hash": "bcb368c205ca2099",
+      "modules": [
+        "assistant",
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "107": {
+      "iid": 107,
+      "title": "test(runtime-features/report): add coverage matrix and upgrade drift report",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "kind/test",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:11.741Z",
+      "content_hash": "394b1caadb7063f7",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "108": {
+      "iid": 108,
+      "title": "feature(release): establish qbot desktop version contract",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/scripts",
+        "area/ui",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T10:04:06.315Z",
+      "content_hash": "8f1515a5183a4e2a",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "109": {
+      "iid": 109,
+      "title": "enhancement(uiux/auth): converge Lingxi OAuth2 login shell and audit coverage",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T18:49:12.601Z",
+      "content_hash": "f9b8fb3fc3f74f5d",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "compliance"
+      ],
+      "material": true
+    },
+    "110": {
+      "iid": 110,
+      "title": "enhancement(runtime): harden Codex OpenAI-compatible Responses proxy",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T11:23:01.922Z",
+      "content_hash": "7313735eb7b61162",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "111": {
+      "iid": 111,
+      "title": "bug(ui/assistant): correct chat role alignment and Qbot avatar ownership",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T16:05:24.121Z",
+      "content_hash": "9bcc09689e626b80",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "112": {
+      "iid": 112,
+      "title": "bug(assistant): keep global assistant chat on personal local runtime",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/e2e",
+        "area/projects",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T16:05:24.059Z",
+      "content_hash": "997f1910c87e9c8e",
+      "modules": [
+        "assistant",
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "113": {
+      "iid": 113,
+      "title": "enhancement(uiux/qbot-workbench): soften boundary hierarchy and composer chrome",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-28T17:58:34.746Z",
+      "content_hash": "b60764abd801a2e2",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "114": {
+      "iid": 114,
+      "title": "bug(qbot): keep chat artifact panel free of runtime internals",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-28T18:52:34.842Z",
+      "content_hash": "d4cc9819115e1dfe",
+      "modules": [
+        "assistant",
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "115": {
+      "iid": 115,
+      "title": "feature(projects/automation): deliver GitLab-backed project-internal automation",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/docs",
+        "area/e2e",
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T08:52:06.632Z",
+      "content_hash": "ef2a3175a200d71c",
+      "modules": [
+        "runtime",
+        "projects",
+        "automation",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "116": {
+      "iid": 116,
+      "title": "test(runtime/codex): run qbot real-runtime core capability regression",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T01:10:45.610Z",
+      "content_hash": "34690c1726944907",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "117": {
+      "iid": 117,
+      "title": "test(runtime/claude-code): run qbot real-runtime core capability regression",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T01:13:31.519Z",
+      "content_hash": "08196b67bcd2f1ef",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "118": {
+      "iid": 118,
+      "title": "feature(projects): replace legacy project flows with repo-backed project CRUD and templates",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/preload",
+        "area/projects",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-29T11:10:47.321Z",
+      "content_hash": "cd7d73bf2989800f",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "119": {
+      "iid": 119,
+      "title": "Composer add-attachment affordance is too quiet and uiux-audit misses it",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T08:05:18.103Z",
+      "content_hash": "f01a4e8de2d42d2c",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "120": {
+      "iid": 120,
+      "title": "design(runtime): 合规档位（M1–M4）驱动运行时/模型选择，与任务场景解耦",
+      "state": "opened",
+      "labels": [
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/design"
+      ],
+      "updated_at": "2026-06-29T10:46:59.874Z",
+      "content_hash": "119931b5df8440f8",
+      "modules": [
+        "runtime",
+        "uiux",
+        "compliance"
+      ],
+      "material": true
+    },
+    "121": {
+      "iid": 121,
+      "title": "enhancement(uiux/app-shell): 精简侧栏导航（仅留助理配置）与品牌头部",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/enhancement",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-29T10:57:45.794Z",
+      "content_hash": "d22eaa3edd1a56fd",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "122": {
+      "iid": 122,
+      "title": "bug(e2e): macOS 下 e2e:local 失败——宿主 seed 本地 SQLite 与 docker 服务端不可靠共享",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/server",
+        "kind/bug"
+      ],
+      "updated_at": "2026-06-29T11:07:23.262Z",
+      "content_hash": "1ac422e4e0a29bf8",
+      "modules": [
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "123": {
+      "iid": 123,
+      "title": "release: 建设隔离干净的 UAT 环境并启用 desktop-release uat",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/db",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/skills",
+        "kind/release",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:27:35.138Z",
+      "content_hash": "2c526998d0b110d6",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "124": {
+      "iid": 124,
+      "title": "design(experts): 专家板块后台改版 — server 端目录 + 归属/可见性/审核/分类 + Meta 专家 + skill 绑定",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/db",
+        "area/server",
+        "area/skills",
+        "kind/design",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-29T11:05:10.191Z",
+      "content_hash": "a9579e959480f44f",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "125": {
+      "iid": 125,
+      "title": "feature(experts): 子#1 数据地基 — experts/categories/admin/expert_skills 表 + skill visibility + seed 机制",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/scripts",
+        "area/server",
+        "kind/feature",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-06-29T11:05:10.228Z",
+      "content_hash": "de003adb6cfc71e8",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "126": {
+      "iid": 126,
+      "title": "feature(experts): 子#2 Catalog API — 四分区 + 可见性过滤",
+      "state": "opened",
+      "labels": [
+        "area/server",
+        "kind/feature",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T10:43:41.089Z",
+      "content_hash": "3b1a689eef1cd2fb",
+      "modules": [
+        "context_governance"
+      ],
+      "material": true
+    },
+    "127": {
+      "iid": 127,
+      "title": "feature(experts): 子#3 审核闭环 — 发布申请 + 助理配置 admin 审核位",
+      "state": "opened",
+      "labels": [
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T10:43:42.406Z",
+      "content_hash": "0cd94cebc4c2c21e",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "128": {
+      "iid": 128,
+      "title": "feature(experts): 子#4 Meta 专家 — 创建专家的专家 + 产私有 skill",
+      "state": "opened",
+      "labels": [
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/feature",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T10:46:59.843Z",
+      "content_hash": "a75ec5be7bb5d2ea",
+      "modules": [
+        "skills_mcp",
+        "uiux"
+      ],
+      "material": true
+    },
+    "129": {
+      "iid": 129,
+      "title": "chore(experts): 生产初始专家清单(待产品输入,不阻塞工程)",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "kind/chore",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T10:42:44.795Z",
+      "content_hash": "b9401290c629247f",
+      "modules": [
+        "skills_mcp",
+        "context_governance"
+      ],
+      "material": true
+    },
+    "130": {
+      "iid": 130,
+      "title": "feature(experts/runtime): 子#5 运行时注入 — 专家正文+绑定 skill 从 PG 注入(Claude/Codex 双路径)",
+      "state": "opened",
+      "labels": [
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T10:46:59.320Z",
+      "content_hash": "132f306221e44c0f",
+      "modules": [
+        "runtime",
+        "skills_mcp"
+      ],
+      "material": true
+    },
+    "131": {
+      "iid": 131,
+      "title": "enhancement(uiux/app-shell): 左下用户入口统一设置模块并新增检查更新版本展示",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/enhancement",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-29T11:08:38.539Z",
+      "content_hash": "b413becc56e24832",
+      "modules": [
+        "uiux",
+        "e2e_release"
+      ],
+      "material": true
+    },
+    "132": {
+      "iid": 132,
+      "title": "design(skills): market_skills 取数策略 — 快照 SkillHub vs 实时读 vs TTL 缓存(待拍)",
+      "state": "opened",
+      "labels": [
+        "area/skills",
+        "kind/design",
+        "status/blocked"
+      ],
+      "updated_at": "2026-06-29T11:23:03.162Z",
+      "content_hash": "46848b32b8841911",
+      "modules": [
+        "skills_mcp"
+      ],
+      "material": true
+    }
+  }
+}
