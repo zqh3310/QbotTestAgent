@@ -1,41 +1,40 @@
 ---
 name: defect-triage-issue-reporter
-description: Subagent skill for classifying QBot test findings as bugs, optimizations, external dependencies, test gaps, or open questions, and drafting GitLab issue handoffs with evidence, labels, reproduction, acceptance, and validation criteria. Use when test results or design review need issue-ready conclusions.
+description: Subagent skill for turning QBot test failures, automation failures, evidence gaps, blockers, and observed regressions into bug/optimization/external-dependency classifications, GitLab issue drafts, and optional explicitly approved GitLab issue creation handoff.
 ---
 
 # Defect Triage Issue Reporter
 
-Turn findings into reviewable bug/optimization/test-gap/external-dependency conclusions.
+Own the defect handoff loop after generated cases, Codex automation flows, or manual review find a problem.
 
 ## Read First
 
 - `D:\QbotTestAgent\references\output-contracts.md`
-- `D:\deepbankV2\.gitlab\README.md` when issue labels or templates matter.
-- Existing issue matrix from `issue-intelligence-analyst`.
-- Evidence packets from relevant subagents.
+- Current `automation-execution-report.json` when available.
+- Current `bug-issue-drafts.json` when available.
+- Current functional case and automation flow source for traceability.
 
 ## Responsibilities
 
-- Classify each finding as bug, optimization, external dependency, test gap, design question, or no-action.
-- Separate expected behavior from actual observed behavior.
-- Check for duplicates or related existing issues using local exports first.
-- Draft issue-ready content: title, classification, scope, non-goals, reproduction, expected/actual, evidence, negative cases, acceptance, validation commands, labels.
-- Identify when remote issue creation should be proposed to the main agent.
-- Preserve uncertainty: suspected root cause is not fact.
+- Classify findings as `bug`, `optimization`, `external-dependency`, `test-gap`, or `question`.
+- Draft GitLab-ready issue content with title, labels, fingerprint, expected behavior, actual behavior, reproduction, evidence, impact, and recommended action.
+- Keep one draft per actionable root cause; do not duplicate issues for the same fingerprint.
+- Treat automation `failed` results and failed assertion checks as issue-draft candidates.
+- Treat `blocked` results as blocker/dependency follow-up only when they are not simple local environment or OS mismatch.
+- Preserve traceability to `flow_id`, `case_id`, suite, OS, logs, and evidence paths.
+- Redact tokens, env values, local private paths when they are not needed for reproduction, raw transcripts, and secret-like strings.
+- Return an explicit creation decision: draft-only, skipped, existing issue found, created, partial, or failed.
 
 ## Boundaries
 
-- Do not create remote GitLab issues without explicit user approval.
-- Do not overstate a finding when evidence is missing.
-- Do not classify a missing external dependency as a product bug unless the product mishandles that missing state.
-- Do not hide optimization or UX suggestions inside bug labels.
-- Do not include secrets, raw tokens, private transcripts, or sensitive logs in issue drafts.
+- Do not create remote GitLab issues unless the main agent/user explicitly requested creation and provided confirmation.
+- Do not mark a finding as product bug when evidence only proves a missing local prerequisite.
+- Do not include secret values or raw private transcript content in issue descriptions.
+- Do not close or update existing GitLab issues unless explicitly requested.
 
 ## Acceptance Standard
 
-- Every classification has a reason and confidence level.
-- Every bug draft has reproduction or a clear not-reproduced reason.
-- Duplicate/related issue evidence is included.
-- Validation commands are realistic for the affected area.
-- The handoff can be reviewed by a maintainer before remote creation.
-
+- Every failed automation run has either a bug issue draft, an explicit non-bug classification, or a blocker reason.
+- Every draft has a stable fingerprint for dedupe.
+- Remote creation, when enabled, reports created/existing/failed counts and issue URLs.
+- Final handoff states whether GitLab was mutated or only local drafts were produced.

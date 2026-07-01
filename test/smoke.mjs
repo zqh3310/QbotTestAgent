@@ -23,6 +23,7 @@ fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
     'runtime-features:test': 'node -e "process.exit(0)"',
     'uiux:audit': 'node -e "process.exit(0)"',
     'skills:check': 'node -e "process.exit(0)"',
+    'fail:test': 'node -e "console.error(\\"simulated failure\\"); process.exit(7)"',
   },
 }, null, 2), 'utf8');
 fs.writeFileSync(path.join(issuesDir, 'issues_list.json'), JSON.stringify([
@@ -123,6 +124,57 @@ execFileSync(process.execPath, [
 const automationReport = JSON.parse(fs.readFileSync(path.join(automationOut, 'automation-execution-report.json'), 'utf8'));
 if (automationReport.doctor.status !== 'pass') throw new Error(`Automation doctor should pass: ${automationReport.doctor.findings.join('; ')}`);
 if (!fs.existsSync(path.join(automationOut, 'automation-execution-report.md'))) throw new Error('Missing automation execution markdown report.');
+
+const failingFlows = path.join(temp, 'failing-flows.json');
+const flowOs = process.platform === 'win32' ? 'Windows' : 'macOS';
+const failCommand = flowOs === 'Windows'
+  ? 'Set-Location $env:DEEPBANK_REPO\nnpm run fail:test'
+  : 'cd "$DEEPBANK_REPO"\nnpm run fail:test';
+fs.writeFileSync(failingFlows, JSON.stringify([
+  {
+    flow_id: 'QBOT-CODEX-FAIL-001',
+    linked_case_ids: 'QBOT-FUNC-FAIL-001',
+    os: flowOs,
+    automation_level: 'A1',
+    execution_scope: 'local_mock_or_fixture',
+    mode: 'shell',
+    required_tools: 'Node.js 22+; npm',
+    required_env: 'DEEPBANK_REPO; DEEPBANK_TEST_HOME',
+    setup_steps: 'Use the smoke test fake repo.',
+    codex_prompt_or_command: failCommand,
+    ui_steps: 'No UI operation.',
+    assertions: 'The simulated command should pass; this smoke fixture intentionally fails to verify bug issue drafts.',
+    blackbox_assertions: 'No secret value should appear in output.',
+    evidence_paths: 'test-results/**',
+    timeout_minutes: '1',
+    long_running_controls: 'Fail fast.',
+    cleanup: 'No cleanup required.',
+    skip_or_block_rules: 'Missing repo is blocked.',
+  },
+], null, 2), 'utf8');
+const failOut = path.join(temp, 'automation-failed');
+let failedRunClosed = false;
+try {
+  execFileSync(process.execPath, [
+    path.join(root, 'src', 'cli.mjs'),
+    'automation-run',
+    '--repo', repo,
+    '--flows', failingFlows,
+    '--out', failOut,
+    '--suite', 'daily',
+  ], { stdio: 'pipe' });
+} catch {
+  failedRunClosed = true;
+}
+if (!failedRunClosed) throw new Error('Expected failing automation flow to exit non-zero.');
+const failedReport = JSON.parse(fs.readFileSync(path.join(failOut, 'automation-execution-report.json'), 'utf8'));
+if (failedReport.status !== 'failed') throw new Error(`Expected failed automation report, got ${failedReport.status}`);
+if (failedReport.issue_loop?.draft_count !== 1) throw new Error('Expected one bug issue draft from failed automation run.');
+const drafts = JSON.parse(fs.readFileSync(path.join(failOut, 'bug-issue-drafts.json'), 'utf8'));
+if (!drafts[0]?.fingerprint || !drafts[0]?.description.includes('simulated failure')) {
+  throw new Error('Bug issue draft should include a fingerprint and redacted failure evidence.');
+}
+if (!fs.existsSync(path.join(failOut, 'bug-issue-drafts.md'))) throw new Error('Missing bug issue draft markdown.');
 
 const badRepo = path.join(temp, 'bad-repo');
 fs.mkdirSync(path.join(badRepo, 'issues'), { recursive: true });

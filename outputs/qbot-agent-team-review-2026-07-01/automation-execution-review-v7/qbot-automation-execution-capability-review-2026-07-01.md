@@ -140,10 +140,30 @@ npm run automation:run -- --repo D:\deepbankV2 --flows D:\QbotTestAgent\outputs\
 2. Qbot 源码目前有 Windows release artifact verify 能力，但没有等价的 `e2e:release:win` 安装启动 UI 回归脚本。Windows release 当前覆盖到 `release:prepare/build/verify --platform=win`，建议后续 Qbot 项目补一个 Windows installer launch smoke。
 3. A2/A3 真实依赖必须提供 env 后才能实跑；缺 env 时应保持 blocked，不能降级成 pass。
 
+## Bug 闭环补充
+
+已补齐“自动化发现 bug 后如何闭环”的能力：
+
+- `automation-run` 失败时自动生成本地 GitLab issue 草稿：`bug-issue-drafts.json`、`bug-issue-drafts.md`
+- 每个草稿包含稳定 fingerprint、labels、flow/case 追踪、期望行为、实际失败、断言检查、复现命令、stdout/stderr 尾部和建议动作
+- 默认不直接创建远端 GitLab issue，避免误报污染项目
+- 只有显式传入 `--create-gitlab-issues --confirm-create-issues` 且提供 `GITLAB_TOKEN` / `GLAB_TOKEN` / `PRIVATE_TOKEN` 时才会 POST 到 GitLab
+- 创建前会按 fingerprint 查重，已存在的 issue 不重复创建
+- OS mismatch、缺 env、缺本机前置条件等 blocked 状态不会自动当作产品 bug 提交
+
+已用失败 flow 验证：
+
+`/Users/qifu/Documents/QbotTestAgent/outputs/qbot-agent-team-review-2026-07-01/bug-loop-demo-failed-run/bug-issue-drafts.md`
+
+- 失败状态：`failed`
+- issue loop：`drafted`
+- draft count：1
+- creation report：默认 `skipped`
+
 ## 专家判断
 
-本轮之后，QbotTestAgent 的自动化能力从“计划可读”提升到了“可执行、可 doctor、可 dry-run、可实跑一部分本地 flow”。对开发移交后的执行方案，建议固定为：
+本轮之后，QbotTestAgent 的自动化能力从“计划可读”提升到了“可执行、可 doctor、可 dry-run、可实跑一部分本地 flow，并能将失败转成可追踪 issue 草稿”。对开发移交后的执行方案，建议固定为：
 
-`issue-intelligence -> functional cases -> codex automation flows -> automation-doctor -> automation-run -> execution report`
+`issue-intelligence -> functional cases -> codex automation flows -> automation-doctor -> automation-run -> execution report -> bug issue drafts -> optional GitLab issue creation -> next monitor round`
 
 底层自动化继续复用 Qbot 源码自己的 Playwright/Electron/Node wrapper。这样最贴近项目实际，也最利于开发团队维护。

@@ -86,6 +86,14 @@ Use `--dry-run` to generate scripts and reports without running product tests. E
 
 Each execution result includes an assertion checklist. The runner checks command exit code, timeout, case assertion carry-through, black-box assertion carry-through, stdout/stderr secret leakage, and expected evidence paths. Product-specific behavior assertions are enforced by QBot's own Playwright/runtime/release scripts through non-zero exits. Use `--strict-assertions` when missing evidence paths should fail the run instead of being reported as warnings.
 
+When a real `automation-run` fails, the runner also writes `bug-issue-drafts.json`, `bug-issue-drafts.md`, and `gitlab-issue-creation-report.json` into the run output. These are local drafts by default. To create remote GitLab issues, use both `--create-gitlab-issues` and `--confirm-create-issues` with `GITLAB_TOKEN`, `GLAB_TOKEN`, or `PRIVATE_TOKEN` set:
+
+```bash
+npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows outputs/qbot-agent-team-review-2026-07-01/latest-live-product-scope-automation-executable-v7/codex-automation-flows.json --out outputs/automation-run-macos-daily --suite daily --create-gitlab-issues --confirm-create-issues
+```
+
+Remote issue creation dedupes by a stable fingerprint before posting. Blocked runs caused by OS mismatch, missing env, or missing prerequisites are reported as blockers instead of being auto-filed as product bugs.
+
 ## Regenerate From Live GitLab
 
 ```powershell

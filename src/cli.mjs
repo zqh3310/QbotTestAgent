@@ -173,6 +173,14 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
     audit_status: result.audit?.status || null,
     automation_status: result.status || null,
     automation_summary: result.summary || null,
+    issue_loop: result.issue_loop
+      ? {
+          status: result.issue_loop.status,
+          draft_count: result.issue_loop.draft_count,
+          created_count: result.issue_loop.created_count,
+          failed_count: result.issue_loop.failed_count,
+        }
+      : null,
   }, null, 2));
   if (result.audit?.status === 'blocked' || result.monitorReport?.blockers?.length || result.status === 'failed' || (command === 'automation-doctor' && result.status === 'blocked')) process.exitCode = 1;
 }

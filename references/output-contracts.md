@@ -266,6 +266,41 @@ Execution status rules:
 - Product-specific assertions are delegated to QBot's own Playwright, runtime-feature, release-verify, lint, typecheck, and build scripts. Their failing assertions must produce non-zero exit.
 - Missing evidence paths are warnings by default unless `--strict-assertions` is used; secret-like output always fails the assertion checklist.
 
+## Bug Issue Loop Report
+
+Automation execution must close the loop for failed results by generating local issue drafts. Remote GitLab mutation is opt-in only.
+
+```yaml
+issue_loop:
+  status: none | drafted | skipped | created | partial | failed
+  draft_count: 0
+  created_count: 0
+  existing_count: 0
+  failed_count: 0
+  files:
+    drafts_json: <bug-issue-drafts.json>
+    drafts_md: <bug-issue-drafts.md>
+    creation_json: <gitlab-issue-creation-report.json>
+  creation:
+    status: skipped | created | partial | failed | none
+    reason: <why>
+    created:
+      - fingerprint: <stable dedupe id>
+        iid: 123
+        web_url: <GitLab URL>
+        title: <title>
+    existing: []
+    failed: []
+```
+
+Rules:
+
+- `automation-run` failed results must generate `bug-issue-drafts.json` and `bug-issue-drafts.md`.
+- Drafts include title, labels, fingerprint, expected behavior, actual behavior, reproduction, logs, assertion checks, and recommended action.
+- The runner must not create remote GitLab issues unless `--create-gitlab-issues --confirm-create-issues` is passed and a token is available.
+- Remote creation dedupes by fingerprint before posting.
+- `blocked` due to OS mismatch, missing local env, or missing prerequisite is not automatically classified as a product bug.
+
 ## Bug / Optimization Decision Fields
 
 When deciding whether a finding is a bug:

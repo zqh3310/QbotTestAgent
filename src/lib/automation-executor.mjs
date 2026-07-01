@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ensureDir, readJsonFile, writeJsonFile, writeTextFile } from './fs.mjs';
+import { buildIssueLoop } from './bug-issue-loop.mjs';
 
 const SUITES = {
   smoke: { levels: ['A0'], scopes: ['local_mock_or_fixture'] },
@@ -78,6 +79,7 @@ export function runAutomationCommand({ mode, repoRoot, flowsFile, outDir, option
     : report.summary.blocked > 0 && mode === 'doctor'
       ? 'blocked'
       : 'pass';
+  report.issue_loop = buildIssueLoop({ report, outDir: resolvedOut, options });
 
   writeJsonFile(path.join(resolvedOut, 'automation-execution-report.json'), report);
   writeTextFile(path.join(resolvedOut, 'automation-execution-report.md'), renderAutomationExecutionReport(report));
@@ -274,6 +276,8 @@ export function renderAutomationExecutionReport(report) {
     `- Selected flows: ${report.selection.selected_flows}`,
     `- Levels: ${report.selection.levels.join(', ') || 'none'}`,
     `- Execution scopes: ${report.selection.execution_scopes.join(', ') || 'none'}`,
+    `- Bug issue drafts: ${report.issue_loop?.draft_count ?? 0}`,
+    `- GitLab issues created: ${report.issue_loop?.created_count ?? 0}`,
     '',
     '## Doctor',
     `- Status: ${report.doctor.status}`,
@@ -305,6 +309,16 @@ export function renderAutomationExecutionReport(report) {
           ...(result.assertion_checks || []).map((check) => `- ${check.status}: ${check.name} - ${check.detail}`),
         ])
       : ['- None']),
+    '',
+    '## Bug Issue Loop',
+    `- Status: ${report.issue_loop?.status || 'none'}`,
+    `- Draft count: ${report.issue_loop?.draft_count ?? 0}`,
+    `- Created count: ${report.issue_loop?.created_count ?? 0}`,
+    `- Existing count: ${report.issue_loop?.existing_count ?? 0}`,
+    `- Failed count: ${report.issue_loop?.failed_count ?? 0}`,
+    `- Drafts JSON: ${report.issue_loop?.files?.drafts_json || 'none'}`,
+    `- Drafts MD: ${report.issue_loop?.files?.drafts_md || 'none'}`,
+    `- Creation report: ${report.issue_loop?.files?.creation_json || 'none'}`,
     '',
   ].join('\n');
 }
