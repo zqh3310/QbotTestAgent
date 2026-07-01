@@ -32,15 +32,30 @@ export function runAutomationCommand({ mode, repoRoot, flowsFile, outDir, option
     flowIds: splitList(options['flow-id']),
     caseIds: splitList(options['case-id']),
     limit: options.limit ? Number(options.limit) : null,
+    shard: options.shard,
+    retryFailedReport: options['retry-failed-report'],
   });
   const doctor = buildDoctor({ repoRoot: resolvedRepo, flowsFile: resolvedFlows, flows: selected, suite, osName: targetOs });
   const dryRun = mode === 'doctor' || Boolean(options['dry-run']);
   const includeBlocked = Boolean(options['include-blocked']);
   const failFast = Boolean(options['fail-fast']);
   const strictAssertions = Boolean(options['strict-assertions']);
-  const results = [];
+  const progressFile = path.join(resolvedOut, 'automation-progress.json');
+  const startedAt = new Date();
+  const maxDurationMs = Number(options['max-duration-minutes'])
+    ? Math.max(1, Number(options['max-duration-minutes'])) * 60 * 1000
+    : null;
+  const priorResults = options.resume ? loadPriorResults(progressFile) : [];
+  const completedFlowIds = new Set(priorResults.map((result) => result.flow_id));
+  const results = [...priorResults];
+  let stopReason = '';
 
   for (const flow of selected) {
+    if (completedFlowIds.has(flow.flow_id)) continue;
+    if (maxDurationMs && Date.now() - startedAt.getTime() >= maxDurationMs) {
+      stopReason = `Reached max duration window: ${options['max-duration-minutes']} minute(s).`;
+      break;
+    }
     const result = executeFlow({
       flow,
       repoRoot: resolvedRepo,
@@ -51,12 +66,72 @@ export function runAutomationCommand({ mode, repoRoot, flowsFile, outDir, option
       strictAssertions,
     });
     results.push(result);
+    writeJsonFile(progressFile, buildExecutionReport({
+      mode,
+      resolvedRepo,
+      resolvedFlows,
+      resolvedOut,
+      suite,
+      targetOs,
+      dryRun,
+      flows,
+      selected,
+      doctor,
+      results,
+      startedAt,
+      stopReason: '',
+      progress: true,
+    }));
     if (failFast && result.status === 'failed') break;
   }
 
+  const report = buildExecutionReport({
+    mode,
+    resolvedRepo,
+    resolvedFlows,
+    resolvedOut,
+    suite,
+    targetOs,
+    dryRun,
+    flows,
+    selected,
+    doctor,
+    results,
+    startedAt,
+    stopReason,
+    progress: false,
+  });
+  report.issue_loop = buildIssueLoop({ report, outDir: resolvedOut, options });
+
+  writeJsonFile(path.join(resolvedOut, 'automation-execution-report.json'), report);
+  writeTextFile(path.join(resolvedOut, 'automation-execution-report.md'), renderAutomationExecutionReport(report));
+  writeTextFile(path.join(resolvedOut, 'automation-delivery-report.md'), renderAutomationDeliveryReport(report));
+  return report;
+}
+
+function buildExecutionReport({
+  mode,
+  resolvedRepo,
+  resolvedFlows,
+  resolvedOut,
+  suite,
+  targetOs,
+  dryRun,
+  flows,
+  selected,
+  doctor,
+  results,
+  startedAt,
+  stopReason,
+  progress,
+}) {
+  const summary = summarizeResults(results);
+  const completedFlowIds = new Set(results.map((result) => result.flow_id));
+  const remaining = selected.filter((flow) => !completedFlowIds.has(flow.flow_id)).length;
   const report = {
     command: mode,
     generated_at: new Date().toISOString(),
+    started_at: startedAt.toISOString(),
     repo_root: resolvedRepo,
     flows_file: resolvedFlows,
     out_dir: resolvedOut,
@@ -64,31 +139,34 @@ export function runAutomationCommand({ mode, repoRoot, flowsFile, outDir, option
     target_os: targetOs,
     current_os: currentFlowOs(),
     dry_run: dryRun,
+    progress,
+    stop_reason: stopReason || '',
     selection: {
       total_flows: flows.length,
       selected_flows: selected.length,
+      completed_flows: results.length,
+      remaining_flows: remaining,
       levels: [...new Set(selected.map((flow) => flow.automation_level))],
       execution_scopes: [...new Set(selected.map((flow) => flow.execution_scope))],
     },
     doctor,
-    summary: summarizeResults(results),
+    summary,
     results,
   };
-  report.status = report.summary.failed > 0
+  report.status = remaining > 0 && stopReason
+    ? 'incomplete'
+    : report.summary.failed > 0
     ? 'failed'
-    : report.summary.blocked > 0 && mode === 'doctor'
+    : report.summary.blocked > 0
       ? 'blocked'
       : 'pass';
-  report.issue_loop = buildIssueLoop({ report, outDir: resolvedOut, options });
-
-  writeJsonFile(path.join(resolvedOut, 'automation-execution-report.json'), report);
-  writeTextFile(path.join(resolvedOut, 'automation-execution-report.md'), renderAutomationExecutionReport(report));
   return report;
 }
 
-function selectFlows(flows, { osName, suite, levels, flowIds, caseIds, limit }) {
+function selectFlows(flows, { osName, suite, levels, flowIds, caseIds, limit, shard, retryFailedReport }) {
   const suiteConfig = SUITES[suite];
   const wantedLevels = levels.length ? levels : suiteConfig.levels;
+  const retryFlowIds = retryFailedReport ? failedFlowIdsFromReport(retryFailedReport) : null;
   let selected = flows.filter((flow) => {
     if (String(flow.os) !== osName) return false;
     if (wantedLevels.length && !wantedLevels.includes(String(flow.automation_level))) return false;
@@ -96,8 +174,10 @@ function selectFlows(flows, { osName, suite, levels, flowIds, caseIds, limit }) 
     if (!['release', 'all'].includes(suite) && hasReleaseCommand(flow)) return false;
     if (flowIds.length && !flowIds.includes(String(flow.flow_id))) return false;
     if (caseIds.length && !caseIds.some((caseId) => flowCaseIds(flow).includes(caseId))) return false;
+    if (retryFlowIds && !retryFlowIds.has(String(flow.flow_id))) return false;
     return true;
   });
+  selected = applyShard(selected, shard);
   if (Number.isFinite(limit) && limit > 0) selected = selected.slice(0, limit);
   return selected;
 }
@@ -274,8 +354,11 @@ export function renderAutomationExecutionReport(report) {
     `- Repo: ${report.repo_root}`,
     `- Flows file: ${report.flows_file}`,
     `- Selected flows: ${report.selection.selected_flows}`,
+    `- Completed flows: ${report.selection.completed_flows ?? report.results.length}`,
+    `- Remaining flows: ${report.selection.remaining_flows ?? 0}`,
     `- Levels: ${report.selection.levels.join(', ') || 'none'}`,
     `- Execution scopes: ${report.selection.execution_scopes.join(', ') || 'none'}`,
+    `- Stop reason: ${report.stop_reason || 'none'}`,
     `- Bug issue drafts: ${report.issue_loop?.draft_count ?? 0}`,
     `- GitLab issues created: ${report.issue_loop?.created_count ?? 0}`,
     '',
@@ -323,6 +406,68 @@ export function renderAutomationExecutionReport(report) {
   ].join('\n');
 }
 
+export function renderAutomationDeliveryReport(report) {
+  const failed = (report.results || []).filter((result) => result.status === 'failed');
+  const blocked = (report.results || []).filter((result) => result.status === 'blocked');
+  const warnings = (report.results || []).filter((result) => result.assertion_status === 'pass-with-warnings');
+  return [
+    '# QBot Automation Delivery Report',
+    '',
+    `- Status: ${report.status}`,
+    `- Suite: ${report.suite}`,
+    `- Target OS: ${report.target_os}`,
+    `- Started at: ${report.started_at || 'unknown'}`,
+    `- Generated at: ${report.generated_at}`,
+    `- Selected flows: ${report.selection.selected_flows}`,
+    `- Completed flows: ${report.selection.completed_flows ?? report.results.length}`,
+    `- Remaining flows: ${report.selection.remaining_flows ?? 0}`,
+    `- Passed: ${report.summary.passed}`,
+    `- Failed: ${report.summary.failed}`,
+    `- Blocked: ${report.summary.blocked}`,
+    `- Planned: ${report.summary.planned}`,
+    `- Stop reason: ${report.stop_reason || 'none'}`,
+    `- Bug issue drafts: ${report.issue_loop?.draft_count ?? 0}`,
+    `- GitLab issues created: ${report.issue_loop?.created_count ?? 0}`,
+    '',
+    '## Delivery Decision',
+    deliveryDecision(report),
+    '',
+    '## Failed Flows',
+    ...(failed.length ? failed.map((result) => `- ${result.flow_id}: ${result.reason}`) : ['- None']),
+    '',
+    '## Blocked Flows',
+    ...(blocked.length ? blocked.map((result) => `- ${result.flow_id}: ${result.reason}`) : ['- None']),
+    '',
+    '## Warning Flows',
+    ...(warnings.length ? warnings.map((result) => `- ${result.flow_id}: ${result.reason}`) : ['- None']),
+    '',
+    '## Artifacts',
+    `- Execution report JSON: ${path.join(report.out_dir, 'automation-execution-report.json')}`,
+    `- Execution report MD: ${path.join(report.out_dir, 'automation-execution-report.md')}`,
+    `- Progress checkpoint: ${path.join(report.out_dir, 'automation-progress.json')}`,
+    `- Bug drafts JSON: ${report.issue_loop?.files?.drafts_json || 'none'}`,
+    `- Bug drafts MD: ${report.issue_loop?.files?.drafts_md || 'none'}`,
+    `- GitLab creation report: ${report.issue_loop?.files?.creation_json || 'none'}`,
+    '',
+  ].join('\n');
+}
+
+function deliveryDecision(report) {
+  if (report.status === 'incomplete') {
+    return 'Not ready for final delivery: execution stopped before all selected flows completed. Re-run with `--resume` using the same output directory.';
+  }
+  if (report.summary.failed > 0) {
+    return 'Not ready for pass delivery: failed flows require bug triage. Review bug issue drafts and rerun failed flows after fixes.';
+  }
+  if (report.summary.blocked > 0) {
+    return 'Conditionally delivered with blockers: blocked flows must be resolved or explicitly waived.';
+  }
+  if ((report.results || []).some((result) => result.assertion_status === 'pass-with-warnings')) {
+    return 'Delivered with warnings: review missing evidence or non-artifact flow warnings.';
+  }
+  return 'Delivered: all selected flows completed without failures or blockers.';
+}
+
 function currentFlowOs() {
   if (process.platform === 'win32') return 'Windows';
   if (process.platform === 'darwin') return 'macOS';
@@ -339,6 +484,31 @@ function normalizeFlowOs(value) {
 function splitList(value) {
   if (!value || value === true) return [];
   return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function loadPriorResults(progressFile) {
+  if (!fs.existsSync(progressFile)) return [];
+  const progress = readJsonFile(progressFile);
+  return Array.isArray(progress.results) ? progress.results : [];
+}
+
+function failedFlowIdsFromReport(reportFile) {
+  const report = readJsonFile(path.resolve(reportFile));
+  return new Set((report.results || [])
+    .filter((result) => result.status === 'failed' || result.assertion_status === 'failed')
+    .map((result) => String(result.flow_id)));
+}
+
+function applyShard(flows, shard) {
+  if (!shard) return flows;
+  const match = String(shard).trim().match(/^(\d+)\/(\d+)$/);
+  if (!match) throw new Error(`Invalid --shard=${shard}; expected N/M, for example 1/4.`);
+  const index = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isInteger(index) || !Number.isInteger(total) || index < 1 || total < 1 || index > total) {
+    throw new Error(`Invalid --shard=${shard}; expected 1 <= N <= M.`);
+  }
+  return flows.filter((_, flowIndex) => flowIndex % total === index - 1);
 }
 
 function flowCaseIds(flow) {

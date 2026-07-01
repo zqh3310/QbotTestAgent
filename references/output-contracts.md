@@ -211,16 +211,20 @@ Use this report when a developer or test executor runs generated Codex automatio
 
 ```yaml
 command: automation-doctor | automation-run
-status: pass | blocked | failed
+status: pass | blocked | failed | incomplete
 suite: smoke | daily | local | real | release | all
 target_os: macOS | Windows
 current_os: macOS | Windows
 dry_run: true | false
+progress: true | false
+stop_reason: <empty or reason>
 repo_root: <Deepbank repo>
 flows_file: <codex-automation-flows.json>
 selection:
   total_flows: 0
   selected_flows: 0
+  completed_flows: 0
+  remaining_flows: 0
   levels: []
   execution_scopes: []
 doctor:
@@ -265,6 +269,11 @@ Execution status rules:
 - The runner performs generic assertions: command exit code, timeout, assertion text carry-through, black-box assertion carry-through, stdout/stderr secret scan, and evidence path discovery.
 - Product-specific assertions are delegated to QBot's own Playwright, runtime-feature, release-verify, lint, typecheck, and build scripts. Their failing assertions must produce non-zero exit.
 - Missing evidence paths are warnings by default unless `--strict-assertions` is used; secret-like output always fails the assertion checklist.
+- Long unattended runs must write `automation-progress.json` after every flow and `automation-delivery-report.md` at the end.
+- `--resume` continues from `automation-progress.json` in the same output directory.
+- `--shard N/M` splits the selected flow list for multiple runners.
+- `--max-duration-minutes` stops with status `incomplete` after the configured window; resume can continue later.
+- `--retry-failed-report <automation-execution-report.json>` selects only previously failed flows.
 
 ## Bug Issue Loop Report
 

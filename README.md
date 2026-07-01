@@ -94,6 +94,27 @@ npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows output
 
 Remote issue creation dedupes by a stable fingerprint before posting. Blocked runs caused by OS mismatch, missing env, or missing prerequisites are reported as blockers instead of being auto-filed as product bugs.
 
+For long unattended runs, use `--suite all` on each OS runner separately. The runner writes `automation-progress.json` after every flow and can resume with the same output directory:
+
+```bash
+npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows outputs/qbot-agent-team-review-2026-07-01/latest-live-product-scope-automation-executable-v7/codex-automation-flows.json --out outputs/full-run-macos --suite all --max-duration-minutes 480
+npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows outputs/qbot-agent-team-review-2026-07-01/latest-live-product-scope-automation-executable-v7/codex-automation-flows.json --out outputs/full-run-macos --suite all --resume
+```
+
+For multiple runners, split the selected flow list with `--shard N/M`:
+
+```bash
+npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows outputs/qbot-agent-team-review-2026-07-01/latest-live-product-scope-automation-executable-v7/codex-automation-flows.json --out outputs/full-run-macos-shard-1 --suite all --shard 1/3
+```
+
+After fixes, rerun only previous failures:
+
+```bash
+npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows outputs/qbot-agent-team-review-2026-07-01/latest-live-product-scope-automation-executable-v7/codex-automation-flows.json --out outputs/rerun-failed-macos --suite all --retry-failed-report outputs/full-run-macos/automation-execution-report.json
+```
+
+Each run also writes `automation-delivery-report.md`, which is the handoff summary for completed, failed, blocked, warning, bug draft, and GitLab issue creation counts.
+
 ## Regenerate From Live GitLab
 
 ```powershell

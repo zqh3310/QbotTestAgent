@@ -124,6 +124,47 @@ execFileSync(process.execPath, [
 const automationReport = JSON.parse(fs.readFileSync(path.join(automationOut, 'automation-execution-report.json'), 'utf8'));
 if (automationReport.doctor.status !== 'pass') throw new Error(`Automation doctor should pass: ${automationReport.doctor.findings.join('; ')}`);
 if (!fs.existsSync(path.join(automationOut, 'automation-execution-report.md'))) throw new Error('Missing automation execution markdown report.');
+if (!fs.existsSync(path.join(automationOut, 'automation-delivery-report.md'))) throw new Error('Missing automation delivery markdown report.');
+
+const resumeOut = path.join(temp, 'automation-resume');
+execFileSync(process.execPath, [
+  path.join(root, 'src', 'cli.mjs'),
+  'automation-run',
+  '--repo', repo,
+  '--flows', path.join(out, 'codex-automation-flows.json'),
+  '--out', resumeOut,
+  '--suite', 'daily',
+  '--dry-run',
+  '--limit', '1',
+], { stdio: 'pipe' });
+execFileSync(process.execPath, [
+  path.join(root, 'src', 'cli.mjs'),
+  'automation-run',
+  '--repo', repo,
+  '--flows', path.join(out, 'codex-automation-flows.json'),
+  '--out', resumeOut,
+  '--suite', 'daily',
+  '--dry-run',
+  '--limit', '2',
+  '--resume',
+], { stdio: 'pipe' });
+const resumeReport = JSON.parse(fs.readFileSync(path.join(resumeOut, 'automation-execution-report.json'), 'utf8'));
+if (resumeReport.selection.completed_flows !== 2) throw new Error(`Expected resume to complete 2 flows, got ${resumeReport.selection.completed_flows}`);
+if (!fs.existsSync(path.join(resumeOut, 'automation-progress.json'))) throw new Error('Missing automation progress checkpoint.');
+
+const shardOut = path.join(temp, 'automation-shard');
+execFileSync(process.execPath, [
+  path.join(root, 'src', 'cli.mjs'),
+  'automation-run',
+  '--repo', repo,
+  '--flows', path.join(out, 'codex-automation-flows.json'),
+  '--out', shardOut,
+  '--suite', 'daily',
+  '--dry-run',
+  '--shard', '1/2',
+], { stdio: 'pipe' });
+const shardReport = JSON.parse(fs.readFileSync(path.join(shardOut, 'automation-execution-report.json'), 'utf8'));
+if (shardReport.selection.selected_flows < 1) throw new Error('Expected shard to select at least one flow.');
 
 const failingFlows = path.join(temp, 'failing-flows.json');
 const flowOs = process.platform === 'win32' ? 'Windows' : 'macOS';
