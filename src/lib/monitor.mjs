@@ -14,6 +14,13 @@ export function buildSnapshot(issues) {
       updated_at: issue.updated_at,
       content_hash: issue.content_hash,
       modules: classification.module_ids,
+      module_names: classification.module_names,
+      owner_agents: classification.owner_agents,
+      kind: classification.kind,
+      status: classification.status,
+      priority: classification.priority,
+      test_types: classification.test_types,
+      blocked_by: classification.blocked_by,
       material: classification.material,
     };
   }
@@ -71,13 +78,26 @@ export function buildMonitorReport({ issues, stateFile, saveState = true, source
   }
   const firstRun = !previous;
   const required = firstRun || allMaterial.length > 0;
-  const recommended = new Set(['issue-intelligence-analyst']);
+  const recommended = new Set(required
+    ? ['issue-intelligence-analyst', 'test-plan-maintainer']
+    : ['gitlab-issue-monitor']);
   for (const module of Object.keys(moduleImpact)) {
     if (['runtime', 'skills_mcp'].includes(module)) recommended.add('runtime-protocol-skill-chain-tester');
     if (['uiux', 'assistant'].includes(module)) recommended.add('ui-product-experience-tester');
     if (['e2e_release'].includes(module)) recommended.add('cross-platform-e2e-validator');
     if (['compliance'].includes(module)) recommended.add('compliance-security-tester');
-    if (['projects', 'automation'].includes(module)) recommended.add('functional-test-case-designer');
+    if (['projects', 'automation', 'assistant', 'uiux', 'runtime', 'skills_mcp', 'compliance', 'e2e_release'].includes(module)) {
+      recommended.add('functional-test-case-designer');
+      recommended.add('codex-os-automation-planner');
+    }
+  }
+  if (allMaterial.some((issue) => issue.blocked_by || ['external-dependency', 'bug'].includes(issue.kind))) {
+    recommended.add('test-data-fixture-planner');
+    recommended.add('defect-triage-issue-reporter');
+  }
+  if (required) {
+    recommended.add('test-case-reviewer');
+    recommended.add('evidence-quality-auditor');
   }
 
   const report = {
@@ -91,6 +111,13 @@ export function buildMonitorReport({ issues, stateFile, saveState = true, source
     closed_or_reopened_issues: delta.closed_or_reopened_issues,
     removed_issues: delta.removed_issues,
     module_impact: moduleImpact,
+    delta_summary: {
+      material_count: allMaterial.length,
+      new_count: delta.new_issues.length,
+      changed_count: delta.changed_issues.length,
+      state_change_count: delta.closed_or_reopened_issues.length,
+      removed_count: delta.removed_issues.length,
+    },
     test_plan_decision: {
       required,
       reason: firstRun
@@ -100,6 +127,7 @@ export function buildMonitorReport({ issues, stateFile, saveState = true, source
           : 'No material issue delta detected.',
       recommended_agents: [...recommended],
     },
+    workflow_plan: buildWorkflowPlan({ required, firstRun, allMaterial, moduleImpact }),
     blockers: [],
   };
 
@@ -107,3 +135,65 @@ export function buildMonitorReport({ issues, stateFile, saveState = true, source
   return { report, snapshot: current, previous };
 }
 
+function buildWorkflowPlan({ required, firstRun, allMaterial, moduleImpact }) {
+  if (!required) {
+    return [
+      {
+        step: 1,
+        agent: 'gitlab-issue-monitor',
+        action: 'Keep monitoring. No material issue delta requires test-plan maintenance.',
+      },
+    ];
+  }
+  const plan = [
+    {
+      step: 1,
+      agent: 'issue-intelligence-analyst',
+      action: firstRun
+        ? 'Bootstrap issue/module/risk matrix from the current issue source.'
+        : 'Normalize material issue deltas and identify changed requirements, risks, and acceptance criteria.',
+    },
+    {
+      step: 2,
+      agent: 'test-plan-maintainer',
+      action: 'Apply an incremental update plan: add new cases, edit impacted cases, deprecate stale cases, preserve stable IDs, and update S0/S1/S2/S3 plus A0/A1/A2/A3 layers.',
+    },
+    {
+      step: 3,
+      agent: 'functional-test-case-designer',
+      action: 'Draft or revise tester-readable functional cases for changed product behavior.',
+    },
+    {
+      step: 4,
+      agent: 'codex-os-automation-planner',
+      action: 'Draft or revise Codex-executable UI/OS flows with setup, assertions, evidence paths, cleanup, and skip/block rules.',
+    },
+  ];
+  const specialists = new Set();
+  for (const module of Object.keys(moduleImpact)) {
+    if (['runtime', 'skills_mcp'].includes(module)) specialists.add('runtime-protocol-skill-chain-tester');
+    if (['uiux', 'assistant'].includes(module)) specialists.add('ui-product-experience-tester');
+    if (module === 'e2e_release') specialists.add('cross-platform-e2e-validator');
+    if (module === 'compliance') specialists.add('compliance-security-tester');
+  }
+  if (allMaterial.some((issue) => issue.blocked_by)) specialists.add('test-data-fixture-planner');
+  if (allMaterial.some((issue) => ['bug', 'external-dependency'].includes(issue.kind))) specialists.add('defect-triage-issue-reporter');
+  for (const specialist of specialists) {
+    plan.push({
+      step: plan.length + 1,
+      agent: specialist,
+      action: 'Fill specialist coverage, blockers, or issue handoff needs for impacted deltas.',
+    });
+  }
+  plan.push({
+    step: plan.length + 1,
+    agent: 'test-case-reviewer',
+    action: 'Reject vague, unexecutable, over-broad, under-specified, or misprioritized case changes before delivery.',
+  });
+  plan.push({
+    step: plan.length + 1,
+    agent: 'evidence-quality-auditor',
+    action: 'Audit traceability, freshness, redaction, skipped/blocked semantics, and false-success risk.',
+  });
+  return plan;
+}

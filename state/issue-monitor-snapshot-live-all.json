@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-06-29T11:30:26.735Z",
-  "issue_count": 132,
+  "generated_at": "2026-07-01T09:02:47.278Z",
+  "issue_count": 196,
   "entries": {
     "1": {
       "iid": 1,
@@ -11,11 +11,25 @@
         "kind/refactor",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T11:22:57.003Z",
+      "updated_at": "2026-07-01T07:37:41.868Z",
       "content_hash": "766cb2891f30478d",
       "modules": [
         "e2e_release"
       ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "refactor",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "2": {
@@ -29,13 +43,32 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T10:42:36.646Z",
+      "updated_at": "2026-06-30T11:59:19.489Z",
       "content_hash": "358efe139ee3fd0b",
       "modules": [
         "projects",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "3": {
@@ -51,7 +84,7 @@
         "kind/feature",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T10:42:36.679Z",
+      "updated_at": "2026-06-30T11:59:19.519Z",
       "content_hash": "492cdfca55e48326",
       "modules": [
         "runtime",
@@ -59,6 +92,26 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "4": {
@@ -73,7 +126,7 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T10:42:36.714Z",
+      "updated_at": "2026-06-30T11:59:19.546Z",
       "content_hash": "45da6f557bb5bc9c",
       "modules": [
         "runtime",
@@ -81,6 +134,26 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "5": {
@@ -90,12 +163,30 @@
       "labels": [
         "status/closed"
       ],
-      "updated_at": "2026-06-29T10:46:59.746Z",
+      "updated_at": "2026-06-30T11:59:19.571Z",
       "content_hash": "62a21e49982f8491",
       "modules": [
         "assistant",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "6": {
@@ -110,7 +201,7 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:46:05.021Z",
+      "updated_at": "2026-06-30T11:59:19.597Z",
       "content_hash": "b466ff8b92022509",
       "modules": [
         "skills_mcp",
@@ -118,6 +209,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "7": {
@@ -132,13 +245,32 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:46:06.125Z",
+      "updated_at": "2026-06-30T11:59:19.622Z",
       "content_hash": "c489118adc76a78f",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "8": {
@@ -153,7 +285,7 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:46:07.855Z",
+      "updated_at": "2026-06-30T11:59:19.654Z",
       "content_hash": "975b4e0a67f6affe",
       "modules": [
         "skills_mcp",
@@ -161,6 +293,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "9": {
@@ -175,7 +329,7 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:46:09.577Z",
+      "updated_at": "2026-06-30T11:59:19.685Z",
       "content_hash": "4f8bfa9feec0c656",
       "modules": [
         "skills_mcp",
@@ -183,6 +337,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "10": {
@@ -197,7 +373,7 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:46:11.039Z",
+      "updated_at": "2026-06-30T11:59:19.710Z",
       "content_hash": "67340d5faed2da4d",
       "modules": [
         "skills_mcp",
@@ -205,6 +381,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "11": {
@@ -217,12 +415,28 @@
         "kind/design",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:47.885Z",
+      "updated_at": "2026-06-30T11:59:19.734Z",
       "content_hash": "f1494d4a141db978",
       "modules": [
         "runtime",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "12": {
@@ -239,7 +453,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:48.876Z",
+      "updated_at": "2026-06-30T11:59:19.760Z",
       "content_hash": "1d98e32e47da3b5e",
       "modules": [
         "assistant",
@@ -248,6 +462,32 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "13": {
@@ -268,6 +508,25 @@
         "projects",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "14": {
@@ -288,6 +547,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "15": {
@@ -316,6 +594,31 @@
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e",
+        "security"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "16": {
@@ -338,6 +641,29 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "17": {
@@ -362,6 +688,25 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "18": {
@@ -386,6 +731,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "19": {
@@ -404,13 +771,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:54.797Z",
+      "updated_at": "2026-07-01T05:11:39.404Z",
       "content_hash": "ab3021a4d61149ab",
       "modules": [
         "uiux",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "20": {
@@ -430,7 +817,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:55.417Z",
+      "updated_at": "2026-07-01T05:11:39.438Z",
       "content_hash": "9e6ed2a30c52d6d4",
       "modules": [
         "projects",
@@ -438,6 +825,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "21": {
@@ -458,7 +867,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T18:49:11.778Z",
+      "updated_at": "2026-07-01T05:11:39.500Z",
       "content_hash": "eb9376bbd441e6f3",
       "modules": [
         "runtime",
@@ -466,6 +875,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "22": {
@@ -482,12 +913,28 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-27T09:05:41.060Z",
+      "updated_at": "2026-07-01T07:03:16.468Z",
       "content_hash": "9f5ae87bf8142490",
       "modules": [
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "23": {
@@ -512,6 +959,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "24": {
@@ -525,13 +994,32 @@
         "kind/release",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:57.490Z",
+      "updated_at": "2026-07-01T07:31:17.381Z",
       "content_hash": "25a214e5ff5a8a88",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "docs",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "25": {
@@ -561,6 +1049,31 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "26": {
@@ -574,12 +1087,29 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:44:58.847Z",
+      "updated_at": "2026-07-01T07:31:17.411Z",
       "content_hash": "e4ad6ca4533e644c",
       "modules": [
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "27": {
@@ -599,6 +1129,22 @@
         "skills_mcp",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "28": {
@@ -611,11 +1157,24 @@
         "kind/docs",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T11:23:44.783Z",
-      "content_hash": "4244df7159170c03",
+      "updated_at": "2026-07-01T08:54:25.375Z",
+      "content_hash": "3947f71d34da64d1",
       "modules": [
         "context_governance"
       ],
+      "module_names": [
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "issue-intelligence-analyst"
+      ],
+      "kind": "docs",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": false
     },
     "29": {
@@ -637,6 +1196,22 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "30": {
@@ -652,12 +1227,28 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:00.728Z",
+      "updated_at": "2026-06-30T07:43:36.604Z",
       "content_hash": "1c93b73c33231022",
       "modules": [
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "31": {
@@ -674,7 +1265,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:01.375Z",
+      "updated_at": "2026-06-30T17:00:16.503Z",
       "content_hash": "b35d72fc51dd6252",
       "modules": [
         "runtime",
@@ -682,6 +1273,26 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "32": {
@@ -703,6 +1314,22 @@
         "projects",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "refactor",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "33": {
@@ -718,13 +1345,32 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-28T04:15:38.490Z",
+      "updated_at": "2026-06-30T01:17:11.045Z",
       "content_hash": "5b98d2f69ff8d8d6",
       "modules": [
         "runtime",
         "projects",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "34": {
@@ -740,7 +1386,7 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-28T18:27:38.190Z",
+      "updated_at": "2026-06-30T17:35:20.173Z",
       "content_hash": "ca70251929893f01",
       "modules": [
         "projects",
@@ -748,6 +1394,26 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "Project Automation",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "35": {
@@ -777,6 +1443,31 @@
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e",
+        "security"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "36": {
@@ -797,6 +1488,22 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "37": {
@@ -814,6 +1521,20 @@
       "modules": [
         "e2e_release"
       ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "docs",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "38": {
@@ -830,6 +1551,20 @@
       "modules": [
         "skills_mcp"
       ],
+      "module_names": [
+        "Skills / MCP / Experts"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "39": {
@@ -853,6 +1588,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "refactor",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "40": {
@@ -865,13 +1619,32 @@
         "kind/chore",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:07.023Z",
+      "updated_at": "2026-07-01T07:31:17.438Z",
       "content_hash": "3f67a23a5fb53394",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "41": {
@@ -895,6 +1668,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "42": {
@@ -912,6 +1704,23 @@
         "skills_mcp",
         "uiux"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "43": {
@@ -936,6 +1745,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "44": {
@@ -959,6 +1787,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "45": {
@@ -974,13 +1821,33 @@
         "priority/high",
         "status/in-progress"
       ],
-      "updated_at": "2026-06-28T09:07:18.170Z",
+      "updated_at": "2026-07-01T08:38:21.790Z",
       "content_hash": "dfb552ccc8fcfaeb",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "in-progress",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "46": {
@@ -1000,6 +1867,22 @@
         "skills_mcp",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "47": {
@@ -1016,13 +1899,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:12.673Z",
+      "updated_at": "2026-06-29T11:43:06.610Z",
       "content_hash": "0ca5fe3d84a6ca7a",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "48": {
@@ -1039,13 +1942,32 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T03:32:23.871Z",
+      "updated_at": "2026-07-01T05:18:40.853Z",
       "content_hash": "76148d449b366f40",
       "modules": [
         "skills_mcp",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "49": {
@@ -1069,6 +1991,25 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "50": {
@@ -1088,12 +2029,29 @@
         "skills_mcp",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "51": {
       "iid": 51,
       "title": "外部依赖：调整 GitLab 服务端上传限制，避免 mac/win 安装包被拆成 part 包",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/deploy",
         "area/docs",
@@ -1102,14 +2060,37 @@
         "priority/high",
         "status/in-review"
       ],
-      "updated_at": "2026-06-29T08:55:36.282Z",
-      "content_hash": "c3b746daea251deb",
+      "updated_at": "2026-06-30T09:13:58.563Z",
+      "content_hash": "a5aea78e7dc213f6",
       "modules": [
         "projects",
         "e2e_release",
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "external-dependency",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "e2e",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "External dependency acceptance required.",
       "material": true
     },
     "52": {
@@ -1134,6 +2115,27 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "53": {
@@ -1145,12 +2147,27 @@
         "kind/test",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:14.804Z",
+      "updated_at": "2026-06-30T02:02:54.722Z",
       "content_hash": "87e18cf4ed4a7824",
       "modules": [
         "assistant",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "54": {
@@ -1174,6 +2191,27 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "55": {
@@ -1194,6 +2232,26 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "56": {
@@ -1214,6 +2272,23 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "57": {
@@ -1234,6 +2309,24 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "58": {
@@ -1255,6 +2348,26 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "59": {
@@ -1276,6 +2389,26 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "60": {
@@ -1296,6 +2429,25 @@
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "security"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "61": {
@@ -1315,6 +2467,19 @@
       "modules": [
         "context_governance"
       ],
+      "module_names": [
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "62": {
@@ -1337,6 +2502,27 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "63": {
@@ -1356,6 +2542,23 @@
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "64": {
@@ -1373,14 +2576,36 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T11:22:48.949Z",
-      "content_hash": "c8ea954f41a8ffb2",
+      "updated_at": "2026-07-01T08:18:06.230Z",
+      "content_hash": "f74b46d6385531b7",
       "modules": [
         "skills_mcp",
         "uiux",
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "security"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "65": {
@@ -1398,13 +2623,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T11:22:50.528Z",
+      "updated_at": "2026-06-30T14:27:05.247Z",
       "content_hash": "9f7ea7f1e5093dbc",
       "modules": [
         "runtime",
         "projects",
         "uiux"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "66": {
@@ -1415,16 +2660,34 @@
         "area/docs",
         "area/server",
         "dependency/external",
+        "developer-confirmation",
         "kind/external-dependency",
         "priority/high",
-        "status/ready"
+        "status/blocked"
       ],
-      "updated_at": "2026-06-29T11:26:12.364Z",
-      "content_hash": "ead125436a6eaea7",
+      "updated_at": "2026-07-01T08:13:20.788Z",
+      "content_hash": "48a545219ef1c2d9",
       "modules": [
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "external-dependency",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "Issue status is blocked.",
       "material": true
     },
     "67": {
@@ -1439,16 +2702,37 @@
         "area/ui",
         "kind/feature",
         "priority/high",
-        "status/ready"
+        "status/blocked"
       ],
-      "updated_at": "2026-06-29T11:22:55.231Z",
-      "content_hash": "eca267bd9edab3c7",
+      "updated_at": "2026-06-30T18:19:00.779Z",
+      "content_hash": "b348f03fb93a3d36",
       "modules": [
         "runtime",
         "skills_mcp",
         "projects",
         "uiux"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "Issue status is blocked.",
       "material": true
     },
     "68": {
@@ -1459,62 +2743,89 @@
         "area/docs",
         "area/server",
         "dependency/external",
+        "developer-confirmation",
         "kind/external-dependency",
         "priority/high",
-        "status/ready"
+        "status/blocked"
       ],
-      "updated_at": "2026-06-29T11:26:13.774Z",
-      "content_hash": "e42baff23be57c8a",
+      "updated_at": "2026-07-01T09:00:15.435Z",
+      "content_hash": "823ac9731a5c147b",
       "modules": [
         "skills_mcp",
         "compliance",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "external-dependency",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "Issue status is blocked.",
       "material": true
     },
     "69": {
       "iid": 69,
-      "title": "feature: remote control server 聚合 SkillHub 用户技能资源",
+      "title": "design(skills): QBot SkillHub 技能全链路产品与运行时就绪方案",
       "state": "opened",
       "labels": [
+        "area/db",
+        "area/docs",
         "area/preload",
+        "area/projects",
         "area/runtime",
         "area/server",
         "area/skills",
         "area/ui",
-        "kind/feature",
+        "kind/design",
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T11:22:57.658Z",
-      "content_hash": "24744c18cd271715",
+      "updated_at": "2026-07-01T07:19:50.924Z",
+      "content_hash": "1bb6939f404fa1f4",
       "modules": [
         "runtime",
         "skills_mcp",
-        "uiux"
-      ],
-      "material": true
-    },
-    "70": {
-      "iid": 70,
-      "title": "外部依赖: SkillHub 用户技能资源 API 支持 Lingxi OAuth2",
-      "state": "opened",
-      "labels": [
-        "area/docs",
-        "area/server",
-        "area/skills",
-        "dependency/external",
-        "kind/external-dependency",
-        "priority/high",
-        "status/ready"
-      ],
-      "updated_at": "2026-06-29T11:26:14.922Z",
-      "content_hash": "a25e9eb62cafc326",
-      "modules": [
-        "skills_mcp",
-        "compliance",
+        "projects",
+        "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "71": {
@@ -1528,12 +2839,29 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:22.067Z",
+      "updated_at": "2026-06-30T07:43:38.950Z",
       "content_hash": "7071843aa1c05eee",
       "modules": [
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "72": {
@@ -1554,6 +2882,24 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "73": {
@@ -1572,6 +2918,22 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "74": {
@@ -1596,6 +2958,27 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "75": {
@@ -1616,6 +2999,24 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "76": {
@@ -1629,13 +3030,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T13:45:25.100Z",
+      "updated_at": "2026-06-30T10:03:20.267Z",
       "content_hash": "805940417f0a2a16",
       "modules": [
         "skills_mcp",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "77": {
@@ -1660,12 +3081,34 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "78": {
       "iid": 78,
       "title": "design(uiux): Deepbank Electron 视觉系统统一与设计治理编排",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/assistant-ui",
         "area/e2e",
@@ -1676,8 +3119,8 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T10:57:45.857Z",
-      "content_hash": "659a1949a039fe27",
+      "updated_at": "2026-06-30T01:17:12.103Z",
+      "content_hash": "30b5e24321fdbc37",
       "modules": [
         "assistant",
         "skills_mcp",
@@ -1685,6 +3128,29 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "79": {
@@ -1707,12 +3173,34 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "80": {
       "iid": 80,
       "title": "enhancement(uiux/foundation): 主题 token、字体、色板与层级语义统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/assistant-ui",
         "area/ui",
@@ -1720,18 +3208,33 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-28T13:46:16.801Z",
-      "content_hash": "6adc6379560b95dc",
+      "updated_at": "2026-06-29T18:09:37.813Z",
+      "content_hash": "6442122a67a0e991",
       "modules": [
         "assistant",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "81": {
       "iid": 81,
       "title": "enhancement(uiux/primitives): 共享组件原语与状态表达标准化",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/assistant-ui",
         "area/ui",
@@ -1739,108 +3242,204 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-28T13:46:18.096Z",
-      "content_hash": "c2b7caba42b54211",
+      "updated_at": "2026-06-30T01:17:12.132Z",
+      "content_hash": "f70ddc0a2d22ee64",
       "modules": [
         "assistant",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "82": {
       "iid": 82,
       "title": "enhancement(uiux/app-shell): 登录壳、侧栏、状态条与全局骨架统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/electron",
         "area/ui",
         "kind/enhancement",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T10:57:45.825Z",
-      "content_hash": "cdec2a4f47af2044",
+      "updated_at": "2026-06-30T01:17:12.162Z",
+      "content_hash": "5c9239b3bb812df0",
       "modules": [
         "uiux"
       ],
+      "module_names": [
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "83": {
       "iid": 83,
       "title": "enhancement(uiux/assistant-workbench): thread、composer、artifact、AskUserQuestion 统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/assistant-ui",
         "area/ui",
         "kind/enhancement",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T08:05:17.999Z",
-      "content_hash": "27c18e636d17fc32",
+      "updated_at": "2026-06-30T02:02:54.689Z",
+      "content_hash": "76d3207fec28699c",
       "modules": [
         "assistant",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "84": {
       "iid": 84,
       "title": "enhancement(uiux/projects-workspace): 项目列表与 workspace 视觉体系统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/projects",
         "area/ui",
         "kind/enhancement",
         "status/ready"
       ],
-      "updated_at": "2026-06-28T18:00:07.280Z",
-      "content_hash": "032a7787afaa7465",
+      "updated_at": "2026-06-30T01:17:12.221Z",
+      "content_hash": "23eea4c22223190f",
       "modules": [
         "projects",
         "uiux"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "85": {
       "iid": 85,
       "title": "enhancement(uiux/experts-skills): 专家与技能市场视觉体系统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/skills",
         "area/ui",
         "kind/enhancement",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T10:42:36.809Z",
-      "content_hash": "ca0ffa4fce27644c",
+      "updated_at": "2026-06-30T01:17:12.076Z",
+      "content_hash": "4dd66b1490c7a986",
       "modules": [
         "skills_mcp",
         "uiux"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "86": {
       "iid": 86,
       "title": "enhancement(uiux/config-surfaces): AssistantConfig、ConfigCenter、Connectors 统一",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/skills",
         "area/ui",
         "kind/enhancement",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T03:32:23.782Z",
-      "content_hash": "0b869d0e91a78164",
+      "updated_at": "2026-06-30T07:43:38.910Z",
+      "content_hash": "78d78f7dfd63a8f3",
       "modules": [
         "assistant",
         "skills_mcp",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "87": {
       "iid": 87,
       "title": "test(uiux/audit-convergence): 可访问性残差与审计误报治理",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/e2e",
         "area/ui",
@@ -1848,33 +3447,74 @@
         "priority/high",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T08:05:17.904Z",
-      "content_hash": "203b015dac3b8caa",
+      "updated_at": "2026-06-30T01:17:12.049Z",
+      "content_hash": "49527dab26d9ca3c",
       "modules": [
         "uiux",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "test",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "88": {
       "iid": 88,
-      "title": "refactor(runtime): conditionally retire Codex OpenAI-compatible protocol proxy",
-      "state": "opened",
+      "title": "design(runtime): Codex OpenAI-compatible Responses proxy 长期内嵌契约",
+      "state": "closed",
       "labels": [
+        "area/e2e",
         "area/electron",
         "area/runtime",
         "area/server",
         "area/ui",
-        "kind/refactor",
-        "status/blocked"
+        "kind/design",
+        "priority/high"
       ],
-      "updated_at": "2026-06-29T11:23:00.570Z",
-      "content_hash": "923c184e5e3d8cd7",
+      "updated_at": "2026-07-01T06:24:19.851Z",
+      "content_hash": "7ec596750e532548",
       "modules": [
         "runtime",
-        "uiux"
+        "uiux",
+        "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "89": {
@@ -1902,6 +3542,29 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "90": {
@@ -1926,6 +3589,26 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "91": {
@@ -1950,6 +3633,31 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "92": {
@@ -1968,7 +3676,7 @@
         "priority/high",
         "status/in-progress"
       ],
-      "updated_at": "2026-06-29T10:42:38.971Z",
+      "updated_at": "2026-06-30T01:17:11.388Z",
       "content_hash": "8eb868824dd7f378",
       "modules": [
         "runtime",
@@ -1977,6 +3685,29 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "in-progress",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "93": {
@@ -2000,6 +3731,25 @@
         "uiux",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "94": {
@@ -2021,6 +3771,25 @@
         "projects",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "95": {
@@ -2041,6 +3810,23 @@
         "projects",
         "uiux"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "96": {
@@ -2055,13 +3841,33 @@
         "kind/feature",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T19:27:01.434Z",
+      "updated_at": "2026-06-30T01:10:16.476Z",
       "content_hash": "ad926e94afd77588",
       "modules": [
         "runtime",
         "projects",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "97": {
@@ -2076,13 +3882,31 @@
         "kind/feature",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T11:22:49.759Z",
+      "updated_at": "2026-06-30T17:19:14.763Z",
       "content_hash": "fe38d38d4c6af8fa",
       "modules": [
         "runtime",
         "skills_mcp",
         "projects"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "98": {
@@ -2104,6 +3928,24 @@
         "projects",
         "uiux"
       ],
+      "module_names": [
+        "Assistant",
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "integration"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "99": {
@@ -2118,13 +3960,34 @@
         "kind/external-dependency",
         "status/blocked"
       ],
-      "updated_at": "2026-06-29T11:26:17.118Z",
+      "updated_at": "2026-07-01T07:56:39.428Z",
       "content_hash": "475afadd6c9131da",
       "modules": [
         "runtime",
         "projects",
         "compliance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "Compliance / Security"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "compliance-security-tester"
+      ],
+      "kind": "external-dependency",
+      "status": "blocked",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "Issue status is blocked.",
       "material": true
     },
     "100": {
@@ -2140,7 +4003,7 @@
         "kind/test",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T09:53:17.270Z",
+      "updated_at": "2026-06-30T01:17:11.448Z",
       "content_hash": "2006ed0c657fad23",
       "modules": [
         "runtime",
@@ -2148,6 +4011,29 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "ready",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "101": {
@@ -2163,12 +4049,29 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T06:10:25.011Z",
+      "updated_at": "2026-06-29T12:36:13.240Z",
       "content_hash": "691501dd177f943f",
       "modules": [
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "102": {
@@ -2187,6 +4090,23 @@
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "103": {
@@ -2204,6 +4124,20 @@
       "modules": [
         "runtime"
       ],
+      "module_names": [
+        "Runtime / Protocol"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "104": {
@@ -2224,6 +4158,26 @@
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "105": {
@@ -2237,13 +4191,31 @@
         "kind/test",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T23:01:52.733Z",
+      "updated_at": "2026-06-30T10:03:20.298Z",
       "content_hash": "add57ed8da0b23b1",
       "modules": [
         "runtime",
         "skills_mcp",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "106": {
@@ -2264,6 +4236,26 @@
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "107": {
@@ -2283,6 +4275,23 @@
         "runtime",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "108": {
@@ -2298,13 +4307,32 @@
         "kind/feature",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T10:04:06.315Z",
+      "updated_at": "2026-06-30T17:24:37.188Z",
       "content_hash": "8f1515a5183a4e2a",
       "modules": [
         "uiux",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "109": {
@@ -2319,13 +4347,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T18:49:12.601Z",
+      "updated_at": "2026-06-29T19:06:22.191Z",
       "content_hash": "f9b8fb3fc3f74f5d",
       "modules": [
         "uiux",
         "e2e_release",
         "compliance"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Compliance / Security"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "security"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "110": {
@@ -2343,7 +4391,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T11:23:01.922Z",
+      "updated_at": "2026-07-01T06:24:19.319Z",
       "content_hash": "7313735eb7b61162",
       "modules": [
         "runtime",
@@ -2351,6 +4399,28 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "111": {
@@ -2372,6 +4442,25 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "112": {
@@ -2388,7 +4477,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T16:05:24.059Z",
+      "updated_at": "2026-06-30T01:09:51.128Z",
       "content_hash": "997f1910c87e9c8e",
       "modules": [
         "assistant",
@@ -2398,6 +4487,33 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "113": {
@@ -2412,13 +4528,31 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-28T17:58:34.746Z",
+      "updated_at": "2026-06-30T09:45:29.472Z",
       "content_hash": "b60764abd801a2e2",
       "modules": [
         "assistant",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "114": {
@@ -2434,7 +4568,7 @@
         "priority/high",
         "status/in-review"
       ],
-      "updated_at": "2026-06-28T18:52:34.842Z",
+      "updated_at": "2026-06-30T02:02:54.753Z",
       "content_hash": "d4cc9819115e1dfe",
       "modules": [
         "assistant",
@@ -2442,6 +4576,28 @@
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "115": {
@@ -2461,7 +4617,7 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T08:52:06.632Z",
+      "updated_at": "2026-06-30T01:09:52.270Z",
       "content_hash": "ef2a3175a200d71c",
       "modules": [
         "runtime",
@@ -2471,6 +4627,32 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "Project Automation",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "116": {
@@ -2488,13 +4670,33 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T01:10:45.610Z",
+      "updated_at": "2026-06-29T12:36:13.086Z",
       "content_hash": "34690c1726944907",
       "modules": [
         "runtime",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "117": {
@@ -2512,19 +4714,39 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T01:13:31.519Z",
+      "updated_at": "2026-06-29T12:36:13.057Z",
       "content_hash": "08196b67bcd2f1ef",
       "modules": [
         "runtime",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "118": {
       "iid": 118,
       "title": "feature(projects): replace legacy project flows with repo-backed project CRUD and templates",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/db",
         "area/deploy",
@@ -2536,16 +4758,38 @@
         "area/ui",
         "kind/feature",
         "priority/high",
-        "status/in-review"
+        "status/closed"
       ],
-      "updated_at": "2026-06-29T11:10:47.321Z",
-      "content_hash": "cd7d73bf2989800f",
+      "updated_at": "2026-06-29T13:51:02.037Z",
+      "content_hash": "11356258efbe425e",
       "modules": [
         "projects",
         "uiux",
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
       "material": true
     },
     "119": {
@@ -2560,13 +4804,31 @@
         "priority/high",
         "status/closed"
       ],
-      "updated_at": "2026-06-29T08:05:18.103Z",
+      "updated_at": "2026-06-30T09:45:29.447Z",
       "content_hash": "f01a4e8de2d42d2c",
       "modules": [
         "assistant",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "120": {
@@ -2579,32 +4841,69 @@
         "area/ui",
         "kind/design"
       ],
-      "updated_at": "2026-06-29T10:46:59.874Z",
+      "updated_at": "2026-07-01T08:18:06.186Z",
       "content_hash": "119931b5df8440f8",
       "modules": [
         "runtime",
         "uiux",
         "compliance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "Compliance / Security"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "compliance-security-tester"
+      ],
+      "kind": "design",
+      "status": "opened",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "security"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "121": {
       "iid": 121,
       "title": "enhancement(uiux/app-shell): 精简侧栏导航（仅留助理配置）与品牌头部",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/e2e",
         "area/ui",
-        "kind/enhancement",
-        "status/in-review"
+        "kind/enhancement"
       ],
-      "updated_at": "2026-06-29T10:57:45.794Z",
-      "content_hash": "d22eaa3edd1a56fd",
+      "updated_at": "2026-06-29T12:36:12.993Z",
+      "content_hash": "3c600b72217d3710",
       "modules": [
         "assistant",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "122": {
@@ -2616,17 +4915,32 @@
         "area/server",
         "kind/bug"
       ],
-      "updated_at": "2026-06-29T11:07:23.262Z",
+      "updated_at": "2026-07-01T02:00:50.945Z",
       "content_hash": "1ac422e4e0a29bf8",
       "modules": [
         "e2e_release"
       ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "opened",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "123": {
       "iid": 123,
       "title": "release: 建设隔离干净的 UAT 环境并启用 desktop-release uat",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/context",
         "area/db",
@@ -2641,10 +4955,10 @@
         "area/skills",
         "kind/release",
         "priority/high",
-        "status/ready"
+        "status/in-review"
       ],
-      "updated_at": "2026-06-29T11:27:35.138Z",
-      "content_hash": "2c526998d0b110d6",
+      "updated_at": "2026-07-01T01:56:35.267Z",
+      "content_hash": "c320fad8d39f333c",
       "modules": [
         "runtime",
         "skills_mcp",
@@ -2653,12 +4967,39 @@
         "e2e_release",
         "context_governance"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "124": {
       "iid": 124,
       "title": "design(experts): 专家板块后台改版 — server 端目录 + 归属/可见性/审核/分类 + Meta 专家 + skill 绑定",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/context",
         "area/db",
@@ -2667,87 +5008,174 @@
         "kind/design",
         "status/ready"
       ],
-      "updated_at": "2026-06-29T11:05:10.191Z",
-      "content_hash": "a9579e959480f44f",
+      "updated_at": "2026-07-01T08:24:33.396Z",
+      "content_hash": "98ad38401d3e0668",
       "modules": [
         "skills_mcp",
         "projects",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "125": {
       "iid": 125,
       "title": "feature(experts): 子#1 数据地基 — experts/categories/admin/expert_skills 表 + skill visibility + seed 机制",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/db",
         "area/scripts",
         "area/server",
         "kind/feature",
-        "status/in-progress"
+        "status/in-review"
       ],
-      "updated_at": "2026-06-29T11:05:10.228Z",
-      "content_hash": "de003adb6cfc71e8",
+      "updated_at": "2026-07-01T07:35:58.668Z",
+      "content_hash": "e8cfd8430cf07d19",
       "modules": [
         "skills_mcp",
         "projects",
         "e2e_release"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "126": {
       "iid": 126,
       "title": "feature(experts): 子#2 Catalog API — 四分区 + 可见性过滤",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/server",
         "kind/feature",
-        "status/blocked"
+        "status/in-review"
       ],
-      "updated_at": "2026-06-29T10:43:41.089Z",
-      "content_hash": "3b1a689eef1cd2fb",
+      "updated_at": "2026-07-01T07:35:58.697Z",
+      "content_hash": "ab5925256efe7ac2",
       "modules": [
         "context_governance"
       ],
+      "module_names": [
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P2",
+      "test_types": [
+        "functional"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "127": {
       "iid": 127,
       "title": "feature(experts): 子#3 审核闭环 — 发布申请 + 助理配置 admin 审核位",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/server",
         "area/ui",
         "kind/feature",
-        "status/blocked"
+        "status/in-review"
       ],
-      "updated_at": "2026-06-29T10:43:42.406Z",
-      "content_hash": "0cd94cebc4c2c21e",
+      "updated_at": "2026-06-30T01:17:11.908Z",
+      "content_hash": "6081eb56034d959b",
       "modules": [
         "assistant",
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "128": {
       "iid": 128,
       "title": "feature(experts): 子#4 Meta 专家 — 创建专家的专家 + 产私有 skill",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/server",
         "area/skills",
         "area/ui",
         "kind/feature",
-        "status/blocked"
+        "status/in-review"
       ],
-      "updated_at": "2026-06-29T10:46:59.843Z",
-      "content_hash": "a75ec5be7bb5d2ea",
+      "updated_at": "2026-07-01T07:35:58.724Z",
+      "content_hash": "dc99f4d62a59a108",
       "modules": [
         "skills_mcp",
         "uiux"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "129": {
@@ -2759,65 +5187,2770 @@
         "kind/chore",
         "status/blocked"
       ],
-      "updated_at": "2026-06-29T10:42:44.795Z",
+      "updated_at": "2026-06-30T01:17:11.561Z",
       "content_hash": "b9401290c629247f",
       "modules": [
         "skills_mcp",
         "context_governance"
       ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "blocked",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "Issue status is blocked.",
       "material": true
     },
     "130": {
       "iid": 130,
       "title": "feature(experts/runtime): 子#5 运行时注入 — 专家正文+绑定 skill 从 PG 注入(Claude/Codex 双路径)",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/runtime",
         "area/server",
         "area/skills",
-        "kind/feature",
-        "status/blocked"
+        "kind/feature"
       ],
-      "updated_at": "2026-06-29T10:46:59.320Z",
-      "content_hash": "132f306221e44c0f",
+      "updated_at": "2026-07-01T07:57:27.907Z",
+      "content_hash": "e4900ba806b26e9a",
       "modules": [
         "runtime",
         "skills_mcp"
       ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
       "material": true
     },
     "131": {
       "iid": 131,
       "title": "enhancement(uiux/app-shell): 左下用户入口统一设置模块并新增检查更新版本展示",
-      "state": "opened",
+      "state": "closed",
       "labels": [
         "area/e2e",
         "area/ui",
-        "kind/enhancement",
-        "status/in-review"
+        "kind/enhancement"
       ],
-      "updated_at": "2026-06-29T11:08:38.539Z",
-      "content_hash": "b413becc56e24832",
+      "updated_at": "2026-06-29T13:07:13.827Z",
+      "content_hash": "d73909ca0beeefd6",
       "modules": [
         "uiux",
         "e2e_release"
       ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
       "material": true
     },
     "132": {
       "iid": 132,
-      "title": "design(skills): market_skills 取数策略 — 快照 SkillHub vs 实时读 vs TTL 缓存(待拍)",
-      "state": "opened",
+      "title": "design(skills): 技能市场取数策略 — SkillHub 实时获取，不做缓存",
+      "state": "closed",
       "labels": [
         "area/skills",
-        "kind/design",
-        "status/blocked"
+        "kind/design"
       ],
-      "updated_at": "2026-06-29T11:23:03.162Z",
-      "content_hash": "46848b32b8841911",
+      "updated_at": "2026-07-01T07:19:51.183Z",
+      "content_hash": "8855420e30d4c2fb",
       "modules": [
         "skills_mcp"
       ],
+      "module_names": [
+        "Skills / MCP / Experts"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "133": {
+      "iid": 133,
+      "title": "release: publish desktop artifacts as single GitLab package files",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/release",
+        "priority/high",
+        "status/closed"
+      ],
+      "updated_at": "2026-07-01T01:56:35.312Z",
+      "content_hash": "063ad8c938ac518d",
+      "modules": [
+        "assistant",
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Assistant",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "release",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "135": {
+      "iid": 135,
+      "title": "feature(skillhub): add user-bound SkillHub resource client and normalizer skeleton",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-30T17:00:16.447Z",
+      "content_hash": "018496918a830cd9",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "136": {
+      "iid": 136,
+      "title": "design(context): rename product-facing Deepbank v2 concepts to QBot while preserving legacy namespaces",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/electron",
+        "area/repo",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "status/closed"
+      ],
+      "updated_at": "2026-06-29T16:48:11.172Z",
+      "content_hash": "e1dcec6049b26458",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "137": {
+      "iid": 137,
+      "title": "feature(skillhub/runtime): materialize SkillHub skills for Claude Code and Codex session workdirs",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T07:57:27.876Z",
+      "content_hash": "8b714826259fb55f",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "138": {
+      "iid": 138,
+      "title": "chore(repo): harden GitLab issue/MR collaboration workflow gates",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/chore",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-29T17:19:31.465Z",
+      "content_hash": "423f8bee57b63b5b",
+      "modules": [
+        "skills_mcp",
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "139": {
+      "iid": 139,
+      "title": "design(uiux/qifu): restore Qifu theme contract and gate release audit",
+      "state": "closed",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/repo",
+        "area/scripts",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T08:11:28.313Z",
+      "content_hash": "2f8c40a4fbc6ebd6",
+      "modules": [
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "140": {
+      "iid": 140,
+      "title": "收敛助理入口与配置面，保留新建任务为唯一 chat area 入口",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/db",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-06-30T10:06:04.354Z",
+      "content_hash": "fd093ae6e9e7362e",
+      "modules": [
+        "assistant",
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "design",
+      "status": "in-progress",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "141": {
+      "iid": 141,
+      "title": "design(product): 定稿 WorkBuddy 空间 / 工作区 / 任务产品概念边界",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:10:43.949Z",
+      "content_hash": "eb74a97ec4f774a2",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "142": {
+      "iid": 142,
+      "title": "docs(product): 定稿 QBot 文档/context 的空间 / 工作区 / 任务模型",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/projects",
+        "kind/docs",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T08:44:35.101Z",
+      "content_hash": "d9d4c1e54e97ce88",
+      "modules": [
+        "runtime",
+        "projects",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "docs",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "143": {
+      "iid": 143,
+      "title": "enhancement(ui): 保持全局新建任务 / 空间 / 工作区 IA",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/projects",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T08:44:36.125Z",
+      "content_hash": "cf5b577f4c738578",
+      "modules": [
+        "assistant",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "144": {
+      "iid": 144,
+      "title": "enhancement(projects): 保持项目工作区 / 项目任务 / 自动化任务术语",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/projects",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:07:04.628Z",
+      "content_hash": "4ed7d28b72915bc2",
+      "modules": [
+        "projects",
+        "automation",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Projects / GitLab",
+        "Project Automation",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "145": {
+      "iid": 145,
+      "title": "refactor(server): 固化任务创建后的工作区 / 项目绑定",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/e2e",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/refactor",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:07:04.918Z",
+      "content_hash": "b57f90a37e8eb05d",
+      "modules": [
+        "runtime",
+        "projects",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "refactor",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "146": {
+      "iid": 146,
+      "title": "test(product): WorkBuddy 术语与工作区边界最终回归",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/test",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:07:04.225Z",
+      "content_hash": "ada1c60cb4a04e54",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "test",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "147": {
+      "iid": 147,
+      "title": "test(runtime): 固化 GitLab 项目任务 repo-root 项目工作区",
+      "state": "opened",
+      "labels": [
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/test",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:07:24.738Z",
+      "content_hash": "6e8125d68b74c1d7",
+      "modules": [
+        "runtime",
+        "projects"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "test",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "148": {
+      "iid": 148,
+      "title": "chore(skills): 对齐 repo-managed skills 的 WorkBuddy 概念",
+      "state": "opened",
+      "labels": [
+        "area/context",
+        "area/repo",
+        "area/scripts",
+        "area/skills",
+        "kind/chore",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T09:59:47.215Z",
+      "content_hash": "cbbf12f1c0bed0b2",
+      "modules": [
+        "skills_mcp",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "chore",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "149": {
+      "iid": 149,
+      "title": "refactor(preload): 保留 task/workspace 桥接词汇并隔离内部 session",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/projects",
+        "area/ui",
+        "kind/refactor",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T08:44:42.761Z",
+      "content_hash": "316cbcd7c897fd8d",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "refactor",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "150": {
+      "iid": 150,
+      "title": "enhancement(ui/artifact): 拓宽成果采集 — 工作目录新增/变更文件均入成果，不止 Write/Edit",
+      "state": "closed",
+      "labels": [
+        "area/server",
+        "area/ui",
+        "kind/enhancement",
+        "status/closed"
+      ],
+      "updated_at": "2026-07-01T02:00:50.995Z",
+      "content_hash": "a23f8578465daa5c",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "151": {
+      "iid": 151,
+      "title": "feature(ui/artifact): 跨会话全局成果库 — 左侧「更多」聚合所有任务成果",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/ui",
+        "kind/feature",
+        "status/closed"
+      ],
+      "updated_at": "2026-07-01T02:00:50.832Z",
+      "content_hash": "e72f6a7ea75d4a50",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "152": {
+      "iid": 152,
+      "title": "refactor(runtime): 对齐模型可见的任务 / 工作区语义",
+      "state": "opened",
+      "labels": [
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "kind/refactor",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T08:44:43.630Z",
+      "content_hash": "3fa5d9b70547cbb0",
+      "modules": [
+        "runtime",
+        "projects"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "refactor",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "153": {
+      "iid": 153,
+      "title": "feature(knowledge): 知识路由偏好配置（配置层 MVP）",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/server",
+        "area/ui",
+        "kind/feature"
+      ],
+      "updated_at": "2026-07-01T02:03:13.659Z",
+      "content_hash": "18748c32c0075ceb",
+      "modules": [
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "154": {
+      "iid": 154,
+      "title": "feature(knowledge): 知识路由应用层 — 策略编译注入系统人设（待整合）",
+      "state": "opened",
+      "labels": [
+        "area/runtime",
+        "area/server",
+        "kind/feature",
+        "status/blocked"
+      ],
+      "updated_at": "2026-07-01T05:28:22.325Z",
+      "content_hash": "79eb7c93a525312f",
+      "modules": [
+        "runtime"
+      ],
+      "module_names": [
+        "Runtime / Protocol"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester"
+      ],
+      "kind": "feature",
+      "status": "blocked",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "Issue status is blocked.",
+      "material": true
+    },
+    "155": {
+      "iid": 155,
+      "title": "design(llm): 统一全链路模型连接与本地 agent runtime 配置闭环",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/e2e",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/blocked"
+      ],
+      "updated_at": "2026-07-01T08:18:06.097Z",
+      "content_hash": "e27865da48e0dde1",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Issue status is blocked.",
+      "material": true
+    },
+    "156": {
+      "iid": 156,
+      "title": "feature(llm/server): first-class personal custom LLM connections",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/e2e",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T02:00:50.868Z",
+      "content_hash": "2eaf745354da8bc5",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "157": {
+      "iid": 157,
+      "title": "enhancement(llm/ui): runtime and model binding controls for platform and custom LLM",
+      "state": "closed",
+      "labels": [
+        "area/preload",
+        "area/server",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T07:23:16.966Z",
+      "content_hash": "9791d1bae2d84749",
+      "modules": [
+        "runtime",
+        "uiux"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "158": {
+      "iid": 158,
+      "title": "feature(llm/runtime): resume-aware session model overrides for local agent turns",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/server",
+        "kind/feature",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T07:23:17.045Z",
+      "content_hash": "a4a946e0a905b6e9",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "159": {
+      "iid": 159,
+      "title": "test(llm/e2e): full-chain platform and custom LLM connection matrix",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "area/ui",
+        "kind/test",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T07:23:17.081Z",
+      "content_hash": "064362f3becc13d2",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "160": {
+      "iid": 160,
+      "title": "docs(llm): document unified model connection contract and rollout boundaries",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/docs",
+        "area/runtime",
+        "area/server",
+        "kind/docs"
+      ],
+      "updated_at": "2026-06-30T14:27:05.190Z",
+      "content_hash": "0faef7f754ba73ab",
+      "modules": [
+        "runtime",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "docs",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "161": {
+      "iid": 161,
+      "title": "feature(ops): 任务体验度量 — 运行时错误捕获(P0a) + 本地会话评估(P1)",
+      "state": "closed",
+      "labels": [
+        "area/db",
+        "area/runtime",
+        "area/server",
+        "kind/feature"
+      ],
+      "updated_at": "2026-07-01T05:28:22.552Z",
+      "content_hash": "ca390385eb71515f",
+      "modules": [
+        "assistant",
+        "runtime",
+        "projects"
+      ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "Projects / GitLab"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "162": {
+      "iid": 162,
+      "title": "外部依赖: Lingxi OAuth2 Server 支持 Teams SSO token 置换 access token",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/electron",
+        "area/preload",
+        "area/server",
+        "dependency/external",
+        "developer-confirmation",
+        "kind/external-dependency",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T08:13:19.557Z",
+      "content_hash": "73a51f288de70270",
+      "modules": [
+        "uiux",
+        "compliance",
+        "context_governance"
+      ],
+      "module_names": [
+        "UI / UX",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "external-dependency",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "External dependency acceptance required.",
+      "material": true
+    },
+    "163": {
+      "iid": 163,
+      "title": "design(connectors): 定稿 QBot 连接器产品模型与本轮/专家路由契约",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/electron",
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/design",
+        "priority/high",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T07:30:26.628Z",
+      "content_hash": "1ffb84ca4c82cbb4",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "design",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "164": {
+      "iid": 164,
+      "title": "feature(qbot/feedback): add chat-area quick feedback issue intake",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature"
+      ],
+      "updated_at": "2026-06-30T17:24:36.895Z",
+      "content_hash": "f81bad2e21229d19",
+      "modules": [
+        "assistant",
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
+      "material": true
+    },
+    "165": {
+      "iid": 165,
+      "title": "feature(connectors/server): 建立 MCPHub 连接器 catalog 与 source-aware redacted view",
+      "state": "closed",
+      "labels": [
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T07:30:26.686Z",
+      "content_hash": "ff75734e2ece8358",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "uiux",
+        "compliance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "Compliance / Security"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "compliance-security-tester"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "security"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "166": {
+      "iid": 166,
+      "title": "feature(connectors/routing): 实现用户默认、专家绑定与显式选择的连接器 resolver",
+      "state": "closed",
+      "labels": [
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T07:30:26.723Z",
+      "content_hash": "f3c56e077c620fc4",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "167": {
+      "iid": 167,
+      "title": "enhancement(connectors/ui): 收敛连接器产品文案、来源展示与连应用选择体验",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/ui",
+        "kind/enhancement",
+        "priority/high"
+      ],
+      "updated_at": "2026-06-30T17:12:57.994Z",
+      "content_hash": "286b03b88e237873",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "168": {
+      "iid": 168,
+      "title": "feature(connectors/runtime): 同步支持 Claude Code 与 Codex 的连接器 materialization",
+      "state": "closed",
+      "labels": [
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "priority/high"
+      ],
+      "updated_at": "2026-06-30T17:18:00.804Z",
+      "content_hash": "b5d3cad1d52e662b",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "169": {
+      "iid": 169,
+      "title": "test(connectors/e2e): 验证 MCPHub 到连接器到 Claude/Codex runtime 的全链路",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/preload",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/test",
+        "priority/high"
+      ],
+      "updated_at": "2026-06-30T18:11:15.980Z",
+      "content_hash": "d145fdc8d300d712",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "170": {
+      "iid": 170,
+      "title": "feature(ui): 支持删除任务(会话)",
+      "state": "closed",
+      "labels": [
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-06-30T11:14:17.811Z",
+      "content_hash": "d22bcdb4ee07f5ac",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "feature",
+      "status": "in-progress",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "171": {
+      "iid": 171,
+      "title": "bug(llm/server): k8s-dev real platform LLM connections surface is empty",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/e2e",
+        "area/scripts",
+        "area/server",
+        "kind/bug",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T00:53:10.349Z",
+      "content_hash": "d579e85e3dd6f41b",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "172": {
+      "iid": 172,
+      "title": "feature(qbot/feedback): enable server-configured GitLab token for quick feedback",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/scripts",
+        "area/server",
+        "kind/feature",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-30T19:03:27.998Z",
+      "content_hash": "0847ebebf84fd461",
+      "modules": [
+        "projects",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Projects / GitLab",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
+      "material": true
+    },
+    "173": {
+      "iid": 173,
+      "title": "QBot quick feedback server auth e2e smoke 2026-06-30T15-48-09-241Z",
+      "state": "closed",
+      "labels": [
+        "area/server",
+        "kind/support",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T17:37:01.686Z",
+      "content_hash": "4a008497561f4b75",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "support",
+      "status": "ready",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "174": {
+      "iid": 174,
+      "title": "QBot remote quick feedback e2e smoke 2026-06-30T15-50-42-964Z",
+      "state": "closed",
+      "labels": [
+        "area/server",
+        "kind/support",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T17:37:02.669Z",
+      "content_hash": "b1a46850f516902c",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "support",
+      "status": "ready",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "175": {
+      "iid": 175,
+      "title": "QBot quick feedback remote full-chain test 2026-06-30T16-43-45-346Z 6120bff9c82a",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/server",
+        "kind/bug",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-06-30T17:37:03.727Z",
+      "content_hash": "d678e910de6252d6",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "176": {
+      "iid": 176,
+      "title": "feature(experts/runtime): materialize remote ADK expert bundles through runtime resources",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/projects",
+        "area/runtime",
+        "area/server",
+        "area/skills",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-06-30T17:41:18.141Z",
+      "content_hash": "83f6790a57a998cf",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "177": {
+      "iid": 177,
+      "title": "feature(qbot/feedback): 补齐完整证据包与 agent 追问建单 SOP",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T04:55:17.668Z",
+      "content_hash": "fb336d9354450333",
+      "modules": [
+        "assistant",
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
+      "material": true
+    },
+    "178": {
+      "iid": 178,
+      "title": "test(connectors/real): 验证 #68 MCPHub Lingxi 真实端点全链路",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/test",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T09:00:15.470Z",
+      "content_hash": "7d80f6accd1bb7a9",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "e2e_release",
+        "compliance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform",
+        "Compliance / Security"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester"
+      ],
+      "kind": "test",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e",
+        "security"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "179": {
+      "iid": 179,
+      "title": "bug(llm/runtime): Claude Code rejects valid Deepbank Anthropic connection",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/bug",
+        "priority/high"
+      ],
+      "updated_at": "2026-07-01T06:24:19.462Z",
+      "content_hash": "6dadf5fdec66fc09",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "closed",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "180": {
+      "iid": 180,
+      "title": "enhancement(assistant-ui): left-align user chat messages while preserving role distinction",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/ui",
+        "kind/enhancement",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T07:37:41.827Z",
+      "content_hash": "8f4bd5706dbae93e",
+      "modules": [
+        "assistant",
+        "uiux"
+      ],
+      "module_names": [
+        "Assistant",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "enhancement",
+      "status": "in-review",
+      "priority": "P2",
+      "test_types": [
+        "functional",
+        "UI"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "181": {
+      "iid": 181,
+      "title": "QBot feedback upload validation real-upload-1782869826211",
+      "state": "closed",
+      "labels": [
+        "area/server",
+        "kind/support",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T04:52:52.799Z",
+      "content_hash": "cd87c5b36878d355",
+      "modules": [
+        "context_governance"
+      ],
+      "module_names": [
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "issue-intelligence-analyst"
+      ],
+      "kind": "support",
+      "status": "ready",
+      "priority": "P2",
+      "test_types": [
+        "functional"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "182": {
+      "iid": 182,
+      "title": "enhancement(runtime): make default personal workdir and release env identity explicit",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/enhancement"
+      ],
+      "updated_at": "2026-07-01T04:06:24.114Z",
+      "content_hash": "ffe7c7e504f533ff",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "enhancement",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "183": {
+      "iid": 183,
+      "title": "QBot quick feedback: E2E quick feedback: UI button screenshot issue",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "kind/bug",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T04:16:49.661Z",
+      "content_hash": "ef19d666cb0ef5ae",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "184": {
+      "iid": 184,
+      "title": "QBot quick feedback: E2E quick feedback: UI button screenshot issue",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "kind/bug",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T04:18:29.481Z",
+      "content_hash": "4524b1de3c667da5",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "185": {
+      "iid": 185,
+      "title": "QBot quick feedback: E2E quick feedback: UI button screenshot issue",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "kind/bug",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T04:22:37.878Z",
+      "content_hash": "b179ce627747485b",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "186": {
+      "iid": 186,
+      "title": "QBot quick feedback: E2E quick feedback: UI button screenshot issue",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "kind/bug",
+        "source/qbot-feedback",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T04:55:19.805Z",
+      "content_hash": "ac91857158c91ef3",
+      "modules": [
+        "e2e_release"
+      ],
+      "module_names": [
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "187": {
+      "iid": 187,
+      "title": "feature(teams): 支持 QBot standalone Electron 与 Teams-hosted embedded 双形态交付",
+      "state": "closed",
+      "labels": [
+        "area/context",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/server",
+        "area/skills",
+        "area/ui",
+        "kind/feature",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T07:31:17.593Z",
+      "content_hash": "fd8dccc63f38863f",
+      "modules": [
+        "skills_mcp",
+        "uiux",
+        "e2e_release",
+        "context_governance"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
+      "material": true
+    },
+    "188": {
+      "iid": 188,
+      "title": "test(llm/e2e): close remaining real platform matrix blockers after #159",
+      "state": "opened",
+      "labels": [
+        "area/e2e",
+        "area/runtime",
+        "area/scripts",
+        "area/server",
+        "kind/test",
+        "priority/high",
+        "status/blocked"
+      ],
+      "updated_at": "2026-07-01T07:23:17.108Z",
+      "content_hash": "a913dbc9967485c6",
+      "modules": [
+        "runtime",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "test",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Issue status is blocked.",
+      "material": true
+    },
+    "189": {
+      "iid": 189,
+      "title": "feature(release): 桌面包按环境派生 appId/名字/数据目录/签名身份，支持三环境同机并存",
+      "state": "closed",
+      "labels": [
+        "area/e2e",
+        "area/electron",
+        "area/runtime",
+        "area/scripts",
+        "kind/feature",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T08:48:24.417Z",
+      "content_hash": "fee1d019ceb917a6",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "190": {
+      "iid": 190,
+      "title": "feature(server/deploy): MCPHub/SkillHub/外部连接地址按环境在控制面 manifest 完整参数化",
+      "state": "closed",
+      "labels": [
+        "area/scripts",
+        "area/server",
+        "kind/feature",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T08:54:58.204Z",
+      "content_hash": "1da08e23d20ab69d",
+      "modules": [
+        "skills_mcp",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "in-review",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "Lingxi OAuth2 to GitLab token exchange dependency.",
+      "material": true
+    },
+    "191": {
+      "iid": 191,
+      "title": "外部依赖: 360Teams/im-pc 同步 QBot host package 并完成 Teams-hosted 验收",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/deploy",
+        "area/docs",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/runtime",
+        "area/server",
+        "dependency/external",
+        "developer-confirmation",
+        "kind/external-dependency",
+        "priority/high",
+        "status/blocked"
+      ],
+      "updated_at": "2026-07-01T08:13:19.278Z",
+      "content_hash": "d01849b4cb4c6be3",
+      "modules": [
+        "runtime",
+        "projects",
+        "uiux",
+        "e2e_release",
+        "compliance",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Projects / GitLab",
+        "UI / UX",
+        "E2E / Release / Platform",
+        "Compliance / Security",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator",
+        "compliance-security-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "external-dependency",
+      "status": "blocked",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "e2e",
+        "security",
+        "contract"
+      ],
+      "blocked_by": "Issue status is blocked.",
+      "material": true
+    },
+    "192": {
+      "iid": 192,
+      "title": "bug(skills): 技能市场安装失败，SkillHub 安装路径仍依赖服务端令牌",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/server",
+        "area/skills",
+        "kind/bug",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T08:49:56.693Z",
+      "content_hash": "ba4c0d702455d563",
+      "modules": [
+        "skills_mcp",
+        "context_governance"
+      ],
+      "module_names": [
+        "Skills / MCP / Experts",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "bug",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "193": {
+      "iid": 193,
+      "title": "feature(llm/ui): add composer model selector with M-tier labels",
+      "state": "closed",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/feature"
+      ],
+      "updated_at": "2026-07-01T08:18:05.914Z",
+      "content_hash": "b6d812595fc2646e",
+      "modules": [
+        "assistant",
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "runtime-protocol-skill-chain-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "feature",
+      "status": "closed",
+      "priority": "P1",
+      "test_types": [
+        "functional",
+        "UI",
+        "runtime",
+        "e2e"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "195": {
+      "iid": 195,
+      "title": "bug(connectors): MCPHub 已配置多服务但 QBot 连接器仅显示内置毓数SQL",
+      "state": "opened",
+      "labels": [
+        "area/docs",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/bug",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-07-01T09:00:59.213Z",
+      "content_hash": "e9a879dc88b691f2",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "uiux",
+        "context_governance"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "UI / UX",
+        "Context / Governance"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "issue-intelligence-analyst"
+      ],
+      "kind": "bug",
+      "status": "in-progress",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "196": {
+      "iid": 196,
+      "title": "release: isolate packaged DMG runtime from user-local env and config",
+      "state": "closed",
+      "labels": [
+        "area/deploy",
+        "area/e2e",
+        "area/electron",
+        "area/preload",
+        "area/scripts",
+        "kind/release",
+        "priority/high",
+        "status/in-review"
+      ],
+      "updated_at": "2026-07-01T08:38:21.724Z",
+      "content_hash": "29c05f38fab3306e",
+      "modules": [
+        "runtime",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "release",
+      "status": "in-review",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "UI",
+        "e2e",
+        "release"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "197": {
+      "iid": 197,
+      "title": "bug(experts): 对话创建专家后未出现在「我的专家」",
+      "state": "opened",
+      "labels": [
+        "area/db",
+        "area/runtime",
+        "area/server",
+        "area/ui",
+        "kind/bug",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-07-01T08:24:33.022Z",
+      "content_hash": "d38dd6c7b535b876",
+      "modules": [
+        "runtime",
+        "skills_mcp",
+        "projects",
+        "uiux"
+      ],
+      "module_names": [
+        "Runtime / Protocol",
+        "Skills / MCP / Experts",
+        "Projects / GitLab",
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "runtime-protocol-skill-chain-tester",
+        "functional-test-case-designer",
+        "ui-product-experience-tester"
+      ],
+      "kind": "bug",
+      "status": "in-progress",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "runtime",
+        "integration",
+        "UI",
+        "regression"
+      ],
+      "blocked_by": "Requires explicit real-provider environment.",
+      "material": true
+    },
+    "198": {
+      "iid": 198,
+      "title": "bug(assistant-ui): keep user chat messages left-aligned and restore composer input outline",
+      "state": "opened",
+      "labels": [
+        "area/assistant-ui",
+        "area/e2e",
+        "area/ui",
+        "kind/bug",
+        "priority/high",
+        "status/in-progress"
+      ],
+      "updated_at": "2026-07-01T08:47:53.620Z",
+      "content_hash": "406666cdb198b27b",
+      "modules": [
+        "assistant",
+        "uiux",
+        "e2e_release"
+      ],
+      "module_names": [
+        "Assistant",
+        "UI / UX",
+        "E2E / Release / Platform"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester",
+        "cross-platform-e2e-validator"
+      ],
+      "kind": "bug",
+      "status": "in-progress",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "e2e",
+        "regression"
+      ],
+      "blocked_by": "",
+      "material": true
+    },
+    "199": {
+      "iid": 199,
+      "title": "QBot窗口右侧内容区顶部无法拖拽移动窗口",
+      "state": "opened",
+      "labels": [
+        "area/electron",
+        "area/ui",
+        "kind/bug",
+        "status/ready"
+      ],
+      "updated_at": "2026-07-01T07:47:46.194Z",
+      "content_hash": "f960ecee0ee252f2",
+      "modules": [
+        "uiux"
+      ],
+      "module_names": [
+        "UI / UX"
+      ],
+      "owner_agents": [
+        "ui-product-experience-tester"
+      ],
+      "kind": "bug",
+      "status": "ready",
+      "priority": "P0",
+      "test_types": [
+        "functional",
+        "UI",
+        "regression"
+      ],
+      "blocked_by": "",
       "material": true
     }
   }

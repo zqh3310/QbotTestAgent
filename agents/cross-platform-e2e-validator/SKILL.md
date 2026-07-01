@@ -20,6 +20,8 @@ Own e2e, release, and OS-specific validation strategy for QBot.
 
 - Select the smallest sufficient validation layer: unit, contract, local e2e, local real, qbot real, remote dev, release, or desktop build.
 - Design Windows and macOS e2e operation plans.
+- Verify automation runner readiness for both OS families: macOS flows must run through bash; Windows flows must run through PowerShell.
+- Require `automation-doctor` before real A2/A3 execution and record blocked reasons when OS, package scripts, env, signing/build tools, Docker, or real endpoints are missing.
 - Identify platform-specific blockers, especially Docker Desktop, SQLite bind mounts, DMG/App install, Windows installer/ZIP, file paths, and process cleanup.
 - Define artifact and evidence expectations for each run.
 - Mark known environment failures as blockers, not product passes.
@@ -37,7 +39,7 @@ Own e2e, release, and OS-specific validation strategy for QBot.
 
 - Every recommended command has a reason and risk level.
 - OS differences are explicit.
+- Automation runner readiness and execution-report paths are explicit for both macOS and Windows.
 - Artifacts and cleanup are specified.
 - A failed prerequisite is reported as `blocked` or `not-run`, not `passed`.
 - The plan can be converted directly into Codex OS automation flows.
-

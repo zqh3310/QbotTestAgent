@@ -8,6 +8,8 @@
     "check": "node --check src/cli.mjs && node test/smoke.mjs",
     "run": "node src/cli.mjs run",
     "monitor": "node src/cli.mjs monitor",
-    "generate": "node src/cli.mjs generate"
+    "generate": "node src/cli.mjs generate",
+    "automation:doctor": "node src/cli.mjs automation-doctor",
+    "automation:run": "node src/cli.mjs automation-run"
   }
 }

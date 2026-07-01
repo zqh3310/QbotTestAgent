@@ -2,19 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, writeCsv } from './fs.mjs';
 import { FLOW_COLUMNS } from './automation.mjs';
+import { ISSUE_SCOPE_COLUMNS } from './issue-intelligence.mjs';
 import { TEST_CASE_COLUMNS } from './testcases.mjs';
 
-export function writeTabularOutputs({ outDir, issueMatrix, testCases, automationFlows }) {
+export function writeTabularOutputs({ outDir, issueMatrix, issueScopeRows = [], testCases, automationFlows }) {
   const files = {};
   files.test_cases_csv = path.join(outDir, 'qbot-functional-test-cases.csv');
   files.automation_flows_csv = path.join(outDir, 'qbot-codex-automation-flows.csv');
   files.issue_matrix_csv = path.join(outDir, 'qbot-issue-matrix.csv');
+  files.issue_scope_csv = path.join(outDir, 'qbot-product-issue-scope.csv');
   writeCsv(files.test_cases_csv, testCases, TEST_CASE_COLUMNS);
   writeCsv(files.automation_flows_csv, automationFlows, FLOW_COLUMNS);
   writeCsv(files.issue_matrix_csv, issueMatrix, Object.keys(issueMatrix[0] || { iid: '', title: '' }));
+  writeCsv(files.issue_scope_csv, issueScopeRows, ISSUE_SCOPE_COLUMNS);
 
   files.workbook_xlsx = path.join(outDir, 'qbot-test-plan.xlsx');
   writeXlsx(files.workbook_xlsx, [
+    { name: 'ProductIssueScope', rows: issueScopeRows, columns: ISSUE_SCOPE_COLUMNS },
     { name: 'FunctionalCases', rows: testCases, columns: TEST_CASE_COLUMNS },
     { name: 'CodexFlows', rows: automationFlows, columns: FLOW_COLUMNS },
     { name: 'IssueMatrix', rows: issueMatrix, columns: Object.keys(issueMatrix[0] || { iid: '', title: '' }) },
@@ -185,4 +189,3 @@ function crc32(buffer) {
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
-

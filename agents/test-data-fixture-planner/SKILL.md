@@ -20,6 +20,7 @@ Own test data readiness and fixture design for QBot test work.
 - Define the minimum safe data needed for each functional or automated test.
 - Separate local/mock fixtures, live GitLab fixtures, Lingxi accounts, provider/model env, ADK runtime resources, and release artifacts.
 - Create readiness gates: ready, blocked, skipped, degraded, or not-run.
+- Maintain fixture impact for dynamic issue deltas: identify which new/changed cases require new accounts, projects, repos, connector definitions, skills, provider gates, release artifacts, or cleanup changes.
 - Specify fixture cleanup without touching unrelated user data.
 - Ensure test data can be recreated and does not depend on hidden local state.
 - Flag destructive or production-risk data needs before they reach automation.
@@ -39,4 +40,4 @@ Own test data readiness and fixture design for QBot test work.
 - Fixtures are minimal, reproducible, and non-secret.
 - Cleanup steps are scoped and non-destructive.
 - The main agent can distinguish test gap, environment blocker, and product defect.
-
+- Dynamic updates list newly required fixtures separately from existing reusable fixtures.

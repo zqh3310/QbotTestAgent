@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runAutomationCommand } from './lib/automation-executor.mjs';
 import { generateAutomationFlows } from './lib/automation.mjs';
 import { auditOutputs } from './lib/audit.mjs';
 import { buildIssueMatrix } from './lib/classifier.mjs';
 import { writeTabularOutputs } from './lib/excel.mjs';
 import { ensureDir, parseArgs, timestampForPath, writeJsonFile, writeTextFile } from './lib/fs.mjs';
+import { buildIssueIntelligence, issuesForTestDesign } from './lib/issue-intelligence.mjs';
 import { loadIssues } from './lib/issues.mjs';
 import { loadLiveGitLabIssues } from './lib/live-gitlab.mjs';
 import { buildMonitorReport } from './lib/monitor.mjs';
-import { renderMonitor, writeReports } from './lib/reports.mjs';
+import { renderIssueIntelligence, renderMonitor, writeReports } from './lib/reports.mjs';
 import { generateTestCases } from './lib/testcases.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,6 +32,14 @@ function resolveOptions(raw) {
   return { repoRoot, runId, outDir, stateFile, saveState, source, gitlabHost, gitlabProject };
 }
 
+function resolveAutomationOptions(raw) {
+  const repoRoot = path.resolve(raw.repo || defaultRepoRoot());
+  const runId = raw['run-id'] || timestampForPath();
+  const outDir = path.resolve(raw.out || path.join(ROOT, 'outputs', runId));
+  const flowsFile = path.resolve(raw.flows || path.join(outDir, 'codex-automation-flows.json'));
+  return { repoRoot, runId, outDir, flowsFile };
+}
+
 function loadIssueSource(options) {
   if (options.source === 'live-gitlab') {
     return loadLiveGitLabIssues({ host: options.gitlabHost, projectPath: options.gitlabProject });
@@ -41,6 +51,17 @@ function loadIssueSource(options) {
 }
 
 export function run(command, rawOptions = {}) {
+  if (['automation-doctor', 'automation-run'].includes(command)) {
+    const options = resolveAutomationOptions(rawOptions);
+    return runAutomationCommand({
+      mode: command === 'automation-doctor' ? 'doctor' : 'run',
+      repoRoot: options.repoRoot,
+      flowsFile: options.flowsFile,
+      outDir: options.outDir,
+      options: rawOptions,
+    });
+  }
+
   const options = resolveOptions(rawOptions);
   ensureDir(options.outDir);
   let issues = [];
@@ -51,7 +72,15 @@ export function run(command, rawOptions = {}) {
   } catch (error) {
     sourceErrors = [{ file: options.source, error: error.message }];
   }
+  if (options.source === 'local-export' && sources.length === 0 && sourceErrors.length === 0) {
+    sourceErrors = [{
+      file: options.repoRoot,
+      error: 'No local GitLab issue export files found. Use --source live-gitlab for current coverage or provide issues/issue_*.json, issues.json, or issues_closed.json.',
+    }];
+  }
   const issueMatrix = buildIssueMatrix(issues);
+  const issueIntelligence = buildIssueIntelligence(issues);
+  const testDesignIssues = issuesForTestDesign(issues, issueIntelligence);
   const { report: monitorReport } = buildMonitorReport({
     issues,
     stateFile: options.stateFile,
@@ -69,32 +98,41 @@ export function run(command, rawOptions = {}) {
       reason: 'Issue source unavailable; monitor did not compare snapshots.',
       recommended_agents: ['qbot-test-chief'],
     };
+    monitorReport.workflow_plan = [{
+      step: 1,
+      agent: 'qbot-test-chief',
+      action: 'Blocked: restore a fresh issue source before updating or accepting the test plan.',
+    }];
     monitorReport.blockers.push(...sourceErrors.map((error) => `Issue source read error in ${error.file}: ${error.error}`));
   }
 
   if (command === 'monitor') {
-    const monitorOnly = { monitorReport, sources, sourceErrors, options };
+    const monitorOnly = { monitorReport, issueIntelligence, sources, sourceErrors, options };
     writeJsonFile(path.join(options.outDir, 'monitor-only.json'), monitorOnly);
     writeJsonFile(path.join(options.outDir, 'monitor-report.json'), monitorReport);
     writeTextFile(path.join(options.outDir, 'monitor-report.md'), renderMonitor(monitorReport));
+    writeJsonFile(path.join(options.outDir, 'issue-intelligence-report.json'), issueIntelligence);
+    writeTextFile(path.join(options.outDir, 'issue-intelligence-report.md'), renderIssueIntelligence(issueIntelligence));
     return monitorOnly;
   }
 
-  const testCases = generateTestCases(issues);
+  const testCases = generateTestCases(testDesignIssues);
   const automationFlows = generateAutomationFlows(testCases);
   const tableFiles = writeTabularOutputs({
     outDir: options.outDir,
     deepbankRoot: options.repoRoot,
     issueMatrix,
+    issueScopeRows: issueIntelligence.issue_scope_rows,
     testCases,
     automationFlows,
   });
-  const audit = auditOutputs({ issueMatrix, testCases, automationFlows, sourceErrors, tableFiles });
+  const audit = auditOutputs({ issueMatrix, issueIntelligence, testCases, automationFlows, sourceErrors, tableFiles });
   const reportFiles = writeReports({
     outDir: options.outDir,
     repoRoot: options.repoRoot,
     monitorReport,
     issueMatrix,
+    issueIntelligence,
     testCases,
     automationFlows,
     audit,
@@ -108,6 +146,8 @@ export function run(command, rawOptions = {}) {
     source_errors: sourceErrors,
     counts: {
       issues: issues.length,
+      product_issues: issueIntelligence.selected_product_issue_count,
+      excluded_issues: issueIntelligence.excluded_issue_count,
       test_cases: testCases.length,
       automation_flows: automationFlows.length,
     },
@@ -120,7 +160,7 @@ export function run(command, rawOptions = {}) {
 
 if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!['run', 'monitor', 'generate', 'analyze'].includes(command)) {
+  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run'].includes(command)) {
     console.error(`Unknown command: ${command}`);
     process.exit(2);
   }
@@ -131,6 +171,8 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
     out_dir: result.options?.outDir || result.out_dir,
     counts: result.counts || null,
     audit_status: result.audit?.status || null,
+    automation_status: result.status || null,
+    automation_summary: result.summary || null,
   }, null, 2));
-  if (result.audit?.status === 'blocked' || result.monitorReport?.blockers?.length) process.exitCode = 1;
+  if (result.audit?.status === 'blocked' || result.monitorReport?.blockers?.length || result.status === 'failed' || (command === 'automation-doctor' && result.status === 'blocked')) process.exitCode = 1;
 }

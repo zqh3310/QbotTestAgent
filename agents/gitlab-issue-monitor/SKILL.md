@@ -20,8 +20,10 @@ Monitor GitLab issue drift for QBot testing. This skill detects whether new or c
 
 - Detect newly created issues, reopened issues, closed issues, label/status changes, title changes, and materially changed descriptions.
 - Classify each issue delta by product module: assistant, runtime, Codex, Claude Code, protocol/model, skills/MCP, projects, automation, UI/UX, e2e, release, compliance, Teams embedding, external dependency.
+- Mark the source freshness explicitly: live GitLab, local export, mixed, unavailable, or stale snapshot.
 - Decide whether the delta means:
   - no test-plan change;
+  - existing test assets need incremental maintenance;
   - functional test cases need additions or edits;
   - Codex Windows/macOS executable flows need additions or edits;
   - runtime/protocol/skill-chain coverage needs additions;
@@ -65,6 +67,16 @@ test_plan_decision:
   required: true | false
   reason: <short reason>
   recommended_agents: []
+delta_summary:
+  material_count: 0
+  new_count: 0
+  changed_count: 0
+  state_change_count: 0
+  removed_count: 0
+workflow_plan:
+  - step: 1
+    agent: <agent>
+    action: <action>
 blockers: []
 ```
 
@@ -95,6 +107,6 @@ Do not trigger a test-plan update for only typo fixes, duplicate comments, assig
 - The monitor report states whether the source is live or snapshot-based.
 - Each material delta has issue ID, title, changed field, module, and recommended next agent.
 - Non-material deltas are summarized, not expanded into test work.
+- Material deltas recommend `test-plan-maintainer`, `test-case-reviewer`, and `evidence-quality-auditor`; changed cases should not bypass maintenance and review.
 - Blockers such as GitLab auth failure or remote network failure are explicit.
 - The main agent can decide the next action without rereading every changed issue.
-

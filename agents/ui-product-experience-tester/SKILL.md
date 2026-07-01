@@ -19,6 +19,7 @@ Own tester-facing QBot product experience coverage. Focus on what users see, cli
 
 - Design UI and conversation-flow cases for assistant, composer, artifacts, attachments, AskUserQuestion, navigation, login, projects, experts, skills, config, and connectors.
 - Cover both UI interactions and conversation interactions where the product offers both.
+- Own the ordinary-user black-box experience: first-time users, product managers, operations, and leaders should complete common tasks without understanding model, runtime, provider, Codex, Claude Code, baseURL, env key, MCP command, or skill mechanics.
 - Include visual quality, accessibility, responsive layout, text fit, loading, empty, error, disabled, blocked, and permission states.
 - Verify runtime internals, raw SDK text, secrets, or debugging details are not exposed in user-facing panes.
 - Cover standalone Electron and 360Teams embedding expectations when source context requires it.
@@ -35,7 +36,7 @@ Own tester-facing QBot product experience coverage. Focus on what users see, cli
 
 - Cases are phrased in tester-readable product language.
 - Each UI assertion is visible, inspectable, or artifact-backed.
+- Black-box cases include explicit negative assertions for hidden technical jargon on ordinary-user paths.
 - Accessibility and layout checks have concrete criteria.
 - Conversation usability cases distinguish model behavior from product UI behavior.
 - Findings are classifiable as bug, optimization, test gap, or design question.
-

@@ -19,6 +19,10 @@ Build the issue intelligence layer for QBot testing. Treat issue descriptions, l
 ## Responsibilities
 
 - Normalize all relevant issues into a compact matrix: ID, title, labels, status, module, acceptance, validation commands, blockers, dependencies.
+- Classify every issue as `include_product_scope` or `exclude_development_process` before any downstream test design.
+- Include only issues whose body or product documentation defines clear product behavior, user/admin path, acceptance criteria, constraints, permission/compliance rules, or product-facing blocked states.
+- Exclude MR workflow, repo hooks, CI/e2e infrastructure, refactor/chore, release plumbing, test orchestration, governance, and development-process bug/feature issues unless the issue body defines explicit product behavior.
+- Return the full body of every selected product/function issue to `qbot-test-chief`; downstream agents should not reread every GitLab issue.
 - Group issues by product module: app shell, assistant, runtime, skills/MCP, projects, automation, GitLab, release, UI/UX, compliance, e2e.
 - Identify issues that are test-owned, feature-owned, blocked, in-review, or external-dependency.
 - Extract negative cases and acceptance criteria from issue descriptions.
@@ -37,6 +41,9 @@ Build the issue intelligence layer for QBot testing. Treat issue descriptions, l
 Return a subagent result packet with:
 
 - `issue_matrix`: normalized issue rows.
+- `issue_scope_rows`: per-issue include/exclude decision and reason.
+- `selected_issues`: product/function/constraint issues, including full issue body.
+- `excluded_issues`: development-process issues with exclusion reason.
 - `module_map`: module to issues.
 - `coverage_seeds`: behaviors that need functional cases.
 - `blockers`: external dependencies and environment blockers.
@@ -46,6 +53,7 @@ Return a subagent result packet with:
 
 - Every issue-derived claim cites an issue ID or file.
 - Open and closed issue scope is separated.
+- Development-process issues are excluded from functional case generation unless explicit product behavior is present.
+- Selected issue handoff includes enough body text for the main agent to brief downstream agents.
 - Blocked or external items are not converted into runnable tests without skip/block rules.
 - The handoff is usable by a test designer without rereading every issue.
-
