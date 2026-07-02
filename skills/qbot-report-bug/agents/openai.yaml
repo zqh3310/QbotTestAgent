@@ -1,0 +1,7 @@
+interface:
+  display_name: "QBot 提 Bug"
+  short_description: "按 deepbankV2 固定模板提交缺陷 Issue"
+  default_prompt: "Use $qbot-report-bug to file a QBot bug issue from my natural-language report."
+
+policy:
+  allow_implicit_invocation: true
