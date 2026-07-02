@@ -14,6 +14,7 @@ Own e2e, release, and OS-specific validation strategy for QBot.
 - `D:\deepbankV2\test\AGENTS.md`
 - `D:\deepbankV2\README.md`
 - `D:\deepbankV2\docs\release-workflow.md` when release/package validation matters.
+- `D:\QbotTestAgent\agents\release-package-mac-automation-tester\SKILL.md` when a macOS dmg/app package needs to be launched or inspected from QbotTestAgent.
 - Active e2e issues such as macOS Docker/SQLite blockers when present.
 
 ## Responsibilities
@@ -23,6 +24,7 @@ Own e2e, release, and OS-specific validation strategy for QBot.
 - Verify automation runner readiness for both OS families: macOS flows must run through bash; Windows flows must run through PowerShell.
 - Require `automation-doctor` before real A2/A3 execution and record blocked reasons when OS, package scripts, env, signing/build tools, Docker, or real endpoints are missing.
 - Identify platform-specific blockers, especially Docker Desktop, SQLite bind mounts, DMG/App install, Windows installer/ZIP, file paths, and process cleanup.
+- Delegate macOS `dmg` / `qbot.app` launch, CDP inspection, screenshots, and package logs to `release-package-mac-automation-tester`.
 - Define artifact and evidence expectations for each run.
 - Mark known environment failures as blockers, not product passes.
 - Ensure release cases include remote-control-plane/fail-closed expectations when relevant.
@@ -40,6 +42,7 @@ Own e2e, release, and OS-specific validation strategy for QBot.
 - Every recommended command has a reason and risk level.
 - OS differences are explicit.
 - Automation runner readiness and execution-report paths are explicit for both macOS and Windows.
+- For macOS release packages, the package doctor/run command and `release-package-automation-report.*` paths are explicit.
 - Artifacts and cleanup are specified.
 - A failed prerequisite is reported as `blocked` or `not-run`, not `passed`.
 - The plan can be converted directly into Codex OS automation flows.

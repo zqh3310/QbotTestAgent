@@ -10,6 +10,8 @@
     "monitor": "node src/cli.mjs monitor",
     "generate": "node src/cli.mjs generate",
     "automation:doctor": "node src/cli.mjs automation-doctor",
-    "automation:run": "node src/cli.mjs automation-run"
+    "automation:run": "node src/cli.mjs automation-run",
+    "automation:package-doctor": "node src/cli.mjs release-package-doctor",
+    "automation:package-run": "node src/cli.mjs release-package-run"
   }
 }

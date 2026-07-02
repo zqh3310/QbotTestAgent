@@ -28,6 +28,7 @@ Convert approved test cases into Codex-executable operating-system flows for Win
 - Include timeout minutes and long-running controls so assistant turns, e2e jobs, release builds, and remote dependency checks cannot hang silently.
 - Ensure generated flows can be consumed by the local automation runner: `automation-doctor` for readiness and `automation-run` for execution or dry-run.
 - Include platform differences: PowerShell vs zsh/bash, path separators, Docker Desktop behavior, DMG/App handling, Windows installer/ZIP handling.
+- When a macOS flow targets a delivered `dmg` or `qbot.app` package rather than the development repository, express it through `npm run automation:package-doctor` and `npm run automation:package-run`, then delegate execution details to `release-package-mac-automation-tester`.
 - Include long-running task handling: timeouts, progress checks, background process cleanup, artifact polling, and non-hanging completion.
 - Preserve secret safety by listing env variable names only.
 

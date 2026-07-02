@@ -10,6 +10,7 @@ This agent team is built for Deepbank v2 / QBot test work. It is not an implemen
 - runtime/protocol/skill-chain regression coverage for Codex CLI + GLM5.2 style model routing;
 - bug-vs-optimization conclusions with evidence;
 - issue drafts or issue-creation handoffs when gaps are confirmed.
+- macOS QBot release package doctor/run automation with CDP screenshots, logs, and explicit blocked reasons.
 
 ## Source Context
 
@@ -25,6 +26,7 @@ Current local facts used to design this team:
 - Personal assistant turns run locally; project turns can route through a bound ADK runtime server.
 - Product surfaces include assistant chat, experts, skills, connectors/MCP, projects, GitLab-backed project workbench, automation, release lanes, 360Teams embedding, and runtime-family/provider selection.
 - Existing test entrypoints include `npm run check`, `npm run build:ui`, `npm run e2e:local`, `npm run e2e:qbot:codex:real`, `npm run e2e:qbot:claude-code:real`, `npm run codex:smoke`, runtime feature matrix commands, and release/e2e lanes.
+- QbotTestAgent package automation entrypoints include `npm run automation:package-doctor` and `npm run automation:package-run`, which launch macOS QBot release packages, connect Electron CDP, inspect visible controls, capture screenshots, and write package automation reports.
 - GitLab issue exports are present locally under `D:\deepbankV2\issues` and root issue JSON files.
 
 The remote GitLab web page was not reachable from the current web channel during creation; the local clone, origin URL, repository docs, and exported issue JSON were used as the source of truth for this first architecture pass.
@@ -42,6 +44,7 @@ flowchart TD
   M --> V["test-case-reviewer"]
   M --> R["runtime-protocol-skill-chain-tester"]
   M --> X["cross-platform-e2e-validator"]
+  M --> L["release-package-mac-automation-tester"]
   M --> P["ui-product-experience-tester"]
   M --> C["compliance-security-tester"]
   M --> D["test-data-fixture-planner"]
@@ -55,6 +58,7 @@ flowchart TD
   V --> M
   R --> M
   X --> M
+  L --> M
   P --> M
   C --> M
   D --> M
@@ -76,6 +80,7 @@ flowchart TD
 | `test-case-reviewer` | subagent | Strictly reviews functional and Codex automation test cases for granularity, executable steps, expected results, traceability, coverage gaps, priority discipline, and evidence requirements. |
 | `runtime-protocol-skill-chain-tester` | subagent | Tests Codex CLI, GLM5.2/protocol-conversion assumptions, long tasks, skill invocation, and multi-skill chains. |
 | `cross-platform-e2e-validator` | subagent | Owns OS, packaging, local/release/dev e2e command selection and platform-specific executable flows. |
+| `release-package-mac-automation-tester` | subagent | Owns macOS QBot release package doctor/run automation through QbotTestAgent scripts, including dmg/app discovery, quarantine cleanup, launch, Electron CDP inspection, screenshots, logs, and blocked reason reporting. |
 | `ui-product-experience-tester` | subagent | Owns QBot UI/chat usability, visual/product behavior, accessibility, Teams/standalone shell experience. |
 | `compliance-security-tester` | subagent | Owns M1-M4 compliance, secret redaction, auth/token boundaries, and data-leak negative cases. |
 | `test-data-fixture-planner` | subagent | Owns fixtures, accounts, repo/test data readiness, skip/blocker semantics, and reproducibility. |
@@ -94,7 +99,8 @@ flowchart TD
 8. No agent may fabricate TestMind, GitLab, runtime, DB, UI, provider, MCP, model, log, or issue evidence.
 9. Every material issue delta must pass through `test-plan-maintainer` before a workbook or automation package is delivered, unless the final report explicitly states why maintenance was skipped.
 10. Any user-facing test case workbook, automation plan, or case redesign must pass `test-case-reviewer` before `evidence-quality-auditor`; if skipped, the final result must state the skip explicitly.
-11. Remote GitLab writes, issue creation, commits, pushes, or destructive environment changes require explicit user authorization.
+11. Mac release package automation must use `automation:package-doctor` / `automation:package-run` as the normal path, not Codex Computer Use, so the same checks can run on tester machines without Codex UI control.
+12. Remote GitLab writes, issue creation, commits, pushes, or destructive environment changes require explicit user authorization.
 
 ## Dynamic Issue Loop
 
@@ -107,8 +113,9 @@ The team must assume QBot issue scope changes continuously. A normal dynamic upd
 5. `functional-test-case-designer` drafts only the new or changed functional rows.
 6. `codex-os-automation-planner` drafts only the new or changed automation flows and updates setup/cleanup/evidence contracts.
 7. Specialist agents fill domain gaps for runtime, UI/UX, compliance, platform, fixture, or triage needs.
-8. `test-case-reviewer` blocks vague, unexecutable, over-broad, misprioritized, or non-black-box ordinary-user cases.
-9. `evidence-quality-auditor` verifies freshness, redaction, traceability, blocked/skipped semantics, and false-success risk.
+8. `release-package-mac-automation-tester` runs package doctor/run when a macOS dmg/app build is under test, then returns report paths and blocked/pass/fail evidence.
+9. `test-case-reviewer` blocks vague, unexecutable, over-broad, misprioritized, or non-black-box ordinary-user cases.
+10. `evidence-quality-auditor` verifies freshness, redaction, traceability, blocked/skipped semantics, and false-success risk.
 
 Dynamic updates must never replace the whole workbook silently. They must include a delta summary and changed-case list.
 
@@ -121,10 +128,11 @@ Dynamic updates must never replace the whole workbook silently. They must includ
 5. Test design: functional designer produces Excel-ready new or changed cases and traceability.
 6. Automation design: automation planner converts eligible cases into Windows/macOS Codex operation flows.
 7. Test case review: test case reviewer challenges granularity, executable paths, expected results, coverage, priorities, and automation evidence requirements.
-8. Specialist reviews: runtime, UI, compliance, cross-platform, and data agents fill domain gaps.
-9. Triage: defect reporter classifies confirmed gaps and drafts issues when needed.
-10. Audit: evidence auditor checks proof, redaction, traceability, and blocked/skipped semantics.
-11. Synthesis: main agent returns the final round result and the next recommended action.
+8. Release package validation: release package mac automation tester runs package doctor/run when the scope includes a macOS dmg/app build.
+9. Specialist reviews: runtime, UI, compliance, cross-platform, and data agents fill domain gaps.
+10. Triage: defect reporter classifies confirmed gaps and drafts issues when needed.
+11. Audit: evidence auditor checks proof, redaction, traceability, and blocked/skipped semantics.
+12. Synthesis: main agent returns the final round result and the next recommended action.
 
 ## File Layout
 
@@ -152,6 +160,8 @@ D:\QbotTestAgent
     |-- runtime-protocol-skill-chain-tester
     |   `-- SKILL.md
     |-- cross-platform-e2e-validator
+    |   `-- SKILL.md
+    |-- release-package-mac-automation-tester
     |   `-- SKILL.md
     |-- ui-product-experience-tester
     |   `-- SKILL.md

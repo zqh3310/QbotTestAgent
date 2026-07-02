@@ -115,6 +115,51 @@ npm run automation:run -- --repo /Users/qifu/Documents/deepbankV2 --flows output
 
 Each run also writes `automation-delivery-report.md`, which is the handoff summary for completed, failed, blocked, warning, bug draft, and GitLab issue creation counts.
 
+## Validate macOS Release Package
+
+Use this path when a tester has a delivered QBot `dmg` or installed `/Applications/qbot.app` and needs to verify that scripts can operate the product package directly. This does not depend on Codex Computer Use.
+
+Doctor against an installed app:
+
+```bash
+npm run automation:package-doctor -- --app /Applications/qbot.app --out outputs/release-package-doctor-current --timeout-seconds 45
+```
+
+Doctor against a dmg:
+
+```bash
+npm run automation:package-doctor -- --dmg ~/Downloads/qbot.dmg --out outputs/release-package-doctor-dmg --timeout-seconds 45
+```
+
+Run a simple input operation after doctor passes:
+
+```bash
+npm run automation:package-run -- --app /Applications/qbot.app --out outputs/release-package-run-type --type-text "请帮我设计一个产品需求文档"
+```
+
+Run a click operation when the target exposes a `data-testid`:
+
+```bash
+npm run automation:package-run -- --app /Applications/qbot.app --out outputs/release-package-run-click --click-testid auth-login
+```
+
+Keep QBot open after the script finishes:
+
+```bash
+npm run automation:package-doctor -- --app /Applications/qbot.app --out outputs/release-package-doctor-current --keep-open
+```
+
+The package runner writes:
+
+- `release-package-automation-report.json`
+- `release-package-automation-report.md`
+- `screenshots/qbot-initial.png`
+- `screenshots/qbot-after-action.png` when an operation is attempted
+- `logs/qbot.stdout.log`
+- `logs/qbot.stderr.log`
+
+If package launch, Gatekeeper/quarantine cleanup, Electron CDP connection, screenshot capture, visible control discovery, click, or typing is unavailable, the runner must return `blocked` or `failed` with a specific reason. It must not report a fake pass.
+
 ## Regenerate From Live GitLab
 
 ```powershell

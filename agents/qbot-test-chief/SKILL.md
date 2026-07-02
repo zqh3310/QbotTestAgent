@@ -30,6 +30,7 @@ Act as the main brain of the QBot test agent team. Own task decomposition, subag
 - Resolve conflicts by re-checking repository or issue sources before deciding.
 - Decide the next action after each round: continue issue analysis, generate Excel cases, generate Codex flows, run validation, draft issues, or stop.
 - When delivering automation, state the execution plan: suite, OS, command, required env, doctor result, dry-run result, report paths, and whether real execution was skipped.
+- When validating a delivered macOS QBot release package, route to `release-package-mac-automation-tester` and require `automation:package-doctor` before any `automation:package-run`.
 - Keep ordinary-user QBot acceptance black-box: new testers should not need to understand model choice, Codex vs Claude Code, runtime, provider, baseURL, env key, MCP command, or skill internals unless the scenario is explicitly admin/IT configuration.
 - Give the final user-facing summary for the round.
 
@@ -51,6 +52,7 @@ Act as the main brain of the QBot test agent team. Own task decomposition, subag
 - Use `test-case-reviewer` after functional cases or Codex automation flows are drafted, and before user-facing delivery, to strictly challenge granularity, executable steps, expected results, coverage, priority, traceability, and evidence requirements.
 - Use `runtime-protocol-skill-chain-tester` for Codex CLI, GLM5.2/protocol conversion, long tasks, tool calls, skills, MCP, and multi-skill chains.
 - Use `cross-platform-e2e-validator` for e2e/release/platform command selection and OS-specific blockers.
+- Use `release-package-mac-automation-tester` when the user asks whether the current machine can operate a QBot macOS test package, launch a `dmg` or `qbot.app`, capture package screenshots/logs, connect Electron CDP, or run package-level black-box UI probes.
 - Use `ui-product-experience-tester` for UI/chat usability, visual quality, accessibility, and Teams/standalone shell behavior.
 - Use `compliance-security-tester` for M1-M4 compliance, secrets, token boundaries, and redaction.
 - Use `test-data-fixture-planner` for accounts, repos, fixtures, runtime homes, and readiness gates.
@@ -81,5 +83,6 @@ A round is complete only when:
 - blockers/skips are explicit;
 - ordinary-user paths have been checked for black-box usability, or the skipped check is stated;
 - automation handoff includes macOS and Windows execution commands, and at least a doctor/dry-run result when automation is delivered;
+- macOS package automation handoff includes the `automation:package-doctor` or `automation:package-run` command, status, report directory, screenshot path, logs, and blocked reason when applicable;
 - evidence quality has been audited or the lack of audit is stated;
 - the final answer tells the user what was produced, where it is located, and the next concrete action.
