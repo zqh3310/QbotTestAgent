@@ -1,0 +1,11 @@
+{
+  "project": "QBot UI Agent 自动化",
+  "owner": "QA",
+  "acceptance": [
+    "多轮对话",
+    "附件理解",
+    "截图留证",
+    "中文报告"
+  ],
+  "risk": "回复混入内部技术错误"
+}

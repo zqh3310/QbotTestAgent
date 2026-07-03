@@ -12,6 +12,14 @@
     "automation:doctor": "node src/cli.mjs automation-doctor",
     "automation:run": "node src/cli.mjs automation-run",
     "automation:package-doctor": "node src/cli.mjs release-package-doctor",
-    "automation:package-run": "node src/cli.mjs release-package-run"
+    "automation:package-run": "node src/cli.mjs release-package-run",
+    "ui-agent:fixtures": "node src/cli.mjs ui-agent-fixtures",
+    "ui-agent:doctor": "node src/cli.mjs ui-agent-doctor",
+    "ui-agent:run": "node src/cli.mjs ui-agent-run",
+    "ui-agent:explore": "node src/cli.mjs ui-agent-explore",
+    "ui-agent:module-run": "node src/cli.mjs ui-agent-module-run"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
   }
 }

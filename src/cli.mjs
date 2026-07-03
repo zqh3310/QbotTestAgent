@@ -3,6 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAutomationCommand } from './lib/automation-executor.mjs';
 import { runReleasePackageAutomation } from './lib/release-package-automation.mjs';
+import { runUiAgentExploreCommand } from './lib/ui-agent-explorer.mjs';
+import { runUiAgentModuleCommand } from './lib/ui-agent-module-runner.mjs';
+import { runUiAgentCommand } from './lib/ui-agent-runner.mjs';
 import { generateAutomationFlows } from './lib/automation.mjs';
 import { auditOutputs } from './lib/audit.mjs';
 import { buildIssueMatrix } from './lib/classifier.mjs';
@@ -52,6 +55,29 @@ function loadIssueSource(options) {
 }
 
 export async function run(command, rawOptions = {}) {
+  if (command === 'ui-agent-explore') {
+    return await runUiAgentExploreCommand({
+      options: rawOptions,
+      root: ROOT,
+    });
+  }
+
+  if (command === 'ui-agent-module-run') {
+    return await runUiAgentModuleCommand({
+      options: rawOptions,
+      root: ROOT,
+    });
+  }
+
+  if (['ui-agent-doctor', 'ui-agent-run', 'ui-agent-fixtures'].includes(command)) {
+    const mode = command.replace('ui-agent-', '');
+    return await runUiAgentCommand({
+      mode,
+      options: rawOptions,
+      root: ROOT,
+    });
+  }
+
   if (['release-package-doctor', 'release-package-run'].includes(command)) {
     return await runReleasePackageAutomation({
       mode: command === 'release-package-doctor' ? 'doctor' : 'run',
@@ -169,7 +195,7 @@ export async function run(command, rawOptions = {}) {
 
 if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run', 'release-package-doctor', 'release-package-run'].includes(command)) {
+  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run', 'release-package-doctor', 'release-package-run', 'ui-agent-doctor', 'ui-agent-run', 'ui-agent-fixtures', 'ui-agent-explore', 'ui-agent-module-run'].includes(command)) {
     console.error(`Unknown command: ${command}`);
     process.exit(2);
   }
@@ -190,6 +216,31 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
           cdp: result.cdp?.status,
           operation: result.operation?.status,
           screenshot: result.artifacts?.initial_screenshot || null,
+        }
+      : null,
+    ui_agent: result.command?.startsWith?.('ui-agent')
+      ? {
+          status: result.status,
+          summary: result.summary || null,
+          doctor: result.doctor
+            ? {
+                status: result.doctor.status,
+                login_required: result.doctor.login_required,
+                composer: result.doctor.composer || null,
+                upload: result.doctor.upload || null,
+              }
+            : null,
+          report: result.command === 'ui-agent-fixtures'
+            ? null
+            : result.command === 'ui-agent-module-run'
+              ? (result.out_dir ? path.join(result.out_dir, 'ui-agent-module-report.md') : null)
+              : result.out_dir ? path.join(result.out_dir, 'ui-agent-report.md') : null,
+          fixtures_report: result.command === 'ui-agent-fixtures' && result.out_dir
+            ? path.join(result.out_dir, 'ui-agent-fixtures-report.md')
+            : null,
+          explore_report: result.command === 'ui-agent-explore' && result.out_dir
+            ? path.join(result.out_dir, 'ui-agent-explore-report.md')
+            : null,
         }
       : null,
     issue_loop: result.issue_loop
