@@ -39,6 +39,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   const runStamp = timestampMinute();
   const outDir = path.resolve(options.out || createRunDir(path.join(root, 'autoTest'), `${runStamp}_自动化测试结果`));
   const casesFile = path.join(outDir, 'casebook-cases.json');
+  const progressFile = path.join(outDir, 'automation-progress.json');
   const cdpUrl = String(options.cdp || process.env.QBOT_CDP_URL || DEFAULT_CDP_URL);
   const timeoutMs = Number(options['timeout-ms'] || DEFAULT_TIMEOUT_MS);
   const profile = String(options.profile || 'mandatory');
@@ -189,8 +190,9 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     page.setDefaultNavigationTimeout(30000);
     page.on('dialog', async (dialog) => dialog.dismiss().catch(() => {}));
     const precheck = await inspectPrecheck(page, outDir);
-    const results = [];
-    for (let index = 0; index < selectedCases.length; index += 1) {
+    const resume = loadResumeProgress(progressFile, selectedCases, options.resume === true || options.resume === 'true');
+    const results = resume.results;
+    for (let index = resume.startIndex; index < selectedCases.length; index += 1) {
       const testCase = selectedCases[index];
       const caseDir = path.join(outDir, 'cases', `${String(index + 1).padStart(3, '0')}-${testCase.id}-${slugify(testCase.scenario)}`);
       ensureDir(caseDir);
@@ -206,7 +208,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         playwright: loaded,
       });
       results.push(result);
-      writeJsonFile(path.join(outDir, 'automation-progress.json'), {
+      writeJsonFile(progressFile, {
         updated_at: new Date().toISOString(),
         completed: results.length,
         total: selectedCases.length,
@@ -253,6 +255,25 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   } finally {
     if (browser) await browser.close().catch(() => {});
+  }
+}
+
+function loadResumeProgress(progressFile, selectedCases, enabled) {
+  if (!enabled || !fs.existsSync(progressFile)) return { results: [], startIndex: 0 };
+  try {
+    const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+    const existing = Array.isArray(progress.results) ? progress.results : [];
+    const aligned = existing.every((result, index) => {
+      const expected = selectedCases[index];
+      return expected
+        && result?.id === expected.id
+        && String(result?.sheet || '') === String(expected.sheet || '')
+        && String(result?.row_number || '') === String(expected.row_number || '');
+    });
+    if (!aligned) return { results: [], startIndex: 0 };
+    return { results: existing, startIndex: Math.min(existing.length, selectedCases.length) };
+  } catch {
+    return { results: [], startIndex: 0 };
   }
 }
 
