@@ -14,3 +14,7 @@ state/*
 *.log
 .DS_Store
 Thumbs.db
+autoTest/
+bug/
+__pycache__/
+*.pyc

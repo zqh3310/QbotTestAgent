@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, slugify, timestampForPath, writeJsonFile, writeTextFile } from './fs.mjs';
+import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
 import { runUiAgentCommand } from './ui-agent-runner.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
@@ -219,11 +220,11 @@ function buildModuleTestCases(fixturesDir) {
     {
       id: 'MOD-DOCUMENT-014',
       module: '附件',
-      title: '添加文档入口应提供可感知的文档选择反馈',
+      title: '统一附件入口应明确支持图片、文本、PDF 和 Office 文档',
       priority: 'P1',
-      type: 'document-entry',
-      scenario: '用户点击【添加文档】选择工作区或本地文档。',
-      expected_result: '点击后应出现文件选择器、文档选择面板、已添加文档状态，或清晰的不可用提示；不能无反馈。',
+      type: 'attachment-affordance',
+      scenario: '用户需要上传不同类型资料时，通过统一附件入口理解支持范围。',
+      expected_result: '输入区应提供清晰的统一附件入口，文案或辅助信息能表达支持图片、文本、PDF、Office 文档等类型。',
     },
     {
       id: 'MOD-CHAT-015',
@@ -400,8 +401,8 @@ async function executeCase({ page, testCase, caseDir, order, timeoutMs }) {
       case 'upload-only':
         await runUploadOnly(page, testCase, state, caseDir);
         break;
-      case 'document-entry':
-        await runDocumentEntry(page, state, caseDir);
+      case 'attachment-affordance':
+        await runAttachmentAffordance(page, state, caseDir);
         break;
       case 'chat':
         await runChat(page, testCase, state, caseDir, timeoutMs);
@@ -577,6 +578,18 @@ async function runUploadOnly(page, testCase, state, caseDir) {
   const upload = await uploadFiles(page, testCase.attachments || [], state);
   state.screenshots.after_upload = await shot(page, caseDir, '02-after-upload');
   state.artifacts.upload = upload;
+  if (upload.status === 'blocked') {
+    recordStep(
+      state,
+      '检查附件展示',
+      '上传未被环境阻塞时才继续检查附件卡片',
+      '上传步骤已被系统权限或环境条件阻塞，本轮不继续判定产品 UI 展示。',
+      'blocked',
+      state.screenshots.after_upload,
+    );
+    await finalizeFromAssertions(page, state, '附件上传被环境阻塞。');
+    return;
+  }
   const visibleNames = upload.visible_names || [];
   const expectedNames = upload.expected_names || [];
   const clear = upload.status === 'passed' && expectedNames.length && visibleNames.length === expectedNames.length;
@@ -591,18 +604,36 @@ async function runUploadOnly(page, testCase, state, caseDir) {
   await finalizeFromAssertions(page, state, clear ? '附件上传后展示清晰。' : '附件上传后的文件名展示不清晰或无法确认。');
 }
 
-async function runDocumentEntry(page, state, caseDir) {
+async function runAttachmentAffordance(page, state, caseDir) {
   await openNewTask(page, state);
-  const button = page.locator('[data-testid="composer-add-document"]').first();
-  const chooserPromise = page.waitForEvent('filechooser', { timeout: 2500 }).catch(() => null);
-  await clickLocator(button, '点击【添加文档】', state);
-  const chooser = await chooserPromise;
-  await page.waitForTimeout(1200);
-  state.screenshots.after_click = await shot(page, caseDir, '02-after-add-document');
+  const button = page.locator('[data-testid="composer-add-attachment"]').first();
+  if (!(await visible(button, 3000))) {
+    recordStep(state, '检查统一附件入口', '输入区应存在统一附件入口', '未找到统一附件入口', 'failed');
+    await finalizeFromAssertions(page, state, '统一附件入口可见。');
+    return;
+  }
+  const label = await button.evaluate((el) => [
+    el.textContent || '',
+    el.getAttribute('aria-label') || '',
+    el.getAttribute('title') || '',
+  ].join(' ')).catch(() => '');
+  await button.hover({ force: true }).catch(() => {});
+  await page.waitForTimeout(800);
+  state.screenshots.after_hover = await shot(page, caseDir, '02-attachment-affordance');
   const text = await bodyText(page);
-  const feedback = Boolean(chooser) || /选择|文档|文件|上传|不可用|未配置|添加/.test(text);
-  recordStep(state, '检查添加文档反馈', '点击后应出现文件选择器、面板或明确提示', feedback ? (chooser ? '触发系统文件选择器' : '页面出现可感知反馈') : '点击后未检测到可感知反馈', feedback ? 'passed' : 'failed', state.screenshots.after_click);
-  await finalizeFromAssertions(page, state, feedback ? '添加文档入口有反馈。' : '添加文档入口点击后无明确反馈。');
+  const surface = `${label}\n${text}`;
+  for (const keyword of ['附件', '图片', '文本', 'PDF', 'Office']) {
+    const ok = new RegExp(keyword, 'i').test(surface);
+    recordStep(
+      state,
+      `检查附件入口文案：${keyword}`,
+      `统一附件入口应表达支持范围，包含或可感知「${keyword}」`,
+      ok ? `已检测到「${keyword}」` : `未检测到「${keyword}」`,
+      ok ? 'passed' : 'failed',
+      state.screenshots.after_hover,
+    );
+  }
+  await finalizeFromAssertions(page, state, '统一附件入口支持范围表达清晰。');
 }
 
 async function runChat(page, testCase, state, caseDir, timeoutMs) {
@@ -610,6 +641,10 @@ async function runChat(page, testCase, state, caseDir, timeoutMs) {
   if (testCase.attachments?.length) {
     state.artifacts.upload = await uploadFiles(page, testCase.attachments, state);
     state.screenshots.after_upload = await shot(page, caseDir, '02-after-upload');
+    if (state.artifacts.upload.status !== 'passed') {
+      await finalizeFromAssertions(page, state, '附件上传完成后再继续 Agent 回复校验。');
+      return;
+    }
   }
   const before = await bodyText(page);
   await fillComposer(page, testCase.prompt, state);
@@ -779,34 +814,21 @@ async function removeAttachments(page, state) {
 }
 
 async function uploadFiles(page, files, state) {
-  const existing = files.map((file) => path.resolve(file)).filter((file) => fs.existsSync(file));
-  const missing = files.map((file) => path.resolve(file)).filter((file) => !fs.existsSync(file));
-  if (!existing.length) {
-    recordStep(state, '上传附件', '测试文件应存在', `文件不存在：${missing.join(', ')}`, 'blocked');
-    return { status: 'blocked', attached: [], missing, reason: '测试文件不存在。' };
-  }
-  const selector = '[data-testid="composer-add-attachment"]';
-  const button = page.locator(selector).first();
-  if (!(await visible(button, 3000))) {
-    recordStep(state, '上传附件', '输入区应存在【+】附件入口', '未找到附件入口', 'failed');
-    return { status: 'failed', attached: [], missing, reason: '未找到附件入口。' };
-  }
-  const chooserPromise = page.waitForEvent('filechooser', { timeout: 4000 }).catch(() => null);
-  await button.click({ force: true });
-  const chooser = await chooserPromise;
-  if (!chooser) {
-    recordStep(state, '上传附件', '点击【+】应打开文件选择器', '未触发文件选择器', 'failed');
-    return { status: 'failed', attached: [], missing, reason: '未触发文件选择器。' };
-  }
-  await chooser.setFiles(existing);
-  await page.waitForTimeout(1500);
-  const text = await bodyText(page);
-  const names = existing.map((file) => path.basename(file));
-  const visibleNames = names.filter((name) => text.includes(name));
-  const hasRemove = await page.locator('button:has-text("Remove file"), button[aria-label*="Remove"], button[aria-label*="移除"]').first().isVisible({ timeout: 800 }).catch(() => false);
-  const status = visibleNames.length === names.length && hasRemove ? 'passed' : 'unverified';
-  recordStep(state, '上传附件', '文件选择后应显示文件名和移除入口', `已选择：${names.join(', ')}；页面可见文件名：${visibleNames.join(', ') || '无'}；移除入口：${hasRemove ? '有' : '无'}`, status === 'passed' ? 'passed' : 'failed');
-  return { status, attached: existing, missing, expected_names: names, visible_names: visibleNames, has_remove: hasRemove };
+  const result = await uploadAttachmentsInComposer(page, files);
+  const status = result.status === 'passed' ? 'passed' : result.status === 'blocked' ? 'blocked' : 'failed';
+  recordStep(
+    state,
+    '上传附件',
+    '文件选择后应显示文件名和移除入口；如受系统权限限制应明确阻塞原因',
+    [
+      result.reason,
+      result.expected_names?.length ? `期望文件：${result.expected_names.join(', ')}` : '',
+      result.visible_names?.length ? `页面可见文件：${result.visible_names.join(', ')}` : '',
+      typeof result.has_remove === 'boolean' ? `移除入口：${result.has_remove ? '有' : '无'}` : '',
+    ].filter(Boolean).join('；'),
+    status,
+  );
+  return result;
 }
 
 async function fillComposer(page, text, state, action = '输入测试问题') {

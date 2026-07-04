@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, slugify, timestampForPath, writeJsonFile, writeTextFile } from './fs.mjs';
+import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -305,7 +306,7 @@ async function runScenario({ page, scenario, caseDir, order, options }) {
         warnings: [],
         forbidden_matches: [],
       };
-      status = 'failed';
+      status = uploadResult.status === 'blocked' ? 'blocked' : 'failed';
       reason = assertions.failed.join('；');
       scores = scoreScenario({ status, assertions, uploadResult, replyText: '' });
       steps.push({ action: '自动断言与评分', status, text: reason });
@@ -654,81 +655,18 @@ async function sendMessage(page, steps) {
 }
 
 async function attachFiles(page, filePaths, steps) {
-  const existing = filePaths.filter((file) => fs.existsSync(file));
-  const missing = filePaths.filter((file) => !fs.existsSync(file));
-  if (!existing.length) {
-    const result = { status: 'blocked', attached: [], missing, reason: '附件文件不存在。' };
-    steps.push({ action: '上传附件', status: 'blocked', text: result.reason });
-    return result;
-  }
-
-  const directInput = page.locator('input[type="file"]').first();
-  if (await directInput.count().catch(() => 0)) {
-    await directInput.setInputFiles(existing);
-    const result = { status: 'passed', attached: existing, missing, method: 'input[type=file]' };
-    await page.waitForTimeout(1200);
-    return verifyAttachmentEvidence(page, result, steps, 'input[type=file]');
-  }
-
-  const buttons = [
-    '[data-testid="composer-add-attachment"]',
-    '[data-testid*="attachment"]',
-    'button:has-text("Add Attachment")',
-    'button:has-text("添加文档")',
-    'button:has-text("添加附件")',
-  ];
-  for (const selector of buttons) {
-    const button = page.locator(selector).first();
-    if (!(await locatorVisible(button, 1000))) continue;
-    const chooserPromise = page.waitForEvent('filechooser', { timeout: 3000 }).catch(() => null);
-    await button.click({ force: true });
-    const chooser = await chooserPromise;
-    if (chooser) {
-      await chooser.setFiles(existing);
-      const result = { status: 'passed', attached: existing, missing, method: `filechooser:${selector}` };
-      await page.waitForTimeout(1200);
-      return verifyAttachmentEvidence(page, result, steps, selector);
-    }
-    const inputAfterClick = page.locator('input[type="file"]').first();
-    if (await inputAfterClick.count().catch(() => 0)) {
-      await inputAfterClick.setInputFiles(existing);
-      const result = { status: 'passed', attached: existing, missing, method: `input-after-click:${selector}` };
-      await page.waitForTimeout(1200);
-      return verifyAttachmentEvidence(page, result, steps, selector);
-    }
-  }
-
-  const result = {
-    status: 'blocked',
-    attached: [],
-    missing,
-    reason: '未找到可用的附件上传入口；本轮会在问题中附上本地文件路径作为证据。',
-  };
-  steps.push({ action: '上传附件', status: 'blocked', text: result.reason });
-  return result;
-}
-
-async function verifyAttachmentEvidence(page, result, steps, selector) {
-  const body = await bodyText(page).catch(() => '');
-  const names = result.attached.map((file) => path.basename(file));
-  const visibleNames = names.filter((name) => body.includes(name));
-  const verified = visibleNames.length > 0;
-  const finalResult = {
-    ...result,
-    status: verified ? 'passed' : 'unverified',
-    ui_visible_names: visibleNames,
-    expected_names: names,
-    reason: verified
-      ? `页面已显示附件文件名：${visibleNames.join(', ')}`
-      : `已通过系统文件选择器传入文件，但页面未显示附件文件名，上传状态不可确认：${names.join(', ')}`,
-  };
+  const result = await uploadAttachmentsInComposer(page, filePaths);
   steps.push({
     action: '上传附件',
-    selector,
-    status: finalResult.status,
-    text: finalResult.status === 'passed' ? finalResult.reason : `${finalResult.reason}\n${result.attached.join('; ')}`,
+    selector: result.method || '[data-testid="composer-add-attachment"]',
+    status: result.status,
+    text: [
+      result.reason,
+      result.expected_names?.length ? `期望文件：${result.expected_names.join(', ')}` : '',
+      result.visible_names?.length ? `页面可见文件：${result.visible_names.join(', ')}` : '',
+    ].filter(Boolean).join('；'),
   });
-  return finalResult;
+  return result;
 }
 
 async function waitForReply(page, beforeText, { timeoutMs }) {

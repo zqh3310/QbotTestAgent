@@ -1,0 +1,397 @@
+{
+  "version": "2026-07-03",
+  "canonical_casebook": "PRD/Qbot_TestCase.xlsx",
+  "evidence_root": "autoTest",
+  "default_profile": "mandatory",
+  "profiles": {
+    "mandatory": {
+      "core": [
+        "CORE-TEXT-001",
+        "CORE-CONTEXT-002",
+        "CORE-LONGTEXT-003",
+        "CORE-TXT-004",
+        "CORE-MD-005",
+        "CORE-OFFICE-006",
+        "CORE-IMAGE-007",
+        "CORE-STRUCTURED-008",
+        "SYS-PM-009",
+        "SYS-OPS-010",
+        "SYS-SAFETY-015"
+      ],
+      "module": [
+        "MOD-SEARCH-001",
+        "MOD-SIDEBAR-002",
+        "MOD-EXPERT-003",
+        "MOD-EXPERT-004",
+        "MOD-CONNECTOR-005",
+        "MOD-CONNECTOR-006",
+        "MOD-KNOWLEDGE-007",
+        "MOD-KNOWLEDGE-008",
+        "MOD-WELCOME-011",
+        "MOD-COMPOSER-012",
+        "MOD-UPLOAD-013",
+        "MOD-DOCUMENT-014",
+        "MOD-CHAT-015",
+        "MOD-CHAT-016",
+        "MOD-CHAT-017",
+        "MOD-ATTACH-018",
+        "MOD-ATTACH-019",
+        "MOD-ARTIFACT-020",
+        "MOD-SESSION-021",
+        "MOD-SETTINGS-022",
+        "MOD-SETTINGS-023",
+        "MOD-UPDATE-024"
+      ]
+    },
+    "full": {
+      "core": [
+        "CORE-TEXT-001",
+        "CORE-CONTEXT-002",
+        "CORE-LONGTEXT-003",
+        "CORE-TXT-004",
+        "CORE-MD-005",
+        "CORE-OFFICE-006",
+        "CORE-IMAGE-007",
+        "CORE-STRUCTURED-008",
+        "SYS-PM-009",
+        "SYS-OPS-010",
+        "SYS-QA-011",
+        "SYS-AMBIGUOUS-012",
+        "SYS-NOISE-014",
+        "SYS-SAFETY-015"
+      ],
+      "module": [
+        "MOD-SEARCH-001",
+        "MOD-SIDEBAR-002",
+        "MOD-EXPERT-003",
+        "MOD-EXPERT-004",
+        "MOD-CONNECTOR-005",
+        "MOD-CONNECTOR-006",
+        "MOD-KNOWLEDGE-007",
+        "MOD-KNOWLEDGE-008",
+        "MOD-AUTOMATION-009",
+        "MOD-PROJECT-010",
+        "MOD-WELCOME-011",
+        "MOD-COMPOSER-012",
+        "MOD-UPLOAD-013",
+        "MOD-DOCUMENT-014",
+        "MOD-CHAT-015",
+        "MOD-CHAT-016",
+        "MOD-CHAT-017",
+        "MOD-ATTACH-018",
+        "MOD-ATTACH-019",
+        "MOD-ARTIFACT-020",
+        "MOD-SESSION-021",
+        "MOD-SETTINGS-022",
+        "MOD-SETTINGS-023",
+        "MOD-UPDATE-024"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "CORE-TEXT-001",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "普通问候应自然回复且无内部技术噪音",
+      "must_run_reason": "核心对话入口是 QBot 第一价值点，每轮必须验证基础问答可用。"
+    },
+    {
+      "id": "CORE-CONTEXT-002",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "多轮上下文应记住业务数字并完成计算",
+      "must_run_reason": "非技术用户通常在一个会话内连续追问，必须验证上下文延续。"
+    },
+    {
+      "id": "CORE-LONGTEXT-003",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "长文本输入应可摘要、提炼行动项和风险",
+      "must_run_reason": "产品、运营、领导会粘贴长材料，这是高频核心场景。"
+    },
+    {
+      "id": "CORE-TXT-004",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "TXT 附件应可上传并提取关键字段",
+      "must_run_reason": "附件上传和读取是核心信息处理能力的最小文件场景。"
+    },
+    {
+      "id": "CORE-MD-005",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "Markdown 需求文档应可读取并结构化总结",
+      "must_run_reason": "需求文档理解是产品/测试工作流的核心材料场景。"
+    },
+    {
+      "id": "CORE-OFFICE-006",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "Word、Excel、PDF、PPT 多文件混合应可处理或明确失败原因",
+      "must_run_reason": "办公用户最常见资料类型必须每轮覆盖，失败也要留证。"
+    },
+    {
+      "id": "CORE-IMAGE-007",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P1",
+      "title": "图片或视觉附件应明确支持边界",
+      "must_run_reason": "多模态能力需要明确验证，不能让 Agent 编造图片内容。"
+    },
+    {
+      "id": "CORE-STRUCTURED-008",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P1",
+      "title": "JSON、CSV、HTML、JS 结构化资料应可识别类型并总结关注点",
+      "must_run_reason": "结构化数据和轻代码材料是数据洞察与协作场景的核心输入。"
+    },
+    {
+      "id": "SYS-PM-009",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "产品经理完整流程：从需求描述产出可执行方案",
+      "must_run_reason": "验证专家角色/产品场景下的完整任务交付质量。"
+    },
+    {
+      "id": "SYS-OPS-010",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "运营完整流程：活动复盘输出结论和行动项",
+      "must_run_reason": "验证运营用户高频业务分析场景是否实用。"
+    },
+    {
+      "id": "SYS-QA-011",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P1",
+      "title": "测试专家完整流程：根据需求生成测试点",
+      "must_run_reason": "验证 Agent 是否能产出测试人员可用的结构化结果。"
+    },
+    {
+      "id": "SYS-AMBIGUOUS-012",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P1",
+      "title": "模糊需求应追问或给出合理假设",
+      "must_run_reason": "普通用户经常表达不完整，Agent 应保持可用的引导能力。"
+    },
+    {
+      "id": "SYS-NOISE-014",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P2",
+      "title": "口语化和噪声输入应能抓住用户目标",
+      "must_run_reason": "验证真实用户非标准表达下的鲁棒性。"
+    },
+    {
+      "id": "SYS-SAFETY-015",
+      "suite": "core",
+      "runner": "ui-agent-run",
+      "priority": "P0",
+      "title": "内部信息保护：不得输出环境变量、token 或后台敏感配置",
+      "must_run_reason": "安全边界是核心对话发布前每轮必测项。"
+    },
+    {
+      "id": "MOD-SEARCH-001",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "搜索入口可打开并输入关键词",
+      "must_run_reason": "高频入口，影响任务查找和上手效率。"
+    },
+    {
+      "id": "MOD-SIDEBAR-002",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "左侧栏可收起并恢复展开",
+      "must_run_reason": "全局导航基础交互，影响所有模块可达性。"
+    },
+    {
+      "id": "MOD-EXPERT-003",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "专家入口展示专家角色与技能页签",
+      "must_run_reason": "专家入口是产品简化 AI 概念的重要用户路径。"
+    },
+    {
+      "id": "MOD-EXPERT-004",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "创建专家入口提供清晰创建方式",
+      "must_run_reason": "验证用户是否理解如何扩展专家角色。"
+    },
+    {
+      "id": "MOD-CONNECTOR-005",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "连接器列表展示可用连接器与工具入口",
+      "must_run_reason": "验证外部应用入口是否清晰可理解。"
+    },
+    {
+      "id": "MOD-CONNECTOR-006",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "添加连接器与查看工具弹窗可打开并关闭",
+      "must_run_reason": "验证连接器基础管理入口可操作。"
+    },
+    {
+      "id": "MOD-KNOWLEDGE-007",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "知识模块页签可切换并展示状态说明",
+      "must_run_reason": "知识配置影响回答质量，入口和状态必须可理解。"
+    },
+    {
+      "id": "MOD-KNOWLEDGE-008",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "自然语言补充编辑区应有明确保存方式",
+      "must_run_reason": "用户输入配置后必须知道是否已保存。"
+    },
+    {
+      "id": "MOD-AUTOMATION-009",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P2",
+      "title": "自动化入口有明确页面反馈",
+      "must_run_reason": "第一版非深测，仅 full profile 验证入口不误导。"
+    },
+    {
+      "id": "MOD-PROJECT-010",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P2",
+      "title": "项目入口展示项目列表或蓝图占位",
+      "must_run_reason": "第一版非深测，仅 full profile 验证入口不误导。"
+    },
+    {
+      "id": "MOD-WELCOME-011",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "新建任务欢迎页展示分类和快捷任务",
+      "must_run_reason": "新用户第一屏必须稳定、简单、可理解。"
+    },
+    {
+      "id": "MOD-COMPOSER-012",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "底部 Craft、技能、连应用、M4 菜单可打开",
+      "must_run_reason": "输入区是所有对话的核心操作面。"
+    },
+    {
+      "id": "MOD-UPLOAD-013",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "加号附件入口可选择文件并清晰展示附件",
+      "must_run_reason": "附件入口可用性是文件处理自动化的前置能力。"
+    },
+    {
+      "id": "MOD-DOCUMENT-014",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "统一附件入口应明确支持图片、文本、PDF 和 Office 文档",
+      "must_run_reason": "验证用户能否理解附件支持范围。"
+    },
+    {
+      "id": "MOD-CHAT-015",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "普通问候应得到自然、相关、无技术噪音的回复",
+      "must_run_reason": "模块层复测核心对话与输入区联动。"
+    },
+    {
+      "id": "MOD-CHAT-016",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "多轮上下文应能记住并回答业务数字",
+      "must_run_reason": "模块层复测多轮上下文能力。"
+    },
+    {
+      "id": "MOD-CHAT-017",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "长文本输入应能摘要并输出行动项",
+      "must_run_reason": "模块层复测长文本处理能力。"
+    },
+    {
+      "id": "MOD-ATTACH-018",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "上传 TXT 后 Agent 应能读取并提取字段",
+      "must_run_reason": "模块层复测附件读取能力。"
+    },
+    {
+      "id": "MOD-ATTACH-019",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "上传图片后 Agent 应明确说明是否支持视觉理解",
+      "must_run_reason": "模块层复测多模态支持边界。"
+    },
+    {
+      "id": "MOD-ARTIFACT-020",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "成果面板可打开并可关闭",
+      "must_run_reason": "成果查看是对话产出的主要承载区。"
+    },
+    {
+      "id": "MOD-SESSION-021",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P0",
+      "title": "会话右键菜单展示重命名和删除入口",
+      "must_run_reason": "会话管理是日常使用高频基础能力。"
+    },
+    {
+      "id": "MOD-SETTINGS-022",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "个人设置入口展示主题、人设和用户画像",
+      "must_run_reason": "验证个人默认配置可见且可理解。"
+    },
+    {
+      "id": "MOD-SETTINGS-023",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P1",
+      "title": "左侧栏收起状态进入个人设置标题不应被展开按钮遮挡",
+      "must_run_reason": "覆盖已发现的布局风险并防回归。"
+    },
+    {
+      "id": "MOD-UPDATE-024",
+      "suite": "module",
+      "runner": "ui-agent-module-run",
+      "priority": "P2",
+      "title": "检查更新入口展示版本和更新状态",
+      "must_run_reason": "验证用户可理解版本更新状态。"
+    }
+  ]
+}

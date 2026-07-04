@@ -36,8 +36,11 @@ export async function runReleasePackageAutomation({ mode = 'doctor', options = {
       packageInfo.quarantine_after_cleanup = xattrContains(target.dmg, 'com.apple.quarantine');
     }
 
-    const prepared = await prepareApp(target, { outDir, cleanup, removeQuarantine: shouldRemoveQuarantine(options) });
+    let prepared = await prepareApp(target, { outDir, cleanup, removeQuarantine: shouldRemoveQuarantine(options) });
     if (prepared.status !== 'ready') findings.push(prepared.reason);
+    if (prepared.status === 'ready') {
+      prepared = prepareE2ePackagedDescriptor(prepared, { outDir, cleanup });
+    }
 
     const appInfo = prepared.appPath ? inspectMacApp(prepared.appPath) : {};
     if (prepared.appPath && shouldRemoveQuarantine(options)) {
@@ -79,6 +82,7 @@ export async function runReleasePackageAutomation({ mode = 'doctor', options = {
       keepOpen: !!options['keep-open'],
       env: {
         ELECTRON_ENABLE_LOGGING: '1',
+        DEEPBANK_E2E: '1',
         DEEPBANK_TEST_HOME: path.join(runHome, 'deepbank-test-home'),
         QBOT_TEST_HOME: path.join(runHome, 'qbot-test-home'),
       },
@@ -228,6 +232,71 @@ async function prepareApp(target, { outDir, cleanup, removeQuarantine }) {
   return { status: 'ready', appPath, mounted: true, mountPoint };
 }
 
+function prepareE2ePackagedDescriptor(prepared, { outDir, cleanup }) {
+  const descriptorPath = packagedRuntimeDescriptorPath(prepared.appPath);
+  if (!descriptorPath || !fs.existsSync(descriptorPath)) return prepared;
+
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
+  } catch (error) {
+    return {
+      ...prepared,
+      e2e_descriptor_status: 'unreadable',
+      e2e_descriptor_error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const descriptor = payload?.env && typeof payload.env === 'object' && !Array.isArray(payload.env)
+    ? payload.env
+    : payload;
+  const releaseMetadata = descriptor?.releaseMetadata && typeof descriptor.releaseMetadata === 'object' && !Array.isArray(descriptor.releaseMetadata)
+    ? descriptor.releaseMetadata
+    : {};
+  if (descriptorFlag(releaseMetadata.enableE2EBridge)) {
+    return { ...prepared, e2e_descriptor_status: 'already-enabled', e2e_descriptor: descriptorPath };
+  }
+
+  const patchedPayload = JSON.parse(JSON.stringify(payload));
+  const patchedDescriptor = patchedPayload?.env && typeof patchedPayload.env === 'object' && !Array.isArray(patchedPayload.env)
+    ? patchedPayload.env
+    : patchedPayload;
+  patchedDescriptor.releaseMetadata = {
+    ...(patchedDescriptor.releaseMetadata && typeof patchedDescriptor.releaseMetadata === 'object' && !Array.isArray(patchedDescriptor.releaseMetadata)
+      ? patchedDescriptor.releaseMetadata
+      : {}),
+    enableE2EBridge: true,
+    qbotTestAgentE2EPatched: true,
+  };
+
+  const backupDir = path.join(outDir, 'runtime', 'descriptor-backup');
+  ensureDir(backupDir);
+  const backupPath = path.join(backupDir, `${path.basename(prepared.appPath, '.app')}-remote-descriptor.json`);
+  fs.copyFileSync(descriptorPath, backupPath);
+  fs.writeFileSync(descriptorPath, `${JSON.stringify(patchedPayload, null, 2)}\n`);
+  cleanup.push(() => {
+    fs.copyFileSync(backupPath, descriptorPath);
+  });
+
+  return {
+    ...prepared,
+    e2e_descriptor_status: 'patched-temporarily',
+    e2e_descriptor: descriptorPath,
+    e2e_descriptor_backup: backupPath,
+  };
+}
+
+function packagedRuntimeDescriptorPath(appPath) {
+  if (!appPath) return '';
+  return path.join(appPath, 'Contents', 'Resources', 'runtime-config', 'remote-descriptor.json');
+}
+
+function descriptorFlag(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 function findMountedAppForDmg(dmg) {
   const info = spawnSyncText('/usr/bin/hdiutil', ['info'], { timeout: 10000 });
   const lines = `${info.stdout}\n${info.stderr}`.split(/\r?\n/);
@@ -284,11 +353,16 @@ function launchMacApp(appPath, { port, profileDir, logDir, extraArgs = [], env =
   if (!appInfo.executable_exists) throw new Error(`Missing app executable: ${appInfo.executable_path}`);
   const stdout = path.join(logDir, 'qbot.stdout.log');
   const stderr = path.join(logDir, 'qbot.stderr.log');
+  const normalizedExtraArgs = [...extraArgs];
+  const hasE2eArg = normalizedExtraArgs.some((arg) => String(arg).startsWith('--qbot-e2e') || String(arg).startsWith('--deepbank-e2e'));
+  if (env.DEEPBANK_E2E === '1' && !hasE2eArg) {
+    normalizedExtraArgs.push('--qbot-e2e=1');
+  }
   const args = [
     `--remote-debugging-port=${port}`,
     '--remote-allow-origins=*',
     `--user-data-dir=${profileDir}`,
-    ...extraArgs,
+    ...normalizedExtraArgs,
   ];
   const child = spawn(appInfo.executable_path, args, {
     detached: keepOpen,

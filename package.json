@@ -17,7 +17,8 @@
     "ui-agent:doctor": "node src/cli.mjs ui-agent-doctor",
     "ui-agent:run": "node src/cli.mjs ui-agent-run",
     "ui-agent:explore": "node src/cli.mjs ui-agent-explore",
-    "ui-agent:module-run": "node src/cli.mjs ui-agent-module-run"
+    "ui-agent:module-run": "node src/cli.mjs ui-agent-module-run",
+    "ui-agent:casebook-run": "node src/cli.mjs ui-agent-casebook-run"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

@@ -55,6 +55,36 @@ On macOS:
 npm run check
 ```
 
+## Playwright UI Agent Casebook Runner
+
+Use this standard runner for QBot UI automation driven by the test case workbook. It reads the casebook, operates QBot through Playwright CDP, saves screenshots/transcripts/reports for every case, and writes a fresh result Excel without modifying the source casebook.
+
+Default mandatory run:
+
+```bash
+npm run ui-agent:casebook-run -- --profile mandatory
+```
+
+Run specific cases:
+
+```bash
+npm run ui-agent:casebook-run -- --case AUTO-0152,AUTO-0201
+```
+
+Dry-run the framework without operating QBot:
+
+```bash
+npm run ui-agent:casebook-run -- --profile mandatory --limit 2 --skip-run
+```
+
+Outputs are written under:
+
+```text
+autoTest/YYYYMMDDHHmm_自动化测试结果/
+```
+
+Each run contains `automation-run-report.md`, `automation-run-summary.json`, per-case `case-report.md` / `case-result.json`, screenshots, transcripts when applicable, LLM review request files when deterministic assertions cannot decide, and `YYYYMMDDHHmm_自动化测试结果.xlsx`.
+
 ## Execute Generated Automation
 
 The generated `codex-automation-flows.json` is executable through the local runner. Use `automation-doctor` before any real run.

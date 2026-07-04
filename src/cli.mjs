@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAutomationCommand } from './lib/automation-executor.mjs';
 import { runReleasePackageAutomation } from './lib/release-package-automation.mjs';
+import { runUiAgentCasebookCommand } from './lib/ui-agent-casebook-runner.mjs';
 import { runUiAgentExploreCommand } from './lib/ui-agent-explorer.mjs';
 import { runUiAgentModuleCommand } from './lib/ui-agent-module-runner.mjs';
 import { runUiAgentCommand } from './lib/ui-agent-runner.mjs';
@@ -55,6 +56,13 @@ function loadIssueSource(options) {
 }
 
 export async function run(command, rawOptions = {}) {
+  if (command === 'ui-agent-casebook-run') {
+    return await runUiAgentCasebookCommand({
+      options: rawOptions,
+      root: ROOT,
+    });
+  }
+
   if (command === 'ui-agent-explore') {
     return await runUiAgentExploreCommand({
       options: rawOptions,
@@ -195,7 +203,7 @@ export async function run(command, rawOptions = {}) {
 
 if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
   const { command, options } = parseArgs(process.argv.slice(2));
-  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run', 'release-package-doctor', 'release-package-run', 'ui-agent-doctor', 'ui-agent-run', 'ui-agent-fixtures', 'ui-agent-explore', 'ui-agent-module-run'].includes(command)) {
+  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run', 'release-package-doctor', 'release-package-run', 'ui-agent-doctor', 'ui-agent-run', 'ui-agent-fixtures', 'ui-agent-explore', 'ui-agent-module-run', 'ui-agent-casebook-run'].includes(command)) {
     console.error(`Unknown command: ${command}`);
     process.exit(2);
   }
@@ -234,7 +242,9 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
             ? null
             : result.command === 'ui-agent-module-run'
               ? (result.out_dir ? path.join(result.out_dir, 'ui-agent-module-report.md') : null)
-              : result.out_dir ? path.join(result.out_dir, 'ui-agent-report.md') : null,
+              : result.command === 'ui-agent-casebook-run'
+                ? (result.run_dir ? path.join(result.run_dir, 'automation-run-report.md') : null)
+                : result.out_dir ? path.join(result.out_dir, 'ui-agent-report.md') : null,
           fixtures_report: result.command === 'ui-agent-fixtures' && result.out_dir
             ? path.join(result.out_dir, 'ui-agent-fixtures-report.md')
             : null,

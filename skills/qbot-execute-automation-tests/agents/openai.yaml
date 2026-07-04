@@ -1,0 +1,8 @@
+interface:
+  display_name: "QBot 自动化测试"
+  short_description: "按核心用例执行 QBot 自动化测试、归档证据并输出结果Excel"
+  brand_color: "#168A50"
+  default_prompt: "Use $qbot-execute-automation-tests to run QBot automated regression tests from Qbot_TestCase.xlsx and archive evidence."
+
+policy:
+  allow_implicit_invocation: true
