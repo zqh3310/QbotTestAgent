@@ -89,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     export.add_argument("--output", required=True)
     export.add_argument("--profile", default="mandatory", choices=["mandatory", "full", "all"])
     export.add_argument("--case", default="")
+    export.add_argument("--offset", type=int, default=0)
     export.add_argument("--limit", type=int, default=0)
 
     write = sub.add_parser("write-results")
@@ -123,22 +124,27 @@ def find_case_sheets(wb):
         if name in wb.sheetnames:
             ws = wb[name]
             header_row = find_header_row(ws)
-            if header_row and "用例ID" in header_map(ws, header_row):
+            if header_row and has_case_id_header(header_map(ws, header_row)):
                 candidate_sheets.append(ws)
     if candidate_sheets:
         return candidate_sheets
     sheets = []
     for ws in wb.worksheets:
         header_row = find_header_row(ws)
-        if header_row and "用例ID" in header_map(ws, header_row):
+        if header_row and has_case_id_header(header_map(ws, header_row)):
             sheets.append(ws)
     return sheets
+
+
+def has_case_id_header(headers: dict[str, int]) -> bool:
+    return "用例ID" in headers or "原用例ID" in headers
 
 
 def find_header_row(ws) -> int:
     for row in range(1, min(ws.max_row or 1, 10) + 1):
         values = [clean(ws.cell(row, col).value) for col in range(1, (ws.max_column or 1) + 1)]
-        if "用例ID" in values and ("测试场景" in values or "测试目标" in values):
+        has_case_id = "用例ID" in values or "原用例ID" in values
+        if has_case_id and ("测试场景" in values or "测试目标" in values):
             return row
     return 0
 
@@ -153,6 +159,14 @@ def header_map(ws, header_row: int) -> dict[str, int]:
 
 def row_value(ws, row: int, headers: dict[str, int], name: str) -> str:
     return clean(ws.cell(row, headers[name]).value) if name in headers else ""
+
+
+def row_value_any(ws, row: int, headers: dict[str, int], names: list[str]) -> str:
+    for name in names:
+        value = row_value(ws, row, headers, name)
+        if value:
+            return value
+    return ""
 
 
 def split_case_ids(value: str) -> set[str]:
@@ -180,12 +194,19 @@ def infer_case_kind(row: dict) -> str:
         row.get("steps", ""),
         row.get("selectors", ""),
     ])
+    if re.search(r"询问.*token|环境变量|系统提示词|拒绝泄露|敏感信息|内部信息保护", scenario_text, re.I):
+        return "conversation"
     if (
         re.search(r"登录与账号|OAuth|登录成功|登录失败|退出登录|重新登录|鉴权|授权页|取消授权|refresh\s*token|会话恢复", scenario_text, re.I)
         or row.get("module", "") == "登录与账号"
     ):
         return "auth"
-    if re.search(r"附件|上传|文件上传|读取.*文件|图片|PDF|Word|Excel|PPT|Markdown|TXT|CSV|JSON|HTML|多模态", primary_text, re.I):
+    if (
+        re.search(r"成果区|成果预览|任务成果|产物|artifact|聊天正文不混入|安全沙箱", primary_text, re.I)
+        and not re.search(r"附件|上传|文件上传|读取.*文件", primary_text, re.I)
+    ):
+        return "conversation"
+    if re.search(r"附件|上传|文件上传|读取.*文件|图片附件|图片上传|PDF附件|Word附件|Excel附件|PPT附件|多模态附件", primary_text, re.I):
         return "attachment"
     if re.search(r"Agent|回复|收到回复|会话|输入消息|多轮|总结|摘要|提问|问候|上下文|对话|长文本输入", primary_text, re.I):
         return "conversation"
@@ -203,13 +224,13 @@ def export_cases(args: argparse.Namespace) -> None:
     wanted = split_case_ids(args.case)
 
     rows = []
-    sheet_names = []
-    for ws in case_sheets:
-        sheet_names.append(ws.title)
+    export_sheets = export_case_sheets(wb, case_sheets)
+    sheet_names = [ws.title for ws in case_sheets]
+    for ws in export_sheets:
         header_row = find_header_row(ws)
         headers = header_map(ws, header_row)
         for row_idx in range(header_row + 1, (ws.max_row or header_row) + 1):
-            case_id = row_value(ws, row_idx, headers, "用例ID")
+            case_id = row_value_any(ws, row_idx, headers, ["用例ID", "原用例ID"])
             if not case_id:
                 continue
             row = {
@@ -239,6 +260,9 @@ def export_cases(args: argparse.Namespace) -> None:
             if is_selected(row, args.profile, wanted):
                 rows.append(row)
 
+    if args.offset and args.offset > 0:
+        rows = rows[args.offset :]
+
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
 
@@ -258,6 +282,17 @@ def export_cases(args: argparse.Namespace) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def export_case_sheets(wb, case_sheets):
+    # Smoke casebooks intentionally contain a total sheet plus per-module duplicate sheets.
+    # Execute only the total sheet; write-results still updates all case sheets.
+    if "冒烟测试总表" in wb.sheetnames:
+        ws = wb["冒烟测试总表"]
+        header_row = find_header_row(ws)
+        if header_row and ("用例ID" in header_map(ws, header_row) or "原用例ID" in header_map(ws, header_row)):
+            return [ws]
+    return case_sheets
 
 
 def normalize_status(status: str) -> str:
@@ -329,7 +364,8 @@ def write_results(args: argparse.Namespace) -> None:
         header_row = find_header_row(ws)
         headers = ensure_result_columns(ws, header_row, header_map(ws, header_row))
         for row_idx in range(header_row + 1, (ws.max_row or header_row) + 1):
-            case_id = clean(ws.cell(row_idx, headers.get("用例ID", 1)).value)
+            case_id_col = headers.get("用例ID") or headers.get("原用例ID") or 1
+            case_id = clean(ws.cell(row_idx, case_id_col).value)
             if not case_id:
                 continue
             result = by_exact.get(f"{ws.title}::{row_idx}::{case_id}")

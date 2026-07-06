@@ -32,6 +32,16 @@ That folder must contain all screenshots, transcripts, case reports, logs, JSON 
 YYYYMMDDHHmm_自动化测试结果.xlsx
 ```
 
+Every run must also produce these run-level human-readable artifacts:
+
+```text
+最终自动化测试报告.md
+所有证据截图图集.html
+所有证据截图图集.md
+```
+
+The final report must include execution scope, environment/source information when available, module-level pass/fail/block counts, every executed case, operation evidence, failure/blocker explanations, and links to key screenshots and case reports. The screenshot galleries must group every saved screenshot by case so reviewers can inspect the UI evidence without opening each case directory manually.
+
 ## Mandatory Run Policy
 
 When the user says "执行自动化测试" without further scope, run the `mandatory` profile from `references/core-case-map.json`.
@@ -142,6 +152,9 @@ The run-level folder must include:
 
 - `automation-run-summary.json`
 - `automation-run-report.md`
+- `最终自动化测试报告.md`
+- `所有证据截图图集.html`
+- `所有证据截图图集.md`
 - `YYYYMMDDHHmm_自动化测试结果.xlsx`
 - `logs/*.log`
 - `cases/**` evidence directories
