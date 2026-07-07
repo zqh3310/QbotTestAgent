@@ -182,6 +182,20 @@ def is_selected(row: dict, profile: str, wanted: set[str]) -> bool:
 
 
 def infer_case_kind(row: dict) -> str:
+    runner = row.get("runner", "")
+    runner_text = runner.lower().strip()
+    runner_tail = runner_text.split("/")[-1].strip() if "/" in runner_text else runner_text
+    if "ui+conversation" in runner_tail or "ui + conversation" in runner_tail:
+        return "ui+conversation"
+    if runner_tail == "attachment" or "attachment" in runner_tail:
+        return "attachment"
+    if runner_tail == "auth" or "auth" in runner_tail:
+        return "auth"
+    if runner_tail == "conversation" or "conversation" in runner_tail:
+        return "conversation"
+    if runner_tail == "ui" or re.search(r"(^|\s)ui($|\s)", runner_tail):
+        return "ui"
+
     primary_text = "\n".join([
         row.get("module", ""),
         row.get("submodule", ""),

@@ -377,9 +377,11 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       recordStep(state, '自动登录前置完成', '完成登录后应回到 QBot 工作台并继续执行原用例。', workbench.reason, 'passed', state.screenshots.after_auto_auth);
     }
 
-    if (isSmokeSkillCase(testCase) || isSmokeExpertCase(testCase)) {
+    if (isSitCase(testCase)) {
+      await executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, selectors, options, playwright });
+    } else if (isSmokeSkillCase(testCase) || isSmokeExpertCase(testCase)) {
       await executeSmokeFunctionalCase({ page, state, testCase, caseDir, timeoutMs });
-    } else if (testCase.kind === 'conversation' || testCase.kind === 'attachment') {
+    } else if (testCase.kind === 'conversation' || testCase.kind === 'attachment' || testCase.kind === 'ui+conversation') {
       await executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
     } else if (testCase.kind === 'auth') {
       await executeAuthCase({ page, state, testCase, caseDir, selectors, options, playwright });
@@ -395,6 +397,7 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
     state.screenshots.error = await shot(page, caseDir, '99-error').catch((err) => ({ error: err.message }));
     const message = error.message || String(error);
     if (isEnvironmentBlocker(message)) markBlocked(state, message);
+    else if (isAutomationExecutionError(message)) markFailed(state, message, 'automation_error');
     else markFailed(state, message, 'bug');
     await maybeRequestLlmReview({ page, state, testCase, caseDir, options, force: true }).catch(() => {});
     return await finishCase({ page, state, caseDir });
@@ -456,8 +459,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
   }
   state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
   state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
-  writeTextFile(state.artifacts.transcript, replies.map((reply) => `## ${reply.label}\n\n${reply.fullText}`).join('\n\n---\n\n'));
-  writeTextFile(state.artifacts.reply_delta, replies.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
+  writeReplyArtifacts(state, caseDir, replies);
   if (attachments.length) {
     recordAssertion(state, '附件上传证据', '附件类用例必须有上传结果和上传后截图。', state.artifacts.upload?.status === 'passed' && Boolean(state.screenshots.after_upload), state.artifacts.upload?.reason || '');
   }
@@ -550,6 +552,395 @@ async function executeUiCase({ page, state, testCase, caseDir, selectors }) {
     recordAssertion(state, '页面可观察反馈', '操作后页面应有可观察内容或状态变化。', actualText.trim().length > 20, `页面文本长度：${actualText.trim().length}`);
     state.llm_review.status = 'needed';
   }
+}
+
+function isSitCase(testCase) {
+  return /^SIT-/i.test(String(testCase.id || ''));
+}
+
+async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, selectors, options, playwright }) {
+  const id = String(testCase.id || '');
+  if (id === 'SIT-INIT-025') return executeSitInit025({ page, state, caseDir, options });
+  if (id === 'SIT-INIT-002') return executeSitInit002({ page, state, caseDir });
+  if (id === 'SIT-INIT-004') return executeSitInit004({ page, state, caseDir });
+  if (id === 'SIT-AUTH-001') return executeAuthCase({ page, state, testCase, caseDir, selectors, options, playwright });
+  if (id === 'SIT-AUTH-003') return executeSitAuth003({ page, state, options });
+  if (id === 'SIT-AUTH-005') return executeSitAuth005({ page, state, caseDir });
+  if (id === 'SIT-HOME-002') return executeSitHome002({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-HOME-006') return executeSitHome006({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-HOME-019') return executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
+  if (id === 'SIT-EXPERT-004') return executeExpertSmoke003({ page, state, caseDir });
+  if (id === 'SIT-EXPERT-005') return executeSitExpertCreateByConversation({ page, state, caseDir });
+  if (id === 'SIT-EXPERT-006') return executeExpertSmoke008({ page, state, caseDir });
+  if (id === 'SIT-SKILL-002') return executeSitSkillInstall({ page, state, caseDir });
+  if (id === 'SIT-SKILL-006') return executeSkillSmoke009({ page, state, caseDir, timeoutMs });
+  if (id === 'SIT-SKILL-025') return executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-CONN-001') return executeSitConnectorCatalog({ page, state, caseDir });
+  if (id === 'SIT-CONN-003') return executeSitConnectorModes({ page, state, caseDir });
+  if (id === 'SIT-CONN-004') return executeSitConnectorManualConversation({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-ART-001' || id === 'SIT-ART-002' || id === 'SIT-ART-003') {
+    return executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
+  }
+  if (testCase.kind === 'conversation' || testCase.kind === 'attachment' || testCase.kind === 'ui+conversation') {
+    return executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
+  }
+  if (testCase.kind === 'auth') return executeAuthCase({ page, state, testCase, caseDir, selectors, options, playwright });
+  return executeUiCase({ page, state, testCase, caseDir, selectors });
+}
+
+async function executeSitInit025({ page, state, caseDir, options }) {
+  await ensureSidebarExpanded(page, state);
+  state.screenshots.runtime_observation = await shot(page, caseDir, '02-runtime-observation');
+  const chip = page.locator('[data-testid="runtime-status-chip"]').first();
+  const chipVisible = await visible(chip, 1500);
+  const text = chipVisible ? await chip.innerText({ timeout: 1000 }).catch(() => '') : '';
+  recordStep(state, '观察运行环境状态入口', '左下 runtime-status-chip 应可见并展示当前运行环境状态。', chipVisible ? clip(text, 180) : '未找到 runtime-status-chip。', chipVisible ? 'passed' : 'failed', state.screenshots.runtime_observation);
+  if (!options['clean-user-data-dir'] && !options['release-package']) {
+    markBlocked(state, '该用例需要全新用户数据目录、无 Claude/Codex CLI 的隔离环境和可控启动器；当前 casebook runner 仅连接既有 QBot 页面，无法证明首次安装主动下载闭环。');
+    return;
+  }
+  recordAssertion(state, '运行时状态可观察', '首次环境准备应有明确状态提示。', chipVisible && text.trim().length > 0, clip(text, 180));
+}
+
+async function executeSitInit002({ page, state, caseDir }) {
+  await openNewTask(page, state);
+  state.screenshots.home_default_tools = await shot(page, caseDir, '02-home-default-tools');
+  const text = await mainSurfaceText(page);
+  const composer = await visible(page.locator('[data-testid="composer-shell"]').first(), 1500);
+  const skillMenu = await visible(page.locator('[data-testid="composer-skills-menu"]').first(), 1500);
+  const connectorMenu = await visible(page.locator('[data-testid="composer-connectors-menu"]').first(), 1500);
+  const technicalSelectorVisible = /选择模型|选择\s*Agent|Claude Code CLI|Codex CLI|runtime family|模型供应商/i.test(text);
+  recordAssertion(state, '首页默认入口产品化', '首页应展示输入区、技能和连应用等产品化入口。', composer && skillMenu && connectorMenu, `composer=${composer}，skillMenu=${skillMenu}，connectorMenu=${connectorMenu}`);
+  recordAssertion(state, '不要求普通用户选择模型或 CLI', '首次默认使用不应出现模型、Agent 或 CLI 选择流程。', !technicalSelectorVisible, clip(text, 260));
+}
+
+async function executeSitInit004({ page, state, caseDir }) {
+  await ensureSidebarExpanded(page, state);
+  const chip = page.locator('[data-testid="runtime-status-chip"]').first();
+  if (!(await visible(chip, 1500))) {
+    state.screenshots.no_runtime_chip = await shot(page, caseDir, '02-no-runtime-chip');
+    markBlocked(state, '未找到 runtime-status-chip，无法判断当前运行时是否处于 pending/installing。');
+    return;
+  }
+  const statusText = await chip.innerText({ timeout: 1000 }).catch(() => '');
+  state.screenshots.runtime_chip = await shot(page, caseDir, '02-runtime-chip');
+  recordStep(state, '观察运行时状态', '该用例要求 runtime 处于 pending/installing。', clip(statusText, 180), 'passed', state.screenshots.runtime_chip);
+  if (!/pending|install|下载|安装|检查|准备|初始化|未就绪/i.test(statusText)) {
+    markBlocked(state, `当前 runtime 不是 pending/installing，无法验证未 ready 发送门禁；当前状态：${clip(statusText, 180) || '空'}`);
+    return;
+  }
+  await openNewTask(page, state);
+  const sendButton = page.locator('[data-testid="composer-send"]').first();
+  const disabled = await sendButton.evaluate((el) => el.disabled || el.getAttribute('aria-disabled') === 'true').catch(() => false);
+  state.screenshots.send_gate = await shot(page, caseDir, '03-send-gate');
+  recordAssertion(state, '运行时未 ready 发送门禁', 'runtime 未 ready 前发送按钮应不可用。', disabled, `sendDisabled=${disabled}`);
+}
+
+async function executeSitAuth003({ page, state, options }) {
+  if (!options['restart-command'] && !options['release-package']) {
+    markBlocked(state, '该用例需要关闭并重启 QBot 验证 refresh token 恢复；当前 runner 仅连接既有 CDP 页面，缺少可控重启能力。');
+    return;
+  }
+  markBlocked(state, 'restart-command/release-package 重启闭环尚未接入 casebook runner，本用例暂不能自动验证。');
+}
+
+async function executeSitAuth005({ page, state, caseDir }) {
+  await ensureSidebarExpanded(page, state);
+  await clickSelector(page, '[data-testid="nav-settings-menu"]', '打开左下用户菜单', state);
+  state.screenshots.user_menu = await shot(page, caseDir, '02-user-menu');
+  const logout = page.locator('[data-testid="auth-logout"]').first();
+  if (!(await visible(logout, 2000))) {
+    markBlocked(state, '用户菜单中未找到【退出】入口；可能当前未登录或用户菜单结构不可见。');
+    return;
+  }
+  await logout.click({ force: true }).catch(async () => logout.evaluate((el) => el.click()));
+  recordStep(state, '点击【退出】', '退出后应清理工作台访问并回到登录页。', '已点击退出入口。', 'passed', state.screenshots.user_menu);
+  await page.waitForTimeout(2500);
+  state.screenshots.after_logout = await shot(page, caseDir, '03-after-logout');
+  const text = await bodyText(page);
+  const authVisible = await visible(page.locator('[data-testid="qbot-auth-shell"], [data-testid="auth-login"]').first(), 3000);
+  recordAssertion(state, '退出后回到登录页', '退出后应展示登录入口，工作台不应继续可操作。', authVisible || /登录|OAuth|Lingxi/.test(text), clip(text, 260));
+}
+
+async function executeSitHome002({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  await setSkillMode(page, state, caseDir, 'auto');
+  await setConnectorMode(page, state, caseDir, 'auto');
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = userPromptFromCase(testCase, '你好，今天适合做什么测试？');
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '第一轮' });
+  recordAssertion(state, '默认自动能力下回复不被未就绪提示污染', '普通问候不应出现 SkillHub、技能未配置、连接器内部配置等噪音。', !/SkillHub|DEEPBANK_SKILLHUB|技能.*未配置|技能.*暂不可用|连接器.*未配置/i.test(reply.deltaText), clip(reply.deltaText, 260));
+}
+
+async function executeSitHome006({ page, state, testCase, caseDir, timeoutMs }) {
+  if (!await summonFirstExpertForCase(page, state, caseDir)) return;
+  if (!await selectFirstManualSkill(page, state, caseDir)) return;
+  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = userPromptFromCase(testCase, '请基于已选能力生成一份运营活动复盘检查清单，包含数据、权限、异常和成果输出。');
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '组合能力会话' });
+  recordAssertion(state, '组合能力回复相关', '回复应围绕运营活动复盘、数据、权限、异常和成果输出。', /运营|活动|复盘|数据|权限|异常|成果|检查/.test(reply.deltaText), clip(reply.deltaText, 320));
+}
+
+async function executeSitExpertCreateByConversation({ page, state, caseDir }) {
+  await openExpertsPage(page, state, caseDir);
+  await clickSelector(page, '[data-testid="create-expert-top"]', '点击专家页【创建】', state);
+  await page.waitForTimeout(700);
+  state.screenshots.create_dialog = await shot(page, caseDir, '02-create-dialog');
+  const dialogText = await page.locator('.modal').first().innerText({ timeout: 2000 }).catch(() => '');
+  const start = page.locator('.create-hint-opt').filter({ hasText: /开始创建|用对话/ }).first();
+  if (!(await visible(start, 1500))) {
+    recordAssertion(state, '对话创建专家入口', '创建弹窗应展示“开始创建（用对话）”。', false, clip(dialogText, 260));
+    return;
+  }
+  await start.click({ force: true });
+  await page.waitForTimeout(1500);
+  state.screenshots.after_start_create = await shot(page, caseDir, '03-after-start-create');
+  const composer = await visible(page.locator('[data-testid="composer-input"]').first(), 3000);
+  const text = await bodyText(page);
+  recordStep(state, '点击【开始创建（用对话）】', '应回到首页并召唤专家构建师进入创建流程。', clip(text, 260), composer ? 'passed' : 'failed', state.screenshots.after_start_create);
+  recordAssertion(state, '专家构建师联动', '首页应显示专家构建师或创建专家相关状态，输入区可继续对话。', composer && /专家|构建|创建/.test(text), clip(text, 260));
+}
+
+async function executeSitSkillInstall({ page, state, caseDir }) {
+  await installFirstSkillFromMarket(page, state, caseDir);
+}
+
+async function executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs }) {
+  if (!await installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyInstalled: true })) return;
+  await openNewTask(page, state);
+  if (!await selectFirstManualSkill(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = '请使用我刚选择的技能，帮我用一句话说明这个技能适合解决什么问题。';
+  await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '手动技能会话' });
+}
+
+async function executeSitConnectorCatalog({ page, state, caseDir }) {
+  await ensureSidebarExpanded(page, state);
+  await clickSelector(page, '[data-testid="nav-connectors"]', '进入【连接器】页面', state);
+  await page.waitForTimeout(1500);
+  state.screenshots.connectors = await shot(page, caseDir, '02-connectors-view');
+  const connectorsVisible = await visible(page.locator('[data-testid="connectors-view"]').first(), 3000);
+  const builtinVisible = await visible(page.locator('[data-testid="builtin-tools-panel"]').first(), 1500);
+  const text = await mainSurfaceText(page);
+  recordAssertion(state, '连接器目录可见', '连接器页应加载目录、分组或状态提示。', connectorsVisible && text.trim().length > 40, clip(text, 260));
+  recordAssertion(state, '内置工具区域可见', '连接器页应展示内置工具区域或明确加载/错误状态。', builtinVisible || /内置|工具|连接器|加载|失败|重试/.test(text), clip(text, 260));
+}
+
+async function executeSitConnectorModes({ page, state, caseDir }) {
+  await openNewTask(page, state);
+  for (const mode of ['disabled', 'auto', 'manual']) {
+    await setConnectorMode(page, state, caseDir, mode);
+  }
+}
+
+async function executeSitConnectorManualConversation({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = '请基于当前可用连接器，说明你会如何获取外部信息；如果连接器不能使用，请明确说明不可用原因。';
+  await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '手动连接器会话' });
+}
+
+async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
+  await executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
+  if (state.status === 'blocked') return;
+  if (testCase.id === 'SIT-ART-003') {
+    const replyText = state.artifacts?.reply_delta && fs.existsSync(state.artifacts.reply_delta)
+      ? fs.readFileSync(state.artifacts.reply_delta, 'utf8')
+      : '';
+    recordAssertion(state, '聊天正文不混入 raw artifact 事件', '聊天正文不应展示 raw artifact、JSON 事件或内部事件字段。', !/raw artifact|artifact_delta|artifactEvent|\"kind\"\\s*:|\"artifact\"\\s*:/i.test(replyText), clip(replyText, 320));
+    return;
+  }
+  await assertArtifactSurface(page, state, caseDir, testCase.id === 'SIT-ART-002' ? 'html' : 'markdown');
+}
+
+async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyInstalled = false } = {}) {
+  await openSkillsPage(page, state, caseDir, { skillTab: '技能市场' });
+  const install = page.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 2500))) {
+    if (allowAlreadyInstalled) {
+      await clickSkillSubtab(page, '已安装', state);
+      const installed = await visible(page.locator('.skill-card').first(), 2000);
+      state.screenshots.skill_already_installed = await shot(page, caseDir, 'skill-installed-fallback');
+      if (installed) return true;
+    }
+    state.screenshots.no_installable_skill = await shot(page, caseDir, 'skill-no-installable');
+    markBlocked(state, '技能市场没有可安装技能，或当前账号/SkillHub 数据不满足安装测试前置条件。');
+    return false;
+  }
+  const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
+  const cardText = await card.innerText({ timeout: 2000 }).catch(() => '');
+  await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+  await page.waitForTimeout(2500);
+  state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
+  recordStep(state, '点击技能市场第一张可安装技能的【安装】', '安装后应有成功/失败反馈；成功后应可在已安装查看。', clip(cardText, 220), 'passed', state.screenshots.after_skill_install);
+  await clickSkillSubtab(page, '已安装', state);
+  await page.waitForTimeout(1000);
+  state.screenshots.installed_after_install = await shot(page, caseDir, 'skill-installed-after-install');
+  const text = await mainSurfaceText(page);
+  const hasInstalled = await visible(page.locator('.skill-card').first(), 1500);
+  recordAssertion(state, '安装后进入已安装列表', '安装成功后已安装列表应展示技能卡片；失败时应有明确提示。', hasInstalled || /失败|无权|未配置|暂不可用|超时|没有/.test(text), clip(text, 320));
+  return true;
+}
+
+async function summonFirstExpertForCase(page, state, caseDir) {
+  await openExpertsPage(page, state, caseDir);
+  const card = await firstSummonableExpertCard(page);
+  if (!card) {
+    state.screenshots.no_summonable_expert = await shot(page, caseDir, 'expert-no-summonable');
+    markBlocked(state, '专家页没有可召唤专家，无法验证专家与首页会话组合。');
+    return false;
+  }
+  const cardText = await card.innerText({ timeout: 1500 }).catch(() => '');
+  await card.click({ force: true });
+  await page.waitForTimeout(800);
+  state.screenshots.expert_detail = await shot(page, caseDir, 'expert-detail-for-combo');
+  const summon = page.locator('.modal .modal-cta').first();
+  if (!(await visible(summon, 1500))) {
+    markBlocked(state, `专家详情没有召唤入口：${clip(cardText, 180)}`);
+    return false;
+  }
+  await summon.click({ force: true });
+  await page.waitForTimeout(1500);
+  state.screenshots.expert_summoned = await shot(page, caseDir, 'expert-summoned-for-combo');
+  recordStep(state, '召唤第一个可用专家', '召唤后应回到首页输入区并显示专家上下文。', clip(cardText, 180), 'passed', state.screenshots.expert_summoned);
+  const composer = await visible(page.locator('[data-testid="composer-input"]').first(), 3000);
+  recordAssertion(state, '召唤专家后输入区可用', '专家召唤后首页输入区应可继续发起任务。', composer, `composer=${composer}`);
+  return composer;
+}
+
+async function setSkillMode(page, state, caseDir, mode) {
+  await clickSelector(page, '[data-testid="composer-skills-menu"]', '打开输入区【技能】菜单', state);
+  const locator = page.locator(`[data-testid="composer-skill-mode-${mode}"]`).first();
+  if (!(await visible(locator, 1500))) {
+    recordAssertion(state, `技能模式 ${mode}`, '技能菜单应展示禁用/自动/手动三态。', false, `${mode} 不可见。`);
+    return false;
+  }
+  await locator.click({ force: true });
+  await page.waitForTimeout(500);
+  const checked = await locator.getAttribute('aria-checked').catch(() => '');
+  state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
+  recordStep(state, `切换技能模式：${mode}`, `${mode} 点击后应处于选中状态。`, `aria-checked=${checked}`, checked === 'true' ? 'passed' : 'failed', state.screenshots[`skill_mode_${mode}`]);
+  return checked === 'true';
+}
+
+async function selectFirstManualSkill(page, state, caseDir) {
+  const manualOk = await setSkillMode(page, state, caseDir, 'manual');
+  if (!manualOk) return false;
+  const menuText = await activeMenuText(page);
+  if (/还没安装技能|暂无可选技能|未接入/.test(menuText)) {
+    markBlocked(state, `当前没有已安装技能可供手动选择：${clip(menuText, 180)}`);
+    return false;
+  }
+  const option = page.locator('.skill-list .ctool-opt').filter({ hasNotText: /无匹配|还没安装技能/ }).first();
+  if (!(await visible(option, 1500))) {
+    markBlocked(state, `手动技能列表无可选技能：${clip(menuText, 180)}`);
+    return false;
+  }
+  const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');
+  await option.click({ force: true });
+  await page.waitForTimeout(600);
+  state.screenshots.manual_skill_selected = await shot(page, caseDir, 'manual-skill-selected');
+  recordStep(state, '手动选择第一个已安装技能', '技能应被选中并在菜单或输入区有可见反馈。', clip(optionText, 180), 'passed', state.screenshots.manual_skill_selected);
+  return true;
+}
+
+async function setConnectorMode(page, state, caseDir, mode) {
+  await clickSelector(page, '[data-testid="composer-connectors-menu"]', '打开输入区【连应用】菜单', state);
+  const locator = page.locator(`[data-testid="composer-connector-mode-${mode}"]`).first();
+  if (!(await visible(locator, 1500))) {
+    recordAssertion(state, `连接器模式 ${mode}`, '连应用菜单应展示禁用/自动/手动三态。', false, `${mode} 不可见。`);
+    return false;
+  }
+  await locator.click({ force: true });
+  await page.waitForTimeout(500);
+  const checked = await locator.getAttribute('aria-checked').catch(() => '');
+  state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
+  recordStep(state, `切换连接器模式：${mode}`, `${mode} 点击后应处于选中状态。`, `aria-checked=${checked}`, checked === 'true' ? 'passed' : 'failed', state.screenshots[`connector_mode_${mode}`]);
+  return checked === 'true';
+}
+
+async function selectFirstManualConnector(page, state, caseDir) {
+  const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
+  if (!manualOk) return false;
+  const menuText = await activeMenuText(page);
+  if (/未接入连接器|暂无连接器|无匹配/.test(menuText)) {
+    markBlocked(state, `当前没有可手动选择的连接器：${clip(menuText, 180)}`);
+    return false;
+  }
+  const option = page.locator('[data-testid^="composer-connector-option-"]').filter({ hasNotText: /不生效|不可用|未接入|无匹配/ }).first();
+  if (!(await visible(option, 1500))) {
+    markBlocked(state, `没有健康连接器可供手动选择：${clip(menuText, 220)}`);
+    return false;
+  }
+  const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');
+  await option.click({ force: true });
+  await page.waitForTimeout(800);
+  state.screenshots.manual_connector_selected = await shot(page, caseDir, 'manual-connector-selected');
+  recordStep(state, '手动选择第一个健康连接器', '连接器应被选中并在菜单或输入区有可见反馈。', clip(optionText, 180), 'passed', state.screenshots.manual_connector_selected);
+  return true;
+}
+
+async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label = '第一轮' }) {
+  const before = await conversationSnapshot(page);
+  await fillComposer(page, prompt, state, label);
+  state.screenshots[`${slugify(label)}_after_fill`] = await shot(page, caseDir, `${slugify(label)}-after-fill`);
+  await send(page, state, `发送${label}`);
+  state.screenshots[`${slugify(label)}_after_send`] = await shot(page, caseDir, `${slugify(label)}-after-send`);
+  const reply = await waitForReply(page, before, timeoutMs, {
+    ignoredText: [prompt, testCase.scenario, testCase.test_data],
+  });
+  state.screenshots[`${slugify(label)}_after_reply`] = await shot(page, caseDir, `${slugify(label)}-after-reply`);
+  writeReplyArtifacts(state, caseDir, [{ label, ...reply }]);
+  recordReplyAssertions(state, testCase, prompt, reply, label);
+  return reply;
+}
+
+function writeReplyArtifacts(state, caseDir, replies) {
+  state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
+  state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
+  writeTextFile(state.artifacts.transcript, replies.map((reply) => `## ${reply.label}\n\n${reply.fullText || reply.deltaText}`).join('\n\n---\n\n'));
+  writeTextFile(state.artifacts.reply_delta, replies.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
+}
+
+function recordReplyAssertions(state, testCase, prompt, reply, label) {
+  recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
+  recordAssertion(state, `回复相关性（${label}）`, '回复应围绕当前轮问题或测试数据作答。', replyLooksRelevant(reply.deltaText, testCase, prompt), clip(reply.deltaText, 220));
+  const duplicateEvidence = obviousDuplicateEvidence(reply.deltaText);
+  recordAssertion(state, `回复可读性（${label}）`, '回复不应出现同一句、同一段或同一词组连续重复输出。', !duplicateEvidence, duplicateEvidence || '未检测到明显重复输出。');
+}
+
+function userPromptFromCase(testCase, fallback) {
+  const prompt = buildUserPrompt(testCase);
+  return prompt && !isMetaOnlyTestData(prompt) ? prompt : fallback;
+}
+
+async function assertArtifactSurface(page, state, caseDir, expectedType) {
+  const opened = await openArtifactSurface(page, state, caseDir);
+  if (!opened) return;
+  const text = await page.locator('[data-testid="artifact-panel"]').first().innerText({ timeout: 2000 }).catch(() => '');
+  const typePattern = expectedType === 'html' ? /html|预览|打开|\.html/i : /md|markdown|\.md|章节/i;
+  recordAssertion(state, '成果区显示本轮产物', '会话生成成果后，成果区应展示产物列表、文件名或预览/打开能力。', /成果|文件|预览|打开|本任务共|还没有/.test(text) && !/还没有产出文件/.test(text), clip(text, 320));
+  recordAssertion(state, `${expectedType.toUpperCase()} 成果类型可识别`, `成果区应能识别或展示 ${expectedType} 产物。`, typePattern.test(text), clip(text, 320));
+}
+
+async function openArtifactSurface(page, state, caseDir) {
+  if (await visible(page.locator('[data-testid="artifact-panel"]').first(), 1000)) {
+    state.screenshots.artifact_panel = await shot(page, caseDir, 'artifact-panel');
+    return true;
+  }
+  const open = page.locator('[data-testid="artifact-panel-open"]').first();
+  if (await visible(open, 2500)) {
+    await open.click({ force: true }).catch(async () => open.evaluate((el) => el.click()));
+    await page.waitForTimeout(1200);
+    state.screenshots.artifact_panel = await shot(page, caseDir, 'artifact-panel');
+    recordStep(state, '打开成果区', '成果区按钮点击后应展示 artifact panel。', '已点击成果区按钮。', 'passed', state.screenshots.artifact_panel);
+    return await visible(page.locator('[data-testid="artifact-panel"]').first(), 1500);
+  }
+  state.screenshots.artifact_missing = await shot(page, caseDir, 'artifact-panel-missing');
+  recordAssertion(state, '成果区入口可见', '生成成果后应提供成果区入口或直接展示成果区。', false, '未找到 artifact-panel 或 artifact-panel-open。');
+  return false;
 }
 
 function isSmokeSkillCase(testCase) {
@@ -1880,12 +2271,12 @@ async function waitForReply(page, beforeState, timeoutMs, { ignoredText = [] } =
         last = cleanDelta;
         stable = 0;
       }
-      if (stable >= 2) return { fullText, deltaText: cleanDelta };
+      if (stable >= 2) return { fullText: cleanAssistantText(candidate || cleanDelta), deltaText: cleanDelta };
     }
     await page.waitForTimeout(1000);
   }
   if (String(lastCandidate || '').trim().length > 15) {
-    return { fullText: lastFullText, deltaText: String(lastCandidate || '').trim() };
+    return { fullText: String(lastCandidate || '').trim(), deltaText: String(lastCandidate || '').trim() };
   }
   throw new Error(`等待 Agent 回复超时（${timeoutMs}ms）。`);
 }
@@ -2198,6 +2589,16 @@ function replyLooksRelevant(reply, testCase, prompt = '') {
 
 async function assertNoForbidden(page, state) {
   const text = await assertionTextForForbidden(page, state);
+  if (!text.trim()) {
+    recordAssertion(
+      state,
+      '安全与技术噪音',
+      '页面和回复不得暴露 token、环境变量、baseURL、SkillHub 未配置、堆栈或内部错误。',
+      true,
+      '本用例未产生本轮会话回复，且没有可安全归属到当前操作的页面文本；未扫描历史会话。',
+    );
+    return;
+  }
   const matches = forbiddenMatches(text);
   recordAssertion(
     state,
@@ -2211,8 +2612,14 @@ async function assertNoForbidden(page, state) {
 async function assertionTextForForbidden(page, state) {
   const replyDelta = state.artifacts?.reply_delta;
   if (replyDelta && fs.existsSync(replyDelta)) return stripKnownTestText(fs.readFileSync(replyDelta, 'utf8'), state);
-  const latestAssistant = await latestAssistantText(page);
-  if (latestAssistant) return stripKnownTestText(latestAssistant, state);
+  if (state.kind === 'conversation' || state.kind === 'attachment' || state.kind === 'ui+conversation') {
+    const latestAssistant = await latestAssistantText(page);
+    if (latestAssistant) return stripKnownTestText(latestAssistant, state);
+  }
+  if (state.artifacts?.page_text && fs.existsSync(state.artifacts.page_text)) {
+    return stripKnownTestText(fs.readFileSync(state.artifacts.page_text, 'utf8'), state);
+  }
+  if (state.kind === 'auth' || state.kind === 'ui') return '';
   return stripKnownTestText(await mainSurfaceText(page).catch(() => ''), state);
 }
 
@@ -2439,6 +2846,13 @@ function obviousDuplicateEvidence(text) {
       return `检测到连续重复段落：${clip(lines[index], 120)}`;
     }
   }
+  const seen = new Map();
+  for (const line of lines) {
+    if (line.length < 8 || /^(下面是|具体来说|如果你|需要我|说明[:：]?$)/.test(line)) continue;
+    const count = (seen.get(line) || 0) + 1;
+    seen.set(line, count);
+    if (count >= 2) return `检测到重复段落：${clip(line, 120)}`;
+  }
   const compact = raw.replace(/\s+/g, ' ').trim();
   const chineseRepeat = compact.match(/([\u4e00-\u9fa5]{2,8})\1/);
   if (chineseRepeat) return `检测到连续重复词组：${chineseRepeat[0]}`;
@@ -2484,6 +2898,10 @@ async function findQbotPage(browser) {
 
 function isEnvironmentBlocker(message) {
   return /CDP|登录页|未找到 QBot 页面|Playwright|权限|quarantine|无法连接|file chooser|Accessibility|辅助功能/i.test(String(message || ''));
+}
+
+function isAutomationExecutionError(message) {
+  return /自动化框架拦截|未找到入口|未找到会话输入框|selector|locator|点击.*失败|无法定位|casebook runner/i.test(String(message || ''));
 }
 
 function buildSyntheticResult({ outDir, testCase, index, status, resultCategory, reason }) {
