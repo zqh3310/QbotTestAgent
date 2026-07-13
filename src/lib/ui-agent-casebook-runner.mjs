@@ -34,6 +34,8 @@ const TECHNICAL_FAILURE_PATTERNS = [
   /\btraceback\b/i,
   /\buncaught\b/i,
   /\bexception\b/i,
+  /\bAPI Error\b/i,
+  /litellm\.BadRequestError/i,
   /发生内部错误/,
   /系统内部错误/,
   /错误码\s*[:：]?\s*(?:[A-Z_]+[-_]?\d{2,}|\d{4,}|HTTP\s*5\d{2}|5\d{2})/i,
@@ -3699,17 +3701,38 @@ async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutM
 async function prepareVisibleQaWorkspace(page, state, caseDir) {
   const workspace = path.resolve(process.cwd(), 'outputs', 'ui-agent-workspaces', `${slugify(state.id)}-${path.basename(path.dirname(caseDir))}`);
   ensureDir(workspace);
-  const result = await page.evaluate(async (cwd) => {
+  const invoked = await page.evaluate(async (cwd) => {
     const bridge = window.__qbotE2E || window.__deepbankE2E;
     if (!bridge?.prepareTaskInContext) return { ok: false, reason: 'E2E bridge prepareTaskInContext unavailable' };
     try {
       await bridge.prepareTaskInContext({ cwd });
-      const current = await bridge.state?.();
-      return { ok: current?.cwd === cwd, cwd: current?.cwd || null, reason: current?.cwd === cwd ? 'workspace selected' : 'workspace readback mismatch' };
+      return { ok: true, reason: 'prepareTaskInContext invoked' };
     } catch (error) {
       return { ok: false, reason: error?.message || String(error) };
     }
   }, workspace).catch((error) => ({ ok: false, reason: error.message }));
+  let current = null;
+  let matched = false;
+  if (invoked.ok) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      current = await qbotE2EState(page);
+      if (current?.available && current.cwd === workspace) {
+        matched = true;
+        break;
+      }
+      await page.waitForTimeout(250);
+    }
+  }
+  const result = invoked.ok
+    ? {
+        ok: matched,
+        cwd: current?.cwd || null,
+        reason: matched
+          ? 'workspace selected and confirmed after renderer state settled'
+          : `workspace readback mismatch after 10s: ${current?.cwd || 'null'}`,
+      }
+    : invoked;
   const clean = result.ok ? await waitForCleanDraftTask(page, 8000) : { ok: false, reason: result.reason };
   state.artifacts.qa_workspace = { requested: workspace, ...result, clean_draft: clean };
   state.screenshots.qa_workspace_selected = await shot(page, caseDir, 'qa-workspace-selected');
@@ -5766,7 +5789,14 @@ async function openSkillsPage(page, state, caseDir, { skillTab = '已安装' } =
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   await clickSelector(page, '[data-testid="nav-experts"]', '进入【专家/技能】模块', state);
-  await clickSelector(page, '[data-testid="skills-tab"]', '切换到【技能】页签', state);
+  const skillsTab = page.locator('[data-testid="skills-tab"]').first();
+  const fallbackTab = page.getByRole('button', { name: /^技能$/ }).first();
+  let target = null;
+  if (await visible(skillsTab, 5000)) target = skillsTab;
+  else if (await visible(fallbackTab, 1500)) target = fallbackTab;
+  if (!target) throw new Error('未找到入口：[data-testid="skills-tab"]；等待专家页渲染及“技能”文案入口后仍不可见。');
+  await target.click({ force: true }).catch(async () => target.evaluate((el) => el.click()));
+  recordStep(state, '切换到【技能】页签', '专家/技能模块加载后应出现技能页签。', '已等待页面渲染并点击技能页签。', 'passed');
   await page.waitForTimeout(1000);
   if (skillTab) await clickSkillSubtab(page, skillTab, state);
   const visibleSkills = await visible(page.locator('[data-testid="skills-view"]').first(), 4000);
