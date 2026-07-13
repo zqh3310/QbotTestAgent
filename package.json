@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Local QBot / Deepbank v2 test agent team runner.",
   "scripts": {
-    "check": "node --check src/cli.mjs && node test/smoke.mjs",
+    "check": "node --check src/cli.mjs && node --check src/lib/ui-agent-casebook-runner.mjs && node test/framework-invariants.mjs && node test/smoke.mjs",
     "run": "node src/cli.mjs run",
     "monitor": "node src/cli.mjs monitor",
     "generate": "node src/cli.mjs generate",
