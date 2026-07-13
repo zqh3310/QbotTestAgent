@@ -52,6 +52,14 @@ const WORK_MODE_LABELS = {
   ask: '问答',
   plan: '规划',
 };
+const REPLY_EVIDENCE_OPTIONAL_CASE_IDS = new Set([
+  'SIT-HOME-023',
+  'SIT-HOME-047',
+  'SIT-HOME-048',
+  'SIT-HOME-049',
+  'SIT-HOME-050',
+  'SIT-HOME-051',
+]);
 
 export async function runUiAgentCasebookCommand({ options = {}, root = process.cwd() } = {}) {
   const startedAt = new Date();
@@ -1473,15 +1481,15 @@ async function executeSitHomePrdBoundary({ page, state, testCase, caseDir, timeo
 async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  const injected = await page.evaluate(() => {
-    const agent = window.agent;
-    if (!agent?.send) return { ok: false, reason: 'agent.send unavailable' };
-    globalThis.__QBOT_QA_ORIGINAL_SEND__ = agent.send;
-    agent.send = async () => { throw new Error('任务执行失败，请稍后重试（QBotTestAgent controlled failure）'); };
-    return { ok: agent.send !== globalThis.__QBOT_QA_ORIGINAL_SEND__ };
-  }).catch((error) => ({ ok: false, reason: error.message }));
-  if (!injected.ok) {
-    markBlocked(state, `无法安装会话失败 dry-run 注入：${injected.reason || 'agent.send bridge 不可替换'}`);
+  const control = await installPreloadHttpControl(page, [{
+    id: 'home-025-turn-context-failure',
+    method: 'POST',
+    pathExact: '/api/desktop-agent/turn-context',
+    mode: 'network-error',
+    errorMessage: '任务执行失败，请稍后重试（QBotTestAgent controlled failure）',
+  }]);
+  if (!control.ok) {
+    markBlocked(state, `框架无法安装 preload HTTP 会话失败注入：${control.reason}`);
     return;
   }
   const prompt = String(testCase.test_data || '').trim()
@@ -1497,20 +1505,18 @@ async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir })
     const retry = assistant.getByRole('button', { name: /重新生成|重试/ }).first();
     const retryVisible = await visible(retry, 800);
     const reasonVisible = /任务执行失败|稍后重试|controlled failure/.test(pageText);
+    const controlState = await readPreloadHttpControl(control);
+    const routeHits = controlState.hits.filter((item) => item.id === 'home-025-turn-context-failure').length;
     state.screenshots.home_025_failure_recovery = await shot(page, caseDir, 'home-025-failure-recovery');
-    state.artifacts.controlled_failure = { injected: true, retry_visible: retryVisible, reason_visible: reasonVisible };
+    state.artifacts.controlled_failure = { injected: routeHits > 0, route: '/api/desktop-agent/turn-context', route_hits: routeHits, retry_visible: retryVisible, reason_visible: reasonVisible };
     state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
     state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
     writeTextFile(state.artifacts.transcript, `USER\n${prompt}\n\nASSISTANT_ERROR\n${reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500)}`);
     writeTextFile(state.artifacts.reply_delta, reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500));
-    recordStep(state, '注入一次可控任务失败', '应通过 dry-run 替换发送桥，只触发 UI 失败恢复，不请求真实模型。', `reasonVisible=${reasonVisible}；retryVisible=${retryVisible}`, 'passed', state.screenshots.home_025_failure_recovery);
+    recordStep(state, '注入一次可控任务失败', '应在 Electron preload Node HTTP 传输层拦截 turn-context，只触发 UI 失败恢复，不修改冻结的 agent bridge。', `routeHits=${routeHits}；reasonVisible=${reasonVisible}；retryVisible=${retryVisible}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.home_025_failure_recovery, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '失败后保留原问题和恢复出路', '任务失败后应保留原问题，并展示重试入口或明确可理解原因。', users.some((text) => text.includes('提升 QBot 新手易用性')) && (retryVisible || reasonVisible), `userMessages=${users.length}；retryVisible=${retryVisible}；reasonVisible=${reasonVisible}`);
   } finally {
-    await page.evaluate(() => {
-      const original = globalThis.__QBOT_QA_ORIGINAL_SEND__;
-      if (original && window.agent) window.agent.send = original;
-      delete globalThis.__QBOT_QA_ORIGINAL_SEND__;
-    }).catch(() => {});
+    await restorePreloadHttpControl(control);
   }
 }
 
@@ -1539,26 +1545,25 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     clip(panelText, 420),
   );
   if (!opened) return;
-  const injected = await page.evaluate(() => {
-    const agent = window.agent;
-    if (!agent?.submitFeedbackIssueIntake) return { ok: false, reason: 'submitFeedbackIssueIntake unavailable' };
-    globalThis.__QBOT_QA_ORIGINAL_SUBMIT_FEEDBACK__ = agent.submitFeedbackIssueIntake;
-    agent.submitFeedbackIssueIntake = async (payload) => {
-      globalThis.__QBOT_QA_CAPTURED_FEEDBACK_PAYLOAD__ = payload;
-      return {
-        state: 'created',
-        issueIid: 999999,
-        issueUrl: null,
-        mutation: 'qa-dry-run',
-        duplicateCandidates: [],
-        blockedReason: null,
-        draftMarkdown: '',
-      };
-    };
-    return { ok: agent.submitFeedbackIssueIntake !== globalThis.__QBOT_QA_ORIGINAL_SUBMIT_FEEDBACK__ };
-  }).catch((error) => ({ ok: false, reason: error.message }));
-  if (!injected.ok) {
-    markBlocked(state, `无法安装快速反馈 dry-run 捕获器：${injected.reason || 'bridge 不可替换'}`);
+  const control = await installPreloadHttpControl(page, [{
+    id: 'home-030-feedback-dry-run',
+    method: 'POST',
+    pathExact: '/api/feedback-issues/intake',
+    mode: 'fixed-response',
+    status: 200,
+    body: {
+      state: 'created',
+      issueIid: 999999,
+      issueUrl: null,
+      mutation: 'qa-dry-run',
+      duplicateCandidates: [],
+      readiness: { state: 'ready', ok: true },
+      blockedReason: null,
+      draftMarkdown: '',
+    },
+  }]);
+  if (!control.ok) {
+    markBlocked(state, `框架无法安装 preload HTTP 快速反馈 dry-run：${control.reason}`);
     return;
   }
   const secretMarker = 'qa-secret-token-12345';
@@ -1569,21 +1574,20 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     const submit = panel.locator('[data-testid="quick-feedback-submit"]').first();
     await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
     await page.locator('[data-testid="quick-feedback-result"], [data-testid="quick-feedback-error"], [data-testid="quick-feedback-duplicate"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
-    const captured = await page.evaluate(() => globalThis.__QBOT_QA_CAPTURED_FEEDBACK_PAYLOAD__ || null).catch(() => null);
+    const controlState = await readPreloadHttpControl(control);
+    const hit = controlState.hits.find((item) => item.id === 'home-030-feedback-dry-run') || null;
+    let captured = null;
+    try { captured = hit?.requestBody ? JSON.parse(hit.requestBody) : null; } catch { captured = { raw: hit?.requestBody || '' }; }
+    const routeHits = controlState.hits.filter((item) => item.id === 'home-030-feedback-dry-run').length;
     const serialized = JSON.stringify(captured || {});
     const summaryPresent = /快速反馈|测试快速反馈|当前对话|conversation|summary/i.test(serialized);
     const redacted = Boolean(captured) && !serialized.includes(secretMarker) && !serialized.includes(privatePath);
-    state.artifacts.quick_feedback_dry_run = { captured: Boolean(captured), summary_present: summaryPresent, redacted };
+    state.artifacts.quick_feedback_dry_run = { captured: Boolean(captured), route: '/api/feedback-issues/intake', route_hits: routeHits, summary_present: summaryPresent, redacted };
     state.screenshots.home_030_feedback_dry_run = await shot(page, caseDir, 'home-030-feedback-dry-run');
-    recordStep(state, '提交快速反馈 dry-run', '框架应拦截最终 issue 写入，只捕获产品已构造的脱敏 payload。', `captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`, captured ? 'passed' : 'failed', state.screenshots.home_030_feedback_dry_run, captured ? '' : 'automation_error');
+    recordStep(state, '提交快速反馈 dry-run', '框架应在 Electron preload Node HTTP 传输层拦截最终 issue 写入，只捕获产品已构造的脱敏 payload。', `routeHits=${routeHits}；captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`, captured ? 'passed' : 'failed', state.screenshots.home_030_feedback_dry_run, captured ? '' : 'automation_error');
     recordAssertion(state, '快速反馈 payload 带摘要且已脱敏', 'dry-run payload 应包含当前会话摘要，且不包含测试 token 原值和完整本地路径。', Boolean(captured) && summaryPresent && redacted, `captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`);
   } finally {
-    await page.evaluate(() => {
-      const original = globalThis.__QBOT_QA_ORIGINAL_SUBMIT_FEEDBACK__;
-      if (original && window.agent) window.agent.submitFeedbackIssueIntake = original;
-      delete globalThis.__QBOT_QA_ORIGINAL_SUBMIT_FEEDBACK__;
-      delete globalThis.__QBOT_QA_CAPTURED_FEEDBACK_PAYLOAD__;
-    }).catch(() => {});
+    await restorePreloadHttpControl(control);
   }
 }
 
@@ -1853,7 +1857,26 @@ async function executeSitHomeSidebarInteraction({ page, state, testCase, caseDir
   }
 
   if (id === 'SIT-HOME-050') {
-    const title = (await item.innerText({ timeout: 1000 }).catch(() => '')).trim();
+    const title = `自动化搜索-${Date.now()}`;
+    await item.dblclick({ force: true });
+    const renameInput = page.getByTestId(`session-rename-input-${session.id}`).first();
+    const renameVisible = await visible(renameInput, 1500);
+    if (renameVisible) {
+      await renameInput.fill(title);
+      await renameInput.press('Enter');
+      await page.waitForTimeout(800);
+    }
+    const renamedText = await page.getByTestId(`session-item-${session.id}`).first().innerText({ timeout: 1200 }).catch(() => '');
+    recordStep(
+      state,
+      '为搜索用例设置唯一会话标题',
+      '搜索前应将新建会话重命名为唯一可搜索标题，不依赖“新会话”默认文案。',
+      `renameVisible=${renameVisible}；title=${renamedText}`,
+      renameVisible && renamedText.includes(title) ? 'passed' : 'failed',
+      '',
+      renameVisible && renamedText.includes(title) ? '' : 'automation_error',
+    );
+    if (!renameVisible || !renamedText.includes(title)) return;
     const search = page.getByTestId('sidebar-search').first();
     await search.click({ force: true });
     const input = page.getByPlaceholder('搜索任务', { exact: true }).first();
@@ -1887,13 +1910,21 @@ async function executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDi
     recordAssertion(state, '待删除附件卡片定位', `输入区应能定位 ${deletedName}。`, false, await visibleComposerAttachmentText(page), 'automation_error');
     return;
   }
-  const remove = root.locator('button[aria-label*="移除"], button[aria-label*="remove" i], button, .aui-attachment-remove').last();
+  const remove = root.locator('button[aria-label*="移除"], button[aria-label*="Remove file" i], button[aria-label*="remove" i], .aui-attachment-remove').first();
+  if (!(await visible(remove, 1200))) {
+    recordStep(state, '点击指定附件的删除按钮', `必须在 ${deletedName} 卡片内找到具有移除语义的专用按钮。`, '未找到专用移除按钮，已停止，不点击泛化 button。', 'failed', state.screenshots.home_056_uploaded, 'automation_error');
+    return;
+  }
   await remove.click({ force: true });
   await page.waitForTimeout(600);
   const remainingText = await visibleComposerAttachmentText(page);
+  const remainingCount = await page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => -1);
   state.screenshots.home_056_after_remove = await shot(page, caseDir, 'home-056-after-remove-one');
-  const remainingOk = files.filter((_, index) => index !== 1).every((file) => remainingText.includes(path.basename(file))) && !remainingText.includes(deletedName);
-  recordAssertion(state, '发送前只保留两个附件', '删除 qbot-requirement.md 后，输入区只应保留 TXT 和 JSON。', remainingOk, clip(remainingText, 280), remainingOk ? '' : 'automation_error');
+  const remainingOk = remainingCount === 2
+    && files.filter((_, index) => index !== 1).every((file) => remainingText.includes(path.basename(file)))
+    && !remainingText.includes(deletedName);
+  recordStep(state, '点击指定附件的删除按钮', `点击 ${deletedName} 卡片内的专用移除按钮。`, `remainingCount=${remainingCount}；${clip(remainingText, 220)}`, remainingOk ? 'passed' : 'failed', state.screenshots.home_056_after_remove, remainingOk ? '' : 'automation_error');
+  recordAssertion(state, '发送前只保留两个附件', '删除 qbot-requirement.md 后，输入区应精确保留 2 个附件：TXT 和 JSON。', remainingOk, `remainingCount=${remainingCount}；${clip(remainingText, 280)}`, remainingOk ? '' : 'automation_error');
   if (!remainingOk) return;
   const reply = await runPromptInCurrentTask({
     page,
@@ -3209,36 +3240,35 @@ async function executeSitSkillNetworkInterrupt({ page, state, caseDir }) {
   const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
   const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
   const skillName = await skillCardName(card, cardText);
-  const injected = await page.evaluate(() => {
-    const agent = window.agent;
-    if (!agent?.installSkill) return { ok: false, reason: 'installSkill unavailable' };
-    globalThis.__QBOT_QA_ORIGINAL_INSTALL_SKILL__ = agent.installSkill;
-    agent.installSkill = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      throw new Error('QBotTestAgent controlled network interruption');
-    };
-    return { ok: agent.installSkill !== globalThis.__QBOT_QA_ORIGINAL_INSTALL_SKILL__ };
-  }).catch((error) => ({ ok: false, reason: error.message }));
-  if (!injected.ok) {
-    markBlocked(state, `无法注入技能安装网络中断：${injected.reason || 'installSkill bridge 不可替换'}`);
+  const control = await installPreloadHttpControl(page, [{
+    id: 'skill-021-install-interrupt',
+    method: 'POST',
+    pathExact: '/api/skills/install',
+    mode: 'fixed-response',
+    status: 200,
+    delayMs: 800,
+    body: { ok: false, msg: '技能安装失败：网络连接中断，请重试（QBotTestAgent controlled network interruption）' },
+  }]);
+  if (!control.ok) {
+    markBlocked(state, `框架无法安装 preload HTTP 技能安装中断注入：${control.reason}`);
     return;
   }
   try {
-    await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+    const dialog = await captureDialogDuring(page, async () => install.click({ force: true }).catch(async () => install.evaluate((el) => el.click())), 8000);
     await page.waitForTimeout(2200);
     state.screenshots.skill_021_after_interrupt = await shot(page, caseDir, 'skill-021-after-interrupt');
     const text = await mainSurfaceText(page);
     await clickSkillSubtab(page, '已安装', state);
     await page.waitForTimeout(700);
     const dirtyInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 800);
-    recordStep(state, '技能安装请求中注入网络中断', '安装应从进行中收敛到失败，并允许重试。', `技能=${skillName}；market=${clip(text, 300)}`, 'passed', state.screenshots.skill_021_after_interrupt);
-    recordAssertion(state, '安装中断可恢复且无脏状态', '安装失败后应展示失败/重试提示，且失败技能不能进入已安装列表。', /失败|网络|重试|稍后|安装/.test(text) && !dirtyInstalled, `dirtyInstalled=${dirtyInstalled}；${clip(text, 360)}`);
+    const controlState = await readPreloadHttpControl(control);
+    const routeHits = controlState.hits.filter((item) => item.id === 'skill-021-install-interrupt').length;
+    const failureText = `${dialog.message || ''}\n${text}`;
+    state.artifacts.skill_install_interrupt = { route: '/api/skills/install', route_hits: routeHits, dialog: dialog.message || '' };
+    recordStep(state, '技能安装请求中注入网络中断', '安装应从进行中收敛到失败，并允许重试。', `routeHits=${routeHits}；技能=${skillName}；dialog=${dialog.message || '无'}；market=${clip(text, 260)}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.skill_021_after_interrupt, routeHits > 0 ? '' : 'automation_error');
+    recordAssertion(state, '安装中断可恢复且无脏状态', '安装失败后应展示失败/重试提示，且失败技能不能进入已安装列表。', routeHits > 0 && /失败|网络|重试|稍后|安装/.test(failureText) && !dirtyInstalled, `dirtyInstalled=${dirtyInstalled}；${clip(failureText, 360)}`);
   } finally {
-    await page.evaluate(() => {
-      const original = globalThis.__QBOT_QA_ORIGINAL_INSTALL_SKILL__;
-      if (original && window.agent) window.agent.installSkill = original;
-      delete globalThis.__QBOT_QA_ORIGINAL_INSTALL_SKILL__;
-    }).catch(() => {});
+    await restorePreloadHttpControl(control);
   }
 }
 
@@ -3477,23 +3507,16 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir 
     markBlocked(state, '已选中连接器，但框架未能读取 connector key，无法执行渲染层健康快照故障注入。');
     return;
   }
-  const injected = await page.evaluate((key) => {
-    const agent = window.agent;
-    if (!agent?.getConnectorHealth) return { ok: false, reason: 'getConnectorHealth unavailable' };
-    globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_HEALTH__ = agent.getConnectorHealth;
-    agent.getConnectorHealth = async () => [{
-      name: key,
-      connectorKey: key,
-      transport: 'http',
-      status: 'unreachable',
-      reason: 'QBotTestAgent controlled health fault',
-      elapsedMs: 1,
-      checkedAt: Date.now(),
-    }];
-    return { ok: agent.getConnectorHealth !== globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_HEALTH__ };
-  }, connectorKey).catch((error) => ({ ok: false, reason: error.message }));
-  if (!injected.ok) {
-    markBlocked(state, `无法注入连接器健康快照：${injected.reason}`);
+  const control = await installPreloadHttpControl(page, [{
+    id: 'connector-012-needs-auth',
+    method: 'GET',
+    pathExact: '/api/capabilities',
+    mode: 'transform-json',
+    transform: 'connector-needs-auth',
+    connectorKey,
+  }]);
+  if (!control.ok) {
+    markBlocked(state, `框架无法安装 preload HTTP 连接器状态注入：${control.reason}`);
     return;
   }
   try {
@@ -3507,15 +3530,16 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir 
     const warning = page.locator('[data-testid="composer-connector-unhealthy-selected"]').first();
     const warningVisible = await visible(warning, 1800);
     const menuText = await activeMenuText(page);
+    const controlState = await readPreloadHttpControl(control);
+    const controlHits = controlState.hits.filter((item) => item.id === 'connector-012-needs-auth');
+    const routeHits = controlHits.length;
+    const modified = controlHits.reduce((total, item) => total + Number(item.modified || 0), 0);
     state.screenshots.connector_012_unhealthy_selected = await shot(page, caseDir, 'connector-012-unhealthy-selected');
-    recordStep(state, '将已选连接器健康状态注入为 unreachable', '健康快照变化后应重新渲染手动菜单。', `connector=${connectorKey}；warning=${warningVisible}；menu=${clip(menuText, 260)}`, warningVisible ? 'passed' : 'failed', state.screenshots.connector_012_unhealthy_selected);
-    recordAssertion(state, '已选不可用连接器本轮不生效提示', '已选连接器变为 unreachable 后应显示“本轮不会生效”并给出重试连接出路。', warningVisible && /本轮不会生效/.test(menuText) && /重试连接|需处理/.test(menuText), clip(menuText, 360));
+    state.artifacts.connector_unhealthy_snapshot = { route: '/api/capabilities', route_hits: routeHits, modified, connector: connectorKey, injected_status: 'needs_auth' };
+    recordStep(state, '将已选连接器注入为受控不可用状态', '通过 capabilities 快照将已选连接器改为 needs_auth，菜单应重新渲染为不生效。', `routeHits=${routeHits}；modified=${modified}；connector=${connectorKey}；warning=${warningVisible}；menu=${clip(menuText, 240)}`, routeHits > 0 && modified > 0 ? 'passed' : 'failed', state.screenshots.connector_012_unhealthy_selected, routeHits > 0 && modified > 0 ? '' : 'automation_error');
+    recordAssertion(state, '已选不可用连接器本轮不生效提示', '已选连接器变为不可用后应显示“本轮不会生效”，并给出重试连接或完成授权的出路。', warningVisible && /本轮不会生效/.test(menuText) && /重试连接|完成授权|需处理/.test(menuText), clip(menuText, 360));
   } finally {
-    await page.evaluate(() => {
-      const original = globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_HEALTH__;
-      if (original && window.agent) window.agent.getConnectorHealth = original;
-      delete globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_HEALTH__;
-    }).catch(() => {});
+    await restorePreloadHttpControl(control);
   }
 }
 
@@ -3524,23 +3548,20 @@ async function executeSitConnectorRefreshFailure({ page, state, caseDir }) {
   const refresh = page.locator('[data-testid="connectors-refresh"], button').filter({ hasText: /刷新|重新加载|重试/ }).first();
   if (!(await visible(refresh, 1500))) {
     state.screenshots.connector_013_no_refresh = await shot(page, caseDir, 'connector-013-no-refresh');
-    markBlocked(state, '连接器页未找到刷新入口，且当前 runner 不能阻断目录接口，无法验证刷新失败缓存提示。');
+    recordAssertion(state, '连接器目录刷新入口', '连接器页应提供可触发目录刷新的入口。', false, '未找到 connectors-refresh 或可见的刷新/重试按钮。');
     return;
   }
   state.screenshots.connector_013_before_refresh = await shot(page, caseDir, 'connector-013-before-refresh');
   const cardsBefore = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
-  const injected = await page.evaluate(() => {
-    const agent = window.agent;
-    if (!agent?.getConnectorCatalog) return { ok: false, reason: 'getConnectorCatalog unavailable' };
-    globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__ = agent.getConnectorCatalog;
-    agent.getConnectorCatalog = async (options = {}) => {
-      if (options?.forceRefresh) throw new Error('QBotTestAgent controlled connector catalog failure');
-      return globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__.call(agent, options);
-    };
-    return { ok: agent.getConnectorCatalog !== globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__ };
-  }).catch((error) => ({ ok: false, reason: error.message }));
-  if (!injected.ok) {
-    markBlocked(state, `无法注入连接器目录刷新失败：${injected.reason}`);
+  const control = await installPreloadHttpControl(page, [{
+    id: 'connector-013-refresh-failure',
+    method: 'GET',
+    pathIncludes: '/api/connectors/catalog?refresh=force',
+    mode: 'network-error',
+    errorMessage: 'QBotTestAgent controlled connector catalog refresh failure',
+  }]);
+  if (!control.ok) {
+    markBlocked(state, `框架无法安装 preload HTTP 连接器刷新失败注入：${control.reason}`);
     return;
   }
   try {
@@ -3548,15 +3569,14 @@ async function executeSitConnectorRefreshFailure({ page, state, caseDir }) {
     await page.waitForTimeout(1600);
     const cardsAfter = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
     const text = await mainSurfaceText(page);
+    const controlState = await readPreloadHttpControl(control);
+    const routeHits = controlState.hits.filter((item) => item.id === 'connector-013-refresh-failure').length;
     state.screenshots.connector_013_after_refresh_failure = await shot(page, caseDir, 'connector-013-after-refresh-failure');
-    recordStep(state, '注入目录刷新失败并点击刷新', '刷新失败时应保留已有缓存卡片并显示产品化错误。', `cardsBefore=${cardsBefore}；cardsAfter=${cardsAfter}；page=${clip(text, 280)}`, 'passed', state.screenshots.connector_013_after_refresh_failure);
-    recordAssertion(state, '刷新失败保留缓存', '目录刷新失败后已有连接器卡片不应消失，并应显示刷新失败/稍后重试提示。', cardsBefore > 0 && cardsAfter >= cardsBefore && /刷新失败|加载失败|稍后重试|重试/.test(text), `before=${cardsBefore}；after=${cardsAfter}；${clip(text, 360)}`);
+    state.artifacts.connector_refresh_failure = { route: '/api/connectors/catalog?refresh=force', route_hits: routeHits, cards_before: cardsBefore, cards_after: cardsAfter };
+    recordStep(state, '注入目录刷新失败并点击刷新', '刷新失败时应保留已有缓存卡片并显示产品化错误。', `routeHits=${routeHits}；cardsBefore=${cardsBefore}；cardsAfter=${cardsAfter}；page=${clip(text, 260)}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.connector_013_after_refresh_failure, routeHits > 0 ? '' : 'automation_error');
+    recordAssertion(state, '刷新失败保留缓存', '目录刷新失败后已有连接器卡片不应消失，并应显示刷新失败/稍后重试提示。', routeHits > 0 && cardsBefore > 0 && cardsAfter >= cardsBefore && /刷新失败|加载失败|稍后重试|重试/.test(text), `routeHits=${routeHits}；before=${cardsBefore}；after=${cardsAfter}；${clip(text, 340)}`);
   } finally {
-    await page.evaluate(() => {
-      const original = globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__;
-      if (original && window.agent) window.agent.getConnectorCatalog = original;
-      delete globalThis.__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__;
-    }).catch(() => {});
+    await restorePreloadHttpControl(control);
   }
 }
 
@@ -3690,7 +3710,8 @@ async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutM
     const replyText = state.artifacts?.reply_delta && fs.existsSync(state.artifacts.reply_delta)
       ? fs.readFileSync(state.artifacts.reply_delta, 'utf8')
       : '';
-    recordAssertion(state, '聊天正文不混入 raw artifact 事件', '聊天正文不应展示 raw artifact、JSON 事件或内部事件字段。', !/raw artifact|artifact_delta|artifactEvent|\"kind\"\\s*:|\"artifact\"\\s*:/i.test(replyText), clip(replyText, 320));
+    const leak = rawArtifactEventLeakEvidence(replyText);
+    recordAssertion(state, '聊天正文不混入 raw artifact 事件', '聊天正文不应展示序列化成果事件、artifact_delta 或内部事件字段。', !leak, leak || clip(replyText, 320));
     await assertArtifactSurface(page, state, caseDir, 'artifact');
     return;
   }
@@ -3699,7 +3720,9 @@ async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutM
 }
 
 async function prepareVisibleQaWorkspace(page, state, caseDir) {
-  const workspace = path.resolve(process.cwd(), 'outputs', 'ui-agent-workspaces', `${slugify(state.id)}-${path.basename(path.dirname(caseDir))}`);
+  const runDirName = path.basename(path.dirname(path.dirname(caseDir)));
+  const workspace = path.resolve(process.cwd(), 'outputs', 'ui-agent-workspaces', `${slugify(state.id)}-${slugify(runDirName)}`);
+  fs.rmSync(workspace, { recursive: true, force: true });
   ensureDir(workspace);
   const invoked = await page.evaluate(async (cwd) => {
     const bridge = window.__qbotE2E || window.__deepbankE2E;
@@ -3780,7 +3803,7 @@ function artifactPromptsFromCase(testCase) {
     'SIT-ART-014': '进入项目页，使用项目任务输入框发起“生成项目周报”。',
     'SIT-ART-015': '请生成 HTML 成果 sandbox_script_check.html，标题为“沙箱安全验证”，正文含“SAFE_PREVIEW”。在 script 中写 window.parent.__QBOT_ARTIFACT_SCRIPT_EXECUTED__ = true 并调用 alert("脚本已执行")，用于验证成果预览不会执行脚本。',
     'SIT-ART-016': '请生成文件名“上线 检查-中文.md”的 Markdown 成果，内容包含“中文文件名验证”。',
-    'SIT-ART-018': '请生成 Markdown、HTML 和 CSV 三种成果文件，文件名分别为 stats_doc.md、stats_page.html、stats_data.csv。',
+    'SIT-ART-018': '请生成三个成果：stats_doc.md 包含“文档统计”，stats_page.html 包含“网页统计”，stats_data.csv 包含表头 metric,value 和一行 visits,100。',
     'SIT-ART-019': '请生成一个 Markdown 文件 qbot_open_test.md，内容包含“本地打开验证”。',
     'SIT-ART-020': '请生成一个 HTML 文件 qbot_reopen_test.html，内容包含一个标题“成果重开验证”。',
   };
@@ -3789,7 +3812,7 @@ function artifactPromptsFromCase(testCase) {
     return ['请生成一个 HTML 成果文件 qbot_v1_release_summary.html，用于展示《QBot V1 上线检查摘要》。页面包含标题、关键结论列表、风险提示和下一步计划，并在回复中说明成果已生成。'];
   }
   if (id === 'SIT-ART-003') {
-    return ['请生成 Markdown 成果 qbot_raw_event_guard.md，内容包含“成果事件隔离验证”。聊天正文只给可读总结和该文件名，不要展示 raw artifact 事件、JSON 事件或内部事件字段。'];
+    return ['请生成 Markdown 成果 qbot_raw_event_guard.md，内容包含“成果事件隔离验证”。聊天正文只给可读总结和该文件名，不解释内部实现、事件协议或测试标准。'];
   }
   return ['请生成一份 Markdown 格式的《QBot V1 上线检查摘要》，包含测试背景、关键结论、风险清单、下一步计划四个章节，并保存为 qbot_v1_summary.md。'];
 }
@@ -6501,6 +6524,169 @@ async function captureDialogDuring(page, action, timeoutMs = 5000) {
   return { message };
 }
 
+export function preloadHttpInterceptorBootstrap(rules) {
+  const http = require('node:http');
+  const { EventEmitter } = require('node:events');
+  const { Readable } = require('node:stream');
+  const controlKey = '__QBOT_QA_HTTP_INTERCEPT_CONTROL__';
+  const previous = globalThis[controlKey];
+  if (previous?.originalRequest) http.request = previous.originalRequest;
+
+  const originalRequest = http.request;
+  const state = { hits: [], installedAt: Date.now() };
+  const matches = (rule, method, requestPath) => {
+    if (rule.method && String(rule.method).toUpperCase() !== method) return false;
+    if (rule.pathExact && requestPath !== rule.pathExact) return false;
+    if (rule.pathPrefix && !requestPath.startsWith(rule.pathPrefix)) return false;
+    if (rule.pathIncludes && !requestPath.includes(rule.pathIncludes)) return false;
+    return true;
+  };
+  const fakeResponse = (statusCode, headers, body, callback, delayMs = 0) => {
+    const response = new Readable({ read() {} });
+    response.statusCode = Number(statusCode || 200);
+    response.headers = { 'content-type': 'application/json', ...(headers || {}) };
+    setTimeout(() => {
+      callback?.(response);
+      response.push(String(body ?? ''));
+      response.push(null);
+    }, Number(delayMs || 0));
+  };
+  const fakeRequest = (rule, callback, hit) => {
+    const request = new EventEmitter();
+    const chunks = [];
+    request.write = (chunk) => {
+      if (chunk !== undefined && chunk !== null) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      return true;
+    };
+    request.end = (chunk) => {
+      if (chunk !== undefined && chunk !== null) request.write(chunk);
+      hit.requestBody = Buffer.concat(chunks).toString('utf8');
+      const delayMs = Number(rule.delayMs || 0);
+      if (rule.mode === 'network-error') {
+        setTimeout(() => request.emit('error', new Error(rule.errorMessage || 'QBotTestAgent controlled network error')), delayMs);
+      } else {
+        fakeResponse(rule.status || 200, rule.headers, JSON.stringify(rule.body ?? {}), callback, delayMs);
+      }
+      return request;
+    };
+    request.abort = () => request;
+    request.destroy = (error) => {
+      if (error) queueMicrotask(() => request.emit('error', error));
+      return request;
+    };
+    request.setTimeout = () => request;
+    request.setNoDelay = () => request;
+    request.setHeader = () => request;
+    request.getHeader = () => undefined;
+    request.removeHeader = () => request;
+    return request;
+  };
+  const transformedRequest = (self, args, callback, rule, hit) => {
+    const nextArgs = [...args];
+    const callbackIndex = nextArgs.findIndex((item, index) => index > 0 && typeof item === 'function');
+    const onOriginalResponse = (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
+      response.on('end', () => {
+        let payload = null;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { payload = {}; }
+        if (rule.transform === 'connector-needs-auth') {
+          const connectors = Array.isArray(payload?.connectors) ? payload.connectors : [];
+          let modified = 0;
+          for (const connector of connectors) {
+            if (connector?.key !== rule.connectorKey && connector?.label !== rule.connectorKey) continue;
+            connector.statusKind = 'needs_auth';
+            connector.statusLabel = '需授权';
+            connector.disabledReason = 'QBotTestAgent controlled unavailable snapshot';
+            modified += 1;
+          }
+          hit.modified = modified;
+        }
+        fakeResponse(response.statusCode || 200, response.headers, JSON.stringify(payload), callback);
+      });
+      response.on('error', (error) => hit.responseError = error?.message || String(error));
+    };
+    if (callbackIndex >= 0) nextArgs[callbackIndex] = onOriginalResponse;
+    else nextArgs.push(onOriginalResponse);
+    return originalRequest.apply(self, nextArgs);
+  };
+
+  http.request = function controlledHttpRequest(...args) {
+    const options = args[0];
+    const callback = args.find((item, index) => index > 0 && typeof item === 'function');
+    const method = String(typeof options === 'object' ? options?.method || 'GET' : 'GET').toUpperCase();
+    let requestPath = '';
+    if (typeof options === 'string' || options instanceof URL) {
+      const parsed = new URL(String(options));
+      requestPath = `${parsed.pathname}${parsed.search}`;
+    } else {
+      requestPath = String(options?.path || options?.pathname || '');
+    }
+    const rule = (Array.isArray(rules) ? rules : []).find((item) => matches(item, method, requestPath));
+    if (!rule) return originalRequest.apply(this, args);
+    const hit = { id: rule.id || '', method, path: requestPath, mode: rule.mode || 'fixed-response', at: Date.now(), requestBody: '' };
+    state.hits.push(hit);
+    if (rule.mode === 'transform-json') return transformedRequest(this, args, callback, rule, hit);
+    return fakeRequest(rule, callback, hit);
+  };
+  globalThis[controlKey] = { originalRequest, state };
+  return { ok: http.request !== originalRequest, ruleCount: Array.isArray(rules) ? rules.length : 0 };
+}
+
+async function installPreloadHttpControl(page, rules) {
+  let cdp = null;
+  try {
+    cdp = await page.context().newCDPSession(page);
+    const contexts = [];
+    cdp.on('Runtime.executionContextCreated', (event) => contexts.push(event.context));
+    await cdp.send('Runtime.enable');
+    await page.waitForTimeout(250);
+    for (const context of contexts) {
+      const probe = await cdp.send('Runtime.evaluate', {
+        contextId: context.id,
+        expression: `(() => ({ hasRequire: typeof require === 'function', processType: typeof process === 'object' ? process.type : '', hasHttp: typeof require === 'function' ? typeof require('node:http').request === 'function' : false }))()`,
+        returnByValue: true,
+      }).catch(() => null);
+      const value = probe?.result?.value;
+      if (!value?.hasRequire || !value?.hasHttp || value.processType !== 'renderer') continue;
+      const installed = await cdp.send('Runtime.evaluate', {
+        contextId: context.id,
+        expression: `(${preloadHttpInterceptorBootstrap.toString()})(${JSON.stringify(rules || [])})`,
+        returnByValue: true,
+        awaitPromise: true,
+      });
+      const result = installed?.result?.value || null;
+      if (!result?.ok) continue;
+      return { ok: true, cdp, contextId: context.id, contextName: context.name || '', result };
+    }
+    await cdp.detach().catch(() => {});
+    return { ok: false, reason: 'CDP 未找到可访问 Node http 模块的 Electron preload 隔离上下文。' };
+  } catch (error) {
+    await cdp?.detach().catch(() => {});
+    return { ok: false, reason: error?.message || String(error) };
+  }
+}
+
+async function readPreloadHttpControl(control) {
+  if (!control?.ok || !control.cdp || !control.contextId) return { hits: [] };
+  const result = await control.cdp.send('Runtime.evaluate', {
+    contextId: control.contextId,
+    expression: `(() => { const c = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; return { hits: c?.state?.hits || [], installedAt: c?.state?.installedAt || 0 }; })()`,
+    returnByValue: true,
+  }).catch(() => null);
+  return result?.result?.value || { hits: [] };
+}
+
+async function restorePreloadHttpControl(control) {
+  if (!control?.ok || !control.cdp || !control.contextId) return;
+  await control.cdp.send('Runtime.evaluate', {
+    contextId: control.contextId,
+    expression: `(() => { const c = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; if (c?.originalRequest && typeof require === 'function') require('node:http').request = c.originalRequest; delete globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; return true; })()`,
+    returnByValue: true,
+  }).catch(() => {});
+  await control.cdp.detach().catch(() => {});
+}
+
 async function captureConfirmDuringWithAction(page, action, { accept = false } = {}) {
   const installed = await page.evaluate((response) => {
     if (globalThis.__qbotAutomationOriginalConfirm) return false;
@@ -8432,7 +8618,7 @@ function forbiddenMatches(text) {
   return TECHNICAL_FAILURE_PATTERNS.map((pattern) => String(text || '').match(pattern)?.[0] || '').filter(Boolean);
 }
 
-function obviousDuplicateEvidence(text) {
+export function obviousDuplicateEvidence(text) {
   const raw = String(text || '');
   if (!raw.trim()) return '';
   const lines = raw
@@ -8462,8 +8648,8 @@ function obviousDuplicateEvidence(text) {
 function isRepeatSafeStructuralLine(line) {
   const text = String(line || '').trim();
   if (!text) return true;
-  if (/^(调用连接器|运行命令|读取文件|调用技能)(?:\s|$)/.test(text)) return true;
-  if (/^(?:ERROR|Error|错误|DETAILS|CODE|SUGGESTED ACTIONS)[:：]/.test(text)) return true;
+  if (/^(调用连接器|运行命令|读取文件|新建文件|编辑文件|写入文件|保存文件|打开文件|删除文件|调用技能)(?:\s|$)/.test(text)) return true;
+  if (/^(?:ERROR|Error|错误|错误码|状态码|error code|status code|DETAILS|CODE|SUGGESTED ACTIONS)[:：]/i.test(text)) return true;
   if (/^(?:Use a public URL|Set QBOT_WEB_TOOLS_)/.test(text)) return true;
   if (/^[\s|│┃┌┐└┘├┤┬┴┼─━═╞╡╪+:-]+$/.test(text)) return true;
   const cells = text
@@ -8478,6 +8664,19 @@ function isRepeatSafeStructuralLine(line) {
   const hasHeaderKeyword = /(角色|场景|痛点|字段|类型|位置|值|用户|指标|曝光|点击|报名|到场|成交|检查项|负责方|通过标准|验证方式|ID|验收项|前置条件|操作|预期结果|权限|层级|定位|暴露技术|业务化交互)/.test(cells.join('\t'));
   const hasMostlyHeaderCells = cells.filter((cell) => /^[#A-Za-z0-9\u4e00-\u9fa5 /·（）()_-]{1,14}$/.test(cell)).length >= Math.ceil(cells.length * 0.8);
   return !hasSentencePunctuation && !hasLongCell && (hasHeaderKeyword || hasMostlyHeaderCells);
+}
+
+export function rawArtifactEventLeakEvidence(text) {
+  const raw = String(text || '');
+  const structuralPatterns = [
+    /\bartifact_delta\b/i,
+    /\bartifactEvent\b/i,
+    /[\[{][^\]}]{0,240}\"(?:kind|type)\"\s*:\s*\"artifact(?:_|\")/i,
+    /[\[{][^\]}]{0,240}\"artifact\"\s*:\s*[\[{]/i,
+    /[\[{][^\]}]{0,240}\"(?:artifactPath|artifactId|artifactType)\"\s*:/i,
+  ];
+  const match = structuralPatterns.map((pattern) => raw.match(pattern)?.[0] || '').find(Boolean);
+  return match ? `检测到内部成果事件结构：${clip(match, 160)}` : '';
 }
 
 function attachmentReplyMissingEvidence(text) {
@@ -8675,7 +8874,7 @@ async function writeResultExcel({ python, root, casebook, outDir, summary, resul
   }
 }
 
-function buildCredibilityReview(results = []) {
+export function buildCredibilityReview(results = []) {
   const items = results.map(reviewCaseCredibility);
   const trusted = items.filter((item) => item.trusted).length;
   const total = items.length;
@@ -8699,7 +8898,7 @@ function buildCredibilityReview(results = []) {
   };
 }
 
-function reviewCaseCredibility(result) {
+export function reviewCaseCredibility(result) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
   const steps = Array.isArray(result.steps) ? result.steps : [];
@@ -8714,10 +8913,12 @@ function reviewCaseCredibility(result) {
   const kind = String(result.kind || '');
   const sentUserMessage = steps.some((step) => /发送/.test(String(step.action || '')) && step.status === 'passed');
   const filledInput = steps.some((step) => /输入|粘贴|上传/.test(String(step.action || '')) && step.status === 'passed');
-  const uploadPassed = result.artifacts?.upload?.status === 'passed';
-  const requiresConversationEvidence = sentUserMessage
-    || kind === 'ui+conversation'
-    || (kind === 'attachment' && uploadPassed);
+  const replyEvidenceOptional = REPLY_EVIDENCE_OPTIONAL_CASE_IDS.has(String(result.id || ''));
+  // Evidence requirements follow the action that actually happened. A broad
+  // case "kind" is not enough: many UI/attachment boundary cases legitimately
+  // stop before sending, while a failed install can be a credible product
+  // failure before the conversation phase starts.
+  const requiresConversationEvidence = !replyEvidenceOptional && sentUserMessage;
   const hasCurrentEvidence = hasScreenshot && hasReport;
   const uploadAutomationFailure = result.artifacts?.upload?.status
     && result.artifacts.upload.status !== 'passed'
@@ -8726,9 +8927,9 @@ function reviewCaseCredibility(result) {
     .concat(steps, assertions)
     .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`));
   const blockedText = `${result.actual_result || ''}\n${result.conclusion || ''}`;
-  const frameworkBlocked = /当前 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|缺少可控|CDP|Playwright|handler|selector/.test(blockedText);
+  const frameworkBlocked = /当前 runner|批量 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|dry-run|bridge.*(?:不可替换|unavailable|undefined)|无法安装.*捕获器|无法注入.*(?:快照|目录|网络|失败)|CDP|Playwright|handler|selector/.test(blockedText);
   const hardEnvironmentBlocked = /没有健康连接器|无可选技能|无已安装技能|未找到可识别.*runtime|runtime 技能卡片存在，但没有可点击安装入口|账号无权限|测试数据|未配置|登录|权限|DEEPBANK_E2E|启动方式|release-package|本地 E2E|辅助功能|原生文件框|filechooser|文件选择|文件名|期望文件|附件入口|没有可稳定用于产品\/业务类任务的专家卡片|产品\/业务类任务的专家|自动化测试残留专家|不能随机选择错误专家|专家页没有可稳定|技能市场未找到.*技能卡片|已安装技能列表未找到|当前已安装\/技能市场未找到|当前账号存在可选技能|该用例要求没有已安装技能|找到疑似(可更新|历史版本)技能，但未找到可点击(更新|回退)入口|故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|当前账号存在可见连接器|无 platform\/custom 连接器账号|未找到 unreachable 连接器|未找到 needs_auth 连接器|手动菜单未展示 needs_auth\/unreachable|无法到达连接器空状态判断点|无专家市场数据|专家市场存在专家卡片|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText);
-  const environmentBlocked = hardEnvironmentBlocked && (!frameworkBlocked || /故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText));
+  const environmentBlocked = hardEnvironmentBlocked && !frameworkBlocked;
   const sentCaseInstruction = requiresConversationEvidence && hasReplyDelta && replyDeltaLooksLikeCaseInstruction(result);
   const missingConversationEvidence = status !== 'blocked' && requiresConversationEvidence && (!hasTranscript || !hasReplyDelta || !sentUserMessage);
   const modelTierArtifact = result.artifacts?.model_tier || null;
@@ -8840,6 +9041,8 @@ function reviewCaseCredibility(result) {
       actionItems.push('修复 blocked reason，使其明确缺少的环境、数据、权限或框架能力。');
       userViewConclusion = '阻塞原因不清晰，尚不能评价真实用户体验。';
     }
+  } else if (reasons.length) {
+    userViewConclusion = '自动化证据或执行链路未通过可信度校验，尚不能评价真实用户体验。';
   } else {
     reasons.push(`未知状态：${status || '空'}`);
     actionItems.push('修复状态枚举，只允许 passed/failed/blocked/needs_llm_review。');
