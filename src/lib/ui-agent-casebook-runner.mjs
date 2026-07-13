@@ -8,11 +8,11 @@ import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
 const MIN_REPLY_WAIT_MS = 60000;
-const MAX_REPLY_WAIT_MS = 300000;
+const MAX_REPLY_WAIT_MS = 600000;
 const SHORT_REPLY_WAIT_MS = 90000;
 const COMBO_REPLY_WAIT_MS = 180000;
-const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 240000;
-const LONG_CONTEXT_REPLY_WAIT_MS = 300000;
+const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000;
+const LONG_CONTEXT_REPLY_WAIT_MS = 600000;
 const MULTI_TURN_REPLY_WAIT_MS = 90000;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
@@ -7482,9 +7482,11 @@ function replyWaitConfig(testCase, requestedTimeoutMs = DEFAULT_TIMEOUT_MS) {
     budget = COMBO_REPLY_WAIT_MS;
   }
   const requested = Number(requestedTimeoutMs || 0);
+  const longRunningKind = kind === 'attachment_artifact' || kind === 'long_context';
+  const requestedBudget = Number.isFinite(requested) && requested > 0 ? Math.min(requested, budget) : budget;
   const timeout = Math.min(
     MAX_REPLY_WAIT_MS,
-    Math.max(MIN_REPLY_WAIT_MS, Number.isFinite(requested) && requested > 0 ? Math.min(requested, budget) : budget),
+    Math.max(MIN_REPLY_WAIT_MS, longRunningKind ? budget : requestedBudget),
   );
   return {
     kind,

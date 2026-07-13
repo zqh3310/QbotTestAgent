@@ -17,6 +17,7 @@ const required = [
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*outputs', 'ui-agent-workspaces/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
+  ['成果和长上下文任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*longRunningKind \? budget : requestedBudget/],
   ['连接器刷新失败注入', /__QBOT_QA_ORIGINAL_GET_CONNECTOR_CATALOG__[\s\S]*forceRefresh/],
   ['技能安装中断注入', /__QBOT_QA_ORIGINAL_INSTALL_SKILL__[\s\S]*controlled network interruption/],
 ];
