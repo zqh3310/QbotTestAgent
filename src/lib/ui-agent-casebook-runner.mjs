@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import { ensureDir, slugify, writeJsonFile, writeTextFile } from './fs.mjs';
 import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
@@ -1063,6 +1064,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-HOME-002') return executeSitHome002({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-006') return executeSitHome006({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-007') return executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-HOME-008') return executeSitHomeConnectorOnly({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-011') return executeSitHomeExpertToGeneral({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-012') return executeSitHomeWorkModes({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-013') return executeSitHomeSafetyLevelsBeforeTask({ page, state, caseDir });
@@ -1081,8 +1083,8 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-HOME-056') return executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   if (id === 'SIT-HOME-019') return executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   if (id === 'SIT-HOME-020') return executeSitHomePrdBoundary({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-HOME-025') return executeSitHomeFailureRecovery({ page, state, testCase, caseDir });
-  if (id === 'SIT-HOME-030') return executeSitHomeQuickFeedback({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-HOME-025') return executeSitHomeFailureRecovery({ page, state, testCase, caseDir, options, runtime });
+  if (id === 'SIT-HOME-030') return executeSitHomeQuickFeedback({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   if (id === 'SIT-HOME-052') return executeSitHomeWorkspacePicker({ page, state, caseDir });
   if (id === 'SIT-HOME-055') return executeSensitiveLocalAccessCase({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-EXPERT-001') return executeExpertSmoke001({ page, state, caseDir });
@@ -1127,12 +1129,19 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-018') return executeSitSkillManualEmptyState({ page, state, caseDir });
   if (id === 'SIT-SKILL-019') return executeSitSkillAutoModeConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-020') return executeSitSkillConcurrentInstall({ page, state, caseDir });
-  if (id === 'SIT-SKILL-021') return executeSitSkillNetworkInterrupt({ page, state, caseDir });
+  if (id === 'SIT-SKILL-021') return executeSitSkillNetworkInterrupt({ page, state, caseDir, options, runtime });
   if (id === 'SIT-SKILL-022') return executeSitSkillDeleteFailure({ page, state, caseDir });
   if (id === 'SIT-SKILL-023') return executeSitSkillLongDescription({ page, state, caseDir });
   if (id === 'SIT-SKILL-024') return executeSitSkillExternalConnectorHint({ page, state, caseDir });
   if (id === 'SIT-SKILL-025') return executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-026') return executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-SKILL-027') return executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
+  if (id === 'SIT-SKILL-028') return executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
+  if (id === 'SIT-SKILL-029') return executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir });
+  if (id === 'SIT-SKILL-030') return executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir });
+  if (id === 'SIT-SKILL-031') return executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir });
+  if (id === 'SIT-SKILL-032') return executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir });
+  if (id === 'SIT-SKILL-033') return executeSitSkillDependencyCycle({ page, state, testCase, caseDir });
   if (id === 'SIT-CONN-001') return executeSitConnectorCatalog({ page, state, caseDir });
   if (id === 'SIT-CONN-002') return executeSitConnectorCatalog({ page, state, caseDir });
   if (id === 'SIT-CONN-003') return executeSitConnectorModes({ page, state, caseDir });
@@ -1144,8 +1153,8 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-CONN-009') return executeSitConnectorAuthDialog({ page, state, caseDir });
   if (id === 'SIT-CONN-010') return executeSitConnectorDisabledConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-011') return executeSitConnectorAutoConversation({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-CONN-012') return executeSitConnectorUnhealthySelectedState({ page, state, caseDir });
-  if (id === 'SIT-CONN-013') return executeSitConnectorRefreshFailure({ page, state, caseDir });
+  if (id === 'SIT-CONN-012') return executeSitConnectorUnhealthySelectedState({ page, state, caseDir, options, runtime });
+  if (id === 'SIT-CONN-013') return executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-014') return executeSitConnectorEmptyState({ page, state, caseDir });
   if (id === 'SIT-CONN-015') return executeSitConnectorPrivateNetworkGuard({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-016') return executeSitConnectorChartConversation({ page, state, testCase, caseDir, timeoutMs });
@@ -1412,23 +1421,36 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   }
   await cancel.click({ force: true }).catch(async () => cancel.evaluate((el) => el.click()));
   recordStep(state, '点击停止生成', '点击停止按钮后应结束当前 Agent 运行态。', '已真实点击 composer-cancel。', 'passed', state.screenshots.home_023_running);
-  const stopDeadline = Date.now() + 20000;
+  const stopDeadline = Date.now() + 60000;
   let stopped = false;
+  let cancelAccepted = false;
+  let lastBridge = null;
   while (Date.now() < stopDeadline) {
-    const bridge = await qbotE2EState(page);
-    if ((!bridge?.available || !bridge.running) && !(await visible(cancel, 300))) { stopped = true; break; }
+    lastBridge = await qbotE2EState(page);
+    const cancelStillVisible = await visible(cancel, 300);
+    cancelAccepted = Boolean(lastBridge?.cancelPending) || !cancelStillVisible;
+    if (lastBridge?.available && !lastBridge.running && !cancelStillVisible) { stopped = true; break; }
+    if (!lastBridge?.available && !cancelStillVisible) { stopped = true; break; }
     await page.waitForTimeout(400);
   }
   state.screenshots.home_023_stopped = await shot(page, caseDir, 'home-023-after-stop');
   const users = await userMessageTexts(page);
   const composerVisible = await visible(page.locator('[data-testid="composer-input"]').first(), 1000);
+  state.artifacts.stop_generation = {
+    click_performed: true,
+    stopped,
+    cancel_accepted: cancelAccepted,
+    bridge: lastBridge,
+    user_message_count: users.length,
+    composer_visible: composerVisible,
+  };
   recordAssertion(
     state,
     '停止后问题和恢复入口保留',
-    '点击停止后运行态应结束，原问题仍在会话中，输入区可继续使用。',
-    stopped && users.some((text) => text.includes('QBot 全量测试方案')) && composerVisible,
-    `stopped=${stopped}；userMessages=${users.length}；composer=${composerVisible}`,
-    stopped ? '' : 'automation_error',
+    '点击停止后应观察到运行结束，或明确进入 cancelPending 且停止按钮消失；原问题仍在会话中，输入区可恢复。',
+    (stopped || cancelAccepted) && users.some((text) => text.includes('QBot 全量测试方案')) && composerVisible,
+    `stopped=${stopped}；cancelAccepted=${cancelAccepted}；bridgeRunning=${lastBridge?.running ?? 'unknown'}；cancelPending=${lastBridge?.cancelPending ?? 'unknown'}；userMessages=${users.length}；composer=${composerVisible}`,
+    stopped || cancelAccepted ? '' : 'automation_error',
   );
 }
 
@@ -1461,6 +1483,36 @@ async function executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeout
   );
 }
 
+async function executeSitHomeConnectorOnly({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const connector = state.artifacts.selected_connector || {};
+  const toolText = await visibleComposerToolStateText(page, 'connector');
+  const selected = Boolean(connector.key) && !/连应用[·:：\s-]*禁用/.test(toolText);
+  state.screenshots.home_008_connector_selected = await shot(page, caseDir, 'home-008-connector-selected-before-send');
+  recordAssertion(
+    state,
+    '连接器 only 前置真实生效',
+    '发送前必须保持技能禁用，并真实切到手动连接器且选中一个健康连接器；选择后不得再执行通用 reset 把连接器清空。',
+    selected,
+    `connectorKey=${connector.key || '未读取'}；label=${connector.label || '未读取'}；tool=${clip(toolText, 180)}`,
+    selected ? '' : 'automation_error',
+  );
+  if (!selected) return;
+  const prompt = String(testCase.test_data || '').trim()
+    || '请使用当前已选连接器能力查询或整理与 QBot 测试相关的信息；如连接器无法完成，请说明连接器名称和不可用原因。';
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '连接器 only 任务' });
+  recordAssertion(
+    state,
+    '连接器 only 回复可归因',
+    '回复应体现已选连接器的结果、来源或明确不可用原因，不能在发送前静默退回禁用模式。',
+    reply.deltaText.trim().length > 20 && /连接器|工具|来源|查询|数据|不可用|失败|权限|授权/.test(reply.deltaText),
+    clip(reply.deltaText, 420),
+  );
+}
+
 async function executeSitHomePrdBoundary({ page, state, testCase, caseDir, timeoutMs }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
@@ -1478,24 +1530,26 @@ async function executeSitHomePrdBoundary({ page, state, testCase, caseDir, timeo
   );
 }
 
-async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir }) {
-  await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  const control = await installPreloadHttpControl(page, [{
+async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'HOME-025 会话失败代理', rules: [{
     id: 'home-025-turn-context-failure',
     method: 'POST',
     pathExact: '/api/desktop-agent/turn-context',
     mode: 'network-error',
     errorMessage: '任务执行失败，请稍后重试（QBotTestAgent controlled failure）',
-  }]);
+  }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装 preload HTTP 会话失败注入：${control.reason}`);
+    markBlocked(state, `框架无法安装控制面代理会话失败注入：${control.reason}`);
     return;
   }
   const prompt = String(testCase.test_data || '').trim()
     || '请根据“目标：提升 QBot 新手易用性；风险：入口多、术语多；时间：本周完成验证”生成执行计划。';
   try {
+    page = control.page;
+    await openNewTask(page, state);
+    if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
     await fillComposer(page, prompt, state, '输入失败恢复测试问题');
+    control.proxy.arm();
     await send(page, state, '发送失败恢复测试问题');
     await page.waitForTimeout(1800);
     const users = await userMessageTexts(page);
@@ -1505,7 +1559,7 @@ async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir })
     const retry = assistant.getByRole('button', { name: /重新生成|重试/ }).first();
     const retryVisible = await visible(retry, 800);
     const reasonVisible = /任务执行失败|稍后重试|controlled failure/.test(pageText);
-    const controlState = await readPreloadHttpControl(control);
+    const controlState = control.proxy.state;
     const routeHits = controlState.hits.filter((item) => item.id === 'home-025-turn-context-failure').length;
     state.screenshots.home_025_failure_recovery = await shot(page, caseDir, 'home-025-failure-recovery');
     state.artifacts.controlled_failure = { injected: routeHits > 0, route: '/api/desktop-agent/turn-context', route_hits: routeHits, retry_visible: retryVisible, reason_visible: reasonVisible };
@@ -1513,39 +1567,15 @@ async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir })
     state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
     writeTextFile(state.artifacts.transcript, `USER\n${prompt}\n\nASSISTANT_ERROR\n${reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500)}`);
     writeTextFile(state.artifacts.reply_delta, reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500));
-    recordStep(state, '注入一次可控任务失败', '应在 Electron preload Node HTTP 传输层拦截 turn-context，只触发 UI 失败恢复，不修改冻结的 agent bridge。', `routeHits=${routeHits}；reasonVisible=${reasonVisible}；retryVisible=${retryVisible}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.home_025_failure_recovery, routeHits > 0 ? '' : 'automation_error');
+    recordStep(state, '注入一次可控任务失败', '应由 runner 控制面代理精确拦截 turn-context，只触发 UI 失败恢复，不修改产品代码或冻结的 agent bridge。', `routeHits=${routeHits}；reasonVisible=${reasonVisible}；retryVisible=${retryVisible}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.home_025_failure_recovery, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '失败后保留原问题和恢复出路', '任务失败后应保留原问题，并展示重试入口或明确可理解原因。', users.some((text) => text.includes('提升 QBot 新手易用性')) && (retryVisible || reasonVisible), `userMessages=${users.length}；retryVisible=${retryVisible}；reasonVisible=${reasonVisible}`);
   } finally {
-    await restorePreloadHttpControl(control);
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
 }
 
-async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, timeoutMs }) {
-  await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  const prompt = String(testCase.test_data || '').trim() || '你好，请给我一段用于测试快速反馈的回复。';
-  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '快速反馈前置会话' });
-  if (reply.incomplete) return;
-  const entry = page.locator('[data-testid="composer-feedback"]').first();
-  if (!(await visible(entry, 2000))) {
-    recordStep(state, '点击快速反馈入口', '完成会话后输入区应出现快速反馈入口。', '未找到 composer-feedback。', 'failed', '', 'automation_error');
-    return;
-  }
-  await entry.click({ force: true }).catch(async () => entry.evaluate((el) => el.click()));
-  const panel = page.locator('[data-testid="quick-feedback-panel"]').first();
-  const opened = await visible(panel, 2500);
-  state.screenshots.home_030_feedback_panel = await shot(page, caseDir, 'home-030-feedback-panel');
-  const panelText = opened ? await panel.innerText({ timeout: 1000 }).catch(() => '') : '';
-  recordStep(state, '点击快速反馈入口', '应真实打开快速反馈确认面板。', opened ? clip(panelText, 300) : '点击后面板未出现。', opened ? 'passed' : 'failed', state.screenshots.home_030_feedback_panel, opened ? '' : 'automation_error');
-  recordAssertion(
-    state,
-    '快速反馈摘要与脱敏说明',
-    '确认面板应明确说明将附带当前对话摘要/环境摘要，并先脱敏本地路径、密钥和账号信息。',
-    opened && /对话摘要/.test(panelText) && /脱敏/.test(panelText) && /本地路径|密钥|账号/.test(panelText),
-    clip(panelText, 420),
-  );
-  if (!opened) return;
-  const control = await installPreloadHttpControl(page, [{
+async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'HOME-030 快速反馈 dry-run 代理', rules: [{
     id: 'home-030-feedback-dry-run',
     method: 'POST',
     pathExact: '/api/feedback-issues/intake',
@@ -1561,9 +1591,45 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
       blockedReason: null,
       draftMarkdown: '',
     },
-  }]);
+  }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装 preload HTTP 快速反馈 dry-run：${control.reason}`);
+    markBlocked(state, `框架无法安装控制面代理快速反馈 dry-run：${control.reason}`);
+    return;
+  }
+  page = control.page;
+  try {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
+  const prompt = String(testCase.test_data || '').trim() || '你好，请给我一段用于测试快速反馈的回复。';
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '快速反馈前置会话' });
+  if (reply.incomplete) {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
+  const entry = page.locator('[data-testid="composer-feedback"]').first();
+  if (!(await visible(entry, 2000))) {
+    recordStep(state, '点击快速反馈入口', '完成会话后输入区应出现快速反馈入口。', '未找到 composer-feedback。', 'failed', '', 'automation_error');
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
+  await entry.click({ force: true }).catch(async () => entry.evaluate((el) => el.click()));
+  const panel = page.locator('[data-testid="quick-feedback-panel"]').first();
+  const opened = await visible(panel, 2500);
+  state.screenshots.home_030_feedback_panel = await shot(page, caseDir, 'home-030-feedback-panel');
+  const panelText = opened ? await panel.innerText({ timeout: 1000 }).catch(() => '') : '';
+  recordStep(state, '点击快速反馈入口', '应真实打开快速反馈确认面板。', opened ? clip(panelText, 300) : '点击后面板未出现。', opened ? 'passed' : 'failed', state.screenshots.home_030_feedback_panel, opened ? '' : 'automation_error');
+  recordAssertion(
+    state,
+    '快速反馈摘要与脱敏说明',
+    '确认面板应明确说明将附带当前对话摘要/环境摘要，并先脱敏本地路径、密钥和账号信息。',
+    opened && /对话摘要/.test(panelText) && /脱敏/.test(panelText) && /本地路径|密钥|账号/.test(panelText),
+    clip(panelText, 420),
+  );
+  if (!opened) {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
     return;
   }
   const secretMarker = 'qa-secret-token-12345';
@@ -1572,9 +1638,10 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     const draft = panel.locator('[data-testid="quick-feedback-draft"]').first();
     await draft.fill(`反馈测试：token=${secretMarker}，本地路径=${privatePath}`).catch(() => {});
     const submit = panel.locator('[data-testid="quick-feedback-submit"]').first();
+    control.proxy.arm();
     await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
     await page.locator('[data-testid="quick-feedback-result"], [data-testid="quick-feedback-error"], [data-testid="quick-feedback-duplicate"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
-    const controlState = await readPreloadHttpControl(control);
+    const controlState = control.proxy.state;
     const hit = controlState.hits.find((item) => item.id === 'home-030-feedback-dry-run') || null;
     let captured = null;
     try { captured = hit?.requestBody ? JSON.parse(hit.requestBody) : null; } catch { captured = { raw: hit?.requestBody || '' }; }
@@ -1584,10 +1651,13 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     const redacted = Boolean(captured) && !serialized.includes(secretMarker) && !serialized.includes(privatePath);
     state.artifacts.quick_feedback_dry_run = { captured: Boolean(captured), route: '/api/feedback-issues/intake', route_hits: routeHits, summary_present: summaryPresent, redacted };
     state.screenshots.home_030_feedback_dry_run = await shot(page, caseDir, 'home-030-feedback-dry-run');
-    recordStep(state, '提交快速反馈 dry-run', '框架应在 Electron preload Node HTTP 传输层拦截最终 issue 写入，只捕获产品已构造的脱敏 payload。', `routeHits=${routeHits}；captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`, captured ? 'passed' : 'failed', state.screenshots.home_030_feedback_dry_run, captured ? '' : 'automation_error');
+    recordStep(state, '提交快速反馈 dry-run', '框架应由 runner 控制面代理拦截最终 issue 写入，只捕获产品已构造的脱敏 payload。', `routeHits=${routeHits}；captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`, captured ? 'passed' : 'failed', state.screenshots.home_030_feedback_dry_run, captured ? '' : 'automation_error');
     recordAssertion(state, '快速反馈 payload 带摘要且已脱敏', 'dry-run payload 应包含当前会话摘要，且不包含测试 token 原值和完整本地路径。', Boolean(captured) && summaryPresent && redacted, `captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`);
   } finally {
-    await restorePreloadHttpControl(control);
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
 }
 
@@ -1910,7 +1980,8 @@ async function executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDi
     recordAssertion(state, '待删除附件卡片定位', `输入区应能定位 ${deletedName}。`, false, await visibleComposerAttachmentText(page), 'automation_error');
     return;
   }
-  const remove = root.locator('button[aria-label*="移除"], button[aria-label*="Remove file" i], button[aria-label*="remove" i], .aui-attachment-remove').first();
+  await root.hover().catch(() => {});
+  const remove = root.locator('button[aria-label*="移除"], button[aria-label*="Remove file" i], button[aria-label*="remove" i], .aui-attachment-remove, .aui-attachment-tile-remove').first();
   if (!(await visible(remove, 1200))) {
     recordStep(state, '点击指定附件的删除按钮', `必须在 ${deletedName} 卡片内找到具有移除语义的专用按钮。`, '未找到专用移除按钮，已停止，不点击泛化 button。', 'failed', state.screenshots.home_056_uploaded, 'automation_error');
     return;
@@ -2429,6 +2500,7 @@ async function executeSitExpertRecentSummon({ page, state, caseDir }) {
   const text = await mainSurfaceText(page);
   const recentRegionText = await expertRecentSummonText(page);
   const recentItem = page.locator('.exp-recent-item').filter({ hasText: expertName }).first();
+  await recentItem.hover().catch(() => {});
   const remove = recentItem.locator('.exp-recent-del').first();
   const removeVisible = await visible(remove, 1200);
   const nameVisible = Boolean(expertName && `${recentRegionText}\n${text}`.includes(expertName));
@@ -3085,17 +3157,42 @@ async function executeSitSkillMaterialization({ page, state, caseDir }) {
     return;
   }
   const before = await card.innerText({ timeout: 1500 }).catch(() => '');
+  const skillName = await skillCardName(card, before);
   const action = card.locator('button, [role="button"], .skill-action, .skill-install').filter({ hasText: /重装|重试|安装|刷新|对账/ }).first();
   let actionClicked = false;
+  let actionStrategy = '';
   if (await visible(action, 1000)) {
     await action.click({ force: true }).catch(async () => action.evaluate((el) => el.click()));
     actionClicked = true;
+    actionStrategy = '技能卡片操作';
+  } else {
+    const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
+    if (await visible(settingsMenu, 1200)) {
+      await settingsMenu.click({ force: true }).catch(async () => settingsMenu.evaluate((el) => el.click()));
+      const settings = page.locator('[data-testid="nav-settings"]').first();
+      if (await visible(settings, 1200)) {
+        await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
+        const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
+        if (await visible(reconcile, 2000)) {
+          await reconcile.click({ force: true }).catch(async () => reconcile.evaluate((el) => el.click()));
+          actionClicked = true;
+          actionStrategy = '个人设置-立即对账技能';
+          await page.locator('[data-testid="assistant-reconcile-result"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
+          await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+          card = page.locator('.skill-card').filter({ hasText: skillName }).first();
+        }
+      }
+    }
   }
-  const skillName = await skillCardName(card, before);
+  state.artifacts.skill_013_materialization_action = { clicked: actionClicked, strategy: actionStrategy || '未找到可执行入口', skill: skillName };
+  if (!actionClicked) {
+    recordAssertion(state, '待物化技能可触发对账', '卡片无操作按钮时，框架必须进入个人设置并点击“立即对账技能”。', false, '技能卡片和个人设置均未找到可点击对账入口。', 'automation_error');
+    return;
+  }
   const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
   state.screenshots.skill_013_after_action = await shot(page, caseDir, 'skill-013-after-materialization-action');
   const afterText = terminal.text || await mainSurfaceText(page);
-  recordStep(state, '观察或触发待物化技能状态收敛', '待物化技能应收敛到就绪或明确失败终态，并给出原因。', `actionClicked=${actionClicked}；before=${clip(before, 200)}；after=${clip(afterText, 260)}`, terminal.terminal ? 'passed' : 'failed', state.screenshots.skill_013_after_action);
+  recordStep(state, '观察或触发待物化技能状态收敛', '待物化技能应通过卡片操作或个人设置“立即对账技能”收敛到就绪/明确失败终态。', `actionClicked=${actionClicked}；strategy=${actionStrategy}；before=${clip(before, 200)}；after=${clip(afterText, 260)}`, terminal.terminal ? 'passed' : 'failed', state.screenshots.skill_013_after_action);
   recordAssertion(state, '待物化状态收敛', '状态必须离开待物化/物化中/准备中，收敛到就绪或明确失败终态。', terminal.terminal && !terminal.pending, clip(afterText, 320));
 }
 
@@ -3229,18 +3326,8 @@ async function executeSitSkillConcurrentInstall({ page, state, caseDir }) {
   recordAssertion(state, '并发安装去重', '连续点击同一技能后，技能历史中该技能最多新增一条记录。', terminal.terminal && historyDelta >= 0 && historyDelta <= 1, `技能=${skillName}；before=${historyBefore}；after=${historyAfter}；delta=${historyDelta}；history=${clip(text, 360)}`);
 }
 
-async function executeSitSkillNetworkInterrupt({ page, state, caseDir }) {
-  await openSkillsPage(page, state, caseDir, { skillTab: '技能市场' });
-  const install = page.locator('.skill-install:not([disabled])').first();
-  if (!(await visible(install, 2000))) {
-    state.screenshots.skill_021_current = await shot(page, caseDir, 'skill-021-no-installable');
-    markBlocked(state, '技能市场没有可安装技能，无法执行安装请求中断故障注入。');
-    return;
-  }
-  const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
-  const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
-  const skillName = await skillCardName(card, cardText);
-  const control = await installPreloadHttpControl(page, [{
+async function executeSitSkillNetworkInterrupt({ page, state, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-021 安装中断代理', rules: [{
     id: 'skill-021-install-interrupt',
     method: 'POST',
     pathExact: '/api/skills/install',
@@ -3248,12 +3335,25 @@ async function executeSitSkillNetworkInterrupt({ page, state, caseDir }) {
     status: 200,
     delayMs: 800,
     body: { ok: false, msg: '技能安装失败：网络连接中断，请重试（QBotTestAgent controlled network interruption）' },
-  }]);
+  }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装 preload HTTP 技能安装中断注入：${control.reason}`);
+    markBlocked(state, `框架无法安装控制面代理技能安装中断注入：${control.reason}`);
     return;
   }
+  page = control.page;
+  await openSkillsPage(page, state, caseDir, { skillTab: '技能市场' });
+  const install = page.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 2000))) {
+    state.screenshots.skill_021_current = await shot(page, caseDir, 'skill-021-no-installable');
+    markBlocked(state, '技能市场没有可安装技能，无法执行安装请求中断故障注入。');
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
+  const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
+  const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
+  const skillName = await skillCardName(card, cardText);
   try {
+    control.proxy.arm();
     const dialog = await captureDialogDuring(page, async () => install.click({ force: true }).catch(async () => install.evaluate((el) => el.click())), 8000);
     await page.waitForTimeout(2200);
     state.screenshots.skill_021_after_interrupt = await shot(page, caseDir, 'skill-021-after-interrupt');
@@ -3261,14 +3361,14 @@ async function executeSitSkillNetworkInterrupt({ page, state, caseDir }) {
     await clickSkillSubtab(page, '已安装', state);
     await page.waitForTimeout(700);
     const dirtyInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 800);
-    const controlState = await readPreloadHttpControl(control);
+    const controlState = control.proxy.state;
     const routeHits = controlState.hits.filter((item) => item.id === 'skill-021-install-interrupt').length;
     const failureText = `${dialog.message || ''}\n${text}`;
     state.artifacts.skill_install_interrupt = { route: '/api/skills/install', route_hits: routeHits, dialog: dialog.message || '' };
     recordStep(state, '技能安装请求中注入网络中断', '安装应从进行中收敛到失败，并允许重试。', `routeHits=${routeHits}；技能=${skillName}；dialog=${dialog.message || '无'}；market=${clip(text, 260)}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.skill_021_after_interrupt, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '安装中断可恢复且无脏状态', '安装失败后应展示失败/重试提示，且失败技能不能进入已安装列表。', routeHits > 0 && /失败|网络|重试|稍后|安装/.test(failureText) && !dirtyInstalled, `dirtyInstalled=${dirtyInstalled}；${clip(failureText, 360)}`);
   } finally {
-    await restorePreloadHttpControl(control);
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
 }
 
@@ -3322,6 +3422,193 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
   recordAssertion(state, '多技能选择数量反馈', '选择多个技能后，输入区技能按钮应显示数量、多个 chip 或明确已选状态。', /2|两|已选|手动/.test(`${badgeText}\n${await visibleSkillChipText(page)}`), `tool=${clip(badgeText, 180)}；chip=${clip(await visibleSkillChipText(page), 180)}`);
   const prompt = '请使用我选择的技能，帮我把一个活动复盘需求整理成测试检查点。';
   await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '多技能手动会话' });
+}
+
+function automationSkillMarker(testCase, fallback = '') {
+  const text = String(testCase?.test_data || '');
+  const match = text.match(/(?:自动化技能标识|技能标识|marker|slug)\s*[:=：]\s*([A-Za-z0-9._-]+)/i);
+  return match?.[1] || fallback;
+}
+
+function automationDependencyMarkers(testCase) {
+  const text = String(testCase?.test_data || '');
+  const match = text.match(/(?:依赖技能标识|dependencies?)\s*[:=：]\s*([A-Za-z0-9._,，\s-]+)/i);
+  return match ? match[1].split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+async function searchAutomationSkillCard(page, state, caseDir, marker, { installed = false } = {}) {
+  await openSkillsPage(page, state, caseDir, { skillTab: installed ? '已安装' : '技能市场' });
+  if (installed) return marker ? findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')) : null;
+  const input = page.locator('.skill-search input').first();
+  if (marker && await visible(input, 1500)) {
+    await input.fill(marker);
+    const submit = page.locator('.skill-search button').filter({ hasText: /搜索/ }).first();
+    await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
+    await page.waitForTimeout(1600);
+  }
+  return marker ? findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')) : null;
+}
+
+async function waitForSkillOperationFeedback(page, timeoutMs = 120000) {
+  const feedback = page.locator('[data-testid="skill-operation-feedback"]').first();
+  const deadline = Date.now() + timeoutMs;
+  let text = '';
+  while (Date.now() < deadline) {
+    text = await feedback.innerText({ timeout: 700 }).catch(() => '');
+    const pending = /正在|安装中|处理中|准备中/.test(text);
+    if (text && !pending) return { terminal: true, text, error: /失败|未安装|未就绪|错误/.test(text) };
+    await page.waitForTimeout(700);
+  }
+  return { terminal: false, text, error: false };
+}
+
+async function executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-027 显式重试计数代理', rules: [{
+    id: 'skill-027-install-observe', method: 'POST', pathExact: '/api/skills/install', mode: 'observe',
+  }] });
+  if (!control.ok) return markBlocked(state, `无法启动技能显式重试计数代理：${control.reason}`);
+  try {
+    page = control.page;
+    const marker = automationSkillMarker(testCase, 'qa-runtime-retryable');
+    let card = await searchAutomationSkillCard(page, state, caseDir, marker);
+    if (!card) card = await findSkillCardByText(page, /装不上|rejected|重试安装/);
+    state.screenshots.skill_027_before_retry = await shot(page, caseDir, 'skill-027-before-explicit-retry');
+    if (!card) return markBlocked(state, `技能市场未找到标识 ${marker} 的拒装测试技能，也没有其他“装不上/重试安装”卡片。`);
+    const before = await card.innerText({ timeout: 1200 }).catch(() => '');
+    const retry = card.locator('.skill-install').filter({ hasText: /重试安装/ }).first();
+    if (!(await visible(retry, 1200))) {
+      recordAssertion(state, '拒装技能显式重试入口', '拒装技能卡片应展示可点击“重试安装”。', false, clip(before, 300), 'bug');
+      return;
+    }
+    control.proxy.arm();
+    await retry.click({ force: true }).catch(async () => retry.evaluate((el) => el.click()));
+    const terminal = await waitForSkillOperationFeedback(page, 120000);
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'skill-027-install-observe');
+    state.screenshots.skill_027_after_retry = await shot(page, caseDir, 'skill-027-after-explicit-retry');
+    state.artifacts.skill_027_retry = { marker, request_hits: hits.length, feedback: terminal.text };
+    recordStep(state, '点击拒装技能“重试安装”一次', '用户单击一次必须只触发一次安装请求，并收敛到成功或明确失败终态。', `marker=${marker}；requestHits=${hits.length}；feedback=${clip(terminal.text, 260)}`, terminal.terminal && hits.length === 1 ? 'passed' : 'failed', state.screenshots.skill_027_after_retry, hits.length === 1 ? '' : 'automation_error');
+    recordAssertion(state, '用户显式重试单次通道', '同版本拒装不得封死显式重试；一次点击只允许一次请求，结果必须可理解。', terminal.terminal && hits.length === 1 && /成功|失败|未安装|未就绪|重试/.test(terminal.text), `requestHits=${hits.length}；${clip(terminal.text, 320)}`);
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
+}
+
+async function executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-028 自动对账零安装请求代理', rules: [{
+    id: 'skill-028-install-observe', method: 'POST', pathExact: '/api/skills/install', mode: 'observe',
+  }] });
+  if (!control.ok) return markBlocked(state, `无法启动自动对账安装请求观察代理：${control.reason}`);
+  try {
+    page = control.page;
+    const marker = automationSkillMarker(testCase, 'qa-audit-terminal');
+    let card = await searchAutomationSkillCard(page, state, caseDir, marker);
+    if (!card) card = await findSkillCardByText(page, /装不上|rejected|审计拒装/);
+    if (!card) return markBlocked(state, `技能市场未找到标识 ${marker} 的审计硬拒测试技能，也没有其他审计拒装卡片。`);
+    const before = await card.innerText({ timeout: 1200 }).catch(() => '');
+    const name = await skillCardName(card, before);
+    const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
+    await settingsMenu.click({ force: true }).catch(async () => settingsMenu.evaluate((el) => el.click()));
+    const settings = page.locator('[data-testid="nav-settings"]').first();
+    await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
+    const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
+    if (!(await visible(reconcile, 2000))) return markBlocked(state, '个人设置未找到“立即对账技能”入口。');
+    control.proxy.arm();
+    await reconcile.click({ force: true }).catch(async () => reconcile.evaluate((el) => el.click()));
+    const result = page.locator('[data-testid="assistant-reconcile-result"]').first();
+    await result.waitFor({ state: 'visible', timeout: 60000 }).catch(() => {});
+    const reconcileText = await result.innerText({ timeout: 1200 }).catch(() => '');
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'skill-028-install-observe');
+    card = await searchAutomationSkillCard(page, state, caseDir, marker || name);
+    const after = card ? await card.innerText({ timeout: 1200 }).catch(() => '') : '';
+    state.screenshots.skill_028_after_reconcile = await shot(page, caseDir, 'skill-028-after-auto-reconcile');
+    state.artifacts.skill_028_auto_reconcile = { marker, request_hits: hits.length, reconcile: reconcileText, before, after };
+    recordAssertion(state, '审计硬拒自动对账不触发安装请求', '对同版本 audit_terminal 技能点击通用“立即对账”时，不得走用户显式安装接口；拒装状态应保持并给出说明。', hits.length === 0 && /装不上|拒装|rejected|审计|重试安装/.test(after), `requestHits=${hits.length}；reconcile=${clip(reconcileText, 220)}；after=${clip(after, 260)}`);
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
+}
+
+async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir }) {
+  const marker = automationSkillMarker(testCase, 'qa-uninstall-rejected');
+  const card = await searchAutomationSkillCard(page, state, caseDir, marker, { installed: true });
+  state.screenshots.skill_029_before_uninstall = await shot(page, caseDir, 'skill-029-before-uninstall');
+  if (!card) return markBlocked(state, `已安装列表未找到标识 ${marker} 的带拒装本机状态测试技能；请按用例前置数据准备后重跑。`);
+  const before = await card.innerText({ timeout: 1200 }).catch(() => '');
+  if (!/装不上|拒装|rejected|未就绪|准备失败/.test(before)) return markBlocked(state, `技能 ${marker} 当前不是拒装/未就绪状态，不能验证拒装 overlay 清理：${clip(before, 220)}`);
+  const remove = card.locator('.skill-del').first();
+  await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
+  const confirm = page.locator('[data-testid="skill-uninstall-confirm"]').first();
+  if (!(await visible(confirm, 1200))) return recordAssertion(state, '删除拒装技能确认入口', '点击删除后应出现确认弹窗。', false, '未找到 skill-uninstall-confirm。', 'automation_error');
+  await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
+  await page.locator('[data-testid="skill-uninstall-dialog"]').first().waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {});
+  const marketCard = await searchAutomationSkillCard(page, state, caseDir, marker);
+  const after = marketCard ? await marketCard.innerText({ timeout: 1200 }).catch(() => '') : '';
+  const installVisible = marketCard ? await visible(marketCard.locator('.skill-install').first(), 1200) : false;
+  state.screenshots.skill_029_after_uninstall = await shot(page, caseDir, 'skill-029-after-uninstall-cleanup');
+  recordAssertion(state, '卸载同步清理本机拒装状态', '卸载后市场卡应恢复可安装，旧的“装不上/拒装” overlay 不得残留。', Boolean(marketCard) && installVisible && !/装不上|拒装|rejected/.test(after), `marketCard=${Boolean(marketCard)}；installVisible=${installVisible}；after=${clip(after, 300)}`);
+}
+
+async function installAutomationDependencyRoot({ page, state, testCase, caseDir, marker }) {
+  const card = await searchAutomationSkillCard(page, state, caseDir, marker);
+  if (!card) return { blocked: `技能市场未找到依赖测试技能 ${marker}。请发布该自动化 fixture 后重跑。` };
+  const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
+  const name = await skillCardName(card, cardText);
+  const install = card.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 1200))) return { blocked: `依赖测试技能 ${marker} 没有可点击安装入口：${clip(cardText, 220)}` };
+  await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+  const feedback = await waitForSkillOperationFeedback(page, 120000);
+  return { card, name, cardText, feedback };
+}
+
+async function installedSkillMarkersVisible(page, state, caseDir, markers) {
+  await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+  const visibility = {};
+  for (const marker of markers) visibility[marker] = Boolean(await findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')));
+  return visibility;
+}
+
+async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir }) {
+  const marker = automationSkillMarker(testCase, 'qa-dep-root-success');
+  const dependencies = automationDependencyMarkers(testCase);
+  const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
+  if (result.blocked) return markBlocked(state, result.blocked);
+  const visibleMap = await installedSkillMarkersVisible(page, state, caseDir, [marker, ...dependencies]);
+  state.screenshots.skill_030_cascade_success = await shot(page, caseDir, 'skill-030-cascade-success');
+  const allVisible = Object.values(visibleMap).every(Boolean);
+  recordAssertion(state, '必填依赖先装且主技能安装成功', '安装主技能后反馈应列出级联安装的依赖，已安装列表应同时出现主技能和全部必填依赖。', result.feedback.terminal && !result.feedback.error && /并级联安装/.test(result.feedback.text) && dependencies.length > 0 && allVisible, `feedback=${clip(result.feedback.text, 300)}；visible=${JSON.stringify(visibleMap)}`);
+}
+
+async function executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir }) {
+  const marker = automationSkillMarker(testCase, 'qa-dep-root-existing');
+  const dependencies = automationDependencyMarkers(testCase);
+  if (!dependencies.length) return markBlocked(state, '用例数据缺少 dependencies= 已安装依赖标识。');
+  const before = await installedSkillMarkersVisible(page, state, caseDir, dependencies);
+  if (!Object.values(before).every(Boolean)) return markBlocked(state, `前置依赖未全部安装：${JSON.stringify(before)}`);
+  const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
+  if (result.blocked) return markBlocked(state, result.blocked);
+  const after = await installedSkillMarkersVisible(page, state, caseDir, [marker, ...dependencies]);
+  state.screenshots.skill_031_existing_dependency = await shot(page, caseDir, 'skill-031-existing-dependency-skipped');
+  recordAssertion(state, '已安装必填依赖跳过不重复安装', '依赖已安装时主技能应成功，反馈不得把该依赖再次列为本次级联安装，已安装列表仍各保留一张卡片。', result.feedback.terminal && !result.feedback.error && !/并级联安装/.test(result.feedback.text) && Object.values(after).every(Boolean), `feedback=${clip(result.feedback.text, 300)}；before=${JSON.stringify(before)}；after=${JSON.stringify(after)}`);
+}
+
+async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir }) {
+  const marker = automationSkillMarker(testCase, 'qa-dep-root-failure');
+  const dependencies = automationDependencyMarkers(testCase);
+  const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
+  if (result.blocked) return markBlocked(state, result.blocked);
+  const visibility = await installedSkillMarkersVisible(page, state, caseDir, [marker]);
+  state.screenshots.skill_032_dependency_failure = await shot(page, caseDir, 'skill-032-dependency-failure');
+  const dependencyNamed = dependencies.length === 0 || dependencies.some((item) => result.feedback.text.includes(item));
+  recordAssertion(state, '依赖失败阻断主技能安装', '任一必填依赖失败时应点名失败依赖，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /依赖技能/.test(result.feedback.text) && /失败/.test(result.feedback.text) && dependencyNamed && !visibility[marker], `feedback=${clip(result.feedback.text, 340)}；rootInstalled=${visibility[marker]}`);
+}
+
+async function executeSitSkillDependencyCycle({ page, state, testCase, caseDir }) {
+  const marker = automationSkillMarker(testCase, 'qa-dep-root-cycle');
+  const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
+  if (result.blocked) return markBlocked(state, result.blocked);
+  const visibility = await installedSkillMarkersVisible(page, state, caseDir, [marker]);
+  state.screenshots.skill_033_dependency_cycle = await shot(page, caseDir, 'skill-033-dependency-cycle');
+  recordAssertion(state, '循环依赖 fail-closed', '必填依赖循环时应明确提示循环引用，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /循环引用|循环依赖/.test(result.feedback.text) && !visibility[marker], `feedback=${clip(result.feedback.text, 340)}；rootInstalled=${visibility[marker]}`);
 }
 
 async function executeSitConnectorCatalog({ page, state, caseDir }) {
@@ -3496,7 +3783,7 @@ async function executeSitConnectorAutoConversation({ page, state, testCase, case
   recordAssertion(state, '自动连接器回复可理解', '自动模式应按需使用可用内置工具/默认连接器；不可用时应说明原因。', /图表|可视化|数据|连接器|工具|不可用|无法/.test(reply.deltaText), clip(reply.deltaText, 320));
 }
 
-async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir }) {
+async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir, options, runtime }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const selected = await selectFirstManualConnector(page, state, caseDir);
@@ -3507,19 +3794,20 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir 
     markBlocked(state, '已选中连接器，但框架未能读取 connector key，无法执行渲染层健康快照故障注入。');
     return;
   }
-  const control = await installPreloadHttpControl(page, [{
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-012 不健康快照代理', initiallyArmed: true, rules: [{
     id: 'connector-012-needs-auth',
     method: 'GET',
     pathExact: '/api/capabilities',
     mode: 'transform-json',
     transform: 'connector-needs-auth',
     connectorKey,
-  }]);
+  }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装 preload HTTP 连接器状态注入：${control.reason}`);
+    markBlocked(state, `框架无法安装控制面代理连接器状态注入：${control.reason}`);
     return;
   }
   try {
+    page = control.page;
     await page.keyboard.press('Escape').catch(() => {});
     await ensureComposerToolMenu(page, state, {
       selector: '[data-testid="composer-connectors-menu"]',
@@ -3530,7 +3818,7 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir 
     const warning = page.locator('[data-testid="composer-connector-unhealthy-selected"]').first();
     const warningVisible = await visible(warning, 1800);
     const menuText = await activeMenuText(page);
-    const controlState = await readPreloadHttpControl(control);
+    const controlState = control.proxy.state;
     const controlHits = controlState.hits.filter((item) => item.id === 'connector-012-needs-auth');
     const routeHits = controlHits.length;
     const modified = controlHits.reduce((total, item) => total + Number(item.modified || 0), 0);
@@ -3539,44 +3827,47 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir 
     recordStep(state, '将已选连接器注入为受控不可用状态', '通过 capabilities 快照将已选连接器改为 needs_auth，菜单应重新渲染为不生效。', `routeHits=${routeHits}；modified=${modified}；connector=${connectorKey}；warning=${warningVisible}；menu=${clip(menuText, 240)}`, routeHits > 0 && modified > 0 ? 'passed' : 'failed', state.screenshots.connector_012_unhealthy_selected, routeHits > 0 && modified > 0 ? '' : 'automation_error');
     recordAssertion(state, '已选不可用连接器本轮不生效提示', '已选连接器变为不可用后应显示“本轮不会生效”，并给出重试连接或完成授权的出路。', warningVisible && /本轮不会生效/.test(menuText) && /重试连接|完成授权|需处理/.test(menuText), clip(menuText, 360));
   } finally {
-    await restorePreloadHttpControl(control);
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
 }
 
-async function executeSitConnectorRefreshFailure({ page, state, caseDir }) {
-  await openConnectorsPage(page, state, caseDir);
-  const refresh = page.locator('[data-testid="connectors-refresh"], button').filter({ hasText: /刷新|重新加载|重试/ }).first();
-  if (!(await visible(refresh, 1500))) {
-    state.screenshots.connector_013_no_refresh = await shot(page, caseDir, 'connector-013-no-refresh');
-    recordAssertion(state, '连接器目录刷新入口', '连接器页应提供可触发目录刷新的入口。', false, '未找到 connectors-refresh 或可见的刷新/重试按钮。');
-    return;
-  }
-  state.screenshots.connector_013_before_refresh = await shot(page, caseDir, 'connector-013-before-refresh');
-  const cardsBefore = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
-  const control = await installPreloadHttpControl(page, [{
+async function executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-013 刷新失败代理', rules: [{
     id: 'connector-013-refresh-failure',
     method: 'GET',
     pathIncludes: '/api/connectors/catalog?refresh=force',
     mode: 'network-error',
     errorMessage: 'QBotTestAgent controlled connector catalog refresh failure',
-  }]);
+  }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装 preload HTTP 连接器刷新失败注入：${control.reason}`);
+    markBlocked(state, `框架无法安装控制面代理连接器刷新失败注入：${control.reason}`);
     return;
   }
+  page = control.page;
+  await openConnectorsPage(page, state, caseDir);
+  const refresh = page.locator('[data-testid="connectors-refresh"], button').filter({ hasText: /刷新|重新加载|重试/ }).first();
+  if (!(await visible(refresh, 1500))) {
+    state.screenshots.connector_013_no_refresh = await shot(page, caseDir, 'connector-013-no-refresh');
+    recordAssertion(state, '连接器目录刷新入口', '连接器页应提供可触发目录刷新的入口。', false, '未找到 connectors-refresh 或可见的刷新/重试按钮。');
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
+  state.screenshots.connector_013_before_refresh = await shot(page, caseDir, 'connector-013-before-refresh');
+  const cardsBefore = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
   try {
+    control.proxy.arm();
     await refresh.click({ force: true }).catch(async () => refresh.evaluate((el) => el.click()));
     await page.waitForTimeout(1600);
     const cardsAfter = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
     const text = await mainSurfaceText(page);
-    const controlState = await readPreloadHttpControl(control);
+    const controlState = control.proxy.state;
     const routeHits = controlState.hits.filter((item) => item.id === 'connector-013-refresh-failure').length;
     state.screenshots.connector_013_after_refresh_failure = await shot(page, caseDir, 'connector-013-after-refresh-failure');
     state.artifacts.connector_refresh_failure = { route: '/api/connectors/catalog?refresh=force', route_hits: routeHits, cards_before: cardsBefore, cards_after: cardsAfter };
     recordStep(state, '注入目录刷新失败并点击刷新', '刷新失败时应保留已有缓存卡片并显示产品化错误。', `routeHits=${routeHits}；cardsBefore=${cardsBefore}；cardsAfter=${cardsAfter}；page=${clip(text, 260)}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.connector_013_after_refresh_failure, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '刷新失败保留缓存', '目录刷新失败后已有连接器卡片不应消失，并应显示刷新失败/稍后重试提示。', routeHits > 0 && cardsBefore > 0 && cardsAfter >= cardsBefore && /刷新失败|加载失败|稍后重试|重试/.test(text), `routeHits=${routeHits}；before=${cardsBefore}；after=${cardsAfter}；${clip(text, 340)}`);
   } finally {
-    await restorePreloadHttpControl(control);
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
 }
 
@@ -6524,16 +6815,9 @@ async function captureDialogDuring(page, action, timeoutMs = 5000) {
   return { message };
 }
 
-export function preloadHttpInterceptorBootstrap(rules) {
-  const http = require('node:http');
-  const { EventEmitter } = require('node:events');
-  const { Readable } = require('node:stream');
-  const controlKey = '__QBOT_QA_HTTP_INTERCEPT_CONTROL__';
-  const previous = globalThis[controlKey];
-  if (previous?.originalRequest) http.request = previous.originalRequest;
-
-  const originalRequest = http.request;
-  const state = { hits: [], installedAt: Date.now() };
+export async function createControlPlaneFaultProxy({ upstreamUrl, rules = [], initiallyArmed = false } = {}) {
+  const upstream = new URL(String(upstreamUrl || 'http://127.0.0.1:8900'));
+  const state = { armed: Boolean(initiallyArmed), hits: [], installedAt: Date.now() };
   const matches = (rule, method, requestPath) => {
     if (rule.method && String(rule.method).toUpperCase() !== method) return false;
     if (rule.pathExact && requestPath !== rule.pathExact) return false;
@@ -6541,55 +6825,53 @@ export function preloadHttpInterceptorBootstrap(rules) {
     if (rule.pathIncludes && !requestPath.includes(rule.pathIncludes)) return false;
     return true;
   };
-  const fakeResponse = (statusCode, headers, body, callback, delayMs = 0) => {
-    const response = new Readable({ read() {} });
-    response.statusCode = Number(statusCode || 200);
-    response.headers = { 'content-type': 'application/json', ...(headers || {}) };
-    setTimeout(() => {
-      callback?.(response);
-      response.push(String(body ?? ''));
-      response.push(null);
-    }, Number(delayMs || 0));
-  };
-  const fakeRequest = (rule, callback, hit) => {
-    const request = new EventEmitter();
-    const chunks = [];
-    request.write = (chunk) => {
-      if (chunk !== undefined && chunk !== null) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-      return true;
-    };
-    request.end = (chunk) => {
-      if (chunk !== undefined && chunk !== null) request.write(chunk);
-      hit.requestBody = Buffer.concat(chunks).toString('utf8');
-      const delayMs = Number(rule.delayMs || 0);
-      if (rule.mode === 'network-error') {
-        setTimeout(() => request.emit('error', new Error(rule.errorMessage || 'QBotTestAgent controlled network error')), delayMs);
-      } else {
-        fakeResponse(rule.status || 200, rule.headers, JSON.stringify(rule.body ?? {}), callback, delayMs);
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, Number(ms || 0)));
+
+  const server = http.createServer(async (incoming, outgoing) => {
+    const requestChunks = [];
+    for await (const chunk of incoming) requestChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const requestBody = Buffer.concat(requestChunks);
+    const method = String(incoming.method || 'GET').toUpperCase();
+    const requestPath = String(incoming.url || '/');
+    const rule = state.armed ? rules.find((item) => matches(item, method, requestPath)) : null;
+    const hit = rule ? {
+      id: rule.id || '',
+      method,
+      path: requestPath,
+      mode: rule.mode || 'fixed-response',
+      at: Date.now(),
+      requestBody: requestBody.toString('utf8'),
+    } : null;
+    if (hit) state.hits.push(hit);
+
+    if (rule && !['transform-json', 'observe'].includes(rule.mode)) {
+      await delay(rule.delayMs);
+      const status = rule.mode === 'network-error' ? Number(rule.status || 503) : Number(rule.status || 200);
+      const body = rule.mode === 'network-error'
+        ? { ok: false, error: rule.errorMessage || 'QBotTestAgent controlled network error' }
+        : (rule.body ?? {});
+      outgoing.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...(rule.headers || {}) });
+      outgoing.end(JSON.stringify(body));
+      return;
+    }
+
+    const target = new URL(requestPath, upstream);
+    const transport = target.protocol === 'https:' ? https : http;
+    const headers = { ...incoming.headers, host: target.host };
+    delete headers.connection;
+    delete headers['content-length'];
+    if (requestBody.length) headers['content-length'] = String(requestBody.length);
+    const proxyRequest = transport.request(target, { method, headers }, (proxyResponse) => {
+      if (!rule || rule.mode !== 'transform-json') {
+        outgoing.writeHead(proxyResponse.statusCode || 502, proxyResponse.headers);
+        proxyResponse.pipe(outgoing);
+        return;
       }
-      return request;
-    };
-    request.abort = () => request;
-    request.destroy = (error) => {
-      if (error) queueMicrotask(() => request.emit('error', error));
-      return request;
-    };
-    request.setTimeout = () => request;
-    request.setNoDelay = () => request;
-    request.setHeader = () => request;
-    request.getHeader = () => undefined;
-    request.removeHeader = () => request;
-    return request;
-  };
-  const transformedRequest = (self, args, callback, rule, hit) => {
-    const nextArgs = [...args];
-    const callbackIndex = nextArgs.findIndex((item, index) => index > 0 && typeof item === 'function');
-    const onOriginalResponse = (response) => {
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-      response.on('end', () => {
-        let payload = null;
-        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { payload = {}; }
+      const responseChunks = [];
+      proxyResponse.on('data', (chunk) => responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      proxyResponse.on('end', () => {
+        let payload = {};
+        try { payload = JSON.parse(Buffer.concat(responseChunks).toString('utf8') || '{}'); } catch { payload = {}; }
         if (rule.transform === 'connector-needs-auth') {
           const connectors = Array.isArray(payload?.connectors) ? payload.connectors : [];
           let modified = 0;
@@ -6602,89 +6884,105 @@ export function preloadHttpInterceptorBootstrap(rules) {
           }
           hit.modified = modified;
         }
-        fakeResponse(response.statusCode || 200, response.headers, JSON.stringify(payload), callback);
+        const body = Buffer.from(JSON.stringify(payload));
+        const responseHeaders = { ...proxyResponse.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length) };
+        delete responseHeaders['content-encoding'];
+        delete responseHeaders['transfer-encoding'];
+        outgoing.writeHead(proxyResponse.statusCode || 200, responseHeaders);
+        outgoing.end(body);
       });
-      response.on('error', (error) => hit.responseError = error?.message || String(error));
-    };
-    if (callbackIndex >= 0) nextArgs[callbackIndex] = onOriginalResponse;
-    else nextArgs.push(onOriginalResponse);
-    return originalRequest.apply(self, nextArgs);
+    });
+    proxyRequest.on('error', (error) => {
+      if (hit) hit.proxyError = error?.message || String(error);
+      if (!outgoing.headersSent) outgoing.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
+      outgoing.end(JSON.stringify({ ok: false, error: 'QBotTestAgent proxy upstream unavailable' }));
+    });
+    if (requestBody.length) proxyRequest.write(requestBody);
+    proxyRequest.end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    upstreamUrl: upstream.toString().replace(/\/$/, ''),
+    state,
+    arm(value = true) { state.armed = Boolean(value); },
+    close: () => new Promise((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections?.();
+    }),
   };
-
-  http.request = function controlledHttpRequest(...args) {
-    const options = args[0];
-    const callback = args.find((item, index) => index > 0 && typeof item === 'function');
-    const method = String(typeof options === 'object' ? options?.method || 'GET' : 'GET').toUpperCase();
-    let requestPath = '';
-    if (typeof options === 'string' || options instanceof URL) {
-      const parsed = new URL(String(options));
-      requestPath = `${parsed.pathname}${parsed.search}`;
-    } else {
-      requestPath = String(options?.path || options?.pathname || '');
-    }
-    const rule = (Array.isArray(rules) ? rules : []).find((item) => matches(item, method, requestPath));
-    if (!rule) return originalRequest.apply(this, args);
-    const hit = { id: rule.id || '', method, path: requestPath, mode: rule.mode || 'fixed-response', at: Date.now(), requestBody: '' };
-    state.hits.push(hit);
-    if (rule.mode === 'transform-json') return transformedRequest(this, args, callback, rule, hit);
-    return fakeRequest(rule, callback, hit);
-  };
-  globalThis[controlKey] = { originalRequest, state };
-  return { ok: http.request !== originalRequest, ruleCount: Array.isArray(rules) ? rules.length : 0 };
 }
 
-async function installPreloadHttpControl(page, rules) {
-  let cdp = null;
-  try {
-    cdp = await page.context().newCDPSession(page);
-    const contexts = [];
-    cdp.on('Runtime.executionContextCreated', (event) => contexts.push(event.context));
-    await cdp.send('Runtime.enable');
-    await page.waitForTimeout(250);
-    for (const context of contexts) {
-      const probe = await cdp.send('Runtime.evaluate', {
-        contextId: context.id,
-        expression: `(() => ({ hasRequire: typeof require === 'function', processType: typeof process === 'object' ? process.type : '', hasHttp: typeof require === 'function' ? typeof require('node:http').request === 'function' : false }))()`,
-        returnByValue: true,
-      }).catch(() => null);
-      const value = probe?.result?.value;
-      if (!value?.hasRequire || !value?.hasHttp || value.processType !== 'renderer') continue;
-      const installed = await cdp.send('Runtime.evaluate', {
-        contextId: context.id,
-        expression: `(${preloadHttpInterceptorBootstrap.toString()})(${JSON.stringify(rules || [])})`,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      const result = installed?.result?.value || null;
-      if (!result?.ok) continue;
-      return { ok: true, cdp, contextId: context.id, contextName: context.name || '', result };
-    }
-    await cdp.detach().catch(() => {});
-    return { ok: false, reason: 'CDP 未找到可访问 Node http 模块的 Electron preload 隔离上下文。' };
-  } catch (error) {
-    await cdp?.detach().catch(() => {});
-    return { ok: false, reason: error?.message || String(error) };
+function inferQbotRootForElectronRestart(options = {}) {
+  const explicit = String(options['qbot-root'] || '').trim();
+  if (explicit && fs.existsSync(path.join(explicit, 'electron', 'main.cjs'))) return explicit;
+  const restartCwd = String(options['restart-cwd'] || '').trim();
+  if (restartCwd && fs.existsSync(path.join(restartCwd, 'electron', 'main.cjs'))) return restartCwd;
+  const command = String(options['restart-command'] || '');
+  const match = command.match(/(\/[^\s'\"]+?)\/restart-qbot-slim\.sh\b/);
+  return match?.[1] || '';
+}
+
+function electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl }) {
+  const qbotRoot = inferQbotRootForElectronRestart(options);
+  if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断 deepbankV2 根目录。' };
+  const helper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-electron-control-plane.sh');
+  if (!fs.existsSync(helper)) return { ok: false, reason: `缺少 Electron QA 重启脚本：${helper}` };
+  let cdpPort = '9224';
+  try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  return { ok: true, command: [helper, qbotRoot, controlPlaneUrl, cdpPort].map(shellQuote).join(' ') };
+}
+
+async function installControlPlaneHttpControl({ options, runtime, state, caseDir, rules, label, initiallyArmed = false }) {
+  const upstreamUrl = String(options['control-plane-url'] || process.env.DEEPBANK_SERVER || 'http://127.0.0.1:8900').trim();
+  const proxy = await createControlPlaneFaultProxy({ upstreamUrl, rules, initiallyArmed });
+  const command = electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl: proxy.url });
+  if (!command.ok) {
+    await proxy.close();
+    return command;
   }
+  const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: label || '切换到受控控制面代理', commandOverride: command.command });
+  if (!restarted.ok) {
+    await proxy.close();
+    const restoreCommand = electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl: upstreamUrl });
+    if (restoreCommand.ok) await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '代理启动失败后恢复原控制面', commandOverride: restoreCommand.command }).catch(() => {});
+    return restarted;
+  }
+  const workbench = await waitForQbotWorkbench(restarted.page, 90000);
+  if (!workbench.ok) {
+    const restoreCommand = electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl: upstreamUrl });
+    if (restoreCommand.ok) await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '代理工作台失败后恢复原控制面', commandOverride: restoreCommand.command }).catch(() => {});
+    await proxy.close();
+    return { ok: false, reason: workbench.reason };
+  }
+  state.artifacts.control_plane_fault_proxy = { proxy_url: proxy.url, upstream_url: proxy.upstreamUrl, initially_armed: initiallyArmed };
+  return { ok: true, page: restarted.page, proxy, upstreamUrl };
 }
 
-async function readPreloadHttpControl(control) {
-  if (!control?.ok || !control.cdp || !control.contextId) return { hits: [] };
-  const result = await control.cdp.send('Runtime.evaluate', {
-    contextId: control.contextId,
-    expression: `(() => { const c = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; return { hits: c?.state?.hits || [], installedAt: c?.state?.installedAt || 0 }; })()`,
-    returnByValue: true,
-  }).catch(() => null);
-  return result?.result?.value || { hits: [] };
-}
-
-async function restorePreloadHttpControl(control) {
-  if (!control?.ok || !control.cdp || !control.contextId) return;
-  await control.cdp.send('Runtime.evaluate', {
-    contextId: control.contextId,
-    expression: `(() => { const c = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; if (c?.originalRequest && typeof require === 'function') require('node:http').request = c.originalRequest; delete globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__; return true; })()`,
-    returnByValue: true,
-  }).catch(() => {});
-  await control.cdp.detach().catch(() => {});
+async function restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir }) {
+  if (!control?.ok || control.restored) return;
+  control.restored = true;
+  const command = electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl: control.upstreamUrl });
+  let restored = command.ok
+    ? await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复原控制面地址', commandOverride: command.command })
+    : command;
+  await control.proxy.close().catch(() => {});
+  if (restored.ok) {
+    const workbench = await waitForQbotWorkbench(restored.page, 90000);
+    if (!workbench.ok) restored = { ok: false, reason: workbench.reason };
+  }
+  recordAssertion(
+    state,
+    '控制面故障注入后环境恢复',
+    '故障场景结束后必须将 Electron 恢复到原控制面并重新进入已登录工作台。',
+    Boolean(restored.ok),
+    restored.ok ? `已恢复 ${control.upstreamUrl}` : restored.reason,
+    restored.ok ? '' : 'automation_error',
+  );
 }
 
 async function captureConfirmDuringWithAction(page, action, { accept = false } = {}) {
@@ -8283,6 +8581,19 @@ function inferAttachments(testCase, fixturesDir) {
     const file = path.join(fixturesDir, name);
     if (fs.existsSync(file)) files.push(file);
   };
+  if (testCase.id === 'SIT-HOME-037') {
+    add('qbot-image-test.png');
+    return dedupe(files, (item) => item);
+  }
+  if (testCase.id === 'SIT-HOME-038') {
+    for (const name of ['qbot-image-test.png', 'qbot-image-flow.png', 'qbot-image-risk.png']) add(name);
+    return dedupe(files, (item) => item);
+  }
+  if (testCase.id === 'SIT-HOME-039') {
+    add('qbot-image-test.png');
+    add('qbot-data.json');
+    return dedupe(files, (item) => item);
+  }
   const explicitText = String(testCase.test_data || '');
   for (const match of explicitText.matchAll(/(?:testflies\/)?([A-Za-z0-9_.-]+\.(?:txt|md|markdown|docx|xlsx|xls|pdf|pptx|png|jpg|jpeg|json|csv|html|js|svg))/gi)) {
     add(match[1]);

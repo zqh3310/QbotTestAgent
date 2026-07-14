@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, slugify, timestampForPath, writeJsonFile, writeTextFile } from './fs.mjs';
@@ -953,7 +954,12 @@ function generateUiAgentFixtures({ fixturesDir }) {
   write('qbot-page.html', '<!doctype html><html><head><title>QBot Fixture</title></head><body><h1>QBot 测试页面</h1><p data-risk="internal-error">重点检查用户是否能理解回复。</p></body></html>\n');
   write('qbot-script.js', 'export function conversionRate(arrived, sold) { return sold / arrived; }\nconsole.log(conversionRate(70, 12));\n');
   write('qbot-visual-test.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#f7faf8"/><rect x="60" y="70" width="160" height="80" fill="#dcefe4" stroke="#15803d"/><text x="84" y="118" font-size="24" fill="#0f172a">输入资料</text><path d="M230 110 H395" stroke="#2563eb" stroke-width="8" marker-end="url(#a)"/><rect x="410" y="70" width="170" height="80" fill="#e0ecff" stroke="#2563eb"/><text x="440" y="118" font-size="24" fill="#0f172a">结构化回复</text><defs><marker id="a" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#2563eb"/></marker></defs><text x="70" y="245" font-size="22" fill="#475569">目标：验证 QBot 能理解视觉流程图</text></svg>\n');
-  write('qbot-image-test.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64'), null);
+  const imageGenerator = path.resolve(process.cwd(), 'scripts', 'generate-qa-image-fixtures.py');
+  const generatedImages = spawnSync(String(process.env.PYTHON || 'python3'), [imageGenerator, fixturesDir], { encoding: 'utf8' });
+  if (generatedImages.error || generatedImages.status !== 0) {
+    throw new Error(`生成图片 fixture 失败：${generatedImages.error?.message || generatedImages.stderr || generatedImages.stdout || generatedImages.status}`);
+  }
+  for (const name of ['qbot-image-test.png', 'qbot-image-flow.png', 'qbot-image-risk.png']) files.push(path.join(fixturesDir, name));
   writeDocx(path.join(fixturesDir, 'qbot-word-report.docx'));
   files.push(path.join(fixturesDir, 'qbot-word-report.docx'));
   writeXlsx(path.join(fixturesDir, 'qbot-data-table.xlsx'));

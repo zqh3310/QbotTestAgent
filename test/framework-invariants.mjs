@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import http from 'node:http';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  createControlPlaneFaultProxy,
   obviousDuplicateEvidence,
-  preloadHttpInterceptorBootstrap,
   rawArtifactEventLeakEvidence,
   reviewCaseCredibility,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
@@ -17,23 +16,29 @@ const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['可信度审计使用逐次发送前证据', /preSendTierChecks[\s\S]*successfulSendCount[\s\S]*preSendTierChecks\.length < successfulSendCount/],
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
+  ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
-  ['preload Node HTTP 注入安装与恢复完整', /installPreloadHttpControl[\s\S]*Runtime\.executionContextCreated[\s\S]*require\('node:http'\)[\s\S]*restorePreloadHttpControl/],
-  ['HOME-025 使用 preload 传输层可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restorePreloadHttpControl/],
-  ['HOME-030 真实打开并使用 preload HTTP dry-run 快速反馈', /composer-feedback[\s\S]*quick-feedback-panel[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*quick_feedback_dry_run/],
+  ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
+  ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
+  ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-052 打开并取消原生工作区选择器', /executeSitHomeWorkspacePicker[\s\S]*wspick-trigger[\s\S]*wspick-menu[\s\S]*osascript/],
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
   ['成果和长上下文任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*longRunningKind \? budget : requestedBudget/],
-  ['连接器刷新失败注入', /executeSitConnectorRefreshFailure[\s\S]*pathIncludes: '\/api\/connectors\/catalog\?refresh=force'[\s\S]*mode: 'network-error'[\s\S]*restorePreloadHttpControl/],
-  ['技能安装中断注入', /executeSitSkillNetworkInterrupt[\s\S]*pathExact: '\/api\/skills\/install'[\s\S]*controlled network interruption[\s\S]*restorePreloadHttpControl/],
+  ['连接器刷新失败注入', /executeSitConnectorRefreshFailure[\s\S]*pathIncludes: '\/api\/connectors\/catalog\?refresh=force'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
+  ['技能安装中断注入', /executeSitSkillNetworkInterrupt[\s\S]*pathExact: '\/api\/skills\/install'[\s\S]*controlled network interruption[\s\S]*restoreControlPlaneHttpControl/],
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathExact: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
   ['纯 UI 用例不强制会话证据', /REPLY_EVIDENCE_OPTIONAL_CASE_IDS[\s\S]*SIT-HOME-050[\s\S]*requiresConversationEvidence = !replyEvidenceOptional/],
   ['有证据缺口的 passed 不误报未知状态', /else if \(reasons\.length\)[\s\S]*自动化证据或执行链路未通过可信度校验/],
   ['HOME-050 搜索前设置唯一标题', /SIT-HOME-050'[\s\S]*自动化搜索-[\s\S]*session-rename-input/],
-  ['HOME-056 只点击专用附件移除按钮', /executeSitHomeDeleteOneAttachment[\s\S]*button\[aria-label\*="移除"\][\s\S]*不点击泛化 button/],
+  ['HOME-056 hover 后点击真实附件移除按钮', /executeSitHomeDeleteOneAttachment[\s\S]*root\.hover[\s\S]*aui-attachment-tile-remove[\s\S]*不点击泛化 button/],
+  ['EXPERT-012 hover 后识别最近召唤移除按钮', /executeSitExpertRecentSummon[\s\S]*recentItem\.hover[\s\S]*exp-recent-del/],
+  ['SKILL-013 卡片无入口时走个人设置立即对账', /executeSitSkillMaterialization[\s\S]*nav-settings-menu[\s\S]*assistant-reconcile-skills[\s\S]*assistant-reconcile-result/],
+  ['三张图片用例使用互异真实 PNG', /SIT-HOME-038'[\s\S]*qbot-image-test\.png[\s\S]*qbot-image-flow\.png[\s\S]*qbot-image-risk\.png/],
+  ['#668 三条自动化路由完整', /SIT-SKILL-027'[\s\S]*executeSitSkillRejectedExplicitRetry[\s\S]*SIT-SKILL-028'[\s\S]*executeSitSkillAuditRejectNoAutoRetry[\s\S]*SIT-SKILL-029'[\s\S]*executeSitSkillRejectedUninstallCleanup/],
+  ['#669 四条自动化路由完整', /SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['工具进度与安全错误码不误判重复', /新建文件\|编辑文件\|写入文件[\s\S]*错误码\|状态码\|error code/],
   ['ART-003 仅识别结构化内部事件泄漏', /rawArtifactEventLeakEvidence[\s\S]*artifact_delta[\s\S]*artifactPath\|artifactId\|artifactType/],
 ];
@@ -114,7 +119,7 @@ if (!obviousDuplicateEvidence('这是一段确实重复的用户可见正文。\
 if (rawArtifactEventLeakEvidence('成果已生成，请在成果区查看。')) throw new Error('用户可读的成果描述不应判为内部泄漏');
 if (!rawArtifactEventLeakEvidence('{"kind":"artifact","artifact":{"path":"a.md"}}')) throw new Error('序列化成果事件应被识别');
 
-const interceptorServer = http.createServer((req, res) => {
+const upstreamServer = http.createServer((req, res) => {
   if (req.url === '/api/capabilities') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ connectors: [{ key: 'qa-connector', label: 'QA Connector', statusKind: 'ready', statusLabel: '可用' }] }));
@@ -124,18 +129,26 @@ const interceptorServer = http.createServer((req, res) => {
   res.end('{}');
 });
 await new Promise((resolve, reject) => {
-  interceptorServer.once('error', reject);
-  interceptorServer.listen(0, '127.0.0.1', resolve);
+  upstreamServer.once('error', reject);
+  upstreamServer.listen(0, '127.0.0.1', resolve);
 });
-const interceptorPort = interceptorServer.address().port;
-const previousGlobalRequire = globalThis.require;
-globalThis.require = createRequire(import.meta.url);
+const upstreamPort = upstreamServer.address().port;
+const proxy = await createControlPlaneFaultProxy({
+  upstreamUrl: `http://127.0.0.1:${upstreamPort}`,
+  rules: [
+    { id: 'fixed', method: 'POST', pathExact: '/api/fixed', mode: 'fixed-response', status: 200, body: { ok: false, msg: '受控失败' } },
+    { id: 'network', method: 'GET', pathExact: '/api/network-error', mode: 'network-error', errorMessage: '受控网络错误' },
+    { id: 'transform', method: 'GET', pathExact: '/api/capabilities', mode: 'transform-json', transform: 'connector-needs-auth', connectorKey: 'qa-connector' },
+    { id: 'observe', method: 'GET', pathExact: '/api/observed', mode: 'observe' },
+  ],
+});
+const proxyPort = new URL(proxy.url).port;
 const readJson = (requestPath, { method = 'GET', body = '' } = {}) => new Promise((resolve, reject) => {
-  const request = http.request({ hostname: '127.0.0.1', port: interceptorPort, path: requestPath, method }, (response) => {
+  const request = http.request({ hostname: '127.0.0.1', port: proxyPort, path: requestPath, method }, (response) => {
     const chunks = [];
     response.on('data', (chunk) => chunks.push(chunk));
     response.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); } catch (error) { reject(error); }
+      try { resolve({ status: response.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') }); } catch (error) { reject(error); }
     });
   });
   request.on('error', reject);
@@ -143,28 +156,20 @@ const readJson = (requestPath, { method = 'GET', body = '' } = {}) => new Promis
   request.end();
 });
 try {
-  preloadHttpInterceptorBootstrap([
-    { id: 'fixed', method: 'POST', pathExact: '/api/fixed', mode: 'fixed-response', status: 200, body: { ok: false, msg: '受控失败' } },
-    { id: 'network', method: 'GET', pathExact: '/api/network-error', mode: 'network-error', errorMessage: '受控网络错误' },
-    { id: 'transform', method: 'GET', pathExact: '/api/capabilities', mode: 'transform-json', transform: 'connector-needs-auth', connectorKey: 'qa-connector' },
-  ]);
+  proxy.arm();
   const fixed = await readJson('/api/fixed', { method: 'POST', body: '{"name":"qa"}' });
-  if (fixed.ok !== false || fixed.msg !== '受控失败') throw new Error('preload HTTP 固定响应注入失败');
+  if (fixed.body.ok !== false || fixed.body.msg !== '受控失败') throw new Error('控制面代理固定响应注入失败');
   const transformed = await readJson('/api/capabilities');
-  if (transformed.connectors?.[0]?.statusKind !== 'needs_auth') throw new Error('preload HTTP JSON 转换注入失败');
-  const networkError = await readJson('/api/network-error').then(() => '').catch((error) => error.message);
-  if (!networkError.includes('受控网络错误')) throw new Error('preload HTTP 网络错误注入失败');
-  const control = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__;
-  if (control?.state?.hits?.length !== 3 || !control.state.hits.find((item) => item.id === 'fixed')?.requestBody.includes('qa')) {
-    throw new Error('preload HTTP 注入证据采集失败');
+  if (transformed.body.connectors?.[0]?.statusKind !== 'needs_auth') throw new Error('控制面代理 JSON 转换注入失败');
+  const networkError = await readJson('/api/network-error');
+  if (networkError.status !== 503 || !networkError.body.error.includes('受控网络错误')) throw new Error('控制面代理网络错误注入失败');
+  await readJson('/api/observed');
+  if (proxy.state.hits.length !== 4 || !proxy.state.hits.find((item) => item.id === 'fixed')?.requestBody.includes('qa')) {
+    throw new Error('控制面代理证据采集失败');
   }
 } finally {
-  const control = globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__;
-  if (control?.originalRequest) http.request = control.originalRequest;
-  delete globalThis.__QBOT_QA_HTTP_INTERCEPT_CONTROL__;
-  if (previousGlobalRequire === undefined) delete globalThis.require;
-  else globalThis.require = previousGlobalRequire;
-  await new Promise((resolve) => interceptorServer.close(resolve));
+  await proxy.close();
+  await new Promise((resolve) => upstreamServer.close(resolve));
 }
 
 console.log('framework invariants ok');
