@@ -4699,8 +4699,15 @@ async function resetComposerControls(page, state, caseDir, {
   await page.waitForTimeout(150);
 
   if (clearConnectors) {
-    results.push(await clearManualConnectorSelections(page, state, caseDir));
-    if (connectorMode) results.push(await setConnectorMode(page, state, caseDir, connectorMode));
+    // disabled/auto 本身会覆盖上一轮的手动选择，直接切到目标模式即可。
+    // 先切 manual 再切目标模式会与菜单打开时的异步 refresh 竞争，既浪费一次
+    // 控制面写入，也可能让自动化读取到点击前的旧选中态。
+    if (connectorMode === 'disabled' || connectorMode === 'auto') {
+      results.push(await setConnectorMode(page, state, caseDir, connectorMode));
+    } else {
+      results.push(await clearManualConnectorSelections(page, state, caseDir));
+      if (connectorMode) results.push(await setConnectorMode(page, state, caseDir, connectorMode));
+    }
   }
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(250);
@@ -4833,6 +4840,22 @@ async function clearManualSkillSelections(page, state, caseDir) {
 }
 
 async function clearManualConnectorSelections(page, state, caseDir) {
+  const capabilities = await currentCapabilities(page);
+  const selectedConnectors = Array.isArray(capabilities?.selectedConnectors)
+    ? capabilities.selectedConnectors
+    : [];
+  if (!selectedConnectors.length) {
+    state.screenshots.connector_selection_cleared = await shot(page, caseDir, 'connector-selection-cleared');
+    recordStep(
+      state,
+      '清理输入区手动连接器选择',
+      '上一个用例遗留的手动连接器必须被移除，不能污染本用例。',
+      '能力状态未发现已选连接器，无需切到手动模式清理。',
+      'passed',
+      state.screenshots.connector_selection_cleared,
+    );
+    return true;
+  }
   const menuOpened = await setConnectorMode(page, state, caseDir, 'manual');
   if (!menuOpened) return false;
   const menu = await activeMenuLocator(page);
@@ -5240,23 +5263,41 @@ async function setConnectorMode(page, state, caseDir, mode) {
     return false;
   }
 
-  await locator.click({ force: true });
-  await page.waitForTimeout(500);
-  const checked = await locator.getAttribute('aria-checked').catch(() => '');
-  const cls = await locator.getAttribute('class').catch(() => '');
-  const afterText = await activeMenuText(page);
-  const toolStateText = await visibleComposerToolStateText(page, 'connector');
-  const selectedOk = checked === 'true'
-    || /(?:^|\s)on(?:\s|$)/.test(cls || '')
-    || connectorModeSelectedByText(mode, `${afterText}\n${toolStateText}`);
+  await locator.click({ force: true }).catch(async () => locator.evaluate((element) => element.click()));
+
+  // 切换动作会触发控制面写入、refresh 和菜单关闭/重绘。不能继续读取点击前
+  // 的 locator；每轮都从当前 DOM 和 capabilities 重新取证，避免旧节点误判。
+  let checked = '';
+  let cls = '';
+  let afterText = '';
+  let toolStateText = '';
+  let storedMode = '';
+  let selectedOk = false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    const freshLocator = await connectorModeLocator(page, mode);
+    checked = freshLocator ? await freshLocator.getAttribute('aria-checked').catch(() => '') : '';
+    cls = freshLocator ? await freshLocator.getAttribute('class').catch(() => '') : '';
+    afterText = await activeMenuText(page);
+    toolStateText = await visibleComposerToolStateText(page, 'connector');
+    const capabilities = await currentCapabilities(page);
+    storedMode = String(capabilities?.connectorRouting?.mode || '');
+    selectedOk = checked === 'true'
+      || /(?:^|\s)on(?:\s|$)/.test(cls || '')
+      || connectorModeSelectedByText(mode, `${afterText}\n${toolStateText}`)
+      || storedMode === mode;
+    if (selectedOk) break;
+  }
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
   recordStep(
     state,
     `切换连接器模式：${mode}`,
     `${mode} 点击后应处于选中状态，且通过 aria-checked、on class 或“当前：...”文案可验证。`,
-    `label=${label}；aria-checked=${checked || '未读取'}；class=${cls || '未读取'}；菜单=${clip(afterText, 180)}；工具条=${clip(toolStateText, 120)}`,
+    `label=${label}；aria-checked=${checked || '未读取'}；class=${cls || '未读取'}；capabilities.connectorRouting.mode=${storedMode || '未读取'}；菜单=${clip(afterText, 180)}；工具条=${clip(toolStateText, 120)}`,
     selectedOk ? 'passed' : 'failed',
     state.screenshots[`connector_mode_${mode}`],
+    selectedOk ? '' : 'automation_error',
   );
   if (!selectedOk) {
     recordAssertion(
@@ -5265,6 +5306,7 @@ async function setConnectorMode(page, state, caseDir, mode) {
       `${mode} 点击后应有明确选中态反馈。`,
       false,
       `点击“${label}”后未检测到选中态：${clip(afterText, 220)}`,
+      'automation_error',
     );
   }
   return selectedOk;
@@ -6927,14 +6969,29 @@ function inferQbotRootForElectronRestart(options = {}) {
   return match?.[1] || '';
 }
 
+export function inferQbotHomeForElectronRestart(options = {}) {
+  const explicit = String(options['qbot-home'] || options['deepbank-home'] || '').trim();
+  if (explicit) return explicit;
+  const environment = String(process.env.QBOT_TEST_DEEPBANK_HOME || process.env.DEEPBANK_HOME || '').trim();
+  if (environment) return environment;
+  const command = String(options['restart-command'] || '');
+  const match = command.match(/(?:^|\s)DEEPBANK_HOME=(?:"([^"]+)"|'([^']+)'|([^\s;]+))/);
+  return String(match?.[1] || match?.[2] || match?.[3] || '').trim();
+}
+
 function electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl }) {
   const qbotRoot = inferQbotRootForElectronRestart(options);
   if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断 deepbankV2 根目录。' };
   const helper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-electron-control-plane.sh');
   if (!fs.existsSync(helper)) return { ok: false, reason: `缺少 Electron QA 重启脚本：${helper}` };
+  const qbotHome = inferQbotHomeForElectronRestart(options);
   let cdpPort = '9224';
   try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
-  return { ok: true, command: [helper, qbotRoot, controlPlaneUrl, cdpPort].map(shellQuote).join(' ') };
+  return {
+    ok: true,
+    command: [helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome].map(shellQuote).join(' '),
+    qbotHome,
+  };
 }
 
 async function installControlPlaneHttpControl({ options, runtime, state, caseDir, rules, label, initiallyArmed = false }) {

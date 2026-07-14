@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="${1:?deepbankV2 root is required}"
 CONTROL_PLANE_URL="${2:?control-plane URL is required}"
 CDP_PORT="${3:-9224}"
+DEEPBANK_HOME_OVERRIDE="${4:-}"
 
 cd "$ROOT_DIR"
 
@@ -17,7 +18,7 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-DEEPBANK_HOME="${DEEPBANK_HOME:-$ROOT_DIR/.deepbank-runtime/slim}"
+DEEPBANK_HOME="${DEEPBANK_HOME_OVERRIDE:-${DEEPBANK_HOME:-$ROOT_DIR/.deepbank-runtime/slim}}"
 DEEPBANK_AUTH_PROVIDER="${DEEPBANK_AUTH_PROVIDER:-mock}"
 LOG_DIR="$DEEPBANK_HOME/logs"
 PID_DIR="$DEEPBANK_HOME/pids"

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createControlPlaneFaultProxy,
+  inferQbotHomeForElectronRestart,
   obviousDuplicateEvidence,
   rawArtifactEventLeakEvidence,
   reviewCaseCredibility,
@@ -11,6 +12,7 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
+const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-electron-control-plane.sh'), 'utf8');
 
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
@@ -20,6 +22,9 @@ const required = [
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
+  ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],
+  ['连接器 reset 对禁用/自动模式直达且不先切手动', /if \(connectorMode === 'disabled' \|\| connectorMode === 'auto'\)[\s\S]*setConnectorMode\(page, state, caseDir, connectorMode\)[\s\S]*else \{[\s\S]*clearManualConnectorSelections/],
+  ['连接器模式切换使用新 DOM 和能力状态轮询', /async function setConnectorMode[\s\S]*const freshLocator = await connectorModeLocator[\s\S]*capabilities\?\.connectorRouting\?\.mode[\s\S]*'automation_error'/],
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-052 打开并取消原生工作区选择器', /executeSitHomeWorkspacePicker[\s\S]*wspick-trigger[\s\S]*wspick-menu[\s\S]*osascript/],
@@ -46,6 +51,21 @@ const required = [
 for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
 }
+
+if (!/DEEPBANK_HOME_OVERRIDE="\$\{4:-\}"/.test(electronRestartHelper)
+  || !/DEEPBANK_HOME="\$\{DEEPBANK_HOME_OVERRIDE:-\$\{DEEPBANK_HOME:-\$ROOT_DIR\/\.deepbank-runtime\/slim\}\}"/.test(electronRestartHelper)) {
+  throw new Error('Electron 控制面代理重启脚本必须优先使用 runner 显式传入的 DEEPBANK_HOME');
+}
+
+const inferredHome = inferQbotHomeForElectronRestart({
+  'restart-command': 'DEEPBANK_E2E=1 DEEPBANK_HOME=/tmp/qbot-home /tmp/deepbank/restart-qbot-slim.sh --skip-build',
+});
+if (inferredHome !== '/tmp/qbot-home') throw new Error(`未从 restart-command 推断 DEEPBANK_HOME：${inferredHome}`);
+const explicitHome = inferQbotHomeForElectronRestart({
+  'qbot-home': '/tmp/explicit qbot home',
+  'restart-command': 'DEEPBANK_HOME=/tmp/ignored /tmp/deepbank/restart-qbot-slim.sh --skip-build',
+});
+if (explicitHome !== '/tmp/explicit qbot home') throw new Error(`--qbot-home 未覆盖 restart-command：${explicitHome}`);
 
 const forbidden = [
   ['成果删除仍直接声明缺少注入', '当前测试环境缺少可控的成果文件删除注入能力'],
