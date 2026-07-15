@@ -5,8 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createControlPlaneFaultProxy,
+  createConnectorRegressionServer,
   createSkillHubRegressionServer,
   inferQbotHomeForElectronRestart,
+  isSuccessfulSendStep,
+  latestAssistantReplyForPrompt,
   obviousDuplicateEvidence,
   rawArtifactEventLeakEvidence,
   reviewCaseCredibility,
@@ -38,7 +41,7 @@ const required = [
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
-  ['成果和长上下文任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*longRunningKind \? budget : requestedBudget/],
+  ['成果、长上下文和多轮任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*longRunningKind \? budget : requestedBudget/],
   ['连接器刷新失败注入', /executeSitConnectorRefreshFailure[\s\S]*pathIncludes: '\/api\/connectors\/catalog\?refresh=force'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['技能安装中断注入', /executeSitSkillNetworkInterrupt[\s\S]*pathExact: '\/api\/skills\/install'[\s\S]*controlled network interruption[\s\S]*restoreControlPlaneHttpControl/],
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathPrefix: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
@@ -75,7 +78,7 @@ const required = [
   ['SKILL-018 使用空已安装目录代理', /executeSitSkillManualEmptyState[\s\S]*skill-018-empty-installed[\s\S]*skills-empty-installed/],
   ['EXPERT-015 使用空专家市场代理', /executeSitExpertEmptyMarket[\s\S]*expert-015-empty-market[\s\S]*experts-empty-market/],
   ['CONN-014 使用空连接器目录代理', /executeSitConnectorEmptyState[\s\S]*connectors-empty-catalog[\s\S]*connector-014-empty-catalog/],
-  ['连接器三态用例使用产品 dev Fixture', /executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-018'/],
+  ['连接器三态用例使用 runner 自建 Fixture', /createConnectorRegressionServer[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-018'/],
   ['连接器 dev Fixture 缺入口进入产品断言而非阻塞', /executeSitConnectorRetry[\s\S]*unreachable 连接器重试入口[\s\S]*executeSitConnectorAuthDialog[\s\S]*needs_auth 连接器授权入口[\s\S]*executeSitConnectorManualUnhealthyOption[\s\S]*手动菜单展示不可用连接器状态/],
   ['项目成果用例创建真实项目和项目任务', /(?=[\s\S]*executeSitProjectArtifactCase)(?=[\s\S]*QBot QA 自动化项目)(?=[\s\S]*project-tasks-view)(?=[\s\S]*project-task-launch)(?=[\s\S]*project_result\.md)(?=[\s\S]*project_weekly_report\.md)/],
   ['项目入口缺失进入产品断言而非数据阻塞', /executeSitProjectArtifactCase[\s\S]*项目导航入口[\s\S]*项目任务输入与启动入口/],
@@ -101,17 +104,22 @@ if (!/source "\$ROOT_DIR\/\.env"/.test(skillHubRestartHelper)
 }
 
 if (!/source "\$ROOT_DIR\/\.env"/.test(connectorFixtureRestartHelper)
-  || !/export DEEPBANK_MCPHUB_MOCK=1/.test(connectorFixtureRestartHelper)
-  || !/unset DEEPBANK_MCPHUB_URL/.test(connectorFixtureRestartHelper)
+  || !/export DEEPBANK_MCPHUB_MOCK=0/.test(connectorFixtureRestartHelper)
+  || !/DEEPBANK_MCPHUB_URL="\$MCPHUB_URL\/api\/openapi\/servers\?detail=true"/.test(connectorFixtureRestartHelper)
   || !/npm run dev:server/.test(connectorFixtureRestartHelper)) {
-  throw new Error('连接器 QA 重启脚本必须读取本地 .env、启用产品 dev mock 并只重启控制面');
+  throw new Error('连接器 QA 重启脚本必须读取本地 .env、注入 runner MCPHub Fixture 并只重启控制面');
 }
 
 if (!/source "\$ROOT_DIR\/\.env"/.test(capabilityFixtureRestartHelper)
   || !/DEEPBANK_SKILLHUB_RESOURCES_BASE_URL="\$SKILLHUB_URL"/.test(capabilityFixtureRestartHelper)
-  || !/export DEEPBANK_MCPHUB_MOCK=1/.test(capabilityFixtureRestartHelper)
+  || !/DEEPBANK_MCPHUB_URL="\$MCPHUB_URL\/api\/openapi\/servers\?detail=true"/.test(capabilityFixtureRestartHelper)
   || !/npm run dev:server/.test(capabilityFixtureRestartHelper)) {
-  throw new Error('首页能力组合重启脚本必须同时启用受控 SkillHub 和产品 dev 连接器 Fixture');
+  throw new Error('首页能力组合重启脚本必须同时启用 runner SkillHub 和 MCPHub Fixture');
+}
+
+if (!/SKILLHUB_URL_OVERRIDE="\$\{5:-\}"/.test(electronRestartHelper)
+  || !/DEEPBANK_SKILLHUB_RESOURCES_BASE_URL="\$\{DEEPBANK_SKILLHUB_RESOURCES_BASE_URL:-\}"/.test(electronRestartHelper)) {
+  throw new Error('Electron 重启脚本必须显式接收并传递当前 Case 的 SkillHub Fixture 地址');
 }
 
 const skillFixtures = Array.isArray(skillHubFixtureManifest.skills) ? skillHubFixtureManifest.skills : [];
@@ -194,6 +202,14 @@ if (pureUi.review_category !== '可信通过-用户可接受' || !pureUi.trusted
   throw new Error('纯 UI 用例不应因缺少 transcript 被判为框架问题');
 }
 
+const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({
+  id: 'SIT-HOME-056',
+  steps: [{ action: '输入删除一个附件后发送', status: 'passed' }],
+}));
+if (inputOnlyWithSendWord.review_category !== '可信通过-用户可接受' || !inputOnlyWithSendWord.trusted) {
+  throw new Error('仅输入动作名称包含“发送”时不应要求会话 reply-delta/transcript');
+}
+
 const preConversationBug = reviewCaseCredibility(reviewFixture({
   id: 'SIT-SKILL-025',
   status: 'failed',
@@ -227,9 +243,22 @@ if (environmentBlocked.review_category !== '可信阻塞-环境或数据' || !en
 
 if (obviousDuplicateEvidence('新建文件 first.md\n新建文件 first.md')) throw new Error('正常文件工具进度不应判为重复');
 if (obviousDuplicateEvidence('错误码：blocked_private_network\n错误码：blocked_private_network')) throw new Error('分地址安全错误码不应判为重复');
+if (obviousDuplicateEvidence('▼          ▼          ▼\n▼          ▼          ▼')) throw new Error('流程图方向符号不应判为重复正文');
 if (!obviousDuplicateEvidence('这是一段确实重复的用户可见正文。\n这是一段确实重复的用户可见正文。')) throw new Error('真实重复正文应被识别');
 if (rawArtifactEventLeakEvidence('成果已生成，请在成果区查看。')) throw new Error('用户可读的成果描述不应判为内部泄漏');
 if (!rawArtifactEventLeakEvidence('{"kind":"artifact","artifact":{"path":"a.md"}}')) throw new Error('序列化成果事件应被识别');
+
+const promptBoundReply = latestAssistantReplyForPrompt({
+  messages: [
+    { role: 'user', text: '旧问题' },
+    { role: 'assistant', text: '旧回复' },
+    { role: 'user', text: '报名人数是多少？' },
+    { role: 'assistant', text: '报名人数是 100 人。' },
+  ],
+}, '报名人数是多少？');
+if (promptBoundReply !== '报名人数是 100 人。') throw new Error(`回复必须按本轮用户消息绑定，实际=${promptBoundReply}`);
+if (isSuccessfulSendStep({ action: '输入删除一个附件后发送', status: 'passed' })) throw new Error('输入动作名称包含“发送”时不能计为真实发送');
+if (!isSuccessfulSendStep({ action: '发送删除附件后的问题', status: 'passed' })) throw new Error('明确以“发送”开头的动作应计为真实发送');
 
 const upstreamServer = http.createServer((req, res) => {
   if (req.url?.startsWith('/api/capabilities')) {
@@ -320,6 +349,20 @@ try {
 } finally {
   await proxy.close();
   await new Promise((resolve) => upstreamServer.close(resolve));
+}
+
+const connectorFixtureServer = await createConnectorRegressionServer();
+try {
+  const catalog = await fetch(`${connectorFixtureServer.url}/api/openapi/servers?detail=true`).then((response) => response.json());
+  const servers = catalog?.data?.servers || [];
+  if (!servers.find((item) => item.name === 'dev_healthy' && item.status === 'connected')) throw new Error('连接器 Fixture 缺少 healthy 条目');
+  if (!servers.find((item) => item.name === 'dev_unreachable')) throw new Error('连接器 Fixture 缺少 unreachable 条目');
+  if (!servers.find((item) => item.name === 'dev_needs_auth' && item.status === 'oauth_required')) throw new Error('连接器 Fixture 缺少 needs_auth 条目');
+  const healthyProbe = await fetch(`${connectorFixtureServer.url}/mcp/healthy`, { method: 'POST', body: '{}' });
+  const unreachableProbe = await fetch(`${connectorFixtureServer.url}/mcp/unreachable`, { method: 'POST', body: '{}' });
+  if (healthyProbe.status !== 200 || unreachableProbe.status !== 503) throw new Error('连接器 Fixture 健康探测终态错误');
+} finally {
+  await connectorFixtureServer.close();
 }
 
 const fixtureSmokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-skillhub-fixture-'));

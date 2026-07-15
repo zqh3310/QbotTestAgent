@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # QA-only helper: restart the already-built local QBot control plane with the
-# product-owned dev connector catalog (healthy / unreachable / needs_auth).
+# runner-owned connector catalog (healthy / unreachable / needs_auth).
 # No deepbankV2 file is modified; the normal restart command restores .env.
 set -euo pipefail
 
 ROOT_DIR="${1:?deepbankV2 root is required}"
-DEEPBANK_HOME_OVERRIDE="${2-}"
+MCPHUB_URL="${2:?MCPHub fixture URL is required}"
+DEEPBANK_HOME_OVERRIDE="${3-}"
 
 cd "$ROOT_DIR"
 
@@ -24,9 +25,9 @@ PID_FILE="$PID_DIR/dev-server.pid"
 export DEEPBANK_HOME
 export DEEPBANK_ENV=dev
 export DEEPBANK_E2E=1
-export DEEPBANK_MCPHUB_MOCK=1
-unset DEEPBANK_MCPHUB_URL
-unset DEEPBANK_MCPHUB_BASE_URL
+export DEEPBANK_MCPHUB_MOCK=0
+export DEEPBANK_MCPHUB_URL="$MCPHUB_URL/api/openapi/servers?detail=true"
+export DEEPBANK_MCPHUB_BASE_URL="$MCPHUB_URL"
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
@@ -62,9 +63,9 @@ nohup env \
   DEEPBANK_HOME="$DEEPBANK_HOME" \
   DEEPBANK_ENV=dev \
   DEEPBANK_E2E=1 \
-  DEEPBANK_MCPHUB_MOCK=1 \
-  DEEPBANK_MCPHUB_URL= \
-  DEEPBANK_MCPHUB_BASE_URL= \
+  DEEPBANK_MCPHUB_MOCK=0 \
+  DEEPBANK_MCPHUB_URL="$MCPHUB_URL/api/openapi/servers?detail=true" \
+  DEEPBANK_MCPHUB_BASE_URL="$MCPHUB_URL" \
   npm run dev:server >"$LOG_DIR/dev-server.log" 2>&1 &
 
 server_pid="$!"
@@ -72,7 +73,7 @@ printf '%s\n' "$server_pid" > "$PID_FILE"
 
 for _ in {1..160}; do
   if curl -fsS "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
-    printf 'control plane restarted pid=%s connector_fixture=dev-mock\n' "$server_pid"
+    printf 'control plane restarted pid=%s connector_fixture=%s\n' "$server_pid" "$MCPHUB_URL"
     exit 0
   fi
   if ! kill -0 "$server_pid" 2>/dev/null; then
