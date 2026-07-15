@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "namespace": "global",
+  "version": "1.0.0",
+  "skills": [
+    {
+      "slug": "qa-python-runtime",
+      "title": "QA Python Runtime",
+      "description": "包含 Python 脚本且无第三方依赖的隔离运行时 QA Fixture",
+      "archive": "python_runtime",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-node-runtime",
+      "title": "QA Node Runtime",
+      "description": "显式声明 Node 且无第三方依赖的隔离运行时 QA Fixture",
+      "archive": "node_runtime",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-version-rollback",
+      "title": "QA Version Rollback",
+      "description": "先安装 1.0.0、更新到 2.0.0 后验证回退的 QA Fixture",
+      "archive": "valid",
+      "versions": ["1.0.0", "2.0.0"],
+      "dependencies": []
+    },
+    {
+      "slug": "qa-uninstall-failure",
+      "title": "QA Uninstall Failure",
+      "description": "卸载接口受控失败后必须保留技能的 QA Fixture",
+      "archive": "valid",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-runtime-retryable",
+      "title": "QA Runtime Retryable",
+      "description": "同版本拒装后允许用户显式重试的 QA Fixture",
+      "archive": "audit_rejected",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-audit-terminal",
+      "title": "QA Audit Terminal",
+      "description": "审计硬拒后自动对账不得重试的 QA Fixture",
+      "archive": "audit_rejected",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-uninstall-rejected",
+      "title": "QA Uninstall Rejected",
+      "description": "卸载应同步清理本机未就绪 overlay 的 QA Fixture",
+      "archive": "valid",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-dep-root-success",
+      "title": "QA Dependency Root Success",
+      "description": "安装时级联两个必填依赖的 QA Fixture",
+      "archive": "valid",
+      "dependencies": ["qa-dep-leaf-a", "qa-dep-leaf-b"]
+    },
+    { "slug": "qa-dep-leaf-a", "title": "QA Dependency Leaf A", "description": "级联成功依赖 A", "archive": "valid", "dependencies": [] },
+    { "slug": "qa-dep-leaf-b", "title": "QA Dependency Leaf B", "description": "级联成功依赖 B", "archive": "valid", "dependencies": [] },
+    {
+      "slug": "qa-dep-root-existing",
+      "title": "QA Dependency Root Existing",
+      "description": "已安装依赖不得重复安装的 QA Fixture",
+      "archive": "valid",
+      "dependencies": ["qa-dep-leaf-existing"]
+    },
+    { "slug": "qa-dep-leaf-existing", "title": "QA Dependency Leaf Existing", "description": "预先安装的依赖", "archive": "valid", "dependencies": [] },
+    {
+      "slug": "qa-dep-root-failure",
+      "title": "QA Dependency Root Failure",
+      "description": "依赖失败必须阻断根技能的 QA Fixture",
+      "archive": "valid",
+      "dependencies": ["qa-dep-leaf-failure"]
+    },
+    { "slug": "qa-dep-leaf-failure", "title": "QA Dependency Leaf Failure", "description": "下载失败的必填依赖", "archive": "download_failure", "dependencies": [] },
+    {
+      "slug": "qa-dep-root-cycle",
+      "title": "QA Dependency Root Cycle",
+      "description": "循环依赖必须 fail-closed 的 QA Fixture",
+      "archive": "valid",
+      "dependencies": ["qa-dep-cycle-b"]
+    },
+    { "slug": "qa-dep-cycle-b", "title": "QA Dependency Cycle B", "description": "回指根技能形成循环", "archive": "valid", "dependencies": ["qa-dep-root-cycle"] }
+  ]
+}

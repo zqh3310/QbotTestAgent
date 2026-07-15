@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { ensureDir, slugify, writeJsonFile, writeTextFile } from './fs.mjs';
 import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
 
@@ -825,6 +826,7 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
     finalizeState(state);
     return await finishCase({ page, state, caseDir });
   } catch (error) {
+    page = runtime?.page || page;
     state.screenshots.error = await shot(page, caseDir, '99-error').catch((err) => ({ error: err.message }));
     const message = error.message || String(error);
     if (isCdpDisconnectedMessage(message)) markFailed(state, message, 'automation_error');
@@ -878,6 +880,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
     const waitConfig = replyWaitConfig(testCase, timeoutMs);
     const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
       ignoredText: [turn.prompt, testCase.scenario, testCase.test_data],
+      expectedUserText: turn.prompt,
       state,
       caseDir,
       label: turn.label || `第 ${turnNo} 轮`,
@@ -1058,13 +1061,14 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-AUTH-001') return executeAuthCase({ page, state, testCase, caseDir, selectors, options, playwright });
   if (id === 'SIT-AUTH-003') return executeSitAuth003({ page, state, caseDir, options, runtime });
   if (id === 'SIT-AUTH-005') return executeSitAuth005({ page, state, caseDir });
-  if (['SIT-HOME-001', 'SIT-HOME-003', 'SIT-HOME-004', 'SIT-HOME-005'].includes(id)) {
+  if (['SIT-HOME-004', 'SIT-HOME-005', 'SIT-HOME-006', 'SIT-HOME-007', 'SIT-HOME-008', 'SIT-HOME-009'].includes(id)) {
+    return executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
+  }
+  if (['SIT-HOME-001', 'SIT-HOME-003'].includes(id)) {
     return executeSitHomeAbilityCombination({ page, state, testCase, caseDir, timeoutMs });
   }
   if (id === 'SIT-HOME-002') return executeSitHome002({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-HOME-006') return executeSitHome006({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-HOME-007') return executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-HOME-008') return executeSitHomeConnectorOnly({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-HOME-010') return executeSitHomeAutoAbility({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-011') return executeSitHomeExpertToGeneral({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-012') return executeSitHomeWorkModes({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HOME-013') return executeSitHomeSafetyLevelsBeforeTask({ page, state, caseDir });
@@ -1072,7 +1076,6 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-HOME-016') return executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   if (id === 'SIT-HOME-023') return executeSitHomeStopGeneration({ page, state, caseDir });
   if (id === 'SIT-HOME-027') return executeSitHomeEmptySend({ page, state, caseDir });
-  if (id === 'SIT-HOME-029') return executeSitHomePromptEnhance({ page, state, caseDir });
   if (['SIT-HOME-042', 'SIT-HOME-043', 'SIT-HOME-044', 'SIT-HOME-045'].includes(id)) {
     return executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir });
   }
@@ -1101,7 +1104,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-EXPERT-012') return executeSitExpertRecentSummon({ page, state, caseDir });
   if (id === 'SIT-EXPERT-013') return executeSitExpertDeleteCreated({ page, state, caseDir });
   if (id === 'SIT-EXPERT-014') return executeExpertSmoke005({ page, state, caseDir });
-  if (id === 'SIT-EXPERT-015') return executeSitExpertEmptyMarket({ page, state, caseDir });
+  if (id === 'SIT-EXPERT-015') return executeSitExpertEmptyMarket({ page, state, caseDir, options, runtime });
   if (id === 'SIT-EXPERT-016') return executeSitExpertLongPersonaCreate({ page, state, caseDir });
   if (id === 'SIT-EXPERT-017') return executeSitExpertDuplicateName({ page, state, caseDir });
   if (id === 'SIT-EXPERT-018') return executeSitExpertCancelCreate({ page, state, caseDir });
@@ -1112,8 +1115,9 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-001') return executeSkillSmoke001({ page, state, caseDir });
   if (id === 'SIT-SKILL-002') return executeSitSkillInstall({ page, state, caseDir });
   if (id === 'SIT-SKILL-003') return executeSkillSmoke005({ page, state, caseDir });
-  if (id === 'SIT-SKILL-004') return executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'python' });
-  if (id === 'SIT-SKILL-005') return executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'node' });
+  if (id === 'SIT-SKILL-004' || id === 'SIT-SKILL-005' || id === 'SIT-SKILL-015' || id === 'SIT-SKILL-022') {
+    return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime });
+  }
   if (id === 'SIT-SKILL-006') return executeSkillSmoke009({ page, state, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-007') return executeSkillSmoke007({ page, state, caseDir });
   if (id === 'SIT-SKILL-008') return executeSkillSmoke003({ page, state, caseDir });
@@ -1123,25 +1127,19 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-012') return executeSitSkillAutoDeclared({ page, state, caseDir });
   if (id === 'SIT-SKILL-013') return executeSitSkillMaterialization({ page, state, caseDir });
   if (id === 'SIT-SKILL-014') return executeSitSkillUpdate({ page, state, caseDir });
-  if (id === 'SIT-SKILL-015') return executeSitSkillRollback({ page, state, caseDir });
   if (id === 'SIT-SKILL-016') return executeSitSkillHistory({ page, state, caseDir });
   if (id === 'SIT-SKILL-017') return executeSitSkillManualSelect({ page, state, caseDir });
-  if (id === 'SIT-SKILL-018') return executeSitSkillManualEmptyState({ page, state, caseDir });
+  if (id === 'SIT-SKILL-018') return executeSitSkillManualEmptyState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-SKILL-019') return executeSitSkillAutoModeConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-020') return executeSitSkillConcurrentInstall({ page, state, caseDir });
   if (id === 'SIT-SKILL-021') return executeSitSkillNetworkInterrupt({ page, state, caseDir, options, runtime });
-  if (id === 'SIT-SKILL-022') return executeSitSkillDeleteFailure({ page, state, caseDir });
   if (id === 'SIT-SKILL-023') return executeSitSkillLongDescription({ page, state, caseDir });
   if (id === 'SIT-SKILL-024') return executeSitSkillExternalConnectorHint({ page, state, caseDir });
   if (id === 'SIT-SKILL-025') return executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-026') return executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-SKILL-027') return executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
-  if (id === 'SIT-SKILL-028') return executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
-  if (id === 'SIT-SKILL-029') return executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir });
-  if (id === 'SIT-SKILL-030') return executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir });
-  if (id === 'SIT-SKILL-031') return executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir });
-  if (id === 'SIT-SKILL-032') return executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir });
-  if (id === 'SIT-SKILL-033') return executeSitSkillDependencyCycle({ page, state, testCase, caseDir });
+  if (/^SIT-SKILL-0(?:27|28|29|30|31|32|33)$/.test(id)) {
+    return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime });
+  }
   if (id === 'SIT-CONN-001') return executeSitConnectorCatalog({ page, state, caseDir });
   if (id === 'SIT-CONN-002') return executeSitConnectorCatalog({ page, state, caseDir });
   if (id === 'SIT-CONN-003') return executeSitConnectorModes({ page, state, caseDir });
@@ -1149,17 +1147,17 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-CONN-005') return executeSitConnectorDetails({ page, state, caseDir });
   if (id === 'SIT-CONN-006') return executeSitConnectorDefaultAutoMode({ page, state, caseDir });
   if (id === 'SIT-CONN-007') return executeSitConnectorToolToggle({ page, state, caseDir });
-  if (id === 'SIT-CONN-008') return executeSitConnectorRetry({ page, state, caseDir });
-  if (id === 'SIT-CONN-009') return executeSitConnectorAuthDialog({ page, state, caseDir });
+  if (id === 'SIT-CONN-008' || id === 'SIT-CONN-009' || id === 'SIT-CONN-018') {
+    return executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime });
+  }
   if (id === 'SIT-CONN-010') return executeSitConnectorDisabledConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-011') return executeSitConnectorAutoConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-012') return executeSitConnectorUnhealthySelectedState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-013') return executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
-  if (id === 'SIT-CONN-014') return executeSitConnectorEmptyState({ page, state, caseDir });
+  if (id === 'SIT-CONN-014') return executeSitConnectorEmptyState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-015') return executeSitConnectorPrivateNetworkGuard({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-016') return executeSitConnectorChartConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-017') return executeSitConnectorAddEntryScope({ page, state, caseDir });
-  if (id === 'SIT-CONN-018') return executeSitConnectorManualUnhealthyOption({ page, state, caseDir });
   if (/^SIT-ART-/i.test(id)) {
     return executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   }
@@ -1324,6 +1322,7 @@ async function executeSitHomeSafetyLevelsBeforeTask({ page, state, caseDir }) {
     action: '打开输入区【安全级别】菜单',
     matchPattern: /M1|M2|M3|M4|安全|当前/,
     expectedLabels: ['M1', 'M2', 'M3', 'M4'],
+    menuKind: 'safety',
   });
   const levels = await page.evaluate(() => ['M1', 'M2', 'M3', 'M4'].map((level) => {
     const el = document.querySelector(`[data-testid="composer-safety-level-option-${level}"]`);
@@ -1363,6 +1362,7 @@ async function executeSitHomeSafetyLevelAfterTask({ page, state, testCase, caseD
     action: '任务创建后打开【安全级别】菜单',
     matchPattern: /M1|M2|M3|M4|当前/,
     expectedLabels: ['M1', 'M2', 'M3', 'M4'],
+    menuKind: 'safety',
   });
   state.screenshots.home_014_safety_after_task = await shot(page, caseDir, 'home-014-safety-after-task');
   const alternatives = await page.evaluate((activeTier) => ['M1', 'M2', 'M3', 'M4'].filter((level) => level !== activeTier).map((level) => {
@@ -1539,7 +1539,7 @@ async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir, o
     errorMessage: '任务执行失败，请稍后重试（QBotTestAgent controlled failure）',
   }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装控制面代理会话失败注入：${control.reason}`);
+    markFailed(state, `框架无法安装控制面代理会话失败注入：${control.reason}`, 'automation_error');
     return;
   }
   const prompt = String(testCase.test_data || '').trim()
@@ -1593,7 +1593,7 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     },
   }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装控制面代理快速反馈 dry-run：${control.reason}`);
+    markFailed(state, `框架无法安装控制面代理快速反馈 dry-run：${control.reason}`, 'automation_error');
     return;
   }
   page = control.page;
@@ -1738,34 +1738,6 @@ async function executeSitHomeEmptySend({ page, state, caseDir }) {
     '输入为空时发送按钮应禁用；即使触发点击也不能增加 sendCount 或消息数。',
     disabled || unchanged,
     `disabled=${disabled}；before.sendCount=${before?.sendCount || 0}；after.sendCount=${after?.sendCount || 0}；before.messageCount=${before?.messageCount || 0}；after.messageCount=${after?.messageCount || 0}`,
-  );
-}
-
-async function executeSitHomePromptEnhance({ page, state, caseDir }) {
-  await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  const original = '帮我复盘活动';
-  await fillComposer(page, original, state, '输入待美化提示词');
-  const enhance = page.locator('.aui-composer-enhance, button[aria-label="提示词美化"], button[title="提示词美化"]').first();
-  if (!(await visible(enhance, 1500))) {
-    recordAssertion(state, '提示词美化入口', '有输入内容时应展示可点击的提示词美化入口。', false, '未找到 .aui-composer-enhance。', 'automation_error');
-    return;
-  }
-  await enhance.click({ force: true });
-  const deadline = Date.now() + 30000;
-  let enhanced = original;
-  while (Date.now() < deadline) {
-    enhanced = await composerTextValue(page);
-    if (enhanced.trim() && enhanced.trim() !== original) break;
-    await page.waitForTimeout(500);
-  }
-  state.screenshots.home_029_enhanced = await shot(page, caseDir, 'home-029-prompt-enhanced');
-  recordAssertion(
-    state,
-    '提示词美化保留原意',
-    '点击美化后输入框文本应发生变化，并仍围绕活动复盘任务。',
-    enhanced.trim() !== original && /活动|复盘/.test(enhanced),
-    `原文=${original}；美化后=${clip(enhanced, 360)}`,
   );
 }
 
@@ -2215,6 +2187,13 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
     if (!await summonFirstExpertForCase(page, state, caseDir)) return;
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
     if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  } else if (id === 'SIT-HOME-009') {
+    if (!await selectGeneralAssistantForCase(page, state, caseDir)) return;
+    await openNewTask(page, state);
+    if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+    if (!await selectFirstManualSkill(page, state, caseDir)) return;
+    if (!await selectFirstManualConnector(page, state, caseDir)) return;
+    if (!await assertManualSkillSelectionPresent(page, state, caseDir, '选择连接器后手动技能仍保留')) return;
   }
 
   await page.keyboard.press('Escape').catch(() => {});
@@ -2234,6 +2213,37 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
   } else if (/技能/.test(testCase.scenario || '')) {
     recordAssertion(state, '技能选择路径已执行', '技能组合用例必须完成技能菜单手动选择或明确阻塞原因。', state.steps.some((step) => /技能/.test(step.action) && step.status === 'passed'), '已检查执行步骤中的技能选择记录。');
   }
+}
+
+async function executeSitHomeAutoAbility({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await selectGeneralAssistantForCase(page, state, caseDir)) return;
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'auto', connectorMode: 'auto' })) return;
+  const capabilities = await currentCapabilities(page);
+  const skillText = await visibleComposerToolStateText(page, 'skill');
+  const connectorText = await visibleComposerToolStateText(page, 'connector');
+  const skillAuto = /自动/.test(skillText);
+  const connectorAuto = capabilities?.connectorRouting?.mode === 'auto' || /自动/.test(connectorText);
+  state.screenshots.home_010_auto_ability = await shot(page, caseDir, 'home-010-auto-ability-before-send');
+  recordAssertion(
+    state,
+    '技能和连接器自动模式前置',
+    '发送活动数据前，技能与连接器都必须真实处于自动模式，且不挂专家身份。',
+    skillAuto && connectorAuto && !String(capabilities?.currentExpert || '').trim(),
+    `skill=${clip(skillText, 160)}；connector=${clip(connectorText, 160)}；mode=${capabilities?.connectorRouting?.mode || '未读取'}；expert=${capabilities?.currentExpert || '空'}`,
+    'automation_error',
+  );
+  if (!skillAuto || !connectorAuto || String(capabilities?.currentExpert || '').trim()) return;
+  const prompt = userPromptFromCase(testCase, '曝光12000，点击860，报名240，到场170，成交28。请做活动复盘。');
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '自动能力活动复盘' });
+  recordAssertion(
+    state,
+    '自动能力按需回复',
+    '普通活动数据复盘应给出业务结论和指标分析，不应要求用户选择模型、技能或连接器。',
+    /曝光|点击|报名|到场|成交|转化|复盘|指标/.test(reply.deltaText) && !/请选择.*(?:模型|技能|连接器)|需要你.*选择.*(?:技能|连接器)/.test(reply.deltaText),
+    clip(reply.deltaText, 420),
+  );
 }
 
 function expectsDisabledConnectorScenario(testCase) {
@@ -2542,36 +2552,41 @@ async function executeSitExpertRecentSummon({ page, state, caseDir }) {
   );
 }
 
-async function executeSitExpertEmptyMarket({ page, state, caseDir }) {
-  await openExpertsPage(page, state, caseDir);
-  state.screenshots.expert_015_market = await shot(page, caseDir, 'expert-015-market-current-env');
-  const text = await mainSurfaceText(page);
-  const marketText = await expertMarketText(page);
-  const devLeak = /seed-experts|node\s+.*seed|server\/|npm\s+run|pnpm|yarn|npx|脚本|命令/.test(`${marketText}\n${text}`);
-  const emptyState = /暂无|没有|空|还没有|无专家|无数据/.test(marketText || text);
-  const hasMarketCards = await page.locator('[data-testid="experts-view"] .exp-card, [data-testid="experts-view"] .feat-card, main .exp-card, main .feat-card')
-    .first()
-    .isVisible({ timeout: 1000 })
-    .catch(() => false);
-  recordStep(
-    state,
-    '进入专家市场观察当前环境数据状态',
-    '该用例前置要求无专家市场数据；当前环境如果仍有市场专家，不能伪造空市场验证。',
-    `emptyState=${emptyState}；hasMarketCards=${hasMarketCards}；devLeak=${devLeak}；marketText=${clip(marketText || text, 320)}`,
-    'passed',
-    state.screenshots.expert_015_market,
-  );
-  if (!emptyState && hasMarketCards) {
-    markBlocked(state, '该用例要求“无专家市场数据”的 dev 环境；当前账号/环境专家市场存在专家卡片，无法到达空市场文案判断点。');
+async function executeSitExpertEmptyMarket({ page, state, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'EXPERT-015 专家空市场代理', initiallyArmed: true, rules: [{
+    id: 'expert-015-empty-market',
+    method: 'GET',
+    pathExact: '/api/experts/catalog',
+    mode: 'transform-json',
+    transform: 'experts-empty-market',
+  }] });
+  if (!control.ok) {
+    markFailed(state, `框架无法构造专家空市场：${control.reason}`, 'automation_error');
     return;
   }
-  recordAssertion(
-    state,
-    '专家市场空状态文案',
-    '空市场状态应面向普通用户，不应暴露 seed 脚本、server 路径或开发命令。',
-    emptyState && !devLeak,
-    `emptyState=${emptyState}；devLeak=${devLeak}；marketText=${clip(marketText || text, 360)}`,
-  );
+  try {
+    page = control.page;
+    await openExpertsPage(page, state, caseDir);
+    state.screenshots.expert_015_market = await shot(page, caseDir, 'expert-015-market-controlled-empty');
+    const text = await mainSurfaceText(page);
+    const marketText = await expertMarketText(page);
+    const devLeak = /seed-experts|node\s+.*seed|server\/|npm\s+run|pnpm|yarn|npx|脚本|命令/.test(`${marketText}\n${text}`);
+    const emptyState = /暂无|没有|空|还没有|无专家|无数据/.test(marketText || text);
+    const marketCards = await page.locator('[data-testid="experts-view"] .market-tabs ~ .exp-grid .exp-card, [data-testid="experts-view"] .market-tabs + .exp-grid .exp-card').count().catch(() => 0);
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'expert-015-empty-market');
+    const modified = hits.reduce((total, item) => total + Number(item.modified || 0), 0);
+    state.artifacts.expert_015_empty_fixture = { route_hits: hits.length, modified, market_cards: marketCards };
+    recordStep(state, '构造专家市场空数据并进入专家页', '框架应只改写本 Case 的市场目录响应，不删除真实专家。', `routeHits=${hits.length}；modified=${modified}；emptyState=${emptyState}；marketCards=${marketCards}；marketText=${clip(marketText || text, 320)}`, hits.length > 0 && modified > 0 && marketCards === 0 ? 'passed' : 'failed', state.screenshots.expert_015_market, hits.length > 0 && modified > 0 && marketCards === 0 ? '' : 'automation_error');
+    recordAssertion(
+      state,
+      '专家市场空状态文案',
+      '空市场状态应面向普通用户，不应暴露 seed 脚本、server 路径或开发命令。',
+      hits.length > 0 && modified > 0 && emptyState && !devLeak,
+      `emptyState=${emptyState}；devLeak=${devLeak}；marketText=${clip(marketText || text, 360)}`,
+    );
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
 }
 
 async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase, caseDir, timeoutMs }) {
@@ -2603,7 +2618,7 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
   const general = page.locator('[data-testid="expert-general-assistant"]').first();
   if (!(await visible(general, 2500))) {
     state.screenshots.expert_022_general_missing = await shot(page, caseDir, 'expert-022-general-missing');
-    markBlocked(state, '专家页未展示通用助手，无法执行从专家切回通用助手的关键步骤。');
+    recordAssertion(state, '专家页通用助手入口', '专家会话后返回专家页，应始终能看到通用助手入口。', false, clip(await mainSurfaceText(page), 360));
     return;
   }
   await general.click({ force: true }).catch(async () => general.evaluate((el) => el.click()));
@@ -2932,6 +2947,7 @@ async function executeSitSkillInstall({ page, state, caseDir }) {
 
 async function executeSitSkillRuntimeInstall({ page, state, caseDir, runtime }) {
   const label = runtime === 'node' ? 'Node' : 'Python';
+  const fixtureMarker = runtime === 'node' ? 'qa-node-runtime' : 'qa-python-runtime';
   const runtimePattern = runtime === 'node'
     ? /\bNode(?:\.js)?\b|\bnodejs\b|\bnpm\b|package\.json|JavaScript|TypeScript/i
     : /\bPython\b|\bpip\b|requirements\.txt|pyproject\.toml|\.py\b/i;
@@ -2943,7 +2959,7 @@ async function executeSitSkillRuntimeInstall({ page, state, caseDir, runtime }) 
   for (let index = 0; index < count; index += 1) {
     const card = cards.nth(index);
     const text = await card.innerText({ timeout: 800 }).catch(() => '');
-    if (runtimePattern.test(text)) {
+    if (new RegExp(escapeRegExp(fixtureMarker), 'i').test(text) && runtimePattern.test(text)) {
       target = card;
       targetText = text;
       break;
@@ -2951,13 +2967,13 @@ async function executeSitSkillRuntimeInstall({ page, state, caseDir, runtime }) 
   }
   if (!target) {
     state.screenshots[`skill_${runtime}_runtime_missing`] = await shot(page, caseDir, `skill-${runtime}-runtime-missing`);
-    markBlocked(state, `技能市场未找到可识别为 ${label} runtime 的技能卡片，无法验证 ${label} 隔离运行时安装链路。`);
+    markFailed(state, `QA SkillHub 未返回 ${fixtureMarker}，或卡片未声明 ${label} runtime，受控测试数据不可用。`, 'automation_error');
     return;
   }
   const install = target.locator('.skill-install:not([disabled])').first();
   if (!(await visible(install, 1500))) {
     state.screenshots[`skill_${runtime}_runtime_no_install`] = await shot(page, caseDir, `skill-${runtime}-runtime-no-install`);
-    markBlocked(state, `${label} runtime 技能卡片存在，但没有可点击安装入口；卡片内容：${clip(targetText, 220)}`);
+    recordAssertion(state, `${label} runtime 技能可安装`, `${fixtureMarker} 是合法且未安装的受控 Fixture，卡片应展示可点击安装入口。`, false, clip(targetText, 300));
     return;
   }
   const dialog = await captureDialogDuring(page, async () => install.click({ force: true }), 8000);
@@ -3073,7 +3089,16 @@ async function executeSitSkillAuthError({ page, state, caseDir, options, runtime
 async function restartWithSkillHubFault({ state, caseDir, options, runtime, label, overrideUrl, cleanup = null }) {
   const baseCommand = String(options['restart-command'] || '').trim();
   if (!baseCommand) return { ok: false, reason: `${label}需要可控 restart-command。`, cleanup };
-  const command = `QBOT_QA_SKILLHUB_BASE_URL_OVERRIDE=${shellQuote(overrideUrl)} ${baseCommand}`;
+  const qbotRoot = inferQbotRootForElectronRestart(options);
+  if (!qbotRoot) return { ok: false, reason: `${label}无法从 qbot-root/restart-cwd/restart-command 推断当前 deepbankV2 根目录。`, cleanup };
+  const helper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-skillhub-control-plane.sh');
+  if (!fs.existsSync(helper)) return { ok: false, reason: `${label}缺少 QA SkillHub 控制面重启脚本：${helper}`, cleanup };
+  const qbotHome = inferQbotHomeForElectronRestart(options);
+  const command = [
+    baseCommand,
+    '&&',
+    [helper, qbotRoot, overrideUrl, qbotHome].map(shellQuote).join(' '),
+  ].join(' ');
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label, commandOverride: command });
   if (!restarted.ok) return { ...restarted, cleanup };
   const workbench = await waitForQbotWorkbench(restarted.page, 90000);
@@ -3108,6 +3133,180 @@ async function createSkillHubFaultServer(statusCode) {
   return {
     url: `http://127.0.0.1:${address.port}`,
     close: () => new Promise((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections?.();
+    }),
+  };
+}
+
+export async function createSkillHubRegressionServer(caseDir) {
+  const manifestPath = path.resolve(process.cwd(), 'testfixtures', 'skillhub-regression', 'manifest.json');
+  const templatePath = path.resolve(process.cwd(), 'testfixtures', 'skillhub-regression', 'SKILL.template.md');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const template = fs.readFileSync(templatePath, 'utf8');
+  const fixtureRoot = path.join(caseDir, 'skillhub-regression-fixtures');
+  ensureDir(fixtureRoot);
+  const skills = manifest.skills.map((item, index) => ({
+    ...item,
+    namespace: manifest.namespace || 'global',
+    versions: Array.isArray(item.versions) && item.versions.length ? item.versions : [manifest.version || '1.0.0'],
+    version: (Array.isArray(item.versions) && item.versions.length ? item.versions[0] : manifest.version) || '1.0.0',
+    id: 70000 + index,
+    versionId: 71000 + index,
+    fingerprint: `sha256:qbot-test-agent-${item.slug}-${(Array.isArray(item.versions) && item.versions.length ? item.versions[0] : manifest.version) || '1.0.0'}`,
+  }));
+  const archives = new Map();
+  for (const skill of skills) {
+    if (skill.archive === 'download_failure') continue;
+    for (const version of skill.versions) {
+      const root = path.join(fixtureRoot, skill.slug, version);
+      ensureDir(root);
+      let skillMd = template
+        .replaceAll('{{slug}}', skill.slug)
+        .replaceAll('{{title}}', `${skill.title} ${version}`)
+        .replaceAll('{{description}}', `${skill.description}；fixtureVersion=${version}`);
+      if (skill.archive === 'node_runtime') {
+        skillMd = skillMd.replace(/^---\n/, '---\nnode: true\n');
+      }
+      writeTextFile(path.join(root, 'SKILL.md'), skillMd);
+      if (skill.archive === 'audit_rejected') {
+        writeTextFile(path.join(root, 'run.py'), 'from playwright.sync_api import sync_playwright\n');
+      } else if (skill.archive === 'python_runtime') {
+        writeTextFile(path.join(root, 'run.py'), 'import json\nprint(json.dumps({"runtime": "python", "isolated": True}))\n');
+      } else if (skill.archive === 'node_runtime') {
+        writeTextFile(path.join(root, 'package.json'), JSON.stringify({ name: skill.slug, private: true, version, dependencies: {} }, null, 2));
+        writeTextFile(path.join(root, 'run.js'), 'console.log(JSON.stringify({ runtime: "node", isolated: true }));\n');
+      }
+      const archivePath = path.join(fixtureRoot, `${skill.slug}-${version}.zip`);
+      const zipped = spawnSync('/usr/bin/zip', ['-q', '-r', archivePath, '.'], { cwd: root, encoding: 'utf8' });
+      if (zipped.status !== 0 || !fs.existsSync(archivePath)) {
+        throw new Error(`构建 SkillHub QA Fixture 失败：${skill.slug}@${version}；${zipped.stderr || zipped.stdout || `exit=${zipped.status}`}`);
+      }
+      archives.set(`${skill.slug}@${version}`, fs.readFileSync(archivePath));
+    }
+  }
+
+  const state = {
+    hits: [],
+    activeVersions: Object.fromEntries(skills.map((skill) => [skill.slug, skill.version])),
+  };
+  const versionFor = (skill, requested = '') => {
+    const candidate = String(requested || state.activeVersions[skill.slug] || skill.version);
+    return skill.versions.includes(candidate) ? candidate : skill.version;
+  };
+  const versionIdFor = (skill, version) => skill.versionId + Math.max(0, skill.versions.indexOf(version));
+  const fingerprintFor = (skill, version) => `sha256:qbot-test-agent-${skill.slug}-${version}`;
+  const writeJson = (res, status, payload) => {
+    const body = Buffer.from(JSON.stringify(payload));
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length) });
+    res.end(body);
+  };
+  const discovery = () => skills.map((skill) => {
+    const version = versionFor(skill);
+    const versionId = versionIdFor(skill, version);
+    return ({
+    id: skill.id,
+    namespace: skill.namespace,
+    slug: skill.slug,
+    displayName: skill.title,
+    summary: `${skill.description} (${skill.slug})`,
+    visibility: 'PUBLIC',
+    status: 'ACTIVE',
+    hidden: false,
+    userRelations: [],
+    materializationStatus: 'not_materialized',
+    labels: ['qa-regression'],
+    publishedVersion: { id: versionId, version, status: 'PUBLISHED' },
+    headlineVersion: { id: versionId, version, status: 'PUBLISHED' },
+    resolutionMode: 'PUBLISHED',
+    updatedAt: '2026-07-15T00:00:00Z',
+    });
+  });
+  const server = http.createServer((req, res) => {
+    const url = new URL(String(req.url || '/'), 'http://127.0.0.1');
+    const requestPath = url.pathname;
+    state.hits.push({ method: req.method || 'GET', path: `${requestPath}${url.search}`, at: Date.now() });
+    if (requestPath === '/api/web/skills') {
+      const items = discovery();
+      return writeJson(res, 200, { data: { items, total: items.length, page: 0, size: 100 } });
+    }
+    if (requestPath === '/api/v1/me/skills' || requestPath === '/api/web/me/skills') return writeJson(res, 200, { data: { items: [], total: 0, page: 0, size: 100 } });
+    if (/\/labels$/.test(requestPath)) return writeJson(res, 200, { data: { items: [{ slug: 'qa-regression', name: 'QA Regression' }] } });
+
+    const match = requestPath.match(/^\/api\/v1\/skills\/([^/]+)\/([^/]+)(.*)$/);
+    if (!match) return writeJson(res, 404, { error: `unknown fixture route: ${requestPath}` });
+    const namespace = decodeURIComponent(match[1]);
+    const slug = decodeURIComponent(match[2]);
+    const tail = match[3] || '';
+    const skill = skills.find((item) => item.namespace === namespace && item.slug === slug);
+    if (!skill) return writeJson(res, 404, { error: `fixture skill not found: ${namespace}/${slug}` });
+    const base = `/api/v1/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}`;
+    const requestedVersion = String(url.searchParams.get('version') || '');
+    const resolvedVersion = versionFor(skill, requestedVersion);
+    const resolvedVersionId = versionIdFor(skill, resolvedVersion);
+    const resolvedFingerprint = fingerprintFor(skill, resolvedVersion);
+    if (!tail) {
+      return writeJson(res, 200, { data: { id: skill.id, namespace, slug, displayName: skill.title, summary: skill.description, visibility: 'PUBLIC', status: 'ACTIVE', hidden: false } });
+    }
+    if (tail === '/resolve') {
+      return writeJson(res, 200, { data: { skillId: skill.id, namespace, slug, version: resolvedVersion, versionId: resolvedVersionId, fingerprint: resolvedFingerprint, matched: true, downloadUrl: `${base}/versions/${resolvedVersion}/download` } });
+    }
+    const versionMatch = tail.match(/^\/versions\/([^/]+)(\/files|\/download)?$/);
+    if (!versionMatch) return writeJson(res, 404, { error: `unknown fixture tail: ${tail}` });
+    const routeVersion = decodeURIComponent(versionMatch[1]);
+    if (!skill.versions.includes(routeVersion)) return writeJson(res, 404, { error: `fixture version not found: ${slug}@${routeVersion}` });
+    const routeVersionId = versionIdFor(skill, routeVersion);
+    const routeFingerprint = fingerprintFor(skill, routeVersion);
+    const routeSuffix = versionMatch[2] || '';
+    if (!routeSuffix) {
+      return writeJson(res, 200, { data: {
+        id: routeVersionId,
+        version: routeVersion,
+        status: 'PUBLISHED',
+        fingerprint: routeFingerprint,
+        manifestJson: { name: skill.slug, entry: 'SKILL.md', description: skill.description },
+        parsedMetadataJson: {
+          dependencies: skill.dependencies.map((dependency) => ({ namespace: skill.namespace, slug: dependency, required: true, version: routeVersion })),
+          runtimeUseCapabilities: ['skill_prompt'],
+        },
+      } });
+    }
+    if (routeSuffix === '/files') {
+      const files = [{ filePath: 'SKILL.md', fileSize: 256, contentType: 'text/markdown', sha256: `sha256:${slug}-skill-md` }];
+      if (skill.archive === 'audit_rejected' || skill.archive === 'python_runtime') files.push({ filePath: 'run.py', fileSize: 96, contentType: 'text/x-python', sha256: `sha256:${slug}-run-py` });
+      if (skill.archive === 'node_runtime') {
+        files.push({ filePath: 'package.json', fileSize: 128, contentType: 'application/json', sha256: `sha256:${slug}-package-json` });
+        files.push({ filePath: 'run.js', fileSize: 96, contentType: 'text/javascript', sha256: `sha256:${slug}-run-js` });
+      }
+      return writeJson(res, 200, { data: { files } });
+    }
+    if (routeSuffix === '/download') {
+      if (skill.archive === 'download_failure') return writeJson(res, 503, { error: `controlled download failure for ${slug}` });
+      const archive = archives.get(`${slug}@${routeVersion}`);
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(archive.length) });
+      res.end(archive);
+      return;
+    }
+    return writeJson(res, 404, { error: `unknown fixture tail: ${tail}` });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    manifestPath,
+    skills,
+    state,
+    setActiveVersion(slug, version) {
+      const skill = skills.find((item) => item.slug === slug);
+      if (!skill || !skill.versions.includes(version)) throw new Error(`unknown fixture version: ${slug}@${version}`);
+      state.activeVersions[slug] = version;
+      return version;
+    },
+    close: () => new Promise((resolve) => {
+      if (!server.listening) return resolve();
       server.close(() => resolve());
       server.closeAllConnections?.();
     }),
@@ -3223,16 +3422,17 @@ async function executeSitSkillUpdate({ page, state, caseDir }) {
 
 async function executeSitSkillRollback({ page, state, caseDir }) {
   await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
-  const card = await findSkillCardByText(page, /可回退版本|回退|rollback|历史版本/i);
+  const marker = 'qa-version-rollback';
+  const card = await findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i'));
   state.screenshots.skill_015_installed = await shot(page, caseDir, 'skill-015-installed-rollback-search');
   if (!card) {
-    markBlocked(state, '已安装技能列表未找到可回退版本 chip 或回退入口，无法验证版本回退。');
+    markFailed(state, `已完成 ${marker} 1.0.0 → 2.0.0 前置，但已安装列表无法定位该 Fixture。`, 'automation_error');
     return;
   }
   const text = await card.innerText({ timeout: 1500 }).catch(() => '');
-  const rollback = card.locator('button, [role="button"], .skill-revert-chip, .skill-action').filter({ hasText: /回退|可回退版本|rollback/i }).first();
+  const rollback = card.locator('.skill-revert-chip').filter({ hasText: /1\.0\.0/ }).first();
   if (!(await visible(rollback, 1000))) {
-    markBlocked(state, `找到疑似历史版本技能，但未找到可点击回退入口：${clip(text, 220)}`);
+    recordAssertion(state, '技能历史版本回退入口', '更新到 2.0.0 后，已安装卡片应展示可点击的 1.0.0 回退 chip。', false, clip(text, 300));
     return;
   }
   const dialog = await captureDialogDuringWithAction(page, async () => rollback.click({ force: true }), { accept: true, timeoutMs: 5000 });
@@ -3264,20 +3464,43 @@ async function executeSitSkillManualSelect({ page, state, caseDir }) {
   recordAssertion(state, '手动技能选中反馈', '手动选择已安装技能后，输入区应显示技能名、选中态或 badge。', Boolean(chipText.trim()) || /手动|已选|技能/.test(toolText), `chip=${clip(chipText, 160)}；tool=${clip(toolText, 160)}`);
 }
 
-async function executeSitSkillManualEmptyState({ page, state, caseDir }) {
-  if (!await openSkillMenuInNewTask(page, state)) return;
-  const manualOk = await setSkillMode(page, state, caseDir, 'manual');
-  if (!manualOk) return;
-  state.screenshots.skill_018_manual = await shot(page, caseDir, 'skill-018-manual-current-env');
-  const text = await activeMenuText(page);
-  const empty = /还没安装技能|暂无可选技能|暂无技能|去技能市场|安装技能/.test(text);
-  const hasOption = await skillManualOptionCount(page) > 0;
-  recordStep(state, '打开技能手动模式观察空状态', '该用例前置要求清空已安装测试技能；当前环境如仍有技能，不应伪造空状态。', `empty=${empty}；hasOption=${hasOption}；菜单=${clip(text, 260)}`, 'passed', state.screenshots.skill_018_manual);
-  if (hasOption && !empty) {
-    markBlocked(state, '该用例要求没有已安装技能；当前账号存在可选技能，无法到达“还没安装技能”空状态判断点。');
+async function executeSitSkillManualEmptyState({ page, state, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({
+    options,
+    runtime,
+    state,
+    caseDir,
+    label: 'SKILL-018 已安装技能空目录代理',
+    initiallyArmed: true,
+    rules: [{
+      id: 'skill-018-empty-installed',
+      method: 'GET',
+      pathPrefix: '/api/skills/catalog',
+      mode: 'transform-json',
+      transform: 'skills-empty-installed',
+    }],
+  });
+  if (!control.ok) {
+    markFailed(state, `框架无法构造“无已安装技能”视图：${control.reason}`, 'automation_error');
     return;
   }
-  recordAssertion(state, '手动模式空状态提示', '没有已安装技能时手动模式应展示“还没安装技能”或引导去技能市场。', empty, clip(text, 320));
+  try {
+    page = control.page;
+    if (!await openSkillMenuInNewTask(page, state)) return;
+    const manualOk = await setSkillMode(page, state, caseDir, 'manual');
+    if (!manualOk) return;
+    state.screenshots.skill_018_manual = await shot(page, caseDir, 'skill-018-manual-controlled-empty');
+    const text = await activeMenuText(page, 'skill');
+    const empty = /还没安装技能|暂无可选技能|暂无技能|去技能市场|安装技能/.test(text);
+    const hasOption = await skillManualOptionCount(page) > 0;
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'skill-018-empty-installed');
+    const modified = hits.reduce((total, item) => total + Number(item.modified || 0), 0);
+    state.artifacts.skill_018_empty_fixture = { route_hits: hits.length, modified };
+    recordStep(state, '构造无已安装技能并打开手动模式', '框架应仅改写当前 Case 的技能目录响应，不删除账号真实技能。', `routeHits=${hits.length}；modified=${modified}；empty=${empty}；hasOption=${hasOption}；菜单=${clip(text, 260)}`, hits.length > 0 && modified > 0 ? 'passed' : 'failed', state.screenshots.skill_018_manual, hits.length > 0 && modified > 0 ? '' : 'automation_error');
+    recordAssertion(state, '手动模式空状态提示', '没有已安装技能时手动模式应展示“还没安装技能”或引导去技能市场。', hits.length > 0 && modified > 0 && empty && !hasOption, clip(text, 320));
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
 }
 
 async function executeSitSkillAutoModeConversation({ page, state, testCase, caseDir, timeoutMs }) {
@@ -3337,7 +3560,7 @@ async function executeSitSkillNetworkInterrupt({ page, state, caseDir, options, 
     body: { ok: false, msg: '技能安装失败：网络连接中断，请重试（QBotTestAgent controlled network interruption）' },
   }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装控制面代理技能安装中断注入：${control.reason}`);
+    markFailed(state, `框架无法安装控制面代理技能安装中断注入：${control.reason}`, 'automation_error');
     return;
   }
   page = control.page;
@@ -3372,10 +3595,57 @@ async function executeSitSkillNetworkInterrupt({ page, state, caseDir, options, 
   }
 }
 
-async function executeSitSkillDeleteFailure({ page, state, caseDir }) {
-  await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
-  state.screenshots.skill_022_installed = await shot(page, caseDir, 'skill-022-installed-current-env');
-  markBlocked(state, '该用例需要准备一个通过测试环境可触发卸载失败的已安装技能；当前环境未提供失败注入或指定测试技能，不能把正常删除路径伪造成删除失败。');
+async function executeSitSkillDeleteFailure({ page, state, caseDir, options, runtime }) {
+  const marker = 'qa-uninstall-failure';
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-022 卸载失败代理', initiallyArmed: true, rules: [{
+    id: 'skill-022-uninstall-failure',
+    method: 'POST',
+    pathExact: '/api/skills/uninstall',
+    mode: 'fixed-response',
+    status: 200,
+    body: { ok: false, msg: '受控卸载失败，请稍后重试' },
+  }] });
+  if (!control.ok) {
+    markFailed(state, `框架无法启动卸载失败注入：${control.reason}`, 'automation_error');
+    return;
+  }
+  try {
+    page = control.page;
+    await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+    const card = await findSkillCardByText(page, new RegExp(marker, 'i'));
+    state.screenshots.skill_022_installed = await shot(page, caseDir, 'skill-022-installed-before-failed-delete');
+    if (!card) {
+      recordAssertion(state, '卸载失败测试技能前置', `已安装列表应保留 ${marker}。`, false, '重启代理后未找到测试技能。', 'automation_error');
+      return;
+    }
+    const remove = card.locator('.skill-del').first();
+    if (!(await visible(remove, 1200))) {
+      recordAssertion(state, '卸载失败测试技能删除入口', '测试技能应有可点击删除按钮。', false, await card.innerText().catch(() => ''), 'automation_error');
+      return;
+    }
+    const dialogs = [];
+    const onDialog = async (dialog) => {
+      dialogs.push(dialog.message());
+      await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
+    };
+    page.on('dialog', onDialog);
+    try {
+      await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
+      await page.waitForTimeout(1800);
+    } finally {
+      page.off('dialog', onDialog);
+    }
+    await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+    const retained = Boolean(await findSkillCardByText(page, new RegExp(marker, 'i')));
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'skill-022-uninstall-failure');
+    const feedback = dialogs.join(' / ');
+    state.screenshots.skill_022_after_failure = await shot(page, caseDir, 'skill-022-after-controlled-delete-failure');
+    state.artifacts.skill_022_uninstall_failure = { route_hits: hits.length, dialogs, retained };
+    recordStep(state, '确认删除并注入受控卸载失败', '请求应命中卸载失败代理，页面提示失败，原技能继续保留。', `routeHits=${hits.length}；dialogs=${feedback || '无'}；retained=${retained}`, hits.length === 1 ? 'passed' : 'failed', state.screenshots.skill_022_after_failure, hits.length === 1 ? '' : 'automation_error');
+    recordAssertion(state, '卸载失败保留原技能并提示重试', '卸载失败后原技能必须仍在已安装列表，提示应可理解且不泄露 URL/token/堆栈。', hits.length === 1 && retained && /删除失败|卸载失败|失败|重试/.test(feedback) && !/https?:|token|stack|traceback/i.test(feedback), `dialogs=${feedback || '无'}；retained=${retained}`);
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
 }
 
 async function executeSitSkillLongDescription({ page, state, caseDir }) {
@@ -3436,6 +3706,315 @@ function automationDependencyMarkers(testCase) {
   return match ? match[1].split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean) : [];
 }
 
+async function restartWithHomeCapabilityFixture({ state, caseDir, options, runtime, skillHubUrl }) {
+  const qbotRoot = inferQbotRootForElectronRestart(options);
+  if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断当前 deepbankV2 根目录。' };
+  const serverHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-capability-fixture-control-plane.sh');
+  const electronHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-electron-control-plane.sh');
+  if (!fs.existsSync(serverHelper) || !fs.existsSync(electronHelper)) {
+    return { ok: false, reason: `缺少首页能力组合 Fixture 重启脚本：server=${fs.existsSync(serverHelper)}；electron=${fs.existsSync(electronHelper)}` };
+  }
+  const qbotHome = inferQbotHomeForElectronRestart(options);
+  let cdpPort = '9224';
+  try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  const command = [
+    [serverHelper, qbotRoot, skillHubUrl, qbotHome].map(shellQuote).join(' '),
+    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome].map(shellQuote).join(' '),
+  ].join(' && ');
+  const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用首页稳定技能和连接器 Fixture', commandOverride: command });
+  if (!restarted.ok) return restarted;
+  const workbench = await waitForQbotWorkbench(restarted.page, 90000);
+  if (!workbench.ok) return { ok: false, reason: workbench.reason };
+  const connectorFixture = await restarted.page.evaluate(async () => {
+    const catalog = await window.agent.getConnectorCatalog({ forceRefresh: true });
+    return (catalog?.connectors || []).map((item) => ({ key: item.key, label: item.label, statusKind: item.statusKind }));
+  }).catch((error) => [{ error: error.message }]);
+  const healthy = connectorFixture.find((item) => item.key === 'dev_healthy' && item.statusKind === 'ready');
+  state.artifacts.home_capability_connector_fixture = connectorFixture;
+  if (!healthy) return { ok: false, reason: `产品 dev_healthy 连接器 Fixture 未准备成功：${clip(JSON.stringify(connectorFixture), 500)}` };
+  return { ok: true, page: restarted.page, connectors: connectorFixture };
+}
+
+async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
+  const fixture = await createSkillHubRegressionServer(caseDir);
+  state.artifacts.home_capability_fixture = {
+    skillhub_url: fixture.url,
+    skill_slug: 'qa-python-runtime',
+    connector_key: 'dev_healthy',
+    manifest: fixture.manifestPath,
+  };
+  const injected = await restartWithHomeCapabilityFixture({ state, caseDir, options, runtime, skillHubUrl: fixture.url });
+  if (!injected.ok) {
+    const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '首页能力 Fixture 启动失败后恢复正常配置' });
+    await fixture.close().catch(() => {});
+    markFailed(state, `首页能力组合测试数据启动失败：${injected.reason}；恢复正常配置=${restored.ok ? '成功' : restored.reason}`, 'automation_error');
+    return;
+  }
+  page = injected.page;
+  const needsSkill = ['SIT-HOME-004', 'SIT-HOME-006', 'SIT-HOME-007', 'SIT-HOME-009'].includes(testCase.id);
+  try {
+    if (needsSkill) {
+      const cleanupBefore = await page.evaluate(async (slug) => {
+        try { return await window.agent.uninstallSkill(slug); }
+        catch (error) { return { ok: false, msg: error?.message || String(error) }; }
+      }, 'qa-python-runtime').catch((error) => ({ ok: false, msg: error.message }));
+      const installed = await installSkillFixtureForSetup(page, state, caseDir, 'qa-python-runtime');
+      state.artifacts.home_capability_skill_setup = { cleanup_before: cleanupBefore, installed };
+      if (!installed.ok) {
+        markFailed(state, `首页能力组合技能 Fixture 安装失败：${installed.reason}`, 'automation_error');
+        return;
+      }
+    }
+    state.screenshots.home_capability_fixture_ready = await shot(page, caseDir, 'home-capability-fixture-ready');
+    recordStep(
+      state,
+      `准备 ${testCase.id} 稳定能力测试数据`,
+      '需要手动技能或连接器的首页 Case 应使用受控已安装技能、健康连接器和可自动创建的稳定专家，不依赖账号历史数据或执行顺序。',
+      `skill=${needsSkill ? 'qa-python-runtime 已安装' : '本 Case 不需要'}；connector=dev_healthy ready；experts=按需自动创建`,
+      'passed',
+      state.screenshots.home_capability_fixture_ready,
+    );
+    if (testCase.id === 'SIT-HOME-006') return await executeSitHome006({ page, state, testCase, caseDir, timeoutMs });
+    if (testCase.id === 'SIT-HOME-007') return await executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeoutMs });
+    if (testCase.id === 'SIT-HOME-008') return await executeSitHomeConnectorOnly({ page, state, testCase, caseDir, timeoutMs });
+    return await executeSitHomeAbilityCombination({ page, state, testCase, caseDir, timeoutMs });
+  } finally {
+    const activePage = runtime?.page || page;
+    if (needsSkill && activePage) {
+      state.artifacts.home_capability_skill_cleanup = await activePage.evaluate(async (slug) => {
+        try { return await window.agent.uninstallSkill(slug); }
+        catch (error) { return { ok: false, msg: error?.message || String(error) }; }
+      }, 'qa-python-runtime').catch((error) => ({ ok: false, msg: error.message }));
+      const cleanupResult = state.artifacts.home_capability_skill_cleanup;
+      recordAssertion(
+        state,
+        '首页能力技能 Fixture 清理',
+        '受控技能用例结束后必须卸载 qa-python-runtime，避免污染后续 Case。',
+        cleanupResult?.ok !== false,
+        JSON.stringify(cleanupResult),
+        'automation_error',
+      );
+    }
+    const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常首页能力配置' });
+    await fixture.close().catch(() => {});
+    recordAssertion(
+      state,
+      '首页能力 Fixture 后环境恢复',
+      '受控技能/连接器组合 Case 结束后必须恢复 .env 中的正常服务配置。',
+      restored.ok,
+      restored.ok ? '正常配置已恢复。' : restored.reason,
+      'automation_error',
+    );
+  }
+}
+
+async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime }) {
+  const fixture = await createSkillHubRegressionServer(caseDir);
+  state.artifacts.skillhub_regression_fixture = {
+    manifest: fixture.manifestPath,
+    base_url: fixture.url,
+    skills: fixture.skills.map((item) => item.slug),
+  };
+  const injected = await restartWithSkillHubFault({
+    page,
+    state,
+    caseDir,
+    options,
+    runtime,
+    label: `${testCase.id} QA SkillHub Fixture`,
+    overrideUrl: fixture.url,
+    cleanup: fixture.close,
+  });
+  if (!injected.ok) {
+    await fixture.close().catch(() => {});
+    markFailed(state, `QA SkillHub Fixture 启动失败：${injected.reason}`, 'automation_error');
+    return;
+  }
+  try {
+    page = injected.page;
+    const prepared = await prepareSkillRegressionFixtureState({ page, state, testCase, caseDir, options, fixture });
+    if (!prepared) return;
+    const id = testCase.id;
+    if (id === 'SIT-SKILL-004') return await executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'python' });
+    if (id === 'SIT-SKILL-005') return await executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'node' });
+    if (id === 'SIT-SKILL-015') return await executeSitSkillRollback({ page, state, caseDir });
+    if (id === 'SIT-SKILL-022') return await executeSitSkillDeleteFailure({ page, state, caseDir, options, runtime });
+    if (id === 'SIT-SKILL-027') return await executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
+    if (id === 'SIT-SKILL-028') return await executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
+    if (id === 'SIT-SKILL-029') return await executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-030') return await executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-031') return await executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-032') return await executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-033') return await executeSitSkillDependencyCycle({ page, state, testCase, caseDir });
+  } finally {
+    state.artifacts.skillhub_regression_fixture.hits = fixture.state.hits;
+    state.artifacts.skill_fixture_teardown = await cleanupSkillRegressionFixtureState(runtime?.page || page, testCase);
+    await restoreNormalQbotAfterFault({ state, caseDir, options, runtime, cleanup: fixture.close });
+  }
+}
+
+async function cleanupSkillRegressionFixtureState(page, testCase) {
+  const byCase = skillRegressionFixtureSlugsByCase();
+  const slugs = byCase[testCase.id] || [];
+  if (!page || !slugs.length) return [];
+  return page.evaluate(async (items) => {
+    const results = [];
+    for (const slug of items) {
+      try { results.push({ slug, ...(await window.agent.uninstallSkill(slug)) }); }
+      catch (error) { results.push({ slug, ok: false, msg: error?.message || String(error) }); }
+    }
+    return results;
+  }, slugs).catch((error) => [{ ok: false, msg: `Fixture teardown failed: ${error.message}` }]);
+}
+
+function skillRegressionFixtureSlugsByCase() {
+  return {
+    'SIT-SKILL-004': ['qa-python-runtime'],
+    'SIT-SKILL-005': ['qa-node-runtime'],
+    'SIT-SKILL-015': ['qa-version-rollback'],
+    'SIT-SKILL-022': ['qa-uninstall-failure'],
+    'SIT-SKILL-027': ['qa-runtime-retryable'],
+    'SIT-SKILL-028': ['qa-audit-terminal'],
+    'SIT-SKILL-029': ['qa-uninstall-rejected'],
+    'SIT-SKILL-030': ['qa-dep-root-success', 'qa-dep-leaf-a', 'qa-dep-leaf-b'],
+    'SIT-SKILL-031': ['qa-dep-root-existing', 'qa-dep-leaf-existing'],
+    'SIT-SKILL-032': ['qa-dep-root-failure', 'qa-dep-leaf-failure'],
+    'SIT-SKILL-033': ['qa-dep-root-cycle', 'qa-dep-cycle-b'],
+  };
+}
+
+async function prepareSkillRegressionFixtureState({ page, state, testCase, caseDir, options, fixture }) {
+  const byCase = skillRegressionFixtureSlugsByCase();
+  const slugs = byCase[testCase.id] || [];
+  const cleanup = await page.evaluate(async (items) => {
+    const results = [];
+    for (const slug of items) {
+      try { results.push({ slug, ...(await window.agent.uninstallSkill(slug)) }); }
+      catch (error) { results.push({ slug, ok: false, msg: error?.message || String(error) }); }
+    }
+    return results;
+  }, slugs).catch((error) => [{ ok: false, msg: error.message }]);
+  state.artifacts.skill_fixture_cleanup = cleanup;
+  await page.waitForTimeout(700);
+
+  if (testCase.id === 'SIT-SKILL-027' || testCase.id === 'SIT-SKILL-028') {
+    const slug = slugs[0];
+    const setup = await installSkillFixtureForSetup(page, state, caseDir, slug, { expectFailure: true });
+    if (!setup.ok) {
+      markFailed(state, `无法构造 ${slug} 审计拒装前置：${setup.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  if (testCase.id === 'SIT-SKILL-029') {
+    const slug = 'qa-uninstall-rejected';
+    const setup = await installSkillFixtureForSetup(page, state, caseDir, slug);
+    if (!setup.ok) {
+      markFailed(state, `无法安装 ${slug} 以构造未就绪 overlay：${setup.reason}`, 'automation_error');
+      return false;
+    }
+    const qbotHome = inferQbotHomeForElectronRestart(options);
+    const seeded = seedLocalSkillReadiness(qbotHome, slug, 'runtime_projection_failed');
+    state.artifacts.skill_fixture_local_seed = seeded;
+    if (!seeded.ok) {
+      markFailed(state, `无法写入 ${slug} 本机未就绪前置：${seeded.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  if (testCase.id === 'SIT-SKILL-031') {
+    const setup = await installSkillFixtureForSetup(page, state, caseDir, 'qa-dep-leaf-existing');
+    if (!setup.ok) {
+      markFailed(state, `无法预装 qa-dep-leaf-existing：${setup.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  if (testCase.id === 'SIT-SKILL-015') {
+    const slug = 'qa-version-rollback';
+    fixture.setActiveVersion(slug, '1.0.0');
+    const installed = await installSkillFixtureForSetup(page, state, caseDir, slug);
+    if (!installed.ok) {
+      markFailed(state, `无法安装 ${slug}@1.0.0 以准备回退前置：${installed.reason}`, 'automation_error');
+      return false;
+    }
+    fixture.setActiveVersion(slug, '2.0.0');
+    const updated = await page.evaluate(async (name) => {
+      const result = await window.agent.updateSkill(name);
+      if (result?.ok) await window.agent.reconcileSkills().catch(() => null);
+      return result;
+    }, slug).catch((error) => ({ ok: false, msg: error.message }));
+    state.artifacts.skill_fixture_version_setup = { slug, installed, updated };
+    if (!updated?.ok || updated.updated === false || updated.fromVersion !== '1.0.0' || updated.toVersion !== '2.0.0') {
+      markFailed(state, `无法构造 ${slug} 1.0.0 → 2.0.0 回退历史：${JSON.stringify(updated)}`, 'automation_error');
+      return false;
+    }
+    await page.waitForTimeout(1000);
+  }
+
+  if (testCase.id === 'SIT-SKILL-022') {
+    const slug = 'qa-uninstall-failure';
+    const installed = await installSkillFixtureForSetup(page, state, caseDir, slug);
+    state.artifacts.skill_fixture_uninstall_failure_setup = installed;
+    if (!installed.ok) {
+      markFailed(state, `无法安装 ${slug} 以准备卸载失败前置：${installed.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  state.screenshots.skill_fixture_prepared = await shot(page, caseDir, 'skill-fixture-prepared');
+  recordStep(
+    state,
+    `准备 ${testCase.id} 技能测试数据`,
+    '框架应先清理同名 QA Fixture，再构造该用例唯一需要的拒装、未就绪或依赖前置。',
+    `cleanup=${JSON.stringify(cleanup)}；fixtures=${slugs.join(', ')}`,
+    'passed',
+    state.screenshots.skill_fixture_prepared,
+  );
+  return true;
+}
+
+async function installSkillFixtureForSetup(page, state, caseDir, slug, { expectFailure = false } = {}) {
+  const card = await searchAutomationSkillCard(page, state, caseDir, slug);
+  if (!card) return { ok: false, reason: '技能市场未返回对应 Fixture 卡片。' };
+  const text = await card.innerText({ timeout: 1200 }).catch(() => '');
+  const install = card.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 1200))) {
+    if (/已安装|已就绪/.test(text) && !expectFailure) return { ok: true, reason: '已安装。' };
+    return { ok: false, reason: `没有可点击安装入口：${clip(text, 220)}` };
+  }
+  await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+  const feedback = await waitForSkillOperationFeedback(page, 120000);
+  await page.waitForTimeout(800);
+  const refreshed = await searchAutomationSkillCard(page, state, caseDir, slug);
+  const refreshedText = refreshed ? await refreshed.innerText({ timeout: 1200 }).catch(() => '') : '';
+  if (!feedback.terminal) return { ok: false, reason: `安装未收敛：${clip(feedback.text, 220)}` };
+  if (expectFailure && !/装不上|拒装|失败|重试安装|rejected/.test(`${feedback.text}\n${refreshedText}`)) {
+    return { ok: false, reason: `未形成拒装终态：${clip(`${feedback.text}\n${refreshedText}`, 260)}` };
+  }
+  if (!expectFailure && feedback.error) return { ok: false, reason: `安装失败：${clip(feedback.text, 260)}` };
+  return { ok: true, feedback: feedback.text, cardText: refreshedText };
+}
+
+function seedLocalSkillReadiness(qbotHome, slug, readinessStatus) {
+  if (!qbotHome) return { ok: false, reason: '未配置 qbot-home/deepbank-home。' };
+  const dbPath = path.join(qbotHome, 'local.db');
+  if (!fs.existsSync(dbPath)) return { ok: false, reason: `本机状态库不存在：${dbPath}` };
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec('PRAGMA busy_timeout = 5000');
+    const runtimeName = `skillhub__global__${slug}`;
+    const result = db.prepare(`UPDATE installed_skills
+      SET readiness_status=?, next_action='retry_projection', install_status='ok', updated_at=?
+      WHERE slug=? OR name=? OR runtime_name=?`).run(readinessStatus, Date.now(), slug, slug, runtimeName);
+    return { ok: Number(result.changes || 0) > 0, changes: Number(result.changes || 0), dbPath, slug, readinessStatus, reason: Number(result.changes || 0) > 0 ? '' : '未找到已安装技能本机记录。' };
+  } catch (error) {
+    return { ok: false, dbPath, slug, reason: error.message };
+  } finally {
+    db.close();
+  }
+}
+
 async function searchAutomationSkillCard(page, state, caseDir, marker, { installed = false } = {}) {
   await openSkillsPage(page, state, caseDir, { skillTab: installed ? '已安装' : '技能市场' });
   if (installed) return marker ? findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')) : null;
@@ -3466,14 +4045,14 @@ async function executeSitSkillRejectedExplicitRetry({ page, state, testCase, cas
   const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-027 显式重试计数代理', rules: [{
     id: 'skill-027-install-observe', method: 'POST', pathExact: '/api/skills/install', mode: 'observe',
   }] });
-  if (!control.ok) return markBlocked(state, `无法启动技能显式重试计数代理：${control.reason}`);
+  if (!control.ok) return markFailed(state, `无法启动技能显式重试计数代理：${control.reason}`, 'automation_error');
   try {
     page = control.page;
     const marker = automationSkillMarker(testCase, 'qa-runtime-retryable');
     let card = await searchAutomationSkillCard(page, state, caseDir, marker);
     if (!card) card = await findSkillCardByText(page, /装不上|rejected|重试安装/);
     state.screenshots.skill_027_before_retry = await shot(page, caseDir, 'skill-027-before-explicit-retry');
-    if (!card) return markBlocked(state, `技能市场未找到标识 ${marker} 的拒装测试技能，也没有其他“装不上/重试安装”卡片。`);
+    if (!card) return markFailed(state, `QA SkillHub 未返回拒装测试技能 ${marker}，无法执行显式重试。`, 'automation_error');
     const before = await card.innerText({ timeout: 1200 }).catch(() => '');
     const retry = card.locator('.skill-install').filter({ hasText: /重试安装/ }).first();
     if (!(await visible(retry, 1200))) {
@@ -3497,13 +4076,13 @@ async function executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, ca
   const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'SKILL-028 自动对账零安装请求代理', rules: [{
     id: 'skill-028-install-observe', method: 'POST', pathExact: '/api/skills/install', mode: 'observe',
   }] });
-  if (!control.ok) return markBlocked(state, `无法启动自动对账安装请求观察代理：${control.reason}`);
+  if (!control.ok) return markFailed(state, `无法启动自动对账安装请求观察代理：${control.reason}`, 'automation_error');
   try {
     page = control.page;
     const marker = automationSkillMarker(testCase, 'qa-audit-terminal');
     let card = await searchAutomationSkillCard(page, state, caseDir, marker);
     if (!card) card = await findSkillCardByText(page, /装不上|rejected|审计拒装/);
-    if (!card) return markBlocked(state, `技能市场未找到标识 ${marker} 的审计硬拒测试技能，也没有其他审计拒装卡片。`);
+    if (!card) return markFailed(state, `QA SkillHub 未返回审计硬拒测试技能 ${marker}。`, 'automation_error');
     const before = await card.innerText({ timeout: 1200 }).catch(() => '');
     const name = await skillCardName(card, before);
     const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
@@ -3511,7 +4090,7 @@ async function executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, ca
     const settings = page.locator('[data-testid="nav-settings"]').first();
     await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
     const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
-    if (!(await visible(reconcile, 2000))) return markBlocked(state, '个人设置未找到“立即对账技能”入口。');
+    if (!(await visible(reconcile, 2000))) return recordAssertion(state, '立即对账技能入口', '个人设置应提供“立即对账技能”入口。', false, '未找到 assistant-reconcile-skills。');
     control.proxy.arm();
     await reconcile.click({ force: true }).catch(async () => reconcile.evaluate((el) => el.click()));
     const result = page.locator('[data-testid="assistant-reconcile-result"]').first();
@@ -3532,15 +4111,30 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
   const marker = automationSkillMarker(testCase, 'qa-uninstall-rejected');
   const card = await searchAutomationSkillCard(page, state, caseDir, marker, { installed: true });
   state.screenshots.skill_029_before_uninstall = await shot(page, caseDir, 'skill-029-before-uninstall');
-  if (!card) return markBlocked(state, `已安装列表未找到标识 ${marker} 的带拒装本机状态测试技能；请按用例前置数据准备后重跑。`);
+  if (!card) return markFailed(state, `Fixture 前置已安装 ${marker}，但已安装列表无法定位该技能。`, 'automation_error');
   const before = await card.innerText({ timeout: 1200 }).catch(() => '');
-  if (!/装不上|拒装|rejected|未就绪|准备失败/.test(before)) return markBlocked(state, `技能 ${marker} 当前不是拒装/未就绪状态，不能验证拒装 overlay 清理：${clip(before, 220)}`);
+  if (!/装不上|拒装|rejected|未就绪|准备失败/.test(before)) {
+    return recordAssertion(state, '拒装本机状态可见', `Fixture ${marker} 已写入受控未就绪状态，产品卡片应展示拒装/未就绪 overlay。`, false, clip(before, 300));
+  }
   const remove = card.locator('.skill-del').first();
-  await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
-  const confirm = page.locator('[data-testid="skill-uninstall-confirm"]').first();
-  if (!(await visible(confirm, 1200))) return recordAssertion(state, '删除拒装技能确认入口', '点击删除后应出现确认弹窗。', false, '未找到 skill-uninstall-confirm。', 'automation_error');
-  await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
-  await page.locator('[data-testid="skill-uninstall-dialog"]').first().waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {});
+  if (!(await visible(remove, 1200))) {
+    return recordAssertion(state, '拒装技能删除入口', '已安装的拒装/未就绪技能应仍可删除。', false, clip(before, 300));
+  }
+  const confirmation = await captureDialogDuringWithAction(
+    page,
+    async () => remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click())),
+    { accept: true, timeoutMs: 5000 },
+  );
+  await page.waitForTimeout(1800);
+  recordStep(
+    state,
+    '确认删除带拒装本机状态的技能',
+    '产品使用原生确认框；框架应接受确认并继续验证服务端绑定和本机 overlay 同步清理。',
+    confirmation.message || '未捕获到删除确认文案',
+    confirmation.message ? 'passed' : 'failed',
+    '',
+    confirmation.message ? '' : 'automation_error',
+  );
   const marketCard = await searchAutomationSkillCard(page, state, caseDir, marker);
   const after = marketCard ? await marketCard.innerText({ timeout: 1200 }).catch(() => '') : '';
   const installVisible = marketCard ? await visible(marketCard.locator('.skill-install').first(), 1200) : false;
@@ -3550,11 +4144,11 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
 
 async function installAutomationDependencyRoot({ page, state, testCase, caseDir, marker }) {
   const card = await searchAutomationSkillCard(page, state, caseDir, marker);
-  if (!card) return { blocked: `技能市场未找到依赖测试技能 ${marker}。请发布该自动化 fixture 后重跑。` };
+  if (!card) return { automationError: `QA SkillHub 未返回依赖测试技能 ${marker}。` };
   const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
   const name = await skillCardName(card, cardText);
   const install = card.locator('.skill-install:not([disabled])').first();
-  if (!(await visible(install, 1200))) return { blocked: `依赖测试技能 ${marker} 没有可点击安装入口：${clip(cardText, 220)}` };
+  if (!(await visible(install, 1200))) return { productFailure: `依赖测试技能 ${marker} 是合法未安装 Fixture，但没有可点击安装入口：${clip(cardText, 220)}` };
   await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
   const feedback = await waitForSkillOperationFeedback(page, 120000);
   return { card, name, cardText, feedback };
@@ -3571,7 +4165,8 @@ async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, 
   const marker = automationSkillMarker(testCase, 'qa-dep-root-success');
   const dependencies = automationDependencyMarkers(testCase);
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
-  if (result.blocked) return markBlocked(state, result.blocked);
+  if (result.automationError) return markFailed(state, result.automationError, 'automation_error');
+  if (result.productFailure) return recordAssertion(state, '依赖根技能安装入口', '合法未安装的依赖根技能应提供安装入口。', false, result.productFailure);
   const visibleMap = await installedSkillMarkersVisible(page, state, caseDir, [marker, ...dependencies]);
   state.screenshots.skill_030_cascade_success = await shot(page, caseDir, 'skill-030-cascade-success');
   const allVisible = Object.values(visibleMap).every(Boolean);
@@ -3581,11 +4176,12 @@ async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, 
 async function executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir }) {
   const marker = automationSkillMarker(testCase, 'qa-dep-root-existing');
   const dependencies = automationDependencyMarkers(testCase);
-  if (!dependencies.length) return markBlocked(state, '用例数据缺少 dependencies= 已安装依赖标识。');
+  if (!dependencies.length) return markFailed(state, '用例数据缺少 dependencies= 已安装依赖标识。', 'automation_error');
   const before = await installedSkillMarkersVisible(page, state, caseDir, dependencies);
-  if (!Object.values(before).every(Boolean)) return markBlocked(state, `前置依赖未全部安装：${JSON.stringify(before)}`);
+  if (!Object.values(before).every(Boolean)) return markFailed(state, `Fixture 前置依赖未全部安装：${JSON.stringify(before)}`, 'automation_error');
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
-  if (result.blocked) return markBlocked(state, result.blocked);
+  if (result.automationError) return markFailed(state, result.automationError, 'automation_error');
+  if (result.productFailure) return recordAssertion(state, '依赖根技能安装入口', '合法未安装的依赖根技能应提供安装入口。', false, result.productFailure);
   const after = await installedSkillMarkersVisible(page, state, caseDir, [marker, ...dependencies]);
   state.screenshots.skill_031_existing_dependency = await shot(page, caseDir, 'skill-031-existing-dependency-skipped');
   recordAssertion(state, '已安装必填依赖跳过不重复安装', '依赖已安装时主技能应成功，反馈不得把该依赖再次列为本次级联安装，已安装列表仍各保留一张卡片。', result.feedback.terminal && !result.feedback.error && !/并级联安装/.test(result.feedback.text) && Object.values(after).every(Boolean), `feedback=${clip(result.feedback.text, 300)}；before=${JSON.stringify(before)}；after=${JSON.stringify(after)}`);
@@ -3595,7 +4191,8 @@ async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCas
   const marker = automationSkillMarker(testCase, 'qa-dep-root-failure');
   const dependencies = automationDependencyMarkers(testCase);
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
-  if (result.blocked) return markBlocked(state, result.blocked);
+  if (result.automationError) return markFailed(state, result.automationError, 'automation_error');
+  if (result.productFailure) return recordAssertion(state, '依赖根技能安装入口', '合法未安装的依赖根技能应提供安装入口。', false, result.productFailure);
   const visibility = await installedSkillMarkersVisible(page, state, caseDir, [marker]);
   state.screenshots.skill_032_dependency_failure = await shot(page, caseDir, 'skill-032-dependency-failure');
   const dependencyNamed = dependencies.length === 0 || dependencies.some((item) => result.feedback.text.includes(item));
@@ -3605,7 +4202,8 @@ async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCas
 async function executeSitSkillDependencyCycle({ page, state, testCase, caseDir }) {
   const marker = automationSkillMarker(testCase, 'qa-dep-root-cycle');
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
-  if (result.blocked) return markBlocked(state, result.blocked);
+  if (result.automationError) return markFailed(state, result.automationError, 'automation_error');
+  if (result.productFailure) return recordAssertion(state, '依赖根技能安装入口', '合法未安装的依赖根技能应提供安装入口。', false, result.productFailure);
   const visibility = await installedSkillMarkersVisible(page, state, caseDir, [marker]);
   state.screenshots.skill_033_dependency_cycle = await shot(page, caseDir, 'skill-033-dependency-cycle');
   recordAssertion(state, '循环依赖 fail-closed', '必填依赖循环时应明确提示循环引用，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /循环引用|循环依赖/.test(result.feedback.text) && !visibility[marker], `feedback=${clip(result.feedback.text, 340)}；rootInstalled=${visibility[marker]}`);
@@ -3680,6 +4278,7 @@ async function executeSitConnectorDefaultAutoMode({ page, state, caseDir }) {
     selector: '[data-testid="composer-connectors-menu"]',
     action: '打开输入区【连应用】菜单查看自动模式',
     matchPattern: /连接器|连应用|自动|默认/i,
+    menuKind: 'connector',
   });
   state.screenshots.connector_006_auto_menu = await shot(page, caseDir, 'connector-006-auto-menu');
   recordAssertion(state, '自动模式默认连接器说明', '自动模式应能看到默认连接器、内置工具或自动使用说明。', /默认|自动|内置|工具|连接器/.test(menuText), clip(menuText, 320));
@@ -3722,12 +4321,68 @@ async function executeSitConnectorToolToggle({ page, state, caseDir }) {
   }
 }
 
+async function restartWithConnectorRegressionFixture({ state, caseDir, options, runtime }) {
+  const qbotRoot = inferQbotRootForElectronRestart(options);
+  if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断当前 deepbankV2 根目录。' };
+  const serverHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-connector-fixture-control-plane.sh');
+  const electronHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-electron-control-plane.sh');
+  if (!fs.existsSync(serverHelper) || !fs.existsSync(electronHelper)) {
+    return { ok: false, reason: `缺少连接器 Fixture 重启脚本：server=${fs.existsSync(serverHelper)}；electron=${fs.existsSync(electronHelper)}` };
+  }
+  const qbotHome = inferQbotHomeForElectronRestart(options);
+  let cdpPort = '9224';
+  try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  const command = [
+    [serverHelper, qbotRoot, qbotHome].map(shellQuote).join(' '),
+    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome].map(shellQuote).join(' '),
+  ].join(' && ');
+  const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用产品 dev 连接器三态 Fixture', commandOverride: command });
+  if (!restarted.ok) return restarted;
+  const workbench = await waitForQbotWorkbench(restarted.page, 90000);
+  if (!workbench.ok) return { ok: false, reason: workbench.reason };
+  const prepared = await restarted.page.evaluate(async () => {
+    const catalog = await window.agent.getConnectorCatalog({ forceRefresh: true });
+    const healthResult = await window.agent.reconcileConnectorHealth?.();
+    const health = Array.isArray(healthResult?.health) ? healthResult.health : await window.agent.getConnectorHealth?.();
+    return {
+      connectors: (catalog?.connectors || []).map((item) => ({ key: item.key, label: item.label, statusKind: item.statusKind })),
+      health: Array.isArray(health) ? health.map((item) => ({ key: item.key, name: item.name, status: item.status, reason: item.reason })) : [],
+    };
+  }).catch((error) => ({ error: error.message, connectors: [], health: [] }));
+  await restarted.page.waitForTimeout(1500);
+  const text = JSON.stringify(prepared);
+  const hasUnreachable = /dev_unreachable|Dev Unreachable/.test(text) && /unreachable/.test(text);
+  const hasNeedsAuth = /dev_needs_auth|Dev Needs Auth/.test(text) && /needs_auth/.test(text);
+  state.artifacts.connector_regression_fixture = prepared;
+  if (!hasUnreachable || !hasNeedsAuth) {
+    return { ok: false, reason: `产品 dev 连接器 Fixture 未形成 unreachable/needs_auth 三态：${clip(text, 500)}` };
+  }
+  return { ok: true, page: restarted.page, prepared };
+}
+
+async function executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime }) {
+  const injected = await restartWithConnectorRegressionFixture({ state, caseDir, options, runtime });
+  if (!injected.ok) {
+    markFailed(state, `连接器 QA Fixture 启动失败：${injected.reason}`, 'automation_error');
+    return;
+  }
+  try {
+    page = injected.page;
+    if (testCase.id === 'SIT-CONN-008') return await executeSitConnectorRetry({ page, state, caseDir });
+    if (testCase.id === 'SIT-CONN-009') return await executeSitConnectorAuthDialog({ page, state, caseDir });
+    if (testCase.id === 'SIT-CONN-018') return await executeSitConnectorManualUnhealthyOption({ page, state, caseDir });
+  } finally {
+    const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常连接器配置' });
+    recordAssertion(state, '连接器 Fixture 后环境恢复', '受控连接器三态用例结束后必须恢复 .env 中的正常配置。', restored.ok, restored.ok ? '正常配置已恢复。' : restored.reason, 'automation_error');
+  }
+}
+
 async function executeSitConnectorRetry({ page, state, caseDir }) {
   await openConnectorsPage(page, state, caseDir);
   const retry = await connectorActionByText(page, /重试连接|重新检测|重试|检测/);
   if (!retry) {
     state.screenshots.connector_008_no_retry = await shot(page, caseDir, 'connector-008-no-retry');
-    markBlocked(state, '当前环境未找到 unreachable 连接器或【重试连接】入口，无法验证重新探测流程。');
+    recordAssertion(state, 'unreachable 连接器重试入口', '受控 dev_unreachable 连接器应展示【重试连接/重新检测】入口。', false, clip(await mainSurfaceText(page), 360));
     return;
   }
   const beforeText = await connectorCardText(retry);
@@ -3744,7 +4399,7 @@ async function executeSitConnectorAuthDialog({ page, state, caseDir }) {
   const auth = await connectorActionByText(page, /去授权|授权|重新授权|登录/);
   if (!auth) {
     state.screenshots.connector_009_no_auth = await shot(page, caseDir, 'connector-009-no-auth');
-    markBlocked(state, '当前环境未找到 needs_auth 连接器或【去授权】入口，无法验证授权弹窗和重新检测。');
+    recordAssertion(state, 'needs_auth 连接器授权入口', '受控 dev_needs_auth 连接器应展示【去授权/授权】入口。', false, clip(await mainSurfaceText(page), 360));
     return;
   }
   const beforeText = await connectorCardText(auth);
@@ -3791,19 +4446,19 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
   state.screenshots.connector_012_selected = await shot(page, caseDir, 'connector-012-selected');
   const connectorKey = state.artifacts.selected_connector?.key || state.artifacts.selected_connector?.label || '';
   if (!connectorKey) {
-    markBlocked(state, '已选中连接器，但框架未能读取 connector key，无法执行渲染层健康快照故障注入。');
+    markFailed(state, '已选中连接器，但框架未能读取 connector key，无法执行渲染层健康快照故障注入。', 'automation_error');
     return;
   }
   const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-012 不健康快照代理', initiallyArmed: true, rules: [{
     id: 'connector-012-needs-auth',
     method: 'GET',
-    pathExact: '/api/capabilities',
+    pathPrefix: '/api/capabilities',
     mode: 'transform-json',
     transform: 'connector-needs-auth',
     connectorKey,
   }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装控制面代理连接器状态注入：${control.reason}`);
+    markFailed(state, `框架无法安装控制面代理连接器状态注入：${control.reason}`, 'automation_error');
     return;
   }
   try {
@@ -3813,11 +4468,12 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
       selector: '[data-testid="composer-connectors-menu"]',
       action: '健康变更后重新打开连应用菜单',
       matchPattern: /连接器|连应用|手动|不可用|本轮不会生效/i,
+      menuKind: 'connector',
     });
     await page.waitForTimeout(1000);
     const warning = page.locator('[data-testid="composer-connector-unhealthy-selected"]').first();
     const warningVisible = await visible(warning, 1800);
-    const menuText = await activeMenuText(page);
+    const menuText = await activeMenuText(page, 'connector');
     const controlState = control.proxy.state;
     const controlHits = controlState.hits.filter((item) => item.id === 'connector-012-needs-auth');
     const routeHits = controlHits.length;
@@ -3840,7 +4496,7 @@ async function executeSitConnectorRefreshFailure({ page, state, caseDir, options
     errorMessage: 'QBotTestAgent controlled connector catalog refresh failure',
   }] });
   if (!control.ok) {
-    markBlocked(state, `框架无法安装控制面代理连接器刷新失败注入：${control.reason}`);
+    markFailed(state, `框架无法安装控制面代理连接器刷新失败注入：${control.reason}`, 'automation_error');
     return;
   }
   page = control.page;
@@ -3871,17 +4527,34 @@ async function executeSitConnectorRefreshFailure({ page, state, caseDir, options
   }
 }
 
-async function executeSitConnectorEmptyState({ page, state, caseDir }) {
-  await openConnectorsPage(page, state, caseDir);
-  const text = await mainSurfaceText(page);
-  state.screenshots.connector_014_current_env = await shot(page, caseDir, 'connector-014-current-env');
-  const empty = /暂无连接器|没有连接器|未接入连接器|空状态/.test(text);
-  const builtinVisible = await visible(page.locator('[data-testid="builtin-tools-panel"]').first(), 1000) || /内置工具|qbot_web|qbot_chart/.test(text);
-  if (!empty && /连接器|connector|MCP|工具/.test(text)) {
-    markBlocked(state, '该用例要求使用无 platform/custom 连接器账号；当前账号存在可见连接器，无法到达连接器空状态判断点。');
+async function executeSitConnectorEmptyState({ page, state, caseDir, options, runtime }) {
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-014 连接器空目录代理', initiallyArmed: true, rules: [{
+    id: 'connector-014-empty-catalog',
+    method: 'GET',
+    pathPrefix: '/api/connectors/catalog',
+    mode: 'transform-json',
+    transform: 'connectors-empty-catalog',
+  }] });
+  if (!control.ok) {
+    markFailed(state, `框架无法构造连接器空目录：${control.reason}`, 'automation_error');
     return;
   }
-  recordAssertion(state, '连接器空状态和内置工具', '无可见连接器时应显示空状态，且仍展示内置工具或明确不可用。', empty && builtinVisible, clip(text, 320));
+  try {
+    page = control.page;
+    await openConnectorsPage(page, state, caseDir);
+    const text = await mainSurfaceText(page);
+    state.screenshots.connector_014_current_env = await shot(page, caseDir, 'connector-014-controlled-empty');
+    const empty = /暂无连接器|没有连接器|未接入连接器|空状态/.test(text);
+    const builtinVisible = await visible(page.locator('[data-testid="builtin-tools-panel"]').first(), 1000) || /内置工具|qbot_web|qbot_chart/.test(text);
+    const connectorCards = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
+    const hits = control.proxy.state.hits.filter((item) => item.id === 'connector-014-empty-catalog');
+    const modified = hits.reduce((total, item) => total + Number(item.modified || 0), 0);
+    state.artifacts.connector_014_empty_fixture = { route_hits: hits.length, modified, connector_cards: connectorCards };
+    recordStep(state, '构造无平台/自定义连接器目录', '框架应只改写当前 Case 的目录响应，并保留随包内置工具面板。', `routeHits=${hits.length}；modified=${modified}；connectorCards=${connectorCards}；builtinVisible=${builtinVisible}`, hits.length > 0 && modified > 0 && connectorCards === 0 ? 'passed' : 'failed', state.screenshots.connector_014_current_env, hits.length > 0 && modified > 0 && connectorCards === 0 ? '' : 'automation_error');
+    recordAssertion(state, '连接器空状态和内置工具', '无可见连接器时应显示空状态，且仍展示内置工具或明确不可用。', hits.length > 0 && modified > 0 && connectorCards === 0 && empty && builtinVisible, clip(text, 320));
+  } finally {
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+  }
 }
 
 async function executeSitConnectorPrivateNetworkGuard({ page, state, testCase, caseDir, timeoutMs }) {
@@ -3931,11 +4604,11 @@ async function executeSitConnectorManualUnhealthyOption({ page, state, caseDir }
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
   if (!manualOk) return;
-  const menuText = await activeMenuText(page);
+  const menuText = await activeMenuText(page, 'connector');
   state.screenshots.connector_018_manual_menu = await shot(page, caseDir, 'connector-018-manual-menu');
   const hasUnhealthy = /needs_auth|unreachable|需授权|去授权|不可用|不生效|重试连接|连接失败/.test(menuText);
   if (!hasUnhealthy) {
-    markBlocked(state, '当前连接器手动菜单未展示 needs_auth/unreachable 连接器，无法验证不可用连接器不可选或本轮不生效提示。');
+    recordAssertion(state, '手动菜单展示不可用连接器状态', '受控 dev_unreachable/dev_needs_auth 连接器应在手动菜单中置灰或展示不可用出路。', false, clip(menuText, 360));
     return;
   }
   const bad = await connectorMenuOptionByText(page, /needs_auth|unreachable|需授权|去授权|不可用|连接失败|重试/);
@@ -3950,20 +4623,17 @@ async function executeSitConnectorManualUnhealthyOption({ page, state, caseDir }
   const afterClass = await bad.getAttribute('class').catch(() => '');
   const afterChecked = await bad.getAttribute('aria-checked').catch(() => '');
   state.screenshots.connector_018_after_click = await shot(page, caseDir, 'connector-018-after-click-unhealthy');
-  const blockedByUi = /disabled|unavailable|muted|not-allowed|off/.test(`${beforeClass} ${afterClass}`) || /不生效|不可用|去授权|重试/.test(await activeMenuText(page));
+  const blockedByUi = /disabled|unavailable|muted|not-allowed|off/.test(`${beforeClass} ${afterClass}`) || /不生效|不可用|去授权|重试/.test(await activeMenuText(page, 'connector'));
   const selected = afterChecked === 'true' || /(?:^|\s)on(?:\s|$)/.test(afterClass || '');
-  recordAssertion(state, '不可用连接器不可误选', 'needs_auth/unreachable 连接器应不可选，或即使点击也标注本轮不生效。', blockedByUi || !selected, `beforeClass=${beforeClass}; afterClass=${afterClass}; beforeChecked=${beforeChecked}; afterChecked=${afterChecked}; menu=${clip(await activeMenuText(page), 260)}`);
+  recordAssertion(state, '不可用连接器不可误选', 'needs_auth/unreachable 连接器应不可选，或即使点击也标注本轮不生效。', blockedByUi || !selected, `beforeClass=${beforeClass}; afterClass=${afterClass}; beforeChecked=${beforeChecked}; afterChecked=${afterChecked}; menu=${clip(await activeMenuText(page, 'connector'), 260)}`);
 }
 
 async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
   if (testCase.id === 'SIT-ART-012') {
     return executeSitArtifactPermissionFixture({ page, state, caseDir });
   }
-  if (artifactCaseEnvironmentBlocker(testCase)) {
-    await openNewTask(page, state);
-    state.screenshots.artifact_blocked_precondition = await shot(page, caseDir, 'artifact-blocked-precondition');
-    markBlocked(state, artifactCaseEnvironmentBlocker(testCase));
-    return;
+  if (testCase.id === 'SIT-ART-013' || testCase.id === 'SIT-ART-014') {
+    return executeSitProjectArtifactCase({ page, state, testCase, caseDir, timeoutMs });
   }
   await openNewTask(page, state);
   if (!await prepareVisibleQaWorkspace(page, state, caseDir)) return;
@@ -4008,6 +4678,150 @@ async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutM
   }
   await assertArtifactSurface(page, state, caseDir, artifactExpectedType(testCase));
   await executeArtifactSpecificChecks(page, state, testCase, caseDir, reply);
+}
+
+async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, timeoutMs }) {
+  const preferredProjectName = 'QBot QA 自动化项目';
+  const prompt = testCase.id === 'SIT-ART-013'
+    ? '请在当前项目上下文生成 project_result.md 和 project_result.html，内容为 QBot 项目成果关联验证，并在回复中列出两个文件名。'
+    : '请在当前项目上下文生成项目周报 project_weekly_report.md，包含本周进展、风险和下周计划，并在回复中说明文件已生成。';
+  await ensureSidebarExpanded(page, state);
+  const nav = page.locator('[data-testid="nav-projects"]').first();
+  if (!(await visible(nav, 1800))) {
+    state.screenshots.project_navigation_missing = await shot(page, caseDir, 'project-navigation-missing');
+    recordAssertion(state, '项目导航入口', '已登录工作台应展示项目导航，项目成果用例必须能从真实项目入口开始。', false, clip(await bodyText(page), 360));
+    return;
+  }
+  await nav.click({ force: true }).catch(async () => nav.evaluate((el) => el.click()));
+  await page.locator('[data-testid="projects-list-view"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const candidates = await page.evaluate(async (preferredName) => {
+    const projects = await window.agent.listProjects().catch(() => []);
+    const eligible = [];
+    for (const project of Array.isArray(projects) ? projects : []) {
+      if (project?.source !== 'gitlab' || !project?.id) continue;
+      const binding = project.runtimeBinding || (typeof window.agent.getProjectRuntimeBinding === 'function'
+        ? await window.agent.getProjectRuntimeBinding(project.id).catch(() => null)
+        : null);
+      const name = String(project.config?.displayName || project.name || project.meta?.pathWithNamespace || project.id);
+      eligible.push({
+        id: String(project.id),
+        name,
+        runtimeStatus: String(binding?.workspace?.status || (binding?.enabled ? 'provisioning' : 'unbound')),
+        preferred: name === preferredName,
+      });
+    }
+    eligible.sort((a, b) => Number(b.runtimeStatus === 'ready') - Number(a.runtimeStatus === 'ready')
+      || Number(b.preferred) - Number(a.preferred));
+    return eligible;
+  }, preferredProjectName).catch(() => []);
+  const selectedProject = candidates[0] || null;
+  let projectName = selectedProject?.name || preferredProjectName;
+  let projectId = selectedProject?.id || '';
+  let card = projectId
+    ? page.getByTestId(`project-card-${projectId}`).first()
+    : page.locator('[data-testid^="project-card-"]').filter({ hasText: preferredProjectName }).first();
+  if (!(await visible(card, 1200))) {
+    const create = page.locator('[data-testid="projects-create-button"]').first();
+    if (!(await visible(create, 1500))) {
+      state.screenshots.project_fixture_create_missing = await shot(page, caseDir, 'project-fixture-create-missing');
+      recordAssertion(state, '项目测试数据创建入口', '没有可用项目时应展示“新建项目”入口，以便自动准备项目测试数据。', false, '未找到 projects-create-button。');
+      return;
+    }
+    await create.click({ force: true }).catch(async () => create.evaluate((el) => el.click()));
+    await page.locator('[data-testid="projects-create-name"]').fill(preferredProjectName);
+    await page.locator('[data-testid="projects-create-description"]').fill('QbotTestAgent 项目成果与项目任务自动化专用测试数据');
+    state.screenshots.project_fixture_create = await shot(page, caseDir, 'project-fixture-before-create');
+    await page.locator('[data-testid="projects-create-submit"]').click({ force: true });
+    await page.locator('[data-testid="projects-workspace-view"]').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+    const creationError = await page.locator('[data-testid="projects-create-panel"] [role="alert"], [data-testid="projects-create-panel"] .proj-error').first().innerText({ timeout: 500 }).catch(() => '');
+    const workspaceVisible = await visible(page.locator('[data-testid="projects-workspace-view"]').first(), 1200);
+    recordStep(state, '创建项目自动化专用测试数据', '项目成果用例应使用真实项目入口创建/复用项目，不能因账号初始无项目而阻塞。', `project=${preferredProjectName}；workspaceVisible=${workspaceVisible}；error=${creationError || '无'}`, workspaceVisible ? 'passed' : 'failed', state.screenshots.project_fixture_create);
+    recordAssertion(state, '项目测试数据创建结果', '提交新建项目后应进入项目工作台；失败时应展示明确原因。', workspaceVisible, creationError || `workspaceVisible=${workspaceVisible}`);
+    if (!workspaceVisible) return;
+    projectName = preferredProjectName;
+  } else {
+    const testId = await card.getAttribute('data-testid').catch(() => '');
+    projectId = projectId || String(testId || '').replace(/^project-card-/, '');
+    await card.click({ force: true }).catch(async () => card.evaluate((el) => el.click()));
+    await page.locator('[data-testid="projects-workspace-view"]').first().waitFor({ state: 'visible', timeout: 12000 }).catch(() => {});
+    recordStep(state, '复用可执行项目测试数据', '优先复用同名 QA 项目，其次复用账号已有项目，避免因固定项目名不存在而阻塞。', `project=${projectName}；projectId=${projectId || '待回读'}；runtimeStatus=${selectedProject?.runtimeStatus || 'unknown'}`, 'passed');
+  }
+  const filesTab = page.locator('[data-testid="project-tab-files"]').first();
+  await filesTab.click({ force: true }).catch(async () => filesTab.evaluate((el) => el.click()));
+  const taskInput = page.locator('[data-testid="project-tasks-view"] input[placeholder*="当前项目上下文"]').first();
+  const launch = page.locator('[data-testid="project-task-launch"]').first();
+  if (!(await visible(taskInput, 3000)) || !(await visible(launch, 1500))) {
+    state.screenshots.project_task_entry_missing = await shot(page, caseDir, 'project-task-entry-missing');
+    recordAssertion(state, '项目任务输入与启动入口', '已进入 QA 项目“任务 / 文件”页后，应展示项目任务输入框和启动按钮。', false, clip(await mainSurfaceText(page), 420));
+    return;
+  }
+  await taskInput.fill(prompt);
+  state.screenshots.project_task_before_launch = await shot(page, caseDir, 'project-task-before-launch');
+  const before = {
+    bodyText: '',
+    threadText: '',
+    assistantTexts: [],
+    userTexts: [],
+    userCount: 0,
+    assistantCount: 0,
+    assistantNodeCount: 0,
+    latestAssistantText: '',
+    activeTaskId: '',
+    bridgeMessageCount: 0,
+  };
+  await launch.click({ force: true }).catch(async () => launch.evaluate((el) => el.click()));
+  await page.locator('[data-testid="composer-input"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  state.screenshots.project_task_after_launch = await shot(page, caseDir, 'project-task-after-launch');
+  const waitConfig = replyWaitConfig(testCase, timeoutMs);
+  const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
+    ignoredText: [prompt, testCase.scenario, testCase.test_data],
+    expectedUserText: prompt,
+    state,
+    caseDir,
+    label: '项目任务成果生成',
+    minWaitMs: waitConfig.minWaitMs,
+    waitKind: waitConfig.kind,
+  });
+  state.screenshots.project_task_after_reply = await shot(page, caseDir, 'project-task-after-reply');
+  writeReplyArtifacts(state, caseDir, [{ label: '项目任务成果生成', ...reply }]);
+  recordReplyWaitAssertion(state, reply, '项目任务成果生成');
+  recordReplyAssertions(state, testCase, prompt, reply, '项目任务成果生成');
+  if (reply.incomplete) {
+    await cancelRunningReplyAfterTimeout(page, state, caseDir, '项目任务成果生成');
+    return;
+  }
+  const bridge = await qbotE2EState(page);
+  projectId = String(bridge.projectId || projectId || '');
+  state.artifacts.project_task_context = { project_name: projectName, project_id: projectId, launch_source: bridge.launchSource || '', active_id: bridge.activeId || '' };
+  recordAssertion(state, '项目任务上下文真实绑定', '从项目输入框启动后，当前任务 bridge 必须带 projectId 和 project launchSource。', Boolean(projectId) && /project/.test(String(bridge.launchSource || '')), JSON.stringify(state.artifacts.project_task_context), 'automation_error');
+  await assertArtifactSurface(page, state, caseDir, artifactExpectedType(testCase));
+  await executeArtifactSpecificChecks(page, state, testCase, caseDir, reply);
+
+  await ensureSidebarExpanded(page, state);
+  await page.locator('[data-testid="nav-projects"]').click({ force: true });
+  await page.locator('[data-testid="projects-list-view"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  card = projectId
+    ? page.getByTestId(`project-card-${projectId}`).first()
+    : page.locator('[data-testid^="project-card-"]').filter({ hasText: projectName }).first();
+  if (await visible(card, 2000)) await card.click({ force: true });
+  await page.locator('[data-testid="projects-workspace-view"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  await page.locator('[data-testid="project-tab-files"]').click({ force: true }).catch(() => {});
+  await page.waitForTimeout(1500);
+  state.screenshots.project_task_files_after_generation = await shot(page, caseDir, 'project-task-files-after-generation');
+  const taskSurface = await page.locator('[data-testid="project-tasks-view"]').innerText({ timeout: 2000 }).catch(() => '');
+  const fileSurface = await page.locator('[data-testid="project-files-view"]').innerText({ timeout: 2000 }).catch(() => '');
+  const expectedFiles = testCase.id === 'SIT-ART-013' ? ['project_result.md', 'project_result.html'] : ['project_weekly_report.md'];
+  const taskLinked = Boolean(taskSurface.trim()) && !/暂无项目任务/.test(taskSurface);
+  const filesLinked = expectedFiles.every((name) => fileSurface.includes(name));
+  state.artifacts.project_task_files_readback = {
+    expected_files: expectedFiles,
+    task_linked: taskLinked,
+    files_linked: filesLinked,
+    task_surface: clip(taskSurface, 800),
+    file_surface: clip(fileSurface, 1200),
+  };
+  recordAssertion(state, '项目任务回写项目会话', '项目入口发起的任务应出现在该项目任务列表中。', taskLinked, clip(taskSurface, 420));
+  recordAssertion(state, '项目成果关联项目文件', '项目任务生成的成果应能在项目“任务 / 文件”区域回读到对应文件名。', filesLinked, `expected=${expectedFiles.join(', ')}；files=${clip(fileSurface, 500)}`);
 }
 
 async function prepareVisibleQaWorkspace(page, state, caseDir) {
@@ -4106,12 +4920,6 @@ function artifactPromptsFromCase(testCase) {
     return ['请生成 Markdown 成果 qbot_raw_event_guard.md，内容包含“成果事件隔离验证”。聊天正文只给可读总结和该文件名，不解释内部实现、事件协议或测试标准。'];
   }
   return ['请生成一份 Markdown 格式的《QBot V1 上线检查摘要》，包含测试背景、关键结论、风险清单、下一步计划四个章节，并保存为 qbot_v1_summary.md。'];
-}
-
-function artifactCaseEnvironmentBlocker(testCase) {
-  const id = String(testCase.id || '');
-  if (id === 'SIT-ART-013' || id === 'SIT-ART-014') return '当前账号/环境缺少可控项目上下文和项目文件断言入口，无法可信验证项目任务成果关联。';
-  return '';
 }
 
 async function executeSitArtifactPermissionFixture({ page, state, caseDir }) {
@@ -4581,7 +5389,7 @@ async function longestSkillCard(page) {
 }
 
 async function skillManualOptionCount(page) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) return 0;
   const options = menu.locator('.skill-list .ctool-opt, .ctool-opt, [role="option"], button')
     .filter({ hasNotText: /禁用|自动|手动|无匹配|还没安装技能|暂无可选技能|搜索技能/ });
@@ -4594,7 +5402,7 @@ async function skillManualOptionCount(page) {
 }
 
 async function selectMultipleManualSkills(page, state, caseDir, expectedCount = 2) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) {
     recordAssertion(state, '多技能手动菜单定位', '自动化应能定位当前打开的技能菜单。', false, '手动模式已点击，但当前技能菜单不可见。', 'automation_error');
     return 0;
@@ -4628,11 +5436,28 @@ async function selectMultipleManualSkills(page, state, caseDir, expectedCount = 
 
 async function summonFirstExpertForCase(page, state, caseDir) {
   await openExpertsPage(page, state, caseDir);
-  const card = await firstSummonableExpertCard(page);
+  let card = await findExpertCardByName(page, 'QBot QA 产品运营专家') || await firstSummonableExpertCard(page);
   if (!card) {
-    state.screenshots.no_summonable_expert = await shot(page, caseDir, 'expert-no-summonable');
-    markBlocked(state, '专家页没有可召唤专家，无法验证专家与首页会话组合。');
-    return false;
+    const created = await createBasicExpert(
+      page,
+      state,
+      caseDir,
+      'QBot QA 产品运营专家',
+      '用于 QBot 回归验证的产品运营分析与复盘专家',
+      '你是一位产品运营专家，擅长活动复盘、需求分析、数据指标、权限风险、异常场景和验收标准。回答必须结构清晰、基于用户提供的数据，不虚构外部事实。',
+      'qa-stable-product-expert',
+    );
+    if (!created) {
+      state.screenshots.no_summonable_expert = await shot(page, caseDir, 'expert-no-summonable');
+      recordAssertion(state, '稳定 QA 专家预置', '没有可召唤专家时，框架应通过用户可见创建流程补充 QA 前缀专家。', false, 'QA 专家创建失败，当前专家组合用例不可执行。', 'automation_error');
+      return false;
+    }
+    await openExpertsPage(page, state, caseDir);
+    card = await findExpertCardByName(page, 'QBot QA 产品运营专家');
+    if (!card) {
+      recordAssertion(state, '稳定 QA 专家可定位', '创建后必须能在专家列表定位同名 QA 专家。', false, '创建成功后列表未定位到 QBot QA 产品运营专家。', 'automation_error');
+      return false;
+    }
   }
   const cardText = await card.innerText({ timeout: 1500 }).catch(() => '');
   await card.click({ force: true });
@@ -4640,7 +5465,7 @@ async function summonFirstExpertForCase(page, state, caseDir) {
   state.screenshots.expert_detail = await shot(page, caseDir, 'expert-detail-for-combo');
   const summon = page.locator('.modal .modal-cta').first();
   if (!(await visible(summon, 1500))) {
-    markBlocked(state, `专家详情没有召唤入口：${clip(cardText, 180)}`);
+    recordAssertion(state, '稳定 QA 专家召唤入口', '框架已创建/定位稳定 QA 专家后，其详情应提供召唤入口。', false, clip(cardText, 260));
     return false;
   }
   await summon.click({ force: true });
@@ -4657,7 +5482,7 @@ async function selectGeneralAssistantForCase(page, state, caseDir) {
   const general = page.locator('[data-testid="expert-general-assistant"]').first();
   if (!(await visible(general, 2500))) {
     state.screenshots.general_assistant_missing = await shot(page, caseDir, 'general-assistant-missing');
-    markBlocked(state, '专家页未展示通用助手，无法清理上一轮专家上下文并执行纯会话场景。');
+    recordAssertion(state, '通用助手入口', '专家页应展示通用助手，以便用户清理专家身份并回到纯会话。', false, clip(await mainSurfaceText(page), 360));
     return false;
   }
   await general.click({ force: true }).catch(async () => general.evaluate((el) => el.click()));
@@ -4672,7 +5497,7 @@ async function selectGeneralAssistantForCase(page, state, caseDir) {
     composer ? 'passed' : 'blocked',
     state.screenshots.general_assistant_selected,
   );
-  if (!composer) markBlocked(state, '点击通用助手后未回到会话输入区，无法证明纯会话前置状态已清理。');
+  if (!composer) recordAssertion(state, '通用助手切换结果', '点击通用助手后应回到会话输入区。', false, '点击后未找到 composer-input。');
   return composer;
 }
 
@@ -4813,7 +5638,7 @@ async function clearManualSkillSelections(page, state, caseDir) {
   }
   const menuOpened = await setSkillMode(page, state, caseDir, 'manual');
   if (!menuOpened) return false;
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) {
     recordAssertion(state, '清理手动技能选择', '切到手动技能后应能定位当前技能菜单。', false, '技能菜单不可见。', 'automation_error');
     return false;
@@ -4858,7 +5683,7 @@ async function clearManualConnectorSelections(page, state, caseDir) {
   }
   const menuOpened = await setConnectorMode(page, state, caseDir, 'manual');
   if (!menuOpened) return false;
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'connector');
   if (!menu) {
     recordAssertion(state, '清理手动连接器选择', '切到手动连接器后应能定位当前连应用菜单。', false, '连应用菜单不可见。', 'automation_error');
     return false;
@@ -4968,6 +5793,7 @@ async function setWorkMode(page, state, caseDir, mode) {
     action: '打开输入区【工作模式/专家】菜单',
     matchPattern: /动手|问答|规划/,
     expectedLabels: Object.values(WORK_MODE_LABELS),
+    menuKind: 'workMode',
   });
   const locator = await workModeLocator(page, mode);
   if (!locator) {
@@ -5004,7 +5830,7 @@ async function setWorkMode(page, state, caseDir, mode) {
 }
 
 async function workModeLocator(page, mode) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'workMode');
   if (!menu) return null;
   const label = WORK_MODE_LABELS[mode] || mode;
   const escaped = escapeRegExp(label);
@@ -5098,6 +5924,7 @@ async function setSkillMode(page, state, caseDir, mode) {
     selector: '[data-testid="composer-skills-menu"]',
     action: '打开输入区【技能】菜单',
     matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+    menuKind: 'skill',
   });
   const locator = await skillModeLocator(page, mode);
   if (!locator) {
@@ -5114,15 +5941,25 @@ async function setSkillMode(page, state, caseDir, mode) {
     );
     return false;
   }
-  await locator.click({ force: true });
-  await page.waitForTimeout(500);
-  const checked = await locator.getAttribute('aria-checked').catch(() => '');
-  const cls = await locator.getAttribute('class').catch(() => '');
-  const afterText = await activeMenuText(page);
-  const toolStateText = await visibleComposerToolStateText(page, 'skill');
-  const selectedOk = checked === 'true'
-    || /(?:^|\s)on(?:\s|$)/.test(cls || '')
-    || skillModeSelectedByText(mode, `${afterText}\n${toolStateText}`);
+  await locator.click({ force: true }).catch(async () => locator.evaluate((element) => element.click()));
+  let checked = '';
+  let cls = '';
+  let afterText = '';
+  let toolStateText = '';
+  let selectedOk = false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    const freshLocator = await skillModeLocator(page, mode);
+    checked = freshLocator ? await freshLocator.getAttribute('aria-checked').catch(() => '') : '';
+    cls = freshLocator ? await freshLocator.getAttribute('class').catch(() => '') : '';
+    afterText = await activeMenuText(page, 'skill');
+    toolStateText = await visibleComposerToolStateText(page, 'skill');
+    selectedOk = checked === 'true'
+      || /(?:^|\s)on(?:\s|$)/.test(cls || '')
+      || skillModeSelectedByText(mode, `${afterText}\n${toolStateText}`);
+    if (selectedOk) break;
+  }
   state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
   recordStep(
     state,
@@ -5131,19 +5968,23 @@ async function setSkillMode(page, state, caseDir, mode) {
     `label=${label}；aria-checked=${checked || '未读取'}；class=${cls || '未读取'}；菜单=${clip(afterText, 180)}；工具条=${clip(toolStateText, 120)}`,
     selectedOk ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
+    selectedOk ? '' : 'automation_error',
   );
+  if (!selectedOk) {
+    recordAssertion(state, `技能模式 ${mode} 选中`, `${mode} 点击后应有明确选中态反馈。`, false, `点击“${label}”后未检测到选中态：${clip(afterText, 220)}`, 'automation_error');
+  }
   return selectedOk;
 }
 
 async function selectFirstManualSkill(page, state, caseDir) {
   const manualOk = await setSkillMode(page, state, caseDir, 'manual');
   if (!manualOk) return false;
-  const menuText = await activeMenuText(page);
+  const menuText = await activeMenuText(page, 'skill');
   if (/还没安装技能|暂无可选技能|未接入/.test(menuText)) {
     markBlocked(state, `当前没有已安装技能可供手动选择：${clip(menuText, 180)}`);
     return false;
   }
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) {
     recordAssertion(state, '手动技能菜单定位', '自动化应能定位当前打开的技能菜单。', false, '手动模式已点击，但当前技能菜单不可见。', 'automation_error');
     return false;
@@ -5166,7 +6007,7 @@ async function selectFirstManualSkill(page, state, caseDir) {
 async function selectManualSkillByName(page, state, caseDir, skillName) {
   const manualOk = await setSkillMode(page, state, caseDir, 'manual');
   if (!manualOk) return false;
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) {
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
     return false;
@@ -5192,7 +6033,7 @@ async function selectManualSkillByName(page, state, caseDir, skillName) {
 }
 
 async function skillModeLocator(page, mode) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'skill');
   if (!menu) return null;
   const label = SKILL_MODE_LABELS[mode] || mode;
   const escaped = escapeRegExp(label);
@@ -5223,6 +6064,7 @@ async function setConnectorMode(page, state, caseDir, mode) {
     selector: '[data-testid="composer-connectors-menu"]',
     action: '打开输入区【连应用】菜单',
     matchPattern: /连接器|连应用|本次对话不会使用任何连接器|自动使用连接器|手动选择连接器|工具可用/i,
+    menuKind: 'connector',
   });
   const hasAllModeLabels = Object.values(CONNECTOR_MODE_LABELS).every((item) => menuText.includes(item));
   if (!menuText.trim()) {
@@ -5279,7 +6121,7 @@ async function setConnectorMode(page, state, caseDir, mode) {
     const freshLocator = await connectorModeLocator(page, mode);
     checked = freshLocator ? await freshLocator.getAttribute('aria-checked').catch(() => '') : '';
     cls = freshLocator ? await freshLocator.getAttribute('class').catch(() => '') : '';
-    afterText = await activeMenuText(page);
+    afterText = await activeMenuText(page, 'connector');
     toolStateText = await visibleComposerToolStateText(page, 'connector');
     const capabilities = await currentCapabilities(page);
     storedMode = String(capabilities?.connectorRouting?.mode || '');
@@ -5315,12 +6157,12 @@ async function setConnectorMode(page, state, caseDir, mode) {
 async function selectFirstManualConnector(page, state, caseDir) {
   const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
   if (!manualOk) return false;
-  const menuText = await activeMenuText(page);
+  const menuText = await activeMenuText(page, 'connector');
   if (/未接入连接器|暂无连接器|无匹配/.test(menuText)) {
     markBlocked(state, `当前没有可手动选择的连接器：${clip(menuText, 180)}`);
     return false;
   }
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'connector');
   if (!menu) {
     recordAssertion(state, '手动连接器菜单定位', '自动化应能定位当前打开的连应用菜单。', false, '手动模式已点击，但当前连应用菜单不可见。', 'automation_error');
     return false;
@@ -5359,7 +6201,7 @@ async function assertManualSkillSelectionPresent(page, state, caseDir, label = '
 }
 
 async function connectorModeLocator(page, mode) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return null;
   const label = CONNECTOR_MODE_LABELS[mode] || mode;
   const escaped = escapeRegExp(label);
@@ -5393,6 +6235,7 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
   const waitConfig = replyWaitConfig(testCase, timeoutMs);
   const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
     ignoredText: [prompt, testCase.scenario, testCase.test_data],
+    expectedUserText: prompt,
     state,
     caseDir,
     label,
@@ -5730,7 +6573,7 @@ async function executeSkillSmoke008({ page, state, caseDir }) {
   await manual.click({ force: true });
   await page.waitForTimeout(800);
   state.screenshots.manual_open = await shot(page, caseDir, 'skill-008-manual-open');
-  const menuText = await activeMenuText(page);
+  const menuText = await activeMenuText(page, 'skill');
   if (/还没安装技能|暂无可选技能|未接入/.test(menuText)) {
     markBlocked(state, `当前没有已安装技能可供手动选择：${clip(menuText, 180)}`);
     return;
@@ -5760,7 +6603,7 @@ async function executeSkillSmoke009({ page, state, caseDir, timeoutMs }) {
   await disabled.click({ force: true });
   await page.waitForTimeout(500);
   state.screenshots.disabled = await shot(page, caseDir, 'skill-009-disabled');
-  recordStep(state, '切换为禁用技能', '禁用态应说明本次对话不会使用技能。', await activeMenuText(page), 'passed', state.screenshots.disabled);
+  recordStep(state, '切换为禁用技能', '禁用态应说明本次对话不会使用技能。', await activeMenuText(page, 'skill'), 'passed', state.screenshots.disabled);
   await page.keyboard.press('Escape').catch(() => {});
   const before = await conversationSnapshot(page);
   const prompt = '你好，请用一句话告诉我今天是星期几。';
@@ -5770,6 +6613,7 @@ async function executeSkillSmoke009({ page, state, caseDir, timeoutMs }) {
   const waitConfig = replyWaitConfig({ ...state, kind: 'conversation' }, timeoutMs);
   const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
     ignoredText: [prompt],
+    expectedUserText: prompt,
     state,
     caseDir,
     label: '普通问题',
@@ -5793,7 +6637,7 @@ async function executeSkillSmoke010({ page, state, caseDir }) {
   if (!await openSkillMenuInNewTask(page, state)) return;
   const importEntry = page.locator('.ctool-import').filter({ hasText: /导入技能/ }).first();
   if (!(await visible(importEntry, 1500))) {
-    recordAssertion(state, '导入技能入口', '输入区技能菜单应提供导入技能入口。', false, await activeMenuText(page));
+    recordAssertion(state, '导入技能入口', '输入区技能菜单应提供导入技能入口。', false, await activeMenuText(page, 'skill'));
     return;
   }
   await importEntry.click({ force: true });
@@ -5871,6 +6715,7 @@ async function executeExpertSmoke004({ page, state, caseDir, timeoutMs }) {
   const waitConfig = replyWaitConfig({ ...state, kind: 'conversation', scenario: '专家 PRD 任务' }, timeoutMs);
   const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
     ignoredText: [prompt],
+    expectedUserText: prompt,
     state,
     caseDir,
     label: '产品经理专家 PRD 任务',
@@ -6124,6 +6969,7 @@ async function executeExpertSmoke010({ page, state, caseDir, timeoutMs }) {
   const waitConfig = replyWaitConfig({ ...state, kind: 'conversation', scenario: '通用助手普通问题' }, timeoutMs);
   const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
     ignoredText: [prompt],
+    expectedUserText: prompt,
     state,
     caseDir,
     label: '通用助手普通问题',
@@ -6216,16 +7062,23 @@ async function openSkillMenuInNewTask(page, state) {
     selector: '[data-testid="composer-skills-menu"]',
     action: '打开输入区【技能】菜单',
     matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+    menuKind: 'skill',
   });
-  const visibleMenu = Boolean(await activeMenuLocator(page));
-  recordAssertion(state, '输入区技能菜单可见', '技能菜单应在新建任务输入区打开，展示禁用/自动/手动三态。', visibleMenu, await activeMenuText(page));
+  const visibleMenu = Boolean(await activeMenuLocator(page, 'skill'));
+  recordAssertion(state, '输入区技能菜单可见', '技能菜单应在新建任务输入区打开，展示禁用/自动/手动三态。', visibleMenu, await activeMenuText(page, 'skill'));
   return visibleMenu;
 }
 
-async function ensureComposerToolMenu(page, state, { selector, action, matchPattern, expectedLabels = ['禁用', '自动', '手动'] }) {
+async function ensureComposerToolMenu(page, state, {
+  selector,
+  action,
+  matchPattern,
+  expectedLabels = ['禁用', '自动', '手动'],
+  menuKind = '',
+}) {
   const matches = (text) => expectedLabels.every((item) => String(text || '').includes(item))
     && (!matchPattern || matchPattern.test(String(text || '')));
-  let text = await activeMenuText(page);
+  let text = await activeMenuText(page, menuKind);
   if (text.trim()) {
     await page.keyboard.press('Escape').catch(() => {});
     await page.waitForTimeout(250);
@@ -6241,13 +7094,19 @@ async function ensureComposerToolMenu(page, state, { selector, action, matchPatt
     const clicked = await tryClick(page, selector, label, state);
     if (!clicked) throw new Error(`未找到入口：${selector}`);
     await page.waitForTimeout(650);
-    text = await activeMenuText(page);
+    text = await activeMenuText(page, menuKind);
     if (matches(text)) return text;
   }
   return text;
 }
 
-async function activeMenuLocator(page) {
+const COMPOSER_MENU_ANCHORS = Object.freeze({
+  skill: '[data-testid^="composer-skill-mode-"]',
+  connector: '[data-testid^="composer-connector-mode-"]',
+  safety: '[data-testid^="composer-safety-level-option-"]',
+});
+
+async function activeMenuLocator(page, menuKind = '') {
   const selectors = [
     '[data-testid="composer-shell"] .ctool-menu',
     '[data-testid="composer-shell"] .ctool-pop',
@@ -6267,14 +7126,23 @@ async function activeMenuLocator(page) {
     const count = await locators.count().catch(() => 0);
     for (let index = count - 1; index >= 0; index -= 1) {
       const loc = locators.nth(index);
-      if (await visible(loc, 250)) return loc;
+      if (!(await visible(loc, 250))) continue;
+      if (menuKind === 'workMode') {
+        const titles = await loc.locator('.ctool-opt-title').allInnerTexts().catch(() => []);
+        const normalizedTitles = titles.map((item) => item.replace(/\s+/g, ' ').trim());
+        if (!Object.values(WORK_MODE_LABELS).every((label) => normalizedTitles.includes(label))) continue;
+        return loc;
+      }
+      const anchor = COMPOSER_MENU_ANCHORS[menuKind];
+      if (anchor && !(await loc.locator(anchor).count().catch(() => 0))) continue;
+      return loc;
     }
   }
   return null;
 }
 
-async function activeMenuText(page) {
-  const loc = await activeMenuLocator(page);
+async function activeMenuText(page, menuKind = '') {
+  const loc = await activeMenuLocator(page, menuKind);
   if (!loc) return '';
   return loc.innerText({ timeout: 1000 }).catch(() => '');
 }
@@ -6367,7 +7235,7 @@ async function controlChecked(locator) {
 }
 
 async function connectorMenuOptionByText(page, pattern) {
-  const menu = await activeMenuLocator(page);
+  const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return null;
   const candidates = menu.locator('[data-testid^="composer-connector-option-"], .ctool-opt, [role="option"], button');
   const count = await candidates.count().catch(() => 0);
@@ -6389,6 +7257,18 @@ async function firstSummonableExpertCard(page) {
   for (const selector of selectors) {
     const loc = page.locator(selector).first();
     if (await visible(loc, 1000)) return loc;
+  }
+  return null;
+}
+
+async function findExpertCardByName(page, name) {
+  const cards = page.locator('.feat-card, .exp-card, .exp-card-mine');
+  const count = await cards.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const card = cards.nth(index);
+    if (!(await visible(card, 250))) continue;
+    const text = await card.innerText({ timeout: 500 }).catch(() => '');
+    if (String(text || '').split('\n').some((line) => line.trim() === name) || String(text || '').includes(name)) return card;
   }
   return null;
 }
@@ -6441,15 +7321,38 @@ async function expertMarketText(page) {
 
 async function summonProductLikeExpert(page, state, caseDir) {
   await openExpertsPage(page, state, caseDir);
-  const candidate = await productLikeExpertCard(page);
+  const stableCard = await findExpertCardByName(page, 'QBot QA 产品运营专家');
+  let candidate = stableCard
+    ? { card: stableCard, text: await stableCard.innerText({ timeout: 600 }).catch(() => 'QBot QA 产品运营专家'), score: 100 }
+    : await productLikeExpertCard(page);
   if (!candidate) {
-    state.screenshots.no_product_like_expert = await shot(page, caseDir, 'expert-no-product-like-card');
-    markBlocked(state, '专家页没有可稳定用于产品/业务类任务的专家卡片；已排除自动化测试残留专家、专家构建师和通用助手，不能随机选择错误专家伪造产品经理专家场景。');
-    return false;
+    const created = await createBasicExpert(
+      page,
+      state,
+      caseDir,
+      'QBot QA 产品运营专家',
+      '用于 QBot 回归验证的产品运营分析与复盘专家',
+      '你是一位产品运营专家，擅长活动复盘、需求分析、数据指标、权限风险、异常场景和验收标准。回答必须结构清晰、基于用户提供的数据，不虚构外部事实。',
+      'qa-stable-product-expert',
+    );
+    if (!created) {
+      state.screenshots.no_product_like_expert = await shot(page, caseDir, 'expert-no-product-like-card');
+      recordAssertion(state, '产品类 QA 专家预置', '没有稳定产品类专家时，框架应补充 QA 前缀专家后继续。', false, '稳定产品类 QA 专家创建失败。', 'automation_error');
+      return false;
+    }
+    await openExpertsPage(page, state, caseDir);
+    const createdCard = await findExpertCardByName(page, 'QBot QA 产品运营专家');
+    candidate = createdCard
+      ? { card: createdCard, text: await createdCard.innerText({ timeout: 600 }).catch(() => 'QBot QA 产品运营专家'), score: 100 }
+      : await productLikeExpertCard(page);
+    if (!candidate) {
+      recordAssertion(state, '产品类 QA 专家可定位', '创建后必须能在专家列表按产品/运营能力定位。', false, '创建成功后仍未定位到产品类专家。', 'automation_error');
+      return false;
+    }
   }
   const { card, text: cardText } = candidate;
   if (!card) {
-    markBlocked(state, '没有可召唤专家，无法验证专家业务产出。');
+    markFailed(state, '稳定 QA 专家已准备，但框架未能保留可操作卡片定位。', 'automation_error');
     return false;
   }
   await card.click({ force: true });
@@ -6458,13 +7361,21 @@ async function summonProductLikeExpert(page, state, caseDir) {
   if (await visible(summon, 1500)) {
     await summon.click({ force: true });
     await page.waitForTimeout(1200);
-  } else {
-    await closeModal(page);
-    await card.click({ force: true }).catch(() => {});
   }
   state.screenshots.product_expert_summoned = await shot(page, caseDir, 'expert-product-summoned');
-  recordStep(state, '召唤产品/业务类专家', '应通过专家卡片或详情召唤专家进入任务输入区。', `专家卡片：${clip(cardText, 180)}`, 'passed', state.screenshots.product_expert_summoned);
-  return true;
+  const composer = await visible(page.locator('[data-testid="composer-input"]').first(), 3000);
+  const cap = composer ? await currentCapabilities(page) : null;
+  const expertSelected = composer && Boolean(String(cap?.currentExpert || '').trim());
+  recordStep(
+    state,
+    '召唤产品/业务类专家',
+    '应通过专家详情召唤专家进入任务输入区，且 capabilities.currentExpert 明确绑定当前专家。',
+    `专家卡片=${clip(cardText, 180)}；summonVisible=${await visible(summon, 200)}；composer=${composer}；currentExpert=${cap?.currentExpert || '空'}`,
+    expertSelected ? 'passed' : 'failed',
+    state.screenshots.product_expert_summoned,
+  );
+  recordAssertion(state, '产品类专家召唤生效', '召唤后应进入输入区并绑定非空专家身份。', expertSelected, `composer=${composer}；currentExpert=${cap?.currentExpert || '空'}`);
+  return expertSelected;
 }
 
 async function productLikeExpertCard(page) {
@@ -6917,14 +7828,48 @@ export async function createControlPlaneFaultProxy({ upstreamUrl, rules = [], in
         if (rule.transform === 'connector-needs-auth') {
           const connectors = Array.isArray(payload?.connectors) ? payload.connectors : [];
           let modified = 0;
+          let connectorLabel = rule.connectorKey;
           for (const connector of connectors) {
             if (connector?.key !== rule.connectorKey && connector?.label !== rule.connectorKey) continue;
+            connectorLabel = connector?.label || connector?.key || rule.connectorKey;
             connector.statusKind = 'needs_auth';
             connector.statusLabel = '需授权';
             connector.disabledReason = 'QBotTestAgent controlled unavailable snapshot';
             modified += 1;
           }
+          if (modified && payload?.connectorRouting && typeof payload.connectorRouting === 'object') {
+            const routing = payload.connectorRouting;
+            routing.mode = 'manual';
+            routing.explicitConnectorIds = Array.from(new Set([...(Array.isArray(routing.explicitConnectorIds) ? routing.explicitConnectorIds : []), rule.connectorKey]));
+            routing.effectiveConnectorIds = (Array.isArray(routing.effectiveConnectorIds) ? routing.effectiveConnectorIds : []).filter((key) => key !== rule.connectorKey);
+            routing.unavailableRequiredConnectors = [
+              ...(Array.isArray(routing.unavailableRequiredConnectors) ? routing.unavailableRequiredConnectors.filter((item) => item?.key !== rule.connectorKey) : []),
+              { key: rule.connectorKey, label: connectorLabel, reason: 'needs_auth', statusKind: 'needs_auth' },
+            ];
+          }
           hit.modified = modified;
+        } else if (rule.transform === 'skills-empty-installed') {
+          const before = Array.isArray(payload?.installed) ? payload.installed.length : 0;
+          payload.installed = [];
+          hit.modified = before + 1;
+        } else if (rule.transform === 'experts-empty-market') {
+          const before = ['recommended', 'all', 'categories'].reduce((total, key) => total + (Array.isArray(payload?.[key]) ? payload[key].length : 0), 0);
+          payload.recommended = [];
+          payload.all = [];
+          payload.categories = [];
+          hit.modified = before + 1;
+        } else if (rule.transform === 'connectors-empty-catalog') {
+          const before = Array.isArray(payload?.connectors) ? payload.connectors.length : 0;
+          payload.connectors = [];
+          if (payload?.connectorRouting && typeof payload.connectorRouting === 'object') {
+            payload.connectorRouting = {
+              ...payload.connectorRouting,
+              explicitConnectorIds: [],
+              effectiveConnectorIds: [],
+              unavailableRequiredConnectors: [],
+            };
+          }
+          hit.modified = before + 1;
         }
         const body = Buffer.from(JSON.stringify(payload));
         const responseHeaders = { ...proxyResponse.headers, 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length) };
@@ -7835,7 +8780,15 @@ async function openNewTask(page, state) {
     await tryClick(page, '[data-testid="nav-new-task"]', '重载后再次点击【新建任务】', state);
   }
   if (!(await visible(composer, 15000))) throw new Error('点击【新建任务】并重载重试后仍未找到会话输入框。');
-  const cleanDraft = await waitForCleanDraftTask(page, 8000);
+  let cleanDraft = await waitForCleanDraftTask(page, 8000);
+  if (!cleanDraft.ok) {
+    await page.keyboard.press('Escape').catch(() => {});
+    await dismissBlockingOverlays(page, state);
+    await ensureSidebarExpanded(page, state);
+    await tryClick(page, '[data-testid="nav-new-task"]', '隔离校验失败后再次点击【新建任务】', state);
+    await page.waitForTimeout(800);
+    cleanDraft = await waitForCleanDraftTask(page, 8000);
+  }
   recordAssertion(
     state,
     '新建任务隔离',
@@ -8038,6 +8991,7 @@ function replyWaitConfig(testCase, requestedTimeoutMs = DEFAULT_TIMEOUT_MS) {
 
 async function waitForReply(page, beforeState, timeoutMs, {
   ignoredText = [],
+  expectedUserText = '',
   state = null,
   caseDir = '',
   label = '',
@@ -8056,6 +9010,8 @@ async function waitForReply(page, beforeState, timeoutMs, {
   let lastCandidate = '';
   let lastGenerating = false;
   let lastCandidateFullText = '';
+  let boundTaskId = String(before.activeTaskId || '');
+  let taskDrift = '';
   while (Date.now() < deadline) {
     const handledConfirmation = await resolveAssistantConfirmationModal(page, { state, caseDir, label });
     if (handledConfirmation) {
@@ -8065,6 +9021,18 @@ async function waitForReply(page, beforeState, timeoutMs, {
       continue;
     }
     const snapshot = await conversationSnapshot(page);
+    const snapshotTaskId = String(snapshot.activeTaskId || '');
+    if (!boundTaskId && snapshotTaskId) boundTaskId = snapshotTaskId;
+    if (boundTaskId && snapshotTaskId && snapshotTaskId !== boundTaskId) {
+      taskDrift = `期望任务=${boundTaskId}；当前任务=${snapshotTaskId}`;
+      await page.waitForTimeout(500);
+      continue;
+    }
+    const expectedUserVisible = !expectedUserText || snapshot.userTexts.some((text) => userMessageMatchesPrompt(text, expectedUserText));
+    if (!expectedUserVisible) {
+      await page.waitForTimeout(500);
+      continue;
+    }
     const candidate = latestAssistantReplySince(snapshot, before);
     const assistantNodeSeen = Number(before.assistantNodeCount || 0) > 0 || Number(snapshot.assistantNodeCount || 0) > 0;
     const canUseThreadDiffFallback = !candidate
@@ -8125,7 +9093,7 @@ async function waitForReply(page, beforeState, timeoutMs, {
     fullText: '',
     deltaText: '',
     incomplete: true,
-    incomplete_reason: `等待 Agent 回复完成超时（${effectiveTimeoutMs}ms，实际等待 ${waitedMs}ms），当前未观察到可归属本轮的助手正文；未使用整页历史文本作为回复证据。`,
+    incomplete_reason: `等待 Agent 回复完成超时（${effectiveTimeoutMs}ms，实际等待 ${waitedMs}ms），当前未观察到可归属本轮的助手正文；未使用整页历史文本作为回复证据。${taskDrift ? `任务漂移：${taskDrift}。` : ''}`,
     waited_ms: waitedMs,
     min_wait_ms: effectiveMinWaitMs,
     timeout_ms: effectiveTimeoutMs,
@@ -8189,6 +9157,7 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
 
 async function conversationSnapshot(page) {
   const body = await bodyText(page).catch(() => '');
+  const bridge = await qbotE2EState(page);
   const assistantTexts = await assistantMessageTexts(page);
   const userTexts = await userMessageTexts(page);
   const normalizedAssistantTexts = assistantTexts.map(cleanAssistantText).filter(Boolean);
@@ -8202,14 +9171,22 @@ async function conversationSnapshot(page) {
     assistantCount: normalizedAssistantTexts.length,
     assistantNodeCount: assistantTexts.length,
     latestAssistantText: normalizedAssistantTexts.at(-1) || '',
+    activeTaskId: bridge?.available ? String(bridge.activeId || '') : '',
+    bridgeMessageCount: bridge?.available ? Number(bridge.messageCount || 0) : null,
   };
 }
 
 async function assistantMessageTexts(page) {
   return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
     const content = node.querySelector('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content');
-    const text = content?.innerText || node.innerText || node.textContent || '';
-    return String(text);
+    if (content) return String(content.innerText || content.textContent || '');
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll('button, [role="button"], [data-testid*="toolbar"], [data-testid*="action"], [data-testid*="composer"], .ctools, .ctool-menu, .ctool-pop, .message-actions, .aui-message-actions').forEach((element) => element.remove());
+    return String(clone.innerText || clone.textContent || '');
+  }).filter((text) => {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return false;
+    return !/^(?:动手|问答|规划|禁用|自动|手动|技能|连应用|连接器|M[1-4]|发送|停止生成)(?:\s+(?:动手|问答|规划|禁用|自动|手动|技能|连应用|连接器|M[1-4]|发送|停止生成))*$/.test(normalized);
   })).catch(() => []);
 }
 
@@ -8240,6 +9217,16 @@ function latestAssistantReplySince(snapshot, before) {
   const latest = cleanAssistantText(snapshot.latestAssistantText || '');
   if (latest && latest !== cleanAssistantText(before.latestAssistantText || '')) return latest;
   return '';
+}
+
+function userMessageMatchesPrompt(message, prompt) {
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const actual = normalize(message);
+  const expected = normalize(prompt);
+  if (!expected) return true;
+  if (actual.includes(expected) || expected.includes(actual)) return true;
+  const anchor = expected.slice(0, Math.min(48, expected.length));
+  return anchor.length >= 8 && actual.includes(anchor);
 }
 
 function cleanAssistantText(text) {
@@ -8290,6 +9277,8 @@ function buildPrompt(testCase, attachments) {
 
 function buildConversationTurns(testCase, attachments) {
   const data = expandTestData(testCase.test_data || testCase.scenario);
+  const numericMemory = numericMemoryConversationTurns(testCase);
+  if (numericMemory.length) return numericMemory;
   const split = splitFollowUpData(data);
   if (split) return [
     {
@@ -8301,8 +9290,6 @@ function buildConversationTurns(testCase, attachments) {
       prompt: split.followUp,
     },
   ];
-  const numericMemory = numericMemoryConversationTurns(testCase);
-  if (numericMemory.length) return numericMemory;
   const scripted = scenarioConversationTurns(testCase, attachments);
   if (scripted.length) return scripted;
   return [{ label: '第一轮', prompt: buildPrompt(testCase, attachments) }];
@@ -8310,24 +9297,32 @@ function buildConversationTurns(testCase, attachments) {
 
 function numericMemoryConversationTurns(testCase) {
   if (!isNumericMemoryScenario(testCase)) return [];
-  const firstPrompt = expandTestData(testCase.test_data || '')
-    || '请记住：活动报名100人，到场70人，成交12单。先复述这三个数字。';
   return [
     {
       label: '第一轮：记录并复述活动数字',
-      prompt: firstPrompt,
+      prompt: '请记住这组活动数据：报名100人，到场70人，成交12单。请先复述这三个数字。',
       expectedNumbers: ['100', '70', '12'],
       expectedDescription: '第一轮回复应复述报名 100 人、到场 70 人、成交 12 单。',
     },
     {
-      label: '第二轮：追问成交和转化率',
-      prompt: '刚才那组活动数据里，成交单数是多少？请计算到场率（到场/报名）和成交率（成交/到场），并给出一句话结论。',
+      label: '第二轮：追问报名人数',
+      prompt: '刚才记录的活动数据里，报名人数是多少？只回答报名人数并说明单位。',
+      expectedNumbers: ['100'],
+      expectedDescription: '第二轮回复应从上一轮上下文回答报名 100 人。',
+    },
+    {
+      label: '第三轮：追问到场人数和到场率',
+      prompt: '那到场人数是多少？请同时计算到场率（到场/报名）。',
+      expectedNumbers: ['70'],
+      expectedPatterns: [/70\s*%|70％|百分之七十/],
+      expectedDescription: '第三轮回复应从上下文回答到场 70 人、到场率 70%。',
+    },
+    {
+      label: '第四轮：追问成交和成交率',
+      prompt: '最后，成交单数是多少？请计算成交率（成交/到场），并给出一句话结论。',
       expectedNumbers: ['12'],
-      expectedPatterns: [
-        /70\s*%|70％|百分之七十/,
-        /17(?:\.\d+)?\s*%|17(?:\.\d+)?％|约\s*17|17\.14|17\.1|百分之十七/,
-      ],
-      expectedDescription: '第二轮回复应基于上一轮上下文回答成交 12 单，并给出到场率 70% 和成交率约 17%。',
+      expectedPatterns: [/17(?:\.\d+)?\s*%|17(?:\.\d+)?％|约\s*17|17\.14|17\.1|百分之十七/],
+      expectedDescription: '第四轮回复应从上下文回答成交 12 单、成交率约 17.1%。',
     },
   ];
 }
@@ -8343,6 +9338,14 @@ function scenarioConversationTurns(testCase, attachments) {
     if (!attachments.length) return prompt;
     return `${prompt}\n\n我已经上传了相关附件，请先读取附件内容再回答；如果某个附件无法读取，请直接说明。`;
   };
+  if (testCase.id === 'SIT-HOME-037') {
+    return [{
+      label: '第一轮：识别 PNG 漏斗图',
+      prompt: withAttachmentHint('请读取我上传的 PNG 活动漏斗图，提取报名、到场、成交三个阶段的数字，并计算到场率和成交率；不要改成日期、问候或其他场景。'),
+      expectedNumbers: ['100', '70', '12'],
+      expectedDescription: '回复应读取图片中的报名 100、到场 70、成交 12。',
+    }];
+  }
   if (/10\s*轮|连续追问|自动压缩|触发上下文压缩/.test(text)) {
     if (/自动压缩|触发上下文压缩|长会话/.test(text) && /活动报名\s*100|报名100|到场\s*70|成交\s*12/.test(text)) {
       return [
@@ -8463,6 +9466,9 @@ function isLongTextScenario(testCase) {
 
 function attachmentPromptForScenario(testCase) {
   const text = `${testCase.scenario || ''}\n${testCase.test_data || ''}`;
+  if (testCase.id === 'SIT-HOME-037') {
+    return '请读取我上传的 PNG 活动漏斗图，提取报名、到场、成交三个阶段的数字，并计算到场率和成交率。';
+  }
   if (/图片|图像|视觉|多模态|PNG/i.test(text)) {
     return '请查看我上传的图片，说明图片里的主要内容，并指出是否有明显的文字、图表或界面问题。';
   }
@@ -8850,7 +9856,11 @@ async function maybeRequestLlmReview({ page, state, testCase, caseDir, options, 
 }
 
 function finalizeState(state) {
-  if (state.status === 'blocked') return;
+  // Handlers may terminate a case directly when a controlled fixture, proxy, or
+  // other automation prerequisite cannot be prepared.  Do not let the generic
+  // assertion aggregation below turn that explicit terminal failure into a
+  // false pass merely because no assertion was recorded afterwards.
+  if (state.status === 'blocked' || (state.status === 'failed' && state.actual_result)) return;
   if (state.llm_review?.status === 'needed') {
     const hardFailures = state.assertions.filter((item) => item.status === 'failed');
     if (!hardFailures.length) {
