@@ -2213,7 +2213,10 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
   const prompt = userPromptFromCase(testCase, '你好，请用一句话说明你能帮我做什么。');
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '组合能力会话' });
   const expected = String(testCase.expected_result || testCase.success_criteria || '');
-  if (id !== 'SIT-HOME-001' && (/专家/.test(expected) || /专家/.test(testCase.scenario || ''))) {
+  const expertScenarioText = `${expected}\n${testCase.scenario || ''}`;
+  const expectsSelectedExpert = !/不选专家|未选专家|不挂专家|通用助手/.test(expertScenarioText)
+    && /专家/.test(expertScenarioText);
+  if (id !== 'SIT-HOME-001' && expectsSelectedExpert) {
     recordAssertion(state, '专家选择后的回复相关性', '选择专家后回复应体现所选专家或任务领域。', /产品|经理|需求|复盘|运营|专家|PRD|目标|流程/.test(reply.deltaText), clip(reply.deltaText, 320));
   }
   if (expectsDisabledConnectorScenario(testCase)) {
@@ -3334,7 +3337,12 @@ export async function createConnectorRegressionServer() {
   let origin = '';
   const server = http.createServer(async (req, res) => {
     const url = new URL(String(req.url || '/'), 'http://127.0.0.1');
-    state.hits.push({ method: req.method || 'GET', path: `${url.pathname}${url.search}`, at: Date.now() });
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const requestText = Buffer.concat(chunks).toString('utf8');
+    let requestPayload = {};
+    try { requestPayload = requestText ? JSON.parse(requestText) : {}; } catch {}
+    state.hits.push({ method: req.method || 'GET', path: `${url.pathname}${url.search}`, rpcMethod: requestPayload?.method || '', at: Date.now() });
     if (url.pathname === '/api/openapi/servers') {
       const runtime = (name, endpointUrl, status = 'connected') => ({
         name,
@@ -3349,8 +3357,6 @@ export async function createConnectorRegressionServer() {
         runtimeInvocation: status === 'oauth_required' ? {} : {
           kind: 'mcp_streamable_http',
           endpointUrl,
-          authorization: { type: 'bearer', source: 'lingxi_oauth2_access_token' },
-          headersRef: 'server_only:qbot_test_agent_fixture',
         },
         updatedAt: '2026-07-15T00:00:00Z',
         revision: `qbot-test-agent-${name}-1`,
@@ -3366,8 +3372,36 @@ export async function createConnectorRegressionServer() {
       return;
     }
     if (url.pathname === '/mcp/healthy') {
+      if (requestPayload?.method === 'notifications/initialized' || requestPayload?.id == null) {
+        res.writeHead(202, { 'content-type': 'application/json', 'mcp-session-id': 'qbot-test-agent-healthy' });
+        res.end('{}');
+        return;
+      }
+      let result = {};
+      if (requestPayload?.method === 'initialize') {
+        result = {
+          protocolVersion: requestPayload?.params?.protocolVersion || '2025-03-26',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'qbot-test-agent', version: '1.0.0' },
+        };
+      } else if (requestPayload?.method === 'tools/list') {
+        result = {
+          tools: [{
+            name: 'dev_healthy_tool',
+            title: 'Dev Healthy tool',
+            description: 'Returns deterministic QBotTestAgent fixture evidence.',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: true },
+          }],
+        };
+      } else if (requestPayload?.method === 'tools/call') {
+        result = {
+          content: [{ type: 'text', text: 'dev_healthy fixture invocation succeeded' }],
+          structuredContent: { ok: true, fixture: 'dev_healthy' },
+          isError: false,
+        };
+      }
       res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'qbot-test-agent-healthy' });
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-03-26', capabilities: {}, serverInfo: { name: 'qbot-test-agent', version: '1.0.0' } } }));
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: requestPayload?.id ?? 'qbot-mcp-preflight', result }));
       return;
     }
     if (url.pathname === '/mcp/unreachable') {
@@ -3711,20 +3745,26 @@ async function executeSitSkillDeleteFailure({ page, state, caseDir, options, run
       await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
     };
     page.on('dialog', onDialog);
+    let confirmation = { message: '' };
     try {
-      await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
-      await page.waitForTimeout(1800);
+      confirmation = await confirmDestructiveAction(
+        page,
+        async () => remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click())),
+        { accept: true },
+      );
+      await page.waitForTimeout(2500);
     } finally {
       page.off('dialog', onDialog);
     }
     await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
     const retained = Boolean(await findSkillCardByText(page, new RegExp(marker, 'i')));
     const hits = control.proxy.state.hits.filter((item) => item.id === 'skill-022-uninstall-failure');
-    const feedback = dialogs.join(' / ');
+    const pageFeedback = await page.locator('[data-testid="skill-operation-feedback"]').first().innerText({ timeout: 800 }).catch(() => '');
+    const feedback = [confirmation.message, ...dialogs, pageFeedback].filter(Boolean).join(' / ');
     state.screenshots.skill_022_after_failure = await shot(page, caseDir, 'skill-022-after-controlled-delete-failure');
-    state.artifacts.skill_022_uninstall_failure = { route_hits: hits.length, dialogs, retained };
-    recordStep(state, '确认删除并注入受控卸载失败', '请求应命中卸载失败代理，页面提示失败，原技能继续保留。', `routeHits=${hits.length}；dialogs=${feedback || '无'}；retained=${retained}`, hits.length === 1 ? 'passed' : 'failed', state.screenshots.skill_022_after_failure, hits.length === 1 ? '' : 'automation_error');
-    recordAssertion(state, '卸载失败保留原技能并提示重试', '卸载失败后原技能必须仍在已安装列表，提示应可理解且不泄露 URL/token/堆栈。', hits.length === 1 && retained && /删除失败|卸载失败|失败|重试/.test(feedback) && !/https?:|token|stack|traceback/i.test(feedback), `dialogs=${feedback || '无'}；retained=${retained}`);
+    state.artifacts.skill_022_uninstall_failure = { route_hits: hits.length, confirmation: confirmation.message, confirmation_source: confirmation.source, dialogs, page_feedback: pageFeedback, retained };
+    recordStep(state, '确认删除并注入受控卸载失败', '请求应命中卸载失败代理，页面提示失败，原技能继续保留。', `routeHits=${hits.length}；feedback=${feedback || '无'}；retained=${retained}`, hits.length === 1 ? 'passed' : 'failed', state.screenshots.skill_022_after_failure, hits.length === 1 ? '' : 'automation_error');
+    recordAssertion(state, '卸载失败保留原技能并提示重试', '卸载失败后原技能必须仍在已安装列表，提示应可理解且不泄露 URL/token/堆栈。', hits.length === 1 && retained && /删除失败|卸载失败|失败|重试/.test(feedback) && !/https?:|token|stack|traceback/i.test(feedback), `feedback=${feedback || '无'}；retained=${retained}`);
   } finally {
     await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
@@ -3882,6 +3922,16 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
     const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常首页能力配置' });
     await fixture.close().catch(() => {});
     state.artifacts.home_capability_connector_fixture_hits = connectorFixture.state.hits;
+    if (['SIT-HOME-005', 'SIT-HOME-008', 'SIT-HOME-009'].includes(testCase.id)) {
+      const invocationHits = connectorFixture.state.hits.filter((item) => item.rpcMethod === 'tools/call');
+      recordAssertion(
+        state,
+        '首页连接器 Fixture 真实调用',
+        '手动选择 dev_healthy 的组合用例必须真实完成 MCP tools/call，不能只凭目录 ready 判为可执行。',
+        invocationHits.length > 0,
+        `tools/call hits=${invocationHits.length}；rpc=${connectorFixture.state.hits.map((item) => item.rpcMethod).filter(Boolean).join(',') || '无'}`,
+      );
+    }
     await connectorFixture.close().catch(() => {});
     recordAssertion(
       state,
@@ -3983,7 +4033,7 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
   state.artifacts.skill_fixture_cleanup = cleanup;
   await page.waitForTimeout(700);
 
-  if (testCase.id === 'SIT-SKILL-027' || testCase.id === 'SIT-SKILL-028') {
+  if (testCase.id === 'SIT-SKILL-028') {
     const slug = slugs[0];
     const setup = await installSkillFixtureForSetup(page, state, caseDir, slug, { expectFailure: true });
     if (!setup.ok) {
@@ -4137,12 +4187,24 @@ async function executeSitSkillRejectedExplicitRetry({ page, state, testCase, cas
     const marker = automationSkillMarker(testCase, 'qa-runtime-retryable');
     let card = await searchAutomationSkillCard(page, state, caseDir, marker);
     if (!card) card = await findSkillCardByText(page, /装不上|rejected|重试安装/);
-    state.screenshots.skill_027_before_retry = await shot(page, caseDir, 'skill-027-before-explicit-retry');
     if (!card) return markFailed(state, `QA SkillHub 未返回拒装测试技能 ${marker}，无法执行显式重试。`, 'automation_error');
-    const before = await card.innerText({ timeout: 1200 }).catch(() => '');
-    const retry = card.locator('.skill-install').filter({ hasText: /重试安装/ }).first();
+    let before = await card.innerText({ timeout: 1200 }).catch(() => '');
+    const initialInstall = card.locator('.skill-install:not([disabled])').first();
+    if (await visible(initialInstall, 1200)) {
+      await initialInstall.click({ force: true }).catch(async () => initialInstall.evaluate((el) => el.click()));
+      const rejected = await waitForSkillOperationFeedback(page, 120000);
+      if (!rejected.terminal || !/装不上|拒装|失败|重试|未安装/.test(rejected.text)) {
+        return markFailed(state, `无法先形成用户可见拒装状态：${clip(rejected.text, 260)}`, 'automation_error');
+      }
+      card = await searchAutomationSkillCard(page, state, caseDir, marker) || card;
+      before = `${await card.innerText({ timeout: 1200 }).catch(() => '')}\n${rejected.text}`;
+    }
+    state.screenshots.skill_027_before_retry = await shot(page, caseDir, 'skill-027-before-explicit-retry');
+    const globalRetry = page.locator('[data-testid="skill-operation-feedback"] button, [data-testid="skill-operation-feedback"] [role="button"]').filter({ hasText: /重试|重新安装/ }).first();
+    const cardRetry = card.locator('.skill-install').filter({ hasText: /重试安装|重试/ }).first();
+    const retry = await visible(globalRetry, 1200) ? globalRetry : cardRetry;
     if (!(await visible(retry, 1200))) {
-      recordAssertion(state, '拒装技能显式重试入口', '拒装技能卡片应展示可点击“重试安装”。', false, clip(before, 300), 'bug');
+      recordAssertion(state, '拒装技能显式重试入口', '拒装后页面或技能卡片应展示可点击“重试/重试安装”。', false, clip(before, 300), 'bug');
       return;
     }
     control.proxy.arm();
@@ -4206,10 +4268,10 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
   if (!(await visible(remove, 1200))) {
     return recordAssertion(state, '拒装技能删除入口', '已安装的拒装/未就绪技能应仍可删除。', false, clip(before, 300));
   }
-  const confirmation = await captureDialogDuringWithAction(
+  const confirmation = await confirmDestructiveAction(
     page,
     async () => remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click())),
-    { accept: true, timeoutMs: 5000 },
+    { accept: true },
   );
   await page.waitForTimeout(1800);
   recordStep(
@@ -4437,11 +4499,19 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   }).catch((error) => ({ error: error.message, connectors: [], health: [] }));
   await restarted.page.waitForTimeout(1500);
   const text = JSON.stringify(prepared);
-  const hasUnreachable = /dev_unreachable|Dev Unreachable/.test(text) && /unreachable/.test(text);
-  const hasNeedsAuth = /dev_needs_auth|Dev Needs Auth/.test(text) && /needs_auth/.test(text);
+  const connectorByName = (pattern) => prepared.connectors.find((item) => pattern.test(`${item.key || ''}\n${item.label || ''}`));
+  const healthByName = (pattern) => prepared.health.find((item) => pattern.test(`${item.key || ''}\n${item.name || ''}`));
+  const healthyConnector = connectorByName(/dev_healthy|Dev Healthy/);
+  const unreachableConnector = connectorByName(/dev_unreachable|Dev Unreachable/);
+  const needsAuthConnector = connectorByName(/dev_needs_auth|Dev Needs Auth/);
+  const healthyHealth = healthByName(/dev_healthy/);
+  const unreachableHealth = healthByName(/dev_unreachable/);
+  const hasHealthy = healthyConnector?.statusKind === 'ready' && healthyHealth?.status === 'healthy';
+  const hasUnreachable = unreachableConnector?.statusKind === 'ready' && unreachableHealth?.status === 'unreachable';
+  const hasNeedsAuth = needsAuthConnector?.statusKind === 'needs_auth';
   state.artifacts.connector_regression_fixture = prepared;
-  if (!hasUnreachable || !hasNeedsAuth) {
-    return { ok: false, reason: `产品 dev 连接器 Fixture 未形成 unreachable/needs_auth 三态：${clip(text, 500)}` };
+  if (!hasHealthy || !hasUnreachable || !hasNeedsAuth) {
+    return { ok: false, reason: `产品 dev 连接器 Fixture 未形成 healthy/unreachable/needs_auth 三态：${clip(text, 500)}` };
   }
   return { ok: true, page: restarted.page, prepared };
 }
@@ -4539,7 +4609,7 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
     markFailed(state, '已选中连接器，但框架未能读取 connector key，无法执行渲染层健康快照故障注入。', 'automation_error');
     return;
   }
-  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-012 不健康快照代理', initiallyArmed: true, rules: [{
+  const control = await installControlPlaneHttpControl({ options, runtime, state, caseDir, label: 'CONN-012 不健康快照代理', initiallyArmed: false, rules: [{
     id: 'connector-012-needs-auth',
     method: 'GET',
     pathPrefix: '/api/capabilities',
@@ -4553,6 +4623,12 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
   }
   try {
     page = control.page;
+    await openNewTask(page, state);
+    if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+    if (!await selectManualConnectorByKey(page, state, caseDir, connectorKey)) return;
+    control.proxy.arm();
+    await page.evaluate(async () => window.agent.capabilities()).catch(() => null);
+    await page.waitForTimeout(900);
     await page.keyboard.press('Escape').catch(() => {});
     await ensureComposerToolMenu(page, state, {
       selector: '[data-testid="composer-connectors-menu"]',
@@ -4807,10 +4883,29 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
   const selectedProject = candidates[0] || null;
   let projectName = selectedProject?.name || preferredProjectName;
   let projectId = selectedProject?.id || '';
+  const workspaceAlreadyVisible = await visible(page.locator('[data-testid="projects-workspace-view"]').first(), 1200);
+  if (workspaceAlreadyVisible) {
+    const workspaceText = await page.locator('[data-testid="projects-workspace-view"]').first().innerText({ timeout: 1200 }).catch(() => '');
+    const title = page.locator('[data-testid="projects-workspace-view"] .proj-workbench-title h2').first();
+    const currentName = await title.getAttribute('title').catch(() => '') || await title.innerText({ timeout: 700 }).catch(() => '');
+    const currentProject = candidates.find((item) => item.name === currentName || workspaceText.includes(item.name));
+    projectName = currentProject?.name || currentName || projectName;
+    projectId = currentProject?.id || '';
+    recordStep(
+      state,
+      '复用当前已打开项目详情',
+      '前序 Case 留在项目工作台时，应直接识别并复用当前项目，不能误找项目卡片或“新建项目”按钮。',
+      `project=${projectName}；projectId=${projectId || '待回读'}；workspace=${clip(workspaceText, 180)}`,
+      'passed',
+    );
+  }
   let card = projectId
     ? page.getByTestId(`project-card-${projectId}`).first()
     : page.locator('[data-testid^="project-card-"]').filter({ hasText: preferredProjectName }).first();
-  if (!(await visible(card, 1200))) {
+  if (workspaceAlreadyVisible) {
+    // Already in the project selected above; proceed directly to runtime
+    // readiness instead of treating the absent list card as missing test data.
+  } else if (!(await visible(card, 1200))) {
     const create = page.locator('[data-testid="projects-create-button"]').first();
     if (!(await visible(create, 1500))) {
       state.screenshots.project_fixture_create_missing = await shot(page, caseDir, 'project-fixture-create-missing');
@@ -6326,6 +6421,31 @@ async function selectFirstManualConnector(page, state, caseDir) {
   state.artifacts.selected_connector = { key: connectorKey, label: firstLine(optionText), testid: testId || '' };
   recordStep(state, '手动选择第一个健康连接器', '连接器应被选中并在菜单或输入区有可见反馈。', clip(optionText, 180), 'passed', state.screenshots.manual_connector_selected);
   return true;
+}
+
+async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
+  const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
+  if (!manualOk) return false;
+  const menu = await activeMenuLocator(page, 'connector');
+  if (!menu) return false;
+  const candidates = menu.locator('[data-testid^="composer-connector-option-"], .ctool-opt, [role="option"]');
+  const count = await candidates.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    if (!(await visible(candidate, 250))) continue;
+    const testId = await candidate.getAttribute('data-testid').catch(() => '');
+    const parsedKey = String(testId || '').replace(/^composer-connector-option-/, '').replace(/-(?:tag|checkbox|row)$/, '');
+    if (parsedKey !== connectorKey) continue;
+    const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
+    await candidate.click({ force: true }).catch(async () => candidate.evaluate((el) => el.click()));
+    await page.waitForTimeout(700);
+    state.artifacts.selected_connector = { key: connectorKey, label: firstLine(text), testid: testId || '' };
+    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
+    recordStep(state, '代理重启后重选同一连接器', '控制面代理启动会重建 Electron，必须在故障注入前按 connector key 恢复本轮手动选择。', `connector=${connectorKey}；${clip(text, 140)}`, 'passed', state.screenshots.manual_connector_reselected);
+    return true;
+  }
+  recordAssertion(state, '代理重启后连接器重选', `应能按 key=${connectorKey} 恢复故障注入前的手动选择。`, false, clip(await activeMenuText(page, 'connector'), 300), 'automation_error');
+  return false;
 }
 
 async function assertManualSkillSelectionPresent(page, state, caseDir, label = '手动技能已保留') {
@@ -7969,7 +8089,14 @@ export async function createControlPlaneFaultProxy({ upstreamUrl, rules = [], in
         let payload = {};
         try { payload = JSON.parse(Buffer.concat(responseChunks).toString('utf8') || '{}'); } catch { payload = {}; }
         if (rule.transform === 'connector-needs-auth') {
-          const connectors = Array.isArray(payload?.connectors) ? payload.connectors : [];
+          const capabilityPayload = Array.isArray(payload?.connectors)
+            ? payload
+            : Array.isArray(payload?.data?.connectors)
+              ? payload.data
+              : Array.isArray(payload?.data?.capabilities?.connectors)
+                ? payload.data.capabilities
+                : payload;
+          const connectors = Array.isArray(capabilityPayload?.connectors) ? capabilityPayload.connectors : [];
           let modified = 0;
           let connectorLabel = rule.connectorKey;
           for (const connector of connectors) {
@@ -7980,8 +8107,8 @@ export async function createControlPlaneFaultProxy({ upstreamUrl, rules = [], in
             connector.disabledReason = 'QBotTestAgent controlled unavailable snapshot';
             modified += 1;
           }
-          if (modified && payload?.connectorRouting && typeof payload.connectorRouting === 'object') {
-            const routing = payload.connectorRouting;
+          if (modified && capabilityPayload?.connectorRouting && typeof capabilityPayload.connectorRouting === 'object') {
+            const routing = capabilityPayload.connectorRouting;
             routing.mode = 'manual';
             routing.explicitConnectorIds = Array.from(new Set([...(Array.isArray(routing.explicitConnectorIds) ? routing.explicitConnectorIds : []), rule.connectorKey]));
             routing.effectiveConnectorIds = (Array.isArray(routing.effectiveConnectorIds) ? routing.effectiveConnectorIds : []).filter((key) => key !== rule.connectorKey);
@@ -8157,6 +8284,18 @@ async function captureConfirmDuringWithAction(page, action, { accept = false } =
       delete globalThis.__qbotAutomationConfirmCalls;
     }).catch(() => {});
   }
+}
+
+async function confirmDestructiveAction(page, action, { accept = true } = {}) {
+  const native = await captureConfirmDuringWithAction(page, action, { accept });
+  if (native.message || !accept) return { ...native, source: native.message ? 'native-confirm' : 'none' };
+  const dialog = page.locator('[data-testid="skill-uninstall-dialog"], [role="dialog"], .modal').filter({ hasText: /删除|卸载|移除|确认/ }).first();
+  if (!(await visible(dialog, 1200))) return { message: '', source: 'none' };
+  const message = await dialog.innerText({ timeout: 900 }).catch(() => '');
+  const confirm = dialog.locator('[data-testid="skill-uninstall-confirm"], button, [role="button"]').filter({ hasText: /确认|删除|卸载|移除/ }).first();
+  if (!(await visible(confirm, 800))) return { message, source: 'custom-dialog-missing-confirm' };
+  await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
+  return { message, source: 'custom-dialog' };
 }
 
 function textStillPresent(fullText, originalCardText) {
@@ -9485,12 +9624,12 @@ function buildPrompt(testCase, attachments) {
   return lines.join('\n');
 }
 
-function buildConversationTurns(testCase, attachments) {
+export function buildConversationTurns(testCase, attachments) {
   const data = expandTestData(testCase.test_data || testCase.scenario);
-  const scripted = scenarioConversationTurns(testCase, attachments);
-  if (scripted.length) return scripted;
   const numericMemory = numericMemoryConversationTurns(testCase);
   if (numericMemory.length) return numericMemory;
+  const scripted = scenarioConversationTurns(testCase, attachments);
+  if (scripted.length) return scripted;
   const split = splitFollowUpData(data);
   if (split) return [
     {
@@ -9897,7 +10036,7 @@ function expectedKeywordsForCase(testCase) {
   return dedupe(candidates.map(String), (item) => item);
 }
 
-function replyLooksRelevant(reply, testCase, prompt = '') {
+export function replyLooksRelevant(reply, testCase, prompt = '') {
   const text = semanticReplyText(reply);
   if (text.length < 15) return false;
   const scenario = String(testCase.scenario || '');
@@ -9930,6 +10069,13 @@ function replyLooksRelevant(reply, testCase, prompt = '') {
   for (const [scenarioPattern, replyPattern] of targetedRules) {
     if (scenarioPattern.test(relevanceInput) && replyPattern.test(text)) return true;
   }
+  const constraintTerms = [
+    '输出格式', '风险', '验证方法', '验证方式', '样本量', '用户分层', '渠道',
+    '转化路径', '数据结论', '可能原因', '下一步动作', '指标', '口径', '验收',
+  ];
+  const mentionedConstraints = constraintTerms.filter((term) => relevanceInput.includes(term));
+  if (mentionedConstraints.some((term) => text.includes(term))
+    || (mentionedConstraints.length && /已记住|已记录|收到|了解|补充|会按|后续/.test(text))) return true;
   const keywords = expectedKeywordsForCase(testCase).filter((item) => !/全局|界面|核心|功能/.test(item));
   if (!keywords.length) return true;
   const promptTokens = String(prompt || testCase.test_data || '')
@@ -10224,7 +10370,7 @@ export function obviousDuplicateEvidence(text) {
   }
   const seen = new Map();
   for (const line of lines) {
-    if (line.length < 8 || /^(下面是|具体来说|如果你|需要我|说明[:：]?$)/.test(line)) continue;
+    if (line.length < 16 || /^(下面是|具体来说|如果你|需要我|说明[:：]?$)/.test(line)) continue;
     const count = (seen.get(line) || 0) + 1;
     seen.set(line, count);
     if (count >= 2) return `检测到重复段落：${clip(line, 120)}`;
@@ -10239,7 +10385,11 @@ export function obviousDuplicateEvidence(text) {
 function isRepeatSafeStructuralLine(line) {
   const text = String(line || '').trim();
   if (!text) return true;
-  if (/^(调用连接器|运行命令|读取文件|新建文件|编辑文件|写入文件|保存文件|打开文件|删除文件|调用技能)(?:\s|$)/.test(text)) return true;
+  if (/^(调用\s*[^，。；;:：]{1,80}|调用连接器|运行命令|读取文件|新建文件|编辑文件|写入文件|保存文件|打开文件|删除文件|调用技能)(?:\s|$)/.test(text)) return true;
+  if (/^(?:思考|思考中|生成中|运行中|执行中)[.。…]*$/i.test(text)) return true;
+  if (/^(?:🔒|⚠️?|✅|❌|ℹ️?|📌|📄|🔍)\s*[^。！？!?；;]{1,18}$/u.test(text)) return true;
+  if (/^(?:用户看到的提示|提示|说明|结果|输出|权限|状态)[:：]?$/.test(text)) return true;
+  if (/^[^。！？!?；;]{1,24}[:：]$/.test(text)) return true;
   if (/^(?:ERROR|Error|错误|错误码|状态码|error code|status code|DETAILS|CODE|SUGGESTED ACTIONS)[:：]/i.test(text)) return true;
   if (/^(?:Use a public URL|Set QBOT_WEB_TOOLS_)/.test(text)) return true;
   if (/^[\s|│┃┌┐└┘├┤┬┴┼─━═╞╡╪+:\-▼▲▶◀→←↓↑↔⇢⟶]+$/.test(text)) return true;

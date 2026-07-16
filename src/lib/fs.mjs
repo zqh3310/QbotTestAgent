@@ -12,7 +12,32 @@ export function readJsonFile(file) {
 
 export function writeJsonFile(file, data) {
   ensureDir(path.dirname(file));
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(file, `${JSON.stringify(data, (_key, value) => (
+    typeof value === 'string' ? replaceUnpairedSurrogates(value) : value
+  ), 2)}\n`, 'utf8');
+}
+
+// Electron can expose an isolated UTF-16 surrogate while an emoji is only
+// partially rendered. JSON.parse accepts it, but jq and report consumers reject
+// the resulting document. Preserve valid pairs and replace only malformed ones.
+export function replaceUnpairedSurrogates(value) {
+  const input = String(value || '');
+  let output = '';
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = input.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        output += input[index] + input[index + 1];
+        index += 1;
+      } else {
+        output += '\uFFFD';
+      }
+      continue;
+    }
+    output += code >= 0xDC00 && code <= 0xDFFF ? '\uFFFD' : input[index];
+  }
+  return output;
 }
 
 export function writeTextFile(file, text) {
@@ -90,4 +115,3 @@ export function parseArgs(argv) {
   }
   return { command, options };
 }
-

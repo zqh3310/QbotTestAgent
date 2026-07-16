@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  buildConversationTurns,
   createControlPlaneFaultProxy,
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
@@ -12,8 +13,10 @@ import {
   latestAssistantReplyForPrompt,
   obviousDuplicateEvidence,
   rawArtifactEventLeakEvidence,
+  replyLooksRelevant,
   reviewCaseCredibility,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
+import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
@@ -62,6 +65,7 @@ const required = [
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*专家页通用助手入口/],
   ['HOME-016 真实发送四轮业务数字', /numericMemoryConversationTurns[\s\S]*报名100人，到场70人，成交12单[\s\S]*第二轮：追问报名人数[\s\S]*第三轮：追问到场人数和到场率[\s\S]*第四轮：追问成交和成交率/],
+  ['HOME-009 不选专家不执行专家回复断言', /expertScenarioText[\s\S]*不选专家\|未选专家\|不挂专家\|通用助手[\s\S]*expectsSelectedExpert/],
   ['HOME-004 到 HOME-009 统一使用稳定能力测试数据', /SIT-HOME-004'[\s\S]*SIT-HOME-009'[\s\S]*executeHomeCapabilityFixtureCase[\s\S]*qa-python-runtime[\s\S]*dev_healthy/],
   ['首页能力 Fixture 失败和结束均恢复正常环境', /executeHomeCapabilityFixtureCase[\s\S]*启动失败后恢复正常配置[\s\S]*首页能力技能 Fixture 清理[\s\S]*恢复正常首页能力配置/],
   ['Fixture 包装器等待 Case 完成后再执行 finally 清理', /executeHomeCapabilityFixtureCase[\s\S]*return await executeSitHome[\s\S]*finally[\s\S]*executeSkillRegressionFixtureCase[\s\S]*return await executeSitSkill[\s\S]*finally[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*return await executeSitConnector[\s\S]*finally/],
@@ -73,14 +77,20 @@ const required = [
   ['技能运行时 Fixture 覆盖 Python、Node 和双版本', /qa-python-runtime[\s\S]*qa-node-runtime[\s\S]*qa-version-rollback[\s\S]*setActiveVersion\(slug, '2\.0\.0'\)/],
   ['Python 与 Node 安装用例按受控 Fixture 精确定位', /executeSitSkillRuntimeInstall[\s\S]*fixtureMarker = runtime === 'node' \? 'qa-node-runtime' : 'qa-python-runtime'[\s\S]*escapeRegExp\(fixtureMarker\)/],
   ['版本回退按 qa-version-rollback 和 1.0.0 精确操作', /executeSitSkillRollback[\s\S]*marker = 'qa-version-rollback'[\s\S]*skill-revert-chip[\s\S]*1\\\.0\\\.0/],
-  ['拒装技能卸载使用产品原生确认框', /executeSitSkillRejectedUninstallCleanup[\s\S]*captureDialogDuringWithAction[\s\S]*accept: true[\s\S]*同步清理本机拒装状态/],
+  ['拒装技能卸载兼容原生确认和产品确认弹窗', /executeSitSkillRejectedUninstallCleanup[\s\S]*confirmDestructiveAction[\s\S]*accept: true[\s\S]*同步清理本机拒装状态/],
+  ['SKILL-022 同时捕获确认与异步失败反馈', /executeSitSkillDeleteFailure[\s\S]*confirmDestructiveAction[\s\S]*skill-operation-feedback[\s\S]*skill_022_uninstall_failure/],
+  ['SKILL-027 在代理重启后重建拒装态并点击全局重试', /executeSitSkillRejectedExplicitRetry[\s\S]*initialInstall[\s\S]*skill-operation-feedback[\s\S]*globalRetry[\s\S]*control\.proxy\.arm/],
   ['技能回归 Fixture 用例前后均隔离清理', /(?=[\s\S]*skill_fixture_cleanup)(?=[\s\S]*skill_fixture_teardown)(?=[\s\S]*cleanupSkillRegressionFixtureState)/],
   ['SKILL-018 使用空已安装目录代理', /executeSitSkillManualEmptyState[\s\S]*skill-018-empty-installed[\s\S]*skills-empty-installed/],
   ['EXPERT-015 使用空专家市场代理', /executeSitExpertEmptyMarket[\s\S]*expert-015-empty-market[\s\S]*experts-empty-market/],
   ['CONN-014 使用空连接器目录代理', /executeSitConnectorEmptyState[\s\S]*connectors-empty-catalog[\s\S]*connector-014-empty-catalog/],
   ['连接器三态用例使用 runner 自建 Fixture', /createConnectorRegressionServer[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-018'/],
+  ['连接器 Fixture 提供无 OAuth 的真实 MCP 工具调用', /createConnectorRegressionServer[\s\S]*tools\/list[\s\S]*dev_healthy_tool[\s\S]*tools\/call[\s\S]*fixture invocation succeeded/],
+  ['连接器三态前置使用结构化状态校验', /healthyConnector\?\.statusKind === 'ready'[\s\S]*healthyHealth\?\.status === 'healthy'[\s\S]*unreachableHealth\?\.status === 'unreachable'[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
+  ['CONN-012 代理重启后按 key 重选再注入', /executeSitConnectorUnhealthySelectedState[\s\S]*initiallyArmed: false[\s\S]*selectManualConnectorByKey[\s\S]*control\.proxy\.arm/],
   ['连接器 dev Fixture 缺入口进入产品断言而非阻塞', /executeSitConnectorRetry[\s\S]*unreachable 连接器重试入口[\s\S]*executeSitConnectorAuthDialog[\s\S]*needs_auth 连接器授权入口[\s\S]*executeSitConnectorManualUnhealthyOption[\s\S]*手动菜单展示不可用连接器状态/],
   ['项目成果用例创建真实项目和项目任务', /(?=[\s\S]*executeSitProjectArtifactCase)(?=[\s\S]*QBot QA 自动化项目)(?=[\s\S]*project-tasks-view)(?=[\s\S]*project-task-launch)(?=[\s\S]*project_result\.md)(?=[\s\S]*project_weekly_report\.md)/],
+  ['项目详情态可直接复用而不误找创建按钮', /executeSitProjectArtifactCase[\s\S]*workspaceAlreadyVisible[\s\S]*复用当前已打开项目详情[\s\S]*proceed directly to runtime/],
   ['项目入口缺失进入产品断言而非数据阻塞', /executeSitProjectArtifactCase[\s\S]*项目导航入口[\s\S]*项目任务输入与启动入口/],
   ['受控 Fixture/代理失败统一归自动化错误', /框架无法安装控制面代理会话失败注入[\s\S]*automation_error[\s\S]*框架无法构造专家空市场[\s\S]*automation_error[\s\S]*框架无法构造“无已安装技能”视图[\s\S]*automation_error[\s\S]*框架无法安装控制面代理连接器状态注入[\s\S]*automation_error[\s\S]*框架无法构造连接器空目录[\s\S]*automation_error/],
   ['处理器直接终止的失败不会被收尾逻辑覆盖成通过', /function finalizeState\(state\) \{[\s\S]*state\.status === 'failed' && state\.actual_result[\s\S]*state\.status = 'passed'/],
@@ -242,9 +252,38 @@ if (environmentBlocked.review_category !== '可信阻塞-环境或数据' || !en
 }
 
 if (obviousDuplicateEvidence('新建文件 first.md\n新建文件 first.md')) throw new Error('正常文件工具进度不应判为重复');
+if (obviousDuplicateEvidence('调用 WaitForMcpServers\n调用 WaitForMcpServers')) throw new Error('MCP 等待工具进度不应判为重复');
+if (obviousDuplicateEvidence('用户看到的提示：\n用户看到的提示：')) throw new Error('短结构标题不应判为重复正文');
+if (obviousDuplicateEvidence('🔒 无查看权限\n🔒 无查看权限')) throw new Error('短权限状态不应判为重复正文');
 if (obviousDuplicateEvidence('错误码：blocked_private_network\n错误码：blocked_private_network')) throw new Error('分地址安全错误码不应判为重复');
 if (obviousDuplicateEvidence('▼          ▼          ▼\n▼          ▼          ▼')) throw new Error('流程图方向符号不应判为重复正文');
 if (!obviousDuplicateEvidence('这是一段确实重复的用户可见正文。\n这是一段确实重复的用户可见正文。')) throw new Error('真实重复正文应被识别');
+
+const numericTurns = buildConversationTurns({
+  id: 'SIT-HOME-016',
+  scenario: '普通多轮业务数字追问',
+  test_data: '活动报名100人，到场70人，成交12单',
+}, []);
+if (numericTurns.length !== 4 || !numericTurns[3]?.prompt.includes('成交率')) {
+  throw new Error(`HOME-016 必须优先进入四轮数字记忆脚本：${JSON.stringify(numericTurns)}`);
+}
+if (!replyLooksRelevant('收到，我会按“数据结论、可能原因、下一步动作”的格式输出。', {
+  id: 'SIT-HOME-053',
+  scenario: '连续追问补充输出格式',
+  test_data: '补充输出格式、风险和验证方法',
+}, '请补充输出格式、风险和验证方法')) {
+  throw new Error('多轮约束确认不应被相关性启发式误判');
+}
+
+const unicodeTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-json-unicode-'));
+const unicodeFile = path.join(unicodeTemp, 'progress.json');
+writeJsonFile(unicodeFile, { broken: `left${String.fromCharCode(0xD800)}right`, emoji: '😀' });
+const unicodeText = fs.readFileSync(unicodeFile, 'utf8');
+const unicodeParsed = JSON.parse(unicodeText);
+if (unicodeParsed.broken !== 'left�right' || unicodeParsed.emoji !== '😀' || replaceUnpairedSurrogates('😀') !== '😀') {
+  throw new Error('进度 JSON Unicode 清洗破坏有效字符或未替换孤立 surrogate');
+}
+fs.rmSync(unicodeTemp, { recursive: true, force: true });
 if (rawArtifactEventLeakEvidence('成果已生成，请在成果区查看。')) throw new Error('用户可读的成果描述不应判为内部泄漏');
 if (!rawArtifactEventLeakEvidence('{"kind":"artifact","artifact":{"path":"a.md"}}')) throw new Error('序列化成果事件应被识别');
 
@@ -356,11 +395,16 @@ try {
   const catalog = await fetch(`${connectorFixtureServer.url}/api/openapi/servers?detail=true`).then((response) => response.json());
   const servers = catalog?.data?.servers || [];
   if (!servers.find((item) => item.name === 'dev_healthy' && item.status === 'connected')) throw new Error('连接器 Fixture 缺少 healthy 条目');
+  if (servers.find((item) => item.name === 'dev_healthy')?.runtimeInvocation?.authorization) throw new Error('dev_healthy Fixture 不应依赖 OAuth token');
   if (!servers.find((item) => item.name === 'dev_unreachable')) throw new Error('连接器 Fixture 缺少 unreachable 条目');
   if (!servers.find((item) => item.name === 'dev_needs_auth' && item.status === 'oauth_required')) throw new Error('连接器 Fixture 缺少 needs_auth 条目');
-  const healthyProbe = await fetch(`${connectorFixtureServer.url}/mcp/healthy`, { method: 'POST', body: '{}' });
+  const healthyProbe = await fetch(`${connectorFixtureServer.url}/mcp/healthy`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } }) });
+  const toolsList = await fetch(`${connectorFixtureServer.url}/mcp/healthy`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) }).then((response) => response.json());
+  const toolCall = await fetch(`${connectorFixtureServer.url}/mcp/healthy`, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dev_healthy_tool', arguments: {} } }) }).then((response) => response.json());
   const unreachableProbe = await fetch(`${connectorFixtureServer.url}/mcp/unreachable`, { method: 'POST', body: '{}' });
-  if (healthyProbe.status !== 200 || unreachableProbe.status !== 503) throw new Error('连接器 Fixture 健康探测终态错误');
+  if (healthyProbe.status !== 200 || unreachableProbe.status !== 503 || toolsList?.result?.tools?.[0]?.name !== 'dev_healthy_tool' || toolCall?.result?.isError !== false) {
+    throw new Error('连接器 Fixture 健康探测或真实工具调用终态错误');
+  }
 } finally {
   await connectorFixtureServer.close();
 }
