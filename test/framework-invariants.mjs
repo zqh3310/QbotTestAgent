@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  attachmentTaskPromptFromCase,
   buildConversationTurns,
+  caseAwareReplyAssertion,
   createControlPlaneFaultProxy,
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
@@ -15,6 +17,7 @@ import {
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   reviewCaseCredibility,
+  sentPromptFidelity,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
@@ -61,6 +64,15 @@ const required = [
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
+  ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
+  ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
+  ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],
+  ['附件源文件在上传前记录非零字节证据', /attachment_sources[\s\S]*附件源文件非空[\s\S]*size_bytes/],
+  ['附件 Case 使用 Excel 真实任务而非通用提示', /attachmentTaskPromptFromCase[\s\S]*实际输入与 Case 测试数据一致/],
+  ['新增 UX Case 使用成功标准驱动的确定性断言', /caseAwareReplyAssertion[\s\S]*三句结构与事实落地[\s\S]*跨格式事实与决策摘要/],
+  ['新增成果 Case 回读真实文件并校验列表唯一', /assertUxArtifactReadback[\s\S]*成果文件真实落地[\s\S]*成果列表唯一[\s\S]*活动复盘聊天与文件一致/],
+  ['二次复核检查实际发送提示与确定性断言', /sentPromptFidelity[\s\S]*hasDeterministicAssertion[\s\S]*实际发送内容与 Case 测试数据不一致/],
+  ['运行汇总写入真实 duration_ms', /duration_ms: Math\.max\(0, endedAt\.getTime\(\) - startedAt\.getTime\(\)\)/],
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
   ['稳定 QA 专家不存在时自动创建', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
@@ -289,6 +301,36 @@ if (!replyLooksRelevant('我是 QBot，你的智能办公助手，可以帮助�
 }, '你好，请用一句话说明你是谁。')) {
   throw new Error('身份问答不应被相关性启发式误判');
 }
+
+const attachment066 = {
+  id: 'SIT-HOME-066',
+  kind: 'attachment',
+  scenario: '多文件跨材料分析应逐文件引用事实并给出统一结论',
+  test_data: '上传 qbot-requirement.md 和 qbot-data.json；分别总结每个文件的关键事实，再给出统一的验收风险清单；每条结论标注来源文件名。',
+};
+const expectedAttachmentTask = '分别总结每个文件的关键事实，再给出统一的验收风险清单；每条结论标注来源文件名。';
+if (attachmentTaskPromptFromCase(attachment066) !== expectedAttachmentTask) {
+  throw new Error(`附件 Case 未保留 Excel 真实任务：${attachmentTaskPromptFromCase(attachment066)}`);
+}
+const attachmentTurns = buildConversationTurns(attachment066, ['/tmp/qbot-requirement.md', '/tmp/qbot-data.json']);
+if (attachmentTurns.length !== 1 || !attachmentTurns[0].prompt.startsWith(expectedAttachmentTask) || /Word、Excel、PDF/.test(attachmentTurns[0].prompt)) {
+  throw new Error(`附件 Case 被通用提示覆盖：${JSON.stringify(attachmentTurns)}`);
+}
+const goodGroundedThreeSentence = caseAwareReplyAssertion({ id: 'SIT-HOME-063' }, { label: '第一轮' }, '结论：报名240人、到场170人，到场率约70.8%。风险：现有投诉28件，需进一步核实具体环节。下一步：按渠道排查报名到到场链路并跟进投诉原因。');
+if (!goodGroundedThreeSentence.applicable || !goodGroundedThreeSentence.ok) throw new Error(`HOME-063 合法三句被误判：${JSON.stringify(goodGroundedThreeSentence)}`);
+const unsupportedThreeSentence = caseAwareReplyAssertion({ id: 'SIT-HOME-063' }, { label: '第一轮' }, '结论：报名240人、到场170人。风险：投诉28件集中在到场后。下一步：排查现场服务。');
+if (unsupportedThreeSentence.ok) throw new Error('HOME-063 不得放过未提供的“投诉集中在到场后”归因');
+
+const fidelityOk = sentPromptFidelity({
+  ...attachment066,
+  artifacts: { sent_prompts: [{ prompt: `${expectedAttachmentTask}\n\n我已经上传了相关附件，请先读取附件内容再回答；如果某个附件无法读取，请直接说明。` }] },
+});
+if (!fidelityOk.checked || !fidelityOk.ok) throw new Error(`附件 prompt fidelity 应通过：${JSON.stringify(fidelityOk)}`);
+const fidelityBad = sentPromptFidelity({
+  ...attachment066,
+  artifacts: { sent_prompts: [{ prompt: '请读取我上传的 Word、Excel、PDF 或 PPT 文件，分别概括每个文件的主要内容。' }] },
+});
+if (fidelityBad.ok) throw new Error('通用附件提示不得通过 prompt fidelity 审核');
 
 const unicodeTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-json-unicode-'));
 const unicodeFile = path.join(unicodeTemp, 'progress.json');

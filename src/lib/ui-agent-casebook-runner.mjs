@@ -846,6 +846,20 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
   }
   const attachments = inferAttachments(testCase, fixturesDir);
   if (attachments.length) {
+    state.artifacts.attachment_sources = attachments.map((file) => {
+      const stats = fs.statSync(file);
+      return { path: file, name: path.basename(file), size_bytes: stats.size };
+    });
+    const emptySources = state.artifacts.attachment_sources.filter((item) => item.size_bytes <= 0);
+    recordAssertion(
+      state,
+      '附件源文件非空',
+      '自动化上传前必须回读每个 fixture 的真实路径和字节数；空 fixture 属于框架/测试数据错误，不能归因给产品。',
+      emptySources.length === 0,
+      state.artifacts.attachment_sources.map((item) => `${item.name}=${item.size_bytes}B`).join('；'),
+      'automation_error',
+    );
+    if (emptySources.length) return;
     const upload = await uploadAttachmentsInComposer(page, attachments);
     state.artifacts.upload = upload;
     state.screenshots.after_upload = await shot(page, caseDir, '02-after-upload');
@@ -865,11 +879,17 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
   }
 
   const turns = buildConversationTurns(testCase, attachments);
+  state.artifacts.sent_prompts = [];
   const replies = [];
   for (let index = 0; index < turns.length; index += 1) {
     const turn = turns[index];
     const turnNo = index + 1;
     const before = await conversationSnapshot(page);
+    state.artifacts.sent_prompts.push({
+      label: turn.label || `第 ${turnNo} 轮`,
+      prompt: turn.prompt,
+      recorded_at: new Date().toISOString(),
+    });
     await fillComposer(page, turn.prompt, state, turn.label || `第 ${turnNo} 轮输入`);
     state.screenshots[`turn_${turnNo}_after_fill`] = await shot(page, caseDir, `${String(turnNo + 2).padStart(2, '0')}-turn-${turnNo}-after-fill`);
     recordTurnInputAssertions(state, turn, testCase);
@@ -901,7 +921,18 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
       reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
     );
     recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
-    recordAssertion(state, `回复相关性（${turn.label || `第 ${turnNo} 轮`}）`, '回复应围绕当前轮问题或测试数据作答。', replyLooksRelevant(reply.deltaText, testCase, turn.prompt), clip(reply.deltaText, 220));
+    const caseAware = caseAwareReplyAssertion(testCase, turn, reply.deltaText);
+    if (caseAware.applicable) {
+      recordAssertion(
+        state,
+        `${caseAware.name}（${turn.label || `第 ${turnNo} 轮`}）`,
+        caseAware.expected,
+        caseAware.ok,
+        caseAware.actual,
+      );
+    } else {
+      recordAssertion(state, `回复相关性（${turn.label || `第 ${turnNo} 轮`}）`, '回复应围绕当前轮问题或测试数据作答。', replyLooksRelevant(reply.deltaText, testCase, turn.prompt), clip(reply.deltaText, 220));
+    }
     recordTurnSpecificAssertions(state, reply.deltaText, turn, testCase);
     const sensitiveOrErrorNoise = forbiddenMatches(reply.deltaText).find(Boolean);
     recordAssertion(
@@ -1141,7 +1172,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-013') return executeSitSkillMaterialization({ page, state, caseDir });
   if (id === 'SIT-SKILL-014') return executeSitSkillUpdate({ page, state, caseDir });
   if (id === 'SIT-SKILL-016') return executeSitSkillHistory({ page, state, caseDir });
-  if (id === 'SIT-SKILL-017') return executeSitSkillManualSelect({ page, state, caseDir });
+  if (id === 'SIT-SKILL-017') return executeSitSkillManualSelect({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-018') return executeSitSkillManualEmptyState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-SKILL-019') return executeSitSkillAutoModeConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-SKILL-020') return executeSitSkillConcurrentInstall({ page, state, caseDir });
@@ -3590,12 +3621,60 @@ async function executeSitSkillHistory({ page, state, caseDir }) {
   recordAssertion(state, '技能历史记录可理解', '历史页应展示最近变更、动作中文标签、时间、结果、失败原因或空状态。', /最近变更|历史|安装|更新|删除|回退|失败|成功|还没有技能变更|空/.test(text), clip(text, 360));
 }
 
-async function executeSitSkillManualSelect({ page, state, caseDir }) {
+async function executeSitSkillManualSelect({ page, state, testCase, caseDir, timeoutMs }) {
   if (!await openSkillMenuInNewTask(page, state)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prefix = '请整理这份活动复盘';
+  const suffix = '并输出验收清单。';
+  const prompt = `${prefix}${suffix}`;
+  await fillComposer(page, prefix, state, '输入 Skill chip 前半句');
+  await ensureComposerToolMenu(page, state, {
+    selector: '[data-testid="composer-skills-menu"]',
+    action: '在句中光标位置重新打开【技能】菜单',
+    matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+    menuKind: 'skill',
+  });
   if (!await selectFirstManualSkill(page, state, caseDir)) return;
-  const chipText = await visibleSkillChipText(page);
+  await page.keyboard.press('Escape').catch(() => {});
+  const composer = page.locator('[data-testid="composer-input"]').first();
+  await composer.click({ force: true });
+  await page.keyboard.press('End').catch(() => {});
+  await page.keyboard.insertText(suffix);
+  await page.waitForTimeout(300);
+  const snapshot = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_017_inline_chip = snapshot;
+  state.screenshots.skill_017_inline_chip = await shot(page, caseDir, 'skill-017-inline-chip');
+  const chipText = snapshot.chipTexts.join(' / ');
   const toolText = await visibleComposerToolStateText(page, 'skill');
-  recordAssertion(state, '手动技能选中反馈', '手动选择已安装技能后，输入区应显示技能名、选中态或 badge。', Boolean(chipText.trim()) || /手动|已选|技能/.test(toolText), `chip=${clip(chipText, 160)}；tool=${clip(toolText, 160)}`);
+  recordAssertion(
+    state,
+    '手动技能内联 chip 与选择状态同步',
+    '手动选择已安装技能后，composer 句内应恰有一个带稳定 testid 的 chip，selectedSkills 同步为 1，且正文前后片段保留。',
+    snapshot.chipCount === 1
+      && snapshot.chipsInsideComposer
+      && snapshot.chipTestIds.every((item) => item.startsWith('composer-skill-chip-'))
+      && snapshot.selectedSkillCount === 1
+      && snapshot.composerText.includes(prefix)
+      && snapshot.composerText.includes(suffix),
+    `snapshot=${clip(JSON.stringify(snapshot), 700)}；tool=${clip(toolText, 160)}`,
+  );
+  recordAssertion(
+    state,
+    '手动技能内部标记不泄露',
+    '输入区和用户可见文本不应出现 {{skill:、⟦skill: 或旧版 marker。',
+    !snapshot.hasRawMarker,
+    `composer=${clip(snapshot.composerText, 300)}；html=${clip(snapshot.composerHtml, 300)}`,
+  );
+  await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt,
+    label: '手动 Skill 强走会话',
+    composerPrepared: true,
+  });
 }
 
 async function executeSitSkillManualEmptyState({ page, state, caseDir, options, runtime }) {
@@ -3819,6 +3898,17 @@ async function executeSitSkillExternalConnectorHint({ page, state, caseDir }) {
 
 async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs }) {
   if (!await openSkillMenuInNewTask(page, state)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prefix = '请';
+  const suffix = '结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。';
+  const prompt = `${prefix}${suffix}`;
+  await fillComposer(page, prefix, state, '输入多 Skill chip 前半句');
+  await ensureComposerToolMenu(page, state, {
+    selector: '[data-testid="composer-skills-menu"]',
+    action: '在句中光标位置重新打开【技能】菜单',
+    matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+    menuKind: 'skill',
+  });
   const manualOk = await setSkillMode(page, state, caseDir, 'manual');
   if (!manualOk) return;
   const selected = await selectMultipleManualSkills(page, state, caseDir, 2);
@@ -3827,11 +3917,84 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
     return;
   }
   await page.keyboard.press('Escape').catch(() => {});
+  const composer = page.locator('[data-testid="composer-input"]').first();
+  await composer.click({ force: true });
+  await page.keyboard.press('End').catch(() => {});
+  await page.keyboard.insertText(suffix);
+  await page.waitForTimeout(300);
+  const beforeRemoval = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_026_before_removal = beforeRemoval;
   const badgeText = await visibleComposerToolStateText(page, 'skill');
   state.screenshots.skill_026_after_multi_select = await shot(page, caseDir, 'skill-026-after-multi-select');
-  recordAssertion(state, '多技能选择数量反馈', '选择多个技能后，输入区技能按钮应显示数量、多个 chip 或明确已选状态。', /2|两|已选|手动/.test(`${badgeText}\n${await visibleSkillChipText(page)}`), `tool=${clip(badgeText, 180)}；chip=${clip(await visibleSkillChipText(page), 180)}`);
-  const prompt = '请使用我选择的技能，帮我把一个活动复盘需求整理成测试检查点。';
-  await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '多技能手动会话' });
+  recordAssertion(
+    state,
+    '多技能初始选择数量反馈',
+    '选择两个技能后，输入区应有两个句内 chip，selectedSkills 和 badge 同步为 2。',
+    beforeRemoval.chipCount === 2
+      && beforeRemoval.chipsInsideComposer
+      && beforeRemoval.selectedSkillCount === 2
+      && /2|两|已选|手动/.test(`${badgeText}\n${beforeRemoval.chipTexts.join(' / ')}`),
+    `snapshot=${clip(JSON.stringify(beforeRemoval), 700)}；tool=${clip(badgeText, 180)}`,
+  );
+
+  const firstChip = page.locator('[data-testid^="composer-skill-chip-"], .skill-chip').first();
+  const removedSkill = cleanSkillChipLabel(await firstChip.innerText({ timeout: 1000 }).catch(() => ''));
+  const remove = firstChip.locator('.skill-chip-x, button[aria-label="移除"], button[aria-label*="remove" i]').first();
+  if (!(await visible(remove, 1200))) {
+    recordAssertion(state, '多技能 chip 删除入口', '每个手动 Skill chip 应提供可点击删除按钮。', false, `chip=${clip(removedSkill, 160)}`);
+    return;
+  }
+  await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
+  await page.waitForTimeout(400);
+  const afterRemoval = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_026_after_removal = afterRemoval;
+  state.screenshots.skill_026_after_removal = await shot(page, caseDir, 'skill-026-after-removal');
+  recordStep(state, '删除第一个内联 Skill chip', '删除后 chip、selectedSkills 和 badge 应同步由 2 变为 1，正文不丢失。', `removed=${removedSkill || '未读取'}；snapshot=${clip(JSON.stringify(afterRemoval), 500)}`, 'passed', state.screenshots.skill_026_after_removal);
+  recordAssertion(
+    state,
+    '多技能删除状态同步',
+    '删除一个 chip 后应只剩一个 chip，selectedSkills 为 1，正文前后片段仍存在。',
+    afterRemoval.chipCount === 1
+      && afterRemoval.selectedSkillCount === 1
+      && afterRemoval.composerText.includes(prefix)
+      && afterRemoval.composerText.includes(suffix),
+    clip(JSON.stringify(afterRemoval), 700),
+  );
+
+  await ensureComposerToolMenu(page, state, {
+    selector: '[data-testid="composer-skills-menu"]',
+    action: '重新打开【技能】菜单恢复已删除 Skill',
+    matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+    menuKind: 'skill',
+  });
+  if (!removedSkill || !await selectManualSkillByName(page, state, caseDir, removedSkill)) {
+    recordAssertion(state, '恢复已删除 Skill chip', '删除后应能从手动技能菜单重新选择同一 Skill。', false, `removedSkill=${removedSkill || '空'}`);
+    return;
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  const afterRestore = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_026_after_restore = afterRestore;
+  state.screenshots.skill_026_after_restore = await shot(page, caseDir, 'skill-026-after-restore');
+  recordAssertion(
+    state,
+    '多技能恢复状态同步',
+    '重新选择已删除 Skill 后应恢复两个唯一 chip，selectedSkills 为 2，且无内部 marker 泄露。',
+    afterRestore.chipCount === 2
+      && new Set(afterRestore.chipTestIds).size === 2
+      && afterRestore.selectedSkillCount === 2
+      && !afterRestore.hasRawMarker,
+    clip(JSON.stringify(afterRestore), 700),
+  );
+  await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt,
+    label: '多 Skill 强走会话',
+    composerPrepared: true,
+  });
 }
 
 function automationSkillMarker(testCase, fallback = '') {
@@ -5265,6 +5428,11 @@ async function executeArtifactSpecificChecks(page, state, testCase, caseDir, rep
   state.artifacts.artifact_panel_text = path.join(caseDir, 'artifact-panel-text.txt');
   writeTextFile(state.artifacts.artifact_panel_text, panelText);
 
+  if (['SIT-ART-021', 'SIT-ART-022', 'SIT-ART-023'].includes(id)) {
+    assertUxArtifactReadback(state, testCase, panelText);
+    return;
+  }
+
   if (id === 'SIT-ART-002') {
     const clicked = await clickArtifactEntry(page, /qbot_v1_release_summary|\.html|html/i);
     await page.waitForTimeout(900);
@@ -5492,6 +5660,73 @@ async function executeArtifactSpecificChecks(page, state, testCase, caseDir, rep
       closed && reopened && /qbot_reopen_test|\.html|成果重开验证/i.test(`${beforeClose}\n${afterReopen}`),
       `closed=${closed}; reopened=${reopened}; before=${clip(beforeClose, 220)}; after=${clip(afterReopen, 320)}`,
     );
+  }
+}
+
+function assertUxArtifactReadback(state, testCase, panelText) {
+  const id = String(testCase.id || '');
+  const workspace = String(state.artifacts.qa_workspace?.requested || '');
+  const expectedNames = dedupe(
+    Array.from(String(testCase.test_data || '').matchAll(/\b([A-Za-z0-9_.-]+\.(?:md|markdown|txt|html|csv|json))\b/gi)).map((match) => match[1]),
+    (item) => item.toLowerCase(),
+  );
+  state.artifacts.artifact_readback = [];
+  recordAssertion(
+    state,
+    '成果目标文件名解析',
+    '新增成果 Case 必须从测试数据中解析出且只解析出一个安全的目标文件名。',
+    expectedNames.length === 1 && expectedNames.every((name) => path.basename(name) === name),
+    `expected_names=${JSON.stringify(expectedNames)}`,
+    'automation_error',
+  );
+  if (expectedNames.length !== 1 || expectedNames.some((name) => path.basename(name) !== name)) return;
+  for (const name of expectedNames) {
+    const file = path.join(workspace, name);
+    const insideWorkspace = Boolean(workspace) && path.dirname(file) === path.resolve(workspace);
+    const exists = insideWorkspace && fs.existsSync(file) && fs.statSync(file).isFile();
+    const sizeBytes = exists ? fs.statSync(file).size : 0;
+    const content = exists ? fs.readFileSync(file, 'utf8') : '';
+    const listOccurrences = String(panelText || '').split('\n').filter((line) => line.trim() === name).length;
+    state.artifacts.artifact_readback.push({ name, path: file, exists, size_bytes: sizeBytes, panel_list_occurrences: listOccurrences });
+    recordAssertion(
+      state,
+      `成果文件真实落地：${name}`,
+      '成果不能只在聊天中声称已生成；目标文件必须位于本轮 QA 工作区、真实存在且非空，并由 runner 回读正文。',
+      exists && sizeBytes > 0,
+      `workspace=${workspace || '空'}；path=${file}；exists=${exists}；size=${sizeBytes}B`,
+    );
+    recordAssertion(
+      state,
+      `成果列表唯一：${name}`,
+      '同一真实文件在成果概览中只能出现一个列表项，不能重复登记同一路径。',
+      listOccurrences === 1,
+      `panel_list_occurrences=${listOccurrences}；panel=${clip(panelText, 360)}`,
+    );
+    if (!exists || sizeBytes <= 0) continue;
+
+    if (id === 'SIT-ART-021') {
+      const sections = ['背景', '结论', '风险', '下一步', '负责人', '截止日期'].every((term) => content.includes(term));
+      const facts = ['12000', '240', '170', '张三', '2026-07-18'].every((term) => content.includes(term));
+      recordAssertion(state, '周报成果结构与事实回读', 'weekly_decision_brief.md 应包含六个必需部分及全部用户事实。', sections && facts, `sections=${sections}；facts=${facts}；content=${clip(content, 520)}`);
+    }
+    if (id === 'SIT-ART-022') {
+      const reply = state.artifacts.reply_delta && fs.existsSync(state.artifacts.reply_delta)
+        ? fs.readFileSync(state.artifacts.reply_delta, 'utf8')
+        : '';
+      const data = ['12000', '860', '240', '170', '28'].every((term) => content.includes(term));
+      const contentRates = /70\.(?:8|83)\s*[%％]/.test(content) && /27\.(?:9|91)\s*[%％]/.test(content);
+      const replyRates = /70\.(?:8|83)\s*[%％]/.test(reply) && /27\.(?:9|91)\s*[%％]/.test(reply);
+      const formulas = /170\s*[\/÷]\s*240/.test(content) && /240\s*[\/÷]\s*860/.test(content);
+      const risk = /风险/.test(content);
+      recordAssertion(state, '活动复盘聊天与文件一致', '聊天和文件都应含约70.8%与27.9%；文件需保留原始数据、两个公式和风险。', data && contentRates && replyRates && formulas && risk, `data=${data}；file_rates=${contentRates}；reply_rates=${replyRates}；formulas=${formulas}；risk=${risk}；content=${clip(content, 520)}；reply=${clip(reply, 260)}`);
+    }
+    if (id === 'SIT-ART-023') {
+      const headings = Array.from(content.matchAll(/^#\s+(.+)$/gm)).map((match) => match[1].trim());
+      const exactHeadings = JSON.stringify(headings) === JSON.stringify(['结论', '风险', '下一步']);
+      const facts = ['240', '170', '28', '李四', '2026-07-20'].every((term) => content.includes(term));
+      const technicalNoise = /token|\/Users\/|tools\/call|stack|traceback|运行时|实现细节/i.test(content);
+      recordAssertion(state, '领导更新成果可直接使用', 'leader_update.md 的一级标题应恰为结论/风险/下一步，事实齐全且不含技术噪音。', exactHeadings && facts && !technicalNoise, `headings=${JSON.stringify(headings)}；facts=${facts}；technical_noise=${technicalNoise}；content=${clip(content, 520)}`);
+    }
   }
 }
 
@@ -6062,6 +6297,62 @@ async function visibleSkillChipText(page) {
   return texts.map((item) => item.trim()).filter(Boolean).join(' / ');
 }
 
+function cleanSkillChipLabel(value) {
+  return String(value || '')
+    .replace(/(?:移除|删除|remove)/gi, '')
+    .replace(/[×xX]\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function composerSkillSelectionSnapshot(page) {
+  return page.evaluate(async () => {
+    const composer = document.querySelector('[data-testid="composer-input"]');
+    const allChips = composer
+      ? Array.from(composer.querySelectorAll('[data-testid^="composer-skill-chip-"], .skill-chip'))
+      : [];
+    const chips = allChips.filter((chip) => {
+      const rect = chip.getBoundingClientRect();
+      const style = globalThis.getComputedStyle(chip);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    let capabilities = null;
+    if (typeof globalThis.window?.agent?.capabilities === 'function') {
+      try {
+        capabilities = await globalThis.window.agent.capabilities();
+      } catch {
+        capabilities = null;
+      }
+    }
+    const selectedSkills = Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [];
+    const composerText = String(composer?.innerText || composer?.textContent || '');
+    const composerHtml = String(composer?.innerHTML || '');
+    const markerText = `${composerText}\n${composerHtml}`;
+    return {
+      chipCount: chips.length,
+      chipTexts: chips.map((chip) => String(chip.textContent || '').replace(/\s+/g, ' ').trim()),
+      chipTestIds: chips.map((chip) => String(chip.getAttribute('data-testid') || '')),
+      chipsInsideComposer: Boolean(composer) && chips.every((chip) => composer.contains(chip)),
+      selectedSkillCount: selectedSkills.length,
+      selectedSkills,
+      composerText,
+      composerHtml,
+      hasRawMarker: /\{\{\s*skill\s*:|⟦\s*skill\s*:|\[\[\s*skill\s*:/i.test(markerText),
+    };
+  }).catch((error) => ({
+    chipCount: 0,
+    chipTexts: [],
+    chipTestIds: [],
+    chipsInsideComposer: false,
+    selectedSkillCount: 0,
+    selectedSkills: [],
+    composerText: '',
+    composerHtml: '',
+    hasRawMarker: false,
+    error: error.message,
+  }));
+}
+
 async function visibleComposerToolStateText(page, tool) {
   const selector = tool === 'connector'
     ? '[data-testid="composer-connectors-menu"]'
@@ -6564,9 +6855,25 @@ function connectorModeSelectedByText(mode, text) {
   return expected ? expected.test(String(text || '')) : false;
 }
 
-async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label = '第一轮' }) {
+async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label = '第一轮', composerPrepared = false }) {
   const before = await conversationSnapshot(page);
-  await fillComposer(page, prompt, state, label);
+  if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
+  state.artifacts.sent_prompts.push({ label, prompt, recorded_at: new Date().toISOString() });
+  if (!composerPrepared) {
+    await fillComposer(page, prompt, state, label);
+  } else {
+    const preparedText = await composerTextValue(page);
+    recordStep(
+      state,
+      `${label}已在输入区完成`,
+      '包含内联能力 chip 的用例应直接发送已准备的 composer，不能再次 fill 导致 chip 与 selectedSkills 被清空。',
+      `composer=${clip(preparedText, 240)}`,
+      preparedText.trim() ? 'passed' : 'failed',
+      '',
+      preparedText.trim() ? '' : 'automation_error',
+    );
+    if (!preparedText.trim()) throw new Error(`${label}发送前 composer 为空。`);
+  }
   state.screenshots[`${slugify(label)}_after_fill`] = await shot(page, caseDir, `${slugify(label)}-after-fill`);
   await send(page, state, `发送${label}`);
   state.screenshots[`${slugify(label)}_after_send`] = await shot(page, caseDir, `${slugify(label)}-after-send`);
@@ -9894,6 +10201,118 @@ function scenarioConversationTurns(testCase, attachments) {
   return [];
 }
 
+export function caseAwareReplyAssertion(testCase, turn, replyText) {
+  const id = String(testCase?.id || '');
+  const reply = semanticReplyText(replyText);
+  const prompt = String(turn?.prompt || '');
+  const label = String(turn?.label || '');
+  const result = (name, expected, ok, actual = clip(reply, 360)) => ({ applicable: true, name, expected, ok, actual });
+  const notApplicable = { applicable: false };
+
+  if (id === 'SIT-HOME-057') {
+    const questionGroups = [
+      /汇报对象|向谁汇报|谁会看|受众|领导|老板/,
+      /汇报目标|目的|希望.*(?:达成|推动)|重点关注|核心目标/,
+      /数据来源|有哪些数据|数据口径|现有数据|材料|事实依据/,
+      /截止时间|什么时候要|何时提交|具体日期|下周几|deadline/i,
+    ];
+    const asked = questionGroups.filter((pattern) => pattern.test(reply)).length;
+    const fabricated = /(?:业绩|收入|成本|预算|增长|下降|完成率|转化率)\D{0,8}\d+(?:\.\d+)?\s*(?:%|％|万|元|人|单)/.test(reply);
+    return result(
+      '信息不足时的最少澄清',
+      '应至少澄清汇报对象、目标、数据来源、截止时间中的两项，且不得编造业务数字或结论。',
+      asked >= 2 && !fabricated,
+      `clarification_groups=${asked}/4；fabricated_business_fact=${fabricated}；reply=${clip(reply, 360)}`,
+    );
+  }
+  if (id === 'SIT-HOME-058') {
+    if (!/第二轮|更正|最终/.test(`${label}\n${prompt}`)) return notApplicable;
+    const hasNew = /30\s*万/.test(reply) && /240\s*人?/.test(reply) && /企业微信/.test(reply);
+    const keepsOld = /50\s*万|300\s*人|短信|App\s*弹窗|\bApp\b/i.test(reply);
+    return result('新约束覆盖旧约束', '最终方案必须包含30万元、240人、企业微信，且不再沿用50万元、300人、短信或App。', hasNew && !keepsOld, `has_new=${hasNew}；keeps_old=${keepsOld}；reply=${clip(reply, 360)}`);
+  }
+  if (id === 'SIT-HOME-059') {
+    if (!/第二轮|260|完成率/.test(`${label}\n${prompt}`)) return notApplicable;
+    const mentionsBoth = /240/.test(reply) && /260/.test(reply);
+    const identifiesConflict = /冲突|不一致|两个目标|无法确定|需确认|请确认/.test(reply);
+    const asksNeededInput = /权威|以哪个为准|哪个目标|实际.*(?:完成|报名)|完成.*人数|请.*确认/.test(reply);
+    const inventsRate = /(?:完成率|达成率)\D{0,8}\d+(?:\.\d+)?\s*[%％]/.test(reply);
+    return result('冲突事实处置', '应同时指出240与260冲突，询问权威目标或实际完成人数，不得擅自给出唯一完成率。', mentionsBoth && identifiesConflict && asksNeededInput && !inventsRate, `both=${mentionsBoth}；conflict=${identifiesConflict}；asks_input=${asksNeededInput}；invented_rate=${inventsRate}；reply=${clip(reply, 380)}`);
+  }
+  if (id === 'SIT-HOME-060') {
+    if (!/第二轮|简报/.test(`${label}\n${prompt}`)) return notApplicable;
+    const compact = Array.from(reply.replace(/[#*_`>\s]/g, '')).length;
+    const hasArrivalRate = /70\.(?:8|83|833)\s*[%％]/.test(reply);
+    const hasComplaintRate = /0\.23(?:3)?\s*[%％]/.test(reply);
+    const hasAction = /下一步|建议|应|优化|排查|跟进|复盘|降低|提升/.test(reply);
+    return result('领导简报数字与长度', '简报应在120字的合理容差内，包含报名到场率约70.8%、投诉占触达约0.23%和可执行下一步。', compact <= 145 && hasArrivalRate && hasComplaintRate && hasAction, `chars=${compact}；arrival_rate=${hasArrivalRate}；complaint_rate=${hasComplaintRate}；action=${hasAction}；reply=${clip(reply, 360)}`);
+  }
+  if (id === 'SIT-HOME-062') {
+    const saysInsufficient = /无法|不能|不足|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
+    const hasInputs = /成本/.test(reply) && /收益|收入/.test(reply);
+    const hasFormula = /(?:收益|收入)\s*[-－−]\s*成本[）)]?\s*[\/÷]\s*成本|\((?:收益|收入)\s*[-－−]\s*成本\)\s*[\/÷]\s*成本|ROI\s*=\s*[（(]?(?:收益|收入)\s*[-－−]\s*成本[）)]?\s*[\/÷]\s*成本/i.test(reply);
+    const fabricatedMoney = /\d+(?:\.\d+)?\s*(?:万元|元)/.test(reply);
+    return result('ROI 边界与公式', '缺少成本和收益时应明确无法得到唯一ROI，说明必要输入并给出(收益-成本)/成本公式，不得编造金额。', saysInsufficient && hasInputs && hasFormula && !fabricatedMoney, `insufficient=${saysInsufficient}；inputs=${hasInputs}；formula=${hasFormula}；fabricated_money=${fabricatedMoney}；reply=${clip(reply, 360)}`);
+  }
+  if (id === 'SIT-HOME-061') {
+    const planSteps = reply.split('\n').filter((line) => /^\s*(?:\d+[.、)]|[-*]\s*步骤\s*\d+)/.test(line)).slice(0, 6);
+    const checklist = ['数据核对', '用户反馈', '风险', '负责人', '截止时间'].every((term) => reply.includes(term));
+    return result('三步计划与交付检查清单', '应先给恰好3个可识别计划步骤，再交付包含数据核对、用户反馈、风险、负责人、截止时间的检查清单。', planSteps.length === 3 && checklist, `plan_steps=${planSteps.length}；checklist=${checklist}；reply=${clip(reply, 460)}`);
+  }
+  if (id === 'SIT-HOME-063') {
+    const sentences = replySentences(reply);
+    const unsupportedAttribution = /(?:投诉\s*28\s*(?:件|单)?|28\s*(?:件|单)?\s*投诉)\s*(?:集中|主要|发生|来自|出现在).*?(?:到场|现场|报名后|活动后)/.test(reply);
+    const rolesOk = sentences.length === 3
+      && /结论|到场|报名|触达/.test(sentences[0] || '')
+      && /风险|投诉/.test(sentences[1] || '')
+      && /下一步|建议|排查|优化|跟进|复盘/.test(sentences[2] || '');
+    return result('三句结构与事实落地', '必须恰好三句并依次表达结论、风险、下一步；不得把“投诉28件”虚构归因到到场后等未提供环节。', rolesOk && !unsupportedAttribution, `sentences=${sentences.length}；roles_ok=${rolesOk}；unsupported_attribution=${unsupportedAttribution}；reply=${clip(reply, 420)}`);
+  }
+  if (id === 'SIT-HOME-064') {
+    const lines = reply.split('\n').map((line) => line.trim()).filter(Boolean);
+    const tableLines = lines.filter((line) => /^\|.*\|$/.test(line));
+    const dataRows = tableLines.filter((line) => !/^\|\s*(?:事项|[-: ]+)\s*\|/.test(line));
+    const headerOk = tableLines.some((line) => /\|\s*事项\s*\|\s*负责人\s*\|\s*截止日期\s*\|\s*状态\s*\|/.test(line));
+    const expectedRows = [
+      ['核对报名数据', '张三', '7月18日', '进行中'],
+      ['复核短信到达率', '李四', '7月19日', '未开始'],
+      ['提交复盘', '王五', '7月20日', '未开始'],
+    ];
+    const rowsOk = expectedRows.every((row) => tableLines.some((line) => row.every((cell) => line.includes(cell))));
+    const outsideText = lines.filter((line) => !/^\|.*\|$/.test(line) && !/^```/.test(line));
+    return result('固定列 Markdown 表格', '只能输出指定四列表格，恰好3条任务，所有单元格与输入一致，表格外无说明。', headerOk && dataRows.length === 3 && rowsOk && outsideText.length === 0, `header=${headerOk}；data_rows=${dataRows.length}；rows_ok=${rowsOk}；outside=${outsideText.length}；reply=${clip(reply, 500)}`);
+  }
+  if (id === 'SIT-HOME-065') {
+    const admitsMissing = /未收到|没收到|未检测到|没有.*附件|看不到.*附件|尚未上传/.test(reply);
+    const givesGuide = /上传|重新发送|重新附加|拖拽|附件按钮/.test(reply);
+    const inventedAmount = /\d+(?:\.\d+)?\s*(?:万|元)/.test(reply);
+    return result('未上传附件边界', '未上传文件时应明确未收到附件并给出上传指引，不得虚构金额或文件内容。', admitsMissing && givesGuide && !inventedAmount, `missing=${admitsMissing}；guide=${givesGuide}；invented_amount=${inventedAmount}；reply=${clip(reply, 360)}`);
+  }
+  if (id === 'SIT-HOME-066') {
+    const filenames = /qbot-requirement\.md/i.test(reply) && /qbot-data\.json/i.test(reply);
+    const requirementFact = /非技术用户|自然语言|产品运营|结构化结论|模型|Agent/.test(reply);
+    const dataFact = /QBot UI Agent 自动化|owner|QA|多轮对话|附件理解|截图留证|中文报告/.test(reply);
+    const unified = /统一|验收|风险|清单/.test(reply);
+    return result('多文件事实与来源', '应同时按文件名引用 Markdown 与 JSON，各给出至少一项可核对事实，并形成统一验收风险清单。', filenames && requirementFact && dataFact && unified, `filenames=${filenames}；md_fact=${requirementFact}；json_fact=${dataFact}；unified=${unified}；reply=${clip(reply, 420)}`);
+  }
+  if (id === 'SIT-HOME-067') {
+    const filenames = /qbot-word-report\.docx/i.test(reply) && /qbot-data-table\.xlsx/i.test(reply);
+    const wordFact = /读取文档|总结主题|验收点|多轮对话|附件理解|截图留证|中文报告/.test(reply);
+    const excelFact = /100/.test(reply) && /70/.test(reply) && /12/.test(reply);
+    const sections = ['结论', '证据', '风险', '下一步'].every((term) => reply.includes(term));
+    return result('跨格式事实与决策摘要', '应按两个文件名分别引用 Word 结论和 Excel 关键数据，并输出结论、证据、风险、下一步四部分。', filenames && wordFact && excelFact && sections, `filenames=${filenames}；word_fact=${wordFact}；excel_fact=${excelFact}；sections=${sections}；reply=${clip(reply, 460)}`);
+  }
+  return notApplicable;
+}
+
+function replySentences(value) {
+  return String(value || '')
+    .replace(/^\s*(?:[-*]|\d+[.、])\s*/gm, '')
+    .split(/[。！？!?]+|\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function recordTurnSpecificAssertions(state, replyText, turn, testCase) {
   if (!turn.expectedNumbers?.length && !turn.expectedPatterns?.length) return;
   const text = String(replyText || '');
@@ -9929,6 +10348,20 @@ function recordTurnSpecificAssertions(state, replyText, turn, testCase) {
 }
 
 function recordTurnInputAssertions(state, turn, testCase) {
+  const expectedAttachmentTask = attachmentTaskPromptFromCase(testCase);
+  if (expectedAttachmentTask && /附件|上传|文件|Word|Excel|Markdown|JSON/i.test(`${testCase.kind || ''}\n${testCase.scenario || ''}\n${testCase.test_data || ''}`)) {
+    const actualTask = String(turn.prompt || '')
+      .replace(/\n+我已经上传了相关附件，请先读取附件内容再回答；如果某个附件无法读取，请直接说明。\s*$/u, '')
+      .trim();
+    recordAssertion(
+      state,
+      `实际输入与 Case 测试数据一致（${turn.label || '当前轮'}）`,
+      '附件场景必须发送 Excel 中的真实用户任务（仅可去掉“上传文件名”动作前缀），不能替换为通用附件提示词。',
+      normalizePromptForComparison(actualTask) === normalizePromptForComparison(expectedAttachmentTask),
+      `expected=${clip(expectedAttachmentTask, 260)}；actual=${clip(actualTask, 260)}`,
+      'automation_error',
+    );
+  }
   if (!isLongTextScenario(testCase)) return;
   const prompt = String(turn.prompt || '');
   const promptLength = Array.from(prompt).length;
@@ -9948,6 +10381,10 @@ function recordTurnInputAssertions(state, turn, testCase) {
   );
 }
 
+function normalizePromptForComparison(value) {
+  return String(value || '').replace(/\s+/g, '').replace(/[；;]/g, '；').trim();
+}
+
 function isLongTextScenario(testCase) {
   const text = `${testCase.id || ''}\n${testCase.scenario || ''}\n${testCase.test_data || ''}`;
   return /SIT-HOME-017|5000\s*字|长文本/.test(text);
@@ -9958,6 +10395,8 @@ function attachmentPromptForScenario(testCase) {
   if (testCase.id === 'SIT-HOME-037') {
     return '请读取我上传的 PNG 活动漏斗图，提取报名、到场、成交三个阶段的数字，并计算到场率和成交率。';
   }
+  const caseTask = attachmentTaskPromptFromCase(testCase);
+  if (caseTask) return caseTask;
   if (/图片|图像|视觉|多模态|PNG/i.test(text)) {
     return '请查看我上传的图片，说明图片里的主要内容，并指出是否有明显的文字、图表或界面问题。';
   }
@@ -9968,6 +10407,18 @@ function attachmentPromptForScenario(testCase) {
     return '请读取我上传的结构化文件，说明文件类型、关键字段或主要内容，并指出是否存在明显异常。';
   }
   return '请读取我上传的附件，概括主要内容，并说明这些材料能支持什么结论。';
+}
+
+export function attachmentTaskPromptFromCase(testCase) {
+  const raw = expandTestData(String(testCase?.test_data || '').trim());
+  if (!raw || isMetaOnlyTestData(raw)) return '';
+  const withoutUploadInstruction = raw.replace(
+    /^上传\s+[^；;\n]+(?:\.(?:txt|md|markdown|docx|xlsx|xls|pdf|pptx|png|jpg|jpeg|json|csv|html|js|svg)[^；;\n]*)[；;]\s*/i,
+    '',
+  ).trim();
+  const candidate = withoutUploadInstruction || raw;
+  if (!/(?:请|读取|总结|概括|分析|分别|列出|给出|输出|找出|说明|回答|提取)/.test(candidate)) return '';
+  return candidate;
 }
 
 function buildUserPrompt(testCase) {
@@ -10681,6 +11132,7 @@ function statusFromResults(results) {
 }
 
 function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profile, cdpUrl, modelTier = '', results, reason = '', precheck = null }) {
+  const endedAt = new Date();
   const summary = {
     command: 'ui-agent-casebook-run',
     status,
@@ -10701,7 +11153,8 @@ function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profil
       max_timeout_ms: MAX_REPLY_WAIT_MS,
     },
     started_at: startedAt.toISOString(),
-    ended_at: new Date().toISOString(),
+    ended_at: endedAt.toISOString(),
+    duration_ms: Math.max(0, endedAt.getTime() - startedAt.getTime()),
     precheck,
     counts: countResults(results),
     results: results.map((result) => ({
@@ -10780,6 +11233,47 @@ export function buildCredibilityReview(results = []) {
   };
 }
 
+const DETERMINISTIC_UX_ASSERTIONS = {
+  'SIT-HOME-057': /信息不足时的最少澄清/,
+  'SIT-HOME-058': /新约束覆盖旧约束/,
+  'SIT-HOME-059': /冲突事实处置/,
+  'SIT-HOME-060': /领导简报数字与长度/,
+  'SIT-HOME-061': /三步计划与交付检查清单/,
+  'SIT-HOME-062': /ROI 边界与公式/,
+  'SIT-HOME-063': /三句结构与事实落地/,
+  'SIT-HOME-064': /固定列 Markdown 表格/,
+  'SIT-HOME-065': /未上传附件边界/,
+  'SIT-HOME-066': /多文件事实与来源/,
+  'SIT-HOME-067': /跨格式事实与决策摘要/,
+  'SIT-ART-021': /周报成果结构与事实回读/,
+  'SIT-ART-022': /活动复盘聊天与文件一致/,
+  'SIT-ART-023': /领导更新成果可直接使用/,
+};
+
+export function sentPromptFidelity(result) {
+  const id = String(result?.id || '');
+  if (!Object.hasOwn(DETERMINISTIC_UX_ASSERTIONS, id)) return { checked: false, ok: true, reason: '非本组确定性 UX Case。' };
+  const sent = Array.isArray(result?.artifacts?.sent_prompts)
+    ? result.artifacts.sent_prompts.map((item) => String(item?.prompt || '').trim()).filter(Boolean)
+    : [];
+  if (!sent.length) return { checked: true, ok: false, reason: '缺少 artifacts.sent_prompts，无法证明实际发送了 Case 中的用户输入。' };
+  const raw = expandTestData(String(result?.test_data || '').trim());
+  const split = splitFollowUpData(raw);
+  let expected = split ? [split.question, split.followUp] : [raw];
+  const attachmentTask = attachmentTaskPromptFromCase(result);
+  if (['SIT-HOME-065', 'SIT-HOME-066', 'SIT-HOME-067'].includes(id) && attachmentTask) expected = [attachmentTask];
+  const cleanedSent = sent.map((prompt) => prompt
+    .replace(/\n+我已经上传了相关附件，请先读取附件内容再回答；如果某个附件无法读取，请直接说明。\s*$/u, '')
+    .trim());
+  const ok = cleanedSent.length === expected.length
+    && expected.every((prompt, index) => normalizePromptForComparison(prompt) === normalizePromptForComparison(cleanedSent[index]));
+  return {
+    checked: true,
+    ok,
+    reason: `expected=${JSON.stringify(expected)}；sent=${JSON.stringify(cleanedSent)}`,
+  };
+}
+
 export function reviewCaseCredibility(result) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
@@ -10839,6 +11333,10 @@ export function reviewCaseCredibility(result) {
     && replyWaits.some((item) => item.incomplete)
     && screenshots.some((file) => /after-reply/i.test(path.basename(file || '')))
     && !screenshots.some((file) => /after-timeout/i.test(path.basename(file || '')));
+  const promptFidelity = sentPromptFidelity(result);
+  const deterministicAssertionPattern = DETERMINISTIC_UX_ASSERTIONS[String(result.id || '')] || null;
+  const hasDeterministicAssertion = !deterministicAssertionPattern
+    || assertions.some((item) => deterministicAssertionPattern.test(String(item.name || '')));
 
   let reviewCategory = '不可信-框架问题';
   let trusted = false;
@@ -10877,6 +11375,16 @@ export function reviewCaseCredibility(result) {
     reasons.push('回复证据疑似包含测试场景/执行步骤文本，存在把 case 文档发给 QBot 的风险。');
     actionItems.push('修复 prompt 构造，只发送测试数据中的用户真实问题。');
     stepMatch.push('疑似把 case 元数据发给 QBot，操作步骤和用户真实输入不一致。');
+  }
+  if (promptFidelity.checked && !promptFidelity.ok) {
+    reasons.push(`实际发送内容与 Case 测试数据不一致：${clip(promptFidelity.reason, 420)}`);
+    actionItems.push('修复 prompt 构造，发送 Excel 中的真实用户任务；附件场景只允许去除“上传文件名”动作前缀。');
+    stepMatch.push('实际发送内容与当前 Case 测试数据不一致，执行结果不能用于产品结论。');
+  }
+  if (!hasDeterministicAssertion) {
+    reasons.push('新增 UX Case 未执行对应成功标准的确定性断言，不能仅凭通用关键词相关性判为可信。');
+    actionItems.push('补齐该 Case 的结构、事实、计算、文件落地或边界断言后重跑。');
+    evidenceCompleteness.push('缺少与 success_criteria 一一对应的确定性断言。');
   }
   if (automationSignals.length) {
     reasons.push(`存在自动化执行/断言错误：${clip(automationSignals.map((item) => item.actual || item.name || item.action).join('；'), 260)}`);
@@ -11161,6 +11669,7 @@ function renderRunReport(summary) {
     `- 回复等待策略：最小等待 ${summary.reply_wait_policy?.min_wait_ms || MIN_REPLY_WAIT_MS}ms；短问 ${summary.reply_wait_policy?.short_timeout_ms || SHORT_REPLY_WAIT_MS}ms；组合 ${summary.reply_wait_policy?.combo_timeout_ms || COMBO_REPLY_WAIT_MS}ms；附件/成果 ${summary.reply_wait_policy?.attachment_artifact_timeout_ms || ATTACHMENT_ARTIFACT_REPLY_WAIT_MS}ms；长文本/多轮 ${summary.reply_wait_policy?.long_context_timeout_ms || LONG_CONTEXT_REPLY_WAIT_MS}ms`,
     `- 开始时间：${summary.started_at}`,
     `- 结束时间：${summary.ended_at}`,
+    `- 执行耗时：${summary.duration_ms ?? '未记录'} ms`,
     '',
     '## 汇总',
     '',
@@ -11319,6 +11828,7 @@ function renderFinalDetailedReport(summary) {
     `- 回复等待策略：最小等待 ${summary.reply_wait_policy?.min_wait_ms || MIN_REPLY_WAIT_MS}ms；短问 ${summary.reply_wait_policy?.short_timeout_ms || SHORT_REPLY_WAIT_MS}ms；组合 ${summary.reply_wait_policy?.combo_timeout_ms || COMBO_REPLY_WAIT_MS}ms；附件/成果 ${summary.reply_wait_policy?.attachment_artifact_timeout_ms || ATTACHMENT_ARTIFACT_REPLY_WAIT_MS}ms；长文本/多轮 ${summary.reply_wait_policy?.long_context_timeout_ms || LONG_CONTEXT_REPLY_WAIT_MS}ms`,
     `- 开始时间：${summary.started_at}`,
     `- 结束时间：${summary.ended_at}`,
+    `- 执行耗时：${summary.duration_ms ?? '未记录'} ms`,
     `- 结果 Excel：${summary.result_excel}`,
     `- 自动化总报告：${path.join(summary.run_dir, 'automation-run-report.md')}`,
     `- 二次复核报告：${summary.credibility_review_file || path.join(summary.run_dir, '二次复核报告.md')}`,
