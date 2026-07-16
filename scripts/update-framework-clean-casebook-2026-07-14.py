@@ -172,7 +172,14 @@ UPDATES = {
     "SIT-SKILL-013": {"执行入口/Selector": '.skill-card; [data-testid="nav-settings-menu"]; [data-testid="nav-settings"]; [data-testid="assistant-reconcile-skills"]; [data-testid="assistant-reconcile-result"]', "备注": "2026-07-14：卡片无操作入口时走个人设置“立即对账技能”，不再只等待。"},
     "SIT-SKILL-021": {"执行入口/Selector": '.skill-install; runner-control-plane-proxy:/api/skills/install', "备注": "2026-07-14：runner 控制面代理返回可控安装失败并验证无脏已安装状态。"},
     "SIT-CONN-012": {"执行入口/Selector": '[data-testid="composer-connectors-menu"]; runner-control-plane-proxy:/api/capabilities', "备注": "2026-07-14：代理变换 capabilities 中已选连接器为 needs_auth，并在重启后复查警告。"},
-    "SIT-CONN-013": {"执行入口/Selector": '[data-testid="connectors-refresh"]; runner-control-plane-proxy:/api/connectors/catalog?refresh=force', "备注": "2026-07-14：代理注入刷新失败，断言已有缓存卡片保留。"},
+    "SIT-CONN-013": {
+        "前置条件": "QBot 已登录工作台；框架先启动受控连接器 Fixture，成功加载至少3张平台连接器卡片并形成非空缓存，再安装目录刷新失败代理。",
+        "测试数据": "缓存基线=Dev Healthy、Dev Unreachable、Dev Needs Auth；故障注入=GET /api/connectors/catalog?refresh=force 网络错误。",
+        "执行入口/Selector": '[data-testid="connectors-refresh"]; runner-control-plane-proxy:/api/connectors/catalog?refresh=force',
+        "执行步骤": "1. 启动受控连接器 Fixture并确认平台卡片数>=3。\n2. 安装未激活的刷新失败代理并记录缓存基线。\n3. 激活代理后点击刷新。\n4. 核对代理命中、错误提示及刷新前后卡片。",
+        "成功判定": "代理命中>=1；cardsBefore>=3；cardsAfter>=cardsBefore；三张Fixture卡仍在且出现产品化失败提示。",
+        "备注": "2026-07-16：先构造非空缓存再注入刷新失败，禁止以 cardsBefore=0 执行缓存保留断言。",
+    },
 }
 
 

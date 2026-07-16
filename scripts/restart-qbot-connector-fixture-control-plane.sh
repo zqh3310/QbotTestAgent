@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="${1:?deepbankV2 root is required}"
 MCPHUB_URL="${2:?MCPHub fixture URL is required}"
 DEEPBANK_HOME_OVERRIDE="${3-}"
+DEEPBANK_E2E_OVERRIDE="${4:-1}"
 
 cd "$ROOT_DIR"
 
@@ -24,7 +25,7 @@ PID_DIR="$DEEPBANK_HOME/pids"
 PID_FILE="$PID_DIR/dev-server.pid"
 export DEEPBANK_HOME
 export DEEPBANK_ENV=dev
-export DEEPBANK_E2E=1
+export DEEPBANK_E2E="$DEEPBANK_E2E_OVERRIDE"
 export DEEPBANK_MCPHUB_MOCK=0
 export DEEPBANK_MCPHUB_URL="$MCPHUB_URL/api/openapi/servers?detail=true"
 export DEEPBANK_MCPHUB_BASE_URL="$MCPHUB_URL"
@@ -62,7 +63,7 @@ done
 nohup env \
   DEEPBANK_HOME="$DEEPBANK_HOME" \
   DEEPBANK_ENV=dev \
-  DEEPBANK_E2E=1 \
+  DEEPBANK_E2E="$DEEPBANK_E2E_OVERRIDE" \
   DEEPBANK_MCPHUB_MOCK=0 \
   DEEPBANK_MCPHUB_URL="$MCPHUB_URL/api/openapi/servers?detail=true" \
   DEEPBANK_MCPHUB_BASE_URL="$MCPHUB_URL" \

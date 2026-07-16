@@ -74,8 +74,9 @@ UPDATES = {
         "成功判定": "先记录实际专家名和技能名；按所选技能真实能力判断相关性，允许明确说明不适配，不再要求任意技能必须命中特定业务关键词。",
     },
     "SIT-HOME-009": {
-        "测试数据": "请说明当前已选技能和连接器分别能做什么，并给出一个同时适配两者的测试执行步骤；无法组合时请明确说明限制。",
-        "成功判定": "截图证明技能和健康连接器实际选中；回复正确描述二者能力或限制，不以固定‘测试计划’关键词强判。",
+        "测试数据": "请实际调用当前已选的 QA Python Runtime 技能和 Dev Healthy 连接器：先让连接器返回一段确定性测试数据，再用已选技能把结果整理成三步测试执行方案；如果任一能力没有生效，请明确指出具体是哪一项。\n自动化技能=qa-python-runtime；自动化连接器=mcphub:dev_healthy",
+        "执行步骤": "1. 点击【新建任务】并保持通用助手。\n2. 精确选择 QA Python Runtime（qa-python-runtime）。\n3. 精确选择 mcphub:dev_healthy。\n4. 发送要求真实调用两项能力的组合任务。\n5. 保存工具条状态、回复和 MCP tools/call 命中记录。",
+        "成功判定": "技能和连接器精确选中截图齐全；受控连接器记录至少1次 MCP tools/call；回复包含三步执行方案或明确、可理解的能力失败原因。",
     },
     "SIT-HOME-011": {
         "测试数据": "会议纪要：报名目标100人，负责人张三，周五前验收报名页，风险是短信到达率偏低。先用专家整理，再切回通用助手输出3条待办。",
@@ -132,12 +133,31 @@ UPDATES = {
     "SIT-HOME-051": {"成功判定": "真实点击侧栏折叠/展开 testid，比较前后几何尺寸和可见状态，不用文案推断。"},
     "SIT-HOME-055": {"成功判定": "仅将真实堆栈、绝对源码路径、密钥/token/header 等判为技术泄漏；不把正常产品说明中的普通技术词误判为失败。"},
     "SIT-HOME-056": {"成功判定": "上传 TXT/JSON/MD 三个真实文件，点击 MD 的附件删除按钮；发送后回复只处理 TXT/JSON，不引用已删除文件名。"},
+    "SIT-EXPERT-001": {
+        "执行步骤": "1. 点击左侧【专家】。\n2. 若 experts-view 已可见则直接检查；否则点击当前可见的【专家】页签。\n3. 观察通用助手、推荐、我的专家、专家市场和创建入口。",
+        "成功判定": "experts-view 可见且页面结构完整；不得因新版默认已进入专家页、未渲染 experts-tab 而判失败。",
+    },
     "SIT-SKILL-003": {"成功判定": "从已安装列表定位第一张实际带 .skill-del 的可删除卡片；取消后保留，确认后移除；无可删除技能则可信阻塞。"},
     "SIT-SKILL-007": {"执行步骤": "1. 新建任务。\n2. 每个模式切换前重新打开技能菜单。\n3. 依次点击禁用、自动、手动。\n4. 每次读取 capabilities.skillMode 验证状态。"},
     "SIT-SKILL-009": {"执行步骤": "1. 在页面网络层拦截 /api/skills/catalog，返回 marketStatus=unconfigured。\n2. 进入技能市场。\n3. 截图并验证产品化提示。\n4. 立即解除拦截。"},
     "SIT-SKILL-010": {"执行步骤": "1. 在页面网络层拦截 /api/skills/catalog，返回 marketStatus=unauthorized、模拟403原因。\n2. 进入技能市场。\n3. 验证无权访问提示且不显示 raw HTTP。\n4. 立即解除拦截。"},
+    "SIT-SKILL-015": {
+        "前置条件": "QBot 使用最新 main 本地代码启动并指向 dev 环境；框架启动受控 QA SkillHub，安装 qa-version-rollback@1.0.0，再更新到2.0.0并确认1.0.0出现在可回退版本。",
+        "测试数据": "自动化技能标识=qa-version-rollback\n初始版本=1.0.0\n更新版本=2.0.0\n目标回退版本=1.0.0",
+        "执行步骤": "1. 安装 qa-version-rollback@1.0.0。\n2. 更新到2.0.0并确认回退chip为1.0.0。\n3. 点击1.0.0并确认。\n4. 验证当前版本1.0.0且2.0.0成为历史版本。",
+        "成功判定": "同一技能卡形成 2.0.0 + 回退1.0.0 → 1.0.0 + 历史2.0.0 的版本证据链，不能只按固定chip文案判定。",
+    },
     "SIT-SKILL-019": {"成功判定": "自动模式下按任务正常回复；有匹配技能则保留能力证据，无匹配也可普通回复；重复短词不作为失败依据。"},
     "SIT-SKILL-025": {"测试数据": "安装第一个可安装普通技能，记录其真实名称；首页手动模式搜索并选择同名技能，再询问该技能适用的问题。", "成功判定": "以安装前后同一技能名、首页选中态、capabilities 和回复构成证据链；不以固定业务关键词判相关性。"},
+    "SIT-CONN-008": {"前置条件": "QBot 已登录工作台；框架启动受控 healthy/unreachable/needs_auth 三态连接器 Fixture，并在健康对账阶段临时关闭 E2E 短路。", "测试数据": "dev_healthy=MCP成功；dev_unreachable=MCP端点503；dev_needs_auth=oauth_required。", "成功判定": "健康注册表包含 dev_unreachable=unreachable；页面出现重试入口且点击后有明确反馈。"},
+    "SIT-CONN-009": {"前置条件": "QBot 已登录工作台；框架启动受控 healthy/unreachable/needs_auth 三态连接器 Fixture，并在健康对账阶段临时关闭 E2E 短路。", "测试数据": "dev_needs_auth=oauth_required，无 runtimeInvocation endpoint。", "成功判定": "needs_auth 状态、授权弹窗和重新检测/关闭入口证据齐全，且不暴露 raw token/header/client_secret。"},
+    "SIT-CONN-013": {
+        "前置条件": "QBot 已登录工作台；框架先加载 Dev Healthy/Dev Unreachable/Dev Needs Auth 至少3张平台连接器卡片并形成非空缓存，再安装刷新失败代理。",
+        "测试数据": "缓存基线=Dev Healthy、Dev Unreachable、Dev Needs Auth；故障注入=GET /api/connectors/catalog?refresh=force 网络错误。",
+        "执行步骤": "1. 启动受控连接器 Fixture并确认平台卡片数>=3。\n2. 安装未激活的刷新失败代理并记录缓存基线。\n3. 激活代理后点击刷新。\n4. 核对代理命中、错误提示及刷新前后卡片。",
+        "成功判定": "代理命中>=1；cardsBefore>=3；cardsAfter>=cardsBefore；三张Fixture卡仍在且出现产品化失败提示。",
+    },
+    "SIT-CONN-018": {"前置条件": "QBot 已登录工作台；框架启动受控 healthy/unreachable/needs_auth 三态连接器 Fixture，并在健康对账阶段临时关闭 E2E 短路。", "测试数据": "dev_unreachable=unreachable；dev_needs_auth=needs_auth；dev_healthy=healthy。", "成功判定": "手动菜单中不可用连接器明确置灰/不可选/不生效并给出重试或授权出路；dev_healthy仍可选。"},
 }
 
 

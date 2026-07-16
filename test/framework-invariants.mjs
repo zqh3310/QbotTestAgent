@@ -59,6 +59,7 @@ const required = [
   ['#668 三条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-027'[\s\S]*executeSitSkillRejectedExplicitRetry[\s\S]*SIT-SKILL-028'[\s\S]*executeSitSkillAuditRejectNoAutoRetry[\s\S]*SIT-SKILL-029'[\s\S]*executeSitSkillRejectedUninstallCleanup/],
   ['#669 四条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
+  ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
   ['稳定 QA 专家不存在时自动创建', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
@@ -69,7 +70,8 @@ const required = [
   ['HOME-004 到 HOME-009 统一使用稳定能力测试数据', /SIT-HOME-004'[\s\S]*SIT-HOME-009'[\s\S]*executeHomeCapabilityFixtureCase[\s\S]*qa-python-runtime[\s\S]*dev_healthy/],
   ['首页能力 Fixture 失败和结束均恢复正常环境', /executeHomeCapabilityFixtureCase[\s\S]*启动失败后恢复正常配置[\s\S]*首页能力技能 Fixture 清理[\s\S]*恢复正常首页能力配置/],
   ['Fixture 包装器等待 Case 完成后再执行 finally 清理', /executeHomeCapabilityFixtureCase[\s\S]*return await executeSitHome[\s\S]*finally[\s\S]*executeSkillRegressionFixtureCase[\s\S]*return await executeSitSkill[\s\S]*finally[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*return await executeSitConnector[\s\S]*finally/],
-  ['HOME-009 专项执行技能加连接器组合', /SIT-HOME-009'[\s\S]*selectGeneralAssistantForCase[\s\S]*selectFirstManualSkill[\s\S]*selectFirstManualConnector[\s\S]*assertManualSkillSelectionPresent/],
+  ['HOME-009 专项精确选择技能加连接器组合', /SIT-HOME-009'[\s\S]*selectGeneralAssistantForCase[\s\S]*selectManualSkillByName[\s\S]*QA Python Runtime[\s\S]*selectManualConnectorByKey[\s\S]*mcphub:dev_healthy[\s\S]*assertManualSkillSelectionPresent/],
+  ['HOME-009 使用真实组合任务而非通用问候', /promptOverride: testCase\.id === 'SIT-HOME-009'[\s\S]*实际调用当前已选的 QA Python Runtime 技能和 Dev Healthy 连接器/],
   ['HOME-010 专项执行技能连接器双自动', /SIT-HOME-010'[\s\S]*executeSitHomeAutoAbility[\s\S]*skillMode: 'auto'[\s\S]*connectorMode: 'auto'[\s\S]*自动能力活动复盘/],
   ['HOME-037 固定 PNG 漏斗数据', /SIT-HOME-037'[\s\S]*PNG 活动漏斗图[\s\S]*expectedNumbers: \['100', '70', '12'\]/],
   ['技能回归 Fixture 服务覆盖 ZIP 与依赖元数据', /createSkillHubRegressionServer[\s\S]*skillhub-regression[\s\S]*\/api\/web\/skills[\s\S]*parsedMetadataJson[\s\S]*download_failure/],
@@ -84,9 +86,12 @@ const required = [
   ['SKILL-018 使用空已安装目录代理', /executeSitSkillManualEmptyState[\s\S]*skill-018-empty-installed[\s\S]*skills-empty-installed/],
   ['EXPERT-015 使用空专家市场代理', /executeSitExpertEmptyMarket[\s\S]*expert-015-empty-market[\s\S]*experts-empty-market/],
   ['CONN-014 使用空连接器目录代理', /executeSitConnectorEmptyState[\s\S]*connectors-empty-catalog[\s\S]*connector-014-empty-catalog/],
-  ['连接器三态用例使用 runner 自建 Fixture', /createConnectorRegressionServer[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-018'/],
+  ['连接器三态与缓存用例使用 runner 自建 Fixture', /createConnectorRegressionServer[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-013'[\s\S]*SIT-CONN-018'/],
   ['连接器 Fixture 提供无 OAuth 的真实 MCP 工具调用', /createConnectorRegressionServer[\s\S]*tools\/list[\s\S]*dev_healthy_tool[\s\S]*tools\/call[\s\S]*fixture invocation succeeded/],
   ['连接器三态前置使用结构化状态校验', /healthyConnector\?\.statusKind === 'ready'[\s\S]*healthyHealth\?\.status === 'healthy'[\s\S]*unreachableHealth\?\.status === 'unreachable'[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
+  ['连接器健康 Fixture 临时关闭 E2E 健康短路并轮询快照', /(?=[\s\S]*\[serverHelper, qbotRoot, fixture\.url, qbotHome, '0'\])(?=[\s\S]*\[electronHelper, qbotRoot,[\s\S]*qbotHome, '', '0'\])(?=[\s\S]*getConnectorHealth)(?=[\s\S]*Date\.now\(\) \+ 15000)/],
+  ['CONN-013 使用非空三态 Fixture 后再注入刷新失败', /SIT-CONN-013'[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*executeSitConnectorRefreshFailure/],
+  ['CONN-013 刷新前验证三类缓存卡片', /executeSitConnectorRefreshFailure[\s\S]*Dev Healthy[\s\S]*Dev Unreachable[\s\S]*Dev Needs Auth[\s\S]*刷新失败前非空三态缓存夹具[\s\S]*cached_kinds_present/],
   ['CONN-012 代理重启后按 key 重选再注入', /executeSitConnectorUnhealthySelectedState[\s\S]*initiallyArmed: false[\s\S]*selectManualConnectorByKey[\s\S]*control\.proxy\.arm/],
   ['连接器 dev Fixture 缺入口进入产品断言而非阻塞', /executeSitConnectorRetry[\s\S]*unreachable 连接器重试入口[\s\S]*executeSitConnectorAuthDialog[\s\S]*needs_auth 连接器授权入口[\s\S]*executeSitConnectorManualUnhealthyOption[\s\S]*手动菜单展示不可用连接器状态/],
   ['项目成果用例创建真实项目和项目任务', /(?=[\s\S]*executeSitProjectArtifactCase)(?=[\s\S]*QBot QA 自动化项目)(?=[\s\S]*project-tasks-view)(?=[\s\S]*project-task-launch)(?=[\s\S]*project_result\.md)(?=[\s\S]*project_weekly_report\.md)/],
@@ -115,6 +120,8 @@ if (!/source "\$ROOT_DIR\/\.env"/.test(skillHubRestartHelper)
 
 if (!/source "\$ROOT_DIR\/\.env"/.test(connectorFixtureRestartHelper)
   || !/export DEEPBANK_MCPHUB_MOCK=0/.test(connectorFixtureRestartHelper)
+  || !/DEEPBANK_E2E_OVERRIDE="\$\{4:-1\}"/.test(connectorFixtureRestartHelper)
+  || !/DEEPBANK_E2E="\$DEEPBANK_E2E_OVERRIDE"/.test(connectorFixtureRestartHelper)
   || !/DEEPBANK_MCPHUB_URL="\$MCPHUB_URL\/api\/openapi\/servers\?detail=true"/.test(connectorFixtureRestartHelper)
   || !/npm run dev:server/.test(connectorFixtureRestartHelper)) {
   throw new Error('连接器 QA 重启脚本必须读取本地 .env、注入 runner MCPHub Fixture 并只重启控制面');
@@ -128,6 +135,7 @@ if (!/source "\$ROOT_DIR\/\.env"/.test(capabilityFixtureRestartHelper)
 }
 
 if (!/SKILLHUB_URL_OVERRIDE="\$\{5:-\}"/.test(electronRestartHelper)
+  || !/DEEPBANK_E2E_OVERRIDE="\$\{6:-1\}"/.test(electronRestartHelper)
   || !/DEEPBANK_SKILLHUB_RESOURCES_BASE_URL="\$\{DEEPBANK_SKILLHUB_RESOURCES_BASE_URL:-\}"/.test(electronRestartHelper)) {
   throw new Error('Electron 重启脚本必须显式接收并传递当前 Case 的 SkillHub Fixture 地址');
 }
@@ -273,6 +281,13 @@ if (!replyLooksRelevant('收到，我会按“数据结论、可能原因、下�
   test_data: '补充输出格式、风险和验证方法',
 }, '请补充输出格式、风险和验证方法')) {
   throw new Error('多轮约束确认不应被相关性启发式误判');
+}
+if (!replyLooksRelevant('我是 QBot，你的智能办公助手，可以帮助整理资料、分析数据和执行任务。', {
+  id: 'SIT-HOME-015',
+  scenario: '普通身份问答',
+  test_data: '你好，请用一句话说明你是谁。',
+}, '你好，请用一句话说明你是谁。')) {
+  throw new Error('身份问答不应被相关性启发式误判');
 }
 
 const unicodeTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-json-unicode-'));

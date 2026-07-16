@@ -1160,13 +1160,12 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-CONN-005') return executeSitConnectorDetails({ page, state, caseDir });
   if (id === 'SIT-CONN-006') return executeSitConnectorDefaultAutoMode({ page, state, caseDir });
   if (id === 'SIT-CONN-007') return executeSitConnectorToolToggle({ page, state, caseDir });
-  if (id === 'SIT-CONN-008' || id === 'SIT-CONN-009' || id === 'SIT-CONN-018') {
+  if (id === 'SIT-CONN-008' || id === 'SIT-CONN-009' || id === 'SIT-CONN-013' || id === 'SIT-CONN-018') {
     return executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime });
   }
   if (id === 'SIT-CONN-010') return executeSitConnectorDisabledConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-011') return executeSitConnectorAutoConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-012') return executeSitConnectorUnhealthySelectedState({ page, state, caseDir, options, runtime });
-  if (id === 'SIT-CONN-013') return executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-014') return executeSitConnectorEmptyState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-015') return executeSitConnectorPrivateNetworkGuard({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-016') return executeSitConnectorChartConversation({ page, state, testCase, caseDir, timeoutMs });
@@ -2179,7 +2178,7 @@ async function executeSitHomeWorkModes({ page, state, testCase, caseDir, timeout
   );
 }
 
-async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir, timeoutMs }) {
+async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir, timeoutMs, promptOverride = '' }) {
   const id = String(testCase.id || '');
   await openNewTask(page, state);
 
@@ -2204,13 +2203,15 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
     if (!await selectGeneralAssistantForCase(page, state, caseDir)) return;
     await openNewTask(page, state);
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-    if (!await selectFirstManualSkill(page, state, caseDir)) return;
-    if (!await selectFirstManualConnector(page, state, caseDir)) return;
+    if (!await selectManualSkillByName(page, state, caseDir, 'QA Python Runtime')) return;
+    if (!await selectManualConnectorByKey(page, state, caseDir, 'mcphub:dev_healthy')
+      && !await selectManualConnectorByKey(page, state, caseDir, 'dev_healthy')) return;
     if (!await assertManualSkillSelectionPresent(page, state, caseDir, '选择连接器后手动技能仍保留')) return;
   }
 
   await page.keyboard.press('Escape').catch(() => {});
-  const prompt = userPromptFromCase(testCase, '你好，请用一句话说明你能帮我做什么。');
+  const prompt = String(promptOverride || '').trim()
+    || userPromptFromCase(testCase, '你好，请用一句话说明你能帮我做什么。');
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '组合能力会话' });
   const expected = String(testCase.expected_result || testCase.success_criteria || '');
   const expertScenarioText = `${expected}\n${testCase.scenario || ''}`;
@@ -3545,8 +3546,22 @@ async function executeSitSkillRollback({ page, state, caseDir }) {
     markFailed(state, `已完成 ${marker} 1.0.0 → 2.0.0 前置，但已安装列表无法定位该 Fixture。`, 'automation_error');
     return;
   }
-  const text = await card.innerText({ timeout: 1500 }).catch(() => '');
-  const rollback = card.locator('.skill-revert-chip').filter({ hasText: /1\.0\.0/ }).first();
+  let text = await card.innerText({ timeout: 1500 }).catch(() => '');
+  let rollback = card.locator('.skill-revert-chip').filter({ hasText: /1\.0\.0/ }).first();
+  // updateSkill 后的自动对账可能把当前版本恢复成 1.0.0，并把 2.0.0
+  // 放进回退列表。先切到 2.0.0，再执行真正的 2.0.0 -> 1.0.0 回退，
+  // 避免把合法的反向历史 chip 误报成产品 Bug。
+  if (!(await visible(rollback, 1000))) {
+    const forward = card.locator('.skill-revert-chip').filter({ hasText: /2\.0\.0/ }).first();
+    if (await visible(forward, 1000)) {
+      await captureDialogDuringWithAction(page, async () => forward.click({ force: true }), { accept: true, timeoutMs: 5000 });
+      await page.waitForTimeout(2200);
+      await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+      const refreshed = await findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i'));
+      text = refreshed ? await refreshed.innerText({ timeout: 1500 }).catch(() => '') : text;
+      rollback = refreshed?.locator('.skill-revert-chip').filter({ hasText: /1\.0\.0/ }).first() || rollback;
+    }
+  }
   if (!(await visible(rollback, 1000))) {
     recordAssertion(state, '技能历史版本回退入口', '更新到 2.0.0 后，已安装卡片应展示可点击的 1.0.0 回退 chip。', false, clip(text, 300));
     return;
@@ -3557,6 +3572,9 @@ async function executeSitSkillRollback({ page, state, caseDir }) {
   const afterText = await mainSurfaceText(page);
   recordStep(state, '点击可回退版本并确认', '回退后应成功、重新物化或给出明确失败原因。', `技能=${clip(text, 180)}；确认=${dialog.message || '无'}；页面=${clip(afterText, 260)}`, 'passed', state.screenshots.skill_015_after_rollback);
   recordAssertion(state, '技能回退反馈', '回退操作应展示成功、失败、物化、重试或历史记录反馈。', /回退|成功|失败|物化|重试|历史|版本/.test(afterText), clip(afterText, 320));
+  const afterCard = await findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i'));
+  const afterCardText = afterCard ? await afterCard.innerText({ timeout: 1200 }).catch(() => '') : '';
+  recordAssertion(state, '技能回退版本落点', '执行 2.0.0 → 1.0.0 回退后，当前版本应为 1.0.0，且 2.0.0 成为可回退历史版本。', /1\.0\.0/.test(afterCardText) && /可回退版本[\s\S]*2\.0\.0/.test(afterCardText), clip(afterCardText, 320));
 }
 
 async function executeSitSkillHistory({ page, state, caseDir }) {
@@ -3901,7 +3919,16 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
     if (testCase.id === 'SIT-HOME-006') return await executeSitHome006({ page, state, testCase, caseDir, timeoutMs });
     if (testCase.id === 'SIT-HOME-007') return await executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeoutMs });
     if (testCase.id === 'SIT-HOME-008') return await executeSitHomeConnectorOnly({ page, state, testCase, caseDir, timeoutMs });
-    return await executeSitHomeAbilityCombination({ page, state, testCase, caseDir, timeoutMs });
+    return await executeSitHomeAbilityCombination({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      promptOverride: testCase.id === 'SIT-HOME-009'
+        ? '请实际调用当前已选的 QA Python Runtime 技能和 Dev Healthy 连接器：先让连接器返回一段确定性测试数据，再用已选技能把结果整理成三步测试执行方案；如果任一能力没有生效，请明确指出具体是哪一项。'
+        : '',
+    });
   } finally {
     const activePage = runtime?.page || page;
     if (needsSkill && activePage) {
@@ -4075,11 +4102,8 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
       return false;
     }
     fixture.setActiveVersion(slug, '2.0.0');
-    const updated = await page.evaluate(async (name) => {
-      const result = await window.agent.updateSkill(name);
-      if (result?.ok) await window.agent.reconcileSkills().catch(() => null);
-      return result;
-    }, slug).catch((error) => ({ ok: false, msg: error.message }));
+    const updated = await page.evaluate(async (name) => window.agent.updateSkill(name), slug)
+      .catch((error) => ({ ok: false, msg: error.message }));
     state.artifacts.skill_fixture_version_setup = { slug, installed, updated };
     if (!updated?.ok || updated.updated === false || updated.fromVersion !== '1.0.0' || updated.toVersion !== '2.0.0') {
       markFailed(state, `无法构造 ${slug} 1.0.0 → 2.0.0 回退历史：${JSON.stringify(updated)}`, 'automation_error');
@@ -4286,8 +4310,11 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
   const marketCard = await searchAutomationSkillCard(page, state, caseDir, marker);
   const after = marketCard ? await marketCard.innerText({ timeout: 1200 }).catch(() => '') : '';
   const installVisible = marketCard ? await visible(marketCard.locator('.skill-install').first(), 1200) : false;
+  const rejectedBadgeText = marketCard
+    ? (await marketCard.locator('.skill-badge.err').allInnerTexts().catch(() => [])).join(' / ')
+    : '';
   state.screenshots.skill_029_after_uninstall = await shot(page, caseDir, 'skill-029-after-uninstall-cleanup');
-  recordAssertion(state, '卸载同步清理本机拒装状态', '卸载后市场卡应恢复可安装，旧的“装不上/拒装” overlay 不得残留。', Boolean(marketCard) && installVisible && !/装不上|拒装|rejected/.test(after), `marketCard=${Boolean(marketCard)}；installVisible=${installVisible}；after=${clip(after, 300)}`);
+  recordAssertion(state, '卸载同步清理本机拒装状态', '卸载后市场卡应恢复可安装，旧的“装不上/拒装” overlay 不得残留。', Boolean(marketCard) && installVisible && !rejectedBadgeText.trim(), `marketCard=${Boolean(marketCard)}；installVisible=${installVisible}；rejectedBadge=${rejectedBadgeText || '无'}；after=${clip(after, 300)}`);
 }
 
 async function installAutomationDependencyRoot({ page, state, testCase, caseDir, marker }) {
@@ -4481,8 +4508,8 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   let cdpPort = '9224';
   try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
   const command = [
-    [serverHelper, qbotRoot, fixture.url, qbotHome].map(shellQuote).join(' '),
-    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome].map(shellQuote).join(' '),
+    [serverHelper, qbotRoot, fixture.url, qbotHome, '0'].map(shellQuote).join(' '),
+    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome, '', '0'].map(shellQuote).join(' '),
   ].join(' && ');
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用产品 dev 连接器三态 Fixture', commandOverride: command });
   if (!restarted.ok) return restarted;
@@ -4490,8 +4517,17 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   if (!workbench.ok) return { ok: false, reason: workbench.reason };
   const prepared = await restarted.page.evaluate(async () => {
     const catalog = await window.agent.getConnectorCatalog({ forceRefresh: true });
-    const healthResult = await window.agent.reconcileConnectorHealth?.();
-    const health = Array.isArray(healthResult?.health) ? healthResult.health : await window.agent.getConnectorHealth?.();
+    await window.agent.reconcileConnectorHealth?.();
+    let health = [];
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      health = await window.agent.getConnectorHealth?.() || [];
+      const statuses = new Map(health.map((item) => [item.key || item.name, item.status]));
+      const hasHealthy = [...statuses].some(([key, status]) => /dev_healthy/.test(String(key)) && status === 'healthy');
+      const hasUnreachable = [...statuses].some(([key, status]) => /dev_unreachable/.test(String(key)) && status === 'unreachable');
+      if (hasHealthy && hasUnreachable) break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
     return {
       connectors: (catalog?.connectors || []).map((item) => ({ key: item.key, label: item.label, statusKind: item.statusKind })),
       health: Array.isArray(health) ? health.map((item) => ({ key: item.key, name: item.name, status: item.status, reason: item.reason })) : [],
@@ -4528,6 +4564,7 @@ async function executeConnectorRegressionFixtureCase({ page, state, testCase, ca
     page = injected.page;
     if (testCase.id === 'SIT-CONN-008') return await executeSitConnectorRetry({ page, state, caseDir });
     if (testCase.id === 'SIT-CONN-009') return await executeSitConnectorAuthDialog({ page, state, caseDir });
+    if (testCase.id === 'SIT-CONN-013') return await executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
     if (testCase.id === 'SIT-CONN-018') return await executeSitConnectorManualUnhealthyOption({ page, state, caseDir });
   } finally {
     state.artifacts.connector_regression_fixture_hits = fixture.state.hits;
@@ -4675,17 +4712,42 @@ async function executeSitConnectorRefreshFailure({ page, state, caseDir, options
     return;
   }
   state.screenshots.connector_013_before_refresh = await shot(page, caseDir, 'connector-013-before-refresh');
-  const cardsBefore = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
+  const cardSelector = '[data-testid^="connector-card-"]';
+  const cardLocatorBefore = page.locator(cardSelector);
+  const cardsBefore = await cardLocatorBefore.count().catch(() => 0);
+  const cardsBeforeText = await cardLocatorBefore.allInnerTexts().catch(() => []);
+  const cachedKindsPresent = ['Dev Healthy', 'Dev Unreachable', 'Dev Needs Auth']
+    .every((label) => cardsBeforeText.some((text) => String(text || '').includes(label)));
+  recordAssertion(
+    state,
+    '刷新失败前非空三态缓存夹具',
+    '执行刷新失败注入前，页面必须已展示 Dev Healthy、Dev Unreachable、Dev Needs Auth 三类稳定缓存数据。',
+    cardsBefore >= 3 && cachedKindsPresent,
+    `cardsBefore=${cardsBefore}；cards=${clip(cardsBeforeText.join(' / '), 500)}`,
+    'automation_error',
+  );
+  if (cardsBefore < 3 || !cachedKindsPresent) {
+    markFailed(state, 'CONN-013 的非空三态缓存夹具未完整渲染，停止刷新失败断言，避免把空测试数据误报为产品问题。', 'automation_error');
+    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
+    return;
+  }
   try {
     control.proxy.arm();
     await refresh.click({ force: true }).catch(async () => refresh.evaluate((el) => el.click()));
     await page.waitForTimeout(1600);
-    const cardsAfter = await page.locator('.connector-card, [data-testid^="connector-card-"]').count().catch(() => 0);
+    const cardsAfter = await page.locator(cardSelector).count().catch(() => 0);
     const text = await mainSurfaceText(page);
     const controlState = control.proxy.state;
     const routeHits = controlState.hits.filter((item) => item.id === 'connector-013-refresh-failure').length;
     state.screenshots.connector_013_after_refresh_failure = await shot(page, caseDir, 'connector-013-after-refresh-failure');
-    state.artifacts.connector_refresh_failure = { route: '/api/connectors/catalog?refresh=force', route_hits: routeHits, cards_before: cardsBefore, cards_after: cardsAfter };
+    state.artifacts.connector_refresh_failure = {
+      route: '/api/connectors/catalog?refresh=force',
+      route_hits: routeHits,
+      cards_before: cardsBefore,
+      cards_before_text: cardsBeforeText,
+      cached_kinds_present: cachedKindsPresent,
+      cards_after: cardsAfter,
+    };
     recordStep(state, '注入目录刷新失败并点击刷新', '刷新失败时应保留已有缓存卡片并显示产品化错误。', `routeHits=${routeHits}；cardsBefore=${cardsBefore}；cardsAfter=${cardsAfter}；page=${clip(text, 260)}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.connector_013_after_refresh_failure, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '刷新失败保留缓存', '目录刷新失败后已有连接器卡片不应消失，并应显示刷新失败/稍后重试提示。', routeHits > 0 && cardsBefore > 0 && cardsAfter >= cardsBefore && /刷新失败|加载失败|稍后重试|重试/.test(text), `routeHits=${routeHits}；before=${cardsBefore}；after=${cardsAfter}；${clip(text, 340)}`);
   } finally {
@@ -5747,6 +5809,7 @@ async function resetComposerControls(page, state, caseDir, {
 } = {}) {
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(150);
+  await closeWorkspacePicker(page);
   const results = [];
 
   if (clearScene) results.push(await clearSceneTag(page, state, caseDir));
@@ -5927,7 +5990,7 @@ async function clearManualConnectorSelections(page, state, caseDir) {
   const clicked = await clickSelectedOptions(menu, page, /连接器|连应用|搜索连接器|禁用|自动|手动|无匹配|未接入连接器|暂无连接器/);
   await page.waitForTimeout(250);
   state.screenshots.connector_selection_cleared = await shot(page, caseDir, 'connector-selection-cleared');
-  const selectedCount = await menu.locator('[data-testid^="composer-connector-option-"].on, .ctool-list .ctool-opt.on').count().catch(() => 0);
+  const selectedCount = await menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on, .ctool-list .ctool-opt.on').count().catch(() => 0);
   recordStep(
     state,
     '清理输入区手动连接器选择',
@@ -5969,7 +6032,7 @@ async function closeVisibleSkillChips(page, state, caseDir) {
 async function clickSelectedOptions(menu, page, ignorePattern) {
   let clicked = 0;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const options = menu.locator('.ctool-list .ctool-opt.on, [data-testid^="composer-connector-option-"].on');
+    const options = menu.locator('.ctool-list .ctool-opt.on, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on');
     const count = await options.count().catch(() => 0);
     let target = null;
     for (let index = 0; index < count; index += 1) {
@@ -6156,6 +6219,11 @@ async function visibleComposerAttachmentText(page) {
 
 async function setSkillMode(page, state, caseDir, mode) {
   const label = SKILL_MODE_LABELS[mode] || mode;
+  const initialToolStateText = await visibleComposerToolStateText(page, 'skill');
+  if (skillModeSelectedByText(mode, initialToolStateText)) {
+    recordStep(state, `确认技能模式：${mode}`, '目标技能模式已生效时无需重复点击，避免刷新重绘导致菜单瞬时关闭。', `工具条=${clip(initialToolStateText, 160)}`, 'passed');
+    return true;
+  }
   const menuText = await ensureComposerToolMenu(page, state, {
     selector: '[data-testid="composer-skills-menu"]',
     action: '打开输入区【技能】菜单',
@@ -6296,6 +6364,13 @@ function skillModeSelectedByText(mode, text) {
 
 async function setConnectorMode(page, state, caseDir, mode) {
   const label = CONNECTOR_MODE_LABELS[mode] || mode;
+  const initialCapabilities = await currentCapabilities(page);
+  const initialToolStateText = await visibleComposerToolStateText(page, 'connector');
+  if (String(initialCapabilities?.connectorRouting?.mode || '') === mode
+    || connectorModeSelectedByText(mode, initialToolStateText)) {
+    recordStep(state, `确认连接器模式：${mode}`, '目标连接器模式已生效时无需重复点击，避免 capabilities 刷新重绘导致菜单瞬时关闭。', `capabilities.connectorRouting.mode=${initialCapabilities?.connectorRouting?.mode || '未读取'}；工具条=${clip(initialToolStateText, 160)}`, 'passed');
+    return true;
+  }
   const menuText = await ensureComposerToolMenu(page, state, {
     selector: '[data-testid="composer-connectors-menu"]',
     action: '打开输入区【连应用】菜单',
@@ -6403,7 +6478,7 @@ async function selectFirstManualConnector(page, state, caseDir) {
     recordAssertion(state, '手动连接器菜单定位', '自动化应能定位当前打开的连应用菜单。', false, '手动模式已点击，但当前连应用菜单不可见。', 'automation_error');
     return false;
   }
-  const option = menu.locator('[data-testid^="composer-connector-option-"], .ctool-opt, [role="option"], button')
+  const option = menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"], button')
     .filter({ hasNotText: /禁用|自动|手动|不生效|不可用|未接入|无匹配|暂无连接器|搜索/ })
     .first();
   if (!(await visible(option, 1500))) {
@@ -6428,7 +6503,7 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   if (!manualOk) return false;
   const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return false;
-  const candidates = menu.locator('[data-testid^="composer-connector-option-"], .ctool-opt, [role="option"]');
+  const candidates = menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
@@ -7291,7 +7366,15 @@ async function openExpertsPage(page, state, caseDir) {
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   await clickSelector(page, '[data-testid="nav-experts"]', '进入【专家/技能】模块', state);
-  await clickSelector(page, '[data-testid="experts-tab"]', '切换到【专家】页签', state);
+  await page.waitForTimeout(350);
+  const expertsView = page.locator('[data-testid="experts-view"]').first();
+  if (!(await visible(expertsView, 900))) {
+    const tab = page.locator('[data-testid="experts-tab"], [role="tab"], button').filter({ hasText: /^\s*专家\s*$/ }).first();
+    if (await visible(tab, 1800)) {
+      await tab.click({ force: true }).catch(async () => tab.evaluate((el) => el.click()));
+      recordStep(state, '切换到【专家】页签', '专家/技能模块未默认落在专家页时，应通过当前可见页签进入专家列表。', '已点击专家页签。', 'passed');
+    }
+  }
   await page.waitForTimeout(1200);
   const visibleExperts = await visible(page.locator('[data-testid="experts-view"]').first(), 4000);
   const text = await mainSurfaceText(page);
@@ -7349,18 +7432,42 @@ async function ensureComposerToolMenu(page, state, {
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    // WorkspacePicker does not listen for Escape. If it was left open by the
+    // preceding case, it can cover ComposerTools and make a forced click look
+    // successful while the requested menu never becomes interactive.
+    await closeWorkspacePicker(page);
     if (text.trim() && !matches(text)) {
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(250);
     }
     const label = attempt ? `${action}（重试 ${attempt}）` : action;
-    const clicked = await tryClick(page, selector, label, state);
-    if (!clicked) throw new Error(`未找到入口：${selector}`);
-    await page.waitForTimeout(650);
-    text = await activeMenuText(page, menuKind);
-    if (matches(text)) return text;
+    const trigger = locatorFor(page, selector).first();
+    if (!(await visible(trigger, 1500))) throw new Error(`未找到入口：${selector}`);
+    await trigger.click({ force: true }).catch(async () => trigger.evaluate((el) => el.click()));
+    recordStep(state, label, `入口应可见且可点击：${selector}`, '已点击。', 'passed');
+    // onOpen 会异步刷新 capabilities 并可能重绘 ComposerTools。旧实现固定
+    // 等待 1.35s 后才找菜单，常常已错过可操作窗口。现在用菜单种类锚点
+    // 立即轮询，绝不把工作区选择器或其他浮层当成技能/连接器菜单。
+    const deadline = Date.now() + 1800;
+    while (Date.now() < deadline) {
+      text = await activeMenuText(page, menuKind);
+      if (matches(text)) return text;
+      await page.waitForTimeout(60);
+    }
+    await closeWorkspacePicker(page);
   }
   return text;
+}
+
+async function closeWorkspacePicker(page) {
+  const menu = page.locator('.wspick-menu').first();
+  if (!(await visible(menu, 250))) return true;
+  const trigger = page.locator('.wspick-trigger').first();
+  if (await visible(trigger, 500)) {
+    await trigger.click({ force: true }).catch(async () => trigger.evaluate((el) => el.click()));
+    await page.waitForTimeout(120);
+  }
+  return !(await visible(menu, 300));
 }
 
 const COMPOSER_MENU_ANCHORS = Object.freeze({
@@ -7500,7 +7607,7 @@ async function controlChecked(locator) {
 async function connectorMenuOptionByText(page, pattern) {
   const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return null;
-  const candidates = menu.locator('[data-testid^="composer-connector-option-"], .ctool-opt, [role="option"], button');
+  const candidates = menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"], button');
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
@@ -9376,6 +9483,39 @@ async function waitForReply(page, beforeState, timeoutMs, {
     }
     await page.waitForTimeout(1000);
   }
+  // 截止点再给 DOM 一个很短的提交窗口并重新绑定一次当前用户消息。
+  // React/assistant-ui 可能在最后一次轮询之后、截图之前提交最终文本；旧逻辑
+  // 会返回空 delta，但紧接着的“超时后”截图已能看到完整答案。
+  await page.waitForTimeout(1200);
+  const finalSnapshot = await conversationSnapshot(page);
+  const finalTaskId = String(finalSnapshot.activeTaskId || '');
+  const finalTaskMatches = !boundTaskId || !finalTaskId || finalTaskId === boundTaskId;
+  const finalUserVisible = !expectedUserText
+    || finalSnapshot.userTexts.some((text) => userMessageMatchesPrompt(text, expectedUserText));
+  if (finalTaskMatches && finalUserVisible) {
+    const finalCandidate = latestAssistantReplyForPrompt(finalSnapshot, expectedUserText)
+      || latestAssistantReplySince(finalSnapshot, before);
+    const finalClean = stripTextValues(finalCandidate || '', ignoredText).trim();
+    if (finalClean.length > 15) {
+      lastCandidate = finalClean;
+      lastCandidateFullText = cleanAssistantText(finalCandidate || finalClean);
+      lastGenerating = await isAgentGenerating(page);
+      if (!lastGenerating) {
+        return {
+          fullText: lastCandidateFullText,
+          deltaText: finalClean,
+          waited_ms: Date.now() - startedAt,
+          min_wait_ms: effectiveMinWaitMs,
+          timeout_ms: effectiveTimeoutMs,
+          wait_kind: waitKind,
+          stable_observations: Math.max(stable, 1),
+          reconciled_at_timeout: true,
+          screenshot_phase: 'after_reply',
+          screenshot_file_suffix: 'after-reply',
+        };
+      }
+    }
+  }
   const waitedMs = Date.now() - startedAt;
   if (String(lastCandidate || '').trim().length > 15) {
     const partial = String(lastCandidate || '').trim();
@@ -10050,6 +10190,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     return ['100', '70', '12'].every((number) => new RegExp(`(^|[^0-9])${escapeRegExp(number)}([^0-9]|$)`).test(text));
   }
   const targetedRules = [
+    [/你是谁|说明你是谁|介绍一下你自己|身份/, /我是|QBot|Q宝|助手|工作台|帮助/],
     [/一句话.*介绍|介绍.*能帮|能帮我做什么|普通问候/, /QBot|Q宝|助手|能|帮助|任务|文件|工具|工作台/],
     [/失败|重试|保留原问题|恢复/, /失败|没能|未能|保留|原问题|重试|重新|继续/],
     [/上下文|多轮|连续追问/, /上下文|前面|刚才|继续|目标|流程|验收|总结|需求/],
