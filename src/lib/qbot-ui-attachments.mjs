@@ -643,30 +643,20 @@ async function stageAttachmentsDirectlyInComposer(page, existing) {
     }
     const documentPrefix = 'qbot-document-attachment:';
     const descriptorFor = (attachment) => {
-      if (attachment.kind === 'image') {
-        return {
-          id: attachment.id,
-          type: 'image',
-          name: attachment.name || 'image',
-          contentType: attachment.contentType || 'image/png',
-          content: [{ type: 'image', image: attachment.dataUrl || attachment.data || '' }],
-        };
-      }
-      if (attachment.kind === 'text') {
-        return {
-          id: attachment.id,
-          type: 'document',
-          name: attachment.name || 'text',
-          contentType: attachment.contentType || 'text/plain',
-          content: [{ type: 'text', text: attachment.text || '' }],
-        };
-      }
+      // Keep this mapping identical to the product's
+      // stagedAttachmentToDescriptor(). Current desktop attachments are
+      // reference-first: images and text files do not carry renderer-visible
+      // bytes/data URLs. Converting them to inline image/text parts here would
+      // therefore manufacture an empty attachment and invalidate the E2E.
       const mimeType = attachment.contentType || 'application/octet-stream';
+      const kind = attachment.kind || attachment.type || 'document';
       const payload = {
         id: attachment.id || null,
-        name: attachment.name || 'document',
-        kind: 'document',
-        type: 'document',
+        name: attachment.name || kind,
+        originalName: attachment.originalName || null,
+        displayName: attachment.displayName || attachment.originalName || attachment.name || null,
+        kind,
+        type: attachment.type || kind,
         contentType: attachment.contentType || null,
         size: attachment.size ?? null,
         ext: attachment.ext || null,
@@ -679,12 +669,12 @@ async function stageAttachmentsDirectlyInComposer(page, existing) {
       };
       return {
         id: attachment.id,
-        type: 'document',
-        name: attachment.name || 'document',
+        type: kind === 'image' ? 'image' : 'document',
+        name: attachment.name || kind,
         contentType: mimeType,
         content: [{
           type: 'file',
-          filename: attachment.name || 'document',
+          filename: attachment.name || kind,
           mimeType,
           data: `${documentPrefix}${JSON.stringify(payload)}`,
         }],
