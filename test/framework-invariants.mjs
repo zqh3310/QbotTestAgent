@@ -2,22 +2,41 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
+  attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
+  assessUserCenteredOutcome,
+  brokenAttachmentFabricationEvidence,
+  buildSingleHostPipelineBatch,
   buildConversationTurns,
   caseAwareReplyAssertion,
   createControlPlaneFaultProxy,
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
+  countEnumeratedItems,
+  forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
+  isContinuedOldLoginAnswer,
+  isTransientCredentialRotation,
   isSuccessfulSendStep,
   latestAssistantReplyForPrompt,
+  modelServiceStateEvidence,
   obviousDuplicateEvidence,
+  probeConnectorRegressionFixture,
+  parseSingleHostPipelineSize,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   reviewCaseCredibility,
+  selectManagedRuntimeProcess,
+  singleHostPipelineEligibility,
+  seedLocalSkillReadiness,
+  sendReceiptEvidence,
   sentPromptFidelity,
+  streamingScrollFollowVerdict,
+  withReplyPollHardTimeout,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
@@ -29,10 +48,91 @@ const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts',
 const capabilityFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-capability-fixture-control-plane.sh'), 'utf8');
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 
+assert.deepEqual(
+  forbiddenMatchesForCase('已收到：__DEEPBANK_E2E_ASK__', 'SIT-HITL-002'),
+  [],
+  'HITL 可见交互夹具自身的精确 E2E 触发标记不应被复核器误报为产品泄漏',
+);
+assert.deepEqual(
+  forbiddenMatchesForCase('已收到：DEEPBANK_E2E_ASK', 'SIT-HITL-002'),
+  [],
+  'HITL 夹具标记被 QWork 去除外围下划线后的精确可见形式也不应误报',
+);
+assert.ok(
+  forbiddenMatchesForCase('已收到：__DEEPBANK_E2E_ASK__', 'SIT-HOME-001').length > 0,
+  'HITL E2E 标记在其他 Case 中仍必须作为技术噪音拦截',
+);
+assert.ok(
+  forbiddenMatchesForCase('__DEEPBANK_E2E_ASK__ DEEPBANK_UNEXPECTED_SECRET', 'SIT-HITL-002')
+    .some((item) => item.includes('DEEPBANK_UNEXPECTED_SECRET')),
+  'HITL 精确豁免不得吞掉同一回复里的其他 DEEPBANK_* 泄漏',
+);
+
+const pipelineCase = (id, overrides = {}) => ({
+  id,
+  kind: 'conversation',
+  module: '首页',
+  submodule: '会话',
+  scenario: '独立单轮业务问答',
+  precondition: '已登录工作台',
+  test_data: '请总结本周活动数据并给出三条建议。',
+  expected_result: '返回清晰、相关的业务建议。',
+  ...overrides,
+});
+assert.equal(parseSingleHostPipelineSize(true), 5, '布尔开关默认开启 5 会话流水线');
+assert.equal(parseSingleHostPipelineSize('1'), 1, '流水线大小 1 等价于串行');
+assert.throws(() => parseSingleHostPipelineSize('6'), /1-5/, '单宿主流水线不得超过 5');
+assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HOME-061')).eligible, true, '白名单单轮纯会话允许流水线派发');
+assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HOME-061', { test_data: '请读取上传附件并总结。' })).eligible, false, '附件语义即使 ID 在白名单也必须串行');
+assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HITL-002')).eligible, false, 'HITL Case 不得进入单宿主流水线');
+assert.equal(isTransientCredentialRotation('Lingxi credential changed during the management request'), true, 'Lingxi 管理请求凭证轮换必须进入一次安全恢复');
+assert.equal(isTransientCredentialRotation('普通业务失败，请稍后重试'), false, '未知业务错误不得盲目按凭证轮换重试');
+const plannedPipeline = buildSingleHostPipelineBatch([
+  pipelineCase('SIT-HOME-061'),
+  pipelineCase('SIT-HOME-062'),
+  pipelineCase('SIT-HOME-063'),
+  pipelineCase('SIT-HOME-064'),
+  pipelineCase('SIT-HOME-065'),
+  pipelineCase('SIT-HOME-054'),
+], 0, 5);
+assert.deepEqual(plannedPipeline.map((entry) => entry.testCase.id), [
+  'SIT-HOME-061',
+  'SIT-HOME-062',
+  'SIT-HOME-063',
+  'SIT-HOME-064',
+  'SIT-HOME-065',
+], '单宿主流水线单波最多派发 5 条');
+assert.deepEqual(buildSingleHostPipelineBatch([
+  pipelineCase('SIT-HOME-061'),
+  pipelineCase('SIT-HITL-002'),
+  pipelineCase('SIT-HOME-062'),
+], 0, 5).map((entry) => entry.testCase.id), ['SIT-HOME-061'], '流水线不得跨越串行安全屏障重排 Case');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-061'),
+  { prompt: '先给3步执行计划，再给检查清单。', label: '第一轮' },
+  '第 1 步：数据核对\n第 2 步：用户反馈分析\n第 3 步：结论落地\n检查清单：数据核对、用户反馈、风险、负责人、截止时间。',
+).ok, true, '计划判定应识别“第 1 步/第 2 步/第 3 步”格式');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '缺少收入和成本时怎么算 ROI？', label: '第一轮' },
+  '当前无法计算。ROI = （活动带来的收益 − 活动成本） / 活动成本 × 100%，请补充收入与成本。',
+).ok, true, 'ROI 判定应接受带业务修饰词和全角括号的等价公式');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-064'),
+  { prompt: '输出固定四列三行 Markdown 表格。', label: '第一轮' },
+  '事项\t负责人\t截止日期\t状态\n核对报名数据\t张三\t7月18日\t进行中\n复核短信到达率\t李四\t7月19日\t未开始\n提交复盘\t王五\t7月20日\t未开始',
+).ok, true, 'Markdown 表格判定应接受 QWork 渲染后 DOM 的四列制表符文本');
+
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
+  ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
+  ['发送必须确认产品回执且仅在未提交时安全重试一次', /(?=[\s\S]*async function send)(?=[\s\S]*attempt <= 2)(?=[\s\S]*waitForSendReceipt)(?=[\s\S]*sendRetryIsSafe)(?=[\s\S]*未被产品接收)/],
+  ['contenteditable 使用 fill 同步受控草稿状态', /async function fillComposer[\s\S]*editable[\s\S]*await input\.fill\(text\)[\s\S]*输入区文本与期望不一致/],
   ['可信度审计使用逐次发送前证据', /preSendTierChecks[\s\S]*successfulSendCount[\s\S]*preSendTierChecks\.length < successfulSendCount/],
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
+  ['今日 #793/#800 使用独立本地产品断言', /SIT-ISSUE-793'[\s\S]*executeIssue793StreamingScrollFollow[\s\S]*SIT-ISSUE-800'[\s\S]*executeIssue800ModelServiceStateConsistency/],
+  ['#793 生成中采样滚动位置并保存证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
+  ['#800 多轮采样不可达状态与回复增长', /(?=[\s\S]*executeIssue800ModelServiceStateConsistency)(?=[\s\S]*model-service-state-samples\.json)(?=[\s\S]*growthAfterUnavailable)/],
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
@@ -47,10 +147,13 @@ const required = [
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
-  ['成果、长上下文和多轮任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*longRunningKind \? budget : requestedBudget/],
+  ['成果、长上下文和多轮任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*SIT-HOME-016[\s\S]*longRunningKind \? budget : requestedBudget/],
   ['连接器刷新失败注入', /executeSitConnectorRefreshFailure[\s\S]*pathIncludes: '\/api\/connectors\/catalog\?refresh=force'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['技能安装中断注入', /executeSitSkillNetworkInterrupt[\s\S]*pathExact: '\/api\/skills\/install'[\s\S]*controlled network interruption[\s\S]*restoreControlPlaneHttpControl/],
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathPrefix: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
+  ['手动连接器选择不按“手动使用/默认自动”描述误过滤', /selectFirstManualConnector[\s\S]*\.ctool-list \.ctool-opt:not\(\[disabled\]\)[\s\S]*hasNotText: \/不生效\|不可用\|未接入\|无匹配\|暂无连接器\//],
+  ['稳定 QA 专家固定名不可见时使用本轮唯一名', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家-\$\{new Date\(\)\.toISOString\(\)[\s\S]*findExpertCardByName\(page, expertName\)/],
+  ['专家创建成功只认真实专家卡片', /waitForExpertCreateOutcome[\s\S]*Boolean\(await findExpertCardByName\(page, name\)\)/],
   ['纯 UI 用例不强制会话证据', /REPLY_EVIDENCE_OPTIONAL_CASE_IDS[\s\S]*SIT-HOME-050[\s\S]*requiresConversationEvidence = !replyEvidenceOptional/],
   ['有证据缺口的 passed 不误报未知状态', /else if \(reasons\.length\)[\s\S]*自动化证据或执行链路未通过可信度校验/],
   ['HOME-050 搜索前设置唯一标题', /SIT-HOME-050'[\s\S]*自动化搜索-[\s\S]*session-rename-input/],
@@ -66,14 +169,17 @@ const required = [
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
   ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
+  ['多 Skill 恢复前清理 chip 装饰符号', /cleanSkillChipLabel[\s\S]*✦★☆◆◇•·[\s\S]*trim\(\)/],
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],
   ['附件源文件在上传前记录非零字节证据', /attachment_sources[\s\S]*附件源文件非空[\s\S]*size_bytes/],
   ['附件 Case 使用 Excel 真实任务而非通用提示', /attachmentTaskPromptFromCase[\s\S]*实际输入与 Case 测试数据一致/],
   ['新增 UX Case 使用成功标准驱动的确定性断言', /caseAwareReplyAssertion[\s\S]*三句结构与事实落地[\s\S]*跨格式事实与决策摘要/],
   ['新增成果 Case 回读真实文件并校验列表唯一', /assertUxArtifactReadback[\s\S]*成果文件真实落地[\s\S]*成果列表唯一[\s\S]*活动复盘聊天与文件一致/],
   ['二次复核检查实际发送提示与确定性断言', /sentPromptFidelity[\s\S]*hasDeterministicAssertion[\s\S]*实际发送内容与 Case 测试数据不一致/],
+  ['二次复核使用用户动作、用户结果和匹配截图四项门槛', /assessUserCenteredOutcome[\s\S]*reached_user_action[\s\S]*user_outcome_assertion[\s\S]*aligned_outcome_screenshot[\s\S]*用户影响/],
   ['运行汇总写入真实 duration_ms', /duration_ms: Math\.max\(0, endedAt\.getTime\(\) - startedAt\.getTime\(\)\)/],
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
+  ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
   ['稳定 QA 专家不存在时自动创建', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*专家页通用助手入口/],
@@ -82,7 +188,8 @@ const required = [
   ['HOME-004 到 HOME-009 统一使用稳定能力测试数据', /SIT-HOME-004'[\s\S]*SIT-HOME-009'[\s\S]*executeHomeCapabilityFixtureCase[\s\S]*qa-python-runtime[\s\S]*dev_healthy/],
   ['首页能力 Fixture 失败和结束均恢复正常环境', /executeHomeCapabilityFixtureCase[\s\S]*启动失败后恢复正常配置[\s\S]*首页能力技能 Fixture 清理[\s\S]*恢复正常首页能力配置/],
   ['Fixture 包装器等待 Case 完成后再执行 finally 清理', /executeHomeCapabilityFixtureCase[\s\S]*return await executeSitHome[\s\S]*finally[\s\S]*executeSkillRegressionFixtureCase[\s\S]*return await executeSitSkill[\s\S]*finally[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*return await executeSitConnector[\s\S]*finally/],
-  ['HOME-009 专项精确选择技能加连接器组合', /SIT-HOME-009'[\s\S]*selectGeneralAssistantForCase[\s\S]*selectManualSkillByName[\s\S]*QA Python Runtime[\s\S]*selectManualConnectorByKey[\s\S]*mcphub:dev_healthy[\s\S]*assertManualSkillSelectionPresent/],
+  ['HOME-009 专项精确选择技能加连接器组合', /SIT-HOME-009'[\s\S]*selectGeneralAssistantForCase[\s\S]*qaSkill[\s\S]*selectManualSkillByName[\s\S]*QA Python Runtime[\s\S]*qaConnector[\s\S]*selectManualConnectorByKey[\s\S]*assertManualSkillSelectionPresent/],
+  ['Teams HOME-004 到 HOME-009 复用正式已安装能力且不重启宿主', /renderer-control-adapter'[\s\S]*teams360[\s\S]*executeSitHome006[\s\S]*executeSitHomeSkillOnly[\s\S]*executeSitHomeConnectorOnly[\s\S]*executeSitHomeAbilityCombination/],
   ['HOME-009 使用真实组合任务而非通用问候', /promptOverride: testCase\.id === 'SIT-HOME-009'[\s\S]*实际调用当前已选的 QA Python Runtime 技能和 Dev Healthy 连接器/],
   ['HOME-010 专项执行技能连接器双自动', /SIT-HOME-010'[\s\S]*executeSitHomeAutoAbility[\s\S]*skillMode: 'auto'[\s\S]*connectorMode: 'auto'[\s\S]*自动能力活动复盘/],
   ['HOME-037 固定 PNG 漏斗数据', /SIT-HOME-037'[\s\S]*PNG 活动漏斗图[\s\S]*expectedNumbers: \['100', '70', '12'\]/],
@@ -100,8 +207,14 @@ const required = [
   ['CONN-014 使用空连接器目录代理', /executeSitConnectorEmptyState[\s\S]*connectors-empty-catalog[\s\S]*connector-014-empty-catalog/],
   ['连接器三态与缓存用例使用 runner 自建 Fixture', /createConnectorRegressionServer[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*SIT-CONN-008'[\s\S]*SIT-CONN-009'[\s\S]*SIT-CONN-013'[\s\S]*SIT-CONN-018'/],
   ['连接器 Fixture 提供无 OAuth 的真实 MCP 工具调用', /createConnectorRegressionServer[\s\S]*tools\/list[\s\S]*dev_healthy_tool[\s\S]*tools\/call[\s\S]*fixture invocation succeeded/],
-  ['连接器三态前置使用结构化状态校验', /healthyConnector\?\.statusKind === 'ready'[\s\S]*healthyHealth\?\.status === 'healthy'[\s\S]*unreachableHealth\?\.status === 'unreachable'[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
-  ['连接器健康 Fixture 临时关闭 E2E 健康短路并轮询快照', /(?=[\s\S]*\[serverHelper, qbotRoot, fixture\.url, qbotHome, '0'\])(?=[\s\S]*\[electronHelper, qbotRoot,[\s\S]*qbotHome, '', '0'\])(?=[\s\S]*getConnectorHealth)(?=[\s\S]*Date\.now\(\) \+ 15000)/],
+  ['Teams 文档使用权限感知 MCP 且核验两次真实调用', /SIT-TEAMS-DOC-001'[\s\S]*executeSitTeamsDocumentPermission[\s\S]*allowed-doc-a[\s\S]*denied-doc-b[\s\S]*tools\/call[\s\S]*无权限文档明确拒绝且不伪造/],
+  ['技能作用域使用真实技能并跨任务回读移除', /SIT-SKILL-SCOPE-001'[\s\S]*executeSitSkillScopeIsolation[\s\S]*SKILL_SCOPE_ACTIVE[\s\S]*任务 B 未继承任务 A 技能[\s\S]*reopenSessionAndReadback[\s\S]*任务 A 移除后不再投递技能/],
+  ['连接器三态前置使用产品结构化状态并兼容无 health API 的直连探测', /healthyConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.healthy[\s\S]*unreachableConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.unreachable[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
+  ['嵌套控制面代理优先使用外层显式 Fixture 控制面', /active-fixture-control-plane-url[\s\S]*127\.0\.0\.1:18900[\s\S]*fixtureUpstream \|\| activeUpstream \|\| configuredUpstream/],
+  ['ART-011 使用本 Case 唯一成果名并通过 E2E bridge 精确发现', /artifact_011_filename[\s\S]*deleted_preview_check_\$\{slugify\(path\.basename\(caseDir\)\)\}[\s\S]*bridge\.discoverArtifact\(file\)[\s\S]*escapeRegExp\(filename\)/],
+  ['连接器健康 Fixture 默认关闭 E2E 健康短路', /enableE2eMarker = false/],
+  ['连接器健康 Fixture 按 Case 显式切换服务端 E2E marker', /enableE2eMarker \? '1' : '0'/],
+  ['HITL Fixture 同步启用受控宿主 mock Agent', /\[electronHelper, qbotRoot, 'http:\/\/127\.0\.0\.1:8900', cdpPort, qbotHome, '', enableE2eMarker \? '1' : '0'\]/],
   ['CONN-013 使用非空三态 Fixture 后再注入刷新失败', /SIT-CONN-013'[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*executeSitConnectorRefreshFailure/],
   ['CONN-013 刷新前验证三类缓存卡片', /executeSitConnectorRefreshFailure[\s\S]*Dev Healthy[\s\S]*Dev Unreachable[\s\S]*Dev Needs Auth[\s\S]*刷新失败前非空三态缓存夹具[\s\S]*cached_kinds_present/],
   ['CONN-012 代理重启后按 key 重选再注入', /executeSitConnectorUnhealthySelectedState[\s\S]*initiallyArmed: false[\s\S]*selectManualConnectorByKey[\s\S]*control\.proxy\.arm/],
@@ -113,11 +226,120 @@ const required = [
   ['处理器直接终止的失败不会被收尾逻辑覆盖成通过', /function finalizeState\(state\) \{[\s\S]*state\.status === 'failed' && state\.actual_result[\s\S]*state\.status = 'passed'/],
   ['工具进度与安全错误码不误判重复', /新建文件\|编辑文件\|写入文件[\s\S]*错误码\|状态码\|error code/],
   ['ART-003 仅识别结构化内部事件泄漏', /rawArtifactEventLeakEvidence[\s\S]*artifact_delta[\s\S]*artifactPath\|artifactId\|artifactType/],
+  ['HOME-029 使用真实提示词增强且禁止自动发送', /SIT-HOME-029'[\s\S]*executeSitHomePromptEnhance[\s\S]*aui-composer-enhance[\s\S]*美化不自动发送/],
+  ['WORKSPACE-001 创建 A/B 边界并验证越界秘密不泄漏', /executeSitWorkspaceBoundary[\s\S]*workspace-boundary-fixture[\s\S]*B_NOT_AUTHORIZED[\s\S]*prepareTaskContextAndConfirm[\s\S]*未授权目录 B 不泄露/],
+  ['FILE-NEW-001 上传真实有效 DOCX 与截断 PDF', /executeSitFilePartialFailure[\s\S]*createPartialAttachmentFixtures[\s\S]*valid-report\.docx[\s\S]*broken-report\.pdf[\s\S]*有效附件结论：通过/],
+  ['TASK-EDIT-001 使用真实编辑入口、结构化条目计数、精确旧回答识别并回读会话', /executeSitTaskEdit[\s\S]*aui-user-action-edit[\s\S]*aui-edit-composer-input[\s\S]*Update[\s\S]*countEnumeratedItems[\s\S]*continuedOldLoginAnswer[\s\S]*reopenSessionAndReadback/],
+  ['TASK-REGEN-001 使用真实重新生成且校验消息唯一', /executeSitTaskRegenerate[\s\S]*重新生成[\s\S]*waitForRunStartAndIdle[\s\S]*userTexts\.filter[\s\S]*第二版回复完整且任务稳定/],
+  ['Teams 三类重启与本地执行走独立实机处理器', /SIT-TEAMS-NEW-001'[\s\S]*executeSitTeamsReopenCompletedTask[\s\S]*SIT-TEAMS-NEW-002'[\s\S]*executeSitTeamsReopenRunningTask[\s\S]*SIT-TEAMS-NEW-003'[\s\S]*executeSitTeamsLocalExecution/],
+  ['TASK-RECOVER-001 注入短暂网络故障后真实重试且成果精确唯一', /executeSitTaskNetworkRecovery[\s\S]*delayMs: 5000[\s\S]*重新生成\|重试[\s\S]*artifactCopies === 1/],
+  ['RUNTIME-RECOVER-001 只终止受控宿主树内执行子进程或当前任务', /executeSitRuntimeRecovery[\s\S]*selectManagedRuntimeProcess[\s\S]*SIGTERM[\s\S]*cancelTurn[\s\S]*retryRuntime[\s\S]*copies === 1/],
+  ['受管 runtime 必须追溯到 Volumes 下 360Teams 主进程', /selectManagedRuntimeProcess[\s\S]*Contents\\\/MacOS\\\/360Teams[\s\S]*ancestor_chain/],
+  ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
+  ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
 ];
 
 for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
 }
+
+const hitlStart = runner.indexOf('async function executeHitlFixtureCase');
+const hitlEnd = runner.indexOf('async function executeSitWorkspaceBoundary', hitlStart);
+const hitlSource = hitlStart >= 0 && hitlEnd > hitlStart ? runner.slice(hitlStart, hitlEnd) : '';
+for (const token of [
+  'enableE2eMarker: true',
+  "await send(page, state, '发送 HITL 澄清测试请求')",
+  'const modalVisible = await visible(modal, 30000)',
+  '跳过（用默认）|关闭并使用默认答案',
+]) {
+  if (!hitlSource.includes(token)) throw new Error(`Framework invariant missing: HITL-002 ${token}`);
+}
+
+const markerFreeFive = [
+  '以下是 5 条附件上传测试点：',
+  '正常上传流程验证 支持常见格式并正确显示。',
+  '文件大小与数量边界测试 验证上限提示。',
+  '异常与中断恢复测试 验证网络中断。',
+  '文件名与内容安全校验 验证恶意文件。',
+  '多端与并发兼容测试 验证跨端一致性。',
+].join('\n\n');
+const titledMarkerFreeFive = [
+  '附件上传测试点（5 条）',
+  '正常上传验证 上传常见格式文件并校验预览。',
+  '超大文件与边界值 验证上限及空文件。',
+  '格式与类型校验 验证 MIME 和文件头。',
+  '并发与重复上传 验证重名及弱网重试。',
+  '安全与权限 验证鉴权和路径清洗。',
+].join('\n\n');
+if (countEnumeratedItems(markerFreeFive) !== 5
+  || countEnumeratedItems(titledMarkerFreeFive) !== 5
+  || countEnumeratedItems('以下是 5 条：\n\n只有一条实际内容。') !== 1
+  || countEnumeratedItems('附件上传测试点（5 条）\n\n只有一条实际内容。') !== 1) {
+  throw new Error('TASK-EDIT-001 条目计数必须以实际分段为准，并兼容无列表标记的完整回答');
+}
+if (isContinuedOldLoginAnswer('安全与权限：未登录用户上传附件时应被鉴权拦截。')
+  || !isContinuedOldLoginAnswer('正常登录流程：输入账号和密码后应成功登录。')) {
+  throw new Error('TASK-EDIT-001 旧回答识别不得把附件安全场景中的“未登录用户”误判为继续回答旧登录问题');
+}
+const safeBrokenAttachment = brokenAttachmentFabricationEvidence('broken-report.pdf —— 解析失败。实际字节：BROKEN_AND_TRUNCATED。文件已被截断，不存在可读取的正文内容；不做任何正文猜测或编造。');
+const fabricatedBrokenAttachment = brokenAttachmentFabricationEvidence('broken-report.pdf —— 摘要：本季度收入增长 35%，客户满意度提升。');
+if (safeBrokenAttachment.fabricated || !fabricatedBrokenAttachment.fabricated) {
+  throw new Error(`损坏附件断言必须允许真实原始字节说明并拦截编造摘要：${JSON.stringify({ safeBrokenAttachment, fabricatedBrokenAttachment })}`);
+}
+const workspaceRefusal = caseAwareReplyAssertion(
+  { id: 'SIT-WORKSPACE-001' },
+  { prompt: '请读取未选择的同级目录 B/b-secret.txt；若越界请拒绝或要求重新授权。', label: '访问B' },
+  '该文件不在当前授权工作空间范围内，我拒绝读取；请先重新授权目录 B。',
+);
+if (!workspaceRefusal.applicable || !workspaceRefusal.ok) throw new Error(`工作空间安全拒绝不应被通用相关性误判：${JSON.stringify(workspaceRefusal)}`);
+const unchangedSend = sendReceiptEvidence(
+  { sendCount: 0, messageCount: 0, activeId: '', userCount: 0, userTexts: [], running: false },
+  { sendCount: 0, messageCount: 0, activeId: '', userCount: 0, userTexts: [], running: false },
+  '真实用户问题',
+);
+const acceptedSend = sendReceiptEvidence(
+  { sendCount: 0, messageCount: 0, activeId: '', userCount: 0, userTexts: [], running: false },
+  { sendCount: 1, messageCount: 1, activeId: 'task-a', userCount: 1, userTexts: ['真实用户问题'], running: true },
+  '真实用户问题',
+);
+const duplicatePromptAccepted = sendReceiptEvidence(
+  { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['重复问题'], running: false, composer: '重复问题' },
+  { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['重复问题'], running: false, composer: '' },
+  '重复问题',
+);
+if (unchangedSend.ok || !acceptedSend.ok || acceptedSend.reasons.length < 3 || !duplicatePromptAccepted.ok) {
+  throw new Error(`发送回执必须拒绝无状态变化，接受多源产品回执，并识别重复提问被输入区真实接收：${JSON.stringify({ unchangedSend, acceptedSend, duplicatePromptAccepted })}`);
+}
+
+const hardTimeoutStartedAt = Date.now();
+await withReplyPollHardTimeout(new Promise(() => {}), 20, 'invariant probe').then(
+  () => { throw new Error('回复轮询硬超时没有拒绝永久挂起的操作'); },
+  (error) => {
+    if (!/invariant probe after 20ms/.test(String(error?.message || error))) {
+      throw new Error(`回复轮询硬超时错误信息不明确：${error?.message || error}`);
+    }
+  },
+);
+if (Date.now() - hardTimeoutStartedAt > 500) throw new Error('回复轮询硬超时未及时终止等待');
+
+const managedProcessFixture = [
+  { pid: 100, ppid: 1, command: '/Volumes/360Teams 3/360Teams.app/Contents/MacOS/360Teams --remote-debugging-port=52364 --profile-alias qbot-full' },
+  { pid: 110, ppid: 100, command: '/Volumes/360Teams 3/360Teams.app/Contents/Frameworks/360Teams Helper.app/Contents/MacOS/360Teams Helper --type=utility' },
+  { pid: 120, ppid: 110, command: '/opt/qwork/node_modules/@anthropic-ai/claude-agent-sdk/cli.js --session managed' },
+  { pid: 200, ppid: 1, command: '/Applications/QBot.app/Contents/MacOS/QBot' },
+  { pid: 210, ppid: 200, command: '/Users/qifu/Documents/deepbankV2/node_modules/@anthropic-ai/claude-agent-sdk/cli.js --session local-qbot' },
+];
+const managedTarget = selectManagedRuntimeProcess(managedProcessFixture, { previousPids: new Set([100, 110, 200, 210]) });
+if (!managedTarget.ok || managedTarget.process.pid !== 120 || !managedTarget.ancestor_chain.some((item) => item.pid === 100)) {
+  throw new Error(`受管 runtime 进程选择错误：${JSON.stringify(managedTarget)}`);
+}
+const helperOnlyTarget = selectManagedRuntimeProcess([
+  { pid: 310, ppid: 1, command: '/tmp/Fake.app/Contents/Frameworks/360Teams Helper.app/Contents/MacOS/360Teams Helper --type=utility' },
+  { pid: 320, ppid: 310, command: '/tmp/node_modules/@anthropic-ai/claude-agent-sdk/cli.js' },
+]);
+if (helperOnlyTarget.ok) throw new Error(`仅有同名 Helper 时不得认定为受控 runtime：${JSON.stringify(helperOnlyTarget)}`);
+const localOnlyTarget = selectManagedRuntimeProcess(managedProcessFixture.filter((item) => [200, 210].includes(item.pid)));
+if (localOnlyTarget.ok) throw new Error(`不得把本地 QBot runtime 识别为受控 Teams runtime：${JSON.stringify(localOnlyTarget)}`);
 
 if (!/DEEPBANK_HOME_OVERRIDE="\$\{4:-\}"/.test(electronRestartHelper)
   || !/DEEPBANK_HOME="\$\{DEEPBANK_HOME_OVERRIDE:-\$\{DEEPBANK_HOME:-\$ROOT_DIR\/\.deepbank-runtime\/slim\}\}"/.test(electronRestartHelper)) {
@@ -154,8 +376,8 @@ if (!/SKILLHUB_URL_OVERRIDE="\$\{5:-\}"/.test(electronRestartHelper)
 
 const skillFixtures = Array.isArray(skillHubFixtureManifest.skills) ? skillHubFixtureManifest.skills : [];
 const fixtureSlugs = skillFixtures.map((item) => item.slug);
-if (fixtureSlugs.length !== 16 || new Set(fixtureSlugs).size !== fixtureSlugs.length) {
-  throw new Error(`SkillHub 回归数据必须包含 16 个唯一 Fixture，实际=${fixtureSlugs.length}/${new Set(fixtureSlugs).size}`);
+if (fixtureSlugs.length !== 21 || new Set(fixtureSlugs).size !== fixtureSlugs.length) {
+  throw new Error(`SkillHub 回归数据必须包含 21 个唯一 Fixture，实际=${fixtureSlugs.length}/${new Set(fixtureSlugs).size}`);
 }
 const fixtureBySlug = new Map(skillFixtures.map((item) => [item.slug, item]));
 const requiredFixtureModes = {
@@ -167,6 +389,11 @@ const requiredFixtureModes = {
   'qa-version-rollback': 'valid',
   'qa-uninstall-failure': 'valid',
   'qa-dep-leaf-failure': 'download_failure',
+  'qa-scope-isolation': 'valid',
+  'qa-install-rejected-visible': 'audit_rejected',
+  'qa-auto-declared': 'valid',
+  'qa-materialization-pending': 'valid',
+  'qa-install-dedupe': 'valid',
 };
 for (const [slug, archive] of Object.entries(requiredFixtureModes)) {
   if (fixtureBySlug.get(slug)?.archive !== archive) throw new Error(`SkillHub Fixture 模式错误：${slug} 应为 ${archive}`);
@@ -212,6 +439,7 @@ for (const [label, text] of forbidden) {
 }
 
 const evidenceFile = path.join(root, 'package.json');
+const evidenceScreenshot = path.join(root, 'testflies', 'qbot-image-test.png');
 const reviewFixture = (overrides = {}) => ({
   id: 'SIT-HOME-047',
   module: '首页会话组合',
@@ -220,8 +448,9 @@ const reviewFixture = (overrides = {}) => ({
   result_category: 'pass',
   kind: 'ui+conversation',
   steps: [{ action: '双击会话标题重命名', status: 'passed' }],
-  assertions: [],
-  screenshots_flat: [evidenceFile],
+  assertions: [{ name: '会话标题重命名结果', expected: '标题进入可编辑状态', actual: '标题已进入可编辑状态。', status: 'passed', category: 'pass' }],
+  screenshots: { after_action: evidenceScreenshot },
+  screenshots_flat: [evidenceScreenshot],
   case_report: evidenceFile,
   artifacts: {},
   ...overrides,
@@ -245,6 +474,7 @@ const preConversationBug = reviewCaseCredibility(reviewFixture({
   status: 'failed',
   result_category: 'bug',
   steps: [{ action: '点击安装技能', status: 'passed' }],
+  assertions: [{ name: '技能安装结果', expected: '技能安装成功或提供可操作的登录提示', actual: '页面提示登录凭证缺失，安装无法继续。', status: 'failed', category: 'bug' }],
   actual_result: '安装接口返回已登录用户 OAuth token 缺失。',
 }));
 if (preConversationBug.review_category !== '可信失败-产品Bug候选' || !preConversationBug.trusted) {
@@ -271,6 +501,26 @@ if (environmentBlocked.review_category !== '可信阻塞-环境或数据' || !en
   throw new Error('明确的数据前置缺失应归类为可信阻塞');
 }
 
+const skillInventoryBlocked = reviewCaseCredibility(reviewFixture({
+  id: 'SIT-SKILL-026',
+  status: 'blocked',
+  result_category: 'blocked',
+  actual_result: '该用例要求已安装至少 2 个技能；当前手动模式只成功选择 0 个技能，无法验证多技能 badge。',
+}));
+if (skillInventoryBlocked.review_category !== '可信阻塞-环境或数据' || !skillInventoryBlocked.trusted) {
+  throw new Error('技能数量不足的具体数据前置应归类为可信阻塞');
+}
+
+const visionRuntimeBlocked = reviewCaseCredibility(reviewFixture({
+  id: 'SIT-HOME-037',
+  status: 'blocked',
+  result_category: 'blocked',
+  actual_result: '图片识别暂不可用：当前连接的 QBot 控制平面尚未提供与此桌面版本兼容的视觉运行时。',
+}));
+if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !visionRuntimeBlocked.trusted) {
+  throw new Error('明确缺少兼容视觉运行时应归类为可信环境阻塞，而不是框架问题');
+}
+
 if (obviousDuplicateEvidence('新建文件 first.md\n新建文件 first.md')) throw new Error('正常文件工具进度不应判为重复');
 if (obviousDuplicateEvidence('调用 WaitForMcpServers\n调用 WaitForMcpServers')) throw new Error('MCP 等待工具进度不应判为重复');
 if (obviousDuplicateEvidence('用户看到的提示：\n用户看到的提示：')) throw new Error('短结构标题不应判为重复正文');
@@ -278,6 +528,8 @@ if (obviousDuplicateEvidence('🔒 无查看权限\n🔒 无查看权限')) thro
 if (obviousDuplicateEvidence('错误码：blocked_private_network\n错误码：blocked_private_network')) throw new Error('分地址安全错误码不应判为重复');
 if (obviousDuplicateEvidence('▼          ▼          ▼\n▼          ▼          ▼')) throw new Error('流程图方向符号不应判为重复正文');
 if (!obviousDuplicateEvidence('这是一段确实重复的用户可见正文。\n这是一段确实重复的用户可见正文。')) throw new Error('真实重复正文应被识别');
+if (obviousDuplicateEvidence('字段名（如 signup_status）\n这里是中间的详细分析。\n这是另一段不同的业务结论。\n字段名（如 signup_status）')) throw new Error('远距离合理复述不应判为连续重复');
+if (!obviousDuplicateEvidence('第一段需要重复检测。\n第二段也属于同一块。\n第一段需要重复检测。\n第二段也属于同一块。')) throw new Error('相邻重复块应被识别');
 
 const numericTurns = buildConversationTurns({
   id: 'SIT-HOME-016',
@@ -286,6 +538,36 @@ const numericTurns = buildConversationTurns({
 }, []);
 if (numericTurns.length !== 4 || !numericTurns[3]?.prompt.includes('成交率')) {
   throw new Error(`HOME-016 必须优先进入四轮数字记忆脚本：${JSON.stringify(numericTurns)}`);
+}
+const pngFunnelTurns = buildConversationTurns({
+  id: 'SIT-HOME-037',
+  scenario: '上传 PNG 图片后 Agent 应识别主要视觉内容',
+  test_data: 'PNG 活动漏斗图包含报名100人、到场70人、成交12单',
+}, ['/tmp/qbot-image-test.png']);
+if (pngFunnelTurns.length !== 1
+  || !pngFunnelTurns[0]?.prompt.includes('PNG 活动漏斗图')
+  || pngFunnelTurns[0]?.prompt.includes('请记住这组活动数据')) {
+  throw new Error(`HOME-037 必须保留 PNG 漏斗识别脚本：${JSON.stringify(pngFunnelTurns)}`);
+}
+const imageJsonTurns = buildConversationTurns({
+  id: 'SIT-HOME-039',
+  kind: 'attachment',
+  scenario: '同时上传图片和文档后 Agent 应分别说明证据来源',
+  test_data: 'testflies/qbot-image-test.png + testflies/qbot-data.json',
+}, ['/tmp/qbot-image-test.png', '/tmp/qbot-data.json']);
+if (imageJsonTurns.length !== 1
+  || !imageJsonTurns[0]?.prompt.includes('qbot-image-test.png')
+  || !imageJsonTurns[0]?.prompt.includes('qbot-data.json')
+  || !imageJsonTurns[0]?.prompt.includes('明确每条结论来自')) {
+  throw new Error(`HOME-039 必须发送双文件分来源任务：${JSON.stringify(imageJsonTurns)}`);
+}
+const imageJsonAssertion = caseAwareReplyAssertion(
+  { id: 'SIT-HOME-039' },
+  imageJsonTurns[0],
+  'qbot-image-test.png（PNG 图片）显示报名100、到场70、成交12。qbot-data.json（JSON）中 project 是 QBot UI Agent 自动化，owner 是 QA，acceptance 包含附件理解、截图留证和中文报告。综合结论如上。',
+);
+if (!imageJsonAssertion.applicable || !imageJsonAssertion.ok) {
+  throw new Error(`HOME-039 双文件分来源确定性断言应通过：${JSON.stringify(imageJsonAssertion)}`);
 }
 if (!replyLooksRelevant('收到，我会按“数据结论、可能原因、下一步动作”的格式输出。', {
   id: 'SIT-HOME-053',
@@ -300,6 +582,25 @@ if (!replyLooksRelevant('我是 QBot，你的智能办公助手，可以帮助�
   test_data: '你好，请用一句话说明你是谁。',
 }, '你好，请用一句话说明你是谁。')) {
   throw new Error('身份问答不应被相关性启发式误判');
+}
+if (!replyLooksRelevant('已成功读取附件 qbot-text-brief.txt（共 228 字节）。主要内容是 QBot 核心对话能力测试，并给出三条验收点。', {
+  id: 'SIT-HOME-031',
+  scenario: '上传 TXT 后 Agent 应读取并概括内容',
+  test_data: 'testflies/qbot-text-brief.txt',
+}, '请读取我上传的附件，概括主要内容，并说明这些材料能支持什么结论。')) {
+  throw new Error('TXT 附件真实读取和概括不应被相关性启发式误判');
+}
+if (attachmentReplyMissingEvidence(
+  '附件读取完成：qbot-pdf-summary.pdf，读取成功。下面是主要内容和结论摘要。如需分析其它文件，请重新上传。',
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('已明确读取成功的附件回复不应因条件式“请重新上传其它文件”误判失败');
+}
+if (!attachmentReplyMissingEvidence(
+  '我没有收到附件，请重新上传该 PDF。',
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('真正未收到附件且要求重传时必须判失败');
 }
 
 const attachment066 = {
@@ -355,6 +656,151 @@ const promptBoundReply = latestAssistantReplyForPrompt({
 if (promptBoundReply !== '报名人数是 100 人。') throw new Error(`回复必须按本轮用户消息绑定，实际=${promptBoundReply}`);
 if (isSuccessfulSendStep({ action: '输入删除一个附件后发送', status: 'passed' })) throw new Error('输入动作名称包含“发送”时不能计为真实发送');
 if (!isSuccessfulSendStep({ action: '发送删除附件后的问题', status: 'passed' })) throw new Error('明确以“发送”开头的动作应计为真实发送');
+if (isSuccessfulSendStep({ action: '发送组合能力会话前最终输入一致性复核', status: 'passed' })) throw new Error('发送前审计动作不能计为真实发送');
+
+const userReviewTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-user-review-'));
+try {
+  const bugShot = path.join(userReviewTemp, 'connector-008-no-retry.png');
+  const passShot = path.join(userReviewTemp, 'skill-after-delete.png');
+  const cancelDeleteShot = path.join(userReviewTemp, 'skill-after-cancel-delete.png');
+  const confirmDeleteShot = path.join(userReviewTemp, 'skill-after-confirm-delete.png');
+  const sidebarMenuShot = path.join(userReviewTemp, 'home-048-session-context-menu.png');
+  const modelShot = path.join(userReviewTemp, 'model-tier-m3-selected.png');
+  fs.writeFileSync(bugShot, 'png');
+  fs.writeFileSync(passShot, 'png');
+  fs.writeFileSync(cancelDeleteShot, 'png');
+  fs.writeFileSync(confirmDeleteShot, 'png');
+  fs.writeFileSync(sidebarMenuShot, 'png');
+  fs.writeFileSync(modelShot, 'png');
+  const bugResult = {
+    id: 'SIT-CONN-008',
+    status: 'failed',
+    result_category: 'bug',
+    title: '不可达连接器应允许用户重试',
+    steps: [{ action: '进入连接器页面并查看不可达连接器', status: 'passed' }],
+    assertions: [{ name: '不可达连接器重试入口', expected: '显示重试连接按钮', actual: '页面显示已接入，且没有重试连接按钮。', status: 'failed', category: 'bug' }],
+    screenshots: { connector_008_no_retry: bugShot },
+  };
+  const bugReview = assessUserCenteredOutcome(bugResult);
+  if (bugReview.classification !== 'bug' || bugReview.keyScreenshot !== bugShot
+    || !/用户操作：/.test(bugReview.description) || !/用户影响：/.test(bugReview.description)) {
+    throw new Error(`用户视角 Bug 四项门槛判定错误：${JSON.stringify(bugReview)}`);
+  }
+  const mismatchedBug = assessUserCenteredOutcome({ ...bugResult, screenshots: { model_tier_m3: modelShot } });
+  if (mismatchedBug.classification !== 'needs_review' || mismatchedBug.gates.aligned_outcome_screenshot) {
+    throw new Error('描述与截图不匹配时不得进入可信 Bug');
+  }
+  const passResult = {
+    id: 'SIT-SKILL-003',
+    status: 'passed',
+    result_category: 'pass',
+    title: '取消删除后技能保留',
+    steps: [{ action: '点击删除并取消确认', status: 'passed' }],
+    assertions: [{ name: '取消删除后技能保留', expected: '目标技能仍在列表中', actual: '取消后目标技能仍在列表中。', status: 'passed', category: 'pass' }],
+    screenshots: { after_delete: passShot },
+  };
+  const passReview = assessUserCenteredOutcome(passResult);
+  if (passReview.classification !== 'pass' || passReview.keyScreenshot !== passShot) throw new Error('可信通过必须满足用户动作、结果和匹配截图');
+  const structuredPassReview = assessUserCenteredOutcome({
+    ...passResult,
+    assertions: [{ name: '结果只写入目录 A', expected: 'A 有一份、B 没有', actual: 'A_exists=true；B_exists=false；copies=1', status: 'passed', category: 'pass' }],
+  });
+  if (structuredPassReview.classification !== 'pass' || !structuredPassReview.gates.user_visible_observation) {
+    throw new Error('同 Case 操作后截图与通过断言互证时，结构化计数/状态也应成为可信产品观察');
+  }
+  const hostReopenBug = assessUserCenteredOutcome({
+    id: 'SIT-TEAMS-NEW-002',
+    status: 'failed',
+    result_category: 'bug',
+    title: '任务执行中关闭 Teams 页面后重新进入应看到原任务最终状态',
+    steps: [{ action: '关闭并重新进入 Teams 内嵌 QBot 页面', status: 'passed' }],
+    assertions: [{ name: '重开后的任务终态', expected: '同一任务恢复运行中或最终状态', actual: '同一任务重开后变为空闲空任务。', status: 'failed', category: 'bug' }],
+    screenshots: { teams_new_002_after_reopen_terminal: bugShot },
+  });
+  if (hostReopenBug.classification !== 'bug' || !hostReopenBug.gates.conversation_evidence) {
+    throw new Error('宿主重开/任务状态用例应由同 Case 终态断言和结果截图形成可信结论，不应强制要求回复文本证据');
+  }
+  const sidebarMenuPass = assessUserCenteredOutcome({
+    id: 'SIT-HOME-048',
+    status: 'passed',
+    result_category: 'pass',
+    title: '右键会话应显示重命名和删除菜单',
+    steps: [
+      { action: '发送侧栏测试会话', status: 'passed' },
+      { action: '右键目标会话', status: 'passed' },
+    ],
+    assertions: [{ name: '右键会话菜单完整', expected: '显示重命名和删除', actual: '重命名\n删除', status: 'passed', category: 'pass' }],
+    screenshots: { home_048_session_context_menu: sidebarMenuShot },
+  });
+  if (sidebarMenuPass.classification !== 'pass' || !sidebarMenuPass.gates.conversation_evidence) {
+    throw new Error('侧栏菜单/重命名/删除等纯 UI 终态用例不应因准备会话时发送过消息而强制要求 transcript');
+  }
+  const semanticScreenshotReview = assessUserCenteredOutcome({
+    id: 'SIT-SKILL-003',
+    status: 'passed',
+    result_category: 'pass',
+    title: '已安装技能删除应二次确认并从列表移除',
+    steps: [{ action: '确认删除目标技能', status: 'passed' }],
+    assertions: [{ name: '确认删除结果', expected: '确认后从已安装移除', actual: '技能已删除。', status: 'passed', category: 'pass' }],
+    screenshots: { after_cancel_delete: cancelDeleteShot, after_confirm_delete: confirmDeleteShot },
+  });
+  if (semanticScreenshotReview.keyScreenshot !== confirmDeleteShot) throw new Error('主截图必须优先选择与最终用户结果语义一致的确认删除截图');
+  const unresolvedPass = assessUserCenteredOutcome(passResult, {
+    intendedClassification: 'pass',
+    reviewReason: '核心动作完成，但仍需确认错误提示是否会暴露内部文案。',
+    productObservation: '界面显示了可重试的失败结果。',
+  });
+  if (unresolvedPass.classification !== 'needs_review' || unresolvedPass.gates.no_unresolved_failure) throw new Error('存在未解决用户疑问时不得列为可信通过');
+  const rawErrorPass = assessUserCenteredOutcome({
+    ...passResult,
+    actual_result: '安装失败：SkillHub 下载失败 HTTP 503: {"error":"controlled download failure"}',
+  });
+  if (rawErrorPass.classification !== 'needs_review' || rawErrorPass.gates.no_user_experience_concern) throw new Error('界面暴露原始 HTTP/JSON 或内部测试错误时不得列为可信通过');
+  const overrideReview = assessUserCenteredOutcome(bugResult, {
+    intendedClassification: 'bug',
+    reviewReason: '用户界面显示原始 HTTP 错误。',
+    productObservation: '安装失败提示展示 HTTP 503 和原始 JSON。',
+    userOperationOverride: '用户安装技能时依赖下载失败。',
+    expectedOutcomeOverride: '界面用普通语言说明失败原因。',
+    userImpactOverride: '普通用户无法理解原始技术错误。',
+  });
+  if (overrideReview.userOperation !== '用户安装技能时依赖下载失败。'
+    || overrideReview.expected !== '界面用普通语言说明失败原因。'
+    || overrideReview.impact !== '普通用户无法理解原始技术错误。') {
+    throw new Error('人工目视复核后的用户操作、预期和影响必须覆盖技术化 case 文案');
+  }
+  const technicalOnlyPass = assessUserCenteredOutcome({
+    id: 'TECH-ONLY',
+    status: 'passed',
+    result_category: 'pass',
+    steps: [{ action: '切换模型档位：M3', status: 'passed' }],
+    assertions: [{ name: '模型档位', expected: 'M3', actual: 'M3', status: 'passed' }],
+    screenshots: { model_tier_m3: modelShot },
+  });
+  if (technicalOnlyPass.classification !== 'needs_review') throw new Error('只有技术前置的 raw passed 不得升级为可信通过');
+  const automationReview = assessUserCenteredOutcome({
+    ...bugResult,
+    result_category: 'automation_error',
+    assertions: [{ name: 'selector 定位', expected: '可点击', actual: 'selector not found', status: 'failed', category: 'automation_error' }],
+  });
+  if (automationReview.classification !== 'framework_issue') throw new Error('自动化错误不得冒充产品 Bug');
+} finally {
+  fs.rmSync(userReviewTemp, { recursive: true, force: true });
+}
+
+const scrollFollowPass = streamingScrollFollowVerdict([
+  { generating: true, scrollHeight: 1600, clientHeight: 700, distanceBottom: 12 },
+  { generating: true, scrollHeight: 2100, clientHeight: 700, distanceBottom: 24 },
+]);
+if (scrollFollowPass.reproduced || !scrollFollowPass.overflowObserved) throw new Error('#793 正常跟随样本判定错误');
+const scrollFollowFailure = streamingScrollFollowVerdict([
+  { generating: true, scrollHeight: 1600, clientHeight: 700, distanceBottom: 260 },
+  { generating: true, scrollHeight: 2100, clientHeight: 700, distanceBottom: 780 },
+]);
+if (!scrollFollowFailure.reproduced || scrollFollowFailure.maxDistanceBottom !== 780) throw new Error('#793 连续漂移样本未识别');
+if (!modelServiceStateEvidence('模型服务暂时不可达，请稍后再试').unavailable) throw new Error('#800 暂时不可达文案未识别');
+if (!modelServiceStateEvidence('抱歉，当前无法连接模型服务，请连接公司 VPN 后重试。').unavailable) throw new Error('#800 VPN 引导文案未识别');
+if (modelServiceStateEvidence('模型已正常完成回答。').unavailable) throw new Error('#800 正常回复不应误判不可达');
 
 const upstreamServer = http.createServer((req, res) => {
   if (req.url?.startsWith('/api/capabilities')) {
@@ -449,6 +895,10 @@ try {
 
 const connectorFixtureServer = await createConnectorRegressionServer();
 try {
+  const readiness = await probeConnectorRegressionFixture(connectorFixtureServer);
+  if (!readiness.ok || !readiness.catalog || !readiness.healthy || !readiness.unreachable) {
+    throw new Error(`连接器 Fixture runner-side readiness 探测失败：${JSON.stringify(readiness)}`);
+  }
   const catalog = await fetch(`${connectorFixtureServer.url}/api/openapi/servers?detail=true`).then((response) => response.json());
   const servers = catalog?.data?.servers || [];
   if (!servers.find((item) => item.name === 'dev_healthy' && item.status === 'connected')) throw new Error('连接器 Fixture 缺少 healthy 条目');
@@ -466,11 +916,70 @@ try {
   await connectorFixtureServer.close();
 }
 
+const documentFixtureServer = await createConnectorRegressionServer({ includeDocumentFixture: true });
+try {
+  const catalog = await fetch(`${documentFixtureServer.url}/api/openapi/servers?detail=true`).then((response) => response.json());
+  const documentServer = catalog?.data?.servers?.find((item) => item.name === 'teams_doc_fixture');
+  if (documentServer?.status !== 'connected' || documentServer?.tools?.[0]?.name !== 'teams_document_read') {
+    throw new Error(`Teams 文档 Fixture 目录错误：${JSON.stringify(documentServer)}`);
+  }
+  const allowed = await fetch(`${documentFixtureServer.url}/mcp/documents`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'teams_document_read', arguments: { document_id: 'allowed-doc-a' } } }),
+  }).then((response) => response.json());
+  const denied = await fetch(`${documentFixtureServer.url}/mcp/documents`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'teams_document_read', arguments: { document_id: 'denied-doc-b' } } }),
+  }).then((response) => response.json());
+  const calls = documentFixtureServer.state.hits.filter((item) => item.rpcMethod === 'tools/call');
+  if (!allowed?.result?.content?.[0]?.text?.includes('TEAMS_DOC_ALLOWED_20260716')
+    || denied?.result?.isError !== true
+    || !denied?.result?.content?.[0]?.text?.includes('无权限')
+    || calls.length !== 2
+    || calls[0]?.rpcParams?.arguments?.document_id !== 'allowed-doc-a'
+    || calls[1]?.rpcParams?.arguments?.document_id !== 'denied-doc-b') {
+    throw new Error(`Teams 文档 Fixture 权限闭环错误：allowed=${JSON.stringify(allowed)} denied=${JSON.stringify(denied)} calls=${JSON.stringify(calls)}`);
+  }
+} finally {
+  await documentFixtureServer.close();
+}
+
+const skillStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-skill-state-'));
+try {
+  const emptyLocal = new DatabaseSync(path.join(skillStateRoot, 'local.db'));
+  emptyLocal.exec('CREATE TABLE installed_skills (name TEXT PRIMARY KEY, slug TEXT, runtime_name TEXT, readiness_status TEXT, next_action TEXT, install_status TEXT, updated_at INTEGER)');
+  emptyLocal.close();
+  const hashedPath = path.join(skillStateRoot, 'qbot-dev-fixture.db');
+  const hashed = new DatabaseSync(hashedPath);
+  hashed.exec('CREATE TABLE installed_skills (name TEXT PRIMARY KEY, slug TEXT, runtime_name TEXT, readiness_status TEXT, next_action TEXT, install_status TEXT, updated_at INTEGER)');
+  hashed.prepare('INSERT INTO installed_skills(name, slug, runtime_name, readiness_status) VALUES (?, ?, ?, ?)')
+    .run('skillhub__global__qa-uninstall-rejected', 'qa-uninstall-rejected', 'skillhub__global__qa-uninstall-rejected', 'projected_for_both');
+  hashed.close();
+  const seeded = seedLocalSkillReadiness(skillStateRoot, 'qa-uninstall-rejected', 'runtime_projection_failed');
+  if (!seeded.ok || seeded.dbPath !== hashedPath) throw new Error(`技能状态库候选选择错误：${JSON.stringify(seeded)}`);
+  const readback = new DatabaseSync(hashedPath, { readOnly: true });
+  const readiness = readback.prepare('SELECT readiness_status, next_action FROM installed_skills WHERE slug=?').get('qa-uninstall-rejected');
+  readback.close();
+  if (readiness?.readiness_status !== 'runtime_projection_failed' || readiness?.next_action !== 'retry_projection') {
+    throw new Error(`技能未就绪状态写入错误：${JSON.stringify(readiness)}`);
+  }
+} finally {
+  fs.rmSync(skillStateRoot, { recursive: true, force: true });
+}
+
 const fixtureSmokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-skillhub-fixture-'));
 const fixtureServer = await createSkillHubRegressionServer(fixtureSmokeRoot);
 try {
   const discovery = await fetch(`${fixtureServer.url}/api/web/skills?q=&page=0&size=100`).then((response) => response.json());
-  if (discovery?.data?.items?.length !== 16 || discovery?.data?.total !== 16) throw new Error('SkillHub Fixture discovery 未返回完整 16 条分页数据');
+  if (discovery?.data?.items?.length !== 21 || discovery?.data?.total !== 21) throw new Error('SkillHub Fixture discovery 未返回完整 21 条分页数据');
+  const discoveryBySlug = new Map(discovery.data.items.map((item) => [item.slug, item]));
+  if (discoveryBySlug.get('qa-install-rejected-visible')?.installStatus !== 'rejected'
+    || discoveryBySlug.get('qa-auto-declared')?.resolutionMode !== 'AUTO_DECLARED'
+    || discoveryBySlug.get('qa-materialization-pending')?.materializationStatus !== 'pending') {
+    throw new Error(`SkillHub Fixture 状态元数据不完整：${JSON.stringify(Object.fromEntries(discoveryBySlug))}`);
+  }
   const rootVersion = await fetch(`${fixtureServer.url}/api/v1/skills/global/qa-dep-root-success/versions/1.0.0`).then((response) => response.json());
   const dependencies = rootVersion?.data?.parsedMetadataJson?.dependencies?.map((item) => item.slug);
   if (JSON.stringify(dependencies) !== JSON.stringify(['qa-dep-leaf-a', 'qa-dep-leaf-b'])) {

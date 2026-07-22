@@ -85,6 +85,46 @@
       "archive": "valid",
       "dependencies": ["qa-dep-cycle-b"]
     },
-    { "slug": "qa-dep-cycle-b", "title": "QA Dependency Cycle B", "description": "回指根技能形成循环", "archive": "valid", "dependencies": ["qa-dep-root-cycle"] }
+    { "slug": "qa-dep-cycle-b", "title": "QA Dependency Cycle B", "description": "回指根技能形成循环", "archive": "valid", "dependencies": ["qa-dep-root-cycle"] },
+    {
+      "slug": "qa-scope-isolation",
+      "title": "QA Scope Isolation",
+      "description": "仅在当前任务被手动选择时输出确定性作用域标识的 QA Fixture",
+      "archive": "valid",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-install-rejected-visible",
+      "title": "QA 装不上技能",
+      "description": "装不上：安全审计不允许安装；这是脱敏且用户可理解的拒装原因",
+      "archive": "audit_rejected",
+      "installStatus": "rejected",
+      "installStatusReason": "安全审计不允许安装",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-auto-declared",
+      "title": "QA 已补声明技能",
+      "description": "已补声明：运行时声明已自动补全，可按正常技能安装",
+      "archive": "valid",
+      "resolutionMode": "AUTO_DECLARED",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-materialization-pending",
+      "title": "QA 待物化技能",
+      "description": "待物化：安装后通过重试或对账收敛到明确终态",
+      "archive": "valid",
+      "materializationStatus": "pending",
+      "readinessStatus": "pending_materialization",
+      "dependencies": []
+    },
+    {
+      "slug": "qa-install-dedupe",
+      "title": "QA 并发安装去重",
+      "description": "可安装技能；连续两次点击只允许产生一次有效安装记录",
+      "archive": "valid",
+      "dependencies": []
+    }
   ]
 }

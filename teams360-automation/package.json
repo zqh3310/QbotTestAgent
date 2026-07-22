@@ -1,0 +1,21 @@
+{
+  "name": "qbot-teams360-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated 360Teams-hosted QBot automation adapter.",
+  "scripts": {
+    "launch": "node cli.mjs launch",
+    "launch:live": "node cli.mjs launch-live",
+    "doctor": "node cli.mjs doctor",
+    "proxy": "node lib/cdp-webview-proxy.mjs",
+    "casebook": "node lib/casebook-runner.mjs",
+    "merge-runs": "node lib/merge-runs.mjs",
+    "trusted-review": "node lib/trusted-review.mjs",
+    "finalize-trusted-report": "node lib/finalize-trusted-report.mjs",
+    "smoke": "node cli.mjs smoke",
+    "stop": "node cli.mjs stop",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check cli.mjs && node --check lib/config.mjs && node --check lib/launcher.mjs && node --check lib/cdp-webview.mjs && node --check lib/cdp-webview-proxy.mjs && node --check lib/casebook-runner.mjs && node --check lib/relaunch-managed-host.mjs && node --check lib/merge-runs.mjs && node --check lib/run-metadata.mjs && node --check lib/review-evidence.mjs && node --check lib/trusted-history.mjs && node --check lib/trusted-review.mjs && node --check lib/consolidate-trusted-history.mjs && node --check lib/finalize-trusted-report.mjs && node --check runtime/scripts/teams-control-plane.mjs && node --check lib/targets.mjs && node --check lib/report.mjs && npm test"
+  }
+}

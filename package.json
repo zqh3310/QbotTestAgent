@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Local QBot / Deepbank v2 test agent team runner.",
   "scripts": {
-    "check": "node --check src/cli.mjs && node --check src/lib/ui-agent-casebook-runner.mjs && node test/framework-invariants.mjs && node test/smoke.mjs",
+    "check": "node --check src/cli.mjs && node --check src/lib/ui-agent-casebook-runner.mjs && node --check src/lib/ui-agent-case-scheduler.mjs && node test/case-scheduler.mjs && node test/framework-invariants.mjs && node test/smoke.mjs",
     "run": "node src/cli.mjs run",
     "monitor": "node src/cli.mjs monitor",
     "generate": "node src/cli.mjs generate",
@@ -18,7 +18,8 @@
     "ui-agent:run": "node src/cli.mjs ui-agent-run",
     "ui-agent:explore": "node src/cli.mjs ui-agent-explore",
     "ui-agent:module-run": "node src/cli.mjs ui-agent-module-run",
-    "ui-agent:casebook-run": "node src/cli.mjs ui-agent-casebook-run"
+    "ui-agent:casebook-run": "node src/cli.mjs ui-agent-casebook-run",
+    "ui-agent:casebook-run-parallel": "node src/cli.mjs ui-agent-casebook-run --parallel 5"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

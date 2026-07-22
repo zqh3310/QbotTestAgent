@@ -77,6 +77,22 @@ Dry-run the framework without operating QBot:
 npm run ui-agent:casebook-run -- --profile mandatory --limit 2 --skip-run
 ```
 
+Run up to five cases in parallel with five independent QBot App/CDP workers:
+
+```bash
+npm run ui-agent:casebook-run-parallel -- \
+  --profile full \
+  --worker-cdps 9401,9402,9403,9404,9405
+```
+
+Parallel mode is fail-closed: every slot must use a different loopback CDP endpoint and an
+independent QWork page. A single 360Teams App exposes only one QWork WebView and cannot be
+listed five times. Cases that mutate shared account state (initialization, auth, experts,
+skills, connectors, Teams host state, memory, and runtime recovery) are drained serially
+after the parallel-safe queue. Cases that restart the App are always moved to the final
+`restart_serial` phase. The scheduler records the three queues, worker assignment, and child
+run directory in `automation-run-summary.json`.
+
 Outputs are written under:
 
 ```text
