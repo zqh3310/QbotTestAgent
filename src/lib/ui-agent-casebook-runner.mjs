@@ -4075,6 +4075,22 @@ async function composerTextValue(page) {
   }).catch(() => '');
 }
 
+async function composerUserTextValue(page) {
+  const input = page.locator('[data-testid="composer-input"]').first();
+  return input.evaluate((el) => {
+    if ('value' in el) return String(el.value || '');
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll([
+      '[data-testid^="composer-skill-chip-"]',
+      '[data-testid^="composer-connector-chip-"]',
+      '.skill-chip',
+      '.connector-chip',
+      '.capability-chip',
+    ].join(',')).forEach((node) => node.remove());
+    return String(clone.textContent || '');
+  }).catch(() => '');
+}
+
 async function createSidebarTestSession(page, state, caseDir, id) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return { ok: false, id: '' };
@@ -4372,6 +4388,30 @@ async function executeSitExpertConversationCreateClosedLoop({ page, state, testC
     '从“用对话创建”入口提交完整信息后，应真实创建专家并在“我的专家”列表可见。',
     createdVisible,
     `专家=${name}；列表可见=${createdVisible}；回复=${clip(reply.deltaText, 320)}`,
+  );
+  if (!createdVisible) return;
+
+  const summoned = await summonCreatedExpertByName(page, state, caseDir, name, 'expert-021');
+  if (!summoned) return;
+  const reviewPrompt = '请以当前专家身份评审“用户提交审批后可以撤回”这条需求，给出完整性、边界条件、验收标准和风险四项结论。';
+  const review = await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt: reviewPrompt,
+    label: '首页选择新专家后的需求评审',
+  });
+  const reviewText = String(review.deltaText || '');
+  const fourDimensions = ['完整', '边界', '验收', '风险'].every((term) => reviewText.includes(term));
+  state.screenshots.expert_021_homepage_reply = await shot(page, caseDir, 'expert-021-homepage-reply');
+  recordAssertion(
+    state,
+    '对话创建专家可从首页选择并使用',
+    '对话创建的专家必须能从专家页召唤到首页，并以当前专家身份完成一次包含完整性、边界、验收标准和风险的真实需求评审。',
+    !review.incomplete && fourDimensions,
+    `专家=${name}；incomplete=${review.incomplete}；四项结论=${fourDimensions}；reply=${clip(reviewText, 520)}`,
   );
 }
 
@@ -4735,9 +4775,9 @@ async function executeSitExpertDeleteCreated({ page, state, caseDir }) {
     '点击删除此自建专家并确认',
     '确认删除后，该专家应从我的专家列表移除。',
     `专家=${name}；确认来源=${dialog.source || 'unknown'}；确认弹窗=${dialog.message || '未捕获'}；仍可见=${stillVisible}`,
-    dialog.source !== 'none' ? 'passed' : 'failed',
+    ['native-confirm', 'custom-dialog'].includes(dialog.source) ? 'passed' : 'failed',
     state.screenshots.expert_013_after_delete,
-    dialog.source !== 'none' ? '' : 'automation_error',
+    ['native-confirm', 'custom-dialog'].includes(dialog.source) ? '' : 'automation_error',
   );
   recordAssertion(state, '确认删除后专家移除', '删除确认后我的专家列表不应继续显示该专家。', !stillVisible, `专家=${name}；仍可见=${stillVisible}`);
 }
@@ -6089,7 +6129,10 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
   });
   const manualOk = await setSkillMode(page, state, caseDir, 'manual');
   if (!manualOk) return;
-  const selected = await selectMultipleManualSkills(page, state, caseDir, 2);
+  let selected = 0;
+  for (const skillName of ['QA Python Runtime', 'QA Node Runtime']) {
+    if (await selectManualSkillByName(page, state, caseDir, skillName, { ensureMode: false })) selected += 1;
+  }
   if (selected < 2) {
     markBlocked(state, `该用例要求已安装至少 2 个技能；当前手动模式只成功选择 ${selected} 个技能，无法验证多技能 badge 和限定使用。`);
     return;
@@ -6115,11 +6158,12 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
     `snapshot=${clip(JSON.stringify(beforeRemoval), 700)}；tool=${clip(badgeText, 180)}`,
   );
 
-  const firstChip = page.locator('[data-testid^="composer-skill-chip-"], .skill-chip').first();
+  const firstChip = composer.locator('[data-testid^="composer-skill-chip-"]').first();
   const removedSkill = cleanSkillChipLabel(await firstChip.innerText({ timeout: 1000 }).catch(() => ''));
-  const remove = firstChip.locator('.skill-chip-x, button[aria-label="移除"], button[aria-label*="remove" i]').first();
+  await firstChip.hover().catch(() => {});
+  const remove = firstChip.locator('.skill-chip-x, button[aria-label^="移除"], button[aria-label*="remove" i]').first();
   if (!(await visible(remove, 1200))) {
-    recordAssertion(state, '多技能 chip 删除入口', '每个手动 Skill chip 应提供可点击删除按钮。', false, `chip=${clip(removedSkill, 160)}`);
+    recordAssertion(state, '多技能 chip 删除入口', '每个手动 Skill chip 应在悬停后提供可点击删除按钮。', false, `chip=${clip(removedSkill, 160)}`);
     return;
   }
   await remove.click({ force: true }).catch(async () => remove.evaluate((el) => el.click()));
@@ -6145,7 +6189,7 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
     matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
     menuKind: 'skill',
   });
-  if (!removedSkill || !await selectManualSkillByName(page, state, caseDir, removedSkill)) {
+  if (!removedSkill || !await selectManualSkillByName(page, state, caseDir, removedSkill, { ensureMode: false })) {
     recordAssertion(state, '恢复已删除 Skill chip', '删除后应能从手动技能菜单重新选择同一 Skill。', false, `removedSkill=${removedSkill || '空'}`);
     return;
   }
@@ -7317,7 +7361,11 @@ export function webSearchQualityVerdict(replyText, toolText = '') {
   const urls = [...reply.matchAll(/https:\/\/[^\s)\]}>，。；;"']+/gi)].map((match) => match[0]);
   const uniqueUrls = [...new Set(urls)];
   const officialUrls = uniqueUrls.filter((url) => /(^|\.)openai\.com\//i.test(new URL(url).hostname + new URL(url).pathname));
-  const dateEvidence = (reply.match(/\b20\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?/g) || []).length;
+  // Accept both compact ISO-style dates and the spaced Chinese date format
+  // commonly emitted in user-facing replies (for example “2026 年 7 月 11 日”).
+  const dateEvidence = (
+    reply.match(/\b20\d{2}\s*(?:[-/.年]\s*)\d{1,2}(?:\s*(?:[-/.月]\s*)\d{1,2}\s*日?)?/g) || []
+  ).length;
   const explicitShortage = /不足两条|不足\s*2\s*条|未找到足够|最近两条|暂无足够|只有一条/.test(reply);
   const toolEvidence = /qbot[_-]?web|web[_-]?(?:search|crawl)|网页搜索|搜索网页|搜索/.test(tools);
   return {
@@ -7621,7 +7669,7 @@ async function executeSitArtifactConfirmationGate({ page, state, testCase, caseD
   await closeArtifactSurface(page, state, caseDir).catch(() => false);
 
   await ensureSidebarExpanded(page, state);
-  const nav = page.locator('[data-testid="nav-knowledge"]').first();
+  const nav = knowledgeNavigationLocator(page);
   if (!(await visible(nav, 1800))) {
     recordAssertion(state, '知识成果入口', '确认正式成果后应能进入知识-任务成果页核验。', false, 'nav-knowledge 不可见。');
     return;
@@ -7708,7 +7756,7 @@ async function executeSitKnowledgeClosedLoop({ page, state, testCase, caseDir, t
   await closeArtifactSurface(page, state, caseDir).catch(() => false);
 
   await ensureSidebarExpanded(page, state);
-  const nav = page.locator('[data-testid="nav-knowledge"]').first();
+  const nav = knowledgeNavigationLocator(page);
   if (!(await visible(nav, 1800))) {
     state.screenshots.knowledge_001_nav_missing = await shot(page, caseDir, 'knowledge-001-navigation-missing');
     recordAssertion(state, '知识导航入口', '登录后的 Teams QWork 应展示【知识】入口。', false, clip(await bodyText(page), 360));
@@ -7718,7 +7766,23 @@ async function executeSitKnowledgeClosedLoop({ page, state, testCase, caseDir, t
   const view = page.locator('[data-testid="knowledge-view"]').first();
   if (!(await visible(view, 5000))) {
     state.screenshots.knowledge_001_view_missing = await shot(page, caseDir, 'knowledge-001-view-missing');
-    recordAssertion(state, '知识页可用', '点击知识入口后应进入知识页。', false, clip(await bodyText(page), 360));
+    const surfaceText = await mainSurfaceText(page);
+    const placeholderVisible = /知识/.test(surfaceText) && /占位|后续再开放|未来的产品能力/.test(surfaceText);
+    recordAssertion(
+      state,
+      '知识入口真实可达',
+      '点击当前版本提供的知识入口后应进入知识功能表面，而不是被框架误判为入口缺失。',
+      placeholderVisible,
+      clip(surfaceText, 420),
+      'automation_error',
+    );
+    recordAssertion(
+      state,
+      '知识页按任务汇总正式成果',
+      '知识页必须提供任务成果聚合与来源任务回跳，不能只展示“后续开放”的占位说明。',
+      false,
+      placeholderVisible ? `当前集成版本打开的是知识占位页：${clip(surfaceText, 420)}` : `点击后未出现知识功能页：${clip(surfaceText, 420)}`,
+    );
     return;
   }
   const artifactsTab = view.getByRole('tab', { name: /^任务成果$/ }).first();
@@ -7757,6 +7821,10 @@ async function executeSitKnowledgeClosedLoop({ page, state, testCase, caseDir, t
     composerVisible && /knowledge_gate|知识门禁样例/.test(`${readback.latestUserText || ''}\n${readback.latestAssistantText || ''}\n${reply.deltaText || ''}`),
     `source=${clip(sourceLabel, 120)}; composer=${composerVisible}; user=${clip(readback.latestUserText, 180)}; assistant=${clip(readback.latestAssistantText, 220)}`,
   );
+}
+
+function knowledgeNavigationLocator(page) {
+  return page.locator('[data-testid="nav-knowledge"], [data-testid="nav-more"]').filter({ hasText: /知识/ }).first();
 }
 
 async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
@@ -7830,8 +7898,12 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
   }
   await nav.click({ force: true }).catch(async () => nav.evaluate((el) => el.click()));
   await page.locator('[data-testid="projects-list-view"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const modernProjectsView = await visible(page.locator('[data-testid="projects-list-view"]').first(), 1200);
   const candidates = await page.evaluate(async (preferredName) => {
-    const projects = await window.agent.listProjects().catch(() => []);
+    const projects = await Promise.race([
+      window.agent.listProjects().catch(() => []),
+      new Promise((resolve) => setTimeout(() => resolve([]), 20000)),
+    ]);
     const eligible = [];
     for (const project of Array.isArray(projects) ? projects : []) {
       if (!project?.id) continue;
@@ -7848,12 +7920,46 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
       });
     }
     eligible.sort((a, b) => Number(b.runtimeStatus === 'ready') - Number(a.runtimeStatus === 'ready')
+      || Number(b.source !== 'gitlab') - Number(a.source !== 'gitlab')
       || Number(b.preferred) - Number(a.preferred));
     return eligible;
   }, preferredProjectName).catch(() => []);
   const selectedProject = candidates[0] || null;
   let projectName = selectedProject?.name || preferredProjectName;
   let projectId = selectedProject?.id || '';
+  if (!modernProjectsView) {
+    // The legacy QWork shell can launch an existing ordinary project on the
+    // current runtime. createProject in the integrated Teams build creates a
+    // GitLab-backed project as well, so it must never be used to pretend an
+    // unbound GitLab project can be replaced by a local executable fixture.
+    // Only seed when the account truly has no project; runtime readiness below
+    // then truthfully blocks if the created GitLab project has no runtime.
+    if (!projectId) {
+      const bridgeSeed = await page.evaluate(async ({ name, description }) => {
+        if (typeof window.agent?.createProject !== 'function') return { ok: false, reason: 'createProject bridge 不可用' };
+        try {
+          const created = await Promise.race([
+            window.agent.createProject({ name, description }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('createProject bridge 20000ms 未返回')), 20000)),
+          ]);
+          return { ok: Boolean(created?.id), project: created || null, reason: created?.id ? '' : 'createProject 未返回项目 ID' };
+        } catch (error) {
+          return { ok: false, reason: String(error?.message || error) };
+        }
+      }, {
+        name: preferredProjectName,
+        description: 'QbotTestAgent 项目成果与项目任务自动化专用测试数据',
+      }).catch((error) => ({ ok: false, reason: error.message }));
+      state.artifacts.project_fixture_bridge_seed = bridgeSeed;
+      if (!bridgeSeed.ok) {
+        markBlocked(state, `当前账号无可复用项目，受控 createProject 测试数据准备失败：${bridgeSeed.reason}`);
+        return;
+      }
+      projectId = String(bridgeSeed.project.id || '');
+      projectName = String(bridgeSeed.project.config?.displayName || bridgeSeed.project.name || preferredProjectName);
+    }
+    return executeLegacyProjectArtifactTask({ page, state, testCase, caseDir, timeoutMs, projectId, projectName, prompt });
+  }
   const workspaceAlreadyVisible = await visible(page.locator('[data-testid="projects-workspace-view"]').first(), 1200);
   if (workspaceAlreadyVisible) {
     const workspaceText = await page.locator('[data-testid="projects-workspace-view"]').first().innerText({ timeout: 1200 }).catch(() => '');
@@ -7882,7 +7988,10 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
       const bridgeSeed = await page.evaluate(async ({ name, description }) => {
         if (typeof window.agent?.createProject !== 'function') return { ok: false, reason: 'createProject bridge 不可用' };
         try {
-          const created = await window.agent.createProject({ name, description });
+          const created = await Promise.race([
+            window.agent.createProject({ name, description }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('createProject bridge 20000ms 未返回')), 20000)),
+          ]);
           return { ok: Boolean(created?.id), project: created || null, reason: created?.id ? '' : 'createProject 未返回项目 ID' };
         } catch (error) {
           return { ok: false, reason: String(error?.message || error) };
@@ -7900,16 +8009,17 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
       projectId = String(bridgeSeed.project.id || '');
       projectName = String(bridgeSeed.project.config?.displayName || bridgeSeed.project.name || preferredProjectName);
       // createProject 直接更新产品数据层，项目列表不会保证自动订阅这次变更。
-      // 重新加载同一 Teams WebView 后再从真实 UI 打开项目，避免把陈旧列表
-      // 误报成“创建成功但工作区不可见”。
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-      const refreshedWorkbench = await waitForQbotWorkbench(page, 30000);
-      if (!refreshedWorkbench.ok) {
-        markFailed(state, `createProject 成功后刷新 Teams QWork 失败：${refreshedWorkbench.reason}`, 'automation_error');
-        return;
-      }
+      // Teams WebView 在 page.reload() 时可能销毁当前 CDP target；通过真实导航离开
+      // 再返回项目页触发组件重挂载和列表回读，保持同一受控页面句柄有效。
       await ensureSidebarExpanded(page, state);
-      await nav.click({ force: true }).catch(() => {});
+      const newTaskNav = page.locator('[data-testid="nav-new-task"]').first();
+      if (await visible(newTaskNav, 1200)) {
+        await newTaskNav.click({ force: true }).catch(async () => newTaskNav.evaluate((el) => el.click()));
+        await page.locator('[data-testid="composer-input"]').first().waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+      }
+      const refreshedProjectsNav = page.locator('[data-testid="nav-projects"]').first();
+      await refreshedProjectsNav.click({ force: true }).catch(async () => refreshedProjectsNav.evaluate((el) => el.click()));
+      await page.locator('[data-testid="projects-list-view"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
       await page.waitForTimeout(1000);
       card = page.getByTestId(`project-card-${projectId}`).first();
       if (await visible(card, 3000)) {
@@ -8034,22 +8144,197 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
   recordAssertion(state, '项目成果关联项目文件', '项目任务生成的成果应能在项目“任务 / 文件”区域回读到对应文件名。', filesLinked, `expected=${expectedFiles.join(', ')}；files=${clip(fileSurface, 500)}`);
 }
 
+async function executeLegacyProjectArtifactTask({ page, state, testCase, caseDir, timeoutMs, projectId, projectName, prompt }) {
+  const runtimeReadiness = await waitForProjectRuntimeReady(page, { projectId, projectName, timeoutMs: 60000 });
+  projectId = runtimeReadiness.projectId || projectId;
+  state.artifacts.project_runtime_precondition = runtimeReadiness;
+  recordStep(
+    state,
+    '校验旧版项目运行时前置',
+    '旧版 Teams QWork 虽然项目主导航仍是占位页，但从左侧“空间”发起项目前仍须按项目类型校验运行时；普通项目使用当前运行时，GitLab 项目才要求 workspace ready。',
+    JSON.stringify(runtimeReadiness),
+    runtimeReadiness.ok ? 'passed' : 'blocked',
+    '',
+    runtimeReadiness.ok ? '' : 'test_data',
+  );
+  if (!runtimeReadiness.ok) {
+    markBlocked(state, `项目测试数据运行时未就绪：project=${projectName}；projectId=${projectId || 'unknown'}；status=${runtimeReadiness.status || 'unknown'}；reason=${runtimeReadiness.reason}`);
+    return;
+  }
+
+  await ensureSidebarExpanded(page, state);
+  let entry = page.getByTestId(`sidebar-space-project-${projectId}`).first();
+  if (!(await visible(entry, 1800))) {
+    const newTaskNav = page.locator('[data-testid="nav-new-task"]').first();
+    if (await visible(newTaskNav, 1200)) {
+      await newTaskNav.click({ force: true }).catch(async () => newTaskNav.evaluate((el) => el.click()));
+      await page.waitForTimeout(800);
+      await ensureSidebarExpanded(page, state);
+      entry = page.getByTestId(`sidebar-space-project-${projectId}`).first();
+    }
+  }
+  const entryVisible = await visible(entry, 2500);
+  state.screenshots.project_legacy_space_entry = await shot(page, caseDir, 'project-legacy-space-entry');
+  recordAssertion(
+    state,
+    '旧版项目空间入口可定位',
+    '当前集成版本项目主导航为占位页时，框架应从左侧“空间”精确定位同一 projectId，不能把版本差异误报为项目不可用。',
+    entryVisible,
+    `project=${projectName}；projectId=${projectId}；entry=${entryVisible ? 'visible' : 'missing'}`,
+    'automation_error',
+  );
+  if (!entryVisible) return;
+
+  await entry.click({ force: true }).catch(async () => entry.evaluate((el) => el.click()));
+  await page.locator('[data-testid="composer-input"], .aui-composer-input').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const draftContext = await qbotE2EState(page);
+  state.screenshots.project_legacy_after_open = await shot(page, caseDir, 'project-legacy-after-open');
+  recordStep(
+    state,
+    '从左侧空间打开项目任务',
+    '必须通过用户可见的项目空间入口进入带项目上下文的新任务。',
+    JSON.stringify({ projectId, bridgeProjectId: draftContext.projectId || '', launchSource: draftContext.launchSource || '', composerVisible: await visible(page.locator('[data-testid="composer-input"], .aui-composer-input').first(), 1200) }),
+    'passed',
+    state.screenshots.project_legacy_after_open,
+  );
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '旧版项目空间成果生成' });
+  if (state.status === 'blocked') return;
+  await assertArtifactSurface(page, state, caseDir, artifactExpectedType(testCase));
+  await executeArtifactSpecificChecks(page, state, testCase, caseDir, reply);
+
+  const bridge = await qbotE2EState(page);
+  const activeId = String(bridge.activeId || '');
+  const expectedFiles = testCase.id === 'SIT-ART-013' ? ['project_result.md', 'project_result.html'] : ['project_weekly_report.md'];
+  const persisted = await page.evaluate(async ({ expectedProjectId, expectedActiveId }) => {
+    const sessions = await window.agent.listSessions().catch(() => []);
+    const session = (Array.isArray(sessions) ? sessions : []).find((item) => String(item?.id || '') === expectedActiveId)
+      || (Array.isArray(sessions) ? sessions : []).filter((item) => String(item?.projectId || '') === expectedProjectId).at(-1)
+      || null;
+    const sessionId = String(session?.id || expectedActiveId || '');
+    const artifacts = sessionId && typeof window.agent.getSessionArtifacts === 'function'
+      ? await window.agent.getSessionArtifacts(sessionId).catch(() => [])
+      : [];
+    return { session, sessionId, artifacts: Array.isArray(artifacts) ? artifacts : [] };
+  }, { expectedProjectId: projectId, expectedActiveId: activeId }).catch((error) => ({ error: error.message, session: null, sessionId: activeId, artifacts: [] }));
+  const artifactNames = persisted.artifacts.map((item) => String(item?.name || item?.path || '').split('/').pop()).filter(Boolean);
+  const taskLinked = String(persisted.session?.projectId || bridge.projectId || '') === projectId;
+  const filesLinked = expectedFiles.every((name) => artifactNames.includes(name));
+  state.artifacts.project_task_context = {
+    project_name: projectName,
+    project_id: projectId,
+    bridge_project_id: bridge.projectId || '',
+    launch_source: bridge.launchSource || '',
+    active_id: activeId,
+  };
+  state.artifacts.project_task_files_readback = {
+    expected_files: expectedFiles,
+    task_linked: taskLinked,
+    files_linked: filesLinked,
+    session_id: persisted.sessionId || '',
+    artifact_names: artifactNames,
+    error: persisted.error || '',
+  };
+  recordAssertion(
+    state,
+    '项目任务上下文真实绑定',
+    '从左侧项目空间进入后，持久化 session 或 E2E bridge 必须带同一 projectId。',
+    taskLinked,
+    JSON.stringify(state.artifacts.project_task_context),
+    taskLinked ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    '项目成果持久化关联项目任务',
+    '项目任务生成的成果必须在该 session 的产品成果记录中回读到预期文件名。',
+    filesLinked,
+    `expected=${expectedFiles.join(', ')}；artifacts=${artifactNames.join(', ') || '空'}；sessionId=${persisted.sessionId || '空'}`,
+  );
+}
+
 async function waitForProjectRuntimeReady(page, { projectId = '', projectName = '', timeoutMs = 60000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = { projectId, status: 'unknown', reason: '尚未读取项目运行时绑定。' };
   while (Date.now() < deadline) {
     last = await page.evaluate(async ({ expectedId, expectedName }) => {
-      const projects = await window.agent.listProjects().catch(() => []);
+      const projects = await Promise.race([
+        window.agent.listProjects().catch(() => []),
+        new Promise((resolve) => setTimeout(() => resolve([]), 20000)),
+      ]);
       const project = (Array.isArray(projects) ? projects : []).find((item) => String(item?.id || '') === expectedId)
         || (Array.isArray(projects) ? projects : []).find((item) => String(item?.config?.displayName || item?.name || '') === expectedName);
       if (!project?.id) return { ok: false, projectId: expectedId, status: 'missing', reason: '项目列表中未回读到刚进入/创建的项目。' };
+      const projectSource = String(project.source || 'legacy');
       const binding = project.runtimeBinding || (typeof window.agent.getProjectRuntimeBinding === 'function'
         ? await window.agent.getProjectRuntimeBinding(project.id).catch(() => null)
         : null);
+      // Only GitLab-backed projects require a provisioned remote workspace.
+      // Legacy/manual projects launch through the currently selected runtime and
+      // carry projectId on the session. Requiring workspace.status=ready for
+      // those projects creates a false blocker because their binding response
+      // intentionally has no workspace object (the product UI does not block
+      // their task launcher either).
+      if (projectSource !== 'gitlab') {
+        return {
+          ok: true,
+          projectId: String(project.id),
+          projectSource,
+          enabled: binding?.enabled === true,
+          status: binding?.enabled === true ? 'bound_current_runtime' : 'current_runtime',
+          reason: '普通项目使用当前选中运行时启动；无需 GitLab workspace ready 前置。',
+        };
+      }
+      if (binding?.enabled !== true
+        && String(project.config?.displayName || project.name || '') === 'QBot QA 自动化项目'
+        && typeof window.agent.listRuntimes === 'function'
+        && typeof window.agent.saveProjectRuntimeBinding === 'function') {
+        const runtimes = await window.agent.listRuntimes().catch(() => []);
+        const candidates = (Array.isArray(runtimes) ? runtimes : [])
+          .filter((runtime) => runtime?.runtimeId && runtime.enabled !== false)
+          .sort((left, right) => Number(Boolean(right.lastHealthyAt && !right.lastError)) - Number(Boolean(left.lastHealthyAt && !left.lastError))
+            || Number(right.lastHealthyAt || 0) - Number(left.lastHealthyAt || 0)
+            || String(left.runtimeId).localeCompare(String(right.runtimeId)));
+        const selectedRuntime = candidates[0] || null;
+        if (!selectedRuntime) {
+          return {
+            ok: false,
+            projectId: String(project.id),
+            projectSource,
+            status: 'unbound',
+            reason: 'QA 项目未绑定运行时，且产品运行时目录没有 enabled 候选。',
+            runtimeCandidates: [],
+          };
+        }
+        const saved = await window.agent.saveProjectRuntimeBinding(project.id, selectedRuntime.runtimeId, true).catch((error) => ({ error: String(error?.message || error) }));
+        if (saved?.error) {
+          return {
+            ok: false,
+            projectId: String(project.id),
+            projectSource,
+            status: 'binding_failed',
+            reason: `通过产品 bridge 绑定 QA 项目运行时失败：${saved.error}`,
+            selectedRuntimeId: String(selectedRuntime.runtimeId),
+          };
+        }
+        const savedStatus = String(saved?.workspace?.status || (saved?.enabled ? 'provisioning' : 'unbound'));
+        return {
+          ok: saved?.enabled === true && savedStatus === 'ready',
+          projectId: String(project.id),
+          projectSource,
+          enabled: saved?.enabled === true,
+          status: savedStatus,
+          autoBound: true,
+          selectedRuntimeId: String(selectedRuntime.runtimeId),
+          reason: savedStatus === 'ready'
+            ? 'QA 项目已通过产品 bridge 绑定 enabled 运行时，workspace ready。'
+            : `QA 项目已绑定运行时，workspace 正在准备：${savedStatus}`,
+        };
+      }
       const status = String(binding?.workspace?.status || (binding?.enabled ? 'provisioning' : 'unbound'));
       return {
         ok: binding?.enabled === true && status === 'ready',
         projectId: String(project.id),
+        projectSource,
         enabled: binding?.enabled === true,
         status,
         reason: binding?.enabled === true
@@ -8567,7 +8852,8 @@ function assertUxArtifactReadback(state, testCase, panelText) {
 
     if (id === 'SIT-ART-021') {
       const sections = ['背景', '结论', '风险', '下一步', '负责人', '截止日期'].every((term) => content.includes(term));
-      const facts = ['12000', '240', '170', '张三', '2026-07-18'].every((term) => content.includes(term));
+      const normalizedFacts = content.replace(/(?<=\d)[,_，](?=\d)/g, '');
+      const facts = ['12000', '240', '170', '张三', '2026-07-18'].every((term) => normalizedFacts.includes(term));
       recordAssertion(state, '周报成果结构与事实回读', 'weekly_decision_brief.md 应包含六个必需部分及全部用户事实。', sections && facts, `sections=${sections}；facts=${facts}；content=${clip(content, 520)}`);
     }
     if (id === 'SIT-ART-022') {
@@ -8770,16 +9056,16 @@ async function waitForSkillInstallTerminal(page, { skillName, marketCard = null,
     text = marketCard ? await marketCard.innerText({ timeout: 800 }).catch(() => '') : '';
     const pageText = await mainSurfaceText(page);
     const combined = `${text}\n${pageText}`;
-    const pending = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|reconcil|materializing/i.test(combined);
-    const failure = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|错误/.test(combined);
-    const success = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/.test(text);
-    if (!pending && (failure || success)) return { terminal: true, success: success && !failure, failure, pending: false, text: combined };
-    if (marketCard && !pending && !failure) {
+    if (marketCard) {
       const installedAction = marketCard.locator('button, .skill-install, .skill-delete').filter({ hasText: /删除|卸载/ }).first();
       if (await visible(installedAction, 250)) {
         return { terminal: true, success: true, failure: false, pending: false, text: text || combined };
       }
     }
+    const pending = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|reconcil|materializing/i.test(combined);
+    const failure = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|错误/.test(combined);
+    const success = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/.test(text);
+    if (!pending && (failure || success)) return { terminal: true, success: success && !failure, failure, pending: false, text: combined };
     if (skillName) {
       const installed = page.locator('.skill-card').filter({ hasText: skillName }).filter({ hasText: /已安装|已就绪|安装成功/ }).first();
       if (await visible(installed, 250)) return { terminal: true, success: true, failure: false, pending: false, text: await installed.innerText({ timeout: 500 }).catch(() => combined) };
@@ -9509,11 +9795,13 @@ async function selectFirstManualSkill(page, state, caseDir) {
   return true;
 }
 
-async function selectManualSkillByName(page, state, caseDir, skillName) {
+async function selectManualSkillByName(page, state, caseDir, skillName, { ensureMode = true } = {}) {
   const matcher = skillName instanceof RegExp ? skillName : new RegExp(escapeRegExp(String(skillName)), 'i');
   const expectedLabel = skillName instanceof RegExp ? String(skillName) : String(skillName);
-  const manualOk = await setSkillMode(page, state, caseDir, 'manual');
-  if (!manualOk) return false;
+  if (ensureMode) {
+    const manualOk = await setSkillMode(page, state, caseDir, 'manual');
+    if (!manualOk) return false;
+  }
   const menu = await activeMenuLocator(page, 'skill');
   if (!menu) {
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
@@ -9792,7 +10080,12 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
     if (!preparedText.trim()) throw new Error(`${label}发送前 composer 为空。`);
   }
   state.screenshots[`${slugify(label)}_after_fill`] = await shot(page, caseDir, `${slugify(label)}-after-fill`);
-  await send(page, state, `发送${label}`);
+  state._composerPreparedSend = composerPrepared;
+  try {
+    await send(page, state, `发送${label}`);
+  } finally {
+    state._composerPreparedSend = false;
+  }
   state.screenshots[`${slugify(label)}_after_send`] = await shot(page, caseDir, `${slugify(label)}-after-send`);
   const waitConfig = replyWaitConfig(testCase, timeoutMs);
   let reply = await waitForReply(page, before, waitConfig.timeoutMs, {
@@ -11867,7 +12160,18 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
           : route.path;
         const rule = config?.armed ? config.rules.find((item) => matches(item, route.method, path)) : null;
         if (!rule) return original(...args);
-        const hit = { id: rule.id || '', method: route.method, path, mode: rule.mode || 'fixed-response' };
+        let requestArgs = [];
+        try { requestArgs = structuredClone(args); } catch { requestArgs = args.map((value) => String(value)); }
+        let requestBody = '';
+        try { requestBody = JSON.stringify(args.length === 1 ? args[0] : args); } catch { requestBody = ''; }
+        const hit = {
+          id: rule.id || '',
+          method: route.method,
+          path,
+          mode: rule.mode || 'fixed-response',
+          requestArgs,
+          requestBody,
+        };
         if (!['transform-json', 'observe'].includes(rule.mode)) {
           await root.__qbotAutomationControlHit?.(activeId, hit);
           if (Number(rule.delayMs || 0) > 0) {
@@ -11942,9 +12246,9 @@ async function confirmDestructiveAction(page, action, { accept = true } = {}) {
     if (!(await visible(dialog, 250))) continue;
     const message = await dialog.innerText({ timeout: 900 }).catch(() => '');
     if (!fallbackMessage && /删除|卸载|移除|确认/.test(message)) fallbackMessage = message;
-    const confirmationCopy = /确认|确定要|是否.*(?:删除|卸载|移除)|操作后.*(?:无法|不可)|删除后|卸载后/.test(message);
-    const confirm = dialog.locator('[data-testid="skill-uninstall-confirm"], button, [role="button"]')
-      .filter({ hasText: /^(?:确认(?:删除|卸载|移除)?|确定|删除|卸载|移除)$/ })
+    const confirmationCopy = /确认|确定(?:要)?(?:删除|卸载|移除)|是否.*(?:删除|卸载|移除)|操作后.*(?:无法|不可)|删除后|卸载后/.test(message);
+    const confirm = dialog.locator('[data-testid$="-confirm"], [data-testid="skill-uninstall-confirm"], button, [role="button"]')
+      .filter({ hasText: /确认(?:删除|卸载|移除)?|确定|删除|卸载|移除/ })
       .first();
     if (!confirmationCopy || !(await visible(confirm, 500))) continue;
     await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
@@ -12918,11 +13222,16 @@ async function send(page, state, action = '点击发送') {
     ? String(state.artifacts.sent_prompts.at(-1)?.prompt || '')
     : '';
   if (expectedPrompt) {
-    const beforeRestore = await composerTextValue(page);
+    const beforeRestore = state._composerPreparedSend
+      ? await composerUserTextValue(page)
+      : await composerTextValue(page);
     const normalize = normalizePromptForComparison;
     let actualPrompt = beforeRestore;
     let restored = false;
     if (normalize(actualPrompt) !== normalize(expectedPrompt)) {
+      if (state._composerPreparedSend) {
+        throw new Error(`${action}前能力 chip composer 的用户正文与期望不一致；为避免清空 selectedSkills，框架已阻止 fill 覆盖。`);
+      }
       await fillComposer(page, expectedPrompt, state, `${action}前恢复模型档位复核后被覆盖的用户输入`);
       actualPrompt = await composerTextValue(page);
       restored = true;
@@ -13108,11 +13417,13 @@ function replyWaitConfig(testCase, requestedTimeoutMs = DEFAULT_TIMEOUT_MS) {
     budget = COMBO_REPLY_WAIT_MS;
   }
   const requested = Number(requestedTimeoutMs || 0);
-  const longRunningKind = kind === 'attachment_artifact' || kind === 'long_context' || kind === 'multi_turn';
-  const requestedBudget = Number.isFinite(requested) && requested > 0 ? Math.min(requested, budget) : budget;
+  // --timeout-ms is the user's explicit per-Case ceiling. A shorter heuristic
+  // may classify evidence, but must not silently truncate a real long-running
+  // Agent/tool call before that ceiling.
+  const requestedBudget = Number.isFinite(requested) && requested > 0 ? requested : budget;
   const timeout = Math.min(
     MAX_REPLY_WAIT_MS,
-    Math.max(MIN_REPLY_WAIT_MS, longRunningKind ? budget : requestedBudget),
+    Math.max(MIN_REPLY_WAIT_MS, requestedBudget),
   );
   return {
     kind,
@@ -13466,8 +13777,16 @@ function userMessageMatchesPrompt(message, prompt) {
   const expected = normalize(prompt);
   if (!expected) return true;
   if (actual.includes(expected) || expected.includes(actual)) return true;
-  const anchor = expected.slice(0, Math.min(48, expected.length));
-  return anchor.length >= 8 && actual.includes(anchor);
+  const leadingAnchor = expected.slice(0, Math.min(48, expected.length));
+  if (leadingAnchor.length >= 8 && actual.includes(leadingAnchor)) return true;
+  // Inline Skill/connector chips are serialized into the sent user bubble as
+  // visible labels. A chip placed immediately after the first word breaks an
+  // otherwise exact leading-prefix match (for example, "请 <Skill> 结合…").
+  // Bind on a substantial trailing prompt anchor as well; this remains scoped
+  // to the current user bubble and is long enough to avoid matching UI chrome.
+  const trailingLength = Math.min(48, Math.max(16, expected.length - 1));
+  const trailingAnchor = expected.slice(-trailingLength);
+  return trailingAnchor.length >= 16 && actual.includes(trailingAnchor);
 }
 
 function cleanAssistantText(text) {
@@ -13656,6 +13975,30 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const label = String(turn?.label || '');
   const result = (name, expected, ok, actual = clip(reply, 360)) => ({ applicable: true, name, expected, ok, actual });
   const notApplicable = { applicable: false };
+
+  if (id === 'SIT-MEM-001') {
+    const context = `${label}\n${prompt}`;
+    if (/验证偏好已删除|没有记录|没有固定偏好/.test(context)) {
+      const cleared = /没有|未记录|尚未|无固定|已删除|未设置/.test(reply)
+        && !/默认.{0,8}(?:Markdown|Excel|XLSX)/i.test(reply);
+      return result('记忆删除后的用户结果', '删除后新任务应明确没有固定测试报告格式，且不得继续宣称默认 Markdown 或 Excel。', cleared);
+    }
+    if (/删除报告格式偏好|请删除/.test(context)) {
+      return result('记忆删除操作确认', '应明确确认已删除测试报告格式偏好。', /已删除|删除成功|不再保留|已移除/.test(reply));
+    }
+    if (/读取 Excel 偏好|默认测试报告格式是什么/.test(context) && /Excel/.test(context)) {
+      return result('修改后跨任务记忆', '修改后新任务应回答默认格式为 Excel，且不得继续回答默认 Markdown。', /Excel|XLSX|\.xlsx\b/i.test(reply) && !/默认.{0,8}Markdown/i.test(reply));
+    }
+    if (/修改为 Excel 偏好|修改为 Excel|替换旧偏好/.test(context)) {
+      return result('记忆修改操作确认', '应明确确认默认测试报告格式已修改为 Excel。', /Excel|XLSX|\.xlsx\b/i.test(reply) && /已更新|已修改|已替换|记住/.test(reply));
+    }
+    if (/读取 Markdown 偏好|默认测试报告格式是什么/.test(context) && /Markdown/.test(context)) {
+      return result('初始跨任务记忆', '新任务应回答默认测试报告格式为 Markdown。', /Markdown|\.md\b/i.test(reply));
+    }
+    if (/记录 Markdown 偏好|请记住/.test(context)) {
+      return result('记忆写入操作确认', '应明确确认已记住默认使用 Markdown。', /Markdown|\.md\b/i.test(reply) && /已记住|已记录|会默认|已写入/.test(reply));
+    }
+  }
 
   if (id === 'SIT-WORKSPACE-001' && /未选择的同级目录|b-secret\.txt|重新授权/.test(prompt)) {
     const refusesBoundary = /拒绝|不能|无法|未授权|重新授权|授权工作空间|范围|目录/.test(reply);
@@ -14154,6 +14497,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/活动复盘|活动数据|复盘自动生成/, /活动|复盘|运营|归因|指标|口径|数据|报告|结论|需求/],
     [/产品经理|需求拆解|核心需求|PRD/, /产品|需求|场景|用户|流程|边界|指标|验收|MVP|风险/],
     [/当前可用连接器|获取外部信息|连接器不能使用/, /连接器|外部|信息|获取|工具|不可用|来源/],
+    [/已选的两个技能|两个\s*Skill|联合处理|两项能力/, /QA Node Runtime|QA Python Runtime|Node(?:\.js)?|Python|两个\s*Skill|两项能力|联合处理|pipeline/i],
     [/技能.*适合解决|使用我刚选择的技能/, /技能|适合|解决|能力|创建|更新|复用|方法/],
     [/(?:概括.*附件|附件.*概括|读取.*附件|当前保留.*附件|保留的两个附件)/, /附件|文本|结构化|JSON|概括|材料|文件/],
     [/(?:查看|读取|分析).*(?:图片|图像)|(?:图片|图像).*(?:内容|问题)/, /图片|图像|文字|图表|界面|数据|内容/],

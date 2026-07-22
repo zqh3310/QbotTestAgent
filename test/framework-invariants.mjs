@@ -80,6 +80,42 @@ assert.match(coreGateById.get('SIT-HOME-050').evidence_required, /搜索命中�
 assert.match(coreGateById.get('SIT-SKILL-026').precondition, /qa-python-runtime.*qa-node-runtime/, 'SKILL-026 必须使用两项确定性 Fixture');
 assert.match(coreGateById.get('SIT-SKILL-032').evidence_required, /原始请求.*只保存在脱敏证据 JSON/, 'SKILL-032 必须分离用户结论与原始证据');
 assert.match(coreGateById.get('SIT-TEAMS-DOC-001').steps, /按 key 选择 Teams Document QA/, 'Teams 文档必须按 key 显式选择连接器');
+assert.match(
+  runner,
+  /if \(projectSource !== 'gitlab'\)[\s\S]{0,500}普通项目使用当前选中运行时启动/,
+  '普通项目不得被 GitLab workspace.ready 前置条件误阻塞',
+);
+assert.match(
+  runner,
+  /selectManualSkillByName\(page, state, caseDir, skillName, \{ ensureMode: false \}\)/,
+  '多技能选择不得在每次点击前重复切换手动模式并清空上一技能',
+);
+assert.match(
+  runner,
+  /selectManualSkillByName\(page, state, caseDir, removedSkill, \{ ensureMode: false \}\)/,
+  '多技能恢复不得重复切换手动模式并清空未删除技能',
+);
+assert.match(
+  runner,
+  /saveProjectRuntimeBinding\(project\.id, selectedRuntime\.runtimeId, true\)/,
+  '专用 QA GitLab 项目未绑定时应通过产品 bridge 选择 enabled 运行时准备测试数据',
+);
+assert.match(
+  runner,
+  /Number\(b\.source !== 'gitlab'\) - Number\(a\.source !== 'gitlab'\)/,
+  '项目成果用例应优先复用现有普通项目，避免无谓选择未绑定的 GitLab 项目',
+);
+assert.doesNotMatch(
+  runner,
+  /!projectId \|\| \(selectedProject\?\.source === 'gitlab'/,
+  'createProject 不能被当作将未绑定 GitLab 项目转换为本地可执行项目的兜底',
+);
+assert.match(
+  runner,
+  /state\._composerPreparedSend[\s\S]{0,1400}composerUserTextValue/,
+  '能力 chip composer 发送前应剔除 chip 文本校验用户正文，不能用 fill 清空 selectedSkills',
+);
+assert.match(runner, /createProject bridge 20000ms 未返回/, '项目测试数据 bridge 必须有硬超时，不能拖满整条 Case');
 
 assert.deepEqual(
   forbiddenMatchesForCase('已收到：__DEEPBANK_E2E_ASK__', 'SIT-HITL-002'),
@@ -174,6 +210,16 @@ assert.equal(memoryLifecycleVerdict({
   excelReply: '默认格式仍是 Markdown。',
   deletedReply: '默认格式是 Excel。',
 }).ok, false, '记忆门禁必须拒绝旧值残留或删除后继续注入');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-MEM-001'),
+  { prompt: '我的默认测试报告格式是什么？', label: '新任务读取 Excel 偏好' },
+  '根据你此前的设定，你的默认测试报告格式是 Excel。',
+).ok, true, 'MEM-001 的直接偏好回答不应被通用相关性规则误报');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-MEM-001'),
+  { prompt: '如果没有记录，请明确说没有固定偏好。', label: '新任务验证偏好已删除' },
+  '当前没有关于默认测试报告格式的固定偏好记录。',
+).ok, true, 'MEM-001 删除后的直接回答应通过确定性用例断言');
 
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
@@ -200,7 +246,7 @@ const required = [
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
-  ['成果、长上下文和多轮任务使用十分钟等待预算', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*SIT-HOME-016[\s\S]*longRunningKind \? budget : requestedBudget/],
+  ['显式 Case timeout 可为全部真实 Agent/工具调用提供十分钟上限', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*SIT-HOME-016[\s\S]*requestedBudget = Number\.isFinite\(requested\)[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
   ['连接器刷新失败注入', /executeSitConnectorRefreshFailure[\s\S]*pathIncludes: '\/api\/connectors\/catalog\?refresh=force'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['技能安装中断注入', /executeSitSkillNetworkInterrupt[\s\S]*pathExact: '\/api\/skills\/install'[\s\S]*controlled network interruption[\s\S]*restoreControlPlaneHttpControl/],
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathPrefix: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
@@ -223,7 +269,19 @@ const required = [
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
   ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
+  ['#736 多 Skill 删除按钮限定在输入区 chip 内', /const firstChip = composer\.locator\([\s\S]*aria-label\^="移除"/],
+  ['技能安装以真实删除或卸载按钮优先判定成功', /waitForSkillInstallTerminal[\s\S]*installedAction[\s\S]*return \{ terminal: true, success: true[\s\S]*const pending/],
+  ['回复等待尊重显式 Case timeout', /const requestedBudget = Number\.isFinite\(requested\)[\s\S]*\? requested : budget[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
+  ['Teams 渲染层控制适配器保留请求体证据', /installRendererControlAdapter[\s\S]*requestArgs[\s\S]*requestBody/],
+  ['项目 Fixture 创建后通过真实导航刷新而非 reload WebView', /createProject bridge[\s\S]*nav-new-task[\s\S]*refreshedProjectsNav/],
+  ['旧版项目占位页改走可见空间入口并回读项目成果', /executeLegacyProjectArtifactTask[\s\S]*sidebar-space-project-[\s\S]*runPromptInCurrentTask[\s\S]*getSessionArtifacts[\s\S]*项目成果持久化关联项目任务/],
+  ['知识入口兼容 nav-more 且占位页归为产品缺口', /(?=[\s\S]*knowledgeNavigationLocator[\s\S]*nav-knowledge[\s\S]*nav-more)(?=[\s\S]*知识页按任务汇总正式成果)(?=[\s\S]*后续开放)/],
+  ['周报数字事实比较兼容千分位', /normalizedFacts = content\.replace[\s\S]*周报成果结构与事实回读/],
+  ['对话创建专家覆盖召唤和首页真实问答', /executeSitExpertConversationCreateClosedLoop[\s\S]*summonCreatedExpertByName[\s\S]*首页选择新专家后的需求评审[\s\S]*对话创建专家可从首页选择并使用/],
+  ['破坏性操作精确点击新版确认按钮且缺失时不判通过', /(?=[\s\S]*confirmDestructiveAction[\s\S]*data-testid\$="-confirm"[\s\S]*custom-dialog-missing-confirm)(?=[\s\S]*\['native-confirm', 'custom-dialog'\]\.includes\(dialog\.source\))/],
+  ['破坏性确认文案兼容“确定删除”与“确定要删除”', /confirmationCopy = \/确认\|确定\(\?:要\)\?\(\?:删除\|卸载\|移除\)/],
   ['SKILL-026 预装两项确定性 Fixture 并进入真实 Fixture 路由', /SIT-SKILL-026'[\s\S]*qa-python-runtime[\s\S]*qa-node-runtime[\s\S]*skill_fixture_multi_select_setup/],
+  ['SKILL-026 只选择刚预装的两项 Fixture 而非创建技能入口', /executeSitSkillMultiSelect[\s\S]*QA Python Runtime[\s\S]*QA Node Runtime[\s\S]*selectManualSkillByName/],
   ['多 Skill 恢复前清理 chip 装饰符号', /cleanSkillChipLabel[\s\S]*✦★☆◆◇•·[\s\S]*trim\(\)/],
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],
   ['附件源文件在上传前记录非零字节证据', /attachment_sources[\s\S]*附件源文件非空[\s\S]*size_bytes/],
@@ -277,7 +335,7 @@ const required = [
   ['连接器 dev Fixture 缺入口进入产品断言而非阻塞', /executeSitConnectorRetry[\s\S]*unreachable 连接器重试入口[\s\S]*executeSitConnectorAuthDialog[\s\S]*needs_auth 连接器授权入口[\s\S]*executeSitConnectorManualUnhealthyOption[\s\S]*手动菜单展示不可用连接器状态/],
   ['项目成果用例创建真实项目和项目任务', /(?=[\s\S]*executeSitProjectArtifactCase)(?=[\s\S]*QBot QA 自动化项目)(?=[\s\S]*project-tasks-view)(?=[\s\S]*project-task-launch)(?=[\s\S]*project_result\.md)(?=[\s\S]*project_weekly_report\.md)/],
   ['项目详情态可直接复用而不误找创建按钮', /executeSitProjectArtifactCase[\s\S]*workspaceAlreadyVisible[\s\S]*复用当前已打开项目详情[\s\S]*proceed directly to runtime/],
-  ['bridge 创建项目后刷新 Teams 列表再从 UI 打开', /createProject[\s\S]*page\.reload\([\s\S]*waitForQbotWorkbench[\s\S]*project-card-/],
+  ['bridge 创建项目后重挂载 Teams 项目列表再从 UI 打开', /createProject[\s\S]*nav-new-task[\s\S]*nav-projects[\s\S]*project-card-/],
   ['项目入口缺失进入产品断言而非数据阻塞', /executeSitProjectArtifactCase[\s\S]*项目导航入口[\s\S]*项目任务输入与启动入口/],
   ['受控 Fixture/代理失败统一归自动化错误', /框架无法安装控制面代理会话失败注入[\s\S]*automation_error[\s\S]*框架无法构造专家空市场[\s\S]*automation_error[\s\S]*框架无法构造“无已安装技能”视图[\s\S]*automation_error[\s\S]*框架无法安装控制面代理连接器状态注入[\s\S]*automation_error[\s\S]*框架无法构造连接器空目录[\s\S]*automation_error/],
   ['处理器直接终止的失败不会被收尾逻辑覆盖成通过', /function finalizeState\(state\) \{[\s\S]*state\.status === 'failed' && state\.actual_result[\s\S]*state\.status = 'passed'/],
@@ -303,6 +361,7 @@ const required = [
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
   ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
   ['CONN-019 真实执行 Web 搜索并断言官方来源日期与工具证据', /SIT-CONN-019'[\s\S]*executeSitConnectorWebSearchQuality[\s\S]*webSearchQualityVerdict[\s\S]*Web 搜索新鲜度、相关性与可追溯性/],
+  ['CONN-019 日期证据兼容带空格的中文年月日', /dateEvidence = \([\s\S]*20\\d\{2\}\\s\*[\s\S]*年[\s\S]*月[\s\S]*日/],
   ['KNOWLEDGE-001 生成成果后进入知识页并回到来源任务', /SIT-KNOWLEDGE-001'[\s\S]*executeSitKnowledgeClosedLoop[\s\S]*knowledge_gate\.md[\s\S]*知识成果可回到来源任务复核/],
   ['ART-024 在 iframe 或 webview 中点击交互 HTML 且验证宿主隔离', /SIT-ART-024[\s\S]*interactive_preview\.html[\s\S]*interactWithEmbeddedArtifactPreview[\s\S]*__QBOT_PREVIEW_ESCAPE__/],
   ['ART-CONFIRM-001 必须操作显性确认并核验正式成果唯一入库', /SIT-ART-CONFIRM-001'[\s\S]*executeSitArtifactConfirmationGate[\s\S]*正式成果显性确认入口[\s\S]*正式成果唯一入库且临时\/失败产物不污染/],
@@ -660,6 +719,13 @@ if (!replyLooksRelevant('已成功读取附件 qbot-text-brief.txt（共 228 字
 }, '请读取我上传的附件，概括主要内容，并说明这些材料能支持什么结论。')) {
   throw new Error('TXT 附件真实读取和概括不应被相关性启发式误判');
 }
+if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负责 Node.js 生成数据，QA Python Runtime 负责 Python 分析数据，下面执行一次联合处理。', {
+  id: 'SIT-SKILL-026',
+  scenario: '手动多 Skill 以内联 chip 共存，删除/恢复任一 chip 后选择状态同步且强走列表准确',
+  test_data: '选择两个技能并完成联合处理',
+}, '请结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。')) {
+  throw new Error('多 Skill 联合处理的真实回复不应被通用相关性启发式误判');
+}
 if (attachmentReplyMissingEvidence(
   '附件读取完成：qbot-pdf-summary.pdf，读取成功。下面是主要内容和结论摘要。如需分析其它文件，请重新上传。',
   ['/tmp/qbot-pdf-summary.pdf'],
@@ -724,6 +790,18 @@ const promptBoundReply = latestAssistantReplyForPrompt({
   ],
 }, '报名人数是多少？');
 if (promptBoundReply !== '报名人数是 100 人。') throw new Error(`回复必须按本轮用户消息绑定，实际=${promptBoundReply}`);
+const inlineSkillPromptBoundReply = latestAssistantReplyForPrompt({
+  messages: [
+    {
+      role: 'user',
+      text: '请 QA Node Runtime Skill 不可用 结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。 QA Python Runtime Skill 不可用',
+    },
+    { role: 'assistant', text: '两个 Fixture 都已成功执行，并分别验证了 Node 与 Python 运行时。' },
+  ],
+}, '请结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。');
+if (!/Node 与 Python/.test(inlineSkillPromptBoundReply)) {
+  throw new Error(`内联技能 chip 文本不得破坏本轮回复归属，实际=${inlineSkillPromptBoundReply}`);
+}
 if (isSuccessfulSendStep({ action: '输入删除一个附件后发送', status: 'passed' })) throw new Error('输入动作名称包含“发送”时不能计为真实发送');
 if (!isSuccessfulSendStep({ action: '发送删除附件后的问题', status: 'passed' })) throw new Error('明确以“发送”开头的动作应计为真实发送');
 if (isSuccessfulSendStep({ action: '发送组合能力会话前最终输入一致性复核', status: 'passed' })) throw new Error('发送前审计动作不能计为真实发送');

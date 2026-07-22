@@ -22,10 +22,13 @@ const ROOT = path.resolve(HERE, '../..');
 const TEAMS_OUTPUT_ROOT = path.resolve(HERE, '../output');
 const TEAMS_RUNTIME_ROOT = path.resolve(HERE, '../runtime');
 const TEAMS_CONTROL_PLANE_HOME = path.resolve(HERE, '../state/control-plane-home');
-const DEFAULT_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-main-b408a07a');
+const CURRENT_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-origin-main');
+const LEGACY_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-main-b408a07a');
 const DEEPBANK_ROOT = process.env.QBOT_TEAMS_FIXTURE_QBOT_ROOT
-  || (fs.existsSync(path.join(DEFAULT_FIXTURE_DEEPBANK_ROOT, 'package.json'))
-    ? DEFAULT_FIXTURE_DEEPBANK_ROOT
+  || (fs.existsSync(path.join(CURRENT_FIXTURE_DEEPBANK_ROOT, 'package.json'))
+    ? CURRENT_FIXTURE_DEEPBANK_ROOT
+    : fs.existsSync(path.join(LEGACY_FIXTURE_DEEPBANK_ROOT, 'package.json'))
+      ? LEGACY_FIXTURE_DEEPBANK_ROOT
     : path.resolve(ROOT, '../deepbankV2'));
 const RECOVERABLE_TEAMS_FRAMEWORK_PATTERNS = [
   /Target page, context or browser has been closed/i,
