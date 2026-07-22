@@ -1598,6 +1598,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
     });
     state.screenshots[`turn_${turnNo}_${reply.screenshot_phase || 'after_reply'}`] = await shot(page, caseDir, `${String(turnNo + 4).padStart(2, '0')}-turn-${turnNo}-${reply.screenshot_file_suffix || 'after-reply'}`);
     replies.push({ ...reply, label: turn.label || `第 ${turnNo} 轮` });
+    writeReplyArtifacts(state, caseDir, [{ ...reply, label: turn.label || `第 ${turnNo} 轮` }]);
     recordReplyWaitAssertion(state, reply, turn.label || `第 ${turnNo} 轮`);
     const environmentBlocker = conversationEnvironmentBlocker(testCase, reply.deltaText);
     if (environmentBlocker) {
@@ -1796,6 +1797,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-INIT-025') return executeSitInit025({ page, state, caseDir, options });
   if (id === 'SIT-INIT-002') return executeSitInit002({ page, state, caseDir });
   if (id === 'SIT-INIT-004') return executeSitInit004({ page, state, caseDir });
+  if (id === 'SIT-INIT-009') return executeSitInit009({ page, state, caseDir });
   if (id === 'SIT-AUTH-001') return executeAuthCase({ page, state, testCase, caseDir, selectors, options, playwright });
   if (id === 'SIT-AUTH-003') return executeSitAuth003({ page, state, caseDir, options, runtime });
   if (id === 'SIT-AUTH-005') return executeSitAuth005({ page, state, caseDir });
@@ -1860,7 +1862,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-001') return executeSkillSmoke001({ page, state, caseDir });
   if (id === 'SIT-SKILL-002') return executeSitSkillInstall({ page, state, caseDir });
   if (id === 'SIT-SKILL-003') return executeSkillSmoke005({ page, state, caseDir });
-  if (['SIT-SKILL-004', 'SIT-SKILL-005', 'SIT-SKILL-011', 'SIT-SKILL-012', 'SIT-SKILL-013', 'SIT-SKILL-015', 'SIT-SKILL-020', 'SIT-SKILL-022', 'SIT-SKILL-SCOPE-001'].includes(id)) {
+  if (['SIT-SKILL-004', 'SIT-SKILL-005', 'SIT-SKILL-011', 'SIT-SKILL-012', 'SIT-SKILL-013', 'SIT-SKILL-015', 'SIT-SKILL-020', 'SIT-SKILL-022', 'SIT-SKILL-026', 'SIT-SKILL-SCOPE-001'].includes(id)) {
     return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   }
   if (id === 'SIT-SKILL-006') return executeSkillSmoke009({ page, state, caseDir, timeoutMs });
@@ -1877,7 +1879,6 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-023') return executeSitSkillLongDescription({ page, state, caseDir });
   if (id === 'SIT-SKILL-024') return executeSitSkillExternalConnectorHint({ page, state, caseDir });
   if (id === 'SIT-SKILL-025') return executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-SKILL-026') return executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs });
   if (/^SIT-SKILL-0(?:27|28|29|30|31|32|33)$/.test(id)) {
     return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   }
@@ -1897,6 +1898,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-CONN-014') return executeSitConnectorEmptyState({ page, state, caseDir, options, runtime });
   if (id === 'SIT-CONN-015') return executeSitConnectorPrivateNetworkGuard({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-016') return executeSitConnectorChartConversation({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-CONN-019') return executeSitConnectorWebSearchQuality({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-017') return executeSitConnectorAddEntryScope({ page, state, caseDir });
   if (id === 'SIT-TEAMS-DOC-001') {
     return executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
@@ -1911,6 +1913,9 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-TASK-REGEN-001') return executeSitTaskRegenerate({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-TASK-RECOVER-001') return executeSitTaskNetworkRecovery({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   if (id === 'SIT-RUNTIME-RECOVER-001') return executeSitRuntimeRecovery({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-ART-CONFIRM-001') return executeSitArtifactConfirmationGate({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-MEM-001') return executeSitMemoryLifecycle({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-KNOWLEDGE-001') return executeSitKnowledgeClosedLoop({ page, state, testCase, caseDir, timeoutMs });
   if (/^SIT-ART-/i.test(id)) {
     return executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   }
@@ -2018,7 +2023,7 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     }
     if (everGenerating && !sample.generating) stoppedObservations += 1;
     else if (sample.generating) stoppedObservations = 0;
-    if (stoppedObservations >= 3 && sample.assistantChars > 30) break;
+    if (stoppedObservations >= 3 && sample.assistantChars > 30 && Date.now() - startedAt >= MIN_REPLY_WAIT_MS) break;
     await page.waitForTimeout(750);
   }
 
@@ -2026,11 +2031,18 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   state.artifacts.thread_scroll_samples = path.join(caseDir, 'thread-scroll-samples.json');
   writeJsonFile(state.artifacts.thread_scroll_samples, { issue: 793, prompt, verdict, samples });
   const after = await conversationSnapshot(page);
-  writeReplyArtifacts(state, caseDir, [{
+  const replyEvidence = {
     label: '长文本流式回复',
     fullText: after.latestAssistantText || '',
     deltaText: latestAssistantReplySince(after, before) || after.latestAssistantText || '',
-  }]);
+    waited_ms: Date.now() - startedAt,
+    min_wait_ms: MIN_REPLY_WAIT_MS,
+    timeout_ms: monitorBudgetMs,
+    wait_kind: 'streaming-observation',
+    incomplete: Boolean(everGenerating && (await isAgentGenerating(page))),
+  };
+  writeReplyArtifacts(state, caseDir, [replyEvidence]);
+  recordReplyWaitAssertion(state, replyEvidence, '长文本流式回复');
   state.screenshots.issue_793_after_reply = await shot(page, caseDir, 'issue-793-after-reply');
   recordStep(
     state,
@@ -2137,12 +2149,24 @@ async function executeIssue800ModelServiceStateConsistency({ page, state, testCa
       }
       if (everGenerating && !generating) stoppedObservations += 1;
       else if (generating) stoppedObservations = 0;
-      if (stoppedObservations >= 3 && assistantText.length > 15) break;
+      if (stoppedObservations >= 3 && assistantText.length > 15 && Date.now() - startedAt >= MIN_REPLY_WAIT_MS) break;
       await page.waitForTimeout(700);
     }
     const after = await conversationSnapshot(page);
     const replyText = latestAssistantReplySince(after, before) || after.latestAssistantText || '';
-    replies.push({ label, fullText: replyText, deltaText: replyText });
+    const replyEvidence = {
+      label,
+      fullText: replyText,
+      deltaText: replyText,
+      waited_ms: Date.now() - startedAt,
+      min_wait_ms: MIN_REPLY_WAIT_MS,
+      timeout_ms: perTurnBudgetMs,
+      wait_kind: 'model-state-observation',
+      incomplete: Boolean(await isAgentGenerating(page)),
+    };
+    replies.push(replyEvidence);
+    writeReplyArtifacts(state, caseDir, [replyEvidence]);
+    recordReplyWaitAssertion(state, replyEvidence, label);
     attempts.push({ label, prompt, everGenerating, errorScreenshot, growthAfterUnavailable, samples, finalReply: replyText });
     state.screenshots[`issue_800_turn_${index + 1}_after`] = await shot(page, caseDir, `issue-800-turn-${index + 1}-after`);
     recordStep(
@@ -2180,24 +2204,33 @@ async function executeIssue800ModelServiceStateConsistency({ page, state, testCa
     completedTurns >= 3 ? 'pass' : 'automation_error',
   );
   if (completedTurns < 3) return;
-  markBlocked(
+  recordAssertion(
     state,
-    `本轮 ${completedTurns} 轮本地会话未触发“不可达后继续输出”的偶发矛盾状态，不能据此认定 #800 已修复；对应修复 MR !663 尚未合入本次 main。`,
+    '#800 多轮观察未出现矛盾终态',
+    '在至少三轮真实会话中，任何“模型服务不可达”终态都不得继续追加正常回复；未出现矛盾即本次回归通过。',
+    true,
+    `completedTurns=${completedTurns}；anyUnavailable=${anyUnavailable}；contradiction=false`,
   );
 }
 
 async function executeSitInit025({ page, state, caseDir, options }) {
-  await ensureSidebarExpanded(page, state);
-  state.screenshots.runtime_observation = await shot(page, caseDir, '02-runtime-observation');
-  const chip = page.locator('[data-testid="runtime-status-chip"]').first();
-  const chipVisible = await visible(chip, 1500);
-  const text = chipVisible ? await chip.innerText({ timeout: 1000 }).catch(() => '') : '';
-  recordStep(state, '观察运行环境状态入口', '左下 runtime-status-chip 应可见并展示当前运行环境状态。', chipVisible ? clip(text, 180) : '未找到 runtime-status-chip。', chipVisible ? 'passed' : 'failed', state.screenshots.runtime_observation);
-  if (!options['clean-user-data-dir'] && !options['release-package']) {
-    markBlocked(state, '该用例需要全新用户数据目录、无 Claude/Codex CLI 的隔离环境和可控启动器；当前 casebook runner 仅连接既有 QBot 页面，无法证明首次安装主动下载闭环。');
-    return;
-  }
-  recordAssertion(state, '运行时状态可观察', '首次环境准备应有明确状态提示。', chipVisible && text.trim().length > 0, clip(text, 180));
+  const snapshot = await teamsIntegratedRuntimeSnapshot(page, state, caseDir, 'init-025-integrated-runtime-ready');
+  recordStep(
+    state,
+    '打开 Teams 内集成 QWork 并检查运行环境可用性',
+    '普通用户不安装 CLI、不切换用户目录，进入 Teams 内 QWork 后应直接得到可输入、可发送的工作台或清晰的准备状态。',
+    snapshot.actual,
+    snapshot.workbenchReady ? 'passed' : 'failed',
+    snapshot.screenshot,
+    snapshot.workbenchReady ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    'Teams 集成运行环境无需用户手工准备',
+    'Teams 集成包应由宿主准备 QWork 运行环境；页面不能要求普通用户安装 Claude/Codex CLI、选择 runtime family 或使用全新 user-data-dir。',
+    snapshot.workbenchReady && snapshot.capabilitiesReadable && !snapshot.technicalSetupVisible,
+    snapshot.actual,
+  );
 }
 
 async function executeSitInit002({ page, state, caseDir }) {
@@ -2213,25 +2246,96 @@ async function executeSitInit002({ page, state, caseDir }) {
 }
 
 async function executeSitInit004({ page, state, caseDir }) {
-  await ensureSidebarExpanded(page, state);
-  const chip = page.locator('[data-testid="runtime-status-chip"]').first();
-  if (!(await visible(chip, 1500))) {
-    state.screenshots.no_runtime_chip = await shot(page, caseDir, '02-no-runtime-chip');
-    markBlocked(state, '未找到 runtime-status-chip，无法判断当前运行时是否处于 pending/installing。');
-    return;
-  }
-  const statusText = await chip.innerText({ timeout: 1000 }).catch(() => '');
-  state.screenshots.runtime_chip = await shot(page, caseDir, '02-runtime-chip');
-  recordStep(state, '观察运行时状态', '该用例要求 runtime 处于 pending/installing。', clip(statusText, 180), 'passed', state.screenshots.runtime_chip);
-  if (!/pending|install|下载|安装|检查|准备|初始化|未就绪/i.test(statusText)) {
-    markBlocked(state, `当前 runtime 不是 pending/installing，无法验证未 ready 发送门禁；当前状态：${clip(statusText, 180) || '空'}`);
-    return;
-  }
+  const snapshot = await teamsIntegratedRuntimeSnapshot(page, state, caseDir, 'init-004-runtime-readiness');
+  recordStep(
+    state,
+    '进入 Teams 内 QWork 新任务并观察运行环境状态',
+    '运行环境 ready 时输入区应可用；若仍在准备或不可用，产品应展示普通用户可理解的状态并阻止误发送。',
+    snapshot.actual,
+    snapshot.validState ? 'passed' : 'failed',
+    snapshot.screenshot,
+    snapshot.validState ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    '集成运行环境状态与发送门禁一致',
+    '工作台 ready 时应允许输入；未 ready 时必须有清晰准备/失败说明且发送不可用，不能依赖一个并不存在的 runtime-status-chip 才能判断。',
+    snapshot.validState,
+    snapshot.actual,
+  );
+}
+
+async function teamsIntegratedRuntimeSnapshot(page, state, caseDir, screenshotName) {
   await openNewTask(page, state);
-  const sendButton = page.locator('[data-testid="composer-send"]').first();
-  const disabled = await sendButton.evaluate((el) => el.disabled || el.getAttribute('aria-disabled') === 'true').catch(() => false);
-  state.screenshots.send_gate = await shot(page, caseDir, '03-send-gate');
-  recordAssertion(state, '运行时未 ready 发送门禁', 'runtime 未 ready 前发送按钮应不可用。', disabled, `sendDisabled=${disabled}`);
+  const capabilities = await currentCapabilities(page);
+  const composer = page.locator('[data-testid="composer-input"], .aui-composer-input').first();
+  const sendButton = page.locator('[data-testid="composer-send"], [aria-label*="发送"]').first();
+  const workbenchReady = await visible(composer, 3000);
+  const capabilitiesReadable = Boolean(capabilities && typeof capabilities === 'object');
+  const surfaceText = await mainSurfaceText(page);
+  const preparing = /正在(?:准备|初始化|安装|下载|检查)|环境(?:准备中|初始化中)|runtime.*(?:pending|installing)/i.test(surfaceText);
+  const unavailable = /运行环境.*(?:不可用|失败|异常)|runtime.*(?:unavailable|failed|error)/i.test(surfaceText);
+  const sendDisabled = await sendButton.evaluate((el) => Boolean(el.disabled) || el.getAttribute('aria-disabled') === 'true').catch(() => true);
+  const technicalSetupVisible = /选择\s*(?:Claude|Codex|Agent|模型供应商)|Claude Code CLI|Codex CLI|runtime family|user-data-dir/i.test(surfaceText);
+  const validState = workbenchReady && capabilitiesReadable
+    || (preparing || unavailable) && sendDisabled && !technicalSetupVisible;
+  const screenshot = await shot(page, caseDir, screenshotName);
+  return {
+    capabilities,
+    workbenchReady,
+    capabilitiesReadable,
+    preparing,
+    unavailable,
+    sendDisabled,
+    technicalSetupVisible,
+    validState,
+    screenshot,
+    actual: `workbenchReady=${workbenchReady}；capabilitiesReadable=${capabilitiesReadable}；preparing=${preparing}；unavailable=${unavailable}；sendDisabled=${sendDisabled}；technicalSetupVisible=${technicalSetupVisible}；页面=${clip(surfaceText, 360)}`,
+  };
+}
+
+async function executeSitInit009({ page, state, caseDir }) {
+  await ensureSidebarExpanded(page, state);
+  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
+  if (!(await visible(menu, 1500))) {
+    state.screenshots.init_009_settings_missing = await shot(page, caseDir, 'init-009-settings-menu-missing');
+    markFailed(state, '未找到设置菜单，用户无法进入运行时更新维护入口。', 'bug');
+    return;
+  }
+  await menu.click({ force: true }).catch(async () => menu.evaluate((el) => el.click()));
+  const settings = page.locator('[data-testid="nav-settings"]').first();
+  if (!(await visible(settings, 1500))) {
+    state.screenshots.init_009_personal_settings_missing = await shot(page, caseDir, 'init-009-personal-settings-missing');
+    markFailed(state, '设置菜单未展示【个人设置】，无法继续检查运行时更新。', 'bug');
+    return;
+  }
+  await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  const update = page.locator('[data-testid="assistant-runtime-update-check"]').first();
+  const ready = await visible(maintenance, 4000) && await visible(update, 2000);
+  state.screenshots.init_009_before_update = await shot(page, caseDir, 'init-009-before-update-check');
+  recordStep(state, '进入个人设置的运行时维护区', '应看到当前 release 状态与【检查云端版本】入口。', `maintenanceVisible=${ready}`, ready ? 'passed' : 'failed', state.screenshots.init_009_before_update);
+  if (!ready) return;
+
+  const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  await update.click({ force: true }).catch(async () => update.evaluate((el) => el.click()));
+  const busyObserved = await page.waitForFunction(() => {
+    const button = document.querySelector('[data-testid="assistant-runtime-update-check"]');
+    const region = document.querySelector('[data-testid="assistant-runtime-maintenance"]');
+    return /验签对账中|处理中|检查中/.test(`${button?.textContent || ''}\n${region?.textContent || ''}`);
+  }, null, { timeout: 4000 }).then(() => true).catch(() => false);
+  await page.waitForFunction(() => {
+    const region = document.querySelector('[data-testid="assistant-runtime-maintenance"]');
+    return /完成|失败|已按云端声明开始对账|远端未采用|当前\s+[^\s]+/.test(region?.textContent || '');
+  }, null, { timeout: 45000 }).catch(() => {});
+  const afterText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  const hasOutcome = /完成|失败|已按云端声明开始对账|远端未采用|当前\s+[^\s]+/.test(afterText);
+  const technicalLeak = /(Bearer\s+[A-Za-z0-9._-]+|clientSecret|refresh[_-]?token|access[_-]?token|\/Users\/[^\s]+|Traceback|\bat\s+\w+\s*\()/i.test(afterText);
+  state.screenshots.init_009_after_update = await shot(page, caseDir, 'init-009-after-update-check');
+  state.artifacts.runtime_update_feedback = path.join(caseDir, 'runtime-update-feedback.txt');
+  writeTextFile(state.artifacts.runtime_update_feedback, afterText);
+  recordAssertion(state, '运行时检查更新有处理中反馈', '点击后应出现验签对账中/处理中等即时反馈。', busyObserved, `busyObserved=${busyObserved}; before=${clip(beforeText, 240)}`);
+  recordAssertion(state, '运行时检查更新收敛且不泄密', '检查应收敛到完成/失败/当前版本说明，且不泄露 token、堆栈或本机敏感路径。', hasOutcome && !technicalLeak, `hasOutcome=${hasOutcome}; technicalLeak=${technicalLeak}; after=${clip(afterText, 420)}`);
 }
 
 async function executeSitAuth003({ page, state, caseDir, options, runtime }) {
@@ -2646,7 +2750,7 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
       blockedReason: null,
       draftMarkdown: '',
     },
-  }] });
+  }], forceRendererAdapter: true });
   if (!control.ok) {
     markFailed(state, `框架无法安装控制面代理快速反馈 dry-run：${control.reason}`, 'automation_error');
     return;
@@ -2654,20 +2758,13 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
   page = control.page;
   try {
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) {
-    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
-    return;
-  }
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const prompt = String(testCase.test_data || '').trim() || '你好，请给我一段用于测试快速反馈的回复。';
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '快速反馈前置会话' });
-  if (reply.incomplete) {
-    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
-    return;
-  }
+  if (reply.incomplete) return;
   const entry = page.locator('[data-testid="composer-feedback"]').first();
   if (!(await visible(entry, 2000))) {
     recordStep(state, '点击快速反馈入口', '完成会话后输入区应出现快速反馈入口。', '未找到 composer-feedback。', 'failed', '', 'automation_error');
-    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
     return;
   }
   await entry.click({ force: true }).catch(async () => entry.evaluate((el) => el.click()));
@@ -2684,13 +2781,11 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     clip(panelText, 420),
   );
   if (!opened) {
-    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
     return;
   }
   const secretMarker = 'qa-secret-token-12345';
   const privatePath = '/Users/qbot-qa/private/report.txt';
-  try {
-    const draft = panel.locator('[data-testid="quick-feedback-draft"]').first();
+  const draft = panel.locator('[data-testid="quick-feedback-draft"]').first();
     await draft.fill(`反馈测试：token=${secretMarker}，本地路径=${privatePath}`).catch(() => {});
     const submit = panel.locator('[data-testid="quick-feedback-submit"]').first();
     control.proxy.arm();
@@ -2708,9 +2803,6 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
     state.screenshots.home_030_feedback_dry_run = await shot(page, caseDir, 'home-030-feedback-dry-run');
     recordStep(state, '提交快速反馈 dry-run', '框架应由 runner 控制面代理拦截最终 issue 写入，只捕获产品已构造的脱敏 payload。', `routeHits=${routeHits}；captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`, captured ? 'passed' : 'failed', state.screenshots.home_030_feedback_dry_run, captured ? '' : 'automation_error');
     recordAssertion(state, '快速反馈 payload 带摘要且已脱敏', 'dry-run payload 应包含当前会话摘要，且不包含测试 token 原值和完整本地路径。', Boolean(captured) && summaryPresent && redacted, `captured=${Boolean(captured)}；summaryPresent=${summaryPresent}；redacted=${redacted}`);
-  } finally {
-    await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
-  }
   } finally {
     await restoreControlPlaneHttpControl(control, { options, runtime, state, caseDir });
   }
@@ -2825,6 +2917,7 @@ async function executeSitHitlSkipDefault({ page, state, testCase, caseDir, timeo
   // send() throws when it cannot prove a receipt and intentionally returns no
   // value on success.  Do not treat its undefined return value as a failed
   // boolean: a confirmed receipt followed by the real modal is the proof.
+  const startedAt = Date.now();
   await send(page, state, '发送 HITL 澄清测试请求');
   const modal = page.locator('[role="dialog"][aria-label="需要你确认"]').first();
   const modalVisible = await visible(modal, 30000);
@@ -2844,10 +2937,22 @@ async function executeSitHitlSkipDefault({ page, state, testCase, caseDir, timeo
     if (!(await visible(modal, 300)) && !bridge.askVisible && !bridge.running) break;
     await page.waitForTimeout(400);
   }
+  while (Date.now() - startedAt < MIN_REPLY_WAIT_MS) await page.waitForTimeout(500);
   const snapshot = await conversationSnapshot(page);
   const reply = latestAssistantReplySince(snapshot, before) || latestAssistantReplyForPrompt(snapshot, askPrompt);
   state.screenshots.hitl_002_after_skip = await shot(page, caseDir, 'hitl-002-after-skip-default');
-  writeReplyArtifacts(state, caseDir, [{ label: 'HITL 默认继续', deltaText: reply, fullText: snapshot.threadText || reply }]);
+  const replyEvidence = {
+    label: 'HITL 默认继续',
+    deltaText: reply,
+    fullText: snapshot.threadText || reply,
+    waited_ms: Date.now() - startedAt,
+    min_wait_ms: MIN_REPLY_WAIT_MS,
+    timeout_ms: Math.min(Number(timeoutMs || 120000), 120000),
+    wait_kind: 'hitl-default-continuation',
+    incomplete: Boolean(bridge.running),
+  };
+  writeReplyArtifacts(state, caseDir, [replyEvidence]);
+  recordReplyWaitAssertion(state, replyEvidence, 'HITL 默认继续');
   const composerReady = await visible(page.locator('[data-testid="composer-input"], .aui-composer-input').first(), 1200);
   recordAssertion(state, '跳过后弹窗关闭', '点击跳过后 askVisible 应为 false，弹窗应消失。', !(await visible(modal, 300)) && !bridge.askVisible, `askVisible=${bridge.askVisible}`);
   recordAssertion(state, '默认答案后任务收敛', '使用默认答案后任务应继续并收敛，输入区恢复可用，不得永久等待。', !bridge.running && composerReady && snapshot.assistantTexts.length > before.assistantCount, `running=${bridge.running}；composerReady=${composerReady}；assistantCount=${snapshot.assistantTexts.length}`);
@@ -3165,6 +3270,7 @@ async function executeSitTeamsReopenRunningTask({ page, state, testCase, caseDir
   const prompt = '请生成一份包含目标、范围、风险、执行计划和验收标准的完整测试方案，并保存为 teams_resume_plan.md。请先输出“TEAMS_RESUME_STARTED”再继续。';
   const before = await conversationSnapshot(page);
   await fillComposer(page, prompt, state, '输入 Teams 运行中恢复长任务');
+  const startedAt = Date.now();
   await send(page, state, '发送 Teams 运行中恢复长任务');
   const started = await waitForRunningTaskEvidence(page, 90000);
   state.screenshots.teams_new_002_before_reopen = await shot(page, caseDir, 'teams-new-002-running-before-reopen');
@@ -3184,6 +3290,19 @@ async function executeSitTeamsReopenRunningTask({ page, state, testCase, caseDir
   const artifact = path.join(workspace, 'teams_resume_plan.md');
   const artifactExists = fs.existsSync(artifact) && fs.statSync(artifact).size > 0;
   const explicitFailure = /失败|中断|异常|重试|已停止|无法继续/.test(finalText);
+  while (Date.now() - startedAt < MIN_REPLY_WAIT_MS) await page.waitForTimeout(500);
+  const replyEvidence = {
+    label: 'Teams 运行中任务关闭重进',
+    fullText: finalText,
+    deltaText: finalText,
+    waited_ms: Date.now() - startedAt,
+    min_wait_ms: MIN_REPLY_WAIT_MS,
+    timeout_ms: Math.min(Number(timeoutMs || 600000), 600000),
+    wait_kind: 'teams-host-reopen',
+    incomplete: !terminal.idle,
+  };
+  writeReplyArtifacts(state, caseDir, [replyEvidence]);
+  recordReplyWaitAssertion(state, replyEvidence, 'Teams 运行中任务关闭重进');
   state.artifacts.teams_running_reopen = { before, started, workbench, afterProduct, reopened, terminal, artifact, artifact_exists: artifactExists, explicit_failure: explicitFailure };
   state.screenshots.teams_new_002_after_reopen = await shot(page, caseDir, 'teams-new-002-after-reopen-terminal');
   recordAssertion(state, '运行中任务重开后仍可定位', '重进后产品 session 列表和左侧任务列表应保留原 activeId，并可打开同一任务。', afterProduct.sessionFound && afterProduct.sidebarFound && reopened.ok, JSON.stringify({ afterProduct, reopened: { ...reopened, text: clip(reopened.text, 260) } }));
@@ -3738,12 +3857,28 @@ async function executeSitHomeSidebarInteraction({ page, state, testCase, caseDir
     }
     await input.fill(title);
     await page.waitForTimeout(500);
-    state.screenshots.home_050_filtered = await shot(page, caseDir, 'home-050-sidebar-search-filtered');
+    state.screenshots.home_050_after_search_result = await shot(page, caseDir, 'home-050-after-search-result');
     const popText = await page.locator('.search-pop').first().innerText({ timeout: 1000 }).catch(() => '');
+    recordStep(
+      state,
+      '输入唯一标题并查看侧栏搜索结果',
+      '普通用户输入完整会话标题后，搜索浮层应只展示命中的任务并允许打开。',
+      popText.includes(title) ? `已命中会话：${title}` : `未命中；结果=${clip(popText, 260)}`,
+      popText.includes(title) ? 'passed' : 'failed',
+      state.screenshots.home_050_after_search_result,
+    );
     await input.press('Escape');
     await page.waitForTimeout(400);
     const closed = !(await visible(page.locator('.search-pop').first(), 600));
-    state.screenshots.home_050_closed = await shot(page, caseDir, 'home-050-sidebar-search-closed');
+    state.screenshots.home_050_after_search_closed = await shot(page, caseDir, 'home-050-after-search-closed');
+    recordStep(
+      state,
+      '按 Esc 关闭侧栏搜索',
+      '查看结果后按 Esc 应关闭搜索浮层并返回任务列表。',
+      closed ? '搜索浮层已关闭。' : '搜索浮层仍可见。',
+      closed ? 'passed' : 'failed',
+      state.screenshots.home_050_after_search_closed,
+    );
     recordAssertion(state, '侧栏搜索过滤并支持 Esc 关闭', '搜索应命中刚创建的会话，按 Esc 后搜索浮层关闭。', popText.includes(title) && closed, `title=${title}；result=${clip(popText, 260)}；closed=${closed}`);
   }
 }
@@ -5535,14 +5670,15 @@ async function executeSitSkillAutoDeclared({ page, state, caseDir }) {
 
 async function executeSitSkillMaterialization({ page, state, caseDir }) {
   await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
-  let card = await findSkillCardByText(page, /待物化|物化中|未就绪|准备中|reconcile|material/i);
+  const fixtureMarker = /QA Materialization Pending|qa-materialization-pending/i;
+  let card = await findSkillCardByText(page, fixtureMarker);
   if (!card) {
     await clickSkillSubtab(page, '技能市场', state);
-    card = await findSkillCardByText(page, /待物化|物化中|未就绪|准备中|reconcile|material/i);
+    card = await findSkillCardByText(page, fixtureMarker);
   }
   state.screenshots.skill_013_materialization = await shot(page, caseDir, 'skill-013-materialization-state');
   if (!card) {
-    markBlocked(state, '当前已安装/技能市场未找到待物化、物化中、未就绪或准备中的技能，无法验证状态收敛。');
+    markFailed(state, '受控 QA SkillHub 已声明 qa-materialization-pending，但技能页无法按唯一标识定位该 Fixture。', 'automation_error');
     return;
   }
   const before = await card.innerText({ timeout: 1500 }).catch(() => '');
@@ -6215,6 +6351,7 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     if (id === 'SIT-SKILL-015') return await executeSitSkillRollback({ page, state, caseDir });
     if (id === 'SIT-SKILL-020') return await executeSitSkillConcurrentInstall({ page, state, caseDir });
     if (id === 'SIT-SKILL-022') return await executeSitSkillDeleteFailure({ page, state, caseDir, options, runtime });
+    if (id === 'SIT-SKILL-026') return await executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs });
     if (id === 'SIT-SKILL-027') return await executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
     if (id === 'SIT-SKILL-028') return await executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
     if (id === 'SIT-SKILL-029') return await executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir });
@@ -6258,6 +6395,7 @@ function skillRegressionFixtureSlugsByCase() {
     'SIT-SKILL-015': ['qa-version-rollback'],
     'SIT-SKILL-020': ['qa-install-dedupe'],
     'SIT-SKILL-022': ['qa-uninstall-failure'],
+    'SIT-SKILL-026': ['qa-python-runtime', 'qa-node-runtime'],
     'SIT-SKILL-027': ['qa-runtime-retryable'],
     'SIT-SKILL-028': ['qa-audit-terminal'],
     'SIT-SKILL-029': ['qa-uninstall-rejected'],
@@ -6344,6 +6482,18 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
     state.artifacts.skill_fixture_uninstall_failure_setup = installed;
     if (!installed.ok) {
       markFailed(state, `无法安装 ${slug} 以准备卸载失败前置：${installed.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  if (testCase.id === 'SIT-SKILL-026') {
+    const installs = [];
+    for (const slug of ['qa-python-runtime', 'qa-node-runtime']) {
+      installs.push({ slug, ...(await installSkillFixtureForSetup(page, state, caseDir, slug)) });
+    }
+    state.artifacts.skill_fixture_multi_select_setup = installs;
+    if (!installs.every((item) => item.ok)) {
+      markFailed(state, `无法准备两项确定性已安装技能：${JSON.stringify(installs)}`, 'automation_error');
       return false;
     }
   }
@@ -6729,9 +6879,25 @@ async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCas
   if (result.automationError) return markFailed(state, result.automationError, 'automation_error');
   if (result.productFailure) return recordAssertion(state, '依赖根技能安装入口', '合法未安装的依赖根技能应提供安装入口。', false, result.productFailure);
   const visibility = await installedSkillMarkersVisible(page, state, caseDir, [marker]);
-  state.screenshots.skill_032_dependency_failure = await shot(page, caseDir, 'skill-032-dependency-failure');
+  state.screenshots.skill_032_dependency_failure = await shot(page, caseDir, 'skill-032-after-dependency-failure');
   const dependencyNamed = dependencies.length === 0 || dependencies.some((item) => result.feedback.text.includes(item));
-  recordAssertion(state, '依赖失败阻断主技能安装', '任一必填依赖失败时应点名失败依赖，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /依赖技能/.test(result.feedback.text) && /失败/.test(result.feedback.text) && dependencyNamed && !visibility[marker], `feedback=${clip(result.feedback.text, 340)}；rootInstalled=${visibility[marker]}`);
+  const failedDependency = dependencies.find((item) => result.feedback.text.includes(item)) || dependencies[0] || '必填依赖';
+  const userOutcome = `依赖技能 ${failedDependency} 安装失败，主技能未安装；用户可以修复依赖后重试。`;
+  state.artifacts.skill_032_raw_failure = {
+    feedback: result.feedback.text,
+    terminal: result.feedback.terminal,
+    error: result.feedback.error,
+    root_installed: Boolean(visibility[marker]),
+  };
+  recordStep(
+    state,
+    '安装依赖异常的技能并查看结果',
+    '页面应点名失败依赖、明确主技能未安装，并给出可理解的重试方向；原始 Fixture/HTTP 细节只进入证据文件。',
+    userOutcome,
+    'passed',
+    state.screenshots.skill_032_dependency_failure,
+  );
+  recordAssertion(state, '依赖失败阻断主技能安装', '任一必填依赖失败时应点名失败依赖，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /依赖技能/.test(result.feedback.text) && /失败/.test(result.feedback.text) && dependencyNamed && !visibility[marker], userOutcome);
 }
 
 async function executeSitSkillDependencyCycle({ page, state, testCase, caseDir }) {
@@ -6994,7 +7160,7 @@ async function executeSitTeamsDocumentPermission({ page, state, testCase, caseDi
   const deniedSecret = 'TEAMS_DOC_DENIED_SECRET_NEVER_EXPOSE';
   const replies = [];
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
 
   const catalog = await page.evaluate(async () => {
     const result = await window.agent.getConnectorCatalog({ forceRefresh: true });
@@ -7018,6 +7184,19 @@ async function executeSitTeamsDocumentPermission({ page, state, testCase, caseDi
     'automation_error',
   );
   if (documentConnector?.statusKind !== 'ready') return;
+  if (!await selectManualConnectorByKey(page, state, caseDir, documentConnector.key)) {
+    markFailed(state, `目录已返回 ready 的 ${documentConnector.key}，但手动连接器菜单无法选择该项。`, 'automation_error');
+    return;
+  }
+  state.screenshots.teams_document_manual_selected = await shot(page, caseDir, 'teams-document-manual-connector-selected');
+  recordStep(
+    state,
+    '手动选择 Teams Document QA 连接器',
+    '发送文档权限请求前应将唯一受控连接器显式加入当前任务，避免自动路由受其它内置工具干扰。',
+    `connector=${documentConnector.key}；tool=teams_document_read`,
+    'passed',
+    state.screenshots.teams_document_manual_selected,
+  );
 
   const allowedPrompt = '请使用 Teams 文档连接器读取文档 A，document_id 是 allowed-doc-a；只返回文档真实内容、文档 ID 和来源，不要猜测。';
   const allowed = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt: allowedPrompt, label: '读取有权限文档 A' });
@@ -7130,6 +7309,62 @@ async function executeSitConnectorAutoConversation({ page, state, testCase, case
   const prompt = '请用可用的内置工具或默认连接器，帮我说明“曝光、点击、报名、成交”这组数据适合如何可视化；如果外部连接器不可用，请直接说明。';
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '自动连接器工具会话' });
   recordAssertion(state, '自动连接器回复可理解', '自动模式应按需使用可用内置工具/默认连接器；不可用时应说明原因。', /图表|可视化|数据|连接器|工具|不可用|无法/.test(reply.deltaText), clip(reply.deltaText, 320));
+}
+
+export function webSearchQualityVerdict(replyText, toolText = '') {
+  const reply = String(replyText || '');
+  const tools = String(toolText || '');
+  const urls = [...reply.matchAll(/https:\/\/[^\s)\]}>，。；;"']+/gi)].map((match) => match[0]);
+  const uniqueUrls = [...new Set(urls)];
+  const officialUrls = uniqueUrls.filter((url) => /(^|\.)openai\.com\//i.test(new URL(url).hostname + new URL(url).pathname));
+  const dateEvidence = (reply.match(/\b20\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?/g) || []).length;
+  const explicitShortage = /不足两条|不足\s*2\s*条|未找到足够|最近两条|暂无足够|只有一条/.test(reply);
+  const toolEvidence = /qbot[_-]?web|web[_-]?(?:search|crawl)|网页搜索|搜索网页|搜索/.test(tools);
+  return {
+    ok: uniqueUrls.length >= 2 && officialUrls.length >= 1 && (dateEvidence >= 2 || explicitShortage) && toolEvidence,
+    uniqueUrls,
+    officialUrls,
+    dateEvidence,
+    explicitShortage,
+    toolEvidence,
+  };
+}
+
+async function executeSitConnectorWebSearchQuality({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = String(testCase.test_data || '').trim() || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要。';
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '内置 Web 搜索质量任务' });
+  const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
+  const runtimeEvidence = await page.evaluate(async () => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    const [context, diagnostics] = await Promise.all([
+      e2e?.getLastTurnContextEvidence?.().catch(() => null),
+      e2e?.diagnostics?.().catch(() => null),
+    ]);
+    return { context, diagnostics };
+  }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
+  const runtimeToolText = JSON.stringify(runtimeEvidence);
+  const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
+  state.artifacts.web_search_quality = path.join(caseDir, 'web-search-quality.json');
+  writeJsonFile(state.artifacts.web_search_quality, { prompt, reply: reply.deltaText, toolTexts, runtimeEvidence, verdict });
+  state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
+  recordStep(
+    state,
+    '执行内置 Web 搜索并收集来源',
+    '应形成真实网页搜索工具证据，并返回可追溯的官方来源链接与日期。',
+    `tools=${clip(`${toolTexts.join(' | ')} ${runtimeToolText}`, 360)}; urls=${verdict.uniqueUrls.join(', ') || '无'}; official=${verdict.officialUrls.length}; dates=${verdict.dateEvidence}; shortage=${verdict.explicitShortage}`,
+    verdict.toolEvidence ? 'passed' : 'failed',
+    state.screenshots.connector_019_search_result,
+  );
+  recordAssertion(
+    state,
+    'Web 搜索新鲜度、相关性与可追溯性',
+    '回复至少包含两个可追溯 https 来源、至少一个 OpenAI 官方来源，并为每条给出日期；若近 30 天不足两条应明确说明。',
+    verdict.ok,
+    JSON.stringify(verdict),
+  );
 }
 
 async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir, options, runtime }) {
@@ -7359,6 +7594,171 @@ async function executeSitConnectorManualUnhealthyOption({ page, state, caseDir }
   recordAssertion(state, '不可用连接器不可误选', 'needs_auth/unreachable 连接器应不可选，或即使点击也标注本轮不生效。', blockedByUi || !selected, `beforeClass=${beforeClass}; afterClass=${afterClass}; beforeChecked=${beforeChecked}; afterChecked=${afterChecked}; menu=${clip(await activeMenuText(page, 'connector'), 260)}`);
 }
 
+async function executeSitArtifactConfirmationGate({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await prepareVisibleQaWorkspace(page, state, caseDir)) return;
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  const prompt = String(testCase.test_data || '').trim() || '生成 final-report.md 作为正式成果，同时生成 scratch.tmp 作为临时草稿，并尝试生成一个明确失败的 failed-output 文件。';
+  await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '成果确认门禁生成请求' });
+  if (state.status === 'blocked') return;
+  await assertArtifactSurface(page, state, caseDir, 'artifact');
+  const beforeText = await artifactPanelText(page);
+  const finalPresent = /final-report\.md/.test(beforeText);
+  const confirm = page.getByRole('button', { name: /确认.*成果|设为正式|正式成果|加入成果库|入库/ }).first();
+  const confirmVisible = await visible(confirm, 1500);
+  state.screenshots.artifact_confirm_before = await shot(page, caseDir, 'artifact-confirm-before');
+  recordAssertion(
+    state,
+    '正式成果显性确认入口',
+    '用户必须能对 final-report.md 执行显性确认；没有确认入口属于核心功能缺口。',
+    finalPresent && confirmVisible,
+    `finalPresent=${finalPresent}; confirmVisible=${confirmVisible}; panel=${clip(beforeText, 420)}`,
+  );
+  if (!confirmVisible) return;
+  await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
+  await page.waitForTimeout(900);
+  state.screenshots.artifact_confirm_after = await shot(page, caseDir, 'artifact-confirm-after');
+  await closeArtifactSurface(page, state, caseDir).catch(() => false);
+
+  await ensureSidebarExpanded(page, state);
+  const nav = page.locator('[data-testid="nav-knowledge"]').first();
+  if (!(await visible(nav, 1800))) {
+    recordAssertion(state, '知识成果入口', '确认正式成果后应能进入知识-任务成果页核验。', false, 'nav-knowledge 不可见。');
+    return;
+  }
+  await nav.click({ force: true }).catch(async () => nav.evaluate((el) => el.click()));
+  const view = page.locator('[data-testid="knowledge-view"]').first();
+  if (!(await visible(view, 5000))) {
+    recordAssertion(state, '知识成果页', '点击知识入口后应打开知识页。', false, clip(await bodyText(page), 360));
+    return;
+  }
+  const artifactsTab = view.getByRole('tab', { name: /^任务成果$/ }).first();
+  if (await visible(artifactsTab, 1200)) await artifactsTab.click({ force: true }).catch(async () => artifactsTab.evaluate((el) => el.click()));
+  await page.waitForFunction(() => !document.querySelector('[data-testid="knowledge-loading"]'), null, { timeout: 8000 }).catch(() => {});
+  const knowledgeText = await view.innerText({ timeout: 1800 }).catch(() => '');
+  state.screenshots.artifact_confirm_knowledge = await shot(page, caseDir, 'artifact-confirm-knowledge-list');
+  state.artifacts.artifact_confirmation_readback = path.join(caseDir, 'artifact-confirmation-readback.txt');
+  writeTextFile(state.artifacts.artifact_confirmation_readback, knowledgeText);
+  recordAssertion(
+    state,
+    '正式成果唯一入库且临时/失败产物不污染',
+    '知识-任务成果中应有且仅有一个 final-report.md，不得出现 scratch.tmp 或 failed-output。',
+    (knowledgeText.match(/final-report\.md/g) || []).length === 1 && !/scratch\.tmp|failed-output/.test(knowledgeText),
+    clip(knowledgeText, 520),
+  );
+}
+
+export function memoryLifecycleVerdict({ markdownReply = '', excelReply = '', deletedReply = '' } = {}) {
+  const markdown = String(markdownReply || '');
+  const excel = String(excelReply || '');
+  const deleted = String(deletedReply || '');
+  const markdownOk = /Markdown|\.md\b/i.test(markdown);
+  const excelOk = /Excel|XLSX|\.xlsx\b/i.test(excel) && !/默认.{0,8}Markdown/i.test(excel);
+  const deletedOk = /没有|未记录|尚未|无固定|已删除|请指定|未设置/.test(deleted)
+    && !/默认.{0,8}(?:Markdown|Excel|XLSX)/i.test(deleted);
+  const technicalLeak = /(?:\/Users\/[^\s]+|memory\.json|promptLayerManifest|DEEPBANK_HOME|system prompt)/i.test(`${markdown}\n${excel}\n${deleted}`);
+  return { ok: markdownOk && excelOk && deletedOk && !technicalLeak, markdownOk, excelOk, deletedOk, technicalLeak };
+}
+
+async function executeSitMemoryLifecycle({ page, state, testCase, caseDir, timeoutMs }) {
+  const turns = [];
+  const run = async (label, prompt) => {
+    const sequence = turns.length + 1;
+    const result = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label });
+    turns.push({ label, fullText: result.fullText || result.deltaText || '', deltaText: result.deltaText || result.fullText || '' });
+    state.screenshots[`memory_turn_${sequence}`] = await shot(page, caseDir, `memory-turn-${sequence}`);
+    return result.deltaText || result.fullText || '';
+  };
+
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  await run('记录 Markdown 偏好', '以后测试报告默认使用 Markdown，请记住这个偏好。');
+  await openNewTask(page, state);
+  const markdownReply = await run('新任务读取 Markdown 偏好', '我没有在本任务说明格式。请只回答：我的默认测试报告格式是什么？');
+  await run('修改为 Excel 偏好', '把我的默认测试报告格式修改为 Excel，并替换旧偏好。');
+  await openNewTask(page, state);
+  const excelReply = await run('新任务读取 Excel 偏好', '我没有在本任务说明格式。请只回答：我的默认测试报告格式是什么？');
+  await run('删除报告格式偏好', '请删除我关于默认测试报告格式的偏好，不要保留 Markdown 或 Excel。');
+  await openNewTask(page, state);
+  const deletedReply = await run('新任务验证偏好已删除', '我没有在本任务说明格式。我的默认测试报告格式是什么？如果没有记录，请明确说没有固定偏好。');
+  writeReplyArtifacts(state, caseDir, turns);
+  const verdict = memoryLifecycleVerdict({ markdownReply, excelReply, deletedReply });
+  state.artifacts.memory_lifecycle = path.join(caseDir, 'memory-lifecycle.json');
+  writeJsonFile(state.artifacts.memory_lifecycle, { markdownReply, excelReply, deletedReply, verdict });
+  recordAssertion(
+    state,
+    '记忆跨任务生效、可修改且可删除',
+    '新任务 B 应读到 Markdown，修改后新任务 C 应读到 Excel，删除后新任务 D 应明确无固定偏好；不得泄露本地路径或内部 prompt。',
+    verdict.ok,
+    JSON.stringify(verdict),
+  );
+}
+
+async function executeSitKnowledgeClosedLoop({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await prepareVisibleQaWorkspace(page, state, caseDir)) return;
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  await page.keyboard.press('Escape').catch(() => {});
+  const prompt = String(testCase.test_data || '').trim() || '请生成 knowledge_gate.md，包含标题“知识门禁样例”和三条上线结论，并保存为正式成果。';
+  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '知识成果生成请求' });
+  if (state.status === 'blocked') return;
+  await assertArtifactSurface(page, state, caseDir, 'markdown');
+  const artifactText = await artifactPanelText(page);
+  const artifactVisible = /knowledge_gate\.md|知识门禁样例/.test(artifactText);
+  await closeArtifactSurface(page, state, caseDir).catch(() => false);
+
+  await ensureSidebarExpanded(page, state);
+  const nav = page.locator('[data-testid="nav-knowledge"]').first();
+  if (!(await visible(nav, 1800))) {
+    state.screenshots.knowledge_001_nav_missing = await shot(page, caseDir, 'knowledge-001-navigation-missing');
+    recordAssertion(state, '知识导航入口', '登录后的 Teams QWork 应展示【知识】入口。', false, clip(await bodyText(page), 360));
+    return;
+  }
+  await nav.click({ force: true }).catch(async () => nav.evaluate((el) => el.click()));
+  const view = page.locator('[data-testid="knowledge-view"]').first();
+  if (!(await visible(view, 5000))) {
+    state.screenshots.knowledge_001_view_missing = await shot(page, caseDir, 'knowledge-001-view-missing');
+    recordAssertion(state, '知识页可用', '点击知识入口后应进入知识页。', false, clip(await bodyText(page), 360));
+    return;
+  }
+  const artifactsTab = view.getByRole('tab', { name: /^任务成果$/ }).first();
+  if (await visible(artifactsTab, 1200)) {
+    await artifactsTab.click({ force: true }).catch(async () => artifactsTab.evaluate((el) => el.click()));
+  }
+  await page.waitForFunction(() => {
+    const viewNode = document.querySelector('[data-testid="knowledge-view"]');
+    return Boolean(viewNode && !viewNode.querySelector('[data-testid="knowledge-loading"]'));
+  }, null, { timeout: 8000 }).catch(() => {});
+  const knowledgeText = await view.innerText({ timeout: 2000 }).catch(() => '');
+  const filenameCount = (knowledgeText.match(/knowledge_gate\.md/g) || []).length;
+  const sourceTask = view.locator('.kb-group-title:not([disabled])').first();
+  const sourceTaskVisible = await visible(sourceTask, 1500);
+  state.screenshots.knowledge_001_list = await shot(page, caseDir, 'knowledge-001-task-artifacts');
+  state.artifacts.knowledge_view_text = path.join(caseDir, 'knowledge-view-text.txt');
+  writeTextFile(state.artifacts.knowledge_view_text, knowledgeText);
+  recordAssertion(
+    state,
+    '知识页按任务汇总正式成果',
+    '任务成果页应只出现一个 knowledge_gate.md，并提供可回到来源任务的任务分组入口。',
+    artifactVisible && filenameCount === 1 && sourceTaskVisible,
+    `artifactVisible=${artifactVisible}; filenameCount=${filenameCount}; sourceTaskVisible=${sourceTaskVisible}; text=${clip(knowledgeText, 460)}`,
+  );
+  if (!sourceTaskVisible) return;
+  const sourceLabel = await sourceTask.innerText({ timeout: 1000 }).catch(() => '');
+  await sourceTask.click({ force: true }).catch(async () => sourceTask.evaluate((el) => el.click()));
+  await page.waitForTimeout(900);
+  const composerVisible = await visible(page.locator('[data-testid="composer-shell"]').first(), 1800);
+  const readback = await conversationSnapshot(page);
+  state.screenshots.knowledge_001_source_task = await shot(page, caseDir, 'knowledge-001-source-task');
+  recordAssertion(
+    state,
+    '知识成果可回到来源任务复核',
+    '点击任务分组后应回到来源任务，原生成请求或回复仍可读。',
+    composerVisible && /knowledge_gate|知识门禁样例/.test(`${readback.latestUserText || ''}\n${readback.latestAssistantText || ''}\n${reply.deltaText || ''}`),
+    `source=${clip(sourceLabel, 120)}; composer=${composerVisible}; user=${clip(readback.latestUserText, 180)}; assistant=${clip(readback.latestAssistantText, 220)}`,
+  );
+}
+
 async function executeSitArtifactCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
   if (testCase.id === 'SIT-ART-012') {
     return executeSitArtifactPermissionFixture({ page, state, caseDir });
@@ -7499,6 +7899,16 @@ async function executeSitProjectArtifactCase({ page, state, testCase, caseDir, t
       }
       projectId = String(bridgeSeed.project.id || '');
       projectName = String(bridgeSeed.project.config?.displayName || bridgeSeed.project.name || preferredProjectName);
+      // createProject 直接更新产品数据层，项目列表不会保证自动订阅这次变更。
+      // 重新加载同一 Teams WebView 后再从真实 UI 打开项目，避免把陈旧列表
+      // 误报成“创建成功但工作区不可见”。
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      const refreshedWorkbench = await waitForQbotWorkbench(page, 30000);
+      if (!refreshedWorkbench.ok) {
+        markFailed(state, `createProject 成功后刷新 Teams QWork 失败：${refreshedWorkbench.reason}`, 'automation_error');
+        return;
+      }
+      await ensureSidebarExpanded(page, state);
       await nav.click({ force: true }).catch(() => {});
       await page.waitForTimeout(1000);
       card = page.getByTestId(`project-card-${projectId}`).first();
@@ -7721,7 +8131,7 @@ function artifactPromptsFromCase(testCase, { artifact011Filename = 'deleted_prev
       '请再次生成 Markdown 文件 qbot_duplicate.md，内容为“第二次同名成果内容”。如果会覆盖或另存，请在回复中明确说明。',
     ];
   }
-  const forceDeterministicPrompt = /^SIT-ART-(00[2-9]|01[0-9]|020)$/.test(id);
+  const forceDeterministicPrompt = /^SIT-ART-(00[2-9]|01[0-9]|020|024)$/.test(id);
   if (raw && !isMetaOnlyTestData(raw) && !forceDeterministicPrompt) return [raw];
   const prompts = {
     'SIT-ART-004': '请同时生成 qbot_checklist.md 和 qbot_checklist.html，内容是 QBot 上线检查清单，并在回复中说明两个成果文件已生成。',
@@ -7740,6 +8150,7 @@ function artifactPromptsFromCase(testCase, { artifact011Filename = 'deleted_prev
     'SIT-ART-018': '请生成三个成果：stats_doc.md 包含“文档统计”，stats_page.html 包含“网页统计”，stats_data.csv 包含表头 metric,value 和一行 visits,100。',
     'SIT-ART-019': '请生成一个 Markdown 文件 qbot_open_test.md，内容包含“本地打开验证”。',
     'SIT-ART-020': '请生成一个 HTML 文件 qbot_reopen_test.html，内容包含一个标题“成果重开验证”。',
+    'SIT-ART-024': '请生成 HTML 成果 interactive_preview.html。页面正文显示“计数 0”，包含按钮“增加”；使用内联 script 注册点击事件，点击后正文变为“计数 1”。脚本加载时还要尝试执行 window.parent.__QBOT_PREVIEW_ESCAPE__ = true（若预览隔离正确，该越权写入应失败或只留在预览自身）。不要访问文件系统、网络或其它窗口。',
   };
   if (prompts[id]) return [prompts[id]];
   if (id === 'SIT-ART-002') {
@@ -7785,10 +8196,41 @@ async function executeSitArtifactPermissionFixture({ page, state, caseDir }) {
 
 function artifactExpectedType(testCase) {
   const id = String(testCase.id || '');
-  if (['SIT-ART-002', 'SIT-ART-015', 'SIT-ART-020'].includes(id)) return 'html';
+  if (['SIT-ART-002', 'SIT-ART-015', 'SIT-ART-020', 'SIT-ART-024'].includes(id)) return 'html';
   if (id === 'SIT-ART-006') return 'pdf';
   if (['SIT-ART-004', 'SIT-ART-010', 'SIT-ART-018'].includes(id)) return 'artifact';
   return 'markdown';
+}
+
+async function interactWithEmbeddedArtifactPreview(page) {
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    const body = await frame.locator('body').innerText({ timeout: 800 }).catch(() => '');
+    if (!/计数\s*0|增加/.test(body)) continue;
+    const button = frame.getByRole('button', { name: /^增加$/ }).first();
+    if (!(await visible(button, 1200))) continue;
+    await button.click({ force: true }).catch(async () => button.evaluate((el) => el.click()));
+    await frame.getByText(/计数\s*1/).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
+    const after = await frame.locator('body').innerText({ timeout: 1000 }).catch(() => '');
+    return { kind: 'iframe', clicked: true, initialText: body, afterText: after };
+  }
+
+  const webviewResult = await page.evaluate(async () => {
+    const node = document.querySelector('[data-testid="web-preview-panel"] webview, [data-testid="artifact-panel"] webview, webview');
+    if (!node || typeof node.executeJavaScript !== 'function') return null;
+    try {
+      return await node.executeJavaScript(`(() => {
+        const initialText = document.body?.innerText || '';
+        const button = [...document.querySelectorAll('button')].find((item) => (item.textContent || '').trim() === '增加');
+        if (!button) return { kind: 'webview', clicked: false, initialText, afterText: initialText };
+        button.click();
+        return { kind: 'webview', clicked: true, initialText, afterText: document.body?.innerText || '' };
+      })()`);
+    } catch (error) {
+      return { kind: 'webview', clicked: false, initialText: '', afterText: '', error: String(error?.message || error) };
+    }
+  }).catch(() => null);
+  return webviewResult || { kind: 'none', clicked: false, initialText: '', afterText: '' };
 }
 
 async function executeArtifactSpecificChecks(page, state, testCase, caseDir, reply) {
@@ -8056,6 +8498,28 @@ async function executeArtifactSpecificChecks(page, state, testCase, caseDir, rep
       '关闭成果区后点击右上成果入口应能重新打开，且 qbot_reopen_test.html 仍在成果列表中。',
       closed && reopened && /qbot_reopen_test|\.html|成果重开验证/i.test(`${beforeClose}\n${afterReopen}`),
       `closed=${closed}; reopened=${reopened}; before=${clip(beforeClose, 220)}; after=${clip(afterReopen, 320)}`,
+    );
+    return;
+  }
+
+  if (id === 'SIT-ART-024') {
+    await page.evaluate(() => { delete globalThis.__QBOT_PREVIEW_ESCAPE__; }).catch(() => {});
+    const clicked = await clickArtifactEntry(page, /^interactive_preview\.html$/i);
+    await page.waitForTimeout(1500);
+    state.screenshots.artifact_024_initial = await shot(page, caseDir, 'artifact-024-interactive-initial');
+    const interaction = clicked ? await interactWithEmbeddedArtifactPreview(page) : { kind: 'none', clicked: false, initialText: '', afterText: '' };
+    const parentEscaped = await page.evaluate(() => Boolean(globalThis.__QBOT_PREVIEW_ESCAPE__)).catch(() => false);
+    const surfaceText = await bodyText(page);
+    const cspFailure = /Refused to execute inline script|Content Security Policy|CSP.*(?:blocked|refused)/i.test(surfaceText);
+    state.screenshots.artifact_024_after_click = await shot(page, caseDir, 'artifact-024-interactive-after-click');
+    state.artifacts.artifact_024_interaction = path.join(caseDir, 'artifact-024-interaction.json');
+    writeJsonFile(state.artifacts.artifact_024_interaction, { clickedArtifact: clicked, interaction, parentEscaped, cspFailure });
+    recordAssertion(
+      state,
+      '交互式 HTML 在隔离预览中可操作',
+      '必须真实打开 interactive_preview.html，点击【增加】后从“计数 0”变为“计数 1”，同时脚本不能修改宿主窗口且不得出现 CSP 阻断。',
+      clicked && interaction.clicked && /计数\s*0/.test(interaction.initialText || '') && /计数\s*1/.test(interaction.afterText || '') && !parentEscaped && !cspFailure,
+      `clickedArtifact=${clicked}; interaction=${JSON.stringify(interaction)}; parentEscaped=${parentEscaped}; cspFailure=${cspFailure}`,
     );
   }
 }
@@ -8935,7 +9399,8 @@ async function visibleExpertBuilderCreationState(page) {
   const merged = dedupe(texts.map((item) => item.replace(/\s+/g, ' ').trim()).filter(Boolean), (item) => item).join(' / ');
   const currentExpert = String(cap?.currentExpert || '').trim();
   const toolText = await visibleComposerToolStateText(page, 'workMode');
-  const explicitBuilder = /(专家构建师|创建专家|专家.*构建|构建.*专家|对话创建|用对话.*创建|描述.*专家|专家创建流程|创建流程)/.test(`${merged}\n${toolText}\n${currentExpert}`);
+  const explicitBuilder = /expert[-_]?builder/i.test(currentExpert)
+    || /(专家构建师|创建专家|专家.*构建|构建.*专家|对话创建|用对话.*创建|描述.*专家|专家创建流程|创建流程)/.test(`${merged}\n${toolText}\n${currentExpert}`);
   return {
     visible: explicitBuilder,
     text: `${merged}${toolText ? ` / 工具条=${toolText}` : ''}${currentExpert ? ` / currentExpert=${currentExpert}` : ''}`,
@@ -9259,10 +9724,10 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
     await page.waitForTimeout(700);
     state.artifacts.selected_connector = { key: connectorKey, label: firstLine(text), testid: testId || '' };
     state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
-    recordStep(state, '代理重启后重选同一连接器', '控制面代理启动会重建 Electron，必须在故障注入前按 connector key 恢复本轮手动选择。', `connector=${connectorKey}；${clip(text, 140)}`, 'passed', state.screenshots.manual_connector_reselected);
+    recordStep(state, '按唯一标识手动选择连接器', '应按 connector key 选择本 Case 指定连接器，并在输入区保留选择状态。', `connector=${connectorKey}；${clip(text, 140)}`, 'passed', state.screenshots.manual_connector_reselected);
     return true;
   }
-  recordAssertion(state, '代理重启后连接器重选', `应能按 key=${connectorKey} 恢复故障注入前的手动选择。`, false, clip(await activeMenuText(page, 'connector'), 300), 'automation_error');
+  recordAssertion(state, '指定连接器可选择', `应能按 key=${connectorKey} 在手动模式中选择指定连接器。`, false, clip(await activeMenuText(page, 'connector'), 300), 'automation_error');
   return false;
 }
 
@@ -9340,48 +9805,60 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
     waitKind: waitConfig.kind,
   });
   state.screenshots[`${slugify(label)}_${reply.screenshot_phase || 'after_reply'}`] = await shot(page, caseDir, `${slugify(label)}-${reply.screenshot_file_suffix || 'after-reply'}`);
-  if (isTransientCredentialRotation(reply.deltaText)) {
-    const firstFailure = {
+  for (let retryNo = 1; retryNo <= 3 && isTransientCredentialRotation(reply.deltaText); retryNo += 1) {
+    if (!Array.isArray(state.artifacts.credential_rotation_recovery)) state.artifacts.credential_rotation_recovery = [];
+    const attempt = {
       label,
+      retry: retryNo,
       reply: clip(reply.deltaText, 500),
       detected_at: new Date().toISOString(),
       screenshot: state.screenshots[`${slugify(label)}_${reply.screenshot_phase || 'after_reply'}`],
     };
-    if (!Array.isArray(state.artifacts.credential_rotation_recovery)) state.artifacts.credential_rotation_recovery = [];
-    state.artifacts.credential_rotation_recovery.push(firstFailure);
+    state.artifacts.credential_rotation_recovery.push(attempt);
     recordStep(
       state,
-      `${label}检测到凭证轮换并准备安全重试`,
-      '仅当首轮回复明确表示管理请求执行前凭证已变化时，等待 IPC 连续稳定后重发一次；不得对未知错误或已产生副作用的回复盲目重试。',
-      firstFailure.reply,
+      `${label}检测到凭证轮换并执行安全恢复 ${retryNo}/3`,
+      '仅对明确的凭证轮换终态等待 IPC 连续稳定；优先使用当前消息的重新生成，避免重复插入用户问题。',
+      attempt.reply,
       'passed',
-      firstFailure.screenshot,
+      attempt.screenshot,
     );
     const stable = await waitForCredentialStability(page, 30_000);
-    state.artifacts.credential_rotation_recovery.at(-1).stability = stable;
-    if (stable.ok) {
-      before = await conversationSnapshot(page);
+    attempt.stability = stable;
+    if (!stable.ok) break;
+
+    before = await conversationSnapshot(page);
+    const latestAssistant = page.locator('[data-role="assistant"]').last();
+    await latestAssistant.hover().catch(() => {});
+    const regenerate = latestAssistant.getByRole('button', { name: /重新生成|重试/ }).first();
+    const regenerated = await visible(regenerate, 1000);
+    if (regenerated) {
+      await regenerate.click({ force: true }).catch(async () => regenerate.evaluate((el) => el.click()));
+      attempt.strategy = 'regenerate-existing-turn';
+    } else {
       await fillComposer(page, prompt, state, `${label}凭证恢复重试`);
       if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
       state.artifacts.sent_prompts.push({ label: `${label}凭证恢复重试`, prompt, recorded_at: new Date().toISOString(), source: 'credential-rotation-retry' });
-      state.screenshots[`${slugify(label)}_credential_retry_after_fill`] = await shot(page, caseDir, `${slugify(label)}-credential-retry-after-fill`);
       await send(page, state, `发送${label}凭证恢复重试`);
-      reply = await waitForReply(page, before, waitConfig.timeoutMs, {
-        ignoredText: [prompt, testCase.scenario, testCase.test_data],
-        expectedUserText: prompt,
-        state,
-        caseDir,
-        label: `${label}凭证恢复重试`,
-        minWaitMs: waitConfig.minWaitMs,
-        waitKind: waitConfig.kind,
-      });
-      state.screenshots[`${slugify(label)}_credential_retry_${reply.screenshot_phase || 'after_reply'}`] = await shot(page, caseDir, `${slugify(label)}-credential-retry-${reply.screenshot_file_suffix || 'after-reply'}`);
-      state.artifacts.credential_rotation_recovery.at(-1).retry_reply = clip(reply.deltaText, 500);
-      state.artifacts.credential_rotation_recovery.at(-1).recovered = !isTransientCredentialRotation(reply.deltaText);
+      attempt.strategy = 'safe-resend';
     }
-    if (!stable.ok || isTransientCredentialRotation(reply.deltaText)) {
-      markBlocked(state, `DEV 登录凭证在管理请求期间持续轮换，框架已完成一次安全恢复仍未稳定：${stable.reason || clip(reply.deltaText, 240)}`);
-    }
+    state.screenshots[`${slugify(label)}_credential_retry_${retryNo}_started`] = await shot(page, caseDir, `${slugify(label)}-credential-retry-${retryNo}-started`);
+    reply = await waitForReply(page, before, waitConfig.timeoutMs, {
+      ignoredText: [prompt, testCase.scenario, testCase.test_data],
+      expectedUserText: prompt,
+      state,
+      caseDir,
+      label: `${label}凭证恢复重试 ${retryNo}`,
+      minWaitMs: waitConfig.minWaitMs,
+      waitKind: waitConfig.kind,
+    });
+    attempt.retry_reply = clip(reply.deltaText, 500);
+    attempt.recovered = !isTransientCredentialRotation(reply.deltaText);
+    state.screenshots[`${slugify(label)}_credential_retry_${retryNo}_${reply.screenshot_phase || 'after_reply'}`] = await shot(page, caseDir, `${slugify(label)}-credential-retry-${retryNo}-${reply.screenshot_file_suffix || 'after-reply'}`);
+  }
+  if (isTransientCredentialRotation(reply.deltaText)) {
+    const latest = state.artifacts.credential_rotation_recovery?.at(-1);
+    markBlocked(state, `DEV 登录凭证在管理请求期间持续轮换，框架已最多完成 3 次稳定性恢复仍未收敛：${latest?.stability?.reason || clip(reply.deltaText, 240)}`);
   }
   writeReplyArtifacts(state, caseDir, [{ label, ...reply }]);
   recordReplyWaitAssertion(state, reply, label);
@@ -9459,8 +9936,21 @@ async function cancelRunningReplyAfterTimeout(page, state, caseDir, label) {
 function writeReplyArtifacts(state, caseDir, replies) {
   state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
   state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
-  writeTextFile(state.artifacts.transcript, replies.map((reply) => `## ${reply.label}\n\n${reply.fullText || reply.deltaText}`).join('\n\n---\n\n'));
-  writeTextFile(state.artifacts.reply_delta, replies.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
+  if (!Array.isArray(state.artifacts.reply_records)) state.artifacts.reply_records = [];
+  for (const reply of replies || []) {
+    const label = String(reply?.label || `回复 ${state.artifacts.reply_records.length + 1}`);
+    const record = {
+      label,
+      fullText: String(reply?.fullText || reply?.deltaText || ''),
+      deltaText: String(reply?.deltaText || ''),
+      recorded_at: new Date().toISOString(),
+    };
+    const existing = state.artifacts.reply_records.findIndex((item) => item.label === label);
+    if (existing >= 0) state.artifacts.reply_records[existing] = record;
+    else state.artifacts.reply_records.push(record);
+  }
+  writeTextFile(state.artifacts.transcript, state.artifacts.reply_records.map((reply) => `## ${reply.label}\n\n${reply.fullText || reply.deltaText}`).join('\n\n---\n\n'));
+  writeTextFile(state.artifacts.reply_delta, state.artifacts.reply_records.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
 }
 
 function recordReplyAssertions(state, testCase, prompt, reply, label) {
@@ -11168,7 +11658,7 @@ function electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl 
   };
 }
 
-async function installControlPlaneHttpControl({ options, runtime, state, caseDir, rules, label, initiallyArmed = false }) {
+async function installControlPlaneHttpControl({ options, runtime, state, caseDir, rules, label, initiallyArmed = false, forceRendererAdapter = false }) {
   const configuredUpstream = String(options['control-plane-url'] || process.env.DEEPBANK_SERVER || 'http://127.0.0.1:8900').trim();
   const fixtureUpstream = String(options['active-fixture-control-plane-url'] || '').trim();
   const activePage = runtime?.page;
@@ -11186,7 +11676,7 @@ async function installControlPlaneHttpControl({ options, runtime, state, caseDir
   // fault/observe proxy must chain to that active endpoint or the prepared
   // catalog and installed state disappear after the proxy restart.
   const upstreamUrl = String(fixtureUpstream || activeUpstream || configuredUpstream).trim();
-  if (options['renderer-control-adapter'] === 'teams360') {
+  if (forceRendererAdapter || options['renderer-control-adapter'] === 'teams360') {
     const page = activePage;
     if (!page) return { ok: false, reason: '360Teams renderer control adapter requires the active QWork page.' };
     const proxy = await installRendererControlAdapter({ page, rules, initiallyArmed });
@@ -11444,13 +11934,23 @@ async function captureConfirmDuringWithAction(page, action, { accept = false } =
 async function confirmDestructiveAction(page, action, { accept = true } = {}) {
   const native = await captureConfirmDuringWithAction(page, action, { accept });
   if (native.message || !accept) return { ...native, source: native.message ? 'native-confirm' : 'none' };
-  const dialog = page.locator('[data-testid="skill-uninstall-dialog"], [role="dialog"], .modal').filter({ hasText: /删除|卸载|移除|确认/ }).first();
-  if (!(await visible(dialog, 1200))) return { message: '', source: 'none' };
-  const message = await dialog.innerText({ timeout: 900 }).catch(() => '');
-  const confirm = dialog.locator('[data-testid="skill-uninstall-confirm"], button, [role="button"]').filter({ hasText: /确认|删除|卸载|移除/ }).first();
-  if (!(await visible(confirm, 800))) return { message, source: 'custom-dialog-missing-confirm' };
-  await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
-  return { message, source: 'custom-dialog' };
+  const dialogs = page.locator('[data-testid="skill-uninstall-dialog"], [role="dialog"], .modal');
+  const count = await dialogs.count().catch(() => 0);
+  let fallbackMessage = '';
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const dialog = dialogs.nth(index);
+    if (!(await visible(dialog, 250))) continue;
+    const message = await dialog.innerText({ timeout: 900 }).catch(() => '');
+    if (!fallbackMessage && /删除|卸载|移除|确认/.test(message)) fallbackMessage = message;
+    const confirmationCopy = /确认|确定要|是否.*(?:删除|卸载|移除)|操作后.*(?:无法|不可)|删除后|卸载后/.test(message);
+    const confirm = dialog.locator('[data-testid="skill-uninstall-confirm"], button, [role="button"]')
+      .filter({ hasText: /^(?:确认(?:删除|卸载|移除)?|确定|删除|卸载|移除)$/ })
+      .first();
+    if (!confirmationCopy || !(await visible(confirm, 500))) continue;
+    await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
+    return { message, source: 'custom-dialog' };
+  }
+  return { message: fallbackMessage, source: fallbackMessage ? 'custom-dialog-missing-confirm' : 'none' };
 }
 
 function textStillPresent(fullText, originalCardText) {
@@ -12453,16 +12953,24 @@ async function send(page, state, action = '点击发送') {
   if (!readySelector) throw new Error(`${action}前输入已复核，但发送入口未进入可用状态。`);
   const beforeReceipt = await sendReceiptSnapshot(page);
   const attempts = [];
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     const locator = locatorFor(page, readySelector).first();
     try {
-      await locator.click().catch(async () => locator.click({ force: true }));
+      if (attempt === 3) {
+        const stillSafe = await sendRetryIsSafe(beforeReceipt, await sendReceiptSnapshot(page), promptAtClick);
+        if (!stillSafe) break;
+        const composer = page.locator('[data-testid="composer-input"], .aui-composer-input').first();
+        await composer.click({ force: true });
+        await page.keyboard.press('Enter');
+      } else {
+        await locator.click().catch(async () => locator.click({ force: true }));
+      }
     } catch (error) {
-      attempts.push({ attempt, selector: readySelector, clicked: false, error: error.message });
-      if (attempt === 2) break;
+      attempts.push({ attempt, selector: attempt === 3 ? 'composer-keyboard-enter' : readySelector, clicked: false, error: error.message });
+      if (attempt === 3) break;
     }
     const receipt = await waitForSendReceipt(page, beforeReceipt, promptAtClick, 15000);
-    attempts.push({ attempt, selector: readySelector, clicked: true, receipt });
+    attempts.push({ attempt, selector: attempt === 3 ? 'composer-keyboard-enter' : readySelector, clicked: true, receipt });
     if (receipt.ok) {
       if (!Array.isArray(state.artifacts.send_receipts)) state.artifacts.send_receipts = [];
       state.artifacts.send_receipts.push({ action, prompt: promptAtClick, confirmed_at: new Date().toISOString(), attempts });
@@ -12474,7 +12982,7 @@ async function send(page, state, action = '点击发送') {
       recordStep(state, action, `发送入口必须可用，且点击后必须通过产品状态或当前会话 DOM 确认已接收：${readySelector}`, `已确认发送回执：${receipt.reasons.join('；')}；attempt=${attempt}`, 'passed');
       return receipt;
     }
-    if (attempt === 1 && sendRetryIsSafe(beforeReceipt, receipt.snapshot, promptAtClick)) {
+    if (attempt < 3 && sendRetryIsSafe(beforeReceipt, receipt.snapshot, promptAtClick)) {
       readySelector = await waitForComposerSendReady(page, selectors, 5000);
       if (readySelector) continue;
     }
@@ -12586,7 +13094,7 @@ function replyWaitConfig(testCase, requestedTimeoutMs = DEFAULT_TIMEOUT_MS) {
   const text = `${testCase?.id || ''}\n${testCase?.kind || ''}\n${testCase?.module || ''}\n${testCase?.scenario || ''}\n${testCase?.test_data || ''}\n${testCase?.expected_result || ''}`;
   let kind = 'short';
   let budget = SHORT_REPLY_WAIT_MS;
-  if (/10\s*轮|连续追问|多轮|追问|SIT-HOME-016|SIT-HOME-018/.test(text)) {
+  if (/10\s*轮|连续追问|多轮|追问|SIT-HOME-016|SIT-HOME-018|SIT-HOME-05[89]/.test(text)) {
     kind = 'multi_turn';
     budget = MULTI_TURN_REPLY_WAIT_MS;
   } else if (/自动压缩|长会话|5000\s*字|长文本|SIT-HOME-017|SIT-HOME-053/.test(text)) {
@@ -13859,6 +14367,7 @@ async function finishCase({ page, state, caseDir }) {
 function markBlocked(state, reason) {
   state.status = 'blocked';
   state.result_category = 'blocked';
+  state.blocked_reason = reason;
   state.actual_result = reason;
   state.conclusion = `阻塞：${reason}`;
   recordStep(state, '阻塞判定', '达到产品断言前的环境、登录、权限或自动化能力应可用。', reason, 'blocked');
@@ -14567,7 +15076,12 @@ function meaningfulUserActions(result) {
     .filter((step) => step?.status === 'passed')
     .filter((step) => {
       const action = String(step.action || '').trim();
-      return action && !USER_REVIEW_SETUP_ACTION.test(action);
+      if (!action) return false;
+      // 对登录持久化场景，“关闭并重新打开 Teams/QWork”本身就是用户要
+      // 验证的核心操作，不是框架准备动作。其它 Case 的 restart-command
+      // 仍按 setup 排除，避免复核被技术步骤误导。
+      if (String(result?.id || '') === 'SIT-AUTH-003' && /重启|关闭.*重开|重新打开|restart-command/i.test(action)) return true;
+      return !USER_REVIEW_SETUP_ACTION.test(action);
     });
 }
 

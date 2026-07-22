@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 import { runUiAgentCasebookCommand } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import { DEFAULT_SESSION, normalizeCdpUrl, validatePinnedQworkUiUrl } from './config.mjs';
 import {
+  adoptRelaunchedLiveTeamsSession,
   launchLiveTeams,
   managedTeamsProcessLog,
   processMatchesSession,
@@ -103,9 +104,15 @@ export async function resolveTeamsCasebookConnection(options) {
     };
   }
 
-  const session = readSession(options.session);
-  const upstream = validateLiveCasebookSession(session);
+  let session = readSession(options.session);
+  let upstream = validateLiveCasebookSession(session);
   if (!processMatchesSession(session)) {
+    session = await adoptRelaunchedLiveTeamsSession(options.session, {
+      timeoutMs: Number(options['timeout-ms'] || 30_000),
+    });
+    if (session) upstream = validateLiveCasebookSession(session);
+  }
+  if (!session || !processMatchesSession(session)) {
     throw new Error(
       'The recorded 360Teams live session is stale. Quit any regular client, run launch:live, '
       + 'and confirm QWork is signed in before retrying.',
@@ -547,7 +554,7 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   // renderer adapter for per-Case fault transforms; the local-QBot lane never
   // receives this option and keeps its existing control-plane proxy path.
   const selectedCases = String(options.case || options.cases || '').split(',').map((item) => item.trim()).filter(Boolean);
-  const realFixtureCases = /^(?:SIT-SKILL-(?:004|005|011|012|013|015|020|022|027|028|029|030|031|032|033)|SIT-SKILL-SCOPE-001|SIT-CONN-(?:008|009|013|018)|SIT-TEAMS-DOC-001|SIT-HITL-002)$/i;
+  const realFixtureCases = /^(?:SIT-SKILL-(?:004|005|011|012|013|015|020|022|026|027|028|029|030|031|032|033)|SIT-SKILL-SCOPE-001|SIT-CONN-(?:008|009|013|018)|SIT-TEAMS-DOC-001|SIT-HITL-002)$/i;
   const fullProfile = /^(?:full|all)$/i.test(String(options.profile || ''));
   const needsRealFixtureHost = fullProfile || selectedCases.some((id) => realFixtureCases.test(id));
   if (/^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || '')) || needsRealFixtureHost) {

@@ -19,6 +19,7 @@ import {
   managedQbotLaunchArgs,
   managedTeamsEnvironment,
   managedTeamsProcessLog,
+  matchesRelaunchedLiveSession,
   parseRunningTeamsMainProcesses,
 } from '../lib/launcher.mjs';
 import { isFullQbotProbe, scoreTargetProbe, selectBestTarget } from '../lib/targets.mjs';
@@ -416,7 +417,7 @@ test('Teams fixture runtime automatically uses host relaunch for selected real f
     evaluate: async () => 'https://qbot-api.360shuke.com',
   };
   const browser = { contexts: () => [{ pages: () => [page] }] };
-  const options = { case: 'SIT-SKILL-011,SIT-SKILL-020,SIT-SKILL-027,SIT-CONN-013,SIT-SKILL-SCOPE-001,SIT-TEAMS-DOC-001,SIT-HITL-002' };
+  const options = { case: 'SIT-SKILL-011,SIT-SKILL-020,SIT-SKILL-026,SIT-SKILL-027,SIT-CONN-013,SIT-SKILL-SCOPE-001,SIT-TEAMS-DOC-001,SIT-HITL-002' };
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['teams-fixture-host-relaunch'], 'true');
   assert.equal(options['renderer-control-adapter'], undefined);
@@ -427,7 +428,15 @@ test('Teams runtime ships the complete SkillHub regression fixture set', () => {
   const slugs = runtimeManifest.skills.map((item) => item.slug);
   assert.equal(slugs.length, 21);
   assert.equal(new Set(slugs).size, 21);
-  for (const required of ['qa-scope-isolation', 'qa-install-rejected-visible', 'qa-auto-declared', 'qa-materialization-pending', 'qa-install-dedupe']) {
+  for (const required of [
+    'qa-scope-isolation',
+    'qa-install-rejected-visible',
+    'qa-auto-declared',
+    'qa-materialization-pending',
+    'qa-install-dedupe',
+    'qa-python-runtime',
+    'qa-node-runtime',
+  ]) {
     assert.ok(slugs.includes(required), `Teams runtime missing fixture: ${required}`);
   }
 });
@@ -537,6 +546,32 @@ test('the Teams Casebook wrapper can resolve the managed live session without a 
     validateLiveCasebookSession({ profile_mode: 'live', cdp_url: 'http://127.0.0.1:58401' }),
     'http://127.0.0.1:58401',
   );
+});
+
+test('a controlled live-host relaunch can be adopted only with the same executable, profile, CDP and control plane', () => {
+  const session = {
+    profile_mode: 'live',
+    app_path: '/Applications/360Teams.app',
+    executable: '/Applications/360Teams.app/Contents/MacOS/360Teams',
+    profile_dir: '/tmp/teams-live-profile',
+    profile_alias: '/tmp/teams-live-alias',
+    cdp_url: 'http://127.0.0.1:52364',
+    port: 52364,
+    control_plane_origin: 'https://deepbank-control-dev.sandbox.deepbank.daikuan.qihoo.net',
+  };
+  fs.mkdirSync(session.profile_dir, { recursive: true });
+  fs.rmSync(session.profile_alias, { recursive: true, force: true });
+  fs.symlinkSync(session.profile_dir, session.profile_alias, 'dir');
+  const command = `${session.executable} --remote-debugging-address=127.0.0.1 --remote-debugging-port=52364 --user-data-dir=${session.profile_alias} --qbot-server=${session.control_plane_origin} --relaunch`;
+  try {
+    assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command }), true);
+    assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace('52364', '52365') }), false);
+    assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace(session.profile_alias, '/tmp/other') }), false);
+    assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace(session.control_plane_origin, 'https://qbot-api.360shuke.com') }), false);
+  } finally {
+    fs.rmSync(session.profile_alias, { force: true });
+    fs.rmSync(session.profile_dir, { recursive: true, force: true });
+  }
 });
 
 test('functional Casebook runs reject isolated profiles and token-seeded authentication', () => {

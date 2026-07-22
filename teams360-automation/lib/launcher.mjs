@@ -362,6 +362,51 @@ export function processMatchesSession(session) {
   return true;
 }
 
+export function matchesRelaunchedLiveSession(session, { pid, command } = {}) {
+  const listenerPid = Number(pid);
+  const currentCommand = String(command || '');
+  if (session?.profile_mode !== 'live') return false;
+  if (!Number.isInteger(listenerPid) || listenerPid <= 1 || !currentCommand) return false;
+  const executable = path.resolve(String(session.executable || resolveExecutable(session.app_path || '')));
+  if (currentCommand !== executable && !currentCommand.startsWith(`${executable} `)) return false;
+  if (!session.profile_alias || !currentCommand.includes(`--user-data-dir=${session.profile_alias}`)) return false;
+  const port = Number(session.port || safeCdpPort(session.cdp_url));
+  if (!port || !currentCommand.includes(`--remote-debugging-port=${port}`)) return false;
+  if (session.control_plane_origin
+    && !currentCommand.includes(`--qbot-server=${session.control_plane_origin}`)) return false;
+  try {
+    if (fs.realpathSync.native(session.profile_alias) !== fs.realpathSync.native(session.profile_dir)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+export async function adoptRelaunchedLiveTeamsSession(sessionFile, { timeoutMs = 30_000 } = {}) {
+  const previous = readSession(sessionFile);
+  if (!previous || previous.profile_mode !== 'live' || !previous.cdp_url) return null;
+  if (processMatchesSession(previous)) return previous;
+  const port = Number(previous.port || safeCdpPort(previous.cdp_url));
+  if (!port) return null;
+  const listenerPid = listenerPidForPort(port);
+  if (!listenerPid) return null;
+  const identity = processIdentity(listenerPid);
+  if (!matchesRelaunchedLiveSession(previous, { pid: listenerPid, command: identity.command })) return null;
+  const version = await waitForCdp({ cdpUrl: normalizeCdpUrl(previous.cdp_url), timeoutMs });
+  const adopted = {
+    ...previous,
+    pid: listenerPid,
+    launcher_pid: listenerPid,
+    process_started: identity.started,
+    process_command: redactText(identity.command),
+    browser: String(version.Browser || previous.browser || ''),
+    started_at: new Date().toISOString(),
+    adopted_relaunch_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(sessionFile, `${JSON.stringify(adopted, null, 2)}\n`, { mode: 0o600 });
+  return adopted;
+}
+
 export function listRunningTeamsMainProcesses(executable) {
   try {
     const output = execFileSync('ps', ['-ax', '-ww', '-o', 'pid=,command='], { encoding: 'utf8' });
@@ -388,6 +433,14 @@ function listenerPidForPort(port) {
     return Number.isInteger(pid) && pid > 1 ? pid : null;
   } catch {
     return null;
+  }
+}
+
+function safeCdpPort(value) {
+  try {
+    return Number(new URL(String(value || '')).port || 0);
+  } catch {
+    return 0;
   }
 }
 
