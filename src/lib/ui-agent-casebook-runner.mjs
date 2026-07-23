@@ -12998,6 +12998,88 @@ async function waitForQbotWorkbench(page, timeoutMs = 90000) {
   return { ok: false, reason: `完成 OAuth 后未在 ${timeoutMs}ms 内进入工作台；页面文本：${clip(lastText, 220)}` };
 }
 
+function fixtureMockAuthorizeUrl(logText) {
+  const matches = String(logText || '').match(
+    /\[qbot-e2e-open-external\]\s+(https?:\/\/[^\s]+\/api\/auth\/mock\/authorize\?[^\s]+)/g,
+  ) || [];
+  const raw = String(matches.at(-1) || '').replace(/^\[qbot-e2e-open-external\]\s+/, '');
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw); } catch { return ''; }
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) return '';
+  if (url.pathname !== '/api/auth/mock/authorize') return '';
+  if (!url.searchParams.get('attemptId') || !url.searchParams.get('state')) return '';
+  return url.toString();
+}
+
+async function ensureManagedFixtureMockAuth(page, options, { timeoutMs = 30000 } = {}) {
+  const loginVisible = await page.locator('[data-testid="auth-login"]').first()
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  if (!loginVisible) return { ok: true, needed: false };
+
+  const auth = await page.evaluate(async () => window.agent?.getAuthStatus?.())
+    .catch((error) => ({ error: error?.message || String(error) }));
+  if (String(auth?.provider?.id || '').toLowerCase() !== 'mock') {
+    return {
+      ok: false,
+      needed: true,
+      reason: `受控 fixture 重启后进入登录页，但鉴权提供方不是 mock：${clip(JSON.stringify(auth), 300)}`,
+    };
+  }
+
+  const logFile = String(options['qbot-stderr-log'] || '').trim();
+  if (!logFile || !fs.existsSync(logFile)) {
+    return { ok: false, needed: true, reason: '受控 fixture 需要自动完成 mock OAuth，但缺少受控 Teams 日志。' };
+  }
+  const offset = fs.statSync(logFile).size;
+  const loginPromise = page.evaluate(async () => {
+    const result = await window.agent.login();
+    return {
+      authenticated: Boolean(result?.authenticated),
+      provider: String(result?.provider?.id || ''),
+      hasUser: Boolean(result?.user),
+    };
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  let authorizeUrl = '';
+  while (Date.now() < deadline) {
+    const appended = fs.readFileSync(logFile, 'utf8').slice(offset);
+    authorizeUrl = fixtureMockAuthorizeUrl(appended);
+    if (authorizeUrl) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!authorizeUrl) {
+    await loginPromise.catch(() => {});
+    return { ok: false, needed: true, reason: '受控 fixture mock OAuth 未输出可验证的 loopback 授权 URL。' };
+  }
+
+  let response;
+  try {
+    response = await fetch(authorizeUrl, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    await loginPromise.catch(() => {});
+    return { ok: false, needed: true, reason: `受控 fixture mock OAuth 回调失败：${error?.message || error}` };
+  }
+  if (!response.ok) {
+    await loginPromise.catch(() => {});
+    return { ok: false, needed: true, reason: `受控 fixture mock OAuth 回调返回 HTTP ${response.status}。` };
+  }
+  const result = await loginPromise.catch((error) => ({ error: error?.message || String(error) }));
+  if (!result?.authenticated || result?.provider !== 'mock') {
+    return {
+      ok: false,
+      needed: true,
+      reason: `受控 fixture mock OAuth 未进入已登录态：${clip(JSON.stringify(result), 300)}`,
+    };
+  }
+  return { ok: true, needed: true, provider: 'mock', hasUser: result.hasUser };
+}
+
 async function restartQbotAndReconnect({ runtime, options, state, caseDir, label, commandOverride = '' }) {
   const command = String(commandOverride || options['restart-command'] || '').trim();
   if (!command) return { ok: false, reason: '未配置 restart-command，无法执行 QBot 重启闭环。' };
@@ -13034,6 +13116,17 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
       if (!nextPage) throw new Error('CDP 已恢复，但未找到 QBot 主窗口。');
       nextPage.setDefaultTimeout(12000);
       nextPage.setDefaultNavigationTimeout(30000);
+      const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options);
+      if (!fixtureAuth.ok) {
+        throw new Error(fixtureAuth.reason || '受控 fixture mock OAuth 恢复失败。');
+      }
+      if (fixtureAuth.needed) {
+        state.artifacts.fixture_mock_auth = {
+          authenticated: true,
+          provider: fixtureAuth.provider,
+          has_user: fixtureAuth.hasUser,
+        };
+      }
       // Keep dialogs unowned at page scope; case-specific flows decide whether to
       // accept or dismiss each confirmation.
       runtime.browser = nextBrowser;

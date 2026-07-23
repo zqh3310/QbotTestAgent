@@ -43,6 +43,13 @@ const fixtureEnv = {
   DEEPBANK_HOME: home,
   DEEPBANK_ENV: 'dev',
   DEEPBANK_E2E: mode === 'connector' ? (secondUrl || '1') : '1',
+  // Runner-owned fixture control planes must not inherit the developer
+  // checkout's Lingxi provider from .env.  Their database intentionally has
+  // no real DEV app session, so a real OAuth callback can only produce an
+  // invalid_app_session loop after the managed Teams host is relaunched.
+  // Keep authentication deterministic and local for fixture-only cases; the
+  // ordinary DEV lane still exercises the real Lingxi session.
+  DEEPBANK_AUTH_PROVIDER: 'mock',
 };
 if (mode === 'skillhub' || mode === 'capability') {
   fixtureEnv.DEEPBANK_SKILLHUB_RESOURCES_BASE_URL = firstUrl;

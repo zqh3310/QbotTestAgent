@@ -536,6 +536,16 @@ test('managed Teams HITL fixture opts into mock Agent only for its controlled re
   assert.match(runner, /executeHitlFixtureCase[\s\S]*enableE2eMarker: true/);
 });
 
+test('managed Teams local fixture control planes use deterministic mock auth and auto-complete only loopback OAuth', () => {
+  const fixtureServer = fs.readFileSync(new URL('../runtime/scripts/teams-control-plane.mjs', import.meta.url), 'utf8');
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(fixtureServer, /DEEPBANK_AUTH_PROVIDER:\s*['"]mock['"]/);
+  assert.match(runner, /ensureManagedFixtureMockAuth/);
+  assert.match(runner, /\/api\/auth\/mock\/authorize/);
+  assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
+  assert.match(runner, /fixture_mock_auth/);
+});
+
 test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaunch', () => {
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /let connection = await resolveTeamsCasebookConnection/);
