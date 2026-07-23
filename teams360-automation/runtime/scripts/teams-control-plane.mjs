@@ -3,6 +3,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 
 const [mode, qbotRoot, homeOverride, firstUrl = '', secondUrl = ''] = process.argv.slice(2);
@@ -36,6 +37,33 @@ try {
     .trim().split(/\s+/).map(Number).filter((pid) => pid > 1);
   for (const pid of listeners) terminateGroup(pid);
 } catch {}
+
+function portIsOpen() {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    const finish = (open) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(250);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
+let portClosed = false;
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  if (!await portIsOpen()) {
+    portClosed = true;
+    break;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+if (!portClosed) {
+  throw new Error(`Teams fixture control plane port ${port} remained occupied after terminating the previous fixture.`);
+}
 
 const fixtureEnv = {
   ...process.env,
@@ -85,7 +113,12 @@ function health() {
       response.on('end', () => {
         try {
           const payload = JSON.parse(body || '{}');
-          resolve(response.statusCode === 200 && payload.ready === true && payload.env === 'dev');
+          resolve(
+            response.statusCode === 200
+            && payload.ready === true
+            && payload.env === 'dev'
+            && payload.auth?.provider?.id === 'mock',
+          );
         } catch {
           resolve(false);
         }

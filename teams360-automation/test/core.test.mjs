@@ -540,6 +540,9 @@ test('managed Teams local fixture control planes use deterministic mock auth and
   const fixtureServer = fs.readFileSync(new URL('../runtime/scripts/teams-control-plane.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(fixtureServer, /DEEPBANK_AUTH_PROVIDER:\s*['"]mock['"]/);
+  assert.match(fixtureServer, /portIsOpen/);
+  assert.match(fixtureServer, /if\s*\(!portClosed\)/);
+  assert.match(fixtureServer, /payload\.auth\?\.provider\?\.id\s*===\s*['"]mock['"]/);
   assert.match(runner, /ensureManagedFixtureMockAuth/);
   assert.match(runner, /\/api\/auth\/mock\/authorize/);
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
