@@ -12,6 +12,14 @@ const QWORK_RUNTIME_BRIDGE_SOURCE = String.raw`(() => {
   const installAgentTimeoutGuards = () => {
     const agent = root.agent;
     if (!agent || typeof agent.capabilities !== 'function') return;
+    // A case-scoped renderer fixture owns its wrapper lifecycle. Rewrapping it
+    // every 250 ms creates an ever-growing call chain across consecutive runs
+    // and can strand calls on an expired Playwright binding.
+    let rendererControlWrapper = false;
+    try {
+      rendererControlWrapper = Boolean(agent.capabilities.__qbotAutomationRendererControlWrapper);
+    } catch {}
+    if (rendererControlWrapper) return;
     if (root.__teams360AgentCapabilitiesOwner === agent
       && agent.capabilities === root.__teams360WrappedAgentCapabilities) return;
     const original = agent.capabilities.bind(agent);

@@ -153,7 +153,16 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         const deadline = Date.now() + 30_000;
         while (Date.now() < deadline) {
           const bridge = window.__qbotE2E || window.__deepbankE2E;
-          const view = await bridge?.getConnectionView?.();
+          let view = null;
+          try {
+            view = await Promise.race([
+              Promise.resolve().then(() => bridge?.getConnectionView?.()),
+              new Promise((_, reject) => setTimeout(
+                () => reject(new Error('Teams QWork connection view timed out after 1500ms')),
+                1500,
+              )),
+            ]);
+          } catch {}
           const selected = String(view?.runtimeOptions?.selected?.complianceTier || '').toUpperCase();
           if (/^M[1-4]$/.test(selected)) return selected;
           const visible = String(document.querySelector('[data-testid="composer-safety-level-menu"]')?.textContent || '')
@@ -167,7 +176,13 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
       if (!tier) throw new Error('QWork connected, but the visible model tier could not be read back.');
       const capabilitiesHealth = await page.evaluate(async () => {
         try {
-          const value = await window.agent?.capabilities?.();
+          const value = await Promise.race([
+            Promise.resolve().then(() => window.agent?.capabilities?.()),
+            new Promise((_, reject) => setTimeout(
+              () => reject(new Error('Teams QWork capabilities precheck timed out after 5000ms')),
+              5000,
+            )),
+          ]);
           return { ok: Boolean(value && typeof value === 'object'), reason: value ? '' : 'empty capabilities' };
         } catch (error) {
           return { ok: false, reason: String(error?.message || error) };
@@ -214,13 +229,26 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
 }
 
 export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = {}) {
-  const browser = await chromium.connectOverCDP(normalizeCdpUrl(cdpUrl), { timeout: 10_000 });
+  const normalizedCdpUrl = normalizeCdpUrl(cdpUrl);
+  const targetsResponse = await fetch(new URL('/json/list', normalizedCdpUrl), {
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!targetsResponse.ok) {
+    return { recovered: false, reason: `QWork CDP target discovery failed: HTTP ${targetsResponse.status}` };
+  }
+  const targets = await targetsResponse.json();
+  const qworkTarget = Array.isArray(targets) ? targets.find((target) => (
+    target?.type === 'webview'
+    && (/^QWork$/i.test(String(target.title || ''))
+      || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(target.url || '')))
+  )) : null;
+  if (!qworkTarget?.url) {
+    return { recovered: false, reason: 'QWork WebView is unavailable; pinned UI cannot be preserved.' };
+  }
+  const pinnedQworkUi = validatePinnedQworkUiUrl(qworkTarget.url);
+  const browser = await chromium.connectOverCDP(normalizedCdpUrl, { timeout: 10_000 });
   let browserClosed = false;
   try {
-    const qwork = browser.contexts().flatMap((context) => context.pages())
-      .find((page) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(page.url()));
-    if (!qwork) return { recovered: false, reason: 'QWork WebView is unavailable; pinned UI cannot be preserved.' };
-    const pinnedQworkUi = validatePinnedQworkUiUrl(qwork.url());
     const host = browser.contexts().flatMap((context) => context.pages()).find((page) => {
       try {
         const url = new URL(page.url());
@@ -570,10 +598,14 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   const needsRealFixtureHost = fullProfile || selectedCases.some((id) => realFixtureCases.test(id));
   if (/^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || '')) || needsRealFixtureHost) {
     options['teams-fixture-host-relaunch'] = 'true';
-    delete options['renderer-control-adapter'];
-  } else {
-    options['renderer-control-adapter'] = 'teams360';
   }
+  // Packaged QWork 0.0.11 authenticates through the Teams Lingxi bridge even
+  // when DEEPBANK_E2E is enabled. Switching the whole host to a loopback
+  // mock-auth control plane therefore strands the WebView on the login page.
+  // Keep the external DEV control plane/login intact and inject deterministic
+  // fixture behaviour at the renderer bridge. Host relaunch remains enabled
+  // independently for cases that genuinely exercise restart semantics.
+  options['renderer-control-adapter'] = 'teams360';
   options['qbot-root'] ||= DEEPBANK_ROOT;
   options['qbot-home'] ||= TEAMS_CONTROL_PLANE_HOME;
   options['restart-cwd'] = TEAMS_RUNTIME_ROOT;

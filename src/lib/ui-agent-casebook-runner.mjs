@@ -5316,10 +5316,56 @@ async function executeSitSkillAuthError({ page, state, caseDir, options, runtime
   }
 }
 
-async function restartWithSkillHubFault({ state, caseDir, options, runtime, label, overrideUrl, cleanup = null }) {
+async function restartWithSkillHubFault({
+  state,
+  caseDir,
+  options,
+  runtime,
+  label,
+  overrideUrl,
+  cleanup = null,
+  fixture = null,
+}) {
   if (options['renderer-control-adapter'] === 'teams360') {
     const page = runtime?.page;
     if (!page) return { ok: false, reason: `${label}缺少当前 QWork 页面。`, cleanup };
+    if (fixture?.skills?.length) {
+      const controller = createTeamsSkillFixtureController(fixture.skills);
+      const adapter = await installRendererControlAdapter({
+        page,
+        initiallyArmed: true,
+        handler: controller.handle,
+        rules: [
+          ['GET', '/api/skills/catalog'],
+          ['POST', '/api/skills/install'],
+          ['POST', '/api/skills/uninstall'],
+          ['POST', '/api/skills/update'],
+          ['POST', '/api/skills/revert'],
+          ['POST', '/api/skills/reconcile'],
+        ].map(([method, pathExact]) => ({
+          id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
+          method,
+          pathExact,
+          mode: 'node-handler',
+        })),
+      });
+      const combinedCleanup = async () => {
+        await adapter.close().catch(() => {});
+        if (cleanup) await cleanup().catch(() => {});
+      };
+      state.artifacts.teams360_skill_fixture_adapter = {
+        mode: 'stateful-renderer-bridge',
+        control_plane_preserved: String(options['control-plane-url'] || ''),
+        skills: fixture.skills.map((item) => item.slug),
+      };
+      return {
+        ok: true,
+        page,
+        cleanup: combinedCleanup,
+        rendererAdapter: true,
+        fixtureController: controller,
+      };
+    }
     const status = overrideUrl ? 'forbidden' : 'unavailable';
     const marketError = overrideUrl
       ? '403 无权限访问技能市场，请重新登录或联系管理员。'
@@ -6278,6 +6324,11 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
   const beforeRemoval = await composerSkillSelectionSnapshot(page);
   state.artifacts.skill_026_before_removal = beforeRemoval;
   const badgeText = await visibleComposerToolStateText(page, 'skill');
+  const visibleSelectedLabels = beforeRemoval.chipTexts
+    .map(cleanSkillChipLabel)
+    .filter(Boolean);
+  const visibleSelectionFeedback = /2|两|已选|手动/.test(badgeText)
+    || visibleSelectedLabels.every((label) => badgeText.includes(label));
   state.screenshots.skill_026_after_multi_select = await shot(page, caseDir, 'skill-026-after-multi-select');
   recordAssertion(
     state,
@@ -6286,12 +6337,13 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
     beforeRemoval.chipCount === 2
       && beforeRemoval.chipsInsideComposer
       && beforeRemoval.selectedSkillCount === 2
-      && /2|两|已选|手动/.test(`${badgeText}\n${beforeRemoval.chipTexts.join(' / ')}`),
+      && visibleSelectionFeedback,
     `snapshot=${clip(JSON.stringify(beforeRemoval), 700)}；tool=${clip(badgeText, 180)}`,
   );
 
   const firstChip = composer.locator('[data-testid^="composer-skill-chip-"]').first();
-  const removedSkill = cleanSkillChipLabel(await firstChip.innerText({ timeout: 1000 }).catch(() => ''));
+  const chipLabel = await firstChip.locator('.skill-chip-label').first().innerText({ timeout: 1000 }).catch(() => '');
+  const removedSkill = cleanSkillChipLabel(chipLabel || await firstChip.innerText({ timeout: 1000 }).catch(() => ''));
   await firstChip.hover().catch(() => {});
   const remove = firstChip.locator('.skill-chip-x, button[aria-label^="移除"], button[aria-label*="remove" i]').first();
   if (!(await visible(remove, 1200))) {
@@ -6505,15 +6557,18 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     label: `${testCase.id} QA SkillHub Fixture`,
     overrideUrl: fixture.url,
     cleanup: fixture.close,
+    fixture,
   });
   if (!injected.ok) {
     await fixture.close().catch(() => {});
     markFailed(state, `QA SkillHub Fixture 启动失败：${injected.reason}`, 'automation_error');
     return;
   }
-  options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
-    ? 'http://127.0.0.1:18900'
-    : 'http://127.0.0.1:8900';
+  if (!injected.rendererAdapter) {
+    options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
+      ? 'http://127.0.0.1:18900'
+      : 'http://127.0.0.1:8900';
+  }
   try {
     page = injected.page;
     const prepared = await prepareSkillRegressionFixtureState({ page, state, testCase, caseDir, options, fixture });
@@ -6539,7 +6594,9 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
       return await executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs });
     }
   } finally {
-    state.artifacts.skillhub_regression_fixture.hits = fixture.state.hits;
+    state.artifacts.skillhub_regression_fixture.hits = injected.fixtureController
+      ? injected.fixtureController.snapshot().events
+      : fixture.state.hits;
     state.artifacts.skill_fixture_teardown = await cleanupSkillRegressionFixtureState(runtime?.page || page, testCase);
     await restoreNormalQbotAfterFault({ state, caseDir, options, runtime, cleanup: fixture.close });
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
@@ -6863,15 +6920,25 @@ export function seedLocalSkillReadiness(qbotHome, slug, readinessStatus, { addit
 
 async function searchAutomationSkillCard(page, state, caseDir, marker, { installed = false } = {}) {
   await openSkillsPage(page, state, caseDir, { skillTab: installed ? '已安装' : '技能市场' });
-  if (installed) return marker ? findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')) : null;
-  const input = page.locator('.skill-search input').first();
+  const markerPattern = marker ? automationFixtureMarkerPattern(marker) : null;
+  if (installed) return markerPattern ? findSkillCardByText(page, markerPattern) : null;
+  const input = page.locator('.skill-search input, input[placeholder*="搜索技能"]').first();
   if (marker && await visible(input, 1500)) {
     await input.fill(marker);
     const submit = page.locator('.skill-search button').filter({ hasText: /搜索/ }).first();
-    await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
+    if (await visible(submit, 500)) {
+      await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
+    } else {
+      await input.press('Enter').catch(() => {});
+    }
     await page.waitForTimeout(1600);
   }
-  return marker ? findSkillCardByText(page, new RegExp(escapeRegExp(marker), 'i')) : null;
+  return markerPattern ? findSkillCardByText(page, markerPattern) : null;
+}
+
+export function automationFixtureMarkerPattern(marker) {
+  const parts = String(marker || '').trim().split(/[-_\s]+/).filter(Boolean);
+  return new RegExp(parts.map(escapeRegExp).join('(?:[-_\\s]+)'), 'i');
 }
 
 async function waitForSkillOperationFeedback(page, timeoutMs = 120000) {
@@ -9704,10 +9771,11 @@ async function visibleSkillChipText(page) {
   return texts.map((item) => item.trim()).filter(Boolean).join(' / ');
 }
 
-function cleanSkillChipLabel(value) {
+export function cleanSkillChipLabel(value) {
   return String(value || '')
     .replace(/(?:移除|删除|remove)/gi, '')
     .replace(/^\s*[✦★☆◆◇•·]+\s*/u, '')
+    .replace(/^\s*[×xX]\s*/g, '')
     .replace(/[×xX]\s*$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -10224,7 +10292,19 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     const manualOk = await setSkillMode(page, state, caseDir, 'manual');
     if (!manualOk) return false;
   }
-  const menu = await activeMenuLocator(page, 'skill');
+  let menu = await activeMenuLocator(page, 'skill');
+  // Packaged QWork 0.0.11 closes the unified submenu after every selection.
+  // Multi-skill flows must reopen it for the next exact option instead of
+  // assuming the first menu instance remains visible.
+  if (!menu) {
+    await ensureComposerToolMenu(page, state, {
+      selector: '[data-testid="composer-skills-menu"]',
+      action: `重新打开【技能】菜单以选择：${expectedLabel}`,
+      matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+      menuKind: 'skill',
+    });
+    menu = await activeMenuLocator(page, 'skill');
+  }
   if (!menu) {
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
     return false;
@@ -12471,26 +12551,264 @@ async function restoreControlPlaneHttpControl(control, { options, runtime, state
 
 let rendererControlSequence = 0;
 
-async function installRendererControlAdapter({ page, rules = [], initiallyArmed = false }) {
+export function createTeamsSkillFixtureController(skills = []) {
+  const definitions = new Map(
+    skills.map((item) => {
+      const slug = String(item.slug || item.name || '').trim();
+      const versions = Array.isArray(item.versions) && item.versions.length
+        ? item.versions.map(String)
+        : [String(item.version || '1.0.0')];
+      return [slug, {
+        ...item,
+        slug,
+        namespace: String(item.namespace || 'global'),
+        title: String(item.title || item.displayName || item.label || slug),
+        description: String(item.description || item.summary || ''),
+        versions,
+        version: versions.includes(String(item.version || '')) ? String(item.version) : versions[0],
+        dependencies: Array.isArray(item.dependencies) ? item.dependencies.map(String) : [],
+      }];
+    }).filter(([slug]) => slug),
+  );
+  const installed = new Map();
+  const history = [];
+  const events = [];
+  const activeVersions = new Map([...definitions].map(([slug, item]) => [slug, item.version]));
+  const resolveSlug = (value) => {
+    const raw = typeof value === 'string'
+      ? value
+      : value?.slug || value?.name || value?.runtimeName || value?.upstreamId || '';
+    const text = String(raw || '').trim();
+    if (definitions.has(text)) return text;
+    const runtime = text.match(/skillhub__[^_]+__(.+)$/)?.[1];
+    if (runtime && definitions.has(runtime)) return runtime;
+    return [...definitions].find(([, item]) => item.title === text)?.[0] || text;
+  };
+  const installedRow = (slug) => {
+    const item = definitions.get(slug);
+    const row = installed.get(slug);
+    if (!item || !row) return null;
+    return {
+      name: slug,
+      slug,
+      namespace: item.namespace,
+      runtimeName: `skillhub__${item.namespace}__${slug}`,
+      label: item.title,
+      desc: item.description,
+      version: row.version,
+      source: 'SkillHub QA Fixture',
+      sourcePlatform: 'skillhub',
+      upstreamId: `${item.namespace}/${slug}`,
+      installedAt: row.installedAt,
+      updatedAt: row.updatedAt,
+      cached: true,
+      canRemove: true,
+      canUpdate: item.versions.some((version) => version !== row.version),
+      installStatus: item.installStatus === 'AUTO_DECLARED' ? 'auto_declared' : String(item.installStatus || 'ok').toLowerCase(),
+      installReasons: item.installStatusReason ? [{ code: 'fixture', detail: String(item.installStatusReason) }] : [],
+      localReadiness: {
+        status: row.readiness,
+        readinessStatus: row.readiness === 'ready_on_this_process' ? 'ready' : row.readiness,
+        runtimeName: `skillhub__${item.namespace}__${slug}`,
+        activeSessionLoadStatus: row.readiness === 'ready_on_this_process' ? 'loaded' : 'pending',
+      },
+      readinessStatus: row.readiness,
+      availableReverts: history
+        .filter((entry) => entry.skill === slug && entry.version && entry.version !== row.version)
+        .map((entry) => ({ version: entry.version, action: entry.action, createdAt: entry.createdAt, cached: true })),
+    };
+  };
+  const marketRow = (slug) => {
+    const item = definitions.get(slug);
+    const row = installed.get(slug);
+    const latestVersion = activeVersions.get(slug) || item.version;
+    const installStatus = String(item.installStatus || '').toLowerCase();
+    return {
+      name: slug,
+      slug,
+      namespace: item.namespace,
+      label: item.title,
+      displayName: item.title,
+      cnName: item.title,
+      // Keep the immutable slug visible in the card body. Packaged QWork may
+      // move or client-filter the search box between releases; the runner can
+      // still identify the exact QA fixture without relying on a translated
+      // or visually truncated title.
+      desc: `${item.description} (${slug})${item.dependencies.length ? `；依赖 ${item.dependencies.join('、')}` : ''}`,
+      description: item.description,
+      category: 'QA Regression',
+      author: 'QBotTestAgent',
+      installed: Boolean(row),
+      installedVersion: row?.version,
+      latestVersion,
+      source: 'skillhub',
+      sourcePlatform: 'skillhub',
+      sourceLabel: 'QA Fixture',
+      upstreamId: `${item.namespace}/${slug}`,
+      visibility: 'PUBLIC',
+      status: 'ACTIVE',
+      usable: installStatus !== 'rejected',
+      installStatus: item.installStatus === 'AUTO_DECLARED' ? 'auto_declared' : installStatus,
+      installReasons: item.installStatusReason ? [{ code: 'fixture', detail: String(item.installStatusReason) }] : [],
+    };
+  };
+  const installOne = (slug, chain = []) => {
+    const item = definitions.get(slug);
+    if (!item) return { ok: false, msg: `技能不存在：${slug}` };
+    if (chain.includes(slug)) return { ok: false, msg: `检测到循环依赖：${[...chain, slug].join(' -> ')}` };
+    if (item.archive === 'download_failure') return { ok: false, msg: `依赖技能 ${slug} 安装失败：下载失败` };
+    if (item.archive === 'audit_rejected' || String(item.installStatus || '').toLowerCase() === 'rejected') {
+      return { ok: false, msg: `技能 ${slug} 装不上：${item.installStatusReason || '安全审计不允许安装'}` };
+    }
+    if (installed.has(slug)) return { ok: true, skill: installedRow(slug), installedDependencies: [] };
+    const newlyInstalled = [];
+    for (const dependency of item.dependencies) {
+      const result = installOne(dependency, [...chain, slug]);
+      if (!result.ok) return { ok: false, msg: `依赖技能 ${dependency} 安装失败，主技能未安装：${result.msg}` };
+      newlyInstalled.push(...(result.installedDependencies || []), dependency);
+    }
+    const now = Date.now();
+    installed.set(slug, {
+      version: activeVersions.get(slug) || item.version,
+      installedAt: now,
+      updatedAt: now,
+      readiness: slug === 'qa-materialization-pending' ? 'pending_materialization' : 'ready_on_this_process',
+    });
+    history.unshift({ skill: slug, label: item.title, version: installed.get(slug).version, action: 'install', createdAt: now, scope: 'fixture' });
+    return { ok: true, skill: installedRow(slug), installedDependencies: [...new Set(newlyInstalled)] };
+  };
+  const handle = async ({ name, args = [] }) => {
+    events.push({ name, args, at: Date.now() });
+    if (name === 'getSkillsCatalog') {
+      const query = String(args[0] || '').trim().toLowerCase();
+      const market = [...definitions.keys()].map(marketRow).filter((item) => !query
+        || `${item.slug}\n${item.label}\n${item.desc}`.toLowerCase().includes(query));
+      return {
+        handled: true,
+        result: {
+          installed: [...installed.keys()].map(installedRow).filter(Boolean),
+          market,
+          marketSource: 'skillhub',
+          marketStatus: market.length ? 'ready' : 'empty',
+          marketError: '',
+          history: [...history],
+        },
+      };
+    }
+    if (name === 'installSkill') {
+      const slug = resolveSlug(args[0]);
+      const result = installOne(slug);
+      const dependencies = result.installedDependencies?.filter((item) => item !== slug) || [];
+      return {
+        handled: true,
+        result: result.ok
+          ? {
+            ...result,
+            msg: dependencies.length
+              ? `安装成功，并级联安装依赖：${[...new Set(dependencies)].join('、')}`
+              : '安装成功',
+          }
+          : result,
+      };
+    }
+    if (name === 'uninstallSkill') {
+      const slug = resolveSlug(args[0]);
+      const existed = installed.delete(slug);
+      if (existed) history.unshift({ skill: slug, label: definitions.get(slug)?.title || slug, action: 'uninstall', createdAt: Date.now(), scope: 'fixture' });
+      return { handled: true, result: { ok: true, msg: existed ? '卸载成功' : '未安装' } };
+    }
+    if (name === 'reconcileSkills') {
+      const materialized = [];
+      for (const [slug, row] of installed) {
+        if (row.readiness !== 'pending_materialization') continue;
+        row.readiness = 'ready_on_this_process';
+        row.updatedAt = Date.now();
+        materialized.push(slug);
+      }
+      return { handled: true, result: { ok: true, materialized, unready: [], rejected: [], empty: installed.size === 0 } };
+    }
+    if (name === 'updateSkill') {
+      const slug = resolveSlug(args[0]);
+      const row = installed.get(slug);
+      const item = definitions.get(slug);
+      if (!row || !item) return { handled: true, result: { ok: false, msg: '技能未安装' } };
+      const fromVersion = row.version;
+      const toVersion = activeVersions.get(slug) || item.versions.at(-1);
+      row.version = toVersion;
+      row.updatedAt = Date.now();
+      history.unshift({ skill: slug, label: item.title, version: fromVersion, action: 'update', createdAt: row.updatedAt, scope: 'fixture' });
+      return { handled: true, result: { ok: true, updated: fromVersion !== toVersion, fromVersion, toVersion, skill: installedRow(slug) } };
+    }
+    if (name === 'revertSkill') {
+      const slug = resolveSlug(args[0]);
+      const version = String(args[1] || '');
+      const row = installed.get(slug);
+      const item = definitions.get(slug);
+      if (!row || !item?.versions.includes(version)) return { handled: true, result: { ok: false, msg: '回退版本不存在' } };
+      const previous = row.version;
+      row.version = version;
+      row.updatedAt = Date.now();
+      history.unshift({ skill: slug, label: item.title, version: previous, action: 'revert', createdAt: row.updatedAt, scope: 'fixture' });
+      return { handled: true, result: { ok: true, skill: installedRow(slug) } };
+    }
+    return { handled: false };
+  };
+  return {
+    handle,
+    setActiveVersion(slug, version) {
+      if (definitions.get(slug)?.versions.includes(String(version))) activeVersions.set(slug, String(version));
+    },
+    snapshot() {
+      return {
+        installed: [...installed.keys()].map(installedRow).filter(Boolean),
+        history: [...history],
+        events: [...events],
+      };
+    },
+  };
+}
+
+async function installRendererControlAdapter({
+  page,
+  rules = [],
+  initiallyArmed = false,
+  handler = null,
+}) {
+  const id = `teams360-control-${process.pid}-${Date.now()}-${++rendererControlSequence}`;
+  const bindingToken = id.replace(/[^a-zA-Z0-9_]/g, '_');
+  const bindingNames = {
+    get: `__qbotAutomationControlGet_${bindingToken}`,
+    hit: `__qbotAutomationControlHit_${bindingToken}`,
+    invoke: `__qbotAutomationControlInvoke_${bindingToken}`,
+  };
   if (!page.__qbotRendererControlRegistry) {
     const registry = new Map();
     Object.defineProperty(page, '__qbotRendererControlRegistry', { value: registry, configurable: true });
-    await page.exposeFunction('__qbotAutomationControlGet', (id) => {
-      const entry = registry.get(String(id));
-      return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
-    });
-    await page.exposeFunction('__qbotAutomationControlHit', (id, hit) => {
-      const entry = registry.get(String(id));
-      if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
-      return Boolean(entry);
-    });
   }
 
-  const id = `teams360-control-${++rendererControlSequence}`;
+  const registry = page.__qbotRendererControlRegistry;
+  await page.exposeFunction(bindingNames.get, (controlId) => {
+    const entry = registry.get(String(controlId));
+    return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
+  });
+  await page.exposeFunction(bindingNames.hit, (controlId, hit) => {
+    const entry = registry.get(String(controlId));
+    if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
+    return Boolean(entry);
+  });
+  await page.exposeFunction(bindingNames.invoke, async (controlId, call) => {
+    const entry = registry.get(String(controlId));
+    if (!entry?.handler) return { handled: false };
+    try {
+      return await entry.handler(call);
+    } catch (error) {
+      return { handled: true, error: error?.message || String(error) };
+    }
+  });
   const state = { armed: Boolean(initiallyArmed), hits: [], installedAt: Date.now() };
   const serializedRules = rules.map((rule) => ({ ...rule }));
-  page.__qbotRendererControlRegistry.set(id, { state, rules: serializedRules });
-  await page.evaluate(({ controlId }) => {
+  registry.set(id, { state, rules: serializedRules, handler });
+  await page.evaluate(({ controlId, bindings }) => {
     const root = globalThis;
     const methodRoutes = {
       capabilities: { method: 'GET', path: '/api/capabilities' },
@@ -12499,6 +12817,9 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
       getConnectorCatalog: { method: 'GET', path: '/api/connectors/catalog' },
       installSkill: { method: 'POST', path: '/api/skills/install' },
       uninstallSkill: { method: 'POST', path: '/api/skills/uninstall' },
+      updateSkill: { method: 'POST', path: '/api/skills/update' },
+      revertSkill: { method: 'POST', path: '/api/skills/revert' },
+      reconcileSkills: { method: 'POST', path: '/api/skills/reconcile' },
       submitFeedbackIssueIntake: { method: 'POST', path: '/api/feedback-issues/intake' },
       send: { method: 'POST', path: '/api/desktop-agent/turn-context' },
     };
@@ -12579,14 +12900,24 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
       }
       return payload;
     };
-    if (!root.__qbotAutomationAgentOriginals) root.__qbotAutomationAgentOriginals = {};
+    // A prior runner process can disappear before its finally block executes.
+    // Restore any wrappers it left in this long-lived Teams WebView before
+    // installing this run's adapter.
+    if (root.agent && root.__qbotAutomationAgentOriginals) {
+      for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals)) {
+        if (typeof original === 'function') root.agent[name] = original;
+      }
+    }
+    delete root.__qbotAutomationAgentOriginals;
+    delete root.__qbotAutomationAgentOriginalsOwner;
+    root.__qbotAutomationAgentOriginals = {};
     for (const [name, route] of Object.entries(methodRoutes)) {
       if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
       const original = root.agent[name].bind(root.agent);
       root.__qbotAutomationAgentOriginals[name] = original;
-      root.agent[name] = async (...args) => {
+      const wrapped = async (...args) => {
         const activeId = root.__qbotAutomationControlId;
-        const config = activeId ? await root.__qbotAutomationControlGet?.(activeId) : null;
+        const config = activeId ? await root[bindings.get]?.(activeId) : null;
         const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
           ? `${route.path}?refresh=force`
           : route.path;
@@ -12604,8 +12935,22 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
           requestArgs,
           requestBody,
         };
+        if (rule.mode === 'node-handler') {
+          const response = await root[bindings.invoke]?.(activeId, {
+            name,
+            args: requestArgs,
+            method: route.method,
+            path,
+            ruleId: rule.id || '',
+          });
+          hit.handled = Boolean(response?.handled);
+          await root[bindings.hit]?.(activeId, hit);
+          if (response?.error) throw new Error(response.error);
+          if (response?.handled) return structuredClone(response.result);
+          return original(...args);
+        }
         if (!['transform-json', 'observe'].includes(rule.mode)) {
-          await root.__qbotAutomationControlHit?.(activeId, hit);
+          await root[bindings.hit]?.(activeId, hit);
           if (Number(rule.delayMs || 0) > 0) {
             await new Promise((resolve) => setTimeout(resolve, Number(rule.delayMs)));
           }
@@ -12617,13 +12962,16 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
         const result = await original(...args);
         const cloned = structuredClone(result);
         if (rule.mode === 'transform-json') transform(cloned, rule, hit);
-        await root.__qbotAutomationControlHit?.(activeId, hit);
+        await root[bindings.hit]?.(activeId, hit);
         return cloned;
       };
+      Object.defineProperty(wrapped, '__qbotAutomationRendererControlWrapper', { value: true });
+      root.agent[name] = wrapped;
     }
+    root.__qbotAutomationAgentOriginalsOwner = controlId;
     root.__qbotAutomationControlId = controlId;
     return true;
-  }, { controlId: id });
+  }, { controlId: id, bindings: bindingNames });
 
   return {
     state,
@@ -12631,9 +12979,20 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
     close: async () => {
       state.armed = false;
       page.__qbotRendererControlRegistry?.delete(id);
-      await page.evaluate((controlId) => {
-        if (globalThis.__qbotAutomationControlId === controlId) globalThis.__qbotAutomationControlId = '';
-      }, id).catch(() => {});
+      await page.evaluate(({ controlId, bindings }) => {
+        const root = globalThis;
+        if (root.__qbotAutomationControlId === controlId) root.__qbotAutomationControlId = '';
+        if (root.__qbotAutomationAgentOriginalsOwner === controlId && root.agent) {
+          for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals || {})) {
+            if (typeof original === 'function') root.agent[name] = original;
+          }
+          delete root.__qbotAutomationAgentOriginals;
+          delete root.__qbotAutomationAgentOriginalsOwner;
+        }
+        for (const binding of Object.values(bindings)) {
+          try { delete root[binding]; } catch {}
+        }
+      }, { controlId: id, bindings: bindingNames }).catch(() => {});
     },
   };
 }

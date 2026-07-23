@@ -45,6 +45,11 @@ import {
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
 } from '../lib/casebook-runner.mjs';
+import {
+  automationFixtureMarkerPattern,
+  cleanSkillChipLabel,
+  createTeamsSkillFixtureController,
+} from '../../src/lib/ui-agent-casebook-runner.mjs';
 
 test('defaults stay inside the independent teams360 automation directory', () => {
   const options = parseArgs(['doctor']);
@@ -320,6 +325,7 @@ test('the Teams-only runtime bridge bounds a stalled QWork capabilities IPC call
   assert.match(source, /installAgentTimeoutGuards/);
   assert.match(source, /Teams QWork capabilities timed out after 5000ms/);
   assert.match(source, /agent\.capabilities = wrapped/);
+  assert.match(source, /rendererControlWrapper = Boolean\(agent\.capabilities\.__qbotAutomationRendererControlWrapper\)/);
 });
 
 test('the Teams-only runtime bridge falls back to the visible context menu for session rename setup', () => {
@@ -437,11 +443,11 @@ test('Teams fixture runtime can opt into the host-relaunch lane for real fixture
   const browser = { contexts: () => [{ pages: () => [page] }] };
   const options = { 'teams-fixture-host-relaunch': 'true' };
   await configureTeamsFixtureRuntime(options, browser);
-  assert.equal(options['renderer-control-adapter'], undefined);
+  assert.equal(options['renderer-control-adapter'], 'teams360');
   assert.match(options['restart-command'], /restart-qbot-electron-control-plane\.sh/);
 });
 
-test('Teams fixture runtime automatically uses host relaunch for selected real fixture cases', async () => {
+test('Teams fixture runtime keeps host relaunch support while fixture data uses the authenticated renderer bridge', async () => {
   const page = {
     url: () => 'file:///Users/test/.deepbank/ui/0.0.8/index.html',
     evaluate: async () => 'https://qbot-api.360shuke.com',
@@ -450,7 +456,7 @@ test('Teams fixture runtime automatically uses host relaunch for selected real f
   const options = { case: 'SIT-SKILL-011,SIT-SKILL-020,SIT-SKILL-026,SIT-SKILL-027,SIT-CONN-013,SIT-SKILL-SCOPE-001,SIT-TEAMS-DOC-001,SIT-HITL-002' };
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['teams-fixture-host-relaunch'], 'true');
-  assert.equal(options['renderer-control-adapter'], undefined);
+  assert.equal(options['renderer-control-adapter'], 'teams360');
 });
 
 test('Teams runtime ships the complete SkillHub regression fixture set', () => {
@@ -471,7 +477,7 @@ test('Teams runtime ships the complete SkillHub regression fixture set', () => {
   }
 });
 
-test('Teams full profile automatically uses host relaunch because it contains real fixture cases', async () => {
+test('Teams full profile keeps restart coverage and the authenticated renderer fixture bridge', async () => {
   const page = {
     url: () => 'file:///Users/test/.deepbank/ui/0.0.8/index.html',
     evaluate: async () => 'https://qbot-api.360shuke.com',
@@ -480,7 +486,59 @@ test('Teams full profile automatically uses host relaunch because it contains re
   const options = { profile: 'full' };
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['teams-fixture-host-relaunch'], 'true');
-  assert.equal(options['renderer-control-adapter'], undefined);
+  assert.equal(options['renderer-control-adapter'], 'teams360');
+});
+
+test('Teams stateful SkillHub fixture handles dependencies and materialization without host auth drift', async () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../runtime/testfixtures/skillhub-regression/manifest.json', import.meta.url), 'utf8'));
+  const controller = createTeamsSkillFixtureController(fixture.skills);
+  const catalog = await controller.handle({ name: 'getSkillsCatalog', args: ['qa-dep-root'] });
+  assert.equal(catalog.handled, true);
+  assert.ok(catalog.result.market.length >= 3);
+  assert.ok(catalog.result.market.some((item) => item.slug === 'qa-dep-root-success'));
+  assert.ok(catalog.result.market.some((item) => item.slug === 'qa-dep-root-failure'));
+
+  const cascade = await controller.handle({ name: 'installSkill', args: [{ slug: 'qa-dep-root-success' }] });
+  assert.equal(cascade.result.ok, true);
+  assert.match(cascade.result.msg, /并级联安装依赖/);
+  assert.deepEqual(
+    new Set(controller.snapshot().installed.map((item) => item.slug)),
+    new Set(['qa-dep-root-success', 'qa-dep-leaf-a', 'qa-dep-leaf-b']),
+  );
+
+  const dependencyFailure = await controller.handle({ name: 'installSkill', args: ['qa-dep-root-failure'] });
+  assert.equal(dependencyFailure.result.ok, false);
+  assert.match(dependencyFailure.result.msg, /依赖技能 qa-dep-leaf-failure 安装失败，主技能未安装/);
+  assert.equal(controller.snapshot().installed.some((item) => item.slug === 'qa-dep-root-failure'), false);
+
+  const pending = await controller.handle({ name: 'installSkill', args: ['qa-materialization-pending'] });
+  assert.equal(pending.result.ok, true);
+  assert.equal(
+    controller.snapshot().installed.find((item) => item.slug === 'qa-materialization-pending')?.localReadiness?.status,
+    'pending_materialization',
+  );
+  const reconciled = await controller.handle({ name: 'reconcileSkills', args: [] });
+  assert.deepEqual(reconciled.result.materialized, ['qa-materialization-pending']);
+  assert.equal(
+    controller.snapshot().installed.find((item) => item.slug === 'qa-materialization-pending')?.localReadiness?.status,
+    'ready_on_this_process',
+  );
+});
+
+test('Teams fixture lookup matches immutable slugs and human-readable packaged QWork titles', () => {
+  const pattern = automationFixtureMarkerPattern('qa-python-runtime');
+  assert.match('QA Python Runtime', pattern);
+  assert.match('qa-python-runtime', pattern);
+  assert.doesNotMatch('QA Node Runtime', pattern);
+});
+
+test('Teams multi-skill selection reopens the packaged unified menu after each picked skill', () => {
+  const source = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(source, /重新打开【技能】菜单以选择：\$\{expectedLabel\}/);
+  assert.match(source, /menu = await activeMenuLocator\(page, 'skill'\)/);
+  assert.equal(cleanSkillChipLabel('×QA Python Runtime'), 'QA Python Runtime');
+  assert.equal(cleanSkillChipLabel('QA Python Runtime×'), 'QA Python Runtime');
+  assert.equal(cleanSkillChipLabel('  × QA Python Runtime  '), 'QA Python Runtime');
 });
 
 test('Teams renderer fault controls stay opt-in and do not replace the local-QBot proxy lane', () => {
@@ -488,6 +546,10 @@ test('Teams renderer fault controls stay opt-in and do not replace the local-QBo
   assert.match(source, /options\['renderer-control-adapter'\] === 'teams360'/);
   assert.match(source, /installRendererControlAdapter\(\{ page, rules, initiallyArmed \}\)/);
   assert.match(source, /const proxy = await createControlPlaneFaultProxy\(\{ upstreamUrl, rules, initiallyArmed \}\)/);
+  assert.match(source, /teams360-control-\$\{process\.pid\}-\$\{Date\.now\(\)\}/);
+  assert.match(source, /__qbotAutomationRendererControlWrapper/);
+  assert.match(source, /root\.agent\[name\] = original/);
+  assert.match(source, /delete root\.__qbotAutomationAgentOriginalsOwner/);
 });
 
 test('managed Teams fixture relaunch keeps the packaged production home', () => {
@@ -545,7 +607,7 @@ test('managed Teams HITL fixture opts into mock Agent only for its controlled re
   );
 });
 
-test('managed Teams local fixture control planes use deterministic mock auth and auto-complete only loopback OAuth', () => {
+test('managed Teams fixture data stays on the authenticated renderer bridge; legacy loopback auth remains fail-closed', () => {
   const fixtureServer = fs.readFileSync(new URL('../runtime/scripts/teams-control-plane.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(fixtureServer, /DEEPBANK_AUTH_PROVIDER:\s*['"]mock['"]/);
@@ -556,6 +618,9 @@ test('managed Teams local fixture control planes use deterministic mock auth and
   assert.match(runner, /\/api\/auth\/mock\/authorize/);
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
   assert.match(runner, /fixture_mock_auth/);
+  assert.match(runner, /createTeamsSkillFixtureController/);
+  assert.match(runner, /mode:\s*'stateful-renderer-bridge'/);
+  assert.match(runner, /mode:\s*'node-handler'/);
 });
 
 test('managed Teams fixture relaunch transactionally overrides and restores the persisted QBot profile', () => {
@@ -618,7 +683,11 @@ test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaun
 test('managed Teams Casebook refreshes only QWork after a stale renderer CDP attach', () => {
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /recoverTeamsQworkWorkbench/);
-  assert.match(source, /validatePinnedQworkUiUrl\(qwork\.url\(\)\)/);
+  assert.match(source, /Teams QWork connection view timed out after 1500ms/);
+  assert.match(source, /Teams QWork capabilities precheck timed out after 5000ms/);
+  assert.match(source, /new URL\('\/json\/list', normalizedCdpUrl\)/);
+  assert.match(source, /target\?\.type === 'webview'/);
+  assert.match(source, /validatePinnedQworkUiUrl\(qworkTarget\.url\)/);
   assert.match(source, /launchLiveTeams/);
   assert.match(source, /DEEPBANK_UI_URL: pinnedQworkUi\.url/);
   assert.match(source, /QBOT_UI_URL: pinnedQworkUi\.url/);
