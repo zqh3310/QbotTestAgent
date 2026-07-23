@@ -587,6 +587,10 @@ export async function configureTeamsFixtureRuntime(options, browser) {
   )));
   const sessionFile = path.resolve(String(options.session || DEFAULT_SESSION));
   const session = readSession(sessionFile);
+  const upstreamCdpUrl = String(session?.cdp_url || '').trim();
+  if (upstreamCdpUrl) options['teams-upstream-cdp-url'] = upstreamCdpUrl;
+  const teamsAppPath = String(session?.app_path || '').trim();
+  if (teamsAppPath) options['teams-app-path'] = teamsAppPath;
   const managedLog = String(session?.process_log || managedTeamsProcessLog(sessionFile) || '').trim();
   if (managedLog) options['qbot-stderr-log'] = managedLog;
   applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl);

@@ -5652,9 +5652,125 @@ export async function createSkillHubRegressionServer(caseDir) {
   };
 }
 
+export function connectorFixtureDocumentTurnState(requestPayload = {}) {
+  const messages = Array.isArray(requestPayload?.messages) ? requestPayload.messages : [];
+  let promptIndex = -1;
+  let documentId = '';
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const content = typeof message?.content === 'string'
+      ? message.content
+      : (Array.isArray(message?.content) ? message.content : [])
+        .filter((part) => part?.type !== 'tool_result')
+        .map((part) => String(part?.text || ''))
+        .join('\n');
+    const currentDocumentId = /denied-doc-b/.test(content)
+      ? 'denied-doc-b'
+      : /allowed-doc-a/.test(content)
+        ? 'allowed-doc-a'
+        : '';
+    if (!currentDocumentId) continue;
+    promptIndex = index;
+    documentId = currentDocumentId;
+    break;
+  }
+  const toolResultPresent = messages.slice(promptIndex + 1).some((message) => (
+    Array.isArray(message?.content)
+    && message.content.some((part) => part?.type === 'tool_result')
+  ));
+  const tool = (requestPayload?.tools || []).find((item) => /teams_document_read/.test(String(item?.name || '')));
+  return { documentId, promptIndex, toolResultPresent, tool };
+}
+
 export async function createConnectorRegressionServer({ includeDocumentFixture = false } = {}) {
-  const state = { hits: [] };
+  const state = { hits: [], llmTurns: [] };
   let origin = '';
+  let llmSequence = 0;
+  const writeAnthropicMessage = (res, {
+    content,
+    stopReason,
+    stream,
+  }) => {
+    llmSequence += 1;
+    const messageId = `msg_qbot_test_agent_${llmSequence}`;
+    const usage = { input_tokens: 32, output_tokens: 32 };
+    if (!stream) {
+      const body = Buffer.from(JSON.stringify({
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        model: 'qbot-test-agent-m3',
+        content,
+        stop_reason: stopReason,
+        stop_sequence: null,
+        usage,
+      }));
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+      return;
+    }
+    const events = [];
+    const append = (event, data) => events.push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    append('message_start', {
+      type: 'message_start',
+      message: {
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        model: 'qbot-test-agent-m3',
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: usage.input_tokens, output_tokens: 0 },
+      },
+    });
+    content.forEach((block, index) => {
+      if (block.type === 'tool_use') {
+        append('content_block_start', {
+          type: 'content_block_start',
+          index,
+          content_block: {
+            type: 'tool_use',
+            id: block.id,
+            name: block.name,
+            input: {},
+          },
+        });
+        append('content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input || {}) },
+        });
+      } else {
+        append('content_block_start', {
+          type: 'content_block_start',
+          index,
+          content_block: { type: 'text', text: '' },
+        });
+        append('content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'text_delta', text: String(block.text || '') },
+        });
+      }
+      append('content_block_stop', { type: 'content_block_stop', index });
+    });
+    append('message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { output_tokens: usage.output_tokens },
+    });
+    append('message_stop', { type: 'message_stop' });
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    res.end(events.join(''));
+  };
   const server = http.createServer(async (req, res) => {
     const url = new URL(String(req.url || '/'), 'http://127.0.0.1');
     const chunks = [];
@@ -5669,6 +5785,91 @@ export async function createConnectorRegressionServer({ includeDocumentFixture =
       rpcParams: requestPayload?.params || null,
       at: Date.now(),
     });
+    if (url.pathname === '/openapi/models/llm-connections') {
+      const body = Buffer.from(JSON.stringify({
+        success: true,
+        data: {
+          connections: [{
+            id: 'qbot-test-agent-m3-fixture',
+            display_name: 'QBot QA M3 Fixture',
+            description: 'Runner-owned deterministic M3 connection for connector fixture cases.',
+            protocol: 'anthropic',
+            base_url: `${origin}/mock-llm`,
+            api_key: 'qbot-test-agent-fixture-only',
+            default_model: 'qbot-test-agent-m3',
+            models: [{
+              id: 'qbot-test-agent-m3',
+              label: 'QBot QA M3',
+              series: 'QBotTestAgent',
+              safety_level: 'M3',
+            }],
+            status: 'enabled',
+          }],
+        },
+      }));
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+      return;
+    }
+    if (/^\/mock-llm\/v1\/messages(?:\?.*)?$/.test(`${url.pathname}${url.search}`)) {
+      const {
+        documentId,
+        toolResultPresent,
+        tool,
+      } = connectorFixtureDocumentTurnState(requestPayload);
+      state.llmTurns.push({
+        at: Date.now(),
+        model: String(requestPayload?.model || ''),
+        stream: Boolean(requestPayload?.stream),
+        documentId,
+        toolResultPresent,
+        offeredTool: String(tool?.name || ''),
+      });
+      if (!documentId || !tool) {
+        return writeAnthropicMessage(res, {
+          stream: Boolean(requestPayload?.stream),
+          stopReason: 'end_turn',
+          content: [{
+            type: 'text',
+            text: '无法确认文档 ID 或 Teams 文档工具，请明确提供 document_id 后重试。',
+          }],
+        });
+      }
+      if (!toolResultPresent) {
+        return writeAnthropicMessage(res, {
+          stream: Boolean(requestPayload?.stream),
+          stopReason: 'tool_use',
+          content: [{
+            type: 'tool_use',
+            id: `toolu_qbot_test_agent_${llmSequence + 1}`,
+            name: tool.name,
+            input: { document_id: documentId },
+          }],
+        });
+      }
+      return writeAnthropicMessage(res, {
+        stream: Boolean(requestPayload?.stream),
+        stopReason: 'end_turn',
+        content: [{
+          type: 'text',
+          text: documentId === 'allowed-doc-a'
+            ? '已从 Teams Document QA 读取 allowed-doc-a。文档真实内容：TEAMS_DOC_ALLOWED_20260716。来源：Teams 文档连接器。'
+            : '无法读取 denied-doc-b：当前账号没有该 Teams 文档的访问权限。请向文档所有者申请授权；未生成、猜测或泄露文档正文。',
+        }],
+      });
+    }
+    if (url.pathname === '/mock-llm/v1/messages/count_tokens') {
+      const body = Buffer.from(JSON.stringify({ input_tokens: 32 }));
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+      return;
+    }
     if (url.pathname === '/api/openapi/servers') {
       const runtime = (name, endpointUrl, status = 'connected') => ({
         name,
@@ -5823,7 +6024,7 @@ export async function createConnectorRegressionServer({ includeDocumentFixture =
 
 export async function probeConnectorRegressionFixture(fixture) {
   const url = String(fixture?.url || '').replace(/\/$/, '');
-  if (!url) return { ok: false, catalog: false, healthy: false, unreachable: false, reason: 'fixture URL 为空' };
+  if (!url) return { ok: false, catalog: false, modelTier: false, healthy: false, unreachable: false, reason: 'fixture URL 为空' };
   const rpcBody = JSON.stringify({
     jsonrpc: '2.0',
     id: 'qbot-test-agent-readiness',
@@ -5831,29 +6032,43 @@ export async function probeConnectorRegressionFixture(fixture) {
     params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'QbotTestAgent', version: '1.0.0' } },
   });
   try {
-    const [catalogResponse, healthyResponse, unreachableResponse] = await Promise.all([
+    const [catalogResponse, modelResponse, healthyResponse, unreachableResponse] = await Promise.all([
       fetch(`${url}/api/openapi/servers?detail=true`, { signal: AbortSignal.timeout(5000) }),
+      fetch(`${url}/openapi/models/llm-connections`, { signal: AbortSignal.timeout(5000) }),
       fetch(`${url}/mcp/healthy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: rpcBody, signal: AbortSignal.timeout(5000) }),
       fetch(`${url}/mcp/unreachable`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: rpcBody, signal: AbortSignal.timeout(5000) }),
     ]);
     const catalogPayload = await catalogResponse.json().catch(() => ({}));
+    const modelPayload = await modelResponse.json().catch(() => ({}));
     const servers = catalogPayload?.data?.servers || [];
+    const connections = modelPayload?.data?.connections || [];
     const catalog = catalogResponse.ok
       && servers.some((item) => item.name === 'dev_healthy')
       && servers.some((item) => item.name === 'dev_unreachable')
       && servers.some((item) => item.name === 'dev_needs_auth' && item.status === 'oauth_required');
+    const modelTier = modelResponse.ok
+      && connections.some((connection) => (
+        connection.id === 'qbot-test-agent-m3-fixture'
+        && connection.models?.some((model) => model.id === 'qbot-test-agent-m3' && model.safety_level === 'M3')
+      ));
     const healthy = healthyResponse.status === 200;
     const unreachable = unreachableResponse.status === 503;
     return {
-      ok: catalog && healthy && unreachable,
+      ok: catalog && modelTier && healthy && unreachable,
       catalog,
+      modelTier,
       healthy,
       unreachable,
-      statuses: { catalog: catalogResponse.status, healthy: healthyResponse.status, unreachable: unreachableResponse.status },
-      reason: catalog && healthy && unreachable ? '' : '目录或直连健康探测未形成预期三态',
+      statuses: {
+        catalog: catalogResponse.status,
+        model: modelResponse.status,
+        healthy: healthyResponse.status,
+        unreachable: unreachableResponse.status,
+      },
+      reason: catalog && modelTier && healthy && unreachable ? '' : '目录、M3 模型连接或直连健康探测未形成预期状态',
     };
   } catch (error) {
-    return { ok: false, catalog: false, healthy: false, unreachable: false, reason: error.message };
+    return { ok: false, catalog: false, modelTier: false, healthy: false, unreachable: false, reason: error.message };
   }
 }
 
@@ -6427,11 +6642,39 @@ async function restartWithHomeCapabilityFixture({ state, caseDir, options, runti
   const qbotHome = inferQbotHomeForElectronRestart(options);
   let cdpPort = '9224';
   try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  const runtimeReleasePin = await captureManagedTeamsFixtureRuntimeRelease({
+    runtime,
+    options,
+    state,
+    caseDir,
+  });
+  if (!runtimeReleasePin.ok) {
+    return { ok: false, reason: `首页能力 Fixture 无法固定当前 QWork runtime：${runtimeReleasePin.reason}` };
+  }
   const command = [
-    [serverHelper, qbotRoot, skillHubUrl, connectorUrl, qbotHome].map(shellQuote).join(' '),
+    managedFixtureServerCommand(
+      serverHelper,
+      [qbotRoot, skillHubUrl, connectorUrl, qbotHome],
+      runtimeReleasePin.filePath,
+    ),
     [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome, skillHubUrl].map(shellQuote).join(' '),
   ].join(' && ');
-  const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用首页稳定技能和连接器 Fixture', commandOverride: command });
+  const priorFixtureAuthControlPlane = options['fixture-auth-control-plane-url'];
+  options['fixture-auth-control-plane-url'] = 'http://127.0.0.1:18900';
+  const restarted = await restartQbotAndReconnect({
+    runtime,
+    options,
+    state,
+    caseDir,
+    label: '启用首页稳定技能和连接器 Fixture',
+    commandOverride: command,
+  }).finally(() => {
+    if (priorFixtureAuthControlPlane) {
+      options['fixture-auth-control-plane-url'] = priorFixtureAuthControlPlane;
+    } else {
+      delete options['fixture-auth-control-plane-url'];
+    }
+  });
   if (!restarted.ok) return restarted;
   const workbench = await waitForQbotWorkbench(restarted.page, 90000);
   if (!workbench.ok) return { ok: false, reason: workbench.reason };
@@ -6457,9 +6700,18 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
   const injected = await restartWithHomeCapabilityFixture({ state, caseDir, options, runtime, skillHubUrl: fixture.url, connectorUrl: connectorFixture.url });
   if (!injected.ok) {
     const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '首页能力 Fixture 启动失败后恢复正常配置' });
+    const fixtureCleanup = stopManagedTeamsFixtureControlPlane(
+      options,
+      state,
+      'home-capability-fixture-initialization-failed',
+    );
     await fixture.close().catch(() => {});
     await connectorFixture.close().catch(() => {});
-    markFailed(state, `首页能力组合测试数据启动失败：${injected.reason}；恢复正常配置=${restored.ok ? '成功' : restored.reason}`, 'automation_error');
+    markFailed(
+      state,
+      `首页能力组合测试数据启动失败：${injected.reason}；恢复正常配置=${restored.ok ? '成功' : restored.reason}；fixture 清理=${fixtureCleanup.ok ? '成功' : fixtureCleanup.reason}`,
+      'automation_error',
+    );
     return;
   }
   page = injected.page;
@@ -6517,6 +6769,11 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
       );
     }
     const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常首页能力配置' });
+    const fixtureCleanup = stopManagedTeamsFixtureControlPlane(
+      options,
+      state,
+      'home-capability-fixture-finished',
+    );
     await fixture.close().catch(() => {});
     state.artifacts.home_capability_connector_fixture_hits = connectorFixture.state.hits;
     if (['SIT-HOME-005', 'SIT-HOME-008', 'SIT-HOME-009'].includes(testCase.id)) {
@@ -6534,8 +6791,10 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
       state,
       '首页能力 Fixture 后环境恢复',
       '受控技能/连接器组合 Case 结束后必须恢复 .env 中的正常服务配置。',
-      restored.ok,
-      restored.ok ? '正常配置已恢复。' : restored.reason,
+      restored.ok && fixtureCleanup.ok,
+      restored.ok && fixtureCleanup.ok
+        ? '正常配置已恢复，fixture 进程已清理。'
+        : restored.reason || fixtureCleanup.reason,
       'automation_error',
     );
   }
@@ -7385,9 +7644,35 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   const qbotHome = inferQbotHomeForElectronRestart(options);
   let cdpPort = '9224';
   try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  // The Teams restart shim uses its fifth argument as the exact QWork UI to
+  // preserve. Do not let it auto-discover from /json/list here: during a
+  // runtime update that list can briefly contain both the old and new WebView,
+  // and selecting the first stale target silently downgrades the fixture run.
+  // The local-QBot helper uses the same argument for SkillHub, so keep its
+  // existing empty value outside the Teams adapter.
+  const expectedQworkUiUrl = options['renderer-control-adapter'] === 'teams360'
+    ? String(runtime?.page?.url?.() || '')
+    : '';
+  const runtimeReleasePin = await captureManagedTeamsFixtureRuntimeRelease({
+    runtime,
+    options,
+    state,
+    caseDir,
+  });
+  if (!runtimeReleasePin.ok) {
+    return { ok: false, reason: `连接器 Fixture 无法固定当前 QWork runtime：${runtimeReleasePin.reason}` };
+  }
   const command = [
-    [serverHelper, qbotRoot, fixture.url, qbotHome, enableE2eMarker ? '1' : '0'].map(shellQuote).join(' '),
-    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome, '', enableE2eMarker ? '1' : '0'].map(shellQuote).join(' '),
+    managedFixtureServerCommand(
+      serverHelper,
+      [qbotRoot, fixture.url, qbotHome, enableE2eMarker ? '1' : '0'],
+      runtimeReleasePin.filePath,
+    ),
+    // The Teams document fixture supplies a deterministic M3 Anthropic
+    // endpoint. Keep the product's real Agent orchestration enabled so the
+    // test must perform an actual MCP tools/call instead of accepting the
+    // generic mock-agent echo.
+    [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome, expectedQworkUiUrl, fixture.includeDocumentFixture ? '0' : enableE2eMarker ? '1' : '0'].map(shellQuote).join(' '),
   ].join(' && ');
   const restoreAfterFixtureInitializationFailure = async (reason) => {
     const restored = await restartQbotAndReconnect({
@@ -7397,19 +7682,39 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
       caseDir,
       label: 'Fixture 初始化失败后恢复正式控制面',
     }).catch((error) => ({ ok: false, reason: error.message }));
+    const fixtureCleanup = stopManagedTeamsFixtureControlPlane(
+      options,
+      state,
+      'connector-fixture-initialization-failed',
+    );
     return {
       ok: false,
-      reason: restored.ok
-        ? `${reason}；已自动恢复正式控制面和登录态。`
-        : `${reason}；自动恢复正式控制面失败：${restored.reason || '未知原因'}`,
+      reason: restored.ok && fixtureCleanup.ok
+        ? `${reason}；已自动恢复正式控制面和登录态，并清理 fixture 进程。`
+        : `${reason}；自动恢复正式控制面=${restored.ok ? '成功' : restored.reason || '未知原因'}；fixture 清理=${fixtureCleanup.ok ? '成功' : fixtureCleanup.reason}`,
       recovery: {
         attempted: true,
-        ok: Boolean(restored.ok),
-        reason: restored.reason || '',
+        ok: Boolean(restored.ok && fixtureCleanup.ok),
+        reason: restored.reason || fixtureCleanup.reason || '',
       },
     };
   };
-  const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用产品 dev 连接器三态 Fixture', commandOverride: command });
+  const priorFixtureAuthControlPlane = options['fixture-auth-control-plane-url'];
+  options['fixture-auth-control-plane-url'] = 'http://127.0.0.1:18900';
+  const restarted = await restartQbotAndReconnect({
+    runtime,
+    options,
+    state,
+    caseDir,
+    label: '启用产品 dev 连接器三态 Fixture',
+    commandOverride: command,
+  }).finally(() => {
+    if (priorFixtureAuthControlPlane) {
+      options['fixture-auth-control-plane-url'] = priorFixtureAuthControlPlane;
+    } else {
+      delete options['fixture-auth-control-plane-url'];
+    }
+  });
   if (!restarted.ok) return restoreAfterFixtureInitializationFailure(restarted.reason);
   const workbench = await waitForQbotWorkbench(restarted.page, 90000);
   if (!workbench.ok) return restoreAfterFixtureInitializationFailure(workbench.reason);
@@ -7580,20 +7885,26 @@ async function executeConnectorRegressionFixtureCase({ page, state, testCase, ca
     state.artifacts.connector_regression_fixture_hits = injected.rendererAdapter
       ? injected.controller?.snapshot?.().events || []
       : fixture.state.hits;
+    if (!injected.rendererAdapter && fixture.state.llmTurns?.length) {
+      state.artifacts.connector_regression_fixture_llm_turns = fixture.state.llmTurns;
+    }
     const restored = injected.rendererAdapter
       ? await injected.cleanup().then(() => ({ ok: true })).catch((error) => ({ ok: false, reason: error.message }))
       : await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常连接器配置' });
+    const fixtureCleanup = injected.rendererAdapter
+      ? { ok: true, reason: '' }
+      : stopManagedTeamsFixtureControlPlane(options, state, 'connector-fixture-finished');
     await fixture.close().catch(() => {});
     recordAssertion(
       state,
       '连接器 Fixture 后环境恢复',
       '受控连接器三态用例结束后必须恢复正式控制面和登录态。',
-      restored.ok,
-      restored.ok
+      restored.ok && fixtureCleanup.ok,
+      restored.ok && fixtureCleanup.ok
         ? injected.rendererAdapter
           ? 'Teams 渲染层适配器已停用；360Teams、外部 DEV 和登录态均未重启。'
-          : '正常配置已恢复。'
-        : restored.reason,
+          : '正常配置已恢复，fixture 进程已清理。'
+        : restored.reason || fixtureCleanup.reason,
       'automation_error',
     );
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
@@ -7647,6 +7958,46 @@ async function executeSitTeamsDocumentPermission({ page, state, testCase, caseDi
   const allowedPrompt = '请使用 Teams 文档连接器读取文档 A，document_id 是 allowed-doc-a；只返回文档真实内容、文档 ID 和来源，不要猜测。';
   const allowed = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt: allowedPrompt, label: '读取有权限文档 A' });
   replies.push({ label: '读取有权限文档 A', ...allowed });
+  const turnContextEvidence = await page.evaluate(async () => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    if (typeof e2e?.getLastTurnContextEvidence === 'function') {
+      return await e2e.getLastTurnContextEvidence();
+    }
+    if (typeof window.agent?.getLastTurnContextEvidence === 'function') {
+      return await window.agent.getLastTurnContextEvidence();
+    }
+    return null;
+  }).catch((error) => ({ error: error.message }));
+  state.artifacts.teams_document_turn_context = turnContextEvidence;
+  const turnMaterialization = turnContextEvidence?.connectorRuntimeMaterialization || {};
+  const documentMaterialized = Array.isArray(turnMaterialization.materializedConnectorIds)
+    && turnMaterialization.materializedConnectorIds.includes(documentConnector.key);
+  const allowedToolNames = Array.isArray(turnMaterialization.claudeAllowedTools)
+    ? turnMaterialization.claudeAllowedTools
+    : Array.isArray(turnMaterialization.claude?.allowedTools)
+      ? turnMaterialization.claude.allowedTools
+      : [];
+  const allowedToolCount = Number(
+    turnMaterialization.claudeAllowedToolCount
+      ?? turnMaterialization.claude?.allowedToolCount
+      ?? allowedToolNames.length,
+  );
+  const exactDocumentToolAllowed = allowedToolNames
+    .some((name) => /teams_document_read/.test(String(name)));
+  // QWork 0.0.11 exposes only the redacted count, while 0.0.12 may expose
+  // redacted names. The actual fixture tools/call assertion below remains the
+  // decisive oracle, so count compatibility cannot turn a missing call into a
+  // pass.
+  const documentToolAllowed = exactDocumentToolAllowed
+    || (Number.isInteger(allowedToolCount) && allowedToolCount > 0);
+  recordAssertion(
+    state,
+    'Teams 文档连接器已物化到本轮 Agent',
+    '发送后脱敏 turn-context 必须证明所选连接器已物化为 Claude MCP server，且 allowedTools 名称或脱敏计数证明工具已注入；最终仍以真实 tools/call 为准。',
+    documentMaterialized && documentToolAllowed,
+    `exactTool=${exactDocumentToolAllowed}；allowedToolCount=${allowedToolCount}；evidence=${clip(JSON.stringify(turnContextEvidence), 900)}`,
+    'automation_error',
+  );
   const allowedHits = fixture.state.hits.filter((item) => item.rpcMethod === 'tools/call'
     && item.rpcParams?.name === 'teams_document_read'
     && item.rpcParams?.arguments?.document_id === 'allowed-doc-a');
@@ -7658,7 +8009,7 @@ async function executeSitTeamsDocumentPermission({ page, state, testCase, caseDi
     !allowed.incomplete && allowed.deltaText.includes(allowedMarker) && allowedHits.length > 0,
     `tools/call=${allowedHits.length}；reply=${clip(allowed.deltaText, 420)}`,
   );
-  if (allowed.incomplete) return;
+  if (allowed.incomplete || !documentMaterialized || !documentToolAllowed) return;
 
   const deniedPrompt = '现在读取无权限文档 B，document_id 是 denied-doc-b；如果无权限请明确说明并给出授权建议，绝不能生成或猜测文档正文。';
   const denied = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt: deniedPrompt, label: '读取无权限文档 B' });
@@ -10144,8 +10495,11 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   const invoked = await page.evaluate(async ({ methodName }) => {
     const api = globalThis.window?.agent?.[methodName];
     if (typeof api !== 'function') return { ok: false, reason: `${methodName} unavailable` };
-    await api();
-    return { ok: true };
+    const selection = await api();
+    return {
+      ok: true,
+      selection: Array.isArray(selection) ? selection : null,
+    };
   }, { methodName: method }).catch((error) => ({ ok: false, reason: error.message }));
   if (!invoked.ok) {
     recordAssertion(
@@ -10164,21 +10518,35 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   while (Date.now() < deadline) {
     await page.waitForTimeout(150);
     capabilities = await currentCapabilities(page);
-    if (String(capabilities?.connectorRouting?.mode || '') === mode) break;
+    if (unifiedConnectorModeApplied(capabilities, mode)) break;
   }
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
-  const ok = storedMode === mode;
+  const selectedConnectors = capabilities?.selectedConnectors;
+  const ok = unifiedConnectorModeApplied(capabilities, mode);
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
   recordStep(
     state,
     `设置统一菜单连接器模式：${mode}`,
     '该调用只用于隔离用例前置状态；连接器选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`connector_mode_${mode}`],
     ok ? '' : 'automation_error',
   );
   return ok;
+}
+
+function unifiedConnectorModeApplied(capabilities, mode) {
+  const storedMode = String(capabilities?.connectorRouting?.mode || '');
+  const selectedConnectors = capabilities?.selectedConnectors;
+  if (storedMode === mode) return true;
+  // Desktop-local sessions overlay their selected connectors onto server
+  // capabilities. The server routing snapshot can therefore briefly retain
+  // "auto" even though the renderer has already applied disabled=[]. Match
+  // QWork's own ComposerTools derivation: null=auto, []=disabled.
+  if (mode === 'auto') return selectedConnectors === null;
+  if (mode === 'disabled') return Array.isArray(selectedConnectors) && selectedConnectors.length === 0;
+  return false;
 }
 
 async function setWorkMode(page, state, caseDir, mode) {
@@ -10625,23 +10993,77 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   if (!manualOk) return false;
   const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return false;
+  const capabilities = await currentCapabilities(page);
+  const catalogMatch = (capabilities?.connectors || []).find((item) => String(item?.key || '') === connectorKey);
+  const visibleLabels = [...new Set([
+    catalogMatch?.label,
+    catalogMatch?.title,
+    catalogMatch?.name,
+  ].map((item) => String(item || '').trim()).filter(Boolean))];
   const candidates = menu.locator('.composer-plus-connector, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
   const count = await candidates.count().catch(() => 0);
+  const matches = [];
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
     if (!(await visible(candidate, 250))) continue;
     const testId = await candidate.getAttribute('data-testid').catch(() => '');
     const parsedKey = String(testId || '').replace(/^composer-connector-option-/, '').replace(/-(?:tag|checkbox|row)$/, '');
-    if (parsedKey !== connectorKey) continue;
     const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
-    await candidate.click({ force: true }).catch(async () => candidate.evaluate((el) => el.click()));
-    await page.waitForTimeout(700);
-    state.artifacts.selected_connector = { key: connectorKey, label: firstLine(text), testid: testId || '' };
-    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
-    recordStep(state, '按唯一标识手动选择连接器', '应按 connector key 选择本 Case 指定连接器，并在输入区保留选择状态。', `connector=${connectorKey}；${clip(text, 140)}`, 'passed', state.screenshots.manual_connector_reselected);
-    return true;
+    const primaryText = firstLine(text).trim();
+    if (parsedKey === connectorKey || visibleLabels.includes(primaryText)) {
+      matches.push({ candidate, testId, parsedKey, text, primaryText });
+    }
   }
-  recordAssertion(state, '指定连接器可选择', `应能按 key=${connectorKey} 在手动模式中选择指定连接器。`, false, clip(await activeMenuText(page, 'connector'), 300), 'automation_error');
+  if (matches.length === 1) {
+    const match = matches[0];
+    await match.candidate.click({ force: true }).catch(async () => match.candidate.evaluate((el) => el.click()));
+    let selected = false;
+    let selectedConnectors = null;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      const current = await currentCapabilities(page);
+      selectedConnectors = current?.selectedConnectors;
+      selected = Array.isArray(selectedConnectors) && selectedConnectors.includes(connectorKey);
+      if (selected) break;
+    }
+    state.artifacts.selected_connector = {
+      key: connectorKey,
+      label: match.primaryText,
+      testid: match.testId || '',
+      selection_source: match.parsedKey === connectorKey ? 'dom-testid-key' : 'public-catalog-visible-label',
+      selected_connectors: selectedConnectors,
+    };
+    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
+    recordStep(
+      state,
+      '按唯一标识手动选择连接器',
+      '应由公共 catalog 将 connector key 唯一映射到用户可见名称，点击后再从 selectedConnectors 回读确认指定连接器已选中。',
+      `connector=${connectorKey}；label=${clip(match.primaryText, 100)}；source=${state.artifacts.selected_connector.selection_source}；selectedConnectors=${JSON.stringify(selectedConnectors)}`,
+      selected ? 'passed' : 'failed',
+      state.screenshots.manual_connector_reselected,
+      selected ? '' : 'automation_error',
+    );
+    if (!selected) {
+      recordAssertion(
+        state,
+        '指定连接器选择回读',
+        `点击 ${match.primaryText || connectorKey} 后 selectedConnectors 必须包含 ${connectorKey}。`,
+        false,
+        `selectedConnectors=${JSON.stringify(selectedConnectors)}`,
+        'automation_error',
+      );
+    }
+    return selected;
+  }
+  recordAssertion(
+    state,
+    '指定连接器可选择',
+    `应能由公共 catalog 将 key=${connectorKey} 唯一映射到手动菜单中的用户可见连接器。`,
+    false,
+    `catalogLabels=${JSON.stringify(visibleLabels)}；matches=${matches.length}；menu=${clip(await activeMenuText(page, 'connector'), 300)}`,
+    'automation_error',
+  );
   return false;
 }
 
@@ -14002,7 +14424,336 @@ function fixtureMockAuthorizeUrl(logText) {
   return url.toString();
 }
 
-async function ensureManagedFixtureMockAuth(page, options, { timeoutMs = 30000 } = {}) {
+function managedFixtureLoopbackOrigin(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) return '';
+  return url.origin;
+}
+
+function managedFixtureServerCommand(serverHelper, args, runtimeReleaseEnvelopeFile = '') {
+  const command = runtimeReleaseEnvelopeFile
+    ? [
+        '/usr/bin/env',
+        `QBOT_QA_RUNTIME_RELEASE_ENVELOPE_FILE=${runtimeReleaseEnvelopeFile}`,
+        serverHelper,
+        ...args,
+      ]
+    : [serverHelper, ...args];
+  return command.map(shellQuote).join(' ');
+}
+
+function stopManagedTeamsFixtureControlPlane(options, state, label = 'fixture-cleanup') {
+  const home = inferQbotHomeForElectronRestart(options);
+  const pidDir = path.join(home, 'pids');
+  const entries = [
+    {
+      file: path.join(pidDir, 'teams-control-plane-proxy.pid'),
+      expected: /teams-control-plane-proxy\.mjs/,
+      role: 'proxy',
+    },
+    {
+      file: path.join(pidDir, 'teams-control-plane.pid'),
+      expected: /(?:npm run dev:server|server\/index\.(?:js|mjs|cjs)|tsx .*server)/,
+      role: 'upstream',
+    },
+  ];
+  const stopped = [];
+  const refused = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.file)) continue;
+    const pid = Number(fs.readFileSync(entry.file, 'utf8').trim());
+    if (!Number.isInteger(pid) || pid <= 1) {
+      refused.push({ role: entry.role, reason: 'invalid-pid' });
+      continue;
+    }
+    const probe = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    const command = String(probe.stdout || '').trim();
+    if (probe.status === 0 && command && !entry.expected.test(command)) {
+      refused.push({ role: entry.role, pid, reason: 'unexpected-process', command: clip(command, 180) });
+      continue;
+    }
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+    }
+    fs.rmSync(entry.file, { force: true });
+    stopped.push({ role: entry.role, pid });
+  }
+  const evidence = { label, home, stopped, refused };
+  if (!Array.isArray(state.artifacts.teams_fixture_control_plane_cleanup)) {
+    state.artifacts.teams_fixture_control_plane_cleanup = [];
+  }
+  state.artifacts.teams_fixture_control_plane_cleanup.push(evidence);
+  return {
+    ok: refused.length === 0,
+    reason: refused.length ? `拒绝终止非预期进程：${clip(JSON.stringify(refused), 360)}` : '',
+    evidence,
+  };
+}
+
+function managedTeamsVersion(options) {
+  const appPath = String(options['teams-app-path'] || '').trim();
+  if (!appPath) return '';
+  const infoPlist = path.join(appPath, 'Contents', 'Info.plist');
+  if (!fs.existsSync(infoPlist)) return '';
+  const result = spawnSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :CFBundleShortVersionString', infoPlist],
+    { encoding: 'utf8', timeout: 5000 },
+  );
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+async function captureManagedTeamsFixtureRuntimeRelease({ runtime, options, state, caseDir }) {
+  if (options['renderer-control-adapter'] !== 'teams360') {
+    return { ok: true, filePath: '', releaseId: '', version: '' };
+  }
+  const teamsVersion = managedTeamsVersion(options);
+  if (!teamsVersion) {
+    return { ok: false, reason: '无法从受控 360Teams.app 读取 CFBundleShortVersionString。' };
+  }
+  const externalControlPlane = String(options['control-plane-url'] || '').trim();
+  let externalOrigin = '';
+  try {
+    const parsed = new URL(externalControlPlane);
+    if (!['http:', 'https:'].includes(parsed.protocol)
+      || ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname)) {
+      throw new Error('not external');
+    }
+    externalOrigin = parsed.origin;
+  } catch {
+    return { ok: false, reason: `当前控制面不是可验证的外部环境：${externalControlPlane || '空'}` };
+  }
+
+  let hostBrowser = runtime?.browser || null;
+  let ownsHostBrowser = false;
+  let hostPage = hostBrowser?.contexts?.().flatMap((context) => context.pages())
+    .find((candidate) => /(?:^|\/\/)(?:localhost|127\.0\.0\.1)(?::\d+)?\/#\/main\/apps\/qbot(?:$|[/?#])/.test(candidate.url()));
+  if (!hostPage) {
+    const upstreamCdp = managedFixtureLoopbackOrigin(options['teams-upstream-cdp-url']);
+    const chromium = runtime?.playwright?.chromium;
+    if (!upstreamCdp || !chromium?.connectOverCDP) {
+      return { ok: false, reason: '缺少受控 Teams 上游 CDP，无法读取已签名 runtime release。' };
+    }
+    try {
+      hostBrowser = await chromium.connectOverCDP(upstreamCdp, { timeout: 10000 });
+      ownsHostBrowser = true;
+      hostPage = hostBrowser.contexts().flatMap((context) => context.pages())
+        .find((candidate) => /(?:^|\/\/)(?:localhost|127\.0\.0\.1)(?::\d+)?\/#\/main\/apps\/qbot(?:$|[/?#])/.test(candidate.url()));
+    } catch (error) {
+      return { ok: false, reason: `连接受控 Teams 上游 CDP 失败：${error?.message || error}` };
+    }
+  }
+  if (!hostPage) {
+    if (ownsHostBrowser) await hostBrowser.close().catch(() => {});
+    return { ok: false, reason: '受控 Teams 主页面不存在，无法调用只读 control-plane-request。' };
+  }
+
+  const envelope = await hostPage.evaluate(async ({ teamsVersion: version }) => {
+    const ipc = globalThis.ipcRenderer;
+    if (!ipc || typeof ipc.invoke !== 'function') {
+      return { error: '360Teams 主页面未暴露受控 IPC。' };
+    }
+    const params = new URLSearchParams({
+      deviceId: 'qbot-qa-fixture-00000000',
+      teamsVersion: version,
+    });
+    try {
+      return await ipc.invoke('lingxi-credential:control-plane-request', {
+        method: 'GET',
+        path: `/api/runtime-release?${params.toString()}`,
+      });
+    } catch (error) {
+      return { error: error?.message || String(error) };
+    }
+  }, { teamsVersion }).catch((error) => ({ error: error?.message || String(error) }));
+  if (ownsHostBrowser) await hostBrowser.close().catch(() => {});
+
+  const releaseId = String(envelope?.assignment?.releaseId || '');
+  const release = envelope?.catalog?.releases?.[releaseId];
+  const signature = envelope?.catalog?.signature;
+  if (!releaseId || !release || signature?.algorithm !== 'Ed25519' || !signature?.keyId || !signature?.value) {
+    return {
+      ok: false,
+      reason: `外部控制面未返回完整签名 release envelope：${clip(JSON.stringify(envelope), 420)}`,
+    };
+  }
+  if (String(release.version || '') !== releaseId) {
+    return { ok: false, reason: `runtime release 版本与 releaseId 不一致：${release.version || '空'} != ${releaseId}` };
+  }
+
+  const { httpStatus: _httpStatus, ...signedEnvelope } = envelope;
+  const filePath = path.join(caseDir, 'teams-fixture-runtime-release-envelope.json');
+  writeJsonFile(filePath, signedEnvelope);
+  state.artifacts.teams_fixture_runtime_release = {
+    source: externalOrigin,
+    teams_version: teamsVersion,
+    release_id: releaseId,
+    version: String(release.version || ''),
+    commit_id: String(release.commitId || ''),
+    signature_algorithm: String(signature.algorithm || ''),
+    signature_key_id: String(signature.keyId || ''),
+    envelope_file: filePath,
+  };
+  return {
+    ok: true,
+    filePath,
+    releaseId,
+    version: String(release.version || ''),
+  };
+}
+
+async function createManagedFixtureMockSession(controlPlane, { timeoutMs = 30000 } = {}) {
+  const origin = managedFixtureLoopbackOrigin(controlPlane);
+  if (!origin) throw new Error('受控 fixture mock 凭据只允许来自无凭据 loopback 控制面。');
+  const healthResponse = await fetch(`${origin}/api/health`, {
+    signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
+  });
+  const health = await healthResponse.json().catch(() => ({}));
+  if (!healthResponse.ok || health?.ready !== true || health?.auth?.provider?.id !== 'mock') {
+    throw new Error(`受控 fixture 控制面未声明 mock 鉴权：HTTP ${healthResponse.status}`);
+  }
+  const startResponse = await fetch(`${origin}/api/auth/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+    signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
+  });
+  const start = await startResponse.json().catch(() => ({}));
+  if (!startResponse.ok || !start?.attemptId || !start?.authorizeUrl) {
+    throw new Error(`受控 fixture mock OAuth 启动失败：HTTP ${startResponse.status}`);
+  }
+  const authorizeOrigin = managedFixtureLoopbackOrigin(start.authorizeUrl);
+  if (authorizeOrigin !== origin || new URL(start.authorizeUrl).pathname !== '/api/auth/mock/authorize') {
+    throw new Error('受控 fixture mock OAuth 返回了非同源 loopback 授权地址。');
+  }
+  const authorizeResponse = await fetch(start.authorizeUrl, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
+  });
+  if (!authorizeResponse.ok) {
+    throw new Error(`受控 fixture mock OAuth 回调返回 HTTP ${authorizeResponse.status}。`);
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const attemptResponse = await fetch(`${origin}/api/auth/attempt/${encodeURIComponent(start.attemptId)}`, {
+      signal: AbortSignal.timeout(Math.min(Math.max(1000, deadline - Date.now()), 5000)),
+    });
+    const attempt = await attemptResponse.json().catch(() => ({}));
+    if (attempt?.status === 'authenticated' && attempt?.auth?.authenticated && attempt?.auth?.sessionToken) {
+      return attempt.auth;
+    }
+    if (attempt?.status === 'error') {
+      throw new Error(`受控 fixture mock OAuth 失败：${clip(attempt?.error || 'unknown', 220)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`受控 fixture mock OAuth 未在 ${timeoutMs}ms 内完成。`);
+}
+
+async function adoptManagedFixtureMockCredential(
+  browser,
+  page,
+  options,
+  { timeoutMs = 30000, chromium = null } = {},
+) {
+  const controlPlane = managedFixtureLoopbackOrigin(options['fixture-auth-control-plane-url']);
+  if (!controlPlane) return { ok: false, reason: '受控 fixture 未声明可验证的 loopback mock 控制面。' };
+  if (!browser) return { ok: false, reason: '受控 fixture 缺少 360Teams 浏览器上下文，无法注入 E2E mock 凭据。' };
+  let auth;
+  try {
+    auth = await createManagedFixtureMockSession(controlPlane, { timeoutMs });
+  } catch (error) {
+    return { ok: false, reason: error?.message || String(error) };
+  }
+  let hostBrowser = browser;
+  let ownsHostBrowser = false;
+  let hostPage = hostBrowser.contexts().flatMap((context) => context.pages())
+    .find((candidate) => /(?:^|\/\/)(?:localhost|127\.0\.0\.1)(?::\d+)?\/#\/main\/apps\/qbot(?:$|[/?#])/.test(candidate.url()));
+  if (!hostPage) {
+    const upstreamCdp = managedFixtureLoopbackOrigin(options['teams-upstream-cdp-url']);
+    if (!upstreamCdp || !chromium?.connectOverCDP) {
+      return {
+        ok: false,
+        reason: '受控 fixture 的安全 CDP 代理未暴露宿主页，且缺少已校验的 loopback 上游 CDP。',
+      };
+    }
+    try {
+      hostBrowser = await chromium.connectOverCDP(upstreamCdp, { timeout: Math.min(timeoutMs, 10000) });
+      ownsHostBrowser = true;
+      hostPage = hostBrowser.contexts().flatMap((context) => context.pages())
+        .find((candidate) => /(?:^|\/\/)(?:localhost|127\.0\.0\.1)(?::\d+)?\/#\/main\/apps\/qbot(?:$|[/?#])/.test(candidate.url()));
+    } catch (error) {
+      return { ok: false, reason: `无法连接受控 360Teams 上游 CDP：${error?.message || error}` };
+    }
+  }
+  if (!hostPage) {
+    if (ownsHostBrowser) await hostBrowser.close().catch(() => {});
+    return { ok: false, reason: '受控 fixture 未找到 360Teams 主页面，无法调用 E2E mock-adopt 通道。' };
+  }
+  const adopted = await hostPage.evaluate(async (payload) => {
+    const ipc = globalThis.ipcRenderer;
+    if (!ipc || typeof ipc.invoke !== 'function') {
+      return { ok: false, reason: '360Teams 主页面未暴露受控 IPC。' };
+    }
+    try {
+      const result = await ipc.invoke('lingxi-credential:mock-adopt', payload);
+      return {
+        ok: Boolean(result?.authenticated),
+        authenticated: Boolean(result?.authenticated),
+        provider: String(result?.provider?.id || ''),
+        hasUser: Boolean(result?.user),
+      };
+    } catch (error) {
+      return { ok: false, reason: error?.message || String(error) };
+    }
+  }, {
+    auth,
+    // The loopback fixture accepts its app-session token as the bearer
+    // credential. Never persist or report this value outside the private E2E
+    // IPC payload.
+    providerTokens: {
+      accessToken: auth.sessionToken,
+      expiresAt: auth.expiresAt || Date.now() + 30 * 60 * 1000,
+    },
+  }).catch((error) => ({ ok: false, reason: error?.message || String(error) }));
+  if (ownsHostBrowser) await hostBrowser.close().catch(() => {});
+  if (!adopted?.ok || adopted?.provider !== 'mock') {
+    return {
+      ok: false,
+      reason: `360Teams E2E mock-adopt 未进入 mock 已登录态：${clip(JSON.stringify(adopted), 260)}`,
+    };
+  }
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = await page.evaluate(async () => window.agent?.getAuthStatus?.())
+      .catch(() => null);
+    if (current?.authenticated && String(current?.provider?.id || '').toLowerCase() === 'mock') {
+      return {
+        ok: true,
+        needed: true,
+        provider: 'mock',
+        hasUser: Boolean(current?.user),
+        strategy: 'teams-main-e2e-mock-adopt',
+      };
+    }
+    await page.waitForTimeout(250);
+  }
+  return { ok: false, reason: '360Teams 已接收 E2E mock 凭据，但 QWork 重载后未恢复 mock 已登录态。' };
+}
+
+async function ensureManagedFixtureMockAuth(
+  page,
+  options,
+  { timeoutMs = 30000, browser = null, chromium = null } = {},
+) {
   const loginVisible = await page.locator('[data-testid="auth-login"]').first()
     .isVisible({ timeout: 500 })
     .catch(() => false);
@@ -14018,6 +14769,9 @@ async function ensureManagedFixtureMockAuth(page, options, { timeoutMs = 30000 }
   }
 
   const provider = String(auth?.provider?.id || '').toLowerCase();
+  if (provider !== 'mock' && managedFixtureLoopbackOrigin(options['fixture-auth-control-plane-url'])) {
+    return adoptManagedFixtureMockCredential(browser, page, options, { timeoutMs, chromium });
+  }
   if (provider !== 'mock') {
     return {
       ok: false,
@@ -14135,7 +14889,10 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
       if (!nextPage) throw new Error('CDP 已恢复，但未找到 QBot 主窗口。');
       nextPage.setDefaultTimeout(12000);
       nextPage.setDefaultNavigationTimeout(30000);
-      const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options);
+      const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options, {
+        browser: nextBrowser,
+        chromium: runtime.playwright.chromium,
+      });
       if (!fixtureAuth.ok) {
         throw new Error(fixtureAuth.reason || '受控 fixture mock OAuth 恢复失败。');
       }

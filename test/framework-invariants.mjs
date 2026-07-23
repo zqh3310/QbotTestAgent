@@ -18,6 +18,7 @@ import {
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
   countEnumeratedItems,
+  connectorFixtureDocumentTurnState,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
   isContinuedOldLoginAnswer,
@@ -50,6 +51,10 @@ const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restar
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
 const capabilityFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-capability-fixture-control-plane.sh'), 'utf8');
+const teamsControlPlaneProxy = fs.readFileSync(
+  path.join(root, 'teams360-automation', 'runtime', 'scripts', 'teams-control-plane-proxy.mjs'),
+  'utf8',
+);
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 const coreGateCasebook = JSON.parse(fs.readFileSync(
   path.join(root, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json'),
@@ -70,6 +75,49 @@ assert.match(
   /composerProductEntrySnapshot[\s\S]*composer-plus-menu[\s\S]*(?:连接器\|连应用)/,
   '统一“+”菜单快照必须同时验证技能和连接器/连应用入口',
 );
+const connectorFixtureHistory = [
+  { role: 'user', content: '读取 allowed-doc-a' },
+  { role: 'assistant', content: [{ type: 'tool_use', name: 'mcp__teams_doc_fixture__teams_document_read' }] },
+  { role: 'user', content: [{ type: 'tool_result', content: 'allowed-doc-a result' }] },
+  { role: 'assistant', content: 'allowed result' },
+  { role: 'user', content: '现在读取 denied-doc-b' },
+];
+const connectorFixtureTools = [{ name: 'mcp__teams_doc_fixture__teams_document_read' }];
+assert.deepEqual(
+  connectorFixtureDocumentTurnState({ messages: connectorFixtureHistory, tools: connectorFixtureTools }),
+  {
+    documentId: 'denied-doc-b',
+    promptIndex: 4,
+    toolResultPresent: false,
+    tool: connectorFixtureTools[0],
+  },
+  '多轮文档 fixture 不得把上一轮 tool_result 误当成本轮工具结果',
+);
+assert.equal(
+  connectorFixtureDocumentTurnState({
+    messages: [
+      ...connectorFixtureHistory,
+      { role: 'assistant', content: [{ type: 'tool_use', name: connectorFixtureTools[0].name }] },
+      { role: 'user', content: [{ type: 'tool_result', content: 'denied-doc-b permission denied' }] },
+    ],
+    tools: connectorFixtureTools,
+  }).toolResultPresent,
+  true,
+  '文档 fixture 必须识别当前请求之后的 tool_result',
+);
+for (const pattern of [
+  /private-runtime-context/,
+  /private_runtime_context_forbidden/,
+  /private_runtime_context_unavailable/,
+  /platformResourcesBundle/,
+  /qbotVisionRuntime/,
+]) {
+  assert.match(
+    teamsControlPlaneProxy,
+    pattern,
+    'Teams loopback fixture 必须兼容 QWork 0.0.12 私有运行时上下文且保持 fail-closed',
+  );
+}
 assert.match(
   runner,
   /findQbotPage[\s\S]*rankQbotPageCandidates[\s\S]*await page\.title\(\)[\s\S]*\\bQWork\\b/,
@@ -256,6 +304,7 @@ const required = [
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
   ['连接器 reset 对禁用/自动模式直达且不先切手动', /if \(connectorMode === 'disabled' \|\| connectorMode === 'auto'\)[\s\S]*setConnectorMode\(page, state, caseDir, connectorMode\)[\s\S]*else \{[\s\S]*clearManualConnectorSelections/],
   ['连接器模式切换使用新 DOM 和能力状态轮询', /async function setConnectorMode[\s\S]*const freshLocator = await connectorModeLocator[\s\S]*capabilities\?\.connectorRouting\?\.mode[\s\S]*'automation_error'/],
+  ['统一连接器菜单按公共目录名称选择并回读唯一 key', /selectManualConnectorByKey[\s\S]*catalogMatch[\s\S]*matches\.length === 1[\s\S]*selectedConnectors\.includes\(connectorKey\)[\s\S]*public-catalog-visible-label/],
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-030 在 Teams 全量 Fixture 中强制使用渲染层代理', /executeSitHomeQuickFeedback[\s\S]*forceRendererAdapter: true[\s\S]*installControlPlaneHttpControl[\s\S]*forceRendererAdapter \|\| options\['renderer-control-adapter'\] === 'teams360'/],
@@ -283,7 +332,7 @@ const required = [
   ['#669 四条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
   ['QWork 0.0.11 统一加号菜单按技能连接器模式子菜单兼容', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*composer-plus-sub-mode[\s\S]*composer-plus-sub-skill[\s\S]*composer-plus-sub-connector[\s\S]*openUnifiedComposerSubmenu/],
-  ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
+  ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*selectedConnectors === null[\s\S]*selectedConnectors\.length === 0/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
@@ -387,6 +436,9 @@ const required = [
   ['ART-024 在 iframe 或 webview 中点击交互 HTML 且验证宿主隔离', /SIT-ART-024[\s\S]*interactive_preview\.html[\s\S]*interactWithEmbeddedArtifactPreview[\s\S]*__QBOT_PREVIEW_ESCAPE__/],
   ['ART-CONFIRM-001 必须操作显性确认并核验正式成果唯一入库', /SIT-ART-CONFIRM-001'[\s\S]*executeSitArtifactConfirmationGate[\s\S]*正式成果显性确认入口[\s\S]*正式成果唯一入库且临时\/失败产物不污染/],
   ['MEM-001 必须跨四个任务验证记忆新增修改删除', /SIT-MEM-001'[\s\S]*executeSitMemoryLifecycle[\s\S]*memoryLifecycleVerdict[\s\S]*新任务验证偏好已删除/],
+  ['Teams loopback fixture 通过主页面 E2E IPC 采用 mock 会话且限制同源 loopback', /managedFixtureLoopbackOrigin[\s\S]*createManagedFixtureMockSession[\s\S]*\/api\/auth\/mock\/authorize[\s\S]*globalThis\.ipcRenderer[\s\S]*lingxi-credential:mock-adopt[\s\S]*teams-main-e2e-mock-adopt/],
+  ['Teams loopback fixture 复用外部 DEV 已签名 release 且不伪造签名', /captureManagedTeamsFixtureRuntimeRelease[\s\S]*lingxi-credential:control-plane-request[\s\S]*\/api\/runtime-release\?[\s\S]*signature\?\.algorithm !== 'Ed25519'[\s\S]*teams-fixture-runtime-release-envelope\.json/],
+  ['Teams 文档 turn-context 兼容脱敏工具计数但仍要求真实 tools call', /claudeAllowedToolCount[\s\S]*documentToolAllowed[\s\S]*allowedHits[\s\S]*rpcMethod === 'tools\/call'/],
 ];
 
 for (const [label, pattern] of required) {
@@ -1106,9 +1158,12 @@ try {
 const connectorFixtureServer = await createConnectorRegressionServer();
 try {
   const readiness = await probeConnectorRegressionFixture(connectorFixtureServer);
-  if (!readiness.ok || !readiness.catalog || !readiness.healthy || !readiness.unreachable) {
+  if (!readiness.ok || !readiness.catalog || !readiness.modelTier || !readiness.healthy || !readiness.unreachable) {
     throw new Error(`连接器 Fixture runner-side readiness 探测失败：${JSON.stringify(readiness)}`);
   }
+  const models = await fetch(`${connectorFixtureServer.url}/openapi/models/llm-connections`).then((response) => response.json());
+  const m3Connection = models?.data?.connections?.find((item) => item.id === 'qbot-test-agent-m3-fixture');
+  if (m3Connection?.models?.[0]?.safety_level !== 'M3') throw new Error('连接器 Fixture 缺少发送前置所需 M3 模型连接');
   const catalog = await fetch(`${connectorFixtureServer.url}/api/openapi/servers?detail=true`).then((response) => response.json());
   const servers = catalog?.data?.servers || [];
   if (!servers.find((item) => item.name === 'dev_healthy' && item.status === 'connected')) throw new Error('连接器 Fixture 缺少 healthy 条目');
@@ -1132,6 +1187,37 @@ try {
   const documentServer = catalog?.data?.servers?.find((item) => item.name === 'teams_doc_fixture');
   if (documentServer?.status !== 'connected' || documentServer?.tools?.[0]?.name !== 'teams_document_read') {
     throw new Error(`Teams 文档 Fixture 目录错误：${JSON.stringify(documentServer)}`);
+  }
+  const llmToolResponse = await fetch(`${documentFixtureServer.url}/mock-llm/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'qbot-test-agent-m3',
+      stream: true,
+      messages: [{ role: 'user', content: '读取 allowed-doc-a' }],
+      tools: [{ name: 'mcp__teams_doc_fixture__teams_document_read', input_schema: { type: 'object' } }],
+    }),
+  }).then((response) => response.text());
+  if (!llmToolResponse.includes('"type":"tool_use"')
+    || !llmToolResponse.includes('allowed-doc-a')
+    || !llmToolResponse.includes('mcp__teams_doc_fixture__teams_document_read')) {
+    throw new Error(`Teams 文档 M3 模型 Fixture 未生成确定性工具调用：${llmToolResponse}`);
+  }
+  const llmFinalResponse = await fetch(`${documentFixtureServer.url}/mock-llm/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'qbot-test-agent-m3',
+      stream: true,
+      messages: [
+        { role: 'user', content: '读取 allowed-doc-a' },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu-1', content: 'TEAMS_DOC_ALLOWED_20260716' }] },
+      ],
+      tools: [{ name: 'mcp__teams_doc_fixture__teams_document_read', input_schema: { type: 'object' } }],
+    }),
+  }).then((response) => response.text());
+  if (!llmFinalResponse.includes('TEAMS_DOC_ALLOWED_20260716') || !llmFinalResponse.includes('"stop_reason":"end_turn"')) {
+    throw new Error(`Teams 文档 M3 模型 Fixture 未生成确定性最终回复：${llmFinalResponse}`);
   }
   const allowed = await fetch(`${documentFixtureServer.url}/mcp/documents`, {
     method: 'POST',

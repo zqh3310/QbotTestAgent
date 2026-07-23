@@ -88,6 +88,8 @@ console.log(JSON.stringify({
 
 function managedEnvironment(serverUrl, mockFlag) {
   const origin = new URL(serverUrl).origin;
+  const loopbackFixture = ['127.0.0.1', 'localhost', '[::1]', '::1']
+    .includes(new URL(origin).hostname);
   return {
     DEEPBANK_SURFACE: 'workbench',
     DEEPBANK_UI_URL: pinnedQworkUi.url,
@@ -101,6 +103,11 @@ function managedEnvironment(serverUrl, mockFlag) {
     // desktop runtime's mock-agent lane. Keep it an explicit, per-relaunch
     // opt-in so ordinary Casebook runs always exercise the real Agent.
     DEEPBANK_AGENT_MOCK: mockFlag,
+    // Fixture-only Agent turns keep the Claude SDK protocol trace so a
+    // missing MCP initialize/tools/list/tools/call can be diagnosed after the
+    // managed host is restored. This never enables debug logging on the
+    // ordinary external DEV lane.
+    ...(loopbackFixture ? { QBOT_CLAUDE_SDK_DEBUG: '1' } : {}),
     ...(origin === packagedControlPlaneOrigin ? {} : { DEEPBANK_SERVER: serverUrl }),
   };
 }

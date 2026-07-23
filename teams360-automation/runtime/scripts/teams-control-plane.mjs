@@ -13,10 +13,13 @@ if (!['skillhub', 'connector', 'capability'].includes(mode) || !qbotRoot) {
 }
 
 const port = 18900;
+const upstreamPort = 18901;
 const home = path.resolve(homeOverride || path.join(process.cwd(), 'teams360-automation', 'state', 'control-plane-home'));
 const logDir = path.join(home, 'logs');
 const pidDir = path.join(home, 'pids');
 const pidFile = path.join(pidDir, 'teams-control-plane.pid');
+const proxyPidFile = path.join(pidDir, 'teams-control-plane-proxy.pid');
+const runtimeReleaseEnvelopeFile = String(process.env.QBOT_QA_RUNTIME_RELEASE_ENVELOPE_FILE || '').trim();
 fs.mkdirSync(logDir, { recursive: true });
 fs.mkdirSync(pidDir, { recursive: true });
 
@@ -32,15 +35,22 @@ if (fs.existsSync(pidFile)) {
   terminateGroup(pid);
   fs.rmSync(pidFile, { force: true });
 }
-try {
-  const listeners = execFileSync('lsof', ['-nP', `-tiTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
-    .trim().split(/\s+/).map(Number).filter((pid) => pid > 1);
-  for (const pid of listeners) terminateGroup(pid);
-} catch {}
+if (fs.existsSync(proxyPidFile)) {
+  const pid = Number(fs.readFileSync(proxyPidFile, 'utf8').trim());
+  terminateGroup(pid);
+  fs.rmSync(proxyPidFile, { force: true });
+}
+for (const targetPort of [port, upstreamPort]) {
+  try {
+    const listeners = execFileSync('lsof', ['-nP', `-tiTCP:${targetPort}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+      .trim().split(/\s+/).map(Number).filter((pid) => pid > 1);
+    for (const pid of listeners) terminateGroup(pid);
+  } catch {}
+}
 
-function portIsOpen() {
+function portIsOpen(targetPort) {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: '127.0.0.1', port });
+    const socket = net.createConnection({ host: '127.0.0.1', port: targetPort });
     const finish = (open) => {
       socket.removeAllListeners();
       socket.destroy();
@@ -55,19 +65,19 @@ function portIsOpen() {
 
 let portClosed = false;
 for (let attempt = 0; attempt < 80; attempt += 1) {
-  if (!await portIsOpen()) {
+  if (!await portIsOpen(port) && !await portIsOpen(upstreamPort)) {
     portClosed = true;
     break;
   }
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
 if (!portClosed) {
-  throw new Error(`Teams fixture control plane port ${port} remained occupied after terminating the previous fixture.`);
+  throw new Error(`Teams fixture control plane ports ${port}/${upstreamPort} remained occupied after terminating the previous fixture.`);
 }
 
 const fixtureEnv = {
   ...process.env,
-  PORT: String(port),
+  PORT: String(upstreamPort),
   DEEPBANK_HOME: home,
   DEEPBANK_ENV: 'dev',
   DEEPBANK_E2E: mode === 'connector' ? (secondUrl || '1') : '1',
@@ -86,6 +96,12 @@ if (mode === 'connector') {
   fixtureEnv.DEEPBANK_MCPHUB_MOCK = '0';
   fixtureEnv.DEEPBANK_MCPHUB_URL = `${firstUrl.replace(/\/$/, '')}/api/openapi/servers?detail=true`;
   fixtureEnv.DEEPBANK_MCPHUB_BASE_URL = firstUrl;
+  // Connector fixture cases use a deterministic mock agent, while the
+  // product still enforces the requested tier before every send. Supply the
+  // runner-owned M3 connection through the normal platform API instead of
+  // silently falling back to M4 or borrowing external DEV model state.
+  fixtureEnv.DEEPBANK_LLM_CONNECTIONS_MOCK = '0';
+  fixtureEnv.DEEPBANK_LLM_CONNECTIONS_URL = `${firstUrl.replace(/\/$/, '')}/openapi/models/llm-connections`;
 }
 if (mode === 'capability') {
   fixtureEnv.DEEPBANK_MCPHUB_MOCK = '0';
@@ -104,9 +120,9 @@ child.unref();
 fs.closeSync(logFd);
 fs.writeFileSync(pidFile, `${child.pid}\n`);
 
-function health() {
+function health(targetPort) {
   return new Promise((resolve) => {
-    const request = http.get(`http://127.0.0.1:${port}/api/health`, { timeout: 1000 }, (response) => {
+    const request = http.get(`http://127.0.0.1:${targetPort}/api/health`, { timeout: 1000 }, (response) => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => { body += chunk; });
@@ -131,14 +147,55 @@ function health() {
 
 let ready = false;
 for (let attempt = 0; attempt < 160; attempt += 1) {
-  if (await health()) { ready = true; break; }
+  if (await health(upstreamPort)) { ready = true; break; }
   try { process.kill(child.pid, 0); } catch { break; }
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 if (!ready) {
   const log = path.join(logDir, 'teams-control-plane.log');
   const detail = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(-8000) : 'no log';
-  throw new Error(`Teams fixture control plane failed on ${port}: ${detail}`);
+  throw new Error(`Teams fixture control plane failed on ${upstreamPort}: ${detail}`);
 }
 
-console.log(JSON.stringify({ status: 'ready', mode, pid: child.pid, port, home }));
+const proxyScript = path.resolve(path.dirname(new URL(import.meta.url).pathname), 'teams-control-plane-proxy.mjs');
+const proxyLogFd = fs.openSync(path.join(logDir, 'teams-control-plane-proxy.log'), 'a');
+const proxy = spawn(process.execPath, [
+  proxyScript,
+  String(port),
+  String(upstreamPort),
+  runtimeReleaseEnvelopeFile,
+], {
+  detached: true,
+  stdio: ['ignore', proxyLogFd, proxyLogFd],
+});
+proxy.unref();
+fs.closeSync(proxyLogFd);
+fs.writeFileSync(proxyPidFile, `${proxy.pid}\n`);
+
+let proxyReady = false;
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  if (await health(port)) {
+    proxyReady = true;
+    break;
+  }
+  try { process.kill(proxy.pid, 0); } catch { break; }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+if (!proxyReady) {
+  terminateGroup(proxy.pid);
+  terminateGroup(child.pid);
+  const proxyLog = path.join(logDir, 'teams-control-plane-proxy.log');
+  const detail = fs.existsSync(proxyLog) ? fs.readFileSync(proxyLog, 'utf8').slice(-8000) : 'no proxy log';
+  throw new Error(`Teams fixture control-plane proxy failed on ${port}: ${detail}`);
+}
+
+console.log(JSON.stringify({
+  status: 'ready',
+  mode,
+  pid: child.pid,
+  proxyPid: proxy.pid,
+  port,
+  upstreamPort,
+  runtimeReleaseEnvelope: runtimeReleaseEnvelopeFile || '',
+  home,
+}));

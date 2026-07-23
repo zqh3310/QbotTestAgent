@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -51,6 +53,45 @@ import {
   createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
+
+function listen(server, port = 0) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve(server.address().port);
+    });
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function requestJson({ port, path: requestPath, headers = {}, body = '{}' }) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path: requestPath,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+        ...headers,
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: response.statusCode, body: JSON.parse(text || '{}') });
+      });
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+}
 
 test('defaults stay inside the independent teams360 automation directory', () => {
   const options = parseArgs(['doctor']);
@@ -645,6 +686,18 @@ test('Teams Electron restart shim ignores fixture URLs and auto-discovers the pi
   assert.match(source, /relaunch-managed-host\.mjs" "\$CONTROL_PLANE_URL" "" "\$AGENT_MOCK"$/m);
 });
 
+test('Teams connector fixture pins the live QWork UI across managed host relaunches', () => {
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(
+    runner,
+    /const expectedQworkUiUrl = options\['renderer-control-adapter'\] === 'teams360'[\s\S]*runtime\?\.page\?\.url\?\.\(\)/,
+  );
+  assert.match(
+    runner,
+    /\[electronHelper, qbotRoot, 'http:\/\/127\.0\.0\.1:8900', cdpPort, qbotHome, expectedQworkUiUrl,/,
+  );
+});
+
 test('managed Teams HITL fixture opts into mock Agent only for its controlled relaunch', () => {
   const relaunch = fs.readFileSync(new URL('../lib/relaunch-managed-host.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
@@ -660,15 +713,71 @@ test('managed Teams HITL fixture opts into mock Agent only for its controlled re
 
 test('managed Teams fixture data stays on the authenticated renderer bridge; legacy loopback auth remains fail-closed', () => {
   const fixtureServer = fs.readFileSync(new URL('../runtime/scripts/teams-control-plane.mjs', import.meta.url), 'utf8');
+  const fixtureProxy = fs.readFileSync(new URL('../runtime/scripts/teams-control-plane-proxy.mjs', import.meta.url), 'utf8');
+  const relaunch = fs.readFileSync(new URL('../lib/relaunch-managed-host.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(fixtureServer, /DEEPBANK_AUTH_PROVIDER:\s*['"]mock['"]/);
   assert.match(fixtureServer, /portIsOpen/);
+  assert.match(runner, /Teams 文档连接器已物化到本轮 Agent/);
+  assert.match(
+    runner,
+    /const e2e = window\.__qbotE2E \|\| window\.__deepbankE2E;[\s\S]*e2e\?\.getLastTurnContextEvidence[\s\S]*window\.agent\?\.getLastTurnContextEvidence/,
+  );
+  assert.doesNotMatch(runner, /window\.agent\?\.e2e\?\.getLastTurnContextEvidence/);
   assert.match(fixtureServer, /if\s*\(!portClosed\)/);
   assert.match(fixtureServer, /payload\.auth\?\.provider\?\.id\s*===\s*['"]mock['"]/);
   assert.match(runner, /ensureManagedFixtureMockAuth/);
   assert.match(runner, /\/api\/auth\/mock\/authorize/);
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
+  assert.match(runner, /createManagedFixtureMockSession/);
+  assert.match(runner, /lingxi-credential:mock-adopt/);
+  assert.match(runner, /teams-main-e2e-mock-adopt/);
+  assert.match(runner, /captureManagedTeamsFixtureRuntimeRelease/);
+  assert.match(runner, /lingxi-credential:control-plane-request/);
+  assert.match(runner, /QBOT_QA_RUNTIME_RELEASE_ENVELOPE_FILE/);
+  assert.match(runner, /signature\?\.algorithm !== 'Ed25519'/);
+  assert.match(runner, /claudeAllowedToolCount/);
+  assert.match(runner, /actual fixture tools\/call assertion below remains the/);
+  assert.match(fixtureServer, /const upstreamPort = 18901/);
+  assert.match(fixtureServer, /teams-control-plane-proxy\.mjs/);
+  assert.match(fixtureProxy, /url\.pathname === '\/api\/runtime-release'/);
+  assert.match(fixtureProxy, /signature\?\.algorithm !== 'Ed25519'/);
+  assert.match(fixtureProxy, /url\.pathname === '\/api\/desktop-agent\/private-runtime-context'/);
+  assert.match(fixtureProxy, /hasPrivateBearer\(request\)/);
+  assert.match(fixtureProxy, /private_runtime_context_forbidden/);
+  assert.match(fixtureProxy, /private_runtime_context_unavailable/);
+  assert.match(fixtureProxy, /captureTurnContext/);
+  assert.match(fixtureProxy, /platformResourcesBundle/);
+  assert.match(fixtureProxy, /qbotVisionRuntime:\s*\{\}/);
+  assert.doesNotMatch(fixtureProxy, /connectorRuntimeMaterialization\s*[:,]/);
+  assert.match(fixtureProxy, /request\.pipe\(upstream\)/);
+  assert.match(fixtureProxy, /const headers = \{ \.\.\.request\.headers \}/);
+  assert.doesNotMatch(fixtureProxy, /host:\s*`127\.0\.0\.1:\$\{upstreamPort\}`/);
+  assert.match(relaunch, /QBOT_CLAUDE_SDK_DEBUG: '1'/);
+  assert.match(runner, /providerTokens:\s*\{[\s\S]*accessToken:\s*auth\.sessionToken/);
+  assert.match(runner, /fixture-auth-control-plane-url'\]\s*=\s*'http:\/\/127\.0\.0\.1:18900'/);
+  assert.match(runner, /qbot-test-agent-m3-fixture/);
+  assert.match(runner, /modelTier/);
+  assert.match(runner, /mock-llm\\\/v1\\\/messages/);
+  assert.match(runner, /fixture\.includeDocumentFixture \? '0'/);
+  assert.match(runner, /connector_regression_fixture_llm_turns/);
+  assert.match(fixtureServer, /DEEPBANK_LLM_CONNECTIONS_MOCK\s*=\s*'0'/);
+  assert.match(fixtureServer, /DEEPBANK_LLM_CONNECTIONS_URL/);
+  assert.match(runner, /unifiedConnectorModeApplied/);
+  assert.match(runner, /selectedConnectors === null/);
+  assert.match(runner, /Array\.isArray\(selectedConnectors\) && selectedConnectors\.length === 0/);
+  assert.match(runner, /public-catalog-visible-label/);
+  assert.match(runner, /selectedConnectors\.includes\(connectorKey\)/);
+  assert.match(runner, /teams-upstream-cdp-url/);
+  assert.match(runner, /chromium\.connectOverCDP\(upstreamCdp/);
+  assert.match(runner, /ownsHostBrowser/);
+  assert.match(runner, /globalThis\.ipcRenderer/);
   assert.match(runner, /fixture_mock_auth/);
+  assert.match(runner, /stopManagedTeamsFixtureControlPlane/);
+  assert.match(runner, /teams-control-plane-proxy\.pid/);
+  assert.match(runner, /process\.kill\(-pid, 'SIGTERM'\)/);
+  assert.match(runner, /connector-fixture-finished/);
+  assert.match(runner, /home-capability-fixture-finished/);
   assert.match(runner, /if \(auth\?\.authenticated\)[\s\S]*const provider = String\(auth\?\.provider\?\.id \|\| ''\)\.toLowerCase\(\)/);
   assert.doesNotMatch(
     runner.slice(
@@ -685,6 +794,87 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /options\['renderer-control-adapter'\] === 'teams360' && !fixture\.includeDocumentFixture/);
   assert.match(runner, /360Teams、外部 DEV 和登录态均未重启/);
   assert.match(runner, /Fixture 初始化失败后恢复正式控制面/);
+});
+
+test('fixture proxy adapts authenticated legacy turn context to QWork 0.0.12 private context', async () => {
+  const privateBundle = {
+    resources: [{ id: 'teams_doc_fixture', runtime: { url: 'http://127.0.0.1:39001/mcp/documents' } }],
+  };
+  const upstream = http.createServer((request, response) => {
+    if (request.method === 'POST' && request.url === '/api/desktop-agent/turn-context') {
+      const body = JSON.stringify({
+        platformResourcesBundle: privateBundle,
+        connectorRuntimeMaterialization: { secret: 'must-not-be-copied' },
+        redacted: false,
+      });
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      response.end(body);
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'application/json' });
+    response.end('{}');
+  });
+  const upstreamPort = await listen(upstream);
+  const reservation = http.createServer();
+  const proxyPort = await listen(reservation);
+  await closeServer(reservation);
+  const proxyPath = new URL('../runtime/scripts/teams-control-plane-proxy.mjs', import.meta.url);
+  const proxy = spawn(process.execPath, [proxyPath.pathname, String(proxyPort), String(upstreamPort)], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('fixture proxy readiness timeout')), 5000);
+      proxy.once('exit', (code) => reject(new Error(`fixture proxy exited before ready: ${code}`)));
+      proxy.stdout.on('data', (chunk) => {
+        if (!String(chunk).includes('"status":"ready"')) return;
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    const beforeCache = await requestJson({
+      port: proxyPort,
+      path: '/api/desktop-agent/private-runtime-context',
+      headers: { authorization: 'Bearer fixture-private-token' },
+    });
+    assert.equal(beforeCache.status, 503);
+    assert.equal(beforeCache.body.error, 'private_runtime_context_unavailable');
+
+    const publicContext = await requestJson({
+      port: proxyPort,
+      path: '/api/desktop-agent/turn-context',
+      headers: { authorization: 'Bearer fixture-app-session' },
+      body: JSON.stringify({ session: { connectors: ['mcphub:teams_doc_fixture'] } }),
+    });
+    assert.equal(publicContext.status, 200);
+
+    const missingBearer = await requestJson({
+      port: proxyPort,
+      path: '/api/desktop-agent/private-runtime-context',
+    });
+    assert.equal(missingBearer.status, 403);
+    assert.equal(missingBearer.body.error, 'private_runtime_context_forbidden');
+
+    const privateContext = await requestJson({
+      port: proxyPort,
+      path: '/api/desktop-agent/private-runtime-context',
+      headers: { authorization: 'Bearer fixture-private-token' },
+    });
+    assert.equal(privateContext.status, 200);
+    assert.deepEqual(privateContext.body, {
+      platformResourcesBundle: privateBundle,
+      qbotVisionRuntime: {},
+      redacted: true,
+    });
+    assert.equal('connectorRuntimeMaterialization' in privateContext.body, false);
+  } finally {
+    proxy.kill('SIGTERM');
+    await closeServer(upstream);
+  }
 });
 
 test('managed Teams fixture relaunch transactionally overrides and restores the persisted QBot profile', () => {
