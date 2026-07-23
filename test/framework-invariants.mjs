@@ -70,6 +70,11 @@ assert.match(
   /composerProductEntrySnapshot[\s\S]*composer-plus-menu[\s\S]*(?:连接器\|连应用)/,
   '统一“+”菜单快照必须同时验证技能和连接器/连应用入口',
 );
+assert.match(
+  runner,
+  /findQbotPage[\s\S]*rankQbotPageCandidates[\s\S]*await page\.title\(\)[\s\S]*\\bQWork\\b/,
+  'CDP 页面发现必须 await 标题并优先真实 QWork WebView，不能按返回顺序误选 360Teams 外壳',
+);
 assert.equal(coreGateIds.at(-1), 'SIT-AUTH-005', '核心门禁用例簿末条必须是退出登录闭环');
 for (const id of [
   'SIT-INIT-004',

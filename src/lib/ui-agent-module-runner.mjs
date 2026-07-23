@@ -1067,7 +1067,8 @@ async function findQbotPage(browser) {
   while (Date.now() < deadline) {
     const pages = browser.contexts().flatMap((context) => context.pages());
     const candidates = pages.filter((page) => page.url() && page.url() !== 'about:blank');
-    const qbot = candidates.find((page) => /qbot|localhost|127\.0\.0\.1|deepbank/i.test(`${page.url()} ${page.title()}`));
+    const ranked = await rankQbotPageCandidates(candidates);
+    const qbot = ranked[0]?.score > 0 ? ranked[0].page : null;
     if (qbot) {
       await qbot.waitForLoadState('domcontentloaded').catch(() => {});
       return qbot;
@@ -1075,6 +1076,22 @@ async function findQbotPage(browser) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return null;
+}
+
+async function rankQbotPageCandidates(candidates) {
+  const ranked = [];
+  for (const page of candidates) {
+    const url = page.url();
+    const title = await page.title().catch(() => '');
+    let score = 0;
+    if (/\bQWork\b/i.test(title)) score += 120;
+    if (/QBot|deepbank/i.test(title)) score += 80;
+    if (/\.deepbank(?:-dev)?\/ui\/|deepbank/i.test(url)) score += 100;
+    if (/\/apps\/qbot\b|[/?#]qbot\b/i.test(url)) score += 30;
+    if (/localhost|127\.0\.0\.1/i.test(url)) score += 5;
+    ranked.push({ page, score, title, url });
+  }
+  return ranked.sort((left, right) => right.score - left.score);
 }
 
 function selectCases(cases, options) {
