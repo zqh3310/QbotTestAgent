@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "reviewer": "independent-human-or-second-engine",
+  "reviewer_role": "QA reviewer who did not produce the primary verdict",
+  "method": "human or second_engine or human_plus_engine",
+  "independence_attestation": true,
+  "reviewed_at": "YYYY-MM-DDTHH:mm:ss.sssZ",
+  "results": [
+    {
+      "id": "SIT-EXAMPLE-001",
+      "classification": "trusted_pass",
+      "evidence_checked": true,
+      "reason": "逐步核对用户操作、截图、transcript、reply-delta、工具调用和产物读回。"
+    }
+  ]
+}

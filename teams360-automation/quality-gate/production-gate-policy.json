@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "gate_name": "QBot Teams-QWork production release gate",
+  "required_run_count": 5,
+  "required_repetitions_by_priority": {
+    "P0": 5,
+    "P1": 3
+  },
+  "maximum_flake_rate": 0.01,
+  "require_all_trusted_pass": true,
+  "require_raw_pass": true,
+  "require_explicit_case_metadata": true,
+  "required_risk_domains": [
+    "functional",
+    "security_privacy",
+    "reliability_recovery",
+    "performance_capacity",
+    "compatibility_upgrade",
+    "data_integrity_isolation",
+    "external_navigation",
+    "release_rollback"
+  ],
+  "required_artifact_fingerprints": [
+    "host_info_plist_sha256",
+    "host_main_binary_sha256",
+    "qwork_index_sha256",
+    "qwork_install_metadata_sha256",
+    "casebook_sha256"
+  ],
+  "required_release_inputs": [
+    "backend_version",
+    "prompt_policy_version",
+    "feature_flags_hash"
+  ],
+  "require_framework_commit": true,
+  "require_clean_framework_source": true,
+  "require_deepbank_commit": true,
+  "require_clean_deepbank_source": false,
+  "require_calibration": true,
+  "calibration": {
+    "minimum_samples": 30,
+    "minimum_defect_samples": 20,
+    "minimum_p0_samples": 5,
+    "minimum_clean_samples": 5,
+    "minimum_detection_rate": 0.95,
+    "required_p0_detection_rate": 1,
+    "minimum_classification_accuracy": 0.95,
+    "maximum_false_positive_rate": 0.02
+  },
+  "require_independent_review": true,
+  "independent_review": {
+    "require_all_p0": true,
+    "trusted_pass_sample_rate": 0.2
+  }
+}

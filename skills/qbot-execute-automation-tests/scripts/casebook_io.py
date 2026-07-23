@@ -267,9 +267,34 @@ def export_cases(args: argparse.Namespace) -> None:
                 "source_id": row_value(ws, row_idx, headers, "来源ID"),
                 "source_type": row_value(ws, row_idx, headers, "来源类型"),
                 "note": row_value(ws, row_idx, headers, "备注") or row_value(ws, row_idx, headers, "维护备注"),
+                "user_journey": row_value(ws, row_idx, headers, "用户旅程"),
+                "blocking_level": row_value(ws, row_idx, headers, "阻断等级"),
+                "pipeline_policy": row_value(ws, row_idx, headers, "流水线策略"),
+                "second_review_required": row_value(ws, row_idx, headers, "二次复核要求"),
+                "risk_domain": row_value_any(ws, row_idx, headers, ["风险域", "风险分类"]),
+                "oracle_type": row_value_any(ws, row_idx, headers, ["判定Oracle", "Oracle类型", "判定类型"]),
+                "deterministic": row_value_any(ws, row_idx, headers, ["确定性", "是否确定性"]),
+                "repeat_policy": row_value_any(ws, row_idx, headers, ["重复策略", "稳定性重复策略"]),
+                "required_fixture": row_value_any(ws, row_idx, headers, ["必需Fixture", "环境与数据Fixture"]),
+                "hard_gate": row_value_any(ws, row_idx, headers, ["硬门禁", "一票否决"]),
+                "cleanup_policy": row_value_any(ws, row_idx, headers, ["清理策略", "数据清理策略"]),
+                "version_scope": row_value_any(ws, row_idx, headers, ["版本范围", "适用版本"]),
+                "known_bug_link": row_value_any(ws, row_idx, headers, ["历史Bug", "已知Bug链接"]),
+                "production_signal": row_value_any(ws, row_idx, headers, ["生产观测指标", "上线观测指标"]),
                 "sheet": ws.title,
                 "row_number": row_idx,
             }
+            row["production_metadata_explicit"] = all(row.get(field) for field in [
+                "risk_domain",
+                "oracle_type",
+                "deterministic",
+                "repeat_policy",
+                "required_fixture",
+                "hard_gate",
+                "cleanup_policy",
+                "version_scope",
+                "production_signal",
+            ])
             row["kind"] = infer_case_kind(row)
             if is_selected(row, args.profile, wanted):
                 rows.append(row)

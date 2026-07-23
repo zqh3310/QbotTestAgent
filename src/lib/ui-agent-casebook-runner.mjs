@@ -88,6 +88,27 @@ const SINGLE_HOST_PIPELINE_CASE_IDS = new Set([
   'SIT-HOME-064',
   'SIT-HOME-065',
 ]);
+const PRODUCTION_CASE_METADATA_FIELDS = [
+  'risk_domain',
+  'oracle_type',
+  'deterministic',
+  'repeat_policy',
+  'required_fixture',
+  'hard_gate',
+  'cleanup_policy',
+  'version_scope',
+  'production_signal',
+];
+const PRODUCTION_REQUIRED_RISK_DOMAINS = [
+  'functional',
+  'security_privacy',
+  'reliability_recovery',
+  'performance_capacity',
+  'compatibility_upgrade',
+  'data_integrity_isolation',
+  'external_navigation',
+  'release_rollback',
+];
 
 export async function runUiAgentCasebookCommand({ options = {}, root = process.cwd() } = {}) {
   const startedAt = new Date();
@@ -168,6 +189,45 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     writeRunArtifacts(outDir, summary);
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
     return summary;
+  }
+
+  const productionGateEnabled = options['production-gate'] === true
+    || options['production-gate'] === 'true'
+    || String(options['gate-profile'] || '').toLowerCase() === 'release';
+  if (productionGateEnabled) {
+    const audit = validateProductionCasePlan(selectedCases, {
+      backendVersion: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
+      promptPolicyVersion: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
+      featureFlagsHash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+    });
+    writeJsonFile(path.join(outDir, 'production-casebook-preflight.json'), audit);
+    if (!audit.ok) {
+      const reason = `生产门禁前置检查失败：${audit.errors.slice(0, 20).join('；')}`;
+      const results = selectedCases.map((testCase, index) => buildSyntheticResult({
+        outDir,
+        testCase,
+        index,
+        status: 'blocked',
+        resultCategory: 'automation_error',
+        reason,
+      }));
+      const summary = buildSummary({
+        status: 'blocked',
+        startedAt,
+        outDir,
+        casebook,
+        resultExcel,
+        profile,
+        cdpUrl,
+        modelTier,
+        results,
+        reason,
+        precheck: { production_casebook: audit },
+      });
+      writeRunArtifacts(outDir, summary);
+      await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
+      return summary;
+    }
   }
 
   if (options['skip-run'] === true) {
@@ -492,6 +552,74 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
+}
+
+function normalizeProductionRiskDomain(value) {
+  const aliases = new Map([
+    ['功能', 'functional'], ['安全', 'security_privacy'], ['安全隐私', 'security_privacy'],
+    ['可靠性', 'reliability_recovery'], ['稳定性', 'reliability_recovery'], ['恢复', 'reliability_recovery'],
+    ['性能', 'performance_capacity'], ['容量', 'performance_capacity'], ['兼容', 'compatibility_upgrade'],
+    ['升级', 'compatibility_upgrade'], ['数据', 'data_integrity_isolation'], ['隔离', 'data_integrity_isolation'],
+    ['外链', 'external_navigation'], ['webview', 'external_navigation'], ['发布', 'release_rollback'], ['回滚', 'release_rollback'],
+  ]);
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s/-]+/g, '_');
+  return aliases.get(normalized) || normalized;
+}
+
+export function validateProductionCasePlan(cases = [], {
+  backendVersion = '',
+  promptPolicyVersion = '',
+  featureFlagsHash = '',
+} = {}) {
+  const errors = [];
+  const warnings = [];
+  if (!cases.length) errors.push('生产门禁 Case 集为空。');
+  const ids = cases.map((item) => String(item.id || '').trim()).filter(Boolean);
+  if (ids.length !== cases.length || new Set(ids).size !== ids.length) errors.push('Case ID 为空或重复。');
+  const coveredDomains = new Set();
+  const hardGateDomains = new Set();
+  for (const testCase of cases) {
+    const missing = PRODUCTION_CASE_METADATA_FIELDS.filter((field) => !String(testCase[field] || '').trim());
+    if (missing.length) errors.push(`${testCase.id || 'unknown'} 缺少 ${missing.join(',')}`);
+    const domains = String(testCase.risk_domain || '').split(/[,，;；|、\n]+/).map(normalizeProductionRiskDomain).filter(Boolean);
+    domains.forEach((domain) => coveredDomains.add(domain));
+    const isHardGate = /^(是|true|yes|p0|阻断上线)$/i.test(String(testCase.hard_gate || '').trim());
+    if (isHardGate) {
+      domains.forEach((domain) => hardGateDomains.add(domain));
+    } else {
+      warnings.push(`${testCase.id || 'unknown'} 未声明为硬门禁；该 Case 仍会执行，但不能承担风险域放行。`);
+    }
+    if (testCase.deterministic && !/^(是|否|true|false|yes|no|deterministic|stochastic)$/i.test(String(testCase.deterministic).trim())) {
+      errors.push(`${testCase.id || 'unknown'} deterministic 必须明确为是/否。`);
+    }
+    if (testCase.repeat_policy && !/\d+/.test(String(testCase.repeat_policy))) {
+      errors.push(`${testCase.id || 'unknown'} repeat_policy 必须包含明确执行次数。`);
+    }
+  }
+  const missingDomains = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !coveredDomains.has(domain));
+  if (missingDomains.length) errors.push(`缺少生产风险域 ${missingDomains.join(',')}`);
+  const domainsWithoutHardGate = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !hardGateDomains.has(domain));
+  if (domainsWithoutHardGate.length) errors.push(`以下生产风险域没有一票否决 Case：${domainsWithoutHardGate.join(',')}`);
+  if (!String(backendVersion || '').trim()) errors.push('缺少 backend version。');
+  if (!String(promptPolicyVersion || '').trim()) errors.push('缺少 prompt/policy version。');
+  if (!/^[a-f0-9]{64}$/i.test(String(featureFlagsHash || ''))) errors.push('feature flags hash 必须是 64 位 SHA-256。');
+  return {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    ok: errors.length === 0,
+    case_count: cases.length,
+    unique_case_ids: new Set(ids).size,
+    covered_risk_domains: [...coveredDomains].sort(),
+    hard_gate_risk_domains: [...hardGateDomains].sort(),
+    required_risk_domains: PRODUCTION_REQUIRED_RISK_DOMAINS,
+    release_inputs: {
+      backend_version: String(backendVersion || ''),
+      prompt_policy_version: String(promptPolicyVersion || ''),
+      feature_flags_hash: String(featureFlagsHash || ''),
+    },
+    errors,
+    warnings,
+  };
 }
 
 async function runParallelUiAgentCasebook({
@@ -15127,10 +15255,18 @@ export function buildCredibilityReview(results = []) {
     case_needs_update: items.filter((item) => item.review_category === '可信执行-case需优化').length,
     needs_llm_review: items.filter((item) => item.raw_status === 'needs_llm_review').length,
   };
+  const releaseBlockerCount = counts.total - counts.trusted_pass;
   return {
     target_trust_rate: 0.9,
     trust_rate: total ? Number((trusted / total).toFixed(4)) : 0,
     pass_target: total ? trusted / total >= 0.9 : false,
+    target_semantics: '90% 仅表示证据可形成可信分类的诊断目标，不是生产发布通过率。',
+    production_release_gate: {
+      decision: total > 0 && releaseBlockerCount === 0 ? 'ELIGIBLE_FOR_MULTI_RUN_GATE' : 'NO-GO',
+      all_trusted_pass: total > 0 && counts.trusted_pass === total,
+      blocker_count: releaseBlockerCount,
+      rule: '单轮只有全部 Case 均为可信通过且无 Bug、失败、阻塞、框架问题、用例问题或待复核，才可进入多轮生产门禁聚合；单轮永不直接授权生产。',
+    },
     counts,
     items,
   };
@@ -15849,7 +15985,8 @@ function renderRunReport(summary) {
     `- 失败：${summary.counts.failed}`,
     `- 阻塞：${summary.counts.blocked}`,
     `- 需LLM复核：${summary.counts.needs_llm_review}`,
-    `- 可信度：${formatPercent(summary.credibility_review?.trust_rate || 0)}（目标 90%）`,
+    `- 证据可信分类率：${formatPercent(summary.credibility_review?.trust_rate || 0)}（诊断目标 90%，不代表生产放行）`,
+    `- 单轮生产门禁：${summary.credibility_review?.production_release_gate?.decision || 'NO-GO'}`,
     `- 不可信框架问题：${summary.credibility_review?.counts?.framework_issue || 0}`,
     '',
     '## 明细',
@@ -15892,8 +16029,10 @@ function renderCredibilityReviewReport(summary) {
     `- 执行总数：${review.counts.total}`,
     `- 可信结果：${review.counts.trusted}`,
     `- 不可信结果：${review.counts.untrusted}`,
-    `- 可信度：${formatPercent(review.trust_rate)}（目标 90%）`,
-    `- 是否达到目标：${review.pass_target ? '是' : '否'}`,
+    `- 证据可信分类率：${formatPercent(review.trust_rate)}（诊断目标 90%，不代表生产放行）`,
+    `- 是否达到证据诊断目标：${review.pass_target ? '是' : '否'}`,
+    `- 单轮生产门禁：${review.production_release_gate?.decision || 'NO-GO'}`,
+    `- 生产规则：${review.production_release_gate?.rule || '单轮结果不得直接授权生产。'}`,
     '',
     '## 分类统计',
     '',
@@ -16018,7 +16157,8 @@ function renderFinalDetailedReport(summary) {
     '## 二次复核可信度',
     '',
     '- 审核策略：先验“操作步骤是否和 case 一致”，再由 AI Agent 测试专家从真实用户视角审批交互、回复、成果和提示是否合理；最终门禁结论以用户视角复核分类为准，不机械套用 case 断言。',
-    `- 可信度：${formatPercent(review.trust_rate)}（目标 90%）`,
+    `- 证据可信分类率：${formatPercent(review.trust_rate)}（诊断目标 90%，不代表生产放行）`,
+    `- 单轮生产门禁：${review.production_release_gate?.decision || 'NO-GO'}`,
     `- 可信结果：${review.counts.trusted}`,
     `- 不可信框架问题：${review.counts.framework_issue}`,
     `- 二次复核报告：${summary.credibility_review_file || path.join(summary.run_dir, '二次复核报告.md')}`,

@@ -459,6 +459,14 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
         modelTier: options['model-tier'] || 'M3',
         timeoutMs: options['timeout-ms'] || 600000,
         caseIds: String(options.case || '').split(',').map((item) => item.trim()).filter(Boolean),
+        casebookPath: options.casebook,
+        frameworkRoot: ROOT,
+        deepbankRoot: DEEPBANK_ROOT,
+        releaseInputs: {
+          backend_version: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
+          prompt_policy_version: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
+          feature_flags_hash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+        },
       }));
       let handedToRunner = false;
       chromium.connectOverCDP = async (...args) => {

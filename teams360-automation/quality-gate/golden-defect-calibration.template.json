@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "generated_at": "YYYY-MM-DDTHH:mm:ss.sssZ",
+  "framework_commit": "git commit under test",
+  "samples": [
+    {
+      "id": "KNOWN-BUG-001",
+      "severity": "P0",
+      "description": "历史真实缺陷或受控故障注入",
+      "expected_status": "trusted_bug",
+      "actual_status": "trusted_bug",
+      "evidence": "absolute or calibration-file-relative evidence path",
+      "evidence_sha256": "64-char SHA-256 of the evidence file"
+    },
+    {
+      "id": "KNOWN-CLEAN-001",
+      "severity": "P1",
+      "description": "无缺陷控制样本",
+      "expected_status": "trusted_pass",
+      "actual_status": "trusted_pass",
+      "evidence": "absolute or calibration-file-relative evidence path",
+      "evidence_sha256": "64-char SHA-256 of the evidence file"
+    }
+  ]
+}

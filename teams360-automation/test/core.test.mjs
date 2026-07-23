@@ -28,6 +28,7 @@ import { qworkRuntimeBridgeSource, rewriteCdpPayload } from '../lib/cdp-webview-
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
 import {
   assertRunMetadataHost,
+  buildReleaseArtifactFingerprints,
   readMacAppBundleIdentity,
   writePinnedRunMetadata,
 } from '../lib/run-metadata.mjs';
@@ -825,6 +826,39 @@ test('run metadata pins bundle identity and rejects host drift on resume', () =>
       () => writePinnedRunMetadata(root, { ...metadata, host: { ...metadata.host, build: 'wrong' } }),
       /identity drift.*host\.build/i,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('release artifact fingerprints cover the Teams binary, QWork payload and Casebook contents', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-release-fingerprint-'));
+  try {
+    const app = path.join(root, '360Teams.app');
+    const plist = path.join(app, 'Contents', 'Info.plist');
+    const binary = path.join(app, 'Contents', 'MacOS', '360Teams');
+    const qwork = path.join(root, 'qwork', '1.0.0');
+    const index = path.join(qwork, 'index.html');
+    const installed = path.join(qwork, '.installed.json');
+    const casebook = path.join(root, 'casebook.xlsx');
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.mkdirSync(qwork, { recursive: true });
+    fs.writeFileSync(plist, 'plist-content');
+    fs.writeFileSync(binary, 'binary-content');
+    fs.writeFileSync(index, '<!doctype html>');
+    fs.writeFileSync(installed, '{"status":"ready"}');
+    fs.writeFileSync(casebook, 'casebook-content');
+    const first = buildReleaseArtifactFingerprints({
+      host: { app_path: app },
+      qworkUiUrl: `file://${index}`,
+      casebookPath: casebook,
+    });
+    for (const field of ['host_info_plist_sha256', 'host_main_binary_sha256', 'qwork_index_sha256', 'qwork_install_metadata_sha256', 'casebook_sha256']) {
+      assert.match(first[field], /^[a-f0-9]{64}$/);
+    }
+    fs.writeFileSync(index, '<!doctype html><title>changed</title>');
+    const changed = buildReleaseArtifactFingerprints({ host: { app_path: app }, qworkUiUrl: `file://${index}`, casebookPath: casebook });
+    assert.notEqual(changed.qwork_index_sha256, first.qwork_index_sha256);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

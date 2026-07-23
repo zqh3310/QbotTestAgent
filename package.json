@@ -19,7 +19,8 @@
     "ui-agent:explore": "node src/cli.mjs ui-agent-explore",
     "ui-agent:module-run": "node src/cli.mjs ui-agent-module-run",
     "ui-agent:casebook-run": "node src/cli.mjs ui-agent-casebook-run",
-    "ui-agent:casebook-run-parallel": "node src/cli.mjs ui-agent-casebook-run --parallel 5"
+    "ui-agent:casebook-run-parallel": "node src/cli.mjs ui-agent-casebook-run --parallel 5",
+    "production-gate": "node teams360-automation/lib/production-gate-cli.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

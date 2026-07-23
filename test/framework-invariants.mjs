@@ -10,6 +10,7 @@ import {
   attachmentTaskPromptFromCase,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
+  buildCredibilityReview,
   buildSingleHostPipelineBatch,
   buildConversationTurns,
   caseAwareReplyAssertion,
@@ -39,6 +40,7 @@ import {
   streamingScrollFollowVerdict,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
+  validateProductionCasePlan,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
@@ -588,6 +590,45 @@ const reviewFixture = (overrides = {}) => ({
 const pureUi = reviewCaseCredibility(reviewFixture());
 if (pureUi.review_category !== '可信通过-用户可接受' || !pureUi.trusted) {
   throw new Error('纯 UI 用例不应因缺少 transcript 被判为框架问题');
+}
+const productionSingleRunPass = buildCredibilityReview([reviewFixture()]);
+if (productionSingleRunPass.production_release_gate?.decision !== 'ELIGIBLE_FOR_MULTI_RUN_GATE') {
+  throw new Error('单轮全可信通过应只允许进入多轮生产门禁聚合');
+}
+const productionSingleRunNoGo = buildCredibilityReview([reviewFixture(), {
+  ...reviewFixture({ id: 'SIT-PROD-BLOCK' }),
+  status: 'blocked',
+  result_category: 'blocked',
+  actual_result: '生产 fixture 不可用。',
+}]);
+if (productionSingleRunNoGo.production_release_gate?.decision !== 'NO-GO') {
+  throw new Error('任何阻塞或非可信通过都必须使单轮生产门禁 NO-GO');
+}
+const productionCaseMetadata = {
+  id: 'SIT-PROD-META-001',
+  risk_domain: 'functional,security_privacy,reliability_recovery,performance_capacity,compatibility_upgrade,data_integrity_isolation,external_navigation,release_rollback',
+  oracle_type: 'UI+state+log+artifact-readback',
+  deterministic: '是',
+  repeat_policy: 'P0 5/5',
+  required_fixture: 'production-like fixture',
+  hard_gate: '是',
+  cleanup_policy: 'delete task/files',
+  version_scope: 'frozen RC',
+  production_signal: 'task_success_rate,error_rate',
+};
+const productionCasePlanPass = validateProductionCasePlan([productionCaseMetadata], {
+  backendVersion: 'backend-1',
+  promptPolicyVersion: 'prompt-1',
+  featureFlagsHash: 'a'.repeat(64),
+});
+if (!productionCasePlanPass.ok) throw new Error(`完整生产 Case 元数据不应被前置阻断：${productionCasePlanPass.errors.join(';')}`);
+const productionCasePlanNoGo = validateProductionCasePlan([{ ...productionCaseMetadata, oracle_type: '' }], {
+  backendVersion: 'backend-1',
+  promptPolicyVersion: 'prompt-1',
+  featureFlagsHash: 'invalid',
+});
+if (productionCasePlanNoGo.ok || !productionCasePlanNoGo.errors.some((item) => item.includes('oracle_type'))) {
+  throw new Error('生产 Case 缺少 Oracle 或发布输入时必须前置 NO-GO');
 }
 
 const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({
