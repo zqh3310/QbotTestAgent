@@ -537,8 +537,12 @@ test('managed Teams HITL fixture opts into mock Agent only for its controlled re
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(relaunch, /DEEPBANK_AGENT_MOCK: mockFlag/);
   assert.match(relaunch, /\['0', '1'\]\.includes\(agentMock\)/);
-  assert.match(runner, /enableE2eMarker \? '1' : '0'\]\s*\.map\(shellQuote\)/);
-  assert.match(runner, /executeHitlFixtureCase[\s\S]*enableE2eMarker: true/);
+  assert.match(runner, /restartWithHitlMockAgent[\s\S]*parsedControlPlane\.origin[\s\S]*qbotHome[\s\S]*''[\s\S]*'1'[\s\S]*\.map\(shellQuote\)/);
+  assert.match(runner, /executeHitlFixtureCase[\s\S]*restartWithHitlMockAgent/);
+  assert.doesNotMatch(
+    runner.slice(runner.indexOf('async function executeHitlFixtureCase'), runner.indexOf('async function executeSitHitlSkipDefault')),
+    /createConnectorRegressionServer|restartWithConnectorRegressionFixture|127\.0\.0\.1:18900/,
+  );
 });
 
 test('managed Teams local fixture control planes use deterministic mock auth and auto-complete only loopback OAuth', () => {

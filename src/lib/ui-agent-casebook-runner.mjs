@@ -2990,42 +2990,41 @@ async function executeSitHomeWorkspacePicker({ page, state, caseDir }) {
 }
 
 async function executeHitlFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
-  const fixture = await createConnectorRegressionServer();
   const priorFixtureControlPlane = options['active-fixture-control-plane-url'];
-  const injected = await restartWithConnectorRegressionFixture({
+  const injected = await restartWithHitlMockAgent({
     state,
     caseDir,
     options,
     runtime,
-    fixture,
-    enableE2eMarker: true,
   });
-  if (!injected.ok) {
-    await fixture.close().catch(() => {});
-    markFailed(state, `HITL E2E 控制面启动失败：${injected.reason}`, 'automation_error');
-    return;
-  }
-  options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
-    ? 'http://127.0.0.1:18900'
-    : 'http://127.0.0.1:8900';
   try {
+    if (!injected.ok) {
+      markFailed(state, `HITL mock Agent 启动失败：${injected.reason}`, 'automation_error');
+      return;
+    }
     page = injected.page;
+    options['active-fixture-control-plane-url'] = injected.controlPlane;
     state.artifacts.hitl_fixture = {
-      control_plane: options['active-fixture-control-plane-url'],
-      e2e: true,
-      connector_fixture_ready: injected.prepared,
+      control_plane: injected.controlPlane,
+      agent_mock: true,
+      auth: injected.auth,
+      workbench_ready: true,
     };
     return await executeSitHitlSkipDefault({ page, state, testCase, caseDir, timeoutMs });
   } finally {
-    state.artifacts.hitl_fixture_hits = fixture.state.hits;
-    const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常 HITL 后端配置' });
-    await fixture.close().catch(() => {});
+    const restored = await restartQbotAndReconnect({
+      runtime,
+      options,
+      state,
+      caseDir,
+      label: '关闭 HITL mock Agent 并恢复正常 DEV 配置',
+    });
     recordAssertion(
       state,
       'HITL Fixture 后环境恢复',
-      '受控 ask/answer 场景结束后必须恢复 DEV 控制面与固定 Teams 宿主。',
+      '受控 ask/answer 场景结束后必须保持外部 DEV 控制面、关闭 mock Agent 并恢复固定 Teams 宿主。',
       restored.ok,
-      restored.ok ? '正常 DEV 配置已恢复。' : restored.reason,
+      restored.ok ? '外部 DEV 配置已恢复，后续 Case 使用真实 Agent。' : restored.reason,
       'automation_error',
     );
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
@@ -7294,6 +7293,87 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
     return { ok: false, reason: `产品 dev 连接器 Fixture 未形成 healthy/unreachable/needs_auth 三态：${clip(text, 500)}` };
   }
   return { ok: true, page: restarted.page, prepared };
+}
+
+async function restartWithHitlMockAgent({ state, caseDir, options, runtime }) {
+  const controlPlane = String(options['control-plane-url'] || '').trim();
+  let parsedControlPlane;
+  try {
+    parsedControlPlane = new URL(controlPlane);
+  } catch {
+    return { ok: false, reason: `HITL mock Agent 需要有效的外部控制面 URL，实际为：${controlPlane || '空'}` };
+  }
+  if (!['http:', 'https:'].includes(parsedControlPlane.protocol)
+    || ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedControlPlane.hostname)) {
+    return {
+      ok: false,
+      reason: `HITL mock Agent 必须复用当前外部控制面，禁止切换到本地 mock 控制面：${controlPlane}`,
+    };
+  }
+  const qbotRoot = inferQbotRootForElectronRestart(options);
+  if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断当前 deepbankV2 根目录。' };
+  const electronHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-electron-control-plane.sh');
+  if (!fs.existsSync(electronHelper)) {
+    return { ok: false, reason: `缺少 Teams HITL 受控重启脚本：${electronHelper}` };
+  }
+  const qbotHome = inferQbotHomeForElectronRestart(options);
+  let cdpPort = '9224';
+  try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  const command = [
+    electronHelper,
+    qbotRoot,
+    parsedControlPlane.origin,
+    cdpPort,
+    qbotHome,
+    '',
+    '1',
+  ].map(shellQuote).join(' ');
+  const restarted = await restartQbotAndReconnect({
+    runtime,
+    options,
+    state,
+    caseDir,
+    label: '保持外部 DEV 并启用 HITL mock Agent',
+    commandOverride: command,
+  });
+  if (!restarted.ok) return restarted;
+  const workbench = await waitForQbotWorkbench(restarted.page, 90000);
+  if (!workbench.ok) return { ok: false, reason: workbench.reason };
+  const observed = await restarted.page.evaluate(async () => {
+    let controlPlane = '';
+    try {
+      controlPlane = String(
+        typeof process !== 'undefined'
+          ? process.env.DEEPBANK_SERVER || process.env.QBOT_SERVER_URL || ''
+          : '',
+      );
+    } catch {}
+    const auth = await window.agent?.getAuthStatus?.().catch?.(() => null);
+    return {
+      controlPlane,
+      authenticated: Boolean(auth?.authenticated),
+      provider: String(auth?.provider?.id || ''),
+      hasUser: Boolean(auth?.user),
+    };
+  }).catch((error) => ({ error: error.message, controlPlane: '', authenticated: false, provider: '', hasUser: false }));
+  let observedOrigin = '';
+  try { observedOrigin = new URL(observed.controlPlane).origin; } catch {}
+  if (observedOrigin !== parsedControlPlane.origin || !observed.authenticated) {
+    return {
+      ok: false,
+      reason: `HITL mock Agent 重启后未保持外部 DEV 登录态：expected=${parsedControlPlane.origin} observed=${clip(JSON.stringify(observed), 360)}`,
+    };
+  }
+  return {
+    ok: true,
+    page: restarted.page,
+    controlPlane: parsedControlPlane.origin,
+    auth: {
+      authenticated: observed.authenticated,
+      provider: observed.provider,
+      has_user: observed.hasUser,
+    },
+  };
 }
 
 async function executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
