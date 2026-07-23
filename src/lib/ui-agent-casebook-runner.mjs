@@ -14892,9 +14892,17 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
   while (Date.now() < deadline) {
     let nextBrowser = null;
     try {
-      nextBrowser = await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
-      const nextPage = await findQbotPage(nextBrowser);
+      const reconnectHook = typeof options['restart-reconnect-hook'] === 'function'
+        ? options['restart-reconnect-hook']
+        : null;
+      const reconnected = reconnectHook
+        ? await reconnectHook({ runtime, options, state, caseDir, label })
+        : null;
+      nextBrowser = reconnected?.browser
+        || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
+      const nextPage = reconnected?.page || await findQbotPage(nextBrowser);
       if (!nextPage) throw new Error('CDP 已恢复，但未找到 QBot 主窗口。');
+      if (reconnected?.cdpUrl) runtime.cdpUrl = reconnected.cdpUrl;
       nextPage.setDefaultTimeout(12000);
       nextPage.setDefaultNavigationTimeout(30000);
       const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options, {

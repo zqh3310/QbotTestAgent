@@ -11,6 +11,7 @@ import {
   applyManagedQbotProfileConfig,
   waitForStagedQbotServer,
 } from './teams-profile-qbot-config.mjs';
+import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
 
 const controlPlane = String(process.argv[2] || '').trim();
 const expectedQworkUi = String(process.argv[3] || '').trim();
@@ -53,8 +54,9 @@ const profileConfig = applyManagedQbotProfileConfig({
 });
 let session;
 let stagedServer;
+let remountedQwork;
 try {
-  ({ session, stagedServer } = await launchWithProfile(controlPlane, agentMock));
+  ({ session, stagedServer, remountedQwork } = await launchWithProfile(controlPlane, agentMock));
 } catch (error) {
   stopIsolatedTeams(DEFAULT_SESSION);
   let rollbackError = null;
@@ -82,9 +84,17 @@ console.log(JSON.stringify({
   control_plane_origin: session.control_plane_origin,
   agent_mock: agentMock === '1',
   qwork_ui_version: pinnedQworkUi.version,
+  qwork_ui_remounted: remountedQwork.remounted,
+  qwork_workbench_ready: remountedQwork.workbenchReady,
   profile_config_mode: profileConfig.mode,
   staged_control_plane_origin: new URL(stagedServer.actual).origin,
 }));
+// This file is a transaction-style CLI helper invoked through spawnSync.
+// Electron guest reloads can leave a detached Playwright transport handle in
+// the event loop even after every assertion has completed. Exit only after the
+// signed-in workbench result above has been emitted so the parent runner can
+// proceed without waiting for a stale CDP handle.
+process.exit(0);
 
 function managedEnvironment(serverUrl, mockFlag) {
   const origin = new URL(serverUrl).origin;
@@ -130,7 +140,11 @@ async function launchWithProfile(serverUrl, mockFlag) {
       + `expected=${staged.expected} actual=${staged.actual || 'missing'}`,
     );
   }
-  return { session: launched, stagedServer: staged };
+  const remounted = await remountPinnedManagedQworkUi(launched.cdp_url, pinnedQworkUi.url, {
+    timeoutMs: 120_000,
+    settleMs: 3_000,
+  });
+  return { session: launched, stagedServer: staged, remountedQwork: remounted };
 }
 
 export async function resolvePinnedQworkUi(session, explicitUrl = '') {

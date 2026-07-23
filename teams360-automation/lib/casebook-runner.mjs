@@ -17,6 +17,7 @@ import {
 import { qworkRuntimeBridgeSource, startCdpWebviewProxy } from './cdp-webview-proxy.mjs';
 import { buildTeamsRunMetadata, writePinnedRunMetadata } from './run-metadata.mjs';
 import { applyManagedQbotProfileConfig } from './teams-profile-qbot-config.mjs';
+import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -321,7 +322,10 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
         ...(controlPlaneOrigin === packagedControlPlaneOrigin ? {} : { DEEPBANK_SERVER: snapshot.controlPlane }),
       },
     });
-    await waitForManagedQworkUi(relaunched.cdp_url, pinnedQworkUi.url, Math.max(30_000, settleMs));
+    await remountPinnedManagedQworkUi(relaunched.cdp_url, pinnedQworkUi.url, {
+      timeoutMs: Math.max(120_000, settleMs),
+      settleMs,
+    });
     return {
       recovered: true,
       reason: `Managed 360Teams relaunched with pinned QWork ${pinnedQworkUi.version} (${profileConfig.mode}).`,
@@ -529,6 +533,33 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
         resetConnection: connection.reset,
       });
       const runtimeIdentity = await configureTeamsFixtureRuntime(options, browser);
+      if (!callerManagedCdp) {
+        options['restart-reconnect-hook'] = async () => {
+          // The managed host restart invalidates both the browser and the
+          // proxy's auto-attach sessions. Rebuild the proxy immediately,
+          // before the shared runner attempts to touch the old page.
+          await connection.close().catch(() => {});
+          connection = await resolveTeamsCasebookConnection({ ...options, cdp: undefined });
+          options.cdp = connection.cdpUrl;
+          options['teams-upstream-cdp-url'] = connection.upstreamCdpUrl || '';
+          const nextBrowser = await connectTeamsCasebookBrowser(connection.cdpUrl, {
+            recoveryCdpUrl: connection.upstreamCdpUrl || '',
+            resetConnection: connection.reset,
+          });
+          const nextPage = nextBrowser.contexts().flatMap((context) => context.pages())
+            .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+          if (!nextPage) {
+            await nextBrowser.close().catch(() => {});
+            throw new Error('Fresh Teams CDP proxy connected without a QWork page.');
+          }
+          return {
+            browser: nextBrowser,
+            page: nextPage,
+            cdpUrl: connection.cdpUrl,
+            upstreamCdpUrl: connection.upstreamCdpUrl || '',
+          };
+        };
+      }
       const session = readSession(options.session);
       writePinnedRunMetadata(options.out, buildTeamsRunMetadata({
         session,

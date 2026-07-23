@@ -654,6 +654,30 @@ test('managed Teams fixture relaunch keeps the packaged production home', () => 
   assert.match(source, /resolvePinnedQworkUi\(previous, expectedQworkUi\)/);
   assert.match(source, /\/json\/list/);
   assert.match(source, /Automatically rolled back to/);
+  assert.match(source, /remountPinnedManagedQworkUi\(launched\.cdp_url, pinnedQworkUi\.url/);
+  assert.match(source, /qwork_workbench_ready: remountedQwork\.workbenchReady/);
+  assert.match(source, /process\.exit\(0\)/);
+});
+
+test('managed Teams restart rebuilds stale proxy before shared runner touches the new QWork page', () => {
+  const adapter = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(adapter, /options\['restart-reconnect-hook'\] = async \(\) =>/);
+  assert.match(adapter, /await connection\.close\(\)\.catch\(\(\) => \{\}\);[\s\S]*resolveTeamsCasebookConnection/);
+  assert.match(runner, /typeof options\['restart-reconnect-hook'\] === 'function'/);
+  assert.match(runner, /if \(reconnected\?\.cdpUrl\) runtime\.cdpUrl = reconnected\.cdpUrl/);
+});
+
+test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {
+  const source = fs.readFileSync(new URL('../lib/managed-qwork-ui.mjs', import.meta.url), 'utf8');
+  assert.match(source, /webview#qbot-workbench, webview/);
+  assert.match(source, /element\.setAttribute\('src', url\)/);
+  assert.match(source, /element\.reload\(\)/);
+  assert.match(source, /authenticated: Boolean\(auth\?\.authenticated\)/);
+  assert.match(source, /capabilitiesReady/);
+  assert.match(source, /workbenchReady/);
+  assert.match(source, /360Teams webview\.executeJavaScript workbench probe/);
+  assert.match(source, /browser\._connection\?\.close\?/);
 });
 
 test('managed live Teams can expose the real OAuth browser during login recovery', () => {
@@ -980,7 +1004,7 @@ test('managed Teams Casebook refreshes only QWork after a stale renderer CDP att
   assert.match(source, /target\?\.type === 'webview'/);
   assert.match(source, /validatePinnedQworkUiUrl\(qworkTarget\.url\)/);
   assert.match(source, /applyManagedQbotProfileConfig/);
-  assert.match(source, /waitForManagedQworkUi\(relaunched\.cdp_url, pinnedQworkUi\.url/);
+  assert.match(source, /remountPinnedManagedQworkUi\(relaunched\.cdp_url, pinnedQworkUi\.url/);
   assert.match(source, /launchLiveTeams/);
   assert.match(source, /DEEPBANK_UI_URL: pinnedQworkUi\.url/);
   assert.match(source, /QBOT_UI_URL: pinnedQworkUi\.url/);
