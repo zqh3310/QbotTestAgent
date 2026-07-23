@@ -9627,7 +9627,7 @@ async function clearManualConnectorSelections(page, state, caseDir) {
   const clicked = await clickSelectedOptions(menu, page, /连接器|连应用|搜索连接器|禁用|自动|手动|无匹配|未接入连接器|暂无连接器/);
   await page.waitForTimeout(250);
   state.screenshots.connector_selection_cleared = await shot(page, caseDir, 'connector-selection-cleared');
-  const selectedCount = await menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on, .ctool-list .ctool-opt.on').count().catch(() => 0);
+  const selectedCount = await menu.locator('.composer-plus-connector.on, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on, .ctool-list .ctool-opt.on').count().catch(() => 0);
   recordStep(
     state,
     '清理输入区手动连接器选择',
@@ -9669,7 +9669,7 @@ async function closeVisibleSkillChips(page, state, caseDir) {
 async function clickSelectedOptions(menu, page, ignorePattern) {
   let clicked = 0;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const options = menu.locator('.ctool-list .ctool-opt.on, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on');
+    const options = menu.locator('.ctool-list .ctool-opt.on, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on, .composer-plus-skill.on, .composer-plus-connector.on');
     const count = await options.count().catch(() => 0);
     let target = null;
     for (let index = 0; index < count; index += 1) {
@@ -9758,10 +9758,10 @@ async function composerSkillSelectionSnapshot(page) {
 
 async function visibleComposerToolStateText(page, tool) {
   const selector = tool === 'connector'
-    ? '[data-testid="composer-connectors-menu"]'
+    ? '[data-testid="composer-connectors-menu"], [data-testid="composer-connector-chip"], [data-testid="composer-selection-chips"]'
     : tool === 'workMode'
-      ? '[data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child'
-      : '[data-testid="composer-skills-menu"]';
+      ? '[data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child, .composer-plus-main .composer-plus-row'
+      : '[data-testid="composer-skills-menu"], [data-testid^="composer-skill-chip-"], .skill-chip';
   const entries = page.locator(selector);
   const count = await entries.count().catch(() => 0);
   const texts = [];
@@ -9777,6 +9777,152 @@ async function currentCapabilities(page) {
     if (globalThis.window?.agent?.capabilities) return globalThis.window.agent.capabilities();
     return null;
   }).catch(() => null);
+}
+
+async function unifiedComposerPlusAvailable(page) {
+  return visible(page.locator('[data-testid="composer-plus-menu"]').first(), 500);
+}
+
+const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
+  workMode: { label: '模式', selector: '.composer-plus-sub-mode' },
+  skill: { label: '技能', selector: '.composer-plus-sub-skill' },
+  connector: { label: '连接器', selector: '.composer-plus-sub-connector' },
+});
+
+async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
+  const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
+  if (!config || !(await unifiedComposerPlusAvailable(page))) return '';
+
+  await page.keyboard.press('Escape').catch(() => {});
+  await closeWorkspacePicker(page);
+  const plus = page.locator('[data-testid="composer-plus-menu"]').first();
+  if (!(await visible(plus, 1000))) return '';
+  await plus.click({ force: true }).catch(async () => plus.evaluate((element) => element.click()));
+
+  const main = page.locator('.composer-plus-main').first();
+  if (!(await visible(main, 1200))) return '';
+  const row = main.locator('.composer-plus-row, [role="menuitem"]')
+    .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(config.label)}(?:\\s|$)`) })
+    .first();
+  if (!(await visible(row, 1000))) return '';
+
+  await row.hover().catch(() => {});
+  let submenu = page.locator(config.selector).first();
+  if (!(await visible(submenu, 700))) {
+    await row.click({ force: true }).catch(async () => row.evaluate((element) => element.click()));
+    submenu = page.locator(config.selector).first();
+  }
+  if (!(await visible(submenu, 1200))) return '';
+
+  const text = await submenu.innerText({ timeout: 1000 }).catch(() => '');
+  recordStep(
+    state,
+    action || `打开输入区统一“+”菜单的【${config.label}】子菜单`,
+    `QWork 0.0.11 及后续统一菜单应可通过“+ > ${config.label}”进入对应能力选择区。`,
+    `已打开 ${config.selector}；${clip(text, 180)}`,
+    'passed',
+  );
+  return text || config.label;
+}
+
+async function setUnifiedSkillMode(page, state, caseDir, mode) {
+  if (!(await unifiedComposerPlusAvailable(page))) return null;
+  if (mode === 'manual') {
+    const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
+    return Boolean(menuText.trim());
+  }
+
+  const method = mode === 'auto' ? 'setSkillsAuto' : 'setSkillsDisabled';
+  const invoked = await page.evaluate(async ({ methodName }) => {
+    const api = globalThis.window?.agent?.[methodName];
+    if (typeof api !== 'function') return { ok: false, reason: `${methodName} unavailable` };
+    await api();
+    return { ok: true };
+  }, { methodName: method }).catch((error) => ({ ok: false, reason: error.message }));
+  if (!invoked.ok) {
+    recordAssertion(
+      state,
+      `统一菜单技能模式 ${mode}`,
+      '新版统一菜单隐藏全局三态后，框架准备阶段应通过 QWork 公共能力桥设置同等会话状态。',
+      false,
+      invoked.reason || `${method} 调用失败。`,
+      'automation_error',
+    );
+    return false;
+  }
+
+  let capabilities = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(150);
+    capabilities = await currentCapabilities(page);
+    const selected = capabilities?.selectedSkills;
+    if ((mode === 'disabled' && Array.isArray(selected) && selected.length === 0)
+      || (mode === 'auto' && selected === null)) break;
+  }
+  const selected = capabilities?.selectedSkills;
+  const ok = mode === 'disabled'
+    ? Array.isArray(selected) && selected.length === 0
+    : selected === null;
+  state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
+  recordStep(
+    state,
+    `设置统一菜单技能模式：${mode}`,
+    '该调用只用于隔离用例前置状态；技能选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
+    `method=${method}；capabilities.selectedSkills=${JSON.stringify(selected)}`,
+    ok ? 'passed' : 'failed',
+    state.screenshots[`skill_mode_${mode}`],
+    ok ? '' : 'automation_error',
+  );
+  return ok;
+}
+
+async function setUnifiedConnectorMode(page, state, caseDir, mode) {
+  if (!(await unifiedComposerPlusAvailable(page))) return null;
+  if (mode === 'manual') {
+    const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
+    return Boolean(menuText.trim());
+  }
+
+  const method = mode === 'auto' ? 'setConnectorsAuto' : 'setConnectorsDisabled';
+  const invoked = await page.evaluate(async ({ methodName }) => {
+    const api = globalThis.window?.agent?.[methodName];
+    if (typeof api !== 'function') return { ok: false, reason: `${methodName} unavailable` };
+    await api();
+    return { ok: true };
+  }, { methodName: method }).catch((error) => ({ ok: false, reason: error.message }));
+  if (!invoked.ok) {
+    recordAssertion(
+      state,
+      `统一菜单连接器模式 ${mode}`,
+      '新版统一菜单隐藏全局三态后，框架准备阶段应通过 QWork 公共能力桥设置同等会话状态。',
+      false,
+      invoked.reason || `${method} 调用失败。`,
+      'automation_error',
+    );
+    return false;
+  }
+
+  let capabilities = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(150);
+    capabilities = await currentCapabilities(page);
+    if (String(capabilities?.connectorRouting?.mode || '') === mode) break;
+  }
+  const storedMode = String(capabilities?.connectorRouting?.mode || '');
+  const ok = storedMode === mode;
+  state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
+  recordStep(
+    state,
+    `设置统一菜单连接器模式：${mode}`,
+    '该调用只用于隔离用例前置状态；连接器选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
+    `method=${method}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
+    ok ? 'passed' : 'failed',
+    state.screenshots[`connector_mode_${mode}`],
+    ok ? '' : 'automation_error',
+  );
+  return ok;
 }
 
 async function setWorkMode(page, state, caseDir, mode) {
@@ -9829,7 +9975,7 @@ async function workModeLocator(page, mode) {
   const escaped = escapeRegExp(label);
   const candidates = [
     menu.locator(`[data-testid="composer-work-mode-${mode}"]`).first(),
-    menu.locator('.ctool-opt, button, [role="menuitem"], [role="option"]').filter({ hasText: new RegExp(`(^|\\s)${escaped}(\\s|$|主动|只回答|先出方案)`) }).first(),
+    menu.locator('.composer-plus-subrow, .ctool-opt, button, [role="menuitem"], [role="option"]').filter({ hasText: new RegExp(`(^|\\s)${escaped}(\\s|$|主动|只回答|先出方案)`) }).first(),
   ];
   for (const candidate of candidates) {
     if (await visible(candidate, 700)) return candidate;
@@ -9913,6 +10059,8 @@ async function visibleComposerAttachmentText(page) {
 }
 
 async function setSkillMode(page, state, caseDir, mode) {
+  const unifiedResult = await setUnifiedSkillMode(page, state, caseDir, mode);
+  if (unifiedResult !== null) return unifiedResult;
   const label = SKILL_MODE_LABELS[mode] || mode;
   const initialToolStateText = await visibleComposerToolStateText(page, 'skill');
   if (skillModeSelectedByText(mode, initialToolStateText)) {
@@ -9988,7 +10136,7 @@ async function selectFirstManualSkill(page, state, caseDir) {
     recordAssertion(state, '手动技能菜单定位', '自动化应能定位当前打开的技能菜单。', false, '手动模式已点击，但当前技能菜单不可见。', 'automation_error');
     return false;
   }
-  const option = menu.locator('.skill-list .ctool-opt, .ctool-opt, [role="option"], button')
+  const option = menu.locator('.composer-plus-skill, .skill-list .ctool-opt, .ctool-opt, [role="option"], button')
     .filter({ hasNotText: /禁用|自动|手动|无匹配|还没安装技能|暂无可选技能|搜索技能/ })
     .first();
   if (!(await visible(option, 1500))) {
@@ -10015,7 +10163,7 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
     return false;
   }
-  const option = menu.locator('.skill-list .ctool-opt, .ctool-opt, [role="option"], button')
+  const option = menu.locator('.composer-plus-skill, .skill-list .ctool-opt, .ctool-opt, [role="option"], button')
     .filter({ hasText: matcher })
     .first();
   if (!(await visible(option, 2000))) {
@@ -10062,6 +10210,8 @@ function skillModeSelectedByText(mode, text) {
 }
 
 async function setConnectorMode(page, state, caseDir, mode) {
+  const unifiedResult = await setUnifiedConnectorMode(page, state, caseDir, mode);
+  if (unifiedResult !== null) return unifiedResult;
   const label = CONNECTOR_MODE_LABELS[mode] || mode;
   const initialCapabilities = await currentCapabilities(page);
   const initialToolStateText = await visibleComposerToolStateText(page, 'connector');
@@ -10182,7 +10332,7 @@ async function selectFirstManualConnector(page, state, caseDir) {
   // connector in production packages.  Scope the fallback selector to the
   // connector list instead of trying to exclude the three mode buttons by
   // their visible labels.
-  const option = menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]):not([disabled]), .ctool-list .ctool-opt:not([disabled]), [role="option"]:not([disabled])')
+  const option = menu.locator('.composer-plus-connector:not([disabled]), [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]):not([disabled]), .ctool-list .ctool-opt:not([disabled]), [role="option"]:not([disabled])')
     .filter({ hasNotText: /不生效|不可用|未接入|无匹配|暂无连接器/ })
     .first();
   if (!(await visible(option, 1500))) {
@@ -10207,7 +10357,7 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   if (!manualOk) return false;
   const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return false;
-  const candidates = menu.locator('[data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
+  const candidates = menu.locator('.composer-plus-connector, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
   const count = await candidates.count().catch(() => 0);
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
@@ -11257,6 +11407,9 @@ async function ensureComposerToolMenu(page, state, {
   expectedLabels = ['禁用', '自动', '手动'],
   menuKind = '',
 }) {
+  if (menuKind && await unifiedComposerPlusAvailable(page)) {
+    return openUnifiedComposerSubmenu(page, state, menuKind, action);
+  }
   const matches = (text) => expectedLabels.every((item) => String(text || '').includes(item))
     && (!matchPattern || matchPattern.test(String(text || '')));
   let text = await activeMenuText(page, menuKind);
@@ -11306,12 +11459,17 @@ async function closeWorkspacePicker(page) {
 }
 
 const COMPOSER_MENU_ANCHORS = Object.freeze({
-  skill: '[data-testid^="composer-skill-mode-"]',
-  connector: '[data-testid^="composer-connector-mode-"]',
+  skill: '[data-testid^="composer-skill-mode-"], .composer-plus-skill',
+  connector: '[data-testid^="composer-connector-mode-"], .composer-plus-connector',
   safety: '[data-testid^="composer-safety-level-option-"]',
 });
 
 async function activeMenuLocator(page, menuKind = '') {
+  const unifiedSelector = UNIFIED_COMPOSER_SUBMENUS[menuKind]?.selector;
+  if (unifiedSelector) {
+    const unified = page.locator(unifiedSelector).first();
+    if (await visible(unified, 250)) return unified;
+  }
   const selectors = [
     '[data-testid="composer-shell"] .ctool-menu',
     '[data-testid="composer-shell"] .ctool-pop',
@@ -13168,10 +13326,23 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
   }
   const explicitCwd = String(options['restart-cwd'] || '').trim();
   const restartCwd = explicitCwd || (path.isAbsolute(command) && fs.existsSync(command) ? path.dirname(command) : process.cwd());
+  const restartSequence = Number(state._restartCommandSequence || 0) + 1;
+  state._restartCommandSequence = restartSequence;
+  const restartEvidenceName = `${String(restartSequence).padStart(2, '0')}-${slugify(label || 'restart')}`;
   const stdoutFile = path.join(caseDir, 'restart-command.stdout.log');
   const stderrFile = path.join(caseDir, 'restart-command.stderr.log');
+  const preservedStdoutFile = path.join(caseDir, `restart-command-${restartEvidenceName}.stdout.log`);
+  const preservedStderrFile = path.join(caseDir, `restart-command-${restartEvidenceName}.stderr.log`);
   state.artifacts.restart_command_stdout = stdoutFile;
   state.artifacts.restart_command_stderr = stderrFile;
+  if (!Array.isArray(state.artifacts.restart_commands)) state.artifacts.restart_commands = [];
+  const restartEvidence = {
+    sequence: restartSequence,
+    label: label || '重启验证',
+    stdout: preservedStdoutFile,
+    stderr: preservedStderrFile,
+  };
+  state.artifacts.restart_commands.push(restartEvidence);
   const startedAt = Date.now();
   const result = spawnSync('/bin/zsh', ['-lc', command], {
     cwd: restartCwd,
@@ -13179,8 +13350,16 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
     timeout: Number(options['restart-timeout-ms'] || 180000),
     maxBuffer: 1000 * 1000 * 20,
   });
-  writeTextFile(stdoutFile, result.stdout || '');
-  writeTextFile(stderrFile, result.stderr || result.error?.message || '');
+  const stdout = result.stdout || '';
+  const stderr = result.stderr || result.error?.message || '';
+  // 保留兼容用的固定文件名，同时为同一 Case 内的每次重启写独立证据，
+  // 避免“开启 fixture”被“恢复现场”的日志覆盖后无法二次复核。
+  writeTextFile(stdoutFile, stdout);
+  writeTextFile(stderrFile, stderr);
+  writeTextFile(preservedStdoutFile, stdout);
+  writeTextFile(preservedStderrFile, stderr);
+  restartEvidence.completed_at = new Date().toISOString();
+  restartEvidence.exit_status = result.status;
   if (result.error || result.status !== 0) {
     const detail = clip(result.error?.message || result.stderr || result.stdout || `exit=${result.status}`, 420);
     return { ok: false, reason: `restart-command 执行失败：${detail}` };
