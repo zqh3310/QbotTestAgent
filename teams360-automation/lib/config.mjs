@@ -105,19 +105,31 @@ export function normalizeCdpUrl(value) {
 }
 
 export function validatePinnedQworkUiUrl(value, {
-  runtimeHome = path.join(os.homedir(), '.deepbank'),
+  runtimeHome = '',
+  homeDir = os.homedir(),
 } = {}) {
   const url = new URL(String(value || '').trim());
   if (url.protocol !== 'file:') {
     throw new Error('The pinned QWork UI must be a local file URL.');
   }
   const file = fileURLToPath(url);
-  const uiRoot = path.resolve(runtimeHome, 'ui');
   const resolved = path.resolve(file);
-  const relative = path.relative(uiRoot, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`The pinned QWork UI must stay under ${uiRoot}.`);
+  const runtimeHomes = runtimeHome
+    ? [path.resolve(runtimeHome)]
+    : ['', 'dev', 'local', 'uat'].map((suffix) => path.join(
+      homeDir,
+      suffix ? `.deepbank-${suffix}` : '.deepbank',
+    ));
+  const uiRoot = runtimeHomes
+    .map((home) => path.resolve(home, 'ui'))
+    .find((candidate) => {
+      const relative = path.relative(candidate, resolved);
+      return !relative.startsWith('..') && !path.isAbsolute(relative);
+    });
+  if (!uiRoot) {
+    throw new Error(`The pinned QWork UI must stay under an allowed runtime home: ${runtimeHomes.join(', ')}.`);
   }
+  const relative = path.relative(uiRoot, resolved);
   const parts = relative.split(path.sep);
   if (parts.length !== 2 || parts[1] !== 'index.html' || !parts[0]) {
     throw new Error('The pinned QWork UI must match <runtime-home>/ui/<version>/index.html.');

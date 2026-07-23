@@ -146,7 +146,7 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
     try {
       browser = await chromium.connectOverCDP(cdpUrl, { timeout: timeoutMs });
       const page = browser.contexts().flatMap((context) => context.pages())
-        .find((candidate) => /\/\.deepbank\/ui\//.test(candidate.url()));
+        .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
       if (!page) throw new Error('CDP connected, but the full QWork QBot page is unavailable.');
       await page.evaluate(qworkRuntimeBridgeSource());
       const tier = await page.evaluate(async () => {
@@ -218,7 +218,7 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
   let browserClosed = false;
   try {
     const qwork = browser.contexts().flatMap((context) => context.pages())
-      .find((page) => /\/\.deepbank\/ui\//.test(page.url()));
+      .find((page) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(page.url()));
     if (!qwork) return { recovered: false, reason: 'QWork WebView is unavailable; pinned UI cannot be preserved.' };
     const pinnedQworkUi = validatePinnedQworkUiUrl(qwork.url());
     const host = browser.contexts().flatMap((context) => context.pages()).find((page) => {
@@ -537,7 +537,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
 
 export async function configureTeamsFixtureRuntime(options, browser) {
   const page = browser.contexts().flatMap((context) => context.pages())
-    .find((candidate) => /\/\.deepbank\/ui\//.test(candidate.url()));
+    .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
   if (!page) throw new Error('Cannot configure Teams fixture runtime without the QWork QBot page.');
   const qworkUiUrl = page.url();
   const controlPlane = String(options['control-plane-url'] || await page.evaluate(() => (
@@ -554,7 +554,7 @@ export async function configureTeamsFixtureRuntime(options, browser) {
 function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   const normalized = String(controlPlane || '').trim();
   if (!normalized) throw new Error('QWork did not expose DEEPBANK_SERVER; fault fixtures cannot be restored safely.');
-  if (!/\/\.deepbank\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(String(qworkUiUrl || ''))) {
+  if (!/\/\.deepbank(?:-(?:dev|local|uat))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(String(qworkUiUrl || ''))) {
     throw new Error('QWork did not expose a versioned UI URL; managed host relaunch is unsafe.');
   }
   const restartShim = path.join(TEAMS_RUNTIME_ROOT, 'scripts', 'restart-qbot-electron-control-plane.sh');

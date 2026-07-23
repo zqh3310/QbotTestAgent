@@ -213,7 +213,8 @@ function isTargetInfo(value) {
 
 function isQworkTargetInfo(value) {
   return value?.type === 'webview'
-    && (/^qbot$/i.test(String(value.title || '')) || /\/\.deepbank\/ui\//.test(String(value.url || '')));
+    && (/^qbot$/i.test(String(value.title || ''))
+      || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(value.url || '')));
 }
 
 export async function startCdpWebviewProxy({ upstream, port = 0 }) {

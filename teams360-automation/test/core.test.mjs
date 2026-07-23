@@ -96,6 +96,31 @@ test('managed QWork relaunch accepts only a ready versioned UI inside the runtim
   }
 });
 
+test('managed QWork recognizes release-isolated dev runtime homes across target discovery and relaunch', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-qwork-release-home-'));
+  const versionDir = path.join(home, '.deepbank-dev', 'ui', '0.0.11');
+  fs.mkdirSync(versionDir, { recursive: true });
+  fs.writeFileSync(path.join(versionDir, 'index.html'), '<!doctype html>');
+  fs.writeFileSync(path.join(versionDir, '.installed.json'), JSON.stringify({ status: 'ready', version: '0.0.11' }));
+  try {
+    const pinned = validatePinnedQworkUiUrl(`file://${path.join(versionDir, 'index.html')}`, { homeDir: home });
+    assert.equal(pinned.version, '0.0.11');
+    for (const file of [
+      '../lib/cdp-webview.mjs',
+      '../lib/cdp-webview-proxy.mjs',
+      '../lib/casebook-runner.mjs',
+      '../lib/relaunch-managed-host.mjs',
+    ]) {
+      const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
+      assert.match(source, /deepbank.*dev.*local.*uat/s);
+    }
+    const restart = fs.readFileSync(new URL('../runtime/scripts/restart-qbot-electron-control-plane.sh', import.meta.url), 'utf8');
+    assert.match(restart, /deepbank\(-dev\|-local\|-uat\)\?/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('the live 360Teams profile is rejected', () => {
   const live = path.join(os.homedir(), 'Library', 'Application Support', '360Teams');
   assert.throws(() => assertIsolatedProfile(live), /live 360Teams profile/);
@@ -498,7 +523,7 @@ test('Teams Electron restart shim ignores fixture URLs and auto-discovers the pi
   const source = fs.readFileSync(new URL('../runtime/scripts/restart-qbot-electron-control-plane.sh', import.meta.url), 'utf8');
   assert.match(source, /EXPECTED_QWORK_UI_URL="\$\{5-\}"/);
   assert.match(source, /AGENT_MOCK="\$\{6:-0\}"/);
-  assert.match(source, /\.deepbank\/ui/);
+  assert.match(source, /\.deepbank\(-dev\|-local\|-uat\)\?\/ui/);
   assert.match(source, /relaunch-managed-host\.mjs" "\$CONTROL_PLANE_URL" "" "\$AGENT_MOCK"$/m);
 });
 

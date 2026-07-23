@@ -19,7 +19,7 @@ if [[ "$CONTROL_PLANE_URL" == "http://127.0.0.1:8900" || "$CONTROL_PLANE_URL" ==
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-if [[ "$EXPECTED_QWORK_UI_URL" =~ ^file://.*/\.deepbank/ui/[^/]+/index\.html ]]; then
+if [[ "$EXPECTED_QWORK_UI_URL" =~ ^file://.*/\.deepbank(-dev|-local|-uat)?/ui/[^/]+/index\.html ]]; then
   exec node "$ROOT_DIR/lib/relaunch-managed-host.mjs" "$CONTROL_PLANE_URL" "$EXPECTED_QWORK_UI_URL" "$AGENT_MOCK"
 fi
 exec node "$ROOT_DIR/lib/relaunch-managed-host.mjs" "$CONTROL_PLANE_URL" "" "$AGENT_MOCK"

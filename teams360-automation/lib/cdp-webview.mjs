@@ -22,7 +22,8 @@ export async function discoverWebviewProbes(cdpUrl, { timeoutMs = 10_000 } = {})
           return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         };
         const bodyText = document.body?.innerText || '';
-        const qbotLocalUi = /qbot/i.test(document.title) || /\\/\\.deepbank\\/ui\\//.test(location.pathname);
+        const qbotLocalUi = /qbot/i.test(document.title)
+          || /\\/\\.deepbank(?:-(?:dev|local|uat))?\\/ui\\//.test(location.pathname);
         const qbotBridgeReady = typeof globalThis.qbotRuntime === 'object' && typeof globalThis.agent === 'object';
         const qbotWorkbench = qbotLocalUi
           && qbotBridgeReady
