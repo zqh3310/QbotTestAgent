@@ -34,6 +34,10 @@ import {
 } from '../lib/run-metadata.mjs';
 import { loadTrustedValidationSources } from '../lib/trusted-history.mjs';
 import {
+  applyManagedQbotProfileConfig,
+  stagedQbotServer,
+} from '../lib/teams-profile-qbot-config.mjs';
+import {
   configureTeamsFixtureRuntime,
   installTeamsPageGuards,
   parseCasebookRunnerOptions,
@@ -547,6 +551,54 @@ test('managed Teams local fixture control planes use deterministic mock auth and
   assert.match(runner, /\/api\/auth\/mock\/authorize/);
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
   assert.match(runner, /fixture_mock_auth/);
+});
+
+test('managed Teams fixture relaunch transactionally overrides and restores the persisted QBot profile', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-profile-'));
+  const profile = path.join(root, 'profile');
+  const backup = path.join(root, 'state', 'profile-backup.json');
+  const bridgeDir = path.join(profile, 'qbot');
+  fs.mkdirSync(bridgeDir, { recursive: true });
+  const configFile = path.join(profile, 'sk-teams-cfg.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    deepbank: { qbot_custom: { env: 'DEV', serverUrl: '', uiUrl: '' } },
+    configInfo: {
+      QBOT_ENV: 'DEV',
+      QBOT_SERVER_URL: 'https://dev.example.test',
+      QBOT_UI_URL: 'file:///Users/test/.deepbank-dev/ui/0.0.11/index.html',
+      QBOT_SURFACE: 'workbench',
+    },
+  }));
+  const uiUrl = 'file:///Users/test/.deepbank-dev/ui/0.0.11/index.html';
+  const overridden = applyManagedQbotProfileConfig({
+    profileDir: profile,
+    serverUrl: 'http://127.0.0.1:18900',
+    uiUrl,
+    backupFile: backup,
+  });
+  assert.equal(overridden.mode, 'overridden');
+  const fixtureConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(fixtureConfig.deepbank.qbot_custom.serverUrl, 'http://127.0.0.1:18900');
+  assert.equal(fixtureConfig.configInfo.QBOT_SERVER_URL, 'http://127.0.0.1:18900');
+  assert.equal(fs.existsSync(backup), true);
+  fs.writeFileSync(
+    path.join(bridgeDir, 'qbot-agent-bridge.cjs'),
+    'process.env.DEEPBANK_SERVER = "http://127.0.0.1:18900";\n',
+  );
+  assert.equal(stagedQbotServer(profile), 'http://127.0.0.1:18900');
+
+  const restored = applyManagedQbotProfileConfig({
+    profileDir: profile,
+    serverUrl: 'https://dev.example.test',
+    uiUrl,
+    backupFile: backup,
+  });
+  assert.equal(restored.mode, 'restored');
+  const restoredConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(restoredConfig.deepbank.qbot_custom.serverUrl, '');
+  assert.equal(restoredConfig.configInfo.QBOT_SERVER_URL, 'https://dev.example.test');
+  assert.equal(fs.existsSync(backup), false);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaunch', () => {

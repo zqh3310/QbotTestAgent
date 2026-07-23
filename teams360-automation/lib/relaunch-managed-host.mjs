@@ -7,6 +7,10 @@ import {
   readSession,
   stopIsolatedTeams,
 } from './launcher.mjs';
+import {
+  applyManagedQbotProfileConfig,
+  waitForStagedQbotServer,
+} from './teams-profile-qbot-config.mjs';
 
 const controlPlane = String(process.argv[2] || '').trim();
 const expectedQworkUi = String(process.argv[3] || '').trim();
@@ -58,6 +62,12 @@ if (stopped.status !== 'stopped') {
   throw new Error(`Managed 360Teams stop failed: ${stopped.status} ${stopped.reason || ''}`.trim());
 }
 
+const profileConfig = applyManagedQbotProfileConfig({
+  profileDir: snapshot.profileDir,
+  serverUrl: controlPlane,
+  uiUrl: pinnedQworkUi.url,
+  backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
+});
 const session = await launchLiveTeams({
   appPath: snapshot.appPath,
   profileDir: snapshot.profileDir,
@@ -67,6 +77,14 @@ const session = await launchLiveTeams({
   timeoutMs: 60_000,
   environment,
 });
+const stagedServer = await waitForStagedQbotServer(snapshot.profileDir, controlPlane, 30_000);
+if (!stagedServer.ok) {
+  stopIsolatedTeams(DEFAULT_SESSION);
+  throw new Error(
+    `Managed 360Teams staged QWork preload did not adopt the requested control plane: `
+    + `expected=${stagedServer.expected} actual=${stagedServer.actual || 'missing'}`,
+  );
+}
 
 console.log(JSON.stringify({
   status: 'ready',
@@ -75,6 +93,8 @@ console.log(JSON.stringify({
   control_plane_origin: session.control_plane_origin,
   agent_mock: agentMock === '1',
   qwork_ui_version: pinnedQworkUi.version,
+  profile_config_mode: profileConfig.mode,
+  staged_control_plane_origin: new URL(stagedServer.actual).origin,
 }));
 
 export async function resolvePinnedQworkUi(session, explicitUrl = '') {
