@@ -417,6 +417,15 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
   }), /must stay under/);
 });
 
+test('Teams preconnect waits through a full managed-host QWork remount window', () => {
+  const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(source, /attempts = 80/);
+  assert.match(source, /readyTimeoutMs = 120_000/);
+  assert.match(source, /const readyDeadline = startedWaitingAt \+ Math\.max/);
+  assert.match(source, /attempt <= attempts && Date\.now\(\) < readyDeadline/);
+  assert.match(source, /preconnect failed after \$\{attemptsUsed\} attempts/);
+});
+
 test('Teams fixture runtime restores the packaged host and keeps the local-QBot lane untouched', async () => {
   const page = {
     url: () => 'file:///Users/test/.deepbank/ui/0.0.4/index.html',

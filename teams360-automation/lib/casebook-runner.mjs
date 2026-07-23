@@ -133,14 +133,19 @@ export async function resolveTeamsCasebookConnection(options) {
 }
 
 export async function connectTeamsCasebookBrowser(cdpUrl, {
-  attempts = 12,
+  attempts = 80,
   timeoutMs = 15_000,
   retryDelayMs = 1_500,
+  readyTimeoutMs = 120_000,
   recoveryCdpUrl = '',
   resetConnection = null,
 } = {}) {
   let lastError = null;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  const startedWaitingAt = Date.now();
+  const readyDeadline = startedWaitingAt + Math.max(timeoutMs, Number(readyTimeoutMs) || 120_000);
+  let attemptsUsed = 0;
+  for (let attempt = 1; attempt <= attempts && Date.now() < readyDeadline; attempt += 1) {
+    attemptsUsed = attempt;
     let browser = null;
     const startedAt = Date.now();
     try {
@@ -210,7 +215,8 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         elapsed_ms: Date.now() - startedAt,
         reason: String(error?.message || error).split('\n')[0],
       }));
-      if (recoveryCdpUrl && attempt < attempts) {
+      const canRetry = attempt < attempts && Date.now() < readyDeadline;
+      if (recoveryCdpUrl && canRetry) {
         await resetConnection?.().catch(() => {});
         const recovery = await recoverTeamsQworkWorkbench(recoveryCdpUrl).catch((recoveryError) => ({
           recovered: false,
@@ -222,10 +228,18 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
           reason: recovery.reason || '',
         }));
       }
-      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      if (canRetry) {
+        await new Promise((resolve) => setTimeout(
+          resolve,
+          Math.min(retryDelayMs, Math.max(0, readyDeadline - Date.now())),
+        ));
+      }
     }
   }
-  throw new Error(`360Teams QWork CDP preconnect failed after ${attempts} attempts: ${lastError?.message || lastError}`);
+  throw new Error(
+    `360Teams QWork CDP preconnect failed after ${attemptsUsed} attempts / `
+    + `${Date.now() - startedWaitingAt}ms: ${lastError?.message || lastError}`,
+  );
 }
 
 export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = {}) {
