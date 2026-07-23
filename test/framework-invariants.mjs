@@ -60,6 +60,16 @@ const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
+assert.match(
+  runner,
+  /executeSitInit002[\s\S]*composerProductEntrySnapshot/,
+  'SIT-INIT-002 必须通过产品入口快照兼容统一“+”菜单，不能只依赖旧版独立技能/连接器按钮',
+);
+assert.match(
+  runner,
+  /composerProductEntrySnapshot[\s\S]*composer-plus-menu[\s\S]*(?:连接器\|连应用)/,
+  '统一“+”菜单快照必须同时验证技能和连接器/连应用入口',
+);
 assert.equal(coreGateIds.at(-1), 'SIT-AUTH-005', '核心门禁用例簿末条必须是退出登录闭环');
 for (const id of [
   'SIT-INIT-004',

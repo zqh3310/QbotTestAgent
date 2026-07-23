@@ -2366,10 +2366,15 @@ async function executeSitInit002({ page, state, caseDir }) {
   state.screenshots.home_default_tools = await shot(page, caseDir, '02-home-default-tools');
   const text = await mainSurfaceText(page);
   const composer = await visible(page.locator('[data-testid="composer-shell"]').first(), 1500);
-  const skillMenu = await visible(page.locator('[data-testid="composer-skills-menu"]').first(), 1500);
-  const connectorMenu = await visible(page.locator('[data-testid="composer-connectors-menu"]').first(), 1500);
+  const productEntries = await composerProductEntrySnapshot(page, { state, caseDir });
   const technicalSelectorVisible = /选择模型|选择\s*Agent|Claude Code CLI|Codex CLI|runtime family|模型供应商/i.test(text);
-  recordAssertion(state, '首页默认入口产品化', '首页应展示输入区、技能和连应用等产品化入口。', composer && skillMenu && connectorMenu, `composer=${composer}，skillMenu=${skillMenu}，connectorMenu=${connectorMenu}`);
+  recordAssertion(
+    state,
+    '首页默认入口产品化',
+    '首页应展示输入区、技能和连应用等产品化入口；新版可将技能与连接器收纳在统一“+”菜单中。',
+    composer && productEntries.skill && productEntries.connector,
+    `composer=${composer}，skillEntry=${productEntries.skill}，connectorEntry=${productEntries.connector}，surface=${productEntries.surface}，menuText=${clip(productEntries.menuText, 220)}`,
+  );
   recordAssertion(state, '不要求普通用户选择模型或 CLI', '首次默认使用不应出现模型、Agent 或 CLI 选择流程。', !technicalSelectorVisible, clip(text, 260));
 }
 
@@ -9758,10 +9763,10 @@ async function composerSkillSelectionSnapshot(page) {
 
 async function visibleComposerToolStateText(page, tool) {
   const selector = tool === 'connector'
-    ? '[data-testid="composer-connectors-menu"], [data-testid="composer-connector-chip"], [data-testid="composer-selection-chips"]'
+    ? '[data-testid="composer-connectors-menu"], [data-testid="composer-plus-menu"], .composer-plus-sub-connector, [data-testid="composer-connector-chip"], [data-testid="composer-selection-chips"]'
     : tool === 'workMode'
       ? '[data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child, .composer-plus-main .composer-plus-row'
-      : '[data-testid="composer-skills-menu"], [data-testid^="composer-skill-chip-"], .skill-chip';
+      : '[data-testid="composer-skills-menu"], [data-testid="composer-plus-menu"], .composer-plus-sub-skill, [data-testid^="composer-skill-chip-"], .skill-chip';
   const entries = page.locator(selector);
   const count = await entries.count().catch(() => 0);
   const texts = [];
@@ -9781,6 +9786,67 @@ async function currentCapabilities(page) {
 
 async function unifiedComposerPlusAvailable(page) {
   return visible(page.locator('[data-testid="composer-plus-menu"]').first(), 500);
+}
+
+async function composerProductEntrySnapshot(page, { state = null, caseDir = '' } = {}) {
+  const legacySkill = await visible(page.locator('[data-testid="composer-skills-menu"]').first(), 500);
+  const legacyConnector = await visible(page.locator('[data-testid="composer-connectors-menu"]').first(), 500);
+  if (legacySkill && legacyConnector) {
+    return {
+      skill: true,
+      connector: true,
+      surface: 'legacy-separate-controls',
+      menuText: '独立技能与连接器入口均可见。',
+    };
+  }
+
+  const plus = page.locator('[data-testid="composer-plus-menu"]').first();
+  if (!(await visible(plus, 800))) {
+    return {
+      skill: legacySkill,
+      connector: legacyConnector,
+      surface: 'missing',
+      menuText: '未找到统一“+”菜单。',
+    };
+  }
+
+  await page.keyboard.press('Escape').catch(() => {});
+  await closeWorkspacePicker(page);
+  await plus.click({ force: true }).catch(async () => plus.evaluate((element) => element.click()));
+  const main = page.locator('.composer-plus-main').first();
+  const mainVisible = await visible(main, 1200);
+  const menuText = mainVisible
+    ? await main.innerText({ timeout: 1000 }).catch(() => '')
+    : '';
+  const rows = main.locator('.composer-plus-row, [role="menuitem"]');
+  const skill = mainVisible && await visible(
+    rows.filter({ hasText: /^\s*技能(?:\s|$)/ }).first(),
+    700,
+  );
+  const connector = mainVisible && await visible(
+    rows.filter({ hasText: /^\s*(?:连接器|连应用)(?:\s|$)/ }).first(),
+    700,
+  );
+
+  if (state && caseDir && mainVisible) {
+    state.screenshots.home_product_entries = await shot(page, caseDir, '03-home-product-entries');
+    recordStep(
+      state,
+      '展开输入区统一“+”菜单并核对产品入口',
+      '统一菜单中应同时提供技能与连接器/连应用入口，普通用户无需寻找旧版独立按钮。',
+      `skill=${skill}；connector=${connector}；menuText=${clip(menuText, 180)}`,
+      skill && connector ? 'passed' : 'failed',
+      state.screenshots.home_product_entries,
+      skill && connector ? '' : 'product_failure',
+    );
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  return {
+    skill: legacySkill || skill,
+    connector: legacyConnector || connector,
+    surface: mainVisible ? 'unified-plus-menu' : 'unified-plus-menu-not-opened',
+    menuText,
+  };
 }
 
 const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
@@ -12694,18 +12760,19 @@ async function evaluateUiObjective(page, testCase) {
     };
   }
   if (/Thread|composer|工具栏|输入区|层级/.test(scenario)) {
+    const productEntries = await composerProductEntrySnapshot(page);
     const checks = [
       ['assistant-thread', '[data-testid="assistant-thread"], [data-testid="qbot-main-new"], main'],
       ['composer-shell', '[data-testid="composer-shell"]'],
       ['composer-input', '[data-testid="composer-input"]'],
-      ['skills-menu', '[data-testid="composer-skills-menu"]'],
-      ['connectors-menu', '[data-testid="composer-connectors-menu"]'],
       ['send-button', '[data-testid="composer-send"]'],
     ];
     const results = [];
     for (const [name, selector] of checks) {
       results.push({ name, ok: await visible(page.locator(selector).first(), 1200) });
     }
+    results.push({ name: 'skills-entry', ok: productEntries.skill });
+    results.push({ name: 'connectors-entry', ok: productEntries.connector });
     const shell = await elementBox(page, '[data-testid="composer-shell"]');
     const input = await elementBox(page, '[data-testid="composer-input"]');
     const nested = shell && input
