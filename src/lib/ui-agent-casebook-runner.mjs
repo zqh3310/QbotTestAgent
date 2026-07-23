@@ -14006,15 +14006,23 @@ async function ensureManagedFixtureMockAuth(page, options, { timeoutMs = 30000 }
   const loginVisible = await page.locator('[data-testid="auth-login"]').first()
     .isVisible({ timeout: 500 })
     .catch(() => false);
-  if (!loginVisible) return { ok: true, needed: false };
-
   const auth = await page.evaluate(async () => window.agent?.getAuthStatus?.())
     .catch((error) => ({ error: error?.message || String(error) }));
-  if (String(auth?.provider?.id || '').toLowerCase() !== 'mock') {
+  if (auth?.authenticated) {
+    return {
+      ok: true,
+      needed: false,
+      provider: String(auth?.provider?.id || ''),
+      hasUser: Boolean(auth?.user),
+    };
+  }
+
+  const provider = String(auth?.provider?.id || '').toLowerCase();
+  if (provider !== 'mock') {
     return {
       ok: false,
-      needed: true,
-      reason: `受控 fixture 重启后进入登录页，但鉴权提供方不是 mock：${clip(JSON.stringify(auth), 300)}`,
+      needed: loginVisible,
+      reason: `受控 fixture 尚未进入 mock 鉴权就绪态：loginVisible=${loginVisible}；${clip(JSON.stringify(auth), 300)}`,
     };
   }
 

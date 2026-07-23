@@ -669,6 +669,14 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /\/api\/auth\/mock\/authorize/);
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
   assert.match(runner, /fixture_mock_auth/);
+  assert.match(runner, /if \(auth\?\.authenticated\)[\s\S]*const provider = String\(auth\?\.provider\?\.id \|\| ''\)\.toLowerCase\(\)/);
+  assert.doesNotMatch(
+    runner.slice(
+      runner.indexOf('async function ensureManagedFixtureMockAuth'),
+      runner.indexOf('async function restartQbotAndReconnect'),
+    ),
+    /if \(!loginVisible\) return \{ ok: true, needed: false \}/,
+  );
   assert.match(runner, /createTeamsSkillFixtureController/);
   assert.match(runner, /createTeamsConnectorFixtureController/);
   assert.match(runner, /teams360_connector_fixture_adapter/);
