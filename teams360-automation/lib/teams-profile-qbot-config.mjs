@@ -64,6 +64,13 @@ export function applyManagedQbotProfileConfig({
   const custom = config.deepbank.qbot_custom;
   const configInfo = config.configInfo;
   const currentServer = normalizedServer(custom.serverUrl || configInfo.QBOT_SERVER_URL || targetServer);
+  const customUi = String(custom.uiUrl || '').trim();
+  const currentUi = String(configInfo.QBOT_UI_URL || '').trim();
+  const targetAlreadyApplied = currentServer === targetServer
+    && currentUi === targetUi
+    && !customUi
+    && String(custom.surface || configInfo.QBOT_SURFACE || '').trim().toLowerCase() === 'workbench'
+    && String(custom.env || configInfo.QBOT_ENV || '').trim().toUpperCase() === 'DEV';
   let backup = null;
   try { backup = backupFile && fs.existsSync(backupFile) ? readJson(backupFile) : null; } catch {}
 
@@ -75,8 +82,31 @@ export function applyManagedQbotProfileConfig({
     return { mode: 'restored', configFile, serverUrl: targetServer, uiUrl: targetUi };
   }
 
-  if (!backup && currentServer === targetServer) {
+  if (!backup && targetAlreadyApplied) {
     return { mode: 'unchanged', configFile, serverUrl: targetServer, uiUrl: targetUi };
+  }
+
+  // A packaged host can keep the correct control plane while its persisted UI
+  // still points at the previous QWork release. Repin that same-server state
+  // in place; creating a restore backup here would make the next recovery
+  // immediately restore the stale UI because the server identity is equal.
+  if (!backup && currentServer === targetServer) {
+    Object.assign(custom, {
+      env: 'DEV',
+      serverUrl: targetServer,
+      // The host validates qbot_custom.uiUrl as an HTTP URL. Versioned
+      // packaged file URLs belong only in configInfo.QBOT_UI_URL.
+      uiUrl: '',
+      surface: 'workbench',
+    });
+    Object.assign(configInfo, {
+      QBOT_ENV: 'DEV',
+      QBOT_SERVER_URL: targetServer,
+      QBOT_UI_URL: targetUi,
+      QBOT_SURFACE: 'workbench',
+    });
+    atomicWriteJson(configFile, config);
+    return { mode: 'repinned', configFile, serverUrl: targetServer, uiUrl: targetUi };
   }
 
   if (!backup && backupFile) {
@@ -95,6 +125,7 @@ export function applyManagedQbotProfileConfig({
   Object.assign(custom, {
     env: 'DEV',
     serverUrl: targetServer,
+    uiUrl: '',
     surface: 'workbench',
   });
   Object.assign(configInfo, {

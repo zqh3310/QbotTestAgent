@@ -19,6 +19,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   connectorFixtureDocumentTurnState,
+  containsActiveLegacyConstraints,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
   isContinuedOldLoginAnswer,
@@ -332,6 +333,7 @@ const required = [
   ['#669 四条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
   ['QWork 0.0.11 统一加号菜单按技能连接器模式子菜单兼容', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*composer-plus-sub-mode[\s\S]*composer-plus-sub-skill[\s\S]*composer-plus-sub-connector[\s\S]*openUnifiedComposerSubmenu/],
+  ['独立安全档位菜单不误走统一加号子菜单', /if \(UNIFIED_COMPOSER_SUBMENUS\[menuKind\] && await unifiedComposerPlusAvailable\(page\)\)/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*selectedConnectors === null[\s\S]*selectedConnectors\.length === 0/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
@@ -362,8 +364,9 @@ const required = [
   ['二次复核使用用户动作、用户结果和匹配截图四项门槛', /assessUserCenteredOutcome[\s\S]*reached_user_action[\s\S]*user_outcome_assertion[\s\S]*aligned_outcome_screenshot[\s\S]*用户影响/],
   ['运行汇总写入真实 duration_ms', /duration_ms: Math\.max\(0, endedAt\.getTime\(\) - startedAt\.getTime\(\)\)/],
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
+  ['回复采集覆盖 assistant-thread 下的分支消息', /conversationMessageTimeline[\s\S]*assistant-thread.*data-role="user"[\s\S]*assistant-thread.*data-role="assistant"/],
   ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
-  ['稳定 QA 专家不存在时自动创建', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
+  ['稳定 QA 专家不存在时自动创建且不回退通用助手', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*let card = await findExpertCardByName\(page, expertName\);[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*专家页通用助手入口/],
   ['HOME-016 真实发送四轮业务数字', /numericMemoryConversationTurns[\s\S]*报名100人，到场70人，成交12单[\s\S]*第二轮：追问报名人数[\s\S]*第三轮：追问到场人数和到场率[\s\S]*第四轮：追问成交和成交率/],
@@ -839,6 +842,34 @@ if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负�
   test_data: '选择两个技能并完成联合处理',
 }, '请结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。')) {
   throw new Error('多 Skill 联合处理的真实回复不应被通用相关性启发式误判');
+}
+if (!replyLooksRelevant('已生成文件，文件名：teams_local_execution.txt', {
+  id: 'SIT-TEAMS-NEW-003',
+  scenario: 'Teams 内发起普通个人任务时仍应在本机执行',
+  test_data: '生成 teams_local_execution.txt',
+}, '请在本机工作区生成 teams_local_execution.txt')) {
+  throw new Error('复述精确文件名的简洁生成回复不应被相关性启发式误判');
+}
+if (!replyLooksRelevant('已记录三类用户分群：新客、沉默客、高价值老客。', {
+  id: 'SIT-HOME-053',
+  scenario: '长会话补充用户分层',
+  test_data: '补充用户分层',
+}, '用户分层包括新客、沉默客、高价值老客')) {
+  throw new Error('用户分层/用户分群同义回复不应被相关性启发式误判');
+}
+if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
+  throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
+}
+if (!containsActiveLegacyConstraints('预算30万元，目标240人，同时继续用短信补量。')) {
+  throw new Error('实际继续使用短信时必须识别为沿用旧约束');
+}
+const correctedConstraintVerdict = caseAwareReplyAssertion(
+  { id: 'SIT-HOME-058' },
+  { label: '第二轮更正', prompt: '预算30万元、目标240人、只使用企业微信。' },
+  '预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。',
+);
+if (!correctedConstraintVerdict.applicable || !correctedConstraintVerdict.ok) {
+  throw new Error(`否定语境中的旧渠道不应导致约束覆盖误判：${JSON.stringify(correctedConstraintVerdict)}`);
 }
 if (attachmentReplyMissingEvidence(
   '附件读取完成：qbot-pdf-summary.pdf，读取成功。下面是主要内容和结论摘要。如需分析其它文件，请重新上传。',

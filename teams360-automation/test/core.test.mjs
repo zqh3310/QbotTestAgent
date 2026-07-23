@@ -927,6 +927,43 @@ test('managed Teams fixture relaunch transactionally overrides and restores the 
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('managed Teams profile repins a newer QWork UI when the control plane is unchanged', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-profile-repin-'));
+  const profile = path.join(root, 'profile');
+  fs.mkdirSync(profile, { recursive: true });
+  const configFile = path.join(profile, 'sk-teams-cfg.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    deepbank: {
+      qbot_custom: {
+        env: 'DEV',
+        serverUrl: '',
+        uiUrl: '',
+        surface: 'workbench',
+      },
+    },
+    configInfo: {
+      QBOT_ENV: 'DEV',
+      QBOT_SERVER_URL: 'https://dev.example.test',
+      QBOT_UI_URL: 'file:///Users/test/.deepbank-dev/ui/0.0.11/index.html',
+      QBOT_SURFACE: 'workbench',
+    },
+  }));
+  const nextUi = 'file:///Users/test/.deepbank-dev/ui/0.0.12/index.html';
+  const result = applyManagedQbotProfileConfig({
+    profileDir: profile,
+    serverUrl: 'https://dev.example.test',
+    uiUrl: nextUi,
+    backupFile: path.join(root, 'backup.json'),
+  });
+  assert.equal(result.mode, 'repinned');
+  const repinned = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(repinned.deepbank.qbot_custom.serverUrl, 'https://dev.example.test');
+  assert.equal(repinned.deepbank.qbot_custom.uiUrl, '');
+  assert.equal(repinned.configInfo.QBOT_UI_URL, nextUi);
+  assert.equal(fs.existsSync(path.join(root, 'backup.json')), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaunch', () => {
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /let connection = await resolveTeamsCasebookConnection/);
@@ -942,6 +979,8 @@ test('managed Teams Casebook refreshes only QWork after a stale renderer CDP att
   assert.match(source, /new URL\('\/json\/list', normalizedCdpUrl\)/);
   assert.match(source, /target\?\.type === 'webview'/);
   assert.match(source, /validatePinnedQworkUiUrl\(qworkTarget\.url\)/);
+  assert.match(source, /applyManagedQbotProfileConfig/);
+  assert.match(source, /waitForManagedQworkUi\(relaunched\.cdp_url, pinnedQworkUi\.url/);
   assert.match(source, /launchLiveTeams/);
   assert.match(source, /DEEPBANK_UI_URL: pinnedQworkUi\.url/);
   assert.match(source, /QBOT_UI_URL: pinnedQworkUi\.url/);

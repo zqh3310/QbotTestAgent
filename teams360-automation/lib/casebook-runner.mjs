@@ -16,6 +16,7 @@ import {
 } from './launcher.mjs';
 import { qworkRuntimeBridgeSource, startCdpWebviewProxy } from './cdp-webview-proxy.mjs';
 import { buildTeamsRunMetadata, writePinnedRunMetadata } from './run-metadata.mjs';
+import { applyManagedQbotProfileConfig } from './teams-profile-qbot-config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -296,6 +297,12 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
     if (stopped.status !== 'stopped') {
       return { recovered: false, reason: `Managed 360Teams stop failed: ${stopped.status} ${stopped.reason || ''}`.trim() };
     }
+    const profileConfig = applyManagedQbotProfileConfig({
+      profileDir: snapshot.profileDir,
+      serverUrl: snapshot.controlPlane,
+      uiUrl: pinnedQworkUi.url,
+      backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
+    });
     const packagedControlPlaneOrigin = 'https://qbot-api.360shuke.com';
     const controlPlaneOrigin = new URL(snapshot.controlPlane).origin;
     const relaunched = await launchLiveTeams({
@@ -314,16 +321,45 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
         ...(controlPlaneOrigin === packagedControlPlaneOrigin ? {} : { DEEPBANK_SERVER: snapshot.controlPlane }),
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, Math.min(Math.max(settleMs, 0), 10_000)));
+    await waitForManagedQworkUi(relaunched.cdp_url, pinnedQworkUi.url, Math.max(30_000, settleMs));
     return {
       recovered: true,
-      reason: `Managed 360Teams relaunched with pinned QWork ${pinnedQworkUi.version}.`,
+      reason: `Managed 360Teams relaunched with pinned QWork ${pinnedQworkUi.version} (${profileConfig.mode}).`,
       cdpUrl: relaunched.cdp_url,
       qworkUiVersion: pinnedQworkUi.version,
     };
   } finally {
     if (!browserClosed) await browser.close().catch(() => {});
   }
+}
+
+export async function waitForManagedQworkUi(cdpUrl, expectedUiUrl, timeoutMs = 30_000) {
+  const normalizedCdpUrl = normalizeCdpUrl(cdpUrl);
+  const expected = validatePinnedQworkUiUrl(expectedUiUrl);
+  const deadline = Date.now() + Math.max(1_000, Number(timeoutMs) || 30_000);
+  let lastObserved = '';
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(new URL('/json/list', normalizedCdpUrl), {
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (response.ok) {
+        const targets = await response.json();
+        const qwork = (Array.isArray(targets) ? targets : []).find((target) => (
+          target?.type === 'webview'
+          && (/^QWork$/i.test(String(target.title || ''))
+            || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(target.url || '')))
+        ));
+        lastObserved = String(qwork?.url || '');
+        if (lastObserved && new URL(lastObserved).href === expected.url) return expected;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(
+    `Managed 360Teams did not remount pinned QWork ${expected.version}: `
+    + `expected=${expected.url} actual=${lastObserved || 'missing'}`,
+  );
 }
 
 export function installTeamsPageGuards(page, { screenshotTimeoutMs = 15_000 } = {}) {

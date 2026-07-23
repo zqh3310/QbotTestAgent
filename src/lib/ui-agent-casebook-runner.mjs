@@ -9613,7 +9613,8 @@ function assertUxArtifactReadback(state, testCase, panelText) {
       const reply = state.artifacts.reply_delta && fs.existsSync(state.artifacts.reply_delta)
         ? fs.readFileSync(state.artifacts.reply_delta, 'utf8')
         : '';
-      const data = ['12000', '860', '240', '170', '28'].every((term) => content.includes(term));
+      const normalizedContent = content.replace(/(?<=\d)[,_，](?=\d)/g, '');
+      const data = ['12000', '860', '240', '170', '28'].every((term) => normalizedContent.includes(term));
       const contentRates = /70\.(?:8|83)\s*[%％]/.test(content) && /27\.(?:9|91)\s*[%％]/.test(content);
       const replyRates = /70\.(?:8|83)\s*[%％]/.test(reply) && /27\.(?:9|91)\s*[%％]/.test(reply);
       const formulas = /170\s*[\/÷]\s*240/.test(content) && /240\s*[\/÷]\s*860/.test(content);
@@ -9911,7 +9912,10 @@ async function selectMultipleManualSkills(page, state, caseDir, expectedCount = 
 async function summonFirstExpertForCase(page, state, caseDir) {
   await openExpertsPage(page, state, caseDir);
   let expertName = 'QBot QA 产品运营专家';
-  let card = await findExpertCardByName(page, expertName) || await firstSummonableExpertCard(page);
+  // Do not substitute a generic card (especially "通用助手") for the
+  // deterministic QA expert fixture. That fallback produced a framework
+  // failure which was incorrectly reported as a product defect.
+  let card = await findExpertCardByName(page, expertName);
   if (!card) {
     // A stale account can report the stable name as duplicated while the
     // current catalog does not expose that expert card.  A unique QA-prefixed
@@ -12097,7 +12101,11 @@ async function ensureComposerToolMenu(page, state, {
   expectedLabels = ['禁用', '自动', '手动'],
   menuKind = '',
 }) {
-  if (menuKind && await unifiedComposerPlusAvailable(page)) {
+  // Only work mode / skill / connector live under the unified "+" menu.
+  // Safety remains a standalone M-tier control. Routing "safety" through an
+  // unsupported unified submenu returned before the visible trigger was ever
+  // clicked, so HOME-013 inspected a closed menu.
+  if (UNIFIED_COMPOSER_SUBMENUS[menuKind] && await unifiedComposerPlusAvailable(page)) {
     return openUnifiedComposerSubmenu(page, state, menuKind, action);
   }
   const matches = (text) => expectedLabels.every((item) => String(text || '').includes(item))
@@ -15688,7 +15696,10 @@ async function conversationSnapshot(page) {
 }
 
 async function conversationMessageTimeline(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="user"], [data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
+  // Branched/later messages can be rendered under assistant-thread but
+  // outside the first message-list wrapper. Keep the thread boundary while
+  // accepting every role node so a visibly completed follow-up is not lost.
+  return page.locator('[data-testid="assistant-thread"] [data-role="user"], [data-testid="assistant-thread"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
     const role = node.getAttribute('data-role') === 'user' ? 'user' : 'assistant';
     const selector = role === 'user'
       ? '.aui-user-message-content, [data-testid="user-message-content"], .user-message-content'
@@ -15707,7 +15718,7 @@ async function conversationMessageTimeline(page) {
 }
 
 async function assistantMessageTexts(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
+  return page.locator('[data-testid="assistant-thread"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
     const content = node.querySelector('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content');
     if (content) return String(content.innerText || content.textContent || '');
     const clone = node.cloneNode(true);
@@ -15721,7 +15732,7 @@ async function assistantMessageTexts(page) {
 }
 
 async function userMessageTexts(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="user"]').evaluateAll((nodes) => nodes.map((node) => {
+  return page.locator('[data-testid="assistant-thread"] [data-role="user"]').evaluateAll((nodes) => nodes.map((node) => {
     const content = node.querySelector('.aui-user-message-content, [data-testid="user-message-content"], .user-message-content');
     const text = content?.innerText || node.innerText || node.textContent || '';
     return String(text).trim();
@@ -16043,7 +16054,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   if (id === 'SIT-HOME-058') {
     if (!/第二轮|更正|最终/.test(`${label}\n${prompt}`)) return notApplicable;
     const hasNew = /30\s*万/.test(reply) && /240\s*人?/.test(reply) && /企业微信/.test(reply);
-    const keepsOld = /50\s*万|300\s*人|短信|App\s*弹窗|\bApp\b/i.test(reply);
+    const keepsOld = containsActiveLegacyConstraints(reply);
     return result('新约束覆盖旧约束', '最终方案必须包含30万元、240人、企业微信，且不再沿用50万元、300人、短信或App。', hasNew && !keepsOld, `has_new=${hasNew}；keeps_old=${keepsOld}；reply=${clip(reply, 360)}`);
   }
   if (id === 'SIT-HOME-059') {
@@ -16134,6 +16145,16 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
     return result('跨格式事实与决策摘要', '应按两个文件名分别引用 Word 结论和 Excel 关键数据，并输出结论、证据、风险、下一步四部分。', filenames && wordFact && excelFact && sections, `filenames=${filenames}；word_fact=${wordFact}；excel_fact=${excelFact}；sections=${sections}；reply=${clip(reply, 460)}`);
   }
   return notApplicable;
+}
+
+export function containsActiveLegacyConstraints(replyText) {
+  const clauses = String(replyText || '')
+    .split(/[\n。；;！!?？]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const legacy = /50\s*万|300\s*人|短信|App\s*弹窗|\bApp\b/i;
+  const explicitlyRejected = /(?:不再|不使用|不采用|不包含|不保留|不沿用|取消|移除|停用|排除|无|没有|仅|只).{0,24}(?:50\s*万|300\s*人|短信|App)|(?:50\s*万|300\s*人|短信|App).{0,24}(?:不再|不使用|不采用|不包含|不保留|不沿用|取消|移除|停用|排除|作废|无补位|不补位)|(?:旧|原).{0,8}(?:50\s*万|300\s*人|短信|App).{0,16}(?:已|被)?(?:替换|更正|作废|取消)/i;
+  return clauses.some((clause) => legacy.test(clause) && !explicitlyRejected.test(clause));
 }
 
 function replySentences(value) {
@@ -16471,6 +16492,15 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   if (text.length < 15) return false;
   const scenario = String(testCase.scenario || '');
   const relevanceInput = `${scenario}\n${String(prompt || testCase.test_data || '')}`;
+  // A concise artifact acknowledgement is relevant when it repeats the exact
+  // filename requested by the user. The generic token splitter intentionally
+  // drops long tokens, which previously rejected valid replies such as
+  // “已生成文件 teams_local_execution.txt”.
+  const requestedFiles = Array.from(relevanceInput.matchAll(/[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}\b/g))
+    .map((match) => match[0]);
+  if (requestedFiles.length
+    && requestedFiles.some((filename) => text.includes(filename))
+    && /已生成|生成完成|已创建|写入|保存|落地|文件名/.test(text)) return true;
   if (isNumericMemoryScenario(testCase)) {
     if (/成交率|到场率|成交单数/.test(String(prompt || ''))) {
       return /(^|[^0-9])12([^0-9]|$)/.test(text)
@@ -16496,6 +16526,8 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/当前可用连接器|获取外部信息|连接器不能使用/, /连接器|外部|信息|获取|工具|不可用|来源/],
     [/已选的两个技能|两个\s*Skill|联合处理|两项能力/, /QA Node Runtime|QA Python Runtime|Node(?:\.js)?|Python|两个\s*Skill|两项能力|联合处理|pipeline/i],
     [/技能.*适合解决|使用我刚选择的技能/, /技能|适合|解决|能力|创建|更新|复用|方法/],
+    [/用户分层|用户分群/, /用户分层|用户分群|新客|沉默客|高价值老客/],
+    [/运营视角|不涉及技术|不要技术/, /运营视角|运营动作|不涉及技术|技术实现|渠道策略|用户分群/],
     [/(?:概括.*附件|附件.*概括|读取.*附件|当前保留.*附件|保留的两个附件)/, /附件|文本|结构化|JSON|概括|材料|文件/],
     [/(?:查看|读取|分析).*(?:图片|图像)|(?:图片|图像).*(?:内容|问题)/, /图片|图像|文字|图表|界面|数据|内容/],
   ];
