@@ -492,13 +492,14 @@ test('Teams renderer fault controls stay opt-in and do not replace the local-QBo
 
 test('managed Teams fixture relaunch keeps the packaged production home', () => {
   const source = fs.readFileSync(new URL('../lib/relaunch-managed-host.mjs', import.meta.url), 'utf8');
-  assert.match(source, /controlPlaneOrigin === packagedControlPlaneOrigin \? \{\} : \{ DEEPBANK_SERVER: controlPlane \}/);
+  assert.match(source, /origin === packagedControlPlaneOrigin \? \{\} : \{ DEEPBANK_SERVER: serverUrl \}/);
   assert.match(source, /DEEPBANK_UI_URL: pinnedQworkUi\.url/);
   assert.match(source, /QBOT_UI_URL: pinnedQworkUi\.url/);
-  assert.match(source, /QBOT_SERVER_URL: controlPlane/);
+  assert.match(source, /QBOT_SERVER_URL: serverUrl/);
   assert.doesNotMatch(source, /DEEPBANK_ENV:\s*['"]dev['"]/);
   assert.match(source, /resolvePinnedQworkUi\(previous, expectedQworkUi\)/);
   assert.match(source, /\/json\/list/);
+  assert.match(source, /Automatically rolled back to/);
 });
 
 test('managed live Teams can expose the real OAuth browser during login recovery', () => {
@@ -534,7 +535,7 @@ test('Teams Electron restart shim ignores fixture URLs and auto-discovers the pi
 test('managed Teams HITL fixture opts into mock Agent only for its controlled relaunch', () => {
   const relaunch = fs.readFileSync(new URL('../lib/relaunch-managed-host.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
-  assert.match(relaunch, /DEEPBANK_AGENT_MOCK: agentMock/);
+  assert.match(relaunch, /DEEPBANK_AGENT_MOCK: mockFlag/);
   assert.match(relaunch, /\['0', '1'\]\.includes\(agentMock\)/);
   assert.match(runner, /enableE2eMarker \? '1' : '0'\]\s*\.map\(shellQuote\)/);
   assert.match(runner, /executeHitlFixtureCase[\s\S]*enableE2eMarker: true/);
@@ -579,7 +580,9 @@ test('managed Teams fixture relaunch transactionally overrides and restores the 
   assert.equal(overridden.mode, 'overridden');
   const fixtureConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.equal(fixtureConfig.deepbank.qbot_custom.serverUrl, 'http://127.0.0.1:18900');
+  assert.equal(fixtureConfig.deepbank.qbot_custom.uiUrl, '');
   assert.equal(fixtureConfig.configInfo.QBOT_SERVER_URL, 'http://127.0.0.1:18900');
+  assert.equal(fixtureConfig.configInfo.QBOT_UI_URL, uiUrl);
   assert.equal(fs.existsSync(backup), true);
   fs.writeFileSync(
     path.join(bridgeDir, 'qbot-agent-bridge.cjs'),

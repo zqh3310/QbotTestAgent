@@ -95,7 +95,6 @@ export function applyManagedQbotProfileConfig({
   Object.assign(custom, {
     env: 'DEV',
     serverUrl: targetServer,
-    uiUrl: targetUi,
     surface: 'workbench',
   });
   Object.assign(configInfo, {
