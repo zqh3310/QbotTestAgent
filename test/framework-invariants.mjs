@@ -40,6 +40,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   validateProductionCasePlan,
@@ -125,6 +126,31 @@ assert.match(
   'CDP 页面发现必须 await 标题并优先真实 QWork WebView，不能按返回顺序误选 360Teams 外壳',
 );
 assert.equal(coreGateIds.at(-1), 'SIT-AUTH-005', '核心门禁用例簿末条必须是退出登录闭环');
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', []),
+  true,
+  'QWork 0.0.12 capabilities 省略 selectedSkills 时，应使用 setSkillsDisabled 返回的空数组确认禁用态',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', undefined),
+  false,
+  '技能禁用态不能只因 capabilities 缺字段而误判成功',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: [] }, 'disabled', undefined),
+  true,
+  '旧版 capabilities 空数组仍应确认技能禁用态',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'auto', null),
+  true,
+  '技能自动态应接受 setSkillsAuto 返回的 null',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', null),
+  false,
+  '自动态 null 不能被误判为技能禁用态',
+);
 for (const id of [
   'SIT-INIT-004',
   'SIT-INIT-025',
