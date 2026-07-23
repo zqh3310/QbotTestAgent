@@ -5811,6 +5811,7 @@ export async function createConnectorRegressionServer({ includeDocumentFixture =
   origin = `http://127.0.0.1:${address.port}`;
   return {
     url: origin,
+    includeDocumentFixture,
     state,
     close: () => new Promise((resolve) => {
       if (!server.listening) return resolve();
@@ -7299,6 +7300,81 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   if (!fixtureProbe.ok) {
     return { ok: false, reason: `连接器 Fixture 自检失败：${fixtureProbe.reason}；${JSON.stringify(fixtureProbe.statuses || {})}` };
   }
+  if (options['renderer-control-adapter'] === 'teams360' && !fixture.includeDocumentFixture) {
+    const page = runtime?.page;
+    if (!page) return { ok: false, reason: '连接器三态 Fixture 缺少当前 QWork 页面。' };
+    const controller = createTeamsConnectorFixtureController();
+    const snapshot = controller.snapshot();
+    const adapter = await installRendererControlAdapter({
+      page,
+      initiallyArmed: true,
+      handler: controller.handle,
+      rules: [
+        {
+          id: 'teams360-connector-capabilities',
+          method: 'GET',
+          pathExact: '/api/capabilities',
+          mode: 'transform-json',
+          transform: 'connectors-fixture',
+          connectors: snapshot.connectors,
+          health: snapshot.health,
+        },
+        {
+          id: 'teams360-connector-catalog',
+          method: 'GET',
+          pathPrefix: '/api/connectors/catalog',
+          mode: 'node-handler',
+        },
+        {
+          id: 'teams360-connector-health',
+          method: 'GET',
+          pathExact: '/api/connectors/health',
+          mode: 'node-handler',
+        },
+        {
+          id: 'teams360-connector-reconcile',
+          method: 'POST',
+          pathExact: '/api/connectors/reconcile',
+          mode: 'node-handler',
+        },
+        {
+          id: 'teams360-connector-recheck',
+          method: 'POST',
+          pathExact: '/api/connectors/recheck',
+          mode: 'node-handler',
+        },
+      ],
+    });
+    const prepared = {
+      connectors: snapshot.connectors.map((item) => ({
+        key: item.key,
+        label: item.label,
+        statusKind: item.statusKind,
+      })),
+      health: snapshot.health,
+      fixtureProbe,
+      readinessSource: {
+        healthy: 'teams360-renderer-bridge',
+        unreachable: 'teams360-renderer-bridge',
+        needsAuth: 'teams360-renderer-bridge',
+      },
+    };
+    state.artifacts.connector_regression_fixture = prepared;
+    state.artifacts.connector_regression_fixture.e2e_marker_enabled = false;
+    state.artifacts.teams360_connector_fixture_adapter = {
+      mode: 'stateful-renderer-bridge',
+      control_plane_preserved: String(options['control-plane-url'] || ''),
+      connectors: snapshot.connectors.map((item) => item.key),
+    };
+    return {
+      ok: true,
+      page,
+      prepared,
+      rendererAdapter: true,
+      cleanup: adapter.close,
+      controller,
+    };
+  }
   const qbotRoot = inferQbotRootForElectronRestart(options);
   if (!qbotRoot) return { ok: false, reason: '无法从 qbot-root/restart-cwd/restart-command 推断当前 deepbankV2 根目录。' };
   const serverHelper = path.resolve(process.cwd(), 'scripts', 'restart-qbot-connector-fixture-control-plane.sh');
@@ -7313,10 +7389,30 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
     [serverHelper, qbotRoot, fixture.url, qbotHome, enableE2eMarker ? '1' : '0'].map(shellQuote).join(' '),
     [electronHelper, qbotRoot, 'http://127.0.0.1:8900', cdpPort, qbotHome, '', enableE2eMarker ? '1' : '0'].map(shellQuote).join(' '),
   ].join(' && ');
+  const restoreAfterFixtureInitializationFailure = async (reason) => {
+    const restored = await restartQbotAndReconnect({
+      runtime,
+      options,
+      state,
+      caseDir,
+      label: 'Fixture 初始化失败后恢复正式控制面',
+    }).catch((error) => ({ ok: false, reason: error.message }));
+    return {
+      ok: false,
+      reason: restored.ok
+        ? `${reason}；已自动恢复正式控制面和登录态。`
+        : `${reason}；自动恢复正式控制面失败：${restored.reason || '未知原因'}`,
+      recovery: {
+        attempted: true,
+        ok: Boolean(restored.ok),
+        reason: restored.reason || '',
+      },
+    };
+  };
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '启用产品 dev 连接器三态 Fixture', commandOverride: command });
-  if (!restarted.ok) return restarted;
+  if (!restarted.ok) return restoreAfterFixtureInitializationFailure(restarted.reason);
   const workbench = await waitForQbotWorkbench(restarted.page, 90000);
-  if (!workbench.ok) return { ok: false, reason: workbench.reason };
+  if (!workbench.ok) return restoreAfterFixtureInitializationFailure(workbench.reason);
   const prepared = await restarted.page.evaluate(async () => {
     const catalog = await window.agent.getConnectorCatalog({ forceRefresh: true });
     await window.agent.reconcileConnectorHealth?.();
@@ -7362,7 +7458,9 @@ async function restartWithConnectorRegressionFixture({ state, caseDir, options, 
   state.artifacts.connector_regression_fixture = prepared;
   state.artifacts.connector_regression_fixture.e2e_marker_enabled = enableE2eMarker;
   if (!hasHealthy || !hasUnreachable || !hasNeedsAuth) {
-    return { ok: false, reason: `产品 dev 连接器 Fixture 未形成 healthy/unreachable/needs_auth 三态：${clip(text, 500)}` };
+    return restoreAfterFixtureInitializationFailure(
+      `产品 dev 连接器 Fixture 未形成 healthy/unreachable/needs_auth 三态：${clip(text, 500)}`,
+    );
   }
   return { ok: true, page: restarted.page, prepared };
 }
@@ -7451,15 +7549,24 @@ async function restartWithHitlMockAgent({ state, caseDir, options, runtime }) {
 async function executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
   const fixture = await createConnectorRegressionServer({ includeDocumentFixture: testCase.id === 'SIT-TEAMS-DOC-001' });
   const priorFixtureControlPlane = options['active-fixture-control-plane-url'];
-  const injected = await restartWithConnectorRegressionFixture({ state, caseDir, options, runtime, fixture });
+  const injected = await restartWithConnectorRegressionFixture({
+    state,
+    caseDir,
+    options,
+    runtime,
+    fixture,
+    enableE2eMarker: testCase.id === 'SIT-TEAMS-DOC-001',
+  });
   if (!injected.ok) {
     await fixture.close().catch(() => {});
     markFailed(state, `连接器 QA Fixture 启动失败：${injected.reason}`, 'automation_error');
     return;
   }
-  options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
-    ? 'http://127.0.0.1:18900'
-    : 'http://127.0.0.1:8900';
+  options['active-fixture-control-plane-url'] = injected.rendererAdapter
+    ? String(options['control-plane-url'] || '')
+    : /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
+      ? 'http://127.0.0.1:18900'
+      : 'http://127.0.0.1:8900';
   try {
     page = injected.page;
     if (testCase.id === 'SIT-CONN-008') return await executeSitConnectorRetry({ page, state, caseDir });
@@ -7470,10 +7577,25 @@ async function executeConnectorRegressionFixtureCase({ page, state, testCase, ca
       return await executeSitTeamsDocumentPermission({ page, state, testCase, caseDir, timeoutMs, fixture });
     }
   } finally {
-    state.artifacts.connector_regression_fixture_hits = fixture.state.hits;
-    const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常连接器配置' });
+    state.artifacts.connector_regression_fixture_hits = injected.rendererAdapter
+      ? injected.controller?.snapshot?.().events || []
+      : fixture.state.hits;
+    const restored = injected.rendererAdapter
+      ? await injected.cleanup().then(() => ({ ok: true })).catch((error) => ({ ok: false, reason: error.message }))
+      : await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常连接器配置' });
     await fixture.close().catch(() => {});
-    recordAssertion(state, '连接器 Fixture 后环境恢复', '受控连接器三态用例结束后必须恢复 .env 中的正常配置。', restored.ok, restored.ok ? '正常配置已恢复。' : restored.reason, 'automation_error');
+    recordAssertion(
+      state,
+      '连接器 Fixture 后环境恢复',
+      '受控连接器三态用例结束后必须恢复正式控制面和登录态。',
+      restored.ok,
+      restored.ok
+        ? injected.rendererAdapter
+          ? 'Teams 渲染层适配器已停用；360Teams、外部 DEV 和登录态均未重启。'
+          : '正常配置已恢复。'
+        : restored.reason,
+      'automation_error',
+    );
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
     else delete options['active-fixture-control-plane-url'];
   }
@@ -12768,6 +12890,146 @@ export function createTeamsSkillFixtureController(skills = []) {
   };
 }
 
+export function createTeamsConnectorFixtureController() {
+  const now = Date.now();
+  const tool = (connectorKey, name, title) => ({
+    name,
+    connectorKey,
+    toolName: name,
+    toolKey: `${connectorKey}:${name}`,
+    title,
+    description: 'QBotTestAgent controlled connector fixture tool',
+    enabled: true,
+    upstreamEnabled: true,
+    userEnabled: true,
+    effectiveEnabled: true,
+    canEnable: true,
+    parameters: [],
+  });
+  const connector = (name, label, statusKind) => {
+    const key = `platform:${name}`;
+    const ready = statusKind === 'ready';
+    const tools = [tool(key, `${name}_tool`, `${label} tool`)];
+    return {
+      key,
+      label,
+      source: 'platform',
+      sourceLabel: '平台连接器',
+      statusKind,
+      statusLabel: ready ? '可用' : statusKind === 'needs_auth' ? '需授权' : '不可用',
+      usable: ready,
+      installed: true,
+      enabled: true,
+      defaultEnabled: false,
+      canEnable: ready,
+      canRemove: false,
+      description: `QBotTestAgent controlled connector fixture: ${name}`,
+      disabledReason: ready ? '' : statusKind === 'needs_auth' ? '需要在平台完成授权' : '连接检测失败',
+      type: 'streamable-http',
+      tools,
+      toolCount: tools.length,
+      totalToolCount: tools.length,
+      upstreamEnabledToolCount: tools.length,
+      userEnabledToolCount: tools.length,
+      effectiveToolCount: ready ? tools.length : 0,
+      promptCount: 0,
+      resourceCount: 0,
+      updatedAt: '2026-07-15T00:00:00Z',
+      revision: `qbot-test-agent-${name}-1`,
+    };
+  };
+  const connectors = [
+    connector('dev_healthy', 'Dev Healthy', 'ready'),
+    connector('dev_unreachable', 'Dev Unreachable', 'ready'),
+    connector('dev_needs_auth', 'Dev Needs Auth', 'needs_auth'),
+  ];
+  const health = [
+    {
+      name: 'dev_healthy',
+      connectorKey: 'platform:dev_healthy',
+      transport: 'http',
+      status: 'healthy',
+      reason: 'http_200',
+      elapsedMs: 8,
+      checkedAt: now,
+    },
+    {
+      name: 'dev_unreachable',
+      connectorKey: 'platform:dev_unreachable',
+      transport: 'http',
+      status: 'unreachable',
+      reason: 'http_503',
+      elapsedMs: 12,
+      checkedAt: now,
+    },
+    {
+      name: 'dev_needs_auth',
+      connectorKey: 'platform:dev_needs_auth',
+      transport: 'http',
+      status: 'needs_auth',
+      reason: 'oauth_required',
+      elapsedMs: 0,
+      checkedAt: now,
+    },
+  ];
+  const events = [];
+  const catalog = () => ({
+    connectors: structuredClone(connectors),
+    connectorCatalogStatus: {
+      platform: 'configured',
+      source: 'platform',
+      error: '',
+      cacheStatus: 'refresh',
+      lastFetchedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      ttlMs: 60_000,
+      servedStale: false,
+    },
+    connectorRouting: {
+      mode: 'auto',
+      label: '自动',
+      effectiveConnectorIds: [],
+      effectiveConnectors: [],
+      unavailableRequiredConnectors: [],
+      warnings: [],
+      explicitConnectorIds: [],
+      expert: null,
+      redacted: true,
+    },
+  });
+  const handle = async ({ name, args = [] } = {}) => {
+    events.push({ name: String(name || ''), args: structuredClone(args), at: Date.now() });
+    if (name === 'getConnectorCatalog') return { handled: true, result: catalog() };
+    if (name === 'getConnectorHealth') return { handled: true, result: structuredClone(health) };
+    if (name === 'reconcileConnectorHealth') {
+      return { handled: true, result: { ok: true, health: structuredClone(health) } };
+    }
+    if (name === 'recheckConnector') {
+      const requested = String(args[0] || '');
+      const row = health.find((item) => item.name === requested || item.connectorKey === requested) || null;
+      return {
+        handled: true,
+        result: {
+          ok: Boolean(row),
+          row: row ? structuredClone(row) : null,
+          health: structuredClone(health),
+        },
+      };
+    }
+    return { handled: false };
+  };
+  return {
+    handle,
+    snapshot() {
+      return {
+        connectors: structuredClone(connectors),
+        health: structuredClone(health),
+        events: structuredClone(events),
+      };
+    },
+  };
+}
+
 async function installRendererControlAdapter({
   page,
   rules = [],
@@ -12808,13 +13070,17 @@ async function installRendererControlAdapter({
   const state = { armed: Boolean(initiallyArmed), hits: [], installedAt: Date.now() };
   const serializedRules = rules.map((rule) => ({ ...rule }));
   registry.set(id, { state, rules: serializedRules, handler });
-  await page.evaluate(({ controlId, bindings }) => {
+  const liveControlIds = [...registry.keys()];
+  await page.evaluate(({ controlId, bindings, liveIds }) => {
     const root = globalThis;
     const methodRoutes = {
       capabilities: { method: 'GET', path: '/api/capabilities' },
       getExpertsCatalog: { method: 'GET', path: '/api/experts/catalog' },
       getSkillsCatalog: { method: 'GET', path: '/api/skills/catalog' },
       getConnectorCatalog: { method: 'GET', path: '/api/connectors/catalog' },
+      getConnectorHealth: { method: 'GET', path: '/api/connectors/health' },
+      reconcileConnectorHealth: { method: 'POST', path: '/api/connectors/reconcile' },
+      recheckConnector: { method: 'POST', path: '/api/connectors/recheck' },
       installSkill: { method: 'POST', path: '/api/skills/install' },
       uninstallSkill: { method: 'POST', path: '/api/skills/uninstall' },
       updateSkill: { method: 'POST', path: '/api/skills/update' },
@@ -12866,6 +13132,20 @@ async function installRendererControlAdapter({
           ];
         }
         hit.modified = modified;
+      } else if (rule.transform === 'connectors-fixture') {
+        const fixtureConnectors = Array.isArray(rule.connectors) ? structuredClone(rule.connectors) : [];
+        payload.connectors = fixtureConnectors;
+        if (payload.connectorRouting && typeof payload.connectorRouting === 'object') {
+          payload.connectorRouting = {
+            ...payload.connectorRouting,
+            explicitConnectorIds: [],
+            effectiveConnectorIds: [],
+            effectiveConnectors: [],
+            unavailableRequiredConnectors: [],
+            warnings: [],
+          };
+        }
+        hit.modified = fixtureConnectors.length + 1;
       } else if (rule.transform === 'skills-empty-installed') {
         const before = Array.isArray(payload?.installed) ? payload.installed.length : 0;
         payload.installed = [];
@@ -12900,29 +13180,55 @@ async function installRendererControlAdapter({
       }
       return payload;
     };
+    const liveIdSet = new Set(Array.isArray(liveIds) ? liveIds : []);
+    const priorOwner = String(root.__qbotAutomationAgentOriginalsOwner || '');
+    const priorOwnerIsLive = Boolean(
+      priorOwner
+      && liveIdSet.has(priorOwner)
+      && root.__qbotAutomationAgentOriginals,
+    );
     // A prior runner process can disappear before its finally block executes.
-    // Restore any wrappers it left in this long-lived Teams WebView before
-    // installing this run's adapter.
-    if (root.agent && root.__qbotAutomationAgentOriginals) {
-      for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals)) {
-        if (typeof original === 'function') root.agent[name] = original;
+    // Restore only wrappers whose Node-side control registry no longer exists.
+    // Live adapters are stacked so a nested fault rule can fall through to the
+    // Case fixture underneath it.
+    if (!priorOwnerIsLive) {
+      if (root.agent && root.__qbotAutomationAgentOriginals) {
+        for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals)) {
+          if (typeof original === 'function') root.agent[name] = original;
+        }
       }
-    }
-    delete root.__qbotAutomationAgentOriginals;
-    delete root.__qbotAutomationAgentOriginalsOwner;
-    root.__qbotAutomationAgentOriginals = {};
-    for (const [name, route] of Object.entries(methodRoutes)) {
-      if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
-      const original = root.agent[name].bind(root.agent);
-      root.__qbotAutomationAgentOriginals[name] = original;
-      const wrapped = async (...args) => {
-        const activeId = root.__qbotAutomationControlId;
-        const config = activeId ? await root[bindings.get]?.(activeId) : null;
-        const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
-          ? `${route.path}?refresh=force`
-          : route.path;
-        const rule = config?.armed ? config.rules.find((item) => matches(item, route.method, path)) : null;
-        if (!rule) return original(...args);
+      delete root.__qbotAutomationAgentOriginals;
+      delete root.__qbotAutomationAgentOriginalsOwner;
+      delete root.__qbotAutomationControlStack;
+      delete root.__qbotAutomationControlPrimaryBindings;
+      root.__qbotAutomationAgentOriginals = {};
+      root.__qbotAutomationAgentOriginalsOwner = controlId;
+      root.__qbotAutomationControlPrimaryBindings = { ...bindings };
+      for (const [name, route] of Object.entries(methodRoutes)) {
+        if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
+        const original = root.agent[name].bind(root.agent);
+        root.__qbotAutomationAgentOriginals[name] = original;
+        const wrapped = async (...args) => {
+          const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
+            ? `${route.path}?refresh=force`
+            : route.path;
+          const stack = Array.isArray(root.__qbotAutomationControlStack)
+            ? [...root.__qbotAutomationControlStack]
+            : [];
+          let activeId = '';
+          let rule = null;
+          for (let index = stack.length - 1; index >= 0; index -= 1) {
+            const candidateId = stack[index];
+            const config = await root[bindings.get]?.(candidateId);
+            const candidateRule = config?.armed
+              ? config.rules.find((item) => matches(item, route.method, path))
+              : null;
+            if (!candidateRule) continue;
+            activeId = candidateId;
+            rule = candidateRule;
+            break;
+          }
+          if (!rule) return original(...args);
         let requestArgs = [];
         try { requestArgs = structuredClone(args); } catch { requestArgs = args.map((value) => String(value)); }
         let requestBody = '';
@@ -12964,14 +13270,19 @@ async function installRendererControlAdapter({
         if (rule.mode === 'transform-json') transform(cloned, rule, hit);
         await root[bindings.hit]?.(activeId, hit);
         return cloned;
-      };
-      Object.defineProperty(wrapped, '__qbotAutomationRendererControlWrapper', { value: true });
-      root.agent[name] = wrapped;
+        };
+        Object.defineProperty(wrapped, '__qbotAutomationRendererControlWrapper', { value: true });
+        root.agent[name] = wrapped;
+      }
     }
-    root.__qbotAutomationAgentOriginalsOwner = controlId;
+    const stack = Array.isArray(root.__qbotAutomationControlStack)
+      ? root.__qbotAutomationControlStack.filter((item) => liveIdSet.has(item))
+      : [];
+    if (!stack.includes(controlId)) stack.push(controlId);
+    root.__qbotAutomationControlStack = stack;
     root.__qbotAutomationControlId = controlId;
     return true;
-  }, { controlId: id, bindings: bindingNames });
+  }, { controlId: id, bindings: bindingNames, liveIds: liveControlIds });
 
   return {
     state,
@@ -12979,20 +13290,35 @@ async function installRendererControlAdapter({
     close: async () => {
       state.armed = false;
       page.__qbotRendererControlRegistry?.delete(id);
-      await page.evaluate(({ controlId, bindings }) => {
+      const remainingControlIds = [...(page.__qbotRendererControlRegistry?.keys?.() || [])];
+      await page.evaluate(({ controlId, bindings, remainingIds }) => {
         const root = globalThis;
-        if (root.__qbotAutomationControlId === controlId) root.__qbotAutomationControlId = '';
-        if (root.__qbotAutomationAgentOriginalsOwner === controlId && root.agent) {
+        const remaining = (Array.isArray(root.__qbotAutomationControlStack)
+          ? root.__qbotAutomationControlStack
+          : []).filter((item) => item !== controlId && remainingIds.includes(item));
+        root.__qbotAutomationControlStack = remaining;
+        root.__qbotAutomationControlId = remaining.at(-1) || '';
+        if (remaining.length) {
+          root.__qbotAutomationAgentOriginalsOwner = remaining[0];
+        } else if (root.agent) {
           for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals || {})) {
             if (typeof original === 'function') root.agent[name] = original;
           }
+          const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
+          for (const binding of Object.values(primaryBindings)) {
+            try { delete root[binding]; } catch {}
+          }
           delete root.__qbotAutomationAgentOriginals;
           delete root.__qbotAutomationAgentOriginalsOwner;
+          delete root.__qbotAutomationControlStack;
+          delete root.__qbotAutomationControlPrimaryBindings;
         }
+        const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
         for (const binding of Object.values(bindings)) {
+          if (remaining.length && Object.values(primaryBindings).includes(binding)) continue;
           try { delete root[binding]; } catch {}
         }
-      }, { controlId: id, bindings: bindingNames }).catch(() => {});
+      }, { controlId: id, bindings: bindingNames, remainingIds: remainingControlIds }).catch(() => {});
     },
   };
 }

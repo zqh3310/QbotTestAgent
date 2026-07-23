@@ -48,6 +48,7 @@ import {
 import {
   automationFixtureMarkerPattern,
   cleanSkillChipLabel,
+  createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 
@@ -525,6 +526,44 @@ test('Teams stateful SkillHub fixture handles dependencies and materialization w
   );
 });
 
+test('Teams stateful connector fixture exposes deterministic healthy, unreachable, and needs-auth states', async () => {
+  const controller = createTeamsConnectorFixtureController();
+  const snapshot = controller.snapshot();
+  assert.equal(snapshot.connectors.length, 3);
+  assert.deepEqual(
+    new Set(snapshot.connectors.map((item) => item.key)),
+    new Set(['platform:dev_healthy', 'platform:dev_unreachable', 'platform:dev_needs_auth']),
+  );
+
+  const catalog = await controller.handle({ name: 'getConnectorCatalog', args: [{ forceRefresh: true }] });
+  assert.equal(catalog.handled, true);
+  assert.equal(catalog.result.connectors.length, 3);
+  assert.equal(
+    catalog.result.connectors.find((item) => item.key === 'platform:dev_needs_auth')?.statusKind,
+    'needs_auth',
+  );
+
+  const health = await controller.handle({ name: 'getConnectorHealth', args: [] });
+  assert.equal(health.handled, true);
+  assert.equal(
+    health.result.find((item) => item.connectorKey === 'platform:dev_unreachable')?.status,
+    'unreachable',
+  );
+
+  const rechecked = await controller.handle({ name: 'recheckConnector', args: ['dev_unreachable'] });
+  assert.equal(rechecked.handled, true);
+  assert.equal(rechecked.result.ok, true);
+  assert.equal(rechecked.result.row.status, 'unreachable');
+
+  const reconciled = await controller.handle({ name: 'reconcileConnectorHealth', args: [] });
+  assert.equal(reconciled.result.ok, true);
+  assert.equal(reconciled.result.health.length, 3);
+  assert.deepEqual(
+    controller.snapshot().events.map((event) => event.name),
+    ['getConnectorCatalog', 'getConnectorHealth', 'recheckConnector', 'reconcileConnectorHealth'],
+  );
+});
+
 test('Teams fixture lookup matches immutable slugs and human-readable packaged QWork titles', () => {
   const pattern = automationFixtureMarkerPattern('qa-python-runtime');
   assert.match('QA Python Runtime', pattern);
@@ -548,6 +587,9 @@ test('Teams renderer fault controls stay opt-in and do not replace the local-QBo
   assert.match(source, /const proxy = await createControlPlaneFaultProxy\(\{ upstreamUrl, rules, initiallyArmed \}\)/);
   assert.match(source, /teams360-control-\$\{process\.pid\}-\$\{Date\.now\(\)\}/);
   assert.match(source, /__qbotAutomationRendererControlWrapper/);
+  assert.match(source, /__qbotAutomationControlStack/);
+  assert.match(source, /for \(let index = stack\.length - 1; index >= 0; index -= 1\)/);
+  assert.match(source, /priorOwnerIsLive/);
   assert.match(source, /root\.agent\[name\] = original/);
   assert.match(source, /delete root\.__qbotAutomationAgentOriginalsOwner/);
 });
@@ -619,8 +661,13 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /\['127\.0\.0\.1', 'localhost', '\[::1\]', '::1'\]/);
   assert.match(runner, /fixture_mock_auth/);
   assert.match(runner, /createTeamsSkillFixtureController/);
+  assert.match(runner, /createTeamsConnectorFixtureController/);
+  assert.match(runner, /teams360_connector_fixture_adapter/);
   assert.match(runner, /mode:\s*'stateful-renderer-bridge'/);
   assert.match(runner, /mode:\s*'node-handler'/);
+  assert.match(runner, /options\['renderer-control-adapter'\] === 'teams360' && !fixture\.includeDocumentFixture/);
+  assert.match(runner, /360Teams、外部 DEV 和登录态均未重启/);
+  assert.match(runner, /Fixture 初始化失败后恢复正式控制面/);
 });
 
 test('managed Teams fixture relaunch transactionally overrides and restores the persisted QBot profile', () => {
