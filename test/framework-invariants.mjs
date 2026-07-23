@@ -334,6 +334,8 @@ const required = [
   ['统一连接器菜单按公共目录名称选择并回读唯一 key', /selectManualConnectorByKey[\s\S]*catalogMatch[\s\S]*matches\.length === 1[\s\S]*selectedConnectors\.includes\(connectorKey\)[\s\S]*public-catalog-visible-label/],
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
+  ['HOME-030 产品入口缺失保存现场并归类为 bug', /executeSitHomeQuickFeedback[\s\S]*quick_feedback_entry[\s\S]*home_030_feedback_entry_missing[\s\S]*'检查快速反馈入口'[\s\S]*'bug'/],
+  ['HOME-030 可见入口点击后未打开面板归类为 bug', /executeSitHomeQuickFeedback[\s\S]*点击可见的快速反馈入口后，确认面板未出现。[\s\S]*opened \? '' : 'bug'/],
   ['HOME-030 在 Teams 全量 Fixture 中强制使用渲染层代理', /executeSitHomeQuickFeedback[\s\S]*forceRendererAdapter: true[\s\S]*installControlPlaneHttpControl[\s\S]*forceRendererAdapter \|\| options\['renderer-control-adapter'\] === 'teams360'/],
   ['HOME-052 打开并取消原生工作区选择器', /executeSitHomeWorkspacePicker[\s\S]*wspick-trigger[\s\S]*wspick-menu[\s\S]*osascript/],
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],

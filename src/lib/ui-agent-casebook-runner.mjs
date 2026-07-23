@@ -2896,16 +2896,34 @@ async function executeSitHomeQuickFeedback({ page, state, testCase, caseDir, tim
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '快速反馈前置会话' });
   if (reply.incomplete) return;
   const entry = page.locator('[data-testid="composer-feedback"]').first();
-  if (!(await visible(entry, 2000))) {
-    recordStep(state, '点击快速反馈入口', '完成会话后输入区应出现快速反馈入口。', '未找到 composer-feedback。', 'failed', '', 'automation_error');
+  const entryCount = await page.locator('[data-testid="composer-feedback"]').count().catch(() => 0);
+  const entryVisible = await visible(entry, 2000);
+  if (!entryVisible) {
+    const bridgeFeedbackType = await page.evaluate(() => typeof globalThis.__qbotE2E?.submitFeedback).catch(() => 'unavailable');
+    state.artifacts.quick_feedback_entry = {
+      count: entryCount,
+      visible: false,
+      e2e_submit_feedback_type: bridgeFeedbackType,
+    };
+    state.screenshots.home_030_feedback_entry_missing = await shot(page, caseDir, 'home-030-feedback-entry-missing');
+    recordStep(
+      state,
+      '检查快速反馈入口',
+      '完成会话后输入区应展示可点击的快速反馈入口。',
+      `快速反馈按钮数量=${entryCount}；可见=false；产品 submitFeedback 能力=${bridgeFeedbackType}`,
+      'failed',
+      state.screenshots.home_030_feedback_entry_missing,
+      'bug',
+    );
     return;
   }
+  state.artifacts.quick_feedback_entry = { count: entryCount, visible: true };
   await entry.click({ force: true }).catch(async () => entry.evaluate((el) => el.click()));
   const panel = page.locator('[data-testid="quick-feedback-panel"]').first();
   const opened = await visible(panel, 2500);
   state.screenshots.home_030_feedback_panel = await shot(page, caseDir, 'home-030-feedback-panel');
   const panelText = opened ? await panel.innerText({ timeout: 1000 }).catch(() => '') : '';
-  recordStep(state, '点击快速反馈入口', '应真实打开快速反馈确认面板。', opened ? clip(panelText, 300) : '点击后面板未出现。', opened ? 'passed' : 'failed', state.screenshots.home_030_feedback_panel, opened ? '' : 'automation_error');
+  recordStep(state, '点击快速反馈入口', '应真实打开快速反馈确认面板。', opened ? clip(panelText, 300) : '点击可见的快速反馈入口后，确认面板未出现。', opened ? 'passed' : 'failed', state.screenshots.home_030_feedback_panel, opened ? '' : 'bug');
   recordAssertion(
     state,
     '快速反馈摘要与脱敏说明',
