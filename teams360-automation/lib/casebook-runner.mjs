@@ -156,6 +156,40 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
       if (!page) throw new Error('CDP connected, but the full QWork QBot page is unavailable.');
       await page.evaluate(qworkRuntimeBridgeSource());
+      // A runner can be terminated after installing a stateful renderer
+      // fixture but before its finally block restores window.agent.  Those
+      // wrappers retain Playwright exposed-function bindings owned by the dead
+      // Node process; the next capabilities() call then hangs forever.  At
+      // preconnect there is, by definition, no active Case fixture yet and the
+      // wrapper is the only runner allowed for this live profile, so restore
+      // the captured public methods before performing any readiness probe.
+      const staleRendererControlRecovery = await page.evaluate(() => {
+        const root = globalThis;
+        const originals = root.__qbotAutomationAgentOriginals;
+        if (!root.agent || !originals || typeof originals !== 'object') {
+          return { restored: 0, owner: '', stack_size: 0 };
+        }
+        const owner = String(root.__qbotAutomationAgentOriginalsOwner || '');
+        const stackSize = Array.isArray(root.__qbotAutomationControlStack)
+          ? root.__qbotAutomationControlStack.length
+          : 0;
+        let restored = 0;
+        for (const [name, original] of Object.entries(originals)) {
+          if (typeof original !== 'function') continue;
+          root.agent[name] = original;
+          restored += 1;
+        }
+        const bindings = root.__qbotAutomationControlPrimaryBindings || {};
+        for (const binding of Object.values(bindings)) {
+          try { delete root[binding]; } catch {}
+        }
+        delete root.__qbotAutomationAgentOriginals;
+        delete root.__qbotAutomationAgentOriginalsOwner;
+        delete root.__qbotAutomationControlStack;
+        delete root.__qbotAutomationControlPrimaryBindings;
+        delete root.__qbotAutomationControlId;
+        return { restored, owner, stack_size: stackSize };
+      });
       const tier = await page.evaluate(async () => {
         const deadline = Date.now() + 30_000;
         while (Date.now() < deadline) {
@@ -206,6 +240,7 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         qwork_url: page.url(),
         model_tier: tier,
         capabilities_ipc: 'ready',
+        stale_renderer_control_recovery: staleRendererControlRecovery,
       }));
       return browser;
     } catch (error) {
