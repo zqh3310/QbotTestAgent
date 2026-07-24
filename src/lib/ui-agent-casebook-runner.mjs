@@ -1716,25 +1716,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
   }
   const attachments = inferAttachments(testCase, fixturesDir);
   if (attachments.length) {
-    state.artifacts.attachment_sources = attachments.map((file) => {
-      const stats = fs.statSync(file);
-      return {
-        path: file,
-        name: path.basename(file),
-        size_bytes: stats.size,
-        sha256: sha256File(file),
-      };
-    });
-    const emptySources = state.artifacts.attachment_sources.filter((item) => item.size_bytes <= 0);
-    recordAssertion(
-      state,
-      '附件源文件非空',
-      '自动化上传前必须回读每个 fixture 的真实路径和字节数；空 fixture 属于框架/测试数据错误，不能归因给产品。',
-      emptySources.length === 0,
-      state.artifacts.attachment_sources.map((item) => `${item.name}=${item.size_bytes}B`).join('；'),
-      'automation_error',
-    );
-    if (emptySources.length) return;
+    if (!recordAttachmentSources(state, attachments)) return;
     const upload = await uploadAttachmentsInComposer(page, attachments);
     state.artifacts.upload = upload;
     state.screenshots.after_upload = await shot(page, caseDir, '02-after-upload');
@@ -3369,6 +3351,7 @@ async function executeSitFilePartialFailure({ page, state, testCase, caseDir, ti
     return;
   }
   const files = [fixtures.valid, fixtures.broken];
+  if (!recordAttachmentSources(state, files)) return;
   const upload = await uploadAttachmentsInComposer(page, files);
   state.artifacts.upload = upload;
   state.screenshots.file_new_001_after_upload = await shot(page, caseDir, 'file-new-001-after-upload');
@@ -4014,6 +3997,7 @@ async function executeSitHomeEmptySend({ page, state, caseDir }) {
 async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  const beforeState = await qbotE2EState(page).catch(() => null);
   const id = String(testCase.id || '');
   const runtimeDir = path.join(fixturesDir, 'generated-limit-fixtures');
   ensureDir(runtimeDir);
@@ -4043,10 +4027,60 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     expectedPattern = /暂不支持的附件类型|不支持.*\.bin|unsupported/i;
     expectedDescription = '选择不支持的 .bin 文件时应给出可理解的格式提示。';
   }
+  if (!recordAttachmentSources(state, files, {
+    assertionName: '附件限制测试源文件非空且可追溯',
+    expected: '产品拒绝附件前，框架必须记录每个输入文件的名称、非零字节数和真实 SHA-256。',
+  })) return;
   const result = await stageAttachmentPathsThroughComposer(page, files, caseDir, id.toLowerCase());
   state.artifacts.attachment_limit_probe = result;
   state.screenshots.attachment_limit = result.evidenceScreenshot
     || await shot(page, caseDir, `${id.toLowerCase()}-attachment-limit`);
+  const afterState = await qbotE2EState(page).catch(() => null);
+  const expectedMatched = expectedPattern.test(result.dialogMessage || result.feedbackText || result.pageText || '');
+  const acceptedNames = files
+    .map((file) => path.basename(file))
+    .filter((name) => String(result.attachmentText || '').includes(name));
+  const composerEmpty = Number(result.attachmentCount || 0) === 0
+    && !String(result.attachmentText || '').trim();
+  const beforeActiveId = String(beforeState?.activeId || '');
+  const afterActiveId = String(afterState?.activeId || '');
+  const beforeMessageCount = Number(beforeState?.messageCount || 0);
+  const afterMessageCount = Number(afterState?.messageCount || 0);
+  const taskStateUnchanged = beforeActiveId === afterActiveId;
+  const messageCountUnchanged = beforeMessageCount === afterMessageCount;
+  const noTaskCreated = !afterActiveId.trim() && taskStateUnchanged;
+  const noPromptRecorded = !Array.isArray(state.artifacts?.sent_prompts)
+    || state.artifacts.sent_prompts.length === 0;
+  const noMessageSent = messageCountUnchanged && noPromptRecorded;
+  state.artifacts.composer_attachment_state = {
+    source: 'visible_composer_attachment_readback',
+    visible_text: String(result.attachmentText || ''),
+    attachment_count: Number(result.attachmentCount || 0),
+    accepted_names: acceptedNames,
+    rejected_names: files.map((file) => path.basename(file)).filter((name) => !acceptedNames.includes(name)),
+    expected_rejection: true,
+    composer_empty: composerEmpty,
+  };
+  state.artifacts.attachment_limit_rejection = {
+    source: 'product_visible_limit_feedback',
+    dialog_message: String(result.dialogMessage || ''),
+    feedback_text: String(result.feedbackText || ''),
+    expected_pattern_matched: expectedMatched,
+    product_rejected_before_send: expectedMatched && composerEmpty,
+    evidence_screenshot: state.screenshots.attachment_limit,
+  };
+  state.artifacts.no_task_no_send_state = {
+    source: 'public_e2e_state_readback',
+    before_active_id: beforeActiveId,
+    after_active_id: afterActiveId,
+    before_message_count: beforeMessageCount,
+    after_message_count: afterMessageCount,
+    task_state_unchanged: taskStateUnchanged,
+    message_count_unchanged: messageCountUnchanged,
+    no_task_created: noTaskCreated,
+    no_message_sent: noMessageSent,
+    no_prompt_recorded: noPromptRecorded,
+  };
   recordStep(
     state,
     `通过产品统一附件入口选择测试文件（${id}）`,
@@ -4059,8 +4093,16 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     state,
     '附件限制提示符合当前产品契约',
     expectedDescription,
-    expectedPattern.test(result.dialogMessage || result.feedbackText || result.pageText || '') && Boolean(result.evidenceScreenshot),
+    expectedMatched && Boolean(result.evidenceScreenshot),
     `dialog=${result.dialogMessage || '无'}；page=${clip(result.pageText, 360)}`,
+  );
+  recordAssertion(
+    state,
+    '附件限制发生在任务创建和发送之前',
+    '产品拒绝超限/不支持附件时，Composer 不应挂载被拒绝文件，不应创建任务，也不应产生消息。',
+    composerEmpty && noTaskCreated && noMessageSent,
+    `attachmentCount=${result.attachmentCount || 0}；accepted=${acceptedNames.join(',') || '无'}；activeId=${afterState?.activeId || '空'}；messageCount=${afterState?.messageCount || 0}`,
+    'automation_error',
   );
 }
 
@@ -4254,6 +4296,7 @@ async function executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDi
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const files = ['qbot-text-brief.txt', 'qbot-requirement.md', 'qbot-data.json'].map((name) => path.join(fixturesDir, name));
+  if (!recordAttachmentSources(state, files)) return;
   const upload = await uploadAttachmentsInComposer(page, files);
   state.artifacts.upload = upload;
   state.screenshots.home_056_uploaded = await shot(page, caseDir, 'home-056-three-attachments');
@@ -4298,6 +4341,42 @@ async function executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDi
     !missingEvidence && !reply.deltaText.includes(deletedName),
     missingEvidence || clip(reply.deltaText, 360),
   );
+}
+
+function recordAttachmentSources(state, files, {
+  assertionName = '附件源文件非空且可追溯',
+  expected = '自动化上传前必须逐一回读真实文件路径、名称、非零字节数与 SHA-256；缺失或空 fixture 属于框架/测试数据错误，不能归因给产品。',
+} = {}) {
+  const sources = files.map((input) => {
+    const file = path.resolve(String(input || ''));
+    const exists = Boolean(file && fs.existsSync(file) && fs.statSync(file).isFile());
+    const size = exists ? fs.statSync(file).size : 0;
+    return {
+      path: file,
+      name: path.basename(file),
+      exists,
+      size_bytes: size,
+      sha256: exists && size > 0 ? sha256File(file) : '',
+    };
+  });
+  state.artifacts.attachment_sources = sources;
+  const valid = sources.length > 0 && sources.every((item) => (
+    item.exists
+    && item.name
+    && item.size_bytes > 0
+    && /^[a-f0-9]{64}$/i.test(item.sha256)
+  ));
+  recordAssertion(
+    state,
+    assertionName,
+    expected,
+    valid,
+    sources.map((item) => (
+      `${item.name || '<unnamed>'}=${item.size_bytes}B exists=${item.exists} sha256=${item.sha256 || '<missing>'}`
+    )).join('；') || '未提供附件源文件。',
+    'automation_error',
+  );
+  return valid;
 }
 
 function ensureSizedFixture(dir, name, size) {
@@ -4363,6 +4442,7 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
   }
   page.off('dialog', dialogListener);
   const attachmentText = await visibleComposerAttachmentText(page);
+  const attachmentCount = await page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => 0);
   const pageText = await mainSurfaceText(page);
   if (!evidenceScreenshot && caseDir && label) {
     evidenceScreenshot = await shot(page, caseDir, `${label}-product-attachment-result`).catch(() => '');
@@ -4371,6 +4451,7 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
     dialogMessage,
     feedbackText,
     attachmentText,
+    attachmentCount,
     pageText,
     dispatched,
     dispatchError,
@@ -17552,12 +17633,41 @@ function buildCaseEvidenceManifest(state, caseDir) {
     || /selectedSkills|selectedConnectors|connectorRouting|capabilities|public.*state|readback/i.test(artifactsJson),
   );
   const toolLogPresent = /tool(?:_|-)?(?:call|calls|log)|mcp(?:_|-)?(?:call|calls|log)|connector.*(?:call|invocation)|skill.*(?:call|invocation)/i.test(artifactsJson);
-  const attachmentHashPresent = /attachment/i.test(artifactsJson)
-    && /sha256|sha-256|hash/i.test(artifactsJson)
-    && /size|bytes|fileSize/i.test(artifactsJson)
-    && /name|filename|fileName/i.test(artifactsJson);
+  const attachmentSources = Array.isArray(state.artifacts?.attachment_sources)
+    ? state.artifacts.attachment_sources
+    : [];
+  const attachmentHashPresent = attachmentSources.length > 0
+    && attachmentSources.every((item) => {
+      const file = String(item?.path || '');
+      const name = String(item?.name || '');
+      const sha256 = String(item?.sha256 || '');
+      const size = Number(item?.size_bytes || 0);
+      return Boolean(
+        name
+        && size > 0
+        && /^[a-f0-9]{64}$/i.test(sha256)
+        && file
+        && fs.existsSync(file)
+        && fs.statSync(file).size === size
+        && sha256File(file) === sha256,
+      );
+    });
   const composerAttachmentPresent = /composer.*attachment|attachment.*composer|upload.*(?:accepted|ready|state)/i.test(artifactsJson);
   const attachmentReadbackPresent = /attachment.*(?:readback|content|parsed|extracted)|(?:readback|content).*attachment/i.test(artifactsJson);
+  const attachmentLimitRejection = state.artifacts?.attachment_limit_rejection;
+  const attachmentLimitRejectionPresent = Boolean(
+    attachmentLimitRejection?.expected_pattern_matched
+    && attachmentLimitRejection?.product_rejected_before_send
+    && existingFileEvidence(attachmentLimitRejection?.evidence_screenshot),
+  );
+  const noTaskNoSendState = state.artifacts?.no_task_no_send_state;
+  const noTaskNoSendPresent = Boolean(
+    noTaskNoSendState?.task_state_unchanged
+    && noTaskNoSendState?.message_count_unchanged
+    && noTaskNoSendState?.no_task_created
+    && noTaskNoSendState?.no_message_sent
+    && noTaskNoSendState?.no_prompt_recorded,
+  );
   const artifactPathHashPresent = /artifact|成果/i.test(artifactsJson)
     && /path|file/i.test(artifactsJson)
     && /sha256|sha-256|hash/i.test(artifactsJson);
@@ -17637,6 +17747,20 @@ function buildCaseEvidenceManifest(state, caseDir) {
     attachment_readback: attachmentReadbackPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少附件内容读回。' },
+    attachment_limit_rejection: attachmentLimitRejectionPresent
+      ? {
+        available: true,
+        artifacts_sha256: sha256Text(JSON.stringify(attachmentLimitRejection)),
+        evidence_screenshot: fileEvidence(attachmentLimitRejection.evidence_screenshot),
+      }
+      : { available: false, reason: '缺少产品可见附件限制提示或拒绝发生在发送前的证据。' },
+    no_task_no_send_state: noTaskNoSendPresent
+      ? {
+        available: true,
+        artifacts_sha256: sha256Text(JSON.stringify(noTaskNoSendState)),
+        source: noTaskNoSendState.source,
+      }
+      : { available: false, reason: '缺少产品拒绝附件后未创建任务且未发送消息的公开状态读回。' },
     artifact_path_sha256: artifactPathHashPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '成果路径与 SHA-256 未同时出现。' },

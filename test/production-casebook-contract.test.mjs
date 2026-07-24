@@ -110,3 +110,27 @@ test('conversation evidence roles follow real send actions, not read-only send-s
   assert.equal(restartRoles.has('task_id'), true);
   assert.equal(restartRoles.has('transcript'), false);
 });
+
+test('attachment limit rejections use a no-send evidence contract', () => {
+  for (const [id, scenario] of [
+    ['SIT-HOME-043', '单个文档附件超过 30MB 时应提示文件过大'],
+    ['SIT-HOME-044', '文档附件总大小超过 80MB 时应提示总量过大'],
+  ]) {
+    const rejection = migrateProductionCase({
+      ...sourceCase(id),
+      kind: 'attachment',
+      scenario,
+      steps: '1. 真实选择超限附件。\n2. 核对产品限制提示与输入区未挂载附件。\n3. 核对未创建任务且未发送消息。',
+    });
+    const roles = new Set(rejection.required_evidence_roles.split(','));
+    assert.equal(roles.has('attachment_name_size_sha256'), true, id);
+    assert.equal(roles.has('composer_attachment_state'), true, id);
+    assert.equal(roles.has('attachment_limit_rejection'), true, id);
+    assert.equal(roles.has('no_task_no_send_state'), true, id);
+    assert.equal(roles.has('attachment_readback'), false, id);
+    assert.equal(roles.has('prompt'), false, id);
+    assert.equal(roles.has('task_id'), false, id);
+    assert.equal(roles.has('transcript'), false, id);
+    assert.equal(roles.has('reply_delta'), false, id);
+  }
+});

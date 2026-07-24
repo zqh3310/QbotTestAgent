@@ -235,6 +235,7 @@ function evidenceRolesFor(testCase) {
   ]);
   const id = String(testCase.id || '');
   const kind = String(testCase.kind || '');
+  const attachmentLimitRejection = /^SIT-HOME-04[34]$/.test(id);
   const text = `${kind}\n${testCase.module || ''}\n${testCase.submodule || ''}\n${testCase.scenario || ''}\n${testCase.steps || ''}`;
   const conversationActions = String(testCase.steps || '')
     // Product-state assertions such as “发送门禁/发送不可用” describe a
@@ -243,8 +244,11 @@ function evidenceRolesFor(testCase) {
     // a valid UI observation into a framework failure.
     .replace(/发送(?:门禁|不可用|按钮(?:状态)?|状态)/g, '');
   if (
-    /attachment/i.test(kind)
-    || /发送|点击.{0,12}发送|等待.{0,16}(?:Agent\s*)?回复|transcript|reply-delta/i.test(conversationActions)
+    !attachmentLimitRejection
+    && (
+      /attachment/i.test(kind)
+      || /发送|点击.{0,12}发送|等待.{0,16}(?:Agent\s*)?回复|transcript|reply-delta/i.test(conversationActions)
+    )
   ) {
     ['prompt', 'task_id', 'transcript', 'reply_delta'].forEach((item) => roles.add(item));
   }
@@ -255,7 +259,12 @@ function evidenceRolesFor(testCase) {
     roles.add('tool_or_mcp_call_log');
   }
   if (/附件|上传|文件上传/.test(text)) {
-    ['attachment_name_size_sha256', 'composer_attachment_state', 'attachment_readback'].forEach((item) => roles.add(item));
+    ['attachment_name_size_sha256', 'composer_attachment_state'].forEach((item) => roles.add(item));
+    if (attachmentLimitRejection) {
+      ['attachment_limit_rejection', 'no_task_no_send_state'].forEach((item) => roles.add(item));
+    } else {
+      roles.add('attachment_readback');
+    }
   }
   if (/^SIT-ART-|^SIT-KNOWLEDGE-001$/.test(id)) {
     ['artifact_path_sha256', 'artifact_content_readback', 'artifact_preview'].forEach((item) => roles.add(item));
