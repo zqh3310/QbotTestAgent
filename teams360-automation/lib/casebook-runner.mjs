@@ -575,6 +575,9 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
           backend_version: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
           prompt_policy_version: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
           feature_flags_hash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+          qwork_ui_git_commit: options['qwork-ui-git-commit'] || process.env.QBOT_QWORK_UI_GIT_COMMIT || '',
+          qwork_build_id: options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
+          qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
         },
       }));
       let handedToRunner = false;

@@ -1,16 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {
+  PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+  validateTrustedProductionCaseContract,
+} from '../../src/lib/production-casebook-contract.mjs';
 
 export const DEFAULT_PRODUCTION_GATE_POLICY = Object.freeze({
-  schema_version: 1,
+  schema_version: 2,
   gate_name: 'QBot Teams-QWork production release gate',
+  required_case_count: 92,
   required_run_count: 5,
   required_repetitions_by_priority: { P0: 5, P1: 3 },
   maximum_flake_rate: 0.01,
   require_all_trusted_pass: true,
   require_raw_pass: true,
   require_explicit_case_metadata: true,
+  require_trusted_case_contract: true,
+  require_case_evidence_manifest: true,
   required_risk_domains: [
     'functional',
     'security_privacy',
@@ -32,6 +39,9 @@ export const DEFAULT_PRODUCTION_GATE_POLICY = Object.freeze({
     'backend_version',
     'prompt_policy_version',
     'feature_flags_hash',
+    'qwork_ui_git_commit',
+    'qwork_build_id',
+    'qwork_release_manifest_sha256',
   ],
   require_framework_commit: true,
   require_clean_framework_source: true,
@@ -249,6 +259,106 @@ function validateCaseMetadata(cases, policy, add) {
   });
   add('risk_domains_have_hard_gate', domainsWithoutHardGate.length === 0,
     domainsWithoutHardGate.length ? `这些风险域没有明确的一票否决 Case：${domainsWithoutHardGate.join(', ')}` : '所有必需风险域均至少有一条明确硬门禁 Case。');
+  add('required_case_count', cases.length === Number(policy.required_case_count || 92),
+    `case_count=${cases.length} required=${Number(policy.required_case_count || 92)}`);
+  if (policy.require_trusted_case_contract) {
+    const contract = validateTrustedProductionCaseContract(cases, { requireFullSet: false });
+    add(
+      'trusted_case_contract',
+      contract.ok && cases.every((item) => item.contract_version === PRODUCTION_CASEBOOK_CONTRACT_VERSION),
+      contract.ok
+        ? `${cases.length}/${cases.length} Case 使用 ${PRODUCTION_CASEBOOK_CONTRACT_VERSION}。`
+        : contract.errors.slice(0, 20).join('；'),
+    );
+  }
+}
+
+function caseEvidenceManifest(run, result) {
+  const candidates = [
+    result?.artifacts?.evidence_manifest,
+    result?.evidence_manifest_file,
+    result?.case_dir ? path.join(result.case_dir, 'case-evidence-manifest.json') : '',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const file = path.isAbsolute(candidate) ? candidate : path.resolve(run.outDir, candidate);
+    if (!fs.existsSync(file)) continue;
+    try {
+      return { file, manifest: readJson(file) };
+    } catch {
+      return { file, manifest: null };
+    }
+  }
+  return { file: '', manifest: null };
+}
+
+function validateCaseEvidenceManifest(evidence, result, id) {
+  const errors = [];
+  const manifest = evidence.manifest;
+  if (!manifest) return ['manifest missing or unreadable'];
+  if (manifest.case_id !== id) errors.push(`case_id=${manifest.case_id || 'missing'}`);
+  if (manifest.contract_version !== PRODUCTION_CASEBOOK_CONTRACT_VERSION) {
+    errors.push(`contract_version=${manifest.contract_version || 'missing'}`);
+  }
+  if (manifest.complete !== true) errors.push('complete is not true');
+  const requiredRoles = Array.isArray(manifest.required_roles)
+    ? manifest.required_roles.map((role) => String(role || '').trim()).filter(Boolean)
+    : [];
+  if (!requiredRoles.length || new Set(requiredRoles).size !== requiredRoles.length) {
+    errors.push('required_roles missing or duplicated');
+  }
+  if (Number(manifest.required_role_count) !== requiredRoles.length) {
+    errors.push('required_role_count mismatch');
+  }
+  if (Number(manifest.satisfied_role_count) !== requiredRoles.length) {
+    errors.push('satisfied_role_count mismatch');
+  }
+  if (!Array.isArray(manifest.missing_roles) || manifest.missing_roles.length) {
+    errors.push('missing_roles is not an empty array');
+  }
+
+  const verifyFile = (record, role) => {
+    if (!record?.file || !fs.existsSync(record.file) || !fs.statSync(record.file).isFile()) {
+      errors.push(`${role} file missing`);
+      return;
+    }
+    const stat = fs.statSync(record.file);
+    if (Number(record.size) !== stat.size) errors.push(`${role} size mismatch`);
+    if (!/^[a-f0-9]{64}$/i.test(String(record.sha256 || ''))
+      || sha256File(record.file) !== record.sha256) {
+      errors.push(`${role} sha256 mismatch`);
+    }
+  };
+  for (const role of requiredRoles) {
+    const record = manifest.role_evidence?.[role];
+    if (record?.available !== true) {
+      errors.push(`${role} unavailable`);
+      continue;
+    }
+    if (record.file) verifyFile(record, role);
+    if (Array.isArray(record.files)) {
+      if (!record.files.length) errors.push(`${role} files empty`);
+      record.files.forEach((file, index) => verifyFile(file, `${role}[${index}]`));
+    }
+    if (/(?:before|action|after)_screenshot|case_report/.test(role) && !record.file) {
+      errors.push(`${role} has no file evidence`);
+    }
+  }
+
+  const beforeHash = String(manifest.role_evidence?.before_screenshot?.sha256 || '');
+  const actionHash = String(manifest.role_evidence?.action_screenshot?.sha256 || '');
+  const afterHash = String(manifest.role_evidence?.after_screenshot?.sha256 || '');
+  if (requiredRoles.includes('action_screenshot')) {
+    if (!actionHash || actionHash === beforeHash || actionHash === afterHash) {
+      errors.push('action_screenshot is not content-distinct from before/after');
+    }
+  }
+  const recordedManifestHash = String(result?.evidence_manifest?.manifest_sha256 || '');
+  if (!/^[a-f0-9]{64}$/i.test(recordedManifestHash)
+    || !evidence.file
+    || sha256File(evidence.file) !== recordedManifestHash) {
+    errors.push('case-result manifest_sha256 mismatch');
+  }
+  return errors;
 }
 
 function validateCalibration(calibrationFile, policy, add) {
@@ -487,6 +597,23 @@ export function evaluateProductionGate({
       `framework dirty=${String(run.metadata?.sources?.framework?.dirty)}`);
     add(`${label}_deepbank_clean`, !policy.require_clean_deepbank_source || run.metadata?.sources?.deepbank?.dirty === false,
       `deepbank dirty=${String(run.metadata?.sources?.deepbank?.dirty)}`);
+    if (policy.require_case_evidence_manifest) {
+      const summaryById = new Map((run.summary.results || []).map((item) => [String(item.id || ''), item]));
+      const missingManifests = [];
+      for (const id of expected) {
+        const result = summaryById.get(id);
+        const evidence = caseEvidenceManifest(run, result);
+        const errors = validateCaseEvidenceManifest(evidence, result, id);
+        if (errors.length) missingManifests.push(`${id}(${errors.join('; ')})`);
+      }
+      add(
+        `${label}_case_evidence_manifests`,
+        missingManifests.length === 0,
+        missingManifests.length
+          ? `${missingManifests.length} 条缺少完整 V2 证据清单：${missingManifests.slice(0, 20).join(', ')}`
+          : `${expected.length}/${expected.length} 条 case-evidence-manifest.json 完整且可哈希回读。`,
+      );
+    }
     if (policy.require_raw_pass) {
       add(`${label}_raw_pass`, run.summary.status === 'passed'
         && Number(run.summary.counts?.passed || 0) === expected.length,
@@ -515,7 +642,11 @@ export function evaluateProductionGate({
   }
   for (const field of policy.required_release_inputs || []) {
     const value = String(referenceIdentity.release_inputs?.[field] || '');
-    const valid = field.endsWith('_hash') ? /^[a-f0-9]{64}$/i.test(value) : Boolean(value.trim());
+    const valid = field.endsWith('_hash') || field.endsWith('_sha256')
+      ? /^[a-f0-9]{64}$/i.test(value)
+      : field.endsWith('_git_commit')
+        ? /^[a-f0-9]{7,64}$/i.test(value)
+        : Boolean(value.trim());
     add(`release_input_${field}`, valid,
       referenceIdentity.release_inputs?.[field] ? `${field}=${referenceIdentity.release_inputs[field]}` : `缺少开发/发布侧输入 ${field}`);
   }

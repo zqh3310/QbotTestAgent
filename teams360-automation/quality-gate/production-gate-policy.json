@@ -1,6 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "gate_name": "QBot Teams-QWork production release gate",
+  "required_case_count": 92,
   "required_run_count": 5,
   "required_repetitions_by_priority": {
     "P0": 5,
@@ -10,6 +11,8 @@
   "require_all_trusted_pass": true,
   "require_raw_pass": true,
   "require_explicit_case_metadata": true,
+  "require_trusted_case_contract": true,
+  "require_case_evidence_manifest": true,
   "required_risk_domains": [
     "functional",
     "security_privacy",
@@ -30,7 +33,10 @@
   "required_release_inputs": [
     "backend_version",
     "prompt_policy_version",
-    "feature_flags_hash"
+    "feature_flags_hash",
+    "qwork_ui_git_commit",
+    "qwork_build_id",
+    "qwork_release_manifest_sha256"
   ],
   "require_framework_commit": true,
   "require_clean_framework_source": true,

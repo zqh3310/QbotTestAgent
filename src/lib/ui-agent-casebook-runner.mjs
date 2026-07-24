@@ -15,6 +15,10 @@ import {
   parseWorkerCdpUrls,
   validateParallelWorkerPool,
 } from './ui-agent-case-scheduler.mjs';
+import {
+  PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+  validateTrustedProductionCaseContract,
+} from './production-casebook-contract.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -199,6 +203,10 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       backendVersion: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
       promptPolicyVersion: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
       featureFlagsHash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+      qworkUiGitCommit: options['qwork-ui-git-commit'] || process.env.QBOT_QWORK_UI_GIT_COMMIT || '',
+      qworkBuildId: options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
+      qworkReleaseManifestSha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
+      strictContract: true,
     });
     writeJsonFile(path.join(outDir, 'production-casebook-preflight.json'), audit);
     if (!audit.ok) {
@@ -570,6 +578,10 @@ export function validateProductionCasePlan(cases = [], {
   backendVersion = '',
   promptPolicyVersion = '',
   featureFlagsHash = '',
+  qworkUiGitCommit = '',
+  qworkBuildId = '',
+  qworkReleaseManifestSha256 = '',
+  strictContract = false,
 } = {}) {
   const errors = [];
   const warnings = [];
@@ -603,8 +615,23 @@ export function validateProductionCasePlan(cases = [], {
   if (!String(backendVersion || '').trim()) errors.push('缺少 backend version。');
   if (!String(promptPolicyVersion || '').trim()) errors.push('缺少 prompt/policy version。');
   if (!/^[a-f0-9]{64}$/i.test(String(featureFlagsHash || ''))) errors.push('feature flags hash 必须是 64 位 SHA-256。');
+  if (strictContract && !/^[a-f0-9]{7,64}$/i.test(String(qworkUiGitCommit || ''))) {
+    errors.push('qwork_ui_git_commit 必须是 7-64 位十六进制提交标识。');
+  }
+  if (strictContract && !String(qworkBuildId || '').trim()) errors.push('缺少 qwork_build_id。');
+  if (strictContract && !/^[a-f0-9]{64}$/i.test(String(qworkReleaseManifestSha256 || ''))) {
+    errors.push('qwork_release_manifest_sha256 必须是 64 位 SHA-256。');
+  }
+  const trustContract = strictContract
+    ? validateTrustedProductionCaseContract(cases)
+    : null;
+  if (trustContract && !trustContract.ok) {
+    errors.push(...trustContract.errors.map((item) => `可信 V2 契约：${item}`));
+    warnings.push(...trustContract.warnings.map((item) => `可信 V2 契约：${item}`));
+  }
   return {
-    schema_version: 1,
+    schema_version: strictContract ? 2 : 1,
+    contract_version: strictContract ? PRODUCTION_CASEBOOK_CONTRACT_VERSION : '',
     generated_at: new Date().toISOString(),
     ok: errors.length === 0,
     case_count: cases.length,
@@ -616,7 +643,11 @@ export function validateProductionCasePlan(cases = [], {
       backend_version: String(backendVersion || ''),
       prompt_policy_version: String(promptPolicyVersion || ''),
       feature_flags_hash: String(featureFlagsHash || ''),
+      qwork_ui_git_commit: String(qworkUiGitCommit || ''),
+      qwork_build_id: String(qworkBuildId || ''),
+      qwork_release_manifest_sha256: String(qworkReleaseManifestSha256 || ''),
     },
+    trust_contract: trustContract,
     errors,
     warnings,
   };
@@ -1185,6 +1216,17 @@ function createCaseState({ testCase, caseDir, order, modelTier }) {
     failure_criteria: testCase.failure_criteria,
     evidence_required: testCase.evidence_required,
     kind: testCase.kind,
+    contract_version: testCase.contract_version || '',
+    product_baseline: testCase.product_baseline || '',
+    migration_disposition: testCase.migration_disposition || '',
+    visible_action_contract: testCase.visible_action_contract || '',
+    state_readback_contract: testCase.state_readback_contract || '',
+    required_evidence_roles: testCase.required_evidence_roles || '',
+    forbidden_shortcuts: testCase.forbidden_shortcuts || '',
+    selector_contract: testCase.selector_contract || '',
+    identity_contract: testCase.identity_contract || '',
+    trusted_review_contract: testCase.trusted_review_contract || '',
+    numbered_steps: testCase.steps || '',
     status: 'failed',
     result_category: 'bug',
     actual_result: '',
@@ -7474,10 +7516,97 @@ async function executeSitConnectorBuiltinTools({ page, state, caseDir }) {
 
 async function executeSitConnectorModes({ page, state, caseDir }) {
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  for (const mode of ['disabled', 'auto', 'manual']) {
-    await setConnectorMode(page, state, caseDir, mode);
+  const before = await composerConnectorSelectionSnapshot(page);
+  state.artifacts.connector_003_before = before;
+  state.screenshots.connector_003_before = await shot(page, caseDir, 'connector-003-before-visible-selection');
+  recordStep(
+    state,
+    '记录新任务默认连接器状态',
+    '只读记录默认 selectedConnectors/connectorRouting，不得通过 bridge 改写状态代替用户操作。',
+    clip(JSON.stringify(before), 500),
+    'passed',
+    state.screenshots.connector_003_before,
+  );
+  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+
+  const selected = await composerConnectorSelectionSnapshot(page);
+  state.artifacts.connector_003_selected = selected;
+  state.screenshots.connector_003_selected = await shot(page, caseDir, 'connector-003-visible-selected-chip');
+  const expectedKey = String(state.artifacts.selected_connector?.key || '');
+  const selectedKeys = selected.selectedConnectors.map((item) => String(
+    typeof item === 'string' ? item : item?.key || item?.id || item?.name || '',
+  ));
+  recordStep(
+    state,
+    '通过“+ > 连接器”可见 UI 选择健康连接器',
+    '选择后必须出现可见连接器 chip，并由公开 capabilities 读回同一连接器。',
+    `expectedKey=${expectedKey || '未读取'}；snapshot=${clip(JSON.stringify(selected), 620)}`,
+    'passed',
+    state.screenshots.connector_003_selected,
+  );
+  recordAssertion(
+    state,
+    '连接器 chip 与公开状态一致',
+    '可见 chip、selectedConnectors 与本次点击的稳定 connector key 必须一一对应。',
+    selected.chipCount >= 1
+      && selected.selectedConnectorCount >= 1
+      && (!expectedKey || selectedKeys.includes(expectedKey)),
+    clip(JSON.stringify({ expectedKey, selectedKeys, selected }), 760),
+  );
+
+  const chip = page.locator('[data-testid="composer-connector-chip"], [data-testid^="composer-connector-chip-"]').first();
+  if (!(await visible(chip, 1200))) {
+    recordAssertion(
+      state,
+      '连接器 chip 取消入口',
+      '手动选择后应有可点击连接器 chip，可从其子菜单取消当前连接器。',
+      false,
+      clip(JSON.stringify(selected), 500),
+    );
+    return;
   }
+  await chip.click({ force: true }).catch(async () => chip.evaluate((element) => element.click()));
+  let menu = await activeMenuLocator(page, 'connector');
+  if (!menu) {
+    await openUnifiedComposerSubmenu(page, state, 'connector', '从连接器 chip 重新打开连接器子菜单');
+    menu = await activeMenuLocator(page, 'connector');
+  }
+  const selectedOptions = menu?.locator(
+    '.composer-plus-connector.on, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]).on, .ctool-list .ctool-opt.on',
+  );
+  const selectedCount = await selectedOptions?.count().catch(() => 0) || 0;
+  if (!selectedCount || !(await visible(selectedOptions.first(), 800))) {
+    recordAssertion(
+      state,
+      '连接器可见取消选项',
+      '点击 chip 后应在当前连接器子菜单中定位唯一选中项。',
+      false,
+      `selectedOptionCount=${selectedCount}；menu=${clip(await activeMenuText(page, 'connector'), 260)}`,
+    );
+    return;
+  }
+  await selectedOptions.first().click({ force: true }).catch(async () => selectedOptions.first().evaluate((element) => element.click()));
+  await page.waitForTimeout(450);
+  await page.keyboard.press('Escape').catch(() => {});
+  const removed = await composerConnectorSelectionSnapshot(page);
+  state.artifacts.connector_003_removed = removed;
+  state.screenshots.connector_003_removed = await shot(page, caseDir, 'connector-003-visible-selection-removed');
+  recordStep(
+    state,
+    '从可见连接器子菜单取消当前连接器',
+    '取消后连接器 chip 应消失，selectedConnectors 应清空。',
+    clip(JSON.stringify(removed), 620),
+    'passed',
+    state.screenshots.connector_003_removed,
+  );
+  recordAssertion(
+    state,
+    '连接器取消后 UI 与状态同步清空',
+    '连接器 chip 数量和 selectedConnectors 数量都必须为 0。',
+    removed.chipCount === 0 && removed.selectedConnectorCount === 0,
+    clip(JSON.stringify(removed), 700),
+  );
 }
 
 async function executeSitConnectorManualConversation({ page, state, testCase, caseDir, timeoutMs }) {
@@ -8002,10 +8131,8 @@ async function executeSitTeamsDocumentPermission({ page, state, testCase, caseDi
   );
   const exactDocumentToolAllowed = allowedToolNames
     .some((name) => /teams_document_read/.test(String(name)));
-  // QWork 0.0.11 exposes only the redacted count, while 0.0.12 may expose
-  // redacted names. The actual fixture tools/call assertion below remains the
-  // decisive oracle, so count compatibility cannot turn a missing call into a
-  // pass.
+  // QWork 0.0.12 may redact names while preserving count. The actual fixture tools/call assertion below remains the
+  // decisive oracle, so redaction compatibility cannot turn a missing call into a pass.
   const documentToolAllowed = exactDocumentToolAllowed
     || (Number.isInteger(allowedToolCount) && allowedToolCount > 0);
   recordAssertion(
@@ -10324,6 +10451,49 @@ async function composerSkillSelectionSnapshot(page) {
   }));
 }
 
+async function composerConnectorSelectionSnapshot(page) {
+  return page.evaluate(async () => {
+    const shell = document.querySelector('[data-testid="composer-shell"]')
+      || document.querySelector('[data-testid="composer-input"]')?.parentElement
+      || document.body;
+    const allChips = Array.from(shell.querySelectorAll(
+      '[data-testid="composer-connector-chip"], [data-testid^="composer-connector-chip-"]',
+    ));
+    const chips = allChips.filter((chip) => {
+      const rect = chip.getBoundingClientRect();
+      const style = globalThis.getComputedStyle(chip);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    let capabilities = null;
+    if (typeof globalThis.window?.agent?.capabilities === 'function') {
+      try {
+        capabilities = await globalThis.window.agent.capabilities();
+      } catch {
+        capabilities = null;
+      }
+    }
+    const selectedConnectors = Array.isArray(capabilities?.selectedConnectors)
+      ? capabilities.selectedConnectors
+      : [];
+    return {
+      chipCount: chips.length,
+      chipTexts: chips.map((chip) => String(chip.textContent || '').replace(/\s+/g, ' ').trim()),
+      chipTestIds: chips.map((chip) => String(chip.getAttribute('data-testid') || '')),
+      selectedConnectorCount: selectedConnectors.length,
+      selectedConnectors,
+      connectorRouting: capabilities?.connectorRouting || null,
+    };
+  }).catch((error) => ({
+    chipCount: 0,
+    chipTexts: [],
+    chipTestIds: [],
+    selectedConnectorCount: 0,
+    selectedConnectors: [],
+    connectorRouting: null,
+    error: error.message,
+  }));
+}
+
 async function visibleComposerToolStateText(page, tool) {
   const selector = tool === 'connector'
     ? '[data-testid="composer-connectors-menu"], [data-testid="composer-plus-menu"], .composer-plus-sub-connector, [data-testid="composer-connector-chip"], [data-testid="composer-selection-chips"]'
@@ -10447,7 +10617,7 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   recordStep(
     state,
     action || `打开输入区统一“+”菜单的【${config.label}】子菜单`,
-    `QWork 0.0.11 及后续统一菜单应可通过“+ > ${config.label}”进入对应能力选择区。`,
+    `QWork 0.0.12 latest-main 统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
     `已打开 ${config.selector}；${clip(text, 180)}`,
     'passed',
   );
@@ -10816,7 +10986,7 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     if (!manualOk) return false;
   }
   let menu = await activeMenuLocator(page, 'skill');
-  // Packaged QWork 0.0.11 closes the unified submenu after every selection.
+  // QWork 0.0.12 latest-main may close the unified submenu after selection.
   // Multi-skill flows must reopen it for the next exact option instead of
   // assuming the first menu instance remains visible.
   if (!menu) {
@@ -11589,15 +11759,79 @@ async function executeSkillSmoke006({ page, state, caseDir }) {
 
 async function executeSkillSmoke007({ page, state, caseDir }) {
   await openNewTask(page, state);
-  for (const mode of ['disabled', 'auto', 'manual']) {
-    const selected = await setSkillMode(page, state, caseDir, mode);
-    const toolText = await visibleComposerToolStateText(page, 'skill');
-    const label = SKILL_MODE_LABELS[mode] || mode;
-    const reflected = toolText.includes(label) || (mode === 'manual' && /^技能\s*$/.test(toolText));
-    state.screenshots[`mode_${mode}`] = await shot(page, caseDir, `skill-007-mode-${mode}`);
-    recordStep(state, `切换技能模式：${mode}`, '每次重新打开菜单并点击后，工具条应显示当前模式。', `selected=${selected}；工具条=${toolText}`, selected && reflected ? 'passed' : 'failed', state.screenshots[`mode_${mode}`]);
-    recordAssertion(state, `技能模式 ${mode} 选中`, `${mode} 点击后工具条应显示“${label}”。`, selected && reflected, `selected=${selected}；工具条=${toolText}`, selected ? '' : 'automation_error');
+  const before = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_before = before;
+  state.screenshots.skill_007_before = await shot(page, caseDir, 'skill-007-before-visible-selection');
+  recordStep(
+    state,
+    '记录新任务默认技能状态',
+    '只读记录默认 selectedSkills，不得通过 bridge 改写状态代替用户操作。',
+    clip(JSON.stringify(before), 520),
+    'passed',
+    state.screenshots.skill_007_before,
+  );
+  if (!await selectFirstManualSkill(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+
+  const selected = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_selected = selected;
+  state.screenshots.skill_007_selected = await shot(page, caseDir, 'skill-007-visible-selected-chip');
+  const labels = selected.chipTexts.map(cleanSkillChipLabel).filter(Boolean);
+  recordStep(
+    state,
+    '通过“+ > 技能”可见 UI 选择已安装技能',
+    '选择后必须出现句内 Skill chip，并由公开 capabilities.selectedSkills 读回。',
+    clip(JSON.stringify(selected), 650),
+    'passed',
+    state.screenshots.skill_007_selected,
+  );
+  recordAssertion(
+    state,
+    'Skill chip 与公开状态一致',
+    '句内 chip、稳定 testid、可见技能名和 selectedSkills 必须一一对应。',
+    selected.chipCount === 1
+      && selected.selectedSkillCount === 1
+      && selected.chipsInsideComposer
+      && selected.chipTestIds.every((item) => item.startsWith('composer-skill-chip-'))
+      && labels.length === 1
+      && !selected.hasRawMarker,
+    clip(JSON.stringify({ labels, selected }), 760),
+  );
+
+  const composer = page.locator('[data-testid="composer-input"]').first();
+  const chip = composer.locator('[data-testid^="composer-skill-chip-"], .skill-chip').first();
+  await chip.hover().catch(() => {});
+  const remove = chip.locator('.skill-chip-x, button[aria-label^="移除"], button[aria-label*="remove" i]').first();
+  if (!(await visible(remove, 1200))) {
+    recordAssertion(
+      state,
+      'Skill chip 移除入口',
+      '每个手动 Skill chip 应在悬停后提供可点击移除按钮。',
+      false,
+      `chip=${clip(labels[0] || selected.chipTexts[0] || '', 160)}`,
+    );
+    return;
   }
+  await remove.click({ force: true }).catch(async () => remove.evaluate((element) => element.click()));
+  await page.waitForTimeout(450);
+  const removed = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_removed = removed;
+  state.screenshots.skill_007_removed = await shot(page, caseDir, 'skill-007-visible-selection-removed');
+  recordStep(
+    state,
+    '点击 Skill chip 的可见移除按钮',
+    '移除后 chip 应消失，selectedSkills 应清空，内部 marker 不得泄露。',
+    clip(JSON.stringify(removed), 620),
+    'passed',
+    state.screenshots.skill_007_removed,
+  );
+  recordAssertion(
+    state,
+    'Skill 移除后 UI 与状态同步清空',
+    'Skill chip 数量和 selectedSkills 数量都必须为 0，且正文无内部 marker。',
+    removed.chipCount === 0 && removed.selectedSkillCount === 0 && !removed.hasRawMarker,
+    clip(JSON.stringify(removed), 700),
+  );
 }
 
 async function executeSkillSmoke008({ page, state, caseDir }) {
@@ -16763,15 +16997,251 @@ async function finishCase({ page, state, caseDir }) {
   state.ended_at = new Date().toISOString();
   state.screenshots.final = state.screenshots.final || await shot(page, caseDir, '03-assertion').catch(() => '');
   state.screenshots_flat = dedupe(Object.values(state.screenshots).filter((item) => typeof item === 'string'), (item) => item);
+  const taskState = await qbotE2EState(page).catch(() => null);
+  if (taskState?.available) {
+    state.artifacts.final_task_identity = {
+      active_id: String(taskState.activeId || ''),
+      cwd: String(taskState.cwd || ''),
+      project_id: String(taskState.projectId || ''),
+      message_count: Number(taskState.messageCount || 0),
+      captured_at: new Date().toISOString(),
+      source: 'public_e2e_state_readback',
+    };
+  }
   if (!state.screenshots_flat.length && state.status !== 'blocked') {
     markFailed(state, '证据不完整：未保存任何截图。', 'automation_error');
   }
   if (state.status === 'failed' && state.result_category === 'bug' && !state.problem_description) {
     state.problem_description = buildProblemDescription(state);
   }
-  writeJsonFile(path.join(caseDir, 'case-result.json'), state);
   writeTextFile(path.join(caseDir, 'case-report.md'), renderCaseReport(state));
+  let evidenceManifest = buildCaseEvidenceManifest(state, caseDir);
+  if (
+    state.contract_version === PRODUCTION_CASEBOOK_CONTRACT_VERSION
+    && state.status === 'passed'
+    && !evidenceManifest.complete
+  ) {
+    markFailed(
+      state,
+      `V2 可信证据不完整：缺少 ${evidenceManifest.missing_roles.join(', ')}`,
+      'automation_error',
+    );
+    writeTextFile(path.join(caseDir, 'case-report.md'), renderCaseReport(state));
+    evidenceManifest = buildCaseEvidenceManifest(state, caseDir);
+  }
+  const evidenceManifestFile = path.join(caseDir, 'case-evidence-manifest.json');
+  writeJsonFile(evidenceManifestFile, evidenceManifest);
+  state.artifacts.evidence_manifest = evidenceManifestFile;
+  state.evidence_manifest = {
+    contract_version: evidenceManifest.contract_version,
+    complete: evidenceManifest.complete,
+    required_role_count: evidenceManifest.required_role_count,
+    satisfied_role_count: evidenceManifest.satisfied_role_count,
+    missing_roles: evidenceManifest.missing_roles,
+    manifest_sha256: sha256File(evidenceManifestFile),
+  };
+  writeJsonFile(path.join(caseDir, 'case-result.json'), state);
   return state;
+}
+
+function buildCaseEvidenceManifest(state, caseDir) {
+  const requiredRoles = String(state.required_evidence_roles || '')
+    .split(/[,，;；|\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const screenshotEntries = Object.entries(state.screenshots || {})
+    .filter(([, file]) => typeof file === 'string' && file && fs.existsSync(file));
+  const before = screenshotEntries.find(([key]) => /before|initial/i.test(key)) || screenshotEntries[0] || null;
+  const after = screenshotEntries.find(([key]) => /after|final|result|assertion/i.test(key))
+    || screenshotEntries.at(-1)
+    || null;
+  const action = selectTrustedActionScreenshot(screenshotEntries, before, after);
+  const artifactsJson = JSON.stringify(state.artifacts || {});
+  const promptRecords = Array.isArray(state.artifacts?.sent_prompts)
+    ? state.artifacts.sent_prompts.filter((item) => String(item?.prompt || '').trim())
+    : [];
+  const taskId = String(
+    state.artifacts?.final_task_identity?.active_id
+    || state.artifacts?.single_host_pipeline?.task_id
+    || findNestedValue(state.artifacts, /^(?:active_?id|task_?id)$/i)
+    || '',
+  );
+  const transcript = existingFileEvidence(state.artifacts?.transcript);
+  const replyDelta = existingFileEvidence(state.artifacts?.reply_delta);
+  const report = existingFileEvidence(state.case_report);
+  const publicStatePresent = Boolean(
+    state.artifacts?.final_task_identity
+    || /selectedSkills|selectedConnectors|connectorRouting|capabilities|public.*state|readback/i.test(artifactsJson),
+  );
+  const toolLogPresent = /tool(?:_|-)?(?:call|calls|log)|mcp(?:_|-)?(?:call|calls|log)|connector.*(?:call|invocation)|skill.*(?:call|invocation)/i.test(artifactsJson);
+  const attachmentHashPresent = /attachment/i.test(artifactsJson)
+    && /sha256|sha-256|hash/i.test(artifactsJson)
+    && /size|bytes|fileSize/i.test(artifactsJson)
+    && /name|filename|fileName/i.test(artifactsJson);
+  const composerAttachmentPresent = /composer.*attachment|attachment.*composer|upload.*(?:accepted|ready|state)/i.test(artifactsJson);
+  const attachmentReadbackPresent = /attachment.*(?:readback|content|parsed|extracted)|(?:readback|content).*attachment/i.test(artifactsJson);
+  const artifactPathHashPresent = /artifact|成果/i.test(artifactsJson)
+    && /path|file/i.test(artifactsJson)
+    && /sha256|sha-256|hash/i.test(artifactsJson);
+  const artifactReadbackPresent = /artifact.*(?:content|readback)|(?:content|readback).*artifact|成果.*(?:内容|读回)/i.test(artifactsJson);
+  const artifactPreviewPresent = screenshotEntries.some(([key]) => /artifact|preview|成果|web_preview/i.test(key))
+    || /artifact.*preview|preview.*artifact|web_preview/i.test(artifactsJson);
+  const redactedLogFiles = collectFiles(caseDir, (file) => /\.(?:log|txt|json)$/i.test(file)
+    && /auth|host|restart|session|runtime|stderr|stdout/i.test(path.basename(file)));
+  const failedOrBlocked = state.status === 'failed' || state.status === 'blocked';
+  const firstDivergence = failedOrBlocked
+    ? screenshotEntries.find(([key]) => /error|missing|blocked|failure|failed|timeout|divergence/i.test(key))
+      || after
+    : { not_applicable: true, reason: 'raw status passed；最早偏差角色不适用。' };
+
+  const roleEvidence = {
+    before_screenshot: screenshotEvidence(before),
+    action_screenshot: screenshotEvidence(action),
+    after_screenshot: screenshotEvidence(after),
+    numbered_step_assertions: state.steps?.length && state.assertions?.length
+      ? {
+        available: true,
+        step_count: state.steps.length,
+        assertion_count: state.assertions.length,
+        numbered_steps_sha256: sha256Text(state.numbered_steps || ''),
+      }
+      : { available: false, reason: '缺少执行步骤或客观断言。' },
+    first_divergence_evidence: firstDivergence?.not_applicable
+      ? { available: true, ...firstDivergence }
+      : screenshotEvidence(firstDivergence),
+    case_report: report,
+    prompt: promptRecords.length
+      ? {
+        available: true,
+        count: promptRecords.length,
+        sha256: sha256Text(promptRecords.map((item) => item.prompt).join('\n---\n')),
+      }
+      : { available: false, reason: '缺少 artifacts.sent_prompts。' },
+    task_id: taskId
+      ? { available: true, task_id_sha256: sha256Text(taskId), source: 'public task identity readback' }
+      : { available: false, reason: '缺少非空 taskId/activeId 读回。' },
+    transcript: transcript || { available: false, reason: '缺少 transcript 文件。' },
+    reply_delta: replyDelta || { available: false, reason: '缺少 reply-delta 文件。' },
+    public_state_readback: publicStatePresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少公开能力/状态读回。' },
+    tool_or_mcp_call_log: toolLogPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少真实 tool/MCP 调用或无调用日志。' },
+    attachment_name_size_sha256: attachmentHashPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '附件名称、大小、SHA-256 未同时出现。' },
+    composer_attachment_state: composerAttachmentPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少 Composer 附件状态读回。' },
+    attachment_readback: attachmentReadbackPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少附件内容读回。' },
+    artifact_path_sha256: artifactPathHashPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '成果路径与 SHA-256 未同时出现。' },
+    artifact_content_readback: artifactReadbackPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少成果内容读回。' },
+    artifact_preview: artifactPreviewPresent
+      ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
+      : { available: false, reason: '缺少成果可见预览证据。' },
+    redacted_host_and_auth_log: redactedLogFiles.length
+      ? { available: true, files: redactedLogFiles.map(fileEvidence) }
+      : { available: false, reason: '缺少宿主/鉴权/重启脱敏日志文件。' },
+  };
+  const missingRoles = requiredRoles.filter((role) => roleEvidence[role]?.available !== true);
+  return {
+    schema_version: 1,
+    contract_version: state.contract_version || '',
+    case_id: state.id,
+    product_baseline: state.product_baseline || '',
+    generated_at: new Date().toISOString(),
+    raw_status: state.status,
+    required_roles: requiredRoles,
+    required_role_count: requiredRoles.length,
+    satisfied_role_count: requiredRoles.length - missingRoles.length,
+    missing_roles: missingRoles,
+    complete: missingRoles.length === 0,
+    role_evidence: Object.fromEntries(requiredRoles.map((role) => [
+      role,
+      roleEvidence[role] || { available: false, reason: 'runner 未实现该证据角色。' },
+    ])),
+  };
+}
+
+function screenshotEvidence(entry) {
+  if (!entry) return { available: false, reason: '未找到匹配截图。' };
+  const [phase, file] = entry;
+  if (!file || !fs.existsSync(file)) return { available: false, reason: `截图不存在：${file || 'empty'}` };
+  return { available: true, phase, ...fileEvidence(file) };
+}
+
+function selectTrustedActionScreenshot(entries, before, after) {
+  const beforeHash = before?.[1] && fs.existsSync(before[1]) ? sha256File(before[1]) : '';
+  const afterHash = after?.[1] && fs.existsSync(after[1]) ? sha256File(after[1]) : '';
+  return entries
+    .filter(([key, file]) => (
+      !/before|initial|final|after|assertion|model[_-]?tier|precheck/i.test(key)
+      && file !== before?.[1]
+      && file !== after?.[1]
+    ))
+    .map((entry, index) => {
+      const [key, file] = entry;
+      const hash = sha256File(file);
+      let score = 0;
+      if (/visible.*selected|selected.*chip|action|submitted|sent|invoked|attached|preview/i.test(key)) score += 100;
+      if (/selected|opened|created|uploaded|removed|confirmed|executed/i.test(key)) score += 60;
+      if (/manual.*selected/i.test(key)) score += 20;
+      return { entry, index, hash, score };
+    })
+    .filter(({ hash }) => hash && hash !== beforeHash && hash !== afterHash)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .at(0)?.entry || null;
+}
+
+function existingFileEvidence(file) {
+  if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) return null;
+  return { available: true, ...fileEvidence(file) };
+}
+
+function fileEvidence(file) {
+  const stat = fs.statSync(file);
+  return {
+    file,
+    size: stat.size,
+    mtime: stat.mtime.toISOString(),
+    sha256: sha256File(file),
+  };
+}
+
+function collectFiles(root, predicate) {
+  const files = [];
+  if (!root || !fs.existsSync(root)) return files;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...collectFiles(file, predicate));
+    else if (predicate(file)) files.push(file);
+  }
+  return files;
+}
+
+function findNestedValue(value, keyPattern) {
+  if (!value || typeof value !== 'object') return '';
+  for (const [key, nested] of Object.entries(value)) {
+    if (keyPattern.test(key) && typeof nested === 'string' && nested.trim()) return nested.trim();
+    const found = findNestedValue(nested, keyPattern);
+    if (found) return found;
+  }
+  return '';
+}
+
+function sha256File(file) {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
 
 function markBlocked(state, reason) {
