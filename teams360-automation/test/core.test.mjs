@@ -542,6 +542,40 @@ test('trusted action evidence may equal the settled final frame but not the pre-
   }
 });
 
+test('trusted action evidence accepts an explicitly named stable observation but rejects a duplicate mutable action', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-stable-observation-evidence-'));
+  const before = path.join(root, 'before.png');
+  const observation = path.join(root, 'observation.png');
+  const duplicateAction = path.join(root, 'action.png');
+  const final = path.join(root, 'final.png');
+  fs.writeFileSync(before, 'stable-state');
+  fs.writeFileSync(observation, 'stable-state');
+  fs.writeFileSync(duplicateAction, 'stable-state');
+  fs.writeFileSync(final, 'stable-state');
+  try {
+    const observationEntries = [
+      ['before', before],
+      ['auth_observation', observation],
+      ['final', final],
+    ];
+    assert.deepEqual(
+      selectTrustedActionScreenshot(observationEntries, observationEntries[0], observationEntries[2]),
+      observationEntries[1],
+    );
+    const mutableEntries = [
+      ['before', before],
+      ['after_send', duplicateAction],
+      ['final', final],
+    ];
+    assert.equal(
+      selectTrustedActionScreenshot(mutableEntries, mutableEntries[0], mutableEntries[2]),
+      null,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Teams fixture runtime can opt into the host-relaunch lane for real fixture servers', async () => {
   const page = {
     url: () => 'file:///Users/test/.deepbank/ui/0.0.6/index.html',

@@ -2470,6 +2470,7 @@ async function executeSitInit002({ page, state, caseDir }) {
 
 async function executeSitInit004({ page, state, caseDir }) {
   const snapshot = await teamsIntegratedRuntimeSnapshot(page, state, caseDir, 'init-004-runtime-readiness');
+  state.screenshots.init_004_runtime_readiness = snapshot.screenshot;
   recordStep(
     state,
     '进入 Teams 内 QWork 新任务并观察运行环境状态',
@@ -17531,6 +17532,7 @@ function screenshotEvidence(entry) {
 export function selectTrustedActionScreenshot(entries, before, after) {
   const beforeHash = before?.[1] && fs.existsSync(before[1]) ? sha256File(before[1]) : '';
   const nonActionPhase = /(?:^|[_-])(?:before|initial|final|assertion|model[_-]?tier|precheck)(?:$|[_-])/i;
+  const stableObservationPhase = /(?:observation|observed|readback|readiness|runtime[_-]?state|state[_-]?snapshot)/i;
   return entries
     .filter(([key, file]) => (
       !nonActionPhase.test(key)
@@ -17544,14 +17546,14 @@ export function selectTrustedActionScreenshot(entries, before, after) {
       if (/visible.*selected|selected.*chip|action|submitted|sent|invoked|attached|preview|after[_-]?(?:fill|send)/i.test(key)) score += 100;
       if (/selected|opened|created|uploaded|removed|confirmed|executed/i.test(key)) score += 60;
       if (/manual.*selected/i.test(key)) score += 20;
-      return { entry, index, hash, score };
+      return { entry, index, hash, score, stableObservation: stableObservationPhase.test(key) };
     })
-    // The final screenshot is often captured immediately after a successful
-    // read-only action and can legitimately be pixel-identical to the named
-    // action screenshot. It must still differ from the pre-action state; do
-    // not discard the only action evidence merely because finishCase captured
-    // the same settled UI again.
-    .filter(({ hash }) => hash && hash !== beforeHash)
+    // A named action frame may equal the final settled frame. A deliberately
+    // named, read-only observation may also equal the before frame because the
+    // Case proves a stable state through independent public readback instead
+    // of a UI mutation. All other actions must remain visually distinct from
+    // before so a duplicate screenshot cannot masquerade as execution.
+    .filter(({ hash, stableObservation }) => hash && (hash !== beforeHash || stableObservation))
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .at(0)?.entry || null;
 }
