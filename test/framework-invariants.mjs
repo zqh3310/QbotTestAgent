@@ -10,6 +10,7 @@ import {
   attachmentTaskPromptFromCase,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
+  buildTerminalConversationEvidence,
   buildCredibilityReview,
   buildSingleHostPipelineBatch,
   buildConversationTurns,
@@ -19,6 +20,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   connectorFixtureDocumentTurnState,
+  confirmedSendExecutionIdentity,
   containsActiveLegacyConstraints,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
@@ -40,6 +42,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  trustedTaskIdentityEvidence,
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
@@ -67,6 +70,88 @@ const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
+assert.deepEqual(
+  confirmedSendExecutionIdentity(
+    { activeId: '', sessionIdCount: 10, lastSessionId: 'session-old' },
+    { activeId: '', sessionIdCount: 11, lastSessionId: 'session-new' },
+  ),
+  {
+    identity_id: 'session-new',
+    identity_kind: 'execution_session_id',
+    source: 'public_e2e_state.sessionIds_delta',
+    task_persisted: false,
+  },
+  '草稿终止路径必须从发送前后公共 sessionIds 增量绑定执行身份',
+);
+assert.deepEqual(
+  confirmedSendExecutionIdentity(
+    {
+      activeId: '',
+      sendCount: 14,
+      draftInstanceId: 17,
+      sessionIdCount: 217,
+      lastSessionId: 'stable-session',
+    },
+    {
+      activeId: '',
+      sendCount: 15,
+      draftInstanceId: 17,
+      sessionIdCount: 217,
+      lastSessionId: 'stable-session',
+    },
+  ),
+  {
+    identity_id: 'draft-instance:17:send:15',
+    identity_kind: 'draft_execution_identity',
+    source: 'public_e2e_state.draftInstanceId+sendCount',
+    task_persisted: false,
+  },
+  '没有持久化 task/session 增量时，已确认发送必须绑定公开 draftInstanceId 与 sendCount',
+);
+assert.deepEqual(
+  trustedTaskIdentityEvidence({
+    id: 'SIT-HOME-023',
+    artifacts: {
+      final_task_identity: { active_id: '' },
+      confirmed_send_identities: [{
+        identity_id: 'session-new',
+        identity_kind: 'execution_session_id',
+        source: 'public_e2e_state.sessionIds_delta',
+        task_persisted: false,
+      }],
+    },
+  }),
+  {
+    identity_id: 'session-new',
+    identity_kind: 'execution_session_id',
+    source: 'public_e2e_state.sessionIds_delta',
+    task_persisted: false,
+  },
+  'SIT-HOME-023 可使用已确认发送绑定的执行 session 身份，但必须标记任务尚未持久化',
+);
+assert.equal(
+  trustedTaskIdentityEvidence({
+    id: 'SIT-HOME-022',
+    artifacts: {
+      confirmed_send_identities: [{
+        identity_id: 'session-new',
+        identity_kind: 'execution_session_id',
+        source: 'public_e2e_state.sessionIds_delta',
+        task_persisted: false,
+      }],
+    },
+  }),
+  null,
+  '普通会话不得用 execution session 绕过持久化 task id 证据要求',
+);
+const stoppedConversationEvidence = buildTerminalConversationEvidence({
+  prompt: '请生成详细方案。',
+  terminalEvent: 'user_cancelled_before_assistant_reply',
+  observation: 'stopped=true',
+});
+assert.match(stoppedConversationEvidence.transcript, /## USER[\s\S]*请生成详细方案。[\s\S]*## TERMINAL_EVENT/);
+assert.match(stoppedConversationEvidence.replyDelta, /## NO_ASSISTANT_REPLY[\s\S]*assistant_reply_present=false/);
+assert.equal(stoppedConversationEvidence.record.assistant_reply_present, false);
 assert.match(
   runner,
   /executeSitInit002[\s\S]*composerProductEntrySnapshot/,

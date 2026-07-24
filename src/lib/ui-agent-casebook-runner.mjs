@@ -73,6 +73,15 @@ const REPLY_EVIDENCE_OPTIONAL_CASE_IDS = new Set([
   'SIT-HOME-050',
   'SIT-HOME-051',
 ]);
+// These Cases intentionally terminate while the conversation is still a
+// draft, before QWork persists an active task id. They may satisfy the
+// identity evidence role with the public execution-session or draft/send
+// identity observed across the confirmed send receipt. The fallback is scoped:
+// ordinary conversation Cases must still produce a persisted task/active id.
+const DRAFT_TERMINAL_IDENTITY_CASE_IDS = new Set([
+  'SIT-HOME-023',
+  'SIT-HOME-025',
+]);
 
 const DEFAULT_SINGLE_HOST_PIPELINE_SIZE = 5;
 const MAX_SINGLE_HOST_PIPELINE_SIZE = 5;
@@ -2869,6 +2878,16 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     user_message_count: users.length,
     composer_visible: composerVisible,
   };
+  const terminalEvidence = buildTerminalConversationEvidence({
+    prompt,
+    terminalEvent: 'user_cancelled_before_assistant_reply',
+    observation: `stopped=${stopped}；cancelAccepted=${cancelAccepted}；bridgeRunning=${lastBridge?.running ?? 'unknown'}；cancelPending=${lastBridge?.cancelPending ?? 'unknown'}；userMessages=${users.length}；composer=${composerVisible}`,
+  });
+  state.artifacts.terminal_conversation_evidence = terminalEvidence.record;
+  state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
+  state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
+  writeTextFile(state.artifacts.transcript, terminalEvidence.transcript);
+  writeTextFile(state.artifacts.reply_delta, terminalEvidence.replyDelta);
   recordAssertion(
     state,
     '停止后问题和恢复入口保留',
@@ -3025,10 +3044,16 @@ async function executeSitHomeFailureRecovery({ page, state, testCase, caseDir, o
     const routeHits = controlState.hits.filter((item) => item.id === 'home-025-turn-context-failure').length;
     state.screenshots.home_025_failure_recovery = await shot(page, caseDir, 'home-025-failure-recovery');
     state.artifacts.controlled_failure = { injected: routeHits > 0, route: '/api/desktop-agent/turn-context', route_hits: routeHits, retry_visible: retryVisible, reason_visible: reasonVisible };
+    const terminalEvidence = buildTerminalConversationEvidence({
+      prompt,
+      terminalEvent: 'controlled_failure_before_assistant_reply',
+      observation: reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500),
+    });
+    state.artifacts.terminal_conversation_evidence = terminalEvidence.record;
     state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
     state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
-    writeTextFile(state.artifacts.transcript, `USER\n${prompt}\n\nASSISTANT_ERROR\n${reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500)}`);
-    writeTextFile(state.artifacts.reply_delta, reasonVisible ? '任务执行失败，请稍后重试' : clip(pageText, 500));
+    writeTextFile(state.artifacts.transcript, terminalEvidence.transcript);
+    writeTextFile(state.artifacts.reply_delta, terminalEvidence.replyDelta);
     recordStep(state, '注入一次可控任务失败', '应由 runner 控制面代理精确拦截 turn-context，只触发 UI 失败恢复，不修改产品代码或冻结的 agent bridge。', `routeHits=${routeHits}；reasonVisible=${reasonVisible}；retryVisible=${retryVisible}`, routeHits > 0 ? 'passed' : 'failed', state.screenshots.home_025_failure_recovery, routeHits > 0 ? '' : 'automation_error');
     recordAssertion(state, '失败后保留原问题和恢复出路', '任务失败后应保留原问题，并展示重试入口或明确可理解原因。', users.some((text) => text.includes('提升 QBot 新手易用性')) && (retryVisible || reasonVisible), `userMessages=${users.length}；retryVisible=${retryVisible}；reasonVisible=${reasonVisible}`);
   } finally {
@@ -11844,6 +11869,53 @@ function writeReplyArtifacts(state, caseDir, replies) {
   writeTextFile(state.artifacts.reply_delta, state.artifacts.reply_records.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
 }
 
+export function buildTerminalConversationEvidence({
+  prompt = '',
+  terminalEvent = '',
+  observation = '',
+} = {}) {
+  const event = String(terminalEvent || '').trim();
+  const userPrompt = String(prompt || '').trim();
+  const observed = String(observation || '').trim();
+  if (!userPrompt) throw new Error('Terminal conversation evidence requires the confirmed user prompt.');
+  if (!/^(?:user_cancelled_before_assistant_reply|controlled_failure_before_assistant_reply)$/.test(event)) {
+    throw new Error(`Unsupported terminal conversation event: ${event || 'empty'}`);
+  }
+  const recordedAt = new Date().toISOString();
+  const transcript = [
+    '## USER',
+    '',
+    userPrompt,
+    '',
+    '## TERMINAL_EVENT',
+    '',
+    `type=${event}`,
+    'assistant_reply_present=false',
+    `observation=${observed || 'none'}`,
+    `recorded_at=${recordedAt}`,
+  ].join('\n');
+  const replyDelta = [
+    '## NO_ASSISTANT_REPLY',
+    '',
+    `terminal_event=${event}`,
+    'assistant_reply_present=false',
+    `observation=${observed || 'none'}`,
+    `recorded_at=${recordedAt}`,
+  ].join('\n');
+  return {
+    transcript,
+    replyDelta,
+    record: {
+      semantic_type: 'terminal_event_without_assistant_reply',
+      terminal_event: event,
+      assistant_reply_present: false,
+      observation: observed,
+      recorded_at: recordedAt,
+      source: 'confirmed_send_and_public_state_readback',
+    },
+  };
+}
+
 function recordReplyAssertions(state, testCase, prompt, reply, label) {
   recordAssertion(
     state,
@@ -15906,6 +15978,15 @@ async function send(page, state, action = '点击发送') {
     if (receipt.ok) {
       if (!Array.isArray(state.artifacts.send_receipts)) state.artifacts.send_receipts = [];
       state.artifacts.send_receipts.push({ action, prompt: promptAtClick, confirmed_at: new Date().toISOString(), attempts });
+      const executionIdentity = confirmedSendExecutionIdentity(beforeReceipt, receipt.snapshot);
+      if (executionIdentity) {
+        if (!Array.isArray(state.artifacts.confirmed_send_identities)) state.artifacts.confirmed_send_identities = [];
+        state.artifacts.confirmed_send_identities.push({
+          action,
+          captured_at: new Date().toISOString(),
+          ...executionIdentity,
+        });
+      }
       if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
       const latestRecorded = String(state.artifacts.sent_prompts.at(-1)?.prompt || '');
       if (normalizePromptForComparison(latestRecorded) !== normalizePromptForComparison(promptAtClick)) {
@@ -15958,6 +16039,9 @@ async function sendReceiptSnapshot(page) {
     sendCount: Number(bridge?.sendCount || 0),
     messageCount: Number(bridge?.messageCount || 0),
     activeId: String(bridge?.activeId || ''),
+    draftInstanceId: Number(bridge?.draftInstanceId || 0),
+    sessionIdCount: Array.isArray(bridge?.sessionIds) ? bridge.sessionIds.length : 0,
+    lastSessionId: String(Array.isArray(bridge?.sessionIds) ? bridge.sessionIds.at(-1) || '' : ''),
     running: Boolean(bridge?.running || generating),
     userCount: Number(conversation?.userCount || 0),
     userTexts: Array.isArray(conversation?.userTexts) ? conversation.userTexts : [],
@@ -15970,6 +16054,15 @@ export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = ''
   if (Number(after.sendCount || 0) > Number(before.sendCount || 0)) reasons.push(`sendCount ${Number(before.sendCount || 0)}->${Number(after.sendCount || 0)}`);
   if (Number(after.messageCount || 0) > Number(before.messageCount || 0)) reasons.push(`messageCount ${Number(before.messageCount || 0)}->${Number(after.messageCount || 0)}`);
   if (String(after.activeId || '') && String(after.activeId || '') !== String(before.activeId || '')) reasons.push(`activeId ${String(before.activeId || 'draft')}->${String(after.activeId)}`);
+  if (
+    String(after.lastSessionId || '')
+    && (
+      String(after.lastSessionId || '') !== String(before.lastSessionId || '')
+      || Number(after.sessionIdCount || 0) > Number(before.sessionIdCount || 0)
+    )
+  ) {
+    reasons.push(`executionSession ${Number(before.sessionIdCount || 0)}->${Number(after.sessionIdCount || 0)}`);
+  }
   if (Number(after.userCount || 0) > Number(before.userCount || 0)) reasons.push(`userCount ${Number(before.userCount || 0)}->${Number(after.userCount || 0)}`);
   const expected = normalizePromptForComparison(expectedPrompt);
   const beforeExpectedCount = (before.userTexts || []).filter((text) => normalizePromptForComparison(text) === expected).length;
@@ -15985,6 +16078,41 @@ export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = ''
   if (composerAccepted) reasons.push('输入区已清空且当前任务末条用户消息精确匹配');
   if (after.running && !before.running) reasons.push('Agent 进入运行态');
   return { ok: reasons.length > 0, reasons };
+}
+
+export function confirmedSendExecutionIdentity(before = {}, after = {}) {
+  const activeId = String(after.activeId || '').trim();
+  if (activeId) {
+    return {
+      identity_id: activeId,
+      identity_kind: 'persisted_task_id',
+      source: 'public_e2e_state.activeId',
+      task_persisted: true,
+    };
+  }
+  const sessionId = String(after.lastSessionId || '').trim();
+  const sessionAdvanced = sessionId && (
+    sessionId !== String(before.lastSessionId || '').trim()
+    || Number(after.sessionIdCount || 0) > Number(before.sessionIdCount || 0)
+  );
+  if (sessionAdvanced) {
+    return {
+      identity_id: sessionId,
+      identity_kind: 'execution_session_id',
+      source: 'public_e2e_state.sessionIds_delta',
+      task_persisted: false,
+    };
+  }
+  const draftInstanceId = Number(after.draftInstanceId || 0);
+  const sendCount = Number(after.sendCount || 0);
+  const confirmedDraftSend = draftInstanceId > 0 && sendCount > Number(before.sendCount || 0);
+  if (!confirmedDraftSend) return null;
+  return {
+    identity_id: `draft-instance:${draftInstanceId}:send:${sendCount}`,
+    identity_kind: 'draft_execution_identity',
+    source: 'public_e2e_state.draftInstanceId+sendCount',
+    task_persisted: false,
+  };
 }
 
 async function waitForSendReceipt(page, before, expectedPrompt, timeoutMs = 30000) {
@@ -17408,14 +17536,11 @@ function buildCaseEvidenceManifest(state, caseDir) {
   const promptRecords = Array.isArray(state.artifacts?.sent_prompts)
     ? state.artifacts.sent_prompts.filter((item) => String(item?.prompt || '').trim())
     : [];
-  const taskId = String(
-    state.artifacts?.final_task_identity?.active_id
-    || state.artifacts?.single_host_pipeline?.task_id
-    || findNestedValue(state.artifacts, /^(?:active_?id|task_?id)$/i)
-    || '',
-  );
+  const taskIdentity = trustedTaskIdentityEvidence(state);
+  const taskId = String(taskIdentity?.identity_id || '');
   const transcript = existingFileEvidence(state.artifacts?.transcript);
   const replyDelta = existingFileEvidence(state.artifacts?.reply_delta);
+  const terminalConversation = state.artifacts?.terminal_conversation_evidence;
   const report = existingFileEvidence(state.case_report);
   const publicStatePresent = Boolean(
     state.artifacts?.final_task_identity
@@ -17470,10 +17595,28 @@ function buildCaseEvidenceManifest(state, caseDir) {
       }
       : { available: false, reason: '缺少 artifacts.sent_prompts。' },
     task_id: taskId
-      ? { available: true, task_id_sha256: sha256Text(taskId), source: 'public task identity readback' }
+      ? {
+        available: true,
+        task_id_sha256: sha256Text(taskId),
+        identity_kind: taskIdentity.identity_kind,
+        task_persisted: taskIdentity.task_persisted,
+        source: taskIdentity.source,
+      }
       : { available: false, reason: '缺少非空 taskId/activeId 读回。' },
-    transcript: transcript || { available: false, reason: '缺少 transcript 文件。' },
-    reply_delta: replyDelta || { available: false, reason: '缺少 reply-delta 文件。' },
+    transcript: transcript
+      ? {
+        ...transcript,
+        semantic_type: terminalConversation?.semantic_type || 'assistant_conversation',
+        assistant_reply_present: terminalConversation?.assistant_reply_present ?? true,
+      }
+      : { available: false, reason: '缺少 transcript 文件。' },
+    reply_delta: replyDelta
+      ? {
+        ...replyDelta,
+        semantic_type: terminalConversation?.semantic_type || 'assistant_reply_delta',
+        assistant_reply_present: terminalConversation?.assistant_reply_present ?? true,
+      }
+      : { available: false, reason: '缺少 reply-delta 文件。' },
     public_state_readback: publicStatePresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少公开能力/状态读回。' },
@@ -17519,6 +17662,39 @@ function buildCaseEvidenceManifest(state, caseDir) {
       role,
       roleEvidence[role] || { available: false, reason: 'runner 未实现该证据角色。' },
     ])),
+  };
+}
+
+export function trustedTaskIdentityEvidence(state = {}) {
+  const artifacts = state.artifacts || {};
+  const persistedTaskId = String(
+    artifacts?.final_task_identity?.active_id
+    || artifacts?.single_host_pipeline?.task_id
+    || findNestedValue(artifacts, /^(?:active_?id|task_?id)$/i)
+    || '',
+  ).trim();
+  if (persistedTaskId) {
+    return {
+      identity_id: persistedTaskId,
+      identity_kind: 'persisted_task_id',
+      source: 'public task identity readback',
+      task_persisted: true,
+    };
+  }
+  if (!DRAFT_TERMINAL_IDENTITY_CASE_IDS.has(String(state.id || ''))) return null;
+  const identity = Array.isArray(artifacts.confirmed_send_identities)
+    ? [...artifacts.confirmed_send_identities].reverse().find((item) => (
+      ['execution_session_id', 'draft_execution_identity'].includes(item?.identity_kind)
+      && String(item?.identity_id || '').trim()
+      && item?.task_persisted === false
+    ))
+    : null;
+  if (!identity) return null;
+  return {
+    identity_id: String(identity.identity_id).trim(),
+    identity_kind: String(identity.identity_kind),
+    source: String(identity.source || 'public_e2e_state.confirmed_send_identity'),
+    task_persisted: false,
   };
 }
 
