@@ -1718,7 +1718,12 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
   if (attachments.length) {
     state.artifacts.attachment_sources = attachments.map((file) => {
       const stats = fs.statSync(file);
-      return { path: file, name: path.basename(file), size_bytes: stats.size };
+      return {
+        path: file,
+        name: path.basename(file),
+        size_bytes: stats.size,
+        sha256: sha256File(file),
+      };
     });
     const emptySources = state.artifacts.attachment_sources.filter((item) => item.size_bytes <= 0);
     recordAssertion(
