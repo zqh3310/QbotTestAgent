@@ -363,6 +363,7 @@ const required = [
   ['QWork 0.0.11 统一加号菜单按技能连接器模式子菜单兼容', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*composer-plus-sub-mode[\s\S]*composer-plus-sub-skill[\s\S]*composer-plus-sub-connector[\s\S]*openUnifiedComposerSubmenu/],
   ['独立安全档位菜单不误走统一加号子菜单', /if \(UNIFIED_COMPOSER_SUBMENUS\[menuKind\] && await unifiedComposerPlusAvailable\(page\)\)/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*selectedConnectors === null[\s\S]*selectedConnectors\.length === 0/],
+  ['统一菜单手动态以真实 DOM 能力列表而非 innerText placeholder 判定', /setUnifiedSkillMode[\s\S]*input\[placeholder\*="搜索技能"\][\s\S]*composer-plus-list[\s\S]*composer-skill-option-[\s\S]*setUnifiedConnectorMode[\s\S]*composer-connector-option-[\s\S]*当前：手动选择连接器/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],

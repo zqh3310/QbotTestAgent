@@ -10738,21 +10738,44 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
     }
     let afterText = '';
+    let manualSurface = null;
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(200);
       const fresh = page.locator('.composer-plus-sub-skill [data-testid="composer-skill-mode-manual"]').first();
       checked = await fresh.getAttribute('aria-checked').catch(() => '');
       afterText = await activeMenuText(page, 'skill');
-      if (checked === 'true' && /搜索技能|还没安装技能|无匹配/.test(afterText)) break;
+      manualSurface = await page.locator('.composer-plus-sub-skill').first().evaluate((menu) => {
+        const isVisible = (element) => {
+          if (!element || !element.getClientRects().length) return false;
+          const style = globalThis.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        return {
+          search_visible: isVisible(menu.querySelector('input[placeholder*="搜索技能"]')),
+          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
+          option_count: [...menu.querySelectorAll('[data-testid^="composer-skill-option-"]')]
+            .filter(isVisible).length,
+          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
+        };
+      }).catch(() => null);
+      if (
+        checked === 'true'
+        && manualSurface?.search_visible
+        && manualSurface?.list_visible
+        && (manualSurface.option_count > 0 || manualSurface.empty_visible)
+      ) break;
     }
-    const ok = checked === 'true' && /搜索技能|还没安装技能|无匹配/.test(afterText);
+    const ok = checked === 'true'
+      && manualSurface?.search_visible
+      && manualSurface?.list_visible
+      && (manualSurface.option_count > 0 || manualSurface.empty_visible);
     state.screenshots.skill_mode_manual = await shot(page, caseDir, 'skill-mode-manual');
     recordStep(
       state,
       '通过可见 UI 切换技能模式：manual',
       '必须真实点击“+ > 技能 > 手动”，并看到手动技能列表；仅打开自动模式说明页不算完成。',
-      `aria-checked=${checked || '未读取'}；菜单=${clip(afterText, 220)}`,
+      `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 220)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.skill_mode_manual,
       ok ? '' : 'automation_error',
@@ -10838,21 +10861,46 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
     }
     let afterText = '';
+    let manualSurface = null;
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(200);
       const fresh = page.locator('.composer-plus-sub-connector [data-testid="composer-connector-mode-manual"]').first();
       checked = await fresh.getAttribute('aria-checked').catch(() => '');
       afterText = await activeMenuText(page, 'connector');
-      if (checked === 'true' && /搜索连接器|未接入连接器|无匹配/.test(afterText)) break;
+      manualSurface = await page.locator('.composer-plus-sub-connector').first().evaluate((menu) => {
+        const isVisible = (element) => {
+          if (!element || !element.getClientRects().length) return false;
+          const style = globalThis.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        const manualNote = [...menu.querySelectorAll('.composer-plus-note')]
+          .find((element) => /当前：手动选择连接器/.test(element.textContent || ''));
+        return {
+          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
+          option_count: [...menu.querySelectorAll('[data-testid^="composer-connector-option-"]')]
+            .filter(isVisible).length,
+          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
+          manual_note_visible: isVisible(manualNote),
+        };
+      }).catch(() => null);
+      if (
+        checked === 'true'
+        && manualSurface?.list_visible
+        && (manualSurface.option_count > 0 || manualSurface.empty_visible)
+        && manualSurface.manual_note_visible
+      ) break;
     }
-    const ok = checked === 'true' && /搜索连接器|未接入连接器|无匹配/.test(afterText);
+    const ok = checked === 'true'
+      && manualSurface?.list_visible
+      && (manualSurface.option_count > 0 || manualSurface.empty_visible)
+      && manualSurface.manual_note_visible;
     state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual');
     recordStep(
       state,
       '通过可见 UI 切换连接器模式：manual',
       '必须真实点击“+ > 连接器 > 手动”，并看到手动连接器列表；仅打开自动模式说明页不算完成。',
-      `aria-checked=${checked || '未读取'}；菜单=${clip(afterText, 240)}`,
+      `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.connector_mode_manual,
       ok ? '' : 'automation_error',
