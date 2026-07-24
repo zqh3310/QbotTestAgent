@@ -9994,16 +9994,45 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const skillName = await skillCardName(card, cardText);
   await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
   const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
-  state.artifacts.installed_skill = { name: skillName, ...terminal };
   state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
-  recordStep(state, '点击技能市场第一张可安装技能的【安装】', '安装必须收敛到成功或明确失败终态；安装中/准备中不能判通过。', `技能=${skillName}；terminal=${terminal.terminal}；success=${terminal.success}；${clip(terminal.text, 220)}`, terminal.terminal ? 'passed' : 'failed', state.screenshots.after_skill_install);
   await clickSkillSubtab(page, '已安装', state);
   await page.waitForTimeout(1000);
   state.screenshots.installed_after_install = await shot(page, caseDir, 'skill-installed-after-install');
   const text = await mainSurfaceText(page);
   const sameInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 1500);
-  recordAssertion(state, '安装后进入已安装列表', '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。', terminal.terminal && (terminal.success ? sameInstalled : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)), `技能=${skillName}；sameInstalled=${sameInstalled}；${clip(text, 320)}`);
-  return terminal.terminal && terminal.success && sameInstalled;
+  // React may recycle the market card locator immediately after a successful
+  // install, so the polling locator can start reading the next card and miss
+  // the terminal label.  The exact skill appearing in the installed tab is a
+  // stronger independent product readback than that stale card reference.
+  const installedViewSuccess = sameInstalled && !terminal.failure;
+  const observedTerminal = terminal.terminal || installedViewSuccess;
+  const observedSuccess = (terminal.terminal && terminal.success) || installedViewSuccess;
+  state.artifacts.installed_skill = {
+    name: skillName,
+    ...terminal,
+    terminal: observedTerminal,
+    success: observedSuccess,
+    installed_view_readback: sameInstalled,
+    terminal_source: terminal.terminal ? 'market-card' : installedViewSuccess ? 'exact-installed-tab-card' : '',
+  };
+  recordStep(
+    state,
+    '点击技能市场第一张可安装技能的【安装】',
+    '安装必须收敛到成功或明确失败终态；安装中/准备中不能判通过。',
+    `技能=${skillName}；terminal=${observedTerminal}；success=${observedSuccess}；source=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(terminal.text, 220)}`,
+    observedTerminal ? 'passed' : 'failed',
+    state.screenshots.after_skill_install,
+  );
+  recordAssertion(
+    state,
+    '安装后进入已安装列表',
+    '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。',
+    observedTerminal && (observedSuccess
+      ? sameInstalled
+      : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)),
+    `技能=${skillName}；sameInstalled=${sameInstalled}；terminalSource=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(text, 320)}`,
+  );
+  return observedTerminal && observedSuccess && sameInstalled;
 }
 
 async function skillCardName(card, fallbackText = '') {
@@ -10691,7 +10720,44 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
-    return Boolean(menuText.trim());
+    if (!menuText.trim()) return false;
+    const manual = page.locator('.composer-plus-sub-skill [data-testid="composer-skill-mode-manual"]').first();
+    if (!(await visible(manual, 1000))) {
+      recordAssertion(
+        state,
+        '统一菜单技能手动模式入口',
+        '“+ > 技能”子菜单必须提供用户可见的【手动】模式。',
+        false,
+        `子菜单已打开但未找到 composer-skill-mode-manual：${clip(menuText, 220)}`,
+        'automation_error',
+      );
+      return false;
+    }
+    let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    if (checked !== 'true') {
+      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+    }
+    let afterText = '';
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(200);
+      const fresh = page.locator('.composer-plus-sub-skill [data-testid="composer-skill-mode-manual"]').first();
+      checked = await fresh.getAttribute('aria-checked').catch(() => '');
+      afterText = await activeMenuText(page, 'skill');
+      if (checked === 'true' && /搜索技能|还没安装技能|无匹配/.test(afterText)) break;
+    }
+    const ok = checked === 'true' && /搜索技能|还没安装技能|无匹配/.test(afterText);
+    state.screenshots.skill_mode_manual = await shot(page, caseDir, 'skill-mode-manual');
+    recordStep(
+      state,
+      '通过可见 UI 切换技能模式：manual',
+      '必须真实点击“+ > 技能 > 手动”，并看到手动技能列表；仅打开自动模式说明页不算完成。',
+      `aria-checked=${checked || '未读取'}；菜单=${clip(afterText, 220)}`,
+      ok ? 'passed' : 'failed',
+      state.screenshots.skill_mode_manual,
+      ok ? '' : 'automation_error',
+    );
+    return ok;
   }
 
   const method = mode === 'auto' ? 'setSkillsAuto' : 'setSkillsDisabled';
@@ -10754,7 +10820,44 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
-    return Boolean(menuText.trim());
+    if (!menuText.trim()) return false;
+    const manual = page.locator('.composer-plus-sub-connector [data-testid="composer-connector-mode-manual"]').first();
+    if (!(await visible(manual, 1000))) {
+      recordAssertion(
+        state,
+        '统一菜单连接器手动模式入口',
+        '“+ > 连接器”子菜单必须提供用户可见的【手动】模式。',
+        false,
+        `子菜单已打开但未找到 composer-connector-mode-manual：${clip(menuText, 220)}`,
+        'automation_error',
+      );
+      return false;
+    }
+    let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    if (checked !== 'true') {
+      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+    }
+    let afterText = '';
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(200);
+      const fresh = page.locator('.composer-plus-sub-connector [data-testid="composer-connector-mode-manual"]').first();
+      checked = await fresh.getAttribute('aria-checked').catch(() => '');
+      afterText = await activeMenuText(page, 'connector');
+      if (checked === 'true' && /搜索连接器|未接入连接器|无匹配/.test(afterText)) break;
+    }
+    const ok = checked === 'true' && /搜索连接器|未接入连接器|无匹配/.test(afterText);
+    state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual');
+    recordStep(
+      state,
+      '通过可见 UI 切换连接器模式：manual',
+      '必须真实点击“+ > 连接器 > 手动”，并看到手动连接器列表；仅打开自动模式说明页不算完成。',
+      `aria-checked=${checked || '未读取'}；菜单=${clip(afterText, 240)}`,
+      ok ? 'passed' : 'failed',
+      state.screenshots.connector_mode_manual,
+      ok ? '' : 'automation_error',
+    );
+    return ok;
   }
 
   const method = mode === 'auto' ? 'setConnectorsAuto' : 'setConnectorsDisabled';
