@@ -6968,7 +6968,13 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
       ? injected.fixtureController.snapshot().events
       : fixture.state.hits;
     state.artifacts.skill_fixture_teardown = await cleanupSkillRegressionFixtureState(runtime?.page || page, testCase);
-    await restoreNormalQbotAfterFault({ state, caseDir, options, runtime, cleanup: fixture.close });
+    await restoreNormalQbotAfterFault({
+      state,
+      caseDir,
+      options,
+      runtime,
+      cleanup: injected.cleanup || fixture.close,
+    });
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
     else delete options['active-fixture-control-plane-url'];
   }
@@ -7576,7 +7582,7 @@ async function executeSitConnectorBuiltinTools({ page, state, caseDir }) {
   );
 }
 
-async function executeSitConnectorModes({ page, state, caseDir }) {
+async function executeSitConnectorModes({ page, state, caseDir, expectedConnectorKey = '' }) {
   await openNewTask(page, state);
   const before = await composerConnectorSelectionSnapshot(page);
   state.artifacts.connector_003_before = before;
@@ -7589,7 +7595,7 @@ async function executeSitConnectorModes({ page, state, caseDir }) {
     'passed',
     state.screenshots.connector_003_before,
   );
-  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  if (!await selectFirstManualConnector(page, state, caseDir, { expectedConnectorKey })) return;
   await page.keyboard.press('Escape').catch(() => {});
 
   const selected = await composerConnectorSelectionSnapshot(page);
@@ -8087,7 +8093,22 @@ async function executeConnectorRegressionFixtureCase({ page, state, testCase, ca
     if (testCase.id === 'SIT-CONN-009') return await executeSitConnectorAuthDialog({ page, state, caseDir });
     if (testCase.id === 'SIT-CONN-013') return await executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
     if (testCase.id === 'SIT-CONN-018') return await executeSitConnectorManualUnhealthyOption({ page, state, caseDir });
-    if (testCase.id === 'SIT-CONN-003') return await executeSitConnectorModes({ page, state, caseDir });
+    if (testCase.id === 'SIT-CONN-003') {
+      const expectedConnectorKey = String(
+        injected.prepared?.connectors?.find((item) => (
+          item?.key === 'platform:dev_healthy'
+          || ['ready', 'healthy'].includes(String(item?.statusKind || '').toLowerCase())
+        ))?.key || '',
+      );
+      if (injected.rendererAdapter && !expectedConnectorKey) {
+        return markFailed(
+          state,
+          `连接器 Fixture 未提供可唯一定位的健康连接器：${clip(JSON.stringify(injected.prepared?.connectors || []), 500)}`,
+          'automation_error',
+        );
+      }
+      return await executeSitConnectorModes({ page, state, caseDir, expectedConnectorKey });
+    }
     if (testCase.id === 'SIT-TEAMS-DOC-001') {
       return await executeSitTeamsDocumentPermission({ page, state, testCase, caseDir, timeoutMs, fixture });
     }
@@ -11367,7 +11388,7 @@ async function setConnectorMode(page, state, caseDir, mode) {
   return selectedOk;
 }
 
-async function selectFirstManualConnector(page, state, caseDir) {
+async function selectFirstManualConnector(page, state, caseDir, { expectedConnectorKey = '' } = {}) {
   const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
   if (!manualOk) return false;
   const menuText = await activeMenuText(page, 'connector');
@@ -11385,9 +11406,41 @@ async function selectFirstManualConnector(page, state, caseDir) {
   // connector in production packages.  Scope the fallback selector to the
   // connector list instead of trying to exclude the three mode buttons by
   // their visible labels.
-  const option = menu.locator('.composer-plus-connector:not([disabled]), [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]):not([disabled]), .ctool-list .ctool-opt:not([disabled]), [role="option"]:not([disabled])')
-    .filter({ hasNotText: /不生效|不可用|未接入|无匹配|暂无连接器/ })
-    .first();
+  const options = menu.locator('.composer-plus-connector:not([disabled]), [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]):not([disabled]), .ctool-list .ctool-opt:not([disabled]), [role="option"]:not([disabled])')
+    .filter({ hasNotText: /不生效|不可用|未接入|无匹配|暂无连接器/ });
+  let option = options.first();
+  if (expectedConnectorKey) {
+    option = null;
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const count = await options.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const candidate = options.nth(index);
+        if (!(await visible(candidate, 150))) continue;
+        const testId = await candidate.getAttribute('data-testid').catch(() => '');
+        const key = String(testId || '')
+          .replace(/^composer-connector-option-/, '')
+          .replace(/-(?:tag|checkbox|row)$/, '');
+        if (key !== expectedConnectorKey) continue;
+        option = candidate;
+        break;
+      }
+      if (option) break;
+      await page.waitForTimeout(250);
+    }
+    if (!option) {
+      const capabilities = await currentCapabilities(page);
+      recordAssertion(
+        state,
+        '连接器 Fixture 可见目录就绪',
+        `renderer Fixture 的健康连接器 ${expectedConnectorKey} 必须先出现在当前可见手动菜单，禁止在真实 DEV 缓存目录上继续执行。`,
+        false,
+        `expected=${expectedConnectorKey}；public=${JSON.stringify((capabilities?.connectors || []).map((item) => item?.key))}；menu=${clip(await activeMenuText(page, 'connector'), 360)}`,
+        'automation_error',
+      );
+      return false;
+    }
+  }
   if (!(await visible(option, 1500))) {
     markBlocked(state, `没有健康连接器可供手动选择：${clip(menuText, 220)}`);
     return false;

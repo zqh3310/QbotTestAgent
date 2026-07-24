@@ -364,6 +364,8 @@ const required = [
   ['独立安全档位菜单不误走统一加号子菜单', /if \(UNIFIED_COMPOSER_SUBMENUS\[menuKind\] && await unifiedComposerPlusAvailable\(page\)\)/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*selectedConnectors === null[\s\S]*selectedConnectors\.length === 0/],
   ['统一菜单手动态以真实 DOM 能力列表而非 innerText placeholder 判定', /setUnifiedSkillMode[\s\S]*input\[placeholder\*="搜索技能"\][\s\S]*composer-plus-list[\s\S]*composer-skill-option-[\s\S]*setUnifiedConnectorMode[\s\S]*composer-connector-option-[\s\S]*当前：手动选择连接器/],
+  ['技能 Fixture finally 关闭 renderer adapter 而非仅关闭 HTTP fixture', /executeSkillRegressionFixtureCase[\s\S]*cleanup: injected\.cleanup \|\| fixture\.close/],
+  ['连接器 Fixture 手动选择等待唯一健康目录项', /executeSitConnectorModes[\s\S]*expectedConnectorKey[\s\S]*selectFirstManualConnector[\s\S]*连接器 Fixture 可见目录就绪[\s\S]*禁止在真实 DEV 缓存目录上继续执行/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
