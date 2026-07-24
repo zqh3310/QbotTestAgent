@@ -231,6 +231,7 @@ function evidenceRolesFor(testCase) {
     'numbered_step_assertions',
     'first_divergence_evidence',
     'case_report',
+    'public_state_readback',
   ]);
   const id = String(testCase.id || '');
   const kind = String(testCase.kind || '');
@@ -241,9 +242,6 @@ function evidenceRolesFor(testCase) {
   ) {
     ['prompt', 'task_id', 'transcript', 'reply_delta'].forEach((item) => roles.add(item));
   }
-  if (/技能|连接器|工具|Skill|Connector|MCP/i.test(text)) {
-    roles.add('public_state_readback');
-  }
   if (
     /(?:调用|强走|执行).*(?:技能|连接器|工具)|(?:技能|连接器|工具).*(?:调用|强走|执行)|MCP|qbot_web|qbot_chart/i.test(text)
   ) {
@@ -252,7 +250,7 @@ function evidenceRolesFor(testCase) {
   if (/附件|上传|文件上传/.test(text)) {
     ['attachment_name_size_sha256', 'composer_attachment_state', 'attachment_readback'].forEach((item) => roles.add(item));
   }
-  if (/成果|artifact|预览|HTML|Markdown|文件/.test(text) || /^SIT-ART-/.test(id)) {
+  if (/^SIT-ART-|^SIT-KNOWLEDGE-001$/.test(id)) {
     ['artifact_path_sha256', 'artifact_content_readback', 'artifact_preview'].forEach((item) => roles.add(item));
   }
   if (/AUTH|登录|退出|重启|恢复|Teams/i.test(`${id}\n${text}`)) {

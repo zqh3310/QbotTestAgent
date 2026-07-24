@@ -1964,7 +1964,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   const id = String(testCase.id || '');
   if (id === 'SIT-ISSUE-793') return executeIssue793StreamingScrollFollow({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-ISSUE-800') return executeIssue800ModelServiceStateConsistency({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-INIT-025') return executeSitInit025({ page, state, caseDir, options });
+  if (id === 'SIT-INIT-025') return executeSitInit025({ page, state, caseDir, options, runtime });
   if (id === 'SIT-INIT-002') return executeSitInit002({ page, state, caseDir });
   if (id === 'SIT-INIT-004') return executeSitInit004({ page, state, caseDir });
   if (id === 'SIT-INIT-009') return executeSitInit009({ page, state, caseDir });
@@ -2036,7 +2036,9 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
     return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   }
   if (id === 'SIT-SKILL-006') return executeSkillSmoke009({ page, state, caseDir, timeoutMs });
-  if (id === 'SIT-SKILL-007') return executeSkillSmoke007({ page, state, caseDir });
+  if (id === 'SIT-SKILL-007') {
+    return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
+  }
   if (id === 'SIT-SKILL-008') return executeSkillSmoke003({ page, state, caseDir });
   if (id === 'SIT-SKILL-009') return executeSitSkillMarketUnavailable({ page, state, caseDir, options, runtime });
   if (id === 'SIT-SKILL-010') return executeSitSkillAuthError({ page, state, caseDir, options, runtime });
@@ -2048,13 +2050,17 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-021') return executeSitSkillNetworkInterrupt({ page, state, caseDir, options, runtime });
   if (id === 'SIT-SKILL-023') return executeSitSkillLongDescription({ page, state, caseDir });
   if (id === 'SIT-SKILL-024') return executeSitSkillExternalConnectorHint({ page, state, caseDir });
-  if (id === 'SIT-SKILL-025') return executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
+  if (id === 'SIT-SKILL-025') {
+    return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
+  }
   if (/^SIT-SKILL-0(?:27|28|29|30|31|32|33)$/.test(id)) {
     return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   }
   if (id === 'SIT-CONN-001') return executeSitConnectorCatalog({ page, state, caseDir });
   if (id === 'SIT-CONN-002') return executeSitConnectorBuiltinTools({ page, state, caseDir });
-  if (id === 'SIT-CONN-003') return executeSitConnectorModes({ page, state, caseDir });
+  if (id === 'SIT-CONN-003') {
+    return executeConnectorRegressionFixtureCase({ page, state, testCase, caseDir, options, runtime });
+  }
   if (id === 'SIT-CONN-004') return executeSitConnectorManualConversation({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-CONN-005') return executeSitConnectorDetails({ page, state, caseDir });
   if (id === 'SIT-CONN-006') return executeSitConnectorDefaultAutoMode({ page, state, caseDir });
@@ -2383,7 +2389,7 @@ async function executeIssue800ModelServiceStateConsistency({ page, state, testCa
   );
 }
 
-async function executeSitInit025({ page, state, caseDir, options }) {
+async function executeSitInit025({ page, state, caseDir, options, runtime }) {
   const snapshot = await teamsIntegratedRuntimeSnapshot(page, state, caseDir, 'init-025-integrated-runtime-ready');
   recordStep(
     state,
@@ -2400,6 +2406,48 @@ async function executeSitInit025({ page, state, caseDir, options }) {
     'Teams 集成包应由宿主准备 QWork 运行环境；页面不能要求普通用户安装 Claude/Codex CLI、选择 runtime family 或使用全新 user-data-dir。',
     snapshot.workbenchReady && snapshot.capabilitiesReadable && !snapshot.technicalSetupVisible,
     snapshot.actual,
+  );
+  if (!snapshot.workbenchReady) return;
+
+  const composer = page.locator('[data-testid="composer-input"], .aui-composer-input').first();
+  const readinessMarker = 'QBOT-RUNTIME-READINESS-CHECK';
+  await fillComposer(page, readinessMarker, state, '输入 runtime readiness 检查文本');
+  const composerValue = await composerUserTextValue(page);
+  state.screenshots.init_025_composer_ready = await shot(page, caseDir, 'init-025-composer-ready');
+  recordStep(
+    state,
+    '在集成输入区执行不发送的可输入性检查',
+    '输入区应接受普通用户文本；检查完成后清空，不创建任务、不调用模型。',
+    `inputValue=${composerValue}`,
+    composerValue === readinessMarker ? 'passed' : 'failed',
+    state.screenshots.init_025_composer_ready,
+    composerValue === readinessMarker ? '' : 'automation_error',
+  );
+  await composer.fill('').catch(() => {});
+  recordAssertion(
+    state,
+    'Teams 集成输入区真实可编辑',
+    '受控宿主中的 QWork Composer 必须真实接受并读回用户文本。',
+    composerValue === readinessMarker,
+    `readback=${composerValue || '空'}`,
+    composerValue === readinessMarker ? '' : 'automation_error',
+  );
+
+  const release = await captureManagedTeamsFixtureRuntimeRelease({
+    runtime,
+    options,
+    state,
+    caseDir,
+  });
+  recordAssertion(
+    state,
+    '外部 DEV 签名 runtime release 可验证',
+    '受控 360Teams 必须从固定外部 DEV 返回带 Ed25519 签名、releaseId/version/commitId 完整的 runtime release envelope。',
+    release.ok && Boolean(state.artifacts?.teams_fixture_runtime_release?.commit_id),
+    release.ok
+      ? JSON.stringify(state.artifacts.teams_fixture_runtime_release)
+      : release.reason,
+    'automation_error',
   );
 }
 
@@ -6902,6 +6950,8 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     if (id === 'SIT-SKILL-015') return await executeSitSkillRollback({ page, state, caseDir });
     if (id === 'SIT-SKILL-020') return await executeSitSkillConcurrentInstall({ page, state, caseDir });
     if (id === 'SIT-SKILL-022') return await executeSitSkillDeleteFailure({ page, state, caseDir, options, runtime });
+    if (id === 'SIT-SKILL-007') return await executeSkillSmoke007({ page, state, caseDir });
+    if (id === 'SIT-SKILL-025') return await executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs });
     if (id === 'SIT-SKILL-026') return await executeSitSkillMultiSelect({ page, state, testCase, caseDir, timeoutMs });
     if (id === 'SIT-SKILL-027') return await executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
     if (id === 'SIT-SKILL-028') return await executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
@@ -6948,6 +6998,8 @@ function skillRegressionFixtureSlugsByCase() {
     'SIT-SKILL-015': ['qa-version-rollback'],
     'SIT-SKILL-020': ['qa-install-dedupe'],
     'SIT-SKILL-022': ['qa-uninstall-failure'],
+    'SIT-SKILL-007': ['qa-python-runtime'],
+    'SIT-SKILL-025': ['qa-python-runtime'],
     'SIT-SKILL-026': ['qa-python-runtime', 'qa-node-runtime'],
     'SIT-SKILL-027': ['qa-runtime-retryable'],
     'SIT-SKILL-028': ['qa-audit-terminal'],
@@ -7035,6 +7087,16 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
     state.artifacts.skill_fixture_uninstall_failure_setup = installed;
     if (!installed.ok) {
       markFailed(state, `无法安装 ${slug} 以准备卸载失败前置：${installed.reason}`, 'automation_error');
+      return false;
+    }
+  }
+
+  if (testCase.id === 'SIT-SKILL-007') {
+    const slug = 'qa-python-runtime';
+    const installed = await installSkillFixtureForSetup(page, state, caseDir, slug);
+    state.artifacts.skill_fixture_manual_selection_setup = installed;
+    if (!installed.ok) {
+      markFailed(state, `无法安装 ${slug} 以准备可见 Skill chip 选择前置：${installed.reason}`, 'automation_error');
       return false;
     }
   }
@@ -8025,6 +8087,7 @@ async function executeConnectorRegressionFixtureCase({ page, state, testCase, ca
     if (testCase.id === 'SIT-CONN-009') return await executeSitConnectorAuthDialog({ page, state, caseDir });
     if (testCase.id === 'SIT-CONN-013') return await executeSitConnectorRefreshFailure({ page, state, caseDir, options, runtime });
     if (testCase.id === 'SIT-CONN-018') return await executeSitConnectorManualUnhealthyOption({ page, state, caseDir });
+    if (testCase.id === 'SIT-CONN-003') return await executeSitConnectorModes({ page, state, caseDir });
     if (testCase.id === 'SIT-TEAMS-DOC-001') {
       return await executeSitTeamsDocumentPermission({ page, state, testCase, caseDir, timeoutMs, fixture });
     }
@@ -17052,7 +17115,8 @@ function buildCaseEvidenceManifest(state, caseDir) {
   const screenshotEntries = Object.entries(state.screenshots || {})
     .filter(([, file]) => typeof file === 'string' && file && fs.existsSync(file));
   const before = screenshotEntries.find(([key]) => /before|initial/i.test(key)) || screenshotEntries[0] || null;
-  const after = screenshotEntries.find(([key]) => /after|final|result|assertion/i.test(key))
+  const after = screenshotEntries.find(([key]) => /final|result|assertion/i.test(key))
+    || [...screenshotEntries].reverse().find(([key]) => /after|reply|completed/i.test(key))
     || screenshotEntries.at(-1)
     || null;
   const action = selectTrustedActionScreenshot(screenshotEntries, before, after);
@@ -17088,6 +17152,10 @@ function buildCaseEvidenceManifest(state, caseDir) {
     || /artifact.*preview|preview.*artifact|web_preview/i.test(artifactsJson);
   const redactedLogFiles = collectFiles(caseDir, (file) => /\.(?:log|txt|json)$/i.test(file)
     && /auth|host|restart|session|runtime|stderr|stdout/i.test(path.basename(file)));
+  const runMetadataFile = path.resolve(caseDir, '..', '..', 'run-metadata.json');
+  if (fs.existsSync(runMetadataFile) && fs.statSync(runMetadataFile).isFile()) {
+    redactedLogFiles.push(runMetadataFile);
+  }
   const failedOrBlocked = state.status === 'failed' || state.status === 'blocked';
   const firstDivergence = failedOrBlocked
     ? screenshotEntries.find(([key]) => /error|missing|blocked|failure|failed|timeout|divergence/i.test(key))
@@ -17180,9 +17248,10 @@ function screenshotEvidence(entry) {
 function selectTrustedActionScreenshot(entries, before, after) {
   const beforeHash = before?.[1] && fs.existsSync(before[1]) ? sha256File(before[1]) : '';
   const afterHash = after?.[1] && fs.existsSync(after[1]) ? sha256File(after[1]) : '';
+  const nonActionPhase = /(?:^|[_-])(?:before|initial|final|assertion|model[_-]?tier|precheck)(?:$|[_-])/i;
   return entries
     .filter(([key, file]) => (
-      !/before|initial|final|after|assertion|model[_-]?tier|precheck/i.test(key)
+      !nonActionPhase.test(key)
       && file !== before?.[1]
       && file !== after?.[1]
     ))
@@ -17190,7 +17259,7 @@ function selectTrustedActionScreenshot(entries, before, after) {
       const [key, file] = entry;
       const hash = sha256File(file);
       let score = 0;
-      if (/visible.*selected|selected.*chip|action|submitted|sent|invoked|attached|preview/i.test(key)) score += 100;
+      if (/visible.*selected|selected.*chip|action|submitted|sent|invoked|attached|preview|after[_-]?(?:fill|send)/i.test(key)) score += 100;
       if (/selected|opened|created|uploaded|removed|confirmed|executed/i.test(key)) score += 60;
       if (/manual.*selected/i.test(key)) score += 20;
       return { entry, index, hash, score };

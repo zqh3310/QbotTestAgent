@@ -262,7 +262,7 @@ function patchCoverageOverview(workbook) {
     '', '', '', '', '', '', '',
   ]];
   sheet.getRange('A2:H2').values = [[
-    `生产门禁版：360Teams 5.2.20 (2119072293) + QWork/runtime 0.0.12 + DEV + M3；92 条唯一 Case；产品基线 ${LATEST_MAIN_BASELINE.ref}@${LATEST_MAIN_BASELINE.commit}；逐 Case 可信复核。`,
+    `生产门禁版：360Teams 5.2.20 (2119072293) + QWork/runtime 0.0.12+（每轮以签名 release 固定精确版本）+ DEV + M3；92 条唯一 Case；产品基线 ${LATEST_MAIN_BASELINE.ref}@${LATEST_MAIN_BASELINE.commit}；逐 Case 可信复核。`,
     '', '', '', '', '', '', '',
   ]];
 }
@@ -288,7 +288,7 @@ function patchRuleSheets(workbook) {
       ['case_count', 92],
       ['product_baseline', `${LATEST_MAIN_BASELINE.repository} ${LATEST_MAIN_BASELINE.ref}@${LATEST_MAIN_BASELINE.commit}`],
       ['host', '360Teams 5.2.20 (2119072293)'],
-      ['qwork_runtime', '0.0.12'],
+      ['qwork_runtime', '0.0.12+；正式轮必须用签名 release envelope 固定精确 version/commit/build/manifest SHA-256'],
       ['control_plane', 'DEV（外部固定 URL）'],
       ['model_tier', 'M3'],
       ['timeout_ms', 600000],

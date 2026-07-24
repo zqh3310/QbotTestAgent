@@ -60,3 +60,22 @@ test('strict contract rejects legacy selector fallback and bridge-only visible a
   assert.ok(audit.errors.some((item) => item.includes('失效产品断言')));
   assert.ok(audit.warnings.some((item) => item.includes('bridge')));
 });
+
+test('evidence roles are universal for public state but artifact-scoped by Case identity', () => {
+  const init = migrateProductionCase({
+    ...sourceCase('SIT-INIT-002'),
+    steps: '1. 点击添加文件入口。\n2. 核对首页产品入口。',
+  });
+  const initRoles = new Set(init.required_evidence_roles.split(','));
+  assert.equal(initRoles.has('public_state_readback'), true);
+  assert.equal(initRoles.has('artifact_path_sha256'), false);
+  assert.equal(initRoles.has('artifact_content_readback'), false);
+  assert.equal(initRoles.has('artifact_preview'), false);
+
+  const artifact = migrateProductionCase(sourceCase('SIT-ART-002'));
+  const artifactRoles = new Set(artifact.required_evidence_roles.split(','));
+  assert.equal(artifactRoles.has('public_state_readback'), true);
+  assert.equal(artifactRoles.has('artifact_path_sha256'), true);
+  assert.equal(artifactRoles.has('artifact_content_readback'), true);
+  assert.equal(artifactRoles.has('artifact_preview'), true);
+});
