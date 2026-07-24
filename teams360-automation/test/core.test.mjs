@@ -43,6 +43,7 @@ import {
   configureTeamsFixtureRuntime,
   installTeamsPageGuards,
   parseCasebookRunnerOptions,
+  pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
@@ -52,6 +53,7 @@ import {
   cleanSkillChipLabel,
   createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
+  selectTrustedActionScreenshot,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 
 function listen(server, port = 0) {
@@ -484,6 +486,60 @@ test('Teams fixture runtime restores the packaged host and keeps the local-QBot 
   assert.match(options['restart-command'], /file:\/\/\/Users\/test\/\.deepbank\/ui\/0\.0\.4\/index\.html/);
   assert.doesNotMatch(options['restart-command'], /restart-qbot-slim\.sh/);
   assert.match(options['qbot-stderr-log'], /teams360-automation\/state\/managed-360teams\.log$/);
+});
+
+test('managed session pins the observed external control plane for scoped host relaunch rollback', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-session-control-plane-'));
+  const sessionFile = path.join(root, 'session.json');
+  fs.writeFileSync(sessionFile, JSON.stringify({
+    schema_version: 1,
+    profile_mode: 'live',
+    profile_dir: '/tmp/profile',
+    profile_alias: '/tmp/profile-alias',
+    port: 55960,
+    control_plane_origin: '',
+  }));
+  try {
+    const first = pinManagedSessionControlPlane(
+      sessionFile,
+      'https://deepbank-control-dev.sandbox.deepbank.daikuan.qihoo.net/path',
+    );
+    assert.equal(first.changed, true);
+    assert.equal(
+      JSON.parse(fs.readFileSync(sessionFile, 'utf8')).control_plane_origin,
+      'https://deepbank-control-dev.sandbox.deepbank.daikuan.qihoo.net',
+    );
+    const second = pinManagedSessionControlPlane(
+      sessionFile,
+      'https://deepbank-control-dev.sandbox.deepbank.daikuan.qihoo.net',
+    );
+    assert.equal(second.changed, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('trusted action evidence may equal the settled final frame but not the pre-action frame', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-action-evidence-'));
+  const before = path.join(root, 'before.png');
+  const action = path.join(root, 'action.png');
+  const final = path.join(root, 'final.png');
+  fs.writeFileSync(before, 'before-state');
+  fs.writeFileSync(action, 'settled-action-state');
+  fs.writeFileSync(final, 'settled-action-state');
+  try {
+    const entries = [
+      ['before', before],
+      ['runtime_action', action],
+      ['final', final],
+    ];
+    assert.deepEqual(
+      selectTrustedActionScreenshot(entries, entries[0], entries[2]),
+      entries[1],
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Teams fixture runtime can opt into the host-relaunch lane for real fixture servers', async () => {

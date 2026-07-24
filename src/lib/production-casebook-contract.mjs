@@ -236,12 +236,19 @@ function evidenceRolesFor(testCase) {
   const id = String(testCase.id || '');
   const kind = String(testCase.kind || '');
   const text = `${kind}\n${testCase.module || ''}\n${testCase.submodule || ''}\n${testCase.scenario || ''}\n${testCase.steps || ''}`;
+  const conversationActions = String(testCase.steps || '')
+    // Product-state assertions such as “发送门禁/发送不可用” describe a
+    // disabled control; they are not evidence that the Case actually sent a
+    // prompt. Requiring transcript/reply-delta for those read-only Cases turns
+    // a valid UI observation into a framework failure.
+    .replace(/发送(?:门禁|不可用|按钮(?:状态)?|状态)/g, '');
   if (
-    /conversation|attachment/i.test(kind)
-    || /发送|回复|对话|会话|提问|请求.*(?:生成|读取|修改)|让\s*(?:QBot|Agent)/i.test(text)
+    /attachment/i.test(kind)
+    || /发送|点击.{0,12}发送|等待.{0,16}(?:Agent\s*)?回复|transcript|reply-delta/i.test(conversationActions)
   ) {
     ['prompt', 'task_id', 'transcript', 'reply_delta'].forEach((item) => roles.add(item));
   }
+  if (id === 'SIT-AUTH-003') roles.add('task_id');
   if (
     /(?:调用|强走|执行).*(?:技能|连接器|工具)|(?:技能|连接器|工具).*(?:调用|强走|执行)|MCP|qbot_web|qbot_chart/i.test(text)
   ) {

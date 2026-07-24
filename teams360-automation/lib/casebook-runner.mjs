@@ -568,6 +568,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
         resetConnection: connection.reset,
       });
       const runtimeIdentity = await configureTeamsFixtureRuntime(options, browser);
+      pinManagedSessionControlPlane(options.session, runtimeIdentity.controlPlane);
       if (!callerManagedCdp) {
         options['restart-reconnect-hook'] = async () => {
           // The managed host restart invalidates both the browser and the
@@ -687,9 +688,23 @@ export async function configureTeamsFixtureRuntime(options, browser) {
     .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
   if (!page) throw new Error('Cannot configure Teams fixture runtime without the QWork QBot page.');
   const qworkUiUrl = page.url();
-  const controlPlane = String(options['control-plane-url'] || await page.evaluate(() => (
-    typeof process !== 'undefined' ? process.env.DEEPBANK_SERVER || '' : ''
-  )));
+  const requestedControlPlane = String(options['control-plane-url'] || '').trim();
+  const observedControlPlane = String(await page.evaluate(() => (
+    typeof process !== 'undefined'
+      ? process.env.DEEPBANK_SERVER || process.env.QBOT_SERVER_URL || ''
+      : ''
+  ))).trim();
+  if (
+    requestedControlPlane
+    && observedControlPlane
+    && new URL(requestedControlPlane).origin !== new URL(observedControlPlane).origin
+  ) {
+    throw new Error(
+      `Managed QWork control plane drift: requested=${new URL(requestedControlPlane).origin} `
+      + `observed=${new URL(observedControlPlane).origin}`,
+    );
+  }
+  const controlPlane = requestedControlPlane || observedControlPlane;
   const sessionFile = path.resolve(String(options.session || DEFAULT_SESSION));
   const session = readSession(sessionFile);
   const upstreamCdpUrl = String(session?.cdp_url || '').trim();
@@ -700,6 +715,24 @@ export async function configureTeamsFixtureRuntime(options, browser) {
   if (managedLog) options['qbot-stderr-log'] = managedLog;
   applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl);
   return { controlPlane, qworkUiUrl };
+}
+
+export function pinManagedSessionControlPlane(sessionFile, controlPlane) {
+  const file = path.resolve(String(sessionFile || DEFAULT_SESSION));
+  const current = readSession(file);
+  if (!current || current.profile_mode !== 'live') {
+    throw new Error('Cannot pin control plane without a managed live 360Teams session.');
+  }
+  const origin = new URL(String(controlPlane || '')).origin;
+  if (String(current.control_plane_origin || '') === origin) return { file, origin, changed: false };
+  const next = {
+    ...current,
+    control_plane_origin: origin,
+  };
+  const temporary = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  return { file, origin, changed: true };
 }
 
 function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {

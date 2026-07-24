@@ -79,3 +79,34 @@ test('evidence roles are universal for public state but artifact-scoped by Case 
   assert.equal(artifactRoles.has('artifact_content_readback'), true);
   assert.equal(artifactRoles.has('artifact_preview'), true);
 });
+
+test('conversation evidence roles follow real send actions, not read-only send-state wording', () => {
+  const runtimeState = migrateProductionCase({
+    ...sourceCase('SIT-INIT-004'),
+    scenario: 'Teams 内 QWork 运行环境状态必须与输入/发送门禁一致',
+    steps: '1. 回读输入区状态。\n2. 环境未 ready 时确认发送不可用。\n3. 保存发送门禁截图。',
+  });
+  const runtimeRoles = new Set(runtimeState.required_evidence_roles.split(','));
+  assert.equal(runtimeRoles.has('prompt'), false);
+  assert.equal(runtimeRoles.has('transcript'), false);
+
+  const realConversation = migrateProductionCase({
+    ...sourceCase('SIT-HOME-015'),
+    kind: 'conversation',
+    steps: '1. 输入问题并发送。\n2. 等待 Agent 回复，保存 transcript 和 reply-delta。',
+  });
+  const conversationRoles = new Set(realConversation.required_evidence_roles.split(','));
+  assert.equal(conversationRoles.has('prompt'), true);
+  assert.equal(conversationRoles.has('task_id'), true);
+  assert.equal(conversationRoles.has('transcript'), true);
+  assert.equal(conversationRoles.has('reply_delta'), true);
+
+  const restart = migrateProductionCase({
+    ...sourceCase('SIT-AUTH-003'),
+    kind: 'auth',
+    steps: '1. 记录真实历史任务。\n2. 重启宿主。\n3. 核对同一历史任务。',
+  });
+  const restartRoles = new Set(restart.required_evidence_roles.split(','));
+  assert.equal(restartRoles.has('task_id'), true);
+  assert.equal(restartRoles.has('transcript'), false);
+});

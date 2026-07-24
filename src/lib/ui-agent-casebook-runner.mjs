@@ -2566,22 +2566,101 @@ async function executeSitAuth003({ page, state, caseDir, options, runtime }) {
     markBlocked(state, '该用例需要关闭并重启 QBot 验证 refresh token 恢复；当前 runner 仅连接既有 CDP 页面，缺少可控重启能力。');
     return;
   }
+  await ensureSidebarExpanded(page, state);
+  const before = await authPersistenceSnapshot(page);
+  state.artifacts.auth_003_before_identity = before;
+  state.artifacts.auth_003_task_identity = { task_id: before.anchor_task_id };
   state.screenshots.auth_003_before_restart = await shot(page, caseDir, 'auth-003-before-restart');
+  recordStep(
+    state,
+    '记录重启前登录身份与历史任务',
+    '应从用户可见侧栏和公开 session API 同时读取同一真实登录身份及至少一个历史 taskId。',
+    `identityPresent=${before.identity_present}；sessionCount=${before.session_count}；visibleTaskCount=${before.visible_task_count}；anchorTaskId=${before.anchor_task_id || '空'}`,
+    before.identity_present && Boolean(before.anchor_task_id) ? 'passed' : 'blocked',
+    state.screenshots.auth_003_before_restart,
+    before.identity_present && before.anchor_task_id ? '' : 'automation_error',
+  );
+  if (!before.identity_present || !before.anchor_task_id) {
+    markBlocked(state, '受控 live profile 缺少可读登录身份或历史任务，无法验证重启后的 refresh-token 连续性。');
+    return;
+  }
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '登录态恢复验证' });
   if (!restarted.ok) {
+    state.screenshots.auth_003_restart_failure = await shot(page, caseDir, 'auth-003-restart-failure').catch(() => '');
     markBlocked(state, restarted.reason);
     return;
   }
   page = restarted.page;
   const workbench = await waitForQbotWorkbench(page, 90000);
+  await ensureSidebarExpanded(page, state);
+  const after = await authPersistenceSnapshot(page, before.anchor_task_id);
+  state.artifacts.auth_003_after_identity = after;
   state.screenshots.auth_003_after_restart = await shot(page, caseDir, 'auth-003-after-restart');
+  recordStep(
+    state,
+    '重启后读回登录身份与同一历史任务',
+    '不得重新输入账号；用户身份哈希必须一致，重启前 anchor taskId 必须仍由公开 API 与可见侧栏共同读回。',
+    `identityMatch=${before.identity_sha256 === after.identity_sha256}；apiHasAnchor=${after.api_has_anchor}；visibleHasAnchor=${after.visible_has_anchor}`,
+    workbench.ok && before.identity_sha256 === after.identity_sha256 && after.api_has_anchor && after.visible_has_anchor
+      ? 'passed'
+      : 'failed',
+    state.screenshots.auth_003_after_restart,
+  );
   recordAssertion(
     state,
     '重启后登录态恢复',
     '关闭并重启 QBot 后应通过已持久化的 refresh token/session 恢复工作台，不要求用户重复登录。',
-    workbench.ok,
-    workbench.reason,
+    workbench.ok && before.identity_sha256 === after.identity_sha256,
+    `${workbench.reason}；identityMatch=${before.identity_sha256 === after.identity_sha256}`,
   );
+  recordAssertion(
+    state,
+    '重启后同一历史任务恢复',
+    '重启前选定的真实历史 taskId 必须同时出现在公开 session API 与用户可见侧栏。',
+    after.api_has_anchor && after.visible_has_anchor,
+    `anchorTaskId=${before.anchor_task_id}；apiHasAnchor=${after.api_has_anchor}；visibleHasAnchor=${after.visible_has_anchor}`,
+  );
+}
+
+async function authPersistenceSnapshot(page, expectedTaskId = '') {
+  const authText = String(await page.locator('[data-testid="sidebar-auth"]').first()
+    .innerText({ timeout: 2500 }).catch(() => '')).replace(/\s+/g, ' ').trim();
+  const sessions = await page.evaluate(async () => {
+    if (typeof window.agent?.listSessions !== 'function') return [];
+    const value = await window.agent.listSessions().catch(() => []);
+    return Array.isArray(value) ? value : [];
+  }).catch(() => []);
+  const visibleTaskIds = await page.locator('[data-testid^="session-item-"]').evaluateAll((elements) => (
+    elements
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      })
+      .map((element) => String(element.getAttribute('data-testid') || '').replace(/^session-item-/, ''))
+      .filter(Boolean)
+  )).catch(() => []);
+  const normalizedSessions = sessions
+    .map((item) => ({
+      id: String(item?.id || '').trim(),
+      title_sha256: sha256Text(String(item?.title || '')),
+    }))
+    .filter((item) => item.id);
+  const requested = String(expectedTaskId || '').trim();
+  const anchor = requested
+    || normalizedSessions.find((item) => visibleTaskIds.includes(item.id))?.id
+    || normalizedSessions[0]?.id
+    || '';
+  return {
+    identity_present: Boolean(authText),
+    identity_sha256: authText ? sha256Text(authText) : '',
+    session_count: normalizedSessions.length,
+    visible_task_count: visibleTaskIds.length,
+    anchor_task_id: anchor,
+    api_has_anchor: Boolean(anchor && normalizedSessions.some((item) => item.id === anchor)),
+    visible_has_anchor: Boolean(anchor && visibleTaskIds.includes(anchor)),
+    sessions: normalizedSessions.slice(0, 20),
+  };
 }
 
 async function executeSitAuth005({ page, state, caseDir }) {
@@ -17449,9 +17528,8 @@ function screenshotEvidence(entry) {
   return { available: true, phase, ...fileEvidence(file) };
 }
 
-function selectTrustedActionScreenshot(entries, before, after) {
+export function selectTrustedActionScreenshot(entries, before, after) {
   const beforeHash = before?.[1] && fs.existsSync(before[1]) ? sha256File(before[1]) : '';
-  const afterHash = after?.[1] && fs.existsSync(after[1]) ? sha256File(after[1]) : '';
   const nonActionPhase = /(?:^|[_-])(?:before|initial|final|assertion|model[_-]?tier|precheck)(?:$|[_-])/i;
   return entries
     .filter(([key, file]) => (
@@ -17468,7 +17546,12 @@ function selectTrustedActionScreenshot(entries, before, after) {
       if (/manual.*selected/i.test(key)) score += 20;
       return { entry, index, hash, score };
     })
-    .filter(({ hash }) => hash && hash !== beforeHash && hash !== afterHash)
+    // The final screenshot is often captured immediately after a successful
+    // read-only action and can legitimately be pixel-identical to the named
+    // action screenshot. It must still differ from the pre-action state; do
+    // not discard the only action evidence merely because finishCase captured
+    // the same settled UI again.
+    .filter(({ hash }) => hash && hash !== beforeHash)
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .at(0)?.entry || null;
 }
