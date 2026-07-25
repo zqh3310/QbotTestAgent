@@ -43,6 +43,7 @@ import {
   sentPromptFidelity,
   streamingScrollFollowVerdict,
   trustedTaskIdentityEvidence,
+  unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
@@ -235,6 +236,31 @@ assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', null),
   false,
   '自动态 null 不能被误判为技能禁用态',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', []),
+  true,
+  'QWork 0.0.14 capabilities 省略旧连接器字段时，应使用 setConnectorsDisabled 返回的空数组确认禁用态',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', undefined),
+  false,
+  '连接器禁用态不能只因 capabilities 缺字段而误判成功',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined),
+  true,
+  '旧版 capabilities 空数组仍应确认连接器禁用态',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'auto', null),
+  true,
+  '连接器自动态应接受 setConnectorsAuto 返回的 null',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', null),
+  false,
+  '自动态 null 不能被误判为连接器禁用态',
 );
 for (const id of [
   'SIT-INIT-004',
@@ -447,7 +473,7 @@ const required = [
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
   ['QWork 0.0.11 统一加号菜单按技能连接器模式子菜单兼容', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*composer-plus-sub-mode[\s\S]*composer-plus-sub-skill[\s\S]*composer-plus-sub-connector[\s\S]*openUnifiedComposerSubmenu/],
   ['独立安全档位菜单不误走统一加号子菜单', /if \(UNIFIED_COMPOSER_SUBMENUS\[menuKind\] && await unifiedComposerPlusAvailable\(page\)\)/],
-  ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*selectedConnectors === null[\s\S]*selectedConnectors\.length === 0/],
+  ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*unifiedConnectorModeApplied[\s\S]*bridgeSelection === null[\s\S]*selectedConnectors\.length === 0[\s\S]*bridgeSelection\.length === 0/],
   ['统一菜单手动态以真实 DOM 能力列表而非 innerText placeholder 判定', /setUnifiedSkillMode[\s\S]*input\[placeholder\*="搜索技能"\][\s\S]*composer-plus-list[\s\S]*composer-skill-option-[\s\S]*setUnifiedConnectorMode[\s\S]*composer-connector-option-[\s\S]*当前：手动选择连接器/],
   ['技能 Fixture finally 关闭 renderer adapter 而非仅关闭 HTTP fixture', /executeSkillRegressionFixtureCase[\s\S]*cleanup: injected\.cleanup \|\| fixture\.close/],
   ['连接器 Fixture 手动选择等待唯一健康目录项', /executeSitConnectorModes[\s\S]*expectedConnectorKey[\s\S]*selectFirstManualConnector[\s\S]*连接器 Fixture 可见目录就绪[\s\S]*禁止在真实 DEV 缓存目录上继续执行/],

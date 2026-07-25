@@ -11147,11 +11147,11 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   while (Date.now() < deadline) {
     await page.waitForTimeout(150);
     capabilities = await currentCapabilities(page);
-    if (unifiedConnectorModeApplied(capabilities, mode)) break;
+    if (unifiedConnectorModeApplied(capabilities, mode, invoked.selection)) break;
   }
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
   const selectedConnectors = capabilities?.selectedConnectors;
-  const ok = unifiedConnectorModeApplied(capabilities, mode);
+  const ok = unifiedConnectorModeApplied(capabilities, mode, invoked.selection);
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
   recordStep(
     state,
@@ -11165,7 +11165,7 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   return ok;
 }
 
-function unifiedConnectorModeApplied(capabilities, mode) {
+export function unifiedConnectorModeApplied(capabilities, mode, bridgeSelection = undefined) {
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
   const selectedConnectors = capabilities?.selectedConnectors;
   if (storedMode === mode) return true;
@@ -11173,8 +11173,11 @@ function unifiedConnectorModeApplied(capabilities, mode) {
   // capabilities. The server routing snapshot can therefore briefly retain
   // "auto" even though the renderer has already applied disabled=[]. Match
   // QWork's own ComposerTools derivation: null=auto, []=disabled.
-  if (mode === 'auto') return selectedConnectors === null;
-  if (mode === 'disabled') return Array.isArray(selectedConnectors) && selectedConnectors.length === 0;
+  if (mode === 'auto') return selectedConnectors === null || bridgeSelection === null;
+  if (mode === 'disabled') {
+    return (Array.isArray(selectedConnectors) && selectedConnectors.length === 0)
+      || (Array.isArray(bridgeSelection) && bridgeSelection.length === 0);
+  }
   return false;
 }
 

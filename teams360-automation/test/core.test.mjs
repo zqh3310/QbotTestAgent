@@ -54,6 +54,7 @@ import {
   createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
   selectTrustedActionScreenshot,
+  unifiedConnectorModeApplied,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 
 function listen(server, port = 0) {
@@ -880,6 +881,7 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /unifiedConnectorModeApplied/);
   assert.match(runner, /selectedConnectors === null/);
   assert.match(runner, /Array\.isArray\(selectedConnectors\) && selectedConnectors\.length === 0/);
+  assert.match(runner, /Array\.isArray\(bridgeSelection\) && bridgeSelection\.length === 0/);
   assert.match(runner, /public-catalog-visible-label/);
   assert.match(runner, /selectedConnectors\.includes\(connectorKey\)/);
   assert.match(runner, /teams-upstream-cdp-url/);
@@ -1494,4 +1496,12 @@ test('trusted validation overlay can select a clean subset from a complete match
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('QWork 0.0.14 connector bridge result survives omitted legacy capability fields', () => {
+  assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', []), true);
+  assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', undefined), false);
+  assert.equal(unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined), true);
+  assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'auto', null), true);
+  assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', null), false);
 });
