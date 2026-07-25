@@ -173,7 +173,7 @@ export async function launchLiveTeams({
       process_started: identity.started,
       process_command: redactText(identity.command),
       browser: String(version.Browser || ''),
-      control_plane_origin: safeControlPlaneOrigin(environment.DEEPBANK_SERVER),
+      control_plane_origin: managedControlPlaneOrigin(environment),
       release_env: String(environment.QBOT_RELEASE_ENV || environment.DEEPBANK_ENV || '').trim().toLowerCase(),
       process_log: processLog,
       started_at: new Date().toISOString(),
@@ -219,6 +219,12 @@ function safeControlPlaneOrigin(value) {
   } catch {
     return '';
   }
+}
+
+export function managedControlPlaneOrigin(environment = {}) {
+  return safeControlPlaneOrigin(
+    environment.DEEPBANK_SERVER || environment.QBOT_SERVER_URL,
+  );
 }
 
 export function managedTeamsEnvironment(source = process.env, { e2e = true } = {}) {

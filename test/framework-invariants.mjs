@@ -153,6 +153,21 @@ const stoppedConversationEvidence = buildTerminalConversationEvidence({
 assert.match(stoppedConversationEvidence.transcript, /## USER[\s\S]*请生成详细方案。[\s\S]*## TERMINAL_EVENT/);
 assert.match(stoppedConversationEvidence.replyDelta, /## NO_ASSISTANT_REPLY[\s\S]*assistant_reply_present=false/);
 assert.equal(stoppedConversationEvidence.record.assistant_reply_present, false);
+assert.equal(
+  trustedTaskIdentityEvidence({
+    id: 'SIT-TEAMS-NEW-001',
+    artifacts: {
+      confirmed_send_identities: [{
+        identity_id: 'draft-instance:2:send:1',
+        identity_kind: 'draft_execution_identity',
+        source: 'public_e2e_state.draftInstanceId+sendCount',
+        task_persisted: false,
+      }],
+    },
+  })?.identity_id,
+  'draft-instance:2:send:1',
+  'Teams 重开前任务未持久化的产品失败路径必须保留已确认发送的执行身份',
+);
 assert.match(
   runner,
   /executeSitInit002[\s\S]*composerProductEntrySnapshot/,
@@ -319,6 +334,11 @@ assert.match(
   '能力 chip composer 发送前应剔除 chip 文本校验用户正文，不能用 fill 清空 selectedSkills',
 );
 assert.match(runner, /createProject bridge 20000ms 未返回/, '项目测试数据 bridge 必须有硬超时，不能拖满整条 Case');
+assert.match(
+  runner,
+  /terminal\.idle && \(artifactExists \|\| explicitFailure\)/,
+  'Teams 运行中任务恢复只能由真实成果或助手明确失败终态通过，不能让用户 prompt 文本冒充完成证据',
+);
 
 assert.deepEqual(
   forbiddenMatchesForCase('已收到：__DEEPBANK_E2E_ASK__', 'SIT-HITL-002'),

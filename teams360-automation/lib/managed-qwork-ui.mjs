@@ -71,20 +71,23 @@ async function readGuestWorkbench(webview) {
           () => reject(new Error(label + ' timed out after ' + ms + 'ms')),
           ms,
         ));
-        let auth = null;
-        let capabilities = null;
-        try {
-          auth = await Promise.race([
-            Promise.resolve().then(() => window.agent?.getAuthStatus?.()),
-            timeout(5000, 'getAuthStatus'),
-          ]);
-        } catch {}
-        try {
-          capabilities = await Promise.race([
-            Promise.resolve().then(() => window.agent?.capabilities?.()),
-            timeout(5000, 'capabilities'),
-          ]);
-        } catch {}
+        const probe = async (operation, label) => {
+          try {
+            return await Promise.race([
+              Promise.resolve().then(operation),
+              timeout(5000, label),
+            ]);
+          } catch {
+            return null;
+          }
+        };
+        // Probe independent guest APIs concurrently. Running the two 5s
+        // probes serially races the outer 10s executeJavaScript timeout and
+        // can reject a fully mounted, signed-in workbench at the boundary.
+        const [auth, capabilities] = await Promise.all([
+          probe(() => window.agent?.getAuthStatus?.(), 'getAuthStatus'),
+          probe(() => window.agent?.capabilities?.(), 'capabilities'),
+        ]);
         return {
           url: location.href,
           authenticated: Boolean(auth?.authenticated),

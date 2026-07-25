@@ -81,6 +81,7 @@ const REPLY_EVIDENCE_OPTIONAL_CASE_IDS = new Set([
 const DRAFT_TERMINAL_IDENTITY_CASE_IDS = new Set([
   'SIT-HOME-023',
   'SIT-HOME-025',
+  'SIT-TEAMS-NEW-001',
 ]);
 
 const DEFAULT_SINGLE_HOST_PIPELINE_SIZE = 5;
@@ -1766,6 +1767,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
     replies.push({ ...reply, label: turn.label || `第 ${turnNo} 轮` });
     writeReplyArtifacts(state, caseDir, [{ ...reply, label: turn.label || `第 ${turnNo} 轮` }]);
     recordReplyWaitAssertion(state, reply, turn.label || `第 ${turnNo} 轮`);
+    recordModelServiceAvailabilityAssertion(state, reply.deltaText, turn.label || `第 ${turnNo} 轮`);
     const environmentBlocker = conversationEnvironmentBlocker(testCase, reply.deltaText);
     if (environmentBlocker) {
       markBlocked(state, environmentBlocker);
@@ -3576,7 +3578,13 @@ async function executeSitTeamsReopenCompletedTask({ page, state, testCase, caseD
   const beforeProduct = await teamsPersistenceSnapshot(page, beforeState.activeId);
   state.artifacts.teams_reopen_before = beforeProduct;
   if (!beforeState.activeId || !beforeProduct.sessionFound) {
-    recordAssertion(state, 'Teams 重开前任务持久化前置', '关闭宿主前应能从产品 session 列表回读当前任务。', false, JSON.stringify(beforeProduct), 'automation_error');
+    recordAssertion(
+      state,
+      'Teams 重开前任务持久化前置',
+      '关闭宿主前应能从产品 session 列表回读当前任务。',
+      false,
+      JSON.stringify(beforeProduct),
+    );
     return;
   }
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: 'Teams 已完成任务关闭重进' });
@@ -3620,26 +3628,58 @@ async function executeSitTeamsReopenRunningTask({ page, state, testCase, caseDir
   const reopened = workbench.ok ? await reopenSessionAndReadback(page, started.activeId) : { ok: false, text: '', running: false, reason: workbench.reason };
   const terminal = await waitForPersistedTaskTerminal(page, Math.min(Number(timeoutMs || 600000), 600000));
   const finalText = await currentThreadText(page);
+  const assistantText = (await assistantMessageTexts(page)).join('\n').trim();
   const artifact = path.join(workspace, 'teams_resume_plan.md');
   const artifactExists = fs.existsSync(artifact) && fs.statSync(artifact).size > 0;
-  const explicitFailure = /失败|中断|异常|重试|已停止|无法继续/.test(finalText);
+  const explicitFailure = /失败|中断|异常|重试|已停止|无法继续|暂时不可达|无法连接|VPN/.test(assistantText);
   while (Date.now() - startedAt < MIN_REPLY_WAIT_MS) await page.waitForTimeout(500);
   const replyEvidence = {
     label: 'Teams 运行中任务关闭重进',
-    fullText: finalText,
-    deltaText: finalText,
+    fullText: assistantText,
+    deltaText: assistantText,
     waited_ms: Date.now() - startedAt,
     min_wait_ms: MIN_REPLY_WAIT_MS,
     timeout_ms: Math.min(Number(timeoutMs || 600000), 600000),
     wait_kind: 'teams-host-reopen',
     incomplete: !terminal.idle,
   };
-  writeReplyArtifacts(state, caseDir, [replyEvidence]);
+  if (assistantText) {
+    writeReplyArtifacts(state, caseDir, [replyEvidence]);
+  } else {
+    const terminalEvidence = buildTerminalConversationEvidence({
+      prompt,
+      terminalEvent: 'controlled_failure_before_assistant_reply',
+      observation: `宿主重开后任务 idle=${terminal.idle}，未观察到助手回复，artifact=${artifactExists}`,
+    });
+    state.artifacts.terminal_conversation_evidence = terminalEvidence.record;
+    state.artifacts.transcript = path.join(caseDir, 'transcript.txt');
+    state.artifacts.reply_delta = path.join(caseDir, 'reply-delta.txt');
+    writeTextFile(state.artifacts.transcript, terminalEvidence.transcript);
+    writeTextFile(state.artifacts.reply_delta, terminalEvidence.replyDelta);
+  }
   recordReplyWaitAssertion(state, replyEvidence, 'Teams 运行中任务关闭重进');
-  state.artifacts.teams_running_reopen = { before, started, workbench, afterProduct, reopened, terminal, artifact, artifact_exists: artifactExists, explicit_failure: explicitFailure };
+  recordModelServiceAvailabilityAssertion(state, assistantText, 'Teams 运行中任务关闭重进');
+  state.artifacts.teams_running_reopen = {
+    before,
+    started,
+    workbench,
+    afterProduct,
+    reopened,
+    terminal,
+    artifact,
+    artifact_exists: artifactExists,
+    assistant_text: assistantText,
+    explicit_failure: explicitFailure,
+  };
   state.screenshots.teams_new_002_after_reopen = await shot(page, caseDir, 'teams-new-002-after-reopen-terminal');
   recordAssertion(state, '运行中任务重开后仍可定位', '重进后产品 session 列表和左侧任务列表应保留原 activeId，并可打开同一任务。', afterProduct.sessionFound && afterProduct.sidebarFound && reopened.ok, JSON.stringify({ afterProduct, reopened: { ...reopened, text: clip(reopened.text, 260) } }));
-  recordAssertion(state, '运行中任务重开后状态明确', '原任务应继续运行后完成，或进入明确可理解的失败终态；不得丢失、永久 running 或空白。', terminal.idle && (artifactExists || explicitFailure || /目标|范围|风险|执行计划|验收标准/.test(finalText)), `terminal=${JSON.stringify(terminal)}；artifact=${artifactExists}；explicitFailure=${explicitFailure}；text=${clip(finalText, 520)}`);
+  recordAssertion(
+    state,
+    '运行中任务重开后状态明确',
+    '原任务应继续运行后完成，或进入明确可理解的失败终态；不得丢失、永久 running 或空白。',
+    terminal.idle && (artifactExists || explicitFailure),
+    `terminal=${JSON.stringify(terminal)}；artifact=${artifactExists}；explicitFailure=${explicitFailure}；assistant=${clip(assistantText, 520)}；thread=${clip(finalText, 520)}`,
+  );
 }
 
 async function executeSitTeamsLocalExecution({ page, state, testCase, caseDir, timeoutMs }) {
@@ -12006,6 +12046,7 @@ export function buildTerminalConversationEvidence({
 }
 
 function recordReplyAssertions(state, testCase, prompt, reply, label) {
+  recordModelServiceAvailabilityAssertion(state, reply.deltaText, label);
   recordAssertion(
     state,
     `回复完成状态（${label}）`,
@@ -12022,6 +12063,26 @@ function recordReplyAssertions(state, testCase, prompt, reply, label) {
   }
   const duplicateEvidence = obviousDuplicateEvidence(reply.deltaText);
   recordAssertion(state, `回复可读性（${label}）`, '回复不应出现同一句、同一段或同一词组连续重复输出。', !duplicateEvidence, duplicateEvidence || '未检测到明显重复输出。');
+}
+
+function recordModelServiceAvailabilityAssertion(state, replyText, label) {
+  const evidence = modelServiceStateEvidence(replyText);
+  if (!Array.isArray(state.artifacts.model_service_states)) state.artifacts.model_service_states = [];
+  state.artifacts.model_service_states.push({
+    label,
+    unavailable: evidence.unavailable,
+    matched_text: evidence.unavailableMatch,
+    observed_at: new Date().toISOString(),
+  });
+  recordAssertion(
+    state,
+    `模型服务可用性（${label}）`,
+    '生产门禁中的真实模型任务应进入正常执行，不得以“模型服务暂时不可达/请连接 VPN”提示冒充有效回复。',
+    !evidence.unavailable,
+    evidence.unavailable
+      ? `检测到模型服务不可达：${evidence.unavailableMatch}`
+      : '未检测到模型服务不可达提示。',
+  );
 }
 
 function recordReplyWaitAssertion(state, reply, label) {

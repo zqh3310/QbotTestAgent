@@ -18,6 +18,7 @@ import {
 import {
   clearStaleChromiumSingletonLinks,
   ensureProfileAlias,
+  managedControlPlaneOrigin,
   managedQbotLaunchArgs,
   managedTeamsEnvironment,
   managedTeamsProcessLog,
@@ -121,6 +122,23 @@ test('launch-live carries an explicit credential-free QBot control plane', () =>
     () => parseArgs(['launch-live', '--control-plane-url', 'https://user:secret@example.test']),
     /credential-free/,
   );
+});
+
+test('managed PROD relaunch persists the QBOT control plane in session identity', () => {
+  assert.equal(
+    managedControlPlaneOrigin({
+      QBOT_SERVER_URL: 'https://qbot-api.360shuke.com/path',
+    }),
+    'https://qbot-api.360shuke.com',
+  );
+  assert.equal(
+    managedControlPlaneOrigin({
+      DEEPBANK_SERVER: 'https://dev.example.test/path',
+      QBOT_SERVER_URL: 'https://qbot-api.360shuke.com',
+    }),
+    'https://dev.example.test',
+  );
+  assert.equal(managedControlPlaneOrigin({}), '');
 });
 
 test('relative output paths resolve from the QbotTestAgent root', () => {
@@ -768,6 +786,7 @@ test('pinned Teams QWork remount is host-owned and verifies signed-in workbench 
   assert.match(source, /capabilitiesReady/);
   assert.match(source, /workbenchReady/);
   assert.match(source, /360Teams webview\.executeJavaScript workbench probe/);
+  assert.match(source, /Promise\.all\(\[\s*probe\(\(\) => window\.agent\?\.getAuthStatus/);
   assert.match(source, /browser\._connection\?\.close\?/);
 });
 
