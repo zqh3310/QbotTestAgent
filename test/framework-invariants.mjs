@@ -162,6 +162,46 @@ assert.equal(
   null,
   '普通会话不得用 execution session 绕过持久化 task id 证据要求',
 );
+assert.deepEqual(
+  trustedTaskIdentityEvidence({
+    id: 'SIT-HOME-055',
+    status: 'failed',
+    result_category: 'bug',
+    artifacts: {
+      final_task_identity: { active_id: '' },
+      confirmed_send_identities: [{
+        identity_id: 'draft-instance:23:send:35',
+        identity_kind: 'draft_execution_identity',
+        source: 'public_e2e_state.draftInstanceId+sendCount',
+        task_persisted: false,
+      }],
+    },
+  }),
+  {
+    identity_id: 'draft-instance:23:send:35',
+    identity_kind: 'draft_execution_identity',
+    source: 'public_e2e_state.draftInstanceId+sendCount',
+    task_persisted: false,
+  },
+  '产品失败终态可使用已确认发送的草稿执行身份，保留失败前的可信任务归属链',
+);
+assert.equal(
+  trustedTaskIdentityEvidence({
+    id: 'SIT-HOME-055',
+    status: 'failed',
+    result_category: 'automation_error',
+    artifacts: {
+      confirmed_send_identities: [{
+        identity_id: 'draft-instance:23:send:35',
+        identity_kind: 'draft_execution_identity',
+        source: 'public_e2e_state.draftInstanceId+sendCount',
+        task_persisted: false,
+      }],
+    },
+  }),
+  null,
+  'automation_error 不得使用草稿执行身份掩盖缺失的持久化 task id',
+);
 const stoppedConversationEvidence = buildTerminalConversationEvidence({
   prompt: '请生成详细方案。',
   terminalEvent: 'user_cancelled_before_assistant_reply',

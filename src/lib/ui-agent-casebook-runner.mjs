@@ -17940,7 +17940,17 @@ export function trustedTaskIdentityEvidence(state = {}) {
       task_persisted: true,
     };
   }
-  if (!DRAFT_TERMINAL_IDENTITY_CASE_IDS.has(String(state.id || ''))) return null;
+  const caseAllowsDraftTerminalIdentity = DRAFT_TERMINAL_IDENTITY_CASE_IDS.has(String(state.id || ''));
+  // A product can fail after a publicly confirmed send but before it persists
+  // an active task id (for example, an immediate model-service failure). Keep
+  // that execution bound to the observed draft/session identity so the
+  // product bug retains a complete evidence chain. Successful ordinary
+  // conversations and automation errors must still prove a persisted task id.
+  const productFailedBeforeTaskPersistence = (
+    state.status === 'failed'
+    && state.result_category === 'bug'
+  );
+  if (!caseAllowsDraftTerminalIdentity && !productFailedBeforeTaskPersistence) return null;
   const identity = Array.isArray(artifacts.confirmed_send_identities)
     ? [...artifacts.confirmed_send_identities].reverse().find((item) => (
       ['execution_session_id', 'draft_execution_identity'].includes(item?.identity_kind)
