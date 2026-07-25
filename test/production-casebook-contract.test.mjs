@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
+  ATTACHMENT_EVIDENCE_ROLES,
   LATEST_MAIN_BASELINE,
   PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+  attachmentEvidenceApplicability,
   migrateProductionCase,
   productionCaseMigrationPlan,
+  resolveEvidenceRoleApplicability,
   validateTrustedProductionCaseContract,
 } from '../src/lib/production-casebook-contract.mjs';
+import { buildCaseEvidenceManifest } from '../src/lib/ui-agent-casebook-runner.mjs';
 
 function sourceCase(id) {
   return {
@@ -133,4 +140,118 @@ test('attachment limit rejections use a no-send evidence contract', () => {
     assert.equal(roles.has('transcript'), false, id);
     assert.equal(roles.has('reply_delta'), false, id);
   }
+});
+
+test('attachment evidence follows the execution contract, not attachment words in a conversation', () => {
+  for (const [id, testData] of [
+    ['SIT-TASK-EDIT-001', '原问题：请给出 3 条登录测试点。修改后：请给出 5 条附件上传测试点。'],
+    ['SIT-HOME-065', '请读取我刚才上传的预算表，找出金额最高的三项并说明风险。'],
+  ]) {
+    const conversation = migrateProductionCase({
+      ...sourceCase(id),
+      kind: 'conversation',
+      scenario: id === 'SIT-TASK-EDIT-001'
+        ? '编辑历史用户问题并重新发送后，新回复应基于修改后的内容'
+        : '未上传附件时应明确无附件且不得虚构',
+      test_data: testData,
+      steps: '1. 输入包含附件字样的问题并发送。\n2. 等待回复并核对会话状态。',
+    });
+    const roles = new Set(conversation.required_evidence_roles.split(','));
+    for (const role of ATTACHMENT_EVIDENCE_ROLES) {
+      assert.equal(roles.has(role), false, `${id}:${role}`);
+    }
+    assert.equal(attachmentEvidenceApplicability(conversation).applicable, false, id);
+  }
+
+  const actualAttachment = migrateProductionCase({
+    ...sourceCase('SIT-HOME-038'),
+    kind: 'attachment',
+    scenario: '连续上传 3 张图片后应全部进入附件区并被处理',
+    test_data: 'qbot-image-test.png, qbot-image-flow.png, qbot-image-risk.png',
+    steps: '1. 选择并上传三张真实图片。\n2. 核对 Composer 附件状态。\n3. 发送并读回附件内容。',
+  });
+  const attachmentRoles = new Set(actualAttachment.required_evidence_roles.split(','));
+  assert.equal(attachmentRoles.has('attachment_name_size_sha256'), true);
+  assert.equal(attachmentRoles.has('composer_attachment_state'), true);
+  assert.equal(attachmentRoles.has('attachment_readback'), true);
+});
+
+test('legacy over-declared attachment roles are explicit N/A unless runtime observes an attachment', () => {
+  const legacyRoles = [
+    'before_screenshot',
+    'case_report',
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_readback',
+  ];
+  const conversation = {
+    id: 'SIT-TASK-EDIT-001',
+    kind: 'conversation',
+    test_data: '修改后：请给出 5 条附件上传测试点。',
+  };
+  const noAttachment = resolveEvidenceRoleApplicability(conversation, legacyRoles);
+  assert.deepEqual(noAttachment.required_roles, ['before_screenshot', 'case_report']);
+  assert.deepEqual(
+    noAttachment.not_applicable_roles.map((item) => item.role),
+    ['attachment_name_size_sha256', 'composer_attachment_state', 'attachment_readback'],
+  );
+  assert.ok(noAttachment.not_applicable_roles.every((item) => item.reason.includes('不构成附件操作')));
+
+  const observedAttachment = resolveEvidenceRoleApplicability(
+    conversation,
+    legacyRoles,
+    { attachmentObserved: true },
+  );
+  assert.deepEqual(observedAttachment.required_roles, legacyRoles);
+  assert.deepEqual(observedAttachment.not_applicable_roles, []);
+  assert.equal(observedAttachment.attachment_evidence_applicability.source, 'runtime_observation');
+});
+
+test('evidence manifest preserves legacy declarations while gating only applicable roles', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-evidence-applicability-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'SIT-TASK-EDIT-001');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const caseReport = path.join(caseDir, 'case-report.md');
+  fs.writeFileSync(caseReport, '# trusted case report\n');
+  const declaredRoles = [
+    'case_report',
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_readback',
+  ].join(',');
+  const baseState = {
+    id: 'SIT-TASK-EDIT-001',
+    kind: 'conversation',
+    contract_version: PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+    product_baseline: `deepbankV2 origin/main@${LATEST_MAIN_BASELINE.commit}`,
+    required_evidence_roles: declaredRoles,
+    status: 'passed',
+    case_report: caseReport,
+    artifacts: {},
+    screenshots: {},
+    steps: [],
+    assertions: [],
+  };
+  const manifest = buildCaseEvidenceManifest(baseState, caseDir);
+  assert.equal(manifest.schema_version, 2);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.required_roles, ['case_report']);
+  assert.equal(manifest.required_role_count, 1);
+  assert.equal(manifest.satisfied_role_count, 1);
+  assert.equal(manifest.declared_required_role_count, 4);
+  assert.equal(manifest.not_applicable_role_count, 3);
+  assert.equal(manifest.role_evidence.attachment_name_size_sha256.not_applicable, true);
+  assert.match(manifest.role_evidence.attachment_name_size_sha256.reason, /不构成附件操作/);
+
+  const attachmentManifest = buildCaseEvidenceManifest(
+    { ...baseState, id: 'SIT-HOME-038', kind: 'attachment' },
+    caseDir,
+  );
+  assert.equal(attachmentManifest.complete, false);
+  assert.deepEqual(
+    attachmentManifest.missing_roles,
+    ['attachment_name_size_sha256', 'composer_attachment_state', 'attachment_readback'],
+  );
+  assert.equal(attachmentManifest.not_applicable_role_count, 0);
 });

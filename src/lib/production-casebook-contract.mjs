@@ -28,6 +28,67 @@ export const LEGACY_PRODUCT_ASSERTION_PATTERNS = Object.freeze([
   /data-testid=["']nav-knowledge["']/,
 ]);
 
+export const ATTACHMENT_EVIDENCE_ROLES = Object.freeze([
+  'attachment_name_size_sha256',
+  'composer_attachment_state',
+  'attachment_readback',
+  'attachment_limit_rejection',
+  'no_task_no_send_state',
+]);
+
+export function attachmentEvidenceApplicability(testCase = {}, { attachmentObserved = false } = {}) {
+  const kind = String(testCase.kind || '').trim().toLowerCase();
+  if (kind === 'attachment') {
+    return {
+      applicable: true,
+      source: 'case_kind',
+      reason: 'Case kind=attachment，附件证据契约适用。',
+    };
+  }
+  if (attachmentObserved) {
+    return {
+      applicable: true,
+      source: 'runtime_observation',
+      reason: '运行时已观察到真实附件输入/Composer 附件状态，附件证据契约适用。',
+    };
+  }
+  return {
+    applicable: false,
+    source: 'case_kind_and_runtime_observation',
+    reason: `Case kind=${kind || 'empty'}，且运行时未观察到附件输入；用户问题中出现“附件/上传”文案不构成附件操作。`,
+  };
+}
+
+export function resolveEvidenceRoleApplicability(
+  testCase = {},
+  declaredRoles = [],
+  { attachmentObserved = false } = {},
+) {
+  const normalizedDeclaredRoles = [...new Set(
+    (Array.isArray(declaredRoles) ? declaredRoles : String(declaredRoles || '').split(/[,，;；|\n]+/))
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  )];
+  const attachmentApplicability = attachmentEvidenceApplicability(testCase, { attachmentObserved });
+  const notApplicableRoles = attachmentApplicability.applicable
+    ? []
+    : normalizedDeclaredRoles
+      .filter((role) => ATTACHMENT_EVIDENCE_ROLES.includes(role))
+      .map((role) => ({
+        role,
+        domain: 'attachment',
+        source: attachmentApplicability.source,
+        reason: attachmentApplicability.reason,
+      }));
+  const notApplicableRoleNames = new Set(notApplicableRoles.map((item) => item.role));
+  return {
+    declared_roles: normalizedDeclaredRoles,
+    required_roles: normalizedDeclaredRoles.filter((role) => !notApplicableRoleNames.has(role)),
+    not_applicable_roles: notApplicableRoles,
+    attachment_evidence_applicability: attachmentApplicability,
+  };
+}
+
 const REPLACE_CASE_IDS = new Set([
   'SIT-SKILL-007',
   'SIT-CONN-003',
@@ -236,6 +297,7 @@ function evidenceRolesFor(testCase) {
   const id = String(testCase.id || '');
   const kind = String(testCase.kind || '');
   const attachmentLimitRejection = /^SIT-HOME-04[34]$/.test(id);
+  const attachmentEvidenceApplicable = attachmentEvidenceApplicability(testCase).applicable;
   const text = `${kind}\n${testCase.module || ''}\n${testCase.submodule || ''}\n${testCase.scenario || ''}\n${testCase.steps || ''}`;
   const conversationActions = String(testCase.steps || '')
     // Product-state assertions such as “发送门禁/发送不可用” describe a
@@ -258,7 +320,7 @@ function evidenceRolesFor(testCase) {
   ) {
     roles.add('tool_or_mcp_call_log');
   }
-  if (/附件|上传|文件上传/.test(text)) {
+  if (attachmentEvidenceApplicable) {
     ['attachment_name_size_sha256', 'composer_attachment_state'].forEach((item) => roles.add(item));
     if (attachmentLimitRejection) {
       ['attachment_limit_rejection', 'no_task_no_send_state'].forEach((item) => roles.add(item));

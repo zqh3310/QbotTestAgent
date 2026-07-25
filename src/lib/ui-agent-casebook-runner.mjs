@@ -17,6 +17,7 @@ import {
 } from './ui-agent-case-scheduler.mjs';
 import {
   PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+  resolveEvidenceRoleApplicability,
   validateTrustedProductionCaseContract,
 } from './production-casebook-contract.mjs';
 
@@ -17746,8 +17747,11 @@ async function finishCase({ page, state, caseDir }) {
   state.evidence_manifest = {
     contract_version: evidenceManifest.contract_version,
     complete: evidenceManifest.complete,
+    declared_required_role_count: evidenceManifest.declared_required_role_count,
     required_role_count: evidenceManifest.required_role_count,
     satisfied_role_count: evidenceManifest.satisfied_role_count,
+    not_applicable_role_count: evidenceManifest.not_applicable_role_count,
+    not_applicable_roles: evidenceManifest.not_applicable_roles,
     missing_roles: evidenceManifest.missing_roles,
     manifest_sha256: sha256File(evidenceManifestFile),
   };
@@ -17755,8 +17759,8 @@ async function finishCase({ page, state, caseDir }) {
   return state;
 }
 
-function buildCaseEvidenceManifest(state, caseDir) {
-  const requiredRoles = String(state.required_evidence_roles || '')
+export function buildCaseEvidenceManifest(state, caseDir) {
+  const declaredRequiredRoles = String(state.required_evidence_roles || '')
     .split(/[,，;；|\n]+/)
     .map((item) => item.trim())
     .filter(Boolean);
@@ -17786,6 +17790,28 @@ function buildCaseEvidenceManifest(state, caseDir) {
   const attachmentSources = Array.isArray(state.artifacts?.attachment_sources)
     ? state.artifacts.attachment_sources
     : [];
+  const attachmentObserved = attachmentSources.length > 0
+    || Boolean(state.artifacts?.composer_attachment_state)
+    || Boolean(state.artifacts?.attachment_limit_probe)
+    || Boolean(state.artifacts?.attachment_upload_state);
+  const evidenceRoleApplicability = resolveEvidenceRoleApplicability(
+    state,
+    declaredRequiredRoles,
+    { attachmentObserved },
+  );
+  const requiredRoles = evidenceRoleApplicability.required_roles;
+  const notApplicableRoleEvidence = Object.fromEntries(
+    evidenceRoleApplicability.not_applicable_roles.map((item) => [
+      item.role,
+      {
+        available: true,
+        not_applicable: true,
+        domain: item.domain,
+        source: item.source,
+        reason: item.reason,
+      },
+    ]),
+  );
   const attachmentHashPresent = attachmentSources.length > 0
     && attachmentSources.every((item) => {
       const file = String(item?.path || '');
@@ -17926,20 +17952,29 @@ function buildCaseEvidenceManifest(state, caseDir) {
   };
   const missingRoles = requiredRoles.filter((role) => roleEvidence[role]?.available !== true);
   return {
-    schema_version: 1,
+    schema_version: 2,
     contract_version: state.contract_version || '',
     case_id: state.id,
     product_baseline: state.product_baseline || '',
     generated_at: new Date().toISOString(),
     raw_status: state.status,
+    declared_required_roles: evidenceRoleApplicability.declared_roles,
+    declared_required_role_count: evidenceRoleApplicability.declared_roles.length,
     required_roles: requiredRoles,
     required_role_count: requiredRoles.length,
     satisfied_role_count: requiredRoles.length - missingRoles.length,
+    not_applicable_roles: evidenceRoleApplicability.not_applicable_roles,
+    not_applicable_role_count: evidenceRoleApplicability.not_applicable_roles.length,
+    evidence_applicability: {
+      attachment: evidenceRoleApplicability.attachment_evidence_applicability,
+    },
     missing_roles: missingRoles,
     complete: missingRoles.length === 0,
-    role_evidence: Object.fromEntries(requiredRoles.map((role) => [
+    role_evidence: Object.fromEntries(evidenceRoleApplicability.declared_roles.map((role) => [
       role,
-      roleEvidence[role] || { available: false, reason: 'runner 未实现该证据角色。' },
+      notApplicableRoleEvidence[role]
+        || roleEvidence[role]
+        || { available: false, reason: 'runner 未实现该证据角色。' },
     ])),
   };
 }
