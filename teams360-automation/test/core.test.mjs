@@ -504,6 +504,8 @@ test('Teams fixture runtime restores the packaged host and keeps the local-QBot 
   assert.match(options['restart-command'], /teams360-automation\/runtime\/scripts\/restart-qbot-electron-control-plane\.sh/);
   assert.match(options['restart-command'], /file:\/\/\/Users\/test\/\.deepbank\/ui\/0\.0\.4\/index\.html/);
   assert.doesNotMatch(options['restart-command'], /restart-qbot-slim\.sh/);
+  assert.equal(options['restart-timeout-ms'], 480_000);
+  assert.equal(options['restart-reconnect-timeout-ms'], 90_000);
   assert.match(options['qbot-stderr-log'], /teams360-automation\/state\/managed-360teams\.log$/);
 });
 

@@ -36,6 +36,7 @@ import {
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   reviewCaseCredibility,
+  runRestartShellCommand,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
   seedLocalSkillReadiness,
@@ -71,6 +72,22 @@ const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
+const restartCommandProbe = await runRestartShellCommand(
+  `printf 'restart-ok'; printf 'restart-warning' >&2`,
+  { cwd: root, timeoutMs: 2_000, maxBuffer: 1_024 },
+);
+assert.equal(restartCommandProbe.status, 0);
+assert.equal(restartCommandProbe.stdout, 'restart-ok');
+assert.equal(restartCommandProbe.stderr, 'restart-warning');
+assert.equal(restartCommandProbe.error, null);
+const restartTimeoutStartedAt = Date.now();
+const restartTimeoutProbe = await runRestartShellCommand(
+  'sleep 5',
+  { cwd: root, timeoutMs: 50, maxBuffer: 1_024 },
+);
+assert.equal(restartTimeoutProbe.status, null);
+assert.equal(restartTimeoutProbe.error?.code, 'ETIMEDOUT');
+assert.ok(Date.now() - restartTimeoutStartedAt < 2_000, 'restart timeout must terminate the whole shell process group');
 assert.deepEqual(
   confirmedSendExecutionIdentity(
     { activeId: '', sessionIdCount: 10, lastSessionId: 'session-old' },

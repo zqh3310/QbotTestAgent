@@ -765,6 +765,12 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   options['qbot-root'] ||= DEEPBANK_ROOT;
   options['qbot-home'] ||= TEAMS_CONTROL_PLANE_HOME;
   options['restart-cwd'] = TEAMS_RUNTIME_ROOT;
+  // A managed relaunch can legitimately consume the host launch (60s),
+  // staged-control-plane (30s), signed QWork remount (120s), and rollback
+  // windows. Keep the whole process group supervised instead of letting the
+  // shared runner's legacy 180s shell timeout orphan a still-running relaunch.
+  options['restart-timeout-ms'] ||= 480_000;
+  options['restart-reconnect-timeout-ms'] ||= 90_000;
   options['restart-command'] = [
     restartShim,
     options['qbot-root'],

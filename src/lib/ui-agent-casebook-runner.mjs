@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -15672,6 +15672,73 @@ async function ensureManagedFixtureMockAuth(
   return { ok: true, needed: true, provider: 'mock', hasUser: result.hasUser };
 }
 
+export function runRestartShellCommand(command, {
+  cwd = process.cwd(),
+  timeoutMs = 180000,
+  maxBuffer = 1000 * 1000 * 20,
+} = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let bufferedBytes = 0;
+    let commandError = null;
+    let closed = false;
+    let killTimer = null;
+    const child = spawn('/bin/zsh', ['-lc', command], {
+      cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const terminateProcessGroup = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try { child.kill(signal); } catch {}
+      }
+    };
+    const append = (stream, chunk) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+      bufferedBytes += Buffer.byteLength(text);
+      if (bufferedBytes > maxBuffer && !commandError) {
+        commandError = new Error(`restart-command output exceeded ${maxBuffer} bytes`);
+        commandError.code = 'ENOBUFS';
+        terminateProcessGroup('SIGTERM');
+        killTimer = setTimeout(() => terminateProcessGroup('SIGKILL'), 2_000);
+        killTimer.unref?.();
+        return;
+      }
+      if (stream === 'stdout') stdout += text;
+      else stderr += text;
+    };
+    child.stdout?.on('data', (chunk) => append('stdout', chunk));
+    child.stderr?.on('data', (chunk) => append('stderr', chunk));
+    child.once('error', (error) => {
+      commandError ||= error;
+    });
+    const timer = setTimeout(() => {
+      if (closed || commandError) return;
+      commandError = new Error(`restart-command timed out after ${timeoutMs}ms`);
+      commandError.code = 'ETIMEDOUT';
+      terminateProcessGroup('SIGTERM');
+      killTimer = setTimeout(() => terminateProcessGroup('SIGKILL'), 2_000);
+      killTimer.unref?.();
+    }, timeoutMs);
+    timer.unref?.();
+    child.once('close', (status, signal) => {
+      closed = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve({
+        status,
+        signal,
+        stdout,
+        stderr,
+        error: commandError,
+      });
+    });
+  });
+}
+
 async function restartQbotAndReconnect({ runtime, options, state, caseDir, label, commandOverride = '' }) {
   const command = String(commandOverride || options['restart-command'] || '').trim();
   if (!command) return { ok: false, reason: '未配置 restart-command，无法执行 QBot 重启闭环。' };
@@ -15698,10 +15765,9 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
   };
   state.artifacts.restart_commands.push(restartEvidence);
   const startedAt = Date.now();
-  const result = spawnSync('/bin/zsh', ['-lc', command], {
+  const result = await runRestartShellCommand(command, {
     cwd: restartCwd,
-    encoding: 'utf8',
-    timeout: Number(options['restart-timeout-ms'] || 180000),
+    timeoutMs: Number(options['restart-timeout-ms'] || 180000),
     maxBuffer: 1000 * 1000 * 20,
   });
   const stdout = result.stdout || '';
