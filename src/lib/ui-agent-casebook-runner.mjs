@@ -3217,21 +3217,38 @@ async function executeHitlFixtureCase({ page, state, testCase, caseDir, timeoutM
       auth: injected.auth,
       workbench_ready: true,
     };
-    return await executeSitHitlSkipDefault({ page, state, testCase, caseDir, timeoutMs });
+    await executeSitHitlSkipDefault({ page, state, testCase, caseDir, timeoutMs });
+    const terminalTask = await qbotE2EState(page).catch(() => null);
+    const taskId = String(terminalTask?.activeId || '').trim();
+    state.artifacts.hitl_task_identity = {
+      task_id: taskId,
+      message_count: Number(terminalTask?.messageCount || 0),
+      captured_at: new Date().toISOString(),
+      source: 'public_e2e_state_before_fixture_restore',
+      task_persisted: Boolean(taskId),
+    };
+    recordAssertion(
+      state,
+      'HITL 任务归属在 Fixture 恢复前固化',
+      '关闭 mock Agent 和重启宿主前必须读回非空持久 taskId，避免恢复后的空工作台丢失本 Case 任务归属。',
+      Boolean(taskId),
+      `taskId=${taskId || 'empty'}；messageCount=${Number(terminalTask?.messageCount || 0)}；source=public_e2e_state_before_fixture_restore`,
+      'automation_error',
+    );
   } finally {
     const restored = await restartQbotAndReconnect({
       runtime,
       options,
       state,
       caseDir,
-      label: '关闭 HITL mock Agent 并恢复正常 DEV 配置',
+      label: '关闭 HITL mock Agent 并恢复固定外部控制面',
     });
     recordAssertion(
       state,
       'HITL Fixture 后环境恢复',
-      '受控 ask/answer 场景结束后必须保持外部 DEV 控制面、关闭 mock Agent 并恢复固定 Teams 宿主。',
+      '受控 ask/answer 场景结束后必须保持固定外部控制面、关闭 mock Agent 并恢复固定 Teams 宿主。',
       restored.ok,
-      restored.ok ? '外部 DEV 配置已恢复，后续 Case 使用真实 Agent。' : restored.reason,
+      restored.ok ? '固定外部控制面已恢复，后续 Case 使用真实 Agent。' : restored.reason,
       'automation_error',
     );
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
@@ -8240,13 +8257,16 @@ async function restartWithHitlMockAgent({ state, caseDir, options, runtime }) {
   const qbotHome = inferQbotHomeForElectronRestart(options);
   let cdpPort = '9224';
   try { cdpPort = new URL(runtime.cdpUrl).port || '9224'; } catch {}
+  const expectedQworkUiUrl = options['renderer-control-adapter'] === 'teams360'
+    ? String(runtime?.page?.url?.() || '')
+    : '';
   const command = [
     electronHelper,
     qbotRoot,
     parsedControlPlane.origin,
     cdpPort,
     qbotHome,
-    '',
+    expectedQworkUiUrl,
     '1',
   ].map(shellQuote).join(' ');
   const restarted = await restartQbotAndReconnect({
@@ -8254,7 +8274,7 @@ async function restartWithHitlMockAgent({ state, caseDir, options, runtime }) {
     options,
     state,
     caseDir,
-    label: '保持外部 DEV 并启用 HITL mock Agent',
+    label: '保持固定外部控制面并启用 HITL mock Agent',
     commandOverride: command,
   });
   if (!restarted.ok) return restarted;
@@ -8282,7 +8302,7 @@ async function restartWithHitlMockAgent({ state, caseDir, options, runtime }) {
   if (observedOrigin !== parsedControlPlane.origin || !observed.authenticated) {
     return {
       ok: false,
-      reason: `HITL mock Agent 重启后未保持外部 DEV 登录态：expected=${parsedControlPlane.origin} observed=${clip(JSON.stringify(observed), 360)}`,
+      reason: `HITL mock Agent 重启后未保持固定外部控制面登录态：expected=${parsedControlPlane.origin} observed=${clip(JSON.stringify(observed), 360)}`,
     };
   }
   return {

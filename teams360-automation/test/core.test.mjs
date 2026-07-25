@@ -38,6 +38,7 @@ import {
 import { loadTrustedValidationSources } from '../lib/trusted-history.mjs';
 import {
   applyManagedQbotProfileConfig,
+  managedQworkReleaseEnv,
   stagedQbotServer,
 } from '../lib/teams-profile-qbot-config.mjs';
 import {
@@ -839,8 +840,9 @@ test('managed Teams HITL fixture opts into mock Agent only for its controlled re
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(relaunch, /DEEPBANK_AGENT_MOCK: mockFlag/);
   assert.match(relaunch, /\['0', '1'\]\.includes\(agentMock\)/);
-  assert.match(runner, /restartWithHitlMockAgent[\s\S]*parsedControlPlane\.origin[\s\S]*qbotHome[\s\S]*''[\s\S]*'1'[\s\S]*\.map\(shellQuote\)/);
+  assert.match(runner, /restartWithHitlMockAgent[\s\S]*expectedQworkUiUrl[\s\S]*parsedControlPlane\.origin[\s\S]*qbotHome[\s\S]*expectedQworkUiUrl[\s\S]*'1'[\s\S]*\.map\(shellQuote\)/);
   assert.match(runner, /executeHitlFixtureCase[\s\S]*restartWithHitlMockAgent/);
+  assert.match(runner, /executeHitlFixtureCase[\s\S]*public_e2e_state_before_fixture_restore[\s\S]*HITL 任务归属在 Fixture 恢复前固化/);
   assert.doesNotMatch(
     runner.slice(runner.indexOf('async function executeHitlFixtureCase'), runner.indexOf('async function executeSitHitlSkipDefault')),
     /createConnectorRegressionServer|restartWithConnectorRegressionFixture|127\.0\.0\.1:18900/,
@@ -1095,10 +1097,58 @@ test('managed Teams profile repins a newer QWork UI when the control plane is un
   assert.equal(result.mode, 'repinned');
   const repinned = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   assert.equal(repinned.deepbank.qbot_custom.serverUrl, 'https://dev.example.test');
+  assert.equal(repinned.deepbank.qbot_custom.env, 'DEV');
   assert.equal(repinned.deepbank.qbot_custom.uiUrl, '');
+  assert.equal(repinned.configInfo.QBOT_ENV, 'DEV');
   assert.equal(repinned.configInfo.QBOT_UI_URL, nextUi);
   assert.equal(fs.existsSync(path.join(root, 'backup.json')), false);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('managed Teams profile derives the release environment from the pinned QWork home', () => {
+  assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank/ui/0.0.14/index.html'), 'PROD');
+  assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-dev/ui/0.0.14/index.html'), 'DEV');
+  assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-uat/ui/0.0.14/index.html'), 'UAT');
+  assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-local/ui/0.0.14/index.html'), 'LOCAL');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-profile-prod-repin-'));
+  const profile = path.join(root, 'profile');
+  fs.mkdirSync(profile, { recursive: true });
+  const configFile = path.join(profile, 'sk-teams-cfg.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    deepbank: {
+      qbot_custom: {
+        env: 'DEV',
+        serverUrl: 'https://qbot-api.360shuke.com',
+        uiUrl: '',
+        surface: 'workbench',
+      },
+    },
+    configInfo: {
+      QBOT_ENV: 'DEV',
+      QBOT_SERVER_URL: 'https://qbot-api.360shuke.com',
+      QBOT_UI_URL: 'file:///Users/test/.deepbank-dev/ui/0.0.14/index.html',
+      QBOT_SURFACE: 'workbench',
+    },
+  }));
+  const prodUi = 'file:///Users/test/.deepbank/ui/0.0.14/index.html';
+  try {
+    const result = applyManagedQbotProfileConfig({
+      profileDir: profile,
+      serverUrl: 'https://qbot-api.360shuke.com',
+      uiUrl: prodUi,
+      backupFile: path.join(root, 'backup.json'),
+    });
+    assert.equal(result.mode, 'repinned');
+    const repinned = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    assert.equal(repinned.deepbank.qbot_custom.env, 'PROD');
+    assert.equal(repinned.deepbank.qbot_custom.serverUrl, 'https://qbot-api.360shuke.com');
+    assert.equal(repinned.configInfo.QBOT_ENV, 'PROD');
+    assert.equal(repinned.configInfo.QBOT_UI_URL, prodUi);
+    assert.equal(fs.existsSync(path.join(root, 'backup.json')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaunch', () => {

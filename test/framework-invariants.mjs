@@ -626,7 +626,8 @@ const required = [
   ['ART-011 使用本 Case 唯一成果名并通过 E2E bridge 精确发现', /artifact_011_filename[\s\S]*deleted_preview_check_\$\{slugify\(path\.basename\(caseDir\)\)\}[\s\S]*bridge\.discoverArtifact\(file\)[\s\S]*escapeRegExp\(filename\)/],
   ['连接器健康 Fixture 默认关闭 E2E 健康短路', /enableE2eMarker = false/],
   ['连接器健康 Fixture 按 Case 显式切换服务端 E2E marker', /enableE2eMarker \? '1' : '0'/],
-  ['HITL Fixture 保持外部控制面且仅启用受控宿主 mock Agent', /restartWithHitlMockAgent[\s\S]*禁止切换到本地 mock 控制面[\s\S]*parsedControlPlane\.origin[\s\S]*qbotHome[\s\S]*''[\s\S]*'1'/],
+  ['HITL Fixture 保持外部控制面、固定QWork UI且仅启用受控宿主 mock Agent', /restartWithHitlMockAgent[\s\S]*禁止切换到本地 mock 控制面[\s\S]*expectedQworkUiUrl[\s\S]*parsedControlPlane\.origin[\s\S]*qbotHome[\s\S]*expectedQworkUiUrl[\s\S]*'1'/],
+  ['HITL Fixture 恢复前固化持久任务归属', /executeHitlFixtureCase[\s\S]*public_e2e_state_before_fixture_restore[\s\S]*HITL 任务归属在 Fixture 恢复前固化/],
   ['CONN-013 使用非空三态 Fixture 后再注入刷新失败', /SIT-CONN-013'[\s\S]*executeConnectorRegressionFixtureCase[\s\S]*executeSitConnectorRefreshFailure/],
   ['CONN-013 刷新前验证三类缓存卡片', /executeSitConnectorRefreshFailure[\s\S]*Dev Healthy[\s\S]*Dev Unreachable[\s\S]*Dev Needs Auth[\s\S]*刷新失败前非空三态缓存夹具[\s\S]*cached_kinds_present/],
   ['CONN-012 代理重启后按 key 重选再注入', /executeSitConnectorUnhealthySelectedState[\s\S]*initiallyArmed: false[\s\S]*selectManualConnectorByKey[\s\S]*control\.proxy\.arm/],
@@ -679,7 +680,7 @@ const hitlSource = hitlStart >= 0 && hitlEnd > hitlStart ? runner.slice(hitlStar
 for (const token of [
   'restartWithHitlMockAgent',
   'agent_mock: true',
-  '关闭 HITL mock Agent 并恢复正常 DEV 配置',
+  '关闭 HITL mock Agent 并恢复固定外部控制面',
   "await send(page, state, '发送 HITL 澄清测试请求')",
   'const modalVisible = await visible(modal, 30000)',
   '跳过（用默认）|关闭并使用默认答案',

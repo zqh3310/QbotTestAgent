@@ -33,6 +33,15 @@ function normalizedServer(value) {
   return url.href.replace(/\/$/, '');
 }
 
+export function managedQworkReleaseEnv(uiUrl) {
+  const pathname = new URL(String(uiUrl || '').trim()).pathname;
+  if (/\/\.deepbank-dev\/ui\//.test(pathname)) return 'DEV';
+  if (/\/\.deepbank-uat\/ui\//.test(pathname)) return 'UAT';
+  if (/\/\.deepbank-local\/ui\//.test(pathname)) return 'LOCAL';
+  if (/\/\.deepbank\/ui\//.test(pathname)) return 'PROD';
+  throw new Error(`Managed Teams QBot profile UI does not identify a supported release home: ${uiUrl}`);
+}
+
 function atomicWriteJson(file, payload) {
   const stat = fs.statSync(file);
   const temporary = `${file}.qbot-qa-${process.pid}-${Date.now()}.tmp`;
@@ -56,6 +65,7 @@ export function applyManagedQbotProfileConfig({
   if (!/^file:\/\/.+\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(targetUi)) {
     throw new Error(`Managed Teams QBot profile UI is not a pinned versioned file URL: ${targetUi}`);
   }
+  const targetEnv = managedQworkReleaseEnv(targetUi);
 
   const config = readJson(configFile);
   config.deepbank ||= {};
@@ -70,7 +80,7 @@ export function applyManagedQbotProfileConfig({
     && currentUi === targetUi
     && !customUi
     && String(custom.surface || configInfo.QBOT_SURFACE || '').trim().toLowerCase() === 'workbench'
-    && String(custom.env || configInfo.QBOT_ENV || '').trim().toUpperCase() === 'DEV';
+    && String(custom.env || configInfo.QBOT_ENV || '').trim().toUpperCase() === targetEnv;
   let backup = null;
   try { backup = backupFile && fs.existsSync(backupFile) ? readJson(backupFile) : null; } catch {}
 
@@ -92,7 +102,7 @@ export function applyManagedQbotProfileConfig({
   // immediately restore the stale UI because the server identity is equal.
   if (!backup && currentServer === targetServer) {
     Object.assign(custom, {
-      env: 'DEV',
+      env: targetEnv,
       serverUrl: targetServer,
       // The host validates qbot_custom.uiUrl as an HTTP URL. Versioned
       // packaged file URLs belong only in configInfo.QBOT_UI_URL.
@@ -100,7 +110,7 @@ export function applyManagedQbotProfileConfig({
       surface: 'workbench',
     });
     Object.assign(configInfo, {
-      QBOT_ENV: 'DEV',
+      QBOT_ENV: targetEnv,
       QBOT_SERVER_URL: targetServer,
       QBOT_UI_URL: targetUi,
       QBOT_SURFACE: 'workbench',
@@ -123,13 +133,13 @@ export function applyManagedQbotProfileConfig({
   }
 
   Object.assign(custom, {
-    env: 'DEV',
+    env: targetEnv,
     serverUrl: targetServer,
     uiUrl: '',
     surface: 'workbench',
   });
   Object.assign(configInfo, {
-    QBOT_ENV: 'DEV',
+    QBOT_ENV: targetEnv,
     QBOT_SERVER_URL: targetServer,
     QBOT_UI_URL: targetUi,
     QBOT_SURFACE: 'workbench',
