@@ -367,6 +367,44 @@ test('enforced V4 numbered-step gap becomes an explicit blocked result with comp
   assert.ok(manifest.role_evidence.numbered_step_assertions.missing_steps.length > 0);
 });
 
+test('enforced V2 numbered-step gap replaces automation_error with an auditable blocked result', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v2-step-gap-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'SIT-INIT-004');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const caseReport = path.join(caseDir, 'case-report.md');
+  fs.writeFileSync(caseReport, '# numbered step blocker\n');
+  const state = {
+    id: 'SIT-INIT-004',
+    kind: 'ui',
+    contract_version: PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: 'numbered_step_assertions,case_report',
+    numbered_steps: '1. 切换到离线环境\n2. 刷新工作台\n3. 核对发送门禁',
+    status: 'failed',
+    result_category: 'automation_error',
+    actual_result: 'fixture preparation failed',
+    conclusion: '失败：fixture preparation failed',
+    case_report: caseReport,
+    artifacts: {},
+    screenshots: {},
+    steps: [{ action: '观察当前运行环境', status: 'failed', category: 'automation_error' }],
+    assertions: [{ name: '当前环境状态', status: 'failed', category: 'automation_error' }],
+  };
+  const coverage = enforceNumberedStepExecutionContract(state);
+  assert.equal(coverage.complete, false);
+  assert.equal(state.status, 'blocked');
+  assert.equal(state.result_category, 'blocked');
+  assert.equal(state.framework_issue.kind, 'numbered_step_execution_gap');
+  assert.equal(state.artifacts.numbered_step_pre_enforcement_result.status, 'failed');
+  assert.equal(state.artifacts.numbered_step_pre_enforcement_result.result_category, 'automation_error');
+  assert.equal(state.artifacts.numbered_step_pre_enforcement_result.actual_result, 'fixture preparation failed');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.numbered_step_assertions.available, true);
+  assert.equal(manifest.role_evidence.numbered_step_assertions.explicitly_blocked, true);
+});
+
 test('unenforced V4 numbered-step gap cannot satisfy the manifest role', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v4-unenforced-step-gap-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -1432,8 +1432,13 @@ export function numberedStepExecutionCoverage(state = {}) {
 }
 
 export function enforceNumberedStepExecutionContract(state = {}) {
-  const isV4 = String(state.contract_version || '') === 'qbot-current-casebook/v4';
-  if (!isV4) return null;
+  const contractVersion = String(state.contract_version || '');
+  const contractLabel = contractVersion === 'qbot-current-casebook/v4'
+    ? 'V4'
+    : contractVersion === 'qbot-production-gate/v2'
+      ? 'V2'
+      : '';
+  if (!contractLabel) return null;
   const coverage = numberedStepExecutionCoverage(state);
   state.artifacts = state.artifacts || {};
   state.artifacts.numbered_step_coverage = {
@@ -1445,25 +1450,23 @@ export function enforceNumberedStepExecutionContract(state = {}) {
   const missing = coverage.missing_steps
     .map((entry) => `${entry.number}.${entry.declared_step}`)
     .join('；');
-  const reason = `V4 编号步骤未全部真实执行，禁止 raw pass/bug：${missing}`;
+  const reason = `${contractLabel} 编号步骤未全部真实执行，禁止 raw pass/bug/automation_error：${missing}`;
   state.framework_issue = {
     kind: 'numbered_step_execution_gap',
     reason,
     missing_steps: coverage.missing_steps,
   };
-  if (state.status !== 'blocked' && state.result_category !== 'automation_error') {
-    markBlocked(state, reason);
-  } else {
-    recordStep(
-      state,
-      '编号步骤覆盖校验',
-      '每个 Excel 编号步骤都必须有真实动作或客观断言覆盖。',
-      reason,
-      'blocked',
-      '',
-      'automation_error',
-    );
+  if (state.status !== 'blocked' || state.result_category !== 'blocked') {
+    state.artifacts.numbered_step_pre_enforcement_result = {
+      status: state.status || '',
+      result_category: state.result_category || '',
+      actual_result: state.actual_result || '',
+      conclusion: state.conclusion || '',
+      problem_description: state.problem_description || '',
+      captured_at: new Date().toISOString(),
+    };
   }
+  markBlocked(state, reason);
   return coverage;
 }
 
