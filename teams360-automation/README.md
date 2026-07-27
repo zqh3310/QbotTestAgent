@@ -56,6 +56,7 @@ Use the Teams-only Casebook wrapper for real batches:
 ```bash
 npm --prefix teams360-automation run casebook -- \
   --casebook PRD/QBot系统SIT测试用例.xlsx \
+  --sheet 业务功能Case \
   --profile full \
   --case SIT-HOME-001,SIT-HOME-002 \
   --model-tier M3 \
@@ -67,16 +68,40 @@ npm --prefix teams360-automation run casebook -- \
 functional runs should omit it and use the recorded live session. Isolated profiles and
 token-seeded login state are deliberately rejected for functional Casebook execution.
 
+`--sheet` selects one Case sheet by its exact visible name and fails closed when the sheet
+does not exist. This prevents similarly named sheets from being silently merged into one
+batch. Result writing is likewise scoped to the sheets represented by the executed cases.
+
+When a framework fix requires a new immutable output directory, use an explicit trusted
+lineage checkpoint rather than restarting every Case:
+
+```bash
+npm --prefix teams360-automation run casebook -- \
+  --casebook /absolute/path/to/casebook.xlsx \
+  --sheet 业务功能Case \
+  --profile full \
+  --case <the-same-ordered-case-id-list> \
+  --resume-from teams360-automation/output/<frozen-previous-run> \
+  --impact-case <case-ids-affected-by-the-fix> \
+  --out teams360-automation/output/<new-run>
+```
+
+`--resume-from` never writes the source run. It inherits only terminal results whose release
+identity and Case fingerprint still match, whose evidence manifest and evidence hashes are
+complete, and whose result is not an automation error. Changed, incomplete, impacted, or
+framework-error Cases are rerun. Use `--impact-all true` only when the fix can affect every
+Case; an impact declaration is mandatory so inheritance cannot hide a broad framework change.
+
 The wrapper retries the flaky initial QWork CDP attach and hands the successful browser
 connection directly to the existing runner. It refuses local-QBot restart commands and
 refuses output paths outside this folder, so the local-QBot execution lane remains unchanged.
 
-The current managed 360Teams session exposes one QWork WebView, so it remains a single worker.
-Chromium does not support `Target.createTarget` for this embedded WebView; attempting to run
-five cases against the same page would mix composers, attachments, sessions, and screenshots.
-Use the root multi-CDP scheduler only after five independently launched and signed-in QWork
-App workers are available. The scheduler will then run five parallel-safe cases at a time,
-serialize shared expert/skill/connector state, and put all App-restart cases at the end.
+The managed 360Teams session exposes one QWork WebView, so there is still exactly one runner.
+`--single-host-pipeline 5` may overlap dispatch and collection only for an explicit whitelist
+of independent, single-turn, pure-conversation Cases. Attachments, skills, connectors, MCP,
+HITL, artifacts, restarts, shared state, and multi-turn Cases remain serial. The pipeline
+writes `single-host-pipeline.json` with unique wave/task dispatch and collection records so
+an interrupted batch can be audited without mixing Case evidence.
 
 ### Teams-only fault and fixture lane
 

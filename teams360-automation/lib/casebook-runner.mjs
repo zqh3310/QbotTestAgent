@@ -58,6 +58,13 @@ export function parseCasebookRunnerOptions(argv = []) {
 export function validateTeamsCasebookOptions(options) {
   if (!options.casebook) throw new Error('--casebook is required.');
   if (!options.case) throw new Error('--case is required.');
+  if (options['resume-from']) {
+    if (!options['impact-case'] && !/^(?:1|true|yes)$/i.test(String(options['impact-all'] || ''))) {
+      throw new Error('Cross-framework resume requires --impact-case or --impact-all true.');
+    }
+  } else if (options['impact-case'] || options['impact-all']) {
+    throw new Error('--impact-case/--impact-all require --resume-from.');
+  }
   if (options['restart-command']) {
     throw new Error('360Teams Casebook runs must not configure a local-QBot restart-command.');
   }
@@ -83,6 +90,14 @@ export function validateTeamsCasebookOptions(options) {
   }
   options.session = path.resolve(String(options.session || DEFAULT_SESSION));
   options.out = out;
+  if (options['resume-from']) {
+    const resumeFrom = path.resolve(String(options['resume-from']));
+    const resumeRelative = path.relative(TEAMS_OUTPUT_ROOT, resumeFrom);
+    if (resumeRelative.startsWith('..') || path.isAbsolute(resumeRelative) || resumeFrom === out) {
+      throw new Error(`--resume-from must be a different immutable batch under ${TEAMS_OUTPUT_ROOT}.`);
+    }
+    options['resume-from'] = resumeFrom;
+  }
   return options;
 }
 

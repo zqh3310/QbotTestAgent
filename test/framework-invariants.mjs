@@ -1011,6 +1011,37 @@ const numericTurns = buildConversationTurns({
 if (numericTurns.length !== 4 || !numericTurns[3]?.prompt.includes('成交率')) {
   throw new Error(`HOME-016 必须优先进入四轮数字记忆脚本：${JSON.stringify(numericTurns)}`);
 }
+const v4StructuredTurns = buildConversationTurns({
+  id: 'USR-START-001',
+  contract_version: 'qbot-current-casebook/v4',
+  scenario: '已登录用户打开QWork后，直接输入一个工作问题并得到完整回复',
+  test_data: '问题=“请用三点总结今天的待办优先级”；期望回复至少3点且不含运行时噪音; deterministic_seed=USR-START-001',
+}, []);
+if (v4StructuredTurns.length !== 1
+  || v4StructuredTurns[0]?.prompt !== '请用三点总结今天的待办优先级'
+  || v4StructuredTurns[0]?.prompt.includes('deterministic_seed')
+  || v4StructuredTurns[0]?.prompt.includes('期望回复')) {
+  throw new Error(`V4 结构化 test_data 只能发送真实用户问题：${JSON.stringify(v4StructuredTurns)}`);
+}
+const v4StartAssertion = caseAwareReplyAssertion(
+  { id: 'USR-START-001' },
+  v4StructuredTurns[0],
+  '今日待办优先级：\n\n1. 锁定关键交付（P0）\n\n2. 处理主要风险（P1）\n\n3. 同步进展与下一步（P2）',
+);
+if (!v4StartAssertion.applicable || !v4StartAssertion.ok) {
+  throw new Error(`USR-START-001 三点清单应按确定性结构通过：${JSON.stringify(v4StartAssertion)}`);
+}
+const v4StructuredMultiTurns = buildConversationTurns({
+  id: 'USR-CHAT-002',
+  contract_version: 'qbot-current-casebook/v4',
+  scenario: '用户连续追问同一组数字时，第二轮正确使用上一轮上下文',
+  test_data: '第一轮=“本金12万，年利率3%，一年利息多少”；第二轮=“如果本金翻倍呢”; deterministic_seed=USR-CHAT-002',
+}, []);
+if (v4StructuredMultiTurns.length !== 2
+  || v4StructuredMultiTurns[0]?.prompt !== '本金12万，年利率3%，一年利息多少'
+  || v4StructuredMultiTurns[1]?.prompt !== '如果本金翻倍呢') {
+  throw new Error(`V4 第一轮/第二轮结构化数据必须拆成两轮：${JSON.stringify(v4StructuredMultiTurns)}`);
+}
 const pngFunnelTurns = buildConversationTurns({
   id: 'SIT-HOME-037',
   scenario: '上传 PNG 图片后 Agent 应识别主要视觉内容',

@@ -255,3 +255,27 @@ test('evidence manifest preserves legacy declarations while gating only applicab
   );
   assert.equal(attachmentManifest.not_applicable_role_count, 0);
 });
+
+test('evidence manifest maps the V4 redacted_log role to immutable run metadata', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v4-redacted-log-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'USR-START-001');
+  fs.mkdirSync(caseDir, { recursive: true });
+  fs.writeFileSync(path.join(root, 'run-metadata.json'), '{"environment":"prod"}\n');
+  const manifest = buildCaseEvidenceManifest({
+    id: 'USR-START-001',
+    kind: 'ui+conversation',
+    contract_version: 'qbot-current-casebook/v4',
+    required_evidence_roles: 'redacted_log',
+    status: 'passed',
+    artifacts: {},
+    screenshots: {},
+    steps: [],
+    assertions: [],
+  }, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.redacted_log.available, true);
+  assert.equal(manifest.role_evidence.redacted_log.files.length, 1);
+  assert.match(manifest.role_evidence.redacted_log.files[0].file, /run-metadata\.json$/);
+});

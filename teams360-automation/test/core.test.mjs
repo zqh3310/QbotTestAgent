@@ -478,6 +478,14 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     ...options,
     out: 'autoTest/not-teams',
   }), /must stay under/);
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...options,
+    'resume-from': 'teams360-automation/output/old-run',
+  }), /requires --impact-case or --impact-all/);
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...options,
+    'impact-case': 'SIT-HOME-001',
+  }), /require --resume-from/);
 });
 
 test('Teams preconnect waits through a full managed-host QWork remount window', () => {

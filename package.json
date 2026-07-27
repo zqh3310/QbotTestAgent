@@ -6,7 +6,7 @@
   "description": "Local QBot / Deepbank v2 test agent team runner.",
   "scripts": {
     "test": "npm --prefix teams360-automation test",
-    "check": "node --check src/cli.mjs && node --check src/lib/ui-agent-casebook-runner.mjs && node --check src/lib/ui-agent-case-scheduler.mjs && node test/case-scheduler.mjs && node test/framework-invariants.mjs && node test/smoke.mjs && node --test test/production-casebook-contract.test.mjs",
+    "check": "node --check src/cli.mjs && node --check src/lib/ui-agent-casebook-runner.mjs && node --check src/lib/ui-agent-case-scheduler.mjs && node --check src/lib/casebook-lineage.mjs && node test/case-scheduler.mjs && node test/framework-invariants.mjs && node test/smoke.mjs && node --test test/production-casebook-contract.test.mjs test/casebook-lineage.test.mjs",
     "run": "node src/cli.mjs run",
     "monitor": "node src/cli.mjs monitor",
     "generate": "node src/cli.mjs generate",

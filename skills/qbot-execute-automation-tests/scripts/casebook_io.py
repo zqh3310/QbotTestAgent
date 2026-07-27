@@ -88,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     export.add_argument("--casebook", required=True)
     export.add_argument("--output", required=True)
     export.add_argument("--profile", default="mandatory", choices=["mandatory", "full", "all"])
+    export.add_argument("--sheet", default="")
     export.add_argument("--case", default="")
     export.add_argument("--offset", type=int, default=0)
     export.add_argument("--limit", type=int, default=0)
@@ -235,6 +236,13 @@ def export_cases(args: argparse.Namespace) -> None:
     case_sheets = find_case_sheets(wb)
     if not case_sheets:
         raise ValueError("未找到包含“用例ID”的测试用例 sheet")
+    if args.sheet:
+        requested = clean(args.sheet)
+        matched = [ws for ws in case_sheets if clean(ws.title) == requested]
+        if not matched:
+            available = ", ".join(ws.title for ws in case_sheets)
+            raise ValueError(f"未找到指定测试用例 sheet：{requested}；可用 sheet：{available}")
+        case_sheets = matched
     wanted = split_case_ids(args.case)
 
     rows = []
@@ -291,6 +299,18 @@ def export_cases(args: argparse.Namespace) -> None:
                 "selector_contract": row_value_any(ws, row_idx, headers, ["Selector契约", "选择器契约"]),
                 "identity_contract": row_value_any(ws, row_idx, headers, ["身份完整性", "发布身份契约"]),
                 "trusted_review_contract": row_value_any(ws, row_idx, headers, ["可信复核契约", "可信评审规则"]),
+                "case_type": row_value_any(ws, row_idx, headers, ["用例类型", "Case类型"]),
+                "automation_protocol": row_value_any(ws, row_idx, headers, ["自动化协议", "执行协议"]),
+                "state_fixture_contract": row_value_any(ws, row_idx, headers, ["状态Fixture契约", "Fixture契约"]),
+                "api_event_oracle": row_value_any(ws, row_idx, headers, ["API/事件Oracle", "API事件Oracle"]),
+                "design_baseline_id": row_value_any(ws, row_idx, headers, ["设计基线ID"]),
+                "design_baseline_file": row_value_any(ws, row_idx, headers, ["设计基线文件"]),
+                "design_baseline_sha256": row_value_any(ws, row_idx, headers, ["设计基线SHA-256"]),
+                "visual_comparison_contract": row_value_any(ws, row_idx, headers, ["视觉比对契约"]),
+                "viewport_contract": row_value_any(ws, row_idx, headers, ["视口契约"]),
+                "accessibility_contract": row_value_any(ws, row_idx, headers, ["无障碍契约"]),
+                "branch_coverage": row_value_any(ws, row_idx, headers, ["分支覆盖"]),
+                "traceability_tags": row_value_any(ws, row_idx, headers, ["可追溯标签"]),
                 "sheet": ws.title,
                 "row_number": row_idx,
             }
@@ -409,7 +429,14 @@ def write_results(args: argparse.Namespace) -> None:
     by_exact, by_id = result_indexes(summary.get("results", []))
     run_time = summary.get("ended_at") or datetime.now().isoformat()
 
+    result_sheets = {
+        clean(item.get("sheet"))
+        for item in summary.get("results", [])
+        if clean(item.get("sheet"))
+    }
     for ws in case_sheets:
+        if result_sheets and clean(ws.title) not in result_sheets:
+            continue
         header_row = find_header_row(ws)
         headers = ensure_result_columns(ws, header_row, header_map(ws, header_row))
         for row_idx in range(header_row + 1, (ws.max_row or header_row) + 1):

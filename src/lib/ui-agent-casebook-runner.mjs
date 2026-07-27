@@ -20,6 +20,7 @@ import {
   resolveEvidenceRoleApplicability,
   validateTrustedProductionCaseContract,
 } from './production-casebook-contract.mjs';
+import { buildCrossRunLineage } from './casebook-lineage.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -159,6 +160,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       casesFile,
       '--profile',
       profile,
+      ...(options.sheet ? ['--sheet', String(options.sheet)] : []),
       ...(options.case ? ['--case', String(options.case)] : []),
       ...(options.offset ? ['--offset', String(options.offset)] : []),
       ...(options.limit ? ['--limit', String(options.limit)] : []),
@@ -424,8 +426,37 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       return summary;
     }
     const resume = loadResumeProgress(progressFile, selectedCases, options.resume === true || options.resume === 'true');
-    const results = resume.results;
-    for (let index = resume.startIndex; index < selectedCases.length; index += 1) {
+    const resultsByIndex = new Map(resume.resultsByIndex);
+    if (options['resume-from']) {
+      const lineage = buildCrossRunLineage({
+        sourceOut: options['resume-from'],
+        currentOut: outDir,
+        selectedCases,
+        impactCaseIds: options['impact-case'] || '',
+        impactAll: /^(?:1|true|yes)$/i.test(String(options['impact-all'] || '')),
+      });
+      for (const [index, result] of lineage.inheritedByIndex.entries()) {
+        if (!resultsByIndex.has(index)) resultsByIndex.set(index, result);
+      }
+      precheck.cross_run_lineage = {
+        status: 'ready',
+        file: lineage.file,
+        source_out: lineage.manifest.source_out,
+        impact: lineage.manifest.impact,
+        counts: lineage.manifest.counts,
+      };
+      writeCasebookProgress({
+        progressFile,
+        selectedCases,
+        resultsByIndex,
+        extra: {
+          phase: 'lineage-seeded',
+          lineage_file: lineage.file,
+        },
+      });
+    }
+    for (let index = 0; index < selectedCases.length; index += 1) {
+      if (resultsByIndex.has(index)) continue;
       const testCase = selectedCases[index];
       const caseDir = path.join(outDir, 'cases', `${String(index + 1).padStart(3, '0')}-${testCase.id}-${slugify(testCase.scenario)}`);
       ensureDir(caseDir);
@@ -435,7 +466,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           outDir,
           selectedCases,
           startIndex: index,
-          results,
+          resultsByIndex,
           progressFile,
           status: 'blocked',
           resultCategory: 'automation_error',
@@ -443,9 +474,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         });
         break;
       }
-      const pipelineBatch = singleHostPipelineSize > 1
-        ? buildSingleHostPipelineBatch(selectedCases, index, singleHostPipelineSize)
-        : [];
+      const pipelineBatch = [];
+      if (singleHostPipelineSize > 1) {
+        for (const entry of buildSingleHostPipelineBatch(selectedCases, index, singleHostPipelineSize)) {
+          if (resultsByIndex.has(entry.index)) break;
+          pipelineBatch.push(entry);
+        }
+      }
       if (pipelineBatch.length > 1) {
         const batchResults = await executeSingleHostPipelineBatch({
           page,
@@ -461,16 +496,24 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         });
         browser = runtime.browser;
         page = runtime.page;
-        for (const result of batchResults) {
-          results.push(result);
-          writeJsonFile(progressFile, {
-            updated_at: new Date().toISOString(),
-            completed: results.length,
-            total: selectedCases.length,
-            current_case: result.id,
-            execution_mode: 'single-host-pipeline',
-            pipeline_size: pipelineBatch.length,
-            results,
+        for (let batchIndex = 0; batchIndex < batchResults.length; batchIndex += 1) {
+          const result = batchResults[batchIndex];
+          const resultIndex = pipelineBatch[batchIndex].index;
+          resultsByIndex.set(resultIndex, {
+            ...result,
+            order: resultIndex + 1,
+            case_index: resultIndex,
+            execution_provenance: result.execution_provenance || 'executed',
+          });
+          writeCasebookProgress({
+            progressFile,
+            selectedCases,
+            resultsByIndex,
+            extra: {
+              current_case: result.id,
+              execution_mode: 'single-host-pipeline',
+              pipeline_size: pipelineBatch.length,
+            },
           });
         }
         index += pipelineBatch.length - 1;
@@ -481,7 +524,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             outDir,
             selectedCases,
             startIndex: index + 1,
-            results,
+            resultsByIndex,
             progressFile,
             status: 'blocked',
             resultCategory: 'automation_error',
@@ -506,20 +549,20 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       });
       browser = runtime.browser;
       page = runtime.page;
-      results.push(result);
-      writeJsonFile(progressFile, {
-        updated_at: new Date().toISOString(),
-        completed: results.length,
-        total: selectedCases.length,
-        results,
+      resultsByIndex.set(index, {
+        ...result,
+        order: index + 1,
+        case_index: index,
+        execution_provenance: result.execution_provenance || 'executed',
       });
+      writeCasebookProgress({ progressFile, selectedCases, resultsByIndex });
       if (isCdpDisconnectedResult(result) || !isLiveCdpPage(browser, page)) {
         const reason = `用例 ${testCase.id} 执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。原始现象：${clip(result.actual_result || result.conclusion || '', 260)}`;
         appendSyntheticRemainder({
           outDir,
           selectedCases,
           startIndex: index + 1,
-          results,
+          resultsByIndex,
           progressFile,
           status: 'blocked',
           resultCategory: 'automation_error',
@@ -529,6 +572,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
     }
 
+    const results = orderedCasebookResults(resultsByIndex);
     const summary = buildSummary({
       status: statusFromResults(results),
       startedAt,
@@ -840,22 +884,52 @@ async function runParallelUiAgentCasebook({
 }
 
 function loadResumeProgress(progressFile, selectedCases, enabled) {
-  if (!enabled || !fs.existsSync(progressFile)) return { results: [], startIndex: 0 };
+  if (!enabled || !fs.existsSync(progressFile)) return { resultsByIndex: new Map() };
   try {
     const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
     const existing = Array.isArray(progress.results) ? progress.results : [];
-    const aligned = existing.every((result, index) => {
+    const resultsByIndex = new Map();
+    for (let position = 0; position < existing.length; position += 1) {
+      const result = existing[position];
+      const declared = Number(result?.case_index);
+      const index = Number.isInteger(declared) && declared >= 0 ? declared : position;
       const expected = selectedCases[index];
-      return expected
+      const aligned = expected
         && result?.id === expected.id
         && String(result?.sheet || '') === String(expected.sheet || '')
         && String(result?.row_number || '') === String(expected.row_number || '');
-    });
-    if (!aligned) return { results: [], startIndex: 0 };
-    return { results: existing, startIndex: Math.min(existing.length, selectedCases.length) };
+      if (!aligned || resultsByIndex.has(index)) return { resultsByIndex: new Map() };
+      resultsByIndex.set(index, {
+        ...result,
+        order: index + 1,
+        case_index: index,
+      });
+    }
+    return { resultsByIndex };
   } catch {
-    return { results: [], startIndex: 0 };
+    return { resultsByIndex: new Map() };
   }
+}
+
+function orderedCasebookResults(resultsByIndex) {
+  return [...resultsByIndex.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([index, result]) => ({
+      ...result,
+      order: index + 1,
+      case_index: index,
+    }));
+}
+
+function writeCasebookProgress({ progressFile, selectedCases, resultsByIndex, extra = {} }) {
+  const results = orderedCasebookResults(resultsByIndex);
+  writeJsonFile(progressFile, {
+    updated_at: new Date().toISOString(),
+    completed: results.length,
+    total: selectedCases.length,
+    ...extra,
+    results,
+  });
 }
 
 function isLiveCdpPage(browser, page) {
@@ -865,25 +939,41 @@ function isLiveCdpPage(browser, page) {
   return true;
 }
 
-function appendSyntheticRemainder({ outDir, selectedCases, startIndex, results, progressFile, status, resultCategory, reason }) {
+function appendSyntheticRemainder({
+  outDir,
+  selectedCases,
+  startIndex,
+  resultsByIndex,
+  progressFile,
+  status,
+  resultCategory,
+  reason,
+}) {
   for (let index = startIndex; index < selectedCases.length; index += 1) {
-    results.push(buildSyntheticResult({
+    if (resultsByIndex.has(index)) continue;
+    resultsByIndex.set(index, {
+      ...buildSyntheticResult({
       outDir,
       testCase: selectedCases[index],
       index,
       status,
       resultCategory,
       reason,
-    }));
+      }),
+      order: index + 1,
+      case_index: index,
+      execution_provenance: 'synthetic',
+    });
   }
-  writeJsonFile(progressFile, {
-    updated_at: new Date().toISOString(),
-    completed: results.length,
-    total: selectedCases.length,
-    stopped: true,
-    synthetic: true,
-    stop_reason: reason,
-    results,
+  writeCasebookProgress({
+    progressFile,
+    selectedCases,
+    resultsByIndex,
+    extra: {
+      stopped: true,
+      synthetic: true,
+      stop_reason: reason,
+    },
   });
 }
 
@@ -16830,9 +16920,21 @@ export function buildConversationTurns(testCase, attachments) {
   const data = expandTestData(testCase.test_data || testCase.scenario);
   const numericMemory = numericMemoryConversationTurns(testCase);
   if (numericMemory.length) return numericMemory;
+  const split = splitFollowUpData(data);
+  if (String(testCase?.contract_version || '') === 'qbot-current-casebook/v4' && split) {
+    return [
+      {
+        label: '第一轮问题',
+        prompt: split.question,
+      },
+      {
+        label: '第二轮追问',
+        prompt: split.followUp,
+      },
+    ];
+  }
   const scripted = scenarioConversationTurns(testCase, attachments);
   if (scripted.length) return scripted;
-  const split = splitFollowUpData(data);
   if (split) return [
     {
       label: '第一轮问题',
@@ -16966,6 +17068,17 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const label = String(turn?.label || '');
   const result = (name, expected, ok, actual = clip(reply, 360)) => ({ applicable: true, name, expected, ok, actual });
   const notApplicable = { applicable: false };
+
+  if (id === 'USR-START-001') {
+    const itemCount = countEnumeratedItems(reply);
+    const technicalNoise = forbiddenMatches(reply);
+    return result(
+      '三点待办优先级回复',
+      '回复应给出至少三条可识别的待办优先级，并且不包含运行时、内部错误或敏感技术噪音。',
+      itemCount >= 3 && technicalNoise.length === 0,
+      `enumerated_items=${itemCount}；technical_noise=${technicalNoise.join(' | ') || 'none'}；reply=${clip(reply, 460)}`,
+    );
+  }
 
   if (id === 'SIT-MEM-001') {
     const context = `${label}\n${prompt}`;
@@ -17268,6 +17381,8 @@ function buildUserPrompt(testCase) {
   const scenario = String(testCase.scenario || '');
   const rawData = String(testCase.test_data || '').trim();
   const data = expandTestData(rawData);
+  const structuredPrompt = structuredV4UserPrompt(testCase);
+  if (structuredPrompt) return structuredPrompt;
   if (/5000\s*字/.test(rawData)) {
     return [
       '请总结下面这段长文本，提炼 5 个重点、3 个风险和下一步建议：',
@@ -17378,12 +17493,46 @@ function conversationScenarioBlocker(testCase) {
 
 function splitFollowUpData(value) {
   const text = String(value || '').trim();
-  const match = text.match(/(?:普通问题|问题|第一轮)[：:]\s*([\s\S]*?)(?:[；;]\s*|\n+)\s*(?:追问|第二轮)[：:]\s*([\s\S]+)/);
+  const fields = structuredCaseDataFields(text);
+  const question = fields.get('第一轮') || fields.get('普通问题') || fields.get('问题');
+  const followUp = fields.get('第二轮') || fields.get('追问');
+  if (question && followUp) return { question, followUp };
+  const match = text.match(/(?:普通问题|问题|第一轮)[：:=]\s*([\s\S]*?)(?:[；;]\s*|\n+)\s*(?:追问|第二轮)[：:=]\s*([\s\S]+)/);
   if (!match) return null;
-  const question = match[1].trim();
-  const followUp = match[2].trim();
-  if (!question || !followUp) return null;
-  return { question, followUp };
+  const legacyQuestion = cleanStructuredCaseValue(match[1]);
+  const legacyFollowUp = cleanStructuredCaseValue(match[2]);
+  if (!legacyQuestion || !legacyFollowUp) return null;
+  return { question: legacyQuestion, followUp: legacyFollowUp };
+}
+
+function structuredV4UserPrompt(testCase) {
+  if (String(testCase?.contract_version || '') !== 'qbot-current-casebook/v4') return '';
+  const fields = structuredCaseDataFields(testCase?.test_data);
+  for (const key of ['问题', '输入', '任务', '提示', '长任务', '文本']) {
+    const value = fields.get(key);
+    if (value) return value;
+  }
+  return '';
+}
+
+function structuredCaseDataFields(value) {
+  const text = String(value || '').trim();
+  const fields = new Map();
+  const pattern = /(?:^|[；;\n]\s*)([\p{L}\p{N}_]+)\s*[=：:]\s*(?:“([^”]*)”|"([^"]*)"|'([^']*)'|([^；;\n]*))/gu;
+  for (const match of text.matchAll(pattern)) {
+    const key = String(match[1] || '').trim();
+    const fieldValue = cleanStructuredCaseValue(match[2] ?? match[3] ?? match[4] ?? match[5] ?? '');
+    if (key && fieldValue && !fields.has(key)) fields.set(key, fieldValue);
+  }
+  return fields;
+}
+
+function cleanStructuredCaseValue(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^[“"'‘]+|[”"'’]+$/g, '')
+    .replace(/[；;]\s*deterministic_seed\s*=[\s\S]*$/i, '')
+    .trim();
 }
 
 function expandTestData(value) {
@@ -17729,13 +17878,13 @@ async function finishCase({ page, state, caseDir }) {
   writeTextFile(path.join(caseDir, 'case-report.md'), renderCaseReport(state));
   let evidenceManifest = buildCaseEvidenceManifest(state, caseDir);
   if (
-    state.contract_version === PRODUCTION_CASEBOOK_CONTRACT_VERSION
+    String(state.required_evidence_roles || '').trim()
     && state.status === 'passed'
     && !evidenceManifest.complete
   ) {
     markFailed(
       state,
-      `V2 可信证据不完整：缺少 ${evidenceManifest.missing_roles.join(', ')}`,
+      `${state.contract_version || 'Casebook'} 可信证据不完整：缺少 ${evidenceManifest.missing_roles.join(', ')}`,
       'automation_error',
     );
     writeTextFile(path.join(caseDir, 'case-report.md'), renderCaseReport(state));
@@ -17856,6 +18005,9 @@ export function buildCaseEvidenceManifest(state, caseDir) {
   if (fs.existsSync(runMetadataFile) && fs.statSync(runMetadataFile).isFile()) {
     redactedLogFiles.push(runMetadataFile);
   }
+  const redactedLogEvidence = redactedLogFiles.length
+    ? { available: true, files: dedupe(redactedLogFiles, (file) => path.resolve(file)).map(fileEvidence) }
+    : { available: false, reason: '缺少宿主/鉴权/重启脱敏日志文件。' };
   const failedOrBlocked = state.status === 'failed' || state.status === 'blocked';
   const firstDivergence = failedOrBlocked
     ? screenshotEntries.find(([key]) => /error|missing|blocked|failure|failed|timeout|divergence/i.test(key))
@@ -17946,9 +18098,8 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     artifact_preview: artifactPreviewPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少成果可见预览证据。' },
-    redacted_host_and_auth_log: redactedLogFiles.length
-      ? { available: true, files: redactedLogFiles.map(fileEvidence) }
-      : { available: false, reason: '缺少宿主/鉴权/重启脱敏日志文件。' },
+    redacted_log: redactedLogEvidence,
+    redacted_host_and_auth_log: redactedLogEvidence,
   };
   const missingRoles = requiredRoles.filter((role) => roleEvidence[role]?.available !== true);
   return {
