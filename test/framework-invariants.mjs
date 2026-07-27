@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
+  assistantConfirmationSurfaceVerdict,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
   buildTerminalConversationEvidence,
@@ -69,6 +70,42 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+assert.deepEqual(
+  assistantConfirmationSurfaceVerdict({
+    actionLabel: '跳过',
+    surfaceText: '你想分析的「包含敏感字段的合规清单」具体指哪一个？ 风控评审 征信复核 客户回访 其他补充',
+    optionLabels: ['风控评审', '征信复核', '客户回访', '全部贷款相关文件', '其他补充', '跳过'],
+  }),
+  {
+    handle: true,
+    policy: 'skip',
+    action_label: '跳过',
+    question_like: true,
+    has_dialog_ancestor: false,
+    option_count: 5,
+    option_labels: ['风控评审', '征信复核', '客户回访', '全部贷款相关文件', '其他补充'],
+  },
+  '新版 Agent 推荐选项面板必须被识别并采用默认跳过策略',
+);
+assert.equal(
+  assistantConfirmationSurfaceVerdict({
+    actionLabel: '关闭并使用默认答案',
+    surfaceText: '需要你确认 选择一项回答，或直接按 Escape / 关闭按钮使用默认答案继续。',
+    optionLabels: ['风控评审', '关闭并使用默认答案'],
+    hasDialogAncestor: true,
+  }).handle,
+  true,
+  'QWork AskModal 的关闭入口必须按默认答案策略处理',
+);
+assert.equal(
+  assistantConfirmationSurfaceVerdict({
+    actionLabel: '跳过向导',
+    surfaceText: '欢迎使用',
+    optionLabels: ['下一步'],
+  }).handle,
+  false,
+  '普通向导的“跳过”不得被误当成 Agent 推荐选项',
+);
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
@@ -591,6 +628,8 @@ const required = [
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
   ['回复采集覆盖 assistant-thread 下的分支消息', /conversationMessageTimeline[\s\S]*assistant-thread.*data-role="user"[\s\S]*assistant-thread.*data-role="assistant"/],
   ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
+  ['新版推荐选项按精确跳过入口处理并保留结构化证据', /assistantConfirmationSurfaceVerdict[\s\S]*具体指[\s\S]*option_count[\s\S]*assistant_confirmation_interactions[\s\S]*处理 Agent 推荐选项/],
+  ['新 Case 开始前先显式处理残留推荐选项再执行通用 Escape 清理', /executeCasebookCase[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)[\s\S]*openNewTask[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)/],
   ['稳定 QA 专家不存在时自动创建且不回退通用助手', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*let card = await findExpertCardByName\(page, expertName\);[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*专家页通用助手入口/],
