@@ -1347,6 +1347,126 @@ function createCaseState({ testCase, caseDir, order, modelTier }) {
   };
 }
 
+const NUMBERED_STEP_SEMANTIC_MARKERS = [
+  { key: 'new_task', planned: /新建任务|新任务|新会话/, observed: /新建任务|新任务|新会话/ },
+  {
+    key: 'send_or_input',
+    planned: /输入|发送|提交|提问|追问/,
+    observed: /输入|发送|提交|提问|追问|第[一二三四五六七八九十\d]+轮/,
+  },
+  { key: 'wait_for_reply', planned: /等待[^。\n]*(?:回复|生成)|完整回复|生成完成/, observed: /等待[^。\n]*(?:回复|生成)|回复[^。\n]*(?:完成|状态|时长)|生成完成/ },
+  { key: 'logout', planned: /退出(?:当前)?账号|退出登录|登出|注销/, observed: /退出(?:当前)?账号|退出登录|登出|注销/ },
+  { key: 'login', planned: /登录|OAuth|Lingxi|认证/i, observed: /登录|OAuth|Lingxi|认证|鉴权/i },
+  { key: 'cancel', planned: /取消/, observed: /取消/ },
+  { key: 'retry', planned: /重试|再次(?:点击|发起|执行|进入)|重新尝试/, observed: /重试|再次(?:点击|发起|执行|进入)|重新尝试/ },
+  { key: 'failure', planned: /失败|失效|错误/, observed: /失败|失效|错误/ },
+  { key: 'stop_generation', planned: /停止(?:生成|回复)?|中止(?:生成|回复)?/, observed: /停止(?:生成|回复)?|中止(?:生成|回复)?|取消生成/ },
+  { key: 'regenerate', planned: /重新生成/, observed: /重新生成/ },
+  { key: 'refresh', planned: /刷新/, observed: /刷新/ },
+  {
+    key: 'close_and_reopen',
+    planned: /关闭[^。\n]*(?:重新|再次)[^。\n]*(?:进入|打开)|重新进入|重开/,
+    observed: /关闭[^。\n]*(?:重新|再次)[^。\n]*(?:进入|打开)|重新进入|重开|重启|relaunch/i,
+  },
+  { key: 'delete', planned: /删除/, observed: /删除/ },
+  { key: 'copy', planned: /复制/, observed: /复制/ },
+  { key: 'upload', planned: /上传|添加附件|选择文件/, observed: /上传|添加附件|选择文件|附加文件/ },
+  { key: 'download', planned: /下载/, observed: /下载/ },
+  { key: 'feedback', planned: /反馈/, observed: /反馈/ },
+  { key: 'beautify', planned: /美化/, observed: /美化/ },
+  { key: 'settings', planned: /设置|偏好/, observed: /设置|偏好/ },
+];
+
+export function parseDeclaredNumberedSteps(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*(\d+)\s*[.、．)]\s*(.+?)\s*$/))
+    .filter(Boolean)
+    .map((match) => ({ number: Number(match[1]), text: match[2] }));
+}
+
+export function numberedStepExecutionCoverage(state = {}) {
+  const declared = parseDeclaredNumberedSteps(state.numbered_steps);
+  const executorSteps = (state.steps || []).filter((item) => (
+    !/^切换模型档位/.test(String(item?.action || ''))
+    && !/^阻塞判定$/.test(String(item?.action || ''))
+    && !/^编号步骤覆盖校验$/.test(String(item?.action || ''))
+  ));
+  const observedLabels = [
+    ...executorSteps.map((item) => String(item?.action || '')),
+    ...(state.assertions || []).map((item) => String(item?.name || '')),
+  ].filter(Boolean);
+  const observedText = observedLabels.join('\n');
+  const entries = declared.map((step, index) => {
+    const semanticMarkers = NUMBERED_STEP_SEMANTIC_MARKERS
+      .filter((marker) => marker.planned.test(step.text));
+    const missingMarkers = semanticMarkers
+      .filter((marker) => !marker.observed.test(observedText))
+      .map((marker) => marker.key);
+    const positionalEvidence = executorSteps[index] || null;
+    const covered = missingMarkers.length === 0 && Boolean(
+      semanticMarkers.length
+        ? observedLabels.length
+        : positionalEvidence && (state.assertions || []).length,
+    );
+    return {
+      number: step.number,
+      declared_step: step.text,
+      covered,
+      semantic_markers: semanticMarkers.map((marker) => marker.key),
+      missing_semantic_markers: missingMarkers,
+      positional_action: positionalEvidence?.action || '',
+    };
+  });
+  const missing = entries.filter((entry) => !entry.covered);
+  return {
+    schema_version: 1,
+    declared_count: declared.length,
+    executor_step_count: executorSteps.length,
+    assertion_count: (state.assertions || []).length,
+    complete: declared.length === 0 || missing.length === 0,
+    entries,
+    missing_steps: missing,
+    observed_labels: observedLabels,
+  };
+}
+
+export function enforceNumberedStepExecutionContract(state = {}) {
+  const isV4 = String(state.contract_version || '') === 'qbot-current-casebook/v4';
+  if (!isV4) return null;
+  const coverage = numberedStepExecutionCoverage(state);
+  state.artifacts = state.artifacts || {};
+  state.artifacts.numbered_step_coverage = {
+    ...coverage,
+    enforced: true,
+    evaluated_at: new Date().toISOString(),
+  };
+  if (coverage.complete) return coverage;
+  const missing = coverage.missing_steps
+    .map((entry) => `${entry.number}.${entry.declared_step}`)
+    .join('；');
+  const reason = `V4 编号步骤未全部真实执行，禁止 raw pass/bug：${missing}`;
+  state.framework_issue = {
+    kind: 'numbered_step_execution_gap',
+    reason,
+    missing_steps: coverage.missing_steps,
+  };
+  if (state.status !== 'blocked' && state.result_category !== 'automation_error') {
+    markBlocked(state, reason);
+  } else {
+    recordStep(
+      state,
+      '编号步骤覆盖校验',
+      '每个 Excel 编号步骤都必须有真实动作或客观断言覆盖。',
+      reason,
+      'blocked',
+      '',
+      'automation_error',
+    );
+  }
+  return coverage;
+}
+
 export function parseSingleHostPipelineSize(value) {
   if (value == null || value === false || value === 'false' || value === '0') return 1;
   const parsed = value === true || value === 'true' ? DEFAULT_SINGLE_HOST_PIPELINE_SIZE : Number(value);
@@ -17872,6 +17992,7 @@ async function finishCase({ page, state, caseDir }) {
   if (!state.screenshots_flat.length && state.status !== 'blocked') {
     markFailed(state, '证据不完整：未保存任何截图。', 'automation_error');
   }
+  enforceNumberedStepExecutionContract(state);
   if (state.status === 'failed' && state.result_category === 'bug' && !state.problem_description) {
     state.problem_description = buildProblemDescription(state);
   }
@@ -18013,19 +18134,38 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     ? screenshotEntries.find(([key]) => /error|missing|blocked|failure|failed|timeout|divergence/i.test(key))
       || after
     : { not_applicable: true, reason: 'raw status passed；最早偏差角色不适用。' };
+  const numberedStepCoverage = state.artifacts?.numbered_step_coverage
+    || numberedStepExecutionCoverage(state);
+  const numberedStepEvidenceAvailable = numberedStepCoverage.declared_count > 0 && (
+    numberedStepCoverage.complete
+    || Boolean(numberedStepCoverage.enforced && state.status === 'blocked')
+  );
 
   const roleEvidence = {
     before_screenshot: screenshotEvidence(before),
     action_screenshot: screenshotEvidence(action),
     after_screenshot: screenshotEvidence(after),
-    numbered_step_assertions: state.steps?.length && state.assertions?.length
+    numbered_step_assertions: numberedStepEvidenceAvailable
       ? {
         available: true,
-        step_count: state.steps.length,
+        execution_complete: numberedStepCoverage.complete,
+        explicitly_blocked: !numberedStepCoverage.complete && state.status === 'blocked',
+        declared_step_count: numberedStepCoverage.declared_count,
+        executor_step_count: numberedStepCoverage.executor_step_count,
         assertion_count: state.assertions.length,
         numbered_steps_sha256: sha256Text(state.numbered_steps || ''),
+        missing_steps: numberedStepCoverage.missing_steps,
+        coverage_entries: numberedStepCoverage.entries,
       }
-      : { available: false, reason: '缺少执行步骤或客观断言。' },
+      : {
+        available: false,
+        reason: numberedStepCoverage.declared_count
+          ? `编号步骤覆盖不完整：${numberedStepCoverage.missing_steps.map((entry) => entry.number).join(', ')}`
+          : '缺少可解析的编号步骤或客观断言。',
+        declared_step_count: numberedStepCoverage.declared_count,
+        executor_step_count: numberedStepCoverage.executor_step_count,
+        missing_steps: numberedStepCoverage.missing_steps,
+      },
     first_divergence_evidence: firstDivergence?.not_applicable
       ? { available: true, ...firstDivergence }
       : screenshotEvidence(firstDivergence),

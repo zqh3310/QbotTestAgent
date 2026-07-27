@@ -13,7 +13,12 @@ import {
   resolveEvidenceRoleApplicability,
   validateTrustedProductionCaseContract,
 } from '../src/lib/production-casebook-contract.mjs';
-import { buildCaseEvidenceManifest } from '../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  buildCaseEvidenceManifest,
+  enforceNumberedStepExecutionContract,
+  numberedStepExecutionCoverage,
+  parseDeclaredNumberedSteps,
+} from '../src/lib/ui-agent-casebook-runner.mjs';
 
 function sourceCase(id) {
   return {
@@ -278,4 +283,107 @@ test('evidence manifest maps the V4 redacted_log role to immutable run metadata'
   assert.equal(manifest.role_evidence.redacted_log.available, true);
   assert.equal(manifest.role_evidence.redacted_log.files.length, 1);
   assert.match(manifest.role_evidence.redacted_log.files[0].file, /run-metadata\.json$/);
+});
+
+test('V4 numbered-step coverage rejects observation-only auth false passes', () => {
+  const numberedSteps = [
+    '1. 退出当前账号',
+    '2. 发起登录',
+    '3. 取消登录',
+    '4. 再次发起登录',
+    '5. 核对工作台和当前账号',
+  ].join('\n');
+  assert.equal(parseDeclaredNumberedSteps(numberedSteps).length, 5);
+  const coverage = numberedStepExecutionCoverage({
+    numbered_steps: numberedSteps,
+    steps: [
+      { action: '切换模型档位：M3' },
+      { action: '观察当前鉴权状态' },
+    ],
+    assertions: [{ name: '已处于登录后工作台' }],
+  });
+  assert.equal(coverage.complete, false);
+  assert.equal(coverage.declared_count, 5);
+  assert.ok(coverage.missing_steps.some((item) => item.missing_semantic_markers.includes('logout')));
+  assert.ok(coverage.missing_steps.some((item) => item.missing_semantic_markers.includes('cancel')));
+  assert.ok(coverage.missing_steps.some((item) => item.missing_semantic_markers.includes('retry')));
+});
+
+test('V4 numbered-step coverage rejects generic conversation that never clicks stop', () => {
+  const coverage = numberedStepExecutionCoverage({
+    numbered_steps: [
+      '1. 新建任务',
+      '2. 输入一个长问题并发送',
+      '3. 等待回复开始生成',
+      '4. 点击停止',
+      '5. 核对已生成内容仍保留',
+    ].join('\n'),
+    steps: [
+      { action: '切换模型档位：M3' },
+      { action: '点击【新建任务】' },
+      { action: '清理输入区附件' },
+      { action: '发送第一轮问题' },
+      { action: '回复完成状态（第一轮问题）' },
+    ],
+    assertions: [{ name: '回复完成状态（第一轮问题）' }],
+  });
+  assert.equal(coverage.complete, false);
+  assert.ok(coverage.missing_steps.some((item) => item.missing_semantic_markers.includes('stop_generation')));
+});
+
+test('enforced V4 numbered-step gap becomes an explicit blocked result with complete blocker evidence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v4-step-gap-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'USR-START-003');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const caseReport = path.join(caseDir, 'case-report.md');
+  fs.writeFileSync(caseReport, '# numbered step blocker\n');
+  const state = {
+    id: 'USR-START-003',
+    kind: 'auth',
+    contract_version: 'qbot-current-casebook/v4',
+    required_evidence_roles: 'numbered_step_assertions,case_report',
+    numbered_steps: '1. 退出当前账号\n2. 发起登录\n3. 核对工作台',
+    status: 'passed',
+    result_category: 'pass',
+    actual_result: 'incorrect raw pass',
+    conclusion: '通过',
+    case_report: caseReport,
+    artifacts: {},
+    screenshots: {},
+    steps: [{ action: '观察当前鉴权状态', status: 'passed' }],
+    assertions: [{ name: '已处于登录后工作台', status: 'passed' }],
+  };
+  const coverage = enforceNumberedStepExecutionContract(state);
+  assert.equal(coverage.complete, false);
+  assert.equal(state.status, 'blocked');
+  assert.equal(state.result_category, 'blocked');
+  assert.equal(state.framework_issue.kind, 'numbered_step_execution_gap');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.equal(manifest.role_evidence.numbered_step_assertions.available, true);
+  assert.equal(manifest.role_evidence.numbered_step_assertions.execution_complete, false);
+  assert.equal(manifest.role_evidence.numbered_step_assertions.explicitly_blocked, true);
+  assert.ok(manifest.role_evidence.numbered_step_assertions.missing_steps.length > 0);
+});
+
+test('unenforced V4 numbered-step gap cannot satisfy the manifest role', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v4-unenforced-step-gap-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'USR-START-004');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const manifest = buildCaseEvidenceManifest({
+    id: 'USR-START-004',
+    kind: 'auth',
+    contract_version: 'qbot-current-casebook/v4',
+    required_evidence_roles: 'numbered_step_assertions',
+    numbered_steps: '1. 退出当前账号\n2. 取消登录\n3. 再次发起登录',
+    status: 'passed',
+    artifacts: {},
+    screenshots: {},
+    steps: [{ action: '观察当前鉴权状态', status: 'passed' }],
+    assertions: [{ name: '已处于登录后工作台', status: 'passed' }],
+  }, caseDir);
+  assert.equal(manifest.complete, false);
+  assert.deepEqual(manifest.missing_roles, ['numbered_step_assertions']);
 });
