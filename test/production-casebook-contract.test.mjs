@@ -387,3 +387,40 @@ test('unenforced V4 numbered-step gap cannot satisfy the manifest role', (t) => 
   assert.equal(manifest.complete, false);
   assert.deepEqual(manifest.missing_roles, ['numbered_step_assertions']);
 });
+
+test('explicit numbered-step blocker keeps an unchanged after-action frame as diagnostic evidence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-v4-blocked-action-frame-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'USR-EXPERT-003');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const before = path.join(caseDir, '01-before.png');
+  const action = path.join(caseDir, '02-after-action.png');
+  const after = path.join(caseDir, '03-assertion.png');
+  const caseReport = path.join(caseDir, 'case-report.md');
+  fs.writeFileSync(before, 'unchanged-expert-page');
+  fs.writeFileSync(action, 'unchanged-expert-page');
+  fs.writeFileSync(after, 'unchanged-expert-page');
+  fs.writeFileSync(caseReport, '# blocked diagnostic\n');
+  const state = {
+    id: 'USR-EXPERT-003',
+    kind: 'ui',
+    contract_version: 'qbot-current-casebook/v4',
+    required_evidence_roles: 'before_screenshot,action_screenshot,after_screenshot,numbered_step_assertions,case_report',
+    numbered_steps: '1. 输入不存在关键词\n2. 核对空结果\n3. 点击清空搜索',
+    status: 'passed',
+    result_category: 'pass',
+    actual_result: 'incorrect raw pass',
+    conclusion: '通过',
+    case_report: caseReport,
+    artifacts: {},
+    screenshots: { before, after_action: action, final: after },
+    steps: [{ action: '进入模块：专家与技能', status: 'passed' }],
+    assertions: [{ name: '页面预期文案', status: 'failed' }],
+  };
+  enforceNumberedStepExecutionContract(state);
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(state.status, 'blocked');
+  assert.equal(manifest.complete, true);
+  assert.equal(manifest.role_evidence.action_screenshot.available, true);
+  assert.equal(manifest.role_evidence.action_screenshot.file, action);
+});

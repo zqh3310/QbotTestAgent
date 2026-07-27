@@ -18041,7 +18041,17 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     || [...screenshotEntries].reverse().find(([key]) => /after|reply|completed/i.test(key))
     || screenshotEntries.at(-1)
     || null;
-  const action = selectTrustedActionScreenshot(screenshotEntries, before, after);
+  const trustedAction = selectTrustedActionScreenshot(screenshotEntries, before, after);
+  // A numbered-step coverage blocker is a framework diagnosis, not a product
+  // pass/bug claim.  Preserve its explicit after-action frame even when the
+  // attempted navigation leaves the UI visually unchanged.  Mutable pass/bug
+  // outcomes still require selectTrustedActionScreenshot's distinct-frame
+  // contract, so a duplicate image cannot masquerade as executed product work.
+  const blockedDiagnosticAction = state.status === 'blocked'
+    && state.framework_issue?.kind === 'numbered_step_execution_gap'
+    ? screenshotEntries.find(([key]) => /(?:^|[_-])after[_-]?action(?:$|[_-])/i.test(key)) || null
+    : null;
+  const action = trustedAction || blockedDiagnosticAction;
   const artifactsJson = JSON.stringify(state.artifacts || {});
   const promptRecords = Array.isArray(state.artifacts?.sent_prompts)
     ? state.artifacts.sent_prompts.filter((item) => String(item?.prompt || '').trim())
