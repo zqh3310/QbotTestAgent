@@ -11515,7 +11515,7 @@ export function unifiedConnectorModeApplied(capabilities, mode, bridgeSelection 
 
 async function setWorkMode(page, state, caseDir, mode) {
   const label = WORK_MODE_LABELS[mode] || mode;
-  const menuText = await ensureComposerToolMenu(page, state, {
+  let menuText = await ensureComposerToolMenu(page, state, {
     selector: '[data-testid="composer-plus-menu"]',
     action: '打开输入区【工作模式/专家】菜单',
     matchPattern: /动手|问答|规划/,
@@ -11537,12 +11537,41 @@ async function setWorkMode(page, state, caseDir, mode) {
     );
     return false;
   }
-  await locator.click({ force: true }).catch(async () => locator.press('Enter'));
+  // QWork 0.0.17 renders work modes as focusable role=radio divs inside a
+  // Radix submenu. A forced pointer click can close the submenu at the Portal
+  // boundary without delivering React's onClick. Use the component's public
+  // keyboard contract (Enter/Space) and reacquire the Portal node before a
+  // single visible-UI retry.
+  let activation = 'keyboard-enter';
+  await locator.focus({ timeout: 1000 }).catch(() => {});
+  await locator.press('Enter', { timeout: 1500 }).catch(() => {});
   let snapshot = await workModeSelectionSnapshot(page, mode);
-  const deadline = Date.now() + 8000;
+  let deadline = Date.now() + 3000;
   while (!snapshot.ok && Date.now() < deadline) {
     await page.waitForTimeout(200);
     snapshot = await workModeSelectionSnapshot(page, mode);
+  }
+  if (!snapshot.ok) {
+    await page.keyboard.press('Escape').catch(() => {});
+    menuText = await ensureComposerToolMenu(page, state, {
+      selector: '[data-testid="composer-plus-menu"]',
+      action: '重新打开输入区【工作模式/专家】菜单',
+      matchPattern: /动手|问答|规划/,
+      expectedLabels: Object.values(WORK_MODE_LABELS),
+      menuKind: 'workMode',
+    });
+    const retry = await workModeLocator(page, mode);
+    if (retry) {
+      activation = 'keyboard-enter+space-retry';
+      await retry.focus({ timeout: 1000 }).catch(() => {});
+      await retry.press('Space', { timeout: 1500 }).catch(() => {});
+    }
+    snapshot = await workModeSelectionSnapshot(page, mode);
+    deadline = Date.now() + 5000;
+    while (!snapshot.ok && Date.now() < deadline) {
+      await page.waitForTimeout(200);
+      snapshot = await workModeSelectionSnapshot(page, mode);
+    }
   }
   const afterText = await visibleComposerToolStateText(page, 'workMode');
   const selectedOk = snapshot.ok;
@@ -11551,7 +11580,7 @@ async function setWorkMode(page, state, caseDir, mode) {
     state,
     `切换工作模式：${label}`,
     `${label} 点击后应处于当前工作模式，且动手/问答/规划互斥。`,
-    `capabilities.workMode=${snapshot.stored || 'craft/default'}；chipVisible=${snapshot.chipVisible}；chip=${clip(snapshot.chipText, 80) || '无'}；工具条=${clip(afterText, 120)}`,
+    `activation=${activation}；capabilities.workMode=${snapshot.stored || 'craft/default'}；chipVisible=${snapshot.chipVisible}；chip=${clip(snapshot.chipText, 80) || '无'}；工具条=${clip(afterText, 120)}；菜单=${clip(menuText, 80)}`,
     selectedOk ? 'passed' : 'failed',
     state.screenshots[`work_mode_${mode}`],
     selectedOk ? '' : 'automation_error',
