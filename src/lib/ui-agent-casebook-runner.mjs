@@ -18337,10 +18337,30 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     || Boolean(state.artifacts?.composer_attachment_state)
     || Boolean(state.artifacts?.attachment_limit_probe)
     || Boolean(state.artifacts?.attachment_upload_state);
+  const attachmentLimitRejection = state.artifacts?.attachment_limit_rejection;
+  const attachmentLimitRejectionPresent = Boolean(
+    attachmentLimitRejection?.expected_pattern_matched
+    && attachmentLimitRejection?.product_rejected_before_send
+    && existingFileEvidence(attachmentLimitRejection?.evidence_screenshot),
+  );
+  const noTaskNoSendState = state.artifacts?.no_task_no_send_state;
+  const noTaskNoSendPresent = Boolean(
+    noTaskNoSendState?.task_state_unchanged
+    && noTaskNoSendState?.message_count_unchanged
+    && noTaskNoSendState?.no_task_created
+    && noTaskNoSendState?.no_message_sent
+    && noTaskNoSendState?.no_prompt_recorded,
+  );
   const evidenceRoleApplicability = resolveEvidenceRoleApplicability(
     state,
     declaredRequiredRoles,
-    { attachmentObserved },
+    {
+      attachmentObserved,
+      verifiedAttachmentPreSendRejection: (
+        attachmentLimitRejectionPresent
+        && noTaskNoSendPresent
+      ),
+    },
   );
   const requiredRoles = evidenceRoleApplicability.required_roles;
   const notApplicableRoleEvidence = Object.fromEntries(
@@ -18373,20 +18393,6 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     });
   const composerAttachmentPresent = /composer.*attachment|attachment.*composer|upload.*(?:accepted|ready|state)/i.test(artifactsJson);
   const attachmentReadbackPresent = /attachment.*(?:readback|content|parsed|extracted)|(?:readback|content).*attachment/i.test(artifactsJson);
-  const attachmentLimitRejection = state.artifacts?.attachment_limit_rejection;
-  const attachmentLimitRejectionPresent = Boolean(
-    attachmentLimitRejection?.expected_pattern_matched
-    && attachmentLimitRejection?.product_rejected_before_send
-    && existingFileEvidence(attachmentLimitRejection?.evidence_screenshot),
-  );
-  const noTaskNoSendState = state.artifacts?.no_task_no_send_state;
-  const noTaskNoSendPresent = Boolean(
-    noTaskNoSendState?.task_state_unchanged
-    && noTaskNoSendState?.message_count_unchanged
-    && noTaskNoSendState?.no_task_created
-    && noTaskNoSendState?.no_message_sent
-    && noTaskNoSendState?.no_prompt_recorded,
-  );
   const artifactPathHashPresent = /artifact|成果/i.test(artifactsJson)
     && /path|file/i.test(artifactsJson)
     && /sha256|sha-256|hash/i.test(artifactsJson);
@@ -18522,6 +18528,8 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     product_baseline: state.product_baseline || '',
     generated_at: new Date().toISOString(),
     raw_status: state.status,
+    source_declared_required_roles: evidenceRoleApplicability.source_declared_roles,
+    source_declared_required_role_count: evidenceRoleApplicability.source_declared_roles.length,
     declared_required_roles: evidenceRoleApplicability.declared_roles,
     declared_required_role_count: evidenceRoleApplicability.declared_roles.length,
     required_roles: requiredRoles,
@@ -18531,6 +18539,7 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     not_applicable_role_count: evidenceRoleApplicability.not_applicable_roles.length,
     evidence_applicability: {
       attachment: evidenceRoleApplicability.attachment_evidence_applicability,
+      pre_send_attachment_rejection: evidenceRoleApplicability.pre_send_attachment_rejection,
     },
     missing_roles: missingRoles,
     complete: missingRoles.length === 0,

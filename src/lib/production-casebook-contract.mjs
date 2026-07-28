@@ -36,6 +36,18 @@ export const ATTACHMENT_EVIDENCE_ROLES = Object.freeze([
   'no_task_no_send_state',
 ]);
 
+const CONVERSATION_EVIDENCE_ROLES = Object.freeze([
+  'prompt',
+  'task_id',
+  'transcript',
+  'reply_delta',
+]);
+
+const ATTACHMENT_PRE_SEND_REJECTION_EVIDENCE_ROLES = Object.freeze([
+  'attachment_limit_rejection',
+  'no_task_no_send_state',
+]);
+
 export function attachmentEvidenceApplicability(testCase = {}, { attachmentObserved = false } = {}) {
   const kind = String(testCase.kind || '').trim().toLowerCase();
   if (kind === 'attachment') {
@@ -62,17 +74,20 @@ export function attachmentEvidenceApplicability(testCase = {}, { attachmentObser
 export function resolveEvidenceRoleApplicability(
   testCase = {},
   declaredRoles = [],
-  { attachmentObserved = false } = {},
+  {
+    attachmentObserved = false,
+    verifiedAttachmentPreSendRejection = false,
+  } = {},
 ) {
-  const normalizedDeclaredRoles = [...new Set(
+  const sourceDeclaredRoles = [...new Set(
     (Array.isArray(declaredRoles) ? declaredRoles : String(declaredRoles || '').split(/[,，;；|\n]+/))
       .map((item) => String(item || '').trim())
       .filter(Boolean),
   )];
   const attachmentApplicability = attachmentEvidenceApplicability(testCase, { attachmentObserved });
-  const notApplicableRoles = attachmentApplicability.applicable
+  const attachmentNotApplicableRoles = attachmentApplicability.applicable
     ? []
-    : normalizedDeclaredRoles
+    : sourceDeclaredRoles
       .filter((role) => ATTACHMENT_EVIDENCE_ROLES.includes(role))
       .map((role) => ({
         role,
@@ -80,12 +95,47 @@ export function resolveEvidenceRoleApplicability(
         source: attachmentApplicability.source,
         reason: attachmentApplicability.reason,
       }));
+  const preSendAttachmentRejectionApplicable = Boolean(
+    attachmentApplicability.applicable
+    && verifiedAttachmentPreSendRejection,
+  );
+  const preSendAttachmentRejection = {
+    applicable: preSendAttachmentRejectionApplicable,
+    source: preSendAttachmentRejectionApplicable
+      ? 'verified_runtime_rejection'
+      : 'runtime_rejection_not_verified',
+    reason: preSendAttachmentRejectionApplicable
+      ? '产品在发送前明确拒绝附件，且运行时已验证未创建任务、未发送消息、未记录 prompt；发送后会话证据与附件内容读回不可能产生。'
+      : '未同时验证产品可见附件拒绝与未创建任务/未发送消息状态；不得豁免发送后会话证据。',
+  };
+  const rejectionNotApplicableRoles = preSendAttachmentRejectionApplicable
+    ? sourceDeclaredRoles
+      .filter((role) => CONVERSATION_EVIDENCE_ROLES.includes(role) || role === 'attachment_readback')
+      .map((role) => ({
+        role,
+        domain: role === 'attachment_readback' ? 'attachment' : 'conversation',
+        source: preSendAttachmentRejection.source,
+        reason: preSendAttachmentRejection.reason,
+      }))
+    : [];
+  const notApplicableRoles = [
+    ...attachmentNotApplicableRoles,
+    ...rejectionNotApplicableRoles,
+  ].filter((item, index, all) => all.findIndex((candidate) => candidate.role === item.role) === index);
+  const effectiveDeclaredRoles = preSendAttachmentRejectionApplicable
+    ? [...new Set([
+      ...sourceDeclaredRoles,
+      ...ATTACHMENT_PRE_SEND_REJECTION_EVIDENCE_ROLES,
+    ])]
+    : sourceDeclaredRoles;
   const notApplicableRoleNames = new Set(notApplicableRoles.map((item) => item.role));
   return {
-    declared_roles: normalizedDeclaredRoles,
-    required_roles: normalizedDeclaredRoles.filter((role) => !notApplicableRoleNames.has(role)),
+    source_declared_roles: sourceDeclaredRoles,
+    declared_roles: effectiveDeclaredRoles,
+    required_roles: effectiveDeclaredRoles.filter((role) => !notApplicableRoleNames.has(role)),
     not_applicable_roles: notApplicableRoles,
     attachment_evidence_applicability: attachmentApplicability,
+    pre_send_attachment_rejection: preSendAttachmentRejection,
   };
 }
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -210,6 +211,164 @@ test('legacy over-declared attachment roles are explicit N/A unless runtime obse
   assert.deepEqual(observedAttachment.required_roles, legacyRoles);
   assert.deepEqual(observedAttachment.not_applicable_roles, []);
   assert.equal(observedAttachment.attachment_evidence_applicability.source, 'runtime_observation');
+});
+
+test('verified pre-send attachment rejection replaces impossible conversation roles with auditable evidence', () => {
+  const legacyRoles = [
+    'before_screenshot',
+    'prompt',
+    'task_id',
+    'transcript',
+    'reply_delta',
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_readback',
+  ];
+  const applicability = resolveEvidenceRoleApplicability(
+    { id: 'SIT-HOME-043', kind: 'attachment' },
+    legacyRoles,
+    {
+      attachmentObserved: true,
+      verifiedAttachmentPreSendRejection: true,
+    },
+  );
+  assert.deepEqual(applicability.source_declared_roles, legacyRoles);
+  assert.deepEqual(applicability.declared_roles, [
+    ...legacyRoles,
+    'attachment_limit_rejection',
+    'no_task_no_send_state',
+  ]);
+  assert.deepEqual(applicability.required_roles, [
+    'before_screenshot',
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_limit_rejection',
+    'no_task_no_send_state',
+  ]);
+  assert.deepEqual(
+    applicability.not_applicable_roles.map((item) => item.role),
+    ['prompt', 'task_id', 'transcript', 'reply_delta', 'attachment_readback'],
+  );
+  assert.ok(applicability.not_applicable_roles.every(
+    (item) => item.source === 'verified_runtime_rejection',
+  ));
+  assert.equal(applicability.pre_send_attachment_rejection.applicable, true);
+});
+
+test('legacy attachment limit manifest becomes complete only after strict pre-send rejection proof', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-attachment-limit-manifest-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'SIT-HOME-043');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const before = path.join(caseDir, '01-before.png');
+  const action = path.join(caseDir, '02-attachment-limit.png');
+  const after = path.join(caseDir, '03-final.png');
+  const caseReport = path.join(caseDir, 'case-report.md');
+  const attachment = path.join(caseDir, 'oversized.pdf');
+  fs.writeFileSync(before, 'composer-before-upload');
+  fs.writeFileSync(action, 'visible-product-limit-rejection');
+  fs.writeFileSync(after, 'composer-after-rejection');
+  fs.writeFileSync(caseReport, '# attachment limit rejection\n');
+  fs.writeFileSync(attachment, 'oversized attachment fixture');
+  const attachmentSha256 = createHash('sha256').update(fs.readFileSync(attachment)).digest('hex');
+  const legacyRoles = [
+    'before_screenshot',
+    'action_screenshot',
+    'after_screenshot',
+    'numbered_step_assertions',
+    'first_divergence_evidence',
+    'case_report',
+    'public_state_readback',
+    'prompt',
+    'task_id',
+    'transcript',
+    'reply_delta',
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_readback',
+  ];
+  const baseState = {
+    id: 'SIT-HOME-043',
+    kind: 'attachment',
+    contract_version: PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: legacyRoles.join(','),
+    status: 'passed',
+    case_report: caseReport,
+    screenshots: { before, attachment_limit: action, final: after },
+    steps: [
+      { action: '选择超限附件', status: 'passed' },
+      { action: '核对产品限制提示', status: 'passed' },
+      { action: '核对未创建任务且未发送消息', status: 'passed' },
+    ],
+    assertions: [
+      { name: '产品显示附件大小限制提示', status: 'passed' },
+      { name: '输入区未挂载附件', status: 'passed' },
+      { name: '未创建任务且未发送消息', status: 'passed' },
+    ],
+    artifacts: {
+      attachment_sources: [{
+        path: attachment,
+        name: path.basename(attachment),
+        size_bytes: fs.statSync(attachment).size,
+        sha256: attachmentSha256,
+      }],
+      composer_attachment_state: {
+        source: 'visible_composer_attachment_state',
+        rejected_before_attach: true,
+      },
+      attachment_limit_rejection: {
+        expected_pattern_matched: true,
+        product_rejected_before_send: true,
+        evidence_screenshot: action,
+      },
+      no_task_no_send_state: {
+        source: 'public_task_and_message_state_readback',
+        task_state_unchanged: true,
+        message_count_unchanged: true,
+        no_task_created: true,
+        no_message_sent: true,
+        no_prompt_recorded: true,
+      },
+      numbered_step_coverage: {
+        declared_count: 3,
+        executor_step_count: 3,
+        complete: true,
+        enforced: true,
+        missing_steps: [],
+        entries: [],
+      },
+    },
+  };
+  const manifest = buildCaseEvidenceManifest(baseState, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.deepEqual(manifest.source_declared_required_roles, legacyRoles);
+  assert.equal(manifest.source_declared_required_role_count, 14);
+  assert.equal(manifest.declared_required_role_count, 16);
+  assert.equal(manifest.required_role_count, 11);
+  assert.equal(manifest.not_applicable_role_count, 5);
+  assert.equal(manifest.role_evidence.prompt.not_applicable, true);
+  assert.equal(manifest.role_evidence.attachment_readback.not_applicable, true);
+  assert.equal(manifest.role_evidence.attachment_limit_rejection.available, true);
+  assert.equal(manifest.role_evidence.no_task_no_send_state.available, true);
+  assert.equal(manifest.evidence_applicability.pre_send_attachment_rejection.applicable, true);
+
+  const failClosed = buildCaseEvidenceManifest({
+    ...baseState,
+    artifacts: {
+      ...baseState.artifacts,
+      no_task_no_send_state: {
+        ...baseState.artifacts.no_task_no_send_state,
+        no_message_sent: false,
+      },
+    },
+  }, caseDir);
+  assert.equal(failClosed.complete, false);
+  assert.equal(failClosed.evidence_applicability.pre_send_attachment_rejection.applicable, false);
+  assert.equal(failClosed.required_roles.includes('prompt'), true);
+  assert.equal(failClosed.missing_roles.includes('prompt'), true);
+  assert.equal(failClosed.declared_required_roles.includes('attachment_limit_rejection'), false);
+  assert.equal(failClosed.role_evidence.prompt.not_applicable, undefined);
 });
 
 test('evidence manifest preserves legacy declarations while gating only applicable roles', (t) => {
