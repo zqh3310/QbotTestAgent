@@ -57,6 +57,7 @@ import {
   createTeamsSkillFixtureController,
   selectTrustedActionScreenshot,
   unifiedConnectorModeApplied,
+  workModeSelectionVerdict,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 
 function listen(server, port = 0) {
@@ -1583,4 +1584,43 @@ test('QWork 0.0.14 connector bridge result survives omitted legacy capability fi
   assert.equal(unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined), true);
   assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'auto', null), true);
   assert.equal(unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', null), false);
+});
+
+test('QWork 0.0.17 work-mode readback requires public state and the refactored visible chip to agree', () => {
+  assert.equal(workModeSelectionVerdict({
+    mode: 'craft',
+    stored: '',
+    chipVisible: false,
+    chipText: '',
+  }).ok, true);
+  assert.equal(workModeSelectionVerdict({
+    mode: 'ask',
+    stored: 'ask',
+    chipVisible: true,
+    chipText: '问答',
+  }).ok, true);
+  assert.equal(workModeSelectionVerdict({
+    mode: 'plan',
+    stored: 'plan',
+    chipVisible: true,
+    chipText: '规划',
+  }).ok, true);
+  assert.equal(workModeSelectionVerdict({
+    mode: 'ask',
+    stored: '',
+    chipVisible: true,
+    chipText: '问答',
+  }).ok, false);
+  assert.equal(workModeSelectionVerdict({
+    mode: 'plan',
+    stored: 'plan',
+    chipVisible: false,
+    chipText: '',
+  }).ok, false);
+  assert.equal(workModeSelectionVerdict({
+    mode: 'craft',
+    stored: '',
+    chipVisible: true,
+    chipText: '问答',
+  }).ok, false);
 });

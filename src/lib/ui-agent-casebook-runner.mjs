@@ -11077,7 +11077,7 @@ async function visibleComposerToolStateText(page, tool) {
   const selector = tool === 'connector'
     ? '[data-testid="composer-connectors-menu"], [data-testid="composer-plus-menu"], .composer-plus-sub-connector, [data-testid="composer-connector-chip"], [data-testid="composer-selection-chips"]'
     : tool === 'workMode'
-      ? '[data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child, .composer-plus-main .composer-plus-row'
+      ? '[data-testid="composer-work-mode-chip"], [data-testid="composer-plus-section-mode"], [data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child'
       : '[data-testid="composer-skills-menu"], [data-testid="composer-plus-menu"], .composer-plus-sub-skill, [data-testid^="composer-skill-chip-"], .skill-chip';
   const entries = page.locator(selector);
   const count = await entries.count().catch(() => 0);
@@ -11162,10 +11162,41 @@ async function composerProductEntrySnapshot(page, { state = null, caseDir = '' }
 }
 
 const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
-  workMode: { label: '模式', selector: '.composer-plus-sub-mode' },
-  skill: { label: '技能', selector: '.composer-plus-sub-skill' },
-  connector: { label: '连接器', selector: '.composer-plus-sub-connector' },
+  workMode: {
+    label: '模式',
+    section: 'mode',
+    selector: '.composer-plus-sub-mode',
+    optionSelector: '[data-testid^="composer-work-mode-"]',
+  },
+  skill: {
+    label: '技能',
+    section: 'skill',
+    selector: '.composer-plus-sub-skill',
+    optionSelector: '[data-testid^="composer-skill-mode-"], [data-testid^="composer-skill-option-"]',
+  },
+  connector: {
+    label: '连接器',
+    section: 'connector',
+    selector: '.composer-plus-sub-connector',
+    optionSelector: '[data-testid^="composer-connector-mode-"], [data-testid^="composer-connector-option-"]',
+  },
 });
+
+async function lastVisibleLocator(locator, timeout = 250) {
+  const count = await locator.count().catch(() => 0);
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const candidate = locator.nth(index);
+    if (await visible(candidate, timeout)) return candidate;
+  }
+  return null;
+}
+
+async function visibleUnifiedComposerSubmenu(page, config, timeout = 250) {
+  const submenu = await lastVisibleLocator(page.locator(config.selector), timeout);
+  if (!submenu) return null;
+  if (config.optionSelector && !(await submenu.locator(config.optionSelector).count().catch(() => 0))) return null;
+  return submenu;
+}
 
 async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
@@ -11179,25 +11210,51 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
 
   const main = page.locator('.composer-plus-main').first();
   if (!(await visible(main, 1200))) return '';
-  const row = main.locator('.composer-plus-row, [role="menuitem"]')
-    .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(config.label)}(?:\\s|$)`) })
-    .first();
-  if (!(await visible(row, 1000))) return '';
+  const triggerSelector = `[data-testid="composer-plus-section-${config.section}"]`;
+  const locateTrigger = async () => {
+    const exact = main.locator(triggerSelector).first();
+    if (await visible(exact, 500)) return exact;
+    const fallback = main.locator('.composer-plus-row, [role="menuitem"]')
+      .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(config.label)}(?:\\s|$)`) })
+      .first();
+    return await visible(fallback, 500) ? fallback : null;
+  };
+  let row = await locateTrigger();
+  if (!row) return '';
 
-  await row.hover().catch(() => {});
-  let submenu = page.locator(config.selector).first();
-  if (!(await visible(submenu, 700))) {
-    await row.click({ force: true }).catch(async () => row.evaluate((element) => element.click()));
-    submenu = page.locator(config.selector).first();
+  // QWork 0.0.17 uses Radix SubTrigger. A synthetic click does not reliably
+  // open the submenu inside the embedded Teams WebView, and a capabilities
+  // refresh can replace the trigger between pointer events. Reacquire the
+  // stable section testid and drive the accessible pointer/ArrowRight path.
+  await row.hover({ force: true }).catch(() => {});
+  await row.dispatchEvent('pointermove', { pointerType: 'mouse' }).catch(() => {});
+  let submenu = null;
+  let deadline = Date.now() + 900;
+  while (!submenu && Date.now() < deadline) {
+    submenu = await visibleUnifiedComposerSubmenu(page, config, 120);
+    if (!submenu) await page.waitForTimeout(60);
   }
-  if (!(await visible(submenu, 1200))) return '';
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
+    await row.focus().catch(() => {});
+    await row.press('ArrowRight').catch(async () => {
+      await page.keyboard.press('ArrowRight').catch(() => {});
+    });
+    deadline = Date.now() + 1800;
+    while (!submenu && Date.now() < deadline) {
+      submenu = await visibleUnifiedComposerSubmenu(page, config, 150);
+      if (!submenu) await page.waitForTimeout(80);
+    }
+  }
+  if (!submenu) return '';
 
   const text = await submenu.innerText({ timeout: 1000 }).catch(() => '');
   recordStep(
     state,
     action || `打开输入区统一“+”菜单的【${config.label}】子菜单`,
-    `QWork 0.0.12 latest-main 统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
-    `已打开 ${config.selector}；${clip(text, 180)}`,
+    `QWork 0.0.17 统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
+    `trigger=${triggerSelector}；submenu=${config.selector}；${clip(text, 180)}`,
     'passed',
   );
   return text || config.label;
@@ -11459,7 +11516,7 @@ export function unifiedConnectorModeApplied(capabilities, mode, bridgeSelection 
 async function setWorkMode(page, state, caseDir, mode) {
   const label = WORK_MODE_LABELS[mode] || mode;
   const menuText = await ensureComposerToolMenu(page, state, {
-    selector: '[data-testid="composer-shell"] .ctools > *:first-child, .composer-stack .ctools > *:first-child',
+    selector: '[data-testid="composer-plus-menu"]',
     action: '打开输入区【工作模式/专家】菜单',
     matchPattern: /动手|问答|规划/,
     expectedLabels: Object.values(WORK_MODE_LABELS),
@@ -11480,18 +11537,21 @@ async function setWorkMode(page, state, caseDir, mode) {
     );
     return false;
   }
-  await locator.click({ force: true });
-  await page.waitForTimeout(800);
+  await locator.click({ force: true }).catch(async () => locator.press('Enter'));
+  let snapshot = await workModeSelectionSnapshot(page, mode);
+  const deadline = Date.now() + 8000;
+  while (!snapshot.ok && Date.now() < deadline) {
+    await page.waitForTimeout(200);
+    snapshot = await workModeSelectionSnapshot(page, mode);
+  }
   const afterText = await visibleComposerToolStateText(page, 'workMode');
-  const cap = await currentCapabilities(page);
-  const stored = String(cap?.workMode || '');
-  const selectedOk = (mode === 'craft' ? stored === '' : stored === mode) || workModeSelectedByText(mode, afterText);
+  const selectedOk = snapshot.ok;
   state.screenshots[`work_mode_${mode}`] = await shot(page, caseDir, `work-mode-${mode}`);
   recordStep(
     state,
     `切换工作模式：${label}`,
     `${label} 点击后应处于当前工作模式，且动手/问答/规划互斥。`,
-    `capabilities.workMode=${stored || 'craft/default'}；工具条=${clip(afterText, 120)}`,
+    `capabilities.workMode=${snapshot.stored || 'craft/default'}；chipVisible=${snapshot.chipVisible}；chip=${clip(snapshot.chipText, 80) || '无'}；工具条=${clip(afterText, 120)}`,
     selectedOk ? 'passed' : 'failed',
     state.screenshots[`work_mode_${mode}`],
     selectedOk ? '' : 'automation_error',
@@ -11512,6 +11572,46 @@ async function workModeLocator(page, mode) {
     if (await visible(candidate, 700)) return candidate;
   }
   return null;
+}
+
+export function workModeSelectionVerdict({
+  mode,
+  stored = '',
+  chipVisible = false,
+  chipText = '',
+} = {}) {
+  const normalizedMode = String(mode || '');
+  const normalizedStored = String(stored || '');
+  const expectedStored = normalizedMode === 'craft' ? '' : normalizedMode;
+  const label = WORK_MODE_LABELS[normalizedMode] || normalizedMode;
+  const stateMatches = normalizedStored === expectedStored;
+  const uiMatches = normalizedMode === 'craft'
+    ? !chipVisible
+    : Boolean(chipVisible) && String(chipText || '').includes(label);
+  return {
+    ok: Boolean(normalizedMode) && stateMatches && uiMatches,
+    stateMatches,
+    uiMatches,
+    expectedStored,
+    label,
+  };
+}
+
+async function workModeSelectionSnapshot(page, mode) {
+  const cap = await currentCapabilities(page);
+  const chip = page.locator('[data-testid="composer-work-mode-chip"]').first();
+  const chipVisible = await visible(chip, 180);
+  const chipText = chipVisible
+    ? await chip.innerText({ timeout: 500 }).catch(() => '')
+    : '';
+  const stored = String(cap?.workMode || '');
+  return {
+    mode,
+    stored,
+    chipVisible,
+    chipText: String(chipText || '').replace(/\s+/g, ' ').trim(),
+    ...workModeSelectionVerdict({ mode, stored, chipVisible, chipText }),
+  };
 }
 
 function workModeSelectedByText(mode, text) {
@@ -13232,8 +13332,11 @@ const COMPOSER_MENU_ANCHORS = Object.freeze({
 async function activeMenuLocator(page, menuKind = '') {
   const unifiedSelector = UNIFIED_COMPOSER_SUBMENUS[menuKind]?.selector;
   if (unifiedSelector) {
-    const unified = page.locator(unifiedSelector).first();
-    if (await visible(unified, 250)) return unified;
+    const unified = await lastVisibleLocator(page.locator(unifiedSelector), 250);
+    if (unified) {
+      const optionSelector = UNIFIED_COMPOSER_SUBMENUS[menuKind]?.optionSelector;
+      if (!optionSelector || await unified.locator(optionSelector).count().catch(() => 0)) return unified;
+    }
   }
   const selectors = [
     '[data-testid="composer-shell"] .ctool-menu',
