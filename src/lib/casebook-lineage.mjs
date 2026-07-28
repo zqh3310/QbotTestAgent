@@ -227,7 +227,7 @@ export function buildCrossRunLineage({
   const sourceMetadata = readJson(sourceMetadataFile, '源 run-metadata');
   const currentMetadata = readJson(currentMetadataFile, '当前 run-metadata');
   const identity = compareReleaseIdentity(sourceMetadata, currentMetadata);
-  if (!identity.compatible) {
+  if (!identity.compatible && !impactAll) {
     throw new Error(`跨批次发布身份不一致，禁止继承：${identity.drift.map((item) => item.field).join(', ')}`);
   }
   if (sourceMetadata?.sources?.framework?.dirty !== false) {
@@ -311,7 +311,8 @@ export function buildCrossRunLineage({
     current_out: currentDirectory,
     source_framework_commit: String(sourceMetadata?.sources?.framework?.commit || ''),
     current_framework_commit: String(currentMetadata?.sources?.framework?.commit || ''),
-    release_identity_compatible: true,
+    release_identity_compatible: identity.compatible,
+    release_identity_drift: identity.drift,
     impact: {
       all: Boolean(impactAll),
       case_ids: [...impacts].sort(),

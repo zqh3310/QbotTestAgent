@@ -181,7 +181,7 @@ test('cross-run lineage reruns changed, incomplete, and automation-error cases',
   }
 });
 
-test('cross-run lineage fails closed without impact declaration or with release drift', () => {
+test('cross-run lineage fails closed without impact declaration or with partial impact under release drift', () => {
   const { root, sourceOut, currentOut, cases } = fixture();
   try {
     assert.throws(
@@ -196,10 +196,43 @@ test('cross-run lineage fails closed without impact declaration or with release 
         sourceOut,
         currentOut,
         selectedCases: cases,
-        impactAll: true,
+        impactCaseIds: ['CASE-A'],
       }),
       /发布身份不一致/,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cross-run lineage permits release drift only with impact-all and inherits nothing', () => {
+  const { root, sourceOut, currentOut, cases } = fixture();
+  try {
+    const drifted = metadata('new-framework');
+    drifted.host.version = '5.2.24';
+    drifted.qwork.version = '0.0.18';
+    drifted.qwork.url = 'file:///Users/test/.deepbank/ui/0.0.18/index.html';
+    drifted.release_inputs.prompt_policy_version = 'prompt-build-0.0.18';
+    writeJson(path.join(currentOut, 'run-metadata.json'), drifted);
+
+    const built = buildCrossRunLineage({
+      sourceOut,
+      currentOut,
+      selectedCases: cases,
+      impactAll: true,
+      generatedAt: '2026-07-28T00:00:00.000Z',
+    });
+
+    assert.equal(built.manifest.release_identity_compatible, false);
+    assert.ok(built.manifest.release_identity_drift.some((item) => item.field === 'host.version'));
+    assert.ok(built.manifest.release_identity_drift.some((item) => item.field === 'qwork.version'));
+    assert.equal(built.manifest.impact.all, true);
+    assert.equal(built.manifest.counts.selected, 2);
+    assert.equal(built.manifest.counts.inherited, 0);
+    assert.equal(built.manifest.counts.rerun, 2);
+    assert.equal(built.manifest.decisions.length, 2);
+    assert.ok(built.manifest.decisions.every((item) => item.reason === 'impact_all'));
+    assert.equal(built.inheritedByIndex.size, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
