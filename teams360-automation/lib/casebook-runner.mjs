@@ -11,12 +11,16 @@ import {
   managedTeamsProcessLog,
   processMatchesSession,
   readSession,
+  settleRelaunchedLiveTeamsSession,
   stopIsolatedTeams,
   waitForCdp,
 } from './launcher.mjs';
 import { qworkRuntimeBridgeSource, startCdpWebviewProxy } from './cdp-webview-proxy.mjs';
 import { buildTeamsRunMetadata, writePinnedRunMetadata } from './run-metadata.mjs';
-import { applyManagedQbotProfileConfig } from './teams-profile-qbot-config.mjs';
+import {
+  applyManagedQbotProfileConfig,
+  waitForStagedQbotServer,
+} from './teams-profile-qbot-config.mjs';
 import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -348,7 +352,7 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
     if (stopped.status !== 'stopped') {
       return { recovered: false, reason: `Managed 360Teams stop failed: ${stopped.status} ${stopped.reason || ''}`.trim() };
     }
-    const profileConfig = applyManagedQbotProfileConfig({
+    let profileConfig = applyManagedQbotProfileConfig({
       profileDir: snapshot.profileDir,
       serverUrl: snapshot.controlPlane,
       uiUrl: pinnedQworkUi.url,
@@ -356,22 +360,42 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
     });
     const packagedControlPlaneOrigin = 'https://qbot-api.360shuke.com';
     const controlPlaneOrigin = new URL(snapshot.controlPlane).origin;
-    const relaunched = await launchLiveTeams({
-      appPath: snapshot.appPath,
-      profileDir: snapshot.profileDir,
-      profileAlias: snapshot.profileAlias,
-      sessionFile: DEFAULT_SESSION,
-      port: snapshot.port,
-      timeoutMs: 60_000,
-      environment: {
-        DEEPBANK_SURFACE: 'workbench',
-        DEEPBANK_UI_URL: pinnedQworkUi.url,
-        QBOT_SURFACE: 'workbench',
-        QBOT_UI_URL: pinnedQworkUi.url,
-        QBOT_SERVER_URL: snapshot.controlPlane,
-        ...(controlPlaneOrigin === packagedControlPlaneOrigin ? {} : { DEEPBANK_SERVER: snapshot.controlPlane }),
-      },
-    });
+    let relaunched = null;
+    let staged = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await launchLiveTeams({
+        appPath: snapshot.appPath,
+        profileDir: snapshot.profileDir,
+        profileAlias: snapshot.profileAlias,
+        sessionFile: DEFAULT_SESSION,
+        port: snapshot.port,
+        timeoutMs: 60_000,
+        environment: {
+          DEEPBANK_SURFACE: 'workbench',
+          DEEPBANK_UI_URL: pinnedQworkUi.url,
+          QBOT_SURFACE: 'workbench',
+          QBOT_UI_URL: pinnedQworkUi.url,
+          QBOT_SERVER_URL: snapshot.controlPlane,
+          ...(controlPlaneOrigin === packagedControlPlaneOrigin ? {} : { DEEPBANK_SERVER: snapshot.controlPlane }),
+        },
+      });
+      relaunched = await settleRelaunchedLiveTeamsSession(DEFAULT_SESSION);
+      staged = await waitForStagedQbotServer(snapshot.profileDir, snapshot.controlPlane, 30_000);
+      if (staged.ok) break;
+      stopIsolatedTeams(DEFAULT_SESSION);
+      if (attempt === 2) {
+        return {
+          recovered: false,
+          reason: `Managed 360Teams self-relaunch changed the pinned control plane: expected=${staged.expected} actual=${staged.actual || 'missing'}`,
+        };
+      }
+      profileConfig = applyManagedQbotProfileConfig({
+        profileDir: snapshot.profileDir,
+        serverUrl: snapshot.controlPlane,
+        uiUrl: pinnedQworkUi.url,
+        backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
+      });
+    }
     await remountPinnedManagedQworkUi(relaunched.cdp_url, pinnedQworkUi.url, {
       timeoutMs: Math.max(120_000, settleMs),
       settleMs,
@@ -759,6 +783,7 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   const restartShim = path.join(TEAMS_RUNTIME_ROOT, 'scripts', 'restart-qbot-electron-control-plane.sh');
   fs.mkdirSync(TEAMS_CONTROL_PLANE_HOME, { recursive: true });
   options['control-plane-url'] = normalized;
+  options['qwork-ui-url'] = String(qworkUiUrl || '').trim();
   // QWork backend calls are exposed through the 360Teams preload/IPC `agent`
   // object rather than renderer HTTP. Enable the shared runner's opt-in
   // renderer adapter for per-Case fault transforms; the local-QBot lane never

@@ -224,14 +224,12 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     writeJsonFile(path.join(outDir, 'production-casebook-preflight.json'), audit);
     if (!audit.ok) {
       const reason = `生产门禁前置检查失败：${audit.errors.slice(0, 20).join('；')}`;
-      const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-        outDir,
-        testCase,
-        index,
-        status: 'blocked',
-        resultCategory: 'automation_error',
+      writeStoppedProgress({
+        selectedCases,
+        resultsByIndex: new Map(),
+        progressFile,
         reason,
-      }));
+      });
       const summary = buildSummary({
         status: 'blocked',
         startedAt,
@@ -241,7 +239,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         profile,
         cdpUrl,
         modelTier,
-        results,
+        results: [],
         reason,
         precheck: { production_casebook: audit },
       });
@@ -277,18 +275,51 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   }
 
-  const parallelism = Number(options.parallel || (options['worker-cdps'] ? DEFAULT_CASE_PARALLELISM : 1));
-  const singleHostPipelineSize = parseSingleHostPipelineSize(options['single-host-pipeline']);
-  if (parallelism > 1 && singleHostPipelineSize > 1) {
-    const reason = '单宿主会话流水线与多 CDP --parallel 不能同时启用；请选择一种并发模型。';
-    const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-      outDir,
-      testCase,
-      index,
-      status: 'blocked',
-      resultCategory: 'automation_error',
+  let seededResultsByIndex = new Map();
+  let crossRunLineagePrecheck = null;
+  try {
+    const resume = loadResumeProgress(
+      progressFile,
+      selectedCases,
+      options.resume === true || options.resume === 'true',
+    );
+    seededResultsByIndex = new Map(resume.resultsByIndex);
+    if (options['resume-from']) {
+      const lineage = buildCrossRunLineage({
+        sourceOut: options['resume-from'],
+        currentOut: outDir,
+        selectedCases,
+        impactCaseIds: options['impact-case'] || '',
+        impactAll: /^(?:1|true|yes)$/i.test(String(options['impact-all'] || '')),
+      });
+      for (const [index, result] of lineage.inheritedByIndex.entries()) {
+        if (!seededResultsByIndex.has(index)) seededResultsByIndex.set(index, result);
+      }
+      crossRunLineagePrecheck = {
+        status: 'ready',
+        file: lineage.file,
+        source_out: lineage.manifest.source_out,
+        impact: lineage.manifest.impact,
+        counts: lineage.manifest.counts,
+      };
+      writeCasebookProgress({
+        progressFile,
+        selectedCases,
+        resultsByIndex: seededResultsByIndex,
+        extra: {
+          phase: 'lineage-seeded',
+          lineage_file: lineage.file,
+        },
+      });
+    }
+  } catch (error) {
+    const reason = `跨批次账本前置检查失败：${error.message}`;
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: seededResultsByIndex,
+      progressFile,
       reason,
-    }));
+    });
     const summary = buildSummary({
       status: 'blocked',
       startedAt,
@@ -298,11 +329,116 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       profile,
       cdpUrl,
       modelTier,
-      results,
+      results: orderedCasebookResults(seededResultsByIndex),
+      reason,
+      precheck: {
+        cross_run_lineage: {
+          status: 'blocked',
+          reason,
+        },
+      },
+    });
+    writeRunArtifacts(outDir, summary);
+    return summary;
+  }
+
+  if (productionGateEnabled) {
+    const pendingCases = selectedCases.filter((_, index) => !seededResultsByIndex.has(index));
+    const executorReadiness = validateCasebookExecutorReadiness(pendingCases, {
+      controlPlaneUrl: options['control-plane-url'] || process.env.DEEPBANK_SERVER || '',
+      qworkUiUrl: options['qwork-ui-url'] || process.env.QBOT_UI_URL || process.env.DEEPBANK_UI_URL || '',
+      requireExplicitV4Executor: true,
+    });
+    writeJsonFile(path.join(outDir, 'casebook-executor-preflight.json'), executorReadiness);
+    if (!executorReadiness.ok) {
+      const details = [
+        ...executorReadiness.testcase_issues.slice(0, 10),
+        ...executorReadiness.framework_issues.slice(0, 10),
+      ].map((item) => `${item.id ? `${item.id}:` : ''}${item.reason}`);
+      const reason = `生产门禁执行器前置检查失败（testcase_issue=${executorReadiness.testcase_issue_count}, framework_issue=${executorReadiness.framework_issue_count}）：${details.join('；')}`;
+      writeStoppedProgress({
+        selectedCases,
+        resultsByIndex: seededResultsByIndex,
+        progressFile,
+        reason,
+      });
+      const summary = buildSummary({
+        status: 'blocked',
+        startedAt,
+        outDir,
+        casebook,
+        resultExcel,
+        profile,
+        cdpUrl,
+        modelTier,
+        // Preflight failures occur before the first pending Case. Preserve
+        // legitimate inherited results, but never fabricate one synthetic
+        // "result" per unexecuted Case.
+        results: orderedCasebookResults(seededResultsByIndex),
+        reason,
+        precheck: {
+          ...(crossRunLineagePrecheck ? { cross_run_lineage: crossRunLineagePrecheck } : {}),
+          casebook_executor: executorReadiness,
+        },
+      });
+      writeRunArtifacts(outDir, summary);
+      return summary;
+    }
+  }
+
+  const parallelism = Number(options.parallel || (options['worker-cdps'] ? DEFAULT_CASE_PARALLELISM : 1));
+  const singleHostPipelineSize = parseSingleHostPipelineSize(options['single-host-pipeline']);
+  if (parallelism > 1 && singleHostPipelineSize > 1) {
+    const reason = '单宿主会话流水线与多 CDP --parallel 不能同时启用；请选择一种并发模型。';
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: seededResultsByIndex,
+      progressFile,
+      reason,
+    });
+    const summary = buildSummary({
+      status: 'blocked',
+      startedAt,
+      outDir,
+      casebook,
+      resultExcel,
+      profile,
+      cdpUrl,
+      modelTier,
+      results: orderedCasebookResults(seededResultsByIndex),
       reason,
     });
     writeRunArtifacts(outDir, summary);
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
+    return summary;
+  }
+  if (parallelism > 1 && seededResultsByIndex.size > 0) {
+    const reason = '多 CDP 并行调度不接受已继承/已完成的部分账本；请使用单宿主串行续跑，避免全局 Case 索引与 worker 子批次错位。';
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: seededResultsByIndex,
+      progressFile,
+      reason,
+    });
+    const summary = buildSummary({
+      status: 'blocked',
+      startedAt,
+      outDir,
+      casebook,
+      resultExcel,
+      profile,
+      cdpUrl,
+      modelTier,
+      results: orderedCasebookResults(seededResultsByIndex),
+      reason,
+      precheck: {
+        parallel_scheduler: {
+          status: 'blocked',
+          reason,
+        },
+      },
+    });
+    writeRunArtifacts(outDir, summary);
     return summary;
   }
   if (options['parallel-child'] !== true && options['parallel-child'] !== 'true' && parallelism > 1) {
@@ -324,14 +460,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
 
   const loaded = await loadPlaywright();
   if (loaded.error) {
-    const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-      outDir,
-      testCase,
-      index,
-      status: 'blocked',
-      resultCategory: 'blocked',
-      reason: `Playwright 未安装或无法加载：${loaded.error.message}`,
-    }));
+    const reason = `Playwright 未安装或无法加载：${loaded.error.message}`;
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: seededResultsByIndex,
+      progressFile,
+      reason,
+    });
     const summary = buildSummary({
       status: 'blocked',
       startedAt,
@@ -341,8 +476,8 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       profile,
       cdpUrl,
       modelTier,
-      results,
-      reason: `Playwright 未安装或无法加载：${loaded.error.message}`,
+      results: orderedCasebookResults(seededResultsByIndex),
+      reason,
     });
     writeRunArtifacts(outDir, summary);
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
@@ -354,14 +489,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     browser = await loaded.chromium.connectOverCDP(cdpUrl);
     let page = await findQbotPage(browser);
     if (!page) {
-      const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-        outDir,
-        testCase,
-        index,
-        status: 'blocked',
-        resultCategory: 'blocked',
-        reason: `已连接 CDP ${cdpUrl}，但没有找到 QBot 页面。`,
-      }));
+      const reason = `已连接 CDP ${cdpUrl}，但没有找到 QBot 页面。`;
+      writeStoppedProgress({
+        selectedCases,
+        resultsByIndex: seededResultsByIndex,
+        progressFile,
+        reason,
+      });
       const summary = buildSummary({
         status: 'blocked',
         startedAt,
@@ -371,8 +505,8 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         profile,
         cdpUrl,
         modelTier,
-        results,
-        reason: `已连接 CDP ${cdpUrl}，但没有找到 QBot 页面。`,
+        results: orderedCasebookResults(seededResultsByIndex),
+        reason,
       });
       writeRunArtifacts(outDir, summary);
       await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
@@ -400,14 +534,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         : await inspectModelTierAvailability(page, modelTier))
       : { requested: '', status: 'skipped', reason: '未请求固定模型档位。' };
     if (modelTier && ['unavailable', 'error'].includes(precheck.model_tier.status)) {
-      const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-        outDir,
-        testCase,
-        index,
-        status: 'blocked',
-        resultCategory: 'blocked',
-        reason: `模型档位前置阻塞：未找到可用 ${modelTier} 连接，停止本轮功能用例执行。${precheck.model_tier.reason || ''}`,
-      }));
+      const reason = `模型档位前置阻塞：未找到可用 ${modelTier} 连接。`;
+      writeStoppedProgress({
+        selectedCases,
+        resultsByIndex: seededResultsByIndex,
+        progressFile,
+        reason,
+      });
       const summary = buildSummary({
         status: 'blocked',
         startedAt,
@@ -417,44 +550,16 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         profile,
         cdpUrl,
         modelTier,
-        results,
-        reason: `模型档位前置阻塞：未找到可用 ${modelTier} 连接。`,
+        results: orderedCasebookResults(seededResultsByIndex),
+        reason,
         precheck,
       });
       writeRunArtifacts(outDir, summary);
       await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
       return summary;
     }
-    const resume = loadResumeProgress(progressFile, selectedCases, options.resume === true || options.resume === 'true');
-    const resultsByIndex = new Map(resume.resultsByIndex);
-    if (options['resume-from']) {
-      const lineage = buildCrossRunLineage({
-        sourceOut: options['resume-from'],
-        currentOut: outDir,
-        selectedCases,
-        impactCaseIds: options['impact-case'] || '',
-        impactAll: /^(?:1|true|yes)$/i.test(String(options['impact-all'] || '')),
-      });
-      for (const [index, result] of lineage.inheritedByIndex.entries()) {
-        if (!resultsByIndex.has(index)) resultsByIndex.set(index, result);
-      }
-      precheck.cross_run_lineage = {
-        status: 'ready',
-        file: lineage.file,
-        source_out: lineage.manifest.source_out,
-        impact: lineage.manifest.impact,
-        counts: lineage.manifest.counts,
-      };
-      writeCasebookProgress({
-        progressFile,
-        selectedCases,
-        resultsByIndex,
-        extra: {
-          phase: 'lineage-seeded',
-          lineage_file: lineage.file,
-        },
-      });
-    }
+    const resultsByIndex = new Map(seededResultsByIndex);
+    if (crossRunLineagePrecheck) precheck.cross_run_lineage = crossRunLineagePrecheck;
     for (let index = 0; index < selectedCases.length; index += 1) {
       if (resultsByIndex.has(index)) continue;
       const testCase = selectedCases[index];
@@ -462,15 +567,12 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       ensureDir(caseDir);
       if (!isLiveCdpPage(browser, page)) {
         const reason = `自动化框架检测到 QBot CDP/page 已断开，停止本批次，避免把后续用例误判为产品 Bug。CDP=${cdpUrl}`;
-        appendSyntheticRemainder({
-          outDir,
+        writeStoppedProgress({
           selectedCases,
-          startIndex: index,
           resultsByIndex,
           progressFile,
-          status: 'blocked',
-          resultCategory: 'automation_error',
           reason,
+          currentCase: testCase.id,
         });
         break;
       }
@@ -520,15 +622,12 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         const disconnected = batchResults.find(isCdpDisconnectedResult);
         if (disconnected || !isLiveCdpPage(browser, page)) {
           const reason = `单宿主流水线执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。${disconnected ? `原始现象：${clip(disconnected.actual_result || disconnected.conclusion || '', 260)}` : ''}`;
-          appendSyntheticRemainder({
-            outDir,
+          writeStoppedProgress({
             selectedCases,
-            startIndex: index + 1,
             resultsByIndex,
             progressFile,
-            status: 'blocked',
-            resultCategory: 'automation_error',
             reason,
+            currentCase: pipelineBatch.at(-1)?.testCase?.id || '',
           });
           break;
         }
@@ -558,15 +657,12 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       writeCasebookProgress({ progressFile, selectedCases, resultsByIndex });
       if (isCdpDisconnectedResult(result) || !isLiveCdpPage(browser, page)) {
         const reason = `用例 ${testCase.id} 执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。原始现象：${clip(result.actual_result || result.conclusion || '', 260)}`;
-        appendSyntheticRemainder({
-          outDir,
+        writeStoppedProgress({
           selectedCases,
-          startIndex: index + 1,
           resultsByIndex,
           progressFile,
-          status: 'blocked',
-          resultCategory: 'automation_error',
           reason,
+          currentCase: testCase.id,
         });
         break;
       }
@@ -589,14 +685,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
     return summary;
   } catch (error) {
-    const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-      outDir,
-      testCase,
-      index,
-      status: 'blocked',
-      resultCategory: 'blocked',
+    const existing = loadResumeProgress(progressFile, selectedCases, true);
+    const results = orderedCasebookResults(existing.resultsByIndex);
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: existing.resultsByIndex,
+      progressFile,
       reason: `自动化框架异常：${error.message}`,
-    }));
+    });
     const summary = buildSummary({
       status: 'blocked',
       startedAt,
@@ -736,14 +832,12 @@ async function runParallelUiAgentCasebook({
     plan = buildCaseExecutionPlan(selectedCases, options);
   } catch (error) {
     const reason = `并行调度前置阻塞：${error.message}`;
-    const results = selectedCases.map((testCase, index) => buildSyntheticResult({
-      outDir,
-      testCase,
-      index,
-      status: 'blocked',
-      resultCategory: 'automation_error',
+    writeStoppedProgress({
+      selectedCases,
+      resultsByIndex: new Map(),
+      progressFile,
       reason,
-    }));
+    });
     const summary = buildSummary({
       status: 'blocked',
       startedAt,
@@ -753,7 +847,7 @@ async function runParallelUiAgentCasebook({
       profile,
       cdpUrl: '',
       modelTier,
-      results,
+      results: [],
       reason,
       precheck: {
         parallel_scheduler: {
@@ -939,39 +1033,23 @@ function isLiveCdpPage(browser, page) {
   return true;
 }
 
-function appendSyntheticRemainder({
-  outDir,
+function writeStoppedProgress({
   selectedCases,
-  startIndex,
   resultsByIndex,
   progressFile,
-  status,
-  resultCategory,
   reason,
+  currentCase = '',
 }) {
-  for (let index = startIndex; index < selectedCases.length; index += 1) {
-    if (resultsByIndex.has(index)) continue;
-    resultsByIndex.set(index, {
-      ...buildSyntheticResult({
-      outDir,
-      testCase: selectedCases[index],
-      index,
-      status,
-      resultCategory,
-      reason,
-      }),
-      order: index + 1,
-      case_index: index,
-      execution_provenance: 'synthetic',
-    });
-  }
   writeCasebookProgress({
     progressFile,
     selectedCases,
     resultsByIndex,
     extra: {
       stopped: true,
-      synthetic: true,
+      phase: 'stopped',
+      current_case: currentCase,
+      synthetic: false,
+      unexecuted_count: Math.max(0, selectedCases.length - resultsByIndex.size),
       stop_reason: reason,
     },
   });
@@ -1387,42 +1465,61 @@ export function parseDeclaredNumberedSteps(value) {
 
 export function numberedStepExecutionCoverage(state = {}) {
   const declared = parseDeclaredNumberedSteps(state.numbered_steps);
+  const explicitEvidence = new Map();
   const executorSteps = (state.steps || []).filter((item) => (
     !/^切换模型档位/.test(String(item?.action || ''))
     && !/^阻塞判定$/.test(String(item?.action || ''))
     && !/^编号步骤覆盖校验$/.test(String(item?.action || ''))
   ));
+  for (const item of executorSteps) {
+    const number = Number(item?.numbered_step_number || 0);
+    if (!Number.isInteger(number) || number < 1) continue;
+    if (!explicitEvidence.has(number)) explicitEvidence.set(number, []);
+    explicitEvidence.get(number).push(item);
+  }
   const observedLabels = [
     ...executorSteps.map((item) => String(item?.action || '')),
     ...(state.assertions || []).map((item) => String(item?.name || '')),
   ].filter(Boolean);
   const observedText = observedLabels.join('\n');
+  const requiresExplicitEvidence = String(state.contract_version || '') === 'qbot-current-casebook/v4';
   const entries = declared.map((step, index) => {
+    const explicit = explicitEvidence.get(step.number) || [];
     const semanticMarkers = NUMBERED_STEP_SEMANTIC_MARKERS
       .filter((marker) => marker.planned.test(step.text));
     const missingMarkers = semanticMarkers
       .filter((marker) => !marker.observed.test(observedText))
       .map((marker) => marker.key);
     const positionalEvidence = executorSteps[index] || null;
-    const covered = missingMarkers.length === 0 && Boolean(
-      semanticMarkers.length
-        ? observedLabels.length
-        : positionalEvidence && (state.assertions || []).length,
-    );
+    const covered = requiresExplicitEvidence
+      ? explicit.some((item) => (
+        String(item?.numbered_step_declared || '').trim() === step.text
+        && ['passed', 'failed', 'blocked'].includes(String(item?.status || '').toLowerCase())
+      ))
+      : missingMarkers.length === 0 && Boolean(
+        semanticMarkers.length
+          ? observedLabels.length
+          : positionalEvidence && (state.assertions || []).length,
+      );
     return {
       number: step.number,
       declared_step: step.text,
       covered,
+      evidence_mode: requiresExplicitEvidence ? 'explicit_numbered_step' : 'legacy_semantic',
+      explicit_actions: explicit.map((item) => item.action),
       semantic_markers: semanticMarkers.map((marker) => marker.key),
-      missing_semantic_markers: missingMarkers,
+      missing_semantic_markers: requiresExplicitEvidence && explicit.length
+        ? []
+        : missingMarkers,
       positional_action: positionalEvidence?.action || '',
     };
   });
   const missing = entries.filter((entry) => !entry.covered);
   return {
-    schema_version: 1,
+    schema_version: 2,
     declared_count: declared.length,
     executor_step_count: executorSteps.length,
+    explicit_executor_step_count: [...explicitEvidence.values()].flat().length,
     assertion_count: (state.assertions || []).length,
     complete: declared.length === 0 || missing.length === 0,
     entries,
@@ -1468,6 +1565,101 @@ export function enforceNumberedStepExecutionContract(state = {}) {
   }
   markBlocked(state, reason);
   return coverage;
+}
+
+export function executionReleaseEnvironment({ controlPlaneUrl = '', qworkUiUrl = '' } = {}) {
+  const observations = [];
+  const ui = String(qworkUiUrl || '').trim();
+  if (/\/\.deepbank\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'PROD' });
+  else if (/\/\.deepbank-dev\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'DEV' });
+  else if (/\/\.deepbank-uat\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'UAT' });
+  else if (/\/\.deepbank-local\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'LOCAL' });
+
+  const controlPlane = String(controlPlaneUrl || '').trim();
+  if (controlPlane) {
+    let hostname = '';
+    try { hostname = new URL(controlPlane).hostname.toLowerCase(); } catch {}
+    if (hostname === 'qbot-api.360shuke.com') observations.push({ source: 'control_plane', environment: 'PROD' });
+    else if (/uat/.test(hostname)) observations.push({ source: 'control_plane', environment: 'UAT' });
+    else if (['127.0.0.1', 'localhost', '::1'].includes(hostname)) observations.push({ source: 'control_plane', environment: 'LOCAL' });
+    else if (hostname) observations.push({ source: 'control_plane', environment: 'DEV' });
+  }
+  const environments = [...new Set(observations.map((item) => item.environment))];
+  return {
+    environment: environments.length === 1 ? environments[0] : '',
+    consistent: environments.length <= 1,
+    observations,
+  };
+}
+
+function requiredFixtureEnvironment(testCase = {}) {
+  const text = [
+    testCase.required_fixture,
+    testCase.state_fixture_contract,
+    testCase.precondition,
+  ].map((item) => String(item || '')).join('\n');
+  if (/(?:外部\s*DEV|\bDEV\b)/i.test(text)) return 'DEV';
+  if (/(?:正式|生产|\bPROD\b)/i.test(text)) return 'PROD';
+  if (/\bUAT\b/i.test(text)) return 'UAT';
+  if (/(?:本地|\bLOCAL\b)/i.test(text)) return 'LOCAL';
+  return '';
+}
+
+const EXPLICIT_V4_EXECUTOR_CASE_IDS = new Set([]);
+
+export function validateCasebookExecutorReadiness(selectedCases = [], {
+  controlPlaneUrl = '',
+  qworkUiUrl = '',
+  requireExplicitV4Executor = true,
+} = {}) {
+  const release = executionReleaseEnvironment({ controlPlaneUrl, qworkUiUrl });
+  const testcaseIssues = [];
+  const frameworkIssues = [];
+  if (selectedCases.length && !release.observations.length) {
+    frameworkIssues.push({
+      kind: 'release_environment_unresolved',
+      reason: '无法从 QWork UI 与控制面 URL 判定冻结发布环境；禁止在未知身份上执行生产 Case。',
+    });
+  }
+  if (!release.consistent) {
+    frameworkIssues.push({
+      kind: 'release_environment_identity_drift',
+      reason: `QWork UI 与控制面发布环境不一致：${release.observations.map((item) => `${item.source}=${item.environment}`).join(', ')}`,
+    });
+  }
+  for (const testCase of selectedCases) {
+    const expectedEnvironment = requiredFixtureEnvironment(testCase);
+    if (expectedEnvironment && release.environment && expectedEnvironment !== release.environment) {
+      testcaseIssues.push({
+        id: testCase.id,
+        kind: 'fixture_environment_mismatch',
+        expected_environment: expectedEnvironment,
+        actual_environment: release.environment,
+        reason: `用例要求 ${expectedEnvironment} fixture，但本轮冻结身份为 ${release.environment}。`,
+      });
+    }
+    if (
+      requireExplicitV4Executor
+      && String(testCase.contract_version || '') === 'qbot-current-casebook/v4'
+      && !EXPLICIT_V4_EXECUTOR_CASE_IDS.has(String(testCase.id || ''))
+    ) {
+      frameworkIssues.push({
+        id: testCase.id,
+        kind: 'explicit_v4_executor_missing',
+        reason: 'V4 用户旅程没有登记逐编号步骤执行器；禁止退化到通用 ui/conversation 路径。',
+      });
+    }
+  }
+  return {
+    schema_version: 1,
+    ok: testcaseIssues.length === 0 && frameworkIssues.length === 0,
+    release,
+    selected_case_count: selectedCases.length,
+    testcase_issue_count: testcaseIssues.length,
+    framework_issue_count: frameworkIssues.length,
+    testcase_issues: testcaseIssues,
+    framework_issues: frameworkIssues,
+  };
 }
 
 export function parseSingleHostPipelineSize(value) {
@@ -2144,7 +2336,7 @@ async function executeUiCase({ page, state, testCase, caseDir, selectors }) {
   await ensureSidebarExpanded(page, state);
   const clicked = await clickBestEntry(page, testCase, selectors, state);
   await page.waitForTimeout(1000);
-  await prepareUiObjective(page, testCase).catch(() => {});
+  await prepareUiObjective(page, testCase);
   await page.waitForTimeout(500);
   state.screenshots.after_action = await shot(page, caseDir, '02-after-action');
   if (!clicked) {
@@ -15112,7 +15304,7 @@ function firstLine(text) {
 }
 
 async function prepareUiObjective(page, testCase) {
-  const scenario = `${testCase.scenario || ''}\n${testCase.test_data || ''}\n${prompt || ''}`;
+  const scenario = `${testCase.scenario || ''}\n${testCase.test_data || ''}`;
   if (wantsSkillSurface(testCase)) {
     await clickMainTab(page, '技能').catch(() => {});
     await page.waitForTimeout(500);
@@ -18821,8 +19013,40 @@ function markFailed(state, reason, category = 'bug') {
   state.problem_description = category === 'bug' ? buildProblemDescription(state) : '';
 }
 
-function recordStep(state, action, expected, actual, status, screenshot = '', category = '') {
-  state.steps.push({ action, expected, actual, status, screenshot, category });
+function recordStep(state, action, expected, actual, status, screenshot = '', category = '', metadata = {}) {
+  state.steps.push({ action, expected, actual, status, screenshot, category, ...metadata });
+}
+
+export function recordNumberedStep(
+  state,
+  number,
+  action,
+  expected,
+  actual,
+  status,
+  screenshot = '',
+  category = '',
+) {
+  if (!Array.isArray(state.steps)) state.steps = [];
+  const declared = parseDeclaredNumberedSteps(state.numbered_steps)
+    .find((item) => item.number === Number(number));
+  if (!declared) {
+    throw new Error(`Case ${state.id || 'unknown'} does not declare numbered step ${number}.`);
+  }
+  recordStep(
+    state,
+    action,
+    expected,
+    actual,
+    status,
+    screenshot,
+    category,
+    {
+      numbered_step_number: declared.number,
+      numbered_step_declared: declared.text,
+      numbered_step_evidence: 'explicit',
+    },
+  );
 }
 
 function recordAssertion(state, name, expected, ok, actual, category = 'bug') {
@@ -19111,6 +19335,7 @@ function buildSyntheticResult({ outDir, testCase, index, status, resultCategory,
     actual_result: reason,
     conclusion: `${status}：${reason}`,
     synthetic: true,
+    execution_provenance: 'synthetic',
     problem_description: '',
     case_dir: caseDir,
     case_report: path.join(caseDir, 'case-report.md'),

@@ -5,6 +5,7 @@ import {
   launchIsolatedTeams,
   launchLiveTeams,
   resolveSessionCdp,
+  settleRelaunchedLiveTeamsSession,
   stopIsolatedTeams,
   waitForCdp,
 } from './lib/launcher.mjs';
@@ -21,9 +22,12 @@ try {
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   if (options.command === 'launch' || options.command === 'launch-live') {
-    const session = options.command === 'launch-live'
+    let session = options.command === 'launch-live'
       ? await launchLiveTeams(options)
       : await launchIsolatedTeams(options);
+    if (options.command === 'launch-live') {
+      session = await settleRelaunchedLiveTeamsSession(options.sessionFile);
+    }
     const report = baseReport(options, {
       status: 'passed',
       reason: options.command === 'launch-live'
@@ -46,7 +50,7 @@ try {
     report.files = writeReport(options.outputDir, report);
     printSummary(report);
   } else {
-    const resolved = resolveSessionCdp(options);
+    const resolved = await resolveSessionCdp(options);
     await waitForCdp({ cdpUrl: resolved.cdpUrl, timeoutMs: options.timeoutMs });
     const inspection = await inspectTeamsCdp({
       cdpUrl: resolved.cdpUrl,

@@ -17,8 +17,11 @@ import {
 import {
   buildCaseEvidenceManifest,
   enforceNumberedStepExecutionContract,
+  executionReleaseEnvironment,
   numberedStepExecutionCoverage,
   parseDeclaredNumberedSteps,
+  recordNumberedStep,
+  validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 
 function sourceCase(id) {
@@ -488,6 +491,92 @@ test('V4 numbered-step coverage rejects generic conversation that never clicks s
   });
   assert.equal(coverage.complete, false);
   assert.ok(coverage.missing_steps.some((item) => item.missing_semantic_markers.includes('stop_generation')));
+});
+
+test('V4 numbered-step coverage accepts only exact explicit per-step evidence', () => {
+  const state = {
+    id: 'USR-START-001',
+    contract_version: 'qbot-current-casebook/v4',
+    numbered_steps: '1. 点击新建任务\n2. 核对输入区为空',
+    steps: [],
+    assertions: [],
+  };
+  recordNumberedStep(
+    state,
+    1,
+    '点击【新建任务】',
+    '创建一个干净草稿。',
+    '新草稿已显示。',
+    'passed',
+  );
+  let coverage = numberedStepExecutionCoverage(state);
+  assert.equal(coverage.complete, false);
+  assert.equal(coverage.entries[0].evidence_mode, 'explicit_numbered_step');
+  assert.equal(coverage.entries[0].covered, true);
+  assert.equal(coverage.entries[1].covered, false);
+
+  state.steps.push({
+    action: '伪造第二步文字但声明不匹配',
+    status: 'passed',
+    numbered_step_number: 2,
+    numbered_step_declared: '不同的声明步骤',
+  });
+  coverage = numberedStepExecutionCoverage(state);
+  assert.equal(coverage.complete, false);
+  assert.equal(coverage.entries[1].covered, false);
+
+  recordNumberedStep(
+    state,
+    2,
+    '回读 Composer 输入区',
+    '输入区为空。',
+    '输入区为空。',
+    'passed',
+  );
+  coverage = numberedStepExecutionCoverage(state);
+  assert.equal(coverage.complete, true);
+  assert.equal(coverage.explicit_executor_step_count, 3);
+});
+
+test('production executor readiness fails closed on release drift, fixture mismatch, and missing V4 driver', () => {
+  assert.deepEqual(
+    executionReleaseEnvironment({
+      controlPlaneUrl: 'https://qbot-api.360shuke.com',
+      qworkUiUrl: 'file:///Users/test/.deepbank/ui/0.0.19/index.html',
+    }),
+    {
+      environment: 'PROD',
+      consistent: true,
+      observations: [
+        { source: 'qwork_ui', environment: 'PROD' },
+        { source: 'control_plane', environment: 'PROD' },
+      ],
+    },
+  );
+
+  const readiness = validateCasebookExecutorReadiness([{
+    id: 'USR-START-001',
+    contract_version: 'qbot-current-casebook/v4',
+    required_fixture: '外部DEV，已登录账号',
+  }], {
+    controlPlaneUrl: 'https://qbot-api.360shuke.com',
+    qworkUiUrl: 'file:///Users/test/.deepbank/ui/0.0.19/index.html',
+  });
+  assert.equal(readiness.ok, false);
+  assert.equal(readiness.testcase_issue_count, 1);
+  assert.equal(readiness.testcase_issues[0].kind, 'fixture_environment_mismatch');
+  assert.equal(readiness.framework_issue_count, 1);
+  assert.equal(readiness.framework_issues[0].kind, 'explicit_v4_executor_missing');
+
+  const drift = validateCasebookExecutorReadiness([{
+    id: 'SIT-HOME-015',
+    contract_version: PRODUCTION_CASEBOOK_CONTRACT_VERSION,
+  }], {
+    controlPlaneUrl: 'https://qbot-api.360shuke.com',
+    qworkUiUrl: 'file:///Users/test/.deepbank-uat/ui/0.0.19/index.html',
+  });
+  assert.equal(drift.ok, false);
+  assert.equal(drift.framework_issues[0].kind, 'release_environment_identity_drift');
 });
 
 test('enforced V4 numbered-step gap becomes an explicit blocked result with complete blocker evidence', (t) => {

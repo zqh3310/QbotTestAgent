@@ -328,11 +328,16 @@ export function readSession(sessionFile) {
   }
 }
 
-export function resolveSessionCdp({ sessionFile, cdpUrl }) {
+export async function resolveSessionCdp({ sessionFile, cdpUrl }) {
   if (cdpUrl) return { cdpUrl, session: readSession(sessionFile) };
-  const session = readSession(sessionFile);
+  let session = readSession(sessionFile);
   if (!session?.cdp_url) throw new Error(`No managed 360Teams session found. Run launch or launch-live first: ${sessionFile}`);
-  if (!processMatchesSession(session)) throw new Error(`The recorded 360Teams session is not running: pid=${session.pid}`);
+  if (!processMatchesSession(session)) {
+    session = await adoptRelaunchedLiveTeamsSession(sessionFile, { timeoutMs: 10_000 });
+  }
+  if (!session || !processMatchesSession(session)) {
+    throw new Error(`The recorded 360Teams session is not running and no verified replacement owns its CDP port.`);
+  }
   return { cdpUrl: normalizeCdpUrl(session.cdp_url), session };
 }
 
@@ -418,6 +423,41 @@ export async function adoptRelaunchedLiveTeamsSession(sessionFile, { timeoutMs =
   };
   fs.writeFileSync(sessionFile, `${JSON.stringify(adopted, null, 2)}\n`, { mode: 0o600 });
   return adopted;
+}
+
+export async function settleRelaunchedLiveTeamsSession(sessionFile, {
+  settleMs = 30_000,
+  timeoutMs = 90_000,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let session = readSession(sessionFile);
+  if (!session || session.profile_mode !== 'live') return session;
+  let stablePid = Number(session.pid || 0);
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    if (!processMatchesSession(session)) {
+      const adopted = await adoptRelaunchedLiveTeamsSession(sessionFile, {
+        timeoutMs: Math.min(10_000, Math.max(1_000, deadline - Date.now())),
+      });
+      if (!adopted) {
+        await delay(250);
+        session = readSession(sessionFile);
+        continue;
+      }
+      session = adopted;
+    }
+    const currentPid = Number(session.pid || 0);
+    if (currentPid !== stablePid) {
+      stablePid = currentPid;
+      stableSince = Date.now();
+    }
+    if (Date.now() - stableSince >= settleMs) return session;
+    await delay(250);
+    session = readSession(sessionFile) || session;
+  }
+  throw new Error(
+    `Managed 360Teams did not reach a stable main process within ${timeoutMs}ms after launch/relaunch.`,
+  );
 }
 
 export function listRunningTeamsMainProcesses(executable) {

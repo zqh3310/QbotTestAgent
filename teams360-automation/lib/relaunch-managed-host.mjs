@@ -5,6 +5,7 @@ import {
   launchLiveTeams,
   processMatchesSession,
   readSession,
+  settleRelaunchedLiveTeamsSession,
   stopIsolatedTeams,
 } from './launcher.mjs';
 import {
@@ -122,8 +123,8 @@ function managedEnvironment(serverUrl, mockFlag) {
   };
 }
 
-async function launchWithProfile(serverUrl, mockFlag) {
-  const launched = await launchLiveTeams({
+async function launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry = true } = {}) {
+  await launchLiveTeams({
     appPath: snapshot.appPath,
     profileDir: snapshot.profileDir,
     profileAlias: snapshot.profileAlias,
@@ -132,9 +133,22 @@ async function launchWithProfile(serverUrl, mockFlag) {
     timeoutMs: 60_000,
     environment: managedEnvironment(serverUrl, mockFlag),
   });
+  const launched = await settleRelaunchedLiveTeamsSession(DEFAULT_SESSION, {
+    settleMs: 30_000,
+    timeoutMs: 90_000,
+  });
   const staged = await waitForStagedQbotServer(snapshot.profileDir, serverUrl, 30_000);
   if (!staged.ok) {
     stopIsolatedTeams(DEFAULT_SESSION);
+    if (allowProfileDriftRetry) {
+      applyManagedQbotProfileConfig({
+        profileDir: snapshot.profileDir,
+        serverUrl,
+        uiUrl: pinnedQworkUi.url,
+        backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
+      });
+      return launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry: false });
+    }
     throw new Error(
       `Managed 360Teams staged QWork preload did not adopt the requested control plane: `
       + `expected=${staged.expected} actual=${staged.actual || 'missing'}`,
