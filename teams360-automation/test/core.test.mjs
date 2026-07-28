@@ -787,6 +787,9 @@ test('managed Teams restart rebuilds stale proxy before shared runner touches th
   assert.match(adapter, /await connection\.close\(\)\.catch\(\(\) => \{\}\);[\s\S]*resolveTeamsCasebookConnection/);
   assert.match(runner, /typeof options\['restart-reconnect-hook'\] === 'function'/);
   assert.match(runner, /if \(reconnected\?\.cdpUrl\) runtime\.cdpUrl = reconnected\.cdpUrl/);
+  assert.match(runner, /waitForRunningTaskEvidence\(page, 90000, \{[\s\S]*runtime,[\s\S]*screenshotName: 'teams-new-002-running-before-reopen'/);
+  assert.match(runner, /恢复宿主自动重载后的 QBot CDP\/page 绑定/);
+  assert.match(runner, /await reconnectQbotRuntime\(/);
 });
 
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {
@@ -1224,6 +1227,13 @@ test('a controlled live-host relaunch can be adopted only with the same executab
     assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace('52364', '52365') }), false);
     assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace(session.profile_alias, '/tmp/other') }), false);
     assert.equal(matchesRelaunchedLiveSession(session, { pid: 991, command: command.replace(session.control_plane_origin, 'https://qbot-api.360shuke.com') }), false);
+    assert.equal(
+      matchesRelaunchedLiveSession(session, {
+        pid: 991,
+        command: command.replace(` --qbot-server=${session.control_plane_origin}`, ''),
+      }),
+      true,
+    );
   } finally {
     fs.rmSync(session.profile_alias, { force: true });
     fs.rmSync(session.profile_dir, { recursive: true, force: true });

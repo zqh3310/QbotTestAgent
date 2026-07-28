@@ -378,8 +378,15 @@ export function matchesRelaunchedLiveSession(session, { pid, command } = {}) {
   if (!session.profile_alias || !currentCommand.includes(`--user-data-dir=${session.profile_alias}`)) return false;
   const port = Number(session.port || safeCdpPort(session.cdp_url));
   if (!port || !currentCommand.includes(`--remote-debugging-port=${port}`)) return false;
+  // Electron's app.relaunch() preserves the executable, live-profile alias and
+  // CDP port, but the packaged client can omit launcher-only `--qbot-server`
+  // arguments from the replacement process. Only compare that flag when the
+  // replacement process actually declares one. The Casebook preconnect
+  // independently re-reads and fail-closes on the QWork control-plane origin.
+  const relaunchedControlPlane = currentCommand.match(/(?:^|\s)--qbot-server=([^\s]+)/)?.[1] || '';
   if (session.control_plane_origin
-    && !currentCommand.includes(`--qbot-server=${session.control_plane_origin}`)) return false;
+    && relaunchedControlPlane
+    && relaunchedControlPlane !== session.control_plane_origin) return false;
   try {
     if (fs.realpathSync.native(session.profile_alias) !== fs.realpathSync.native(session.profile_dir)) return false;
   } catch {

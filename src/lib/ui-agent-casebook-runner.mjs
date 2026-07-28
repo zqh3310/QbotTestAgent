@@ -3845,8 +3845,16 @@ async function executeSitTeamsReopenRunningTask({ page, state, testCase, caseDir
   await fillComposer(page, prompt, state, '输入 Teams 运行中恢复长任务');
   const startedAt = Date.now();
   await send(page, state, '发送 Teams 运行中恢复长任务');
-  const started = await waitForRunningTaskEvidence(page, 90000);
-  state.screenshots.teams_new_002_before_reopen = await shot(page, caseDir, 'teams-new-002-running-before-reopen');
+  const started = await waitForRunningTaskEvidence(page, 90000, {
+    runtime,
+    options,
+    state,
+    caseDir,
+    label: 'Teams 运行中证据等待',
+    screenshotName: 'teams-new-002-running-before-reopen',
+  });
+  page = runtime.page || page;
+  state.screenshots.teams_new_002_before_reopen = started.screenshot || '';
   recordStep(state, '确认长任务进入运行中并记录首段', '关闭内嵌页前必须回读 activeId、running=true 和首段/消息证据。', JSON.stringify({ ...started, firstText: clip(started.firstText, 260) }), started.ok ? 'passed' : 'failed', state.screenshots.teams_new_002_before_reopen, started.ok ? '' : 'automation_error');
   if (!started.ok) return;
   const restarted = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: 'Teams 运行中任务关闭重进' });
@@ -3963,20 +3971,105 @@ function cssEscape(value) {
   return String(value || '').replace(/(["\\])/g, '\\$1');
 }
 
-async function waitForRunningTaskEvidence(page, timeoutMs) {
+async function waitForRunningTaskEvidence(page, timeoutMs, {
+  runtime = null,
+  options = {},
+  state: caseState = null,
+  caseDir = '',
+  label = '运行中任务等待',
+  screenshotName = '',
+} = {}) {
   const deadline = Date.now() + timeoutMs;
   let state = await qbotE2EState(page);
   let firstText = '';
+  let hostReconnects = 0;
   while (Date.now() < deadline) {
+    const pageLive = page
+      && !(typeof page.isClosed === 'function' && page.isClosed())
+      && (!runtime?.browser
+        || typeof runtime.browser.isConnected !== 'function'
+        || runtime.browser.isConnected());
+    if (!pageLive || isCdpDisconnectedMessage(state?.reason || '')) {
+      if (!runtime) {
+        return {
+          ok: false,
+          reason: `等待运行中任务时 QBot CDP/page 已断开：${state?.reason || 'page closed'}`,
+          activeId: state?.activeId || '',
+          firstText,
+          bridge: state,
+          host_reconnects: hostReconnects,
+        };
+      }
+      const reconnected = await reconnectQbotRuntime({
+        runtime,
+        options,
+        state: caseState,
+        caseDir,
+        label,
+        timeoutMs: Math.max(1_000, deadline - Date.now()),
+        recordAction: `恢复宿主自动重载后的 QBot CDP/page 绑定（${label}）`,
+      });
+      if (!reconnected.ok) {
+        return {
+          ok: false,
+          reason: `等待运行中任务时 QBot CDP/page 已断开且重连失败：${reconnected.reason}`,
+          activeId: state?.activeId || '',
+          firstText,
+          bridge: state,
+          host_reconnects: hostReconnects,
+        };
+      }
+      page = reconnected.page;
+      hostReconnects += 1;
+      state = await qbotE2EState(page);
+      continue;
+    }
     state = await qbotE2EState(page);
     firstText = (await assistantMessageTexts(page)).at(-1) || '';
     if (state.running && state.activeId && (firstText.trim() || Number(state.messageCount || 0) >= 1)) {
-      return { ok: true, activeId: state.activeId, firstText, bridge: state };
+      let screenshot = '';
+      if (screenshotName && caseDir) {
+        try {
+          screenshot = await shot(page, caseDir, screenshotName);
+        } catch (error) {
+          if (isCdpDisconnectedMessage(error?.message || error)) {
+            state = { ...state, available: false, reason: error?.message || String(error) };
+            continue;
+          }
+          throw error;
+        }
+      }
+      return {
+        ok: true,
+        activeId: state.activeId,
+        firstText,
+        bridge: state,
+        screenshot,
+        host_reconnects: hostReconnects,
+      };
     }
-    if (state.activeId && !state.running && firstText.trim()) return { ok: false, reason: '长任务在关闭前已结束，未形成运行中恢复前置。', activeId: state.activeId, firstText, bridge: state };
-    await page.waitForTimeout(250);
+    if (state.activeId && !state.running && firstText.trim()) {
+      return {
+        ok: false,
+        reason: hostReconnects > 0
+          ? '宿主自动重载后任务已结束，未能补采关闭前 running 截图；本次不得作为产品结论。'
+          : '长任务在关闭前已结束，未形成运行中恢复前置。',
+        activeId: state.activeId,
+        firstText,
+        bridge: state,
+        host_reconnects: hostReconnects,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return { ok: false, reason: `等待 ${timeoutMs}ms 未观察到 running 任务。`, activeId: state.activeId, firstText, bridge: state };
+  return {
+    ok: false,
+    reason: `等待 ${timeoutMs}ms 未观察到 running 任务。`,
+    activeId: state.activeId,
+    firstText,
+    bridge: state,
+    host_reconnects: hostReconnects,
+  };
 }
 
 async function waitForPersistedTaskTerminal(page, timeoutMs) {
@@ -16112,6 +16205,81 @@ export function runRestartShellCommand(command, {
   });
 }
 
+async function reconnectQbotRuntime({
+  runtime,
+  options,
+  state,
+  caseDir,
+  label,
+  timeoutMs = 120000,
+  recordAction = '',
+  successPrefix = '',
+}) {
+  if (!runtime?.playwright?.chromium || !runtime?.cdpUrl) {
+    return { ok: false, reason: 'runner 缺少可变 CDP runtime，上下文无法重新连接 QBot。' };
+  }
+  const startedAt = Date.now();
+  let lastError = '';
+  const deadline = startedAt + Math.max(1_000, Number(timeoutMs) || 120000);
+  while (Date.now() < deadline) {
+    let nextBrowser = null;
+    try {
+      const reconnectHook = typeof options['restart-reconnect-hook'] === 'function'
+        ? options['restart-reconnect-hook']
+        : null;
+      const reconnected = reconnectHook
+        ? await reconnectHook({ runtime, options, state, caseDir, label })
+        : null;
+      nextBrowser = reconnected?.browser
+        || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
+      const nextPage = reconnected?.page || await findQbotPage(nextBrowser);
+      if (!nextPage) throw new Error('CDP 已恢复，但未找到 QBot 主窗口。');
+      if (reconnected?.cdpUrl) runtime.cdpUrl = reconnected.cdpUrl;
+      nextPage.setDefaultTimeout(12000);
+      nextPage.setDefaultNavigationTimeout(30000);
+      const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options, {
+        browser: nextBrowser,
+        chromium: runtime.playwright.chromium,
+      });
+      if (!fixtureAuth.ok) {
+        throw new Error(fixtureAuth.reason || '受控 fixture mock OAuth 恢复失败。');
+      }
+      if (fixtureAuth.needed && state) {
+        state.artifacts.fixture_mock_auth = {
+          authenticated: true,
+          provider: fixtureAuth.provider,
+          has_user: fixtureAuth.hasUser,
+        };
+      }
+      runtime.browser = nextBrowser;
+      runtime.page = nextPage;
+      if (state) {
+        if (!Array.isArray(state.artifacts.runtime_reconnects)) state.artifacts.runtime_reconnects = [];
+        state.artifacts.runtime_reconnects.push({
+          label: label || 'QBot runtime reconnect',
+          elapsed_ms: Date.now() - startedAt,
+          cdp_url: runtime.cdpUrl,
+        });
+      }
+      if (state && recordAction) {
+        recordStep(
+          state,
+          recordAction,
+          '宿主切换后应重新发现受管 QWork 页面，并恢复同一 live profile、登录态和 CDP 控制。',
+          `${successPrefix}${Date.now() - startedAt}ms 后已重连 ${runtime.cdpUrl}。`,
+          'passed',
+        );
+      }
+      return { ok: true, browser: nextBrowser, page: nextPage };
+    } catch (error) {
+      lastError = error.message || String(error);
+      if (nextBrowser) await nextBrowser.close().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  return { ok: false, reason: `未能在时限内重连 QBot CDP：${clip(lastError, 320)}` };
+}
+
 async function restartQbotAndReconnect({ runtime, options, state, caseDir, label, commandOverride = '' }) {
   const command = String(commandOverride || options['restart-command'] || '').trim();
   if (!command) return { ok: false, reason: '未配置 restart-command，无法执行 QBot 重启闭环。' };
@@ -16137,7 +16305,6 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
     stderr: preservedStderrFile,
   };
   state.artifacts.restart_commands.push(restartEvidence);
-  const startedAt = Date.now();
   const result = await runRestartShellCommand(command, {
     cwd: restartCwd,
     timeoutMs: Number(options['restart-timeout-ms'] || 180000),
@@ -16158,57 +16325,19 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
     return { ok: false, reason: `restart-command 执行失败：${detail}` };
   }
 
-  let lastError = '';
-  const deadline = Date.now() + Number(options['restart-reconnect-timeout-ms'] || 120000);
-  while (Date.now() < deadline) {
-    let nextBrowser = null;
-    try {
-      const reconnectHook = typeof options['restart-reconnect-hook'] === 'function'
-        ? options['restart-reconnect-hook']
-        : null;
-      const reconnected = reconnectHook
-        ? await reconnectHook({ runtime, options, state, caseDir, label })
-        : null;
-      nextBrowser = reconnected?.browser
-        || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
-      const nextPage = reconnected?.page || await findQbotPage(nextBrowser);
-      if (!nextPage) throw new Error('CDP 已恢复，但未找到 QBot 主窗口。');
-      if (reconnected?.cdpUrl) runtime.cdpUrl = reconnected.cdpUrl;
-      nextPage.setDefaultTimeout(12000);
-      nextPage.setDefaultNavigationTimeout(30000);
-      const fixtureAuth = await ensureManagedFixtureMockAuth(nextPage, options, {
-        browser: nextBrowser,
-        chromium: runtime.playwright.chromium,
-      });
-      if (!fixtureAuth.ok) {
-        throw new Error(fixtureAuth.reason || '受控 fixture mock OAuth 恢复失败。');
-      }
-      if (fixtureAuth.needed) {
-        state.artifacts.fixture_mock_auth = {
-          authenticated: true,
-          provider: fixtureAuth.provider,
-          has_user: fixtureAuth.hasUser,
-        };
-      }
-      // Keep dialogs unowned at page scope; case-specific flows decide whether to
-      // accept or dismiss each confirmation.
-      runtime.browser = nextBrowser;
-      runtime.page = nextPage;
-      recordStep(
-        state,
-        `执行 restart-command（${label || '重启验证'}）`,
-        '重启命令应成功结束，Electron CDP 应恢复且 runner 应重新连接 QBot 主窗口。',
-        `重启命令成功；${Date.now() - startedAt}ms 后已重连 ${runtime.cdpUrl}。`,
-        'passed',
-      );
-      return { ok: true, browser: nextBrowser, page: nextPage };
-    } catch (error) {
-      lastError = error.message || String(error);
-      if (nextBrowser) await nextBrowser.close().catch(() => {});
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-  return { ok: false, reason: `restart-command 已执行，但未能在时限内重连 QBot CDP：${clip(lastError, 320)}` };
+  const reconnected = await reconnectQbotRuntime({
+    runtime,
+    options,
+    state,
+    caseDir,
+    label,
+    timeoutMs: Number(options['restart-reconnect-timeout-ms'] || 120000),
+    recordAction: `执行 restart-command（${label || '重启验证'}）`,
+    successPrefix: '重启命令成功；',
+  });
+  return reconnected.ok
+    ? reconnected
+    : { ok: false, reason: `restart-command 已执行，但${reconnected.reason}` };
 }
 
 async function clickBestEntry(page, testCase, selectors, state) {
