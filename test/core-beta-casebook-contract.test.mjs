@@ -14,6 +14,7 @@ import {
 import {
   coreBetaActionReceiptsComplete,
   coreBetaMaintenanceConfirmationContract,
+  coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   validateCasebookExecutorReadiness,
@@ -125,6 +126,15 @@ test('a terminal product failure remains a complete action receipt', () => {
   assert.equal(coreBetaActionReceiptsComplete([
     { ...base, state_readback: null, error: '' },
   ], 1), false);
+});
+
+test('Core Beta refresh reconnects only for a closed renderer', () => {
+  assert.equal(coreBetaNeedsRendererReconnect(
+    new Error('page.reload: Target page, context or browser has been closed'),
+  ), true);
+  assert.equal(coreBetaNeedsRendererReconnect(
+    new Error('page.reload: net::ERR_FAILED'),
+  ), false);
 });
 
 test('an unknown core beta command fails readiness before the UI runner starts', () => {

@@ -4370,7 +4370,25 @@ async function executeCoreBetaConversationCommand(ctx, command) {
   }
   if (command === 'reload_and_reopen_task') {
     const taskId = ctx.taskIds[0];
-    await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    try {
+      await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (error) {
+      if (!coreBetaNeedsRendererReconnect(error)) throw error;
+      const reconnected = await reconnectQbotRuntime({
+        runtime: ctx.runtime,
+        options: ctx.options,
+        state: ctx.state,
+        caseDir: ctx.caseDir,
+        label: 'Core Beta reload replacement renderer',
+        timeoutMs: Number(ctx.options['restart-reconnect-timeout-ms'] || 120000),
+        recordAction: '刷新后接管 replacement QWork renderer',
+        successPrefix: '旧 renderer 已关闭；',
+      });
+      if (!reconnected.ok) {
+        throw new Error(`刷新关闭旧 QWork renderer 后重连失败：${reconnected.reason}`);
+      }
+      ctx.page = reconnected.page;
+    }
     await ctx.page.waitForTimeout(1800);
     const reopened = await reopenSessionAndReadback(ctx.page, taskId);
     const task = await qbotE2EState(ctx.page);
@@ -4419,6 +4437,12 @@ async function executeCoreBetaConversationCommand(ctx, command) {
   if (command === 'dispatch_batch_without_wait') return coreBetaDispatchBatch(ctx);
   if (command === 'collect_batch_by_task_id') return coreBetaCollectBatch(ctx);
   throw new Error(`Core Beta conversation command 未实现：${command}`);
+}
+
+export function coreBetaNeedsRendererReconnect(error) {
+  return /Target page, context or browser has been closed|QBot CDP\/page 已断开/i.test(
+    String(error?.message || error || ''),
+  );
 }
 
 function coreBetaFixtureFiles(ctx) {
