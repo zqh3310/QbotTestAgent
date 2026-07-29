@@ -36,12 +36,14 @@ import {
   obviousDuplicateEvidence,
   probeConnectorRegressionFixture,
   parseSingleHostPipelineSize,
+  normalizeSingleHostPipelineCapabilitySnapshot,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   reviewCaseCredibility,
   runRestartShellCommand,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
+  singleHostPipelineCapabilityPlan,
   seedLocalSkillReadiness,
   sendReceiptEvidence,
   sentPromptFidelity,
@@ -50,6 +52,7 @@ import {
   unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
   validateSingleHostPipelineWaveIdentity,
+  validateSingleHostPipelineCapabilityBinding,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   validateProductionCasePlan,
@@ -478,6 +481,85 @@ assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SAFE-001')).elig
 assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SERIAL-001', { pipeline_policy: '串行（状态/附件/工具/成果/重启/多轮）' })).eligible, false, 'Casebook 声明串行时不得进入流水线');
 assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SAFE-002', { test_data: '请读取上传附件并总结。' })).eligible, false, '附件语义即使声明可流水线也必须串行');
 assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HITL-002')).eligible, false, 'HITL Case 不得进入单宿主流水线');
+const capabilityPipelineOptions = { rendererControlAdapter: 'teams360' };
+const expertSkillConnectorCase = pipelineCase('SIT-HOME-006', {
+  pipeline_policy: '串行（状态/附件/工具/成果/重启/多轮）',
+  scenario: '专家、手动 Skill、手动 Connector 同时显式指定',
+  test_data: '请基于已选能力生成一份运营活动复盘检查清单，包含数据、权限、异常和成果输出。',
+});
+assert.ok(
+  singleHostPipelineCapabilityPlan(expertSkillConnectorCase, capabilityPipelineOptions),
+  '专家+Skill+Connector 单次发送 Case 应登记任务级能力准备计划',
+);
+assert.equal(
+  singleHostPipelineEligibility(expertSkillConnectorCase, capabilityPipelineOptions).eligible,
+  true,
+  'Teams 下选择现有专家/Skill/Connector 后单次发送应可进入统一回收流水线',
+);
+assert.equal(
+  singleHostPipelineEligibility(expertSkillConnectorCase).eligible,
+  false,
+  '未固定 Teams renderer adapter 时能力流水线必须 fail-closed',
+);
+assert.equal(
+  singleHostPipelineEligibility(pipelineCase('SIT-SKILL-017', {
+    kind: 'ui',
+    pipeline_policy: '串行（状态/附件/工具/成果/重启/多轮）',
+  }), capabilityPipelineOptions).eligible,
+  true,
+  '含内联 Skill chip 但最终只有一次发送的 UI Case 应允许任务级流水线',
+);
+assert.equal(
+  singleHostPipelineEligibility(pipelineCase('SIT-CONN-011', {
+    kind: 'ui',
+    pipeline_policy: '串行（状态/附件/工具/成果/重启/多轮）',
+  }), capabilityPipelineOptions).eligible,
+  true,
+  '选择自动 Connector/MCP 后一次发送的 UI Case 应允许任务级流水线',
+);
+assert.equal(
+  singleHostPipelineCapabilityPlan(pipelineCase('SIT-SKILL-026'), capabilityPipelineOptions),
+  null,
+  '多 Skill 删除/恢复与共享状态验证不得伪装成单次能力选择',
+);
+const normalizedCapability = normalizeSingleHostPipelineCapabilitySnapshot({
+  currentExpert: { id: 'expert-qa', name: 'QA 专家' },
+  selectedSkills: [{ slug: 'qa-runtime', label: 'QA Runtime' }],
+  selectedConnectors: [{ key: 'mcp:healthy', label: 'Healthy MCP' }],
+  connectorRouting: { mode: 'manual' },
+});
+assert.deepEqual(normalizedCapability, {
+  expert: 'expert-qa',
+  skill_mode: 'manual',
+  selected_skills: ['qa-runtime'],
+  connector_mode: 'manual',
+  selected_connectors: ['mcp:healthy'],
+  visible_skill_chips: 0,
+  visible_connector_chips: 0,
+}, '能力快照必须只保留跨任务稳定身份，不能把展示文案或对象顺序当成绑定');
+assert.equal(validateSingleHostPipelineCapabilityBinding(
+  normalizedCapability,
+  normalizedCapability,
+  singleHostPipelineCapabilityPlan(expertSkillConnectorCase, capabilityPipelineOptions),
+).ok, true, '同一 taskId 回读到相同专家/Skill/Connector 时能力绑定校验通过');
+assert.equal(validateSingleHostPipelineCapabilityBinding(
+  normalizedCapability,
+  { ...normalizedCapability, selected_connectors: ['mcp:other'] },
+  singleHostPipelineCapabilityPlan(expertSkillConnectorCase, capabilityPipelineOptions),
+).ok, false, '回收时 Connector/MCP 身份漂移必须 fail-closed');
+assert.deepEqual(
+  buildSingleHostPipelineWave([
+    pipelineCase('CUSTOM-SAFE-001'),
+    expertSkillConnectorCase,
+    pipelineCase('SIT-SKILL-026', {
+      pipeline_policy: '串行（状态/技能/多轮）',
+      scenario: '多 Skill 删除与恢复',
+    }),
+    pipelineCase('CUSTOM-SAFE-002'),
+  ], 0, 20, { eligibilityOptions: capabilityPipelineOptions }).map((entry) => entry.testCase.id),
+  ['CUSTOM-SAFE-001', 'SIT-HOME-006'],
+  '能力单次发送可留在当前波；资源状态/多轮 Case 仍必须在其前收波',
+);
 assert.equal(isTransientCredentialRotation('Lingxi credential changed during the management request'), true, 'Lingxi 管理请求凭证轮换必须进入一次安全恢复');
 assert.equal(isTransientCredentialRotation('普通业务失败，请稍后重试'), false, '未知业务错误不得盲目按凭证轮换重试');
 const plannedPipeline = buildSingleHostPipelineBatch(

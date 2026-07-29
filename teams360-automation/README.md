@@ -101,17 +101,21 @@ The managed 360Teams session exposes one QWork WebView, so there is still exactl
 conversation Cases are dispatched into new tasks without waiting for the Agent reply;
 ordinary UI Cases that are also declared pipeline-safe still execute serially at their
 original positions. At the end of the wave, the runner reopens every deferred conversation
-by its exact persisted task ID and collects/asserts the replies. This overlaps Agent wait
-time with later safe UI work without reordering Cases. `N` is configurable from 1 (fully
-serial) through 20;
+by its exact persisted task ID and collects/asserts the replies. Registered one-shot
+capability Cases may also select an existing expert, Skill, or Connector/MCP before
+dispatch. The runner persists the normalized capability snapshot and requires the same
+expert/Skill/Connector binding after reopening the task. This overlaps Agent wait time
+with later safe UI work without reordering Cases. `N` is configurable from 1 (fully serial)
+through 20;
 `--single-host-pipeline true` uses 20. The final wave may be shorter. A deferred Case must
-both declare a pipeline policy in the Casebook and pass the live independent, single-turn,
-pure-conversation checks. Attachments, skills, connectors, MCP, HITL, artifacts, restarts,
-shared state, and multi-turn Cases are hard barriers: the current wave is collected before
-they execute alone. The pipeline writes
-`single-host-pipeline.json` schema v2 with requested/actual wave sizes, phase timestamps,
-ordered Case IDs, and globally unique task IDs so interrupted runs can be audited without
-mixing Case evidence.
+either declare a pipeline policy in the Casebook or have a registered one-shot capability
+plan, and must pass the live independent, single-turn checks. Resource creation,
+installation, authorization, deletion, fault injection, attachments, HITL, artifact
+operations, restarts, shared state, and multi-turn Cases are hard barriers: the current
+wave is collected before they execute alone. The pipeline writes
+`single-host-pipeline.json` schema v3 with requested/actual wave sizes, phase timestamps,
+ordered Case IDs, globally unique task IDs, capability plans, and dispatch snapshots so
+interrupted runs can be audited without mixing Case or capability evidence.
 
 ### Teams-only fault and fixture lane
 
