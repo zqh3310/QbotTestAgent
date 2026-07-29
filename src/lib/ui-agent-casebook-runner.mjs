@@ -3402,14 +3402,21 @@ async function executeCoreBetaMaintenanceAction({
   if (!(await visible(button, 3000))) throw new Error(`未找到维护按钮 ${testId}。`);
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
-  let dialog = { message: '' };
+  let dialog = { message: '', source: 'none', accepted: false, screenshot: '' };
   if (acceptConfirm) {
-    dialog = await captureDialogDuringWithAction(
+    dialog = await acceptCoreBetaMaintenanceConfirmation(
       page,
       async () => button.click({ force: true }).catch(async () => button.evaluate((element) => element.click())),
-      { accept: true, timeoutMs: 5000 },
+      {
+        testId,
+        state,
+        caseDir,
+        timeoutMs: 5000,
+      },
     );
-    if (!dialog.message) throw new Error(`${testId} 未出现预期确认弹窗，已停止破坏性操作。`);
+    if (!dialog.message || !dialog.accepted) {
+      throw new Error(`${testId} 未出现可验证的预期确认弹窗，已停止破坏性操作。`);
+    }
   } else {
     await button.click({ force: true }).catch(async () => button.evaluate((element) => element.click()));
   }
@@ -3436,6 +3443,9 @@ async function executeCoreBetaMaintenanceAction({
     before_text: clip(beforeText, 1200),
     after_text: clip(afterText, 1800),
     dialog_message: dialog.message,
+    dialog_source: dialog.source,
+    confirmation_label: dialog.confirmation_label || '',
+    confirmation_screenshot: dialog.screenshot || '',
     busy_observed: busyObserved,
     terminal,
     button_enabled_after: !await button.isDisabled().catch(() => true),
@@ -3448,6 +3458,116 @@ async function executeCoreBetaMaintenanceAction({
     state_readback: stateReadback,
     actual: JSON.stringify(stateReadback),
   };
+}
+
+export function coreBetaMaintenanceConfirmationContract(testId) {
+  const contracts = {
+    'assistant-runtime-reset-all': {
+      prompt: /确认.*(?:全量重初始化|重置)|(?:全量重初始化|一键重置)[\s\S]*(?:清空|不可恢复|重新下载)/i,
+      confirm: /^(?:确认)?(?:全量重初始化|一键重置|重置全部运行时)$/,
+    },
+    'assistant-skills-reinstall': {
+      prompt: /确认.*(?:重装|Skill)|(?:一键重装|重装 Skill)[\s\S]*(?:清理|重新物化|确定)/i,
+      confirm: /^(?:确认)?(?:一键)?重装\s*Skill$/,
+    },
+    'assistant-sessions-purge': {
+      prompt: /确认.*清空|清空[\s\S]*(?:全部|所有环境)[\s\S]*(?:会话|不可恢复)/i,
+      confirm: /^(?:确认)?清空(?:全部)?会话$/,
+    },
+  };
+  return contracts[testId] || null;
+}
+
+async function acceptCoreBetaMaintenanceConfirmation(page, action, {
+  testId,
+  state,
+  caseDir,
+  timeoutMs = 5000,
+} = {}) {
+  const contract = coreBetaMaintenanceConfirmationContract(testId);
+  if (!contract) return { message: '', source: 'unsupported', accepted: false, screenshot: '' };
+
+  let nativeResult = null;
+  const listener = async (nativeDialog) => {
+    const message = nativeDialog.message();
+    const expected = contract.prompt.test(message);
+    nativeResult = {
+      message,
+      source: 'native-dialog',
+      accepted: expected,
+      confirmation_label: expected ? 'dialog.accept' : 'dialog.dismiss',
+      screenshot: '',
+    };
+    if (expected) await nativeDialog.accept().catch(() => nativeDialog.dismiss().catch(() => {}));
+    else await nativeDialog.dismiss().catch(() => {});
+  };
+  page.once('dialog', listener);
+  await action();
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (nativeResult) {
+      page.off('dialog', listener);
+      return nativeResult;
+    }
+
+    const dialogs = page.locator('[role="dialog"], .modal');
+    const count = await dialogs.count().catch(() => 0);
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const dialog = dialogs.nth(index);
+      if (!(await visible(dialog, 200))) continue;
+      const message = await dialog.innerText({ timeout: 600 }).catch(() => '');
+      if (!contract.prompt.test(message)) continue;
+
+      const controls = dialog.locator('button, [role="button"]');
+      const controlCount = await controls.count().catch(() => 0);
+      let confirmation = null;
+      let confirmationLabel = '';
+      for (let controlIndex = 0; controlIndex < controlCount; controlIndex += 1) {
+        const candidate = controls.nth(controlIndex);
+        if (!(await visible(candidate, 150))) continue;
+        const label = String(await candidate.innerText({ timeout: 300 }).catch(() => '')).trim();
+        if (!contract.confirm.test(label)) continue;
+        confirmation = candidate;
+        confirmationLabel = label;
+        break;
+      }
+
+      const sequence = Number(state?._coreBetaMaintenanceConfirmationCount || 0) + 1;
+      if (state) state._coreBetaMaintenanceConfirmationCount = sequence;
+      const screenshot = caseDir
+        ? await shot(page, caseDir, `maintenance-confirm-${String(sequence).padStart(2, '0')}-${slugify(testId)}`)
+        : '';
+      if (state && screenshot) {
+        state.screenshots[`maintenance_confirmation_${String(sequence).padStart(2, '0')}`] = screenshot;
+      }
+      if (!confirmation) {
+        page.off('dialog', listener);
+        return {
+          message,
+          source: 'custom-dialog-missing-confirm',
+          accepted: false,
+          confirmation_label: '',
+          screenshot,
+        };
+      }
+
+      await confirmation.click({ force: true }).catch(async () => confirmation.evaluate((element) => element.click()));
+      const closed = await dialog.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false);
+      page.off('dialog', listener);
+      return {
+        message,
+        source: 'custom-dialog',
+        accepted: closed,
+        confirmation_label: confirmationLabel,
+        screenshot,
+      };
+    }
+    await page.waitForTimeout(100);
+  }
+
+  page.off('dialog', listener);
+  return { message: '', source: 'none', accepted: false, confirmation_label: '', screenshot: '' };
 }
 
 async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options, runtime }) {

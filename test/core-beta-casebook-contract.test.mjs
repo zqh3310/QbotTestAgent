@@ -11,7 +11,10 @@ import {
   validateReplyEvidence,
   validateSkillExecutionEvidence,
 } from '../src/lib/core-beta-casebook-contract.mjs';
-import { validateCasebookExecutorReadiness } from '../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  coreBetaMaintenanceConfirmationContract,
+  validateCasebookExecutorReadiness,
+} from '../src/lib/ui-agent-casebook-runner.mjs';
 
 function conversationCase() {
   const steps = [
@@ -200,4 +203,22 @@ test('skill, expert, and MCP use require task-bound execution events', () => {
     selected_connector_keys: ['mcp-a'],
     tool_calls: [{ connector_key: 'mcp-a', task_id: 'task-3', tool_name: '', response_present: false }],
   }).ok, false);
+});
+
+test('destructive maintenance confirmation contracts accept only the intended visible action', () => {
+  const reset = coreBetaMaintenanceConfirmationContract('assistant-runtime-reset-all');
+  assert.equal(reset.prompt.test('确认全量重初始化\n全量重初始化会清空本机运行时，此操作不可恢复。'), true);
+  assert.equal(reset.confirm.test('全量重初始化'), true);
+  assert.equal(reset.confirm.test('取消'), false);
+
+  const skills = coreBetaMaintenanceConfirmationContract('assistant-skills-reinstall');
+  assert.equal(skills.prompt.test('确认一键重装 Skill\n将清理技能环境并重新物化，确定继续？'), true);
+  assert.equal(skills.confirm.test('一键重装 Skill'), true);
+  assert.equal(skills.confirm.test('全量重初始化'), false);
+
+  const sessions = coreBetaMaintenanceConfirmationContract('assistant-sessions-purge');
+  assert.equal(sessions.prompt.test('确认清空全部会话\n将清空所有环境本地会话，此操作不可恢复。'), true);
+  assert.equal(sessions.confirm.test('清空全部会话'), true);
+  assert.equal(sessions.confirm.test('删除专家'), false);
+  assert.equal(coreBetaMaintenanceConfirmationContract('unknown-maintenance-action'), null);
 });
