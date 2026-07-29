@@ -20,6 +20,10 @@ import {
   resolveEvidenceRoleApplicability,
   validateTrustedProductionCaseContract,
 } from './production-casebook-contract.mjs';
+import {
+  CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  validateCoreBetaCase,
+} from './core-beta-casebook-contract.mjs';
 import { buildCrossRunLineage } from './casebook-lineage.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
@@ -1673,6 +1677,12 @@ function requiredFixtureEnvironment(testCase = {}) {
 }
 
 const EXPLICIT_V4_EXECUTOR_CASE_IDS = new Set([]);
+// Core-beta cases are contract-first. Add a case type here only after the live
+// executor records every declared action with before/action/after evidence and
+// satisfies the task-bound capability oracle. Until then preflight must stop;
+// falling through to the generic UI/conversation runner would recreate the V4
+// false-block/false-pass problem this contract is designed to remove.
+const CORE_BETA_EXECUTOR_CASE_TYPES = new Set([]);
 
 export function validateCasebookExecutorReadiness(selectedCases = [], {
   controlPlaneUrl = '',
@@ -1695,6 +1705,24 @@ export function validateCasebookExecutorReadiness(selectedCases = [], {
     });
   }
   for (const testCase of selectedCases) {
+    if (String(testCase.contract_version || '') === CORE_BETA_CASEBOOK_CONTRACT_VERSION) {
+      const audit = validateCoreBetaCase(testCase);
+      for (const reason of audit.errors) {
+        testcaseIssues.push({
+          id: testCase.id,
+          kind: 'core_beta_contract_invalid',
+          reason,
+        });
+      }
+      if (audit.ok && !CORE_BETA_EXECUTOR_CASE_TYPES.has(audit.case_type)) {
+        frameworkIssues.push({
+          id: testCase.id,
+          kind: 'core_beta_executor_missing',
+          case_type: audit.case_type,
+          reason: `core-beta ${audit.case_type} 尚未登记逐动作执行器；禁止退化到通用路径。`,
+        });
+      }
+    }
     const expectedEnvironment = requiredFixtureEnvironment(testCase);
     if (expectedEnvironment && release.environment && expectedEnvironment !== release.environment) {
       testcaseIssues.push({
@@ -2499,7 +2527,27 @@ async function recordSingleHostPipelineCapabilityReplyAssertions(page, state, te
   const text = String(reply?.deltaText || '');
   const capabilityPlan = state.artifacts.single_host_pipeline_capability_dispatch?.plan || null;
   if (capabilityPlan?.manual_connector || capabilityPlan?.manual_skill) {
-    const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
+    const toolBlocks = await page.locator('[data-slot="tool-fallback"]').evaluateAll((elements) => elements.map((element) => ({
+      text: String(element.textContent || '').trim(),
+      connector_key: String(
+        element.getAttribute('data-connector-key')
+        || element.getAttribute('data-mcp-server')
+        || element.getAttribute('data-server-name')
+        || '',
+      ).trim(),
+      tool_name: String(
+        element.getAttribute('data-tool-name')
+        || element.getAttribute('data-tool')
+        || '',
+      ).trim(),
+      call_id: String(
+        element.getAttribute('data-tool-call-id')
+        || element.getAttribute('data-call-id')
+        || '',
+      ).trim(),
+      status: String(element.getAttribute('data-status') || '').trim(),
+      aria_label: String(element.getAttribute('aria-label') || '').trim(),
+    }))).catch(() => []);
     const runtimeEvidence = await page.evaluate(async () => {
       const e2e = window.__qbotE2E || window.__deepbankE2E;
       const [context, diagnostics] = await Promise.all([
@@ -2512,21 +2560,34 @@ async function recordSingleHostPipelineCapabilityReplyAssertions(page, state, te
       task_id: state.artifacts.single_host_pipeline?.task_id || '',
       selected_skills: state.artifacts.single_host_pipeline_capability_dispatch?.snapshot?.selected_skills || [],
       selected_connectors: state.artifacts.single_host_pipeline_capability_dispatch?.snapshot?.selected_connectors || [],
-      tool_texts: toolTexts,
+      tool_blocks: toolBlocks,
       runtime: runtimeEvidence,
     };
     state.artifacts.single_host_pipeline_capability_execution = path.join(caseDir, 'pipeline-capability-execution.json');
     writeJsonFile(state.artifacts.single_host_pipeline_capability_execution, evidence);
     if (capabilityPlan.manual_connector) {
-      const runtimeText = `${toolTexts.join('\n')}\n${JSON.stringify(runtimeEvidence)}`;
-      const actualToolEvidence = toolTexts.some((item) => String(item || '').trim())
-        || /tools?\/call|tool[_-]?(?:call|use)|mcp[_-]?(?:call|tool)|qbot[_-]?\w+/i.test(runtimeText);
+      const selectedConnectorIds = (evidence.selected_connectors || [])
+        .map((item) => pipelineCapabilityItemIdentity(item))
+        .filter(Boolean);
+      const materializedIds = runtimeEvidence?.context?.connectorRuntimeMaterialization?.materializedConnectorIds || [];
+      const materializedIdentitySet = new Set(materializedIds.map((item) => pipelineCapabilityItemIdentity(item)).filter(Boolean));
+      const exactToolBlocks = toolBlocks.filter((block) => (
+        selectedConnectorIds.includes(pipelineCapabilityItemIdentity(block.connector_key))
+        && String(block.tool_name || '').trim()
+        && String(block.call_id || '').trim()
+        && String(block.text || '').trim()
+        && /(?:completed|success|failed|error)/i.test(String(block.status || ''))
+      ));
+      const actualToolEvidence = selectedConnectorIds.length === 1
+        && materializedIdentitySet.has(selectedConnectorIds[0])
+        && exactToolBlocks.length > 0;
       recordAssertion(
         state,
         '手动 Connector/MCP 强走执行证据',
-        '手动 Connector/MCP 不仅要保持选中，还必须出现真实工具调用/工具执行上下文；纯模型冒充不能通过。',
+        '手动 Connector/MCP 必须同时具备：唯一稳定 connector key、runtime 已物化该 key、当前任务工具块明确记录同一 key/tool_name/call_id/终态/响应；选择成功、工具文字或正则命中都不能替代。',
         actualToolEvidence,
         clip(JSON.stringify(evidence), 1200),
+        'automation_error',
       );
     }
   }
