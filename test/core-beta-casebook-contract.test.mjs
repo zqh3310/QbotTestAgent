@@ -17,6 +17,7 @@ import {
 import {
   buildCaseEvidenceManifest,
   coreBetaActionReceiptsComplete,
+  coreBetaAttachmentCollectNeedsSend,
   coreBetaBatchSharedDeadline,
   coreBetaBatchTerminalEvidence,
   coreBetaMaintenanceConfirmationContract,
@@ -295,6 +296,18 @@ test('batch collection uses one shared deadline instead of multiplying timeout b
     600_000,
   );
   assert.ok(deadline.deadline_at_ms - collectionStartedAtMs < 20 * 600_000);
+});
+
+test('an attachment collect step sends when no task-bound readback exists', () => {
+  assert.equal(coreBetaAttachmentCollectNeedsSend(undefined), true);
+  assert.equal(coreBetaAttachmentCollectNeedsSend(null), true);
+  assert.equal(coreBetaAttachmentCollectNeedsSend({ available: false }), true);
+  assert.equal(coreBetaAttachmentCollectNeedsSend({
+    available: true,
+    task_id: 'task-1',
+    source_names: ['fixture.png'],
+    reply_sha256: 'a'.repeat(64),
+  }), false);
 });
 
 test('a fully evidenced partial batch deadline is complete failure evidence and never success', (t) => {

@@ -4905,20 +4905,34 @@ async function coreBetaRemoveRestoreAttachment(ctx) {
   };
 }
 
+export function coreBetaAttachmentCollectNeedsSend(attachmentReadbackEvidence) {
+  return attachmentReadbackEvidence?.available !== true;
+}
+
 async function coreBetaSendAttachmentTurn(ctx, label) {
   const outcome = await coreBetaRunTurn(ctx, 0, { label });
   const sources = ctx.state.artifacts.attachment_sources || [];
+  const replyText = String(outcome.reply?.deltaText || '');
+  const readbackCaptured = Boolean(outcome.taskId)
+    && sources.length > 0
+    && (replyText.trim().length > 0 || outcome.reply?.incomplete === true);
   const attachmentReadback = {
     source: 'reply + exact uploaded source ledger',
     task_id: outcome.taskId,
     source_names: sources.map((item) => item.name),
     source_sha256: sources.map((item) => item.sha256),
-    reply_sha256: sha256Text(outcome.reply.deltaText || ''),
+    reply_sha256: sha256Text(replyText),
+    reply_present: replyText.trim().length > 0,
+    reply_incomplete: outcome.reply?.incomplete === true,
     oracle: outcome.oracle,
   };
   ctx.state.artifacts.attachment_readback = attachmentReadback;
   setCoreBetaEvidence(ctx.state, 'attachment_readback', {
-    available: outcome.oracle.ok && sources.length > 0,
+    // This role proves that the uploaded source ledger was bound to a real
+    // task and its reply (or fully observed terminal failure).  Product-oracle
+    // success is deliberately not an evidence-availability condition: an
+    // incorrect product answer must remain a complete, reviewable failure.
+    available: readbackCaptured,
     ...attachmentReadback,
   });
   return {
@@ -4950,11 +4964,19 @@ async function executeCoreBetaAttachmentCommand(ctx, command) {
     'collect_numeric_oracle',
     'collect_structured_readback',
   ].includes(command)) {
-    const evidence = ensureCoreBetaEvidence(ctx.state).attachment_readback;
+    let evidence = ensureCoreBetaEvidence(ctx.state).attachment_readback;
+    if (coreBetaAttachmentCollectNeedsSend(evidence)) {
+      // Some exact Casebook plans combine "send" and "collect" in one
+      // command.  A collect step must never silently read an empty thread.
+      // Perform the real attachment turn first, then bind the resulting
+      // readback evidence to this numbered action.
+      await coreBetaSendAttachmentTurn(ctx, command);
+      evidence = ensureCoreBetaEvidence(ctx.state).attachment_readback;
+    }
     return {
       ok: evidence?.available === true,
-      selector_or_testid: 'assistant-thread',
-      event: 'attachment-readback',
+      selector_or_testid: 'composer-send + assistant-thread',
+      event: 'send-and-attachment-readback',
       state_readback: evidence || null,
       actual: JSON.stringify(evidence || {}),
     };
