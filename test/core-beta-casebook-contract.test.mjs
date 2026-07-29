@@ -348,6 +348,71 @@ test('verified capability shortage makes an impossible selection role explicit N
   assert.deepEqual(failClosed.missing_roles, ['capability_selection']);
 });
 
+test('captured capability failures remain complete evidence instead of becoming manifest gaps', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-capability-failure-evidence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-EXPERT-001');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const capturedAt = '2026-07-29T13:02:40.666Z';
+  const state = {
+    id: 'BETA-EXPERT-001',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: [
+      'capability_inventory',
+      'capability_selection',
+      'capability_execution_event',
+    ].join(','),
+    status: 'failed',
+    screenshots: {},
+    artifacts: {
+      core_beta_evidence: {
+        capability_inventory: {
+          available: false,
+          captured_at: capturedAt,
+          source: 'visible expert cards + window.agent.capabilities',
+          inventory: { cards: [], current_expert: null },
+        },
+        capability_selection: {
+          available: false,
+          captured_at: capturedAt,
+          source: 'created expert ledger + visible expert cards',
+          created: [
+            { name: '研究专家', id: '', visible: false },
+            { name: '数据专家', id: '', visible: false },
+            { name: '交付专家', id: '', visible: false },
+          ],
+        },
+        capability_execution_event: {
+          available: false,
+          captured_at: capturedAt,
+          source: path.join(caseDir, 'expert-task-bound-execution.json'),
+          kind: 'expert',
+          task_id: 'task-1',
+          expected_identity: 'expert-1',
+          identity_present: false,
+          executed: false,
+          runtime: {},
+          tool_blocks: [],
+        },
+      },
+    },
+  };
+
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  for (const role of ['capability_inventory', 'capability_selection', 'capability_execution_event']) {
+    assert.equal(manifest.role_evidence[role].available, true);
+    assert.equal(manifest.role_evidence[role].evidence_captured, true);
+    assert.equal(manifest.role_evidence[role].outcome_satisfied, false);
+  }
+
+  delete state.artifacts.core_beta_evidence.capability_selection.created;
+  const malformed = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(malformed.complete, false);
+  assert.deepEqual(malformed.missing_roles, ['capability_selection']);
+});
+
 test('verified skill shortage propagates to dependent cases without executing product actions', () => {
   const blocker = {
     applicable: true,

@@ -23394,6 +23394,53 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
   };
 }
 
+function capturedCapabilityRoleEvidence(role, evidence) {
+  if (!evidence || typeof evidence !== 'object') return null;
+  const source = String(evidence.source || '').trim();
+  const capturedAt = String(evidence.captured_at || '').trim();
+  if (!source || !capturedAt || !Number.isFinite(Date.parse(capturedAt))) return null;
+
+  let payloadObserved = false;
+  if (role === 'capability_inventory') {
+    payloadObserved = Array.isArray(evidence.inventory)
+      || Boolean(
+        evidence.inventory
+        && typeof evidence.inventory === 'object'
+        && Array.isArray(evidence.inventory.cards),
+      );
+  } else if (role === 'capability_selection') {
+    payloadObserved = [
+      'selection',
+      'sample',
+      'created',
+      'result',
+      'expected',
+      'snapshot',
+      'selected',
+      'used',
+      'available_slugs',
+      'persisted_skills',
+      'actual',
+    ].some((key) => Object.hasOwn(evidence, key));
+  } else if (role === 'capability_execution_event') {
+    payloadObserved = Boolean(String(evidence.kind || '').trim())
+      && Object.hasOwn(evidence, 'executed')
+      && (
+        Object.hasOwn(evidence, 'task_id')
+        || Object.hasOwn(evidence, 'runtime')
+        || Object.hasOwn(evidence, 'tool_blocks')
+      );
+  }
+  if (!payloadObserved) return null;
+
+  return {
+    ...evidence,
+    available: true,
+    evidence_captured: true,
+    outcome_satisfied: evidence.available === true,
+  };
+}
+
 export function buildCaseEvidenceManifest(state, caseDir) {
   const declaredRequiredRoles = String(state.required_evidence_roles || '')
     .split(/[,，;；|\n]+/)
@@ -23562,6 +23609,18 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     numberedStepCoverage.complete
     || Boolean(numberedStepCoverage.enforced && state.status === 'blocked')
   );
+  const capturedCapabilityInventory = capturedCapabilityRoleEvidence(
+    'capability_inventory',
+    coreBetaEvidence.capability_inventory,
+  );
+  const capturedCapabilitySelection = capturedCapabilityRoleEvidence(
+    'capability_selection',
+    coreBetaEvidence.capability_selection,
+  );
+  const capturedCapabilityExecution = capturedCapabilityRoleEvidence(
+    'capability_execution_event',
+    coreBetaEvidence.capability_execution_event,
+  );
 
   const roleEvidence = {
     before_screenshot: screenshotEvidence(before),
@@ -23650,15 +23709,21 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     public_state_readback: publicStatePresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少公开能力/状态读回。' },
-    capability_inventory: coreBetaEvidence.capability_inventory?.available === true
-      ? coreBetaEvidence.capability_inventory
-      : { available: false, reason: '缺少完整能力目录和稳定身份字段。' },
-    capability_selection: coreBetaEvidence.capability_selection?.available === true
-      ? coreBetaEvidence.capability_selection
-      : { available: false, reason: '缺少可见 chip、稳定能力ID和公开 capabilities 三方一致证据。' },
-    capability_execution_event: coreBetaEvidence.capability_execution_event?.available === true
-      ? coreBetaEvidence.capability_execution_event
-      : { available: false, reason: '缺少与当前 taskId、所选能力ID绑定的真实执行事件。' },
+    capability_inventory: capturedCapabilityInventory
+      || (coreBetaEvidence.capability_inventory?.available === true
+        ? coreBetaEvidence.capability_inventory
+        : null)
+      || { available: false, reason: '缺少完整能力目录和稳定身份字段。' },
+    capability_selection: capturedCapabilitySelection
+      || (coreBetaEvidence.capability_selection?.available === true
+        ? coreBetaEvidence.capability_selection
+        : null)
+      || { available: false, reason: '缺少可见 chip、稳定能力ID和公开 capabilities 三方一致证据。' },
+    capability_execution_event: capturedCapabilityExecution
+      || (coreBetaEvidence.capability_execution_event?.available === true
+        ? coreBetaEvidence.capability_execution_event
+        : null)
+      || { available: false, reason: '缺少与当前 taskId、所选能力ID绑定的真实执行事件。' },
     tool_or_mcp_call_log: toolLogPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少真实 tool/MCP 调用或无调用日志。' },
