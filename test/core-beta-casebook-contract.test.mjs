@@ -25,6 +25,7 @@ import {
   coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
+  verifiedCapabilitySelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
@@ -281,6 +282,69 @@ test('a verified product reply timeout is complete failure evidence, never a suc
   const failClosed = buildCaseEvidenceManifest(state, caseDir);
   assert.equal(failClosed.complete, false);
   assert.deepEqual(failClosed.missing_roles, ['reply_completion']);
+});
+
+test('verified capability shortage makes an impossible selection role explicit N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-capability-shortage-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-SKILL-001');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const inventory = [
+    { slug: 'skill-a', category: '办公' },
+    { slug: 'skill-b', category: '设计' },
+  ];
+  const selection = {
+    ok: false,
+    reason: '可用能力不足：需要 10，实际 2',
+    requested_count: 10,
+    eligible_count: 2,
+    selected: [],
+    selected_ids: [],
+  };
+  const state = {
+    id: 'BETA-SKILL-001',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: 'capability_inventory,capability_selection',
+    status: 'blocked',
+    screenshots: {},
+    artifacts: {
+      core_beta_evidence: {
+        capability_inventory: {
+          available: true,
+          source: 'window.agent.capabilities + visible skill cards',
+          inventory,
+        },
+        capability_selection: {
+          available: false,
+          source: 'deterministicCapabilitySample',
+          selection,
+        },
+      },
+    },
+  };
+  const blocker = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(blocker.applicable, true);
+  assert.equal(blocker.requested_count, 10);
+  assert.equal(blocker.eligible_count, 2);
+
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.deepEqual(manifest.required_roles, ['capability_inventory']);
+  assert.deepEqual(
+    manifest.not_applicable_roles.map((item) => item.role),
+    ['capability_selection'],
+  );
+  assert.equal(manifest.role_evidence.capability_selection.available, true);
+  assert.equal(manifest.role_evidence.capability_selection.not_applicable, true);
+  assert.equal(manifest.evidence_applicability.capability_selection_blocker.applicable, true);
+
+  state.artifacts.core_beta_evidence.capability_selection.selection.reason = '可用能力不足';
+  const unverified = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(unverified.applicable, false);
+  const failClosed = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(failClosed.complete, false);
+  assert.deepEqual(failClosed.missing_roles, ['capability_selection']);
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {

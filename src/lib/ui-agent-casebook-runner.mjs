@@ -23246,6 +23246,48 @@ export function verifiedReplyTimeoutTerminalEvidence(state = {}) {
   };
 }
 
+export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
+  const coreBetaEvidence = state.artifacts?.core_beta_evidence;
+  const inventoryEvidence = coreBetaEvidence?.capability_inventory;
+  const selectionEvidence = coreBetaEvidence?.capability_selection;
+  const selection = selectionEvidence?.selection;
+  const requestedCount = Number(selection?.requested_count);
+  const eligibleCount = Number(selection?.eligible_count);
+  const selected = Array.isArray(selection?.selected) ? selection.selected : null;
+  const selectedIds = Array.isArray(selection?.selected_ids) ? selection.selected_ids : null;
+  const strictShortage = state.status === 'blocked'
+    && inventoryEvidence?.available === true
+    && Array.isArray(inventoryEvidence?.inventory)
+    && inventoryEvidence.inventory.length === eligibleCount
+    && selectionEvidence?.available === false
+    && selectionEvidence?.source === 'deterministicCapabilitySample'
+    && selection?.ok === false
+    && Number.isInteger(requestedCount)
+    && requestedCount > 0
+    && Number.isInteger(eligibleCount)
+    && eligibleCount >= 0
+    && eligibleCount < requestedCount
+    && selected?.length === 0
+    && selectedIds?.length === 0
+    && String(selection?.reason || '') === `可用能力不足：需要 ${requestedCount}，实际 ${eligibleCount}`;
+  if (!strictShortage) {
+    return {
+      applicable: false,
+      source: 'verified_capability_inventory_shortage_not_established',
+      reason: '能力选择角色仅在完整目录、确定性抽样收据和严格数量不足同时成立时才可豁免。',
+    };
+  }
+  return {
+    applicable: true,
+    source: 'verified_capability_inventory_shortage',
+    reason: `已从真实能力目录读回 ${eligibleCount} 个可用能力，少于确定性抽样要求 ${requestedCount} 个；产品前置阻塞后不可能形成 ${requestedCount} 个能力的选择证据。`,
+    requested_count: requestedCount,
+    eligible_count: eligibleCount,
+    inventory_source: String(inventoryEvidence.source || ''),
+    selection_source: String(selectionEvidence.source || ''),
+  };
+}
+
 export function buildCaseEvidenceManifest(state, caseDir) {
   const declaredRequiredRoles = String(state.required_evidence_roles || '')
     .split(/[,，;；|\n]+/)
@@ -23325,6 +23367,25 @@ export function buildCaseEvidenceManifest(state, caseDir) {
       ),
     },
   );
+  const capabilitySelectionBlocker = verifiedCapabilitySelectionUnavailableEvidence(state);
+  if (
+    capabilitySelectionBlocker.applicable
+    && evidenceRoleApplicability.declared_roles.includes('capability_selection')
+  ) {
+    evidenceRoleApplicability.required_roles = evidenceRoleApplicability.required_roles
+      .filter((role) => role !== 'capability_selection');
+    evidenceRoleApplicability.not_applicable_roles = [
+      ...evidenceRoleApplicability.not_applicable_roles,
+      {
+        role: 'capability_selection',
+        domain: 'capability',
+        source: capabilitySelectionBlocker.source,
+        reason: capabilitySelectionBlocker.reason,
+        requested_count: capabilitySelectionBlocker.requested_count,
+        eligible_count: capabilitySelectionBlocker.eligible_count,
+      },
+    ];
+  }
   const requiredRoles = evidenceRoleApplicability.required_roles;
   const notApplicableRoleEvidence = Object.fromEntries(
     evidenceRoleApplicability.not_applicable_roles.map((item) => [
@@ -23546,6 +23607,7 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     evidence_applicability: {
       attachment: evidenceRoleApplicability.attachment_evidence_applicability,
       pre_send_attachment_rejection: evidenceRoleApplicability.pre_send_attachment_rejection,
+      capability_selection_blocker: capabilitySelectionBlocker,
     },
     missing_roles: missingRoles,
     complete: missingRoles.length === 0,
