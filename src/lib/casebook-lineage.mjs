@@ -237,11 +237,29 @@ function parseImpactIds(value) {
 function eligibleTerminalResult(result) {
   const status = String(result?.status || '').toLowerCase();
   const category = String(result?.result_category || '').toLowerCase();
-  if (!['passed', 'failed'].includes(status)) {
+  const provenance = String(result?.execution_provenance || '').toLowerCase();
+  if (!['passed', 'failed', 'blocked'].includes(status)) {
     return { eligible: false, reason: `source_status=${status || 'missing'}不允许继承` };
   }
   if (category === 'automation_error' || /framework|automation_error/i.test(category)) {
     return { eligible: false, reason: `source_result_category=${category}不允许继承` };
+  }
+  if (status === 'blocked') {
+    if (category !== 'blocked') {
+      return { eligible: false, reason: `source_blocked_category=${category || 'missing'}不允许继承` };
+    }
+    if (provenance === 'synthetic' || result?.synthetic === true) {
+      return { eligible: false, reason: 'source_blocked_result=synthetic不允许继承' };
+    }
+    const diagnostic = [
+      result?.actual_result,
+      result?.blocked_reason,
+      result?.stop_reason,
+      result?.framework_issue?.reason,
+    ].filter(Boolean).join('；');
+    if (/framework_issue|automation_error|自动化框架异常|证据门禁|manifest 不完整|synthetic/i.test(diagnostic)) {
+      return { eligible: false, reason: 'source_blocked_result包含框架或合成诊断，不允许继承' };
+    }
   }
   return { eligible: true, reason: '' };
 }

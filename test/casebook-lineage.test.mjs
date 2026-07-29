@@ -156,6 +156,40 @@ test('cross-run lineage inherits only unaffected terminal results with complete 
   }
 });
 
+test('cross-run lineage inherits complete real blockers but rejects synthetic blockers', () => {
+  const { root, sourceOut, currentOut, cases } = fixture();
+  try {
+    const progressFile = path.join(sourceOut, 'automation-progress.json');
+    const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+    progress.results[0] = createSourceResult(sourceOut, cases[0], {
+      status: 'blocked',
+      resultCategory: 'blocked',
+    });
+    progress.results[0].execution_provenance = 'executed';
+    progress.results[0].actual_result = '真实能力目录只有 2 个 Skill，少于本轮要求的 10 个。';
+    progress.results[1] = createSourceResult(sourceOut, cases[1], {
+      status: 'blocked',
+      resultCategory: 'blocked',
+    });
+    progress.results[1].execution_provenance = 'synthetic';
+    progress.results[1].synthetic = true;
+    writeJson(progressFile, progress);
+
+    const built = buildCrossRunLineage({
+      sourceOut,
+      currentOut,
+      selectedCases: cases,
+      impactCaseIds: ['UNRELATED-FRAMEWORK-CASE'],
+    });
+    assert.equal(built.inheritedByIndex.get(0).status, 'blocked');
+    assert.equal(built.inheritedByIndex.get(0).execution_provenance, 'inherited');
+    assert.equal(built.inheritedByIndex.has(1), false);
+    assert.equal(built.manifest.decisions[1].reason, 'source_blocked_result=synthetic不允许继承');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cross-run lineage follows a hash-bound inherited ancestor chain', () => {
   const { root, sourceOut, currentOut, cases } = fixture();
   try {
