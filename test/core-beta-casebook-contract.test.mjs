@@ -13,6 +13,7 @@ import {
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
   coreBetaMaintenanceConfirmationContract,
+  coreBetaSettingsSurfaceState,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 
@@ -221,4 +222,22 @@ test('destructive maintenance confirmation contracts accept only the intended vi
   assert.equal(sessions.confirm.test('清空全部会话'), true);
   assert.equal(sessions.confirm.test('删除专家'), false);
   assert.equal(coreBetaMaintenanceConfirmationContract('unknown-maintenance-action'), null);
+});
+
+test('an already-open system settings shell waits through loading and fails only on an explicit error', () => {
+  assert.deepEqual(coreBetaSettingsSurfaceState('系统设置\n正在加载个人设置...'), {
+    open: true,
+    loading: true,
+    error: '',
+  });
+  assert.deepEqual(coreBetaSettingsSurfaceState('系统设置\n加载个人设置失败：网络错误'), {
+    open: true,
+    loading: false,
+    error: '加载个人设置失败：网络错误',
+  });
+  assert.deepEqual(coreBetaSettingsSurfaceState('新建任务'), {
+    open: false,
+    loading: false,
+    error: '',
+  });
 });

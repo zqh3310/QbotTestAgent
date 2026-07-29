@@ -3336,6 +3336,29 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  const settingsSurface = page.locator('[role="dialog"], .modal').filter({
+    hasText: /系统设置|正在加载个人设置/,
+  }).first();
+  const waitForOpenSettingsMaintenance = async (timeoutMs = 30_000) => {
+    if (!(await visible(settingsSurface, 500))) return { open: false, text: '', error: '' };
+    const deadline = Date.now() + timeoutMs;
+    let surfaceText = '';
+    while (Date.now() < deadline) {
+      if (await visible(maintenance, 500)) return { open: true, text: surfaceText, error: '' };
+      surfaceText = await settingsSurface.innerText({ timeout: 700 }).catch(() => '');
+      const state = coreBetaSettingsSurfaceState(surfaceText);
+      if (state.error) return { open: true, text: surfaceText, error: state.error };
+      await page.waitForTimeout(250);
+    }
+    surfaceText = await settingsSurface.innerText({ timeout: 700 }).catch(() => surfaceText);
+    return {
+      open: true,
+      text: surfaceText,
+      error: `系统设置已打开，但运行时维护区在 ${timeoutMs}ms 内未完成加载。`,
+    };
+  };
+  const initialSettings = await waitForOpenSettingsMaintenance();
+  if (initialSettings.error) throw new Error(`${initialSettings.error} 页面=${clip(initialSettings.text, 300)}`);
   if (await visible(maintenance, 800)) {
     const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
     const capabilities = await currentCapabilities(page);
@@ -3362,9 +3385,15 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
   if (!(await visible(menu, 2500))) throw new Error('未找到设置菜单。');
   await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
   if (!(await visible(maintenance, 600))) {
-    const settings = page.locator('[data-testid="nav-settings"]').first();
-    if (!(await visible(settings, 1800))) throw new Error('设置菜单未展示个人设置入口，且系统设置维护区未直接打开。');
-    await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+    const directlyOpened = await waitForOpenSettingsMaintenance();
+    if (directlyOpened.error) throw new Error(`${directlyOpened.error} 页面=${clip(directlyOpened.text, 300)}`);
+    if (!(await visible(maintenance, 600))) {
+      const settings = page.locator('[data-testid="nav-settings"]').first();
+      if (!(await visible(settings, 1800))) throw new Error('设置菜单未展示个人设置入口，且系统设置维护区未直接打开。');
+      await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+      const selectedSettings = await waitForOpenSettingsMaintenance();
+      if (selectedSettings.error) throw new Error(`${selectedSettings.error} 页面=${clip(selectedSettings.text, 300)}`);
+    }
   }
   if (!(await visible(maintenance, 5000))) throw new Error('未进入运行时维护区。');
   const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
@@ -3386,6 +3415,17 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
     event: 'open',
     state_readback: readback,
     actual: clip(text, 600),
+  };
+}
+
+export function coreBetaSettingsSurfaceState(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const open = /系统设置|正在加载个人设置/.test(normalized);
+  const errorMatch = normalized.match(/(?:加载个人设置失败|个人设置加载失败|加载失败|网络错误|请求失败)[^。\n]*/);
+  return {
+    open,
+    loading: open && /正在加载个人设置/.test(normalized) && !errorMatch,
+    error: errorMatch ? errorMatch[0] : '',
   };
 }
 
