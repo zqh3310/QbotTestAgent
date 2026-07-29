@@ -3335,13 +3335,37 @@ async function coreBetaRunTurn(ctx, turnIndex, {
 async function openCoreBetaSystemSettings(page, state, caseDir) {
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  if (await visible(maintenance, 800)) {
+    const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
+    const capabilities = await currentCapabilities(page);
+    const readback = {
+      maintenance_text: clip(text, 1600),
+      runtime_family: capabilities?.runtimeOptions?.runtimeFamily || capabilities?.runtimeFamily || '',
+      connection_view: capabilities?.connectionView || null,
+      navigation_path: 'settings-already-open',
+    };
+    state.artifacts.core_beta_runtime_identity = readback;
+    setCoreBetaEvidence(state, 'public_state_readback', {
+      source: 'assistant-runtime-maintenance + window.agent.capabilities',
+      state: readback,
+    });
+    return {
+      ok: /当前|版本|运行时|runtime|SDK|Claude|Codex/i.test(text),
+      selector_or_testid: 'assistant-runtime-maintenance',
+      event: 'readback-existing-view',
+      state_readback: readback,
+      actual: clip(text, 600),
+    };
+  }
   const menu = page.locator('[data-testid="nav-settings-menu"]').first();
   if (!(await visible(menu, 2500))) throw new Error('未找到设置菜单。');
   await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
-  const settings = page.locator('[data-testid="nav-settings"]').first();
-  if (!(await visible(settings, 1800))) throw new Error('设置菜单未展示个人设置入口。');
-  await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
-  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  if (!(await visible(maintenance, 600))) {
+    const settings = page.locator('[data-testid="nav-settings"]').first();
+    if (!(await visible(settings, 1800))) throw new Error('设置菜单未展示个人设置入口，且系统设置维护区未直接打开。');
+    await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+  }
   if (!(await visible(maintenance, 5000))) throw new Error('未进入运行时维护区。');
   const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
   const capabilities = await currentCapabilities(page);
@@ -3349,6 +3373,7 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
     maintenance_text: clip(text, 1600),
     runtime_family: capabilities?.runtimeOptions?.runtimeFamily || capabilities?.runtimeFamily || '',
     connection_view: capabilities?.connectionView || null,
+    navigation_path: 'sidebar-settings-menu',
   };
   state.artifacts.core_beta_runtime_identity = readback;
   setCoreBetaEvidence(state, 'public_state_readback', {
