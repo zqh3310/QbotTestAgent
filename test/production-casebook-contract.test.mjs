@@ -21,6 +21,7 @@ import {
   numberedStepExecutionCoverage,
   parseDeclaredNumberedSteps,
   recordNumberedStep,
+  validateCompletedCaseEvidenceIntegrity,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 
@@ -445,6 +446,60 @@ test('evidence manifest maps the V4 redacted_log role to immutable run metadata'
   assert.equal(manifest.role_evidence.redacted_log.available, true);
   assert.equal(manifest.role_evidence.redacted_log.files.length, 1);
   assert.match(manifest.role_evidence.redacted_log.files[0].file, /run-metadata\.json$/);
+});
+
+test('completed ledger evidence gate accepts only real, complete, hash-bound Case artifacts', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-completed-evidence-gate-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'CASE-EVIDENCE-001');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const manifestFile = path.join(caseDir, 'case-evidence-manifest.json');
+  fs.writeFileSync(manifestFile, `${JSON.stringify({
+    complete: true,
+    missing_roles: [],
+  }, null, 2)}\n`);
+  const result = {
+    id: 'CASE-EVIDENCE-001',
+    case_dir: caseDir,
+    execution_provenance: 'executed',
+    artifacts: { evidence_manifest: manifestFile },
+    evidence_manifest: {
+      complete: true,
+      missing_roles: [],
+      manifest_sha256: createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex'),
+    },
+  };
+  fs.writeFileSync(path.join(caseDir, 'case-result.json'), `${JSON.stringify(result, null, 2)}\n`);
+
+  assert.equal(validateCompletedCaseEvidenceIntegrity(result, {
+    expectedCaseId: result.id,
+    executionMode: 'unit-test',
+  }).ok, true);
+
+  const embeddedIncomplete = validateCompletedCaseEvidenceIntegrity({
+    ...result,
+    evidence_manifest: {
+      ...result.evidence_manifest,
+      complete: false,
+      missing_roles: ['transcript'],
+    },
+  });
+  assert.equal(embeddedIncomplete.ok, false);
+  assert.ok(embeddedIncomplete.reasons.some((reason) => /case-result evidence_manifest 不完整/.test(reason)));
+
+  const synthetic = validateCompletedCaseEvidenceIntegrity({
+    ...result,
+    synthetic: true,
+    execution_provenance: 'synthetic',
+  });
+  assert.equal(synthetic.ok, false);
+  assert.ok(synthetic.reasons.some((reason) => /synthetic 结果不得进入/.test(reason)));
+
+  fs.writeFileSync(manifestFile, '{"complete":false,"missing_roles":["reply_delta"]}\n');
+  const tampered = validateCompletedCaseEvidenceIntegrity(result);
+  assert.equal(tampered.ok, false);
+  assert.ok(tampered.reasons.some((reason) => /evidence manifest 不完整/.test(reason)));
+  assert.ok(tampered.reasons.some((reason) => /SHA-256/.test(reason)));
 });
 
 test('V4 numbered-step coverage rejects observation-only auth false passes', () => {

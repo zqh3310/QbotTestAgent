@@ -601,6 +601,10 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         for (let batchIndex = 0; batchIndex < batchResults.length; batchIndex += 1) {
           const result = batchResults[batchIndex];
           const resultIndex = pipelineBatch[batchIndex].index;
+          assertCompletedCaseEvidenceIntegrity(result, {
+            expectedCaseId: pipelineBatch[batchIndex].testCase.id,
+            executionMode: 'single-host-pipeline',
+          });
           resultsByIndex.set(resultIndex, {
             ...result,
             order: resultIndex + 1,
@@ -648,6 +652,10 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       });
       browser = runtime.browser;
       page = runtime.page;
+      assertCompletedCaseEvidenceIntegrity(result, {
+        expectedCaseId: testCase.id,
+        executionMode: 'serial',
+      });
       resultsByIndex.set(index, {
         ...result,
         order: index + 1,
@@ -938,6 +946,10 @@ async function runParallelUiAgentCasebook({
       }
     },
     onResult: async ({ index, result }) => {
+      assertCompletedCaseEvidenceIntegrity(result, {
+        expectedCaseId: selectedCases[index]?.id || '',
+        executionMode: 'parallel-worker',
+      });
       resultsByIndex.set(index, result);
       progressWrite = progressWrite.then(() => {
         const completedResults = [...resultsByIndex.entries()]
@@ -993,6 +1005,10 @@ function loadResumeProgress(progressFile, selectedCases, enabled) {
         && String(result?.sheet || '') === String(expected.sheet || '')
         && String(result?.row_number || '') === String(expected.row_number || '');
       if (!aligned || resultsByIndex.has(index)) return { resultsByIndex: new Map() };
+      assertCompletedCaseEvidenceIntegrity(result, {
+        expectedCaseId: expected.id,
+        executionMode: 'same-run-resume',
+      });
       resultsByIndex.set(index, {
         ...result,
         order: index + 1,
@@ -1000,8 +1016,8 @@ function loadResumeProgress(progressFile, selectedCases, enabled) {
       });
     }
     return { resultsByIndex };
-  } catch {
-    return { resultsByIndex: new Map() };
+  } catch (error) {
+    throw new Error(`同批次续跑进度证据门禁失败：${error.message}`);
   }
 }
 
@@ -1778,6 +1794,10 @@ async function executeSingleHostPipelineBatch({
     const resultFile = path.join(caseDir, 'case-result.json');
     if (saved?.status === 'collected' && fs.existsSync(resultFile)) {
       const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+      assertCompletedCaseEvidenceIntegrity(result, {
+        expectedCaseId: testCase.id,
+        executionMode: 'single-host-pipeline-ledger-resume',
+      });
       resultsByKey.set(key, result);
       continue;
     }
@@ -1811,6 +1831,10 @@ async function executeSingleHostPipelineBatch({
       fixturesDir,
     });
     if (dispatched.result) {
+      assertCompletedCaseEvidenceIntegrity(dispatched.result, {
+        expectedCaseId: testCase.id,
+        executionMode: 'single-host-pipeline-dispatch',
+      });
       resultsByKey.set(key, dispatched.result);
       ledger.entries[key] = {
         case_id: testCase.id,
@@ -1851,6 +1875,10 @@ async function executeSingleHostPipelineBatch({
       options,
       runtime,
     });
+    assertCompletedCaseEvidenceIntegrity(result, {
+      expectedCaseId: context.testCase.id,
+      executionMode: 'single-host-pipeline-collect',
+    });
     resultsByKey.set(context.key, result);
     ledger.entries[context.key] = {
       ...ledger.entries[context.key],
@@ -1866,7 +1894,7 @@ async function executeSingleHostPipelineBatch({
 
   return batch.map(({ testCase, index }) => {
     const key = pipelineLedgerKey(testCase, index + 1);
-    return resultsByKey.get(key) || buildSyntheticResult({
+    const result = resultsByKey.get(key) || buildSyntheticResult({
       outDir,
       testCase,
       index,
@@ -1874,6 +1902,11 @@ async function executeSingleHostPipelineBatch({
       resultCategory: 'automation_error',
       reason: `单宿主流水线未返回 ${testCase.id} 的结果。`,
     });
+    assertCompletedCaseEvidenceIntegrity(result, {
+      expectedCaseId: testCase.id,
+      executionMode: 'single-host-pipeline-result',
+    });
+    return result;
   });
 }
 
@@ -18584,9 +18617,15 @@ async function finishCase({ page, state, caseDir }) {
   let evidenceManifest = buildCaseEvidenceManifest(state, caseDir);
   if (
     String(state.required_evidence_roles || '').trim()
-    && state.status === 'passed'
     && !evidenceManifest.complete
   ) {
+    state.framework_issue = {
+      kind: 'completed_case_evidence_manifest_incomplete',
+      case_id: state.id,
+      missing_roles: [...evidenceManifest.missing_roles],
+      policy: 'diagnostic_artifacts_only_do_not_advance_completed_ledger',
+      detected_at: new Date().toISOString(),
+    };
     markFailed(
       state,
       `${state.contract_version || 'Casebook'} 可信证据不完整：缺少 ${evidenceManifest.missing_roles.join(', ')}`,
@@ -18994,6 +19033,95 @@ function sha256File(file) {
 
 function sha256Text(value) {
   return createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+export function validateCompletedCaseEvidenceIntegrity(result, {
+  expectedCaseId = '',
+  executionMode = 'unknown',
+} = {}) {
+  const caseId = String(result?.id || expectedCaseId || 'unknown');
+  const reasons = [];
+  if (!result || typeof result !== 'object') {
+    reasons.push('结果对象缺失');
+  }
+  if (expectedCaseId && String(result?.id || '') !== String(expectedCaseId)) {
+    reasons.push(`Case ID 不匹配：expected=${expectedCaseId} actual=${result?.id || 'missing'}`);
+  }
+  if (result?.synthetic === true || String(result?.execution_provenance || '') === 'synthetic') {
+    reasons.push('synthetic 结果不得进入真实 completed 账本');
+  }
+
+  const caseDir = String(result?.case_dir || '');
+  const manifestFile = String(result?.artifacts?.evidence_manifest || '');
+  if (!caseDir) reasons.push('case_dir 缺失');
+  if (!manifestFile) reasons.push('evidence manifest 路径缺失');
+  if (caseDir && manifestFile) {
+    const relative = path.relative(path.resolve(caseDir), path.resolve(manifestFile));
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      reasons.push(`evidence manifest 越出 Case 目录：${manifestFile}`);
+    }
+  }
+
+  let manifest = null;
+  if (manifestFile) {
+    if (!fs.existsSync(manifestFile) || !fs.statSync(manifestFile).isFile()) {
+      reasons.push(`evidence manifest 不存在：${manifestFile}`);
+    } else {
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      } catch (error) {
+        reasons.push(`evidence manifest 不可读：${error.message}`);
+      }
+    }
+  }
+  if (manifest) {
+    const manifestHasMissingRolesArray = Array.isArray(manifest.missing_roles);
+    const missingRoles = manifestHasMissingRolesArray ? manifest.missing_roles : [];
+    if (!manifestHasMissingRolesArray) {
+      reasons.push('evidence manifest missing_roles 不是数组');
+    }
+    if (manifest.complete !== true || missingRoles.length > 0) {
+      reasons.push(`evidence manifest 不完整：missing=${missingRoles.join(',') || 'unknown'}`);
+    }
+    const declaredManifestSha256 = String(result?.evidence_manifest?.manifest_sha256 || '');
+    const actualManifestSha256 = sha256File(manifestFile);
+    if (!declaredManifestSha256 || declaredManifestSha256 !== actualManifestSha256) {
+      reasons.push('evidence manifest SHA-256 缺失或不匹配');
+    }
+  }
+
+  const embeddedHasMissingRolesArray = Array.isArray(result?.evidence_manifest?.missing_roles);
+  const embeddedMissingRoles = embeddedHasMissingRolesArray ? result.evidence_manifest.missing_roles : [];
+  if (!embeddedHasMissingRolesArray) {
+    reasons.push('case-result evidence_manifest missing_roles 不是数组');
+  }
+  if (result?.evidence_manifest?.complete !== true || embeddedMissingRoles.length > 0) {
+    reasons.push(`case-result evidence_manifest 不完整：missing=${embeddedMissingRoles.join(',') || 'unknown'}`);
+  }
+  if (caseDir) {
+    const resultFile = path.join(caseDir, 'case-result.json');
+    if (!fs.existsSync(resultFile) || !fs.statSync(resultFile).isFile()) {
+      reasons.push(`case-result 不存在：${resultFile}`);
+    }
+  }
+  return {
+    ok: reasons.length === 0,
+    case_id: caseId,
+    execution_mode: executionMode,
+    reasons,
+    manifest_file: manifestFile,
+  };
+}
+
+function assertCompletedCaseEvidenceIntegrity(result, options = {}) {
+  const checked = validateCompletedCaseEvidenceIntegrity(result, options);
+  if (!checked.ok) {
+    throw new Error(
+      `自动化框架证据门禁拒绝 Case ${checked.case_id} 进入 completed 账本`
+      + `（mode=${checked.execution_mode}）：${checked.reasons.join('；')}`,
+    );
+  }
+  return checked;
 }
 
 function markBlocked(state, reason) {
