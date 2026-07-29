@@ -285,12 +285,19 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       for (const [index, result] of lineage.inheritedByIndex.entries()) {
         if (!seededResultsByIndex.has(index)) seededResultsByIndex.set(index, result);
       }
+      const sharedStateCheckpoint = seedCoreBetaSharedLedgerCheckpoint({
+        sourceOut: lineage.manifest.source_out,
+        currentOut: outDir,
+        selectedCases,
+        impact: lineage.manifest.impact,
+      });
       crossRunLineagePrecheck = {
         status: 'ready',
         file: lineage.file,
         source_out: lineage.manifest.source_out,
         impact: lineage.manifest.impact,
         counts: lineage.manifest.counts,
+        shared_state_checkpoint: sharedStateCheckpoint,
       };
       writeCasebookProgress({
         progressFile,
@@ -3086,6 +3093,104 @@ function coreBetaRunRoot(caseDir) {
 
 function coreBetaSharedLedgerFile(caseDir) {
   return path.join(coreBetaRunRoot(caseDir), 'core-beta-shared-ledger.json');
+}
+
+function validateCoreBetaSharedLedgerShape(ledger) {
+  return Boolean(
+    ledger
+    && Number(ledger.schema_version) === 1
+    && ['skills', 'experts', 'mcp'].every((domain) => (
+      ledger[domain]
+      && typeof ledger[domain] === 'object'
+    ))
+    && ['inventory', 'sample', 'installed', 'used'].every((field) => (
+      Array.isArray(ledger.skills[field])
+    ))
+    && ['before', 'created', 'used'].every((field) => (
+      Array.isArray(ledger.experts[field])
+    ))
+    && ['inventory', 'sample', 'used'].every((field) => (
+      Array.isArray(ledger.mcp[field])
+    ))
+    && ledger.tasks
+    && typeof ledger.tasks === 'object'
+    && !Array.isArray(ledger.tasks)
+  );
+}
+
+export function seedCoreBetaSharedLedgerCheckpoint({
+  sourceOut,
+  currentOut,
+  selectedCases = [],
+  impact = {},
+  seededAt = new Date().toISOString(),
+} = {}) {
+  const coreBetaCases = selectedCases.filter(
+    (item) => String(item?.contract_version || '') === CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  );
+  if (!coreBetaCases.length) return { applicable: false, reason: 'not_core_beta_casebook' };
+  if (impact?.all === true) return { applicable: false, reason: 'impact_all_requires_fresh_shared_state' };
+  const impactIds = new Set(Array.isArray(impact?.case_ids) ? impact.case_ids.map(String) : []);
+  const impactIndexes = selectedCases
+    .map((item, index) => (impactIds.has(String(item?.id || '')) ? index : -1))
+    .filter((index) => index >= 0);
+  if (!impactIndexes.length) return { applicable: false, reason: 'no_explicit_impact_case' };
+  const firstImpactIndex = Math.min(...impactIndexes);
+  const sourceDirectory = path.resolve(String(sourceOut || ''));
+  const currentDirectory = path.resolve(String(currentOut || ''));
+  const sourceProgressFile = path.join(sourceDirectory, 'automation-progress.json');
+  const sourceLedgerFile = path.join(sourceDirectory, 'core-beta-shared-ledger.json');
+  const currentLedgerFile = path.join(currentDirectory, 'core-beta-shared-ledger.json');
+  if (!fs.existsSync(sourceProgressFile) || !fs.existsSync(sourceLedgerFile)) {
+    return { applicable: false, reason: 'source_checkpoint_files_missing' };
+  }
+  if (fs.existsSync(currentLedgerFile)) {
+    throw new Error(`core-beta 当前批次共享账本已存在，拒绝覆盖：${currentLedgerFile}`);
+  }
+  const progress = JSON.parse(fs.readFileSync(sourceProgressFile, 'utf8'));
+  const results = Array.isArray(progress?.results) ? progress.results : [];
+  const expectedPrefixIds = selectedCases
+    .slice(0, firstImpactIndex)
+    .map((item) => String(item?.id || ''));
+  const actualPrefixIds = results.map((item) => String(item?.id || ''));
+  const exactCheckpoint = results.length === firstImpactIndex
+    && expectedPrefixIds.length === actualPrefixIds.length
+    && expectedPrefixIds.every((id, index) => actualPrefixIds[index] === id);
+  if (!exactCheckpoint) {
+    return {
+      applicable: false,
+      reason: 'source_not_exactly_before_first_impact_case',
+      first_impact_order: firstImpactIndex + 1,
+      source_result_count: results.length,
+    };
+  }
+  const ledger = JSON.parse(fs.readFileSync(sourceLedgerFile, 'utf8'));
+  if (!validateCoreBetaSharedLedgerShape(ledger)) {
+    throw new Error(`core-beta 源共享账本结构无效：${sourceLedgerFile}`);
+  }
+  ensureDir(currentDirectory);
+  const temporary = `${currentLedgerFile}.tmp-${process.pid}`;
+  fs.copyFileSync(sourceLedgerFile, temporary);
+  fs.renameSync(temporary, currentLedgerFile);
+  const record = {
+    schema_version: 1,
+    applicable: true,
+    source: 'exact_pre_impact_core_beta_shared_state_checkpoint',
+    seeded_at: seededAt,
+    source_out: sourceDirectory,
+    source_progress: sourceProgressFile,
+    source_progress_sha256: sha256File(sourceProgressFile),
+    source_ledger: sourceLedgerFile,
+    source_ledger_sha256: sha256File(sourceLedgerFile),
+    current_ledger: currentLedgerFile,
+    current_ledger_sha256: sha256File(currentLedgerFile),
+    first_impact_order: firstImpactIndex + 1,
+    first_impact_case_id: String(selectedCases[firstImpactIndex]?.id || ''),
+    source_result_count: results.length,
+    prefix_case_ids_sha256: sha256Text(expectedPrefixIds.join('\n')),
+  };
+  writeJsonFile(path.join(currentDirectory, 'core-beta-shared-ledger-lineage.json'), record);
+  return record;
 }
 
 function loadCoreBetaSharedLedger(caseDir) {

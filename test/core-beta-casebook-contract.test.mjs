@@ -26,6 +26,7 @@ import {
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  seedCoreBetaSharedLedgerCheckpoint,
   verifiedCapabilitySelectionUnavailableEvidence,
   verifiedExpertSelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
@@ -651,6 +652,61 @@ test('a verified missing created expert blocks before send and makes conversatio
       'reply_completion',
     ],
   );
+});
+
+test('core beta shared state resumes only from an exact pre-impact checkpoint', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-shared-checkpoint-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sourceOut = path.join(root, 'source');
+  const currentOut = path.join(root, 'current');
+  fs.mkdirSync(sourceOut, { recursive: true });
+  const selectedCases = ['BETA-INIT-001', 'BETA-EXPERT-001', 'BETA-EXPERT-005']
+    .map((id) => ({
+      id,
+      contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    }));
+  fs.writeFileSync(path.join(sourceOut, 'automation-progress.json'), `${JSON.stringify({
+    completed: 2,
+    results: selectedCases.slice(0, 2).map(({ id }) => ({ id })),
+  })}\n`);
+  fs.writeFileSync(path.join(sourceOut, 'core-beta-shared-ledger.json'), `${JSON.stringify({
+    schema_version: 1,
+    skills: { inventory: [], sample: [], installed: [], used: [] },
+    experts: {
+      before: [],
+      created: [{ role: 'delivery', name: 'QBot内测交付专家-abc123' }],
+      used: [],
+    },
+    mcp: { inventory: [], sample: [], used: [] },
+    tasks: {},
+  })}\n`);
+  const seeded = seedCoreBetaSharedLedgerCheckpoint({
+    sourceOut,
+    currentOut,
+    selectedCases,
+    impact: { all: false, case_ids: ['BETA-EXPERT-005'] },
+    seededAt: '2026-07-29T00:00:00.000Z',
+  });
+  assert.equal(seeded.applicable, true);
+  assert.equal(seeded.first_impact_order, 3);
+  assert.equal(seeded.source_result_count, 2);
+  assert.equal(seeded.source_ledger_sha256, seeded.current_ledger_sha256);
+  assert.ok(fs.existsSync(path.join(currentOut, 'core-beta-shared-ledger-lineage.json')));
+
+  const unsafeCurrent = path.join(root, 'unsafe-current');
+  fs.writeFileSync(path.join(sourceOut, 'automation-progress.json'), `${JSON.stringify({
+    completed: 3,
+    results: selectedCases.map(({ id }) => ({ id })),
+  })}\n`);
+  const unsafe = seedCoreBetaSharedLedgerCheckpoint({
+    sourceOut,
+    currentOut: unsafeCurrent,
+    selectedCases,
+    impact: { all: false, case_ids: ['BETA-EXPERT-005'] },
+  });
+  assert.equal(unsafe.applicable, false);
+  assert.equal(unsafe.reason, 'source_not_exactly_before_first_impact_case');
+  assert.equal(fs.existsSync(path.join(unsafeCurrent, 'core-beta-shared-ledger.json')), false);
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
