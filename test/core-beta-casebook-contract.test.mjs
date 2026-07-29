@@ -13,6 +13,7 @@ import {
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
   coreBetaMaintenanceConfirmationContract,
+  coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
@@ -88,6 +89,19 @@ test('registered core beta cases pass readiness without falling through to a gen
   });
   assert.equal(readiness.ok, true, JSON.stringify(readiness.framework_issues));
   assert.equal(readiness.framework_issues.some((item) => item.kind === 'core_beta_executor_missing'), false);
+});
+
+test('core beta settings loading uses a bounded configurable product wait window', () => {
+  assert.equal(coreBetaSettingsLoadTimeoutMs({}), 90_000);
+  assert.equal(coreBetaSettingsLoadTimeoutMs({
+    QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '120000',
+  }), 120_000);
+  assert.equal(coreBetaSettingsLoadTimeoutMs({
+    QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '1000',
+  }), 30_000);
+  assert.equal(coreBetaSettingsLoadTimeoutMs({
+    QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '999999',
+  }), 180_000);
 });
 
 test('an unknown core beta command fails readiness before the UI runner starts', () => {

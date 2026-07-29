@@ -3339,7 +3339,9 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
   const settingsSurface = page.locator('[role="dialog"], .modal').filter({
     hasText: /系统设置|正在加载个人设置/,
   }).first();
-  const waitForOpenSettingsMaintenance = async (timeoutMs = 30_000) => {
+  const waitForOpenSettingsMaintenance = async (
+    timeoutMs = coreBetaSettingsLoadTimeoutMs(),
+  ) => {
     if (!(await visible(settingsSurface, 500))) return { open: false, text: '', error: '' };
     const deadline = Date.now() + timeoutMs;
     let surfaceText = '';
@@ -3416,6 +3418,12 @@ async function openCoreBetaSystemSettings(page, state, caseDir) {
     state_readback: readback,
     actual: clip(text, 600),
   };
+}
+
+export function coreBetaSettingsLoadTimeoutMs(env = process.env) {
+  const configured = Number(env.QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 90_000;
+  return Math.min(180_000, Math.max(30_000, Math.trunc(configured)));
 }
 
 export function coreBetaSettingsSurfaceState(text) {
