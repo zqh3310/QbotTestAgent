@@ -3665,6 +3665,47 @@ async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, 
   };
   state.artifacts.core_beta_contract_audit = audit;
   state.artifacts.core_beta_shared_ledger = coreBetaSharedLedgerFile(caseDir);
+  const prerequisiteBlocker = coreBetaSharedCapabilityPrerequisiteBlocker(
+    ctx.ledger,
+    audit,
+  );
+  if (prerequisiteBlocker.applicable) {
+    state.artifacts.core_beta_shared_prerequisite_blocker = prerequisiteBlocker;
+    setCoreBetaEvidence(state, 'capability_inventory', {
+      available: true,
+      source: 'verified shared capability prerequisite inventory',
+      inventory: ctx.ledger.skills.inventory,
+    });
+    setCoreBetaEvidence(state, 'capability_selection', {
+      available: false,
+      source: 'verified_shared_capability_prerequisite_blocker',
+      selection: prerequisiteBlocker,
+    });
+    for (const action of ctx.plan) {
+      await runCoreBetaNumberedAction({
+        page: runtime?.page || page,
+        pageProvider: () => runtime?.page || ctx.page,
+        state,
+        caseDir,
+        action,
+        planLength: ctx.plan.length,
+        execute: async () => ({
+          ok: false,
+          status: 'blocked',
+          category: 'blocked',
+          selector_or_testid: 'core-beta-shared-prerequisite-ledger',
+          event: 'prerequisite-blocked',
+          state_readback: prerequisiteBlocker,
+          actual: prerequisiteBlocker.reason,
+        }),
+      });
+    }
+    markBlocked(state, prerequisiteBlocker.reason);
+    await finalizeCoreBetaCase(ctx);
+    saveCoreBetaSharedLedger(caseDir, ctx.ledger);
+    coreBetaPersistRoleEvidence(state, caseDir);
+    return;
+  }
   for (const action of ctx.plan) {
     await runCoreBetaNumberedAction({
       page: runtime?.page || page,
@@ -3680,6 +3721,45 @@ async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, 
   await finalizeCoreBetaCase(ctx);
   saveCoreBetaSharedLedger(caseDir, ctx.ledger);
   coreBetaPersistRoleEvidence(state, caseDir);
+}
+
+export function coreBetaSharedCapabilityPrerequisiteBlocker(ledger = {}, audit = {}) {
+  const caseType = String(audit.case_type || '');
+  const commands = Array.isArray(audit.parsed?.action_plan)
+    ? audit.parsed.action_plan.map((action) => String(action?.command || ''))
+    : [];
+  const sourceSamplerCase = commands.includes('sample_ten_skills');
+  const blocker = ledger.skills?.selection_blocker;
+  const inventory = ledger.skills?.inventory;
+  const requestedCount = Number(blocker?.requested_count);
+  const eligibleCount = Number(blocker?.eligible_count);
+  const strict = /^skill_/.test(caseType)
+    && !sourceSamplerCase
+    && blocker?.kind === 'skill_sample_shortage'
+    && blocker?.source === 'deterministicCapabilitySample'
+    && Array.isArray(inventory)
+    && inventory.length === eligibleCount
+    && Array.isArray(ledger.skills?.sample)
+    && ledger.skills.sample.length === 0
+    && Number.isInteger(requestedCount)
+    && requestedCount > 0
+    && Number.isInteger(eligibleCount)
+    && eligibleCount >= 0
+    && eligibleCount < requestedCount
+    && String(blocker?.reason || '') === `可用能力不足：需要 ${requestedCount}，实际 ${eligibleCount}`;
+  if (!strict) {
+    return {
+      applicable: false,
+      kind: 'skill_sample_shortage',
+      source: 'shared_prerequisite_not_verified',
+      reason: '没有可严格传播的技能抽样前置阻塞。',
+    };
+  }
+  return {
+    ...blocker,
+    applicable: true,
+    propagated_to_case_type: caseType,
+  };
 }
 
 async function finalizeCoreBetaCase(ctx) {
@@ -5498,6 +5578,23 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     });
     ctx.ledger.skills.sample = sample.selected || [];
     ctx.ledger.skills.deep_use = (sample.selected || []).slice(0, Number(policy.deep_use_count || 5));
+    if (sample.ok) {
+      delete ctx.ledger.skills.selection_blocker;
+    } else {
+      ctx.ledger.skills.selection_blocker = {
+        applicable: true,
+        kind: 'skill_sample_shortage',
+        source: 'deterministicCapabilitySample',
+        source_case_id: ctx.state.id,
+        reason: sample.reason,
+        requested_count: sample.requested_count,
+        eligible_count: sample.eligible_count,
+        selected: sample.selected,
+        selected_ids: sample.selected_ids,
+        inventory_sha256: sha256Text(JSON.stringify(ctx.ledger.skills.inventory || [])),
+        captured_at: new Date().toISOString(),
+      };
+    }
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
       available: sample.ok,
       source: 'deterministicCapabilitySample',
@@ -23255,13 +23352,11 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
   const eligibleCount = Number(selection?.eligible_count);
   const selected = Array.isArray(selection?.selected) ? selection.selected : null;
   const selectedIds = Array.isArray(selection?.selected_ids) ? selection.selected_ids : null;
-  const strictShortage = state.status === 'blocked'
+  const commonShortage = state.status === 'blocked'
     && inventoryEvidence?.available === true
     && Array.isArray(inventoryEvidence?.inventory)
     && inventoryEvidence.inventory.length === eligibleCount
     && selectionEvidence?.available === false
-    && selectionEvidence?.source === 'deterministicCapabilitySample'
-    && selection?.ok === false
     && Number.isInteger(requestedCount)
     && requestedCount > 0
     && Number.isInteger(eligibleCount)
@@ -23270,6 +23365,16 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     && selected?.length === 0
     && selectedIds?.length === 0
     && String(selection?.reason || '') === `可用能力不足：需要 ${requestedCount}，实际 ${eligibleCount}`;
+  const strictDirectShortage = commonShortage
+    && selectionEvidence?.source === 'deterministicCapabilitySample'
+    && selection?.ok === false;
+  const strictSharedShortage = commonShortage
+    && selectionEvidence?.source === 'verified_shared_capability_prerequisite_blocker'
+    && selection?.applicable === true
+    && selection?.kind === 'skill_sample_shortage'
+    && selection?.source === 'deterministicCapabilitySample'
+    && state.artifacts?.core_beta_shared_prerequisite_blocker?.reason === selection.reason;
+  const strictShortage = strictDirectShortage || strictSharedShortage;
   if (!strictShortage) {
     return {
       applicable: false,
@@ -23285,6 +23390,7 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     eligible_count: eligibleCount,
     inventory_source: String(inventoryEvidence.source || ''),
     selection_source: String(selectionEvidence.source || ''),
+    propagation_source: strictSharedShortage ? 'shared_prerequisite_ledger' : 'current_case_sampler',
   };
 }
 

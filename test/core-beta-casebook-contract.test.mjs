@@ -25,6 +25,7 @@ import {
   coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
+  coreBetaSharedCapabilityPrerequisiteBlocker,
   verifiedCapabilitySelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
@@ -345,6 +346,104 @@ test('verified capability shortage makes an impossible selection role explicit N
   const failClosed = buildCaseEvidenceManifest(state, caseDir);
   assert.equal(failClosed.complete, false);
   assert.deepEqual(failClosed.missing_roles, ['capability_selection']);
+});
+
+test('verified skill shortage propagates to dependent cases without executing product actions', () => {
+  const blocker = {
+    applicable: true,
+    kind: 'skill_sample_shortage',
+    source: 'deterministicCapabilitySample',
+    source_case_id: 'BETA-SKILL-001',
+    reason: '可用能力不足：需要 10，实际 2',
+    requested_count: 10,
+    eligible_count: 2,
+    selected: [],
+    selected_ids: [],
+  };
+  const ledger = {
+    skills: {
+      inventory: [
+        { slug: 'skill-a', category: '办公' },
+        { slug: 'skill-b', category: '设计' },
+      ],
+      sample: [],
+      selection_blocker: blocker,
+    },
+  };
+  const dependent = coreBetaSharedCapabilityPrerequisiteBlocker(ledger, {
+    case_type: 'skill_lifecycle',
+    parsed: {
+      action_plan: [{ command: 'install_ten_skills_serially' }],
+    },
+  });
+  assert.equal(dependent.applicable, true);
+  assert.equal(dependent.source_case_id, 'BETA-SKILL-001');
+  assert.equal(dependent.propagated_to_case_type, 'skill_lifecycle');
+
+  const sourceSampler = coreBetaSharedCapabilityPrerequisiteBlocker(ledger, {
+    case_type: 'skill_lifecycle',
+    parsed: {
+      action_plan: [{ command: 'sample_ten_skills' }],
+    },
+  });
+  assert.equal(sourceSampler.applicable, false);
+
+  const tampered = structuredClone(ledger);
+  tampered.skills.selection_blocker.reason = '能力不足';
+  assert.equal(
+    coreBetaSharedCapabilityPrerequisiteBlocker(tampered, {
+      case_type: 'skill_use',
+      parsed: { action_plan: [{ command: 'select_skill_by_slug' }] },
+    }).applicable,
+    false,
+  );
+});
+
+test('a propagated capability blocker also makes selection evidence explicit N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-shared-capability-blocker-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-SKILL-002');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const inventory = [{ slug: 'skill-a' }, { slug: 'skill-b' }];
+  const selection = {
+    applicable: true,
+    kind: 'skill_sample_shortage',
+    source: 'deterministicCapabilitySample',
+    reason: '可用能力不足：需要 10，实际 2',
+    requested_count: 10,
+    eligible_count: 2,
+    selected: [],
+    selected_ids: [],
+  };
+  const state = {
+    id: 'BETA-SKILL-002',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: 'capability_inventory,capability_selection',
+    status: 'blocked',
+    screenshots: {},
+    artifacts: {
+      core_beta_shared_prerequisite_blocker: selection,
+      core_beta_evidence: {
+        capability_inventory: {
+          available: true,
+          source: 'verified shared capability prerequisite inventory',
+          inventory,
+        },
+        capability_selection: {
+          available: false,
+          source: 'verified_shared_capability_prerequisite_blocker',
+          selection,
+        },
+      },
+    },
+  };
+  const verified = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(verified.applicable, true);
+  assert.equal(verified.propagation_source, 'shared_prerequisite_ledger');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.capability_selection.not_applicable, true);
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
