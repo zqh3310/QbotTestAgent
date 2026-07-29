@@ -127,6 +127,87 @@ function ensureInside(directory, file, label) {
   return resolved;
 }
 
+function isInside(directory, file) {
+  const root = path.resolve(directory);
+  const resolved = path.resolve(file);
+  const relative = path.relative(root, resolved);
+  return Boolean(relative)
+    && !relative.startsWith('..')
+    && !path.isAbsolute(relative);
+}
+
+function validateLineageSourceFiles(lineage, sourceDirectory) {
+  const pairs = [
+    ['source_run_metadata', 'source_run_metadata_sha256'],
+    ['source_casebook_cases', 'source_casebook_cases_sha256'],
+    ['source_progress', 'source_progress_sha256'],
+  ];
+  for (const [fileKey, shaKey] of pairs) {
+    const file = String(lineage?.files?.[fileKey] || '');
+    const declaredSha256 = String(lineage?.files?.[shaKey] || '');
+    if (!file || !declaredSha256) {
+      throw new Error(`祖先 lineage 缺少 ${fileKey}/${shaKey}`);
+    }
+    const resolved = ensureInside(sourceDirectory, file, `祖先 lineage ${fileKey}`);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`祖先 lineage 文件不存在：${resolved}`);
+    }
+    if (sha256File(resolved) !== declaredSha256) {
+      throw new Error(`祖先 lineage 文件 SHA-256 不匹配：${resolved}`);
+    }
+  }
+}
+
+function resolveInheritedEvidencePath(sourceOut, result, file, label) {
+  const resolved = path.resolve(file);
+  let currentDirectory = path.resolve(sourceOut);
+  const visited = new Set();
+  const hops = [];
+  for (let depth = 0; depth < 64; depth += 1) {
+    if (isInside(currentDirectory, resolved)) {
+      return {
+        file: resolved,
+        evidence_out: currentDirectory,
+        inherited_hops: hops,
+      };
+    }
+    if (String(result?.execution_provenance || '') !== 'inherited') {
+      throw new Error(`${label}越出源批次目录且结果不是 inherited：${resolved}`);
+    }
+    if (visited.has(currentDirectory)) {
+      throw new Error(`${label}祖先 lineage 出现循环：${currentDirectory}`);
+    }
+    visited.add(currentDirectory);
+    const lineageFile = path.join(currentDirectory, 'run-lineage.json');
+    if (!fs.existsSync(lineageFile)) {
+      throw new Error(`${label}越出源批次目录且缺少祖先 lineage：${resolved}`);
+    }
+    const lineage = readJson(lineageFile, '祖先 run-lineage');
+    if (path.resolve(String(lineage?.current_out || '')) !== currentDirectory) {
+      throw new Error(`${label}祖先 lineage current_out 不匹配：${lineageFile}`);
+    }
+    const decision = (lineage?.decisions || []).find((item) => (
+      String(item?.id || '') === String(result?.id || '')
+    ));
+    if (decision?.decision !== 'inherited') {
+      throw new Error(`${label}祖先 lineage 未声明 Case ${result?.id || ''} 为 inherited`);
+    }
+    const nextDirectory = path.resolve(String(lineage?.source_out || ''));
+    if (!nextDirectory || nextDirectory === currentDirectory || !fs.existsSync(nextDirectory)) {
+      throw new Error(`${label}祖先 lineage source_out 无效：${lineageFile}`);
+    }
+    validateLineageSourceFiles(lineage, nextDirectory);
+    hops.push({
+      current_out: currentDirectory,
+      source_out: nextDirectory,
+      lineage_file: lineageFile,
+      lineage_sha256: sha256File(lineageFile),
+    });
+    currentDirectory = nextDirectory;
+  }
+  throw new Error(`${label}祖先 lineage 超过最大深度：${resolved}`);
+}
+
 export function caseDefinitionFingerprint(testCase = {}) {
   const identity = Object.fromEntries(
     CASE_FINGERPRINT_FIELDS.map((field) => [field, testCase?.[field] ?? '']),
@@ -168,12 +249,18 @@ function eligibleTerminalResult(result) {
 function validateEvidence(sourceOut, result) {
   const declared = String(result?.artifacts?.evidence_manifest || '');
   if (!declared) return { ok: false, reason: '源结果缺少 evidence manifest 路径' };
-  let manifestFile;
+  let manifestResolution;
   try {
-    manifestFile = ensureInside(sourceOut, declared, 'evidence manifest');
+    manifestResolution = resolveInheritedEvidencePath(
+      sourceOut,
+      result,
+      declared,
+      'evidence manifest',
+    );
   } catch (error) {
     return { ok: false, reason: error.message };
   }
+  const manifestFile = manifestResolution.file;
   if (!fs.existsSync(manifestFile)) return { ok: false, reason: `evidence manifest 不存在：${manifestFile}` };
   const manifest = readJson(manifestFile, 'evidence manifest');
   if (manifest.complete !== true || (manifest.missing_roles || []).length) {
@@ -184,18 +271,46 @@ function validateEvidence(sourceOut, result) {
   if (!declaredSha256 || declaredSha256 !== actualManifestSha256) {
     return { ok: false, reason: 'evidence manifest SHA-256 缺失或不匹配' };
   }
-  const resultFile = ensureInside(
-    sourceOut,
-    path.join(String(result?.case_dir || ''), 'case-result.json'),
-    'case-result',
-  );
+  let resultResolution;
+  try {
+    resultResolution = resolveInheritedEvidencePath(
+      sourceOut,
+      result,
+      path.join(String(result?.case_dir || ''), 'case-result.json'),
+      'case-result',
+    );
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+  const resultFile = resultResolution.file;
   if (!fs.existsSync(resultFile)) return { ok: false, reason: `case-result 不存在：${resultFile}` };
+  const inheritedEvidence = manifestResolution.inherited_hops.length > 0
+    || resultResolution.inherited_hops.length > 0;
+  if (inheritedEvidence) {
+    const declaredManifest = String(result?.lineage?.source_evidence_manifest || '');
+    const declaredResult = String(result?.lineage?.source_case_result || '');
+    const declaredManifestSha256 = String(result?.lineage?.source_evidence_manifest_sha256 || '');
+    const declaredResultSha256 = String(result?.lineage?.source_case_result_sha256 || '');
+    if (
+      path.resolve(declaredManifest) !== manifestFile
+      || path.resolve(declaredResult) !== resultFile
+      || declaredManifestSha256 !== actualManifestSha256
+      || declaredResultSha256 !== sha256File(resultFile)
+    ) {
+      return {
+        ok: false,
+        reason: '祖先 evidence 路径或 SHA-256 与源结果 lineage 不匹配',
+      };
+    }
+  }
   return {
     ok: true,
     manifest_file: manifestFile,
     manifest_sha256: actualManifestSha256,
     result_file: resultFile,
     result_sha256: sha256File(resultFile),
+    evidence_out: manifestResolution.evidence_out,
+    inherited_hops: manifestResolution.inherited_hops,
   };
 }
 
@@ -285,6 +400,8 @@ export function buildCrossRunLineage({
               source_case_result_sha256: evidence.result_sha256,
               source_evidence_manifest: evidence.manifest_file,
               source_evidence_manifest_sha256: evidence.manifest_sha256,
+              evidence_origin_out: evidence.evidence_out,
+              inherited_hops: evidence.inherited_hops,
               inherited_at: generatedAt,
             },
           });

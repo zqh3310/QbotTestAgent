@@ -156,6 +156,99 @@ test('cross-run lineage inherits only unaffected terminal results with complete 
   }
 });
 
+test('cross-run lineage follows a hash-bound inherited ancestor chain', () => {
+  const { root, sourceOut, currentOut, cases } = fixture();
+  try {
+    const sourceProgressFile = path.join(sourceOut, 'automation-progress.json');
+    const sourceProgress = JSON.parse(fs.readFileSync(sourceProgressFile, 'utf8'));
+    sourceProgress.results[0] = createSourceResult(sourceOut, cases[0], {
+      status: 'failed',
+      resultCategory: 'bug',
+    });
+    writeJson(sourceProgressFile, sourceProgress);
+
+    const middle = buildCrossRunLineage({
+      sourceOut,
+      currentOut,
+      selectedCases: cases,
+      impactCaseIds: ['UNRELATED-FRAMEWORK-CASE'],
+      generatedAt: '2026-07-29T00:00:00.000Z',
+    });
+    assert.equal(middle.manifest.counts.inherited, 2);
+    writeJson(path.join(currentOut, 'casebook-cases.json'), { cases });
+    writeJson(path.join(currentOut, 'automation-progress.json'), {
+      completed: 2,
+      total: 2,
+      results: [...middle.inheritedByIndex.values()],
+    });
+
+    const nextOut = path.join(root, 'next');
+    fs.mkdirSync(nextOut, { recursive: true });
+    writeJson(path.join(nextOut, 'run-metadata.json'), metadata('latest-framework'));
+    const next = buildCrossRunLineage({
+      sourceOut: currentOut,
+      currentOut: nextOut,
+      selectedCases: cases,
+      impactCaseIds: ['CASE-B'],
+      generatedAt: '2026-07-29T01:00:00.000Z',
+    });
+
+    assert.equal(next.manifest.counts.inherited, 1);
+    assert.equal(next.inheritedByIndex.get(0).status, 'failed');
+    assert.equal(next.inheritedByIndex.get(0).result_category, 'bug');
+    assert.equal(next.manifest.decisions[0].reason, 'same_release_same_case_complete_evidence');
+    assert.equal(next.inheritedByIndex.get(0).lineage.evidence_origin_out, sourceOut);
+    assert.equal(next.inheritedByIndex.get(0).lineage.inherited_hops.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cross-run lineage rejects evidence outside the declared ancestor chain', () => {
+  const { root, sourceOut, currentOut, cases } = fixture();
+  try {
+    const middle = buildCrossRunLineage({
+      sourceOut,
+      currentOut,
+      selectedCases: cases,
+      impactCaseIds: ['UNRELATED-FRAMEWORK-CASE'],
+    });
+    writeJson(path.join(currentOut, 'casebook-cases.json'), { cases });
+    const externalOut = path.join(root, 'external');
+    const forged = createSourceResult(externalOut, cases[0], {
+      status: 'passed',
+      resultCategory: 'pass',
+    });
+    forged.execution_provenance = 'inherited';
+    forged.lineage = {
+      source_case_result: path.join(forged.case_dir, 'case-result.json'),
+      source_case_result_sha256: sha256File(path.join(forged.case_dir, 'case-result.json')),
+      source_evidence_manifest: forged.artifacts.evidence_manifest,
+      source_evidence_manifest_sha256: forged.evidence_manifest.manifest_sha256,
+    };
+    writeJson(path.join(currentOut, 'automation-progress.json'), {
+      completed: 2,
+      total: 2,
+      results: [forged, middle.inheritedByIndex.get(1)],
+    });
+
+    const nextOut = path.join(root, 'next');
+    fs.mkdirSync(nextOut, { recursive: true });
+    writeJson(path.join(nextOut, 'run-metadata.json'), metadata('latest-framework'));
+    const next = buildCrossRunLineage({
+      sourceOut: currentOut,
+      currentOut: nextOut,
+      selectedCases: [cases[0]],
+      impactCaseIds: ['UNRELATED-FRAMEWORK-CASE'],
+    });
+
+    assert.equal(next.manifest.counts.inherited, 0);
+    assert.match(next.manifest.decisions[0].reason, /缺少祖先 lineage|越出源批次目录/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cross-run lineage reruns changed, incomplete, and automation-error cases', () => {
   const { root, sourceOut, currentOut, cases } = fixture();
   try {
