@@ -1255,12 +1255,18 @@ try {
   const confirmDeleteShot = path.join(userReviewTemp, 'skill-after-confirm-delete.png');
   const sidebarMenuShot = path.join(userReviewTemp, 'home-048-session-context-menu.png');
   const modelShot = path.join(userReviewTemp, 'model-tier-m3-selected.png');
+  const replyShot = path.join(userReviewTemp, 'chat-after-reply.png');
+  const transcriptFile = path.join(userReviewTemp, 'transcript.json');
+  const replyDeltaFile = path.join(userReviewTemp, 'reply-delta.txt');
   fs.writeFileSync(bugShot, 'png');
   fs.writeFileSync(passShot, 'png');
   fs.writeFileSync(cancelDeleteShot, 'png');
   fs.writeFileSync(confirmDeleteShot, 'png');
   fs.writeFileSync(sidebarMenuShot, 'png');
   fs.writeFileSync(modelShot, 'png');
+  fs.writeFileSync(replyShot, 'png');
+  fs.writeFileSync(transcriptFile, JSON.stringify({ messages: [{ role: 'assistant', text: '测试回复' }] }));
+  fs.writeFileSync(replyDeltaFile, '测试回复');
   const bugResult = {
     id: 'SIT-CONN-008',
     status: 'failed',
@@ -1373,6 +1379,175 @@ try {
     assertions: [{ name: 'selector 定位', expected: '可点击', actual: 'selector not found', status: 'failed', category: 'automation_error' }],
   });
   if (automationReview.classification !== 'framework_issue') throw new Error('自动化错误不得冒充产品 Bug');
+
+  const explicitCoverage = {
+    schema_version: 2,
+    declared_count: 1,
+    complete: true,
+    entries: [{
+      number: 1,
+      declared_step: '输入问题并发送',
+      covered: true,
+      evidence_mode: 'explicit_numbered_step',
+      explicit_actions: ['发送第一轮'],
+    }],
+    missing_steps: [],
+  };
+  const conversationBugBase = {
+    id: 'USR-CHAT-SEMANTIC',
+    contract_version: 'qbot-current-casebook/v4',
+    status: 'failed',
+    result_category: 'bug',
+    title: '用户输入问题后得到回答',
+    execution_provenance: 'executed',
+    steps: [{
+      action: '发送第一轮',
+      status: 'passed',
+      numbered_step_number: 1,
+      numbered_step_declared: '输入问题并发送',
+      numbered_step_evidence: 'explicit',
+    }],
+    assertions: [
+      {
+        name: '回复相关性（第一轮）',
+        expected: '回复围绕用户问题作答',
+        actual: '本金 12 万、年利率 3%，一年利息是 3600 元。',
+        status: 'failed',
+        category: 'bug',
+      },
+      {
+        name: '模型服务可用性（第一轮）',
+        expected: '不得以服务不可达提示冒充回复',
+        actual: '未检测到模型服务不可达提示。',
+        status: 'passed',
+        category: 'pass',
+      },
+    ],
+    actual_result: '回复相关性（第一轮）：本金 12 万、年利率 3%，一年利息是 3600 元。',
+    screenshots: { turn_1_after_reply: replyShot },
+    artifacts: {
+      transcript: transcriptFile,
+      reply_delta: replyDeltaFile,
+      numbered_step_coverage: explicitCoverage,
+      send_receipts: [{
+        attempts: [{ clicked: true, receipt: { ok: true } }],
+      }],
+      reply_waits: [{
+        waited_ms: 61000,
+        min_wait_ms: 60000,
+        timeout_ms: 600000,
+        incomplete: false,
+      }],
+    },
+    evidence_manifest: {
+      contract_version: 'qbot-current-casebook/v4',
+      complete: true,
+      required_role_count: 8,
+      satisfied_role_count: 8,
+      missing_roles: [],
+    },
+  };
+  const semanticFalsePositive = assessUserCenteredOutcome(conversationBugBase);
+  if (semanticFalsePositive.classification !== 'needs_review'
+    || semanticFalsePositive.gates.independent_bug_corroboration) {
+    throw new Error(`纯语义/关键词断言不得自动升级可信 Bug：${JSON.stringify(semanticFalsePositive)}`);
+  }
+
+  const legacyCoverageFalsePositive = assessUserCenteredOutcome({
+    ...conversationBugBase,
+    artifacts: {
+      ...conversationBugBase.artifacts,
+      numbered_step_coverage: {
+        schema_version: 1,
+        declared_count: 1,
+        complete: true,
+        entries: [{
+          number: 1,
+          declared_step: '输入问题并发送',
+          covered: true,
+          positional_action: '清理输入区附件',
+        }],
+      },
+    },
+  });
+  if (legacyCoverageFalsePositive.classification !== 'framework_issue'
+    || legacyCoverageFalsePositive.gates.execution_integrity) {
+    throw new Error('V4 旧式位置匹配不得形成可信产品 Bug');
+  }
+
+  const hardProductFailure = assessUserCenteredOutcome({
+    ...conversationBugBase,
+    assertions: [{
+      name: '回复相关性（第一轮）',
+      expected: '回复围绕用户问题作答',
+      actual: '模型服务暂时不可用，请稍后重试。',
+      status: 'failed',
+      category: 'bug',
+    }],
+    actual_result: '回复相关性（第一轮）：模型服务暂时不可用，请稍后重试。',
+    artifacts: {
+      ...conversationBugBase.artifacts,
+      numbered_step_coverage: {
+        schema_version: 1,
+        declared_count: 1,
+        complete: true,
+        entries: [{
+          number: 1,
+          declared_step: '输入问题并发送',
+          covered: true,
+          positional_action: '清理输入区附件',
+        }],
+      },
+    },
+  });
+  if (hardProductFailure.classification !== 'bug'
+    || !hardProductFailure.gates.independent_bug_corroboration
+    || !hardProductFailure.gates.execution_integrity) {
+    throw new Error(`真实发送后的稳定产品错误必须保留为可信 Bug：${JSON.stringify(hardProductFailure)}`);
+  }
+
+  const genericProbeOnly = assessUserCenteredOutcome({
+    id: 'SIT-HOME-030',
+    contract_version: 'qbot-production-gate/v2',
+    status: 'failed',
+    result_category: 'bug',
+    title: '快速反馈入口应可访问',
+    steps: [
+      { action: '发送快速反馈前置会话', status: 'passed' },
+      { action: '检查快速反馈入口', status: 'failed', actual: 'visible=false', category: 'bug' },
+    ],
+    assertions: [{
+      name: '前置会话回复相关性',
+      expected: '回复相关',
+      actual: '回复正常',
+      status: 'passed',
+      category: 'pass',
+    }],
+    screenshots: { feedback_entry_missing: bugShot },
+    artifacts: {
+      transcript: transcriptFile,
+      reply_delta: replyDeltaFile,
+      send_receipts: [{ attempts: [{ clicked: true, receipt: { ok: true } }] }],
+      reply_waits: [{ waited_ms: 61000, min_wait_ms: 60000, timeout_ms: 600000, incomplete: false }],
+    },
+  });
+  if (genericProbeOnly.classification !== 'needs_review'
+    || genericProbeOnly.gates.product_action_exercised) {
+    throw new Error('只读取隐藏节点、未真实触发目标功能时不得升级可信 Bug');
+  }
+
+  const incompleteManifest = assessUserCenteredOutcome({
+    ...bugResult,
+    evidence_manifest: {
+      complete: false,
+      required_role_count: 2,
+      satisfied_role_count: 1,
+      missing_roles: ['action_screenshot'],
+    },
+  });
+  if (incompleteManifest.classification !== 'framework_issue') {
+    throw new Error('Manifest 不完整时必须归为框架问题');
+  }
 } finally {
   fs.rmSync(userReviewTemp, { recursive: true, force: true });
 }

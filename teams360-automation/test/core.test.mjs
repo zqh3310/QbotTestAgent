@@ -1388,6 +1388,9 @@ test('trusted review selects the archived complete result over a recovery sentin
   assert.match(source, /source_progress: progressPath/);
   assert.doesNotMatch(source, /candidateProgressJson\.stopped\s*!==\s*true/);
   assert.match(source, /candidateProgressJson\.aborted\s*!==\s*true/);
+  assert.match(source, /verifiedReviewOverride: override\?\.strict === true/);
+  assert.match(source, /assessment\.classification === 'framework_issue'[\s\S]*'framework_issue'/);
+  assert.match(source, /raw failed 与语义关键词断言不能单独升级/);
 });
 
 test('strict trusted-review overrides reject cross-case and setup-only screenshots', () => {

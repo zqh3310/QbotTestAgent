@@ -254,9 +254,15 @@ function classifyWithUserGate(result, trustedStatus, reason, override = null) {
     userOperationOverride: override?.userOperation || '',
     expectedOutcomeOverride: override?.expectedOutcome || '',
     userImpactOverride: override?.userImpact || '',
+    verifiedReviewOverride: override?.strict === true,
   });
   if (assessment.classification !== intendedClassification) {
-    return ['needs_review', assessment.description, override, assessment];
+    const downgradedStatus = assessment.classification === 'framework_issue'
+      ? 'framework_issue'
+      : assessment.classification === 'blocked'
+        ? 'trusted_blocked'
+        : 'needs_review';
+    return [downgradedStatus, assessment.description, override, assessment];
   }
   return [trustedStatus, assessment.description, override, assessment];
 }
@@ -448,7 +454,8 @@ const payload = {
   trusted_counts: counts,
   methodology: [
     '最终结论以普通用户能否完成目标、能否理解结果、能否继续操作为准；技术日志只用于确认执行有效，不能替代用户结论。',
-    '可信 Bug 必须同时具备：真实用户操作、失败的用户结果、明确用户影响、与描述直接对应的操作后截图；四项缺一即降为“需人工复核”。',
+    '可信 Bug 必须同时具备：真实用户操作、失败的用户结果、明确用户影响、与描述直接对应的操作后截图，以及独立硬错误或目标功能结构化读回；raw failed 与语义关键词断言不能单独升级。',
+    'V4 Case 必须使用 schema 2 的逐编号步骤显式执行证据；旧式位置匹配、全局关键词匹配或 synthetic 恢复结果一律不能形成可信产品结论。',
     '可信通过必须同时具备：核心用户动作已执行、全部用户成功标准通过、没有未解释失败、操作后截图与会话/成果证据一致。',
     '可信通过还要求普通用户看得懂并能继续或自助恢复；界面出现原始 HTTP/JSON、内部测试文案、内部路径或堆栈时不能通过。',
     '即使 Case 原定主目标通过，只要执行中暴露了独立且明确影响用户的缺陷，也必须从可信通过中移除。',

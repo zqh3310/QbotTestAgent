@@ -19747,6 +19747,31 @@ const USER_REVIEW_SETUP_ACTION = /^(?:切换|确认)模型档位|发送.*前.*(?
 const USER_REVIEW_TECHNICAL_OBSERVATION = /^(?:true|false|null|undefined|\d+|[a-zA-Z_]+\s*=\s*[^；]+)(?:[；,]\s*[a-zA-Z_]+\s*=\s*[^；]+)*$/i;
 const USER_REVIEW_SCREENSHOT_OUTCOME = /after[-_. ]|no[-_. ]|missing|empty|error|fail|retry|reopen|deleted|uninstall|auth|market|dialog|panel|detail|preview|artifact|result|success|installed|dependency|cycle|sandbox|duplicate|feedback|interrupt|hint|page/i;
 const USER_REVIEW_SCREENSHOT_SETUP = /(?:^|[-_.])(before|model[-_. ]?tier|fixture[-_. ]?prepared|attachments?[-_. ]?cleared|scene[-_. ]?tag[-_. ]?cleared|selection[-_. ]?cleared|workspace[-_. ]?selected)(?:[-_. ]|$)|after[-_. ]?(?:fill|send)(?:\.png)?(?:\s|$)/i;
+const USER_REVIEW_SEMANTIC_ORACLE_ASSERTION = /回复(?:相关性|可读性|准确性|完整性|正确性|质量)|回答(?:相关性|准确性|完整性|正确性|质量)|语义|上下文(?:沿用|记忆|一致性)|约束(?:更新|保留|一致性)|事实(?:准确|一致)|计算(?:正确|准确)|内容(?:相关|完整|准确)|是否(?:虚构|幻觉)|重复输出|三点待办|条目数量|公式正确/i;
+const USER_REVIEW_COPY_OR_NOMENCLATURE_ASSERTION = /文案|标签|名称|占位符|提示词|M1\s*[-~至到]\s*M4|安全(?:级别|档位).*(?:显示|名称|标签)/i;
+const USER_REVIEW_OBJECTIVE_UI_ASSERTION = /入口|按钮|菜单|列表|对话框|弹窗|页面|卡片|状态|终态|持久|保存|删除|安装|卸载|重试|重开|重新进入|重命名|焦点|滚动|可见|数量|创建|召唤|选中|启用|停用|chip|preview|artifact|成果/i;
+const USER_REVIEW_OBJECTIVE_FAILURE_OBSERVATION = /(?:visible|exists|present|enabled|selected|persisted|restored|created|installed|deleted)\s*=\s*false|(?:count|数量)\s*=\s*0|未出现|未显示|不可见|没有[^。\n]*(?:入口|按钮|菜单|结果|任务|卡片|专家|技能|连接器)|找不到|变为空闲空任务|仍为空|列表为空|未保存|未生效|未持久|未恢复|未创建|无法继续|不能继续/i;
+const USER_REVIEW_HARD_PRODUCT_FAILURE = /本地执行上下文尚未就绪|模型服务暂时不可用|模型服务(?:暂时)?不可达|无法连接模型服务|Unknown skill\s*:|HTTP\s*5\d\d|原始\s*JSON|Traceback\s*\(most recent|系统内部错误|服务内部错误|供应商错误详情|运行时(?:尚未|未)就绪/i;
+const USER_REVIEW_TIMEOUT_FAILURE = /(?:等待|回复|生成).{0,20}(?:超时|无回复|未响应)|(?:超时|无回复|未响应).{0,20}(?:等待|回复|生成)/i;
+const USER_REVIEW_PRODUCT_ACTION_VERB = /点击|进入|打开|关闭|重开|重新进入|选择|删除|安装|卸载|提交|右键|双击|滚动|切换|查看|创建|召唤|拖拽|上传|下载|复制|粘贴|输入/i;
+const USER_REVIEW_PRODUCT_ACTION_SETUP = /前置|准备|清理|复核|检查|校验|读取|采集|记录|测试数据|发送.*前/i;
+const USER_REVIEW_FEATURE_ACTION_RULES = [
+  [/连接器/i, /连接器/i],
+  [/技能/i, /技能/i],
+  [/专家/i, /专家/i],
+  [/成果|artifact|preview/i, /成果|artifact|preview/i],
+  [/附件|文件/i, /附件|文件|上传|下载/i],
+  [/反馈/i, /反馈/i],
+  [/重试/i, /重试|连接器|技能/i],
+  [/重开|重新进入|恢复/i, /重开|重新进入|恢复|关闭.*打开/i],
+  [/重命名/i, /重命名|双击/i],
+  [/删除|移除/i, /删除|移除/i],
+  [/滚动|回到底部/i, /滚动|回到底部/i],
+  [/侧边栏|会话/i, /侧边栏|会话/i],
+  [/菜单/i, /菜单|右键/i],
+  [/安全级别|安全档位/i, /安全级别|安全档位/i],
+  [/设置|偏好/i, /设置|偏好/i],
+];
 
 function userReviewScreenshots(result, explicitEvidence = []) {
   const entries = [];
@@ -19781,6 +19806,123 @@ function userOutcomeAssertions(result) {
       const name = String(item?.name || '').trim();
       return name && !USER_REVIEW_TECHNICAL_ASSERTION.test(name);
     });
+}
+
+function reviewExecutionIntegrity(result) {
+  const contractVersion = String(
+    result?.contract_version
+    || result?.evidence_manifest?.contract_version
+    || '',
+  );
+  const coverage = result?.artifacts?.numbered_step_coverage;
+  if (contractVersion !== 'qbot-current-casebook/v4') {
+    if (!coverage) return { applicable: false, ok: true, reason: '当前 Case 无 V4 显式编号步骤契约。' };
+    if (Number(coverage.schema_version || 0) < 2) {
+      return { applicable: true, ok: false, reason: '编号步骤覆盖仍是旧 schema，不能证明真实执行。' };
+    }
+    return {
+      applicable: true,
+      ok: coverage.complete === true,
+      reason: coverage.complete === true ? '编号步骤覆盖完整。' : '编号步骤覆盖不完整。',
+    };
+  }
+  if (!coverage) {
+    return { applicable: true, ok: false, reason: 'V4 Case 缺少 numbered_step_coverage。' };
+  }
+  const entries = Array.isArray(coverage.entries) ? coverage.entries : [];
+  const explicitSteps = (Array.isArray(result?.steps) ? result.steps : [])
+    .filter((item) => (
+      Number.isInteger(Number(item?.numbered_step_number))
+      && Number(item.numbered_step_number) > 0
+      && String(item?.numbered_step_declared || '').trim()
+      && item?.numbered_step_evidence === 'explicit'
+    ));
+  const entriesExplicit = entries.length > 0 && entries.every((entry) => (
+    entry?.covered === true
+    && entry?.evidence_mode === 'explicit_numbered_step'
+    && Array.isArray(entry?.explicit_actions)
+    && entry.explicit_actions.length > 0
+  ));
+  const stepNumbers = new Set(explicitSteps.map((item) => Number(item.numbered_step_number)));
+  const everyDeclaredStepRecorded = entries.every((entry) => stepNumbers.has(Number(entry?.number)));
+  const ok = Number(coverage.schema_version || 0) >= 2
+    && Number(coverage.declared_count || 0) > 0
+    && coverage.complete === true
+    && entriesExplicit
+    && everyDeclaredStepRecorded;
+  return {
+    applicable: true,
+    ok,
+    reason: ok
+      ? 'V4 每个编号步骤均有显式执行记录。'
+      : 'V4 覆盖来自旧式位置/全局关键词匹配，或缺少逐步显式执行记录。',
+  };
+}
+
+function reviewEvidenceManifestIntegrity(result) {
+  const manifest = result?.evidence_manifest;
+  if (!manifest) return { applicable: false, ok: true, reason: '当前结果未声明 evidence manifest。' };
+  const missingRoles = Array.isArray(manifest.missing_roles) ? manifest.missing_roles : [];
+  const ok = manifest.complete === true
+    && missingRoles.length === 0
+    && Number(manifest.required_role_count || 0) === Number(manifest.satisfied_role_count || 0);
+  return {
+    applicable: true,
+    ok,
+    reason: ok
+      ? 'Evidence manifest 完整。'
+      : `Evidence manifest 不完整：${missingRoles.join(', ') || 'required/satisfied 计数不一致'}。`,
+  };
+}
+
+function hasConfirmedSendReceipt(result) {
+  const receipts = Array.isArray(result?.artifacts?.send_receipts)
+    ? result.artifacts.send_receipts
+    : [];
+  return receipts.some((receipt) => (
+    Array.isArray(receipt?.attempts)
+    && receipt.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
+  ));
+}
+
+function hasTerminalReplyWait(result) {
+  const waits = Array.isArray(result?.artifacts?.reply_waits)
+    ? result.artifacts.reply_waits
+    : [];
+  return waits.some((wait) => (
+    Number(wait?.waited_ms || 0) >= Number(wait?.min_wait_ms || 0)
+    && (wait?.incomplete === false || Number(wait?.waited_ms || 0) >= Number(wait?.timeout_ms || Infinity))
+  ));
+}
+
+function isSemanticOracleAssertion(item) {
+  const text = `${item?.name || ''}\n${item?.expected || ''}`;
+  return USER_REVIEW_SEMANTIC_ORACLE_ASSERTION.test(text)
+    || USER_REVIEW_COPY_OR_NOMENCLATURE_ASSERTION.test(text);
+}
+
+function isObjectiveUiFailureAssertion(item) {
+  if (!item || item.status !== 'failed' || isSemanticOracleAssertion(item)) return false;
+  const contract = `${item?.name || ''}\n${item?.expected || ''}`;
+  const actual = String(item?.actual || '');
+  return USER_REVIEW_OBJECTIVE_UI_ASSERTION.test(contract)
+    && USER_REVIEW_OBJECTIVE_FAILURE_OBSERVATION.test(actual);
+}
+
+function hasMatchingProductAction(actions, targetAssertion) {
+  const target = `${targetAssertion?.name || ''}\n${targetAssertion?.expected || ''}`;
+  const productActions = actions
+    .map((item) => String(item?.action || '').trim())
+    .filter((action) => (
+      action
+      && !isSuccessfulSendStep({ action, status: 'passed' })
+      && USER_REVIEW_PRODUCT_ACTION_VERB.test(action)
+      && !USER_REVIEW_PRODUCT_ACTION_SETUP.test(action)
+    ));
+  if (!productActions.length) return false;
+  const featureRules = USER_REVIEW_FEATURE_ACTION_RULES.filter(([targetPattern]) => targetPattern.test(target));
+  if (!featureRules.length) return true;
+  return featureRules.some(([, actionPattern]) => productActions.some((action) => actionPattern.test(action)));
 }
 
 function isAutomationReviewFailure(item) {
@@ -19830,6 +19972,7 @@ export function assessUserCenteredOutcome(result, {
   userOperationOverride = '',
   expectedOutcomeOverride = '',
   userImpactOverride = '',
+  verifiedReviewOverride = false,
 } = {}) {
   const status = String(result?.status || '');
   const category = String(result?.result_category || '');
@@ -19923,12 +20066,66 @@ export function assessUserCenteredOutcome(result, {
     || !failedAssertions.length
     || Boolean(reviewReason && productObservation && /误判|满足预期|产品.*通过|解析|断言.*错误|状态判定/i.test(reviewReason)))
     && !unresolvedUserConcern;
+  // Hard-error promotion must only inspect the failed outcome and the bound
+  // conversation.  Passed diagnostic assertions often contain negated text
+  // such as “未检测到模型服务不可达”; including them would turn every normal
+  // reply into a false hard failure.
+  const hardFailureEvidence = [
+    productObservation,
+    result?.actual_result,
+    ...failedAssertions.map((item) => item?.actual || ''),
+  ];
+  for (const file of [result?.artifacts?.reply_delta, result?.artifacts?.transcript]) {
+    if (!file || !fs.existsSync(file)) continue;
+    try { hardFailureEvidence.push(fs.readFileSync(file, 'utf8')); } catch {}
+  }
+  const hardFailureText = hardFailureEvidence.join('\n');
+  const timeoutFailure = USER_REVIEW_TIMEOUT_FAILURE.test(hardFailureText)
+    && (Array.isArray(result?.artifacts?.reply_waits)
+      ? result.artifacts.reply_waits.some((wait) => (
+        wait?.incomplete === true
+        && Number(wait?.timeout_ms || 0) > 0
+        && Number(wait?.waited_ms || 0) >= Number(wait.timeout_ms) - 1000
+      ))
+      : false);
+  const hardProductFailure = intended === 'bug'
+    && sentMessage
+    && hasConfirmedSendReceipt(result)
+    && hasTerminalReplyWait(result)
+    && hasTranscript
+    && (hasReplyDelta || timeoutFailure)
+    && (USER_REVIEW_HARD_PRODUCT_FAILURE.test(hardFailureText) || timeoutFailure);
+  const objectiveFailureAssertion = failedAssertions.find(isObjectiveUiFailureAssertion) || null;
+  const productActionExercised = objectiveFailureAssertion
+    ? hasMatchingProductAction(actions, objectiveFailureAssertion)
+    : false;
+  const verifiedOverrideEvidence = verifiedReviewOverride === true
+    && Boolean(reviewReason)
+    && Boolean(productObservation)
+    && explicitEvidence.length > 0;
+  const independentBugCorroboration = intended !== 'bug'
+    || hardProductFailure
+    || Boolean(objectiveFailureAssertion && productActionExercised)
+    || verifiedOverrideEvidence;
+  const executionIntegrity = reviewExecutionIntegrity(result);
+  const manifestIntegrity = reviewEvidenceManifestIntegrity(result);
+  const nonSyntheticExecution = !/synthetic|archive[_-]?recovery|recovery[_-]?sentinel/i.test(
+    String(result?.execution_provenance || ''),
+  );
   const gates = {
     reached_user_action: actions.length > 0,
     user_outcome_assertion: intended === 'bug'
       ? failedAssertions.length > 0 || Boolean(productObservation && reviewReason)
       : passedAssertions.length > 0 || Boolean(productObservation && reviewReason),
     no_automation_error: automationFailures.length === 0,
+    non_synthetic_execution: nonSyntheticExecution,
+    evidence_manifest_complete: manifestIntegrity.ok,
+    execution_integrity: executionIntegrity.ok || hardProductFailure,
+    independent_bug_corroboration: independentBugCorroboration,
+    product_action_exercised: intended !== 'bug'
+      || hardProductFailure
+      || verifiedOverrideEvidence
+      || productActionExercised,
     user_visible_observation: observationIsVisible,
     aligned_outcome_screenshot: alignedScreenshots.length > 0,
     conversation_evidence: conversationEvidence,
@@ -19959,6 +20156,20 @@ export function assessUserCenteredOutcome(result, {
       keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: missing,
     };
   }
+  if ((!executionIntegrity.ok && !hardProductFailure) || !manifestIntegrity.ok) {
+    const integrityReasons = [
+      !executionIntegrity.ok ? executionIntegrity.reason : '',
+      !manifestIntegrity.ok ? manifestIntegrity.reason : '',
+    ].filter(Boolean);
+    return {
+      classification: 'framework_issue',
+      reason: `执行/证据完整性校验失败：${integrityReasons.join('；')}`,
+      description: `用户操作：${userOperation}；结果：框架不能证明用例编号步骤和证据角色均被真实执行；影响：不能据此判断产品是否有 Bug。`,
+      userOperation, expected, observed, impact: '不能据此判断产品是否有 Bug。',
+      keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: missing,
+      executionIntegrity, manifestIntegrity,
+    };
+  }
   if (!['pass', 'bug'].includes(intended)) {
     return {
       classification: 'needs_review',
@@ -19971,10 +20182,11 @@ export function assessUserCenteredOutcome(result, {
   if (missing.length) {
     return {
       classification: 'needs_review',
-      reason: `用户视角证据门槛未满足：${missing.join('、')}。${screenshotReason}`,
+      reason: `用户视角证据门槛未满足：${missing.join('、')}。raw failed、语义关键词断言或泛化截图不能单独升级为可信 Bug。${screenshotReason}`,
       description: `用户操作：${userOperation}；预期：${expected}；当前证据不足：${missing.join('、')}；不能列为可信${intended === 'bug' ? ' Bug' : '通过'}。`,
       userOperation, expected, observed, impact: '证据不足，不能作为产品质量结论。',
       keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: missing,
+      executionIntegrity, manifestIntegrity,
     };
   }
 
@@ -19986,6 +20198,7 @@ export function assessUserCenteredOutcome(result, {
       description: `用户操作：${userOperation}；预期：${expected}；实际看到：${observed}；用户影响：${impact}`,
       userOperation, expected, observed, impact,
       keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: [],
+      executionIntegrity, manifestIntegrity,
     };
   }
   const impact = '用户能够理解结果并继续完成任务，未发现阻断、误导或无反馈。';
@@ -19995,6 +20208,7 @@ export function assessUserCenteredOutcome(result, {
     description: `用户操作：${userOperation}；预期：${expected}；实际看到：${observed}；结论：${impact}`,
     userOperation, expected, observed, impact,
     keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: [],
+    executionIntegrity, manifestIntegrity,
   };
 }
 
