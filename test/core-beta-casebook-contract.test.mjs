@@ -17,6 +17,8 @@ import {
 import {
   buildCaseEvidenceManifest,
   coreBetaActionReceiptsComplete,
+  coreBetaBatchSharedDeadline,
+  coreBetaBatchTerminalEvidence,
   coreBetaMaintenanceConfirmationContract,
   coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
@@ -277,6 +279,85 @@ test('a verified product reply timeout is complete failure evidence, never a suc
   const failClosed = buildCaseEvidenceManifest(state, caseDir);
   assert.equal(failClosed.complete, false);
   assert.deepEqual(failClosed.missing_roles, ['reply_completion']);
+});
+
+test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
+  const collectionStartedAtMs = Date.parse('2026-07-29T00:00:20.000Z');
+  const entries = Array.from({ length: 20 }, (_, index) => ({
+    dispatched_at: new Date(Date.parse('2026-07-29T00:00:00.000Z') + (index * 1000)).toISOString(),
+  }));
+  const deadline = coreBetaBatchSharedDeadline(entries, 600_000, collectionStartedAtMs);
+  assert.equal(deadline.additive_per_task_timeout, false);
+  assert.equal(deadline.latest_dispatch_at_ms, Date.parse('2026-07-29T00:00:19.000Z'));
+  assert.equal(deadline.deadline_at_ms, Date.parse('2026-07-29T00:10:19.000Z'));
+  assert.equal(
+    deadline.deadline_at_ms - deadline.latest_dispatch_at_ms,
+    600_000,
+  );
+  assert.ok(deadline.deadline_at_ms - collectionStartedAtMs < 20 * 600_000);
+});
+
+test('a fully evidenced partial batch deadline is complete failure evidence and never success', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-batch-terminal-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const entries = Array.from({ length: 20 }, (_, index) => {
+    const dispatchScreenshot = path.join(root, `dispatch-${index + 1}.png`);
+    const terminalScreenshot = path.join(root, `terminal-${index + 1}.png`);
+    fs.writeFileSync(dispatchScreenshot, `dispatch-${index + 1}`);
+    fs.writeFileSync(terminalScreenshot, `terminal-${index + 1}`);
+    const completed = index < 9;
+    return {
+      index,
+      task_id: `task-${index + 1}`,
+      dispatched_at: `2026-07-29T00:00:${String(index).padStart(2, '0')}.000Z`,
+      dispatch_screenshot: dispatchScreenshot,
+      send_receipt: {
+        confirmed: true,
+        confirmed_at: '2026-07-29T00:00:30.000Z',
+      },
+      observation_count: 3,
+      last_observation: {
+        active_task_id: `task-${index + 1}`,
+        assistant_reply_present: completed,
+        running: !completed,
+      },
+      terminal_outcome: completed ? 'reply_completed' : 'running_at_batch_deadline',
+      terminal_at: '2026-07-29T00:10:30.000Z',
+      terminal_screenshot: terminalScreenshot,
+      ok: completed,
+    };
+  });
+  const evidence = coreBetaBatchTerminalEvidence(entries, {
+    deadlineAtMs: Date.parse('2026-07-29T00:10:19.000Z'),
+    deadlineReached: true,
+  });
+  assert.equal(evidence.available, true);
+  assert.equal(evidence.completion_observed, false);
+  assert.equal(evidence.terminal_failure, true);
+  assert.equal(evidence.terminal_outcome, 'batch_partial_timeout');
+  assert.equal(evidence.dispatched, 20);
+  assert.equal(evidence.completed, 9);
+  assert.equal(evidence.failed_or_timed_out, 11);
+  assert.equal(evidence.task_ids_unique, true);
+  assert.equal(evidence.dispatch_receipts_complete, true);
+  assert.equal(evidence.terminal_rows_complete, true);
+
+  fs.rmSync(entries[9].terminal_screenshot);
+  const missingTerminalFrame = coreBetaBatchTerminalEvidence(entries, {
+    deadlineAtMs: Date.parse('2026-07-29T00:10:19.000Z'),
+    deadlineReached: true,
+  });
+  assert.equal(missingTerminalFrame.available, false);
+  assert.equal(missingTerminalFrame.terminal_rows_complete, false);
+
+  fs.writeFileSync(entries[9].terminal_screenshot, 'restored');
+  entries[10].send_receipt.confirmed = false;
+  const missingSendReceipt = coreBetaBatchTerminalEvidence(entries, {
+    deadlineAtMs: Date.parse('2026-07-29T00:10:19.000Z'),
+    deadlineReached: true,
+  });
+  assert.equal(missingSendReceipt.available, false);
+  assert.equal(missingSendReceipt.dispatch_receipts_complete, false);
 });
 
 test('skill, expert, and MCP use require task-bound execution events', () => {

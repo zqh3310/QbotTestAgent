@@ -4110,6 +4110,120 @@ async function coreBetaStopGeneration(ctx) {
   };
 }
 
+export function coreBetaBatchSharedDeadline(
+  entries = [],
+  requestedTimeoutMs = DEFAULT_TIMEOUT_MS,
+  collectionStartedAtMs = Date.now(),
+) {
+  const requested = Number(requestedTimeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Math.min(
+    MAX_REPLY_WAIT_MS,
+    Math.max(MIN_REPLY_WAIT_MS, Number.isFinite(requested) ? requested : DEFAULT_TIMEOUT_MS),
+  );
+  const startedAtMs = Number(collectionStartedAtMs || Date.now());
+  const dispatchTimes = (Array.isArray(entries) ? entries : [])
+    .map((entry) => Date.parse(String(entry?.dispatched_at || '')))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const latestDispatchAtMs = dispatchTimes.length ? Math.max(...dispatchTimes) : startedAtMs;
+  // One shared deadline covers the whole batch.  It is intentionally anchored
+  // to the last confirmed dispatch so the final task receives the same reply
+  // budget as a serial task, while the collector revisits every task in rounds
+  // instead of multiplying the timeout by the batch size.
+  const deadlineAtMs = Math.max(
+    latestDispatchAtMs + timeoutMs,
+    startedAtMs + MIN_REPLY_WAIT_MS,
+  );
+  return {
+    collection_started_at_ms: startedAtMs,
+    latest_dispatch_at_ms: latestDispatchAtMs,
+    timeout_ms: timeoutMs,
+    deadline_at_ms: deadlineAtMs,
+    additive_per_task_timeout: false,
+  };
+}
+
+function coreBetaBatchEvidenceFilePresent(file) {
+  return typeof file === 'string'
+    && Boolean(file)
+    && fs.existsSync(file)
+    && fs.statSync(file).isFile()
+    && fs.statSync(file).size > 0;
+}
+
+export function coreBetaBatchTerminalEvidence(entries = [], {
+  deadlineAtMs = 0,
+  deadlineReached = false,
+} = {}) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const taskIds = rows.map((entry) => String(entry?.task_id || ''));
+  const taskIdsUnique = rows.length > 0
+    && taskIds.every(Boolean)
+    && new Set(taskIds).size === rows.length;
+  const dispatchReceiptsComplete = rows.length > 0 && rows.every((entry) => (
+    entry?.send_receipt?.confirmed === true
+    && String(entry?.send_receipt?.confirmed_at || '')
+    && coreBetaBatchEvidenceFilePresent(entry?.dispatch_screenshot)
+  ));
+  const terminalRowsComplete = rows.length > 0 && rows.every((entry) => (
+    String(entry?.terminal_outcome || '')
+    && String(entry?.terminal_at || '')
+    && Number(entry?.observation_count || 0) > 0
+    && entry?.last_observation
+    && typeof entry.last_observation === 'object'
+    && coreBetaBatchEvidenceFilePresent(entry?.terminal_screenshot)
+  ));
+  const allCompleted = terminalRowsComplete && rows.every((entry) => (
+    entry?.ok === true
+    && entry?.terminal_outcome === 'reply_completed'
+  ));
+  const allTerminalBeforeDeadline = terminalRowsComplete && rows.every((entry) => (
+    !['', 'pending'].includes(String(entry?.terminal_outcome || ''))
+  ));
+  const available = taskIdsUnique
+    && dispatchReceiptsComplete
+    && terminalRowsComplete
+    && (allCompleted || allTerminalBeforeDeadline || deadlineReached);
+  const completedCount = rows.filter((entry) => entry?.terminal_outcome === 'reply_completed').length;
+  const replyPresentCount = rows.filter((entry) => entry?.last_observation?.assistant_reply_present === true).length;
+  const timeoutCount = rows.filter((entry) => (
+    /batch_deadline|deadline/.test(String(entry?.terminal_outcome || ''))
+  )).length;
+  const terminalOutcome = allCompleted
+    ? 'batch_completed'
+    : deadlineReached && timeoutCount > 0
+      ? 'batch_partial_timeout'
+      : 'batch_terminal_failure';
+  return {
+    available,
+    completion_observed: allCompleted,
+    terminal_failure: available && !allCompleted,
+    terminal_outcome: terminalOutcome,
+    source: 'per-task confirmed send receipt + round-robin taskId collection + per-task terminal screenshot',
+    dispatched: rows.length,
+    completed: completedCount,
+    reply_present: replyPresentCount,
+    failed_or_timed_out: Math.max(0, rows.length - completedCount),
+    timeout_count: timeoutCount,
+    task_ids_unique: taskIdsUnique,
+    dispatch_receipts_complete: dispatchReceiptsComplete,
+    terminal_rows_complete: terminalRowsComplete,
+    shared_deadline_reached: Boolean(deadlineReached),
+    shared_deadline_at: Number(deadlineAtMs || 0)
+      ? new Date(Number(deadlineAtMs)).toISOString()
+      : '',
+    reason: available
+      ? ''
+      : '批量终态证据必须覆盖每条唯一 taskId 的确认发送回执、发送后截图、任务状态观察和终态截图。',
+  };
+}
+
+function coreBetaSanitizeBatchEntries(entries = []) {
+  return entries.map(({ before, reply, _last_stable_reply, _last_observed_reply, ...entry }) => ({
+    ...entry,
+    reply_excerpt: clip(reply, 240),
+  }));
+}
+
 async function coreBetaDispatchBatch(ctx) {
   const requested = Math.min(20, Math.max(1, Number(ctx.state.batch_size || 20)));
   const prepared = Array.isArray(ctx.batch) && ctx.batch.length === requested
@@ -4126,6 +4240,14 @@ async function coreBetaDispatchBatch(ctx) {
       dispatched_at: '',
       collected_at: '',
       reply_sha256: '',
+      dispatch_screenshot: '',
+      send_receipt: null,
+      observation_count: 0,
+      stable_observations: 0,
+      last_observation: null,
+      terminal_outcome: '',
+      terminal_at: '',
+      terminal_screenshot: '',
       ok: false,
     }));
   ctx.batch = entries;
@@ -4150,69 +4272,305 @@ async function coreBetaDispatchBatch(ctx) {
     entry.dispatched_at = new Date().toISOString();
     entry.before = before;
     if (!entry.task_id) throw new Error(`批量派发第 ${entry.index + 1} 条缺少 taskId。`);
+    const dispatchScreenshot = await shot(
+      ctx.page,
+      ctx.caseDir,
+      `batch-dispatch-${String(entry.index + 1).padStart(2, '0')}-after-send`,
+    );
+    const screenshotKey = `batch_dispatch_${String(entry.index + 1).padStart(2, '0')}_after_send`;
+    ctx.state.screenshots[screenshotKey] = dispatchScreenshot;
+    const confirmedReceipt = Array.isArray(ctx.state.artifacts.send_receipts)
+      ? [...ctx.state.artifacts.send_receipts].reverse().find((item) => (
+        item?.action === `批量派发 ${entry.index + 1}`
+        && String(item?.confirmed_at || '')
+      ))
+      : null;
+    entry.dispatch_screenshot = dispatchScreenshot;
+    entry.send_receipt = {
+      confirmed: receipt?.ok === true && Boolean(confirmedReceipt),
+      confirmed_at: String(confirmedReceipt?.confirmed_at || ''),
+      action: String(confirmedReceipt?.action || `批量派发 ${entry.index + 1}`),
+      task_id: entry.task_id,
+      reasons: Array.isArray(receipt?.reasons) ? receipt.reasons : [],
+      state_readback: {
+        active_id: String(task?.activeId || ''),
+        running: Boolean(task?.running),
+        message_count: Number(task?.messageCount || 0),
+      },
+    };
+    ctx.state.artifacts.core_beta_batch_dispatch = coreBetaSanitizeBatchEntries(entries);
+    // Persist after every confirmed send.  A host/runner failure must not erase
+    // proof that an individual task was accepted by the product.
+    writeJsonFile(
+      path.join(ctx.caseDir, 'batch-dispatch-ledger.json'),
+      ctx.state.artifacts.core_beta_batch_dispatch,
+    );
   }
   const ids = entries.map((item) => item.task_id);
   const unique = new Set(ids).size === entries.length;
-  ctx.state.artifacts.core_beta_batch_dispatch = entries.map(({ before, ...item }) => item);
+  const receiptsComplete = entries.every((entry) => (
+    entry.send_receipt?.confirmed === true
+    && coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)
+  ));
+  ctx.state.artifacts.core_beta_batch_dispatch = coreBetaSanitizeBatchEntries(entries);
   writeJsonFile(path.join(ctx.caseDir, 'batch-dispatch-ledger.json'), ctx.state.artifacts.core_beta_batch_dispatch);
+  setCoreBetaEvidence(ctx.state, 'send_receipt', {
+    available: unique && receiptsComplete,
+    source: 'per-task confirmed product send receipt + after-send screenshot',
+    expected_count: entries.length,
+    confirmed_count: entries.filter((entry) => entry.send_receipt?.confirmed === true).length,
+    screenshot_count: entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length,
+    task_ids_unique: unique,
+    task_id_sha256s: entries.map((entry) => sha256Text(entry.task_id)),
+  });
   return {
-    ok: unique,
+    ok: unique && receiptsComplete,
     selector_or_testid: 'composer-send',
     event: 'dispatch-batch',
-    state_readback: { requested, dispatched: entries.length, unique_task_ids: new Set(ids).size },
-    actual: `dispatched=${entries.length}；uniqueTaskIds=${new Set(ids).size}`,
+    state_readback: {
+      requested,
+      dispatched: entries.length,
+      unique_task_ids: new Set(ids).size,
+      confirmed_send_receipts: entries.filter((entry) => entry.send_receipt?.confirmed === true).length,
+      after_send_screenshots: entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length,
+    },
+    actual: `dispatched=${entries.length}；uniqueTaskIds=${new Set(ids).size}；confirmedReceipts=${entries.filter((entry) => entry.send_receipt?.confirmed === true).length}；afterSendScreenshots=${entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length}`,
   };
+}
+
+async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) {
+  const observedAt = new Date().toISOString();
+  let reopened;
+  try {
+    reopened = await withReplyPollHardTimeout(
+      reopenSessionAndReadback(ctx.page, entry.task_id),
+      15_000,
+      `batch task ${entry.index + 1} reopen`,
+    );
+  } catch (error) {
+    reopened = { ok: false, reason: error.message, activeId: '', running: false };
+  }
+  let snapshot = null;
+  let publicState = null;
+  let reply = '';
+  let generating = false;
+  if (reopened.ok && String(reopened.activeId || '') === entry.task_id) {
+    snapshot = await conversationSnapshot(ctx.page).catch(() => null);
+    publicState = await qbotE2EState(ctx.page).catch(() => null);
+    reply = latestAssistantReplyForPrompt(snapshot || {}, entry.prompt);
+    generating = Boolean(publicState?.running)
+      || await isAgentGenerating(ctx.page).catch(() => false);
+  }
+  const activeTaskId = String(snapshot?.activeTaskId || publicState?.activeId || reopened?.activeId || '');
+  const userPromptPresent = Boolean(
+    snapshot?.userTexts?.some((text) => userMessageMatchesPrompt(text, entry.prompt)),
+  );
+  const assistantReplyPresent = Boolean(String(reply || '').trim());
+  if (assistantReplyPresent) entry._last_observed_reply = reply;
+  if (
+    assistantReplyPresent
+    && !generating
+    && activeTaskId === entry.task_id
+    && userPromptPresent
+  ) {
+    if (entry._last_stable_reply === reply) entry.stable_observations = Number(entry.stable_observations || 0) + 1;
+    else {
+      entry._last_stable_reply = reply;
+      entry.stable_observations = 1;
+    }
+  } else {
+    entry.stable_observations = 0;
+    if (assistantReplyPresent) entry._last_stable_reply = reply;
+  }
+  entry.observation_count = Number(entry.observation_count || 0) + 1;
+  const observation = {
+    round,
+    observed_at: observedAt,
+    reopen_ok: Boolean(reopened?.ok),
+    reopen_reason: String(reopened?.reason || ''),
+    expected_task_id: entry.task_id,
+    active_task_id: activeTaskId,
+    task_identity_matches: activeTaskId === entry.task_id,
+    user_prompt_present: userPromptPresent,
+    assistant_reply_present: assistantReplyPresent,
+    running: generating,
+    message_count: Number(publicState?.messageCount ?? snapshot?.bridgeMessageCount ?? 0),
+    stable_observations: Number(entry.stable_observations || 0),
+    reply_sha256: assistantReplyPresent ? sha256Text(reply) : '',
+    reply_excerpt: clip(reply, 240),
+  };
+  entry.last_observation = observation;
+  fs.appendFileSync(observationLogFile, `${JSON.stringify({ index: entry.index, marker: entry.marker, task_id: entry.task_id, ...observation })}\n`);
+  const dispatchedAtMs = Date.parse(String(entry.dispatched_at || ''));
+  const waitedMs = Number.isFinite(dispatchedAtMs) ? Date.now() - dispatchedAtMs : 0;
+  const otherMarkerPresent = ctx.batch.some((other) => (
+    other !== entry && String(reply || '').includes(other.marker)
+  ));
+  if (
+    assistantReplyPresent
+    && !generating
+    && activeTaskId === entry.task_id
+    && userPromptPresent
+    && Number(entry.stable_observations || 0) >= 2
+    && waitedMs >= MIN_REPLY_WAIT_MS
+  ) {
+    entry.reply = reply;
+    entry.reply_sha256 = sha256Text(reply);
+    entry.collected_at = observedAt;
+    entry.ok = reply.includes(entry.marker) && !otherMarkerPresent;
+    entry.terminal_outcome = entry.ok ? 'reply_completed' : 'reply_oracle_mismatch';
+    entry.terminal_at = observedAt;
+  }
+  return observation;
+}
+
+async function coreBetaCaptureBatchTerminalScreenshot(ctx, entry) {
+  if (entry.terminal_screenshot && coreBetaBatchEvidenceFilePresent(entry.terminal_screenshot)) {
+    return entry.terminal_screenshot;
+  }
+  if (String(entry.last_observation?.active_task_id || '') !== entry.task_id) {
+    await reopenSessionAndReadback(ctx.page, entry.task_id).catch(() => null);
+  }
+  const screenshot = await shot(
+    ctx.page,
+    ctx.caseDir,
+    `batch-collect-${String(entry.index + 1).padStart(2, '0')}-${slugify(entry.terminal_outcome || 'terminal')}`,
+  );
+  const key = `batch_collect_${String(entry.index + 1).padStart(2, '0')}_terminal`;
+  ctx.state.screenshots[key] = screenshot;
+  entry.terminal_screenshot = screenshot;
+  return screenshot;
 }
 
 async function coreBetaCollectBatch(ctx) {
   if (!Array.isArray(ctx.batch) || !ctx.batch.length) throw new Error('批量回收前没有派发账本。');
-  for (const entry of ctx.batch) {
-    const reopened = await reopenSessionAndReadback(ctx.page, entry.task_id);
-    if (!reopened.ok || String(reopened.activeId || '') !== entry.task_id) {
-      throw new Error(`无法按 taskId 重开批量任务 ${entry.task_id}：${reopened.reason || reopened.activeId || 'unknown'}`);
+  const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
+  const collectionStartedAtMs = Date.now();
+  const sharedDeadline = coreBetaBatchSharedDeadline(
+    ctx.batch,
+    waitConfig.timeoutMs,
+    collectionStartedAtMs,
+  );
+  const observationLogFile = path.join(ctx.caseDir, 'batch-collect-observations.ndjson');
+  writeTextFile(observationLogFile, '');
+  ctx.state.artifacts.core_beta_batch_observations = observationLogFile;
+  let round = 0;
+  let deadlineReached = false;
+  do {
+    round += 1;
+    for (const entry of ctx.batch.filter((item) => !item.terminal_outcome)) {
+      await coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile);
+      if (entry.terminal_outcome) await coreBetaCaptureBatchTerminalScreenshot(ctx, entry);
     }
-    const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
-    const reply = await waitForReply(ctx.page, entry.before, waitConfig.timeoutMs, {
-      ignoredText: [entry.prompt],
-      expectedUserText: entry.prompt,
-      state: ctx.state,
-      caseDir: ctx.caseDir,
-      label: `批量回收 ${entry.index + 1}`,
-      minWaitMs: waitConfig.minWaitMs,
-      waitKind: waitConfig.kind,
-    });
-    const task = await qbotE2EState(ctx.page);
-    const currentTaskId = String(task?.activeId || '');
-    entry.collected_at = new Date().toISOString();
-    entry.reply_sha256 = sha256Text(reply.deltaText || '');
-    entry.reply = reply.deltaText;
-    entry.ok = currentTaskId === entry.task_id
-      && reply.deltaText.includes(entry.marker)
-      && !ctx.batch.some((other) => other !== entry && reply.deltaText.includes(other.marker));
-    writeReplyArtifacts(ctx.state, ctx.caseDir, [{ ...reply, label: `批量任务 ${entry.index + 1}` }]);
-    if (!entry.ok) break;
+    const sanitized = coreBetaSanitizeBatchEntries(ctx.batch);
+    ctx.state.artifacts.core_beta_batch_collect = sanitized;
+    writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
+    if (ctx.batch.every((item) => item.terminal_outcome)) break;
+    deadlineReached = Date.now() >= sharedDeadline.deadline_at_ms;
+    if (!deadlineReached) await ctx.page.waitForTimeout(500);
+  } while (!deadlineReached);
+
+  deadlineReached = Date.now() >= sharedDeadline.deadline_at_ms;
+  for (const entry of ctx.batch.filter((item) => !item.terminal_outcome)) {
+    // Capture one final task-bound observation at/after the shared deadline.
+    await coreBetaObserveBatchEntry(ctx, entry, round + 1, observationLogFile);
+    if (!entry.terminal_outcome) {
+      const observation = entry.last_observation || {};
+      entry.reply = String(entry._last_observed_reply || '');
+      entry.reply_sha256 = entry.reply ? sha256Text(entry.reply) : '';
+      entry.terminal_outcome = !observation.reopen_ok
+        ? 'task_reopen_failed_by_batch_deadline'
+        : observation.running
+          ? 'running_at_batch_deadline'
+          : observation.assistant_reply_present
+            ? 'reply_unstable_at_batch_deadline'
+            : 'no_attributable_reply_by_batch_deadline';
+      entry.terminal_at = new Date().toISOString();
+      entry.ok = false;
+    }
+    await coreBetaCaptureBatchTerminalScreenshot(ctx, entry);
   }
-  const complete = ctx.batch.every((item) => item.ok);
-  const sanitized = ctx.batch.map(({ before, reply, ...item }) => ({ ...item, reply_excerpt: clip(reply, 200) }));
-  ctx.state.artifacts.core_beta_batch_collect = sanitized;
-  writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
-  setCoreBetaEvidence(ctx.state, 'reply_completion', {
-    available: complete,
-    source: 'batch taskId collection ledger',
-    dispatched: ctx.batch.length,
-    collected: ctx.batch.filter((item) => item.collected_at).length,
-    task_ids_unique: new Set(ctx.batch.map((item) => item.task_id)).size === ctx.batch.length,
+
+  const replies = ctx.batch.map((entry) => {
+    const dispatchedAtMs = Date.parse(String(entry.dispatched_at || ''));
+    const terminalAtMs = Date.parse(String(entry.terminal_at || ''));
+    const waitedMs = Number.isFinite(dispatchedAtMs) && Number.isFinite(terminalAtMs)
+      ? Math.max(0, terminalAtMs - dispatchedAtMs)
+      : Math.max(0, Date.now() - collectionStartedAtMs);
+    const completedReply = ['reply_completed', 'reply_oracle_mismatch'].includes(entry.terminal_outcome);
+    return {
+      label: `批量任务 ${entry.index + 1}`,
+      fullText: entry.reply || '',
+      deltaText: entry.reply || '',
+      incomplete: !completedReply,
+      incomplete_reason: completedReply
+        ? ''
+        : `批量共享截止时间终态：${entry.terminal_outcome}；taskId=${entry.task_id}`,
+      stable_observations: Number(entry.stable_observations || 0),
+      waited_ms: waitedMs,
+      min_wait_ms: MIN_REPLY_WAIT_MS,
+      timeout_ms: waitConfig.timeoutMs,
+      wait_kind: 'batch_shared_deadline',
+    };
   });
+  writeReplyArtifacts(ctx.state, ctx.caseDir, replies);
+  for (let index = 0; index < replies.length; index += 1) {
+    const entry = ctx.batch[index];
+    const reply = replies[index];
+    recordReplyWaitAssertion(ctx.state, reply, `批量任务 ${entry.index + 1}`);
+    recordAssertion(
+      ctx.state,
+      `批量任务归属与回复 Oracle（${entry.index + 1}）`,
+      '确认发送回执、taskId、用户 prompt 和助手回复必须归属同一任务；回复只包含本任务 marker，且在共享截止时间前稳定完成。',
+      entry.ok === true,
+      `taskId=${entry.task_id}；terminal=${entry.terminal_outcome}；stable=${entry.stable_observations}；reply=${clip(entry.reply, 180)}`,
+    );
+  }
+
+  const terminalEvidence = coreBetaBatchTerminalEvidence(ctx.batch, {
+    deadlineAtMs: sharedDeadline.deadline_at_ms,
+    deadlineReached,
+  });
+  const complete = ctx.batch.every((item) => item.ok);
+  const sanitized = coreBetaSanitizeBatchEntries(ctx.batch);
+  ctx.state.artifacts.core_beta_batch_collect = sanitized;
+  ctx.state.artifacts.core_beta_batch_collection_summary = {
+    ...sharedDeadline,
+    collection_started_at: new Date(collectionStartedAtMs).toISOString(),
+    collection_finished_at: new Date().toISOString(),
+    rounds: round,
+    deadline_reached: deadlineReached,
+    terminal_evidence: terminalEvidence,
+  };
+  writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
+  writeJsonFile(
+    path.join(ctx.caseDir, 'batch-collection-summary.json'),
+    ctx.state.artifacts.core_beta_batch_collection_summary,
+  );
+  setCoreBetaEvidence(ctx.state, 'reply_completion', terminalEvidence);
+  setCoreBetaEvidence(ctx.state, 'public_state_readback', {
+    source: 'round-robin public task state collection ledger',
+    dispatched: ctx.batch.length,
+    terminal_rows: ctx.batch.filter((item) => item.terminal_outcome).length,
+    completed: ctx.batch.filter((item) => item.ok).length,
+    shared_deadline_reached: deadlineReached,
+  });
+  const reopenFailure = ctx.batch.some((item) => item.terminal_outcome === 'task_reopen_failed_by_batch_deadline');
   return {
     ok: complete,
+    category: reopenFailure ? 'automation_error' : 'bug',
     selector_or_testid: 'task-list',
     event: 'collect-batch',
     state_readback: {
       dispatched: ctx.batch.length,
+      terminal_rows: ctx.batch.filter((item) => item.terminal_outcome).length,
       collected: ctx.batch.filter((item) => item.collected_at).length,
       passed: ctx.batch.filter((item) => item.ok).length,
+      rounds: round,
+      shared_deadline_reached: deadlineReached,
+      terminal_evidence_available: terminalEvidence.available,
     },
-    actual: `collected=${ctx.batch.filter((item) => item.collected_at).length}/${ctx.batch.length}；passed=${ctx.batch.filter((item) => item.ok).length}`,
+    actual: `terminal=${ctx.batch.filter((item) => item.terminal_outcome).length}/${ctx.batch.length}；collected=${ctx.batch.filter((item) => item.collected_at).length}；passed=${ctx.batch.filter((item) => item.ok).length}；rounds=${round}；deadlineReached=${deadlineReached}；terminalEvidence=${terminalEvidence.available}`,
   };
 }
 
