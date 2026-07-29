@@ -23474,22 +23474,35 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     },
   );
   const capabilitySelectionBlocker = verifiedCapabilitySelectionUnavailableEvidence(state);
-  if (
-    capabilitySelectionBlocker.applicable
-    && evidenceRoleApplicability.declared_roles.includes('capability_selection')
-  ) {
+  if (capabilitySelectionBlocker.applicable) {
+    const impossibleRoles = capabilitySelectionBlocker.propagation_source === 'shared_prerequisite_ledger'
+      ? [
+        'capability_selection',
+        'capability_execution_event',
+        'prompt',
+        'send_receipt',
+        'task_id',
+        'transcript',
+        'reply_delta',
+        'reply_completion',
+      ]
+      : ['capability_selection'];
+    const declaredImpossibleRoles = impossibleRoles
+      .filter((role) => evidenceRoleApplicability.declared_roles.includes(role));
     evidenceRoleApplicability.required_roles = evidenceRoleApplicability.required_roles
-      .filter((role) => role !== 'capability_selection');
+      .filter((role) => !declaredImpossibleRoles.includes(role));
     evidenceRoleApplicability.not_applicable_roles = [
       ...evidenceRoleApplicability.not_applicable_roles,
-      {
-        role: 'capability_selection',
-        domain: 'capability',
+      ...declaredImpossibleRoles.map((role) => ({
+        role,
+        domain: role.startsWith('capability_') ? 'capability' : 'conversation',
         source: capabilitySelectionBlocker.source,
-        reason: capabilitySelectionBlocker.reason,
+        reason: capabilitySelectionBlocker.propagation_source === 'shared_prerequisite_ledger'
+          ? `${capabilitySelectionBlocker.reason} 下游 Case 已在执行前停止，因此 ${role} 不可能产生。`
+          : capabilitySelectionBlocker.reason,
         requested_count: capabilitySelectionBlocker.requested_count,
         eligible_count: capabilitySelectionBlocker.eligible_count,
-      },
+      })),
     ];
   }
   const requiredRoles = evidenceRoleApplicability.required_roles;

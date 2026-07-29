@@ -418,7 +418,17 @@ test('a propagated capability blocker also makes selection evidence explicit N/A
   const state = {
     id: 'BETA-SKILL-002',
     contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
-    required_evidence_roles: 'capability_inventory,capability_selection',
+    required_evidence_roles: [
+      'capability_inventory',
+      'capability_selection',
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ].join(','),
     status: 'blocked',
     screenshots: {},
     artifacts: {
@@ -444,6 +454,22 @@ test('a propagated capability blocker also makes selection evidence explicit N/A
   assert.equal(manifest.complete, true);
   assert.deepEqual(manifest.missing_roles, []);
   assert.equal(manifest.role_evidence.capability_selection.not_applicable, true);
+  assert.deepEqual(
+    manifest.not_applicable_roles.map((item) => item.role),
+    [
+      'capability_selection',
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ],
+  );
+  assert.ok(manifest.not_applicable_roles.every(
+    (item) => item.source === 'verified_capability_inventory_shortage',
+  ));
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
