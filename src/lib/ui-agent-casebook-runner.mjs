@@ -22,6 +22,8 @@ import {
 } from './production-casebook-contract.mjs';
 import {
   CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  CORE_BETA_CASE_TYPES,
+  deterministicCapabilitySample,
   validateCoreBetaCase,
 } from './core-beta-casebook-contract.mjs';
 import { buildCrossRunLineage } from './casebook-lineage.mjs';
@@ -1476,6 +1478,17 @@ function createCaseState({ testCase, caseDir, order, modelTier }) {
     selector_contract: testCase.selector_contract || '',
     identity_contract: testCase.identity_contract || '',
     trusted_review_contract: testCase.trusted_review_contract || '',
+    case_type: testCase.case_type || '',
+    automation_protocol: testCase.automation_protocol || '',
+    initialization_profile: testCase.initialization_profile || '',
+    batch_size: Number(testCase.batch_size || 1),
+    action_plan_json: testCase.action_plan_json || '',
+    turns_json: testCase.turns_json || '',
+    capability_policy_json: testCase.capability_policy_json || '',
+    assertion_contract_json: testCase.assertion_contract_json || '',
+    evidence_schema_version: testCase.evidence_schema_version || '',
+    cleanup_policy: testCase.cleanup_policy || '',
+    pipeline_policy: testCase.pipeline_policy || '',
     numbered_steps: testCase.steps || '',
     status: 'failed',
     result_category: 'bug',
@@ -1553,7 +1566,10 @@ export function numberedStepExecutionCoverage(state = {}) {
     ...(state.assertions || []).map((item) => String(item?.name || '')),
   ].filter(Boolean);
   const observedText = observedLabels.join('\n');
-  const requiresExplicitEvidence = String(state.contract_version || '') === 'qbot-current-casebook/v4';
+  const requiresExplicitEvidence = [
+    'qbot-current-casebook/v4',
+    CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  ].includes(String(state.contract_version || ''));
   const entries = declared.map((step, index) => {
     const explicit = explicitEvidence.get(step.number) || [];
     const semanticMarkers = NUMBERED_STEP_SEMANTIC_MARKERS
@@ -1605,6 +1621,8 @@ export function enforceNumberedStepExecutionContract(state = {}) {
     ? 'V4'
     : contractVersion === 'qbot-production-gate/v2'
       ? 'V2'
+      : contractVersion === CORE_BETA_CASEBOOK_CONTRACT_VERSION
+        ? 'CORE-BETA'
       : '';
   if (!contractLabel) return null;
   const coverage = numberedStepExecutionCoverage(state);
@@ -1677,12 +1695,73 @@ function requiredFixtureEnvironment(testCase = {}) {
 }
 
 const EXPLICIT_V4_EXECUTOR_CASE_IDS = new Set([]);
-// Core-beta cases are contract-first. Add a case type here only after the live
-// executor records every declared action with before/action/after evidence and
-// satisfies the task-bound capability oracle. Until then preflight must stop;
-// falling through to the generic UI/conversation runner would recreate the V4
-// false-block/false-pass problem this contract is designed to remove.
-const CORE_BETA_EXECUTOR_CASE_TYPES = new Set([]);
+// Core-beta cases are contract-first. Every type and command must remain
+// explicitly registered; falling through to a generic runner would recreate
+// the V4 false-block/false-pass problem this contract is designed to remove.
+const CORE_BETA_EXECUTOR_CASE_TYPES = new Set(CORE_BETA_CASE_TYPES);
+
+function coreBetaCommandSupported(caseType, command) {
+  const exact = {
+    run_initialization: new Set([
+      'open_system_settings', 'check_runtime_now', 'readback_runtime_identity',
+      'assert_no_running_task', 'full_runtime_reset', 'wait_runtime_ready',
+      'inventory_skills_before', 'reinstall_skill_layer', 'verify_skill_layer_ready',
+      'inventory_tasks_before', 'purge_all_sessions', 'verify_clean_home',
+    ]),
+    conversation: new Set([
+      'open_clean_task', 'send_prompt', 'collect_reply',
+      'send_turn_1', 'send_turn_2', 'send_turn_3',
+      'send_ambiguous_prompt', 'collect_clarification', 'send_constraints_and_collect',
+      'send_incomplete_roi', 'collect_gap_response', 'send_roi_inputs_and_collect',
+      'send_long_prompt', 'exercise_stream_scroll', 'collect_stable_long_reply',
+      'send_and_wait_running', 'stop_generation', 'send_followup_after_stop',
+      'complete_two_turns', 'reload_and_reopen_task', 'verify_transcript_identity',
+      'build_dispatch_ledger', 'dispatch_batch_without_wait', 'collect_batch_by_task_id',
+      'send_synthetic_pii', 'collect_privacy_response', 'send_secret_request',
+    ]),
+    attachment: new Set([
+      'upload_pdf_fixture', 'send_with_attachment', 'collect_and_readback_attachment',
+      'upload_image_fixtures', 'exercise_attachment_remove_restore', 'collect_visual_readback',
+      'upload_docx_pptx', 'send_with_two_files', 'collect_cross_file_analysis',
+      'upload_csv_xlsx', 'send_comparison_prompt', 'collect_numeric_oracle',
+      'upload_structured_files', 'send_correlation_prompt', 'collect_structured_readback',
+      'reject_unsupported_file', 'reject_single_oversize', 'reject_total_oversize_and_verify_no_send',
+    ]),
+    artifact: new Set([
+      'send_md_html_artifact_prompt', 'collect_and_open_artifacts', 'verify_artifact_content_and_sandbox',
+      'send_docx_prompt', 'collect_docx_artifact', 'readback_docx_content',
+      'send_xlsx_csv_prompt', 'collect_table_artifacts', 'verify_formula_and_csv',
+      'send_pptx_pdf_prompt', 'collect_presentation_artifacts', 'verify_pptx_pdf_content',
+    ]),
+    skill_lifecycle: new Set([
+      'inventory_skill_market', 'sample_ten_skills', 'verify_skill_sample',
+      'verify_skill_preinstall_state', 'install_ten_skills_serially', 'verify_skill_install_results',
+      'verify_installed_skill_list', 'verify_skill_composer_availability', 'verify_skill_history',
+      'verify_skill_task_isolation', 'exercise_skill_uninstall_confirm', 'verify_skill_cleanup',
+    ]),
+    skill_use: new Set(['select_skill_by_slug', 'send_skill_task', 'collect_skill_execution']),
+    expert_lifecycle: new Set([
+      'inventory_experts_before', 'create_three_experts', 'verify_created_experts',
+      'exercise_expert_required_fields', 'configure_expert_dependency', 'edit_and_reopen_expert',
+      'verify_expert_identity_in_task_a', 'switch_to_general_assistant', 'verify_expert_isolation_in_task_b',
+      'delete_created_experts', 'verify_expert_removal', 'verify_expert_history_boundary',
+    ]),
+    expert_use: new Set([
+      'summon_expert_by_id', 'run_three_expert_turns',
+      'verify_expert_execution', 'verify_expert_numeric_result', 'verify_expert_delivery_result',
+    ]),
+    mcp_lifecycle: new Set([
+      'inventory_mcp_services', 'sample_five_mcp_services', 'verify_mcp_sample',
+      'select_five_connectors_by_key', 'readback_connector_binding', 'remove_connectors_and_verify',
+    ]),
+    mcp_use: new Set(['select_connector_by_key', 'run_mcp_turn_1', 'run_mcp_turn_2_and_verify']),
+    recovery: new Set([
+      'dispatch_long_task', 'close_and_reopen_embedded_qwork', 'recover_task_by_id',
+      'dispatch_recovery_task', 'inject_runtime_exit', 'recover_runtime_and_continue',
+    ]),
+  };
+  return exact[caseType]?.has(String(command || '')) === true;
+}
 
 export function validateCasebookExecutorReadiness(selectedCases = [], {
   controlPlaneUrl = '',
@@ -1721,6 +1800,19 @@ export function validateCasebookExecutorReadiness(selectedCases = [], {
           case_type: audit.case_type,
           reason: `core-beta ${audit.case_type} 尚未登记逐动作执行器；禁止退化到通用路径。`,
         });
+      }
+      if (audit.ok && CORE_BETA_EXECUTOR_CASE_TYPES.has(audit.case_type)) {
+        for (const action of audit.parsed.action_plan) {
+          if (coreBetaCommandSupported(audit.case_type, action.command)) continue;
+          frameworkIssues.push({
+            id: testCase.id,
+            kind: 'core_beta_command_missing',
+            case_type: audit.case_type,
+            command: action.command,
+            action_id: action.action_id,
+            reason: `core-beta ${audit.case_type} 未登记 command=${action.command}；禁止启动后再退化或崩溃。`,
+          });
+        }
       }
     }
     const expectedEnvironment = requiredFixtureEnvironment(testCase);
@@ -2938,7 +3030,18 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       }
     }
 
-    if (isSitCase(testCase)) {
+    if (String(testCase.contract_version || '') === CORE_BETA_CASEBOOK_CONTRACT_VERSION) {
+      await executeCoreBetaCase({
+        page,
+        state,
+        testCase,
+        caseDir,
+        timeoutMs,
+        fixturesDir,
+        options,
+        runtime,
+      });
+    } else if (isSitCase(testCase)) {
       await executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, selectors, options, playwright, runtime });
     } else if (isSmokeSkillCase(testCase) || isSmokeExpertCase(testCase)) {
       await executeSmokeFunctionalCase({ page, state, testCase, caseDir, timeoutMs });
@@ -2966,6 +3069,2824 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
     await maybeRequestLlmReview({ page, state, testCase, caseDir, options, force: true }).catch(() => {});
     return await finishCase({ page, state, caseDir });
   }
+}
+
+function coreBetaParseJson(value, fallback) {
+  if (value && typeof value === 'object') return value;
+  try {
+    return JSON.parse(String(value || ''));
+  } catch {
+    return fallback;
+  }
+}
+
+function coreBetaRunRoot(caseDir) {
+  return path.resolve(caseDir, '..', '..');
+}
+
+function coreBetaSharedLedgerFile(caseDir) {
+  return path.join(coreBetaRunRoot(caseDir), 'core-beta-shared-ledger.json');
+}
+
+function loadCoreBetaSharedLedger(caseDir) {
+  const file = coreBetaSharedLedgerFile(caseDir);
+  if (!fs.existsSync(file)) {
+    return {
+      schema_version: 1,
+      created_at: new Date().toISOString(),
+      skills: { inventory: [], sample: [], installed: [], used: [] },
+      experts: { before: [], created: [], used: [] },
+      mcp: { inventory: [], sample: [], used: [] },
+      tasks: {},
+    };
+  }
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`core-beta 共享账本不可读：${error.message}`);
+  }
+}
+
+function saveCoreBetaSharedLedger(caseDir, ledger) {
+  const file = coreBetaSharedLedgerFile(caseDir);
+  ledger.updated_at = new Date().toISOString();
+  writeJsonFile(file, ledger);
+  return file;
+}
+
+function ensureCoreBetaEvidence(state) {
+  if (!state.artifacts.core_beta_evidence || typeof state.artifacts.core_beta_evidence !== 'object') {
+    state.artifacts.core_beta_evidence = {};
+  }
+  return state.artifacts.core_beta_evidence;
+}
+
+function setCoreBetaEvidence(state, role, evidence) {
+  const store = ensureCoreBetaEvidence(state);
+  store[role] = {
+    available: true,
+    captured_at: new Date().toISOString(),
+    ...evidence,
+  };
+  return store[role];
+}
+
+function coreBetaPersistRoleEvidence(state, caseDir) {
+  const file = path.join(caseDir, 'core-beta-role-evidence.json');
+  writeJsonFile(file, ensureCoreBetaEvidence(state));
+  state.artifacts.core_beta_role_evidence = file;
+}
+
+async function runCoreBetaNumberedAction({
+  page,
+  pageProvider,
+  state,
+  caseDir,
+  action,
+  planLength,
+  execute,
+}) {
+  const activePage = () => pageProvider?.() || page;
+  const number = Number(action.number);
+  const prefix = `core-step-${String(number).padStart(2, '0')}-${slugify(action.command)}`;
+  const before = await shot(activePage(), caseDir, `${prefix}-before`);
+  state.screenshots[`${prefix}_before`] = before;
+  const startedAt = new Date().toISOString();
+  let result;
+  try {
+    result = await execute();
+  } catch (error) {
+    const afterError = await shot(activePage(), caseDir, `${prefix}-error`).catch(() => '');
+    if (afterError) state.screenshots[`${prefix}_error`] = afterError;
+    const receipt = {
+      action_id: action.action_id,
+      number,
+      command: action.command,
+      declared_step: action.declared_step,
+      selector_or_testid: '',
+      event: 'exception',
+      dispatched_at: startedAt,
+      completed_at: new Date().toISOString(),
+      before_screenshot: before,
+      after_screenshot: afterError,
+      expected_state: action.expected_state,
+      expected_state_observed: false,
+      error: error.message,
+    };
+    if (!Array.isArray(state.artifacts.core_beta_action_receipts)) state.artifacts.core_beta_action_receipts = [];
+    state.artifacts.core_beta_action_receipts.push(receipt);
+    recordNumberedStep(
+      state,
+      number,
+      `${action.command}（${action.action_id}）`,
+      action.expected_state,
+      error.message,
+      'failed',
+      afterError || before,
+      'automation_error',
+    );
+    throw error;
+  }
+  const after = await shot(activePage(), caseDir, `${prefix}-after`);
+  state.screenshots[`${prefix}_after`] = after;
+  const ok = result?.ok !== false;
+  const receipt = {
+    action_id: action.action_id,
+    number,
+    command: action.command,
+    declared_step: action.declared_step,
+    selector_or_testid: String(result?.selector_or_testid || result?.selector || action.command),
+    event: String(result?.event || 'execute'),
+    dispatched_at: startedAt,
+    completed_at: new Date().toISOString(),
+    before_screenshot: before,
+    after_screenshot: after,
+    expected_state: action.expected_state,
+    expected_state_observed: ok && result?.expected_state_observed !== false,
+    state_readback: result?.state_readback || null,
+    actual: result?.actual || '',
+  };
+  if (!Array.isArray(state.artifacts.core_beta_action_receipts)) state.artifacts.core_beta_action_receipts = [];
+  state.artifacts.core_beta_action_receipts.push(receipt);
+  const receipts = state.artifacts.core_beta_action_receipts;
+  setCoreBetaEvidence(state, 'action_receipt', {
+    available: receipts.length === planLength
+      && receipts.every((item) => item.expected_state_observed === true),
+    receipt_count: receipts.length,
+    declared_action_count: planLength,
+    receipts,
+    source: 'core-beta exact action-plan executor',
+  });
+  recordNumberedStep(
+    state,
+    number,
+    `${action.command}（${action.action_id}）`,
+    action.expected_state,
+    result?.actual || JSON.stringify(result?.state_readback || {}),
+    ok ? 'passed' : result?.status === 'blocked' ? 'blocked' : 'failed',
+    after,
+    ok ? '' : result?.category || (result?.status === 'blocked' ? 'blocked' : 'bug'),
+  );
+  coreBetaPersistRoleEvidence(state, caseDir);
+  return result || { ok: true };
+}
+
+function coreBetaTurnOracle(state, turn, reply, label) {
+  const text = String(reply?.deltaText || '');
+  const mustInclude = Array.isArray(turn?.must_include) ? turn.must_include : [];
+  const mustNotInclude = Array.isArray(turn?.must_not_include) ? turn.must_not_include : [];
+  const missing = mustInclude.filter((item) => !text.includes(String(item)));
+  const forbidden = mustNotInclude.filter((item) => text.includes(String(item)));
+  const ok = !reply?.incomplete && text.trim().length > 15 && missing.length === 0 && forbidden.length === 0;
+  recordAssertion(
+    state,
+    `Core Beta Oracle（${label}）`,
+    `${turn?.oracle || '回复满足声明 Oracle'}；must_include=${mustInclude.join('|') || '无'}；must_not_include=${mustNotInclude.join('|') || '无'}`,
+    ok,
+    `incomplete=${Boolean(reply?.incomplete)}；missing=${missing.join('|') || '无'}；forbidden=${forbidden.join('|') || '无'}；reply=${clip(text, 360)}`,
+  );
+  return { ok, missing, forbidden };
+}
+
+async function coreBetaRunTurn(ctx, turnIndex, {
+  openTask = false,
+  resetCapabilities = false,
+  label = '',
+  composerPrepared = false,
+} = {}) {
+  const { page, state, testCase, caseDir, timeoutMs } = ctx;
+  const turn = ctx.turns[turnIndex];
+  if (!turn) throw new Error(`Case ${state.id} 缺少 turns_json[${turnIndex}]。`);
+  if (openTask) await openNewTask(page, state);
+  if (resetCapabilities) {
+    const reset = await resetComposerControls(page, state, caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('新任务能力清理失败。');
+    const capabilities = await currentCapabilities(page);
+    const selectedSkills = Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [];
+    const selectedConnectors = Array.isArray(capabilities?.selectedConnectors) ? capabilities.selectedConnectors : [];
+    const currentExpert = capabilities?.currentExpert || null;
+    const clean = selectedSkills.length === 0 && selectedConnectors.length === 0 && !currentExpert;
+    recordAssertion(
+      state,
+      'Core Beta 干净任务能力状态',
+      '普通会话发送前 selectedSkills/selectedConnectors 为空且 currentExpert 为空。',
+      clean,
+      JSON.stringify({ selectedSkills, selectedConnectors, currentExpert }),
+      clean ? '' : 'automation_error',
+    );
+    if (!clean) throw new Error('新任务仍残留专家/Skill/MCP 选择，已阻止发送。');
+    setCoreBetaEvidence(state, 'public_state_readback', {
+      source: 'window.agent.capabilities',
+      state: { selectedSkills, selectedConnectors, currentExpert },
+    });
+  }
+  const turnLabel = label || `第 ${turnIndex + 1} 轮`;
+  const reply = await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt: turn.prompt,
+    label: turnLabel,
+    composerPrepared,
+  });
+  ctx.replies[turnIndex] = reply;
+  const oracle = coreBetaTurnOracle(state, turn, reply, turnLabel);
+  const publicState = await qbotE2EState(page);
+  const taskId = String(publicState?.activeId || '');
+  ctx.taskIds[turnIndex] = taskId;
+  if (!taskId) {
+    recordAssertion(
+      state,
+      `Core Beta taskId（${turnLabel}）`,
+      '确认发送后必须从公开状态读回非空 taskId。',
+      false,
+      JSON.stringify(publicState),
+      'automation_error',
+    );
+  }
+  const stable = !reply.incomplete && Number(reply.stable_observations || 0) >= 2;
+  setCoreBetaEvidence(state, 'send_receipt', {
+    source: 'send_receipts',
+    confirmed_count: (state.artifacts.send_receipts || []).filter((item) => item.confirmed_at).length,
+  });
+  setCoreBetaEvidence(state, 'reply_completion', {
+    available: stable,
+    source: 'waitForReply',
+    task_id: taskId,
+    stable_observations: Number(reply.stable_observations || 0),
+    running: Boolean(reply.incomplete),
+    waited_ms: Number(reply.waited_ms || 0),
+  });
+  setCoreBetaEvidence(state, 'public_state_readback', {
+    source: 'window.__qbotE2E.state',
+    active_id: taskId,
+    message_count: Number(publicState?.messageCount || 0),
+    running: Boolean(publicState?.running),
+  });
+  coreBetaPersistRoleEvidence(state, caseDir);
+  return { reply, taskId, oracle, stable };
+}
+
+async function openCoreBetaSystemSettings(page, state, caseDir) {
+  await clearUi(page);
+  await ensureSidebarExpanded(page, state);
+  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
+  if (!(await visible(menu, 2500))) throw new Error('未找到设置菜单。');
+  await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
+  const settings = page.locator('[data-testid="nav-settings"]').first();
+  if (!(await visible(settings, 1800))) throw new Error('设置菜单未展示个人设置入口。');
+  await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  if (!(await visible(maintenance, 5000))) throw new Error('未进入运行时维护区。');
+  const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
+  const capabilities = await currentCapabilities(page);
+  const readback = {
+    maintenance_text: clip(text, 1600),
+    runtime_family: capabilities?.runtimeOptions?.runtimeFamily || capabilities?.runtimeFamily || '',
+    connection_view: capabilities?.connectionView || null,
+  };
+  state.artifacts.core_beta_runtime_identity = readback;
+  setCoreBetaEvidence(state, 'public_state_readback', {
+    source: 'assistant-runtime-maintenance + window.agent.capabilities',
+    state: readback,
+  });
+  return {
+    ok: /当前|版本|运行时|runtime|SDK|Claude|Codex/i.test(text),
+    selector_or_testid: 'assistant-runtime-maintenance',
+    event: 'open',
+    state_readback: readback,
+    actual: clip(text, 600),
+  };
+}
+
+async function executeCoreBetaMaintenanceAction({
+  page,
+  state,
+  caseDir,
+  testId,
+  acceptConfirm = false,
+  waitPattern,
+  timeoutMs,
+}) {
+  const button = page.locator(`[data-testid="${testId}"]`).first();
+  if (!(await visible(button, 3000))) throw new Error(`未找到维护按钮 ${testId}。`);
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  let dialog = { message: '' };
+  if (acceptConfirm) {
+    dialog = await captureDialogDuringWithAction(
+      page,
+      async () => button.click({ force: true }).catch(async () => button.evaluate((element) => element.click())),
+      { accept: true, timeoutMs: 5000 },
+    );
+    if (!dialog.message) throw new Error(`${testId} 未出现预期确认弹窗，已停止破坏性操作。`);
+  } else {
+    await button.click({ force: true }).catch(async () => button.evaluate((element) => element.click()));
+  }
+  const busyObserved = await page.waitForFunction(({ id }) => {
+    const target = document.querySelector(`[data-testid="${id}"]`);
+    const region = document.querySelector('[data-testid="assistant-runtime-maintenance"]');
+    return Boolean(target?.getAttribute('aria-busy') === 'true'
+      || target?.hasAttribute('disabled')
+      || /检查中|重置中|重装中|清空中|处理中|准备中|正在/.test(`${target?.textContent || ''}\n${region?.textContent || ''}`));
+  }, { id: testId }, { timeout: 8000 }).then(() => true).catch(() => false);
+  const deadline = Date.now() + Math.max(30_000, Number(timeoutMs || 0));
+  let afterText = '';
+  let terminal = false;
+  while (Date.now() < deadline) {
+    afterText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+    const disabled = await button.isDisabled().catch(() => false);
+    if (!disabled && waitPattern.test(afterText)) {
+      terminal = true;
+      break;
+    }
+    await page.waitForTimeout(1000);
+  }
+  const stateReadback = {
+    before_text: clip(beforeText, 1200),
+    after_text: clip(afterText, 1800),
+    dialog_message: dialog.message,
+    busy_observed: busyObserved,
+    terminal,
+    button_enabled_after: !await button.isDisabled().catch(() => true),
+  };
+  state.artifacts[`core_beta_${testId.replaceAll('-', '_')}`] = stateReadback;
+  return {
+    ok: busyObserved && terminal,
+    selector_or_testid: testId,
+    event: 'click',
+    state_readback: stateReadback,
+    actual: JSON.stringify(stateReadback),
+  };
+}
+
+async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options, runtime }) {
+  const audit = validateCoreBetaCase(testCase);
+  if (!audit.ok) throw new Error(`Core Beta 契约校验失败：${audit.errors.join('；')}`);
+  const ctx = {
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    fixturesDir,
+    options,
+    runtime,
+    audit,
+    plan: audit.parsed.action_plan,
+    turns: audit.parsed.turns,
+    capabilityPolicy: audit.parsed.capability_policy || {},
+    assertionContract: audit.parsed.assertion_contract || {},
+    replies: [],
+    taskIds: [],
+    attachments: [],
+    ledger: loadCoreBetaSharedLedger(caseDir),
+  };
+  state.artifacts.core_beta_contract_audit = audit;
+  state.artifacts.core_beta_shared_ledger = coreBetaSharedLedgerFile(caseDir);
+  for (const action of ctx.plan) {
+    await runCoreBetaNumberedAction({
+      page: runtime?.page || page,
+      pageProvider: () => runtime?.page || ctx.page,
+      state,
+      caseDir,
+      action,
+      planLength: ctx.plan.length,
+      execute: () => executeCoreBetaCommand(ctx, action),
+    });
+    ctx.page = runtime?.page || ctx.page;
+  }
+  await finalizeCoreBetaCase(ctx);
+  saveCoreBetaSharedLedger(caseDir, ctx.ledger);
+  coreBetaPersistRoleEvidence(state, caseDir);
+}
+
+async function finalizeCoreBetaCase(ctx) {
+  ctx.page = ctx.runtime?.page || ctx.page;
+  await ctx.page.keyboard.press('Escape').catch(() => {});
+  await closeModal(ctx.page).catch(() => {});
+  const capabilitiesBefore = await currentCapabilities(ctx.page);
+  const lifecycle = ctx.audit.case_type === 'run_initialization'
+    || /_lifecycle$/.test(ctx.audit.case_type);
+  let reset = true;
+  if (lifecycle) {
+    if (coreBetaExpertIdentity(capabilitiesBefore?.currentExpert)) {
+      reset = await selectGeneralAssistantForCase(ctx.page, ctx.state, ctx.caseDir);
+    }
+    if (reset) {
+      await openNewTask(ctx.page, ctx.state);
+      reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+        skillMode: 'disabled',
+        connectorMode: 'disabled',
+      });
+    }
+  }
+  const capabilities = await currentCapabilities(ctx.page);
+  const task = await qbotE2EState(ctx.page);
+  const readback = {
+    source: 'final public capabilities + task state',
+    lifecycle_cleanup_required: lifecycle,
+    reset,
+    selected_skills: capabilities?.selectedSkills || [],
+    selected_connectors: capabilities?.selectedConnectors || [],
+    current_expert: capabilities?.currentExpert || null,
+    active_id: task?.activeId || '',
+    running: Boolean(task?.running),
+    message_count: Number(task?.messageCount || 0),
+  };
+  const clean = !lifecycle || (
+    reset
+    && readback.selected_skills.length === 0
+    && readback.selected_connectors.length === 0
+    && !coreBetaExpertIdentity(readback.current_expert)
+    && !readback.running
+  );
+  ctx.state.artifacts.core_beta_final_public_state = readback;
+  setCoreBetaEvidence(ctx.state, 'public_state_readback', {
+    available: Boolean(capabilities && task?.available !== false),
+    ...readback,
+  });
+  if (lifecycle) {
+    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
+      available: clean,
+      ...readback,
+    });
+    recordAssertion(
+      ctx.state,
+      'Core Beta Case 清理读回',
+      '生命周期/初始化 Case 结束后，当前任务不得残留 Skill、MCP、专家或运行中状态；共享资源仅按 Casebook 声明保留。',
+      clean,
+      JSON.stringify(readback),
+      clean ? '' : 'automation_error',
+    );
+  }
+}
+
+async function executeCoreBetaCommand(ctx, action) {
+  const command = String(action.command || '');
+  if (ctx.audit.case_type === 'run_initialization') {
+    return executeCoreBetaInitializationCommand(ctx, command);
+  }
+  if (ctx.audit.case_type === 'conversation') {
+    return executeCoreBetaConversationCommand(ctx, command);
+  }
+  if (ctx.audit.case_type === 'attachment') {
+    return executeCoreBetaAttachmentCommand(ctx, command);
+  }
+  if (ctx.audit.case_type === 'artifact') {
+    return executeCoreBetaArtifactCommand(ctx, command);
+  }
+  if (/^skill_/.test(ctx.audit.case_type)) {
+    return executeCoreBetaSkillCommand(ctx, command);
+  }
+  if (/^expert_/.test(ctx.audit.case_type)) {
+    return executeCoreBetaExpertCommand(ctx, command);
+  }
+  if (/^mcp_/.test(ctx.audit.case_type)) {
+    return executeCoreBetaMcpCommand(ctx, command);
+  }
+  if (ctx.audit.case_type === 'recovery') {
+    return executeCoreBetaRecoveryCommand(ctx, command);
+  }
+  throw new Error(`Core Beta 未实现 case_type=${ctx.audit.case_type} command=${command}`);
+}
+
+async function executeCoreBetaInitializationCommand(ctx, command) {
+  const { page, state, caseDir, timeoutMs } = ctx;
+  if (command === 'open_system_settings') return openCoreBetaSystemSettings(page, state, caseDir);
+  if (command === 'check_runtime_now') {
+    return executeCoreBetaMaintenanceAction({
+      page,
+      state,
+      caseDir,
+      testId: 'assistant-prepare-python-runtimes',
+      waitPattern: /就绪|完成|ready|Claude Code SDK|Codex SDK/i,
+      timeoutMs,
+    });
+  }
+  if (command === 'readback_runtime_identity' || command === 'wait_runtime_ready') {
+    const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+    if (!(await visible(maintenance, 3000))) await openCoreBetaSystemSettings(page, state, caseDir);
+    const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
+    const capabilities = await currentCapabilities(page);
+    const composerReady = await visible(page.locator('[data-testid="composer-input"], .aui-composer-input').first(), 800);
+    const ready = /就绪|ready|Claude Code SDK|Codex SDK/i.test(text) && !/失败|不可用|error/i.test(text);
+    const readback = { ready, composer_ready: composerReady, text: clip(text, 1600), capabilities };
+    state.artifacts.core_beta_runtime_ready_readback = readback;
+    setCoreBetaEvidence(state, 'public_state_readback', {
+      source: 'assistant-runtime-maintenance + window.agent.capabilities',
+      state: readback,
+    });
+    if (command === 'wait_runtime_ready') {
+      setCoreBetaEvidence(state, 'cleanup_readback', {
+        source: 'runtime reset terminal readback',
+        state: readback,
+      });
+    }
+    return {
+      ok: ready,
+      selector_or_testid: 'assistant-runtime-maintenance',
+      event: 'readback',
+      state_readback: readback,
+      actual: JSON.stringify({ ready, composerReady, text: clip(text, 500) }),
+    };
+  }
+  if (command === 'assert_no_running_task') {
+    await openNewTask(page, state);
+    const task = await qbotE2EState(page);
+    const ok = task?.available && !task.activeId && Number(task.messageCount || 0) === 0 && !task.running;
+    state.artifacts.core_beta_pre_reset_task_state = task;
+    return {
+      ok,
+      selector_or_testid: 'nav-new-task',
+      event: 'readback',
+      state_readback: task,
+      actual: JSON.stringify(task),
+    };
+  }
+  if (command === 'full_runtime_reset') {
+    await openCoreBetaSystemSettings(page, state, caseDir);
+    return executeCoreBetaMaintenanceAction({
+      page,
+      state,
+      caseDir,
+      testId: 'assistant-runtime-reset-all',
+      acceptConfirm: true,
+      waitPattern: /完成|就绪|ready|成功|当前/i,
+      timeoutMs: Math.max(timeoutMs, 600000),
+    });
+  }
+  if (command === 'inventory_skills_before' || command === 'inventory_tasks_before') {
+    const capabilities = await currentCapabilities(page);
+    const task = await qbotE2EState(page);
+    const inventory = { capabilities, task, captured_at: new Date().toISOString() };
+    state.artifacts[`core_beta_${command}`] = inventory;
+    setCoreBetaEvidence(state, 'capability_inventory', {
+      source: 'window.agent.capabilities',
+      inventory,
+    });
+    return {
+      ok: Boolean(capabilities && typeof capabilities === 'object'),
+      selector_or_testid: 'window.agent.capabilities',
+      event: 'readback',
+      state_readback: inventory,
+      actual: JSON.stringify(inventory),
+    };
+  }
+  if (command === 'reinstall_skill_layer') {
+    await openCoreBetaSystemSettings(page, state, caseDir);
+    return executeCoreBetaMaintenanceAction({
+      page,
+      state,
+      caseDir,
+      testId: 'assistant-skills-reinstall',
+      acceptConfirm: true,
+      waitPattern: /完成|就绪|ready|成功|当前/i,
+      timeoutMs: Math.max(timeoutMs, 600000),
+    });
+  }
+  if (command === 'verify_skill_layer_ready') {
+    const capabilities = await currentCapabilities(page);
+    const skills = Array.isArray(capabilities?.skills) ? capabilities.skills : [];
+    const readback = { skill_count: skills.length, skills, capabilities };
+    const ok = Boolean(capabilities && typeof capabilities === 'object');
+    setCoreBetaEvidence(state, 'capability_inventory', {
+      source: 'window.agent.capabilities after reinstall',
+      inventory: readback,
+    });
+    setCoreBetaEvidence(state, 'cleanup_readback', {
+      source: 'skill layer reinstall terminal readback',
+      state: readback,
+    });
+    return {
+      ok,
+      selector_or_testid: 'window.agent.capabilities',
+      event: 'readback',
+      state_readback: readback,
+      actual: `skill_count=${skills.length}`,
+    };
+  }
+  if (command === 'purge_all_sessions') {
+    await openCoreBetaSystemSettings(page, state, caseDir);
+    return executeCoreBetaMaintenanceAction({
+      page,
+      state,
+      caseDir,
+      testId: 'assistant-sessions-purge',
+      acceptConfirm: true,
+      waitPattern: /完成|清空|成功|当前/i,
+      timeoutMs: Math.max(timeoutMs, 180000),
+    });
+  }
+  if (command === 'verify_clean_home') {
+    await openNewTask(page, state);
+    const task = await qbotE2EState(page);
+    const capabilities = await currentCapabilities(page);
+    const selectedSkills = Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [];
+    const selectedConnectors = Array.isArray(capabilities?.selectedConnectors) ? capabilities.selectedConnectors : [];
+    const currentExpert = capabilities?.currentExpert || null;
+    const ok = !task?.activeId
+      && Number(task?.messageCount || 0) === 0
+      && selectedSkills.length === 0
+      && selectedConnectors.length === 0
+      && !currentExpert;
+    const readback = { task, selectedSkills, selectedConnectors, currentExpert };
+    setCoreBetaEvidence(state, 'cleanup_readback', {
+      source: 'public clean-home readback',
+      state: readback,
+    });
+    setCoreBetaEvidence(state, 'public_state_readback', {
+      source: 'window.__qbotE2E.state + window.agent.capabilities',
+      state: readback,
+    });
+    return {
+      ok,
+      selector_or_testid: 'nav-new-task',
+      event: 'readback',
+      state_readback: readback,
+      actual: JSON.stringify(readback),
+    };
+  }
+  throw new Error(`Core Beta 初始化 command 未实现：${command}`);
+}
+
+function coreBetaReplyReadback(ctx, index = ctx.replies.length - 1) {
+  const reply = ctx.replies[index];
+  const turn = ctx.turns[index];
+  if (!reply || !turn) {
+    return {
+      ok: false,
+      category: 'automation_error',
+      actual: `缺少第 ${index + 1} 轮已完成回复缓存。`,
+      state_readback: { turn_index: index, reply_present: false },
+    };
+  }
+  const oracle = coreBetaTurnOracle(ctx.state, turn, reply, `第 ${index + 1} 轮复核`);
+  return {
+    ok: oracle.ok,
+    selector_or_testid: 'assistant-thread',
+    event: 'readback',
+    state_readback: {
+      turn_index: index,
+      task_id: ctx.taskIds[index] || '',
+      reply_sha256: sha256Text(reply.deltaText || ''),
+      stable_observations: Number(reply.stable_observations || 0),
+      oracle,
+    },
+    actual: `taskId=${ctx.taskIds[index] || 'missing'}；replySha256=${sha256Text(reply.deltaText || '')}；oracle=${oracle.ok}`,
+  };
+}
+
+async function coreBetaDispatchTurnWithoutWait(ctx, turnIndex, {
+  openTask = false,
+  resetCapabilities = false,
+  promptOverride = '',
+  label = '',
+} = {}) {
+  const { page, state, caseDir } = ctx;
+  const turn = ctx.turns[turnIndex] || {};
+  const prompt = promptOverride || turn.prompt;
+  if (!prompt) throw new Error(`第 ${turnIndex + 1} 轮缺少 prompt。`);
+  if (openTask) await openNewTask(page, state);
+  if (resetCapabilities) {
+    const reset = await resetComposerControls(page, state, caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('派发前能力清理失败。');
+  }
+  const before = await conversationSnapshot(page);
+  if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
+  state.artifacts.sent_prompts.push({
+    label: label || `第 ${turnIndex + 1} 轮`,
+    prompt,
+    recorded_at: new Date().toISOString(),
+  });
+  await fillComposer(page, prompt, state, `${label || `第 ${turnIndex + 1} 轮`}输入`);
+  const receipt = await send(page, state, `发送${label || `第 ${turnIndex + 1} 轮`}`);
+  const publicState = await qbotE2EState(page);
+  const taskId = String(publicState?.activeId || receipt?.snapshot?.activeId || '');
+  if (!taskId) throw new Error('发送已接受但未从公开状态读回 taskId。');
+  ctx.pending = {
+    turnIndex,
+    turn: { ...turn, prompt },
+    before,
+    taskId,
+    startedAtMs: Date.now(),
+    label: label || `第 ${turnIndex + 1} 轮`,
+  };
+  ctx.taskIds[turnIndex] = taskId;
+  setCoreBetaEvidence(state, 'send_receipt', {
+    source: 'confirmed product send receipt',
+    task_id: taskId,
+    receipt_reasons: receipt.reasons,
+  });
+  return {
+    ok: true,
+    selector_or_testid: 'composer-send',
+    event: 'click',
+    state_readback: { task_id: taskId, running: Boolean(publicState?.running), receipt: receipt.reasons },
+    actual: `taskId=${taskId}；running=${Boolean(publicState?.running)}；receipt=${receipt.reasons.join('；')}`,
+  };
+}
+
+async function coreBetaCollectPendingTurn(ctx) {
+  if (!ctx.pending) throw new Error('没有可回收的已派发会话。');
+  const { page, state, testCase, caseDir, timeoutMs } = ctx;
+  const pending = ctx.pending;
+  const waitConfig = replyWaitConfig(testCase, timeoutMs);
+  const reply = await waitForReply(page, pending.before, waitConfig.timeoutMs, {
+    ignoredText: [pending.turn.prompt, testCase.scenario, testCase.test_data],
+    expectedUserText: pending.turn.prompt,
+    state,
+    caseDir,
+    label: pending.label,
+    minWaitMs: waitConfig.minWaitMs,
+    waitKind: waitConfig.kind,
+    startedAtMs: pending.startedAtMs,
+  });
+  ctx.replies[pending.turnIndex] = reply;
+  writeReplyArtifacts(state, caseDir, [{ ...reply, label: pending.label }]);
+  recordReplyWaitAssertion(state, reply, pending.label);
+  recordReplyAssertions(state, testCase, pending.turn.prompt, reply, pending.label);
+  const oracle = coreBetaTurnOracle(state, pending.turn, reply, pending.label);
+  const current = await qbotE2EState(page);
+  const taskId = String(current?.activeId || pending.taskId);
+  const stable = !reply.incomplete && Number(reply.stable_observations || 0) >= 2;
+  setCoreBetaEvidence(state, 'reply_completion', {
+    available: stable,
+    source: 'waitForReply',
+    task_id: taskId,
+    stable_observations: Number(reply.stable_observations || 0),
+    running: Boolean(reply.incomplete),
+    waited_ms: Number(reply.waited_ms || 0),
+  });
+  setCoreBetaEvidence(state, 'public_state_readback', {
+    source: 'window.__qbotE2E.state',
+    active_id: taskId,
+    message_count: Number(current?.messageCount || 0),
+    running: Boolean(current?.running),
+  });
+  ctx.pending = null;
+  return {
+    ok: oracle.ok && stable && taskId === pending.taskId,
+    selector_or_testid: 'assistant-thread',
+    event: 'collect',
+    state_readback: {
+      task_id: taskId,
+      expected_task_id: pending.taskId,
+      stable,
+      oracle,
+      reply_sha256: sha256Text(reply.deltaText || ''),
+    },
+    actual: `taskId=${taskId}；stable=${stable}；oracle=${oracle.ok}；replySha256=${sha256Text(reply.deltaText || '')}`,
+  };
+}
+
+async function coreBetaStopGeneration(ctx) {
+  if (!ctx.pending) throw new Error('停止生成前没有运行中的派发任务。');
+  const { page, state, caseDir } = ctx;
+  const cancel = page.locator('[data-testid="composer-cancel"], [aria-label*="停止"], button:has-text("停止生成")').first();
+  const runningBefore = await isAgentGenerating(page);
+  if (!(await visible(cancel, 5000))) {
+    return {
+      ok: false,
+      category: 'bug',
+      selector_or_testid: 'composer-cancel',
+      event: 'readback',
+      state_readback: { running_before: runningBefore, cancel_visible: false },
+      actual: `runningBefore=${runningBefore}；未找到停止生成入口。`,
+    };
+  }
+  await cancel.click({ force: true }).catch(async () => cancel.evaluate((element) => element.click()));
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline && await isAgentGenerating(page)) await page.waitForTimeout(500);
+  const runningAfter = await isAgentGenerating(page);
+  const snapshot = await conversationSnapshot(page);
+  const reply = {
+    fullText: snapshot.latestAssistantText,
+    deltaText: snapshot.latestAssistantText,
+    incomplete: true,
+    incomplete_reason: '用户通过产品停止入口终止生成。',
+    stable_observations: 0,
+    waited_ms: Date.now() - ctx.pending.startedAtMs,
+  };
+  ctx.replies[ctx.pending.turnIndex] = reply;
+  writeReplyArtifacts(state, caseDir, [{ ...reply, label: `${ctx.pending.label}（停止后）` }]);
+  state.artifacts.core_beta_stopped_task = {
+    task_id: ctx.pending.taskId,
+    running_before: runningBefore,
+    running_after: runningAfter,
+    retained_chars: snapshot.latestAssistantText.length,
+  };
+  ctx.pending = null;
+  return {
+    ok: runningBefore && !runningAfter && snapshot.latestAssistantText.length > 0,
+    selector_or_testid: 'composer-cancel',
+    event: 'click',
+    state_readback: state.artifacts.core_beta_stopped_task,
+    actual: JSON.stringify(state.artifacts.core_beta_stopped_task),
+  };
+}
+
+async function coreBetaDispatchBatch(ctx) {
+  const requested = Math.min(20, Math.max(1, Number(ctx.state.batch_size || 20)));
+  const prepared = Array.isArray(ctx.batch) && ctx.batch.length === requested
+    ? ctx.batch
+    : Array.from({ length: requested }, (_, index) => ({
+      index,
+      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${ctx.state.id}:${index}`).slice(0, 8)}`,
+    }));
+  const entries = prepared.map((preparedEntry, index) => ({
+      index,
+      marker: preparedEntry.marker,
+      prompt: `请给“${preparedEntry.marker}”这条内测记录写一句不超过30字的风险提示，回复必须原样包含该标记。`,
+      task_id: '',
+      dispatched_at: '',
+      collected_at: '',
+      reply_sha256: '',
+      ok: false,
+    }));
+  ctx.batch = entries;
+  for (const entry of entries) {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error(`批量派发第 ${entry.index + 1} 条能力清理失败。`);
+    const before = await conversationSnapshot(ctx.page);
+    if (!Array.isArray(ctx.state.artifacts.sent_prompts)) ctx.state.artifacts.sent_prompts = [];
+    ctx.state.artifacts.sent_prompts.push({
+      label: `批量派发 ${entry.index + 1}`,
+      prompt: entry.prompt,
+      recorded_at: new Date().toISOString(),
+    });
+    await fillComposer(ctx.page, entry.prompt, ctx.state, `批量派发 ${entry.index + 1} 输入`);
+    const receipt = await send(ctx.page, ctx.state, `批量派发 ${entry.index + 1}`);
+    const task = await qbotE2EState(ctx.page);
+    entry.task_id = String(task?.activeId || receipt?.snapshot?.activeId || '');
+    entry.dispatched_at = new Date().toISOString();
+    entry.before = before;
+    if (!entry.task_id) throw new Error(`批量派发第 ${entry.index + 1} 条缺少 taskId。`);
+  }
+  const ids = entries.map((item) => item.task_id);
+  const unique = new Set(ids).size === entries.length;
+  ctx.state.artifacts.core_beta_batch_dispatch = entries.map(({ before, ...item }) => item);
+  writeJsonFile(path.join(ctx.caseDir, 'batch-dispatch-ledger.json'), ctx.state.artifacts.core_beta_batch_dispatch);
+  return {
+    ok: unique,
+    selector_or_testid: 'composer-send',
+    event: 'dispatch-batch',
+    state_readback: { requested, dispatched: entries.length, unique_task_ids: new Set(ids).size },
+    actual: `dispatched=${entries.length}；uniqueTaskIds=${new Set(ids).size}`,
+  };
+}
+
+async function coreBetaCollectBatch(ctx) {
+  if (!Array.isArray(ctx.batch) || !ctx.batch.length) throw new Error('批量回收前没有派发账本。');
+  for (const entry of ctx.batch) {
+    const reopened = await reopenSessionAndReadback(ctx.page, entry.task_id);
+    if (!reopened.ok || String(reopened.activeId || '') !== entry.task_id) {
+      throw new Error(`无法按 taskId 重开批量任务 ${entry.task_id}：${reopened.reason || reopened.activeId || 'unknown'}`);
+    }
+    const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
+    const reply = await waitForReply(ctx.page, entry.before, waitConfig.timeoutMs, {
+      ignoredText: [entry.prompt],
+      expectedUserText: entry.prompt,
+      state: ctx.state,
+      caseDir: ctx.caseDir,
+      label: `批量回收 ${entry.index + 1}`,
+      minWaitMs: waitConfig.minWaitMs,
+      waitKind: waitConfig.kind,
+    });
+    const task = await qbotE2EState(ctx.page);
+    const currentTaskId = String(task?.activeId || '');
+    entry.collected_at = new Date().toISOString();
+    entry.reply_sha256 = sha256Text(reply.deltaText || '');
+    entry.reply = reply.deltaText;
+    entry.ok = currentTaskId === entry.task_id
+      && reply.deltaText.includes(entry.marker)
+      && !ctx.batch.some((other) => other !== entry && reply.deltaText.includes(other.marker));
+    writeReplyArtifacts(ctx.state, ctx.caseDir, [{ ...reply, label: `批量任务 ${entry.index + 1}` }]);
+    if (!entry.ok) break;
+  }
+  const complete = ctx.batch.every((item) => item.ok);
+  const sanitized = ctx.batch.map(({ before, reply, ...item }) => ({ ...item, reply_excerpt: clip(reply, 200) }));
+  ctx.state.artifacts.core_beta_batch_collect = sanitized;
+  writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
+  setCoreBetaEvidence(ctx.state, 'reply_completion', {
+    available: complete,
+    source: 'batch taskId collection ledger',
+    dispatched: ctx.batch.length,
+    collected: ctx.batch.filter((item) => item.collected_at).length,
+    task_ids_unique: new Set(ctx.batch.map((item) => item.task_id)).size === ctx.batch.length,
+  });
+  return {
+    ok: complete,
+    selector_or_testid: 'task-list',
+    event: 'collect-batch',
+    state_readback: {
+      dispatched: ctx.batch.length,
+      collected: ctx.batch.filter((item) => item.collected_at).length,
+      passed: ctx.batch.filter((item) => item.ok).length,
+    },
+    actual: `collected=${ctx.batch.filter((item) => item.collected_at).length}/${ctx.batch.length}；passed=${ctx.batch.filter((item) => item.ok).length}`,
+  };
+}
+
+async function executeCoreBetaConversationCommand(ctx, command) {
+  if (command === 'open_clean_task') {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    const capabilities = await currentCapabilities(ctx.page);
+    const clean = reset
+      && (capabilities?.selectedSkills || []).length === 0
+      && (capabilities?.selectedConnectors || []).length === 0
+      && !capabilities?.currentExpert;
+    setCoreBetaEvidence(ctx.state, 'public_state_readback', {
+      source: 'window.agent.capabilities',
+      state: capabilities,
+    });
+    return {
+      ok: clean,
+      selector_or_testid: 'nav-new-task',
+      event: 'click',
+      state_readback: capabilities,
+      actual: `clean=${clean}；selectedSkills=${(capabilities?.selectedSkills || []).length}；selectedConnectors=${(capabilities?.selectedConnectors || []).length}；currentExpert=${Boolean(capabilities?.currentExpert)}`,
+    };
+  }
+  if (command === 'send_prompt') {
+    const outcome = await coreBetaRunTurn(ctx, 0, { label: '普通业务问题' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable && Boolean(outcome.taskId),
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, stable: outcome.stable, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；stable=${outcome.stable}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'collect_reply' || command === 'collect_clarification' || command === 'collect_gap_response') {
+    return coreBetaReplyReadback(ctx);
+  }
+  if (command === 'send_turn_1') {
+    const outcome = await coreBetaRunTurn(ctx, 0, { openTask: true, resetCapabilities: true, label: '第 1 轮' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable,
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'send_turn_2' || command === 'send_constraints_and_collect' || command === 'send_roi_inputs_and_collect') {
+    const outcome = await coreBetaRunTurn(ctx, 1, { label: '第 2 轮' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable && outcome.taskId === ctx.taskIds[0],
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, first_task_id: ctx.taskIds[0], oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；sameTask=${outcome.taskId === ctx.taskIds[0]}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'send_turn_3') {
+    const outcome = await coreBetaRunTurn(ctx, 2, { label: '第 3 轮' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable && outcome.taskId === ctx.taskIds[0],
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, first_task_id: ctx.taskIds[0], oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；sameTask=${outcome.taskId === ctx.taskIds[0]}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'send_ambiguous_prompt' || command === 'send_incomplete_roi' || command === 'send_synthetic_pii') {
+    const outcome = await coreBetaRunTurn(ctx, 0, { openTask: true, resetCapabilities: true, label: '第 1 轮' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable,
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'send_secret_request') {
+    const outcome = await coreBetaRunTurn(ctx, 1, { label: '敏感信息追问' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable && outcome.taskId === ctx.taskIds[0],
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `sameTask=${outcome.taskId === ctx.taskIds[0]}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'collect_privacy_response') return coreBetaReplyReadback(ctx, 0);
+  if (command === 'send_long_prompt') {
+    return coreBetaDispatchTurnWithoutWait(ctx, 0, {
+      openTask: true,
+      resetCapabilities: true,
+      label: '长文本流式回复',
+    });
+  }
+  if (command === 'exercise_stream_scroll') {
+    const thread = ctx.page.locator('[data-testid="assistant-thread"], [data-testid="message-list"]').first();
+    const runningBefore = await isAgentGenerating(ctx.page);
+    await thread.evaluate((element) => { element.scrollTop = 0; }).catch(() => {});
+    await ctx.page.waitForTimeout(1200);
+    const scrollTop = await thread.evaluate((element) => element.scrollTop).catch(() => -1);
+    return {
+      ok: runningBefore && scrollTop <= 10,
+      selector_or_testid: 'assistant-thread',
+      event: 'scroll',
+      state_readback: { running_before: runningBefore, scroll_top_after: scrollTop },
+      actual: `runningBefore=${runningBefore}；scrollTop=${scrollTop}`,
+    };
+  }
+  if (command === 'collect_stable_long_reply') {
+    const result = await coreBetaCollectPendingTurn(ctx);
+    const reply = ctx.replies[0];
+    const chapterCount = (String(reply?.deltaText || '').match(/(?:^|\n)\s*(?:第[一二三四五六七八九十]+章|\d+[.、．])/g) || []).length;
+    const chars = Array.from(String(reply?.deltaText || '')).length;
+    const longOk = chars >= 1200 && chapterCount >= 8;
+    recordAssertion(ctx.state, '长回复长度与章节', '最终回复不少于1200字且至少8个明确章节。', longOk, `chars=${chars}；chapters=${chapterCount}`);
+    return {
+      ...result,
+      ok: result.ok && longOk,
+      actual: `${result.actual}；chars=${chars}；chapters=${chapterCount}`,
+    };
+  }
+  if (command === 'send_and_wait_running') {
+    return coreBetaDispatchTurnWithoutWait(ctx, 0, {
+      openTask: true,
+      resetCapabilities: true,
+      label: '长篇竞品分析',
+    });
+  }
+  if (command === 'stop_generation') return coreBetaStopGeneration(ctx);
+  if (command === 'send_followup_after_stop') {
+    const outcome = await coreBetaRunTurn(ctx, 1, { label: '停止后追问' });
+    return {
+      ok: outcome.oracle.ok && outcome.stable && outcome.taskId === ctx.taskIds[0],
+      selector_or_testid: 'composer-send',
+      event: 'click-and-collect',
+      state_readback: { task_id: outcome.taskId, original_task_id: ctx.taskIds[0], oracle: outcome.oracle },
+      actual: `sameTask=${outcome.taskId === ctx.taskIds[0]}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'complete_two_turns') {
+    const first = await coreBetaRunTurn(ctx, 0, { openTask: true, resetCapabilities: true, label: '第 1 轮' });
+    const second = await coreBetaRunTurn(ctx, 1, { label: '第 2 轮' });
+    ctx.transcriptHashBeforeReload = sha256File(ctx.state.artifacts.transcript);
+    return {
+      ok: first.oracle.ok && second.oracle.ok && first.taskId === second.taskId,
+      selector_or_testid: 'composer-send',
+      event: 'multi-turn',
+      state_readback: { task_id: first.taskId, transcript_sha256: ctx.transcriptHashBeforeReload },
+      actual: `taskId=${first.taskId}；transcriptSha256=${ctx.transcriptHashBeforeReload}`,
+    };
+  }
+  if (command === 'reload_and_reopen_task') {
+    const taskId = ctx.taskIds[0];
+    await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    await ctx.page.waitForTimeout(1800);
+    const reopened = await reopenSessionAndReadback(ctx.page, taskId);
+    const task = await qbotE2EState(ctx.page);
+    return {
+      ok: reopened.ok && String(task?.activeId || '') === taskId,
+      selector_or_testid: 'task-list',
+      event: 'reload-and-open',
+      state_readback: task,
+      actual: `opened=${reopened.ok}；activeId=${task?.activeId || 'missing'}；expected=${taskId}`,
+    };
+  }
+  if (command === 'verify_transcript_identity') {
+    const snapshot = await conversationSnapshot(ctx.page);
+    const transcript = snapshot.messages.map((item) => `${item.role}:${item.text}`).join('\n');
+    const containsAll = ctx.turns.every((turn) => transcript.includes(turn.prompt))
+      && ctx.replies.every((reply) => transcript.includes(reply.deltaText));
+    ctx.state.artifacts.core_beta_reopened_transcript = path.join(ctx.caseDir, 'reopened-transcript.txt');
+    writeTextFile(ctx.state.artifacts.core_beta_reopened_transcript, transcript);
+    return {
+      ok: containsAll && String(snapshot.activeTaskId || '') === ctx.taskIds[0],
+      selector_or_testid: 'assistant-thread',
+      event: 'readback',
+      state_readback: {
+        active_id: snapshot.activeTaskId,
+        expected_task_id: ctx.taskIds[0],
+        contains_all_turns: containsAll,
+        transcript_sha256: sha256Text(transcript),
+      },
+      actual: `activeId=${snapshot.activeTaskId}；containsAll=${containsAll}；sha256=${sha256Text(transcript)}`,
+    };
+  }
+  if (command === 'build_dispatch_ledger') {
+    const requested = Math.min(20, Math.max(1, Number(ctx.state.batch_size || 20)));
+    ctx.batch = Array.from({ length: requested }, (_, index) => ({
+      index,
+      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${ctx.state.id}:${index}`).slice(0, 8)}`,
+    }));
+    return {
+      ok: new Set(ctx.batch.map((item) => item.marker)).size === requested,
+      selector_or_testid: 'core-beta-ledger',
+      event: 'build',
+      state_readback: { requested, unique_markers: new Set(ctx.batch.map((item) => item.marker)).size },
+      actual: `requested=${requested}；uniqueMarkers=${new Set(ctx.batch.map((item) => item.marker)).size}`,
+    };
+  }
+  if (command === 'dispatch_batch_without_wait') return coreBetaDispatchBatch(ctx);
+  if (command === 'collect_batch_by_task_id') return coreBetaCollectBatch(ctx);
+  throw new Error(`Core Beta conversation command 未实现：${command}`);
+}
+
+function coreBetaFixtureFiles(ctx) {
+  const filesByCase = {
+    'BETA-FILE-001': ['qbot-pdf-summary.pdf'],
+    'BETA-FILE-002': ['qbot-image-flow.png', 'qbot-image-risk.png'],
+    'BETA-FILE-003': ['qbot-word-report.docx', 'qbot-slide-deck.pptx'],
+    'BETA-FILE-004': ['qbot-table.csv', 'qbot-data-table.xlsx'],
+    'BETA-FILE-005': ['qbot-data.json', 'qbot-page.html', 'qbot-script.js'],
+  };
+  const names = filesByCase[ctx.state.id] || [];
+  if (ctx.state.id === 'BETA-FILE-005') {
+    const logFile = path.join(ctx.caseDir, 'qbot-request-correlation.log');
+    writeTextFile(logFile, [
+      '2026-07-29T00:00:00Z requestId=QBOT-BETA-REQ-20260729 level=ERROR code=UPSTREAM_TIMEOUT',
+      '2026-07-29T00:00:01Z requestId=QBOT-BETA-REQ-20260729 rootCause=upstream_service_timeout retryable=true',
+    ].join('\n'));
+    return [...names.map((name) => path.join(ctx.fixturesDir, name)), logFile];
+  }
+  return names.map((name) => path.join(ctx.fixturesDir, name));
+}
+
+async function coreBetaUploadFixtures(ctx) {
+  const files = coreBetaFixtureFiles(ctx);
+  await openNewTask(ctx.page, ctx.state);
+  const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+    skillMode: 'disabled',
+    connectorMode: 'disabled',
+  });
+  if (!reset) throw new Error('附件用例发送前能力清理失败。');
+  if (!recordAttachmentSources(ctx.state, files)) {
+    throw new Error('附件 fixture 不完整或 SHA-256 不可读。');
+  }
+  const upload = await uploadAttachmentsInComposer(ctx.page, files);
+  ctx.attachments = files;
+  ctx.state.artifacts.upload = upload;
+  const visibleText = await visibleComposerAttachmentText(ctx.page);
+  const visibleCount = await ctx.page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => 0);
+  const names = files.map((file) => path.basename(file));
+  const exact = upload.status === 'passed'
+    && visibleCount === files.length
+    && names.every((name) => visibleText.includes(name));
+  ctx.state.artifacts.composer_attachment_state = {
+    source: 'visible Composer attachment cards',
+    attachment_count: visibleCount,
+    visible_text: visibleText,
+    expected_names: names,
+    exact,
+  };
+  setCoreBetaEvidence(ctx.state, 'attachment_name_size_sha256', {
+    available: ctx.state.artifacts.attachment_sources.every((item) => (
+      item.exists && item.size_bytes > 0 && /^[a-f0-9]{64}$/i.test(item.sha256)
+    )),
+    source: 'local fixture stat + SHA-256',
+    attachments: ctx.state.artifacts.attachment_sources,
+  });
+  setCoreBetaEvidence(ctx.state, 'composer_attachment_state', {
+    available: exact,
+    ...ctx.state.artifacts.composer_attachment_state,
+  });
+  return {
+    ok: exact,
+    selector_or_testid: 'composer attachment input',
+    event: 'upload',
+    state_readback: ctx.state.artifacts.composer_attachment_state,
+    actual: `expected=${names.join(',')}；visibleCount=${visibleCount}；visible=${clip(visibleText, 500)}；status=${upload.status}`,
+  };
+}
+
+async function coreBetaRemoveRestoreAttachment(ctx) {
+  const file = ctx.attachments[0];
+  const name = path.basename(file || '');
+  const root = ctx.page.locator('.aui-composer-attachments .aui-attachment-root').filter({ hasText: name }).first();
+  if (!(await visible(root, 1500))) throw new Error(`无法定位待移除附件 ${name}。`);
+  await root.hover().catch(() => {});
+  const remove = root.locator('button[aria-label*="移除"], button[aria-label*="Remove file" i], button[aria-label*="remove" i], .aui-attachment-remove, .aui-attachment-tile-remove').first();
+  if (!(await visible(remove, 1200))) throw new Error(`附件 ${name} 缺少专用移除按钮。`);
+  await remove.click({ force: true });
+  await ctx.page.waitForTimeout(500);
+  const afterRemove = await visibleComposerAttachmentText(ctx.page);
+  const removed = !afterRemove.includes(name);
+  const restore = await uploadAttachmentsInComposer(ctx.page, [file]);
+  const afterRestore = await visibleComposerAttachmentText(ctx.page);
+  const count = await ctx.page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => 0);
+  const restored = restore.status === 'passed'
+    && afterRestore.includes(name)
+    && count === ctx.attachments.length;
+  ctx.state.artifacts.core_beta_attachment_remove_restore = {
+    name,
+    removed,
+    restored,
+    after_remove: afterRemove,
+    after_restore: afterRestore,
+    count,
+  };
+  return {
+    ok: removed && restored,
+    selector_or_testid: 'attachment remove + composer attachment input',
+    event: 'remove-and-restore',
+    state_readback: ctx.state.artifacts.core_beta_attachment_remove_restore,
+    actual: JSON.stringify(ctx.state.artifacts.core_beta_attachment_remove_restore),
+  };
+}
+
+async function coreBetaSendAttachmentTurn(ctx, label) {
+  const outcome = await coreBetaRunTurn(ctx, 0, { label });
+  const sources = ctx.state.artifacts.attachment_sources || [];
+  const attachmentReadback = {
+    source: 'reply + exact uploaded source ledger',
+    task_id: outcome.taskId,
+    source_names: sources.map((item) => item.name),
+    source_sha256: sources.map((item) => item.sha256),
+    reply_sha256: sha256Text(outcome.reply.deltaText || ''),
+    oracle: outcome.oracle,
+  };
+  ctx.state.artifacts.attachment_readback = attachmentReadback;
+  setCoreBetaEvidence(ctx.state, 'attachment_readback', {
+    available: outcome.oracle.ok && sources.length > 0,
+    ...attachmentReadback,
+  });
+  return {
+    ok: outcome.oracle.ok && outcome.stable && Boolean(outcome.taskId),
+    selector_or_testid: 'composer-send',
+    event: 'send-with-attachments',
+    state_readback: attachmentReadback,
+    actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}；sources=${sources.map((item) => item.name).join(',')}`,
+  };
+}
+
+async function executeCoreBetaAttachmentCommand(ctx, command) {
+  if (/^upload_(?:pdf_fixture|image_fixtures|docx_pptx|csv_xlsx|structured_files)$/.test(command)) {
+    return coreBetaUploadFixtures(ctx);
+  }
+  if (command === 'exercise_attachment_remove_restore') return coreBetaRemoveRestoreAttachment(ctx);
+  if ([
+    'send_with_attachment',
+    'send_with_two_files',
+    'send_comparison_prompt',
+    'send_correlation_prompt',
+  ].includes(command)) {
+    return coreBetaSendAttachmentTurn(ctx, command);
+  }
+  if ([
+    'collect_and_readback_attachment',
+    'collect_visual_readback',
+    'collect_cross_file_analysis',
+    'collect_numeric_oracle',
+    'collect_structured_readback',
+  ].includes(command)) {
+    const evidence = ensureCoreBetaEvidence(ctx.state).attachment_readback;
+    return {
+      ok: evidence?.available === true,
+      selector_or_testid: 'assistant-thread',
+      event: 'attachment-readback',
+      state_readback: evidence || null,
+      actual: JSON.stringify(evidence || {}),
+    };
+  }
+  const limitIds = {
+    reject_unsupported_file: 'SIT-HOME-045',
+    reject_single_oversize: 'SIT-HOME-043',
+    reject_total_oversize_and_verify_no_send: 'SIT-HOME-044',
+  };
+  if (limitIds[command]) {
+    const fakeCase = {
+      ...ctx.testCase,
+      id: limitIds[command],
+      scenario: ctx.testCase.scenario || '',
+      test_data: ctx.testCase.test_data || '',
+    };
+    await executeSitHomeAttachmentLimit({
+      page: ctx.page,
+      state: ctx.state,
+      testCase: fakeCase,
+      caseDir: ctx.caseDir,
+      fixturesDir: ctx.fixturesDir,
+    });
+    const rejection = ctx.state.artifacts.attachment_limit_rejection || {};
+    const noSend = ctx.state.artifacts.no_task_no_send_state || {};
+    const fiveNoSend = noSend.task_state_unchanged
+      && noSend.message_count_unchanged
+      && noSend.no_task_created
+      && noSend.no_message_sent
+      && noSend.no_prompt_recorded;
+    setCoreBetaEvidence(ctx.state, 'composer_attachment_state', {
+      available: Boolean(ctx.state.artifacts.composer_attachment_state?.composer_empty),
+      ...ctx.state.artifacts.composer_attachment_state,
+    });
+    return {
+      ok: rejection.product_rejected_before_send === true && fiveNoSend,
+      selector_or_testid: 'composer attachment input',
+      event: 'product-reject-before-send',
+      state_readback: { rejection, no_send_state: noSend },
+      actual: `productRejected=${rejection.product_rejected_before_send === true}；fiveNoSend=${fiveNoSend}`,
+    };
+  }
+  throw new Error(`Core Beta attachment command 未实现：${command}`);
+}
+
+function coreBetaCollectExistingFilePaths(value, output = new Set(), depth = 0) {
+  if (depth > 8 || value === null || value === undefined) return output;
+  if (typeof value === 'string') {
+    const candidates = [value, ...(value.match(/\/[^\n\r"'<>]+/g) || [])];
+    for (const candidate of candidates) {
+      const normalized = String(candidate).trim().replace(/[),.;，。；：]+$/, '');
+      if (path.isAbsolute(normalized) && fs.existsSync(normalized) && fs.statSync(normalized).isFile()) {
+        output.add(path.resolve(normalized));
+      }
+    }
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) coreBetaCollectExistingFilePaths(item, output, depth + 1);
+    return output;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) coreBetaCollectExistingFilePaths(item, output, depth + 1);
+  }
+  return output;
+}
+
+async function coreBetaArtifactReadback(ctx) {
+  const opened = await openArtifactSurface(ctx.page, ctx.state, ctx.caseDir);
+  const panel = ctx.page.locator('[data-testid="artifact-panel"]').first();
+  const panelText = opened ? await panel.innerText({ timeout: 2500 }).catch(() => '') : '';
+  const publicEvidence = await ctx.page.evaluate(async () => {
+    const bridge = window.__qbotE2E || window.__deepbankE2E;
+    const [state, diagnostics] = await Promise.all([
+      bridge?.state?.().catch(() => null),
+      bridge?.diagnostics?.().catch(() => null),
+    ]);
+    return { state, diagnostics };
+  }).catch((error) => ({ error: error.message }));
+  const paths = coreBetaCollectExistingFilePaths({
+    artifacts: ctx.state.artifacts,
+    panelText,
+    publicEvidence,
+  });
+  const files = [...paths].map((file) => ({
+    path: file,
+    name: path.basename(file),
+    extension: path.extname(file).toLowerCase(),
+    size_bytes: fs.statSync(file).size,
+    sha256: sha256File(file),
+  }));
+  ctx.state.artifacts.core_beta_artifact_readback = {
+    panel_opened: opened,
+    panel_text: panelText,
+    public_evidence: publicEvidence,
+    files,
+  };
+  setCoreBetaEvidence(ctx.state, 'artifact_path_sha256', {
+    available: files.length > 0 && files.every((item) => item.size_bytes > 0 && /^[a-f0-9]{64}$/.test(item.sha256)),
+    source: 'artifact panel/public bridge/local file readback',
+    files,
+  });
+  setCoreBetaEvidence(ctx.state, 'artifact_preview', {
+    available: opened && Boolean(ctx.state.screenshots.artifact_panel),
+    source: 'visible artifact panel',
+    panel_screenshot: ctx.state.screenshots.artifact_panel || '',
+    panel_text_sha256: sha256Text(panelText),
+  });
+  return ctx.state.artifacts.core_beta_artifact_readback;
+}
+
+async function coreBetaValidateArtifactPayload(ctx) {
+  const readback = ctx.state.artifacts.core_beta_artifact_readback || await coreBetaArtifactReadback(ctx);
+  const expectedExtensions = {
+    'BETA-ART-001': ['.md', '.html'],
+    'BETA-ART-002': ['.docx'],
+    'BETA-ART-003': ['.xlsx', '.csv'],
+    'BETA-ART-004': ['.pptx', '.pdf'],
+  }[ctx.state.id] || [];
+  const matching = expectedExtensions.map((extension) => (
+    readback.files.find((item) => item.extension === extension)
+  ));
+  const allPresent = matching.every(Boolean);
+  const payloadChecks = matching.map((item) => {
+    if (!item) return { ok: false, reason: 'missing' };
+    let readable = item.size_bytes > 0;
+    let detail = `${item.size_bytes}B`;
+    if (['.docx', '.xlsx', '.pptx'].includes(item.extension)) {
+      const zip = spawnSync('/usr/bin/unzip', ['-t', item.path], { encoding: 'utf8', timeout: 20000 });
+      readable = zip.status === 0;
+      detail = clip(`${zip.stdout || ''}\n${zip.stderr || ''}`, 500);
+    } else {
+      const sample = fs.readFileSync(item.path).subarray(0, 2048).toString('utf8');
+      readable = item.extension === '.pdf' ? sample.startsWith('%PDF') : sample.trim().length > 0;
+      detail = clip(sample, 500);
+    }
+    return { path: item.path, extension: item.extension, readable, detail, ok: readable };
+  });
+  const valid = allPresent && payloadChecks.every((item) => item.ok);
+  ctx.state.artifacts.core_beta_artifact_payload_validation = { expectedExtensions, matching, payloadChecks, valid };
+  setCoreBetaEvidence(ctx.state, 'artifact_content_readback', {
+    available: valid,
+    source: 'local artifact content/package validation',
+    validation: ctx.state.artifacts.core_beta_artifact_payload_validation,
+  });
+  return {
+    ok: valid,
+    selector_or_testid: 'artifact-panel',
+    event: 'artifact-content-readback',
+    state_readback: ctx.state.artifacts.core_beta_artifact_payload_validation,
+    actual: JSON.stringify(ctx.state.artifacts.core_beta_artifact_payload_validation),
+  };
+}
+
+async function executeCoreBetaArtifactCommand(ctx, command) {
+  if (/^send_(?:md_html_artifact|docx|xlsx_csv|pptx_pdf)_prompt$/.test(command)) {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('成果用例发送前能力清理失败。');
+    const outcome = await coreBetaRunTurn(ctx, 0, { label: command });
+    return {
+      ok: outcome.oracle.ok && outcome.stable,
+      selector_or_testid: 'composer-send',
+      event: 'artifact-request',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (/^collect_(?:and_open_artifacts|docx_artifact|table_artifacts|presentation_artifacts)$/.test(command)) {
+    const readback = await coreBetaArtifactReadback(ctx);
+    return {
+      ok: readback.panel_opened && readback.files.length > 0,
+      selector_or_testid: 'artifact-panel',
+      event: 'open-and-readback',
+      state_readback: readback,
+      actual: `panelOpened=${readback.panel_opened}；files=${readback.files.map((item) => item.name).join(',') || 'none'}`,
+    };
+  }
+  if (/^verify_|^readback_docx_content$/.test(command)) return coreBetaValidateArtifactPayload(ctx);
+  throw new Error(`Core Beta artifact command 未实现：${command}`);
+}
+
+function coreBetaNormalizeSkill(item = {}) {
+  const slug = String(item.slug || item.key || item.id || item.skillId || '').trim();
+  return {
+    slug,
+    name: String(item.name || item.title || item.label || slug).trim(),
+    category: String(item.category || item.group || item.type || 'unclassified').trim(),
+    version: String(item.version || ''),
+    status: String(item.status || item.phase || ''),
+    raw: item,
+  };
+}
+
+async function coreBetaSkillInventory(ctx, tab = '技能市场') {
+  await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: tab });
+  const capabilities = await currentCapabilities(ctx.page);
+  const publicSkills = (Array.isArray(capabilities?.skills) ? capabilities.skills : [])
+    .map(coreBetaNormalizeSkill)
+    .filter((item) => item.slug);
+  const domSkills = await ctx.page.locator('.skill-card').evaluateAll((cards) => cards.map((card) => {
+    const action = card.querySelector('.skill-install, .skill-del, button');
+    const name = String(card.querySelector('.skill-name')?.textContent || card.textContent || '').split('\n')[0].trim();
+    const slug = String(
+      card.getAttribute('data-skill-slug')
+      || card.getAttribute('data-slug')
+      || card.getAttribute('data-testid')
+      || '',
+    ).replace(/^skill-card-/, '').trim();
+    return {
+      slug,
+      name,
+      category: String(card.getAttribute('data-category') || 'unclassified'),
+      action_text: String(action?.textContent || '').trim(),
+      action_disabled: Boolean(action?.hasAttribute('disabled')),
+      text: String(card.textContent || '').trim(),
+    };
+  })).catch(() => []);
+  const merged = new Map();
+  for (const item of [...publicSkills, ...domSkills.map(coreBetaNormalizeSkill)]) {
+    if (!item.slug) continue;
+    merged.set(item.slug, { ...(merged.get(item.slug) || {}), ...item });
+  }
+  const inventory = [...merged.values()];
+  ctx.ledger.skills.inventory = inventory;
+  setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+    available: inventory.length > 0,
+    source: 'window.agent.capabilities + visible skill cards',
+    inventory,
+  });
+  return { capabilities, publicSkills, domSkills, inventory };
+}
+
+function coreBetaSelectionIndex(selectionSource, fallback = 0) {
+  const match = String(selectionSource || '').match(/\[(\d+)\]/);
+  return match ? Number(match[1]) : fallback;
+}
+
+async function coreBetaInstallSkill(ctx, sampled) {
+  await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '技能市场' });
+  const cards = ctx.page.locator('.skill-card');
+  const count = await cards.count().catch(() => 0);
+  let card = null;
+  for (let index = 0; index < count; index += 1) {
+    const candidate = cards.nth(index);
+    const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
+    const slug = String(
+      await candidate.getAttribute('data-skill-slug').catch(() => '')
+      || await candidate.getAttribute('data-slug').catch(() => '')
+      || await candidate.getAttribute('data-testid').catch(() => ''),
+    ).replace(/^skill-card-/, '');
+    if (slug === sampled.slug || text.includes(sampled.name)) {
+      card = candidate;
+      break;
+    }
+  }
+  if (!card) return { slug: sampled.slug, name: sampled.name, ok: false, reason: 'sampled skill card missing' };
+  const install = card.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 1200))) {
+    const installed = /已安装|删除|卸载/.test(await card.innerText({ timeout: 700 }).catch(() => ''));
+    return { slug: sampled.slug, name: sampled.name, ok: installed, reused: installed, reason: installed ? '' : 'install action unavailable' };
+  }
+  await install.click({ force: true });
+  const terminal = await waitForSkillInstallTerminal(ctx.page, {
+    skillName: sampled.name,
+    marketCard: card,
+    timeoutMs: 120000,
+  });
+  await clickSkillSubtab(ctx.page, '已安装', ctx.state);
+  const visibleInstalled = await visible(ctx.page.locator('.skill-card').filter({ hasText: sampled.name }).first(), 2500);
+  return {
+    slug: sampled.slug,
+    name: sampled.name,
+    ok: (terminal.success || visibleInstalled) && !terminal.failure,
+    terminal,
+    installed_view_readback: visibleInstalled,
+  };
+}
+
+async function coreBetaCapabilityExecutionEvidence(ctx, kind, expectedIdentity) {
+  const task = await qbotE2EState(ctx.page);
+  const capabilities = await currentCapabilities(ctx.page);
+  const toolBlocks = await ctx.page.locator('[data-slot="tool-fallback"]').evaluateAll((elements) => elements.map((element) => ({
+    text: String(element.textContent || '').trim(),
+    connector_key: String(element.getAttribute('data-connector-key') || element.getAttribute('data-mcp-server') || element.getAttribute('data-server-name') || '').trim(),
+    tool_name: String(element.getAttribute('data-tool-name') || element.getAttribute('data-tool') || '').trim(),
+    call_id: String(element.getAttribute('data-tool-call-id') || element.getAttribute('data-call-id') || '').trim(),
+    status: String(element.getAttribute('data-status') || '').trim(),
+  }))).catch(() => []);
+  const runtime = await ctx.page.evaluate(async () => {
+    const bridge = window.__qbotE2E || window.__deepbankE2E;
+    const [context, diagnostics] = await Promise.all([
+      bridge?.getLastTurnContextEvidence?.().catch(() => null),
+      bridge?.diagnostics?.().catch(() => null),
+    ]);
+    return { context, diagnostics };
+  }).catch((error) => ({ error: error.message }));
+  const haystack = JSON.stringify({ task, capabilities, toolBlocks, runtime });
+  const identityPresent = Boolean(expectedIdentity) && haystack.includes(String(expectedIdentity));
+  const taskId = String(task?.activeId || '');
+  let executed = false;
+  if (kind === 'mcp') {
+    executed = toolBlocks.some((block) => (
+      block.connector_key === expectedIdentity
+      && block.tool_name
+      && block.call_id
+      && block.text
+      && /completed|success|failed|error/i.test(block.status)
+    ));
+  } else if (kind === 'skill') {
+    executed = identityPresent
+      && /skill.*(?:execut|invok|call|used|applied)|(?:execut|invok|call).*skill/i.test(haystack);
+  } else if (kind === 'expert') {
+    executed = identityPresent
+      && /currentExpert|expert.*(?:execut|invok|bound|selected)/i.test(haystack);
+  }
+  const evidence = {
+    kind,
+    expected_identity: expectedIdentity,
+    task_id: taskId,
+    identity_present: identityPresent,
+    executed,
+    capabilities,
+    tool_blocks: toolBlocks,
+    runtime,
+  };
+  const file = path.join(ctx.caseDir, `${kind}-task-bound-execution.json`);
+  writeJsonFile(file, evidence);
+  setCoreBetaEvidence(ctx.state, 'capability_execution_event', {
+    available: executed && Boolean(taskId),
+    source: file,
+    ...evidence,
+  });
+  if (kind === 'mcp') {
+    ctx.state.artifacts.tool_or_mcp_call_log = file;
+  }
+  return evidence;
+}
+
+async function executeCoreBetaSkillCommand(ctx, command) {
+  if (command === 'inventory_skill_market') {
+    const result = await coreBetaSkillInventory(ctx, '技能市场');
+    return {
+      ok: result.inventory.length > 0,
+      selector_or_testid: 'skills-view',
+      event: 'inventory',
+      state_readback: result.inventory,
+      actual: `inventory=${result.inventory.length}`,
+    };
+  }
+  if (command === 'sample_ten_skills') {
+    const policy = ctx.capabilityPolicy;
+    const sample = deterministicCapabilitySample(ctx.ledger.skills.inventory, {
+      count: Number(policy.install_count || 10),
+      seed: String(policy.seed || ctx.options?.releaseIdentityManifestSha256 || ctx.state.id),
+      stableIdentityField: 'slug',
+      stratumField: 'category',
+      eligible: (item) => Boolean(item.slug),
+    });
+    ctx.ledger.skills.sample = sample.selected || [];
+    ctx.ledger.skills.deep_use = (sample.selected || []).slice(0, Number(policy.deep_use_count || 5));
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: sample.ok,
+      source: 'deterministicCapabilitySample',
+      selection: sample,
+    });
+    return {
+      ok: sample.ok,
+      status: sample.ok ? 'passed' : 'blocked',
+      category: sample.ok ? '' : 'blocked',
+      selector_or_testid: 'core-beta deterministic sampler',
+      event: 'sample',
+      state_readback: sample,
+      actual: JSON.stringify(sample),
+    };
+  }
+  if (command === 'verify_skill_sample') {
+    const selected = ctx.ledger.skills.sample || [];
+    const unique = new Set(selected.map((item) => item.slug)).size === selected.length;
+    return {
+      ok: selected.length === Number(ctx.capabilityPolicy.install_count || 10) && unique,
+      selector_or_testid: 'core-beta-shared-ledger',
+      event: 'readback',
+      state_readback: selected,
+      actual: `selected=${selected.length}；unique=${unique}`,
+    };
+  }
+  if (command === 'verify_skill_preinstall_state') {
+    const result = await coreBetaSkillInventory(ctx, '已安装');
+    ctx.ledger.skills.preinstall = result.inventory;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: Array.isArray(ctx.ledger.skills.sample) && ctx.ledger.skills.sample.length === 10,
+      source: 'shared deterministic skill sample',
+      sample: ctx.ledger.skills.sample,
+    });
+    return {
+      ok: Array.isArray(ctx.ledger.skills.sample) && ctx.ledger.skills.sample.length > 0,
+      selector_or_testid: 'skills-view',
+      event: 'preinstall-readback',
+      state_readback: { sampled: ctx.ledger.skills.sample, installed: result.inventory },
+      actual: `sampled=${ctx.ledger.skills.sample.length}；installedInventory=${result.inventory.length}`,
+    };
+  }
+  if (command === 'install_ten_skills_serially') {
+    const results = [];
+    for (const sampled of ctx.ledger.skills.sample || []) results.push(await coreBetaInstallSkill(ctx, sampled));
+    ctx.ledger.skills.install_results = results;
+    ctx.ledger.skills.installed = results.filter((item) => item.ok);
+    return {
+      ok: results.length === 10 && results.every((item) => item.ok || item.reason),
+      selector_or_testid: 'skill-install',
+      event: 'serial-install',
+      state_readback: results,
+      actual: `attempted=${results.length}；installed=${results.filter((item) => item.ok).length}；failed=${results.filter((item) => !item.ok).length}`,
+    };
+  }
+  if (command === 'verify_skill_install_results') {
+    const results = ctx.ledger.skills.install_results || [];
+    const exact = results.length === 10 && results.every((item) => item.ok || item.reason);
+    return {
+      ok: exact,
+      selector_or_testid: 'core-beta-shared-ledger',
+      event: 'readback',
+      state_readback: results,
+      actual: `results=${results.length}；terminal=${results.filter((item) => item.ok || item.reason).length}`,
+    };
+  }
+  if (command === 'verify_installed_skill_list') {
+    const result = await coreBetaSkillInventory(ctx, '已安装');
+    const installedNames = result.domSkills.map((item) => item.name);
+    const expected = ctx.ledger.skills.installed || [];
+    const ok = expected.length > 0 && expected.every((item) => installedNames.some((name) => name.includes(item.name)));
+    ctx.ledger.skills.installed_readback = installedNames;
+    return {
+      ok,
+      selector_or_testid: 'skills-view',
+      event: 'installed-readback',
+      state_readback: { expected, installedNames },
+      actual: `expected=${expected.length}；matched=${expected.filter((item) => installedNames.some((name) => name.includes(item.name))).length}`,
+    };
+  }
+  if (command === 'verify_skill_composer_availability') {
+    await openNewTask(ctx.page, ctx.state);
+    const available = [];
+    for (const item of ctx.ledger.skills.installed || []) {
+      const selected = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, item.name);
+      if (selected) available.push(item.slug);
+      await clearManualSkillSelections(ctx.page, ctx.state, ctx.caseDir);
+    }
+    ctx.ledger.skills.composer_available = available;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: available.length === (ctx.ledger.skills.installed || []).length,
+      source: 'exact installed skill names selected through visible composer UI',
+      available_slugs: available,
+    });
+    return {
+      ok: available.length === (ctx.ledger.skills.installed || []).length,
+      selector_or_testid: 'composer-skills-menu',
+      event: 'composer-readback',
+      state_readback: available,
+      actual: `available=${available.length}/${(ctx.ledger.skills.installed || []).length}`,
+    };
+  }
+  if (command === 'verify_skill_history') {
+    await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '历史' });
+    const text = await mainSurfaceText(ctx.page);
+    const ok = (ctx.ledger.skills.installed || []).every((item) => text.includes(item.name) || /安装|install/i.test(text));
+    return {
+      ok,
+      selector_or_testid: 'skills-view history',
+      event: 'history-readback',
+      state_readback: { text: clip(text, 2000) },
+      actual: clip(text, 600),
+    };
+  }
+  if (command === 'select_skill_by_slug') {
+    const index = coreBetaSelectionIndex(ctx.capabilityPolicy.selection_source);
+    const selected = (ctx.ledger.skills.deep_use || [])[index];
+    if (!selected) return { ok: false, status: 'blocked', category: 'blocked', actual: `deep_use[${index}] 不存在。` };
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('Skill 使用前能力清理失败。');
+    await fillComposer(ctx.page, ctx.turns[0].prompt, ctx.state, '输入 Skill 任务并保留正文');
+    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    ctx.selectedSkill = selected;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: ok && snapshot.selectedSkillCount === 1,
+      source: 'visible composer skill chip + window.agent.capabilities',
+      expected: selected,
+      snapshot,
+    });
+    return {
+      ok: ok && snapshot.selectedSkillCount === 1,
+      selector_or_testid: `composer-skill-chip-${selected.slug}`,
+      event: 'select',
+      state_readback: snapshot,
+      actual: `expected=${selected.slug}；selected=${JSON.stringify(snapshot.selectedSkills)}`,
+    };
+  }
+  if (command === 'send_skill_task') {
+    const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 真实使用', composerPrepared: true });
+    ctx.skillOutcome = outcome;
+    return {
+      ok: outcome.oracle.ok && outcome.stable,
+      selector_or_testid: 'composer-send',
+      event: 'send-skill-task',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'collect_skill_execution') {
+    const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'skill', ctx.selectedSkill?.slug);
+    if (evidence.executed) ctx.ledger.skills.used.push({ slug: ctx.selectedSkill.slug, task_id: evidence.task_id });
+    return {
+      ok: evidence.executed && Boolean(evidence.task_id),
+      selector_or_testid: 'task-bound skill execution evidence',
+      event: 'readback',
+      state_readback: evidence,
+      actual: `skill=${ctx.selectedSkill?.slug || 'missing'}；taskId=${evidence.task_id}；executed=${evidence.executed}`,
+    };
+  }
+  if (command === 'verify_skill_task_isolation') {
+    await openNewTask(ctx.page, ctx.state);
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+      available: (ctx.ledger.skills.sample || []).length > 0,
+      source: 'shared skill sample/install ledger',
+      inventory: ctx.ledger.skills.sample || [],
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: (ctx.ledger.skills.used || []).length > 0,
+      source: 'task-bound skill use ledger before cleanup',
+      used: ctx.ledger.skills.used || [],
+      isolated_snapshot: snapshot,
+    });
+    return {
+      ok: snapshot.selectedSkillCount === 0 && snapshot.chipCount === 0,
+      selector_or_testid: 'composer-input',
+      event: 'isolation-readback',
+      state_readback: snapshot,
+      actual: JSON.stringify(snapshot),
+    };
+  }
+  if (command === 'exercise_skill_uninstall_confirm') {
+    await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '已安装' });
+    const deleted = [];
+    for (const item of ctx.ledger.skills.installed || []) {
+      const card = ctx.page.locator('.skill-card').filter({ hasText: item.name }).first();
+      if (!(await visible(card, 700))) continue;
+      const del = card.locator('.skill-del').first();
+      if (!(await visible(del, 700))) continue;
+      await del.click({ force: true });
+      const confirm = ctx.page.locator('[data-testid="skill-uninstall-confirm"]').first();
+      if (await visible(confirm, 1000)) {
+        await confirm.click({ force: true });
+        deleted.push(item.slug);
+        await ctx.page.waitForTimeout(700);
+      }
+    }
+    ctx.ledger.skills.deleted = deleted;
+    return {
+      ok: deleted.length === (ctx.ledger.skills.installed || []).length,
+      selector_or_testid: 'skill-uninstall-confirm',
+      event: 'confirm-uninstall',
+      state_readback: deleted,
+      actual: `deleted=${deleted.length}/${(ctx.ledger.skills.installed || []).length}`,
+    };
+  }
+  if (command === 'verify_skill_cleanup') {
+    const result = await coreBetaSkillInventory(ctx, '已安装');
+    const names = result.domSkills.map((item) => item.name);
+    const clean = (ctx.ledger.skills.installed || []).every((item) => !names.some((name) => name.includes(item.name)));
+    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
+      available: clean,
+      source: 'installed skill list after cleanup',
+      names,
+    });
+    return {
+      ok: clean,
+      selector_or_testid: 'skills-view',
+      event: 'cleanup-readback',
+      state_readback: names,
+      actual: `clean=${clean}；remaining=${names.join(',')}`,
+    };
+  }
+  throw new Error(`Core Beta skill command 未实现：${command}`);
+}
+
+function coreBetaExpertIdentity(value) {
+  return pipelineCapabilityItemIdentity(value);
+}
+
+async function coreBetaExpertInventory(ctx) {
+  await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
+  const cards = await ctx.page.locator('.feat-card, .exp-card, .exp-card-mine').evaluateAll((items) => items.map((item) => ({
+    id: String(item.getAttribute('data-expert-id') || item.getAttribute('data-id') || item.getAttribute('data-testid') || '').replace(/^expert-card-/, ''),
+    name: String(item.querySelector('.exp-name, .feat-title, [data-testid*="name"]')?.textContent || item.textContent || '').split('\n')[0].trim(),
+    owned: item.classList.contains('exp-card-mine'),
+    text: String(item.textContent || '').trim(),
+  }))).catch(() => []);
+  const capabilities = await currentCapabilities(ctx.page);
+  const inventory = { cards, current_expert: capabilities?.currentExpert || null };
+  setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+    available: cards.length > 0,
+    source: 'visible expert cards + window.agent.capabilities',
+    inventory,
+  });
+  return inventory;
+}
+
+async function coreBetaSummonExpert(ctx, expert) {
+  await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
+  const card = await findExpertCardByName(ctx.page, expert.name);
+  if (!card) return { ok: false, reason: `专家卡不存在：${expert.name}` };
+  const domId = String(
+    await card.getAttribute('data-expert-id').catch(() => '')
+    || await card.getAttribute('data-id').catch(() => '')
+    || await card.getAttribute('data-testid').catch(() => ''),
+  ).replace(/^expert-card-/, '');
+  await card.click({ force: true });
+  await ctx.page.waitForTimeout(500);
+  const summon = ctx.page.locator('.modal .modal-cta, .modal button, .modal [role="button"]').filter({ hasText: /召唤|使用|开始/ }).first();
+  if (!(await visible(summon, 1500))) return { ok: false, reason: '专家详情缺少召唤入口' };
+  await summon.click({ force: true });
+  const deadline = Date.now() + 8000;
+  let capabilities = null;
+  let identity = '';
+  while (Date.now() < deadline) {
+    await ctx.page.waitForTimeout(250);
+    capabilities = await currentCapabilities(ctx.page);
+    identity = coreBetaExpertIdentity(capabilities?.currentExpert);
+    if (identity) break;
+  }
+  return {
+    ok: Boolean(identity),
+    name: expert.name,
+    expected_id: expert.id || domId || expert.name,
+    dom_id: domId,
+    current_expert: capabilities?.currentExpert || null,
+    current_identity: identity,
+  };
+}
+
+async function coreBetaReadExpertDetail(page, name) {
+  return page.evaluate(async (expertName) => {
+    if (typeof window.agent?.getExpertDetail !== 'function') return null;
+    return window.agent.getExpertDetail(expertName);
+  }, name).catch(() => null);
+}
+
+async function coreBetaOpenExpertEdit(ctx, expert) {
+  await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
+  const card = await findExpertCardByName(ctx.page, expert.name);
+  if (!card) {
+    return {
+      ok: false,
+      category: 'bug',
+      actual: `共享账本存在专家 ${expert.name}，但“我的专家”列表无法定位对应卡片。`,
+    };
+  }
+  await card.click({ force: true });
+  await ctx.page.waitForTimeout(400);
+  const edit = ctx.page.locator('.modal button, .modal [role="button"], .modal a')
+    .filter({ hasText: /编辑|修改/ })
+    .first();
+  if (!(await visible(edit, 1000))) {
+    const detailText = await ctx.page.locator('.modal').first().innerText({ timeout: 1000 }).catch(() => '');
+    return {
+      ok: false,
+      category: 'bug',
+      selector_or_testid: 'expert-detail-edit',
+      actual: `产品专家详情未展示“编辑/修改”入口，无法执行 Casebook 声明的依赖配置与编辑持久化。详情=${clip(detailText, 800)}`,
+    };
+  }
+  await edit.click({ force: true });
+  await ctx.page.waitForTimeout(500);
+  const modal = ctx.page.locator('.modal').first();
+  if (!(await visible(modal, 1000))) {
+    return {
+      ok: false,
+      category: 'bug',
+      selector_or_testid: 'expert-edit-dialog',
+      actual: '点击专家编辑入口后没有出现可见编辑表单。',
+    };
+  }
+  return { ok: true, card, modal, edit };
+}
+
+async function coreBetaSelectExactExpertSkill(page, modal, dependency) {
+  const buttons = modal.locator('.skill-picks .skill-pick, [data-testid="expert-skill-picks"] button');
+  const count = await buttons.count().catch(() => 0);
+  const options = [];
+  let target = null;
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    const text = String(await button.innerText({ timeout: 500 }).catch(() => '')).trim();
+    options.push(text);
+    if (!target && (text === dependency.name || text.includes(dependency.name))) target = button;
+  }
+  if (!target) {
+    return {
+      ok: false,
+      options,
+      actual: `专家编辑表单没有与已安装 Skill 精确匹配的选项：slug=${dependency.slug}；name=${dependency.name}；options=${options.join('|') || 'none'}`,
+    };
+  }
+  const beforeClass = String(await target.getAttribute('class').catch(() => ''));
+  if (!/\bon\b/.test(beforeClass)) {
+    await target.click({ force: true }).catch(async () => target.evaluate((element) => element.click()));
+    await page.waitForTimeout(500);
+  }
+  const afterClass = String(await target.getAttribute('class').catch(() => ''));
+  const selectedText = String(await target.innerText({ timeout: 500 }).catch(() => '')).trim();
+  return {
+    ok: /\bon\b/.test(afterClass),
+    options,
+    selected_text: selectedText,
+    before_class: beforeClass,
+    after_class: afterClass,
+    actual: `slug=${dependency.slug}；name=${dependency.name}；selectedText=${selectedText}；class=${afterClass}`,
+  };
+}
+
+async function executeCoreBetaExpertCommand(ctx, command) {
+  if (command === 'inventory_experts_before') {
+    const inventory = await coreBetaExpertInventory(ctx);
+    ctx.ledger.experts.before = inventory.cards;
+    return {
+      ok: inventory.cards.length > 0,
+      selector_or_testid: 'experts-view',
+      event: 'inventory',
+      state_readback: inventory,
+      actual: `experts=${inventory.cards.length}`,
+    };
+  }
+  if (command === 'create_three_experts') {
+    const suffix = sha256Text(coreBetaRunRoot(ctx.caseDir)).slice(0, 6);
+    const definitions = [
+      {
+        role: 'research',
+        name: `QBot内测研究专家-${suffix}`,
+        summary: '企业AI助手研究、风险比较与结论输出',
+        body: '你是内测研究专家。回答必须列出维度、证据、风险和可执行结论，不得虚构外部数据。',
+      },
+      {
+        role: 'data',
+        name: `QBot内测数据专家-${suffix}`,
+        summary: '指标复述、比率计算与数字校验',
+        body: '你是数据分析专家。逐项复述输入，展示公式和计算过程，数字不明确时先追问。',
+      },
+      {
+        role: 'delivery',
+        name: `QBot内测交付专家-${suffix}`,
+        summary: '计划拆解、约束修订与检查清单',
+        body: '你是交付管理专家。将目标拆成阶段、负责人、期限、风险和检查清单，并以最新约束覆盖旧约束。',
+      },
+    ];
+    const created = [];
+    for (const definition of definitions) {
+      const ok = await createBasicExpert(
+        ctx.page,
+        ctx.state,
+        ctx.caseDir,
+        definition.name,
+        definition.summary,
+        definition.body,
+        `core-beta-${definition.role}`,
+      );
+      const card = ok ? await findExpertCardByName(ctx.page, definition.name) : null;
+      const id = card ? String(
+        await card.getAttribute('data-expert-id').catch(() => '')
+        || await card.getAttribute('data-id').catch(() => '')
+        || await card.getAttribute('data-testid').catch(() => ''),
+      ).replace(/^expert-card-/, '') : '';
+      created.push({ ...definition, id, ok });
+    }
+    ctx.ledger.experts.created = created;
+    return {
+      ok: created.length === 3 && created.every((item) => item.ok),
+      selector_or_testid: 'create-expert-top',
+      event: 'create-three',
+      state_readback: created,
+      actual: `created=${created.filter((item) => item.ok).length}/3`,
+    };
+  }
+  if (command === 'verify_created_experts') {
+    const inventory = await coreBetaExpertInventory(ctx);
+    const created = ctx.ledger.experts.created || [];
+    const matched = created.filter((item) => inventory.cards.some((card) => card.name === item.name));
+    ctx.ledger.experts.created = created.map((item) => {
+      const card = inventory.cards.find((candidate) => candidate.name === item.name);
+      return { ...item, id: item.id || card?.id || '', visible: Boolean(card) };
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: matched.length === 3,
+      source: 'created expert ledger + visible expert cards',
+      created: ctx.ledger.experts.created,
+    });
+    return {
+      ok: matched.length === 3,
+      selector_or_testid: 'experts-view',
+      event: 'created-readback',
+      state_readback: ctx.ledger.experts.created,
+      actual: `matched=${matched.length}/3`,
+    };
+  }
+  if (command === 'exercise_expert_required_fields') {
+    const before = ctx.state.assertions.length;
+    await executeExpertSmoke007({ page: ctx.page, state: ctx.state, caseDir: ctx.caseDir });
+    const added = ctx.state.assertions.slice(before);
+    return {
+      ok: added.length >= 3 && added.every((item) => item.passed !== false),
+      selector_or_testid: 'expert-create form',
+      event: 'required-field-validation',
+      state_readback: added,
+      actual: `assertions=${added.length}；passed=${added.filter((item) => item.passed !== false).length}`,
+    };
+  }
+  if (command === 'configure_expert_dependency') {
+    const expert = (ctx.ledger.experts.created || []).find((item) => item.role === 'research');
+    if (!expert) return { ok: false, status: 'blocked', category: 'blocked', actual: 'research 专家账本不存在。' };
+    const dependency = (ctx.ledger.skills.installed || [])[0] || (ctx.ledger.skills.deep_use || [])[0];
+    if (!dependency?.slug || !dependency?.name) {
+      return {
+        ok: false,
+        status: 'blocked',
+        category: 'blocked',
+        actual: '本轮没有可按 slug/name 精确选择的已安装 Skill，禁止随机替代。',
+      };
+    }
+    const opened = await coreBetaOpenExpertEdit(ctx, expert);
+    if (!opened.ok) {
+      setCoreBetaEvidence(ctx.state, 'capability_selection', {
+        available: false,
+        source: 'visible expert detail/edit surface',
+        expert,
+        dependency,
+        actual: opened.actual,
+      });
+      return { ok: false, status: 'failed', ...opened };
+    }
+    const modalText = await opened.modal.innerText({ timeout: 1200 }).catch(() => '');
+    const selected = await coreBetaSelectExactExpertSkill(ctx.page, opened.modal, dependency);
+    if (!selected.ok) {
+      setCoreBetaEvidence(ctx.state, 'capability_selection', {
+        available: false,
+        source: 'exact installed Skill option in expert edit form',
+        expert,
+        dependency,
+        selection: selected,
+      });
+      return {
+        ok: false,
+        status: 'failed',
+        category: 'bug',
+        selector_or_testid: 'expert edit .skill-picks .skill-pick',
+        event: 'exact-select',
+        state_readback: selected,
+        actual: selected.actual,
+      };
+    }
+    const save = opened.modal.locator('button, [role="button"]')
+      .filter({ hasText: /保存|更新|确认/ })
+      .first();
+    if (!(await visible(save, 800))) {
+      return {
+        ok: false,
+        status: 'failed',
+        category: 'bug',
+        selector_or_testid: 'expert-edit-save',
+        actual: '依赖 Skill 已选中，但专家编辑表单没有保存/更新入口。',
+      };
+    }
+    await save.click({ force: true });
+    await ctx.page.waitForTimeout(1000);
+    const detail = await coreBetaReadExpertDetail(ctx.page, expert.name);
+    const persistedSkills = Array.isArray(detail?.skills) ? detail.skills.map(String) : [];
+    const persisted = persistedSkills.includes(dependency.slug);
+    ctx.expertEditing = expert;
+    ctx.expertDependency = dependency;
+    ctx.state.artifacts.core_beta_expert_dependency_surface = {
+      expert,
+      dependency,
+      modalText,
+      selection: selected,
+      detail,
+      persistedSkills,
+      persisted,
+    };
+    setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+      available: (ctx.ledger.experts.created || []).length === 3,
+      source: 'shared created expert ledger',
+      inventory: ctx.ledger.experts.created || [],
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: persisted,
+      source: 'exact expert edit selection + window.agent.getExpertDetail',
+      expert,
+      dependency,
+      persisted_skills: persistedSkills,
+      selection: selected,
+    });
+    return {
+      ok: persisted,
+      status: persisted ? 'passed' : 'failed',
+      category: persisted ? '' : 'bug',
+      selector_or_testid: 'expert edit .skill-picks .skill-pick + window.agent.getExpertDetail',
+      event: 'exact-select-save-readback',
+      state_readback: ctx.state.artifacts.core_beta_expert_dependency_surface,
+      actual: `expectedSlug=${dependency.slug}；persistedSkills=${persistedSkills.join(',') || 'none'}；persisted=${persisted}`,
+    };
+  }
+  if (command === 'edit_and_reopen_expert') {
+    if (!ctx.expertEditing || !ctx.expertDependency) {
+      return {
+        ok: false,
+        status: 'failed',
+        category: 'bug',
+        actual: '上一编号步骤没有完成专家依赖保存，禁止把后续编辑步骤伪记为通过。',
+      };
+    }
+    const opened = await coreBetaOpenExpertEdit(ctx, ctx.expertEditing);
+    if (!opened.ok) return { ok: false, status: 'failed', ...opened };
+    const modal = opened.modal;
+    const summary = `研究风险与证据链-${sha256Text(ctx.state.id).slice(0, 6)}`;
+    const input = modal.locator('[data-testid*="summary"], input[placeholder*="一句话"], input[placeholder*="精通"]').first();
+    if (!(await visible(input, 800))) {
+      return { ok: false, status: 'failed', category: 'bug', actual: '专家编辑表单没有能力介绍输入框。' };
+    }
+    await input.fill(summary);
+    const save = modal.locator('button, [role="button"]').filter({ hasText: /保存|更新|确认/ }).first();
+    if (!(await visible(save, 800))) {
+      return { ok: false, status: 'failed', category: 'bug', actual: '专家编辑表单没有保存入口。' };
+    }
+    await save.click({ force: true });
+    await ctx.page.waitForTimeout(1000);
+    await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+    await ctx.page.waitForTimeout(1000);
+    await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
+    const card = await findExpertCardByName(ctx.page, ctx.expertEditing.name);
+    const text = card ? await card.innerText({ timeout: 1000 }).catch(() => '') : '';
+    const detail = await coreBetaReadExpertDetail(ctx.page, ctx.expertEditing.name);
+    const persistedSkills = Array.isArray(detail?.skills) ? detail.skills.map(String) : [];
+    const summaryRetained = String(detail?.summary || '').includes(summary) || text.includes(summary);
+    const dependencyRetained = persistedSkills.includes(ctx.expertDependency.slug);
+    const retained = Boolean(card) && summaryRetained && dependencyRetained;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: retained,
+      source: 'post-reload expert card + window.agent.getExpertDetail',
+      expert: ctx.expertEditing,
+      dependency: ctx.expertDependency,
+      summary,
+      detail,
+      summary_retained: summaryRetained,
+      dependency_retained: dependencyRetained,
+    });
+    return {
+      ok: retained,
+      status: retained ? 'passed' : 'failed',
+      category: retained ? '' : 'bug',
+      selector_or_testid: 'expert card + window.agent.getExpertDetail',
+      event: 'edit-save-reopen',
+      state_readback: {
+        expert: ctx.expertEditing,
+        dependency: ctx.expertDependency,
+        summary,
+        text,
+        detail,
+        summaryRetained,
+        dependencyRetained,
+      },
+      actual: `retained=${retained}；summaryRetained=${summaryRetained}；dependencyRetained=${dependencyRetained}；skills=${persistedSkills.join(',') || 'none'}；card=${clip(text, 500)}`,
+    };
+  }
+  if (command === 'summon_expert_by_id') {
+    const source = String(ctx.capabilityPolicy.selection_source || '');
+    const role = source.split('.').at(-1);
+    const expert = (ctx.ledger.experts.created || []).find((item) => item.role === role);
+    if (!expert) return { ok: false, status: 'blocked', category: 'blocked', actual: `专家 role=${role} 不存在。` };
+    const result = await coreBetaSummonExpert(ctx, expert);
+    ctx.selectedExpert = { ...expert, effective_identity: result.current_identity || expert.id || expert.name };
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: result.ok,
+      source: 'visible expert card + capabilities.currentExpert',
+      result,
+    });
+    return {
+      ok: result.ok,
+      selector_or_testid: `expert-card-${expert.id || expert.name}`,
+      event: 'summon',
+      state_readback: result,
+      actual: JSON.stringify(result),
+    };
+  }
+  if (command === 'run_three_expert_turns') {
+    const outcomes = [];
+    for (let index = 0; index < 3; index += 1) outcomes.push(await coreBetaRunTurn(ctx, index, { label: `专家第 ${index + 1} 轮` }));
+    const sameTask = new Set(outcomes.map((item) => item.taskId)).size === 1;
+    ctx.expertOutcomes = outcomes;
+    return {
+      ok: sameTask && outcomes.every((item) => item.oracle.ok && item.stable),
+      selector_or_testid: 'composer-send',
+      event: 'three-turn-expert-conversation',
+      state_readback: { task_ids: outcomes.map((item) => item.taskId), oracles: outcomes.map((item) => item.oracle) },
+      actual: `sameTask=${sameTask}；oracles=${outcomes.map((item) => item.oracle.ok).join(',')}`,
+    };
+  }
+  if (/^verify_expert_(?:execution|numeric_result|delivery_result)$/.test(command)) {
+    const expected = ctx.selectedExpert?.effective_identity || ctx.selectedExpert?.id || ctx.selectedExpert?.name;
+    const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'expert', expected);
+    if (evidence.executed) ctx.ledger.experts.used.push({ role: ctx.selectedExpert.role, identity: expected, task_id: evidence.task_id });
+    return {
+      ok: evidence.executed && Boolean(evidence.task_id),
+      selector_or_testid: 'task-bound expert execution evidence',
+      event: 'readback',
+      state_readback: evidence,
+      actual: `expert=${expected || 'missing'}；taskId=${evidence.task_id}；executed=${evidence.executed}`,
+    };
+  }
+  if (command === 'verify_expert_identity_in_task_a') {
+    const expert = (ctx.ledger.experts.created || []).find((item) => item.role === 'research');
+    if (!expert) return { ok: false, status: 'blocked', category: 'blocked', actual: 'research 专家不存在。' };
+    await openNewTask(ctx.page, ctx.state);
+    const result = await coreBetaSummonExpert(ctx, expert);
+    ctx.isolationExpert = result;
+    setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+      available: (ctx.ledger.experts.created || []).length === 3,
+      source: 'shared created expert ledger',
+      inventory: ctx.ledger.experts.created || [],
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: result.ok,
+      source: 'visible expert summon + capabilities.currentExpert',
+      result,
+    });
+    return {
+      ok: result.ok,
+      selector_or_testid: 'expert card',
+      event: 'task-a-summon',
+      state_readback: result,
+      actual: JSON.stringify(result),
+    };
+  }
+  if (command === 'switch_to_general_assistant') {
+    const ok = await selectGeneralAssistantForCase(ctx.page, ctx.state, ctx.caseDir);
+    const capabilities = await currentCapabilities(ctx.page);
+    return {
+      ok: ok && !coreBetaExpertIdentity(capabilities?.currentExpert),
+      selector_or_testid: 'expert-general-assistant',
+      event: 'select',
+      state_readback: capabilities,
+      actual: `currentExpert=${JSON.stringify(capabilities?.currentExpert || null)}`,
+    };
+  }
+  if (command === 'verify_expert_isolation_in_task_b') {
+    await openNewTask(ctx.page, ctx.state);
+    const capabilities = await currentCapabilities(ctx.page);
+    const clean = !coreBetaExpertIdentity(capabilities?.currentExpert);
+    return {
+      ok: clean,
+      selector_or_testid: 'nav-new-task',
+      event: 'task-b-readback',
+      state_readback: capabilities,
+      actual: `clean=${clean}；currentExpert=${JSON.stringify(capabilities?.currentExpert || null)}`,
+    };
+  }
+  if (command === 'delete_created_experts') {
+    setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+      available: (ctx.ledger.experts.created || []).length === 3,
+      source: 'shared created expert ledger before deletion',
+      inventory: ctx.ledger.experts.created || [],
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: (ctx.ledger.experts.created || []).length === 3,
+      source: 'exact three run-created experts selected for cleanup',
+      selected: ctx.ledger.experts.created || [],
+    });
+    const deleted = [];
+    for (const expert of ctx.ledger.experts.created || []) {
+      await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
+      const card = await findExpertCardByName(ctx.page, expert.name);
+      if (!card) continue;
+      await card.click({ force: true });
+      await ctx.page.waitForTimeout(400);
+      const del = ctx.page.locator('.modal .modal-del-link, .modal button, .modal [role="button"]').filter({ hasText: /删除/ }).first();
+      if (!(await visible(del, 800))) continue;
+      const dialog = await confirmDestructiveAction(ctx.page, async () => del.click({ force: true }), { accept: true });
+      if (['native-confirm', 'custom-dialog'].includes(dialog.source)) deleted.push(expert.id || expert.name);
+      await ctx.page.waitForTimeout(500);
+    }
+    ctx.ledger.experts.deleted = deleted;
+    return {
+      ok: deleted.length === (ctx.ledger.experts.created || []).length,
+      selector_or_testid: 'expert delete confirmation',
+      event: 'delete-created',
+      state_readback: deleted,
+      actual: `deleted=${deleted.length}/${(ctx.ledger.experts.created || []).length}`,
+    };
+  }
+  if (command === 'verify_expert_removal') {
+    const inventory = await coreBetaExpertInventory(ctx);
+    const remaining = (ctx.ledger.experts.created || []).filter((expert) => inventory.cards.some((card) => card.name === expert.name));
+    const clean = remaining.length === 0;
+    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
+      available: clean,
+      source: 'visible expert inventory after deletion',
+      remaining,
+    });
+    return {
+      ok: clean,
+      selector_or_testid: 'experts-view',
+      event: 'cleanup-readback',
+      state_readback: remaining,
+      actual: `remaining=${remaining.map((item) => item.name).join(',') || 'none'}`,
+    };
+  }
+  if (command === 'verify_expert_history_boundary') {
+    const used = ctx.ledger.experts.used || [];
+    return {
+      ok: used.length > 0 && used.every((item) => item.task_id),
+      selector_or_testid: 'core-beta-shared-ledger',
+      event: 'history-boundary-readback',
+      state_readback: used,
+      actual: `historicalExpertTasks=${used.length}`,
+    };
+  }
+  throw new Error(`Core Beta expert command 未实现：${command}`);
+}
+
+function coreBetaNormalizeConnector(item = {}) {
+  const key = String(item.key || item.id || item.connectorKey || '').trim();
+  const tools = Array.isArray(item.tools) ? item.tools : Array.isArray(item.toolNames) ? item.toolNames : [];
+  return {
+    key,
+    name: String(item.name || item.title || item.label || key).trim(),
+    category: String(item.category || item.group || item.type || 'unclassified').trim(),
+    health: String(item.health || item.status || item.phase || ''),
+    read_only: item.readOnly !== false && item.read_only !== false && item.writeEnabled !== true,
+    tools,
+    raw: item,
+  };
+}
+
+async function coreBetaMcpInventory(ctx) {
+  await openConnectorsPage(ctx.page, ctx.state, ctx.caseDir);
+  const capabilities = await currentCapabilities(ctx.page);
+  const inventory = (Array.isArray(capabilities?.connectors) ? capabilities.connectors : [])
+    .map(coreBetaNormalizeConnector)
+    .filter((item) => item.key);
+  ctx.ledger.mcp.inventory = inventory;
+  setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+    available: inventory.length > 0,
+    source: 'window.agent.capabilities.connectors',
+    inventory,
+  });
+  return { capabilities, inventory };
+}
+
+async function executeCoreBetaMcpCommand(ctx, command) {
+  if (command === 'inventory_mcp_services') {
+    const result = await coreBetaMcpInventory(ctx);
+    return {
+      ok: result.inventory.length > 0,
+      selector_or_testid: 'connectors-view',
+      event: 'inventory',
+      state_readback: result.inventory,
+      actual: `connectors=${result.inventory.length}`,
+    };
+  }
+  if (command === 'sample_five_mcp_services') {
+    const policy = ctx.capabilityPolicy;
+    const sample = deterministicCapabilitySample(ctx.ledger.mcp.inventory, {
+      count: Number(policy.select_count || 5),
+      seed: String(policy.seed || ctx.options?.releaseIdentityManifestSha256 || ctx.state.id),
+      stableIdentityField: 'key',
+      stratumField: 'category',
+      eligible: (item) => item.read_only
+        && (!item.health || /ready|healthy|connected|available|ok/i.test(item.health))
+        && item.tools.length > 0,
+    });
+    ctx.ledger.mcp.sample = sample.selected || [];
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: sample.ok,
+      source: 'deterministicCapabilitySample',
+      selection: sample,
+    });
+    return {
+      ok: sample.ok,
+      status: sample.ok ? 'passed' : 'blocked',
+      category: sample.ok ? '' : 'blocked',
+      selector_or_testid: 'core-beta deterministic sampler',
+      event: 'sample',
+      state_readback: sample,
+      actual: JSON.stringify(sample),
+    };
+  }
+  if (command === 'verify_mcp_sample') {
+    const sample = ctx.ledger.mcp.sample || [];
+    const unique = new Set(sample.map((item) => item.key)).size === sample.length;
+    const ready = sample.every((item) => item.read_only && item.tools.length > 0);
+    return {
+      ok: sample.length === 5 && unique && ready,
+      selector_or_testid: 'core-beta-shared-ledger',
+      event: 'sample-readback',
+      state_readback: sample,
+      actual: `selected=${sample.length}；unique=${unique}；ready=${ready}`,
+    };
+  }
+  if (command === 'select_five_connectors_by_key') {
+    setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+      available: (ctx.ledger.mcp.inventory || []).length >= 5,
+      source: 'shared live MCP inventory',
+      inventory: ctx.ledger.mcp.inventory || [],
+    });
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('MCP 选择前能力清理失败。');
+    const selected = [];
+    for (const item of ctx.ledger.mcp.sample || []) {
+      if (await selectManualConnectorByKey(ctx.page, ctx.state, ctx.caseDir, item.key)) selected.push(item.key);
+    }
+    const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
+    ctx.ledger.mcp.selected = selected;
+    return {
+      ok: selected.length === 5 && snapshot.selectedConnectorCount === 5,
+      selector_or_testid: 'composer-connectors-menu',
+      event: 'select-five',
+      state_readback: { selected, snapshot },
+      actual: `selected=${selected.length}；public=${snapshot.selectedConnectorCount}`,
+    };
+  }
+  if (command === 'readback_connector_binding') {
+    const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
+    const expected = ctx.ledger.mcp.selected || [];
+    const exact = expected.length === snapshot.selectedConnectorCount
+      && expected.every((key) => snapshot.selectedConnectors.includes(key));
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: exact,
+      source: 'visible connector chips + window.agent.capabilities',
+      expected,
+      snapshot,
+    });
+    return {
+      ok: exact,
+      selector_or_testid: 'composer connector chips',
+      event: 'binding-readback',
+      state_readback: snapshot,
+      actual: `expected=${expected.join(',')}；selected=${JSON.stringify(snapshot.selectedConnectors)}`,
+    };
+  }
+  if (command === 'remove_connectors_and_verify') {
+    const cleared = await clearManualConnectorSelections(ctx.page, ctx.state, ctx.caseDir);
+    const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
+    const clean = cleared && snapshot.selectedConnectorCount === 0 && snapshot.chipCount === 0;
+    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
+      available: clean,
+      source: 'visible connector chips + capabilities after removal',
+      snapshot,
+    });
+    return {
+      ok: clean,
+      selector_or_testid: 'composer connector chips',
+      event: 'remove-and-readback',
+      state_readback: snapshot,
+      actual: JSON.stringify(snapshot),
+    };
+  }
+  if (command === 'select_connector_by_key') {
+    const index = coreBetaSelectionIndex(ctx.capabilityPolicy.selection_source);
+    const selected = (ctx.ledger.mcp.sample || [])[index];
+    if (!selected) return { ok: false, status: 'blocked', category: 'blocked', actual: `mcp sample[${index}] 不存在。` };
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('MCP 使用前能力清理失败。');
+    const ok = await selectManualConnectorByKey(ctx.page, ctx.state, ctx.caseDir, selected.key);
+    const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
+    ctx.selectedMcp = selected;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: ok && snapshot.selectedConnectors.includes(selected.key),
+      source: 'visible connector chip + window.agent.capabilities',
+      expected: selected,
+      snapshot,
+    });
+    return {
+      ok: ok && snapshot.selectedConnectors.includes(selected.key),
+      selector_or_testid: `composer-connector-option-${selected.key}`,
+      event: 'select',
+      state_readback: snapshot,
+      actual: `expected=${selected.key}；selected=${JSON.stringify(snapshot.selectedConnectors)}`,
+    };
+  }
+  if (command === 'run_mcp_turn_1') {
+    const outcome = await coreBetaRunTurn(ctx, 0, { label: 'MCP 第 1 轮' });
+    ctx.mcpFirst = outcome;
+    return {
+      ok: outcome.oracle.ok && outcome.stable,
+      selector_or_testid: 'composer-send',
+      event: 'mcp-turn-1',
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
+    };
+  }
+  if (command === 'run_mcp_turn_2_and_verify') {
+    const outcome = await coreBetaRunTurn(ctx, 1, { label: 'MCP 第 2 轮' });
+    const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'mcp', ctx.selectedMcp?.key);
+    if (evidence.executed) ctx.ledger.mcp.used.push({ key: ctx.selectedMcp.key, task_id: evidence.task_id });
+    return {
+      ok: outcome.oracle.ok
+        && outcome.stable
+        && outcome.taskId === ctx.mcpFirst?.taskId
+        && evidence.executed,
+      selector_or_testid: 'task-bound MCP tool call evidence',
+      event: 'mcp-turn-2-and-readback',
+      state_readback: { outcome: { task_id: outcome.taskId, oracle: outcome.oracle }, evidence },
+      actual: `taskId=${outcome.taskId}；sameTask=${outcome.taskId === ctx.mcpFirst?.taskId}；toolCall=${evidence.executed}`,
+    };
+  }
+  throw new Error(`Core Beta MCP command 未实现：${command}`);
+}
+
+function coreBetaNewAssertionsPassed(state, startIndex) {
+  const added = state.assertions.slice(startIndex);
+  return added.length > 0 && added.every((item) => item.passed !== false);
+}
+
+async function executeCoreBetaRecoveryCommand(ctx, command) {
+  if (command === 'dispatch_long_task' || command === 'dispatch_recovery_task') {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('恢复用例派发前能力清理失败。');
+    const prompt = command === 'dispatch_long_task'
+      ? '请生成一份包含目标、范围、风险、执行计划和验收标准的完整测试方案。先输出“BETA_RECOVERY_STARTED”，再继续完整内容。'
+      : '请生成一份运行时恢复报告。先输出“BETA_RUNTIME_STARTED”，随后给出目标、风险、恢复步骤和验收标准。';
+    const before = await conversationSnapshot(ctx.page);
+    await fillComposer(ctx.page, prompt, ctx.state, command);
+    const receipt = await send(ctx.page, ctx.state, command);
+    const started = await waitForRunningTaskEvidence(ctx.page, 90000, {
+      runtime: ctx.runtime,
+      options: ctx.options,
+      state: ctx.state,
+      caseDir: ctx.caseDir,
+      label: command,
+      screenshotName: `${slugify(command)}-running`,
+    });
+    ctx.page = ctx.runtime?.page || ctx.page;
+    ctx.recovery = {
+      mode: command,
+      prompt,
+      prompt_sha256: sha256Text(prompt),
+      before,
+      receipt,
+      started,
+      task_id: String(started.activeId || receipt?.snapshot?.activeId || ''),
+    };
+    ctx.state.artifacts.core_beta_recovery = ctx.recovery;
+    return {
+      ok: started.ok && Boolean(ctx.recovery.task_id),
+      selector_or_testid: 'composer-send',
+      event: 'dispatch-and-wait-running',
+      state_readback: ctx.recovery,
+      actual: `taskId=${ctx.recovery.task_id}；running=${started.ok}；promptSha256=${ctx.recovery.prompt_sha256}`,
+    };
+  }
+  if (command === 'close_and_reopen_embedded_qwork') {
+    if (!ctx.recovery?.task_id) throw new Error('缺少运行中任务账本。');
+    const restarted = await restartQbotAndReconnect({
+      runtime: ctx.runtime,
+      options: ctx.options,
+      state: ctx.state,
+      caseDir: ctx.caseDir,
+      label: 'Core Beta 运行中任务关闭重进',
+    });
+    ctx.page = restarted.page || ctx.runtime?.page || ctx.page;
+    ctx.recovery.restarted = restarted;
+    const workbench = restarted.ok ? await waitForQbotWorkbench(ctx.page, 90000) : { ok: false, reason: restarted.reason };
+    ctx.recovery.workbench = workbench;
+    ctx.state.artifacts.core_beta_recovery = ctx.recovery;
+    return {
+      ok: restarted.ok && workbench.ok,
+      selector_or_testid: 'managed 360Teams/QWork restart',
+      event: 'restart-and-reconnect',
+      state_readback: { restarted: { ok: restarted.ok, reason: restarted.reason || '' }, workbench },
+      actual: `restarted=${restarted.ok}；workbench=${workbench.ok}`,
+    };
+  }
+  if (command === 'recover_task_by_id') {
+    const reopened = await reopenSessionAndReadback(ctx.page, ctx.recovery?.task_id);
+    const terminal = reopened.ok
+      ? await waitForPersistedTaskTerminal(ctx.page, Math.min(Number(ctx.timeoutMs || 600000), 600000))
+      : { idle: false };
+    const snapshot = await conversationSnapshot(ctx.page);
+    const userCopies = snapshot.messages.filter((item) => item.role === 'user' && item.text.includes(ctx.recovery.prompt)).length;
+    const transcript = snapshot.messages.map((item) => `${item.role}:${item.text}`).join('\n');
+    ctx.state.artifacts.transcript = path.join(ctx.caseDir, 'recovered-transcript.txt');
+    writeTextFile(ctx.state.artifacts.transcript, transcript);
+    const ok = reopened.ok
+      && terminal.idle
+      && String(snapshot.activeTaskId || '') === ctx.recovery.task_id
+      && userCopies === 1
+      && transcript.includes('BETA_RECOVERY_STARTED');
+    setCoreBetaEvidence(ctx.state, 'reply_completion', {
+      available: terminal.idle && transcript.includes('BETA_RECOVERY_STARTED'),
+      source: 'reopened task terminal transcript',
+      task_id: ctx.recovery.task_id,
+    });
+    ctx.state.artifacts.core_beta_recovery = {
+      ...ctx.recovery,
+      reopened,
+      terminal,
+      user_copies: userCopies,
+      transcript_sha256: sha256Text(transcript),
+    };
+    return {
+      ok,
+      selector_or_testid: 'public openSession',
+      event: 'recover-by-task-id',
+      state_readback: { reopened, terminal, userCopies, transcript_sha256: sha256Text(transcript) },
+      actual: `reopened=${reopened.ok}；idle=${terminal.idle}；sameTask=${snapshot.activeTaskId === ctx.recovery.task_id}；userCopies=${userCopies}`,
+    };
+  }
+  if (command === 'inject_runtime_exit') {
+    if (!ctx.recovery?.task_id) throw new Error('缺少运行时恢复任务账本。');
+    const rows = managedProcessRows();
+    const target = selectManagedRuntimeProcess(rows);
+    let terminated = false;
+    let mode = 'managed-child-sigterm';
+    let reason = '';
+    if (target.ok) {
+      try {
+        process.kill(target.process.pid, 'SIGTERM');
+        terminated = true;
+      } catch (error) {
+        reason = error.message;
+      }
+    } else {
+      mode = 'task-scoped-cancel-turn';
+      const cancelled = await ctx.page.evaluate(async () => {
+        const bridge = window.__qbotE2E || window.__deepbankE2E;
+        if (typeof bridge?.cancelTurn === 'function') return bridge.cancelTurn();
+        if (typeof window.agent?.cancel === 'function') {
+          await window.agent.cancel();
+          return { ok: true };
+        }
+        return { ok: false, reason: 'cancelTurn/cancel unavailable' };
+      }).catch((error) => ({ ok: false, reason: error.message }));
+      terminated = Boolean(cancelled?.ok);
+      reason = cancelled?.reason || '';
+    }
+    const failure = terminated ? await waitForRuntimeFailureSurface(ctx.page, 60000) : { observed: false };
+    ctx.recovery.termination = { terminated, mode, target, reason, failure };
+    ctx.state.artifacts.core_beta_recovery = ctx.recovery;
+    return {
+      ok: terminated && failure.observed,
+      selector_or_testid: mode,
+      event: 'inject-runtime-exit',
+      state_readback: ctx.recovery.termination,
+      actual: `mode=${mode}；terminated=${terminated}；failureObserved=${failure.observed}；reason=${reason}`,
+    };
+  }
+  if (command === 'recover_runtime_and_continue') {
+    const taskBefore = await qbotE2EState(ctx.page);
+    const family = String(taskBefore.runtimeFamily || 'claude-code');
+    const ready = await recoverRuntimeFamily(ctx.page, family, 180000);
+    const reopened = ready.ok ? await reopenSessionAndReadback(ctx.page, ctx.recovery?.task_id) : { ok: false };
+    if (!ready.ok || !reopened.ok) {
+      return {
+        ok: false,
+        selector_or_testid: 'window.agent.retryRuntime + public openSession',
+        event: 'recover',
+        state_readback: { ready, reopened },
+        actual: `ready=${ready.ok}；reopened=${reopened.ok}`,
+      };
+    }
+    const followup = '运行时已恢复。请基于原任务继续，输出唯一标识 BETA_RUNTIME_RECOVERED，并用一句话说明恢复是否成功。';
+    const before = await conversationSnapshot(ctx.page);
+    await fillComposer(ctx.page, followup, ctx.state, '恢复后继续追问');
+    await send(ctx.page, ctx.state, '恢复后继续追问');
+    const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
+    const reply = await waitForReply(ctx.page, before, waitConfig.timeoutMs, {
+      ignoredText: [followup],
+      expectedUserText: followup,
+      state: ctx.state,
+      caseDir: ctx.caseDir,
+      label: '运行时恢复后继续',
+      minWaitMs: waitConfig.minWaitMs,
+      waitKind: waitConfig.kind,
+    });
+    writeReplyArtifacts(ctx.state, ctx.caseDir, [{ ...reply, label: '运行时恢复后继续' }]);
+    const after = await qbotE2EState(ctx.page);
+    const ok = !reply.incomplete
+      && reply.deltaText.includes('BETA_RUNTIME_RECOVERED')
+      && String(after.activeId || '') === ctx.recovery.task_id;
+    setCoreBetaEvidence(ctx.state, 'reply_completion', {
+      available: !reply.incomplete,
+      source: 'waitForReply after runtime recovery',
+      task_id: after.activeId,
+      stable_observations: reply.stable_observations,
+    });
+    ctx.state.artifacts.core_beta_recovery = {
+      ...ctx.recovery,
+      ready,
+      reopened,
+      active_id_after: after.activeId,
+      reply_sha256: sha256Text(reply.deltaText || ''),
+    };
+    return {
+      ok,
+      selector_or_testid: 'window.agent.retryRuntime + composer-send',
+      event: 'recover-and-continue',
+      state_readback: { ready, reopened, active_id: after.activeId, reply_sha256: sha256Text(reply.deltaText || '') },
+      actual: `ready=${ready.ok}；reopened=${reopened.ok}；sameTask=${after.activeId === ctx.recovery.task_id}；marker=${reply.deltaText.includes('BETA_RUNTIME_RECOVERED')}`,
+    };
+  }
+  throw new Error(`Core Beta recovery command 未实现：${command}`);
 }
 
 async function executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
@@ -19497,6 +22418,11 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     : null;
   const action = trustedAction || blockedDiagnosticAction;
   const artifactsJson = JSON.stringify(state.artifacts || {});
+  const coreBetaEvidence = String(state.contract_version || '') === CORE_BETA_CASEBOOK_CONTRACT_VERSION
+    && state.artifacts?.core_beta_evidence
+    && typeof state.artifacts.core_beta_evidence === 'object'
+    ? state.artifacts.core_beta_evidence
+    : {};
   const promptRecords = Array.isArray(state.artifacts?.sent_prompts)
     ? state.artifacts.sent_prompts.filter((item) => String(item?.prompt || '').trim())
     : [];
@@ -19603,6 +22529,9 @@ export function buildCaseEvidenceManifest(state, caseDir) {
 
   const roleEvidence = {
     before_screenshot: screenshotEvidence(before),
+    action_receipt: coreBetaEvidence.action_receipt?.available === true
+      ? coreBetaEvidence.action_receipt
+      : { available: false, reason: '缺少逐动作 selector/testid、时间和状态变化收据。' },
     action_screenshot: screenshotEvidence(action),
     after_screenshot: screenshotEvidence(after),
     numbered_step_assertions: numberedStepEvidenceAvailable
@@ -19637,6 +22566,15 @@ export function buildCaseEvidenceManifest(state, caseDir) {
         sha256: sha256Text(promptRecords.map((item) => item.prompt).join('\n---\n')),
       }
       : { available: false, reason: '缺少 artifacts.sent_prompts。' },
+    send_receipt: coreBetaEvidence.send_receipt?.available === true
+      ? coreBetaEvidence.send_receipt
+      : Array.isArray(state.artifacts?.send_receipts)
+        && state.artifacts.send_receipts.some((item) => (
+          Array.isArray(item?.attempts)
+          && item.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
+        ))
+        ? { available: true, receipt_count: state.artifacts.send_receipts.length, source: 'confirmed product send receipt' }
+        : { available: false, reason: '缺少产品确认的发送收据。' },
     task_id: taskId
       ? {
         available: true,
@@ -19660,9 +22598,21 @@ export function buildCaseEvidenceManifest(state, caseDir) {
         assistant_reply_present: terminalConversation?.assistant_reply_present ?? true,
       }
       : { available: false, reason: '缺少 reply-delta 文件。' },
+    reply_completion: coreBetaEvidence.reply_completion?.available === true
+      ? coreBetaEvidence.reply_completion
+      : { available: false, reason: '缺少 running=false 且至少两次稳定采样的回复完成证据。' },
     public_state_readback: publicStatePresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少公开能力/状态读回。' },
+    capability_inventory: coreBetaEvidence.capability_inventory?.available === true
+      ? coreBetaEvidence.capability_inventory
+      : { available: false, reason: '缺少完整能力目录和稳定身份字段。' },
+    capability_selection: coreBetaEvidence.capability_selection?.available === true
+      ? coreBetaEvidence.capability_selection
+      : { available: false, reason: '缺少可见 chip、稳定能力ID和公开 capabilities 三方一致证据。' },
+    capability_execution_event: coreBetaEvidence.capability_execution_event?.available === true
+      ? coreBetaEvidence.capability_execution_event
+      : { available: false, reason: '缺少与当前 taskId、所选能力ID绑定的真实执行事件。' },
     tool_or_mcp_call_log: toolLogPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少真实 tool/MCP 调用或无调用日志。' },
@@ -19698,9 +22648,18 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     artifact_preview: artifactPreviewPresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少成果可见预览证据。' },
+    cleanup_readback: coreBetaEvidence.cleanup_readback?.available === true
+      ? coreBetaEvidence.cleanup_readback
+      : { available: false, reason: '缺少清理前后 inventory 与无残留读回。' },
     redacted_log: redactedLogEvidence,
     redacted_host_and_auth_log: redactedLogEvidence,
   };
+  // Core-beta executors write role-specific, structured receipts. They take
+  // precedence over legacy keyword discovery so a JSON field name alone can
+  // never satisfy a hard evidence role.
+  for (const [role, evidence] of Object.entries(coreBetaEvidence)) {
+    if (evidence?.available === true) roleEvidence[role] = evidence;
+  }
   const missingRoles = requiredRoles.filter((role) => roleEvidence[role]?.available !== true);
   return {
     schema_version: 2,
@@ -20764,7 +23723,11 @@ function reviewExecutionIntegrity(result) {
     || '',
   );
   const coverage = result?.artifacts?.numbered_step_coverage;
-  if (contractVersion !== 'qbot-current-casebook/v4') {
+  const explicitContract = [
+    'qbot-current-casebook/v4',
+    CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  ].includes(contractVersion);
+  if (!explicitContract) {
     if (!coverage) return { applicable: false, ok: true, reason: '当前 Case 无 V4 显式编号步骤契约。' };
     if (Number(coverage.schema_version || 0) < 2) {
       return { applicable: true, ok: false, reason: '编号步骤覆盖仍是旧 schema，不能证明真实执行。' };
@@ -20775,8 +23738,9 @@ function reviewExecutionIntegrity(result) {
       reason: coverage.complete === true ? '编号步骤覆盖完整。' : '编号步骤覆盖不完整。',
     };
   }
+  const contractLabel = contractVersion === CORE_BETA_CASEBOOK_CONTRACT_VERSION ? 'CORE-BETA' : 'V4';
   if (!coverage) {
-    return { applicable: true, ok: false, reason: 'V4 Case 缺少 numbered_step_coverage。' };
+    return { applicable: true, ok: false, reason: `${contractLabel} Case 缺少 numbered_step_coverage。` };
   }
   const entries = Array.isArray(coverage.entries) ? coverage.entries : [];
   const explicitSteps = (Array.isArray(result?.steps) ? result.steps : [])
@@ -20803,8 +23767,8 @@ function reviewExecutionIntegrity(result) {
     applicable: true,
     ok,
     reason: ok
-      ? 'V4 每个编号步骤均有显式执行记录。'
-      : 'V4 覆盖来自旧式位置/全局关键词匹配，或缺少逐步显式执行记录。',
+      ? `${contractLabel} 每个编号步骤均有显式执行记录。`
+      : `${contractLabel} 覆盖来自旧式位置/全局关键词匹配，或缺少逐步显式执行记录。`,
   };
 }
 

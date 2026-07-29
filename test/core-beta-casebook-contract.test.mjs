@@ -29,7 +29,7 @@ function conversationCase() {
       number: index + 1,
       action_id: `chat-${index + 1}`,
       declared_step: item,
-      command: ['open_new_task', 'send_prompt', 'collect_reply'][index],
+      command: ['open_clean_task', 'send_prompt', 'collect_reply'][index],
       expected_state: ['clean_task', 'send_receipt', 'reply_completed'][index],
       evidence_roles: ['before_screenshot', 'action_receipt', 'after_screenshot'],
     }))),
@@ -77,13 +77,29 @@ test('natural language steps without an exact action plan fail closed', () => {
   assert.ok(audit.errors.some((item) => item.includes('action_plan_json')));
 });
 
-test('core beta case cannot fall through to a generic runner before its executor is registered', () => {
+test('registered core beta cases pass readiness without falling through to a generic runner', () => {
   const readiness = validateCasebookExecutorReadiness([conversationCase()], {
     controlPlaneUrl: 'https://qbot-api.360shuke.com',
     qworkUiUrl: 'file:///Users/qifu/.deepbank/ui/0.0.20/index.html',
   });
+  assert.equal(readiness.ok, true, JSON.stringify(readiness.framework_issues));
+  assert.equal(readiness.framework_issues.some((item) => item.kind === 'core_beta_executor_missing'), false);
+});
+
+test('an unknown core beta command fails readiness before the UI runner starts', () => {
+  const invalid = conversationCase();
+  const actions = JSON.parse(invalid.action_plan_json);
+  actions[1].command = 'generic_click_and_hope';
+  invalid.action_plan_json = JSON.stringify(actions);
+  const readiness = validateCasebookExecutorReadiness([invalid], {
+    controlPlaneUrl: 'https://qbot-api.360shuke.com',
+    qworkUiUrl: 'file:///Users/qifu/.deepbank/ui/0.0.20/index.html',
+  });
   assert.equal(readiness.ok, false);
-  assert.ok(readiness.framework_issues.some((item) => item.kind === 'core_beta_executor_missing'));
+  assert.ok(readiness.framework_issues.some((item) => (
+    item.kind === 'core_beta_command_missing'
+    && item.command === 'generic_click_and_hope'
+  )));
 });
 
 test('deterministic sampler is stable, stratified, and refuses shortages', () => {
