@@ -6260,6 +6260,59 @@ async function executeCoreBetaExpertCommand(ctx, command) {
     const expert = (ctx.ledger.experts.created || []).find((item) => item.role === role);
     if (!expert) return { ok: false, status: 'blocked', category: 'blocked', actual: `专家 role=${role} 不存在。` };
     const result = await coreBetaSummonExpert(ctx, expert);
+    if (!result.ok) {
+      const inventory = await coreBetaExpertInventory(ctx);
+      const visibleExperts = Array.isArray(inventory?.cards) ? inventory.cards : [];
+      const expectedName = String(expert.name || '');
+      const expectedId = String(expert.id || '');
+      const visible = visibleExperts.some((item) => (
+        (expectedName && String(item?.name || '') === expectedName)
+        || (expectedId && String(item?.id || '') === expectedId)
+      ));
+      if (!visible && expectedName && /专家卡不存在/.test(String(result.reason || ''))) {
+        const blocker = {
+          applicable: true,
+          kind: 'created_expert_missing',
+          source: 'created_expert_ledger + visible_expert_inventory',
+          source_case_id: 'BETA-EXPERT-001',
+          role,
+          expected_expert: {
+            name: expectedName,
+            id: expectedId,
+            create_ok: expert.ok === true,
+            create_visible: expert.visible === true,
+          },
+          visible_experts: visibleExperts.map((item) => ({
+            name: String(item?.name || ''),
+            id: String(item?.id || ''),
+          })),
+          selection_result: result,
+          reason: `本轮声明创建的 ${role} 专家在真实专家列表中不存在：${expectedName}`,
+        };
+        ctx.expertSelectionPrerequisiteBlocker = blocker;
+        ctx.state.artifacts.core_beta_expert_prerequisite_blocker = blocker;
+        setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+          available: true,
+          source: 'visible expert inventory after exact summon failure',
+          inventory: visibleExperts,
+        });
+        setCoreBetaEvidence(ctx.state, 'capability_selection', {
+          available: false,
+          source: 'verified_expert_prerequisite_blocker',
+          selection: blocker,
+          result,
+        });
+        return {
+          ok: false,
+          status: 'blocked',
+          category: 'blocked',
+          selector_or_testid: `expert-card-${expert.id || expert.name}`,
+          event: 'verified-expert-prerequisite-blocked',
+          state_readback: blocker,
+          actual: blocker.reason,
+        };
+      }
+    }
     ctx.selectedExpert = { ...expert, effective_identity: result.current_identity || expert.id || expert.name };
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
       available: result.ok,
@@ -6275,6 +6328,18 @@ async function executeCoreBetaExpertCommand(ctx, command) {
     };
   }
   if (command === 'run_three_expert_turns') {
+    if (ctx.expertSelectionPrerequisiteBlocker?.applicable) {
+      const blocker = ctx.expertSelectionPrerequisiteBlocker;
+      return {
+        ok: false,
+        status: 'blocked',
+        category: 'blocked',
+        selector_or_testid: 'core-beta-expert-prerequisite',
+        event: 'prerequisite-blocked',
+        state_readback: blocker,
+        actual: `${blocker.reason}；未发送专家会话。`,
+      };
+    }
     const outcomes = [];
     for (let index = 0; index < 3; index += 1) outcomes.push(await coreBetaRunTurn(ctx, index, { label: `专家第 ${index + 1} 轮` }));
     const sameTask = new Set(outcomes.map((item) => item.taskId)).size === 1;
@@ -6288,6 +6353,18 @@ async function executeCoreBetaExpertCommand(ctx, command) {
     };
   }
   if (/^verify_expert_(?:execution|numeric_result|delivery_result)$/.test(command)) {
+    if (ctx.expertSelectionPrerequisiteBlocker?.applicable) {
+      const blocker = ctx.expertSelectionPrerequisiteBlocker;
+      return {
+        ok: false,
+        status: 'blocked',
+        category: 'blocked',
+        selector_or_testid: 'core-beta-expert-prerequisite',
+        event: 'prerequisite-blocked',
+        state_readback: blocker,
+        actual: `${blocker.reason}；不可能形成 task-bound 专家执行事件。`,
+      };
+    }
     const expected = ctx.selectedExpert?.effective_identity || ctx.selectedExpert?.id || ctx.selectedExpert?.name;
     const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'expert', expected);
     if (evidence.executed) ctx.ledger.experts.used.push({ role: ctx.selectedExpert.role, identity: expected, task_id: evidence.task_id });
@@ -23436,6 +23513,57 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
   };
 }
 
+export function verifiedExpertSelectionUnavailableEvidence(state = {}) {
+  const coreBetaEvidence = state.artifacts?.core_beta_evidence;
+  const inventoryEvidence = coreBetaEvidence?.capability_inventory;
+  const selectionEvidence = coreBetaEvidence?.capability_selection;
+  const selection = selectionEvidence?.selection;
+  const expectedName = String(selection?.expected_expert?.name || '');
+  const expectedId = String(selection?.expected_expert?.id || '');
+  const visibleExperts = Array.isArray(selection?.visible_experts)
+    ? selection.visible_experts
+    : [];
+  const inventory = Array.isArray(inventoryEvidence?.inventory)
+    ? inventoryEvidence.inventory
+    : null;
+  const expectedAbsent = Boolean(expectedName)
+    && !visibleExperts.some((item) => (
+      String(item?.name || '') === expectedName
+      || (expectedId && String(item?.id || '') === expectedId)
+    ))
+    && !inventory?.some((item) => (
+      String(item?.name || '') === expectedName
+      || (expectedId && String(item?.id || '') === expectedId)
+    ));
+  const strict = state.status === 'blocked'
+    && inventoryEvidence?.available === true
+    && Array.isArray(inventory)
+    && selectionEvidence?.available === false
+    && selectionEvidence?.source === 'verified_expert_prerequisite_blocker'
+    && selection?.applicable === true
+    && selection?.kind === 'created_expert_missing'
+    && selection?.source === 'created_expert_ledger + visible_expert_inventory'
+    && selection?.selection_result?.ok === false
+    && /专家卡不存在/.test(String(selection?.selection_result?.reason || ''))
+    && state.artifacts?.core_beta_expert_prerequisite_blocker?.reason === selection.reason
+    && expectedAbsent;
+  if (!strict) {
+    return {
+      applicable: false,
+      source: 'verified_expert_prerequisite_unavailable_not_established',
+      reason: '未同时取得创建专家账本、真实专家目录与精确召唤失败读回。',
+    };
+  }
+  return {
+    applicable: true,
+    source: 'verified_expert_prerequisite_unavailable',
+    reason: String(selection.reason || ''),
+    role: String(selection.role || ''),
+    expected_expert: selection.expected_expert,
+    visible_expert_count: visibleExperts.length,
+  };
+}
+
 function capturedCapabilityRoleEvidence(role, evidence) {
   if (!evidence || typeof evidence !== 'object') return null;
   const source = String(evidence.source || '').trim();
@@ -23591,6 +23719,31 @@ export function buildCaseEvidenceManifest(state, caseDir) {
           : capabilitySelectionBlocker.reason,
         requested_count: capabilitySelectionBlocker.requested_count,
         eligible_count: capabilitySelectionBlocker.eligible_count,
+      })),
+    ];
+  }
+  const expertSelectionBlocker = verifiedExpertSelectionUnavailableEvidence(state);
+  if (expertSelectionBlocker.applicable) {
+    const impossibleRoles = [
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ];
+    const declaredImpossibleRoles = impossibleRoles
+      .filter((role) => evidenceRoleApplicability.declared_roles.includes(role));
+    evidenceRoleApplicability.required_roles = evidenceRoleApplicability.required_roles
+      .filter((role) => !declaredImpossibleRoles.includes(role));
+    evidenceRoleApplicability.not_applicable_roles = [
+      ...evidenceRoleApplicability.not_applicable_roles,
+      ...declaredImpossibleRoles.map((role) => ({
+        role,
+        domain: role.startsWith('capability_') ? 'capability' : 'conversation',
+        source: expertSelectionBlocker.source,
+        reason: `${expertSelectionBlocker.reason}；Case 已在发送前停止，因此 ${role} 不可能产生。`,
       })),
     ];
   }

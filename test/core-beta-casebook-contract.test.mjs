@@ -27,6 +27,7 @@ import {
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
   verifiedCapabilitySelectionUnavailableEvidence,
+  verifiedExpertSelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
@@ -543,6 +544,113 @@ test('a propagated capability blocker also makes selection evidence explicit N/A
   assert.ok(manifest.not_applicable_roles.every(
     (item) => item.source === 'verified_capability_inventory_shortage',
   ));
+});
+
+test('a verified missing created expert blocks before send and makes conversation evidence N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-missing-created-expert-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-EXPERT-005');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const expected = {
+    name: 'QBot内测交付专家-abc123',
+    id: '',
+    create_ok: false,
+    create_visible: false,
+  };
+  const visibleExperts = [
+    { name: 'QBot内测研究专家-abc123', id: 'research-1' },
+    { name: 'QBot内测数据专家-abc123', id: 'data-1' },
+  ];
+  const blocker = {
+    applicable: true,
+    kind: 'created_expert_missing',
+    source: 'created_expert_ledger + visible_expert_inventory',
+    source_case_id: 'BETA-EXPERT-001',
+    role: 'delivery',
+    expected_expert: expected,
+    visible_experts: visibleExperts,
+    selection_result: {
+      ok: false,
+      reason: '专家卡不存在：QBot内测交付专家-abc123',
+    },
+    reason: '本轮声明创建的 delivery 专家在真实专家列表中不存在：QBot内测交付专家-abc123',
+  };
+  const screenshot = path.join(caseDir, 'step.png');
+  fs.writeFileSync(screenshot, 'image');
+  const receipts = [1, 2, 3].map((number) => ({
+    action_id: `expert-${number}`,
+    number,
+    command: number === 1 ? 'summon_expert_by_id' : number === 2 ? 'run_three_expert_turns' : 'verify_expert_delivery_result',
+    event: number === 1 ? 'verified-expert-prerequisite-blocked' : 'prerequisite-blocked',
+    dispatched_at: '2026-07-29T00:00:00.000Z',
+    completed_at: '2026-07-29T00:00:01.000Z',
+    before_screenshot: screenshot,
+    after_screenshot: screenshot,
+    expected_state_observed: false,
+    state_readback: blocker,
+    actual: blocker.reason,
+  }));
+  const state = {
+    id: 'BETA-EXPERT-005',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: [
+      'action_receipt',
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'capability_selection',
+      'capability_execution_event',
+    ].join(','),
+    status: 'blocked',
+    screenshots: {},
+    artifacts: {
+      core_beta_action_receipts: receipts,
+      core_beta_expert_prerequisite_blocker: blocker,
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          captured_at: '2026-07-29T00:00:02.000Z',
+          source: 'core-beta exact action-plan executor',
+          receipts,
+        },
+        capability_inventory: {
+          available: true,
+          captured_at: '2026-07-29T00:00:02.000Z',
+          source: 'visible expert inventory after exact summon failure',
+          inventory: visibleExperts,
+        },
+        capability_selection: {
+          available: false,
+          captured_at: '2026-07-29T00:00:02.000Z',
+          source: 'verified_expert_prerequisite_blocker',
+          selection: blocker,
+          result: blocker.selection_result,
+        },
+      },
+    },
+  };
+  const verified = verifiedExpertSelectionUnavailableEvidence(state);
+  assert.equal(verified.applicable, true);
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.capability_selection.available, true);
+  assert.equal(manifest.role_evidence.capability_selection.outcome_satisfied, false);
+  assert.deepEqual(
+    manifest.not_applicable_roles.map((item) => item.role),
+    [
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ],
+  );
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
