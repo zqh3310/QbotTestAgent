@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
   CORE_BETA_AUTOMATION_PROTOCOL,
@@ -12,11 +15,13 @@ import {
   validateSkillExecutionEvidence,
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
+  buildCaseEvidenceManifest,
   coreBetaActionReceiptsComplete,
   coreBetaMaintenanceConfirmationContract,
   coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
+  verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 
@@ -209,6 +214,69 @@ test('reply evidence rejects a running or unstable partial answer', () => {
   };
   assert.equal(validateReplyEvidence(complete).ok, true);
   assert.equal(validateReplyEvidence({ ...complete, running: true, stable_sample_count: 1 }).ok, false);
+});
+
+test('a verified product reply timeout is complete failure evidence, never a successful reply', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-reply-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-CHAT-007');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const transcript = path.join(caseDir, 'transcript.txt');
+  const replyDelta = path.join(caseDir, 'reply-delta.txt');
+  const timeoutScreenshot = path.join(caseDir, 'turn-2-after-timeout.png');
+  fs.writeFileSync(transcript, '## 第 2 轮\n\n## TERMINAL_EVENT\nassistant_reply_present=false\n');
+  fs.writeFileSync(replyDelta, '## 第 2 轮\n\n## TERMINAL_EVENT\nassistant_reply_present=false\n');
+  fs.writeFileSync(timeoutScreenshot, 'verified-timeout-frame');
+  const state = {
+    id: 'BETA-CHAT-007',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: 'transcript,reply_delta,reply_completion',
+    status: 'failed',
+    result_category: 'bug',
+    screenshots: {
+      turn_2_after_timeout: timeoutScreenshot,
+    },
+    artifacts: {
+      transcript,
+      reply_delta: replyDelta,
+      reply_records: [{
+        label: '第 2 轮',
+        assistant_reply_present: false,
+        terminal_outcome: 'timed_out',
+      }],
+      reply_waits: [{
+        label: '第 2 轮',
+        waited_ms: 600_421,
+        timeout_ms: 600_000,
+        incomplete: true,
+      }],
+      core_beta_evidence: {
+        send_receipt: { available: true, task_id: 'task-1' },
+        reply_completion: { available: false, running: true },
+      },
+    },
+  };
+  const terminal = verifiedReplyTimeoutTerminalEvidence(state);
+  assert.equal(terminal.available, true);
+  assert.equal(terminal.completion_observed, false);
+  assert.equal(terminal.terminal_outcome, 'timed_out');
+
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.reply_completion.available, true);
+  assert.equal(manifest.role_evidence.reply_completion.completion_observed, false);
+  assert.equal(manifest.role_evidence.reply_completion.terminal_failure, true);
+  assert.equal(manifest.role_evidence.reply_completion.terminal_outcome, 'timed_out');
+  assert.equal(manifest.role_evidence.transcript.assistant_reply_present, false);
+  assert.equal(manifest.role_evidence.reply_delta.assistant_reply_present, false);
+
+  fs.rmSync(timeoutScreenshot);
+  const withoutVisibleTimeout = verifiedReplyTimeoutTerminalEvidence(state);
+  assert.equal(withoutVisibleTimeout.available, false);
+  const failClosed = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(failClosed.complete, false);
+  assert.deepEqual(failClosed.missing_roles, ['reply_completion']);
 });
 
 test('skill, expert, and MCP use require task-bound execution events', () => {

@@ -16648,10 +16648,28 @@ function writeReplyArtifacts(state, caseDir, replies) {
   if (!Array.isArray(state.artifacts.reply_records)) state.artifacts.reply_records = [];
   for (const reply of replies || []) {
     const label = String(reply?.label || `回复 ${state.artifacts.reply_records.length + 1}`);
+    const fullText = String(reply?.fullText || reply?.deltaText || '');
+    const deltaText = String(reply?.deltaText || '');
+    const timedOutWithoutAssistantReply = Boolean(reply?.incomplete) && !deltaText.trim();
+    const terminalRecord = timedOutWithoutAssistantReply
+      ? [
+        '## TERMINAL_EVENT',
+        '',
+        'type=assistant_reply_timeout',
+        'assistant_reply_present=false',
+        `waited_ms=${Number(reply?.waited_ms || 0)}`,
+        `timeout_ms=${Number(reply?.timeout_ms || 0)}`,
+        `observation=${String(reply?.incomplete_reason || 'Agent reply timed out without attributable assistant text.')}`,
+      ].join('\n')
+      : '';
     const record = {
       label,
-      fullText: String(reply?.fullText || reply?.deltaText || ''),
-      deltaText: String(reply?.deltaText || ''),
+      fullText: fullText || terminalRecord,
+      deltaText: deltaText || terminalRecord,
+      assistant_reply_present: Boolean(deltaText.trim()),
+      terminal_outcome: reply?.incomplete ? 'timed_out' : 'completed',
+      waited_ms: Number(reply?.waited_ms || 0),
+      timeout_ms: Number(reply?.timeout_ms || 0),
       recorded_at: new Date().toISOString(),
     };
     const existing = state.artifacts.reply_records.findIndex((item) => item.label === label);
@@ -22634,6 +22652,63 @@ async function finishCase({ page, state, caseDir }) {
   return state;
 }
 
+export function verifiedReplyTimeoutTerminalEvidence(state = {}) {
+  const waits = Array.isArray(state.artifacts?.reply_waits)
+    ? state.artifacts.reply_waits
+    : [];
+  const terminalWait = [...waits].reverse().find((item) => {
+    const waitedMs = Number(item?.waited_ms || 0);
+    const timeoutMs = Number(item?.timeout_ms || 0);
+    return item?.incomplete === true
+      && timeoutMs >= MIN_REPLY_WAIT_MS
+      && waitedMs >= timeoutMs;
+  });
+  const timeoutScreenshot = Object.entries(state.screenshots || {})
+    .reverse()
+    .find(([key, file]) => (
+      /after[_-]?timeout|timeout/i.test(String(key || ''))
+      && typeof file === 'string'
+      && file
+      && fs.existsSync(file)
+      && fs.statSync(file).isFile()
+      && fs.statSync(file).size > 0
+    ));
+  const coreSendReceipt = state.artifacts?.core_beta_evidence?.send_receipt;
+  const confirmedSendReceipt = coreSendReceipt?.available === true
+    || (
+      Array.isArray(state.artifacts?.send_receipts)
+      && state.artifacts.send_receipts.some((item) => (
+        Array.isArray(item?.attempts)
+        && item.attempts.some((attempt) => (
+          attempt?.clicked === true
+          && attempt?.receipt?.ok === true
+        ))
+      ))
+    );
+  const rawFailure = state.status === 'failed';
+  if (!rawFailure || !confirmedSendReceipt || !terminalWait || !timeoutScreenshot) {
+    return {
+      available: false,
+      reason: '真实回复超时终态必须同时具备 raw failed、产品发送收据、完整 timeout 等待和 after-timeout 截图。',
+      raw_failure: rawFailure,
+      confirmed_send_receipt: confirmedSendReceipt,
+      full_timeout_wait: Boolean(terminalWait),
+      timeout_screenshot_present: Boolean(timeoutScreenshot),
+    };
+  }
+  return {
+    available: true,
+    completion_observed: false,
+    terminal_failure: true,
+    terminal_outcome: 'timed_out',
+    source: 'confirmed_send_receipt + full_reply_timeout + after_timeout_screenshot',
+    label: String(terminalWait.label || ''),
+    waited_ms: Number(terminalWait.waited_ms || 0),
+    timeout_ms: Number(terminalWait.timeout_ms || 0),
+    screenshot: fileEvidence(timeoutScreenshot[1]),
+  };
+}
+
 export function buildCaseEvidenceManifest(state, caseDir) {
   const declaredRequiredRoles = String(state.required_evidence_roles || '')
     .split(/[,，;；|\n]+/)
@@ -22671,6 +22746,10 @@ export function buildCaseEvidenceManifest(state, caseDir) {
   const transcript = existingFileEvidence(state.artifacts?.transcript);
   const replyDelta = existingFileEvidence(state.artifacts?.reply_delta);
   const terminalConversation = state.artifacts?.terminal_conversation_evidence;
+  const replyTimeoutTerminal = verifiedReplyTimeoutTerminalEvidence(state);
+  const latestReplyRecord = Array.isArray(state.artifacts?.reply_records)
+    ? state.artifacts.reply_records.at(-1)
+    : null;
   const report = existingFileEvidence(state.case_report);
   const publicStatePresent = Boolean(
     state.artifacts?.final_task_identity
@@ -22827,20 +22906,30 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     transcript: transcript
       ? {
         ...transcript,
-        semantic_type: terminalConversation?.semantic_type || 'assistant_conversation',
-        assistant_reply_present: terminalConversation?.assistant_reply_present ?? true,
+        semantic_type: terminalConversation?.semantic_type
+          || (replyTimeoutTerminal.available ? 'assistant_conversation_with_terminal_timeout' : 'assistant_conversation'),
+        assistant_reply_present: terminalConversation?.assistant_reply_present
+          ?? latestReplyRecord?.assistant_reply_present
+          ?? true,
+        terminal_outcome: replyTimeoutTerminal.available ? 'timed_out' : undefined,
       }
       : { available: false, reason: '缺少 transcript 文件。' },
     reply_delta: replyDelta
       ? {
         ...replyDelta,
-        semantic_type: terminalConversation?.semantic_type || 'assistant_reply_delta',
-        assistant_reply_present: terminalConversation?.assistant_reply_present ?? true,
+        semantic_type: terminalConversation?.semantic_type
+          || (replyTimeoutTerminal.available ? 'assistant_reply_timeout_delta' : 'assistant_reply_delta'),
+        assistant_reply_present: terminalConversation?.assistant_reply_present
+          ?? latestReplyRecord?.assistant_reply_present
+          ?? true,
+        terminal_outcome: replyTimeoutTerminal.available ? 'timed_out' : undefined,
       }
       : { available: false, reason: '缺少 reply-delta 文件。' },
     reply_completion: coreBetaEvidence.reply_completion?.available === true
       ? coreBetaEvidence.reply_completion
-      : { available: false, reason: '缺少 running=false 且至少两次稳定采样的回复完成证据。' },
+      : replyTimeoutTerminal.available
+        ? replyTimeoutTerminal
+        : { available: false, reason: '缺少 running=false 且至少两次稳定采样的回复完成证据，或缺少经发送收据、完整等待窗口与 after-timeout 截图共同证明的失败终态。' },
     public_state_readback: publicStatePresent
       ? { available: true, artifacts_sha256: sha256Text(artifactsJson) }
       : { available: false, reason: '缺少公开能力/状态读回。' },
