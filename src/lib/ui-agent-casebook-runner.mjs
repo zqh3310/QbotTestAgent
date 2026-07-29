@@ -3137,6 +3137,24 @@ function coreBetaPersistRoleEvidence(state, caseDir) {
   state.artifacts.core_beta_role_evidence = file;
 }
 
+export function coreBetaActionReceiptsComplete(receipts, planLength) {
+  return Array.isArray(receipts)
+    && receipts.length === Number(planLength)
+    && receipts.every((item) => (
+      item
+      && String(item.action_id || '').trim()
+      && Number.isInteger(Number(item.number))
+      && String(item.command || '').trim()
+      && String(item.event || '').trim()
+      && String(item.dispatched_at || '').trim()
+      && String(item.completed_at || '').trim()
+      && String(item.before_screenshot || '').trim()
+      && String(item.after_screenshot || '').trim()
+      && typeof item.expected_state_observed === 'boolean'
+      && (item.state_readback != null || String(item.error || '').trim())
+    ));
+}
+
 async function runCoreBetaNumberedAction({
   page,
   pageProvider,
@@ -3210,7 +3228,12 @@ async function runCoreBetaNumberedAction({
   state.artifacts.core_beta_action_receipts.push(receipt);
   const receipts = state.artifacts.core_beta_action_receipts;
   setCoreBetaEvidence(state, 'action_receipt', {
-    available: receipts.length === planLength
+    // An action receipt proves what the UI did, including a terminal product
+    // failure.  Requiring every expected state to pass hid fully evidenced
+    // product errors (for example a visible ENOTEMPTY maintenance failure)
+    // behind a misleading framework-manifest failure.
+    available: coreBetaActionReceiptsComplete(receipts, planLength),
+    all_expected_states_observed: receipts.length === planLength
       && receipts.every((item) => item.expected_state_observed === true),
     receipt_count: receipts.length,
     declared_action_count: planLength,

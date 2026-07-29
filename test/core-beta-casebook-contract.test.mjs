@@ -12,6 +12,7 @@ import {
   validateSkillExecutionEvidence,
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
+  coreBetaActionReceiptsComplete,
   coreBetaMaintenanceConfirmationContract,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
@@ -102,6 +103,28 @@ test('core beta settings loading uses a bounded configurable product wait window
   assert.equal(coreBetaSettingsLoadTimeoutMs({
     QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '999999',
   }), 180_000);
+});
+
+test('a terminal product failure remains a complete action receipt', () => {
+  const base = {
+    action_id: 'beta-init-003-02',
+    number: 2,
+    command: 'reinstall_skill_layer',
+    event: 'click',
+    dispatched_at: '2026-07-29T00:00:00.000Z',
+    completed_at: '2026-07-29T00:00:01.000Z',
+    before_screenshot: '/tmp/before.png',
+    after_screenshot: '/tmp/after.png',
+    expected_state_observed: false,
+    state_readback: {
+      after_text: '失败：ENOTEMPTY, Directory not empty',
+      terminal: true,
+    },
+  };
+  assert.equal(coreBetaActionReceiptsComplete([base], 1), true);
+  assert.equal(coreBetaActionReceiptsComplete([
+    { ...base, state_readback: null, error: '' },
+  ], 1), false);
 });
 
 test('an unknown core beta command fails readiness before the UI runner starts', () => {
