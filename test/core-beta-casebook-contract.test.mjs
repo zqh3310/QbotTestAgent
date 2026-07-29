@@ -135,7 +135,15 @@ test('a terminal product failure remains a complete action receipt', () => {
   };
   assert.equal(coreBetaActionReceiptsComplete([base], 1), true);
   assert.equal(coreBetaActionReceiptsComplete([
-    { ...base, state_readback: null, error: '' },
+    {
+      ...base,
+      state_readback: null,
+      actual: '本轮没有可按 slug/name 精确选择的已安装 Skill，禁止随机替代。',
+      error: '',
+    },
+  ], 1), true);
+  assert.equal(coreBetaActionReceiptsComplete([
+    { ...base, state_readback: null, actual: '', error: '' },
   ], 1), false);
 });
 

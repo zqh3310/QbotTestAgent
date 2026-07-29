@@ -3151,7 +3151,11 @@ export function coreBetaActionReceiptsComplete(receipts, planLength) {
       && String(item.before_screenshot || '').trim()
       && String(item.after_screenshot || '').trim()
       && typeof item.expected_state_observed === 'boolean'
-      && (item.state_readback != null || String(item.error || '').trim())
+      && (
+        item.state_readback != null
+        || String(item.actual || '').trim()
+        || String(item.error || '').trim()
+      )
     ));
 }
 
@@ -6061,11 +6065,41 @@ async function executeCoreBetaExpertCommand(ctx, command) {
     if (!expert) return { ok: false, status: 'blocked', category: 'blocked', actual: 'research 专家账本不存在。' };
     const dependency = (ctx.ledger.skills.installed || [])[0] || (ctx.ledger.skills.deep_use || [])[0];
     if (!dependency?.slug || !dependency?.name) {
+      const prerequisiteBlocker = coreBetaSharedCapabilityPrerequisiteBlocker(ctx.ledger, {
+        case_type: 'skill_use',
+        parsed: { action_plan: [{ command: 'select_skill_by_slug' }] },
+      });
+      if (prerequisiteBlocker.applicable) {
+        const propagatedBlocker = {
+          ...prerequisiteBlocker,
+          propagated_to_case_type: ctx.audit.case_type,
+          dependent_command: command,
+        };
+        ctx.expertDependencyPrerequisiteBlocker = propagatedBlocker;
+        ctx.state.artifacts.core_beta_shared_prerequisite_blocker = propagatedBlocker;
+        setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+          available: true,
+          source: 'verified shared capability prerequisite inventory',
+          inventory: ctx.ledger.skills.inventory || [],
+        });
+        setCoreBetaEvidence(ctx.state, 'capability_selection', {
+          available: false,
+          source: 'verified_shared_capability_prerequisite_blocker',
+          selection: propagatedBlocker,
+        });
+      }
       return {
         ok: false,
         status: 'blocked',
         category: 'blocked',
-        actual: '本轮没有可按 slug/name 精确选择的已安装 Skill，禁止随机替代。',
+        selector_or_testid: prerequisiteBlocker.applicable
+          ? 'core-beta-shared-prerequisite-ledger'
+          : 'expert dependency skill selector',
+        event: prerequisiteBlocker.applicable ? 'prerequisite-blocked' : 'dependency-unavailable',
+        state_readback: prerequisiteBlocker.applicable ? prerequisiteBlocker : null,
+        actual: prerequisiteBlocker.applicable
+          ? prerequisiteBlocker.reason
+          : '本轮没有可按 slug/name 精确选择的已安装 Skill，禁止随机替代。',
       };
     }
     const opened = await coreBetaOpenExpertEdit(ctx, expert);
@@ -6152,11 +6186,19 @@ async function executeCoreBetaExpertCommand(ctx, command) {
   }
   if (command === 'edit_and_reopen_expert') {
     if (!ctx.expertEditing || !ctx.expertDependency) {
+      const prerequisiteBlocker = ctx.expertDependencyPrerequisiteBlocker;
       return {
         ok: false,
-        status: 'failed',
-        category: 'bug',
-        actual: '上一编号步骤没有完成专家依赖保存，禁止把后续编辑步骤伪记为通过。',
+        status: prerequisiteBlocker?.applicable ? 'blocked' : 'failed',
+        category: prerequisiteBlocker?.applicable ? 'blocked' : 'bug',
+        selector_or_testid: prerequisiteBlocker?.applicable
+          ? 'core-beta-shared-prerequisite-ledger'
+          : 'expert dependency edit state',
+        event: prerequisiteBlocker?.applicable ? 'prerequisite-blocked' : 'dependency-not-saved',
+        state_readback: prerequisiteBlocker || null,
+        actual: prerequisiteBlocker?.applicable
+          ? prerequisiteBlocker.reason
+          : '上一编号步骤没有完成专家依赖保存，禁止把后续编辑步骤伪记为通过。',
       };
     }
     const opened = await coreBetaOpenExpertEdit(ctx, ctx.expertEditing);
