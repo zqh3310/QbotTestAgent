@@ -221,9 +221,11 @@ test('verified pre-send attachment rejection replaces impossible conversation ro
   const legacyRoles = [
     'before_screenshot',
     'prompt',
+    'send_receipt',
     'task_id',
     'transcript',
     'reply_delta',
+    'reply_completion',
     'attachment_name_size_sha256',
     'composer_attachment_state',
     'attachment_readback',
@@ -251,7 +253,15 @@ test('verified pre-send attachment rejection replaces impossible conversation ro
   ]);
   assert.deepEqual(
     applicability.not_applicable_roles.map((item) => item.role),
-    ['prompt', 'task_id', 'transcript', 'reply_delta', 'attachment_readback'],
+    [
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'attachment_readback',
+    ],
   );
   assert.ok(applicability.not_applicable_roles.every(
     (item) => item.source === 'verified_runtime_rejection',
@@ -284,9 +294,11 @@ test('legacy attachment limit manifest becomes complete only after strict pre-se
     'case_report',
     'public_state_readback',
     'prompt',
+    'send_receipt',
     'task_id',
     'transcript',
     'reply_delta',
+    'reply_completion',
     'attachment_name_size_sha256',
     'composer_attachment_state',
     'attachment_readback',
@@ -347,11 +359,13 @@ test('legacy attachment limit manifest becomes complete only after strict pre-se
   assert.equal(manifest.complete, true);
   assert.deepEqual(manifest.missing_roles, []);
   assert.deepEqual(manifest.source_declared_required_roles, legacyRoles);
-  assert.equal(manifest.source_declared_required_role_count, 14);
-  assert.equal(manifest.declared_required_role_count, 16);
+  assert.equal(manifest.source_declared_required_role_count, 16);
+  assert.equal(manifest.declared_required_role_count, 18);
   assert.equal(manifest.required_role_count, 11);
-  assert.equal(manifest.not_applicable_role_count, 5);
+  assert.equal(manifest.not_applicable_role_count, 7);
   assert.equal(manifest.role_evidence.prompt.not_applicable, true);
+  assert.equal(manifest.role_evidence.send_receipt.not_applicable, true);
+  assert.equal(manifest.role_evidence.reply_completion.not_applicable, true);
   assert.equal(manifest.role_evidence.attachment_readback.not_applicable, true);
   assert.equal(manifest.role_evidence.attachment_limit_rejection.available, true);
   assert.equal(manifest.role_evidence.no_task_no_send_state.available, true);

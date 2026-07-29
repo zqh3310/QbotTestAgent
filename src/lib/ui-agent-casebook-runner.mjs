@@ -1716,7 +1716,7 @@ function coreBetaCommandSupported(caseType, command) {
       'send_long_prompt', 'exercise_stream_scroll', 'collect_stable_long_reply',
       'send_and_wait_running', 'stop_generation', 'send_followup_after_stop',
       'complete_two_turns', 'reload_and_reopen_task', 'verify_transcript_identity',
-      'build_dispatch_ledger', 'dispatch_batch_without_wait', 'collect_batch_by_task_id',
+      'build_dispatch_ledger', 'dispatch_batch_without_wait', 'assert_batch_pending_pool', 'collect_batch_by_task_id',
       'send_synthetic_pii', 'collect_privacy_response', 'send_secret_request',
     ]),
     attachment: new Set([
@@ -4217,6 +4217,60 @@ export function coreBetaBatchTerminalEvidence(entries = [], {
   };
 }
 
+export function coreBetaBatchPendingPoolEvidence(rows = [], {
+  expectedTaskIds = [],
+  minimumPending = 1,
+  capturedAt = '',
+} = {}) {
+  const expected = [...new Set((Array.isArray(expectedTaskIds) ? expectedTaskIds : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean))];
+  const observations = Array.isArray(rows) ? rows : [];
+  const byTaskId = new Map(observations.map((item) => [String(item?.task_id || ''), item]));
+  const normalized = expected.map((taskId) => {
+    const observed = byTaskId.get(taskId) || {};
+    return {
+      task_id: taskId,
+      item_present: observed.item_present === true,
+      running_indicator_present: observed.running_indicator_present === true,
+      running_indicator_visible: observed.running_indicator_visible === true,
+    };
+  });
+  const minimum = Number(minimumPending || 0);
+  const pendingTaskIds = normalized
+    .filter((item) => item.running_indicator_present)
+    .map((item) => item.task_id);
+  const visiblePendingTaskIds = normalized
+    .filter((item) => item.running_indicator_visible)
+    .map((item) => item.task_id);
+  const taskItemsComplete = expected.length > 0
+    && normalized.every((item) => item.item_present);
+  const thresholdValid = Number.isInteger(minimum)
+    && minimum >= 1
+    && minimum <= expected.length;
+  return {
+    available: taskItemsComplete && thresholdValid,
+    completion_observed: taskItemsComplete
+      && thresholdValid
+      && pendingTaskIds.length >= minimum,
+    source: 'visible sidebar session-item + run-dot[title="正在执行"]',
+    captured_at: String(capturedAt || ''),
+    expected_task_count: expected.length,
+    task_item_count: normalized.filter((item) => item.item_present).length,
+    pending_count: pendingTaskIds.length,
+    visible_pending_count: visiblePendingTaskIds.length,
+    minimum_pending_required: minimum,
+    pending_task_ids: pendingTaskIds,
+    visible_pending_task_ids: visiblePendingTaskIds,
+    observations: normalized,
+    reason: taskItemsComplete && thresholdValid
+      ? pendingTaskIds.length >= minimum
+        ? ''
+        : `末条派发后待回复会话仅 ${pendingTaskIds.length} 条，低于要求 ${minimum} 条。`
+      : `待回复池证据不完整：taskItems=${normalized.filter((item) => item.item_present).length}/${expected.length}；minimum=${minimum}`,
+  };
+}
+
 function coreBetaSanitizeBatchEntries(entries = []) {
   return entries.map(({ before, reply, _last_stable_reply, _last_observed_reply, ...entry }) => ({
     ...entry,
@@ -4226,6 +4280,10 @@ function coreBetaSanitizeBatchEntries(entries = []) {
 
 async function coreBetaDispatchBatch(ctx) {
   const requested = Math.min(20, Math.max(1, Number(ctx.state.batch_size || 20)));
+  const minimumReplyChars = Number(ctx.assertionContract?.batch_reply_min_chars || 0);
+  if (!Number.isInteger(minimumReplyChars) || minimumReplyChars < 500 || minimumReplyChars > 5000) {
+    throw new Error(`批量派发缺少有效 batch_reply_min_chars：${minimumReplyChars || 'missing'}`);
+  }
   const prepared = Array.isArray(ctx.batch) && ctx.batch.length === requested
     ? ctx.batch
     : Array.from({ length: requested }, (_, index) => ({
@@ -4235,7 +4293,8 @@ async function coreBetaDispatchBatch(ctx) {
   const entries = prepared.map((preparedEntry, index) => ({
       index,
       marker: preparedEntry.marker,
-      prompt: `请给“${preparedEntry.marker}”这条内测记录写一句不超过30字的风险提示，回复必须原样包含该标记。`,
+      prompt: `请为“${preparedEntry.marker}”撰写一份不少于${minimumReplyChars}字的内测风险评估。必须原样包含该标记，并使用“范围与假设、用户风险、数据与隐私风险、稳定性与恢复、上线建议”五个明确标题；每节都给出可执行检查项，不要省略任何章节。`,
+      minimum_reply_chars: minimumReplyChars,
       task_id: '',
       dispatched_at: '',
       collected_at: '',
@@ -4338,6 +4397,101 @@ async function coreBetaDispatchBatch(ctx) {
   };
 }
 
+async function coreBetaAssertBatchPendingPool(ctx) {
+  if (!Array.isArray(ctx.batch) || !ctx.batch.length) {
+    throw new Error('待回复池取证前没有批量派发账本。');
+  }
+  const minimumPending = Number(ctx.assertionContract?.batch_min_pending_after_dispatch || 0);
+  if (
+    !Number.isInteger(minimumPending)
+    || minimumPending < 1
+    || minimumPending > ctx.batch.length
+  ) {
+    throw new Error(`批量待回复池缺少有效 batch_min_pending_after_dispatch：${minimumPending || 'missing'}`);
+  }
+  await ensureSidebarExpanded(ctx.page, ctx.state);
+  const taskToggle = ctx.page.locator('[data-testid="sidebar-task-toggle"]').first();
+  if (await visible(taskToggle, 1000)) {
+    const expanded = await taskToggle.getAttribute('aria-expanded').catch(() => '');
+    if (expanded !== 'true') {
+      await taskToggle.click({ force: true }).catch(async () => taskToggle.evaluate((element) => element.click()));
+      await ctx.page.waitForTimeout(250);
+    }
+  }
+  const expectedTaskIds = ctx.batch.map((entry) => entry.task_id);
+  const rows = await ctx.page.evaluate((taskIds) => {
+    const itemById = new Map(
+      Array.from(document.querySelectorAll('[data-testid^="session-item-"]')).map((item) => [
+        String(item.getAttribute('data-testid') || '').replace(/^session-item-/, ''),
+        item,
+      ]),
+    );
+    return taskIds.map((taskId) => {
+      const item = itemById.get(taskId) || null;
+      const indicator = item?.querySelector('.run-dot[title="正在执行"]') || null;
+      const rect = indicator?.getBoundingClientRect();
+      const style = indicator ? getComputedStyle(indicator) : null;
+      const visible = Boolean(
+        indicator
+        && rect
+        && rect.width > 0
+        && rect.height > 0
+        && style?.display !== 'none'
+        && style?.visibility !== 'hidden',
+      );
+      return {
+        task_id: taskId,
+        item_present: Boolean(item),
+        running_indicator_present: Boolean(indicator),
+        running_indicator_visible: visible,
+      };
+    });
+  }, expectedTaskIds);
+  const capturedAt = new Date().toISOString();
+  const evidence = coreBetaBatchPendingPoolEvidence(rows, {
+    expectedTaskIds,
+    minimumPending,
+    capturedAt,
+  });
+  const active = await qbotE2EState(ctx.page);
+  const screenshot = await shot(ctx.page, ctx.caseDir, 'batch-dispatch-pending-pool');
+  ctx.state.screenshots.batch_dispatch_pending_pool = screenshot;
+  const record = {
+    ...evidence,
+    active_task_id: String(active?.activeId || ''),
+    active_task_running: Boolean(active?.running),
+    screenshot,
+  };
+  ctx.state.artifacts.core_beta_batch_pending_pool = record;
+  writeJsonFile(path.join(ctx.caseDir, 'batch-pending-pool.json'), record);
+  setCoreBetaEvidence(ctx.state, 'public_state_readback', record);
+  recordAssertion(
+    ctx.state,
+    '批量派发后形成可见待回复池',
+    `末条派发后、统一回收前，左侧任务列表至少 ${minimumPending} 条本批次 taskId 必须显示“正在执行”。`,
+    evidence.completion_observed,
+    `pending=${evidence.pending_count}/${evidence.expected_task_count}；minimum=${minimumPending}；visible=${evidence.visible_pending_count}；activeRunning=${Boolean(active?.running)}`,
+    evidence.completion_observed
+      ? ''
+      : active?.running
+        ? 'bug'
+        : 'test_data',
+  );
+  return {
+    ok: evidence.completion_observed,
+    category: evidence.completion_observed
+      ? ''
+      : active?.running
+        ? 'bug'
+        : 'test_data',
+    selector_or_testid: 'sidebar-task-list .run-dot[title="正在执行"]',
+    event: 'readback-pending-pool',
+    state_readback: record,
+    screenshot,
+    actual: `pending=${evidence.pending_count}/${evidence.expected_task_count}；minimum=${minimumPending}；visible=${evidence.visible_pending_count}；activeRunning=${Boolean(active?.running)}`,
+  };
+}
+
 async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) {
   const observedAt = new Date().toISOString();
   let reopened;
@@ -4417,7 +4571,9 @@ async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) 
     entry.reply = reply;
     entry.reply_sha256 = sha256Text(reply);
     entry.collected_at = observedAt;
-    entry.ok = reply.includes(entry.marker) && !otherMarkerPresent;
+    entry.ok = reply.includes(entry.marker)
+      && !otherMarkerPresent
+      && cleanAssistantText(reply).length >= Number(entry.minimum_reply_chars || 0);
     entry.terminal_outcome = entry.ok ? 'reply_completed' : 'reply_oracle_mismatch';
     entry.terminal_at = observedAt;
   }
@@ -4793,6 +4949,7 @@ async function executeCoreBetaConversationCommand(ctx, command) {
     };
   }
   if (command === 'dispatch_batch_without_wait') return coreBetaDispatchBatch(ctx);
+  if (command === 'assert_batch_pending_pool') return coreBetaAssertBatchPendingPool(ctx);
   if (command === 'collect_batch_by_task_id') return coreBetaCollectBatch(ctx);
   throw new Error(`Core Beta conversation command 未实现：${command}`);
 }

@@ -269,6 +269,22 @@ export function validateCoreBetaCase(testCase = {}) {
     if (!String(assertionContract.pass_rule || '').trim()) errors.push('assertion_contract_json.pass_rule 不能为空。');
     if (!String(assertionContract.fail_rule || '').trim()) errors.push('assertion_contract_json.fail_rule 不能为空。');
     if (!String(assertionContract.block_rule || '').trim()) errors.push('assertion_contract_json.block_rule 不能为空。');
+    if (actionPlan.some((action) => action?.command === 'dispatch_batch_without_wait')) {
+      const batchSize = Number(testCase.batch_size || 0);
+      const minimumPending = Number(assertionContract.batch_min_pending_after_dispatch);
+      const minimumReplyChars = Number(assertionContract.batch_reply_min_chars);
+      if (
+        !Number.isInteger(minimumPending)
+        || minimumPending < 1
+        || !Number.isInteger(batchSize)
+        || minimumPending > batchSize
+      ) {
+        errors.push('批量派发用例必须声明 batch_min_pending_after_dispatch，且为 1-batch_size 的整数。');
+      }
+      if (!Number.isInteger(minimumReplyChars) || minimumReplyChars < 500 || minimumReplyChars > 5000) {
+        errors.push('批量派发用例必须声明 500-5000 的整数 batch_reply_min_chars。');
+      }
+    }
   }
   if (!String(testCase.cleanup_policy || '').trim()) errors.push('清理策略不能为空。');
   if (!String(testCase.initialization_profile || '').trim()) errors.push('初始化策略不能为空。');

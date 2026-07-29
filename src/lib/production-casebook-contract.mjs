@@ -38,9 +38,11 @@ export const ATTACHMENT_EVIDENCE_ROLES = Object.freeze([
 
 const CONVERSATION_EVIDENCE_ROLES = Object.freeze([
   'prompt',
+  'send_receipt',
   'task_id',
   'transcript',
   'reply_delta',
+  'reply_completion',
 ]);
 
 const ATTACHMENT_PRE_SEND_REJECTION_EVIDENCE_ROLES = Object.freeze([
@@ -105,7 +107,7 @@ export function resolveEvidenceRoleApplicability(
       ? 'verified_runtime_rejection'
       : 'runtime_rejection_not_verified',
     reason: preSendAttachmentRejectionApplicable
-      ? '产品在发送前明确拒绝附件，且运行时已验证未创建任务、未发送消息、未记录 prompt；发送后会话证据与附件内容读回不可能产生。'
+      ? '产品在发送前明确拒绝附件，且运行时已验证未创建任务、未发送消息、未记录 prompt；发送收据、任务身份、回复完成、发送后会话证据与附件内容读回均不可能产生。'
       : '未同时验证产品可见附件拒绝与未创建任务/未发送消息状态；不得豁免发送后会话证据。',
   };
   const rejectionNotApplicableRoles = preSendAttachmentRejectionApplicable

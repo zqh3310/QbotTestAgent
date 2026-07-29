@@ -18,6 +18,7 @@ import {
   buildCaseEvidenceManifest,
   coreBetaActionReceiptsComplete,
   coreBetaAttachmentCollectNeedsSend,
+  coreBetaBatchPendingPoolEvidence,
   coreBetaBatchSharedDeadline,
   coreBetaBatchTerminalEvidence,
   coreBetaMaintenanceConfirmationContract,
@@ -296,6 +297,84 @@ test('batch collection uses one shared deadline instead of multiplying timeout b
     600_000,
   );
   assert.ok(deadline.deadline_at_ms - collectionStartedAtMs < 20 * 600_000);
+});
+
+test('batch dispatch contract requires configurable long replies and a pending pool threshold', () => {
+  const testCase = conversationCase();
+  const actions = JSON.parse(testCase.action_plan_json);
+  actions.splice(1, 0, {
+    number: 2,
+    action_id: 'batch-dispatch',
+    declared_step: '逐条派发后立即切换',
+    command: 'dispatch_batch_without_wait',
+    expected_state: 'batch_dispatched',
+    evidence_roles: ['before_screenshot', 'action_receipt', 'after_screenshot'],
+  });
+  actions.forEach((action, index) => { action.number = index + 1; });
+  testCase.steps = actions.map((action) => `${action.number}. ${action.declared_step}`).join('\n');
+  testCase.action_plan_json = JSON.stringify(actions);
+  testCase.assertion_contract_json = JSON.stringify({
+    pass_rule: '所有硬断言通过',
+    fail_rule: '产品行为与预期不符',
+    block_rule: '环境或能力前置不满足',
+    batch_min_pending_after_dispatch: 5,
+    batch_reply_min_chars: 2000,
+  });
+  assert.equal(validateCoreBetaCase(testCase).ok, true);
+
+  const missingThreshold = {
+    ...testCase,
+    assertion_contract_json: JSON.stringify({
+      pass_rule: '所有硬断言通过',
+      fail_rule: '产品行为与预期不符',
+      block_rule: '环境或能力前置不满足',
+    }),
+  };
+  const audit = validateCoreBetaCase(missingThreshold);
+  assert.equal(audit.ok, false);
+  assert.ok(audit.errors.some((item) => item.includes('batch_min_pending_after_dispatch')));
+  assert.ok(audit.errors.some((item) => item.includes('batch_reply_min_chars')));
+});
+
+test('batch pending pool evidence fails closed when too few dispatched tasks are visibly running', () => {
+  const taskIds = Array.from({ length: 20 }, (_, index) => `task-${index + 1}`);
+  const enough = coreBetaBatchPendingPoolEvidence(taskIds.map((taskId, index) => ({
+    task_id: taskId,
+    item_present: true,
+    running_indicator_present: index < 5,
+    running_indicator_visible: index < 4,
+  })), {
+    expectedTaskIds: taskIds,
+    minimumPending: 5,
+    capturedAt: '2026-07-29T00:00:00.000Z',
+  });
+  assert.equal(enough.available, true);
+  assert.equal(enough.completion_observed, true);
+  assert.equal(enough.pending_count, 5);
+  assert.equal(enough.visible_pending_count, 4);
+
+  const tooFew = coreBetaBatchPendingPoolEvidence(taskIds.map((taskId, index) => ({
+    task_id: taskId,
+    item_present: true,
+    running_indicator_present: index < 4,
+    running_indicator_visible: index < 4,
+  })), {
+    expectedTaskIds: taskIds,
+    minimumPending: 5,
+  });
+  assert.equal(tooFew.available, true);
+  assert.equal(tooFew.completion_observed, false);
+  assert.match(tooFew.reason, /低于要求 5 条/);
+
+  const missingTask = coreBetaBatchPendingPoolEvidence(taskIds.slice(0, 19).map((taskId) => ({
+    task_id: taskId,
+    item_present: true,
+  })), {
+    expectedTaskIds: taskIds,
+    minimumPending: 5,
+  });
+  assert.equal(missingTask.available, false);
+  assert.equal(missingTask.completion_observed, false);
 });
 
 test('an attachment collect step sends when no task-bound readback exists', () => {
