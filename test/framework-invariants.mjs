@@ -14,6 +14,7 @@ import {
   buildTerminalConversationEvidence,
   buildCredibilityReview,
   buildSingleHostPipelineBatch,
+  buildSingleHostPipelineWave,
   buildConversationTurns,
   caseAwareReplyAssertion,
   createControlPlaneFaultProxy,
@@ -25,6 +26,7 @@ import {
   containsActiveLegacyConstraints,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
+  isSingleHostPipelineHardBarrier,
   isContinuedOldLoginAnswer,
   isTransientCredentialRotation,
   isSuccessfulSendStep,
@@ -47,6 +49,7 @@ import {
   trustedTaskIdentityEvidence,
   unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
+  validateSingleHostPipelineWaveIdentity,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   validateProductionCasePlan,
@@ -457,6 +460,7 @@ assert.ok(
 const pipelineCase = (id, overrides = {}) => ({
   id,
   kind: 'conversation',
+  pipeline_policy: 'pipeline20（独立单轮纯会话）',
   module: '首页',
   submodule: '会话',
   scenario: '独立单轮业务问答',
@@ -465,34 +469,79 @@ const pipelineCase = (id, overrides = {}) => ({
   expected_result: '返回清晰、相关的业务建议。',
   ...overrides,
 });
-assert.equal(parseSingleHostPipelineSize(true), 5, '布尔开关默认开启 5 会话流水线');
+assert.equal(parseSingleHostPipelineSize(true), 20, '布尔开关默认开启 20 会话流水线');
 assert.equal(parseSingleHostPipelineSize('1'), 1, '流水线大小 1 等价于串行');
-assert.throws(() => parseSingleHostPipelineSize('6'), /1-5/, '单宿主流水线不得超过 5');
-assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HOME-061')).eligible, true, '白名单单轮纯会话允许流水线派发');
-assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HOME-061', { test_data: '请读取上传附件并总结。' })).eligible, false, '附件语义即使 ID 在白名单也必须串行');
+assert.equal(parseSingleHostPipelineSize('7'), 7, '流水线数量支持显式配置');
+assert.equal(parseSingleHostPipelineSize('20'), 20, '单宿主流水线允许配置到 20');
+assert.throws(() => parseSingleHostPipelineSize('21'), /1-20/, '单宿主流水线不得超过 20');
+assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SAFE-001')).eligible, true, '声明可流水线的单轮纯会话不依赖硬编码 Case ID');
+assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SERIAL-001', { pipeline_policy: '串行（状态/附件/工具/成果/重启/多轮）' })).eligible, false, 'Casebook 声明串行时不得进入流水线');
+assert.equal(singleHostPipelineEligibility(pipelineCase('CUSTOM-SAFE-002', { test_data: '请读取上传附件并总结。' })).eligible, false, '附件语义即使声明可流水线也必须串行');
 assert.equal(singleHostPipelineEligibility(pipelineCase('SIT-HITL-002')).eligible, false, 'HITL Case 不得进入单宿主流水线');
 assert.equal(isTransientCredentialRotation('Lingxi credential changed during the management request'), true, 'Lingxi 管理请求凭证轮换必须进入一次安全恢复');
 assert.equal(isTransientCredentialRotation('普通业务失败，请稍后重试'), false, '未知业务错误不得盲目按凭证轮换重试');
-const plannedPipeline = buildSingleHostPipelineBatch([
-  pipelineCase('SIT-HOME-061'),
-  pipelineCase('SIT-HOME-062'),
-  pipelineCase('SIT-HOME-063'),
-  pipelineCase('SIT-HOME-064'),
-  pipelineCase('SIT-HOME-065'),
-  pipelineCase('SIT-HOME-054'),
-], 0, 5);
-assert.deepEqual(plannedPipeline.map((entry) => entry.testCase.id), [
-  'SIT-HOME-061',
-  'SIT-HOME-062',
-  'SIT-HOME-063',
-  'SIT-HOME-064',
-  'SIT-HOME-065',
-], '单宿主流水线单波最多派发 5 条');
+const plannedPipeline = buildSingleHostPipelineBatch(
+  Array.from({ length: 21 }, (_, index) => pipelineCase(`CUSTOM-SAFE-${String(index + 1).padStart(3, '0')}`)),
+  0,
+  20,
+);
+assert.equal(plannedPipeline.length, 20, '单宿主流水线单波默认最多派发 20 条');
 assert.deepEqual(buildSingleHostPipelineBatch([
   pipelineCase('SIT-HOME-061'),
   pipelineCase('SIT-HITL-002'),
   pipelineCase('SIT-HOME-062'),
-], 0, 5).map((entry) => entry.testCase.id), ['SIT-HOME-061'], '流水线不得跨越串行安全屏障重排 Case');
+], 0, 20).map((entry) => entry.testCase.id), ['SIT-HOME-061'], '流水线不得跨越串行安全屏障重排 Case');
+const mixedWave = buildSingleHostPipelineWave([
+  pipelineCase('CUSTOM-SAFE-001'),
+  pipelineCase('CUSTOM-SAFE-UI-001', {
+    kind: 'ui',
+    pipeline_policy: '安全白名单、独立fixture后可pipeline20',
+    test_data: '折叠并展开侧栏',
+  }),
+  pipelineCase('CUSTOM-SAFE-002'),
+], 0, 20);
+assert.deepEqual(
+  mixedWave.map((entry) => [entry.testCase.id, entry.eligibility.eligible]),
+  [
+    ['CUSTOM-SAFE-001', true],
+    ['CUSTOM-SAFE-UI-001', false],
+    ['CUSTOM-SAFE-002', true],
+  ],
+  '20-Case 波次必须保留原顺序，只延后安全会话并原地执行声明安全的 UI Case',
+);
+assert.equal(
+  isSingleHostPipelineHardBarrier(pipelineCase('SIT-HITL-002', { pipeline_policy: '串行（HITL）' })),
+  true,
+  'HITL 必须关闭当前波并独占执行',
+);
+assert.deepEqual(
+  buildSingleHostPipelineWave([
+    pipelineCase('CUSTOM-SAFE-001'),
+    pipelineCase('SIT-HITL-002', { pipeline_policy: '串行（HITL）' }),
+    pipelineCase('CUSTOM-SAFE-002'),
+  ], 0, 20).map((entry) => entry.testCase.id),
+  ['CUSTOM-SAFE-001'],
+  '波次不得让后台会话等待跨越 HITL/重启/附件等硬屏障',
+);
+assert.deepEqual(validateSingleHostPipelineWaveIdentity([
+  { case_id: 'CUSTOM-SAFE-001', task_id: 'task-a', wave_id: 'wave-1' },
+  { case_id: 'CUSTOM-SAFE-002', task_id: 'task-b', wave_id: 'wave-1' },
+], {
+  waveId: 'wave-1',
+  expectedCaseIds: ['CUSTOM-SAFE-001', 'CUSTOM-SAFE-002'],
+}), {
+  wave_id: 'wave-1',
+  case_ids: ['CUSTOM-SAFE-001', 'CUSTOM-SAFE-002'],
+  task_ids: ['task-a', 'task-b'],
+  count: 2,
+}, '统一回查前必须固化有序 Case/taskId 绑定');
+assert.throws(() => validateSingleHostPipelineWaveIdentity([
+  { case_id: 'CUSTOM-SAFE-001', task_id: 'task-a', wave_id: 'wave-1' },
+  { case_id: 'CUSTOM-SAFE-002', task_id: 'task-a', wave_id: 'wave-1' },
+], {
+  waveId: 'wave-1',
+  expectedCaseIds: ['CUSTOM-SAFE-001', 'CUSTOM-SAFE-002'],
+}), /重复 taskId/, '重复 taskId 必须在统一回查前 fail-closed');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-061'),
   { prompt: '先给3步执行计划，再给检查清单。', label: '第一轮' },

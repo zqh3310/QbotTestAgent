@@ -97,11 +97,21 @@ connection directly to the existing runner. It refuses local-QBot restart comman
 refuses output paths outside this folder, so the local-QBot execution lane remains unchanged.
 
 The managed 360Teams session exposes one QWork WebView, so there is still exactly one runner.
-`--single-host-pipeline 5` may overlap dispatch and collection only for an explicit whitelist
-of independent, single-turn, pure-conversation Cases. Attachments, skills, connectors, MCP,
-HITL, artifacts, restarts, shared state, and multi-turn Cases remain serial. The pipeline
-writes `single-host-pipeline.json` with unique wave/task dispatch and collection records so
-an interrupted batch can be audited without mixing Case evidence.
+`--single-host-pipeline N` enables ordered waves of up to `N` Cases. For each wave, safe
+conversation Cases are dispatched into new tasks without waiting for the Agent reply;
+ordinary UI Cases that are also declared pipeline-safe still execute serially at their
+original positions. At the end of the wave, the runner reopens every deferred conversation
+by its exact persisted task ID and collects/asserts the replies. This overlaps Agent wait
+time with later safe UI work without reordering Cases. `N` is configurable from 1 (fully
+serial) through 20;
+`--single-host-pipeline true` uses 20. The final wave may be shorter. A deferred Case must
+both declare a pipeline policy in the Casebook and pass the live independent, single-turn,
+pure-conversation checks. Attachments, skills, connectors, MCP, HITL, artifacts, restarts,
+shared state, and multi-turn Cases are hard barriers: the current wave is collected before
+they execute alone. The pipeline writes
+`single-host-pipeline.json` schema v2 with requested/actual wave sizes, phase timestamps,
+ordered Case IDs, and globally unique task IDs so interrupted runs can be audited without
+mixing Case evidence.
 
 ### Teams-only fault and fixture lane
 

@@ -86,24 +86,8 @@ const DRAFT_TERMINAL_IDENTITY_CASE_IDS = new Set([
   'SIT-TEAMS-NEW-001',
 ]);
 
-const DEFAULT_SINGLE_HOST_PIPELINE_SIZE = 5;
-const MAX_SINGLE_HOST_PIPELINE_SIZE = 5;
-// Single-host pipelining is deliberately opt-in and conservative. These cases
-// are independent, one-turn, attachment-free generic conversations. Cases
-// involving skills, connectors/MCP, experts, HITL, artifacts, fixtures,
-// host restarts, shared account state or multiple turns remain serial.
-const SINGLE_HOST_PIPELINE_CASE_IDS = new Set([
-  'SIT-HOME-015',
-  'SIT-HOME-021',
-  'SIT-HOME-022',
-  'SIT-HOME-054',
-  'SIT-HOME-057',
-  'SIT-HOME-061',
-  'SIT-HOME-062',
-  'SIT-HOME-063',
-  'SIT-HOME-064',
-  'SIT-HOME-065',
-]);
+const DEFAULT_SINGLE_HOST_PIPELINE_SIZE = 20;
+const MAX_SINGLE_HOST_PIPELINE_SIZE = 20;
 const PRODUCTION_CASE_METADATA_FIELDS = [
   'risk_domain',
   'oracle_type',
@@ -526,7 +510,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       requested_size: singleHostPipelineSize,
       max_size: MAX_SINGLE_HOST_PIPELINE_SIZE,
       eligible_cases: selectedCases.filter((testCase) => singleHostPipelineEligibility(testCase).eligible).map((testCase) => testCase.id),
-      policy: '仅连续、单轮、无附件、无技能/MCP、无HITL、无重启、无共享状态的白名单会话进入流水线；其余自动串行。',
+      policy: '每波按原 Case 顺序处理最多 N 条；仅 Casebook 明确声明可 pipeline、且实时复核为单轮、无附件、无技能/MCP、无HITL、无重启、无共享状态的纯会话延后回查；声明可独立 pipeline 的普通 UI Case 可在波内原地串行。附件、HITL、重启、技能/MCP、成果、多轮和共享状态会关闭当前波并独占执行；波尾按 taskId 统一回查，不重排 Case。',
     };
     precheck.model_tier = modelTier
       ? (precheck.login_required
@@ -578,12 +562,15 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
       const pipelineBatch = [];
       if (singleHostPipelineSize > 1) {
-        for (const entry of buildSingleHostPipelineBatch(selectedCases, index, singleHostPipelineSize)) {
-          if (resultsByIndex.has(entry.index)) break;
-          pipelineBatch.push(entry);
-        }
+        pipelineBatch.push(...buildSingleHostPipelineWave(
+          selectedCases,
+          index,
+          singleHostPipelineSize,
+          { completedIndexes: new Set(resultsByIndex.keys()) },
+        ));
       }
-      if (pipelineBatch.length > 1) {
+      const deferredPipelineCount = pipelineBatch.filter((entry) => entry.eligibility.eligible).length;
+      if (pipelineBatch.length > 1 && deferredPipelineCount > 0) {
         const batchResults = await executeSingleHostPipelineBatch({
           page,
           batch: pipelineBatch,
@@ -595,6 +582,57 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           options,
           playwright: loaded,
           runtime,
+          requestedPipelineSize: singleHostPipelineSize,
+          serialExecutor: async (entry) => {
+            const serialCase = entry.testCase;
+            const serialCaseDir = path.join(
+              outDir,
+              'cases',
+              `${String(entry.index + 1).padStart(3, '0')}-${serialCase.id}-${slugify(serialCase.scenario)}`,
+            );
+            ensureDir(serialCaseDir);
+            const serialResult = await executeCasebookCase({
+              page: runtime.page,
+              testCase: serialCase,
+              caseDir: serialCaseDir,
+              order: entry.index + 1,
+              timeoutMs,
+              fixturesDir,
+              precheck,
+              modelTier,
+              options,
+              playwright: loaded,
+              runtime,
+            });
+            browser = runtime.browser;
+            page = runtime.page;
+            assertCompletedCaseEvidenceIntegrity(serialResult, {
+              expectedCaseId: serialCase.id,
+              executionMode: 'single-host-wave-serial',
+            });
+            resultsByIndex.set(entry.index, {
+              ...serialResult,
+              order: entry.index + 1,
+              case_index: entry.index,
+              execution_provenance: serialResult.execution_provenance || 'executed',
+            });
+            writeCasebookProgress({
+              progressFile,
+              selectedCases,
+              resultsByIndex,
+              extra: {
+                current_case: serialCase.id,
+                execution_mode: 'single-host-wave-serial',
+                pipeline_requested_size: singleHostPipelineSize,
+                pipeline_actual_size: pipelineBatch.length,
+                pipeline_deferred_size: deferredPipelineCount,
+              },
+            });
+            if (isCdpDisconnectedResult(serialResult) || !isLiveCdpPage(browser, page)) {
+              throw new Error(`波内串行 Case ${serialCase.id} 执行后 QBot CDP/page 已断开。`);
+            }
+            return serialResult;
+          },
         });
         browser = runtime.browser;
         page = runtime.page;
@@ -618,11 +656,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             extra: {
               current_case: result.id,
               execution_mode: 'single-host-pipeline',
-              pipeline_size: pipelineBatch.length,
+              pipeline_requested_size: singleHostPipelineSize,
+              pipeline_actual_size: pipelineBatch.length,
+              pipeline_deferred_size: deferredPipelineCount,
             },
           });
         }
-        index += pipelineBatch.length - 1;
+        index = pipelineBatch.at(-1).index;
         const disconnected = batchResults.find(isCdpDisconnectedResult);
         if (disconnected || !isLiveCdpPage(browser, page)) {
           const reason = `单宿主流水线执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。${disconnected ? `原始现象：${clip(disconnected.actual_result || disconnected.conclusion || '', 260)}` : ''}`;
@@ -1690,16 +1730,15 @@ export function parseSingleHostPipelineSize(value) {
 export function singleHostPipelineEligibility(testCase) {
   const id = String(testCase?.id || '');
   const kind = String(testCase?.kind || '');
+  const declaredPolicy = String(testCase?.pipeline_policy || '');
+  const turns = buildConversationTurns(testCase || {}, []);
+  const prompt = String(turns[0]?.prompt || '');
   const text = [
-    testCase?.module,
-    testCase?.submodule,
-    testCase?.scenario,
-    testCase?.precondition,
-    testCase?.test_data,
-    testCase?.expected_result,
+    id,
+    prompt,
   ].map((item) => String(item || '')).join('\n');
   const reasons = [];
-  if (!SINGLE_HOST_PIPELINE_CASE_IDS.has(id)) reasons.push('不在单宿主安全白名单');
+  if (!/pipeline\d*/i.test(declaredPolicy)) reasons.push('Casebook 未明确声明可进入流水线');
   if (kind !== 'conversation') reasons.push(`kind=${kind || 'unknown'} 不是纯会话`);
   if (id !== 'SIT-HOME-065' && /附件|上传|文件|图片|成果|artifact/i.test(text)) {
     reasons.push('包含真实附件/文件/成果串行语义');
@@ -1707,14 +1746,14 @@ export function singleHostPipelineEligibility(testCase) {
   if (/技能|Skill|连接器|MCP|专家|HITL|重启|工作区|项目/i.test(text)) {
     reasons.push('包含能力/HITL/重启/共享状态等串行语义');
   }
-  const turns = buildConversationTurns(testCase || {}, []);
   if (turns.length !== 1) reasons.push(`会话轮数=${turns.length}`);
-  if (!String(turns[0]?.prompt || '').trim()) reasons.push('缺少可发送提示词');
+  if (!prompt.trim()) reasons.push('缺少可发送提示词');
   return {
     eligible: reasons.length === 0,
     reasons,
+    declared_policy: declaredPolicy,
     turn_count: turns.length,
-    prompt: turns[0]?.prompt || '',
+    prompt,
   };
 }
 
@@ -1731,6 +1770,49 @@ export function buildSingleHostPipelineBatch(selectedCases, startIndex, size = D
   return batch;
 }
 
+export function isSingleHostPipelineHardBarrier(testCase) {
+  const eligibility = singleHostPipelineEligibility(testCase);
+  if (eligibility.eligible) return false;
+  const kind = String(testCase?.kind || '');
+  const declaredPolicy = String(testCase?.pipeline_policy || '');
+  const text = [
+    testCase?.id,
+    testCase?.runner,
+    testCase?.scenario,
+    testCase?.steps,
+    declaredPolicy,
+  ].map((item) => String(item || '')).join('\n');
+  if (kind === 'attachment' || kind === 'auth') return true;
+  if (/串行|附件|工具|成果|重启|多轮|共享状态|跨步骤|身份|Skill|技能|连接器|MCP|专家|HITL|artifact/i.test(text)) {
+    return true;
+  }
+  return !/pipeline\d*/i.test(declaredPolicy);
+}
+
+export function buildSingleHostPipelineWave(selectedCases, startIndex, size = DEFAULT_SINGLE_HOST_PIPELINE_SIZE, {
+  completedIndexes = new Set(),
+} = {}) {
+  const limit = parseSingleHostPipelineSize(size);
+  if (limit <= 1 || startIndex < 0 || startIndex >= selectedCases.length) return [];
+  const wave = [];
+  for (let index = startIndex; index < selectedCases.length && wave.length < limit; index += 1) {
+    if (completedIndexes.has(index)) continue;
+    const testCase = selectedCases[index];
+    const entry = {
+      testCase,
+      index,
+      eligibility: singleHostPipelineEligibility(testCase),
+      hard_barrier: isSingleHostPipelineHardBarrier(testCase),
+    };
+    if (entry.hard_barrier) {
+      if (wave.length === 0) wave.push(entry);
+      break;
+    }
+    wave.push(entry);
+  }
+  return wave;
+}
+
 function singleHostPipelineLedgerFile(outDir) {
   return path.join(outDir, 'single-host-pipeline.json');
 }
@@ -1739,16 +1821,23 @@ function loadSingleHostPipelineLedger(outDir) {
   const file = singleHostPipelineLedgerFile(outDir);
   if (!fs.existsSync(file)) {
     return {
-      schema_version: 1,
+      schema_version: 2,
       mode: 'single-host-task-pipeline',
       max_pipeline_size: MAX_SINGLE_HOST_PIPELINE_SIZE,
       updated_at: new Date().toISOString(),
+      waves: {},
       entries: {},
     };
   }
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { ...value, entries: value?.entries && typeof value.entries === 'object' ? value.entries : {} };
+    return {
+      ...value,
+      schema_version: Math.max(2, Number(value?.schema_version || 0)),
+      max_pipeline_size: MAX_SINGLE_HOST_PIPELINE_SIZE,
+      waves: value?.waves && typeof value.waves === 'object' ? value.waves : {},
+      entries: value?.entries && typeof value.entries === 'object' ? value.entries : {},
+    };
   } catch (error) {
     throw new Error(`单宿主流水线断点账本损坏：${error.message}`);
   }
@@ -1767,6 +1856,52 @@ function pipelineLedgerKey(testCase, order) {
   return `${String(order).padStart(3, '0')}:${String(testCase.id || '')}`;
 }
 
+export function validateSingleHostPipelineWaveIdentity(entries = [], {
+  waveId = '',
+  expectedCaseIds = [],
+  priorEntries = [],
+} = {}) {
+  const normalized = entries.map((entry) => ({
+    case_id: String(entry?.case_id || ''),
+    task_id: String(entry?.task_id || ''),
+    wave_id: String(entry?.wave_id || ''),
+  }));
+  const errors = [];
+  const expected = expectedCaseIds.map(String);
+  if (!waveId) errors.push('缺少 waveId');
+  if (normalized.length !== expected.length) {
+    errors.push(`派发条数=${normalized.length}，期望=${expected.length}`);
+  }
+  const actualCases = normalized.map((entry) => entry.case_id);
+  if (new Set(actualCases).size !== actualCases.length) errors.push('同一波存在重复 Case ID');
+  if (actualCases.some((caseId, index) => caseId !== expected[index])) {
+    errors.push(`Case 顺序漂移：actual=${actualCases.join(',')} expected=${expected.join(',')}`);
+  }
+  if (normalized.some((entry) => !entry.task_id)) errors.push('存在空 taskId');
+  if (normalized.some((entry) => entry.wave_id !== waveId)) errors.push('存在 waveId 漂移');
+  const taskIds = normalized.map((entry) => entry.task_id);
+  if (new Set(taskIds).size !== taskIds.length) errors.push('同一波存在重复 taskId');
+  const priorOwners = new Map(
+    priorEntries
+      .map((entry) => [String(entry?.task_id || ''), String(entry?.case_id || '')])
+      .filter(([taskId]) => taskId),
+  );
+  for (const entry of normalized) {
+    if (priorOwners.has(entry.task_id)) {
+      errors.push(`taskId=${entry.task_id} 已归属其他波 Case=${priorOwners.get(entry.task_id)}`);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`单宿主流水线派发身份校验失败：${errors.join('；')}`);
+  }
+  return {
+    wave_id: waveId,
+    case_ids: actualCases,
+    task_ids: taskIds,
+    count: normalized.length,
+  };
+}
+
 async function executeSingleHostPipelineBatch({
   page,
   batch,
@@ -1778,11 +1913,27 @@ async function executeSingleHostPipelineBatch({
   options,
   playwright,
   runtime,
+  requestedPipelineSize,
+  serialExecutor,
 }) {
   const ledger = loadSingleHostPipelineLedger(outDir);
   const waveId = `wave-${String(batch[0].index + 1).padStart(3, '0')}-${String(batch.at(-1).index + 1).padStart(3, '0')}`;
   const contexts = [];
   const resultsByKey = new Map();
+  ledger.configured_pipeline_size = requestedPipelineSize;
+  ledger.waves[waveId] = {
+    ...(ledger.waves[waveId] || {}),
+    wave_id: waveId,
+    mode: 'dispatch-then-collect',
+    requested_size: requestedPipelineSize,
+    actual_size: batch.length,
+    case_ids: batch.map((entry) => String(entry.testCase.id || '')),
+    deferred_case_ids: batch.filter((entry) => entry.eligibility.eligible).map((entry) => String(entry.testCase.id || '')),
+    serial_case_ids: batch.filter((entry) => !entry.eligibility.eligible).map((entry) => String(entry.testCase.id || '')),
+    phase: 'dispatching',
+    dispatch_started_at: ledger.waves[waveId]?.dispatch_started_at || new Date().toISOString(),
+  };
+  writeSingleHostPipelineLedger(outDir, ledger);
 
   for (const entry of batch) {
     const { testCase, index } = entry;
@@ -1790,6 +1941,18 @@ async function executeSingleHostPipelineBatch({
     const key = pipelineLedgerKey(testCase, order);
     const caseDir = path.join(outDir, 'cases', `${String(order).padStart(3, '0')}-${testCase.id}-${slugify(testCase.scenario)}`);
     ensureDir(caseDir);
+    if (!entry.eligibility.eligible) {
+      if (typeof serialExecutor !== 'function') {
+        throw new Error(`单宿主波次包含串行 Case ${testCase.id}，但未提供串行执行器。`);
+      }
+      const result = await serialExecutor(entry);
+      assertCompletedCaseEvidenceIntegrity(result, {
+        expectedCaseId: testCase.id,
+        executionMode: 'single-host-wave-serial-result',
+      });
+      resultsByKey.set(key, result);
+      continue;
+    }
     const saved = ledger.entries[key];
     const resultFile = path.join(caseDir, 'case-result.json');
     if (saved?.status === 'collected' && fs.existsSync(resultFile)) {
@@ -1818,7 +1981,7 @@ async function executeSingleHostPipelineBatch({
     }
 
     const dispatched = await dispatchSingleHostPipelineCase({
-      page,
+      page: runtime?.page || page,
       testCase,
       caseDir,
       order,
@@ -1866,10 +2029,34 @@ async function executeSingleHostPipelineBatch({
     writeSingleHostPipelineLedger(outDir, ledger);
   }
 
+  const waveIdentity = validateSingleHostPipelineWaveIdentity(
+    contexts.map((context) => ({
+      case_id: context.testCase.id,
+      task_id: context.taskId,
+      wave_id: context.waveId,
+    })),
+    {
+      waveId,
+      expectedCaseIds: contexts.map((context) => context.testCase.id),
+      priorEntries: Object.values(ledger.entries).filter((entry) => entry.wave_id !== waveId),
+    },
+  );
+  ledger.waves[waveId] = {
+    ...ledger.waves[waveId],
+    phase: contexts.length > 0 ? 'collecting' : 'collected',
+    deferred_count: contexts.length,
+    serial_count: batch.filter((entry) => !entry.eligibility.eligible).length,
+    dispatched_case_ids: waveIdentity.case_ids,
+    task_ids: waveIdentity.task_ids,
+    dispatch_completed_at: new Date().toISOString(),
+    collect_started_at: contexts.length > 0 ? new Date().toISOString() : '',
+  };
+  writeSingleHostPipelineLedger(outDir, ledger);
+
   for (const context of contexts) {
     if (resultsByKey.has(context.key)) continue;
     const result = await collectSingleHostPipelineCase({
-      page,
+      page: runtime?.page || page,
       context,
       timeoutMs,
       options,
@@ -1891,6 +2078,14 @@ async function executeSingleHostPipelineBatch({
     };
     writeSingleHostPipelineLedger(outDir, ledger);
   }
+
+  ledger.waves[waveId] = {
+    ...ledger.waves[waveId],
+    phase: 'collected',
+    collected_count: batch.length,
+    collect_completed_at: new Date().toISOString(),
+  };
+  writeSingleHostPipelineLedger(outDir, ledger);
 
   return batch.map(({ testCase, index }) => {
     const key = pipelineLedgerKey(testCase, index + 1);
