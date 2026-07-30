@@ -898,6 +898,20 @@ test('Core Beta skill cleanup keeps run-owned receipts separate and drives curre
   assert.match(cleanupBranch, /recordCoreBetaSkillCleanupInventoryEvidence\(ctx\)/);
 });
 
+test('Core Beta five-connector selection captures an exact negative readback before fail-closed', () => {
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  const command = runner.slice(
+    runner.indexOf("if (command === 'select_five_connectors_by_key')"),
+    runner.indexOf("if (command === 'readback_connector_binding')"),
+  );
+  assert.match(command, /const expected = \(ctx\.ledger\.mcp\.sample \|\| \[\]\)\.map/);
+  assert.match(command, /const selectedIdentities = coreBetaSelectedCapabilityIdentities/);
+  assert.match(command, /setCoreBetaEvidence\(ctx\.state, 'capability_selection'/);
+  assert.match(command, /five visible connector option clicks \+ chips \+ window\.agent\.capabilities/);
+  assert.match(command, /available: exact/);
+  assert.match(command, /state_readback: \{ expected, selected, snapshot:/);
+});
+
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {
   const source = fs.readFileSync(new URL('../lib/managed-qwork-ui.mjs', import.meta.url), 'utf8');
   assert.match(source, /webview#qbot-workbench, webview/);

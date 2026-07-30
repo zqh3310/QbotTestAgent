@@ -8247,14 +8247,30 @@ async function executeCoreBetaMcpCommand(ctx, command) {
     }
     const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
     ctx.ledger.mcp.selected = selected;
+    const expected = (ctx.ledger.mcp.sample || []).map((item) => item.key);
+    const selectedIdentities = coreBetaSelectedCapabilityIdentities(snapshot.selectedConnectors);
+    const exact = selected.length === expected.length
+      && expected.length === 5
+      && expected.every((key) => selected.includes(key) && selectedIdentities.includes(key))
+      && snapshot.selectedConnectorCount === expected.length
+      && snapshot.chipCount > 0
+      && snapshot.connectorRouting?.mode === 'manual';
+    // Selection can fail part-way through the five visible menu clicks.  Capture
+    // that exact negative readback before the next action is fail-closed;
+    // otherwise a real product selection failure is incorrectly converted into
+    // a missing capability_selection framework role.
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: exact,
+      source: 'five visible connector option clicks + chips + window.agent.capabilities',
+      expected,
+      selected,
+      snapshot: { ...snapshot, selectedIdentities },
+    });
     return {
-      ok: selected.length === 5
-        && snapshot.selectedConnectorCount === 5
-        && snapshot.chipCount > 0
-        && snapshot.connectorRouting?.mode === 'manual',
+      ok: exact,
       selector_or_testid: 'composer-connectors-menu',
       event: 'select-five',
-      state_readback: { selected, snapshot },
+      state_readback: { expected, selected, snapshot: { ...snapshot, selectedIdentities } },
       actual: `selected=${selected.length}；public=${snapshot.selectedConnectorCount}；chips=${snapshot.chipCount}；mode=${snapshot.connectorRouting?.mode || 'missing'}`,
     };
   }
