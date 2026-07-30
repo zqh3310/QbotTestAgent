@@ -25963,21 +25963,40 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
       || '',
   ).trim();
   const failedSelectionReceipt = Array.isArray(actionEvidence?.receipts)
-    ? actionEvidence.receipts.find((receipt) => (
-      receipt?.command === 'select_skill_via_composer_button'
-      && receipt?.event === 'select-visible-composer-skill'
-      && receipt?.expected_state_observed === false
-      && String(receipt?.actual || '').includes(`expected=${expectedSelectionIdentity}`)
-      && Number(receipt?.state_readback?.selectedSkillCount || 0) === 0
-      && Array.isArray(receipt?.state_readback?.selectedSkills)
-      && receipt.state_readback.selectedSkills.length === 0
-    ))
+    ? actionEvidence.receipts.find((receipt) => {
+      const command = String(receipt?.command || '');
+      const directSelectionFailure = command === 'select_skill_via_composer_button'
+        && receipt?.event === 'select-visible-composer-skill'
+        && String(receipt?.actual || '').includes(`expected=${expectedSelectionIdentity}`)
+        && Number(receipt?.state_readback?.selectedSkillCount || 0) === 0
+        && Array.isArray(receipt?.state_readback?.selectedSkills)
+        && receipt.state_readback.selectedSkills.length === 0;
+      const persistenceSelectionFailure = command === 'verify_skill_selection_persistence'
+        && receipt?.event === 'selection-precondition-failed'
+        && String(receipt?.state_readback?.selected?.slug || '') === expectedSelectionIdentity
+        && receipt?.state_readback?.selectedOk === false
+        && Number(receipt?.state_readback?.before?.selectedSkillCount || 0) === 0
+        && Array.isArray(receipt?.state_readback?.before?.selectedSkills)
+        && receipt.state_readback.before.selectedSkills.length === 0;
+      return receipt?.expected_state_observed === false
+        && (directSelectionFailure || persistenceSelectionFailure);
+    })
     : null;
+  const failedSelectionCommand = String(failedSelectionReceipt?.command || '');
   const failClosedSendReceipt = Array.isArray(actionEvidence?.receipts)
     ? actionEvidence.receipts.find((receipt) => (
-      ['run_two_turn_skill_task', 'send_skill_task'].includes(String(receipt?.command || ''))
+      (
+        (
+          failedSelectionCommand === 'select_skill_via_composer_button'
+          && ['run_two_turn_skill_task', 'send_skill_task'].includes(String(receipt?.command || ''))
+        )
+        || (
+          failedSelectionCommand === 'verify_skill_selection_persistence'
+          && receipt?.command === 'verify_cross_task_skill_isolation'
+        )
+      )
       && receipt?.event === 'skipped-after-failed-prerequisite'
-      && receipt?.state_readback?.stopped_by_command === 'select_skill_via_composer_button'
+      && receipt?.state_readback?.stopped_by_command === failedSelectionCommand
     ))
     : null;
   const finalTaskIdentity = state.artifacts?.final_task_identity;
@@ -25985,15 +26004,27 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     || state.artifacts.sent_prompts.length === 0;
   const noSendRecorded = !Array.isArray(state.artifacts?.send_receipts)
     || state.artifacts.send_receipts.length === 0;
+  const visibleFailureScreenshot = existingFileEvidence(failedSelectionReceipt?.after_screenshot);
+  const supportedSelectionFailureSource = (
+    (
+      failedSelectionCommand === 'select_skill_via_composer_button'
+      && selectionEvidence?.source === 'visible composer Skill option click + chip + window.agent.capabilities.selectedSkills'
+    )
+    || (
+      failedSelectionCommand === 'verify_skill_selection_persistence'
+      && selectionEvidence?.source === 'visible composer skill selection pre-send gate'
+    )
+  );
   const strictPreSendSelectionFailure = ['failed', 'blocked'].includes(String(state.status || ''))
     && selectionEvidence?.available === false
-    && selectionEvidence?.source === 'visible composer Skill option click + chip + window.agent.capabilities.selectedSkills'
+    && supportedSelectionFailureSource
     && Boolean(expectedSelectionIdentity)
-    && selectionEvidence?.snapshot?.selectedSkillCount === 0
+    && Number(selectionEvidence?.snapshot?.selectedSkillCount || 0) === 0
     && Array.isArray(selectionEvidence?.snapshot?.selectedSkills)
     && selectionEvidence.snapshot.selectedSkills.length === 0
     && actionEvidence?.available === true
     && Boolean(failedSelectionReceipt)
+    && Boolean(visibleFailureScreenshot)
     && Boolean(failClosedSendReceipt)
     && publicStateEvidence?.available === true
     && String(publicStateEvidence?.active_id || '') === ''
@@ -26017,6 +26048,8 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
       reason: `已通过可见 Composer 精确选择能力 ${expectedSelectionIdentity}，产品读回为空；后续发送动作被 fail-closed 门禁禁止，最终无任务、无消息、无 prompt 与无发送收据。`,
       expected_identity: expectedSelectionIdentity,
       selection_source: String(selectionEvidence.source || ''),
+      visible_failure_screenshot: visibleFailureScreenshot,
+      failed_selection_command: failedSelectionCommand,
       propagation_source: 'current_case_pre_send_selection_failure',
     };
   }

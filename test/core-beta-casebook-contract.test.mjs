@@ -799,6 +799,8 @@ test('an exact visible skill selection failure before send makes only post-selec
   const caseDir = path.join(root, 'cases', 'BETA-SKILL-007');
   fs.mkdirSync(caseDir, { recursive: true });
   const capturedAt = '2026-07-30T11:37:34.943Z';
+  const selectionFailureScreenshot = path.join(caseDir, 'selection-failure.png');
+  fs.writeFileSync(selectionFailureScreenshot, 'selection-failure');
   const emptySelection = {
     selectedSkillCount: 0,
     selectedSkills: [],
@@ -844,6 +846,7 @@ test('an exact visible skill selection failure before send makes only post-selec
               expected_state_observed: false,
               actual: 'expected=qfin-ppt-brand-assets；selected=[]；chips=0',
               state_readback: emptySelection,
+              after_screenshot: selectionFailureScreenshot,
             },
             {
               command: 'run_two_turn_skill_task',
@@ -894,6 +897,100 @@ test('an exact visible skill selection failure before send makes only post-selec
   const incompleteManifest = buildCaseEvidenceManifest(state, caseDir);
   assert.equal(incompleteManifest.complete, false);
   assert.ok(incompleteManifest.missing_roles.includes('prompt'));
+});
+
+test('Skill persistence selection failure keeps strict visible no-send evidence complete', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-skill-persistence-selection-failure-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-SKILL-011');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const before = path.join(caseDir, '01-before.png');
+  const after = path.join(caseDir, '03-assertion.png');
+  const selectionFailureScreenshot = path.join(caseDir, 'selection-failure.png');
+  fs.writeFileSync(before, 'before');
+  fs.writeFileSync(after, 'after');
+  fs.writeFileSync(selectionFailureScreenshot, 'selection-failure');
+  const capturedAt = '2026-07-30T12:10:34.903Z';
+  const emptySelection = {
+    selectedSkillCount: 0,
+    selectedSkills: [],
+    chipCount: 0,
+  };
+  const state = {
+    id: 'BETA-SKILL-011',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: [
+      'before_screenshot',
+      'action_receipt',
+      'after_screenshot',
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'capability_selection',
+      'capability_execution_event',
+    ].join(','),
+    status: 'failed',
+    screenshots: { before, final: after },
+    steps: [],
+    assertions: [],
+    artifacts: {
+      final_task_identity: { active_id: '', message_count: 0 },
+      core_beta_evidence: {
+        capability_selection: {
+          available: false,
+          captured_at: capturedAt,
+          source: 'visible composer skill selection pre-send gate',
+          expected: { slug: 'column-lineage-analysis' },
+          snapshot: emptySelection,
+        },
+        action_receipt: {
+          available: true,
+          captured_at: capturedAt,
+          receipts: [
+            {
+              command: 'verify_skill_selection_persistence',
+              event: 'selection-precondition-failed',
+              expected_state_observed: false,
+              after_screenshot: selectionFailureScreenshot,
+              state_readback: {
+                selected: { slug: 'column-lineage-analysis' },
+                selectedOk: false,
+                before: emptySelection,
+              },
+            },
+            {
+              command: 'verify_cross_task_skill_isolation',
+              event: 'skipped-after-failed-prerequisite',
+              state_readback: {
+                stopped_by_command: 'verify_skill_selection_persistence',
+              },
+            },
+          ],
+        },
+        public_state_readback: {
+          available: true,
+          captured_at: capturedAt,
+          source: 'final public capabilities + task state',
+          active_id: '',
+          running: false,
+          message_count: 0,
+        },
+      },
+    },
+  };
+
+  const verified = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(verified.applicable, true);
+  assert.equal(verified.failed_selection_command, 'verify_skill_selection_persistence');
+  assert.equal(verified.propagation_source, 'current_case_pre_send_selection_failure');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.capability_selection.available, true);
+  assert.equal(manifest.role_evidence.capability_selection.outcome_satisfied, false);
 });
 
 test('a verified missing created expert blocks before send and makes conversation evidence N/A', (t) => {
