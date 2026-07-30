@@ -25894,6 +25894,8 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
   const coreBetaEvidence = state.artifacts?.core_beta_evidence;
   const inventoryEvidence = coreBetaEvidence?.capability_inventory;
   const selectionEvidence = coreBetaEvidence?.capability_selection;
+  const actionEvidence = coreBetaEvidence?.action_receipt;
+  const publicStateEvidence = coreBetaEvidence?.public_state_readback;
   const selection = selectionEvidence?.selection;
   const requestedCount = Number(selection?.requested_count);
   const eligibleCount = Number(selection?.eligible_count);
@@ -25922,11 +25924,68 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     && selection?.source === 'deterministicCapabilitySample'
     && state.artifacts?.core_beta_shared_prerequisite_blocker?.reason === selection.reason;
   const strictShortage = strictDirectShortage || strictSharedShortage;
-  if (!strictShortage) {
+  const expectedSelectionIdentity = String(
+    selectionEvidence?.expected?.slug
+      || selectionEvidence?.expected?.id
+      || selectionEvidence?.expected?.name
+      || '',
+  ).trim();
+  const failedSelectionReceipt = Array.isArray(actionEvidence?.receipts)
+    ? actionEvidence.receipts.find((receipt) => (
+      receipt?.command === 'select_skill_via_composer_button'
+      && receipt?.event === 'select-visible-composer-skill'
+      && receipt?.expected_state_observed === false
+      && String(receipt?.actual || '').includes(`expected=${expectedSelectionIdentity}`)
+      && Number(receipt?.state_readback?.selectedSkillCount || 0) === 0
+      && Array.isArray(receipt?.state_readback?.selectedSkills)
+      && receipt.state_readback.selectedSkills.length === 0
+    ))
+    : null;
+  const failClosedSendReceipt = Array.isArray(actionEvidence?.receipts)
+    ? actionEvidence.receipts.find((receipt) => (
+      ['run_two_turn_skill_task', 'send_skill_task'].includes(String(receipt?.command || ''))
+      && receipt?.event === 'skipped-after-failed-prerequisite'
+      && receipt?.state_readback?.stopped_by_command === 'select_skill_via_composer_button'
+    ))
+    : null;
+  const finalTaskIdentity = state.artifacts?.final_task_identity;
+  const noPromptRecorded = !Array.isArray(state.artifacts?.sent_prompts)
+    || state.artifacts.sent_prompts.length === 0;
+  const noSendRecorded = !Array.isArray(state.artifacts?.send_receipts)
+    || state.artifacts.send_receipts.length === 0;
+  const strictPreSendSelectionFailure = ['failed', 'blocked'].includes(String(state.status || ''))
+    && selectionEvidence?.available === false
+    && selectionEvidence?.source === 'visible composer Skill option click + chip + window.agent.capabilities.selectedSkills'
+    && Boolean(expectedSelectionIdentity)
+    && selectionEvidence?.snapshot?.selectedSkillCount === 0
+    && Array.isArray(selectionEvidence?.snapshot?.selectedSkills)
+    && selectionEvidence.snapshot.selectedSkills.length === 0
+    && actionEvidence?.available === true
+    && Boolean(failedSelectionReceipt)
+    && Boolean(failClosedSendReceipt)
+    && publicStateEvidence?.available === true
+    && String(publicStateEvidence?.active_id || '') === ''
+    && publicStateEvidence?.running === false
+    && Number(publicStateEvidence?.message_count || 0) === 0
+    && String(finalTaskIdentity?.active_id || '') === ''
+    && Number(finalTaskIdentity?.message_count || 0) === 0
+    && noPromptRecorded
+    && noSendRecorded;
+  if (!strictShortage && !strictPreSendSelectionFailure) {
     return {
       applicable: false,
       source: 'verified_capability_inventory_shortage_not_established',
-      reason: '能力选择角色仅在完整目录、确定性抽样收据和严格数量不足同时成立时才可豁免。',
+      reason: '未取得完整目录严格不足，或精确能力身份、可见选择失败、fail-closed 发送动作与无任务无发送状态的完整组合证据。',
+    };
+  }
+  if (strictPreSendSelectionFailure) {
+    return {
+      applicable: true,
+      source: 'verified_pre_send_capability_selection_failure',
+      reason: `已通过可见 Composer 精确选择能力 ${expectedSelectionIdentity}，产品读回为空；后续发送动作被 fail-closed 门禁禁止，最终无任务、无消息、无 prompt 与无发送收据。`,
+      expected_identity: expectedSelectionIdentity,
+      selection_source: String(selectionEvidence.source || ''),
+      propagation_source: 'current_case_pre_send_selection_failure',
     };
   }
   return {
@@ -26138,7 +26197,17 @@ export function buildCaseEvidenceManifest(state, caseDir) {
         'reply_delta',
         'reply_completion',
       ]
-      : ['capability_selection'];
+      : capabilitySelectionBlocker.propagation_source === 'current_case_pre_send_selection_failure'
+        ? [
+          'capability_execution_event',
+          'prompt',
+          'send_receipt',
+          'task_id',
+          'transcript',
+          'reply_delta',
+          'reply_completion',
+        ]
+        : ['capability_selection'];
     const declaredImpossibleRoles = impossibleRoles
       .filter((role) => evidenceRoleApplicability.declared_roles.includes(role));
     evidenceRoleApplicability.required_roles = evidenceRoleApplicability.required_roles
@@ -26149,7 +26218,8 @@ export function buildCaseEvidenceManifest(state, caseDir) {
         role,
         domain: role.startsWith('capability_') ? 'capability' : 'conversation',
         source: capabilitySelectionBlocker.source,
-        reason: capabilitySelectionBlocker.propagation_source === 'shared_prerequisite_ledger'
+        reason: ['shared_prerequisite_ledger', 'current_case_pre_send_selection_failure']
+          .includes(capabilitySelectionBlocker.propagation_source)
           ? `${capabilitySelectionBlocker.reason} 下游 Case 已在执行前停止，因此 ${role} 不可能产生。`
           : capabilitySelectionBlocker.reason,
         requested_count: capabilitySelectionBlocker.requested_count,

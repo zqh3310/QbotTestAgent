@@ -779,6 +779,109 @@ test('a propagated capability blocker also makes selection evidence explicit N/A
   ));
 });
 
+test('an exact visible skill selection failure before send makes only post-selection evidence N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-skill-selection-failure-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-SKILL-007');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const capturedAt = '2026-07-30T11:37:34.943Z';
+  const emptySelection = {
+    selectedSkillCount: 0,
+    selectedSkills: [],
+  };
+  const state = {
+    id: 'BETA-SKILL-007',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: [
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'capability_selection',
+      'capability_execution_event',
+    ].join(','),
+    status: 'failed',
+    screenshots: {},
+    artifacts: {
+      final_task_identity: {
+        active_id: '',
+        message_count: 0,
+      },
+      core_beta_evidence: {
+        capability_selection: {
+          available: false,
+          captured_at: capturedAt,
+          source: 'visible composer Skill option click + chip + window.agent.capabilities.selectedSkills',
+          expected: {
+            slug: 'qfin-ppt-brand-assets',
+            installed: false,
+          },
+          snapshot: emptySelection,
+        },
+        action_receipt: {
+          available: true,
+          captured_at: capturedAt,
+          receipts: [
+            {
+              command: 'select_skill_via_composer_button',
+              event: 'select-visible-composer-skill',
+              expected_state_observed: false,
+              actual: 'expected=qfin-ppt-brand-assets；selected=[]；chips=0',
+              state_readback: emptySelection,
+            },
+            {
+              command: 'run_two_turn_skill_task',
+              event: 'skipped-after-failed-prerequisite',
+              state_readback: {
+                stopped_by_command: 'select_skill_via_composer_button',
+              },
+            },
+          ],
+        },
+        public_state_readback: {
+          available: true,
+          captured_at: capturedAt,
+          source: 'final public capabilities + task state',
+          active_id: '',
+          running: false,
+          message_count: 0,
+        },
+      },
+    },
+  };
+
+  const verified = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(verified.applicable, true);
+  assert.equal(verified.propagation_source, 'current_case_pre_send_selection_failure');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.capability_selection.available, true);
+  assert.equal(manifest.role_evidence.capability_selection.outcome_satisfied, false);
+  assert.equal(manifest.role_evidence.capability_selection.not_applicable, undefined);
+  assert.deepEqual(
+    manifest.not_applicable_roles.map((item) => item.role),
+    [
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ],
+  );
+
+  state.artifacts.core_beta_evidence.action_receipt.receipts[1].event = 'send-attempted';
+  const failClosed = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(failClosed.applicable, false);
+  const incompleteManifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(incompleteManifest.complete, false);
+  assert.ok(incompleteManifest.missing_roles.includes('prompt'));
+});
+
 test('a verified missing created expert blocks before send and makes conversation evidence N/A', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-missing-created-expert-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
