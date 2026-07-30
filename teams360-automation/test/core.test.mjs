@@ -807,6 +807,20 @@ test('Core Beta skill persistence reload reconnects to a replacement QWork rende
   assert.match(command, /persisted_after_reload: persistent/);
 });
 
+test('Core Beta skill cleanup keeps run-owned receipts separate and drives current uninstall UI', () => {
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(runner, /exact run-owned install receipt ledger/);
+  assert.match(runner, /ledger\.skills\.installed = exactRunInstalled/);
+  assert.match(runner, /if \(derived\.branch === 'installed'\) ctx\.ledger\.skills\.installed_view = inventory/);
+  assert.match(runner, /\.skill-card-more-trigger, \[aria-label="更多"\]/);
+  assert.match(runner, /\.skill-card-more-delete, \[role="menuitem"\]/);
+  assert.match(runner, /custom-dialog-missing-cancel/);
+  assert.match(runner, /operation: 'cleanup_current_run_installs'/);
+  assert.match(runner, /skill_cleanup_cross_view_readback/);
+  assert.match(runner, /history_uninstall_count/);
+  assert.match(runner, /composer_targets_absent/);
+});
+
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {
   const source = fs.readFileSync(new URL('../lib/managed-qwork-ui.mjs', import.meta.url), 'utf8');
   assert.match(source, /webview#qbot-workbench, webview/);

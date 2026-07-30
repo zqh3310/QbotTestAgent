@@ -3272,7 +3272,24 @@ function loadCoreBetaSharedLedger(caseDir) {
     };
   }
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    const ledger = JSON.parse(fs.readFileSync(file, 'utf8'));
+    // `skills.installed` is the exact run-owned install receipt ledger.  Older
+    // runners accidentally overwrote it whenever they merely viewed the
+    // product's complete "已安装" catalog.  Reconstruct the run-owned set from
+    // immutable install receipts on resume so cleanup can never target an
+    // unrelated user/system skill.
+    if (Array.isArray(ledger?.skills?.install_results)) {
+      const exactRunInstalled = [];
+      const seen = new Set();
+      for (const receipt of ledger.skills.install_results) {
+        const identity = String(receipt?.slug || receipt?.name || '').trim();
+        if (receipt?.ok !== true || !identity || seen.has(identity)) continue;
+        seen.add(identity);
+        exactRunInstalled.push(receipt);
+      }
+      ledger.skills.installed = exactRunInstalled;
+    }
+    return ledger;
   } catch (error) {
     throw new Error(`core-beta 共享账本不可读：${error.message}`);
   }
@@ -5870,7 +5887,11 @@ async function coreBetaSkillInventory(ctx, tab = '技能市场') {
   const derived = coreBetaCatalogSkillInventory(catalog || {}, tab, domSkills);
   const inventory = derived.inventory;
   ctx.ledger.skills.inventory = inventory;
-  ctx.ledger.skills[derived.branch] = inventory;
+  // Never let a read-only view inventory replace the exact run-owned install
+  // receipt ledger used by cleanup.  Keep the product's complete installed
+  // catalog in a distinct field; market/history retain their legacy fields.
+  if (derived.branch === 'installed') ctx.ledger.skills.installed_view = inventory;
+  else ctx.ledger.skills[derived.branch] = inventory;
   ctx.ledger.skills.catalog_status = {
     source: derived.market_source,
     status: derived.market_status,
@@ -6161,14 +6182,27 @@ async function coreBetaUninstallSkillsViaVisibleUi(ctx, items, { cancelFirst = f
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '已安装' });
   const results = [];
   for (const [index, item] of (items || []).entries()) {
-    const card = ctx.page.locator('.skill-card').filter({ hasText: item.name }).first();
+    const identities = coreBetaSkillIdentityCandidates(item);
+    const identityPattern = new RegExp(identities.map(escapeRegExp).join('|'), 'i');
+    const card = ctx.page.locator('.skill-card').filter({ hasText: identityPattern }).first();
     if (!(await visible(card, 1000))) {
-      results.push({ ...item, ok: false, reason: 'installed card missing' });
+      results.push({ ...item, identities, ok: false, reason: 'installed card missing' });
       continue;
     }
-    const del = card.locator('.skill-del, button').filter({ hasText: /删除|卸载/ }).first();
+    let del = card.locator('.skill-del, .skill-card-more-delete, button')
+      .filter({ hasText: /删除|卸载/ })
+      .first();
+    if (!(await visible(del, 500))) {
+      const more = card.locator('.skill-card-more-trigger, [aria-label="更多"]').first();
+      if (await visible(more, 700)) {
+        await more.click({ force: true }).catch(async () => more.evaluate((element) => element.click()));
+        del = card.locator('.skill-card-more-delete, [role="menuitem"]')
+          .filter({ hasText: /删除|卸载/ })
+          .first();
+      }
+    }
     if (!(await visible(del, 800))) {
-      results.push({ ...item, ok: false, reason: 'delete action missing' });
+      results.push({ ...item, identities, ok: false, reason: 'delete action missing' });
       continue;
     }
     const shouldCancel = cancelFirst && index === 0;
@@ -6177,13 +6211,19 @@ async function coreBetaUninstallSkillsViaVisibleUi(ctx, items, { cancelFirst = f
       async () => del.click({ force: true }),
       { accept: !shouldCancel },
     );
-    await ctx.page.waitForTimeout(700);
-    const stillVisible = await visible(
-      ctx.page.locator('.skill-card').filter({ hasText: item.name }).first(),
-      700,
-    );
+    const deadline = Date.now() + (shouldCancel ? 2500 : 8000);
+    let stillVisible = true;
+    do {
+      await ctx.page.waitForTimeout(250);
+      stillVisible = await visible(
+        ctx.page.locator('.skill-card').filter({ hasText: identityPattern }).first(),
+        350,
+      );
+      if ((shouldCancel && stillVisible) || (!shouldCancel && !stillVisible)) break;
+    } while (Date.now() < deadline);
     results.push({
       ...item,
+      identities,
       ok: shouldCancel ? stillVisible : !stillVisible,
       cancelled: shouldCancel,
       confirmation,
@@ -6985,6 +7025,15 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     if (!first) return { ok: false, status: 'blocked', category: 'blocked', actual: '没有本轮安装 Skill 可执行取消卸载。' };
     const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, [first], { cancelFirst: true });
     ctx.ledger.skills.cancel_uninstall = results;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: true,
+      source: 'exact run-owned install receipt ledger + visible installed-card identity',
+      selection: {
+        operation: 'cancel_uninstall',
+        selected: [first],
+        results,
+      },
+    });
     return {
       ok: results.length === 1 && results[0].ok && results[0].cancelled,
       selector_or_testid: 'skill delete confirmation',
@@ -6994,14 +7043,27 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     };
   }
   if (command === 'uninstall_run_skill_sample') {
-    const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, ctx.ledger.skills.installed || []);
+    const targets = ctx.ledger.skills.installed || [];
+    const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, targets);
     ctx.ledger.skills.deleted = results.filter((item) => item.ok).map((item) => item.slug);
+    const requestedCount = (ctx.ledger.skills.sample || []).length;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: true,
+      source: 'exact run-owned successful install receipts + visible uninstall actions',
+      selection: {
+        operation: 'cleanup_current_run_installs',
+        requested_sample_count: requestedCount,
+        selected_count: targets.length,
+        selected: targets,
+        results,
+      },
+    });
     return {
-      ok: results.length === (ctx.ledger.skills.installed || []).length && results.every((item) => item.ok),
+      ok: results.length === requestedCount && results.every((item) => item.ok),
       selector_or_testid: 'skill delete confirmation',
       event: 'uninstall-run-sample',
       state_readback: results,
-      actual: `targets=${results.length}；deleted=${results.filter((item) => item.ok).length}`,
+      actual: `requested=${requestedCount}；targets=${results.length}；deleted=${results.filter((item) => item.ok).length}`,
     };
   }
   if (command === 'exercise_skill_uninstall_confirm') {
@@ -7030,26 +7092,99 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     };
   }
   if (command === 'verify_skill_cleanup' || command === 'verify_skill_cleanup_across_views') {
-    const result = await coreBetaSkillInventory(ctx, '已安装');
-    const names = result.domSkills.map((item) => item.name);
-    const clean = (ctx.ledger.skills.installed || []).every((item) => !names.some((name) => name.includes(item.name)));
+    const targets = ctx.ledger.skills.installed || [];
+    const installed = await coreBetaSkillInventory(ctx, '已安装');
+    const baseline = ctx.ledger.skills.clean_baseline || ctx.ledger.skills.baseline_installed || [];
+    const stableIdentity = (item) => [
+      item?.source_platform || item?.sourcePlatform || item?.raw?.sourcePlatform || item?.raw?.source || '',
+      item?.namespace || item?.raw?.namespace || '',
+      item?.slug || item?.name || '',
+      item?.version || item?.raw?.version || '',
+    ].join('/');
+    const installedIds = new Set(installed.inventory.flatMap((item) => (
+      coreBetaSkillIdentityCandidates(item)
+    )));
+    const runTargetsRemoved = targets.every((item) => (
+      coreBetaSkillIdentityCandidates(item).every((identity) => !installedIds.has(identity))
+    ));
+    const expectedBaseline = baseline.map(stableIdentity).sort();
+    const actualInstalled = installed.inventory.map(stableIdentity).sort();
+    const unrelatedBaselinePreserved = JSON.stringify(expectedBaseline) === JSON.stringify(actualInstalled);
     let composer = null;
+    let market = null;
+    let history = null;
+    let composerOptions = [];
+    let marketRestored = true;
+    let historyUninstallCount = 0;
+    let composerTargetsAbsent = true;
     if (command === 'verify_skill_cleanup_across_views') {
+      market = await coreBetaSkillInventory(ctx, '技能市场');
+      history = await coreBetaSkillInventory(ctx, '历史');
+      const sampled = ctx.ledger.skills.sample || [];
+      const marketBySlug = new Map(market.inventory.map((item) => [item.slug, item]));
+      marketRestored = sampled.every((item) => {
+        const readback = marketBySlug.get(item.slug);
+        return Boolean(readback?.visible && readback?.install_action_visible && !readback?.installed);
+      });
+      historyUninstallCount = targets.filter((target) => history.inventory.some((entry) => (
+        String(entry?.raw?.action || '').toLowerCase() === 'uninstall'
+        && coreBetaSkillIdentityCandidates(target).some((identity) => (
+          coreBetaSkillIdentityCandidates(entry).includes(identity)
+        ))
+      ))).length;
       await openNewTask(ctx.page, ctx.state);
+      await setUnifiedSkillMode(ctx.page, ctx.state, ctx.caseDir, 'manual').catch(() => false);
+      composerOptions = await ctx.page.locator(
+        '.composer-plus-sub-skill [data-testid^="composer-skill-option-"]',
+      ).evaluateAll((options) => options.filter((option) => {
+        const rect = option.getBoundingClientRect();
+        const style = globalThis.getComputedStyle(option);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      }).map((option) => ({
+        testid: String(option.getAttribute('data-testid') || ''),
+        text: String(option.textContent || '').replace(/\s+/g, ' ').trim(),
+      }))).catch(() => []);
+      const composerHaystack = JSON.stringify(composerOptions);
+      composerTargetsAbsent = targets.every((item) => (
+        coreBetaSkillIdentityCandidates(item).every((identity) => !composerHaystack.includes(identity))
+      ));
       composer = await composerSkillSelectionSnapshot(ctx.page);
+      await ctx.page.keyboard.press('Escape').catch(() => {});
     }
-    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
-      available: clean && (!composer || (composer.selectedSkillCount === 0 && composer.chipCount === 0)),
-      source: 'installed skill list + composer selection after cleanup',
-      names,
+    const clean = runTargetsRemoved
+      && unrelatedBaselinePreserved
+      && marketRestored
+      && historyUninstallCount === targets.length
+      && composerTargetsAbsent
+      && (!composer || (composer.selectedSkillCount === 0 && composer.chipCount === 0));
+    const crossViewReadback = {
+      run_targets: targets,
+      installed: installed.inventory,
+      expected_baseline: expectedBaseline,
+      actual_installed: actualInstalled,
+      run_targets_removed: runTargetsRemoved,
+      unrelated_baseline_preserved: unrelatedBaselinePreserved,
+      market: market?.inventory || [],
+      market_restored: marketRestored,
+      history: history?.inventory || [],
+      history_uninstall_count: historyUninstallCount,
+      composer_options: composerOptions,
+      composer_targets_absent: composerTargetsAbsent,
       composer,
+    };
+    ctx.state.artifacts.skill_cleanup_cross_view_readback = crossViewReadback;
+    setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
+      available: true,
+      source: 'installed + market + history + visible composer option readback after exact run-owned cleanup',
+      outcome_satisfied: clean,
+      ...crossViewReadback,
     });
     return {
-      ok: clean && (!composer || (composer.selectedSkillCount === 0 && composer.chipCount === 0)),
+      ok: clean,
       selector_or_testid: 'skills-view',
       event: 'cleanup-readback',
-      state_readback: { names, composer },
-      actual: `clean=${clean}；remaining=${names.join(',')}；composerSelected=${composer?.selectedSkillCount ?? 'n/a'}`,
+      state_readback: crossViewReadback,
+      actual: `clean=${clean}；runRemoved=${runTargetsRemoved}；baselinePreserved=${unrelatedBaselinePreserved}；marketRestored=${marketRestored}；historyUninstalls=${historyUninstallCount}/${targets.length}；composerTargetsAbsent=${composerTargetsAbsent}`,
     };
   }
   throw new Error(`Core Beta skill command 未实现：${command}`);
@@ -21975,7 +22110,7 @@ async function captureConfirmDuringWithAction(page, action, { accept = false } =
 
 async function confirmDestructiveAction(page, action, { accept = true } = {}) {
   const native = await captureConfirmDuringWithAction(page, action, { accept });
-  if (native.message || !accept) return { ...native, source: native.message ? 'native-confirm' : 'none' };
+  if (native.message) return { ...native, source: 'native-confirm', accepted: accept };
   const dialogs = page.locator('[data-testid="skill-uninstall-dialog"], [role="dialog"], .modal');
   const count = await dialogs.count().catch(() => 0);
   let fallbackMessage = '';
@@ -21985,14 +22120,26 @@ async function confirmDestructiveAction(page, action, { accept = true } = {}) {
     const message = await dialog.innerText({ timeout: 900 }).catch(() => '');
     if (!fallbackMessage && /删除|卸载|移除|确认/.test(message)) fallbackMessage = message;
     const confirmationCopy = /确认|确定(?:要)?(?:删除|卸载|移除)|是否.*(?:删除|卸载|移除)|操作后.*(?:无法|不可)|删除后|卸载后/.test(message);
-    const confirm = dialog.locator('[data-testid$="-confirm"], [data-testid="skill-uninstall-confirm"], button, [role="button"]')
-      .filter({ hasText: /确认(?:删除|卸载|移除)?|确定|删除|卸载|移除/ })
+    const actionButton = accept
+      ? dialog.locator('[data-testid$="-confirm"], [data-testid="skill-uninstall-confirm"], button, [role="button"]')
+        .filter({ hasText: /确认(?:删除|卸载|移除)?|确定|删除|卸载|移除/ })
+        .first()
+      : dialog.locator('[data-testid$="-cancel"], [data-testid="skill-uninstall-cancel"], button, [role="button"]')
+        .filter({ hasText: /取消|暂不|返回/ })
       .first();
-    if (!confirmationCopy || !(await visible(confirm, 500))) continue;
-    await confirm.click({ force: true }).catch(async () => confirm.evaluate((el) => el.click()));
-    return { message, source: 'custom-dialog' };
+    if (!confirmationCopy || !(await visible(actionButton, 500))) continue;
+    await actionButton.click({ force: true }).catch(async () => actionButton.evaluate((el) => el.click()));
+    return { message, source: 'custom-dialog', accepted: accept };
   }
-  return { message: fallbackMessage, source: fallbackMessage ? 'custom-dialog-missing-confirm' : 'none' };
+  return {
+    message: fallbackMessage,
+    source: fallbackMessage
+      ? accept
+        ? 'custom-dialog-missing-confirm'
+        : 'custom-dialog-missing-cancel'
+      : 'none',
+    accepted: false,
+  };
 }
 
 function textStillPresent(fullText, originalCardText) {
