@@ -792,6 +792,19 @@ test('managed Teams restart rebuilds stale proxy before shared runner touches th
   assert.match(runner, /await reconnectQbotRuntime\(/);
 });
 
+test('Core Beta skill persistence reload reconnects to a replacement QWork renderer', () => {
+  const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  const command = runner.slice(
+    runner.indexOf("if (command === 'verify_skill_selection_persistence')"),
+    runner.indexOf("if (command === 'create_skill_disabled_task')"),
+  );
+  assert.match(command, /await ctx\.page\.reload\(\{ waitUntil: 'domcontentloaded', timeout: 30000 \}\)/);
+  assert.match(command, /coreBetaNeedsRendererReconnect\(error\)/);
+  assert.match(command, /Core Beta skill selection reload replacement renderer/);
+  assert.match(command, /ctx\.page = reconnected\.page/);
+  assert.match(command, /await waitForQbotWorkbench\(ctx\.page, 90000\)/);
+});
+
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {
   const source = fs.readFileSync(new URL('../lib/managed-qwork-ui.mjs', import.meta.url), 'utf8');
   assert.match(source, /webview#qbot-workbench, webview/);

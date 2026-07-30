@@ -6844,8 +6844,27 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     const before = await composerSkillSelectionSnapshot(ctx.page);
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 隔离任务 A' });
     const execution = await coreBetaCapabilityExecutionEvidence(ctx, 'skill', selected.slug);
-    await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-    await waitForQbotWorkbench(ctx.page, 90000);
+    try {
+      await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+      await waitForQbotWorkbench(ctx.page, 90000);
+    } catch (error) {
+      if (!coreBetaNeedsRendererReconnect(error)) throw error;
+      const reconnected = await reconnectQbotRuntime({
+        runtime: ctx.runtime,
+        options: ctx.options,
+        state: ctx.state,
+        caseDir: ctx.caseDir,
+        label: 'Core Beta skill selection reload replacement renderer',
+        timeoutMs: Number(ctx.options['restart-reconnect-timeout-ms'] || 120000),
+        recordAction: '刷新技能任务后接管 replacement QWork renderer',
+        successPrefix: '旧 renderer 已关闭；',
+      });
+      if (!reconnected.ok) {
+        throw new Error(`刷新技能任务关闭旧 QWork renderer 后重连失败：${reconnected.reason}`);
+      }
+      ctx.page = reconnected.page;
+      await waitForQbotWorkbench(ctx.page, 90000);
+    }
     const reopened = await reopenSessionAndReadback(ctx.page, outcome.taskId);
     const after = await composerSkillSelectionSnapshot(ctx.page);
     ctx.skillIsolationTaskA = {
