@@ -15,6 +15,7 @@ import {
   validateSkillExecutionEvidence,
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
+  assessUserCenteredOutcome,
   buildCaseEvidenceManifest,
   coreBetaCatalogSkillInventory,
   coreBetaActionReceiptsComplete,
@@ -23,6 +24,8 @@ import {
   coreBetaBatchSharedDeadline,
   coreBetaBatchTerminalEvidence,
   coreBetaMaintenanceConfirmationContract,
+  coreBetaCapabilityInteractionCategory,
+  coreBetaConnectorOptionTestId,
   coreBetaManualConnectorModeReady,
   coreBetaNeedsRendererReconnect,
   coreBetaRuntimeMaintenanceState,
@@ -98,6 +101,31 @@ test('core beta conversation contract is structured and executable', () => {
   assert.equal(audit.ok, true, audit.errors.join('\n'));
   assert.equal(audit.parsed.action_plan.length, 3);
   assert.equal(audit.parsed.turns.length, 1);
+});
+
+test('a located capability click with unchanged product state is a product failure', () => {
+  assert.equal(coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    expectedStateObserved: false,
+  }), 'bug');
+  assert.equal(coreBetaCapabilityInteractionCategory({
+    controlLocated: false,
+    clickDispatched: false,
+    expectedStateObserved: false,
+  }), 'automation_error');
+  assert.equal(coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    expectedStateObserved: true,
+  }), '');
+});
+
+test('connector option testid preserves exact keys containing a colon', () => {
+  assert.equal(
+    coreBetaConnectorOptionTestId('builtin:qbot_vision'),
+    'composer-connector-option-builtin:qbot_vision',
+  );
 });
 
 test('natural language steps without an exact action plan fail closed', () => {
@@ -1097,6 +1125,69 @@ test('Skill persistence selection failure keeps strict visible no-send evidence 
   assert.deepEqual(manifest.missing_roles, []);
   assert.equal(manifest.role_evidence.capability_selection.available, true);
   assert.equal(manifest.role_evidence.capability_selection.outcome_satisfied, false);
+
+  state.result_category = 'automation_error';
+  state.title = '已安装技能应能在 Composer 中选中并保持';
+  state.steps = [
+    {
+      action: '手动选择刚安装的技能',
+      expected: '技能 chip 和公共能力状态均读回目标技能',
+      actual: '点击目标技能后选中数量=0，技能 chip 未出现。',
+      status: 'failed',
+      category: 'automation_error',
+      numbered_step_number: 1,
+      numbered_step_declared: '手动选择刚安装的技能',
+      numbered_step_evidence: 'explicit',
+    },
+    {
+      action: '验证跨任务技能隔离',
+      expected: '只在技能选中后执行',
+      actual: '前置选择失败，已 fail-closed 禁止后续操作。',
+      status: 'failed',
+      category: 'not_applicable',
+      numbered_step_number: 2,
+      numbered_step_declared: '验证跨任务技能隔离',
+      numbered_step_evidence: 'explicit',
+    },
+  ];
+  state.assertions = [{
+    name: '技能选中状态',
+    expected: '点击目标技能后出现选中 chip',
+    actual: '点击目标技能后选中数量=0，技能 chip 未出现。',
+    status: 'failed',
+    category: 'bug',
+  }];
+  state.screenshots = { skill_selection_failed: selectionFailureScreenshot };
+  state.artifacts.numbered_step_coverage = {
+    schema_version: 2,
+    declared_count: 2,
+    complete: true,
+    entries: [
+      {
+        number: 1,
+        covered: true,
+        evidence_mode: 'explicit_numbered_step',
+        explicit_actions: ['手动选择刚安装的技能'],
+      },
+      {
+        number: 2,
+        covered: true,
+        evidence_mode: 'explicit_numbered_step',
+        explicit_actions: ['验证跨任务技能隔离'],
+      },
+    ],
+  };
+  state.evidence_manifest = {
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    complete: true,
+    required_role_count: manifest.required_role_count,
+    satisfied_role_count: manifest.required_role_count,
+    missing_roles: [],
+  };
+  const trusted = assessUserCenteredOutcome(state);
+  assert.equal(trusted.classification, 'bug');
+  assert.equal(trusted.gates.no_automation_error, true);
+  assert.equal(trusted.gates.product_action_exercised, true);
 });
 
 test('a verified missing created expert blocks before send and makes conversation evidence N/A', (t) => {

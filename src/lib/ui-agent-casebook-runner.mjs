@@ -3929,7 +3929,9 @@ async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, 
         ? async () => ({
           ok: false,
           status: 'failed',
-          category: stoppedBy.result?.category || 'automation_error',
+          // Keep the numbered action in the audit trail, but do not duplicate
+          // one failed prerequisite into several apparent framework errors.
+          category: 'not_applicable',
           selector_or_testid: 'core-beta-fail-closed-action-gate',
           event: 'skipped-after-failed-prerequisite',
           state_readback: {
@@ -7094,7 +7096,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       });
       return {
         ok: false,
-        category: 'automation_error',
+        category: 'bug',
         selector_or_testid: `composer-skill-option-${selected.slug}`,
         event: 'selection-precondition-failed',
         state_readback: { selected, selectedOk, before },
@@ -18665,7 +18667,13 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 220)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.skill_mode_manual,
-      ok ? '' : 'automation_error',
+      // The exact product control was found and clicked. An unchanged visible
+      // state/readback is the product outcome, not a locator/runner failure.
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: ok,
+      }),
     );
     return ok;
   }
@@ -18744,6 +18752,19 @@ export function coreBetaManualConnectorModeReady({
   };
 }
 
+export function coreBetaCapabilityInteractionCategory({
+  controlLocated = false,
+  clickDispatched = false,
+  expectedStateObserved = false,
+} = {}) {
+  if (!controlLocated || !clickDispatched) return 'automation_error';
+  return expectedStateObserved ? '' : 'bug';
+}
+
+export function coreBetaConnectorOptionTestId(connectorKey = '') {
+  return `composer-connector-option-${String(connectorKey || '').trim()}`;
+}
+
 async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
@@ -18818,7 +18839,13 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       `aria-checked=${checked || '未读取'}；routing.mode=${capabilities?.connectorRouting?.mode || '未读取'}；readiness=${JSON.stringify(readiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.connector_mode_manual,
-      ok ? '' : 'automation_error',
+      // Exact control located + click dispatched + unchanged product state is
+      // a product failure. Missing controls remain automation_error above.
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: ok,
+      }),
     );
     return ok;
   }
@@ -19306,7 +19333,11 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     `option=${clip(match.text, 180)}；testid=${match.testId || 'none'}；readback=${JSON.stringify(readback)}`,
     selectedOk ? 'passed' : 'failed',
     state.screenshots.manual_installed_skill_selected,
-    selectedOk ? '' : 'automation_error',
+    coreBetaCapabilityInteractionCategory({
+      controlLocated: true,
+      clickDispatched: true,
+      expectedStateObserved: selectedOk,
+    }),
   );
   return selectedOk;
 }
@@ -19523,10 +19554,28 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
     catalogMatch?.label,
     catalogMatch?.title,
     catalogMatch?.name,
+    catalogMatch?.displayName,
   ].map((item) => String(item || '').trim()).filter(Boolean))];
   const candidates = menu.locator('.composer-plus-connector, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
   const count = await candidates.count().catch(() => 0);
   const matches = [];
+  // Prefer the renderer's stable contract over visible-text inference.
+  // Quoted attribute equality also supports keys containing ":" such as
+  // builtin:qbot_vision without treating the key as a CSS identifier.
+  const exactTestId = coreBetaConnectorOptionTestId(connectorKey);
+  const exactByTestId = menu
+    .locator(`[data-testid=${JSON.stringify(exactTestId)}]`)
+    .first();
+  if (await visible(exactByTestId, 500)) {
+    const text = await exactByTestId.innerText({ timeout: 700 }).catch(() => '');
+    matches.push({
+      candidate: exactByTestId,
+      testId: exactTestId,
+      parsedKey: connectorKey,
+      text,
+      primaryText: firstLine(text).trim(),
+    });
+  }
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
     if (!(await visible(candidate, 250))) continue;
@@ -19534,7 +19583,10 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
     const parsedKey = String(testId || '').replace(/^composer-connector-option-/, '').replace(/-(?:tag|checkbox|row)$/, '');
     const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
     const primaryText = firstLine(text).trim();
-    if (parsedKey === connectorKey || visibleLabels.includes(primaryText)) {
+    if (
+      (parsedKey === connectorKey || visibleLabels.includes(primaryText))
+      && !matches.some((item) => item.testId === testId && item.primaryText === primaryText)
+    ) {
       matches.push({ candidate, testId, parsedKey, text, primaryText });
     }
   }
@@ -19566,7 +19618,11 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
       `connector=${connectorKey}；label=${clip(match.primaryText, 100)}；source=${state.artifacts.selected_connector.selection_source}；selectedConnectors=${JSON.stringify(selectedConnectors)}`,
       selected ? 'passed' : 'failed',
       state.screenshots.manual_connector_reselected,
-      selected ? '' : 'automation_error',
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: selected,
+      }),
     );
     if (!selected) {
       recordAssertion(
@@ -19575,7 +19631,7 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
         `点击 ${match.primaryText || connectorKey} 后 selectedConnectors 必须包含 ${connectorKey}。`,
         false,
         `selectedConnectors=${JSON.stringify(selectedConnectors)}`,
-        'automation_error',
+        'bug',
       );
     }
     return selected;
@@ -25828,7 +25884,10 @@ function finalizeState(state) {
     markBlocked(state, blockedSteps.map((item) => item.actual).join('；'));
   } else if (failedAssertions.length || failedSteps.length) {
     const failedItems = failedAssertions.concat(failedSteps);
-    const productFailures = failedItems.filter((item) => item.category !== 'automation_error');
+    const productFailures = failedItems.filter((item) => (
+      item.category !== 'automation_error'
+      && item.category !== 'not_applicable'
+    ));
     const automationFailures = failedItems.filter((item) => item.category === 'automation_error');
     if (productFailures.length) {
       const reason = productFailures.map((item) => `${item.name || item.action}：${item.actual}`).join('；');
@@ -27407,9 +27466,13 @@ export function reviewCaseCredibility(result) {
   const uploadAutomationFailure = result.artifacts?.upload?.status
     && result.artifacts.upload.status !== 'passed'
     && status !== 'blocked';
+  const verifiedCapabilityOutcome = verifiedCapabilitySelectionUnavailableEvidence(result);
+  const verifiedPreSendProductFailure = verifiedCapabilityOutcome.applicable
+    && verifiedCapabilityOutcome.source === 'verified_pre_send_capability_selection_failure';
   const automationSignals = []
     .concat(steps, assertions)
-    .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`));
+    .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`))
+    .filter((item) => !verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item));
   const blockedText = `${result.actual_result || ''}\n${result.conclusion || ''}`;
   const frameworkBlocked = /当前 runner|批量 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|dry-run|bridge.*(?:不可替换|unavailable|undefined)|无法安装.*捕获器|无法注入.*(?:快照|目录|网络|失败)|CDP|Playwright|handler|selector/.test(blockedText);
   const hardEnvironmentBlocked = /没有健康连接器|无可选技能|无已安装技能|当前没有已安装技能|已安装技能列表没有可删除技能|技能市场没有可安装技能|技能市场没有可见技能卡片|技能市场\/已安装列表未找到|要求已安装至少\s*2\s*个技能|当前手动模式只成功选择\s*\d+\s*个技能|未找到可识别.*runtime|runtime 技能卡片存在，但没有可点击安装入口|账号无权限|测试数据|未配置|登录|权限|DEEPBANK_E2E|启动方式|release-package|本地 E2E|辅助功能|原生文件框|filechooser|文件选择|文件名|期望文件|附件入口|图片识别.*暂不可用|视觉运行时|控制平面.*(?:未提供|不兼容)|没有可稳定用于产品\/业务类任务的专家卡片|产品\/业务类任务的专家|自动化测试残留专家|不能随机选择错误专家|专家页没有可稳定|技能市场未找到.*技能卡片|已安装技能列表未找到|当前已安装\/技能市场未找到|当前账号存在可选技能|该用例要求没有已安装技能|找到疑似(可更新|历史版本)技能，但未找到可点击(更新|回退)入口|故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|当前账号存在可见连接器|无 platform\/custom 连接器账号|未找到 unreachable 连接器|未找到 needs_auth 连接器|手动菜单未展示 needs_auth\/unreachable|无法到达连接器空状态判断点|无专家市场数据|专家市场存在专家卡片|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText);
@@ -27795,6 +27858,14 @@ function isAutomationReviewFailure(item) {
     || item?.status === 'failed' && /selector|locator|runner|自动化|无法定位|无法点击|步骤未执行|fixture.*(?:缺失|失败)|\bcdp\b/i.test(text);
 }
 
+function isVerifiedCapabilitySelectionTrailReviewItem(item) {
+  if (item?.category === 'not_applicable' || item?.event === 'skipped-after-failed-prerequisite') {
+    return true;
+  }
+  const text = `${item?.name || ''}\n${item?.action || ''}\n${item?.expected || ''}\n${item?.actual || ''}`;
+  return /(?:技能|Skill|连接器|connector).{0,48}(?:选择|选中|手动|manual|chip|回读|readback)|(?:选择|选中|手动|manual|chip|回读|readback).{0,48}(?:技能|Skill|连接器|connector)/i.test(text);
+}
+
 function screenshotOutcomeScore(item) {
   const value = `${item.key} ${path.basename(item.file)}`;
   let score = item.explicit ? 50 : 0;
@@ -27846,7 +27917,14 @@ export function assessUserCenteredOutcome(result, {
   const failedAssertions = assertions.filter((item) => item.status === 'failed');
   const passedAssertions = assertions.filter((item) => item.status === 'passed');
   const automationFailures = [...steps, ...(result?.assertions || [])].filter(isAutomationReviewFailure);
-  const intended = intendedClassification || (status === 'passed' ? 'pass' : category === 'bug' ? 'bug' : status);
+  const verifiedCapabilityOutcome = verifiedCapabilitySelectionUnavailableEvidence(result);
+  const verifiedPreSendProductFailure = verifiedCapabilityOutcome.applicable === true
+    && verifiedCapabilityOutcome.source === 'verified_pre_send_capability_selection_failure';
+  const effectiveAutomationFailures = automationFailures.filter((item) => (
+    !verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item)
+  ));
+  const intended = intendedClassification
+    || (verifiedPreSendProductFailure ? 'bug' : status === 'passed' ? 'pass' : category === 'bug' ? 'bug' : status);
   const sentMessage = steps.some(isSuccessfulSendStep);
   const reviewContext = `${result?.title || ''}\n${result?.scenario || ''}\n${result?.expected_result || ''}`;
   const artifactContext = /成果|成果库|预览|生成.*文件|文件.*(?:预览|打开|删除)/.test(reviewContext);
@@ -27970,6 +28048,7 @@ export function assessUserCenteredOutcome(result, {
   const independentBugCorroboration = intended !== 'bug'
     || hardProductFailure
     || Boolean(objectiveFailureAssertion && productActionExercised)
+    || verifiedPreSendProductFailure
     || verifiedOverrideEvidence;
   const executionIntegrity = reviewExecutionIntegrity(result);
   const manifestIntegrity = reviewEvidenceManifestIntegrity(result);
@@ -27977,11 +28056,11 @@ export function assessUserCenteredOutcome(result, {
     String(result?.execution_provenance || ''),
   );
   const gates = {
-    reached_user_action: actions.length > 0,
+    reached_user_action: actions.length > 0 || verifiedPreSendProductFailure,
     user_outcome_assertion: intended === 'bug'
-      ? failedAssertions.length > 0 || Boolean(productObservation && reviewReason)
+      ? failedAssertions.length > 0 || verifiedPreSendProductFailure || Boolean(productObservation && reviewReason)
       : passedAssertions.length > 0 || Boolean(productObservation && reviewReason),
-    no_automation_error: automationFailures.length === 0,
+    no_automation_error: effectiveAutomationFailures.length === 0,
     non_synthetic_execution: nonSyntheticExecution,
     evidence_manifest_complete: manifestIntegrity.ok,
     execution_integrity: executionIntegrity.ok || hardProductFailure,
@@ -27989,6 +28068,7 @@ export function assessUserCenteredOutcome(result, {
     product_action_exercised: intended !== 'bug'
       || hardProductFailure
       || verifiedOverrideEvidence
+      || verifiedPreSendProductFailure
       || productActionExercised,
     user_visible_observation: observationIsVisible,
     aligned_outcome_screenshot: alignedScreenshots.length > 0,
@@ -28011,7 +28091,10 @@ export function assessUserCenteredOutcome(result, {
       keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: missing,
     };
   }
-  if (category === 'automation_error' || automationFailures.length) {
+  if (
+    effectiveAutomationFailures.length
+    || (category === 'automation_error' && !verifiedPreSendProductFailure)
+  ) {
     return {
       classification: 'framework_issue',
       reason: '自动化链路存在错误，未可信到达用户体验判断点。',
