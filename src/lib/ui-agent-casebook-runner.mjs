@@ -572,7 +572,18 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     const resultsByIndex = new Map(seededResultsByIndex);
     if (crossRunLineagePrecheck) precheck.cross_run_lineage = crossRunLineagePrecheck;
     for (let index = 0; index < selectedCases.length; index += 1) {
-      if (resultsByIndex.has(index)) continue;
+      if (resultsByIndex.has(index)) {
+        const inheritedResult = resultsByIndex.get(index);
+        if (String(inheritedResult?.execution_provenance || '') === 'inherited') {
+          restoreCoreBetaSharedLedgerAfterInheritedCase({
+            currentOut: outDir,
+            result: inheritedResult,
+            testCase: selectedCases[index],
+            order: index + 1,
+          });
+        }
+        continue;
+      }
       const testCase = selectedCases[index];
       const caseDir = path.join(outDir, 'cases', `${String(index + 1).padStart(3, '0')}-${testCase.id}-${slugify(testCase.scenario)}`);
       ensureDir(caseDir);
@@ -3124,6 +3135,10 @@ function coreBetaSharedLedgerFile(caseDir) {
   return path.join(coreBetaRunRoot(caseDir), 'core-beta-shared-ledger.json');
 }
 
+function coreBetaSharedLedgerSnapshotFile(caseDir) {
+  return path.join(caseDir, 'core-beta-shared-ledger-after.json');
+}
+
 function coreBetaManagedResourcesFile(caseDir) {
   return path.resolve(coreBetaRunRoot(caseDir), '..', '..', 'state', 'core-beta-managed-resources.json');
 }
@@ -3229,12 +3244,68 @@ export function seedCoreBetaSharedLedgerCheckpoint({
     && expectedPrefixIds.length === actualPrefixIds.length
     && expectedPrefixIds.every((id, index) => actualPrefixIds[index] === id);
   if (!exactCheckpoint) {
-    return {
-      applicable: false,
-      reason: 'source_not_exactly_before_first_impact_case',
+    const resultById = new Map(results.map((item) => [String(item?.id || ''), item]));
+    const impactedDomains = new Map();
+    for (const index of impactIndexes) {
+      const domain = coreBetaSharedStateDomain(selectedCases[index]);
+      if (!domain || impactedDomains.has(domain)) continue;
+      impactedDomains.set(domain, index);
+    }
+    const inheritedSnapshots = [];
+    for (const [domain, domainImpactIndex] of impactedDomains.entries()) {
+      for (let index = 0; index < domainImpactIndex; index += 1) {
+        const testCase = selectedCases[index];
+        if (coreBetaSharedStateDomain(testCase) !== domain) continue;
+        const result = resultById.get(String(testCase?.id || ''));
+        const sourceCaseDir = String(result?.case_dir || '').trim();
+        const snapshot = sourceCaseDir ? coreBetaSharedLedgerSnapshotFile(sourceCaseDir) : '';
+        if (!sourceCaseDir || !fs.existsSync(snapshot)) {
+          throw new Error(
+            `core-beta 源继承共享账本快照缺失：domain=${domain}；`
+            + `case=${String(testCase?.id || '')}；order=${index + 1}；`
+            + `first_domain_impact_order=${domainImpactIndex + 1}；snapshot=${snapshot || '(empty)'}`,
+          );
+        }
+        const snapshotLedger = JSON.parse(fs.readFileSync(snapshot, 'utf8'));
+        if (!validateCoreBetaSharedLedgerShape(snapshotLedger)) {
+          throw new Error(`core-beta 继承共享账本快照结构无效：${snapshot}`);
+        }
+        inheritedSnapshots.push({
+          case_id: String(testCase?.id || ''),
+          case_order: index + 1,
+          domain,
+          source_case_dir: sourceCaseDir,
+          source_snapshot: snapshot,
+          source_snapshot_sha256: sha256File(snapshot),
+        });
+      }
+    }
+    if (!inheritedSnapshots.length) {
+      return {
+        applicable: false,
+        reason: 'no_inherited_shared_state_snapshots_required',
+        first_impact_order: firstImpactIndex + 1,
+        source_result_count: results.length,
+      };
+    }
+    const record = {
+      schema_version: 1,
+      applicable: true,
+      source: 'per_domain_inherited_case_shared_state_snapshots',
+      seeded_at: seededAt,
+      source_out: sourceDirectory,
+      source_progress: sourceProgressFile,
+      source_progress_sha256: sha256File(sourceProgressFile),
+      current_ledger: currentLedgerFile,
       first_impact_order: firstImpactIndex + 1,
+      first_impact_case_id: String(selectedCases[firstImpactIndex]?.id || ''),
       source_result_count: results.length,
+      inherited_snapshots: inheritedSnapshots,
+      restored_snapshots: [],
     };
+    ensureDir(currentDirectory);
+    writeJsonFile(path.join(currentDirectory, 'core-beta-shared-ledger-lineage.json'), record);
+    return record;
   }
   const ledger = JSON.parse(fs.readFileSync(sourceLedgerFile, 'utf8'));
   if (!validateCoreBetaSharedLedgerShape(ledger)) {
@@ -3263,6 +3334,85 @@ export function seedCoreBetaSharedLedgerCheckpoint({
   };
   writeJsonFile(path.join(currentDirectory, 'core-beta-shared-ledger-lineage.json'), record);
   return record;
+}
+
+function coreBetaSharedStateDomain(testCase = {}) {
+  const id = String(testCase?.id || '').toUpperCase();
+  const caseType = String(testCase?.case_type || '').toLowerCase();
+  if (id.startsWith('BETA-SKILL-') || caseType.startsWith('skill_')) return 'skills';
+  if (id.startsWith('BETA-MCP-') || caseType.startsWith('mcp_') || caseType.startsWith('connector_')) return 'mcp';
+  if (id.startsWith('BETA-EXPERT-') || caseType.startsWith('expert_')) return 'experts';
+  return '';
+}
+
+export function restoreCoreBetaSharedLedgerAfterInheritedCase({
+  currentOut,
+  result,
+  testCase,
+  order,
+  restoredAt = new Date().toISOString(),
+} = {}) {
+  const currentDirectory = path.resolve(String(currentOut || ''));
+  const lineageFile = path.join(currentDirectory, 'core-beta-shared-ledger-lineage.json');
+  if (!fs.existsSync(lineageFile)) return { applicable: false, reason: 'shared_state_lineage_missing' };
+  const lineage = JSON.parse(fs.readFileSync(lineageFile, 'utf8'));
+  if (lineage?.source !== 'per_domain_inherited_case_shared_state_snapshots') {
+    return { applicable: false, reason: 'shared_state_lineage_not_deferred_snapshots' };
+  }
+  const caseId = String(testCase?.id || result?.id || '');
+  const entry = (Array.isArray(lineage?.inherited_snapshots) ? lineage.inherited_snapshots : [])
+    .find((item) => String(item?.case_id || '') === caseId);
+  if (!entry) return { applicable: false, reason: 'case_has_no_deferred_shared_state_snapshot' };
+  const sourceSnapshot = path.resolve(String(entry.source_snapshot || ''));
+  if (!fs.existsSync(sourceSnapshot) || sha256File(sourceSnapshot) !== entry.source_snapshot_sha256) {
+    throw new Error(`core-beta 继承共享账本快照缺失或 SHA 漂移：${caseId}`);
+  }
+  const sourceLedger = JSON.parse(fs.readFileSync(sourceSnapshot, 'utf8'));
+  if (!validateCoreBetaSharedLedgerShape(sourceLedger)) {
+    throw new Error(`core-beta 继承共享账本快照结构无效：${sourceSnapshot}`);
+  }
+  const currentLedgerFile = path.join(currentDirectory, 'core-beta-shared-ledger.json');
+  let currentLedger = {
+    schema_version: 1,
+    created_at: restoredAt,
+    skills: { inventory: [], sample: [], installed: [], used: [] },
+    experts: { before: [], created: [], used: [] },
+    mcp: { inventory: [], sample: [], used: [] },
+    tasks: {},
+  };
+  if (fs.existsSync(currentLedgerFile)) {
+    currentLedger = JSON.parse(fs.readFileSync(currentLedgerFile, 'utf8'));
+    if (!validateCoreBetaSharedLedgerShape(currentLedger)) {
+      throw new Error(`core-beta 当前共享账本结构无效：${currentLedgerFile}`);
+    }
+  }
+  const domain = String(entry.domain || coreBetaSharedStateDomain(testCase));
+  if (!['skills', 'experts', 'mcp'].includes(domain)) {
+    throw new Error(`core-beta 继承共享账本快照能力域无效：${domain || '(empty)'}`);
+  }
+  currentLedger[domain] = sourceLedger[domain];
+  currentLedger.tasks = {
+    ...(sourceLedger.tasks || {}),
+    ...(currentLedger.tasks || {}),
+  };
+  currentLedger.updated_at = restoredAt;
+  writeJsonFile(currentLedgerFile, currentLedger);
+  const restored = {
+    case_id: caseId,
+    case_order: Number(order || entry.case_order || 0),
+    domain,
+    restored_at: restoredAt,
+    source_snapshot: sourceSnapshot,
+    source_snapshot_sha256: entry.source_snapshot_sha256,
+    current_ledger_sha256: sha256File(currentLedgerFile),
+  };
+  lineage.restored_snapshots = [
+    ...(Array.isArray(lineage.restored_snapshots) ? lineage.restored_snapshots : [])
+      .filter((item) => String(item?.case_id || '') !== caseId),
+    restored,
+  ];
+  writeJsonFile(lineageFile, lineage);
+  return { applicable: true, ...restored };
 }
 
 function loadCoreBetaSharedLedger(caseDir) {
@@ -3309,6 +3459,7 @@ function saveCoreBetaSharedLedger(caseDir, ledger) {
   const file = coreBetaSharedLedgerFile(caseDir);
   ledger.updated_at = new Date().toISOString();
   writeJsonFile(file, ledger);
+  writeJsonFile(coreBetaSharedLedgerSnapshotFile(caseDir), ledger);
   return file;
 }
 

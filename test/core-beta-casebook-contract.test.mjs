@@ -39,6 +39,7 @@ import {
   coreBetaInstalledSkillReadme,
   coreBetaSkillTaskProfile,
   normalizeCoreBetaExpertCard,
+  restoreCoreBetaSharedLedgerAfterInheritedCase,
   seedCoreBetaSharedLedgerCheckpoint,
   verifiedCapabilitySelectionUnavailableEvidence,
   verifiedExpertSelectionUnavailableEvidence,
@@ -1341,15 +1342,113 @@ test('core beta shared state resumes only from an exact pre-impact checkpoint', 
     completed: 3,
     results: selectedCases.map(({ id }) => ({ id })),
   })}\n`);
-  const unsafe = seedCoreBetaSharedLedgerCheckpoint({
+  assert.throws(() => seedCoreBetaSharedLedgerCheckpoint({
     sourceOut,
     currentOut: unsafeCurrent,
     selectedCases,
     impact: { all: false, case_ids: ['BETA-EXPERT-005'] },
-  });
-  assert.equal(unsafe.applicable, false);
-  assert.equal(unsafe.reason, 'source_not_exactly_before_first_impact_case');
+  }), /源继承共享账本快照缺失.*BETA-EXPERT-001/);
   assert.equal(fs.existsSync(path.join(unsafeCurrent, 'core-beta-shared-ledger.json')), false);
+});
+
+test('core beta shared state restores inherited prerequisite snapshots per capability domain', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-domain-snapshots-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sourceOut = path.join(root, 'source');
+  const currentOut = path.join(root, 'current');
+  fs.mkdirSync(sourceOut, { recursive: true });
+  const selectedCases = [
+    { id: 'BETA-CHAT-006', case_type: 'conversation' },
+    { id: 'BETA-SKILL-001', case_type: 'skill_lifecycle' },
+    { id: 'BETA-SKILL-002', case_type: 'skill_lifecycle' },
+    { id: 'BETA-SKILL-005', case_type: 'skill_lifecycle' },
+    { id: 'BETA-MCP-001', case_type: 'mcp_lifecycle' },
+    { id: 'BETA-MCP-002', case_type: 'mcp_use' },
+  ].map((item) => ({
+    ...item,
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+  }));
+  const results = selectedCases.map((testCase, index) => {
+    const caseDir = path.join(sourceOut, 'cases', `${index + 1}-${testCase.id}`);
+    fs.mkdirSync(caseDir, { recursive: true });
+    const ledger = {
+      schema_version: 1,
+      skills: {
+        inventory: index >= 2 ? [{ slug: 'skill-a' }] : [],
+        sample: index >= 2 ? [{ slug: 'skill-a' }] : [],
+        installed: index >= 2 ? [{ slug: 'skill-a', ok: true }] : [],
+        used: [],
+      },
+      experts: { before: [], created: [], used: [] },
+      mcp: {
+        inventory: index >= 4 ? [{ key: 'builtin:qbot_vision' }] : [],
+        sample: index >= 4 ? [{ key: 'builtin:qbot_vision' }] : [],
+        used: [],
+      },
+      tasks: {},
+    };
+    fs.writeFileSync(
+      path.join(caseDir, 'core-beta-shared-ledger-after.json'),
+      `${JSON.stringify(ledger)}\n`,
+    );
+    return { id: testCase.id, case_dir: caseDir };
+  });
+  fs.writeFileSync(
+    path.join(sourceOut, 'automation-progress.json'),
+    `${JSON.stringify({ completed: selectedCases.length, results })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(sourceOut, 'core-beta-shared-ledger.json'),
+    fs.readFileSync(path.join(results.at(-1).case_dir, 'core-beta-shared-ledger-after.json')),
+  );
+
+  const seeded = seedCoreBetaSharedLedgerCheckpoint({
+    sourceOut,
+    currentOut,
+    selectedCases,
+    impact: {
+      all: false,
+      case_ids: ['BETA-CHAT-006', 'BETA-SKILL-005', 'BETA-MCP-002'],
+    },
+    seededAt: '2026-07-30T00:00:00.000Z',
+  });
+  assert.equal(seeded.applicable, true);
+  assert.equal(seeded.source, 'per_domain_inherited_case_shared_state_snapshots');
+  assert.deepEqual(
+    seeded.inherited_snapshots.map((item) => item.case_id),
+    ['BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-MCP-001'],
+  );
+  assert.equal(fs.existsSync(path.join(currentOut, 'core-beta-shared-ledger.json')), false);
+
+  for (const index of [1, 2, 4]) {
+    const restored = restoreCoreBetaSharedLedgerAfterInheritedCase({
+      currentOut,
+      result: { ...results[index], execution_provenance: 'inherited' },
+      testCase: selectedCases[index],
+      order: index + 1,
+      restoredAt: `2026-07-30T00:00:0${index}.000Z`,
+    });
+    assert.equal(restored.applicable, true);
+    if (index === 1) {
+      const currentLedgerFile = path.join(currentOut, 'core-beta-shared-ledger.json');
+      const inProgressLedger = JSON.parse(fs.readFileSync(currentLedgerFile, 'utf8'));
+      inProgressLedger.tasks['rerun-chat-task'] = { task_id: 'rerun-chat-task' };
+      fs.writeFileSync(currentLedgerFile, `${JSON.stringify(inProgressLedger)}\n`);
+    }
+  }
+  const currentLedger = JSON.parse(
+    fs.readFileSync(path.join(currentOut, 'core-beta-shared-ledger.json'), 'utf8'),
+  );
+  assert.deepEqual(currentLedger.skills.sample.map((item) => item.slug), ['skill-a']);
+  assert.deepEqual(currentLedger.mcp.sample.map((item) => item.key), ['builtin:qbot_vision']);
+  assert.equal(currentLedger.tasks['rerun-chat-task'].task_id, 'rerun-chat-task');
+  const lineage = JSON.parse(
+    fs.readFileSync(path.join(currentOut, 'core-beta-shared-ledger-lineage.json'), 'utf8'),
+  );
+  assert.deepEqual(
+    lineage.restored_snapshots.map((item) => item.case_id),
+    ['BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-MCP-001'],
+  );
 });
 
 test('batch collection uses one shared deadline instead of multiplying timeout by task count', () => {
