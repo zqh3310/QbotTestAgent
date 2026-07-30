@@ -5788,8 +5788,13 @@ export function coreBetaCatalogSkillInventory(catalog = {}, tab = '技能市场'
       action_disabled: Boolean(dom?.action_disabled),
       install_action_visible: Boolean(
         dom
-        && !dom.action_disabled
-        && /安装技能|安装|重试安装/.test(`${dom.action_aria_label} ${dom.action_text}`),
+        && (
+          dom.install_action_visible === true
+          || (
+            !dom.action_disabled
+            && /安装技能|安装|重试安装/.test(`${dom.action_aria_label} ${dom.action_text}`)
+          )
+        ),
       ),
       dom: dom || null,
     };
@@ -5803,6 +5808,16 @@ export function coreBetaCatalogSkillInventory(catalog = {}, tab = '技能市场'
   };
 }
 
+export function coreBetaSkillCardActionSelectorCandidates() {
+  return [
+    '.skill-install:not([disabled])',
+    '.skill-install',
+    '.skill-del',
+    '.skill-action',
+    'button',
+  ];
+}
+
 async function coreBetaSkillInventory(ctx, tab = '技能市场') {
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: tab });
   const [capabilities, catalog] = await Promise.all([
@@ -5812,8 +5827,15 @@ async function coreBetaSkillInventory(ctx, tab = '技能市场') {
       return window.agent.getSkillsCatalog('');
     }).catch(() => null),
   ]);
-  const domSkills = await ctx.page.locator('.skill-card').evaluateAll((cards) => cards.map((card) => {
-    const action = card.querySelector('.skill-install, .skill-del, button');
+  const actionSelectors = coreBetaSkillCardActionSelectorCandidates();
+  const domSkills = await ctx.page.locator('.skill-card').evaluateAll((cards, selectors) => cards.map((card) => {
+    // A market card now renders the “更多” button before the install button.
+    // querySelector('.skill-install, .skill-del, button') follows DOM order,
+    // not selector-list priority, so it incorrectly returned “更多” for every
+    // installable card. Probe selectors one by one and keep install presence
+    // as an independent public-UI fact.
+    const install = card.querySelector('.skill-install');
+    const action = selectors.map((selector) => card.querySelector(selector)).find(Boolean) || null;
     const name = String(card.querySelector('.skill-name')?.childNodes?.[0]?.textContent
       || card.querySelector('.skill-name')?.textContent
       || card.textContent
@@ -5831,9 +5853,10 @@ async function coreBetaSkillInventory(ctx, tab = '技能市场') {
       action_text: String(action?.textContent || '').trim(),
       action_aria_label: String(action?.getAttribute('aria-label') || action?.getAttribute('title') || ''),
       action_disabled: Boolean(action?.hasAttribute('disabled')),
+      install_action_visible: Boolean(install && !install.hasAttribute('disabled')),
       text: String(card.textContent || '').trim(),
     };
-  })).catch(() => []);
+  }), actionSelectors).catch(() => []);
   const derived = coreBetaCatalogSkillInventory(catalog || {}, tab, domSkills);
   const inventory = derived.inventory;
   ctx.ledger.skills.inventory = inventory;

@@ -29,6 +29,7 @@ import {
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  coreBetaSkillCardActionSelectorCandidates,
   coreBetaSkillEntrySelectorCandidates,
   coreBetaInstalledSkillReadme,
   coreBetaSkillTaskProfile,
@@ -299,6 +300,30 @@ test('skill navigation supports the current expert-center role=tab entry as well
   assert.ok(candidates.includes('[data-testid="skills-tab"]'));
   assert.ok(candidates.includes('[data-testid="experts-view"] [role="tablist"][aria-label="专家与技能"] [role="tab"]'));
   assert.ok(candidates.includes('.restab-experts [role="tab"]'));
+});
+
+test('skill market card probing prioritizes the install action over the preceding more-menu button', () => {
+  assert.deepEqual(coreBetaSkillCardActionSelectorCandidates().slice(0, 2), [
+    '.skill-install:not([disabled])',
+    '.skill-install',
+  ]);
+  const result = coreBetaCatalogSkillInventory({
+    market: [{
+      namespace: 'global',
+      slug: 'market-skill',
+      name: 'market-skill',
+      latestVersion: '1.0.0',
+      installed: false,
+      usable: true,
+    }],
+  }, '技能市场', [{
+    name: 'market-skill',
+    action_text: '',
+    action_aria_label: '更多',
+    action_disabled: false,
+    install_action_visible: true,
+  }]);
+  assert.equal(result.inventory[0].install_action_visible, true);
 });
 
 test('installed Skill tasks are derived from the actual Skill identity and README domain', () => {
