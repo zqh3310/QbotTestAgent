@@ -11,6 +11,7 @@ const DOCUMENT_EXTENSIONS = new Set([
   '.html',
   '.js',
   '.json',
+  '.log',
   '.md',
   '.markdown',
   '.pdf',
@@ -22,7 +23,11 @@ const DOCUMENT_EXTENSIONS = new Set([
 ]);
 const IMAGE_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS]);
-const INLINE_TEXT_EXTENSIONS = new Set(['.csv', '.htm', '.html', '.js', '.json', '.md', '.markdown', '.ts', '.txt']);
+const INLINE_TEXT_EXTENSIONS = new Set(['.csv', '.htm', '.html', '.js', '.json', '.log', '.md', '.markdown', '.ts', '.txt']);
+
+export function isSupportedQbotAttachmentPath(file) {
+  return SUPPORTED_ATTACHMENT_EXTENSIONS.has(path.extname(String(file || '')).toLowerCase());
+}
 
 export async function uploadAttachmentsInComposer(page, files, {
   buttonSelector = DEFAULT_BUTTON_SELECTOR,
@@ -41,7 +46,7 @@ export async function uploadAttachmentsInComposer(page, files, {
       reason: `测试附件文件不存在：${missing.join(', ') || files.join(', ')}`,
     };
   }
-  const unsupported = existing.filter((file) => !SUPPORTED_ATTACHMENT_EXTENSIONS.has(path.extname(file).toLowerCase()));
+  const unsupported = existing.filter((file) => !isSupportedQbotAttachmentPath(file));
   if (unsupported.length) {
     return {
       status: 'blocked',

@@ -1745,10 +1745,27 @@ function coreBetaCommandSupported(caseType, command) {
       'verify_skill_preinstall_state', 'install_ten_skills_serially', 'verify_skill_install_results',
       'verify_installed_skill_list', 'verify_skill_composer_availability', 'verify_skill_history',
       'verify_skill_task_isolation', 'exercise_skill_uninstall_confirm', 'verify_skill_cleanup',
+      'open_installed_skills_tab', 'cleanup_prior_qa_skill_installs', 'verify_clean_skill_baseline',
+      'open_and_refresh_skill_market', 'capture_market_inventory', 'sample_ten_market_skills',
+      'verify_first_five_market_cards', 'install_first_five_market_skills',
+      'verify_first_five_install_terminal_states', 'verify_second_five_market_cards',
+      'install_second_five_market_skills', 'verify_second_five_install_terminal_states',
+      'verify_market_installed_state', 'verify_installed_and_history_views',
+      'verify_composer_installed_options', 'verify_skill_selection_persistence',
+      'create_skill_disabled_task', 'verify_cross_task_skill_isolation',
+      'cancel_first_skill_uninstall', 'uninstall_run_skill_sample',
+      'verify_skill_cleanup_across_views',
     ]),
-    skill_use: new Set(['select_skill_by_slug', 'send_skill_task', 'collect_skill_execution']),
+    skill_use: new Set([
+      'select_skill_by_slug', 'send_skill_task', 'collect_skill_execution',
+      'select_skill_via_composer_button', 'capture_skill_turn_context',
+      'run_two_turn_skill_task', 'verify_two_turn_skill_execution',
+      'verify_skill_selection_persistence', 'create_skill_disabled_task',
+      'verify_cross_task_skill_isolation',
+    ]),
     expert_lifecycle: new Set([
       'inventory_experts_before', 'create_three_experts', 'verify_created_experts',
+      'cleanup_stale_qa_experts',
       'exercise_expert_required_fields', 'configure_expert_dependency', 'edit_and_reopen_expert',
       'verify_expert_identity_in_task_a', 'switch_to_general_assistant', 'verify_expert_isolation_in_task_b',
       'delete_created_experts', 'verify_expert_removal', 'verify_expert_history_boundary',
@@ -3093,6 +3110,49 @@ function coreBetaRunRoot(caseDir) {
 
 function coreBetaSharedLedgerFile(caseDir) {
   return path.join(coreBetaRunRoot(caseDir), 'core-beta-shared-ledger.json');
+}
+
+function coreBetaManagedResourcesFile(caseDir) {
+  return path.resolve(coreBetaRunRoot(caseDir), '..', '..', 'state', 'core-beta-managed-resources.json');
+}
+
+function readCoreBetaManagedResources(caseDir) {
+  const file = coreBetaManagedResourcesFile(caseDir);
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return {
+      schema_version: 1,
+      skills: Array.isArray(value?.skills) ? value.skills : [],
+      experts: Array.isArray(value?.experts) ? value.experts : [],
+      file,
+    };
+  } catch {
+    return { schema_version: 1, skills: [], experts: [], file };
+  }
+}
+
+function writeCoreBetaManagedResources(caseDir, resources) {
+  const file = coreBetaManagedResourcesFile(caseDir);
+  ensureDir(path.dirname(file));
+  writeJsonFile(file, {
+    schema_version: 1,
+    updated_at: new Date().toISOString(),
+    skills: Array.isArray(resources?.skills) ? resources.skills : [],
+    experts: Array.isArray(resources?.experts) ? resources.experts : [],
+  });
+  return file;
+}
+
+function upsertCoreBetaManagedResource(caseDir, domain, resource, identityField) {
+  const resources = readCoreBetaManagedResources(caseDir);
+  const identity = String(resource?.[identityField] || '').trim();
+  if (!identity) return resources.file;
+  const current = Array.isArray(resources[domain]) ? resources[domain] : [];
+  resources[domain] = [
+    ...current.filter((item) => String(item?.[identityField] || '').trim() !== identity),
+    { ...resource, recorded_at: new Date().toISOString() },
+  ];
+  return writeCoreBetaManagedResources(caseDir, resources);
 }
 
 function validateCoreBetaSharedLedgerShape(ledger) {
@@ -5509,26 +5569,84 @@ async function executeCoreBetaArtifactCommand(ctx, command) {
 }
 
 function coreBetaNormalizeSkill(item = {}) {
-  const slug = String(item.slug || item.key || item.id || item.skillId || '').trim();
+  const slug = String(item.slug || item.key || item.id || item.skillId || item.skill || item.name || '').trim();
   return {
     slug,
-    name: String(item.name || item.title || item.label || slug).trim(),
+    name: String(item.name || item.skill || item.title || item.label || slug).trim(),
+    label: String(item.cnName || item.displayName || item.label || item.name || slug).trim(),
     category: String(item.category || item.group || item.type || 'unclassified').trim(),
-    version: String(item.version || ''),
-    status: String(item.status || item.phase || ''),
+    namespace: String(item.namespace || ''),
+    source_platform: String(item.sourcePlatform || item.source || ''),
+    version: String(item.version || item.installedVersion || item.latestVersion || ''),
+    status: String(item.status || item.phase || item.skillStatus || ''),
+    install_status: String(item.installStatus || ''),
+    installed: item.installed === true,
+    usable: item.usable !== false,
+    local_readiness: item.localReadiness || null,
     raw: item,
+  };
+}
+
+export function coreBetaCatalogSkillInventory(catalog = {}, tab = '技能市场', domSkills = []) {
+  const branch = tab === '已安装'
+    ? 'installed'
+    : tab === '历史'
+      ? 'history'
+      : 'market';
+  const sourceItems = Array.isArray(catalog?.[branch]) ? catalog[branch] : [];
+  const normalizedDom = (Array.isArray(domSkills) ? domSkills : []).map((item) => ({
+    ...item,
+    name: String(item?.name || '').trim(),
+  }));
+  const inventory = sourceItems.map((item) => {
+    const normalized = coreBetaNormalizeSkill(item);
+    const visibleNames = new Set([
+      normalized.name,
+      normalized.label,
+      String(item?.cnName || '').trim(),
+      String(item?.displayName || '').trim(),
+    ].filter(Boolean));
+    const dom = normalizedDom.find((candidate) => (
+      candidate.slug && candidate.slug === normalized.slug
+    ) || visibleNames.has(candidate.name));
+    return {
+      ...normalized,
+      visible: Boolean(dom),
+      action_text: String(dom?.action_text || ''),
+      action_aria_label: String(dom?.action_aria_label || ''),
+      action_disabled: Boolean(dom?.action_disabled),
+      install_action_visible: Boolean(
+        dom
+        && !dom.action_disabled
+        && /安装技能|安装|重试安装/.test(`${dom.action_aria_label} ${dom.action_text}`),
+      ),
+      dom: dom || null,
+    };
+  }).filter((item) => item.slug);
+  return {
+    branch,
+    inventory,
+    market_source: String(catalog?.marketSource || ''),
+    market_status: String(catalog?.marketStatus || ''),
+    market_error: String(catalog?.marketError || ''),
   };
 }
 
 async function coreBetaSkillInventory(ctx, tab = '技能市场') {
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: tab });
-  const capabilities = await currentCapabilities(ctx.page);
-  const publicSkills = (Array.isArray(capabilities?.skills) ? capabilities.skills : [])
-    .map(coreBetaNormalizeSkill)
-    .filter((item) => item.slug);
+  const [capabilities, catalog] = await Promise.all([
+    currentCapabilities(ctx.page),
+    ctx.page.evaluate(async () => {
+      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
+      return window.agent.getSkillsCatalog('');
+    }).catch(() => null),
+  ]);
   const domSkills = await ctx.page.locator('.skill-card').evaluateAll((cards) => cards.map((card) => {
     const action = card.querySelector('.skill-install, .skill-del, button');
-    const name = String(card.querySelector('.skill-name')?.textContent || card.textContent || '').split('\n')[0].trim();
+    const name = String(card.querySelector('.skill-name')?.childNodes?.[0]?.textContent
+      || card.querySelector('.skill-name')?.textContent
+      || card.textContent
+      || '').trim();
     const slug = String(
       card.getAttribute('data-skill-slug')
       || card.getAttribute('data-slug')
@@ -5540,23 +5658,34 @@ async function coreBetaSkillInventory(ctx, tab = '技能市场') {
       name,
       category: String(card.getAttribute('data-category') || 'unclassified'),
       action_text: String(action?.textContent || '').trim(),
+      action_aria_label: String(action?.getAttribute('aria-label') || action?.getAttribute('title') || ''),
       action_disabled: Boolean(action?.hasAttribute('disabled')),
       text: String(card.textContent || '').trim(),
     };
   })).catch(() => []);
-  const merged = new Map();
-  for (const item of [...publicSkills, ...domSkills.map(coreBetaNormalizeSkill)]) {
-    if (!item.slug) continue;
-    merged.set(item.slug, { ...(merged.get(item.slug) || {}), ...item });
-  }
-  const inventory = [...merged.values()];
+  const derived = coreBetaCatalogSkillInventory(catalog || {}, tab, domSkills);
+  const inventory = derived.inventory;
   ctx.ledger.skills.inventory = inventory;
+  ctx.ledger.skills[derived.branch] = inventory;
+  ctx.ledger.skills.catalog_status = {
+    source: derived.market_source,
+    status: derived.market_status,
+    error: derived.market_error,
+  };
   setCoreBetaEvidence(ctx.state, 'capability_inventory', {
     available: inventory.length > 0,
-    source: 'window.agent.capabilities + visible skill cards',
+    source: `window.agent.getSkillsCatalog().${derived.branch} + visible ${tab} cards`,
     inventory,
+    catalog_status: ctx.ledger.skills.catalog_status,
   });
-  return { capabilities, publicSkills, domSkills, inventory };
+  return {
+    capabilities,
+    catalog,
+    branch: derived.branch,
+    domSkills,
+    inventory,
+    catalogStatus: ctx.ledger.skills.catalog_status,
+  };
 }
 
 function coreBetaSelectionIndex(selectionSource, fallback = 0) {
@@ -5596,13 +5725,45 @@ async function coreBetaInstallSkill(ctx, sampled) {
   });
   await clickSkillSubtab(ctx.page, '已安装', ctx.state);
   const visibleInstalled = await visible(ctx.page.locator('.skill-card').filter({ hasText: sampled.name }).first(), 2500);
-  return {
+  let catalogSkill = null;
+  const readinessDeadline = Date.now() + 120000;
+  while (Date.now() < readinessDeadline) {
+    catalogSkill = await ctx.page.evaluate(async ({ slug, name }) => {
+      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
+      const catalog = await window.agent.getSkillsCatalog('');
+      return (catalog?.installed || []).find((item) => (
+        item?.slug === slug || item?.name === name
+      )) || null;
+    }, { slug: sampled.slug, name: sampled.name }).catch(() => null);
+    const status = String(catalogSkill?.localReadiness?.status || catalogSkill?.localReadiness?.readinessStatus || '');
+    if (/ready|loaded|active|available|ok/i.test(status)) break;
+    if (/reject|fail|error|unready|missing/i.test(status)) break;
+    await ctx.page.waitForTimeout(1000);
+  }
+  const readinessStatus = String(
+    catalogSkill?.localReadiness?.status
+    || catalogSkill?.localReadiness?.readinessStatus
+    || '',
+  );
+  const runtimeReady = /ready|loaded|active|available|ok/i.test(readinessStatus);
+  const result = {
     slug: sampled.slug,
     name: sampled.name,
-    ok: (terminal.success || visibleInstalled) && !terminal.failure,
+    ok: (terminal.success || visibleInstalled) && !terminal.failure && runtimeReady,
     terminal,
     installed_view_readback: visibleInstalled,
+    catalog_installed_readback: catalogSkill,
+    runtime_ready: runtimeReady,
+    readiness_status: readinessStatus,
   };
+  if (result.ok) {
+    upsertCoreBetaManagedResource(ctx.caseDir, 'skills', {
+      slug: sampled.slug,
+      name: sampled.name,
+      source_case_id: ctx.state.id,
+    }, 'slug');
+  }
+  return result;
 }
 
 async function coreBetaCapabilityExecutionEvidence(ctx, kind, expectedIdentity) {
@@ -5665,25 +5826,313 @@ async function coreBetaCapabilityExecutionEvidence(ctx, kind, expectedIdentity) 
   return evidence;
 }
 
+async function coreBetaCleanupManagedSkills(ctx, items = null) {
+  const resources = readCoreBetaManagedResources(ctx.caseDir);
+  const targets = Array.isArray(items)
+    ? items
+    : resources.skills;
+  const results = [];
+  for (const item of targets) {
+    const identity = String(item?.name || item?.slug || '').trim();
+    if (!identity) continue;
+    const result = await ctx.page.evaluate(async (skillName) => {
+      if (typeof window.agent?.uninstallSkill !== 'function') {
+        return { ok: false, msg: 'window.agent.uninstallSkill unavailable' };
+      }
+      return window.agent.uninstallSkill(skillName);
+    }, identity).catch((error) => ({ ok: false, msg: error.message }));
+    results.push({ ...item, identity, ...result });
+  }
+  await ctx.page.evaluate(async () => {
+    if (typeof window.agent?.reconcileSkills === 'function') {
+      return window.agent.reconcileSkills();
+    }
+    return null;
+  }).catch(() => null);
+  const completed = targets.filter((item) => (
+    !results.some((result) => (
+      (result.slug === item.slug || result.name === item.name) && result.ok === false
+    ))
+  ));
+  const targetSlugs = new Set(completed.map((item) => String(item?.slug || '').trim()).filter(Boolean));
+  const targetNames = new Set(completed.map((item) => String(item?.name || '').trim()).filter(Boolean));
+  resources.skills = resources.skills.filter((item) => (
+    !targetSlugs.has(String(item?.slug || '').trim())
+    && !targetNames.has(String(item?.name || '').trim())
+  ));
+  const managedFile = writeCoreBetaManagedResources(ctx.caseDir, resources);
+  return { targets, results, managed_file: managedFile };
+}
+
+async function coreBetaUninstallSkillsViaVisibleUi(ctx, items, { cancelFirst = false } = {}) {
+  await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '已安装' });
+  const results = [];
+  for (const [index, item] of (items || []).entries()) {
+    const card = ctx.page.locator('.skill-card').filter({ hasText: item.name }).first();
+    if (!(await visible(card, 1000))) {
+      results.push({ ...item, ok: false, reason: 'installed card missing' });
+      continue;
+    }
+    const del = card.locator('.skill-del, button').filter({ hasText: /删除|卸载/ }).first();
+    if (!(await visible(del, 800))) {
+      results.push({ ...item, ok: false, reason: 'delete action missing' });
+      continue;
+    }
+    const shouldCancel = cancelFirst && index === 0;
+    const confirmation = await confirmDestructiveAction(
+      ctx.page,
+      async () => del.click({ force: true }),
+      { accept: !shouldCancel },
+    );
+    await ctx.page.waitForTimeout(700);
+    const stillVisible = await visible(
+      ctx.page.locator('.skill-card').filter({ hasText: item.name }).first(),
+      700,
+    );
+    results.push({
+      ...item,
+      ok: shouldCancel ? stillVisible : !stillVisible,
+      cancelled: shouldCancel,
+      confirmation,
+      still_visible: stillVisible,
+    });
+    if (!shouldCancel && !stillVisible) {
+      const resources = readCoreBetaManagedResources(ctx.caseDir);
+      resources.skills = resources.skills.filter((managed) => (
+        String(managed?.slug || '') !== String(item?.slug || '')
+        && String(managed?.name || '') !== String(item?.name || '')
+      ));
+      writeCoreBetaManagedResources(ctx.caseDir, resources);
+    }
+  }
+  return results;
+}
+
+function coreBetaInstalledSkillReadme(skill = {}) {
+  const identities = [skill.slug, skill.name]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const base = path.join(os.homedir(), '.deepbank', 'home', '.claude', 'skills');
+  let entries = [];
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  } catch {
+    return { path: '', text: '', sha256: '' };
+  }
+  const directory = entries.find((entry) => identities.some((identity) => (
+    entry.name === identity || entry.name.endsWith(`__${identity}`)
+  )));
+  const file = directory ? path.join(base, directory.name, 'SKILL.md') : '';
+  if (!file || !fs.existsSync(file)) return { path: '', text: '', sha256: '' };
+  const text = fs.readFileSync(file, 'utf8');
+  return { path: file, text, sha256: sha256Text(text) };
+}
+
+export function coreBetaSkillTaskProfile(skill = {}, readmeText = '') {
+  const identity = String(skill.slug || skill.name || '').trim();
+  const description = String(
+    skill.raw?.desc
+    || skill.raw?.description
+    || skill.desc
+    || readmeText.match(/^description:\s*(.+)$/mi)?.[1]
+    || '',
+  ).replace(/\s+/g, ' ').trim();
+  const haystack = `${identity} ${description} ${readmeText.slice(0, 5000)}`.toLowerCase();
+  if (/forecast|variance|cash.?flow|reconcil|journal|finance|财务|预测|差异|现金流|对账/.test(haystack)) {
+    return {
+      scenario: '财务分析',
+      input: '某业务本月收入120万元、成本78万元，上月收入100万元、成本70万元；管理层要求说明变化、计算关键比率并给出两项行动。',
+      expected: '必须展示计算过程、变化原因、风险和可执行行动',
+    };
+  }
+  if (/web|frontend|canvas|design|html|网页|前端|设计/.test(haystack)) {
+    return {
+      scenario: '网页/设计交付',
+      input: '为“QBot开放内测”制作一个简洁的单页方案，需包含价值主张、三项核心能力、内测报名入口和移动端可用性说明。',
+      expected: '必须给出结构完整、可落地且符合所选Skill流程的交付物',
+    };
+  }
+  if (/search|query|research|company|feature|查询|搜索|调研/.test(haystack)) {
+    return {
+      scenario: '检索与研究',
+      input: '查询并整理QBot开放内测所需的功能验证信息，区分已验证事实、待确认项和建议，不能虚构来源。',
+      expected: '必须区分事实与推断，并给出来源或明确无法查询的原因',
+    };
+  }
+  if (/compliance|nda|sensitive|security|合规|保密|敏感|安全/.test(haystack)) {
+    return {
+      scenario: '合规审查',
+      input: '审查一份内测说明：允许上传脱敏样例，禁止真实客户身份证、密钥和生产数据；发现风险后给出分级及整改建议。',
+      expected: '必须识别风险、分级并提供可执行整改措施',
+    };
+  }
+  if (/meeting|org|performance|planning|计划|会议|绩效|组织/.test(haystack)) {
+    return {
+      scenario: '协作与计划',
+      input: '将QBot两周开放内测拆成目标、负责人、里程碑、风险、验收标准和每日同步机制。',
+      expected: '必须形成责任清晰、期限明确、可验收的计划',
+    };
+  }
+  return {
+    scenario: '通用文档处理',
+    input: '把QBot开放内测信息整理成一页执行摘要：覆盖会话、Skill、专家、MCP、附件与已知限制，并给出发布前检查清单。',
+    expected: '必须遵循所选Skill说明并产出结构完整、可执行的结果',
+  };
+}
+
+function coreBetaResolveSkillTurns(ctx) {
+  const selected = ctx.selectedSkill || {};
+  const readme = coreBetaInstalledSkillReadme(selected);
+  const profile = coreBetaSkillTaskProfile(selected, readme.text);
+  const resolved = (ctx.turns || []).map((turn, index) => {
+    const anchor = index === 0 ? 'QA_SKILL_PRIMARY' : 'QA_SKILL_FOLLOWUP';
+    const placeholder = /\{\{\s*deep_use\[\d+\]\.readme_derived_/;
+    const prompt = placeholder.test(String(turn?.prompt || ''))
+      ? index === 0
+        ? `请使用当前已选 Skill【${selected.name || selected.slug}】完成“${profile.scenario}”任务。业务输入：${profile.input} 请严格遵循该 Skill 的说明与流程，最后单独输出核验锚点 ${anchor}。`
+        : `继续使用同一 Skill 和同一任务上下文，对上一轮结果做一次反向校验与改进：指出至少一处可能遗漏，给出修订后的最终结果，并在最后单独输出核验锚点 ${anchor}。`
+      : turn.prompt;
+    const oracle = placeholder.test(String(turn?.oracle || ''))
+      ? `${profile.expected}；回复包含 ${anchor}`
+      : turn.oracle;
+    return {
+      ...turn,
+      prompt,
+      oracle,
+      must_include: [...new Set([...(turn.must_include || []), anchor])],
+    };
+  });
+  ctx.turns = resolved;
+  const evidence = {
+    selected_skill: selected,
+    readme_path: readme.path,
+    readme_sha256: readme.sha256,
+    readme_available: Boolean(readme.text),
+    profile,
+    turns: resolved,
+  };
+  const file = path.join(ctx.caseDir, 'skill-readme-derived-turns.json');
+  writeJsonFile(file, evidence);
+  ctx.state.artifacts.skill_readme_derived_turns = file;
+  return evidence;
+}
+
 async function executeCoreBetaSkillCommand(ctx, command) {
-  if (command === 'inventory_skill_market') {
+  if (command === 'open_installed_skills_tab') {
+    const result = await coreBetaSkillInventory(ctx, '已安装');
+    ctx.ledger.skills.baseline_installed = result.inventory;
+    return {
+      ok: Boolean(result.catalog),
+      selector_or_testid: 'skills-view installed tab',
+      event: 'open-and-inventory',
+      state_readback: result,
+      actual: `installed=${result.inventory.length}；catalog=${Boolean(result.catalog)}`,
+    };
+  }
+  if (command === 'cleanup_prior_qa_skill_installs') {
+    const resources = readCoreBetaManagedResources(ctx.caseDir);
+    const installed = ctx.ledger.skills.baseline_installed || [];
+    const targets = resources.skills.filter((item) => installed.some((candidate) => (
+      candidate.slug === item.slug || candidate.name === item.name
+    )));
+    const cleanup = await coreBetaCleanupManagedSkills(ctx, targets);
+    cleanup.stale_registry_entries_removed = resources.skills.filter((item) => !targets.some((target) => (
+      target.slug === item.slug || target.name === item.name
+    )));
+    if (cleanup.stale_registry_entries_removed.length) {
+      const next = readCoreBetaManagedResources(ctx.caseDir);
+      const staleIds = new Set(cleanup.stale_registry_entries_removed.flatMap((item) => [item.slug, item.name]).filter(Boolean));
+      next.skills = next.skills.filter((item) => !staleIds.has(item.slug) && !staleIds.has(item.name));
+      writeCoreBetaManagedResources(ctx.caseDir, next);
+    }
+    ctx.ledger.skills.prior_cleanup = cleanup;
+    return {
+      ok: cleanup.results.every((item) => item.ok !== false),
+      selector_or_testid: 'window.agent.uninstallSkill exact QA ledger identities',
+      event: 'qa-baseline-cleanup',
+      state_readback: cleanup,
+      actual: `targets=${cleanup.targets.length}；failed=${cleanup.results.filter((item) => item.ok === false).length}`,
+    };
+  }
+  if (command === 'verify_clean_skill_baseline') {
+    const result = await coreBetaSkillInventory(ctx, '已安装');
+    const targets = ctx.ledger.skills.prior_cleanup?.targets || [];
+    const targetIds = new Set(targets.flatMap((item) => [item.slug, item.name]).filter(Boolean));
+    const identity = (item) => `${item.namespace || ''}/${item.slug || item.name}@${item.version || ''}`;
+    const expectedUnrelated = (ctx.ledger.skills.baseline_installed || [])
+      .filter((item) => !targetIds.has(item.slug) && !targetIds.has(item.name))
+      .map(identity)
+      .sort();
+    const actual = result.inventory.map(identity).sort();
+    const stale = result.inventory.filter((item) => targetIds.has(item.slug) || targetIds.has(item.name));
+    const unrelatedPreserved = JSON.stringify(expectedUnrelated) === JSON.stringify(actual);
+    const market = await coreBetaSkillInventory(ctx, '技能市场');
+    ctx.ledger.skills.clean_baseline = result.inventory;
+    return {
+      ok: stale.length === 0
+        && unrelatedPreserved
+        && market.branch === 'market'
+        && market.inventory.length > 0,
+      selector_or_testid: 'skills-view installed + market tabs',
+      event: 'clean-baseline-readback',
+      state_readback: {
+        installed: result.inventory,
+        expected_unrelated: expectedUnrelated,
+        actual_installed: actual,
+        stale,
+        unrelated_preserved: unrelatedPreserved,
+        market: { branch: market.branch, count: market.inventory.length, status: market.catalogStatus },
+      },
+      actual: `installed=${result.inventory.length}；staleQaManaged=${stale.length}；unrelatedPreserved=${unrelatedPreserved}；market=${market.inventory.length}`,
+    };
+  }
+  if (command === 'open_and_refresh_skill_market') {
+    await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '技能市场' });
+    const refresh = await ctx.page.evaluate(async () => {
+      if (typeof window.agent?.refreshSkillsCatalog === 'function') {
+        return window.agent.refreshSkillsCatalog();
+      }
+      return null;
+    }).catch((error) => ({ error: error.message }));
+    const result = await coreBetaSkillInventory(ctx, '技能市场');
+    return {
+      ok: Boolean(result.catalog) && result.inventory.length > 0,
+      selector_or_testid: 'skills catalog market tab',
+      event: 'refresh-and-readback',
+      state_readback: { refresh, catalog_status: result.catalogStatus, inventory_count: result.inventory.length },
+      actual: `market=${result.inventory.length}；source=${result.catalogStatus.source}；status=${result.catalogStatus.status}`,
+    };
+  }
+  if (command === 'capture_market_inventory' || command === 'inventory_skill_market') {
     const result = await coreBetaSkillInventory(ctx, '技能市场');
     return {
       ok: result.inventory.length > 0,
       selector_or_testid: 'skills-view',
       event: 'inventory',
-      state_readback: result.inventory,
-      actual: `inventory=${result.inventory.length}`,
+      state_readback: {
+        branch: result.branch,
+        catalog_status: result.catalogStatus,
+        inventory: result.inventory,
+      },
+      actual: `inventory=${result.inventory.length}；branch=${result.branch}；source=${result.catalogStatus.source}`,
     };
   }
-  if (command === 'sample_ten_skills') {
+  if (command === 'sample_ten_skills' || command === 'sample_ten_market_skills') {
     const policy = ctx.capabilityPolicy;
     const sample = deterministicCapabilitySample(ctx.ledger.skills.inventory, {
       count: Number(policy.install_count || 10),
       seed: String(policy.seed || ctx.options?.releaseIdentityManifestSha256 || ctx.state.id),
       stableIdentityField: 'slug',
       stratumField: 'category',
-      eligible: (item) => Boolean(item.slug),
+      eligible: (item) => Boolean(
+        item.slug
+        && item.namespace
+        && item.version
+        && item.usable
+        && !item.installed
+        && item.visible
+        && item.install_action_visible
+      ),
     });
     ctx.ledger.skills.sample = sample.selected || [];
     ctx.ledger.skills.deep_use = (sample.selected || []).slice(0, Number(policy.deep_use_count || 5));
@@ -5730,6 +6179,31 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `selected=${selected.length}；unique=${unique}`,
     };
   }
+  if (command === 'verify_first_five_market_cards' || command === 'verify_second_five_market_cards') {
+    const offset = command === 'verify_first_five_market_cards' ? 0 : 5;
+    const segment = (ctx.ledger.skills.sample || []).slice(offset, offset + 5);
+    const result = await coreBetaSkillInventory(ctx, '技能市场');
+    const readback = segment.map((sampled) => {
+      const item = result.inventory.find((candidate) => candidate.slug === sampled.slug);
+      return {
+        slug: sampled.slug,
+        name: sampled.name,
+        visible: Boolean(item?.visible),
+        install_action_visible: Boolean(item?.install_action_visible),
+        installed: Boolean(item?.installed),
+        install_status: item?.install_status || '',
+      };
+    });
+    return {
+      ok: segment.length === 5 && readback.every((item) => (
+        item.visible && (item.install_action_visible || item.installed)
+      )),
+      selector_or_testid: 'skill market exact sampled cards',
+      event: 'sample-card-readback',
+      state_readback: readback,
+      actual: `segment=${segment.length}；visible=${readback.filter((item) => item.visible).length}；actionable=${readback.filter((item) => item.install_action_visible || item.installed).length}`,
+    };
+  }
   if (command === 'verify_skill_preinstall_state') {
     const result = await coreBetaSkillInventory(ctx, '已安装');
     ctx.ledger.skills.preinstall = result.inventory;
@@ -5759,6 +6233,43 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `attempted=${results.length}；installed=${results.filter((item) => item.ok).length}；failed=${results.filter((item) => !item.ok).length}`,
     };
   }
+  if (command === 'install_first_five_market_skills' || command === 'install_second_five_market_skills') {
+    const offset = command === 'install_first_five_market_skills' ? 0 : 5;
+    const segment = (ctx.ledger.skills.sample || []).slice(offset, offset + 5);
+    const results = [];
+    for (const sampled of segment) results.push(await coreBetaInstallSkill(ctx, sampled));
+    ctx.ledger.skills.install_results = [
+      ...(ctx.ledger.skills.install_results || []).filter((item) => (
+        !segment.some((sampled) => sampled.slug === item.slug)
+      )),
+      ...results,
+    ];
+    ctx.ledger.skills.installed = (ctx.ledger.skills.install_results || []).filter((item) => item.ok);
+    return {
+      ok: results.length === 5 && results.every((item) => item.ok),
+      selector_or_testid: 'skill-install exact sampled segment',
+      event: 'serial-install-segment',
+      state_readback: results,
+      actual: `segment=${offset === 0 ? 1 : 2}；attempted=${results.length}；installed=${results.filter((item) => item.ok).length}`,
+    };
+  }
+  if (command === 'verify_first_five_install_terminal_states' || command === 'verify_second_five_install_terminal_states') {
+    const offset = command === 'verify_first_five_install_terminal_states' ? 0 : 5;
+    const expected = (ctx.ledger.skills.sample || []).slice(offset, offset + 5);
+    const results = expected.map((sampled) => (
+      (ctx.ledger.skills.install_results || []).find((item) => item.slug === sampled.slug)
+      || { slug: sampled.slug, name: sampled.name, ok: false, reason: 'missing install receipt' }
+    ));
+    return {
+      ok: results.length === 5 && results.every((item) => item.ok && (
+        item.terminal?.success || item.installed_view_readback || item.reused
+      )),
+      selector_or_testid: 'skill install terminal receipt + installed view',
+      event: 'install-terminal-readback',
+      state_readback: results,
+      actual: `receipts=${results.length}；terminalSuccess=${results.filter((item) => item.ok && (item.terminal?.success || item.installed_view_readback || item.reused)).length}`,
+    };
+  }
   if (command === 'verify_skill_install_results') {
     const results = ctx.ledger.skills.install_results || [];
     const exact = results.length === 10 && results.every((item) => item.ok || item.reason);
@@ -5784,7 +6295,38 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `expected=${expected.length}；matched=${expected.filter((item) => installedNames.some((name) => name.includes(item.name))).length}`,
     };
   }
-  if (command === 'verify_skill_composer_availability') {
+  if (command === 'verify_market_installed_state') {
+    const result = await coreBetaSkillInventory(ctx, '技能市场');
+    const expected = ctx.ledger.skills.installed || [];
+    const readback = expected.map((item) => {
+      const market = result.inventory.find((candidate) => candidate.slug === item.slug);
+      return { slug: item.slug, name: item.name, installed: Boolean(market?.installed), visible: Boolean(market?.visible) };
+    });
+    return {
+      ok: expected.length === 10 && readback.every((item) => item.installed && item.visible),
+      selector_or_testid: 'skill market installed state',
+      event: 'market-installed-readback',
+      state_readback: readback,
+      actual: `expected=${expected.length}；marketInstalled=${readback.filter((item) => item.installed).length}`,
+    };
+  }
+  if (command === 'verify_installed_and_history_views') {
+    const installed = await coreBetaSkillInventory(ctx, '已安装');
+    const history = await coreBetaSkillInventory(ctx, '历史');
+    const expected = ctx.ledger.skills.installed || [];
+    const installedIds = new Set(installed.inventory.flatMap((item) => [item.slug, item.name]));
+    const historyIds = new Set(history.inventory.flatMap((item) => [item.slug, item.name]));
+    const installedMatched = expected.filter((item) => installedIds.has(item.slug) || installedIds.has(item.name));
+    const historyMatched = expected.filter((item) => historyIds.has(item.slug) || historyIds.has(item.name));
+    return {
+      ok: expected.length === 10 && installedMatched.length === 10 && historyMatched.length === 10,
+      selector_or_testid: 'skills installed and history tabs',
+      event: 'cross-view-readback',
+      state_readback: { expected, installed: installed.inventory, history: history.inventory },
+      actual: `expected=${expected.length}；installed=${installedMatched.length}；history=${historyMatched.length}`,
+    };
+  }
+  if (command === 'verify_skill_composer_availability' || command === 'verify_composer_installed_options') {
     await openNewTask(ctx.page, ctx.state);
     const available = [];
     for (const item of ctx.ledger.skills.installed || []) {
@@ -5846,6 +6388,94 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `expected=${selected.slug}；selected=${JSON.stringify(snapshot.selectedSkills)}`,
     };
   }
+  if (command === 'select_skill_via_composer_button') {
+    const index = coreBetaSelectionIndex(ctx.capabilityPolicy.selection_source);
+    const selected = (ctx.ledger.skills.deep_use || [])[index];
+    if (!selected) {
+      return {
+        ok: false,
+        status: 'blocked',
+        category: 'blocked',
+        actual: `deep_use[${index}] 不存在，无法按 Casebook 指定 Skill 执行。`,
+      };
+    }
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('Skill 使用前能力清理失败。');
+    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    ctx.selectedSkill = selected;
+    ctx.skillTaskInitialSelection = snapshot;
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: ok
+        && snapshot.selectedSkillCount === 1
+        && snapshot.chipCount === 1,
+      source: 'visible composer Skill option click + chip + window.agent.capabilities.selectedSkills',
+      expected: selected,
+      snapshot,
+    });
+    return {
+      ok: ok && snapshot.selectedSkillCount === 1 && snapshot.chipCount === 1,
+      selector_or_testid: `composer-skill-option-${selected.slug}`,
+      event: 'select-visible-composer-skill',
+      state_readback: snapshot,
+      actual: `expected=${selected.slug}；selected=${JSON.stringify(snapshot.selectedSkills)}；chips=${snapshot.chipCount}`,
+    };
+  }
+  if (command === 'capture_skill_turn_context') {
+    const task = await qbotE2EState(ctx.page);
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    ctx.skillTaskContextBeforeSend = {
+      task_id: String(task?.activeId || ''),
+      skill: ctx.selectedSkill || null,
+      snapshot,
+    };
+    return {
+      ok: snapshot.selectedSkillCount === 1 && snapshot.chipCount === 1,
+      selector_or_testid: 'composer skill chip + task context',
+      event: 'pre-send-context-readback',
+      state_readback: ctx.skillTaskContextBeforeSend,
+      actual: `taskId=${ctx.skillTaskContextBeforeSend.task_id || 'new-unsaved'}；selected=${JSON.stringify(snapshot.selectedSkills)}`,
+    };
+  }
+  if (command === 'run_two_turn_skill_task') {
+    const derived = coreBetaResolveSkillTurns(ctx);
+    const first = await coreBetaRunTurn(ctx, 0, { label: 'Skill 第 1 轮' });
+    const afterFirst = await composerSkillSelectionSnapshot(ctx.page);
+    const second = await coreBetaRunTurn(ctx, 1, { label: 'Skill 第 2 轮' });
+    const afterSecond = await composerSkillSelectionSnapshot(ctx.page);
+    ctx.skillTwoTurnOutcome = { first, second, afterFirst, afterSecond, derived };
+    return {
+      ok: first.oracle.ok
+        && first.stable
+        && second.oracle.ok
+        && second.stable
+        && first.taskId === second.taskId,
+      selector_or_testid: 'composer-send + task transcript',
+      event: 'two-turn-skill-task',
+      state_readback: ctx.skillTwoTurnOutcome,
+      actual: `firstTask=${first.taskId}；secondTask=${second.taskId}；sameTask=${first.taskId === second.taskId}`,
+    };
+  }
+  if (command === 'verify_two_turn_skill_execution') {
+    const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'skill', ctx.selectedSkill?.slug);
+    const sameTask = Boolean(evidence.task_id)
+      && evidence.task_id === ctx.skillTwoTurnOutcome?.first?.taskId
+      && evidence.task_id === ctx.skillTwoTurnOutcome?.second?.taskId;
+    if (evidence.executed && sameTask) {
+      ctx.ledger.skills.used.push({ slug: ctx.selectedSkill.slug, task_id: evidence.task_id });
+    }
+    return {
+      ok: evidence.executed && sameTask,
+      selector_or_testid: 'task-bound skill execution evidence',
+      event: 'two-turn-execution-readback',
+      state_readback: { evidence, sameTask, turns: ctx.skillTwoTurnOutcome },
+      actual: `skill=${ctx.selectedSkill?.slug || 'missing'}；taskId=${evidence.task_id}；sameTask=${sameTask}；executed=${evidence.executed}`,
+    };
+  }
   if (command === 'send_skill_task') {
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 真实使用', composerPrepared: true });
     ctx.skillOutcome = outcome;
@@ -5868,6 +6498,97 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `skill=${ctx.selectedSkill?.slug || 'missing'}；taskId=${evidence.task_id}；executed=${evidence.executed}`,
     };
   }
+  if (command === 'verify_skill_selection_persistence') {
+    const selected = (ctx.ledger.skills.deep_use || [])[0];
+    if (!selected) return { ok: false, status: 'blocked', category: 'blocked', actual: 'deep_use[0] 不存在。' };
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error('Skill 隔离用例任务 A 初始化失败。');
+    const selectedOk = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    ctx.selectedSkill = selected;
+    const before = await composerSkillSelectionSnapshot(ctx.page);
+    const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 隔离任务 A' });
+    const execution = await coreBetaCapabilityExecutionEvidence(ctx, 'skill', selected.slug);
+    await ctx.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+    await waitForQbotWorkbench(ctx.page, 90000);
+    const reopened = await reopenSessionAndReadback(ctx.page, outcome.taskId);
+    const after = await composerSkillSelectionSnapshot(ctx.page);
+    ctx.skillIsolationTaskA = {
+      selected,
+      outcome,
+      execution,
+      before,
+      after,
+      reopened,
+    };
+    const expected = String(selected.slug || '');
+    const snapshots = [before, after];
+    const persistent = selectedOk
+      && reopened.ok
+      && snapshots.every((snapshot) => (
+        snapshot.selectedSkillCount === 1
+        && snapshot.chipCount === 1
+        && snapshot.selectedSkills.some((identity) => String(identity) === expected || String(identity).includes(expected))
+      ));
+    return {
+      ok: persistent && execution.executed && execution.task_id === outcome.taskId,
+      selector_or_testid: 'composer skill chip after each turn',
+      event: 'selection-persistence-readback',
+      state_readback: ctx.skillIsolationTaskA,
+      actual: `skill=${expected}；taskId=${outcome.taskId}；reopened=${reopened.ok}；persistent=${persistent}；executed=${execution.executed}`,
+    };
+  }
+  if (command === 'create_skill_disabled_task') {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    const task = await qbotE2EState(ctx.page);
+    ctx.skillDisabledTaskSnapshot = { ...snapshot, task_id_before_send: String(task?.activeId || '') };
+    return {
+      ok: reset && snapshot.selectedSkillCount === 0 && snapshot.chipCount === 0,
+      selector_or_testid: 'nav-new-task + composer skill state',
+      event: 'create-skill-disabled-task',
+      state_readback: ctx.skillDisabledTaskSnapshot,
+      actual: `reset=${reset}；selected=${snapshot.selectedSkillCount}；chips=${snapshot.chipCount}`,
+    };
+  }
+  if (command === 'verify_cross_task_skill_isolation') {
+    const outcome = await coreBetaRunTurn(ctx, 1, { label: 'Skill 禁用任务 B' });
+    const snapshot = await composerSkillSelectionSnapshot(ctx.page);
+    const task = await qbotE2EState(ctx.page);
+    const runtime = await ctx.page.evaluate(async () => {
+      const bridge = window.__qbotE2E || window.__deepbankE2E;
+      const [context, diagnostics] = await Promise.all([
+        bridge?.getLastTurnContextEvidence?.().catch(() => null),
+        bridge?.diagnostics?.().catch(() => null),
+      ]);
+      return { context, diagnostics };
+    }).catch((error) => ({ error: error.message }));
+    const target = String(ctx.skillIsolationTaskA?.selected?.slug || '');
+    const taskBHaystack = JSON.stringify({ task, runtime });
+    const isolated = Boolean(ctx.skillIsolationTaskA?.outcome?.taskId)
+      && outcome.taskId !== ctx.skillIsolationTaskA.outcome.taskId
+      && snapshot.selectedSkillCount === 0
+      && snapshot.chipCount === 0
+      && !taskBHaystack.includes(target);
+    return {
+      ok: outcome.oracle.ok && outcome.stable && isolated,
+      selector_or_testid: 'task-bound skill context A/B',
+      event: 'cross-task-isolation-readback',
+      state_readback: {
+        task_a: ctx.skillIsolationTaskA,
+        task_b: { outcome, snapshot, task, runtime },
+        isolated,
+      },
+      actual: `taskA=${ctx.skillIsolationTaskA?.outcome?.taskId || 'missing'}；taskB=${outcome.taskId}；selectedB=${snapshot.selectedSkillCount}；isolated=${isolated}`,
+    };
+  }
   if (command === 'verify_skill_task_isolation') {
     await openNewTask(ctx.page, ctx.state);
     const snapshot = await composerSkillSelectionSnapshot(ctx.page);
@@ -5888,6 +6609,30 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       event: 'isolation-readback',
       state_readback: snapshot,
       actual: JSON.stringify(snapshot),
+    };
+  }
+  if (command === 'cancel_first_skill_uninstall') {
+    const first = (ctx.ledger.skills.installed || [])[0];
+    if (!first) return { ok: false, status: 'blocked', category: 'blocked', actual: '没有本轮安装 Skill 可执行取消卸载。' };
+    const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, [first], { cancelFirst: true });
+    ctx.ledger.skills.cancel_uninstall = results;
+    return {
+      ok: results.length === 1 && results[0].ok && results[0].cancelled,
+      selector_or_testid: 'skill delete confirmation',
+      event: 'cancel-uninstall',
+      state_readback: results,
+      actual: `cancelled=${Boolean(results[0]?.cancelled)}；stillVisible=${Boolean(results[0]?.still_visible)}`,
+    };
+  }
+  if (command === 'uninstall_run_skill_sample') {
+    const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, ctx.ledger.skills.installed || []);
+    ctx.ledger.skills.deleted = results.filter((item) => item.ok).map((item) => item.slug);
+    return {
+      ok: results.length === (ctx.ledger.skills.installed || []).length && results.every((item) => item.ok),
+      selector_or_testid: 'skill delete confirmation',
+      event: 'uninstall-run-sample',
+      state_readback: results,
+      actual: `targets=${results.length}；deleted=${results.filter((item) => item.ok).length}`,
     };
   }
   if (command === 'exercise_skill_uninstall_confirm') {
@@ -5915,21 +6660,27 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       actual: `deleted=${deleted.length}/${(ctx.ledger.skills.installed || []).length}`,
     };
   }
-  if (command === 'verify_skill_cleanup') {
+  if (command === 'verify_skill_cleanup' || command === 'verify_skill_cleanup_across_views') {
     const result = await coreBetaSkillInventory(ctx, '已安装');
     const names = result.domSkills.map((item) => item.name);
     const clean = (ctx.ledger.skills.installed || []).every((item) => !names.some((name) => name.includes(item.name)));
+    let composer = null;
+    if (command === 'verify_skill_cleanup_across_views') {
+      await openNewTask(ctx.page, ctx.state);
+      composer = await composerSkillSelectionSnapshot(ctx.page);
+    }
     setCoreBetaEvidence(ctx.state, 'cleanup_readback', {
-      available: clean,
-      source: 'installed skill list after cleanup',
+      available: clean && (!composer || (composer.selectedSkillCount === 0 && composer.chipCount === 0)),
+      source: 'installed skill list + composer selection after cleanup',
       names,
+      composer,
     });
     return {
-      ok: clean,
+      ok: clean && (!composer || (composer.selectedSkillCount === 0 && composer.chipCount === 0)),
       selector_or_testid: 'skills-view',
       event: 'cleanup-readback',
-      state_readback: names,
-      actual: `clean=${clean}；remaining=${names.join(',')}`,
+      state_readback: { names, composer },
+      actual: `clean=${clean}；remaining=${names.join(',')}；composerSelected=${composer?.selectedSkillCount ?? 'n/a'}`,
     };
   }
   throw new Error(`Core Beta skill command 未实现：${command}`);
@@ -5939,19 +6690,52 @@ function coreBetaExpertIdentity(value) {
   return pipelineCapabilityItemIdentity(value);
 }
 
+export function normalizeCoreBetaExpertCard(card = {}) {
+  const rawId = [card.id, card.expert_id, card.data_id, card.testid]
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value && value !== 'null' && value !== 'undefined') || '';
+  const rawName = String(card.name || card.label || card.text || '').replace(/\s+/g, ' ').trim();
+  const name = rawName
+    .replace(/\s*(?:私有|官方|已发布|草稿)\s*$/u, '')
+    .trim();
+  return {
+    ...card,
+    id: rawId.replace(/^expert-card-/, ''),
+    name,
+  };
+}
+
 async function coreBetaExpertInventory(ctx) {
   await openExpertsPage(ctx.page, ctx.state, ctx.caseDir);
-  const cards = await ctx.page.locator('.feat-card, .exp-card, .exp-card-mine').evaluateAll((items) => items.map((item) => ({
-    id: String(item.getAttribute('data-expert-id') || item.getAttribute('data-id') || item.getAttribute('data-testid') || '').replace(/^expert-card-/, ''),
-    name: String(item.querySelector('.exp-name, .feat-title, [data-testid*="name"]')?.textContent || item.textContent || '').split('\n')[0].trim(),
+  const rawCards = await ctx.page.locator('.feat-card, .exp-card, .exp-card-mine').evaluateAll((items) => items.map((item) => ({
+    expert_id: item.getAttribute('data-expert-id'),
+    data_id: item.getAttribute('data-id'),
+    testid: item.getAttribute('data-testid'),
+    name: String(item.querySelector('.exp-name, .feat-title, [data-testid*="name"]')?.textContent || '').trim(),
     owned: item.classList.contains('exp-card-mine'),
     text: String(item.textContent || '').trim(),
   }))).catch(() => []);
-  const capabilities = await currentCapabilities(ctx.page);
-  const inventory = { cards, current_expert: capabilities?.currentExpert || null };
+  const cards = rawCards.map(normalizeCoreBetaExpertCard);
+  const [capabilities, catalog] = await Promise.all([
+    currentCapabilities(ctx.page),
+    ctx.page.evaluate(async () => {
+      if (typeof window.agent?.getExpertsCatalog !== 'function') return null;
+      return window.agent.getExpertsCatalog();
+    }).catch(() => null),
+  ]);
+  const publicExperts = [
+    ...(Array.isArray(catalog?.mine) ? catalog.mine.map((item) => ({ ...item, owned: true })) : []),
+    ...(Array.isArray(capabilities?.experts) ? capabilities.experts : []),
+    ...(Array.isArray(capabilities?.sessionExperts) ? capabilities.sessionExperts : []),
+  ].map(normalizeCoreBetaExpertCard);
+  for (const expert of publicExperts) {
+    if (!expert.name || cards.some((card) => card.name === expert.name)) continue;
+    cards.push({ ...expert, visible: false, source: 'public expert catalog' });
+  }
+  const inventory = { cards, current_expert: capabilities?.currentExpert || null, catalog };
   setCoreBetaEvidence(ctx.state, 'capability_inventory', {
     available: cards.length > 0,
-    source: 'visible expert cards + window.agent.capabilities',
+    source: 'visible expert cards + window.agent.getExpertsCatalog + capabilities',
     inventory,
   });
   return inventory;
@@ -6071,6 +6855,35 @@ async function coreBetaSelectExactExpertSkill(page, modal, dependency) {
 }
 
 async function executeCoreBetaExpertCommand(ctx, command) {
+  if (command === 'cleanup_stale_qa_experts') {
+    const before = await coreBetaExpertInventory(ctx);
+    const targets = before.cards.filter((item) => item.owned && /^QBot内测(?:研究|数据|交付)专家-/.test(item.name));
+    const results = [];
+    for (const expert of targets) {
+      const result = await ctx.page.evaluate(async (expertName) => {
+        if (typeof window.agent?.deleteExpert !== 'function') {
+          return { ok: false, msg: 'window.agent.deleteExpert unavailable' };
+        }
+        return window.agent.deleteExpert(expertName);
+      }, expert.name).catch((error) => ({ ok: false, msg: error.message }));
+      results.push({ name: expert.name, id: expert.id, ...result });
+    }
+    const resources = readCoreBetaManagedResources(ctx.caseDir);
+    resources.experts = resources.experts.filter((item) => (
+      !targets.some((target) => target.name === item.name)
+    ));
+    const managedFile = writeCoreBetaManagedResources(ctx.caseDir, resources);
+    const after = await coreBetaExpertInventory(ctx);
+    const remaining = targets.filter((target) => after.cards.some((item) => item.name === target.name));
+    ctx.ledger.experts.stale_cleanup = { targets, results, remaining, managed_file: managedFile };
+    return {
+      ok: results.every((item) => item.ok !== false) && remaining.length === 0,
+      selector_or_testid: 'window.agent.deleteExpert exact QBot QA prefix identities',
+      event: 'qa-expert-baseline-cleanup',
+      state_readback: ctx.ledger.experts.stale_cleanup,
+      actual: `targets=${targets.length}；deleted=${results.filter((item) => item.ok).length}；remaining=${remaining.length}`,
+    };
+  }
   if (command === 'inventory_experts_before') {
     const inventory = await coreBetaExpertInventory(ctx);
     ctx.ledger.experts.before = inventory.cards;
@@ -6116,12 +6929,23 @@ async function executeCoreBetaExpertCommand(ctx, command) {
         `core-beta-${definition.role}`,
       );
       const card = ok ? await findExpertCardByName(ctx.page, definition.name) : null;
-      const id = card ? String(
-        await card.getAttribute('data-expert-id').catch(() => '')
-        || await card.getAttribute('data-id').catch(() => '')
-        || await card.getAttribute('data-testid').catch(() => ''),
-      ).replace(/^expert-card-/, '') : '';
+      const idValues = card ? await Promise.all([
+        card.getAttribute('data-expert-id').catch(() => ''),
+        card.getAttribute('data-id').catch(() => ''),
+        card.getAttribute('data-testid').catch(() => ''),
+      ]) : [];
+      const id = (idValues.map((value) => String(value ?? '').trim())
+        .find((value) => value && value !== 'null' && value !== 'undefined') || '')
+        .replace(/^expert-card-/, '');
       created.push({ ...definition, id, ok });
+      if (ok) {
+        upsertCoreBetaManagedResource(ctx.caseDir, 'experts', {
+          name: definition.name,
+          id,
+          role: definition.role,
+          source_case_id: ctx.state.id,
+        }, 'name');
+      }
     }
     ctx.ledger.experts.created = created;
     return {
@@ -6553,6 +7377,15 @@ async function executeCoreBetaExpertCommand(ctx, command) {
       await ctx.page.waitForTimeout(500);
     }
     ctx.ledger.experts.deleted = deleted;
+    if (deleted.length) {
+      const resources = readCoreBetaManagedResources(ctx.caseDir);
+      resources.experts = resources.experts.filter((item) => (
+        !(ctx.ledger.experts.created || []).some((created) => (
+          created.name === item.name && deleted.includes(created.id || created.name)
+        ))
+      ));
+      writeCoreBetaManagedResources(ctx.caseDir, resources);
+    }
     return {
       ok: deleted.length === (ctx.ledger.experts.created || []).length,
       selector_or_testid: 'expert delete confirmation',
@@ -6689,18 +7522,23 @@ async function executeCoreBetaMcpCommand(ctx, command) {
     const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
     ctx.ledger.mcp.selected = selected;
     return {
-      ok: selected.length === 5 && snapshot.selectedConnectorCount === 5,
+      ok: selected.length === 5
+        && snapshot.selectedConnectorCount === 5
+        && snapshot.chipCount > 0
+        && snapshot.connectorRouting?.mode === 'manual',
       selector_or_testid: 'composer-connectors-menu',
       event: 'select-five',
       state_readback: { selected, snapshot },
-      actual: `selected=${selected.length}；public=${snapshot.selectedConnectorCount}`,
+      actual: `selected=${selected.length}；public=${snapshot.selectedConnectorCount}；chips=${snapshot.chipCount}；mode=${snapshot.connectorRouting?.mode || 'missing'}`,
     };
   }
   if (command === 'readback_connector_binding') {
     const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
     const expected = ctx.ledger.mcp.selected || [];
     const exact = expected.length === snapshot.selectedConnectorCount
-      && expected.every((key) => snapshot.selectedConnectors.includes(key));
+      && expected.every((key) => snapshot.selectedConnectors.includes(key))
+      && snapshot.chipCount > 0
+      && snapshot.connectorRouting?.mode === 'manual';
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
       available: exact,
       source: 'visible connector chips + window.agent.capabilities',
@@ -16541,6 +17379,24 @@ export function unifiedSkillModeApplied(capabilities, mode, bridgeSelection = un
   return false;
 }
 
+export function coreBetaManualConnectorModeReady({
+  ariaChecked = '',
+  manualSurface = null,
+  capabilities = null,
+} = {}) {
+  const listReady = Boolean(
+    manualSurface?.list_visible
+    && (Number(manualSurface?.option_count || 0) > 0 || manualSurface?.empty_visible),
+  );
+  const publicManual = capabilities?.connectorRouting?.mode === 'manual';
+  return {
+    ok: listReady && (publicManual || ariaChecked === 'true'),
+    list_ready: listReady,
+    public_manual: publicManual,
+    aria_checked: ariaChecked === 'true',
+  };
+}
+
 async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
@@ -16564,6 +17420,8 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
     }
     let afterText = '';
     let manualSurface = null;
+    let capabilities = null;
+    let readiness = null;
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(200);
@@ -16586,23 +17444,21 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
           manual_note_visible: isVisible(manualNote),
         };
       }).catch(() => null);
-      if (
-        checked === 'true'
-        && manualSurface?.list_visible
-        && (manualSurface.option_count > 0 || manualSurface.empty_visible)
-        && manualSurface.manual_note_visible
-      ) break;
+      capabilities = await currentCapabilities(page);
+      readiness = coreBetaManualConnectorModeReady({
+        ariaChecked: checked,
+        manualSurface,
+        capabilities,
+      });
+      if (readiness.ok) break;
     }
-    const ok = checked === 'true'
-      && manualSurface?.list_visible
-      && (manualSurface.option_count > 0 || manualSurface.empty_visible)
-      && manualSurface.manual_note_visible;
+    const ok = Boolean(readiness?.ok);
     state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual');
     recordStep(
       state,
       '通过可见 UI 切换连接器模式：manual',
-      '必须真实点击“+ > 连接器 > 手动”，并看到手动连接器列表；仅打开自动模式说明页不算完成。',
-      `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
+      '必须真实点击“+ > 连接器 > 手动”，看到手动连接器列表，并由 connectorRouting.mode=manual 或标准 radio 状态确认；非产品契约提示文案不作为硬断言。',
+      `aria-checked=${checked || '未读取'}；routing.mode=${capabilities?.connectorRouting?.mode || '未读取'}；readiness=${JSON.stringify(readiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.connector_mode_manual,
       ok ? '' : 'automation_error',

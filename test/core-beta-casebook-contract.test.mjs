@@ -16,22 +16,27 @@ import {
 } from '../src/lib/core-beta-casebook-contract.mjs';
 import {
   buildCaseEvidenceManifest,
+  coreBetaCatalogSkillInventory,
   coreBetaActionReceiptsComplete,
   coreBetaAttachmentCollectNeedsSend,
   coreBetaBatchPendingPoolEvidence,
   coreBetaBatchSharedDeadline,
   coreBetaBatchTerminalEvidence,
   coreBetaMaintenanceConfirmationContract,
+  coreBetaManualConnectorModeReady,
   coreBetaNeedsRendererReconnect,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  coreBetaSkillTaskProfile,
+  normalizeCoreBetaExpertCard,
   seedCoreBetaSharedLedgerCheckpoint,
   verifiedCapabilitySelectionUnavailableEvidence,
   verifiedExpertSelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
+import { isSupportedQbotAttachmentPath } from '../src/lib/qbot-ui-attachments.mjs';
 
 function conversationCase() {
   const steps = [
@@ -194,6 +199,101 @@ test('deterministic sampler is stable, stratified, and refuses shortages', () =>
   assert.deepEqual(first.selected_ids, second.selected_ids);
   assert.equal(new Set(first.strata).size, 3);
   assert.equal(deterministicCapabilitySample(items.slice(0, 4), { count: 5, seed: 'x' }).ok, false);
+});
+
+test('skill market inventory comes from getSkillsCatalog.market, never installed capabilities', () => {
+  const market = Array.from({ length: 12 }, (_, index) => ({
+    name: `market-skill-${index + 1}`,
+    slug: `market-skill-${index + 1}`,
+    namespace: 'global',
+    label: `市场技能 ${index + 1}`,
+    latestVersion: '1.0.0',
+    category: index % 2 ? '数据' : '文档',
+    installed: false,
+    usable: true,
+  }));
+  const dom = market.map((item) => ({
+    slug: '',
+    name: item.label,
+    action_text: '安装',
+    action_aria_label: '安装技能',
+    action_disabled: false,
+  }));
+  const result = coreBetaCatalogSkillInventory({
+    installed: [
+      { name: 'builtin-a', label: '内置 A', version: '1.0.0' },
+      { name: 'builtin-b', label: '内置 B', version: '1.0.0' },
+    ],
+    market,
+    marketSource: 'remote',
+    marketStatus: 'ready',
+  }, '技能市场', dom);
+  assert.equal(result.branch, 'market');
+  assert.equal(result.inventory.length, 12);
+  assert.equal(result.inventory.every((item) => item.visible && item.install_action_visible), true);
+  assert.equal(result.inventory.some((item) => item.slug === 'builtin-a'), false);
+});
+
+test('installed Skill tasks are derived from the actual Skill identity and README domain', () => {
+  const finance = coreBetaSkillTaskProfile(
+    { slug: 'variance-analysis', raw: { desc: 'Analyze financial variances' } },
+    '# Variance Analysis\nUse monthly finance inputs and show calculations.',
+  );
+  const design = coreBetaSkillTaskProfile(
+    { slug: 'frontend-design', raw: { desc: 'Build polished web interfaces' } },
+    '# Frontend Design',
+  );
+  assert.equal(finance.scenario, '财务分析');
+  assert.match(finance.input, /收入120万元/);
+  assert.equal(design.scenario, '网页/设计交付');
+  assert.match(design.expected, /交付物/);
+});
+
+test('expert visible identity excludes status copy and null DOM ids', () => {
+  assert.deepEqual(
+    normalizeCoreBetaExpertCard({
+      id: null,
+      testid: null,
+      name: '',
+      text: 'QBot内测研究专家-6be9bd私有',
+      owned: true,
+    }),
+    {
+      id: '',
+      testid: null,
+      name: 'QBot内测研究专家-6be9bd',
+      text: 'QBot内测研究专家-6be9bd私有',
+      owned: true,
+    },
+  );
+});
+
+test('MCP manual mode uses public routing plus visible options; optional copy is diagnostic only', () => {
+  const ready = coreBetaManualConnectorModeReady({
+    ariaChecked: '',
+    manualSurface: {
+      list_visible: true,
+      option_count: 24,
+      empty_visible: false,
+      manual_note_visible: false,
+    },
+    capabilities: {
+      connectorRouting: { mode: 'manual' },
+      selectedConnectors: [],
+    },
+  });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.public_manual, true);
+  assert.equal(coreBetaManualConnectorModeReady({
+    ariaChecked: 'true',
+    manualSurface: { list_visible: false, option_count: 24 },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }).ok, false);
+});
+
+test('QA attachment allowlist follows the product release contract for log files', () => {
+  assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.log'), true);
+  assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.exe'), false);
 });
 
 test('click evidence requires before/action/after plus a relevant state transition', () => {
