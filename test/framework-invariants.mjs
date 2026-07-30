@@ -11,6 +11,10 @@ import {
   assistantConfirmationSurfaceVerdict,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
+  coreBetaActionStopsPlan,
+  coreBetaPartialReplyReady,
+  coreBetaSelectedCapabilityIdentities,
+  coreBetaSkillSelectionReadbackMatches,
   buildTerminalConversationEvidence,
   buildCredibilityReview,
   buildSingleHostPipelineBatch,
@@ -687,7 +691,7 @@ const required = [
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
   ['连接器 reset 对禁用/自动模式直达且不先切手动', /if \(connectorMode === 'disabled' \|\| connectorMode === 'auto'\)[\s\S]*setConnectorMode\(page, state, caseDir, connectorMode\)[\s\S]*else \{[\s\S]*clearManualConnectorSelections/],
   ['连接器模式切换使用新 DOM 和能力状态轮询', /async function setConnectorMode[\s\S]*const freshLocator = await connectorModeLocator[\s\S]*capabilities\?\.connectorRouting\?\.mode[\s\S]*'automation_error'/],
-  ['统一连接器菜单按公共目录名称选择并回读唯一 key', /selectManualConnectorByKey[\s\S]*catalogMatch[\s\S]*matches\.length === 1[\s\S]*selectedConnectors\.includes\(connectorKey\)[\s\S]*public-catalog-visible-label/],
+  ['统一连接器菜单按公共目录名称选择并回读唯一 key', /selectManualConnectorByKey[\s\S]*catalogMatch[\s\S]*matches\.length === 1[\s\S]*coreBetaSelectedCapabilityIdentities\(selectedConnectors\)\.includes\(connectorKey\)[\s\S]*public-catalog-visible-label/],
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-030 产品入口缺失保存现场并归类为 bug', /executeSitHomeQuickFeedback[\s\S]*quick_feedback_entry[\s\S]*home_030_feedback_entry_missing[\s\S]*'检查快速反馈入口'[\s\S]*'bug'/],
@@ -830,8 +834,11 @@ const required = [
   ['SKILL-032 用户断言不暴露原始 Fixture 详情', /executeSitSkillDependencyFailureBlocksRoot[\s\S]*用户可以修复依赖后重试[\s\S]*skill_032_raw_failure/],
   ['凭证轮换最多三次且优先重新生成避免重复用户消息', /for \(let retryNo = 1; retryNo <= 3[\s\S]*regenerate-existing-turn[\s\S]*safe-resend/],
   ['TASK-RECOVER-001 注入短暂网络故障后真实重试且成果精确唯一', /executeSitTaskNetworkRecovery[\s\S]*delayMs: 5000[\s\S]*重新生成\|重试[\s\S]*artifactCopies === 1/],
-  ['RUNTIME-RECOVER-001 只终止受控宿主树内执行子进程或当前任务', /executeSitRuntimeRecovery[\s\S]*selectManagedRuntimeProcess[\s\S]*SIGTERM[\s\S]*cancelTurn[\s\S]*retryRuntime[\s\S]*copies === 1/],
-  ['受管 runtime 必须追溯到 Volumes 下 360Teams 主进程', /selectManagedRuntimeProcess[\s\S]*Contents\\\/MacOS\\\/360Teams[\s\S]*ancestor_chain/],
+  ['RUNTIME-RECOVER-001 只终止受控宿主树内真实执行子进程', /executeSitRuntimeRecovery[\s\S]*selectManagedRuntimeProcess[\s\S]*SIGTERM[\s\S]*waitForManagedProcessExit[\s\S]*不得用 cancelTurn 冒充 runtime 崩溃[\s\S]*retryRuntime[\s\S]*copies === 1/],
+  ['受管 runtime 必须追溯到 Applications 或 Volumes 下 360Teams 主进程', /selectManagedRuntimeProcess[\s\S]*Applications\\\/360Teams[\s\S]*Volumes\\\/360Teams[\s\S]*ancestor_chain/],
+  ['Core Beta 动作失败后后续真实动作 fail-closed', /coreBetaActionStopsPlan[\s\S]*core-beta-fail-closed-action-gate[\s\S]*skipped-after-failed-prerequisite/],
+  ['停止生成必须先观察非空 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
+  ['统一能力子菜单使用最新可见 Portal 并保留 click 与键盘回退', /openUnifiedComposerSubmenu[\s\S]*lastVisibleLocator[\s\S]*row\.click[\s\S]*ArrowRight[\s\S]*row\.press\('Enter'\)/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
   ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
@@ -931,6 +938,46 @@ await withReplyPollHardTimeout(new Promise(() => {}), 20, 'invariant probe').the
 );
 if (Date.now() - hardTimeoutStartedAt > 500) throw new Error('回复轮询硬超时未及时终止等待');
 
+assert.equal(coreBetaActionStopsPlan({ ok: false }), true, '明确失败动作必须停止后续真实动作');
+assert.equal(coreBetaActionStopsPlan({ ok: true }), false, '成功动作不得错误停止计划');
+assert.equal(coreBetaActionStopsPlan(null), false, '空结果不得错误停止计划');
+const partialReady = coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  baselineAssistantText: '旧回复',
+  latestAssistantText: '旧回复正在生成新内容',
+});
+assert.equal(partialReady.ready, true, `非空增量应允许停止：${JSON.stringify(partialReady)}`);
+assert.equal(coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  baselineAssistantText: '旧回复',
+  latestAssistantText: '旧回复',
+}).ready, false, '没有新 partial delta 时禁止点击停止');
+assert.equal(coreBetaPartialReplyReady({
+  running: false,
+  cancelVisible: true,
+  latestAssistantText: '已有内容',
+}).ready, false, '任务已结束后不得补点停止');
+assert.deepEqual(
+  coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'connector-b' }, 'plain-c']),
+  ['skill-a', 'connector-b', 'plain-c'],
+  '能力选择读回必须统一对象和字符串身份',
+);
+assert.equal(coreBetaSkillSelectionReadbackMatches({
+  selectedSkillCount: 1,
+  selectedSkills: [{ slug: 'qa-skill-a', label: 'QA Skill A' }],
+  chipCount: 1,
+  chipTexts: ['QA Skill A'],
+  chipTestIds: ['composer-skill-chip-qa-skill-a'],
+}, ['qa-skill-a', 'QA Skill A']).ok, true, 'Skill 选择必须接受 catalog slug 与可见标签的同一身份');
+assert.equal(coreBetaSkillSelectionReadbackMatches({
+  selectedSkillCount: 1,
+  selectedSkills: ['other-skill'],
+  chipCount: 1,
+  chipTexts: ['Other Skill'],
+}, ['qa-skill-a']).ok, false, '不同 Skill 不得被宽松文案误判为已选中');
+
 const managedProcessFixture = [
   { pid: 100, ppid: 1, command: '/Volumes/360Teams 3/360Teams.app/Contents/MacOS/360Teams --remote-debugging-port=52364 --profile-alias qbot-full' },
   { pid: 110, ppid: 100, command: '/Volumes/360Teams 3/360Teams.app/Contents/Frameworks/360Teams Helper.app/Contents/MacOS/360Teams Helper --type=utility' },
@@ -941,6 +988,14 @@ const managedProcessFixture = [
 const managedTarget = selectManagedRuntimeProcess(managedProcessFixture, { previousPids: new Set([100, 110, 200, 210]) });
 if (!managedTarget.ok || managedTarget.process.pid !== 120 || !managedTarget.ancestor_chain.some((item) => item.pid === 100)) {
   throw new Error(`受管 runtime 进程选择错误：${JSON.stringify(managedTarget)}`);
+}
+const applicationManagedTarget = selectManagedRuntimeProcess([
+  { pid: 400, ppid: 1, command: '/Applications/360Teams.app/Contents/MacOS/360Teams --remote-debugging-port=55960' },
+  { pid: 410, ppid: 400, command: '/Applications/360Teams.app/Contents/Frameworks/360Teams Helper.app/Contents/MacOS/360Teams Helper --type=utility' },
+  { pid: 420, ppid: 410, command: '/Users/qifu/.deepbank-uat/runtimes/qbot-core/0.0.23/runtime/desktop-agent-runtime.cjs --family claude-code' },
+]);
+if (!applicationManagedTarget.ok || applicationManagedTarget.process.pid !== 420) {
+  throw new Error(`Applications 正式宿主下的 runtime 进程选择错误：${JSON.stringify(applicationManagedTarget)}`);
 }
 const helperOnlyTarget = selectManagedRuntimeProcess([
   { pid: 310, ppid: 1, command: '/tmp/Fake.app/Contents/Frameworks/360Teams Helper.app/Contents/MacOS/360Teams Helper --type=utility' },

@@ -2131,6 +2131,12 @@ function pipelineCapabilityItemIdentity(item) {
   return '';
 }
 
+export function coreBetaSelectedCapabilityIdentities(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(pipelineCapabilityItemIdentity)
+    .filter(Boolean);
+}
+
 function pipelineCapabilityMode(selection, explicitMode = '') {
   if (String(explicitMode || '').trim()) return String(explicitMode).trim();
   if (selection === null) return 'auto';
@@ -3283,7 +3289,11 @@ function loadCoreBetaSharedLedger(caseDir) {
       const seen = new Set();
       for (const receipt of ledger.skills.install_results) {
         const identity = String(receipt?.slug || receipt?.name || '').trim();
-        if (receipt?.ok !== true || !identity || seen.has(identity)) continue;
+        if (
+          (receipt?.ok !== true && receipt?.managed_side_effect !== true && receipt?.server_installed !== true)
+          || !identity
+          || seen.has(identity)
+        ) continue;
         seen.add(identity);
         exactRunInstalled.push(receipt);
       }
@@ -3345,6 +3355,10 @@ export function coreBetaActionReceiptsComplete(receipts, planLength) {
         || String(item.error || '').trim()
       )
     ));
+}
+
+export function coreBetaActionStopsPlan(result) {
+  return Boolean(result && result.ok === false);
 }
 
 async function runCoreBetaNumberedAction({
@@ -3902,16 +3916,42 @@ async function executeCoreBetaCase({ page, state, testCase, caseDir, timeoutMs, 
     coreBetaPersistRoleEvidence(state, caseDir);
     return;
   }
+  let stoppedBy = null;
   for (const action of ctx.plan) {
-    await runCoreBetaNumberedAction({
+    const result = await runCoreBetaNumberedAction({
       page: runtime?.page || page,
       pageProvider: () => runtime?.page || ctx.page,
       state,
       caseDir,
       action,
       planLength: ctx.plan.length,
-      execute: () => executeCoreBetaCommand(ctx, action),
+      execute: stoppedBy
+        ? async () => ({
+          ok: false,
+          status: 'failed',
+          category: stoppedBy.result?.category || 'automation_error',
+          selector_or_testid: 'core-beta-fail-closed-action-gate',
+          event: 'skipped-after-failed-prerequisite',
+          state_readback: {
+            stopped_by_action_id: stoppedBy.action_id,
+            stopped_by_command: stoppedBy.command,
+            stopped_by_result: stoppedBy.result,
+          },
+          actual: `前置动作 ${stoppedBy.action_id}/${stoppedBy.command} 未成功，已禁止执行后续真实 UI/发送动作。`,
+        })
+        : () => executeCoreBetaCommand(ctx, action),
     });
+    if (!stoppedBy && coreBetaActionStopsPlan(result)) {
+      stoppedBy = {
+        action_id: action.action_id,
+        command: action.command,
+        result,
+      };
+      ctx.state.artifacts.core_beta_fail_closed_gate = {
+        stopped_at: new Date().toISOString(),
+        ...stoppedBy,
+      };
+    }
     ctx.page = runtime?.page || ctx.page;
   }
   await finalizeCoreBetaCase(ctx);
@@ -4433,29 +4473,89 @@ async function coreBetaCollectPendingTurn(ctx) {
   };
 }
 
+export function coreBetaPartialReplyReady({
+  running = false,
+  cancelVisible = false,
+  baselineAssistantText = '',
+  latestAssistantText = '',
+  minimumChars = 4,
+} = {}) {
+  const baseline = String(baselineAssistantText || '');
+  const latest = String(latestAssistantText || '');
+  const delta = latest.startsWith(baseline)
+    ? latest.slice(baseline.length)
+    : latest === baseline
+      ? ''
+      : latest;
+  return {
+    ready: Boolean(running && cancelVisible && delta.trim().length >= Number(minimumChars || 4)),
+    delta,
+    delta_chars: delta.length,
+  };
+}
+
 async function coreBetaStopGeneration(ctx) {
   if (!ctx.pending) throw new Error('停止生成前没有运行中的派发任务。');
   const { page, state, caseDir } = ctx;
   const cancel = page.locator('[data-testid="composer-cancel"], [aria-label*="停止"], button:has-text("停止生成")').first();
-  const runningBefore = await isAgentGenerating(page);
-  if (!(await visible(cancel, 5000))) {
+  const baselineAssistantText = String(ctx.pending.before?.latestAssistantText || '');
+  const partialDeadline = Math.min(
+    Date.now() + 90_000,
+    Number(ctx.pending.startedAtMs || Date.now()) + Math.max(90_000, Number(ctx.timeoutMs || 0)),
+  );
+  let snapshot = await conversationSnapshot(page);
+  let runningBefore = await isAgentGenerating(page);
+  let cancelVisible = await visible(cancel, 1000);
+  let partial = coreBetaPartialReplyReady({
+    running: runningBefore,
+    cancelVisible,
+    baselineAssistantText,
+    latestAssistantText: snapshot.latestAssistantText,
+  });
+  while (!partial.ready && runningBefore && Date.now() < partialDeadline) {
+    await page.waitForTimeout(250);
+    snapshot = await conversationSnapshot(page);
+    runningBefore = await isAgentGenerating(page);
+    cancelVisible = await visible(cancel, 250);
+    partial = coreBetaPartialReplyReady({
+      running: runningBefore,
+      cancelVisible,
+      baselineAssistantText,
+      latestAssistantText: snapshot.latestAssistantText,
+    });
+  }
+  if (!partial.ready) {
     return {
       ok: false,
-      category: 'bug',
+      status: 'blocked',
+      category: 'blocked',
       selector_or_testid: 'composer-cancel',
-      event: 'readback',
-      state_readback: { running_before: runningBefore, cancel_visible: false },
-      actual: `runningBefore=${runningBefore}；未找到停止生成入口。`,
+      event: 'partial-reply-precondition-readback',
+      state_readback: {
+        running_before: runningBefore,
+        cancel_visible: cancelVisible,
+        partial_reply_ready: false,
+        partial_delta_chars: partial.delta_chars,
+        waited_ms: Date.now() - ctx.pending.startedAtMs,
+      },
+      actual: `停止前置未成立：running=${runningBefore}；cancelVisible=${cancelVisible}；partialDeltaChars=${partial.delta_chars}。框架未点击停止。`,
     };
   }
+  state.screenshots.core_beta_partial_before_stop = await shot(page, caseDir, 'core-beta-partial-before-stop');
   await cancel.click({ force: true }).catch(async () => cancel.evaluate((element) => element.click()));
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline && await isAgentGenerating(page)) await page.waitForTimeout(500);
   const runningAfter = await isAgentGenerating(page);
-  const snapshot = await conversationSnapshot(page);
+  snapshot = await conversationSnapshot(page);
+  const retained = coreBetaPartialReplyReady({
+    running: true,
+    cancelVisible: true,
+    baselineAssistantText,
+    latestAssistantText: snapshot.latestAssistantText,
+  });
   const reply = {
     fullText: snapshot.latestAssistantText,
-    deltaText: snapshot.latestAssistantText,
+    deltaText: retained.delta,
     incomplete: true,
     incomplete_reason: '用户通过产品停止入口终止生成。',
     stable_observations: 0,
@@ -4467,11 +4567,13 @@ async function coreBetaStopGeneration(ctx) {
     task_id: ctx.pending.taskId,
     running_before: runningBefore,
     running_after: runningAfter,
-    retained_chars: snapshot.latestAssistantText.length,
+    partial_reply_ready_before_click: partial.ready,
+    partial_chars_before_click: partial.delta_chars,
+    retained_chars: retained.delta_chars,
   };
   ctx.pending = null;
   return {
-    ok: runningBefore && !runningAfter && snapshot.latestAssistantText.length > 0,
+    ok: runningBefore && !runningAfter && retained.delta_chars > 0,
     selector_or_testid: 'composer-cancel',
     event: 'click',
     state_readback: state.artifacts.core_beta_stopped_task,
@@ -5996,11 +6098,14 @@ async function coreBetaInstallSkill(ctx, sampled) {
     const runtimeReady = /ready|loaded|active|available|ok/i.test(readinessStatus);
     const installed = installedMarker || Boolean(catalogSkill);
     const reused = installed && runtimeReady;
-    if (reused) {
+    if (installed) {
       upsertCoreBetaManagedResource(ctx.caseDir, 'skills', {
         slug: sampled.slug,
         name: sampled.name,
         source_case_id: ctx.state.id,
+        managed_side_effect: true,
+        runtime_ready: runtimeReady,
+        readiness_status: readinessStatus,
       }, 'slug');
     }
     return {
@@ -6012,6 +6117,8 @@ async function coreBetaInstallSkill(ctx, sampled) {
       reused,
       installed_card_readback: installedMarker,
       catalog_installed_readback: catalogSkill,
+      server_installed: installed,
+      managed_side_effect: installed,
       runtime_ready: runtimeReady,
       readiness_status: readinessStatus,
       reason: reused
@@ -6058,23 +6165,29 @@ async function coreBetaInstallSkill(ctx, sampled) {
     || '',
   );
   const runtimeReady = /ready|loaded|active|available|ok/i.test(readinessStatus);
+  const serverInstalled = Boolean(terminal.success || visibleInstalled || catalogSkill);
   const result = {
     slug: sampled.slug,
     name: sampled.name,
     label: sampled.label,
     identities,
-    ok: (terminal.success || visibleInstalled) && !terminal.failure && runtimeReady,
+    ok: serverInstalled && !terminal.failure && runtimeReady,
+    server_installed: serverInstalled,
+    managed_side_effect: serverInstalled,
     terminal,
     installed_view_readback: visibleInstalled,
     catalog_installed_readback: catalogSkill,
     runtime_ready: runtimeReady,
     readiness_status: readinessStatus,
   };
-  if (result.ok) {
+  if (serverInstalled) {
     upsertCoreBetaManagedResource(ctx.caseDir, 'skills', {
       slug: sampled.slug,
       name: sampled.name,
       source_case_id: ctx.state.id,
+      managed_side_effect: true,
+      runtime_ready: runtimeReady,
+      readiness_status: readinessStatus,
     }, 'slug');
   }
   return result;
@@ -6596,9 +6709,9 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     const results = [];
     for (const sampled of ctx.ledger.skills.sample || []) results.push(await coreBetaInstallSkill(ctx, sampled));
     ctx.ledger.skills.install_results = results;
-    ctx.ledger.skills.installed = results.filter((item) => item.ok);
+    ctx.ledger.skills.installed = results.filter((item) => item.ok || item.managed_side_effect || item.server_installed);
     return {
-      ok: results.length === 10 && results.every((item) => item.ok || item.reason),
+      ok: results.length === 10 && results.every((item) => item.ok),
       selector_or_testid: 'skill-install',
       event: 'serial-install',
       state_readback: results,
@@ -6616,7 +6729,8 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       )),
       ...results,
     ];
-    ctx.ledger.skills.installed = (ctx.ledger.skills.install_results || []).filter((item) => item.ok);
+    ctx.ledger.skills.installed = (ctx.ledger.skills.install_results || [])
+      .filter((item) => item.ok || item.managed_side_effect || item.server_installed);
     return {
       ok: results.length === 5 && results.every((item) => item.ok),
       selector_or_testid: 'skill-install exact sampled segment',
@@ -6644,7 +6758,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
   }
   if (command === 'verify_skill_install_results') {
     const results = ctx.ledger.skills.install_results || [];
-    const exact = results.length === 10 && results.every((item) => item.ok || item.reason);
+    const exact = results.length === 10 && results.every((item) => item.ok);
     return {
       ok: exact,
       selector_or_testid: 'core-beta-shared-ledger',
@@ -6702,7 +6816,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     await openNewTask(ctx.page, ctx.state);
     const available = [];
     for (const item of ctx.ledger.skills.installed || []) {
-      const selected = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, item.name);
+      const selected = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, item);
       if (selected) available.push(item.slug);
       await clearManualSkillSelections(ctx.page, ctx.state, ctx.caseDir);
     }
@@ -6743,7 +6857,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     });
     if (!reset) throw new Error('Skill 使用前能力清理失败。');
     await fillComposer(ctx.page, ctx.turns[0].prompt, ctx.state, '输入 Skill 任务并保留正文');
-    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected);
     const snapshot = await composerSkillSelectionSnapshot(ctx.page);
     ctx.selectedSkill = selected;
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
@@ -6777,7 +6891,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       connectorMode: 'disabled',
     });
     if (!reset) throw new Error('Skill 使用前能力清理失败。');
-    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    const ok = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected);
     const snapshot = await composerSkillSelectionSnapshot(ctx.page);
     ctx.selectedSkill = selected;
     ctx.skillTaskInitialSelection = snapshot;
@@ -6879,9 +6993,25 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       connectorMode: 'disabled',
     });
     if (!reset) throw new Error('Skill 隔离用例任务 A 初始化失败。');
-    const selectedOk = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected.name);
+    const selectedOk = await selectManualSkillByName(ctx.page, ctx.state, ctx.caseDir, selected);
     ctx.selectedSkill = selected;
     const before = await composerSkillSelectionSnapshot(ctx.page);
+    if (!selectedOk || before.selectedSkillCount !== 1 || before.chipCount !== 1) {
+      setCoreBetaEvidence(ctx.state, 'capability_selection', {
+        available: false,
+        source: 'visible composer skill selection pre-send gate',
+        expected: selected,
+        snapshot: before,
+      });
+      return {
+        ok: false,
+        category: 'automation_error',
+        selector_or_testid: `composer-skill-option-${selected.slug}`,
+        event: 'selection-precondition-failed',
+        state_readback: { selected, selectedOk, before },
+        actual: `Skill 未精确选中，已禁止发送隔离任务：selectedOk=${selectedOk}；public=${before.selectedSkillCount}；chips=${before.chipCount}`,
+      };
+    }
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 隔离任务 A' });
     const execution = await coreBetaCapabilityExecutionEvidence(ctx, 'skill', selected.slug);
     try {
@@ -8039,15 +8169,16 @@ async function executeCoreBetaMcpCommand(ctx, command) {
   if (command === 'readback_connector_binding') {
     const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
     const expected = ctx.ledger.mcp.selected || [];
+    const selectedIdentities = coreBetaSelectedCapabilityIdentities(snapshot.selectedConnectors);
     const exact = expected.length === snapshot.selectedConnectorCount
-      && expected.every((key) => snapshot.selectedConnectors.includes(key))
+      && expected.every((key) => selectedIdentities.includes(key))
       && snapshot.chipCount > 0
       && snapshot.connectorRouting?.mode === 'manual';
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
       available: exact,
       source: 'visible connector chips + window.agent.capabilities',
       expected,
-      snapshot,
+      snapshot: { ...snapshot, selectedIdentities },
     });
     return {
       ok: exact,
@@ -8086,22 +8217,43 @@ async function executeCoreBetaMcpCommand(ctx, command) {
     if (!reset) throw new Error('MCP 使用前能力清理失败。');
     const ok = await selectManualConnectorByKey(ctx.page, ctx.state, ctx.caseDir, selected.key);
     const snapshot = await composerConnectorSelectionSnapshot(ctx.page);
+    const selectedIdentities = coreBetaSelectedCapabilityIdentities(snapshot.selectedConnectors);
     ctx.selectedMcp = selected;
     setCoreBetaEvidence(ctx.state, 'capability_selection', {
-      available: ok && snapshot.selectedConnectors.includes(selected.key),
+      available: ok && selectedIdentities.includes(selected.key),
       source: 'visible connector chip + window.agent.capabilities',
       expected: selected,
-      snapshot,
+      snapshot: { ...snapshot, selectedIdentities },
     });
     return {
-      ok: ok && snapshot.selectedConnectors.includes(selected.key),
+      ok: ok
+        && selectedIdentities.includes(selected.key)
+        && snapshot.chipCount > 0
+        && snapshot.connectorRouting?.mode === 'manual',
       selector_or_testid: `composer-connector-option-${selected.key}`,
       event: 'select',
-      state_readback: snapshot,
-      actual: `expected=${selected.key}；selected=${JSON.stringify(snapshot.selectedConnectors)}`,
+      state_readback: { ...snapshot, selectedIdentities },
+      actual: `expected=${selected.key}；selected=${JSON.stringify(selectedIdentities)}；chips=${snapshot.chipCount}；mode=${snapshot.connectorRouting?.mode || 'missing'}`,
     };
   }
   if (command === 'run_mcp_turn_1') {
+    const selection = await composerConnectorSelectionSnapshot(ctx.page);
+    const selectedIdentities = coreBetaSelectedCapabilityIdentities(selection.selectedConnectors);
+    if (
+      !ctx.selectedMcp?.key
+      || !selectedIdentities.includes(ctx.selectedMcp.key)
+      || selection.chipCount < 1
+      || selection.connectorRouting?.mode !== 'manual'
+    ) {
+      return {
+        ok: false,
+        category: 'automation_error',
+        selector_or_testid: `composer-connector-chip-${ctx.selectedMcp?.key || 'missing'}`,
+        event: 'mcp-selection-precondition-failed',
+        state_readback: { expected: ctx.selectedMcp || null, selection, selectedIdentities },
+        actual: 'MCP 第 1 轮发送前未读到指定连接器的 manual 绑定与可见 chip，已禁止发送。',
+      };
+    }
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'MCP 第 1 轮' });
     ctx.mcpFirst = outcome;
     return {
@@ -8113,6 +8265,23 @@ async function executeCoreBetaMcpCommand(ctx, command) {
     };
   }
   if (command === 'run_mcp_turn_2_and_verify') {
+    const selection = await composerConnectorSelectionSnapshot(ctx.page);
+    const selectedIdentities = coreBetaSelectedCapabilityIdentities(selection.selectedConnectors);
+    if (
+      !ctx.selectedMcp?.key
+      || !selectedIdentities.includes(ctx.selectedMcp.key)
+      || selection.chipCount < 1
+      || selection.connectorRouting?.mode !== 'manual'
+    ) {
+      return {
+        ok: false,
+        category: 'automation_error',
+        selector_or_testid: `composer-connector-chip-${ctx.selectedMcp?.key || 'missing'}`,
+        event: 'mcp-selection-persistence-precondition-failed',
+        state_readback: { expected: ctx.selectedMcp || null, selection, selectedIdentities },
+        actual: 'MCP 第 2 轮发送前指定连接器绑定已丢失，已禁止发送。',
+      };
+    }
     const outcome = await coreBetaRunTurn(ctx, 1, { label: 'MCP 第 2 轮' });
     const evidence = await coreBetaCapabilityExecutionEvidence(ctx, 'mcp', ctx.selectedMcp?.key);
     if (evidence.executed) ctx.ledger.mcp.used.push({ key: ctx.selectedMcp.key, task_id: evidence.task_id });
@@ -8237,39 +8406,57 @@ async function executeCoreBetaRecoveryCommand(ctx, command) {
     if (!ctx.recovery?.task_id) throw new Error('缺少运行时恢复任务账本。');
     const rows = managedProcessRows();
     const target = selectManagedRuntimeProcess(rows);
-    let terminated = false;
-    let mode = 'managed-child-sigterm';
-    let reason = '';
-    if (target.ok) {
-      try {
-        process.kill(target.process.pid, 'SIGTERM');
-        terminated = true;
-      } catch (error) {
-        reason = error.message;
-      }
-    } else {
-      mode = 'task-scoped-cancel-turn';
-      const cancelled = await ctx.page.evaluate(async () => {
-        const bridge = window.__qbotE2E || window.__deepbankE2E;
-        if (typeof bridge?.cancelTurn === 'function') return bridge.cancelTurn();
-        if (typeof window.agent?.cancel === 'function') {
-          await window.agent.cancel();
-          return { ok: true };
-        }
-        return { ok: false, reason: 'cancelTurn/cancel unavailable' };
-      }).catch((error) => ({ ok: false, reason: error.message }));
-      terminated = Boolean(cancelled?.ok);
-      reason = cancelled?.reason || '';
+    const mode = 'managed-runtime-child-sigterm';
+    if (!target.ok) {
+      ctx.recovery.termination = {
+        terminated: false,
+        process_exited: false,
+        mode,
+        target,
+        reason: target.reason || '没有严格归属于受管 360Teams 祖先进程树的 runtime child。',
+        failure: { observed: false },
+      };
+      ctx.state.artifacts.core_beta_recovery = ctx.recovery;
+      return {
+        ok: false,
+        category: 'automation_error',
+        selector_or_testid: mode,
+        event: 'runtime-target-precondition-failed',
+        state_readback: ctx.recovery.termination,
+        actual: `${ctx.recovery.termination.reason} 已 fail-closed，未使用 cancelTurn 冒充 runtime 退出。`,
+      };
     }
-    const failure = terminated ? await waitForRuntimeFailureSurface(ctx.page, 60000) : { observed: false };
-    ctx.recovery.termination = { terminated, mode, target, reason, failure };
+    let signalled = false;
+    let reason = '';
+    try {
+      process.kill(target.process.pid, 'SIGTERM');
+      signalled = true;
+    } catch (error) {
+      reason = error.message;
+    }
+    const processExit = signalled
+      ? await waitForManagedProcessExit(target.process.pid, 15_000)
+      : { exited: false, pid: target.process.pid, waited_ms: 0 };
+    const failure = processExit.exited
+      ? await waitForRuntimeFailureSurface(ctx.page, 60000)
+      : { observed: false };
+    const terminated = signalled && processExit.exited;
+    ctx.recovery.termination = {
+      terminated,
+      process_exited: processExit.exited,
+      mode,
+      target,
+      reason,
+      process_exit: processExit,
+      failure,
+    };
     ctx.state.artifacts.core_beta_recovery = ctx.recovery;
     return {
       ok: terminated && failure.observed,
       selector_or_testid: mode,
       event: 'inject-runtime-exit',
       state_readback: ctx.recovery.termination,
-      actual: `mode=${mode}；terminated=${terminated}；failureObserved=${failure.observed}；reason=${reason}`,
+      actual: `mode=${mode}；signalled=${signalled}；processExited=${processExit.exited}；failureObserved=${failure.observed}；reason=${reason}`,
     };
   }
   if (command === 'recover_runtime_and_continue') {
@@ -10592,32 +10779,29 @@ async function executeSitRuntimeRecovery({ page, state, testCase, caseDir, timeo
   const target = selectManagedRuntimeProcess(afterRows, { previousPids: new Set(beforeRows.map((item) => item.pid)) });
   state.artifacts.runtime_process_target = target;
   state.screenshots.runtime_recover_before_kill = await shot(page, caseDir, 'runtime-recover-before-managed-child-kill');
-  let killed = false;
+  let signalled = false;
   let killError = '';
-  let terminationMode = 'managed-child-sigterm';
+  const terminationMode = 'managed-runtime-child-sigterm';
   if (target.ok) {
-    try { process.kill(target.process.pid, 'SIGTERM'); killed = true; } catch (error) { killError = error.message; }
+    try { process.kill(target.process.pid, 'SIGTERM'); signalled = true; } catch (error) { killError = error.message; }
   } else {
-    // Some packaged QWork runtimes execute behind the task-scoped IPC and do
-    // not expose a standalone OS child.  In that topology, cancelTurn is the
-    // only supported way to terminate exactly the current managed turn; it
-    // preserves the same recovery assertions without ever touching another
-    // QBot/Codex/360Teams process.
-    terminationMode = 'task-scoped-cancel-turn';
-    const cancelled = await page.evaluate(async () => {
-      const bridge = window.__qbotE2E || window.__deepbankE2E;
-      if (typeof bridge?.cancelTurn === 'function') return await bridge.cancelTurn();
-      if (typeof window.agent?.cancel === 'function') {
-        await window.agent.cancel();
-        return { ok: true };
-      }
-      return { ok: false, reason: 'cancelTurn/cancel 均不可用' };
-    }).catch((error) => ({ ok: false, reason: error.message }));
-    killed = Boolean(cancelled?.ok);
-    killError = cancelled?.reason || '';
+    killError = target.reason || '没有严格归属于受管 360Teams 祖先进程树的 runtime child。';
   }
+  const processExit = signalled
+    ? await waitForManagedProcessExit(target.process.pid, 15_000)
+    : { exited: false, pid: target.process?.pid || null, waited_ms: 0 };
+  const killed = signalled && processExit.exited;
   state.artifacts.runtime_termination_mode = terminationMode;
-  recordStep(state, '仅终止当前受管 runtime/任务执行', '优先终止 360Teams 进程树内的执行子进程；远程/内嵌拓扑则只调用当前任务的 cancelTurn，绝不能终止本地 QBot、Codex 或宿主主进程。', `mode=${terminationMode}；target=${JSON.stringify(target.process || null)}；ancestor=${JSON.stringify(target.ancestor_chain || [])}；selector=${target.reason || 'managed child'}；terminated=${killed}；error=${killError || '无'}`, killed ? 'passed' : 'failed', state.screenshots.runtime_recover_before_kill, killed ? '' : 'automation_error');
+  state.artifacts.runtime_process_exit = processExit;
+  recordStep(
+    state,
+    '仅终止当前受管 runtime 子进程',
+    '必须找到并终止 360Teams 进程树内的真实 runtime child，并确认 PID 已退出；不得用 cancelTurn 冒充 runtime 崩溃。',
+    `mode=${terminationMode}；target=${JSON.stringify(target.process || null)}；ancestor=${JSON.stringify(target.ancestor_chain || [])}；selector=${target.reason || 'managed child'}；signalled=${signalled}；processExit=${JSON.stringify(processExit)}；error=${killError || '无'}`,
+    killed ? 'passed' : 'failed',
+    state.screenshots.runtime_recover_before_kill,
+    killed ? '' : 'automation_error',
+  );
   if (!killed) return;
   const failure = await waitForRuntimeFailureSurface(page, 60000);
   state.screenshots.runtime_recover_after_kill = await shot(page, caseDir, 'runtime-recover-after-managed-child-kill');
@@ -10677,14 +10861,32 @@ function renderProcessRows(rows) {
   return rows.map((item) => `${item.pid}\t${item.ppid}\t${item.command}`).join('\n');
 }
 
+async function waitForManagedProcessExit(pid, timeoutMs = 15000) {
+  const startedAt = Date.now();
+  const numericPid = Number(pid);
+  while (Date.now() - startedAt < timeoutMs) {
+    let alive = true;
+    try {
+      process.kill(numericPid, 0);
+    } catch (error) {
+      alive = error?.code === 'EPERM';
+    }
+    if (!alive) {
+      return { exited: true, pid: numericPid, waited_ms: Date.now() - startedAt };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return { exited: false, pid: numericPid, waited_ms: Date.now() - startedAt };
+}
+
 export function selectManagedRuntimeProcess(rows, { previousPids = new Set() } = {}) {
   const list = Array.isArray(rows) ? rows : [];
   const byPid = new Map(list.map((item) => [Number(item.pid), item]));
-  const enginePattern = /(?:claude-agent-sdk|codex(?:-app-server|\s+app-server|\/codex\b)|@anthropic-ai\/claude-agent-sdk)/i;
+  const enginePattern = /(?:claude-agent-sdk|codex(?:-app-server|\s+app-server|\/codex\b)|@anthropic-ai\/claude-agent-sdk|desktop-agent-runtime\.cjs|qbot-core\/[^\s]*runtime)/i;
   // A Helper process alone is not a sufficient ownership boundary: unrelated
   // Electron applications can have similarly named helpers.  Require the
   // complete ancestor chain to reach the managed 360Teams main executable.
-  const hostPattern = /\/Volumes\/360Teams[^/]*\/360Teams\.app\/Contents\/MacOS\/360Teams(?:\s|$)/i;
+  const hostPattern = /(?:\/Applications\/360Teams\.app|\/Volumes\/360Teams[^/]*\/360Teams\.app)\/Contents\/MacOS\/360Teams(?:\s|$)/i;
   const candidates = list.filter((item) => enginePattern.test(String(item.command || '')));
   const qualified = candidates.flatMap((item) => {
     const chain = [];
@@ -17958,7 +18160,7 @@ async function clickSelectedOptions(menu, page, ignorePattern) {
 }
 
 async function visibleSkillChipText(page) {
-  const chips = page.locator('.skill-chip');
+  const chips = page.locator('[data-testid^="composer-skill-chip-"], .skill-chip');
   const count = await chips.count().catch(() => 0);
   const texts = [];
   for (let index = 0; index < count; index += 1) {
@@ -17981,9 +18183,10 @@ export function cleanSkillChipLabel(value) {
 async function composerSkillSelectionSnapshot(page) {
   return page.evaluate(async () => {
     const composer = document.querySelector('[data-testid="composer-input"]');
-    const allChips = composer
-      ? Array.from(composer.querySelectorAll('[data-testid^="composer-skill-chip-"], .skill-chip'))
-      : [];
+    const shell = document.querySelector('[data-testid="composer-shell"]')
+      || composer?.parentElement
+      || document.body;
+    const allChips = Array.from(shell.querySelectorAll('[data-testid^="composer-skill-chip-"], .skill-chip'));
     const chips = allChips.filter((chip) => {
       const rect = chip.getBoundingClientRect();
       const style = globalThis.getComputedStyle(chip);
@@ -18006,6 +18209,7 @@ async function composerSkillSelectionSnapshot(page) {
       chipTexts: chips.map((chip) => String(chip.textContent || '').replace(/\s+/g, ' ').trim()),
       chipTestIds: chips.map((chip) => String(chip.getAttribute('data-testid') || '')),
       chipsInsideComposer: Boolean(composer) && chips.every((chip) => composer.contains(chip)),
+      chipsInsideComposerShell: chips.every((chip) => shell.contains(chip)),
       selectedSkillCount: selectedSkills.length,
       selectedSkills,
       composerText,
@@ -18198,16 +18402,21 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
   if (!config || !(await unifiedComposerPlusAvailable(page))) return '';
 
+  let submenu = await visibleUnifiedComposerSubmenu(page, config, 150);
+  if (submenu) return (await submenu.innerText({ timeout: 1000 }).catch(() => '')) || config.label;
+
   await page.keyboard.press('Escape').catch(() => {});
   await closeWorkspacePicker(page);
   const plus = page.locator('[data-testid="composer-plus-menu"]').first();
   if (!(await visible(plus, 1000))) return '';
   await plus.click({ force: true }).catch(async () => plus.evaluate((element) => element.click()));
 
-  const main = page.locator('.composer-plus-main').first();
-  if (!(await visible(main, 1200))) return '';
+  let main = await lastVisibleLocator(page.locator('.composer-plus-main'), 1200);
+  if (!main) return '';
   const triggerSelector = `[data-testid="composer-plus-section-${config.section}"]`;
   const locateTrigger = async () => {
+    main = await lastVisibleLocator(page.locator('.composer-plus-main'), 500);
+    if (!main) return null;
     const exact = main.locator(triggerSelector).first();
     if (await visible(exact, 500)) return exact;
     const fallback = main.locator('.composer-plus-row, [role="menuitem"]')
@@ -18218,30 +18427,41 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   let row = await locateTrigger();
   if (!row) return '';
 
-  // QWork 0.0.17 uses Radix SubTrigger. A synthetic click does not reliably
-  // open the submenu inside the embedded Teams WebView, and a capabilities
-  // refresh can replace the trigger between pointer events. Reacquire the
-  // stable section testid and drive the accessible pointer/ArrowRight path.
+  const waitForSubmenu = async (timeoutMs) => {
+    let current = null;
+    const deadline = Date.now() + timeoutMs;
+    while (!current && Date.now() < deadline) {
+      current = await visibleUnifiedComposerSubmenu(page, config, 120);
+      if (!current) await page.waitForTimeout(60);
+    }
+    return current;
+  };
+  // The release/0.1 product contract is a real SubTrigger: hover is the
+  // primary path, direct click is supported by the smoke gate, and
+  // ArrowRight is the accessible fallback. Always reacquire the newest
+  // visible Portal node because capability refreshes can leave hidden copies.
   await row.hover({ force: true }).catch(() => {});
   await row.dispatchEvent('pointermove', { pointerType: 'mouse' }).catch(() => {});
-  let submenu = null;
-  let deadline = Date.now() + 900;
-  while (!submenu && Date.now() < deadline) {
-    submenu = await visibleUnifiedComposerSubmenu(page, config, 120);
-    if (!submenu) await page.waitForTimeout(60);
+  submenu = await waitForSubmenu(1200);
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
+    await row.click({ force: true }).catch(async () => row.evaluate((element) => element.click()));
+    submenu = await waitForSubmenu(1800);
   }
   if (!submenu) {
     row = await locateTrigger();
     if (!row) return '';
     await row.focus().catch(() => {});
-    await row.press('ArrowRight').catch(async () => {
-      await page.keyboard.press('ArrowRight').catch(() => {});
-    });
-    deadline = Date.now() + 1800;
-    while (!submenu && Date.now() < deadline) {
-      submenu = await visibleUnifiedComposerSubmenu(page, config, 150);
-      if (!submenu) await page.waitForTimeout(80);
-    }
+    await row.press('ArrowRight').catch(async () => page.keyboard.press('ArrowRight').catch(() => {}));
+    submenu = await waitForSubmenu(2500);
+  }
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
+    await row.focus().catch(() => {});
+    await row.press('Enter').catch(() => {});
+    submenu = await waitForSubmenu(1800);
   }
   if (!submenu) return '';
 
@@ -18249,7 +18469,7 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   recordStep(
     state,
     action || `打开输入区统一“+”菜单的【${config.label}】子菜单`,
-    `QWork 0.0.17 统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
+    `统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
     `trigger=${triggerSelector}；submenu=${config.selector}；${clip(text, 180)}`,
     'passed',
   );
@@ -18261,8 +18481,11 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
     if (!menuText.trim()) return false;
-    const manual = page.locator('.composer-plus-sub-skill [data-testid="composer-skill-mode-manual"]').first();
-    if (!(await visible(manual, 1000))) {
+    let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 500);
+    let manual = submenu
+      ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 500)
+      : null;
+    if (!manual) {
       recordAssertion(
         state,
         '统一菜单技能手动模式入口',
@@ -18282,10 +18505,17 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(200);
-      const fresh = page.locator('.composer-plus-sub-skill [data-testid="composer-skill-mode-manual"]').first();
-      checked = await fresh.getAttribute('aria-checked').catch(() => '');
+      submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 150);
+      if (!submenu) {
+        await openUnifiedComposerSubmenu(page, state, 'skill', '技能模式切换后重新打开【技能】子菜单');
+        submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 350);
+      }
+      manual = submenu
+        ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 150)
+        : null;
+      checked = manual ? await manual.getAttribute('aria-checked').catch(() => '') : '';
       afterText = await activeMenuText(page, 'skill');
-      manualSurface = await page.locator('.composer-plus-sub-skill').first().evaluate((menu) => {
+      manualSurface = submenu ? await submenu.evaluate((menu) => {
         const isVisible = (element) => {
           if (!element || !element.getClientRects().length) return false;
           const style = globalThis.getComputedStyle(element);
@@ -18298,7 +18528,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
             .filter(isVisible).length,
           empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
         };
-      }).catch(() => null);
+      }).catch(() => null) : null;
       if (
         checked === 'true'
         && manualSurface?.search_visible
@@ -18402,8 +18632,11 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
     if (!menuText.trim()) return false;
-    const manual = page.locator('.composer-plus-sub-connector [data-testid="composer-connector-mode-manual"]').first();
-    if (!(await visible(manual, 1000))) {
+    let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 500);
+    let manual = submenu
+      ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 500)
+      : null;
+    if (!manual) {
       recordAssertion(
         state,
         '统一菜单连接器手动模式入口',
@@ -18425,10 +18658,17 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       await page.waitForTimeout(200);
-      const fresh = page.locator('.composer-plus-sub-connector [data-testid="composer-connector-mode-manual"]').first();
-      checked = await fresh.getAttribute('aria-checked').catch(() => '');
+      submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 150);
+      if (!submenu) {
+        await openUnifiedComposerSubmenu(page, state, 'connector', '连接器模式切换后重新打开【连接器】子菜单');
+        submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 350);
+      }
+      manual = submenu
+        ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 150)
+        : null;
+      checked = manual ? await manual.getAttribute('aria-checked').catch(() => '') : '';
       afterText = await activeMenuText(page, 'connector');
-      manualSurface = await page.locator('.composer-plus-sub-connector').first().evaluate((menu) => {
+      manualSurface = submenu ? await submenu.evaluate((menu) => {
         const isVisible = (element) => {
           if (!element || !element.getClientRects().length) return false;
           const style = globalThis.getComputedStyle(element);
@@ -18443,7 +18683,7 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
           empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
           manual_note_visible: isVisible(manualNote),
         };
-      }).catch(() => null);
+      }).catch(() => null) : null;
       capabilities = await currentCapabilities(page);
       readiness = coreBetaManualConnectorModeReady({
         ariaChecked: checked,
@@ -18825,9 +19065,42 @@ async function selectFirstManualSkill(page, state, caseDir) {
   return true;
 }
 
+export function coreBetaSkillSelectionReadbackMatches(snapshot = {}, identities = []) {
+  const expected = [...new Set((Array.isArray(identities) ? identities : [identities])
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean))];
+  const selected = (Array.isArray(snapshot?.selectedSkills) ? snapshot.selectedSkills : [])
+    .map(pipelineCapabilityItemIdentity)
+    .filter(Boolean)
+    .map((value) => value.toLowerCase());
+  const chipIds = (Array.isArray(snapshot?.chipTestIds) ? snapshot.chipTestIds : [])
+    .map((value) => String(value || '').replace(/^composer-skill-chip-/, '').toLowerCase());
+  const chipText = (Array.isArray(snapshot?.chipTexts) ? snapshot.chipTexts : [])
+    .join('\n')
+    .toLowerCase();
+  const identityMatched = expected.some((identity) => (
+    selected.includes(identity)
+    || chipIds.includes(identity)
+    || chipText.includes(identity)
+  ));
+  return {
+    ok: identityMatched && Number(snapshot?.selectedSkillCount || 0) > 0 && Number(snapshot?.chipCount || 0) > 0,
+    expected,
+    selected,
+    chip_ids: chipIds,
+  };
+}
+
 async function selectManualSkillByName(page, state, caseDir, skillName, { ensureMode = true } = {}) {
-  const matcher = skillName instanceof RegExp ? skillName : new RegExp(escapeRegExp(String(skillName)), 'i');
-  const expectedLabel = skillName instanceof RegExp ? String(skillName) : String(skillName);
+  const identities = skillName instanceof RegExp
+    ? []
+    : skillName && typeof skillName === 'object'
+      ? coreBetaSkillIdentityCandidates(skillName)
+      : [String(skillName || '').trim()].filter(Boolean);
+  const matcher = skillName instanceof RegExp
+    ? skillName
+    : new RegExp(identities.map(escapeRegExp).join('|'), 'i');
+  const expectedLabel = skillName instanceof RegExp ? String(skillName) : identities.join(' / ');
   if (ensureMode) {
     const manualOk = await setSkillMode(page, state, caseDir, 'manual');
     if (!manualOk) return false;
@@ -18849,23 +19122,75 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
     return false;
   }
-  const option = menu.locator('.composer-plus-skill, .skill-list .ctool-opt, .ctool-opt, [role="option"], button')
-    .filter({ hasText: matcher })
-    .first();
-  if (!(await visible(option, 2000))) {
+  const findOption = async () => {
+    const options = menu.locator(
+      '.composer-plus-skill, [data-testid^="composer-skill-option-"], .skill-list .ctool-opt, .ctool-list .ctool-opt, [role="option"]',
+    );
+    const count = await options.count().catch(() => 0);
+    const matches = [];
+    for (let index = 0; index < count; index += 1) {
+      const candidate = options.nth(index);
+      if (!(await visible(candidate, 150))) continue;
+      const text = await candidate.innerText({ timeout: 500 }).catch(() => '');
+      const testId = await candidate.getAttribute('data-testid').catch(() => '');
+      const parsedSlug = String(testId || '')
+        .replace(/^composer-skill-option-/, '')
+        .replace(/-(?:tag|checkbox|row)$/, '');
+      const exactIdentity = identities.some((identity) => identity === parsedSlug || identity === firstLine(text).trim());
+      if (exactIdentity || matcher.test(text) || (parsedSlug && matcher.test(parsedSlug))) {
+        matches.push({ candidate, text, testId, parsedSlug, exactIdentity });
+      }
+    }
+    matches.sort((left, right) => Number(right.exactIdentity) - Number(left.exactIdentity));
+    return matches[0] || null;
+  };
+  let match = await findOption();
+  if (!match) {
+    const search = await lastVisibleLocator(menu.locator('input[placeholder*="搜索技能"]'), 350);
+    if (search) {
+      for (const identity of identities) {
+        await search.fill(identity).catch(() => {});
+        await page.waitForTimeout(500);
+        match = await findOption();
+        if (match) break;
+      }
+    }
+  }
+  if (!match) {
     state.screenshots.manual_installed_skill_missing = await shot(page, caseDir, 'manual-installed-skill-missing');
-    recordAssertion(state, '刚安装技能可手动选择', '手动技能列表必须出现刚安装的同一技能。', false, `未找到技能：${expectedLabel}`);
+    recordAssertion(
+      state,
+      '刚安装技能可手动选择',
+      '手动技能列表必须通过 catalog slug/名称/可见标签精确定位刚安装的同一技能。',
+      false,
+      `未找到技能：${expectedLabel}；菜单=${clip(await activeMenuText(page, 'skill'), 360)}`,
+      'automation_error',
+    );
     return false;
   }
-  const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');
-  await option.click({ force: true }).catch(async () => option.evaluate((el) => el.click()));
-  await page.waitForTimeout(600);
-  const chipText = await visibleSkillChipText(page);
-  const toolText = await visibleComposerToolStateText(page, 'skill');
-  const selected = matcher.test(chipText) || matcher.test(toolText) || page.locator('.ctool-opt.on').filter({ hasText: matcher }).first().isVisible({ timeout: 400 }).catch(() => false);
-  const selectedOk = typeof selected === 'boolean' ? selected : await selected;
+  await match.candidate.click({ force: true }).catch(async () => match.candidate.evaluate((el) => el.click()));
+  let snapshot = await composerSkillSelectionSnapshot(page);
+  let readback = coreBetaSkillSelectionReadbackMatches(snapshot, identities.length ? identities : [match.parsedSlug, firstLine(match.text)]);
+  const deadline = Date.now() + 8000;
+  while (!readback.ok && Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    snapshot = await composerSkillSelectionSnapshot(page);
+    readback = coreBetaSkillSelectionReadbackMatches(
+      snapshot,
+      identities.length ? identities : [match.parsedSlug, firstLine(match.text)],
+    );
+  }
+  const selectedOk = readback.ok;
   state.screenshots.manual_installed_skill_selected = await shot(page, caseDir, 'manual-installed-skill-selected');
-  recordStep(state, `手动选择刚安装的技能：${expectedLabel}`, '必须选择安装步骤中记录的同一技能，不能退化为随机选择第一个技能。', clip(optionText, 180), selectedOk ? 'passed' : 'failed', state.screenshots.manual_installed_skill_selected);
+  recordStep(
+    state,
+    `手动选择刚安装的技能：${expectedLabel}`,
+    '必须选择安装步骤中记录的同一技能，并由 visible chip 与 capabilities.selectedSkills 同时读回。',
+    `option=${clip(match.text, 180)}；testid=${match.testId || 'none'}；readback=${JSON.stringify(readback)}`,
+    selectedOk ? 'passed' : 'failed',
+    state.screenshots.manual_installed_skill_selected,
+    selectedOk ? '' : 'automation_error',
+  );
   return selectedOk;
 }
 
@@ -19106,7 +19431,7 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
       await page.waitForTimeout(250);
       const current = await currentCapabilities(page);
       selectedConnectors = current?.selectedConnectors;
-      selected = Array.isArray(selectedConnectors) && selectedConnectors.includes(connectorKey);
+      selected = coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(connectorKey);
       if (selected) break;
     }
     state.artifacts.selected_connector = {

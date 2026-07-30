@@ -53,6 +53,10 @@ import {
 import {
   automationFixtureMarkerPattern,
   cleanSkillChipLabel,
+  coreBetaActionStopsPlan,
+  coreBetaPartialReplyReady,
+  coreBetaSelectedCapabilityIdentities,
+  coreBetaSkillSelectionReadbackMatches,
   createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
   selectTrustedActionScreenshot,
@@ -751,6 +755,40 @@ test('Teams multi-skill selection reopens the packaged unified menu after each p
   assert.equal(cleanSkillChipLabel('  × QA Python Runtime  '), 'QA Python Runtime');
 });
 
+test('Core Beta fail-closed, partial-stop, and capability identity helpers reject false positives', () => {
+  assert.equal(coreBetaActionStopsPlan({ ok: false }), true);
+  assert.equal(coreBetaActionStopsPlan({ ok: true }), false);
+  assert.equal(coreBetaPartialReplyReady({
+    running: true,
+    cancelVisible: true,
+    baselineAssistantText: 'before',
+    latestAssistantText: 'beforepartial reply',
+  }).ready, true);
+  assert.equal(coreBetaPartialReplyReady({
+    running: true,
+    cancelVisible: true,
+    baselineAssistantText: 'same',
+    latestAssistantText: 'same',
+  }).ready, false);
+  assert.deepEqual(
+    coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'mcp-b' }, 'plain-c']),
+    ['skill-a', 'mcp-b', 'plain-c'],
+  );
+  assert.equal(coreBetaSkillSelectionReadbackMatches({
+    selectedSkillCount: 1,
+    selectedSkills: [{ slug: 'skill-a' }],
+    chipCount: 1,
+    chipTexts: ['Skill A'],
+    chipTestIds: ['composer-skill-chip-skill-a'],
+  }, ['skill-a', 'Skill A']).ok, true);
+  assert.equal(coreBetaSkillSelectionReadbackMatches({
+    selectedSkillCount: 1,
+    selectedSkills: ['skill-b'],
+    chipCount: 1,
+    chipTexts: ['Skill B'],
+  }, ['skill-a']).ok, false);
+});
+
 test('Teams renderer fault controls stay opt-in and do not replace the local-QBot proxy lane', () => {
   const source = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /options\['renderer-control-adapter'\] === 'teams360'/);
@@ -947,7 +985,7 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /Array\.isArray\(selectedConnectors\) && selectedConnectors\.length === 0/);
   assert.match(runner, /Array\.isArray\(bridgeSelection\) && bridgeSelection\.length === 0/);
   assert.match(runner, /public-catalog-visible-label/);
-  assert.match(runner, /selectedConnectors\.includes\(connectorKey\)/);
+  assert.match(runner, /coreBetaSelectedCapabilityIdentities\(selectedConnectors\)\.includes\(connectorKey\)/);
   assert.match(runner, /teams-upstream-cdp-url/);
   assert.match(runner, /chromium\.connectOverCDP\(upstreamCdp/);
   assert.match(runner, /ownsHostBrowser/);
