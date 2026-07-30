@@ -803,6 +803,8 @@ test('Core Beta skill persistence reload reconnects to a replacement QWork rende
   assert.match(command, /Core Beta skill selection reload replacement renderer/);
   assert.match(command, /ctx\.page = reconnected\.page/);
   assert.match(command, /await waitForQbotWorkbench\(ctx\.page, 90000\)/);
+  assert.match(command, /setCoreBetaEvidence\(ctx\.state, 'capability_selection'/);
+  assert.match(command, /persisted_after_reload: persistent/);
 });
 
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {

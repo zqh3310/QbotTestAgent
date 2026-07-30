@@ -6884,6 +6884,24 @@ async function executeCoreBetaSkillCommand(ctx, command) {
         && snapshot.chipCount === 1
         && snapshot.selectedSkills.some((identity) => String(identity) === expected || String(identity).includes(expected))
       ));
+    // A visible selection attempt that the product fails to retain is still
+    // complete capability-selection evidence.  Preserve the exact expected
+    // identity plus the before/after public readback so the manifest can
+    // represent the product failure without pretending the selection worked.
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: persistent,
+      source: 'visible composer skill selection + reload/reopen public readback',
+      expected: selected,
+      selection: {
+        attempted: true,
+        selected_ok_before_send: selectedOk,
+        persisted_after_reload: persistent,
+        reopened: reopened.ok,
+        before,
+        after,
+        execution,
+      },
+    });
     return {
       ok: persistent && execution.executed && execution.task_id === outcome.taskId,
       selector_or_testid: 'composer skill chip after each turn',
