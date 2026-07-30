@@ -201,6 +201,9 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   const productionGateEnabled = options['production-gate'] === true
     || options['production-gate'] === 'true'
     || String(options['gate-profile'] || '').toLowerCase() === 'release';
+  const coreBetaGateEnabled = options['core-beta-gate'] === true
+    || options['core-beta-gate'] === 'true'
+    || String(options['gate-profile'] || '').toLowerCase() === 'core-beta';
   if (productionGateEnabled) {
     const audit = validateProductionCasePlan(selectedCases, {
       backendVersion: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
@@ -339,7 +342,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   }
 
-  if (productionGateEnabled) {
+  if (productionGateEnabled || coreBetaGateEnabled) {
     const pendingCases = selectedCases.filter((_, index) => !seededResultsByIndex.has(index));
     const executorReadiness = validateCasebookExecutorReadiness(pendingCases, {
       controlPlaneUrl: options['control-plane-url'] || process.env.DEEPBANK_SERVER || '',
@@ -348,11 +351,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     });
     writeJsonFile(path.join(outDir, 'casebook-executor-preflight.json'), executorReadiness);
     if (!executorReadiness.ok) {
+      const gateLabel = coreBetaGateEnabled && !productionGateEnabled
+        ? 'core-beta 执行器门禁'
+        : '生产门禁执行器';
       const details = [
         ...executorReadiness.testcase_issues.slice(0, 10),
         ...executorReadiness.framework_issues.slice(0, 10),
       ].map((item) => `${item.id ? `${item.id}:` : ''}${item.reason}`);
-      const reason = `生产门禁执行器前置检查失败（testcase_issue=${executorReadiness.testcase_issue_count}, framework_issue=${executorReadiness.framework_issue_count}）：${details.join('；')}`;
+      const reason = `${gateLabel}前置检查失败（testcase_issue=${executorReadiness.testcase_issue_count}, framework_issue=${executorReadiness.framework_issue_count}）：${details.join('；')}`;
       writeStoppedProgress({
         selectedCases,
         resultsByIndex: seededResultsByIndex,
