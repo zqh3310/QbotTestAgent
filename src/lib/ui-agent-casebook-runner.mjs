@@ -11324,20 +11324,91 @@ async function waitForRuntimeFailureSurface(page, timeoutMs) {
 }
 
 async function recoverRuntimeFamily(page, family, timeoutMs) {
-  const invoked = await page.evaluate(async (targetFamily) => {
-    try { return await window.agent.retryRuntime(targetFamily); }
-    catch (error) { return { phase: 'error', error: error?.message || String(error) }; }
-  }, family).catch((error) => ({ phase: 'error', error: error.message }));
+  const invokeBudgetMs = Math.max(1_000, Math.min(15_000, Number(timeoutMs || 0)));
+  let invoked;
+  try {
+    invoked = await withCoreBetaOperationHardTimeout(
+      page.evaluate((targetFamily) => {
+        const key = '__qbotCoreBetaRuntimeRetryDiagnostic';
+        try {
+          const pending = window.agent.retryRuntime(targetFamily);
+          window[key] = {
+            phase: 'dispatched',
+            family: targetFamily,
+            dispatched_at: new Date().toISOString(),
+          };
+          // Do not return the retry promise to Playwright. Some packaged
+          // runtimes keep it pending until a later lifecycle transition; if
+          // page.evaluate awaits it, the outer status deadline never starts.
+          Promise.resolve(pending).then(
+            (value) => {
+              window[key] = {
+                ...window[key],
+                phase: 'settled',
+                settled_at: new Date().toISOString(),
+                result_phase: String(value?.phase || value?.status || ''),
+              };
+            },
+            (error) => {
+              window[key] = {
+                ...window[key],
+                phase: 'rejected',
+                settled_at: new Date().toISOString(),
+                error: error?.message || String(error),
+              };
+            },
+          );
+          return window[key];
+        } catch (error) {
+          window[key] = {
+            phase: 'error',
+            family: targetFamily,
+            error: error?.message || String(error),
+          };
+          return window[key];
+        }
+      }, family),
+      invokeBudgetMs,
+      `${family} retryRuntime dispatch`,
+    );
+  } catch (error) {
+    invoked = {
+      phase: 'invoke-timeout',
+      family,
+      timeout_ms: invokeBudgetMs,
+      error: error.message,
+    };
+  }
   const deadline = Date.now() + timeoutMs;
   let statuses = [];
+  let invokeDiagnostic = invoked;
   while (Date.now() < deadline) {
-    statuses = await page.evaluate(() => window.agent.runtimeStatus()).catch(() => []);
+    statuses = await withCoreBetaOperationHardTimeout(
+      page.evaluate(() => window.agent.runtimeStatus()),
+      5_000,
+      `${family} runtimeStatus`,
+    ).catch(() => []);
+    invokeDiagnostic = await withCoreBetaOperationHardTimeout(
+      page.evaluate(() => window.__qbotCoreBetaRuntimeRetryDiagnostic || null),
+      5_000,
+      `${family} retry diagnostic`,
+    ).catch(() => invokeDiagnostic);
     const target = statuses.find((item) => item.family === family);
-    if (target?.phase === 'ready') return { ok: true, invoked, target, statuses };
-    if (target?.phase === 'error') return { ok: false, invoked, target, statuses };
-    await page.waitForTimeout(1000);
+    if (target?.phase === 'ready') {
+      return { ok: true, invoked, invoke_diagnostic: invokeDiagnostic, target, statuses };
+    }
+    if (target?.phase === 'error') {
+      return { ok: false, invoked, invoke_diagnostic: invokeDiagnostic, target, statuses };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  return { ok: false, invoked, statuses, reason: `等待 ${family} ready 超时` };
+  return {
+    ok: false,
+    invoked,
+    invoke_diagnostic: invokeDiagnostic,
+    statuses,
+    reason: `等待 ${family} ready 超时`,
+  };
 }
 
 async function artifactEntryCount(page, filename) {
@@ -24683,6 +24754,27 @@ export async function withReplyPollHardTimeout(promise, timeoutMs, label = 'repl
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           reject(new Error(`QWork reply-poll operation timed out: ${label} after ${budget}ms`));
+        }, budget);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function withCoreBetaOperationHardTimeout(
+  promise,
+  timeoutMs,
+  label = 'core beta operation',
+) {
+  const budget = Math.max(1, Number(timeoutMs || 0));
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Core Beta operation timed out: ${label} after ${budget}ms`));
         }, budget);
       }),
     ]);

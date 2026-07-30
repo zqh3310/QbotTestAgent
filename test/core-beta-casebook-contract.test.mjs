@@ -48,6 +48,7 @@ import {
   verifiedExpertSelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
+  withCoreBetaOperationHardTimeout,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { isSupportedQbotAttachmentPath } from '../src/lib/qbot-ui-attachments.mjs';
 
@@ -1901,5 +1902,20 @@ test('runtime recovery stages the exact follow-up prompt as the next send contra
   assert.notEqual(
     state.artifacts.sent_prompts.at(-1).prompt,
     state.artifacts.sent_prompts[0].prompt,
+  );
+});
+
+test('runtime recovery invocation has a Node-side hard timeout', async () => {
+  await assert.rejects(
+    withCoreBetaOperationHardTimeout(
+      new Promise(() => {}),
+      10,
+      'claude-code retryRuntime dispatch',
+    ),
+    /Core Beta operation timed out: claude-code retryRuntime dispatch after 10ms/,
+  );
+  assert.deepEqual(
+    await withCoreBetaOperationHardTimeout(Promise.resolve({ phase: 'dispatched' }), 100),
+    { phase: 'dispatched' },
   );
 });
