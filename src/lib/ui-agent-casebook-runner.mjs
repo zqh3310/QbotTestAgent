@@ -5908,11 +5908,19 @@ async function coreBetaUninstallSkillsViaVisibleUi(ctx, items, { cancelFirst = f
   return results;
 }
 
-function coreBetaInstalledSkillReadme(skill = {}) {
+export function coreBetaInstalledSkillReadme(skill = {}, qbotHome = '') {
   const identities = [skill.slug, skill.name]
     .map((value) => String(value || '').trim())
     .filter(Boolean);
-  const base = path.join(os.homedir(), '.deepbank', 'home', '.claude', 'skills');
+  const configuredHome = String(
+    qbotHome
+    || process.env.QBOT_TEST_DEEPBANK_HOME
+    || process.env.DEEPBANK_HOME
+    || '',
+  ).trim();
+  const base = configuredHome
+    ? path.join(path.resolve(configuredHome), 'home', '.claude', 'skills')
+    : path.join(os.homedir(), '.deepbank', 'home', '.claude', 'skills');
   let entries = [];
   try {
     entries = fs.readdirSync(base, { withFileTypes: true }).filter((entry) => entry.isDirectory());
@@ -5982,7 +5990,10 @@ export function coreBetaSkillTaskProfile(skill = {}, readmeText = '') {
 
 function coreBetaResolveSkillTurns(ctx) {
   const selected = ctx.selectedSkill || {};
-  const readme = coreBetaInstalledSkillReadme(selected);
+  const readme = coreBetaInstalledSkillReadme(
+    selected,
+    ctx.options?.['qbot-home'] || ctx.options?.['deepbank-home'] || '',
+  );
   const profile = coreBetaSkillTaskProfile(selected, readme.text);
   const resolved = (ctx.turns || []).map((turn, index) => {
     const anchor = index === 0 ? 'QA_SKILL_PRIMARY' : 'QA_SKILL_FOLLOWUP';

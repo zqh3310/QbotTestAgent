@@ -28,6 +28,7 @@ import {
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  coreBetaInstalledSkillReadme,
   coreBetaSkillTaskProfile,
   normalizeCoreBetaExpertCard,
   seedCoreBetaSharedLedgerCheckpoint,
@@ -247,6 +248,21 @@ test('installed Skill tasks are derived from the actual Skill identity and READM
   assert.match(finance.input, /收入120万元/);
   assert.equal(design.scenario, '网页/设计交付');
   assert.match(design.expected, /交付物/);
+});
+
+test('installed Skill README follows the configured release home instead of production home', () => {
+  const qbotHome = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-uat-home-'));
+  try {
+    const skillDir = path.join(qbotHome, 'home', '.claude', 'skills', 'global__variance-analysis');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# UAT Variance Analysis\n', 'utf8');
+    const readme = coreBetaInstalledSkillReadme({ slug: 'variance-analysis' }, qbotHome);
+    assert.equal(readme.path, path.join(skillDir, 'SKILL.md'));
+    assert.match(readme.text, /UAT Variance Analysis/);
+    assert.match(readme.sha256, /^[a-f0-9]{64}$/);
+  } finally {
+    fs.rmSync(qbotHome, { recursive: true, force: true });
+  }
 });
 
 test('expert visible identity excludes status copy and null DOM ids', () => {
