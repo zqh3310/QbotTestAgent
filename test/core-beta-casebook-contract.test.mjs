@@ -41,7 +41,10 @@ import {
   normalizeCoreBetaExpertCard,
   restoreCoreBetaSharedLedgerAfterInheritedCase,
   seedCoreBetaSharedLedgerCheckpoint,
+  stageCoreBetaPlannedPrompt,
   verifiedCapabilitySelectionUnavailableEvidence,
+  verifiedCoreBetaProductActionFailureEvidence,
+  verifiedCoreBetaUpstreamPrerequisiteShortageEvidence,
   verifiedExpertSelectionUnavailableEvidence,
   verifiedReplyTimeoutTerminalEvidence,
   validateCasebookExecutorReadiness,
@@ -1696,4 +1699,207 @@ test('an already-open system settings shell waits through loading and fails only
     loading: false,
     error: '',
   });
+});
+
+test('partial Skill installation blocks only cases that require the complete install set', () => {
+  const installResults = Array.from({ length: 10 }, (_, index) => ({
+    slug: `skill-${index + 1}`,
+    ok: index < 8,
+    reason: index < 8 ? '' : '产品安装终态失败',
+  }));
+  const ledger = {
+    skills: {
+      sample: installResults.map(({ slug }) => ({ slug })),
+      install_results: installResults,
+      installed: installResults.filter((item) => item.ok),
+      installation_blocker: {
+        source_case_id: 'BETA-SKILL-004',
+        requested_count: 10,
+      },
+    },
+  };
+  const crossView = coreBetaSharedCapabilityPrerequisiteBlocker(ledger, {
+    case_type: 'skill_lifecycle',
+    parsed: { action_plan: [{ command: 'verify_market_installed_state' }] },
+  });
+  assert.equal(crossView.applicable, true);
+  assert.equal(crossView.kind, 'skill_install_terminal_shortage');
+  assert.equal(crossView.requested_count, 10);
+  assert.equal(crossView.successful_count, 8);
+  assert.deepEqual(crossView.failed_ids, ['skill-9', 'skill-10']);
+
+  const useInstalledSkill = coreBetaSharedCapabilityPrerequisiteBlocker(ledger, {
+    case_type: 'skill_use',
+    parsed: { action_plan: [{ command: 'select_skill_by_slug' }] },
+  });
+  assert.equal(useInstalledSkill.applicable, false);
+});
+
+test('legacy cross-view and cleanup failures caused by 8/10 upstream installs review as blockers', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-upstream-shortage-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const screenshot = path.join(root, 'after.png');
+  fs.writeFileSync(screenshot, 'visible product frame');
+  const installed = Array.from({ length: 8 }, (_, index) => ({
+    slug: `skill-${index + 1}`,
+    installed: true,
+    visible: true,
+  }));
+  const market = verifiedCoreBetaUpstreamPrerequisiteShortageEvidence({
+    status: 'failed',
+    result_category: 'bug',
+    artifacts: {
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          declared_action_count: 1,
+          receipt_count: 1,
+          receipts: [{
+            command: 'verify_market_installed_state',
+            event: 'market-installed-readback',
+            expected_state_observed: false,
+            state_readback: installed,
+            after_screenshot: screenshot,
+          }],
+        },
+        capability_selection: {
+          source: 'captured cross-view installed capability selection readback',
+          selection: {
+            expected: installed.map(({ slug }) => ({ slug })),
+            market_readback: installed,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(market.applicable, true);
+  assert.equal(market.kind, 'skill_install_terminal_shortage');
+  assert.equal(market.successful_count, 8);
+
+  const cleanup = verifiedCoreBetaUpstreamPrerequisiteShortageEvidence({
+    status: 'failed',
+    result_category: 'bug',
+    artifacts: {
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          declared_action_count: 1,
+          receipt_count: 1,
+          receipts: [{
+            command: 'uninstall_run_skill_sample',
+            event: 'uninstall-run-sample',
+            expected_state_observed: false,
+            after_screenshot: screenshot,
+          }],
+        },
+        capability_selection: {
+          source: 'exact run-owned successful install receipts + visible uninstall actions',
+          selection: {
+            operation: 'cleanup_current_run_installs',
+            requested_sample_count: 10,
+            selected_count: 8,
+            results: Array.from({ length: 8 }, () => ({ ok: true })),
+          },
+        },
+      },
+    },
+  });
+  assert.equal(cleanup.applicable, true);
+  assert.equal(cleanup.successful_count, 8);
+});
+
+test('strict stop-generation product failure requires exact ledger and visible terminal readback', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-stop-proof-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const before = path.join(root, 'before.png');
+  const after = path.join(root, 'after.png');
+  fs.writeFileSync(before, 'before');
+  fs.writeFileSync(after, 'after');
+  const receipt = {
+    number: 2,
+    command: 'stop_generation',
+    expected_state: 'partial_reply_retained',
+    expected_state_observed: false,
+    selector_or_testid: 'composer-cancel',
+    event: 'stop-generation',
+    before_screenshot: before,
+    after_screenshot: after,
+    actual: 'partialChars=31；retainedChars=0',
+    state_readback: {
+      task_id: 'task-stop-1',
+      running_before: true,
+      running_after: false,
+      partial_reply_ready_before_click: true,
+      partial_chars_before_click: 31,
+      retained_chars: 0,
+    },
+  };
+  const verified = verifiedCoreBetaProductActionFailureEvidence({
+    status: 'failed',
+    result_category: 'bug',
+    steps: [{
+      numbered_step_number: 2,
+      numbered_step_evidence: 'explicit',
+      status: 'failed',
+      category: 'bug',
+    }],
+    artifacts: {
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          declared_action_count: 1,
+          receipt_count: 1,
+          receipts: [receipt],
+        },
+      },
+    },
+  });
+  assert.equal(verified.applicable, true);
+  assert.equal(verified.command, 'stop_generation');
+
+  receipt.state_readback.partial_chars_before_click = 0;
+  assert.equal(verifiedCoreBetaProductActionFailureEvidence({
+    status: 'failed',
+    result_category: 'bug',
+    steps: [{
+      numbered_step_number: 2,
+      numbered_step_evidence: 'explicit',
+      status: 'failed',
+      category: 'bug',
+    }],
+    artifacts: {
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          declared_action_count: 1,
+          receipt_count: 1,
+          receipts: [receipt],
+        },
+      },
+    },
+  }).applicable, false);
+});
+
+test('runtime recovery stages the exact follow-up prompt as the next send contract', () => {
+  const state = { artifacts: { sent_prompts: [] } };
+  stageCoreBetaPlannedPrompt(state, {
+    label: 'dispatch_recovery_task',
+    prompt: '首轮恢复任务',
+    recordedAt: '2026-07-30T00:00:00.000Z',
+  });
+  const followup = stageCoreBetaPlannedPrompt(state, {
+    label: '恢复后继续追问',
+    prompt: '运行时已恢复。请输出唯一标识 BETA_RUNTIME_RECOVERED。',
+    recordedAt: '2026-07-30T00:01:00.000Z',
+  });
+  assert.equal(state.artifacts.sent_prompts.length, 2);
+  assert.equal(state.artifacts.sent_prompts.at(-1), followup);
+  assert.equal(
+    state.artifacts.sent_prompts.at(-1).prompt,
+    '运行时已恢复。请输出唯一标识 BETA_RUNTIME_RECOVERED。',
+  );
+  assert.notEqual(
+    state.artifacts.sent_prompts.at(-1).prompt,
+    state.artifacts.sent_prompts[0].prompt,
+  );
 });

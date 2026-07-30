@@ -4137,17 +4137,87 @@ export function coreBetaSharedCapabilityPrerequisiteBlocker(ledger = {}, audit =
     && eligibleCount < requestedCount
     && String(blocker?.reason || '') === `可用能力不足：需要 ${requestedCount}，实际 ${eligibleCount}`;
   if (!strict) {
+    const installResults = Array.isArray(ledger.skills?.install_results)
+      ? ledger.skills.install_results
+      : [];
+    const requestedInstallCount = Number(
+      ledger.skills?.installation_blocker?.requested_count
+      || ledger.skills?.sample?.length
+      || 0,
+    );
+    const successfulInstalls = installResults.filter((item) => item?.ok === true);
+    const requiresCompleteInstallSet = commands.some((command) => [
+      'verify_market_installed_state',
+      'verify_installed_and_history_views',
+      'verify_composer_installed_options',
+    ].includes(command));
+    const strictInstallShortage = /^skill_/.test(caseType)
+      && requiresCompleteInstallSet
+      && requestedInstallCount > 0
+      && installResults.length === requestedInstallCount
+      && successfulInstalls.length < requestedInstallCount
+      && Array.isArray(ledger.skills?.installed)
+      && ledger.skills.installed.length === successfulInstalls.length;
+    if (strictInstallShortage) {
+      return {
+        applicable: true,
+        kind: 'skill_install_terminal_shortage',
+        source: 'exact run-owned install receipt ledger',
+        source_case_id: String(ledger.skills?.installation_blocker?.source_case_id || ''),
+        reason: `技能安装前置未完成：要求 ${requestedInstallCount} 个，真实成功 ${successfulInstalls.length} 个；依赖完整 10 技能集合的 Case 不得把上游安装失败重复报为自身产品 Bug。`,
+        requested_count: requestedInstallCount,
+        successful_count: successfulInstalls.length,
+        failed_ids: installResults
+          .filter((item) => item?.ok !== true)
+          .map((item) => String(item?.slug || item?.name || ''))
+          .filter(Boolean),
+        receipts_sha256: sha256Text(JSON.stringify(installResults)),
+        propagated_to_case_type: caseType,
+      };
+    }
     return {
       applicable: false,
       kind: 'skill_sample_shortage',
       source: 'shared_prerequisite_not_verified',
-      reason: '没有可严格传播的技能抽样前置阻塞。',
+      reason: '没有可严格传播的技能抽样或安装终态前置阻塞。',
     };
   }
   return {
     ...blocker,
     applicable: true,
     propagated_to_case_type: caseType,
+  };
+}
+
+function refreshCoreBetaSkillInstallationBlocker(ctx) {
+  const results = Array.isArray(ctx.ledger.skills?.install_results)
+    ? ctx.ledger.skills.install_results
+    : [];
+  const requestedCount = Number(
+    ctx.capabilityPolicy?.install_count
+    || ctx.ledger.skills?.sample?.length
+    || 10,
+  );
+  if (requestedCount <= 0 || results.length < requestedCount) return;
+  const successful = results.filter((item) => item?.ok === true);
+  if (successful.length === requestedCount) {
+    delete ctx.ledger.skills.installation_blocker;
+    return;
+  }
+  ctx.ledger.skills.installation_blocker = {
+    applicable: true,
+    kind: 'skill_install_terminal_shortage',
+    source: 'exact run-owned install receipt ledger',
+    source_case_id: ctx.state.id,
+    requested_count: requestedCount,
+    attempted_count: results.length,
+    successful_count: successful.length,
+    failed_ids: results
+      .filter((item) => item?.ok !== true)
+      .map((item) => String(item?.slug || item?.name || ''))
+      .filter(Boolean),
+    receipts_sha256: sha256Text(JSON.stringify(results)),
+    captured_at: new Date().toISOString(),
   };
 }
 
@@ -6918,6 +6988,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     for (const sampled of ctx.ledger.skills.sample || []) results.push(await coreBetaInstallSkill(ctx, sampled));
     ctx.ledger.skills.install_results = results;
     ctx.ledger.skills.installed = results.filter((item) => item.ok || item.managed_side_effect || item.server_installed);
+    refreshCoreBetaSkillInstallationBlocker(ctx);
     return {
       ok: results.length === 10 && results.every((item) => item.ok),
       selector_or_testid: 'skill-install',
@@ -6939,6 +7010,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     ];
     ctx.ledger.skills.installed = (ctx.ledger.skills.install_results || [])
       .filter((item) => item.ok || item.managed_side_effect || item.server_installed);
+    refreshCoreBetaSkillInstallationBlocker(ctx);
     return {
       ok: results.length === 5 && results.every((item) => item.ok),
       selector_or_testid: 'skill-install exact sampled segment',
@@ -6967,6 +7039,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
   if (command === 'verify_skill_install_results') {
     const results = ctx.ledger.skills.install_results || [];
     const exact = results.length === 10 && results.every((item) => item.ok);
+    refreshCoreBetaSkillInstallationBlocker(ctx);
     return {
       ok: exact,
       selector_or_testid: 'core-beta-shared-ledger',
@@ -7432,8 +7505,22 @@ async function executeCoreBetaSkillCommand(ctx, command) {
         results,
       },
     });
+    const cleanupSucceeded = results.length === targets.length
+      && results.every((item) => item.ok);
+    ctx.skillCleanupUpstreamShortage = targets.length !== requestedCount
+      ? {
+        kind: 'skill_install_terminal_shortage',
+        requested_count: requestedCount,
+        selected_count: targets.length,
+        cleanup_succeeded: cleanupSucceeded,
+      }
+      : null;
     return {
-      ok: results.length === requestedCount && results.every((item) => item.ok),
+      // Cleanup must remove every run-owned install even when an earlier
+      // install Case only produced a partial set.  Treat that partial-set
+      // condition as an upstream blocker after cross-view cleanup verification,
+      // not as an uninstall product failure that stops cleanup midway.
+      ok: cleanupSucceeded,
       selector_or_testid: 'skill delete confirmation',
       event: 'uninstall-run-sample',
       state_readback: results,
@@ -7554,6 +7641,20 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       outcome_satisfied: clean,
       ...crossViewReadback,
     });
+    if (clean && ctx.skillCleanupUpstreamShortage) {
+      return {
+        ok: false,
+        status: 'blocked',
+        category: 'blocked',
+        selector_or_testid: 'skills-view',
+        event: 'cleanup-complete-upstream-install-shortage',
+        state_readback: {
+          ...crossViewReadback,
+          upstream_shortage: ctx.skillCleanupUpstreamShortage,
+        },
+        actual: `本轮 ${targets.length} 个真实安装项已全部清理并恢复基线，但上游只成功安装 ${ctx.skillCleanupUpstreamShortage.selected_count}/${ctx.skillCleanupUpstreamShortage.requested_count}，不能验证“清理10个技能”的完整目标。`,
+      };
+    }
     return {
       ok: clean,
       selector_or_testid: 'skills-view',
@@ -8574,6 +8675,28 @@ function coreBetaNewAssertionsPassed(state, startIndex) {
   return added.length > 0 && added.every((item) => item.passed !== false);
 }
 
+export function stageCoreBetaPlannedPrompt(state, {
+  label,
+  prompt,
+  source = 'core-beta planned prompt before send',
+  recordedAt = new Date().toISOString(),
+} = {}) {
+  if (!state?.artifacts || typeof state.artifacts !== 'object') {
+    throw new Error('发送计划提示词前缺少可写 artifacts 账本。');
+  }
+  const normalizedPrompt = String(prompt || '').trim();
+  if (!normalizedPrompt) throw new Error('发送计划提示词不能为空。');
+  if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
+  const record = {
+    label: String(label || 'core-beta planned prompt'),
+    prompt: normalizedPrompt,
+    recorded_at: recordedAt,
+    source,
+  };
+  state.artifacts.sent_prompts.push(record);
+  return record;
+}
+
 async function executeCoreBetaRecoveryCommand(ctx, command) {
   if (command === 'dispatch_long_task' || command === 'dispatch_recovery_task') {
     await openNewTask(ctx.page, ctx.state);
@@ -8586,6 +8709,11 @@ async function executeCoreBetaRecoveryCommand(ctx, command) {
       ? '请生成一份包含目标、范围、风险、执行计划和验收标准的完整测试方案。先输出“BETA_RECOVERY_STARTED”，再继续完整内容。'
       : '请生成一份运行时恢复报告。先输出“BETA_RUNTIME_STARTED”，随后给出目标、风险、恢复步骤和验收标准。';
     const before = await conversationSnapshot(ctx.page);
+    stageCoreBetaPlannedPrompt(ctx.state, {
+      label: command,
+      prompt,
+      source: 'core-beta recovery planned prompt before send',
+    });
     await fillComposer(ctx.page, prompt, ctx.state, command);
     const receipt = await send(ctx.page, ctx.state, command);
     const started = await waitForRunningTaskEvidence(ctx.page, 90000, {
@@ -8745,6 +8873,11 @@ async function executeCoreBetaRecoveryCommand(ctx, command) {
     }
     const followup = '运行时已恢复。请基于原任务继续，输出唯一标识 BETA_RUNTIME_RECOVERED，并用一句话说明恢复是否成功。';
     const before = await conversationSnapshot(ctx.page);
+    stageCoreBetaPlannedPrompt(ctx.state, {
+      label: '恢复后继续追问',
+      prompt: followup,
+      source: 'core-beta recovery planned prompt before send',
+    });
     await fillComposer(ctx.page, followup, ctx.state, '恢复后继续追问');
     await send(ctx.page, ctx.state, '恢复后继续追问');
     const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
@@ -8757,6 +8890,7 @@ async function executeCoreBetaRecoveryCommand(ctx, command) {
       minWaitMs: waitConfig.minWaitMs,
       waitKind: waitConfig.kind,
     });
+    recordReplyWaitAssertion(ctx.state, reply, '运行时恢复后继续');
     writeReplyArtifacts(ctx.state, ctx.caseDir, [{ ...reply, label: '运行时恢复后继续' }]);
     const after = await qbotE2EState(ctx.page);
     const ok = !reply.incomplete
@@ -26245,6 +26379,22 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     })
     : null;
   const failedSelectionCommand = String(failedSelectionReceipt?.command || '');
+  const multiConnectorReceipt = Array.isArray(actionEvidence?.receipts)
+    ? actionEvidence.receipts.find((receipt) => (
+      receipt?.command === 'select_five_connectors_by_key'
+      && receipt?.event === 'select-five'
+      && receipt?.expected_state_observed === false
+      && Array.isArray(receipt?.state_readback?.expected)
+      && receipt.state_readback.expected.length === 5
+      && Array.isArray(receipt?.state_readback?.selected)
+      && receipt.state_readback.selected.length > 0
+      && receipt.state_readback.selected.length < 5
+      && Number(receipt?.state_readback?.snapshot?.selectedConnectorCount || 0)
+        === receipt.state_readback.selected.length
+      && Number(receipt?.state_readback?.snapshot?.chipCount || 0) > 0
+      && receipt?.state_readback?.snapshot?.connectorRouting?.mode === 'manual'
+    ))
+    : null;
   const failClosedSendReceipt = Array.isArray(actionEvidence?.receipts)
     ? actionEvidence.receipts.find((receipt) => (
       (
@@ -26314,7 +26464,28 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     && Number(finalTaskIdentity?.message_count || 0) === 0
     && noPromptRecorded
     && noSendRecorded;
-  if (!strictShortage && !strictPreSendSelectionFailure) {
+  const strictMultiConnectorSelectionFailure = state.status === 'failed'
+    && state.result_category === 'bug'
+    && selectionEvidence?.available === false
+    && selectionEvidence?.source === 'five visible connector option clicks + chips + window.agent.capabilities'
+    && actionEvidence?.available === true
+    && Boolean(multiConnectorReceipt)
+    && Boolean(existingFileEvidence(multiConnectorReceipt.after_screenshot))
+    && Array.isArray(selectionEvidence?.expected)
+    && selectionEvidence.expected.length === 5
+    && Array.isArray(selectionEvidence?.selected)
+    && selectionEvidence.selected.length === multiConnectorReceipt.state_readback.selected.length
+    && selectionEvidence.selected.every((key, index) => (
+      key === multiConnectorReceipt.state_readback.selected[index]
+    ))
+    && (state.steps || []).some((step) => (
+      step?.status === 'failed'
+      && step?.category === 'bug'
+      && /按唯一标识手动选择连接器/.test(String(step?.action || ''))
+    ))
+    && noPromptRecorded
+    && noSendRecorded;
+  if (!strictShortage && !strictPreSendSelectionFailure && !strictMultiConnectorSelectionFailure) {
     return {
       applicable: false,
       source: 'verified_capability_inventory_shortage_not_established',
@@ -26333,6 +26504,19 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
       propagation_source: 'current_case_pre_send_selection_failure',
     };
   }
+  if (strictMultiConnectorSelectionFailure) {
+    return {
+      applicable: true,
+      source: 'verified_pre_send_multi_connector_selection_failure',
+      reason: `已通过可见 Composer 按精确 key 逐个选择 5 个连接器；公共状态和可见 chip 最终只保留 ${multiConnectorReceipt.state_readback.selected.length} 个。未发送任何 prompt，结果不是模型语义误判。`,
+      expected_identities: [...multiConnectorReceipt.state_readback.expected],
+      selected_identities: [...multiConnectorReceipt.state_readback.selected],
+      selection_source: String(selectionEvidence.source || ''),
+      visible_failure_screenshot: existingFileEvidence(multiConnectorReceipt.after_screenshot),
+      failed_selection_command: 'select_five_connectors_by_key',
+      propagation_source: 'current_case_pre_send_selection_failure',
+    };
+  }
   return {
     applicable: true,
     source: 'verified_capability_inventory_shortage',
@@ -26342,6 +26526,184 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
     inventory_source: String(inventoryEvidence.source || ''),
     selection_source: String(selectionEvidence.source || ''),
     propagation_source: strictSharedShortage ? 'shared_prerequisite_ledger' : 'current_case_sampler',
+  };
+}
+
+export function verifiedCoreBetaUpstreamPrerequisiteShortageEvidence(state = {}) {
+  const actionEvidence = state.artifacts?.core_beta_evidence?.action_receipt;
+  const selectionEvidence = state.artifacts?.core_beta_evidence?.capability_selection;
+  const receipts = Array.isArray(actionEvidence?.receipts) ? actionEvidence.receipts : [];
+  const fullReceipts = actionEvidence?.available === true
+    && Number(actionEvidence?.receipt_count || receipts.length)
+      === Number(actionEvidence?.declared_action_count || receipts.length);
+  const marketReceipt = receipts.find((receipt) => (
+    receipt?.command === 'verify_market_installed_state'
+    && receipt?.event === 'market-installed-readback'
+    && receipt?.expected_state_observed === false
+  ));
+  const marketExpected = selectionEvidence?.selection?.expected;
+  const marketReadback = selectionEvidence?.selection?.market_readback;
+  const strictMarketShortage = fullReceipts
+    && state.status === 'failed'
+    && state.result_category === 'bug'
+    && selectionEvidence?.source === 'captured cross-view installed capability selection readback'
+    && Array.isArray(marketExpected)
+    && marketExpected.length > 0
+    && marketExpected.length < 10
+    && Array.isArray(marketReadback)
+    && marketReadback.length === marketExpected.length
+    && marketReadback.every((item) => item?.installed === true && item?.visible === true)
+    && Array.isArray(marketReceipt?.state_readback)
+    && marketReceipt.state_readback.length === marketExpected.length
+    && Boolean(existingFileEvidence(marketReceipt.after_screenshot));
+  if (strictMarketShortage) {
+    return {
+      applicable: true,
+      kind: 'skill_install_terminal_shortage',
+      source: 'inherited exact install receipts + visible market readback',
+      reason: `上游 10 技能安装只形成 ${marketExpected.length} 个成功安装项；这 ${marketExpected.length} 个在技能市场均已真实显示“已安装”，当前 Case 无法验证完整 10 项，不能重复报为跨视图产品 Bug。`,
+      requested_count: 10,
+      successful_count: marketExpected.length,
+      visible_failure_screenshot: existingFileEvidence(marketReceipt.after_screenshot),
+    };
+  }
+
+  const cleanupReceipt = receipts.find((receipt) => (
+    receipt?.command === 'uninstall_run_skill_sample'
+    && receipt?.event === 'uninstall-run-sample'
+    && receipt?.expected_state_observed === false
+  ));
+  const cleanup = selectionEvidence?.selection;
+  const strictCleanupShortage = fullReceipts
+    && state.status === 'failed'
+    && state.result_category === 'bug'
+    && selectionEvidence?.source === 'exact run-owned successful install receipts + visible uninstall actions'
+    && cleanup?.operation === 'cleanup_current_run_installs'
+    && Number(cleanup?.requested_sample_count || 0) === 10
+    && Number(cleanup?.selected_count || 0) > 0
+    && Number(cleanup.selected_count) < 10
+    && Array.isArray(cleanup?.results)
+    && cleanup.results.length === Number(cleanup.selected_count)
+    && cleanup.results.every((item) => item?.ok === true)
+    && Boolean(existingFileEvidence(cleanupReceipt?.after_screenshot));
+  if (strictCleanupShortage) {
+    return {
+      applicable: true,
+      kind: 'skill_install_terminal_shortage',
+      source: 'exact run-owned cleanup receipts',
+      reason: `上游 10 技能安装只形成 ${cleanup.selected_count} 个可清理项；框架已成功卸载全部 ${cleanup.selected_count} 个真实安装项，但当前 Case 无法验证“卸载10个”的完整目标。`,
+      requested_count: 10,
+      successful_count: Number(cleanup.selected_count),
+      visible_failure_screenshot: existingFileEvidence(cleanupReceipt.after_screenshot),
+    };
+  }
+  return {
+    applicable: false,
+    kind: 'skill_install_terminal_shortage',
+    source: 'upstream_prerequisite_shortage_not_verified',
+    reason: '没有取得完整安装账本、精确数量、可见读回与动作截图的组合证据。',
+  };
+}
+
+export function verifiedCoreBetaProductActionFailureEvidence(state = {}) {
+  if (
+    state.status !== 'failed'
+    || state.result_category !== 'bug'
+    || verifiedCoreBetaUpstreamPrerequisiteShortageEvidence(state).applicable
+  ) {
+    return {
+      applicable: false,
+      source: 'strict_core_beta_product_action_failure_not_verified',
+      reason: '不是独立的 CORE-BETA 产品动作失败，或已确认是上游前置不足。',
+    };
+  }
+  const actionEvidence = state.artifacts?.core_beta_evidence?.action_receipt;
+  const receipts = Array.isArray(actionEvidence?.receipts) ? actionEvidence.receipts : [];
+  const exactLedger = actionEvidence?.available === true
+    && receipts.length > 0
+    && receipts.length === Number(actionEvidence?.declared_action_count || 0)
+    && receipts.length === Number(actionEvidence?.receipt_count || 0);
+  const failureReceipt = receipts.find((receipt) => (
+    receipt?.expected_state_observed === false
+    && !['exception', 'skipped-after-failed-prerequisite', 'prerequisite-blocked'].includes(String(receipt?.event || ''))
+  ));
+  const matchingStep = failureReceipt
+    ? (state.steps || []).find((step) => (
+      Number(step?.numbered_step_number || 0) === Number(failureReceipt.number || 0)
+      && step?.numbered_step_evidence === 'explicit'
+      && step?.status === 'failed'
+      && step?.category === 'bug'
+    ))
+    : null;
+  const beforeScreenshot = existingFileEvidence(failureReceipt?.before_screenshot);
+  const afterScreenshot = existingFileEvidence(failureReceipt?.after_screenshot);
+  const laterReceipts = failureReceipt
+    ? receipts.filter((receipt) => Number(receipt?.number || 0) > Number(failureReceipt.number || 0))
+    : [];
+  const failClosedRemainder = laterReceipts.every((receipt) => (
+    receipt?.event === 'skipped-after-failed-prerequisite'
+    && receipt?.state_readback?.stopped_by_command === failureReceipt.command
+  ));
+  let commandProof = false;
+  if (failureReceipt?.command === 'stop_generation') {
+    const terminal = coreBetaStoppedTurnTerminalEvidence(failureReceipt.state_readback);
+    commandProof = terminal.available === true && terminal.assistant_reply_present === false;
+  } else if (failureReceipt?.command === 'select_five_connectors_by_key') {
+    const readback = failureReceipt.state_readback;
+    commandProof = Array.isArray(readback?.expected)
+      && readback.expected.length === 5
+      && Array.isArray(readback?.selected)
+      && readback.selected.length > 0
+      && readback.selected.length < 5
+      && Number(readback?.snapshot?.selectedConnectorCount || 0) === readback.selected.length
+      && Number(readback?.snapshot?.chipCount || 0) > 0
+      && readback?.snapshot?.connectorRouting?.mode === 'manual';
+  } else if (failureReceipt?.command === 'run_mcp_turn_2_and_verify') {
+    const readback = failureReceipt.state_readback;
+    commandProof = readback?.evidence?.kind === 'mcp'
+      && Boolean(String(readback?.evidence?.expected_identity || '').trim())
+      && readback?.evidence?.identity_present === true
+      && readback?.evidence?.executed === false
+      && Boolean(String(readback?.outcome?.task_id || '').trim())
+      && readback.outcome.task_id === readback.evidence.task_id
+      && hasConfirmedSendReceipt(state)
+      && hasTerminalReplyWait(state);
+  } else if (failureReceipt?.command === 'recover_runtime_and_continue') {
+    const readback = failureReceipt.state_readback;
+    commandProof = readback?.ready?.ok === true
+      && readback?.reopened?.ok === true
+      && Boolean(String(readback?.active_id || '').trim())
+      && readback.active_id === readback.reopened.activeId
+      && readback?.reply_sha256 === sha256Text('')
+      && hasConfirmedSendReceipt(state)
+      && hasTerminalReplyWait(state);
+  }
+  const strict = exactLedger
+    && Boolean(failureReceipt)
+    && Boolean(matchingStep)
+    && Boolean(beforeScreenshot)
+    && Boolean(afterScreenshot)
+    && Boolean(String(failureReceipt?.selector_or_testid || '').trim())
+    && Boolean(String(failureReceipt?.actual || '').trim())
+    && failureReceipt?.state_readback != null
+    && failClosedRemainder
+    && commandProof;
+  if (!strict) {
+    return {
+      applicable: false,
+      source: 'strict_core_beta_product_action_failure_not_verified',
+      reason: '缺少精确动作账本、产品读回、前后截图、真实发送/等待或命令专属失败证明。',
+    };
+  }
+  return {
+    applicable: true,
+    source: 'strict_core_beta_product_action_failure',
+    reason: `编号动作 ${failureReceipt.number}/${failureReceipt.command} 已真实触发，产品状态未达到 ${failureReceipt.expected_state}：${failureReceipt.actual}`,
+    command: failureReceipt.command,
+    action_number: Number(failureReceipt.number),
+    actual: String(failureReceipt.actual || ''),
+    before_screenshot: beforeScreenshot,
+    visible_failure_screenshot: afterScreenshot,
   };
 }
 
@@ -27619,11 +27981,17 @@ export function reviewCaseCredibility(result) {
     && status !== 'blocked';
   const verifiedCapabilityOutcome = verifiedCapabilitySelectionUnavailableEvidence(result);
   const verifiedPreSendProductFailure = verifiedCapabilityOutcome.applicable
-    && verifiedCapabilityOutcome.source === 'verified_pre_send_capability_selection_failure';
+    && [
+      'verified_pre_send_capability_selection_failure',
+      'verified_pre_send_multi_connector_selection_failure',
+    ].includes(verifiedCapabilityOutcome.source);
+  const verifiedCoreBetaProductFailure = verifiedCoreBetaProductActionFailureEvidence(result);
   const automationSignals = []
     .concat(steps, assertions)
     .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`))
-    .filter((item) => !verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item));
+    .filter((item) => !verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item))
+    .filter((item) => !verifiedCoreBetaProductFailure.applicable
+      || !isVerifiedCoreBetaActionTrailReviewItem(item, verifiedCoreBetaProductFailure));
   const blockedText = `${result.actual_result || ''}\n${result.conclusion || ''}`;
   const frameworkBlocked = /当前 runner|批量 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|dry-run|bridge.*(?:不可替换|unavailable|undefined)|无法安装.*捕获器|无法注入.*(?:快照|目录|网络|失败)|CDP|Playwright|handler|selector/.test(blockedText);
   const hardEnvironmentBlocked = /没有健康连接器|无可选技能|无已安装技能|当前没有已安装技能|已安装技能列表没有可删除技能|技能市场没有可安装技能|技能市场没有可见技能卡片|技能市场\/已安装列表未找到|要求已安装至少\s*2\s*个技能|当前手动模式只成功选择\s*\d+\s*个技能|未找到可识别.*runtime|runtime 技能卡片存在，但没有可点击安装入口|账号无权限|测试数据|未配置|登录|权限|DEEPBANK_E2E|启动方式|release-package|本地 E2E|辅助功能|原生文件框|filechooser|文件选择|文件名|期望文件|附件入口|图片识别.*暂不可用|视觉运行时|控制平面.*(?:未提供|不兼容)|没有可稳定用于产品\/业务类任务的专家卡片|产品\/业务类任务的专家|自动化测试残留专家|不能随机选择错误专家|专家页没有可稳定|技能市场未找到.*技能卡片|已安装技能列表未找到|当前已安装\/技能市场未找到|当前账号存在可选技能|该用例要求没有已安装技能|找到疑似(可更新|历史版本)技能，但未找到可点击(更新|回退)入口|故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|当前账号存在可见连接器|无 platform\/custom 连接器账号|未找到 unreachable 连接器|未找到 needs_auth 连接器|手动菜单未展示 needs_auth\/unreachable|无法到达连接器空状态判断点|无专家市场数据|专家市场存在专家卡片|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText);
@@ -28017,6 +28385,17 @@ function isVerifiedCapabilitySelectionTrailReviewItem(item) {
   return /(?:技能|Skill|连接器|connector).{0,48}(?:选择|选中|手动|manual|chip|回读|readback)|(?:选择|选中|手动|manual|chip|回读|readback).{0,48}(?:技能|Skill|连接器|connector)/i.test(text);
 }
 
+function isVerifiedCoreBetaActionTrailReviewItem(item, evidence = {}) {
+  if (item?.category === 'not_applicable' || item?.event === 'skipped-after-failed-prerequisite') {
+    return true;
+  }
+  const text = `${item?.name || ''}\n${item?.action || ''}\n${item?.expected || ''}\n${item?.actual || ''}`;
+  if (evidence?.command === 'select_five_connectors_by_key') {
+    return /连接器|connector|selectedConnectors|chip|手动|manual/i.test(text);
+  }
+  return false;
+}
+
 function screenshotOutcomeScore(item) {
   const value = `${item.key} ${path.basename(item.file)}`;
   let score = item.explicit ? 50 : 0;
@@ -28070,12 +28449,27 @@ export function assessUserCenteredOutcome(result, {
   const automationFailures = [...steps, ...(result?.assertions || [])].filter(isAutomationReviewFailure);
   const verifiedCapabilityOutcome = verifiedCapabilitySelectionUnavailableEvidence(result);
   const verifiedPreSendProductFailure = verifiedCapabilityOutcome.applicable === true
-    && verifiedCapabilityOutcome.source === 'verified_pre_send_capability_selection_failure';
+    && [
+      'verified_pre_send_capability_selection_failure',
+      'verified_pre_send_multi_connector_selection_failure',
+    ].includes(verifiedCapabilityOutcome.source);
+  const verifiedCoreBetaProductFailure = verifiedCoreBetaProductActionFailureEvidence(result);
+  const verifiedProductActionFailure = verifiedCoreBetaProductFailure.applicable === true;
+  const verifiedUpstreamPrerequisiteShortage = verifiedCoreBetaUpstreamPrerequisiteShortageEvidence(result);
   const effectiveAutomationFailures = automationFailures.filter((item) => (
-    !verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item)
+    (!verifiedPreSendProductFailure || !isVerifiedCapabilitySelectionTrailReviewItem(item))
+    && (!verifiedProductActionFailure || !isVerifiedCoreBetaActionTrailReviewItem(item, verifiedCoreBetaProductFailure))
   ));
   const intended = intendedClassification
-    || (verifiedPreSendProductFailure ? 'bug' : status === 'passed' ? 'pass' : category === 'bug' ? 'bug' : status);
+    || (
+      verifiedPreSendProductFailure || verifiedProductActionFailure
+        ? 'bug'
+        : status === 'passed'
+          ? 'pass'
+          : category === 'bug'
+            ? 'bug'
+            : status
+    );
   const sentMessage = steps.some(isSuccessfulSendStep);
   const reviewContext = `${result?.title || ''}\n${result?.scenario || ''}\n${result?.expected_result || ''}`;
   const artifactContext = /成果|成果库|预览|生成.*文件|文件.*(?:预览|打开|删除)/.test(reviewContext);
@@ -28128,6 +28522,8 @@ export function assessUserCenteredOutcome(result, {
   const expected = compactUserReviewText(expectedOutcomeOverride || result?.expected_result || targetAssertion?.expected || '完成当前用户目标并得到清晰、正确的结果。');
   const observedSource = productObservation
     || targetAssertion?.actual
+    || (verifiedPreSendProductFailure ? verifiedCapabilityOutcome.reason : '')
+    || (verifiedProductActionFailure ? verifiedCoreBetaProductFailure.reason : '')
     || (intended === 'pass' ? result?.actual_result : '')
     || reviewReason;
   const observed = compactUserReviewText(observedSource);
@@ -28140,7 +28536,9 @@ export function assessUserCenteredOutcome(result, {
   const observationIsVisible = Boolean(observed)
     && (!USER_REVIEW_TECHNICAL_OBSERVATION.test(observed)
       || Boolean(productObservation)
-      || structuredOutcomeObservation);
+      || structuredOutcomeObservation
+      || verifiedPreSendProductFailure
+      || verifiedProductActionFailure);
   const userFacingEvidence = [
     reviewReason,
     productObservation,
@@ -28200,6 +28598,7 @@ export function assessUserCenteredOutcome(result, {
     || hardProductFailure
     || Boolean(objectiveFailureAssertion && productActionExercised)
     || verifiedPreSendProductFailure
+    || verifiedProductActionFailure
     || verifiedOverrideEvidence;
   const executionIntegrity = reviewExecutionIntegrity(result);
   const manifestIntegrity = reviewEvidenceManifestIntegrity(result);
@@ -28207,9 +28606,12 @@ export function assessUserCenteredOutcome(result, {
     String(result?.execution_provenance || ''),
   );
   const gates = {
-    reached_user_action: actions.length > 0 || verifiedPreSendProductFailure,
+    reached_user_action: actions.length > 0 || verifiedPreSendProductFailure || verifiedProductActionFailure,
     user_outcome_assertion: intended === 'bug'
-      ? failedAssertions.length > 0 || verifiedPreSendProductFailure || Boolean(productObservation && reviewReason)
+      ? failedAssertions.length > 0
+        || verifiedPreSendProductFailure
+        || verifiedProductActionFailure
+        || Boolean(productObservation && reviewReason)
       : passedAssertions.length > 0 || Boolean(productObservation && reviewReason),
     no_automation_error: effectiveAutomationFailures.length === 0,
     non_synthetic_execution: nonSyntheticExecution,
@@ -28220,6 +28622,7 @@ export function assessUserCenteredOutcome(result, {
       || hardProductFailure
       || verifiedOverrideEvidence
       || verifiedPreSendProductFailure
+      || verifiedProductActionFailure
       || productActionExercised,
     user_visible_observation: observationIsVisible,
     aligned_outcome_screenshot: alignedScreenshots.length > 0,
@@ -28240,6 +28643,30 @@ export function assessUserCenteredOutcome(result, {
       description: `用户操作：${userOperation}；结果：尚未进入产品结果判断点；影响：本轮不能评价产品通过或失败。`,
       userOperation, expected, observed, impact: '本轮不能评价产品通过或失败。',
       keyScreenshot, alignedScreenshots, screenshotReason, gates, missingGates: missing,
+    };
+  }
+  if (
+    verifiedUpstreamPrerequisiteShortage.applicable
+    && !intendedClassification
+    && effectiveAutomationFailures.length === 0
+    && executionIntegrity.ok
+    && manifestIntegrity.ok
+  ) {
+    return {
+      classification: 'blocked',
+      reason: verifiedUpstreamPrerequisiteShortage.reason,
+      description: `用户操作：${userOperation}；结果：${verifiedUpstreamPrerequisiteShortage.reason}；影响：本条依赖用例不能重复计算为独立产品 Bug。`,
+      userOperation,
+      expected,
+      observed: verifiedUpstreamPrerequisiteShortage.reason,
+      impact: '本条依赖用例不能重复计算为独立产品 Bug。',
+      keyScreenshot: verifiedUpstreamPrerequisiteShortage.visible_failure_screenshot?.file || keyScreenshot,
+      alignedScreenshots,
+      screenshotReason,
+      gates,
+      missingGates: [],
+      executionIntegrity,
+      manifestIntegrity,
     };
   }
   if (
