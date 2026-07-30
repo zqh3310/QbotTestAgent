@@ -5818,6 +5818,16 @@ export function coreBetaSkillCardActionSelectorCandidates() {
   ];
 }
 
+export function coreBetaInstalledSkillTerminalSelectorCandidates() {
+  return [
+    '.skill-card-installed',
+    '.skill-card-go-chat',
+    '[aria-label="试一试"]',
+    '.skill-delete',
+    '[aria-label*="卸载"]',
+  ];
+}
+
 async function coreBetaSkillInventory(ctx, tab = '技能市场') {
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: tab });
   const [capabilities, catalog] = await Promise.all([
@@ -5947,21 +5957,30 @@ async function coreBetaInstallSkill(ctx, sampled) {
   await install.click({ force: true });
   const terminal = await waitForSkillInstallTerminal(ctx.page, {
     skillName: sampled.name,
+    skillSlug: sampled.slug,
     marketCard: card,
     timeoutMs: 120000,
   });
   await clickSkillSubtab(ctx.page, '已安装', ctx.state);
-  const visibleInstalled = await visible(ctx.page.locator('.skill-card').filter({ hasText: sampled.name }).first(), 2500);
+  const identityPattern = new RegExp(identities.map(escapeRegExp).join('|'));
+  const visibleInstalled = await visible(
+    ctx.page.locator('.skill-card').filter({ hasText: identityPattern }).first(),
+    2500,
+  );
   let catalogSkill = null;
   const readinessDeadline = Date.now() + 120000;
   while (Date.now() < readinessDeadline) {
-    catalogSkill = await ctx.page.evaluate(async ({ slug, name }) => {
+    catalogSkill = await ctx.page.evaluate(async ({ slug, names }) => {
       if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
       const catalog = await window.agent.getSkillsCatalog('');
       return (catalog?.installed || []).find((item) => (
-        item?.slug === slug || item?.name === name
+        item?.slug === slug
+        || names.includes(String(item?.name || ''))
+        || names.includes(String(item?.label || ''))
+        || names.includes(String(item?.cnName || ''))
+        || names.includes(String(item?.displayName || ''))
       )) || null;
-    }, { slug: sampled.slug, name: sampled.name }).catch(() => null);
+    }, { slug: sampled.slug, names: identities }).catch(() => null);
     const status = String(catalogSkill?.localReadiness?.status || catalogSkill?.localReadiness?.readinessStatus || '');
     if (/ready|loaded|active|available|ok/i.test(status)) break;
     if (/reject|fail|error|unready|missing/i.test(status)) break;
@@ -5976,6 +5995,8 @@ async function coreBetaInstallSkill(ctx, sampled) {
   const result = {
     slug: sampled.slug,
     name: sampled.name,
+    label: sampled.label,
+    identities,
     ok: (terminal.success || visibleInstalled) && !terminal.failure && runtimeReady,
     terminal,
     installed_view_readback: visibleInstalled,
@@ -17254,18 +17275,49 @@ async function skillCardName(card, fallbackText = '') {
   return firstLine(named || fallbackText).trim();
 }
 
-async function waitForSkillInstallTerminal(page, { skillName, marketCard = null, timeoutMs = 90000 }) {
+async function waitForSkillInstallTerminal(page, {
+  skillName,
+  skillSlug = '',
+  marketCard = null,
+  timeoutMs = 90000,
+}) {
   const deadline = Date.now() + timeoutMs;
   let text = '';
+  const installedSelectors = coreBetaInstalledSkillTerminalSelectorCandidates();
   while (Date.now() < deadline) {
     text = marketCard ? await marketCard.innerText({ timeout: 800 }).catch(() => '') : '';
     const pageText = await mainSurfaceText(page);
     const combined = `${text}\n${pageText}`;
     if (marketCard) {
-      const installedAction = marketCard.locator('button, .skill-install, .skill-delete').filter({ hasText: /删除|卸载/ }).first();
+      const installedAction = marketCard.locator(installedSelectors.join(', ')).first();
       if (await visible(installedAction, 250)) {
-        return { terminal: true, success: true, failure: false, pending: false, text: text || combined };
+        return {
+          terminal: true,
+          success: true,
+          failure: false,
+          pending: false,
+          source: 'visible installed-card action',
+          text: text || combined,
+        };
       }
+    }
+    const catalogInstalled = await page.evaluate(async ({ slug, name }) => {
+      if (typeof window.agent?.getSkillsCatalog !== 'function') return false;
+      const catalog = await window.agent.getSkillsCatalog('');
+      return (catalog?.installed || []).some((item) => (
+        (slug && String(item?.slug || '') === slug)
+        || (name && String(item?.name || '') === name)
+      ));
+    }, { slug: String(skillSlug || ''), name: String(skillName || '') }).catch(() => false);
+    if (catalogInstalled) {
+      return {
+        terminal: true,
+        success: true,
+        failure: false,
+        pending: false,
+        source: 'window.agent.getSkillsCatalog().installed',
+        text: text || combined,
+      };
     }
     const pending = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|reconcil|materializing/i.test(combined);
     const failure = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|错误/.test(combined);

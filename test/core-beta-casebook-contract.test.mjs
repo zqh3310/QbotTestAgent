@@ -29,6 +29,7 @@ import {
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  coreBetaInstalledSkillTerminalSelectorCandidates,
   coreBetaSkillCardActionSelectorCandidates,
   coreBetaSkillIdentityCandidates,
   coreBetaSkillEntrySelectorCandidates,
@@ -341,6 +342,13 @@ test('skill market install matching includes the localized label when cards expo
     'column-lineage-analysis',
     '字段血缘分析工具',
   ]);
+});
+
+test('skill install terminal detection supports the current checkmark and try-it card actions', () => {
+  const candidates = coreBetaInstalledSkillTerminalSelectorCandidates();
+  assert.ok(candidates.includes('.skill-card-installed'));
+  assert.ok(candidates.includes('.skill-card-go-chat'));
+  assert.ok(candidates.includes('[aria-label="试一试"]'));
 });
 
 test('installed Skill tasks are derived from the actual Skill identity and README domain', () => {
