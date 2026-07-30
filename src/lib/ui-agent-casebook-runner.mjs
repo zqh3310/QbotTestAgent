@@ -5949,10 +5949,56 @@ async function coreBetaInstallSkill(ctx, sampled) {
       reason: 'sampled skill card missing after exact market search',
     };
   }
+  const identityPattern = new RegExp(identities.map(escapeRegExp).join('|'));
   const install = card.locator('.skill-install:not([disabled])').first();
   if (!(await visible(install, 1200))) {
-    const installed = /已安装|删除|卸载/.test(await card.innerText({ timeout: 700 }).catch(() => ''));
-    return { slug: sampled.slug, name: sampled.name, ok: installed, reused: installed, reason: installed ? '' : 'install action unavailable' };
+    const installedMarker = await visible(
+      card.locator(coreBetaInstalledSkillTerminalSelectorCandidates().join(', ')).first(),
+      700,
+    );
+    const catalogSkill = await ctx.page.evaluate(async ({ slug, names }) => {
+      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
+      const catalog = await window.agent.getSkillsCatalog('');
+      return (catalog?.installed || []).find((item) => (
+        item?.slug === slug
+        || names.includes(String(item?.name || ''))
+        || names.includes(String(item?.label || ''))
+        || names.includes(String(item?.cnName || ''))
+        || names.includes(String(item?.displayName || ''))
+      )) || null;
+    }, { slug: sampled.slug, names: identities }).catch(() => null);
+    const readinessStatus = String(
+      catalogSkill?.localReadiness?.status
+      || catalogSkill?.localReadiness?.readinessStatus
+      || '',
+    );
+    const runtimeReady = /ready|loaded|active|available|ok/i.test(readinessStatus);
+    const installed = installedMarker || Boolean(catalogSkill);
+    const reused = installed && runtimeReady;
+    if (reused) {
+      upsertCoreBetaManagedResource(ctx.caseDir, 'skills', {
+        slug: sampled.slug,
+        name: sampled.name,
+        source_case_id: ctx.state.id,
+      }, 'slug');
+    }
+    return {
+      slug: sampled.slug,
+      name: sampled.name,
+      label: sampled.label,
+      identities,
+      ok: reused,
+      reused,
+      installed_card_readback: installedMarker,
+      catalog_installed_readback: catalogSkill,
+      runtime_ready: runtimeReady,
+      readiness_status: readinessStatus,
+      reason: reused
+        ? ''
+        : installed
+          ? `installed skill runtime is not ready: ${readinessStatus || 'missing readiness'}`
+          : 'install action unavailable',
+    };
   }
   await install.click({ force: true });
   const terminal = await waitForSkillInstallTerminal(ctx.page, {
@@ -5962,7 +6008,6 @@ async function coreBetaInstallSkill(ctx, sampled) {
     timeoutMs: 120000,
   });
   await clickSkillSubtab(ctx.page, '已安装', ctx.state);
-  const identityPattern = new RegExp(identities.map(escapeRegExp).join('|'));
   const visibleInstalled = await visible(
     ctx.page.locator('.skill-card').filter({ hasText: identityPattern }).first(),
     2500,

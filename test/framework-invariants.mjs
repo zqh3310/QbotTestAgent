@@ -729,6 +729,7 @@ const required = [
   ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
   ['#736 多 Skill 删除按钮限定在输入区 chip 内', /const firstChip = composer\.locator\([\s\S]*aria-label\^="移除"/],
   ['技能安装以新版勾选试用动作或产品已安装目录优先判定成功', /waitForSkillInstallTerminal[\s\S]*coreBetaInstalledSkillTerminalSelectorCandidates[\s\S]*visible installed-card action[\s\S]*getSkillsCatalog[\s\S]*catalogInstalled[\s\S]*const pending/],
+  ['技能中断续跑仅在已安装目录与 runtime ready 同时成立时复用抽样技能', /if \(!\(await visible\(install[\s\S]*catalogSkill[\s\S]*readinessStatus[\s\S]*const reused = installed && runtimeReady[\s\S]*upsertCoreBetaManagedResource/],
   ['回复等待尊重显式 Case timeout', /const requestedBudget = Number\.isFinite\(requested\)[\s\S]*\? requested : budget[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
   ['同 Case 多次受控重启保留不可覆盖的逐次日志', /restartEvidenceName[\s\S]*restart-command-\$\{restartEvidenceName\}\.stdout\.log[\s\S]*state\.artifacts\.restart_commands\.push/],
   ['Teams 渲染层控制适配器保留请求体证据', /installRendererControlAdapter[\s\S]*requestArgs[\s\S]*requestBody/],
