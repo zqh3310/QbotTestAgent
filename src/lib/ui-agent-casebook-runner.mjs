@@ -5887,25 +5887,58 @@ function coreBetaSelectionIndex(selectionSource, fallback = 0) {
   return match ? Number(match[1]) : fallback;
 }
 
+export function coreBetaSkillIdentityCandidates(sampled = {}) {
+  return [...new Set([
+    sampled.label,
+    sampled.name,
+    sampled.slug,
+    sampled.raw?.cnName,
+    sampled.raw?.displayName,
+    sampled.raw?.label,
+    sampled.raw?.name,
+  ].map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
 async function coreBetaInstallSkill(ctx, sampled) {
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: '技能市场' });
-  const cards = ctx.page.locator('.skill-card');
-  const count = await cards.count().catch(() => 0);
-  let card = null;
-  for (let index = 0; index < count; index += 1) {
-    const candidate = cards.nth(index);
-    const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
-    const slug = String(
-      await candidate.getAttribute('data-skill-slug').catch(() => '')
-      || await candidate.getAttribute('data-slug').catch(() => '')
-      || await candidate.getAttribute('data-testid').catch(() => ''),
-    ).replace(/^skill-card-/, '');
-    if (slug === sampled.slug || text.includes(sampled.name)) {
-      card = candidate;
-      break;
-    }
+  const identities = coreBetaSkillIdentityCandidates(sampled);
+  const search = ctx.page.locator('input[placeholder*="搜索技能"]').first();
+  if (await visible(search, 2000)) {
+    // Current market cards intentionally expose no slug/testid attribute. Use
+    // the visible product search and the catalog identity/label set so an
+    // off-screen card is materialized before attempting its install action.
+    await search.fill(identities[0] || sampled.name || sampled.slug);
+    await ctx.page.waitForTimeout(900);
   }
-  if (!card) return { slug: sampled.slug, name: sampled.name, ok: false, reason: 'sampled skill card missing' };
+  const cards = ctx.page.locator('.skill-card');
+  let card = null;
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline && !card) {
+    const count = await cards.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const candidate = cards.nth(index);
+      const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
+      const slug = String(
+        await candidate.getAttribute('data-skill-slug').catch(() => '')
+        || await candidate.getAttribute('data-slug').catch(() => '')
+        || await candidate.getAttribute('data-testid').catch(() => ''),
+      ).replace(/^skill-card-/, '');
+      if (slug === sampled.slug || identities.some((identity) => text.includes(identity))) {
+        card = candidate;
+        break;
+      }
+    }
+    if (!card) await ctx.page.waitForTimeout(300);
+  }
+  if (!card) {
+    return {
+      slug: sampled.slug,
+      name: sampled.name,
+      identities,
+      ok: false,
+      reason: 'sampled skill card missing after exact market search',
+    };
+  }
   const install = card.locator('.skill-install:not([disabled])').first();
   if (!(await visible(install, 1200))) {
     const installed = /已安装|删除|卸载/.test(await card.innerText({ timeout: 700 }).catch(() => ''));
@@ -6414,6 +6447,18 @@ async function executeCoreBetaSkillCommand(ctx, command) {
         installed: Boolean(item?.installed),
         install_status: item?.install_status || '',
       };
+    });
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: (ctx.ledger.skills.sample || []).length === Number(ctx.capabilityPolicy.install_count || 10),
+      source: 'shared deterministic skill sample + exact visible market-card readback',
+      selection: {
+        requested_count: Number(ctx.capabilityPolicy.install_count || 10),
+        selected: ctx.ledger.skills.sample || [],
+        selected_ids: (ctx.ledger.skills.sample || []).map((item) => item.slug),
+        segment_offset: offset,
+        segment,
+        readback,
+      },
     });
     return {
       ok: segment.length === 5 && readback.every((item) => (

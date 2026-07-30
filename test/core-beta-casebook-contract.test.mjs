@@ -30,6 +30,7 @@ import {
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
   coreBetaSkillCardActionSelectorCandidates,
+  coreBetaSkillIdentityCandidates,
   coreBetaSkillEntrySelectorCandidates,
   coreBetaInstalledSkillReadme,
   coreBetaSkillTaskProfile,
@@ -324,6 +325,22 @@ test('skill market card probing prioritizes the install action over the precedin
     install_action_visible: true,
   }]);
   assert.equal(result.inventory[0].install_action_visible, true);
+});
+
+test('skill market install matching includes the localized label when cards expose no slug attribute', () => {
+  assert.deepEqual(coreBetaSkillIdentityCandidates({
+    slug: 'column-lineage-analysis',
+    name: 'column-lineage-analysis',
+    label: '字段血缘分析',
+    raw: {
+      cnName: '字段血缘分析',
+      displayName: '字段血缘分析工具',
+    },
+  }), [
+    '字段血缘分析',
+    'column-lineage-analysis',
+    '字段血缘分析工具',
+  ]);
 });
 
 test('installed Skill tasks are derived from the actual Skill identity and README domain', () => {
