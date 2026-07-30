@@ -10355,8 +10355,17 @@ async function executeSitHomeAttachmentLimit({
     { upstreamCdpUrl },
   );
   state.artifacts.attachment_limit_probe = result;
-  const visibleRejectionScreenshot = result.dialogMessage
-    ? result.dialogEvidenceScreenshot
+  const structuredDialogEvidence = Boolean(
+    result.dialogMessage
+    && result.dialogEvidenceArtifact
+    && fs.existsSync(result.dialogEvidenceArtifact)
+    && result.dialogAccessibilityRole === 'AXSheet'
+    && result.dialogAccessibilityMessageMatched === true
+    && result.dialogAccessibilityConfirmationClicked === true
+    && result.dialogAccessibilitySheetClosed === true
+  );
+  const rejectionOutcomeScreenshot = result.dialogMessage
+    ? result.postDismissalScreenshot
     : result.evidenceScreenshot;
   const dialogSettled = !result.dialogMessage || (
     result.dialogHandled === true
@@ -10364,7 +10373,7 @@ async function executeSitHomeAttachmentLimit({
     && result.pageResponsiveAfterDialog === true
     && Boolean(result.postDismissalScreenshot)
   );
-  state.screenshots.attachment_limit = visibleRejectionScreenshot
+  state.screenshots.attachment_limit = rejectionOutcomeScreenshot
     || await shot(page, caseDir, `${id.toLowerCase()}-attachment-limit`);
   const afterState = await qbotE2EState(page).catch(() => null);
   const expectedMatched = expectedPattern.test(result.dialogMessage || result.feedbackText || result.pageText || '');
@@ -10400,24 +10409,33 @@ async function executeSitHomeAttachmentLimit({
     product_rejected_before_send: expectedMatched
       && composerEmpty
       && dialogSettled
-      && Boolean(visibleRejectionScreenshot),
+      && Boolean(rejectionOutcomeScreenshot)
+      && (!result.dialogMessage || structuredDialogEvidence),
     dialog_handled: result.dialogHandled === true,
     dialog_closed: result.dialogClosed === true,
     page_responsive_after_dialog: result.pageResponsiveAfterDialog === true,
     dialog_action: String(result.dialogAction || ''),
     dialog_confirmation_label: String(result.dialogConfirmationLabel || ''),
     dialog_evidence_source: String(result.dialogEvidenceSource || ''),
+    dialog_evidence_artifact: String(result.dialogEvidenceArtifact || ''),
     dialog_native_capture_prepared: result.dialogNativeCapturePrepared === true,
     dialog_native_capture_prepare_error: String(result.dialogNativeCapturePrepareError || ''),
     dialog_capture_requested_at: String(result.dialogCaptureRequestedAt || ''),
+    dialog_evidence_observed_at: String(result.dialogEvidenceObservedAt || ''),
     dialog_capture_completed_at: String(result.dialogCaptureCompletedAt || ''),
     dialog_capture_completed_before_accept: result.dialogCaptureCompletedBeforeAccept === true,
-    dialog_capture_width: Number(result.dialogCaptureWidth || 0),
-    dialog_capture_height: Number(result.dialogCaptureHeight || 0),
-    dialog_capture_size_bytes: Number(result.dialogCaptureSizeBytes || 0),
     dialog_accepted_at: String(result.dialogAcceptedAt || ''),
     captured_dialog_message: String(result.capturedDialogMessage || ''),
-    evidence_screenshot: visibleRejectionScreenshot,
+    accessibility_message: String(result.dialogAccessibilityMessage || ''),
+    accessibility_role: String(result.dialogAccessibilityRole || ''),
+    accessibility_buttons: Array.isArray(result.dialogAccessibilityButtons)
+      ? result.dialogAccessibilityButtons
+      : [],
+    accessibility_message_matched: result.dialogAccessibilityMessageMatched === true,
+    accessibility_confirmation_clicked: result.dialogAccessibilityConfirmationClicked === true,
+    accessibility_sheet_closed: result.dialogAccessibilitySheetClosed === true,
+    structured_dialog_evidence: structuredDialogEvidence,
+    evidence_screenshot: rejectionOutcomeScreenshot,
     post_dismissal_screenshot: String(result.postDismissalScreenshot || ''),
     capture_error: String(result.dialogCaptureError || ''),
     close_error: String(result.dialogCloseError || ''),
@@ -10445,9 +10463,11 @@ async function executeSitHomeAttachmentLimit({
   recordAssertion(
     state,
     '附件限制提示符合当前产品契约',
-    expectedDescription,
-    expectedMatched && Boolean(visibleRejectionScreenshot),
-    `dialog=${result.dialogMessage || '无'}；visibleEvidence=${visibleRejectionScreenshot || '缺失'}；page=${clip(result.pageText, 360)}`,
+    `${expectedDescription} 原生弹窗必须由 Playwright 文案与 macOS AXSheet 文案双通道一致确认；关闭后的页面截图只证明 UI 已恢复，不能冒充弹窗截图。`,
+    expectedMatched
+      && Boolean(rejectionOutcomeScreenshot)
+      && (!result.dialogMessage || structuredDialogEvidence),
+    `dialog=${result.dialogMessage || '无'}；ax=${result.dialogAccessibilityMessage || '无'}；structured=${structuredDialogEvidence}；outcome=${rejectionOutcomeScreenshot || '缺失'}；page=${clip(result.pageText, 360)}`,
   );
   recordAssertion(
     state,
@@ -10754,8 +10774,6 @@ function ensureSizedFixture(dir, name, size) {
   return file;
 }
 
-const TEAMS_NATIVE_DIALOG_CAPTURE_STATE = '__qbotAutomationTeamsNativeDialogCapture';
-
 function managedTeamsPageTargetWebSocket(value) {
   let url;
   try { url = new URL(String(value || '')); } catch { return ''; }
@@ -10774,329 +10792,237 @@ async function readManagedTeamsCdpTargets(origin) {
   return targets.filter((target) => managedTeamsPageTargetWebSocket(target?.webSocketDebuggerUrl));
 }
 
-async function openManagedTeamsPageTarget(target) {
-  const websocketUrl = managedTeamsPageTargetWebSocket(target?.webSocketDebuggerUrl);
-  if (!websocketUrl) throw new Error(`360Teams target 缺少受管 page WebSocket：${target?.url || 'unknown'}`);
-  const socket = new WebSocket(websocketUrl);
-  let sequence = 0;
-  let closed = false;
-  const pending = new Map();
-  const ready = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('360Teams page-target WebSocket 连接超时。')), 5_000);
-    socket.addEventListener('open', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-    socket.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error('360Teams page-target WebSocket 连接失败。'));
-    }, { once: true });
-  });
-  socket.addEventListener('message', (event) => {
-    let message = null;
-    try { message = JSON.parse(String(event.data)); } catch { return; }
-    if (!message?.id || !pending.has(message.id)) return;
-    const request = pending.get(message.id);
-    pending.delete(message.id);
-    clearTimeout(request.timer);
-    if (message.error) request.reject(new Error(message.error.message || JSON.stringify(message.error)));
-    else request.resolve(message.result);
-  });
-  socket.addEventListener('close', () => {
-    closed = true;
-    for (const request of pending.values()) {
-      clearTimeout(request.timer);
-      request.reject(new Error('360Teams page-target WebSocket 已关闭。'));
-    }
-    pending.clear();
-  });
-  try {
-    await ready;
-  } catch (error) {
-    try { socket.close(); } catch {}
-    throw error;
+function teamsAccessibilitySheet({ dismiss = false } = {}) {
+  if (process.platform !== 'darwin') {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: '当前平台不是 macOS，无法读取 360Teams AXSheet。',
+    };
   }
-
-  const send = (method, params = {}, timeoutMs = 5_000) => {
-    if (closed || socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('360Teams page-target WebSocket 不可用。'));
-    }
-    const id = ++sequence;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`360Teams CDP ${method} 在 ${timeoutMs}ms 内未返回。`));
-      }, timeoutMs);
-      pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method, params }));
-    });
-  };
-  return {
-    url: String(target.url || ''),
-    evaluate: async (expression, timeoutMs = 5_000) => {
-      const result = await send('Runtime.evaluate', {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      }, timeoutMs);
-      if (result?.exceptionDetails) {
-        const detail = result.exceptionDetails.exception?.description
-          || result.exceptionDetails.text
-          || 'Runtime.evaluate exception';
-        throw new Error(detail);
+  const dismissLiteral = dismiss ? 'true' : 'false';
+  const script = `JSON.stringify((() => {
+    const result = {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      role: '',
+      message: '',
+      texts: [],
+      buttons: [],
+      confirmation_label: '',
+      clicked: false,
+      observed_at: new Date().toISOString(),
+      clicked_at: '',
+      error: '',
+    };
+    try {
+      const systemEvents = Application('System Events');
+      const process = systemEvents.processes.byName('360Teams');
+      if (!process.exists()) {
+        result.error = '360Teams accessibility process 不存在。';
+        return result;
       }
-      return result?.result?.value;
-    },
-    close: async () => {
-      if (closed) return;
-      socket.close();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    },
-  };
+      for (const window of process.windows()) {
+        for (const sheet of window.sheets()) {
+          result.observed = true;
+          result.role = 'AXSheet';
+          result.texts = sheet.staticTexts().map((item) => {
+            try { return String(item.name() || item.value() || '').trim(); } catch { return ''; }
+          }).filter(Boolean);
+          const buttons = sheet.buttons();
+          result.buttons = buttons.map((item) => {
+            try { return String(item.name() || item.description() || '').trim(); } catch { return ''; }
+          }).filter(Boolean);
+          result.message = result.texts.find(Boolean) || '';
+          const safeButton = buttons.find((item) => {
+            try { return /^(OK|好|确定)$/.test(String(item.name() || '').trim()); } catch { return false; }
+          });
+          const onlySafeConfirmation = Boolean(
+            safeButton
+            && result.buttons.length === 1
+            && /^(OK|好|确定)$/.test(result.buttons[0])
+          );
+          result.confirmation_label = onlySafeConfirmation ? result.buttons[0] : '';
+          if (${dismissLiteral}) {
+            if (!onlySafeConfirmation) {
+              result.error = 'AXSheet 不是唯一安全确认按钮，拒绝自动点击。';
+              return result;
+            }
+            safeButton.click();
+            result.clicked = true;
+            result.clicked_at = new Date().toISOString();
+          }
+          result.ok = Boolean(result.message && onlySafeConfirmation);
+          if (!result.ok && !result.error) result.error = 'AXSheet 缺少可读文案或唯一安全确认按钮。';
+          return result;
+        }
+      }
+      result.error = '未发现 360Teams AXSheet。';
+      return result;
+    } catch (error) {
+      result.error = error && error.message ? error.message : String(error);
+      return result;
+    }
+  })())`;
+  const command = spawnSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (command.error || command.status !== 0) {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: String(command.error?.message || command.stderr || `osascript status=${command.status}`),
+    };
+  }
+  try {
+    const parsed = JSON.parse(String(command.stdout || '').trim());
+    return {
+      ...parsed,
+      source: 'macos-accessibility-axsheet',
+      error: String(parsed?.error || ''),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: `360Teams AXSheet 输出不是 JSON：${error.message}`,
+    };
+  }
 }
 
-async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
+function normalizedDialogEvidenceText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+async function prepareTeamsNativeDialogEvidence(upstreamCdpUrl) {
   const origin = managedFixtureLoopbackOrigin(upstreamCdpUrl);
   if (!origin) {
     return {
       ok: false,
-      source: 'teams-native-node-screenshots',
-      error: '缺少受管 360Teams 上游 loopback CDP，不能抓取可见原生弹窗。',
+      source: 'playwright-dialog+macos-accessibility-axsheet',
+      error: '缺少受管 360Teams 上游 loopback CDP，不能绑定固定宿主原生弹窗。',
       capture: async () => ({
         ok: false,
-        source: 'teams-native-node-screenshots',
-        error: '原生截图通道未准备。',
+        source: 'playwright-dialog+macos-accessibility-axsheet',
+        error: '原生弹窗证据通道未准备。',
       }),
       close: async () => {},
     };
   }
 
-  let hostTarget = null;
-  let screenshotTarget = null;
   try {
     const targets = await readManagedTeamsCdpTargets(origin);
     const host = targets.find((candidate) => (
       /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/#\/main\/apps\/qbot(?:\/|$|\?)/i
         .test(String(candidate.url || ''))
     ));
-    const screenshot = targets.find((candidate) => (
-      String(candidate.url || '').includes('lib-screencapture-app/dist/electron.html')
-    ));
-    if (!host || !screenshot) {
-      throw new Error(
-        `未发现 360Teams QWork 宿主页或原生截图页（host=${Boolean(host)} screenshot=${Boolean(screenshot)}）。`,
-      );
-    }
-    [hostTarget, screenshotTarget] = await Promise.all([
-      openManagedTeamsPageTarget(host),
-      openManagedTeamsPageTarget(screenshot),
-    ]);
-    const stateKey = JSON.stringify(TEAMS_NATIVE_DIALOG_CAPTURE_STATE);
-    const installed = await screenshotTarget.evaluate(`(() => {
-      const stateKey = ${stateKey};
-      const screenshots = window.screenshots;
-      if (
-        !screenshots
-        || typeof screenshots.on !== 'function'
-        || typeof screenshots.off !== 'function'
-        || typeof screenshots.cancel !== 'function'
-      ) {
-        return { ok: false, error: '360Teams screenshots bridge 不完整。' };
-      }
-      const prior = window[stateKey];
-      if (prior?.handler) {
-        try { screenshots.off('capture', prior.handler); } catch {}
-      }
-      const state = {
-        armed: false,
-        data: '',
-        captured_at: '',
-        display: null,
-        token: '',
-        error: '',
-        handler: null,
-      };
-      state.handler = (display, data, token) => {
-        if (!state.armed || state.data) return;
-        try {
-          state.data = String(data || '');
-          state.captured_at = new Date().toISOString();
-          state.display = display || null;
-          state.token = String(token || '');
-        } catch (error) {
-          state.error = error?.message || String(error);
-        } finally {
-          state.armed = false;
-          try { screenshots.cancel(); } catch {}
-        }
-      };
-      screenshots.on('capture', state.handler);
-      window[stateKey] = state;
-      return { ok: true, error: '' };
-    })()`);
-    if (!installed?.ok) throw new Error(installed?.error || '无法安装 360Teams 原生截图监听器。');
-    const hostReady = await hostTarget.evaluate(
-      `typeof window.ipcRenderer?.invoke === 'function'`,
-    ).catch(() => false);
-    if (!hostReady) throw new Error('360Teams QWork 宿主页 ipcRenderer.invoke 不可用。');
+    if (!host) throw new Error('受管 CDP 中未发现固定 360Teams QWork 宿主页。');
 
     return {
       ok: true,
-      source: 'teams-native-node-screenshots',
+      source: 'playwright-dialog+macos-accessibility-axsheet',
       error: '',
       capture: async (file, expectedMessage) => {
         const requestedAt = new Date().toISOString();
-        const armed = await screenshotTarget.evaluate(`(() => {
-          const stateKey = ${stateKey};
-          const state = window[stateKey];
-          if (!state?.handler) return false;
-          state.armed = true;
-          state.data = '';
-          state.captured_at = '';
-          state.display = null;
-          state.token = '';
-          state.error = '';
-          return true;
-        })()`).catch(() => false);
-        if (!armed) {
-          return {
-            ok: false,
-            source: 'teams-native-node-screenshots',
-            message: String(expectedMessage || ''),
-            requested_at: requestedAt,
-            completed_at: '',
-            error: '360Teams 原生截图监听器未处于 armed 状态。',
-          };
+        let accessibility = null;
+        const accessibilityDeadline = Date.now() + 3_000;
+        while (Date.now() < accessibilityDeadline) {
+          accessibility = teamsAccessibilitySheet({ dismiss: false });
+          if (accessibility.observed) break;
+          await new Promise((resolve) => setTimeout(resolve, 80));
         }
-        const requested = await hostTarget.evaluate(`(() => {
-          const stateKey = ${stateKey};
-          window[stateKey] = { invoke_error: '', requested_at: new Date().toISOString() };
-          Promise.resolve(window.ipcRenderer.invoke('screenshotStart', false))
-            .catch((error) => {
-              window[stateKey].invoke_error = error?.message || String(error);
-            });
-          return true;
-        })()`).catch(() => false);
-        if (!requested) {
-          return {
-            ok: false,
-            source: 'teams-native-node-screenshots',
-            message: String(expectedMessage || ''),
-            requested_at: requestedAt,
-            completed_at: '',
-            error: '无法向 360Teams 主进程发起 screenshotStart。',
-          };
-        }
-
-        let capture = null;
-        let invokeError = '';
-        const deadline = Date.now() + 8_000;
-        while (Date.now() < deadline) {
-          capture = await screenshotTarget.evaluate(`(() => {
-            const stateKey = ${stateKey};
-            const state = window[stateKey];
-            if (!state) return null;
-            return {
-              data: String(state.data || ''),
-              captured_at: String(state.captured_at || ''),
-              display: state.display || null,
-              token: String(state.token || ''),
-              error: String(state.error || ''),
+        accessibility ||= teamsAccessibilitySheet({ dismiss: false });
+        const expected = normalizedDialogEvidenceText(expectedMessage);
+        const observed = normalizedDialogEvidenceText(accessibility.message);
+        const messageMatched = Boolean(expected && observed && expected === observed);
+        const confirmation = messageMatched
+          ? teamsAccessibilitySheet({ dismiss: true })
+          : {
+              ...accessibility,
+              clicked: false,
+              clicked_at: '',
+              error: accessibility.error || 'Playwright 与 AXSheet 文案不一致，拒绝自动点击。',
             };
-          })()`, 10_000).catch((error) => ({
-            data: '',
-            captured_at: '',
-            display: null,
-            token: '',
-            error: String(error?.message || error),
-          }));
-          invokeError = await hostTarget.evaluate(`(() => {
-            const stateKey = ${stateKey};
-            return String(window[stateKey]?.invoke_error || '');
-          })()`).catch(() => '');
-          if (capture?.captured_at || capture?.error || invokeError) break;
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-
-        const dataMatch = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(capture?.data || ''));
-        let buffer = null;
-        if (dataMatch) {
-          try { buffer = Buffer.from(dataMatch[1].replace(/\s+/g, ''), 'base64'); } catch {}
-        }
-        const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        const pngValid = Boolean(
-          buffer
-          && buffer.length > 100_000
-          && buffer.subarray(0, 8).equals(signature),
-        );
-        const width = pngValid ? buffer.readUInt32BE(16) : 0;
-        const height = pngValid ? buffer.readUInt32BE(20) : 0;
-        const dimensionsValid = width >= 800 && height >= 600;
-        if (pngValid && dimensionsValid && expectedMessage) fs.writeFileSync(file, buffer);
+        const completedAt = new Date().toISOString();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        const after = teamsAccessibilitySheet({ dismiss: false });
+        const closed = after.observed !== true;
+        const record = {
+          schema_version: 1,
+          source: 'playwright-dialog+macos-accessibility-axsheet',
+          expected_dialog_message: expected,
+          playwright_dialog_message: String(expectedMessage || ''),
+          accessibility,
+          confirmation,
+          after_confirmation: after,
+          message_matched: messageMatched,
+          evidence_observed_before_confirmation: accessibility.observed === true,
+          confirmation_clicked: confirmation.clicked === true,
+          sheet_closed_after_confirmation: closed,
+          requested_at: requestedAt,
+          completed_at: completedAt,
+        };
+        if (file) fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
         const saved = Boolean(
-          expectedMessage
-          && pngValid
-          && dimensionsValid
+          file
           && fs.existsSync(file)
-          && fs.statSync(file).size === buffer.length
+          && fs.statSync(file).size > 0
+        );
+        const ok = Boolean(
+          accessibility.ok
+          && accessibility.role === 'AXSheet'
+          && confirmation.ok
+          && confirmation.clicked
+          && messageMatched
+          && closed
+          && saved
         );
         return {
-          ok: saved,
-          source: 'teams-native-node-screenshots',
+          ok,
+          source: 'playwright-dialog+macos-accessibility-axsheet',
           message: String(expectedMessage || ''),
           requested_at: requestedAt,
-          completed_at: String(capture?.captured_at || ''),
-          width,
-          height,
-          size_bytes: buffer?.length || 0,
-          display: capture?.display || null,
-          token: String(capture?.token || ''),
-          error: saved
+          observed_at: String(accessibility.observed_at || ''),
+          confirmation_clicked_at: String(confirmation.clicked_at || ''),
+          completed_at: completedAt,
+          artifact: saved ? file : '',
+          role: String(accessibility.role || ''),
+          buttons: Array.isArray(confirmation.buttons) ? confirmation.buttons : [],
+          confirmation_label: String(confirmation.confirmation_label || ''),
+          accessibility_message: String(accessibility.message || ''),
+          message_matched: messageMatched,
+          evidence_observed_before_confirmation: accessibility.observed === true,
+          confirmation_clicked: confirmation.clicked === true,
+          sheet_closed_after_confirmation: closed,
+          error: ok
             ? ''
             : [
-                capture?.error,
-                invokeError,
-                !capture?.captured_at ? '未在 8 秒内收到 360Teams 原生 capture 事件。' : '',
-                !pngValid ? '360Teams 原生截图不是有效的非空 PNG。' : '',
-                pngValid && !dimensionsValid ? `原生截图尺寸异常：${width}x${height}。` : '',
-                !expectedMessage ? 'Playwright 未观察到可绑定的原生弹窗文案。' : '',
+                accessibility.error,
+                !accessibility.observed ? 'macOS 辅助功能树未观察到 AXSheet。' : '',
+                accessibility.role !== 'AXSheet' ? `辅助功能角色异常：${accessibility.role || '缺失'}。` : '',
+                confirmation.error,
+                !confirmation.clicked ? '未点击 AXSheet 唯一安全确认按钮。' : '',
+                !messageMatched ? `Playwright 与 AXSheet 文案不一致：${expected || '<missing>'} != ${observed || '<missing>'}。` : '',
+                !closed ? '点击确认后 AXSheet 仍然存在。' : '',
+                !saved ? 'AXSheet 结构化证据文件未落盘。' : '',
               ].filter(Boolean).join('；'),
         };
       },
-      close: async () => {
-        await screenshotTarget.evaluate(`(() => {
-          const stateKey = ${stateKey};
-          const state = window[stateKey];
-          if (state?.handler && window.screenshots?.off) {
-            try { window.screenshots.off('capture', state.handler); } catch {}
-          }
-          try { window.screenshots?.cancel?.(); } catch {}
-          delete window[stateKey];
-          return true;
-        })()`).catch(() => false);
-        await hostTarget.evaluate(`(() => {
-          const stateKey = ${stateKey};
-          delete window[stateKey];
-          return true;
-        })()`).catch(() => false);
-        await Promise.all([
-          screenshotTarget.close().catch(() => {}),
-          hostTarget.close().catch(() => {}),
-        ]);
-      },
+      close: async () => {},
     };
   } catch (error) {
-    await Promise.all([
-      screenshotTarget ? screenshotTarget.close().catch(() => {}) : Promise.resolve(),
-      hostTarget ? hostTarget.close().catch(() => {}) : Promise.resolve(),
-    ]);
     return {
       ok: false,
-      source: 'teams-native-node-screenshots',
+      source: 'playwright-dialog+macos-accessibility-axsheet',
       error: String(error?.message || error),
       capture: async () => ({
         ok: false,
-        source: 'teams-native-node-screenshots',
+        source: 'playwright-dialog+macos-accessibility-axsheet',
         error: String(error?.message || error),
       }),
       close: async () => {},
@@ -11114,53 +11040,62 @@ async function stageAttachmentPathsThroughComposer(
   let dialogMessage = '';
   let evidenceScreenshot = '';
   let dialogEvidenceScreenshot = '';
+  let dialogEvidenceArtifact = '';
   let dialogHandling = null;
-  // Prepare 360Teams' own node-screenshots bridge before triggering the
-  // attachment action. A QWork page screenshot is suspended behind
-  // window.alert() and, after dismissal, cannot prove the dialog was visible.
-  // The host-native capture event is delivered while the modal is still open.
-  const nativeCapture = await prepareTeamsNativeDialogCapture(upstreamCdpUrl);
+  // A QWork page screenshot is suspended behind window.alert(), while macOS
+  // excludes 360Teams' protected window from generic screen-capture APIs.
+  // Bind the Playwright dialog event to the independent AXSheet tree instead:
+  // read the exact text/button before confirmation, click the sole safe OK
+  // button through accessibility, then verify that the sheet is gone.
+  const nativeEvidence = await prepareTeamsNativeDialogEvidence(upstreamCdpUrl);
   const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
     dialogHandling = (async () => {
-      const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
-      const captured = await nativeCapture.capture(nativeFile, dialogMessage);
+      const evidenceFile = path.join(caseDir, `${label}-product-ax-dialog.json`);
+      const captured = await nativeEvidence.capture(evidenceFile, dialogMessage);
       let closeError = '';
-      let acceptedAt = '';
-      try {
-        // Attachment rejection uses window.alert(), whose only user action is
-        // the visible OK button. Await accept() before any subsequent DOM
-        // operation. The native screenshot above must complete before accept()
-        // so the evidence cannot be a post-dismissal page frame.
-        acceptedAt = new Date().toISOString();
-        await dialog.accept();
-      } catch (error) {
-        closeError = String(error?.message || error);
+      let acceptedAt = String(captured.confirmation_clicked_at || '');
+      let action = captured.confirmation_clicked ? 'macos_accessibility_click' : 'playwright_accept';
+      if (!captured.confirmation_clicked) {
+        try {
+          acceptedAt = new Date().toISOString();
+          await dialog.accept();
+        } catch (error) {
+          closeError = String(error?.message || error);
+        }
       }
+      await new Promise((resolve) => setTimeout(resolve, 120));
       const pageResponsive = !closeError && await page.evaluate(() => (
         document.readyState === 'interactive' || document.readyState === 'complete'
       )).catch(() => false);
       if (captured.ok) {
-        dialogEvidenceScreenshot = nativeFile;
-        evidenceScreenshot = nativeFile;
+        dialogEvidenceArtifact = evidenceFile;
       }
       return {
         observed: true,
         message: dialogMessage,
         handled: !closeError,
-        closed: !closeError && pageResponsive,
+        closed: !closeError && pageResponsive && (
+          captured.sheet_closed_after_confirmation === true
+          || !captured.confirmation_clicked
+        ),
         page_responsive: pageResponsive,
-        action: 'accept',
-        confirmation_label: 'OK',
+        action,
+        confirmation_label: String(captured.confirmation_label || 'OK'),
         evidence_screenshot: dialogEvidenceScreenshot,
+        evidence_artifact: dialogEvidenceArtifact,
         evidence_source: captured.source,
         capture_requested_at: captured.requested_at,
+        evidence_observed_at: captured.observed_at,
         capture_completed_at: captured.completed_at,
-        capture_completed_before_accept: captured.ok === true,
+        capture_completed_before_accept: captured.evidence_observed_before_confirmation === true,
         captured_dialog_message: captured.message,
-        capture_width: Number(captured.width || 0),
-        capture_height: Number(captured.height || 0),
-        capture_size_bytes: Number(captured.size_bytes || 0),
+        accessibility_message: captured.accessibility_message,
+        accessibility_role: captured.role,
+        accessibility_buttons: captured.buttons,
+        accessibility_message_matched: captured.message_matched === true,
+        accessibility_confirmation_clicked: captured.confirmation_clicked === true,
+        accessibility_sheet_closed: captured.sheet_closed_after_confirmation === true,
         dialog_accepted_at: acceptedAt,
         capture_error: captured.error,
         close_error: closeError,
@@ -11213,6 +11148,7 @@ async function stageAttachmentPathsThroughComposer(
     action: '',
     confirmation_label: '',
     evidence_screenshot: '',
+    evidence_artifact: '',
     evidence_source: '',
     capture_error: '',
     close_error: '',
@@ -11241,7 +11177,7 @@ async function stageAttachmentPathsThroughComposer(
     }
   }
   page.off('dialog', dialogListener);
-  await nativeCapture.close();
+  await nativeEvidence.close();
   const postDismissalScreenshot = dialogOutcome.closed
     ? await shot(page, caseDir, `${label}-product-dialog-dismissed`).catch(() => '')
     : '';
@@ -11261,6 +11197,7 @@ async function stageAttachmentPathsThroughComposer(
     dispatchError,
     evidenceScreenshot,
     dialogEvidenceScreenshot,
+    dialogEvidenceArtifact,
     postDismissalScreenshot,
     dialogHandled: dialogOutcome.handled,
     dialogClosed: dialogOutcome.closed,
@@ -11268,16 +11205,22 @@ async function stageAttachmentPathsThroughComposer(
     dialogAction: dialogOutcome.action,
     dialogConfirmationLabel: dialogOutcome.confirmation_label,
     dialogEvidenceSource: dialogOutcome.evidence_source,
-    dialogNativeCapturePrepared: nativeCapture.ok === true,
-    dialogNativeCapturePrepareError: String(nativeCapture.error || ''),
+    dialogNativeCapturePrepared: nativeEvidence.ok === true,
+    dialogNativeCapturePrepareError: String(nativeEvidence.error || ''),
     dialogCaptureRequestedAt: String(dialogOutcome.capture_requested_at || ''),
+    dialogEvidenceObservedAt: String(dialogOutcome.evidence_observed_at || ''),
     dialogCaptureCompletedAt: String(dialogOutcome.capture_completed_at || ''),
     dialogCaptureCompletedBeforeAccept: dialogOutcome.capture_completed_before_accept === true,
-    dialogCaptureWidth: Number(dialogOutcome.capture_width || 0),
-    dialogCaptureHeight: Number(dialogOutcome.capture_height || 0),
-    dialogCaptureSizeBytes: Number(dialogOutcome.capture_size_bytes || 0),
     dialogAcceptedAt: String(dialogOutcome.dialog_accepted_at || ''),
     capturedDialogMessage: String(dialogOutcome.captured_dialog_message || ''),
+    dialogAccessibilityMessage: String(dialogOutcome.accessibility_message || ''),
+    dialogAccessibilityRole: String(dialogOutcome.accessibility_role || ''),
+    dialogAccessibilityButtons: Array.isArray(dialogOutcome.accessibility_buttons)
+      ? dialogOutcome.accessibility_buttons
+      : [],
+    dialogAccessibilityMessageMatched: dialogOutcome.accessibility_message_matched === true,
+    dialogAccessibilityConfirmationClicked: dialogOutcome.accessibility_confirmation_clicked === true,
+    dialogAccessibilitySheetClosed: dialogOutcome.accessibility_sheet_closed === true,
     dialogCaptureError: dialogOutcome.capture_error,
     dialogCloseError: dialogOutcome.close_error,
     patched: false,
@@ -20545,6 +20488,44 @@ async function captureDialogDuringWithAction(page, action, { accept = false, tim
 }
 
 async function dismissBlockingOverlays(page, state = null) {
+  const accessibilitySheet = teamsAccessibilitySheet({ dismiss: true });
+  if (accessibilitySheet.observed) {
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const after = teamsAccessibilitySheet({ dismiss: false });
+    const recovered = Boolean(
+      accessibilitySheet.ok
+      && accessibilitySheet.clicked
+      && after.observed !== true
+    );
+    if (state) {
+      if (!Array.isArray(state.artifacts.native_dialog_recoveries)) {
+        state.artifacts.native_dialog_recoveries = [];
+      }
+      state.artifacts.native_dialog_recoveries.push({
+        source: 'macos-accessibility-axsheet',
+        message: String(accessibilitySheet.message || ''),
+        role: String(accessibilitySheet.role || ''),
+        buttons: Array.isArray(accessibilitySheet.buttons) ? accessibilitySheet.buttons : [],
+        confirmation_label: String(accessibilitySheet.confirmation_label || ''),
+        clicked: accessibilitySheet.clicked === true,
+        observed_at: String(accessibilitySheet.observed_at || ''),
+        clicked_at: String(accessibilitySheet.clicked_at || ''),
+        closed_after_click: after.observed !== true,
+        error: String(accessibilitySheet.error || after.error || ''),
+      });
+      recordStep(
+        state,
+        '清理上一轮 360Teams 原生 AXSheet',
+        '仅允许自动点击带唯一 OK/好/确定按钮的信息型 AXSheet；不得误操作多按钮或破坏性确认。',
+        `message=${accessibilitySheet.message || '无'}；role=${accessibilitySheet.role || '无'}；buttons=${(accessibilitySheet.buttons || []).join(',') || '无'}；closed=${after.observed !== true}`,
+        recovered ? 'passed' : 'failed',
+        '',
+        recovered ? '' : 'automation_error',
+      );
+    }
+    return recovered;
+  }
+
   if (await resolveAssistantConfirmationModal(page, {
     state,
     caseDir: state?.case_dir || '',
@@ -25186,6 +25167,13 @@ export function buildCaseEvidenceManifest(state, caseDir) {
   const attachmentLimitRejectionPresent = Boolean(
     attachmentLimitRejection?.expected_pattern_matched
     && attachmentLimitRejection?.product_rejected_before_send
+    && (
+      !String(attachmentLimitRejection?.dialog_message || '').trim()
+      || (
+        attachmentLimitRejection?.structured_dialog_evidence
+        && existingFileEvidence(attachmentLimitRejection?.dialog_evidence_artifact)
+      )
+    )
     && existingFileEvidence(attachmentLimitRejection?.evidence_screenshot),
   );
   const noTaskNoSendState = state.artifacts?.no_task_no_send_state;
