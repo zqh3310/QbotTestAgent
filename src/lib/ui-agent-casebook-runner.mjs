@@ -3642,6 +3642,7 @@ async function executeCoreBetaMaintenanceAction({
   testId,
   acceptConfirm = false,
   waitPattern,
+  pendingPattern = null,
   timeoutMs,
 }) {
   const button = page.locator(`[data-testid="${testId}"]`).first();
@@ -3679,7 +3680,10 @@ async function executeCoreBetaMaintenanceAction({
   while (Date.now() < deadline) {
     afterText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
     const disabled = await button.isDisabled().catch(() => false);
-    if (!disabled && waitPattern.test(afterText)) {
+    const stillPending = pendingPattern instanceof RegExp
+      ? pendingPattern.test(afterText)
+      : false;
+    if (!disabled && !stillPending && waitPattern.test(afterText)) {
       terminal = true;
       break;
     }
@@ -4041,13 +4045,70 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
     });
   }
   if (command === 'readback_runtime_identity' || command === 'wait_runtime_ready') {
-    const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
-    if (!(await visible(maintenance, 3000))) await openCoreBetaSystemSettings(page, state, caseDir);
-    const text = await maintenance.innerText({ timeout: 2000 }).catch(() => '');
-    const capabilities = await currentCapabilities(page);
-    const composerReady = await visible(page.locator('[data-testid="composer-input"], .aui-composer-input').first(), 800);
-    const ready = /就绪|ready|Claude Code SDK|Codex SDK/i.test(text) && !/失败|不可用|error/i.test(text);
-    const readback = { ready, composer_ready: composerReady, text: clip(text, 1600), capabilities };
+    const waitForTerminal = command === 'wait_runtime_ready';
+    const deadline = Date.now() + (waitForTerminal ? Math.max(timeoutMs, 600000) : 30_000);
+    let activePage = ctx.runtime?.page || ctx.page || page;
+    let text = '';
+    let capabilities = null;
+    let composerReady = false;
+    let runtimeState = coreBetaRuntimeMaintenanceState();
+    let lastError = '';
+    while (Date.now() < deadline) {
+      try {
+        activePage = ctx.runtime?.page || ctx.page || activePage;
+        let maintenance = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
+        if (!(await visible(maintenance, 1200))) {
+          await openCoreBetaSystemSettings(activePage, state, caseDir);
+          maintenance = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
+        }
+        text = await maintenance.innerText({ timeout: 2000 });
+        capabilities = await currentCapabilities(activePage);
+        composerReady = await visible(
+          activePage.locator('[data-testid="composer-input"], .aui-composer-input').first(),
+          800,
+        );
+        const resetButton = activePage.locator('[data-testid="assistant-runtime-reset-all"]').first();
+        const resetButtonEnabled = await resetButton.isEnabled({ timeout: 800 }).catch(() => false);
+        runtimeState = coreBetaRuntimeMaintenanceState({
+          text,
+          composerReady,
+          resetButtonEnabled,
+        });
+        if (!waitForTerminal || runtimeState.ready || runtimeState.failed) break;
+      } catch (error) {
+        lastError = error.message || String(error);
+        if (coreBetaNeedsRendererReconnect(error)) {
+          const reconnected = await reconnectQbotRuntime({
+            runtime: ctx.runtime,
+            options: ctx.options,
+            state,
+            caseDir,
+            label: 'Core Beta runtime reset replacement renderer',
+            timeoutMs: Number(ctx.options['restart-reconnect-timeout-ms'] || 120000),
+          });
+          if (reconnected.ok) {
+            activePage = reconnected.page;
+            ctx.page = reconnected.page;
+            lastError = '';
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    ctx.page = activePage;
+    if (waitForTerminal && !runtimeState.ready && !runtimeState.failed) {
+      runtimeState = {
+        ...runtimeState,
+        reason: `运行时重初始化在 ${Math.max(timeoutMs, 600000)}ms 内未达到稳定终态${lastError ? `：${clip(lastError, 260)}` : ''}`,
+      };
+    }
+    const ready = runtimeState.ready;
+    const readback = {
+      ...runtimeState,
+      composer_ready: composerReady,
+      text: clip(text, 1600),
+      capabilities,
+    };
     state.artifacts.core_beta_runtime_ready_readback = readback;
     setCoreBetaEvidence(state, 'public_state_readback', {
       source: 'assistant-runtime-maintenance + window.agent.capabilities',
@@ -4064,7 +4125,14 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
       selector_or_testid: 'assistant-runtime-maintenance',
       event: 'readback',
       state_readback: readback,
-      actual: JSON.stringify({ ready, composerReady, text: clip(text, 500) }),
+      actual: JSON.stringify({
+        ready,
+        composerReady,
+        pending: runtimeState.pending,
+        failed: runtimeState.failed,
+        reason: runtimeState.reason,
+        text: clip(text, 500),
+      }),
     };
   }
   if (command === 'assert_no_running_task') {
@@ -4088,7 +4156,8 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
       caseDir,
       testId: 'assistant-runtime-reset-all',
       acceptConfirm: true,
-      waitPattern: /完成|就绪|ready|成功|当前/i,
+      waitPattern: /本进程已加载并校验|完成|就绪|ready|成功/i,
+      pendingPattern: /正在按当前身份重新预配|检查中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i,
       timeoutMs: Math.max(timeoutMs, 600000),
     });
   }
@@ -5210,9 +5279,48 @@ async function executeCoreBetaConversationCommand(ctx, command) {
 }
 
 export function coreBetaNeedsRendererReconnect(error) {
-  return /Target page, context or browser has been closed|QBot CDP\/page 已断开/i.test(
+  return /Target page, context or browser has been closed|QBot CDP\/page 已断开|Execution context was destroyed|context mutation was superseded/i.test(
     String(error?.message || error || ''),
   );
+}
+
+export function coreBetaRuntimeMaintenanceState({
+  text = '',
+  composerReady = false,
+  resetButtonEnabled = false,
+} = {}) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const pending = /正在按当前身份重新预配|检查中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i.test(normalized);
+  const failed = /失败|不可用|error|ENOTEMPTY|exception/i.test(normalized);
+  const loaded = /本进程已加载并校验|Claude Code SDK[^。；\n]*就绪|Codex SDK[^。；\n]*就绪|运行时[^。；\n]*(?:完成|就绪|ready)/i.test(normalized);
+  const ready = Boolean(
+    normalized
+    && loaded
+    && composerReady
+    && resetButtonEnabled
+    && !pending
+    && !failed
+  );
+  return {
+    ready,
+    pending,
+    failed,
+    loaded,
+    reset_button_enabled: Boolean(resetButtonEnabled),
+    reason: ready
+      ? '运行时维护区稳定、输入区可用且重初始化按钮恢复。'
+      : failed
+        ? '运行时维护区出现明确失败终态。'
+        : pending
+          ? '运行时仍在重新预配，不能判定完成。'
+          : !loaded
+            ? '尚未读到已加载并校验的运行时终态。'
+            : !composerReady
+              ? '输入区尚未恢复可用。'
+              : !resetButtonEnabled
+                ? '重初始化按钮尚未恢复可用。'
+                : '运行时尚未达到稳定终态。',
+  };
 }
 
 function coreBetaFixtureFiles(ctx) {

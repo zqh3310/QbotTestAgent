@@ -25,6 +25,7 @@ import {
   coreBetaMaintenanceConfirmationContract,
   coreBetaManualConnectorModeReady,
   coreBetaNeedsRendererReconnect,
+  coreBetaRuntimeMaintenanceState,
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
@@ -155,13 +156,55 @@ test('a terminal product failure remains a complete action receipt', () => {
   ], 1), false);
 });
 
-test('Core Beta refresh reconnects only for a closed renderer', () => {
+test('Core Beta refresh reconnects for closed or invalidated renderer contexts', () => {
   assert.equal(coreBetaNeedsRendererReconnect(
     new Error('page.reload: Target page, context or browser has been closed'),
   ), true);
   assert.equal(coreBetaNeedsRendererReconnect(
+    new Error('page.evaluate: Execution context was destroyed, most likely because of a navigation'),
+  ), true);
+  assert.equal(coreBetaNeedsRendererReconnect(
+    new Error('desktop-local context mutation was superseded'),
+  ), true);
+  assert.equal(coreBetaNeedsRendererReconnect(
     new Error('page.reload: net::ERR_FAILED'),
   ), false);
+});
+
+test('runtime reset is not terminal while the replacement environment is still provisioning', () => {
+  const staleReadyText = [
+    '本进程已加载并校验：v0.0.23（builtin）',
+    'Claude Code SDK 0.3.181：就绪 Codex SDK 0.142.0：就绪',
+    '本地运行时、UI、技能环境和会话已清理，正在按当前身份重新预配。',
+  ].join('\n');
+  assert.deepEqual(coreBetaRuntimeMaintenanceState({
+    text: staleReadyText,
+    composerReady: true,
+    resetButtonEnabled: true,
+  }), {
+    ready: false,
+    pending: true,
+    failed: false,
+    loaded: true,
+    reset_button_enabled: true,
+    reason: '运行时仍在重新预配，不能判定完成。',
+  });
+
+  const terminalReadyText = [
+    '本进程已加载并校验：v0.0.23（builtin）',
+    'Claude Code SDK 0.3.181：就绪 Codex SDK 0.142.0：就绪',
+    '完成：Python 3 个就绪；Node 0 个就绪',
+  ].join('\n');
+  assert.equal(coreBetaRuntimeMaintenanceState({
+    text: terminalReadyText,
+    composerReady: true,
+    resetButtonEnabled: true,
+  }).ready, true);
+  assert.equal(coreBetaRuntimeMaintenanceState({
+    text: terminalReadyText,
+    composerReady: false,
+    resetButtonEnabled: true,
+  }).ready, false);
 });
 
 test('an unknown core beta command fails readiness before the UI runner starts', () => {
