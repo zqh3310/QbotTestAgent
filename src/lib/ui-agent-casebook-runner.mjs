@@ -10407,10 +10407,15 @@ async function executeSitHomeAttachmentLimit({
     dialog_action: String(result.dialogAction || ''),
     dialog_confirmation_label: String(result.dialogConfirmationLabel || ''),
     dialog_evidence_source: String(result.dialogEvidenceSource || ''),
-    dialog_capture_hook_installed: result.dialogCaptureHookInstalled === true,
-    dialog_capture_hook_error: String(result.dialogCaptureHookError || ''),
+    dialog_native_capture_prepared: result.dialogNativeCapturePrepared === true,
+    dialog_native_capture_prepare_error: String(result.dialogNativeCapturePrepareError || ''),
     dialog_capture_requested_at: String(result.dialogCaptureRequestedAt || ''),
     dialog_capture_completed_at: String(result.dialogCaptureCompletedAt || ''),
+    dialog_capture_completed_before_accept: result.dialogCaptureCompletedBeforeAccept === true,
+    dialog_capture_width: Number(result.dialogCaptureWidth || 0),
+    dialog_capture_height: Number(result.dialogCaptureHeight || 0),
+    dialog_capture_size_bytes: Number(result.dialogCaptureSizeBytes || 0),
+    dialog_accepted_at: String(result.dialogAcceptedAt || ''),
     captured_dialog_message: String(result.capturedDialogMessage || ''),
     evidence_screenshot: visibleRejectionScreenshot,
     post_dismissal_screenshot: String(result.postDismissalScreenshot || ''),
@@ -10749,148 +10754,251 @@ function ensureSizedFixture(dir, name, size) {
   return file;
 }
 
-const RENDERER_DIALOG_CAPTURE_STATE = '__qbotAutomationDialogCapture';
+const TEAMS_NATIVE_DIALOG_CAPTURE_STATE = '__qbotAutomationTeamsNativeDialogCapture';
 
-async function installRendererDialogCaptureHook(page) {
-  return page.evaluate((stateKey) => {
-    const prior = window[stateKey];
-    if (prior?.restore && typeof prior.restore === 'function') {
-      try { prior.restore(); } catch {}
-    }
-    const originalAlert = window.alert;
-    const captureViewport = window.agent?.shell?.captureViewport;
-    if (typeof originalAlert !== 'function' || typeof captureViewport !== 'function') {
-      window[stateKey] = {
-        installed: false,
-        error: 'window.agent.shell.captureViewport 或 window.alert 不可用。',
-      };
-      return { installed: false, error: window[stateKey].error };
-    }
-
-    const state = {
-      installed: true,
-      message: '',
-      requested_at: '',
-      completed_at: '',
-      result: null,
-      error: '',
-      promise: null,
-      restore: null,
+async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
+  const origin = managedFixtureLoopbackOrigin(upstreamCdpUrl);
+  if (!origin) {
+    return {
+      ok: false,
+      source: 'teams-native-node-screenshots',
+      error: '缺少受管 360Teams 上游 loopback CDP，不能抓取可见原生弹窗。',
+      capture: async () => ({
+        ok: false,
+        source: 'teams-native-node-screenshots',
+        error: '原生截图通道未准备。',
+      }),
+      close: async () => {},
     };
-    const wrappedAlert = function qbotEvidenceAlert(message) {
-      state.message = String(message ?? '');
-      state.requested_at = new Date().toISOString();
-      state.completed_at = '';
-      state.result = null;
-      state.error = '';
-      try {
-        // shell.captureViewport is the product's official renderer → main
-        // process IPC. Invoke it before opening the synchronous alert so the
-        // BrowserWindow capture request is already queued while the visible
-        // rejection dialog is on screen. This wrapper preserves alert's
-        // message, button, return value, and dismissal semantics.
-        state.promise = Promise.resolve(window.agent.shell.captureViewport())
-          .then((result) => {
-            state.result = result;
-            state.completed_at = new Date().toISOString();
-            return result;
-          })
-          .catch((error) => {
-            state.error = error?.message || String(error);
-            state.completed_at = new Date().toISOString();
-            return null;
-          });
-      } catch (error) {
-        state.error = error?.message || String(error);
-        state.completed_at = new Date().toISOString();
-        state.promise = Promise.resolve(null);
+  }
+  const loaded = await loadPlaywright();
+  if (loaded.error || !loaded.chromium) {
+    return {
+      ok: false,
+      source: 'teams-native-node-screenshots',
+      error: `Playwright Chromium 不可用：${loaded.error?.message || '未导出 chromium'}`,
+      capture: async () => ({
+        ok: false,
+        source: 'teams-native-node-screenshots',
+        error: '原生截图通道未准备。',
+      }),
+      close: async () => {},
+    };
+  }
+
+  let browser = null;
+  try {
+    browser = await loaded.chromium.connectOverCDP(origin, { timeout: 10_000 });
+    const pages = browser.contexts().flatMap((context) => context.pages());
+    const hostPage = pages.find((candidate) => (
+      /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/#\/main\/apps\/qbot(?:\/|$|\?)/i
+        .test(candidate.url())
+    ));
+    const screenshotPage = pages.find((candidate) => (
+      candidate.url().includes('lib-screencapture-app/dist/electron.html')
+    ));
+    if (!hostPage || !screenshotPage) {
+      throw new Error(
+        `未发现 360Teams QWork 宿主页或原生截图页（host=${Boolean(hostPage)} screenshot=${Boolean(screenshotPage)}）。`,
+      );
+    }
+    const installed = await screenshotPage.evaluate((stateKey) => {
+      const screenshots = window.screenshots;
+      if (
+        !screenshots
+        || typeof screenshots.on !== 'function'
+        || typeof screenshots.off !== 'function'
+        || typeof screenshots.cancel !== 'function'
+      ) {
+        return { ok: false, error: '360Teams screenshots bridge 不完整。' };
       }
-      return originalAlert.call(window, message);
-    };
-    state.restore = () => {
-      if (window.alert === wrappedAlert) window.alert = originalAlert;
-    };
-    window[stateKey] = state;
-    window.alert = wrappedAlert;
-    return { installed: true, error: '' };
-  }, RENDERER_DIALOG_CAPTURE_STATE).catch((error) => ({
-    installed: false,
-    error: String(error?.message || error),
-  }));
-}
-
-async function collectRendererDialogCapture(page, expectedMessage, file) {
-  let capture = null;
-  const deadline = Date.now() + 7_000;
-  while (Date.now() < deadline) {
-    capture = await page.evaluate((stateKey) => {
-      const state = window[stateKey];
-      if (!state) return null;
-      const result = state.result;
-      return {
-        installed: state.installed === true,
-        message: String(state.message || ''),
-        requested_at: String(state.requested_at || ''),
-        completed_at: String(state.completed_at || ''),
-        error: String(state.error || ''),
-        status: String(result?.status || ''),
-        data: String(result?.data || result?.dataURL || ''),
+      const prior = window[stateKey];
+      if (prior?.handler) {
+        try { screenshots.off('capture', prior.handler); } catch {}
+      }
+      const state = {
+        armed: false,
+        data: '',
+        captured_at: '',
+        display: null,
+        token: '',
+        error: '',
+        handler: null,
       };
-    }, RENDERER_DIALOG_CAPTURE_STATE).catch((error) => ({
-      installed: false,
-      message: '',
-      requested_at: '',
-      completed_at: '',
+      state.handler = (display, data, token) => {
+        if (!state.armed || state.data) return;
+        try {
+          state.data = String(data || '');
+          state.captured_at = new Date().toISOString();
+          state.display = display || null;
+          state.token = String(token || '');
+        } catch (error) {
+          state.error = error?.message || String(error);
+        } finally {
+          state.armed = false;
+          try { screenshots.cancel(); } catch {}
+        }
+      };
+      screenshots.on('capture', state.handler);
+      window[stateKey] = state;
+      return { ok: true, error: '' };
+    }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE);
+    if (!installed?.ok) throw new Error(installed?.error || '无法安装 360Teams 原生截图监听器。');
+    const hostReady = await hostPage.evaluate(() => (
+      typeof window.ipcRenderer?.invoke === 'function'
+    )).catch(() => false);
+    if (!hostReady) throw new Error('360Teams QWork 宿主页 ipcRenderer.invoke 不可用。');
+
+    return {
+      ok: true,
+      source: 'teams-native-node-screenshots',
+      error: '',
+      capture: async (file, expectedMessage) => {
+        const requestedAt = new Date().toISOString();
+        const armed = await screenshotPage.evaluate((stateKey) => {
+          const state = window[stateKey];
+          if (!state?.handler) return false;
+          state.armed = true;
+          state.data = '';
+          state.captured_at = '';
+          state.display = null;
+          state.token = '';
+          state.error = '';
+          return true;
+        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        if (!armed) {
+          return {
+            ok: false,
+            source: 'teams-native-node-screenshots',
+            message: String(expectedMessage || ''),
+            requested_at: requestedAt,
+            completed_at: '',
+            error: '360Teams 原生截图监听器未处于 armed 状态。',
+          };
+        }
+        const requested = await hostPage.evaluate((stateKey) => {
+          window[stateKey] = { invoke_error: '', requested_at: new Date().toISOString() };
+          Promise.resolve(window.ipcRenderer.invoke('screenshotStart', false))
+            .catch((error) => {
+              window[stateKey].invoke_error = error?.message || String(error);
+            });
+          return true;
+        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        if (!requested) {
+          return {
+            ok: false,
+            source: 'teams-native-node-screenshots',
+            message: String(expectedMessage || ''),
+            requested_at: requestedAt,
+            completed_at: '',
+            error: '无法向 360Teams 主进程发起 screenshotStart。',
+          };
+        }
+
+        let capture = null;
+        let invokeError = '';
+        const deadline = Date.now() + 8_000;
+        while (Date.now() < deadline) {
+          capture = await screenshotPage.evaluate((stateKey) => {
+            const state = window[stateKey];
+            if (!state) return null;
+            return {
+              data: String(state.data || ''),
+              captured_at: String(state.captured_at || ''),
+              display: state.display || null,
+              token: String(state.token || ''),
+              error: String(state.error || ''),
+            };
+          }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch((error) => ({
+            data: '',
+            captured_at: '',
+            display: null,
+            token: '',
+            error: String(error?.message || error),
+          }));
+          invokeError = await hostPage.evaluate((stateKey) => (
+            String(window[stateKey]?.invoke_error || '')
+          ), TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => '');
+          if (capture?.captured_at || capture?.error || invokeError) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        const dataMatch = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(capture?.data || ''));
+        let buffer = null;
+        if (dataMatch) {
+          try { buffer = Buffer.from(dataMatch[1].replace(/\s+/g, ''), 'base64'); } catch {}
+        }
+        const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const pngValid = Boolean(
+          buffer
+          && buffer.length > 100_000
+          && buffer.subarray(0, 8).equals(signature),
+        );
+        const width = pngValid ? buffer.readUInt32BE(16) : 0;
+        const height = pngValid ? buffer.readUInt32BE(20) : 0;
+        const dimensionsValid = width >= 800 && height >= 600;
+        if (pngValid && dimensionsValid && expectedMessage) fs.writeFileSync(file, buffer);
+        const saved = Boolean(
+          expectedMessage
+          && pngValid
+          && dimensionsValid
+          && fs.existsSync(file)
+          && fs.statSync(file).size === buffer.length
+        );
+        return {
+          ok: saved,
+          source: 'teams-native-node-screenshots',
+          message: String(expectedMessage || ''),
+          requested_at: requestedAt,
+          completed_at: String(capture?.captured_at || ''),
+          width,
+          height,
+          size_bytes: buffer?.length || 0,
+          display: capture?.display || null,
+          token: String(capture?.token || ''),
+          error: saved
+            ? ''
+            : [
+                capture?.error,
+                invokeError,
+                !capture?.captured_at ? '未在 8 秒内收到 360Teams 原生 capture 事件。' : '',
+                !pngValid ? '360Teams 原生截图不是有效的非空 PNG。' : '',
+                pngValid && !dimensionsValid ? `原生截图尺寸异常：${width}x${height}。` : '',
+                !expectedMessage ? 'Playwright 未观察到可绑定的原生弹窗文案。' : '',
+              ].filter(Boolean).join('；'),
+        };
+      },
+      close: async () => {
+        await screenshotPage.evaluate((stateKey) => {
+          const state = window[stateKey];
+          if (state?.handler && window.screenshots?.off) {
+            try { window.screenshots.off('capture', state.handler); } catch {}
+          }
+          try { window.screenshots?.cancel?.(); } catch {}
+          delete window[stateKey];
+          return true;
+        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        await hostPage.evaluate((stateKey) => {
+          delete window[stateKey];
+          return true;
+        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        await browser.close().catch(() => {});
+      },
+    };
+  } catch (error) {
+    await browser?.close().catch(() => {});
+    return {
+      ok: false,
+      source: 'teams-native-node-screenshots',
       error: String(error?.message || error),
-      status: '',
-      data: '',
-    }));
-    if (capture?.completed_at || capture?.error) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+      capture: async () => ({
+        ok: false,
+        source: 'teams-native-node-screenshots',
+        error: String(error?.message || error),
+      }),
+      close: async () => {},
+    };
   }
-
-  const messageMatches = Boolean(capture?.message)
-    && String(capture.message) === String(expectedMessage || '');
-  const dataMatch = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(capture?.data || ''));
-  let buffer = null;
-  if (dataMatch) {
-    try { buffer = Buffer.from(dataMatch[1].replace(/\s+/g, ''), 'base64'); } catch {}
-  }
-  const pngValid = Boolean(
-    buffer
-    && buffer.length > 8
-    && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
-  );
-  if (messageMatches && pngValid) {
-    fs.writeFileSync(file, buffer);
-  }
-  const saved = messageMatches
-    && pngValid
-    && fs.existsSync(file)
-    && fs.statSync(file).size === buffer.length;
-  return {
-    ok: saved,
-    source: 'qwork-shell-captureViewport-dialog-hook',
-    message: String(capture?.message || ''),
-    requested_at: String(capture?.requested_at || ''),
-    completed_at: String(capture?.completed_at || ''),
-    error: saved
-      ? ''
-      : [
-          capture?.error,
-          !messageMatches ? '主进程截图与 Playwright 观察到的弹窗文案不一致。' : '',
-          !pngValid ? `主进程截图不是有效 PNG（status=${capture?.status || '空'}）。` : '',
-        ].filter(Boolean).join('；'),
-  };
-}
-
-async function restoreRendererDialogCaptureHook(page) {
-  return page.evaluate((stateKey) => {
-    const state = window[stateKey];
-    if (state?.restore && typeof state.restore === 'function') state.restore();
-    delete window[stateKey];
-    return true;
-  }, RENDERER_DIALOG_CAPTURE_STATE).catch(() => false);
 }
 
 async function stageAttachmentPathsThroughComposer(
@@ -10898,30 +11006,30 @@ async function stageAttachmentPathsThroughComposer(
   files,
   caseDir,
   label,
+  { upstreamCdpUrl = '' } = {},
 ) {
   let dialogMessage = '';
   let evidenceScreenshot = '';
   let dialogEvidenceScreenshot = '';
   let dialogHandling = null;
-  // Queue the product's official renderer → main-process BrowserWindow
-  // capture before the synchronous window.alert() opens. Page-level CDP
-  // screenshot commands pause behind native dialogs, so they cannot prove the
-  // visible rejection even when their connection was established in advance.
-  const rendererCaptureHook = await installRendererDialogCaptureHook(page);
+  // Prepare 360Teams' own node-screenshots bridge before triggering the
+  // attachment action. A QWork page screenshot is suspended behind
+  // window.alert() and, after dismissal, cannot prove the dialog was visible.
+  // The host-native capture event is delivered while the modal is still open.
+  const nativeCapture = await prepareTeamsNativeDialogCapture(upstreamCdpUrl);
   const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
     dialogHandling = (async () => {
       const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
-      // Give the already-dispatched IPC a short main-process window to take
-      // the frame while the alert is visible. Use a Node timer because page
-      // timers and page.evaluate are suspended by the modal.
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const captured = await nativeCapture.capture(nativeFile, dialogMessage);
       let closeError = '';
+      let acceptedAt = '';
       try {
         // Attachment rejection uses window.alert(), whose only user action is
         // the visible OK button. Await accept() before any subsequent DOM
-        // operation; merely observing dialog.message() does not mean the
-        // modal has been closed.
+        // operation. The native screenshot above must complete before accept()
+        // so the evidence cannot be a post-dismissal page frame.
+        acceptedAt = new Date().toISOString();
         await dialog.accept();
       } catch (error) {
         closeError = String(error?.message || error);
@@ -10929,17 +11037,7 @@ async function stageAttachmentPathsThroughComposer(
       const pageResponsive = !closeError && await page.evaluate(() => (
         document.readyState === 'interactive' || document.readyState === 'complete'
       )).catch(() => false);
-      const rendererCapture = !closeError
-        ? await collectRendererDialogCapture(page, dialogMessage, nativeFile)
-        : {
-            ok: false,
-            source: 'qwork-shell-captureViewport-dialog-hook',
-            message: '',
-            requested_at: '',
-            completed_at: '',
-            error: '弹窗未成功关闭，无法读取主进程截图结果。',
-          };
-      if (rendererCapture.ok) {
+      if (captured.ok) {
         dialogEvidenceScreenshot = nativeFile;
         evidenceScreenshot = nativeFile;
       }
@@ -10952,11 +11050,16 @@ async function stageAttachmentPathsThroughComposer(
         action: 'accept',
         confirmation_label: 'OK',
         evidence_screenshot: dialogEvidenceScreenshot,
-        evidence_source: rendererCapture.source,
-        capture_requested_at: rendererCapture.requested_at,
-        capture_completed_at: rendererCapture.completed_at,
-        captured_dialog_message: rendererCapture.message,
-        capture_error: rendererCapture.error,
+        evidence_source: captured.source,
+        capture_requested_at: captured.requested_at,
+        capture_completed_at: captured.completed_at,
+        capture_completed_before_accept: captured.ok === true,
+        captured_dialog_message: captured.message,
+        capture_width: Number(captured.width || 0),
+        capture_height: Number(captured.height || 0),
+        capture_size_bytes: Number(captured.size_bytes || 0),
+        dialog_accepted_at: acceptedAt,
+        capture_error: captured.error,
         close_error: closeError,
       };
     })();
@@ -11035,7 +11138,7 @@ async function stageAttachmentPathsThroughComposer(
     }
   }
   page.off('dialog', dialogListener);
-  await restoreRendererDialogCaptureHook(page);
+  await nativeCapture.close();
   const postDismissalScreenshot = dialogOutcome.closed
     ? await shot(page, caseDir, `${label}-product-dialog-dismissed`).catch(() => '')
     : '';
@@ -11062,10 +11165,15 @@ async function stageAttachmentPathsThroughComposer(
     dialogAction: dialogOutcome.action,
     dialogConfirmationLabel: dialogOutcome.confirmation_label,
     dialogEvidenceSource: dialogOutcome.evidence_source,
-    dialogCaptureHookInstalled: rendererCaptureHook.installed === true,
-    dialogCaptureHookError: String(rendererCaptureHook.error || ''),
+    dialogNativeCapturePrepared: nativeCapture.ok === true,
+    dialogNativeCapturePrepareError: String(nativeCapture.error || ''),
     dialogCaptureRequestedAt: String(dialogOutcome.capture_requested_at || ''),
     dialogCaptureCompletedAt: String(dialogOutcome.capture_completed_at || ''),
+    dialogCaptureCompletedBeforeAccept: dialogOutcome.capture_completed_before_accept === true,
+    dialogCaptureWidth: Number(dialogOutcome.capture_width || 0),
+    dialogCaptureHeight: Number(dialogOutcome.capture_height || 0),
+    dialogCaptureSizeBytes: Number(dialogOutcome.capture_size_bytes || 0),
+    dialogAcceptedAt: String(dialogOutcome.dialog_accepted_at || ''),
     capturedDialogMessage: String(dialogOutcome.captured_dialog_message || ''),
     dialogCaptureError: dialogOutcome.capture_error,
     dialogCloseError: dialogOutcome.close_error,
