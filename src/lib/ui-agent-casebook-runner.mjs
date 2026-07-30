@@ -10756,6 +10756,105 @@ function ensureSizedFixture(dir, name, size) {
 
 const TEAMS_NATIVE_DIALOG_CAPTURE_STATE = '__qbotAutomationTeamsNativeDialogCapture';
 
+function managedTeamsPageTargetWebSocket(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password) return '';
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) return '';
+  if (!/^\/devtools\/page\/[A-Za-z0-9_-]+$/.test(url.pathname)) return '';
+  return url.toString();
+}
+
+async function readManagedTeamsCdpTargets(origin) {
+  const endpoint = new URL('/json/list', origin);
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5_000) });
+  if (!response.ok) throw new Error(`360Teams CDP target list HTTP ${response.status}。`);
+  const targets = await response.json();
+  if (!Array.isArray(targets)) throw new Error('360Teams CDP target list 不是数组。');
+  return targets.filter((target) => managedTeamsPageTargetWebSocket(target?.webSocketDebuggerUrl));
+}
+
+async function openManagedTeamsPageTarget(target) {
+  const websocketUrl = managedTeamsPageTargetWebSocket(target?.webSocketDebuggerUrl);
+  if (!websocketUrl) throw new Error(`360Teams target 缺少受管 page WebSocket：${target?.url || 'unknown'}`);
+  const socket = new WebSocket(websocketUrl);
+  let sequence = 0;
+  let closed = false;
+  const pending = new Map();
+  const ready = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('360Teams page-target WebSocket 连接超时。')), 5_000);
+    socket.addEventListener('open', () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+    socket.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error('360Teams page-target WebSocket 连接失败。'));
+    }, { once: true });
+  });
+  socket.addEventListener('message', (event) => {
+    let message = null;
+    try { message = JSON.parse(String(event.data)); } catch { return; }
+    if (!message?.id || !pending.has(message.id)) return;
+    const request = pending.get(message.id);
+    pending.delete(message.id);
+    clearTimeout(request.timer);
+    if (message.error) request.reject(new Error(message.error.message || JSON.stringify(message.error)));
+    else request.resolve(message.result);
+  });
+  socket.addEventListener('close', () => {
+    closed = true;
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error('360Teams page-target WebSocket 已关闭。'));
+    }
+    pending.clear();
+  });
+  try {
+    await ready;
+  } catch (error) {
+    try { socket.close(); } catch {}
+    throw error;
+  }
+
+  const send = (method, params = {}, timeoutMs = 5_000) => {
+    if (closed || socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('360Teams page-target WebSocket 不可用。'));
+    }
+    const id = ++sequence;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`360Teams CDP ${method} 在 ${timeoutMs}ms 内未返回。`));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+  };
+  return {
+    url: String(target.url || ''),
+    evaluate: async (expression, timeoutMs = 5_000) => {
+      const result = await send('Runtime.evaluate', {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      }, timeoutMs);
+      if (result?.exceptionDetails) {
+        const detail = result.exceptionDetails.exception?.description
+          || result.exceptionDetails.text
+          || 'Runtime.evaluate exception';
+        throw new Error(detail);
+      }
+      return result?.result?.value;
+    },
+    close: async () => {
+      if (closed) return;
+      socket.close();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    },
+  };
+}
+
 async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
   const origin = managedFixtureLoopbackOrigin(upstreamCdpUrl);
   if (!origin) {
@@ -10771,38 +10870,30 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
       close: async () => {},
     };
   }
-  const loaded = await loadPlaywright();
-  if (loaded.error || !loaded.chromium) {
-    return {
-      ok: false,
-      source: 'teams-native-node-screenshots',
-      error: `Playwright Chromium 不可用：${loaded.error?.message || '未导出 chromium'}`,
-      capture: async () => ({
-        ok: false,
-        source: 'teams-native-node-screenshots',
-        error: '原生截图通道未准备。',
-      }),
-      close: async () => {},
-    };
-  }
 
-  let browser = null;
+  let hostTarget = null;
+  let screenshotTarget = null;
   try {
-    browser = await loaded.chromium.connectOverCDP(origin, { timeout: 10_000 });
-    const pages = browser.contexts().flatMap((context) => context.pages());
-    const hostPage = pages.find((candidate) => (
+    const targets = await readManagedTeamsCdpTargets(origin);
+    const host = targets.find((candidate) => (
       /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/#\/main\/apps\/qbot(?:\/|$|\?)/i
-        .test(candidate.url())
+        .test(String(candidate.url || ''))
     ));
-    const screenshotPage = pages.find((candidate) => (
-      candidate.url().includes('lib-screencapture-app/dist/electron.html')
+    const screenshot = targets.find((candidate) => (
+      String(candidate.url || '').includes('lib-screencapture-app/dist/electron.html')
     ));
-    if (!hostPage || !screenshotPage) {
+    if (!host || !screenshot) {
       throw new Error(
-        `未发现 360Teams QWork 宿主页或原生截图页（host=${Boolean(hostPage)} screenshot=${Boolean(screenshotPage)}）。`,
+        `未发现 360Teams QWork 宿主页或原生截图页（host=${Boolean(host)} screenshot=${Boolean(screenshot)}）。`,
       );
     }
-    const installed = await screenshotPage.evaluate((stateKey) => {
+    [hostTarget, screenshotTarget] = await Promise.all([
+      openManagedTeamsPageTarget(host),
+      openManagedTeamsPageTarget(screenshot),
+    ]);
+    const stateKey = JSON.stringify(TEAMS_NATIVE_DIALOG_CAPTURE_STATE);
+    const installed = await screenshotTarget.evaluate(`(() => {
+      const stateKey = ${stateKey};
       const screenshots = window.screenshots;
       if (
         !screenshots
@@ -10842,11 +10933,11 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
       screenshots.on('capture', state.handler);
       window[stateKey] = state;
       return { ok: true, error: '' };
-    }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE);
+    })()`);
     if (!installed?.ok) throw new Error(installed?.error || '无法安装 360Teams 原生截图监听器。');
-    const hostReady = await hostPage.evaluate(() => (
-      typeof window.ipcRenderer?.invoke === 'function'
-    )).catch(() => false);
+    const hostReady = await hostTarget.evaluate(
+      `typeof window.ipcRenderer?.invoke === 'function'`,
+    ).catch(() => false);
     if (!hostReady) throw new Error('360Teams QWork 宿主页 ipcRenderer.invoke 不可用。');
 
     return {
@@ -10855,7 +10946,8 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
       error: '',
       capture: async (file, expectedMessage) => {
         const requestedAt = new Date().toISOString();
-        const armed = await screenshotPage.evaluate((stateKey) => {
+        const armed = await screenshotTarget.evaluate(`(() => {
+          const stateKey = ${stateKey};
           const state = window[stateKey];
           if (!state?.handler) return false;
           state.armed = true;
@@ -10865,7 +10957,7 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
           state.token = '';
           state.error = '';
           return true;
-        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        })()`).catch(() => false);
         if (!armed) {
           return {
             ok: false,
@@ -10876,14 +10968,15 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
             error: '360Teams 原生截图监听器未处于 armed 状态。',
           };
         }
-        const requested = await hostPage.evaluate((stateKey) => {
+        const requested = await hostTarget.evaluate(`(() => {
+          const stateKey = ${stateKey};
           window[stateKey] = { invoke_error: '', requested_at: new Date().toISOString() };
           Promise.resolve(window.ipcRenderer.invoke('screenshotStart', false))
             .catch((error) => {
               window[stateKey].invoke_error = error?.message || String(error);
             });
           return true;
-        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
+        })()`).catch(() => false);
         if (!requested) {
           return {
             ok: false,
@@ -10899,7 +10992,8 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
         let invokeError = '';
         const deadline = Date.now() + 8_000;
         while (Date.now() < deadline) {
-          capture = await screenshotPage.evaluate((stateKey) => {
+          capture = await screenshotTarget.evaluate(`(() => {
+            const stateKey = ${stateKey};
             const state = window[stateKey];
             if (!state) return null;
             return {
@@ -10909,16 +11003,17 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
               token: String(state.token || ''),
               error: String(state.error || ''),
             };
-          }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch((error) => ({
+          })()`, 10_000).catch((error) => ({
             data: '',
             captured_at: '',
             display: null,
             token: '',
             error: String(error?.message || error),
           }));
-          invokeError = await hostPage.evaluate((stateKey) => (
-            String(window[stateKey]?.invoke_error || '')
-          ), TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => '');
+          invokeError = await hostTarget.evaluate(`(() => {
+            const stateKey = ${stateKey};
+            return String(window[stateKey]?.invoke_error || '');
+          })()`).catch(() => '');
           if (capture?.captured_at || capture?.error || invokeError) break;
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
@@ -10969,7 +11064,8 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
         };
       },
       close: async () => {
-        await screenshotPage.evaluate((stateKey) => {
+        await screenshotTarget.evaluate(`(() => {
+          const stateKey = ${stateKey};
           const state = window[stateKey];
           if (state?.handler && window.screenshots?.off) {
             try { window.screenshots.off('capture', state.handler); } catch {}
@@ -10977,16 +11073,23 @@ async function prepareTeamsNativeDialogCapture(upstreamCdpUrl) {
           try { window.screenshots?.cancel?.(); } catch {}
           delete window[stateKey];
           return true;
-        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
-        await hostPage.evaluate((stateKey) => {
+        })()`).catch(() => false);
+        await hostTarget.evaluate(`(() => {
+          const stateKey = ${stateKey};
           delete window[stateKey];
           return true;
-        }, TEAMS_NATIVE_DIALOG_CAPTURE_STATE).catch(() => false);
-        await browser.close().catch(() => {});
+        })()`).catch(() => false);
+        await Promise.all([
+          screenshotTarget.close().catch(() => {}),
+          hostTarget.close().catch(() => {}),
+        ]);
       },
     };
   } catch (error) {
-    await browser?.close().catch(() => {});
+    await Promise.all([
+      screenshotTarget ? screenshotTarget.close().catch(() => {}) : Promise.resolve(),
+      hostTarget ? hostTarget.close().catch(() => {}) : Promise.resolve(),
+    ]);
     return {
       ok: false,
       source: 'teams-native-node-screenshots',
