@@ -899,6 +899,112 @@ test('an exact visible skill selection failure before send makes only post-selec
   assert.ok(incompleteManifest.missing_roles.includes('prompt'));
 });
 
+test('an exact visible MCP selection failure before send makes conversation and execution evidence N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-mcp-selection-failure-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const caseDir = path.join(root, 'cases', 'BETA-MCP-003');
+  fs.mkdirSync(caseDir, { recursive: true });
+  const capturedAt = '2026-07-30T12:26:49.485Z';
+  const selectionFailureScreenshot = path.join(caseDir, 'selection-failure.png');
+  fs.writeFileSync(selectionFailureScreenshot, 'selection-failure');
+  const emptySelection = {
+    selectedConnectorCount: 0,
+    selectedConnectors: [],
+    selectedIdentities: [],
+    chipCount: 0,
+    connectorRouting: { mode: 'manual' },
+  };
+  const state = {
+    id: 'BETA-MCP-003',
+    contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
+    required_evidence_roles: [
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'capability_selection',
+      'capability_execution_event',
+    ].join(','),
+    status: 'failed',
+    screenshots: {},
+    artifacts: {
+      final_task_identity: {
+        active_id: '',
+        message_count: 0,
+      },
+      core_beta_evidence: {
+        capability_selection: {
+          available: false,
+          captured_at: capturedAt,
+          source: 'visible connector chip + window.agent.capabilities',
+          expected: {
+            key: 'mcphub:wecom',
+          },
+          snapshot: emptySelection,
+        },
+        action_receipt: {
+          available: true,
+          captured_at: capturedAt,
+          receipts: [
+            {
+              command: 'select_connector_by_key',
+              event: 'select',
+              expected_state_observed: false,
+              actual: 'expected=mcphub:wecom；selected=[]；chips=0；mode=manual',
+              state_readback: emptySelection,
+              after_screenshot: selectionFailureScreenshot,
+            },
+            {
+              command: 'run_mcp_turn_1',
+              event: 'skipped-after-failed-prerequisite',
+              state_readback: {
+                stopped_by_command: 'select_connector_by_key',
+              },
+            },
+          ],
+        },
+        public_state_readback: {
+          available: true,
+          captured_at: capturedAt,
+          source: 'final public capabilities + task state',
+          active_id: '',
+          running: false,
+          message_count: 0,
+        },
+      },
+    },
+  };
+
+  const verified = verifiedCapabilitySelectionUnavailableEvidence(state);
+  assert.equal(verified.applicable, true);
+  assert.equal(verified.expected_identity, 'mcphub:wecom');
+  assert.equal(verified.failed_selection_command, 'select_connector_by_key');
+  assert.equal(verified.propagation_source, 'current_case_pre_send_selection_failure');
+  const manifest = buildCaseEvidenceManifest(state, caseDir);
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.equal(manifest.role_evidence.capability_selection.available, true);
+  assert.equal(manifest.role_evidence.capability_selection.outcome_satisfied, false);
+  assert.deepEqual(
+    manifest.not_applicable_roles.map((item) => item.role),
+    [
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'task_id',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ],
+  );
+
+  state.artifacts.core_beta_evidence.action_receipt.receipts[1].event = 'send-attempted';
+  assert.equal(verifiedCapabilitySelectionUnavailableEvidence(state).applicable, false);
+  assert.equal(buildCaseEvidenceManifest(state, caseDir).complete, false);
+});
+
 test('Skill persistence selection failure keeps strict visible no-send evidence complete', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-skill-persistence-selection-failure-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

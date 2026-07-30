@@ -26003,6 +26003,7 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
   const expectedSelectionIdentity = String(
     selectionEvidence?.expected?.slug
       || selectionEvidence?.expected?.id
+      || selectionEvidence?.expected?.key
       || selectionEvidence?.expected?.name
       || '',
   ).trim();
@@ -26022,8 +26023,15 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
         && Number(receipt?.state_readback?.before?.selectedSkillCount || 0) === 0
         && Array.isArray(receipt?.state_readback?.before?.selectedSkills)
         && receipt.state_readback.before.selectedSkills.length === 0;
+      const connectorSelectionFailure = command === 'select_connector_by_key'
+        && receipt?.event === 'select'
+        && String(receipt?.actual || '').includes(`expected=${expectedSelectionIdentity}`)
+        && Number(receipt?.state_readback?.selectedConnectorCount || 0) === 0
+        && Array.isArray(receipt?.state_readback?.selectedConnectors)
+        && receipt.state_readback.selectedConnectors.length === 0
+        && Number(receipt?.state_readback?.chipCount || 0) === 0;
       return receipt?.expected_state_observed === false
-        && (directSelectionFailure || persistenceSelectionFailure);
+        && (directSelectionFailure || persistenceSelectionFailure || connectorSelectionFailure);
     })
     : null;
   const failedSelectionCommand = String(failedSelectionReceipt?.command || '');
@@ -26037,6 +26045,10 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
         || (
           failedSelectionCommand === 'verify_skill_selection_persistence'
           && receipt?.command === 'verify_cross_task_skill_isolation'
+        )
+        || (
+          failedSelectionCommand === 'select_connector_by_key'
+          && receipt?.command === 'run_mcp_turn_1'
         )
       )
       && receipt?.event === 'skipped-after-failed-prerequisite'
@@ -26058,14 +26070,28 @@ export function verifiedCapabilitySelectionUnavailableEvidence(state = {}) {
       failedSelectionCommand === 'verify_skill_selection_persistence'
       && selectionEvidence?.source === 'visible composer skill selection pre-send gate'
     )
+    || (
+      failedSelectionCommand === 'select_connector_by_key'
+      && selectionEvidence?.source === 'visible connector chip + window.agent.capabilities'
+    )
   );
+  const emptyVisibleSelection = failedSelectionCommand === 'select_connector_by_key'
+    ? (
+      Number(selectionEvidence?.snapshot?.selectedConnectorCount || 0) === 0
+      && Array.isArray(selectionEvidence?.snapshot?.selectedConnectors)
+      && selectionEvidence.snapshot.selectedConnectors.length === 0
+      && Number(selectionEvidence?.snapshot?.chipCount || 0) === 0
+    )
+    : (
+      Number(selectionEvidence?.snapshot?.selectedSkillCount || 0) === 0
+      && Array.isArray(selectionEvidence?.snapshot?.selectedSkills)
+      && selectionEvidence.snapshot.selectedSkills.length === 0
+    );
   const strictPreSendSelectionFailure = ['failed', 'blocked'].includes(String(state.status || ''))
     && selectionEvidence?.available === false
     && supportedSelectionFailureSource
     && Boolean(expectedSelectionIdentity)
-    && Number(selectionEvidence?.snapshot?.selectedSkillCount || 0) === 0
-    && Array.isArray(selectionEvidence?.snapshot?.selectedSkills)
-    && selectionEvidence.snapshot.selectedSkills.length === 0
+    && emptyVisibleSelection
     && actionEvidence?.available === true
     && Boolean(failedSelectionReceipt)
     && Boolean(visibleFailureScreenshot)
