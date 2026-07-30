@@ -4494,6 +4494,31 @@ export function coreBetaPartialReplyReady({
   };
 }
 
+export function coreBetaStoppedTurnTerminalEvidence(readback = {}) {
+  const taskId = String(readback?.task_id || '').trim();
+  const partialChars = Number(readback?.partial_chars_before_click || 0);
+  const retainedChars = Number(readback?.retained_chars || 0);
+  const available = Boolean(
+    taskId
+    && readback?.running_before === true
+    && readback?.running_after === false
+    && readback?.partial_reply_ready_before_click === true
+    && partialChars > 0,
+  );
+  return {
+    available,
+    source: 'confirmed product stop terminal readback',
+    task_id: taskId,
+    running_before: readback?.running_before === true,
+    running_after: readback?.running_after === true,
+    partial_reply_ready_before_click: readback?.partial_reply_ready_before_click === true,
+    partial_chars_before_click: partialChars,
+    retained_chars: retainedChars,
+    terminal_outcome: 'user_stopped',
+    assistant_reply_present: retainedChars > 0,
+  };
+}
+
 async function coreBetaStopGeneration(ctx) {
   if (!ctx.pending) throw new Error('停止生成前没有运行中的派发任务。');
   const { page, state, caseDir } = ctx;
@@ -4571,6 +4596,11 @@ async function coreBetaStopGeneration(ctx) {
     partial_chars_before_click: partial.delta_chars,
     retained_chars: retained.delta_chars,
   };
+  setCoreBetaEvidence(
+    state,
+    'reply_completion',
+    coreBetaStoppedTurnTerminalEvidence(state.artifacts.core_beta_stopped_task),
+  );
   ctx.pending = null;
   return {
     ok: runningBefore && !runningAfter && retained.delta_chars > 0,

@@ -57,6 +57,7 @@ import {
   coreBetaPartialReplyReady,
   coreBetaSelectedCapabilityIdentities,
   coreBetaSkillSelectionReadbackMatches,
+  coreBetaStoppedTurnTerminalEvidence,
   createTeamsConnectorFixtureController,
   createTeamsSkillFixtureController,
   selectTrustedActionScreenshot,
@@ -770,6 +771,26 @@ test('Core Beta fail-closed, partial-stop, and capability identity helpers rejec
     baselineAssistantText: 'same',
     latestAssistantText: 'same',
   }).ready, false);
+  const stoppedEvidence = coreBetaStoppedTurnTerminalEvidence({
+    task_id: 'task-stop-1',
+    running_before: true,
+    running_after: false,
+    partial_reply_ready_before_click: true,
+    partial_chars_before_click: 174,
+    retained_chars: 0,
+  });
+  assert.equal(stoppedEvidence.available, true);
+  assert.equal(stoppedEvidence.terminal_outcome, 'user_stopped');
+  assert.equal(stoppedEvidence.assistant_reply_present, false);
+  assert.equal(stoppedEvidence.retained_chars, 0);
+  assert.equal(coreBetaStoppedTurnTerminalEvidence({
+    task_id: 'task-stop-2',
+    running_before: true,
+    running_after: true,
+    partial_reply_ready_before_click: true,
+    partial_chars_before_click: 20,
+    retained_chars: 20,
+  }).available, false);
   assert.deepEqual(
     coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'mcp-b' }, 'plain-c']),
     ['skill-a', 'mcp-b', 'plain-c'],
