@@ -29,6 +29,7 @@ import {
   coreBetaSettingsLoadTimeoutMs,
   coreBetaSettingsSurfaceState,
   coreBetaSharedCapabilityPrerequisiteBlocker,
+  coreBetaSkillEntrySelectorCandidates,
   coreBetaInstalledSkillReadme,
   coreBetaSkillTaskProfile,
   normalizeCoreBetaExpertCard,
@@ -291,6 +292,13 @@ test('skill market inventory comes from getSkillsCatalog.market, never installed
   assert.equal(result.inventory.length, 12);
   assert.equal(result.inventory.every((item) => item.visible && item.install_action_visible), true);
   assert.equal(result.inventory.some((item) => item.slug === 'builtin-a'), false);
+});
+
+test('skill navigation supports the current expert-center role=tab entry as well as the legacy testid', () => {
+  const candidates = coreBetaSkillEntrySelectorCandidates();
+  assert.ok(candidates.includes('[data-testid="skills-tab"]'));
+  assert.ok(candidates.includes('[data-testid="experts-view"] [role="tablist"][aria-label="专家与技能"] [role="tab"]'));
+  assert.ok(candidates.includes('.restab-experts [role="tab"]'));
 });
 
 test('installed Skill tasks are derived from the actual Skill identity and README domain', () => {

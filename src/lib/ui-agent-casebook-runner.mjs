@@ -19895,21 +19895,72 @@ async function executeExpertSmoke010({ page, state, caseDir, timeoutMs }) {
   recordAssertion(state, '通用助手无专家残留', '回复不应明显残留产品经理/测试专家等上一专家固定称谓。', !/作为产品经理|作为测试专家|我是产品经理/.test(reply.deltaText), clip(reply.deltaText, 260));
 }
 
+export function coreBetaSkillEntrySelectorCandidates() {
+  return [
+    '[data-testid="skills-tab"]',
+    '[data-testid="experts-view"] [role="tablist"][aria-label="专家与技能"] [role="tab"]',
+    '[data-testid="experts-view"] [role="tab"]',
+    '.restab-experts [role="tab"]',
+    '[role="tablist"][aria-label="专家与技能"] [role="tab"]',
+    '[data-uiux-primitive="tab-button"]',
+    'button',
+  ];
+}
+
 async function openSkillsPage(page, state, caseDir, { skillTab = '已安装' } = {}) {
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   await clickSelector(page, '[data-testid="nav-experts"]', '进入【专家/技能】模块', state);
-  const skillsTab = page.locator('[data-testid="skills-tab"]').first();
-  const fallbackTab = page.getByRole('button', { name: /^技能$/ }).first();
+  const skillsView = page.locator('[data-testid="skills-view"]').first();
   let target = null;
-  if (await visible(skillsTab, 5000)) target = skillsTab;
-  else if (await visible(fallbackTab, 1500)) target = fallbackTab;
-  if (!target) throw new Error('未找到入口：[data-testid="skills-tab"]；等待专家页渲染及“技能”文案入口后仍不可见。');
-  await target.click({ force: true }).catch(async () => target.evaluate((el) => el.click()));
-  recordStep(state, '切换到【技能】页签', '专家/技能模块加载后应出现技能页签。', '已等待页面渲染并点击技能页签。', 'passed');
-  await page.waitForTimeout(1000);
+  let targetSelector = '';
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline && !target) {
+    for (const selector of coreBetaSkillEntrySelectorCandidates()) {
+      const candidate = selector === '[data-testid="skills-tab"]'
+        ? page.locator(selector).first()
+        : page.locator(selector).filter({ hasText: /^\s*技能\s*$/ }).first();
+      if (await visible(candidate, 250)) {
+        target = candidate;
+        targetSelector = selector;
+        break;
+      }
+    }
+    if (!target) await page.waitForTimeout(150);
+  }
+  if (!target) {
+    throw new Error('未找到【技能】页签：已检查 skills-tab、专家中心 role=tab、restab-experts 与文案入口。');
+  }
+
+  let visibleSkills = false;
+  for (let attempt = 0; attempt < 3 && !visibleSkills; attempt += 1) {
+    const current = targetSelector === '[data-testid="skills-tab"]'
+      ? page.locator(targetSelector).first()
+      : page.locator(targetSelector).filter({ hasText: /^\s*技能\s*$/ }).first();
+    if (!(await visible(current, 1000))) break;
+    if (attempt === 0) {
+      await current.click({ force: true }).catch(async () => current.evaluate((el) => el.click()));
+    } else if (attempt === 1) {
+      await current.focus().catch(() => {});
+      await page.keyboard.press('Enter').catch(async () => current.evaluate((el) => el.click()));
+    } else {
+      await current.evaluate((el) => el.click());
+    }
+    recordStep(
+      state,
+      attempt ? `切换到【技能】页签（重试 ${attempt}）` : '切换到【技能】页签',
+      '专家/技能模块加载后应通过当前可见的技能 tab 进入技能页。',
+      `已通过 ${targetSelector} 触发技能页签。`,
+      'passed',
+    );
+    visibleSkills = await visible(skillsView, 2500);
+  }
+
+  if (!visibleSkills) {
+    state.screenshots.open_skills_failed = await shot(page, caseDir, 'open-skills-view-not-reached');
+    throw new Error(`已触发【技能】页签但未进入 skills-view：${targetSelector}`);
+  }
   if (skillTab) await clickSkillSubtab(page, skillTab, state);
-  const visibleSkills = await visible(page.locator('[data-testid="skills-view"]').first(), 4000);
   const text = await mainSurfaceText(page);
   state.screenshots.open_skills = await shot(page, caseDir, `open-skills-${slugify(skillTab || 'default')}`);
   recordAssertion(state, '技能页可见', '应进入技能页，而不是专家页或会话页。', visibleSkills && /已安装|技能市场|历史/.test(text), clip(text, 260));
