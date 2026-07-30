@@ -171,39 +171,54 @@ test('Core Beta refresh reconnects for closed or invalidated renderer contexts',
   ), false);
 });
 
-test('runtime reset is not terminal while the replacement environment is still provisioning', () => {
-  const staleReadyText = [
+test('runtime reset follows SDK phases instead of the persistent reprovision notice', () => {
+  const reprovisionText = [
     '本进程已加载并校验：v0.0.23（builtin）',
     'Claude Code SDK 0.3.181：就绪 Codex SDK 0.142.0：就绪',
     '本地运行时、UI、技能环境和会话已清理，正在按当前身份重新预配。',
   ].join('\n');
-  assert.deepEqual(coreBetaRuntimeMaintenanceState({
-    text: staleReadyText,
+  const provisioning = coreBetaRuntimeMaintenanceState({
+    text: reprovisionText,
     composerReady: true,
     resetButtonEnabled: true,
-  }), {
-    ready: false,
-    pending: true,
-    failed: false,
-    loaded: true,
-    reset_button_enabled: true,
-    reason: '运行时仍在重新预配，不能判定完成。',
+    sdkStatuses: [
+      { family: 'claude-code', phase: 'provisioning', progress: 80 },
+      { family: 'codex', phase: 'ready', progress: 100 },
+    ],
+    stableReadyObservations: 0,
   });
+  assert.equal(provisioning.ready, false);
+  assert.equal(provisioning.pending, true);
+  assert.equal(provisioning.provisioning_notice, true);
+  assert.equal(provisioning.sdk_ready, false);
+  assert.equal(provisioning.reason, 'Claude/Codex SDK 尚未全部达到 ready，不能判定完成。');
 
   const terminalReadyText = [
     '本进程已加载并校验：v0.0.23（builtin）',
     'Claude Code SDK 0.3.181：就绪 Codex SDK 0.142.0：就绪',
-    '完成：Python 3 个就绪；Node 0 个就绪',
+    '本地运行时、UI、技能环境和会话已清理，正在按当前身份重新预配。',
   ].join('\n');
   assert.equal(coreBetaRuntimeMaintenanceState({
     text: terminalReadyText,
     composerReady: true,
     resetButtonEnabled: true,
+    sdkStatuses: [
+      { family: 'claude-code', phase: 'ready', progress: 100 },
+      { family: 'codex', phase: 'ready', progress: 100 },
+    ],
+    stableReadyObservations: 2,
+    minimumReadyObservations: 2,
   }).ready, true);
   assert.equal(coreBetaRuntimeMaintenanceState({
     text: terminalReadyText,
     composerReady: false,
     resetButtonEnabled: true,
+    sdkStatuses: [
+      { family: 'claude-code', phase: 'ready', progress: 100 },
+      { family: 'codex', phase: 'ready', progress: 100 },
+    ],
+    stableReadyObservations: 2,
+    minimumReadyObservations: 2,
   }).ready, false);
 });
 

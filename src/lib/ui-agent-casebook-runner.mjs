@@ -4052,6 +4052,8 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
     let capabilities = null;
     let composerReady = false;
     let runtimeState = coreBetaRuntimeMaintenanceState();
+    let sdkStatuses = [];
+    let stableReadyObservations = 0;
     let lastError = '';
     while (Date.now() < deadline) {
       try {
@@ -4063,16 +4065,41 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
         }
         text = await maintenance.innerText({ timeout: 2000 });
         capabilities = await currentCapabilities(activePage);
+        sdkStatuses = await activePage.evaluate(async () => {
+          if (typeof window.agent?.runtimeStatus !== 'function') return [];
+          const statuses = await Promise.race([
+            window.agent.runtimeStatus(),
+            new Promise((_, reject) => setTimeout(
+              () => reject(new Error('runtimeStatus timed out after 5000ms')),
+              5000,
+            )),
+          ]);
+          return Array.isArray(statuses) ? statuses : [];
+        });
         composerReady = await visible(
           activePage.locator('[data-testid="composer-input"], .aui-composer-input').first(),
           800,
         );
         const resetButton = activePage.locator('[data-testid="assistant-runtime-reset-all"]').first();
         const resetButtonEnabled = await resetButton.isEnabled({ timeout: 800 }).catch(() => false);
+        const sampleState = coreBetaRuntimeMaintenanceState({
+          text,
+          composerReady,
+          resetButtonEnabled,
+          sdkStatuses,
+          stableReadyObservations: 1,
+          minimumReadyObservations: 1,
+        });
+        stableReadyObservations = sampleState.ready
+          ? stableReadyObservations + 1
+          : 0;
         runtimeState = coreBetaRuntimeMaintenanceState({
           text,
           composerReady,
           resetButtonEnabled,
+          sdkStatuses,
+          stableReadyObservations,
+          minimumReadyObservations: waitForTerminal ? 2 : 1,
         });
         if (!waitForTerminal || runtimeState.ready || runtimeState.failed) break;
       } catch (error) {
@@ -4108,6 +4135,7 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
       composer_ready: composerReady,
       text: clip(text, 1600),
       capabilities,
+      sdk_statuses: sdkStatuses,
     };
     state.artifacts.core_beta_runtime_ready_readback = readback;
     setCoreBetaEvidence(state, 'public_state_readback', {
@@ -4157,7 +4185,7 @@ async function executeCoreBetaInitializationCommand(ctx, command) {
       testId: 'assistant-runtime-reset-all',
       acceptConfirm: true,
       waitPattern: /本进程已加载并校验|完成|就绪|ready|成功/i,
-      pendingPattern: /正在按当前身份重新预配|检查中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i,
+      pendingPattern: /检查中|初始化中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i,
       timeoutMs: Math.max(timeoutMs, 600000),
     });
   }
@@ -5288,16 +5316,33 @@ export function coreBetaRuntimeMaintenanceState({
   text = '',
   composerReady = false,
   resetButtonEnabled = false,
+  sdkStatuses = [],
+  stableReadyObservations = 0,
+  minimumReadyObservations = 1,
 } = {}) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  const pending = /正在按当前身份重新预配|检查中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i.test(normalized);
-  const failed = /失败|不可用|error|ENOTEMPTY|exception/i.test(normalized);
+  const statuses = Array.isArray(sdkStatuses) ? sdkStatuses : [];
+  const requiredFamilies = new Set(statuses.map((item) => String(item?.family || '').toLowerCase()));
+  const requiredFamiliesPresent = requiredFamilies.has('codex')
+    && [...requiredFamilies].some((family) => family.startsWith('claude'));
+  const sdkReady = requiredFamiliesPresent
+    && statuses.every((item) => String(item?.phase || '').toLowerCase() === 'ready');
+  const sdkFailed = statuses.some((item) => String(item?.phase || '').toLowerCase() === 'error');
+  const sdkPending = statuses.length === 0
+    || statuses.some((item) => !['ready', 'error'].includes(String(item?.phase || '').toLowerCase()));
+  const visibleActivity = /检查中|初始化中|重置中|重装中|清空中|处理中|准备中|下载中|安装中/i.test(normalized);
+  const provisioningNotice = /正在按当前身份重新预配/i.test(normalized);
+  const pending = visibleActivity || sdkPending || !resetButtonEnabled;
+  const failed = sdkFailed || /失败|不可用|error|ENOTEMPTY|exception/i.test(normalized);
   const loaded = /本进程已加载并校验|Claude Code SDK[^。；\n]*就绪|Codex SDK[^。；\n]*就绪|运行时[^。；\n]*(?:完成|就绪|ready)/i.test(normalized);
+  const stable = Number(stableReadyObservations) >= Math.max(1, Number(minimumReadyObservations) || 1);
   const ready = Boolean(
     normalized
     && loaded
     && composerReady
     && resetButtonEnabled
+    && sdkReady
+    && stable
     && !pending
     && !failed
   );
@@ -5306,19 +5351,30 @@ export function coreBetaRuntimeMaintenanceState({
     pending,
     failed,
     loaded,
+    provisioning_notice: provisioningNotice,
+    sdk_ready: sdkReady,
+    sdk_status_count: statuses.length,
+    stable_ready_observations: Number(stableReadyObservations) || 0,
+    minimum_ready_observations: Math.max(1, Number(minimumReadyObservations) || 1),
     reset_button_enabled: Boolean(resetButtonEnabled),
     reason: ready
-      ? '运行时维护区稳定、输入区可用且重初始化按钮恢复。'
+      ? 'Claude/Codex SDK 连续稳定就绪、已加载身份一致、输入区可用且重初始化按钮恢复。'
       : failed
         ? '运行时维护区出现明确失败终态。'
-        : pending
-          ? '运行时仍在重新预配，不能判定完成。'
+        : sdkPending
+          ? 'Claude/Codex SDK 尚未全部达到 ready，不能判定完成。'
+          : !requiredFamiliesPresent
+            ? '缺少 Claude/Codex 两类 SDK 的完整状态读回。'
+            : pending
+              ? '运行时维护动作仍忙，不能判定完成。'
           : !loaded
             ? '尚未读到已加载并校验的运行时终态。'
             : !composerReady
               ? '输入区尚未恢复可用。'
               : !resetButtonEnabled
                 ? '重初始化按钮尚未恢复可用。'
+                : !stable
+                  ? '运行时 ready 状态尚未达到连续稳定采样下限。'
                 : '运行时尚未达到稳定终态。',
   };
 }
