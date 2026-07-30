@@ -596,6 +596,16 @@ test('captured capability failures remain complete evidence instead of becoming 
   const caseDir = path.join(root, 'cases', 'BETA-EXPERT-001');
   fs.mkdirSync(caseDir, { recursive: true });
   const capturedAt = '2026-07-29T13:02:40.666Z';
+  const executionFile = path.join(caseDir, 'expert-task-bound-execution.json');
+  fs.writeFileSync(executionFile, `${JSON.stringify({
+    kind: 'expert',
+    task_id: 'task-1',
+    expected_identity: 'expert-1',
+    identity_present: false,
+    executed: false,
+    runtime: {},
+    tool_blocks: [],
+  })}\n`);
   const state = {
     id: 'BETA-EXPERT-001',
     contract_version: CORE_BETA_CASEBOOK_CONTRACT_VERSION,
@@ -627,7 +637,7 @@ test('captured capability failures remain complete evidence instead of becoming 
         capability_execution_event: {
           available: false,
           captured_at: capturedAt,
-          source: path.join(caseDir, 'expert-task-bound-execution.json'),
+          source: executionFile,
           kind: 'expert',
           task_id: 'task-1',
           expected_identity: 'expert-1',
@@ -653,6 +663,10 @@ test('captured capability failures remain complete evidence instead of becoming 
   const malformed = buildCaseEvidenceManifest(state, caseDir);
   assert.equal(malformed.complete, false);
   assert.deepEqual(malformed.missing_roles, ['capability_selection']);
+
+  fs.rmSync(executionFile);
+  const missingExecutionArtifact = buildCaseEvidenceManifest(state, caseDir);
+  assert.ok(missingExecutionArtifact.missing_roles.includes('capability_execution_event'));
 });
 
 test('verified skill shortage propagates to dependent cases without executing product actions', () => {

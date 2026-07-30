@@ -6974,7 +6974,25 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     const afterFirst = await composerSkillSelectionSnapshot(ctx.page);
     const second = await coreBetaRunTurn(ctx, 1, { label: 'Skill 第 2 轮' });
     const afterSecond = await composerSkillSelectionSnapshot(ctx.page);
-    ctx.skillTwoTurnOutcome = { first, second, afterFirst, afterSecond, derived };
+    // Collect the task-bound execution readback before this action returns.
+    // The business oracle may correctly fail (for example, the assistant
+    // explicitly reports that the selected Skill was not enabled).  If the
+    // readback lived only in the following verification action, the
+    // fail-closed action gate would skip it and turn a fully observed product
+    // failure into a framework manifest gap.
+    const execution = await coreBetaCapabilityExecutionEvidence(
+      ctx,
+      'skill',
+      ctx.selectedSkill?.slug,
+    );
+    ctx.skillTwoTurnOutcome = {
+      first,
+      second,
+      afterFirst,
+      afterSecond,
+      derived,
+      execution,
+    };
     return {
       ok: first.oracle.ok
         && first.stable
@@ -7005,12 +7023,17 @@ async function executeCoreBetaSkillCommand(ctx, command) {
   }
   if (command === 'send_skill_task') {
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'Skill 真实使用', composerPrepared: true });
-    ctx.skillOutcome = outcome;
+    const execution = await coreBetaCapabilityExecutionEvidence(
+      ctx,
+      'skill',
+      ctx.selectedSkill?.slug,
+    );
+    ctx.skillOutcome = { ...outcome, execution };
     return {
       ok: outcome.oracle.ok && outcome.stable,
       selector_or_testid: 'composer-send',
       event: 'send-skill-task',
-      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle, execution },
       actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
     };
   }
@@ -8296,12 +8319,21 @@ async function executeCoreBetaMcpCommand(ctx, command) {
       };
     }
     const outcome = await coreBetaRunTurn(ctx, 0, { label: 'MCP 第 1 轮' });
-    ctx.mcpFirst = outcome;
+    // Preserve a positive or negative tool-call readback even when the first
+    // turn's product oracle fails.  The second-turn action is intentionally
+    // skipped after a failed first turn, so deferring all execution evidence
+    // until that action would manufacture a framework_issue.
+    const execution = await coreBetaCapabilityExecutionEvidence(
+      ctx,
+      'mcp',
+      ctx.selectedMcp?.key,
+    );
+    ctx.mcpFirst = { ...outcome, execution };
     return {
       ok: outcome.oracle.ok && outcome.stable,
       selector_or_testid: 'composer-send',
       event: 'mcp-turn-1',
-      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle },
+      state_readback: { task_id: outcome.taskId, oracle: outcome.oracle, execution },
       actual: `taskId=${outcome.taskId}；oracle=${outcome.oracle.ok}`,
     };
   }
@@ -26080,8 +26112,12 @@ function capturedCapabilityRoleEvidence(role, evidence) {
       'actual',
     ].some((key) => Object.hasOwn(evidence, key));
   } else if (role === 'capability_execution_event') {
+    const sourceFileObserved = path.isAbsolute(source)
+      && fs.existsSync(source)
+      && fs.statSync(source).isFile();
     payloadObserved = Boolean(String(evidence.kind || '').trim())
       && Object.hasOwn(evidence, 'executed')
+      && sourceFileObserved
       && (
         Object.hasOwn(evidence, 'task_id')
         || Object.hasOwn(evidence, 'runtime')
