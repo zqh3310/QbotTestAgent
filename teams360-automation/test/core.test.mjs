@@ -1724,4 +1724,12 @@ test('QWork 0.0.17 work-mode readback requires public state and the refactored v
     chipVisible: true,
     chipText: '问答',
   }).ok, false);
+  const runnerSource = fs.readFileSync(
+    new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    runnerSource,
+    /captured cross-view installed capability selection readback/,
+  );
 });

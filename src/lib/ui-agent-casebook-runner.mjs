@@ -6818,8 +6818,19 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       const market = result.inventory.find((candidate) => candidate.slug === item.slug);
       return { slug: item.slug, name: item.name, installed: Boolean(market?.installed), visible: Boolean(market?.visible) };
     });
+    const exact = expected.length === 10 && readback.every((item) => item.installed && item.visible);
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: exact,
+      source: 'captured cross-view installed capability selection readback',
+      selection: {
+        expected,
+        market_readback: readback,
+      },
+      expected,
+      actual: readback,
+    });
     return {
-      ok: expected.length === 10 && readback.every((item) => item.installed && item.visible),
+      ok: exact,
       selector_or_testid: 'skill market installed state',
       event: 'market-installed-readback',
       state_readback: readback,
