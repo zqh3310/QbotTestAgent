@@ -868,6 +868,18 @@ test('Core Beta skill persistence reload reconnects to a replacement QWork rende
 
 test('Core Beta skill cleanup keeps run-owned receipts separate and drives current uninstall UI', () => {
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
+  const cancelBranch = runner.slice(
+    runner.indexOf("if (command === 'cancel_first_skill_uninstall')"),
+    runner.indexOf("if (command === 'uninstall_run_skill_sample')"),
+  );
+  const uninstallBranch = runner.slice(
+    runner.indexOf("if (command === 'uninstall_run_skill_sample')"),
+    runner.indexOf("if (command === 'exercise_skill_uninstall_confirm')"),
+  );
+  const cleanupBranch = runner.slice(
+    runner.indexOf("if (command === 'verify_skill_cleanup' || command === 'verify_skill_cleanup_across_views')"),
+    runner.indexOf('throw new Error(`Core Beta skill command 未实现'),
+  );
   assert.match(runner, /exact run-owned install receipt ledger/);
   assert.match(runner, /ledger\.skills\.installed = exactRunInstalled/);
   assert.match(runner, /if \(derived\.branch === 'installed'\) ctx\.ledger\.skills\.installed_view = inventory/);
@@ -878,6 +890,12 @@ test('Core Beta skill cleanup keeps run-owned receipts separate and drives curre
   assert.match(runner, /skill_cleanup_cross_view_readback/);
   assert.match(runner, /history_uninstall_count/);
   assert.match(runner, /composer_targets_absent/);
+  assert.match(runner, /function recordCoreBetaSkillCleanupInventoryEvidence\(ctx\)/);
+  assert.match(runner, /shared deterministic Skill sample \+ exact install receipts \+ cleanup target ledger/);
+  assert.match(runner, /successful_install_receipts: installResults\.filter/);
+  assert.match(cancelBranch, /recordCoreBetaSkillCleanupInventoryEvidence\(ctx\)/);
+  assert.match(uninstallBranch, /recordCoreBetaSkillCleanupInventoryEvidence\(ctx\)/);
+  assert.match(cleanupBranch, /recordCoreBetaSkillCleanupInventoryEvidence\(ctx\)/);
 });
 
 test('pinned Teams QWork remount is host-owned and verifies signed-in workbench readiness', () => {

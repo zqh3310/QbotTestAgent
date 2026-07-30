@@ -6504,6 +6504,31 @@ function coreBetaResolveSkillTurns(ctx) {
   return evidence;
 }
 
+function recordCoreBetaSkillCleanupInventoryEvidence(ctx) {
+  const deterministicSample = Array.isArray(ctx.ledger.skills.sample)
+    ? ctx.ledger.skills.sample
+    : [];
+  const installResults = Array.isArray(ctx.ledger.skills.install_results)
+    ? ctx.ledger.skills.install_results
+    : [];
+  const cleanupTargets = Array.isArray(ctx.ledger.skills.installed)
+    ? ctx.ledger.skills.installed
+    : [];
+  const inventory = {
+    cards: deterministicSample,
+    deterministic_sample: deterministicSample,
+    install_results: installResults,
+    successful_install_receipts: installResults.filter((item) => item?.ok === true),
+    cleanup_targets: cleanupTargets,
+  };
+  setCoreBetaEvidence(ctx.state, 'capability_inventory', {
+    available: deterministicSample.length > 0,
+    source: 'shared deterministic Skill sample + exact install receipts + cleanup target ledger',
+    inventory,
+  });
+  return inventory;
+}
+
 async function executeCoreBetaSkillCommand(ctx, command) {
   if (command === 'open_installed_skills_tab') {
     const result = await coreBetaSkillInventory(ctx, '已安装');
@@ -7215,6 +7240,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     };
   }
   if (command === 'cancel_first_skill_uninstall') {
+    recordCoreBetaSkillCleanupInventoryEvidence(ctx);
     const first = (ctx.ledger.skills.installed || [])[0];
     if (!first) return { ok: false, status: 'blocked', category: 'blocked', actual: '没有本轮安装 Skill 可执行取消卸载。' };
     const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, [first], { cancelFirst: true });
@@ -7237,6 +7263,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     };
   }
   if (command === 'uninstall_run_skill_sample') {
+    recordCoreBetaSkillCleanupInventoryEvidence(ctx);
     const targets = ctx.ledger.skills.installed || [];
     const results = await coreBetaUninstallSkillsViaVisibleUi(ctx, targets);
     ctx.ledger.skills.deleted = results.filter((item) => item.ok).map((item) => item.slug);
@@ -7286,6 +7313,7 @@ async function executeCoreBetaSkillCommand(ctx, command) {
     };
   }
   if (command === 'verify_skill_cleanup' || command === 'verify_skill_cleanup_across_views') {
+    recordCoreBetaSkillCleanupInventoryEvidence(ctx);
     const targets = ctx.ledger.skills.installed || [];
     const installed = await coreBetaSkillInventory(ctx, '已安装');
     const baseline = ctx.ledger.skills.clean_baseline || ctx.ledger.skills.baseline_installed || [];
