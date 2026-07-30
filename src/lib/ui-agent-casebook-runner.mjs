@@ -5411,6 +5411,7 @@ async function executeCoreBetaAttachmentCommand(ctx, command) {
       testCase: fakeCase,
       caseDir: ctx.caseDir,
       fixturesDir: ctx.fixturesDir,
+      upstreamCdpUrl: ctx.options?.['teams-upstream-cdp-url'] || '',
     });
     const rejection = ctx.state.artifacts.attachment_limit_rejection || {};
     const noSend = ctx.state.artifacts.no_task_no_send_state || {};
@@ -6063,6 +6064,22 @@ async function executeCoreBetaSkillCommand(ctx, command) {
       writeCoreBetaManagedResources(ctx.caseDir, next);
     }
     ctx.ledger.skills.prior_cleanup = cleanup;
+    // The baseline Case selects the cleanup set by intersecting the immutable
+    // QA-managed registry with the exact installed inventory. An empty
+    // intersection is still a valid, auditable selection (there is simply
+    // nothing from a prior QA run to uninstall); omitting this evidence made
+    // the completed-ledger gate stop a clean first run.
+    setCoreBetaEvidence(ctx.state, 'capability_selection', {
+      available: true,
+      source: 'exact QA-managed skill registry ∩ installed inventory',
+      operation: 'qa_owned_cleanup',
+      identity_fields: ['sourcePlatform', 'namespace', 'slug', 'version'],
+      managed_registry_count: resources.skills.length,
+      installed_inventory_count: installed.length,
+      selected_count: targets.length,
+      selected: targets,
+      empty_selection_valid: targets.length === 0,
+    });
     return {
       ok: cleanup.results.every((item) => item.ok !== false),
       selector_or_testid: 'window.agent.uninstallSkill exact QA ledger identities',
@@ -8127,7 +8144,14 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-HOME-023') return executeSitHomeStopGeneration({ page, state, caseDir });
   if (id === 'SIT-HOME-027') return executeSitHomeEmptySend({ page, state, caseDir });
   if (['SIT-HOME-042', 'SIT-HOME-043', 'SIT-HOME-044', 'SIT-HOME-045'].includes(id)) {
-    return executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir });
+    return executeSitHomeAttachmentLimit({
+      page,
+      state,
+      testCase,
+      caseDir,
+      fixturesDir,
+      upstreamCdpUrl: options['teams-upstream-cdp-url'] || '',
+    });
   }
   if (id === 'SIT-HOME-046') return executeSitHomeAttachmentDrop({ page, state, caseDir, fixturesDir });
   if (['SIT-HOME-047', 'SIT-HOME-048', 'SIT-HOME-049', 'SIT-HOME-050', 'SIT-HOME-051'].includes(id)) {
@@ -10279,7 +10303,14 @@ async function executeSitHomeEmptySend({ page, state, caseDir }) {
   );
 }
 
-async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir }) {
+async function executeSitHomeAttachmentLimit({
+  page,
+  state,
+  testCase,
+  caseDir,
+  fixturesDir,
+  upstreamCdpUrl = '',
+}) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const beforeState = await qbotE2EState(page).catch(() => null);
@@ -10316,9 +10347,24 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     assertionName: '附件限制测试源文件非空且可追溯',
     expected: '产品拒绝附件前，框架必须记录每个输入文件的名称、非零字节数和真实 SHA-256。',
   })) return;
-  const result = await stageAttachmentPathsThroughComposer(page, files, caseDir, id.toLowerCase());
+  const result = await stageAttachmentPathsThroughComposer(
+    page,
+    files,
+    caseDir,
+    id.toLowerCase(),
+    { upstreamCdpUrl },
+  );
   state.artifacts.attachment_limit_probe = result;
-  state.screenshots.attachment_limit = result.evidenceScreenshot
+  const visibleRejectionScreenshot = result.dialogMessage
+    ? result.dialogEvidenceScreenshot
+    : result.evidenceScreenshot;
+  const dialogSettled = !result.dialogMessage || (
+    result.dialogHandled === true
+    && result.dialogClosed === true
+    && result.pageResponsiveAfterDialog === true
+    && Boolean(result.postDismissalScreenshot)
+  );
+  state.screenshots.attachment_limit = visibleRejectionScreenshot
     || await shot(page, caseDir, `${id.toLowerCase()}-attachment-limit`);
   const afterState = await qbotE2EState(page).catch(() => null);
   const expectedMatched = expectedPattern.test(result.dialogMessage || result.feedbackText || result.pageText || '');
@@ -10351,8 +10397,20 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     dialog_message: String(result.dialogMessage || ''),
     feedback_text: String(result.feedbackText || ''),
     expected_pattern_matched: expectedMatched,
-    product_rejected_before_send: expectedMatched && composerEmpty,
-    evidence_screenshot: state.screenshots.attachment_limit,
+    product_rejected_before_send: expectedMatched
+      && composerEmpty
+      && dialogSettled
+      && Boolean(visibleRejectionScreenshot),
+    dialog_handled: result.dialogHandled === true,
+    dialog_closed: result.dialogClosed === true,
+    page_responsive_after_dialog: result.pageResponsiveAfterDialog === true,
+    dialog_action: String(result.dialogAction || ''),
+    dialog_confirmation_label: String(result.dialogConfirmationLabel || ''),
+    dialog_evidence_source: String(result.dialogEvidenceSource || ''),
+    evidence_screenshot: visibleRejectionScreenshot,
+    post_dismissal_screenshot: String(result.postDismissalScreenshot || ''),
+    capture_error: String(result.dialogCaptureError || ''),
+    close_error: String(result.dialogCloseError || ''),
   };
   state.artifacts.no_task_no_send_state = {
     source: 'public_e2e_state_readback',
@@ -10378,8 +10436,16 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     state,
     '附件限制提示符合当前产品契约',
     expectedDescription,
-    expectedMatched && Boolean(result.evidenceScreenshot),
-    `dialog=${result.dialogMessage || '无'}；page=${clip(result.pageText, 360)}`,
+    expectedMatched && Boolean(visibleRejectionScreenshot),
+    `dialog=${result.dialogMessage || '无'}；visibleEvidence=${visibleRejectionScreenshot || '缺失'}；page=${clip(result.pageText, 360)}`,
+  );
+  recordAssertion(
+    state,
+    '附件拒绝弹窗已确认并恢复后续操作',
+    '记录产品原生拒绝弹窗后必须点击唯一的 OK，等待弹窗真正关闭，并用关闭后截图和页面响应读回证明后续 UI 可继续操作。',
+    dialogSettled,
+    `handled=${result.dialogHandled === true}；closed=${result.dialogClosed === true}；responsive=${result.pageResponsiveAfterDialog === true}；action=${result.dialogAction || '无'}；post=${result.postDismissalScreenshot || '缺失'}；captureError=${result.dialogCaptureError || '无'}；closeError=${result.dialogCloseError || '无'}`,
+    'automation_error',
   );
   recordAssertion(
     state,
@@ -10678,15 +10744,140 @@ function ensureSizedFixture(dir, name, size) {
   return file;
 }
 
-async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) {
+async function captureTeamsHostDialogScreenshot(upstreamCdpUrl, file) {
+  const origin = managedFixtureLoopbackOrigin(upstreamCdpUrl);
+  if (!origin) return { ok: false, error: '缺少已校验的 loopback 360Teams 上游 CDP。' };
+  if (typeof WebSocket !== 'function') return { ok: false, error: '当前 Node 运行时不支持 WebSocket。' };
+
+  let socket = null;
+  let timer = null;
+  try {
+    const response = await fetch(new URL('/json/list', origin), {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) throw new Error(`CDP target list HTTP ${response.status}`);
+    const targets = await response.json();
+    const target = (Array.isArray(targets) ? targets : []).find((candidate) => (
+      candidate?.type === 'page'
+      && /^360Teams$/i.test(String(candidate.title || ''))
+      && candidate.webSocketDebuggerUrl
+    ));
+    if (!target) throw new Error('未找到 360Teams 宿主页 CDP target。');
+
+    const websocketUrl = new URL(String(target.webSocketDebuggerUrl));
+    if (!['ws:', 'wss:'].includes(websocketUrl.protocol)
+      || websocketUrl.username
+      || websocketUrl.password
+      || !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(websocketUrl.hostname)) {
+      throw new Error('360Teams 宿主页 CDP WebSocket 不是无凭据 loopback 地址。');
+    }
+
+    socket = new WebSocket(websocketUrl);
+    await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('连接 360Teams 宿主页 CDP 超时。')), 3000);
+      socket.addEventListener('open', resolve, { once: true });
+      socket.addEventListener('error', () => reject(new Error('连接 360Teams 宿主页 CDP 失败。')), { once: true });
+    });
+    if (timer) clearTimeout(timer);
+
+    const commandId = Date.now();
+    const captured = await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('360Teams 宿主页截图超时。')), 5000);
+      const onMessage = (event) => {
+        let message;
+        try { message = JSON.parse(String(event.data || '')); } catch { return; }
+        if (message.id !== commandId) return;
+        socket.removeEventListener('message', onMessage);
+        if (message.error) reject(new Error(message.error.message || 'Page.captureScreenshot 失败。'));
+        else resolve(message.result);
+      };
+      socket.addEventListener('message', onMessage);
+      socket.send(JSON.stringify({
+        id: commandId,
+        method: 'Page.captureScreenshot',
+        params: { format: 'png', fromSurface: true, captureBeyondViewport: false },
+      }));
+    });
+    const buffer = Buffer.from(String(captured?.data || ''), 'base64');
+    if (!buffer.length) throw new Error('360Teams 宿主页截图为空。');
+    fs.writeFileSync(file, buffer);
+    return {
+      ok: fs.existsSync(file) && fs.statSync(file).size > 0,
+      source: 'teams-host-cdp',
+      error: '',
+    };
+  } catch (error) {
+    return { ok: false, source: 'teams-host-cdp', error: String(error?.message || error) };
+  } finally {
+    if (timer) clearTimeout(timer);
+    try { socket?.close(); } catch {}
+  }
+}
+
+async function stageAttachmentPathsThroughComposer(
+  page,
+  files,
+  caseDir,
+  label,
+  { upstreamCdpUrl = '' } = {},
+) {
   let dialogMessage = '';
   let evidenceScreenshot = '';
-  const dialogListener = async (dialog) => {
+  let dialogEvidenceScreenshot = '';
+  let dialogHandling = null;
+  const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
-    const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
-    const captured = spawnSync('/usr/sbin/screencapture', ['-x', nativeFile], { timeout: 10_000, encoding: 'utf8' });
-    if (captured.status === 0 && fs.existsSync(nativeFile) && fs.statSync(nativeFile).size > 0) evidenceScreenshot = nativeFile;
-    await dialog.dismiss().catch(() => {});
+    dialogHandling = (async () => {
+      const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
+      const hostCapture = await captureTeamsHostDialogScreenshot(upstreamCdpUrl, nativeFile);
+      let captured = null;
+      if (!hostCapture.ok) {
+        captured = spawnSync('/usr/sbin/screencapture', ['-x', nativeFile], {
+          timeout: 10_000,
+          encoding: 'utf8',
+        });
+      }
+      const captureOk = hostCapture.ok || (
+        captured?.status === 0
+        && fs.existsSync(nativeFile)
+        && fs.statSync(nativeFile).size > 0
+      );
+      if (captureOk) {
+        dialogEvidenceScreenshot = nativeFile;
+        evidenceScreenshot = nativeFile;
+      }
+      let closeError = '';
+      try {
+        // Attachment rejection uses window.alert(), whose only user action is
+        // the visible OK button. Await accept() before any subsequent DOM
+        // operation; merely observing dialog.message() does not mean the
+        // modal has been closed.
+        await dialog.accept();
+      } catch (error) {
+        closeError = String(error?.message || error);
+      }
+      const pageResponsive = !closeError && await page.evaluate(() => (
+        document.readyState === 'interactive' || document.readyState === 'complete'
+      )).catch(() => false);
+      return {
+        observed: true,
+        message: dialogMessage,
+        handled: !closeError,
+        closed: !closeError && pageResponsive,
+        page_responsive: pageResponsive,
+        action: 'accept',
+        confirmation_label: 'OK',
+        evidence_screenshot: dialogEvidenceScreenshot,
+        evidence_source: hostCapture.ok ? hostCapture.source : 'macos-screencapture',
+        capture_error: captureOk
+          ? ''
+          : [
+              hostCapture.error,
+              String(captured?.stderr || captured?.error?.message || `screencapture status=${captured?.status}`),
+            ].filter(Boolean).join('；'),
+        close_error: closeError,
+      };
+    })();
   };
   page.on('dialog', dialogListener);
   let dispatched = false;
@@ -10725,7 +10916,46 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
     }
     await page.waitForTimeout(100);
   }
+  let dialogOutcome = {
+    observed: false,
+    message: '',
+    handled: false,
+    closed: false,
+    page_responsive: false,
+    action: '',
+    confirmation_label: '',
+    evidence_screenshot: '',
+    evidence_source: '',
+    capture_error: '',
+    close_error: '',
+  };
+  if (dialogMessage) {
+    let handlingTimeout = null;
+    try {
+      dialogOutcome = await Promise.race([
+        dialogHandling,
+        new Promise((_, reject) => {
+          handlingTimeout = setTimeout(
+            () => reject(new Error('产品附件拒绝弹窗在 15 秒内未完成 OK 收尾。')),
+            15_000,
+          );
+        }),
+      ]);
+    } catch (error) {
+      dialogOutcome = {
+        ...dialogOutcome,
+        observed: true,
+        message: dialogMessage,
+        close_error: String(error?.message || error),
+      };
+    } finally {
+      if (handlingTimeout) clearTimeout(handlingTimeout);
+    }
+  }
   page.off('dialog', dialogListener);
+  const postDismissalScreenshot = dialogOutcome.closed
+    ? await shot(page, caseDir, `${label}-product-dialog-dismissed`).catch(() => '')
+    : '';
   const attachmentText = await visibleComposerAttachmentText(page);
   const attachmentCount = await page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => 0);
   const pageText = await mainSurfaceText(page);
@@ -10741,6 +10971,16 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
     dispatched,
     dispatchError,
     evidenceScreenshot,
+    dialogEvidenceScreenshot,
+    postDismissalScreenshot,
+    dialogHandled: dialogOutcome.handled,
+    dialogClosed: dialogOutcome.closed,
+    pageResponsiveAfterDialog: dialogOutcome.page_responsive,
+    dialogAction: dialogOutcome.action,
+    dialogConfirmationLabel: dialogOutcome.confirmation_label,
+    dialogEvidenceSource: dialogOutcome.evidence_source,
+    dialogCaptureError: dialogOutcome.capture_error,
+    dialogCloseError: dialogOutcome.close_error,
     patched: false,
   };
 }
