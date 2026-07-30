@@ -371,6 +371,44 @@ test('legacy attachment limit manifest becomes complete only after strict pre-se
   assert.equal(manifest.role_evidence.no_task_no_send_state.available, true);
   assert.equal(manifest.evidence_applicability.pre_send_attachment_rejection.applicable, true);
 
+  const coreBetaManifest = buildCaseEvidenceManifest({
+    ...baseState,
+    id: 'BETA-FILE-006',
+    contract_version: 'qbot-core-beta/v1',
+    required_evidence_roles: [
+      'before_screenshot',
+      'action_receipt',
+      'after_screenshot',
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'attachment_name_size_sha256',
+      'composer_attachment_state',
+      'attachment_readback',
+    ].join(','),
+    artifacts: {
+      ...baseState.artifacts,
+      core_beta_evidence: {
+        action_receipt: {
+          available: true,
+          source: 'core-beta exact action-plan executor',
+          all_expected_states_observed: true,
+        },
+      },
+    },
+  }, caseDir);
+  assert.equal(coreBetaManifest.complete, true);
+  assert.deepEqual(coreBetaManifest.missing_roles, []);
+  assert.deepEqual(
+    coreBetaManifest.not_applicable_roles.map((item) => item.role),
+    ['prompt', 'task_id', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion', 'attachment_readback'],
+  );
+  assert.equal(coreBetaManifest.role_evidence.attachment_limit_rejection.available, true);
+  assert.equal(coreBetaManifest.role_evidence.no_task_no_send_state.available, true);
+
   const failClosed = buildCaseEvidenceManifest({
     ...baseState,
     artifacts: {

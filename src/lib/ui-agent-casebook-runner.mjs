@@ -10744,10 +10744,24 @@ function ensureSizedFixture(dir, name, size) {
   return file;
 }
 
-async function captureTeamsHostDialogScreenshot(upstreamCdpUrl, file) {
+async function prepareTeamsHostDialogCapture(upstreamCdpUrl) {
   const origin = managedFixtureLoopbackOrigin(upstreamCdpUrl);
-  if (!origin) return { ok: false, error: '缺少已校验的 loopback 360Teams 上游 CDP。' };
-  if (typeof WebSocket !== 'function') return { ok: false, error: '当前 Node 运行时不支持 WebSocket。' };
+  if (!origin) {
+    return {
+      ok: false,
+      source: 'teams-host-cdp-preconnected',
+      error: '缺少已校验的 loopback 360Teams 上游 CDP。',
+      close() {},
+    };
+  }
+  if (typeof WebSocket !== 'function') {
+    return {
+      ok: false,
+      source: 'teams-host-cdp-preconnected',
+      error: '当前 Node 运行时不支持 WebSocket。',
+      close() {},
+    };
+  }
 
   let socket = null;
   let timer = null;
@@ -10780,37 +10794,80 @@ async function captureTeamsHostDialogScreenshot(upstreamCdpUrl, file) {
     });
     if (timer) clearTimeout(timer);
 
-    const commandId = Date.now();
-    const captured = await new Promise((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('360Teams 宿主页截图超时。')), 5000);
-      const onMessage = (event) => {
-        let message;
-        try { message = JSON.parse(String(event.data || '')); } catch { return; }
-        if (message.id !== commandId) return;
-        socket.removeEventListener('message', onMessage);
-        if (message.error) reject(new Error(message.error.message || 'Page.captureScreenshot 失败。'));
-        else resolve(message.result);
-      };
-      socket.addEventListener('message', onMessage);
-      socket.send(JSON.stringify({
-        id: commandId,
-        method: 'Page.captureScreenshot',
-        params: { format: 'png', fromSurface: true, captureBeyondViewport: false },
-      }));
-    });
-    const buffer = Buffer.from(String(captured?.data || ''), 'base64');
-    if (!buffer.length) throw new Error('360Teams 宿主页截图为空。');
-    fs.writeFileSync(file, buffer);
     return {
-      ok: fs.existsSync(file) && fs.statSync(file).size > 0,
-      source: 'teams-host-cdp',
+      ok: true,
+      source: 'teams-host-cdp-preconnected',
       error: '',
+      async capture(file) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return {
+            ok: false,
+            source: 'teams-host-cdp-preconnected',
+            error: '预连接的 360Teams 宿主页 CDP 已关闭。',
+          };
+        }
+        let captureTimer = null;
+        try {
+          const commandId = Date.now() + Math.floor(Math.random() * 1000);
+          const captured = await new Promise((resolve, reject) => {
+            captureTimer = setTimeout(() => reject(new Error('360Teams 宿主页截图超时。')), 5000);
+            const onMessage = (event) => {
+              let message;
+              try { message = JSON.parse(String(event.data || '')); } catch { return; }
+              if (message.id !== commandId) return;
+              socket.removeEventListener('message', onMessage);
+              if (message.error) reject(new Error(message.error.message || 'Page.captureScreenshot 失败。'));
+              else resolve(message.result);
+            };
+            socket.addEventListener('message', onMessage);
+            socket.send(JSON.stringify({
+              id: commandId,
+              method: 'Page.captureScreenshot',
+              params: { format: 'png', fromSurface: true, captureBeyondViewport: false },
+            }));
+          });
+          const buffer = Buffer.from(String(captured?.data || ''), 'base64');
+          if (!buffer.length) throw new Error('360Teams 宿主页截图为空。');
+          fs.writeFileSync(file, buffer);
+          return {
+            ok: fs.existsSync(file) && fs.statSync(file).size > 0,
+            source: 'teams-host-cdp-preconnected',
+            error: '',
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            source: 'teams-host-cdp-preconnected',
+            error: String(error?.message || error),
+          };
+        } finally {
+          if (captureTimer) clearTimeout(captureTimer);
+        }
+      },
+      close() {
+        try { socket?.close(); } catch {}
+      },
     };
   } catch (error) {
-    return { ok: false, source: 'teams-host-cdp', error: String(error?.message || error) };
+    try { socket?.close(); } catch {}
+    return {
+      ok: false,
+      source: 'teams-host-cdp-preconnected',
+      error: String(error?.message || error),
+      close() {},
+    };
   } finally {
     if (timer) clearTimeout(timer);
-    try { socket?.close(); } catch {}
+  }
+}
+
+async function captureTeamsHostDialogScreenshot(upstreamCdpUrl, file) {
+  const prepared = await prepareTeamsHostDialogCapture(upstreamCdpUrl);
+  try {
+    if (!prepared.ok) return prepared;
+    return await prepared.capture(file);
+  } finally {
+    prepared.close();
   }
 }
 
@@ -10825,11 +10882,20 @@ async function stageAttachmentPathsThroughComposer(
   let evidenceScreenshot = '';
   let dialogEvidenceScreenshot = '';
   let dialogHandling = null;
+  // The host page CDP connection must exist before the attachment action
+  // opens window.alert(). Establishing a new debugger connection from inside
+  // Playwright's dialog callback can stall behind the modal, producing an
+  // empty evidence screenshot even though the product rejection is visible.
+  // Keep this single read-only capture channel alive until the dialog has
+  // been captured and accepted.
+  const preparedHostCapture = await prepareTeamsHostDialogCapture(upstreamCdpUrl);
   const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
     dialogHandling = (async () => {
       const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
-      const hostCapture = await captureTeamsHostDialogScreenshot(upstreamCdpUrl, nativeFile);
+      const hostCapture = preparedHostCapture.ok
+        ? await preparedHostCapture.capture(nativeFile)
+        : await captureTeamsHostDialogScreenshot(upstreamCdpUrl, nativeFile);
       let captured = null;
       if (!hostCapture.ok) {
         captured = spawnSync('/usr/sbin/screencapture', ['-x', nativeFile], {
@@ -10953,6 +11019,7 @@ async function stageAttachmentPathsThroughComposer(
     }
   }
   page.off('dialog', dialogListener);
+  preparedHostCapture.close();
   const postDismissalScreenshot = dialogOutcome.closed
     ? await shot(page, caseDir, `${label}-product-dialog-dismissed`).catch(() => '')
     : '';

@@ -751,7 +751,7 @@ const required = [
   ['附件限制拒绝路径记录输入源哈希、Composer 空态与 no-task/no-send 读回', /executeSitHomeAttachmentLimit[\s\S]*recordAttachmentSources\(state, files[\s\S]*composer_attachment_state[\s\S]*attachment_limit_rejection[\s\S]*no_task_no_send_state[\s\S]*task_state_unchanged[\s\S]*message_count_unchanged[\s\S]*no_task_created[\s\S]*no_message_sent/],
   ['附件限制拒绝路径有独立 evidence manifest 角色且不伪造会话证据', /(?=[\s\S]*attachment_limit_rejection:)(?=[\s\S]*no_task_no_send_state:)(?=[\s\S]*缺少产品可见附件限制提示)(?=[\s\S]*未创建任务且未发送消息)/],
   ['附件拒绝原生弹窗必须等待 OK 完成并验证关闭后页面可操作', /(?=[\s\S]*stageAttachmentPathsThroughComposer)(?=[\s\S]*await dialog\.accept\(\))(?=[\s\S]*dialogHandled)(?=[\s\S]*dialogClosed)(?=[\s\S]*pageResponsiveAfterDialog)(?=[\s\S]*postDismissalScreenshot)/],
-  ['Teams 原生弹窗截图优先走宿主页 CDP 且只接受无凭据 loopback target', /captureTeamsHostDialogScreenshot[\s\S]*managedFixtureLoopbackOrigin[\s\S]*360Teams[\s\S]*Page\.captureScreenshot[\s\S]*teams-host-cdp/],
+  ['Teams 原生弹窗截图在附件动作前预连接宿主页 CDP 且只接受无凭据 loopback target', /prepareTeamsHostDialogCapture[\s\S]*managedFixtureLoopbackOrigin[\s\S]*360Teams[\s\S]*Page\.captureScreenshot[\s\S]*teams-host-cdp-preconnected[\s\S]*stageAttachmentPathsThroughComposer[\s\S]*await prepareTeamsHostDialogCapture\(upstreamCdpUrl\)/],
   ['Skill 清洁基线即使无历史 QA 安装也生成精确 capability selection 证据', /cleanup_prior_qa_skill_installs[\s\S]*setCoreBetaEvidence\(ctx\.state, 'capability_selection'[\s\S]*exact QA-managed skill registry[\s\S]*empty_selection_valid/],
   ['附件 Case 使用 Excel 真实任务而非通用提示', /attachmentTaskPromptFromCase[\s\S]*实际输入与 Case 测试数据一致/],
   ['新增 UX Case 使用成功标准驱动的确定性断言', /caseAwareReplyAssertion[\s\S]*三句结构与事实落地[\s\S]*跨格式事实与决策摘要/],
