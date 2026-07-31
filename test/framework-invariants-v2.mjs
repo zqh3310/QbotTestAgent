@@ -59,6 +59,11 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+assert.match(
+  runner,
+  /--profile'[\s\S]*profile[\s\S]*options\.sheet[\s\S]*--sheet/,
+  'Core Beta v2 二次导出必须透传精确 Sheet，禁止多 Sheet Casebook 被静默合并',
+);
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');

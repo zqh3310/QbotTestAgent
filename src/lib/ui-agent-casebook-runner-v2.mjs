@@ -154,6 +154,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       casesFile,
       '--profile',
       profile,
+      ...(options.sheet ? ['--sheet', String(options.sheet)] : []),
       ...(options.case ? ['--case', String(options.case)] : []),
       ...(options.offset ? ['--offset', String(options.offset)] : []),
       ...(options.limit ? ['--limit', String(options.limit)] : []),
