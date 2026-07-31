@@ -170,6 +170,19 @@ def row_value_any(ws, row: int, headers: dict[str, int], names: list[str]) -> st
     return ""
 
 
+def parse_json_cell(value: str, *, field: str, case_id: str):
+    raw = clean(value)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{case_id} 的 {field} 不是合法 JSON："
+            f"line={error.lineno}, column={error.colno}, {error.msg}"
+        ) from error
+
+
 def split_case_ids(value: str) -> set[str]:
     return {item.strip() for item in re.split(r"[,，\s]+", value or "") if item.strip()}
 
@@ -279,6 +292,13 @@ def export_cases(args: argparse.Namespace) -> None:
                 "blocking_level": row_value(ws, row_idx, headers, "阻断等级"),
                 "pipeline_policy": row_value(ws, row_idx, headers, "流水线策略"),
                 "second_review_required": row_value(ws, row_idx, headers, "二次复核要求"),
+                "case_type": row_value(ws, row_idx, headers, "用例类型"),
+                "core_domain": row_value(ws, row_idx, headers, "核心域"),
+                "batch_size": row_value(ws, row_idx, headers, "批次大小"),
+                "initialization_policy": row_value(ws, row_idx, headers, "初始化策略"),
+                "contract_version": row_value(ws, row_idx, headers, "契约版本"),
+                "automation_protocol": row_value(ws, row_idx, headers, "自动化协议"),
+                "evidence_schema_version": row_value(ws, row_idx, headers, "证据Schema版本"),
                 "risk_domain": row_value_any(ws, row_idx, headers, ["风险域", "风险分类"]),
                 "oracle_type": row_value_any(ws, row_idx, headers, ["判定Oracle", "Oracle类型", "判定类型"]),
                 "deterministic": row_value_any(ws, row_idx, headers, ["确定性", "是否确定性"]),
@@ -321,6 +341,35 @@ def export_cases(args: argparse.Namespace) -> None:
                 "sheet": ws.title,
                 "row_number": row_idx,
             }
+            row["action_plan"] = parse_json_cell(
+                row_value(ws, row_idx, headers, "动作计划JSON"),
+                field="动作计划JSON",
+                case_id=case_id,
+            )
+            row["conversation_turns"] = parse_json_cell(
+                row_value(ws, row_idx, headers, "会话轮次JSON"),
+                field="会话轮次JSON",
+                case_id=case_id,
+            )
+            row["capability_sampling"] = parse_json_cell(
+                row_value(ws, row_idx, headers, "能力抽样策略JSON"),
+                field="能力抽样策略JSON",
+                case_id=case_id,
+            )
+            row["precise_assertions"] = parse_json_cell(
+                row_value(ws, row_idx, headers, "精准断言JSON"),
+                field="精准断言JSON",
+                case_id=case_id,
+            )
+            row["evidence_roles"] = [
+                item.strip()
+                for item in re.split(
+                    r"[,，;；|、\n]+",
+                    row_value(ws, row_idx, headers, "证据角色")
+                    or row.get("evidence_required", ""),
+                )
+                if item.strip()
+            ]
             row["production_metadata_explicit"] = all(row.get(field) for field in [
                 "risk_domain",
                 "oracle_type",
@@ -332,7 +381,30 @@ def export_cases(args: argparse.Namespace) -> None:
                 "version_scope",
                 "production_signal",
             ])
-            row["kind"] = infer_case_kind(row)
+            explicit_kind = {
+                "conversation": "conversation",
+                "attachment": "attachment",
+                "artifact": "conversation",
+                "skill_lifecycle": "ui+conversation",
+                "skill_use": "ui+conversation",
+                "expert_lifecycle": "ui+conversation",
+                "expert_use": "ui+conversation",
+                "mcp_lifecycle": "ui+conversation",
+                "mcp_use": "ui+conversation",
+                "recovery": "ui+conversation",
+                "auth_recovery": "auth",
+                "run_initialization": "ui",
+                "task_lifecycle": "ui+conversation",
+                "project_lifecycle": "ui+conversation",
+                "project_automation": "ui+conversation",
+                "knowledge_lifecycle": "ui+conversation",
+                "memory_lifecycle": "ui+conversation",
+                "settings_lifecycle": "ui",
+                "host_integration": "ui+conversation",
+                "security_privacy": "ui+conversation",
+                "performance_capacity": "ui+conversation",
+            }.get(row["case_type"])
+            row["kind"] = explicit_kind or infer_case_kind(row)
             if is_selected(row, args.profile, wanted):
                 rows.append(row)
 

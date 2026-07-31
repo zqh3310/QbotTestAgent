@@ -77,6 +77,10 @@ function normalizeWorkerCdpUrl(value) {
 }
 
 export function requiresAppRestart(testCase, options = {}) {
+  if (String(testCase?.pipeline_policy || '') === 'serial'
+    && /restart|recovery|auth_recovery/i.test(`${testCase?.case_type || ''} ${testCase?.initialization_policy || ''}`)) {
+    return true;
+  }
   const id = String(testCase?.id || '').trim().toUpperCase();
   if (!id) return false;
   if (ALWAYS_RESTART_CASES.has(id)) return true;
@@ -85,6 +89,7 @@ export function requiresAppRestart(testCase, options = {}) {
 }
 
 export function usesSharedAccountState(testCase) {
+  if (String(testCase?.pipeline_policy || '') === 'serial') return true;
   const id = String(testCase?.id || '').trim().toUpperCase();
   if (!id) return true;
   return SHARED_STATE_CASES.has(id) || SHARED_STATE_PREFIXES.some((prefix) => id.startsWith(prefix));
@@ -92,6 +97,9 @@ export function usesSharedAccountState(testCase) {
 
 export function caseExecutionLane(testCase, options = {}) {
   if (requiresAppRestart(testCase, options)) return 'restart_serial';
+  const explicitPolicy = String(testCase?.pipeline_policy || '').trim();
+  if (explicitPolicy === 'dispatch_collect' || explicitPolicy === 'dispatch_collect_round_robin') return 'parallel';
+  if (explicitPolicy === 'serial') return 'shared_state_serial';
   if (usesSharedAccountState(testCase)) return 'shared_state_serial';
   return 'parallel';
 }

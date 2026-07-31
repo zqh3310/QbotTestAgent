@@ -27,6 +27,7 @@ import {
   validateCoreBetaCase,
 } from './core-beta-casebook-contract.mjs';
 import { buildCrossRunLineage } from './casebook-lineage.mjs';
+import { runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand } from './ui-agent-casebook-runner-v2.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -178,6 +179,35 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
 
   const casePlan = JSON.parse(fs.readFileSync(casesFile, 'utf8'));
   const selectedCases = casePlan.cases || [];
+  const coreBetaV2Cases = selectedCases.filter(
+    (testCase) => String(testCase?.contract_version || '').trim() === 'qbot-core-beta/v2',
+  );
+  if (coreBetaV2Cases.length) {
+    if (coreBetaV2Cases.length !== selectedCases.length) {
+      const reason = `同一执行批次不得混用 Core Beta v2 与其他协议：v2=${coreBetaV2Cases.length}, total=${selectedCases.length}`;
+      const summary = buildSummary({
+        status: 'blocked',
+        startedAt,
+        outDir,
+        casebook,
+        resultExcel,
+        profile,
+        cdpUrl,
+        modelTier,
+        results: [],
+        reason,
+      });
+      writeRunArtifacts(outDir, summary);
+      return summary;
+    }
+    return runCoreBetaV2CasebookCommand({
+      options: {
+        ...options,
+        out: outDir,
+      },
+      root,
+    });
+  }
   writeTextFile(path.join(outDir, 'casebook-source.txt'), casebook);
   copyIfExists(casebook, path.join(outDir, `source-${path.basename(casebook)}`));
   if (!selectedCases.length) {

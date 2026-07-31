@@ -44,6 +44,17 @@ assert.deepEqual(plan.restart_serial.map((entry) => entry.testCase.id), ['SIT-CO
 assert.equal(requiresAppRestart({ id: 'SIT-SKILL-027' }, { 'renderer-control-adapter': 'teams360' }), false);
 assert.equal(requiresAppRestart({ id: 'SIT-SKILL-027' }, {}), true);
 assert.equal(caseExecutionLane({ id: 'SIT-SKILL-027' }, { 'renderer-control-adapter': 'teams360' }), 'shared_state_serial');
+assert.equal(caseExecutionLane({ id: 'BETA-CHAT-001', pipeline_policy: 'dispatch_collect' }), 'parallel');
+assert.equal(caseExecutionLane({ id: 'BETA-EXPERT-001', pipeline_policy: 'serial' }), 'shared_state_serial');
+assert.equal(
+  caseExecutionLane({
+    id: 'BETA-REC-001',
+    case_type: 'recovery',
+    pipeline_policy: 'serial',
+    initialization_policy: 'managed_restart',
+  }),
+  'restart_serial',
+);
 
 let active = 0;
 let maxActive = 0;
