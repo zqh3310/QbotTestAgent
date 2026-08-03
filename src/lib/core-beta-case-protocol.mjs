@@ -651,6 +651,69 @@ export function validateCoreBetaCasePlan(cases, options = {}) {
   };
 }
 
+export function validateCoreBetaScopedSelection({
+  fullCases = [],
+  selectedCases = [],
+  excludedCaseIds = [],
+  reason = '',
+} = {}) {
+  const fullIds = fullCases.map((item) => String(item?.id || '').trim()).filter(Boolean);
+  const selectedIds = selectedCases.map((item) => String(item?.id || '').trim()).filter(Boolean);
+  const excludedIds = excludedCaseIds.map((item) => String(item || '').trim()).filter(Boolean);
+  const errors = [];
+  if (!String(reason || '').trim()) errors.push('scoped execution 必须声明非空 scope reason。');
+  if (!fullIds.length) errors.push('scoped execution 无法读取完整 Case 集。');
+  if (!selectedIds.length) errors.push('scoped execution 的选择 Case 集为空。');
+  if (!excludedIds.length) errors.push('scoped execution 必须显式声明 excluded Case。');
+  if (new Set(excludedIds).size !== excludedIds.length) errors.push('scoped execution excluded Case ID 重复。');
+  const fullIdSet = new Set(fullIds);
+  const unknownExcluded = excludedIds.filter((id) => !fullIdSet.has(id));
+  if (unknownExcluded.length) errors.push(`scoped execution excluded Case 不属于完整 Casebook：${unknownExcluded.join(',')}`);
+  const excludedSet = new Set(excludedIds);
+  const expectedSelectedIds = fullIds.filter((id) => !excludedSet.has(id));
+  if (JSON.stringify(selectedIds) !== JSON.stringify(expectedSelectedIds)) {
+    errors.push(
+      'scoped execution 选择集必须严格等于完整 Case 集减去 excluded Case，且保持原顺序；'
+      + `expected=${expectedSelectedIds.join(',')}; actual=${selectedIds.join(',')}`,
+    );
+  }
+  const requiredPartialInitPrefix = [
+    'BETA-INIT-001',
+    'BETA-INIT-002',
+    'BETA-INIT-003',
+    'BETA-INIT-004',
+  ];
+  if (JSON.stringify(selectedIds.slice(0, requiredPartialInitPrefix.length))
+    !== JSON.stringify(requiredPartialInitPrefix)) {
+    errors.push(`scoped execution 仍必须以前四个本地初始化 Case 开场：${requiredPartialInitPrefix.join(',')}`);
+  }
+  if (!selectedIds.includes('BETA-INIT-005') && !excludedSet.has('BETA-INIT-005')) {
+    errors.push('缺少 BETA-INIT-005 时必须把它显式记录为 excluded Case。');
+  }
+  const nonFixtureExclusions = excludedIds.filter((id) => {
+    const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id);
+    return !scenario || scenario.fixture_control === 'public_product_state';
+  });
+  if (nonFixtureExclusions.length) {
+    errors.push(`scoped execution 只允许排除需要专项 fixture 的 Case：${nonFixtureExclusions.join(',')}`);
+  }
+  return {
+    schema_version: 'qbot-core-beta-scoped-execution/v1',
+    generated_at: new Date().toISOString(),
+    ok: errors.length === 0,
+    mode: 'scoped',
+    reason: String(reason || '').trim(),
+    release_gate_eligible: false,
+    full_count: fullIds.length,
+    selected_count: selectedIds.length,
+    excluded_count: excludedIds.length,
+    full_case_ids: fullIds,
+    selected_case_ids: selectedIds,
+    excluded_case_ids: excludedIds,
+    errors,
+  };
+}
+
 export function parseFixtureSpec(value) {
   const raw = String(value || '').trim();
   if (!raw) return [];

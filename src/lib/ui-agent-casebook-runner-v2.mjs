@@ -24,6 +24,7 @@ import {
   evaluateMachineAssertions,
   isCoreBetaCase,
   validateCoreBetaCasePlan,
+  validateCoreBetaScopedSelection,
 } from './core-beta-case-protocol.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
@@ -134,6 +135,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   const fixturesDir = path.resolve(options.fixtures || path.join(root, 'testflies'));
   const python = String(options.python || process.env.PYTHON || 'python3');
   const resultExcel = path.join(outDir, `${runStamp}_自动化测试结果.xlsx`);
+  const scopedExecution = /^(?:1|true|yes)$/i.test(String(options['scoped-execution'] || ''));
 
   ensureDir(outDir);
   ensureDir(path.join(outDir, 'logs'));
@@ -202,9 +204,112 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   }
 
+  let scopeAudit = null;
+  if (scopedExecution) {
+    const fullCasesFile = path.join(outDir, 'casebook-full-cases.json');
+    const fullExport = runPython({
+      python,
+      args: [
+        path.join(root, 'skills', 'qbot-execute-automation-tests', 'scripts', 'casebook_io.py'),
+        'export-cases',
+        '--casebook',
+        casebook,
+        '--output',
+        fullCasesFile,
+        '--profile',
+        profile,
+        ...(options.sheet ? ['--sheet', String(options.sheet)] : []),
+      ],
+      cwd: root,
+    });
+    writeTextFile(path.join(outDir, 'logs', 'export-full-cases.stdout.log'), fullExport.stdout || '');
+    writeTextFile(path.join(outDir, 'logs', 'export-full-cases.stderr.log'), fullExport.stderr || '');
+    const fullCases = fullExport.status === 0
+      ? (JSON.parse(fs.readFileSync(fullCasesFile, 'utf8')).cases || [])
+      : [];
+    const excludedCaseIds = String(options['excluded-case'] || '')
+      .split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean);
+    scopeAudit = validateCoreBetaScopedSelection({
+      fullCases,
+      selectedCases,
+      excludedCaseIds,
+      reason: options['scope-reason'] || '',
+    });
+    const fullFixtureReadiness = fullCases.length
+      ? await inspectCoreBetaFixtureReadiness({
+        options: {
+          ...options,
+          'core-beta-fixture-control-url': '',
+        },
+        cases: fullCases,
+      })
+      : null;
+    const unavailableFixtureIds = Array.isArray(fullFixtureReadiness?.missing_case_ids)
+      ? fullFixtureReadiness.missing_case_ids
+      : [];
+    if (JSON.stringify(unavailableFixtureIds) !== JSON.stringify(scopeAudit.excluded_case_ids)) {
+      scopeAudit.errors.push(
+        'excluded Case 必须精确等于当前环境不可用的 fixture Case；'
+        + `expected=${unavailableFixtureIds.join(',')}; actual=${scopeAudit.excluded_case_ids.join(',')}`,
+      );
+      scopeAudit.ok = false;
+    }
+    scopeAudit.full_fixture_readiness = fullFixtureReadiness;
+    writeJsonFile(path.join(outDir, 'scoped-execution.json'), scopeAudit);
+    if (fullExport.status !== 0 || !scopeAudit.ok) {
+      const reason = `scoped execution 合同失败：${fullExport.status !== 0
+        ? fullExport.stderr || fullExport.error || '完整 Casebook 导出失败'
+        : scopeAudit.errors.join('；')}`;
+      const results = selectedCases.map((testCase, index) => buildSyntheticResult({
+        outDir,
+        testCase,
+        index,
+        status: 'blocked',
+        resultCategory: 'automation_error',
+        reason,
+      }));
+      const summary = buildSummary({
+        status: 'blocked',
+        startedAt,
+        outDir,
+        casebook,
+        resultExcel,
+        profile,
+        cdpUrl,
+        modelTier,
+        results,
+        reason,
+        precheck: { scoped_execution: scopeAudit },
+      });
+      writeRunArtifacts(outDir, summary);
+      await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
+      return summary;
+    }
+  } else if (options['excluded-case'] || options['scope-reason']) {
+    const reason = 'scoped options require --scoped-execution true';
+    const summary = buildSummary({
+      status: 'blocked',
+      startedAt,
+      outDir,
+      casebook,
+      resultExcel,
+      profile,
+      cdpUrl,
+      modelTier,
+      results: [],
+      reason,
+    });
+    writeRunArtifacts(outDir, summary);
+    await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
+    return summary;
+  }
+
   const coreBetaCases = selectedCases.filter(isCoreBetaCase);
   if (coreBetaCases.length) {
-    const protocolAudit = validateCoreBetaCasePlan(coreBetaCases, { fixtureRoot: fixturesDir });
+    const protocolAudit = validateCoreBetaCasePlan(coreBetaCases, {
+      fixtureRoot: fixturesDir,
+      allowPartialInitialization: scopedExecution && scopeAudit?.ok === true,
+    });
     writeJsonFile(path.join(outDir, 'core-beta-protocol-preflight.json'), protocolAudit);
     if (!protocolAudit.ok || coreBetaCases.length !== selectedCases.length) {
       const extra = coreBetaCases.length !== selectedCases.length
@@ -20479,6 +20584,11 @@ function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profil
 }
 
 function writeRunArtifacts(outDir, summary) {
+  const scopeFile = path.join(outDir, 'scoped-execution.json');
+  if (fs.existsSync(scopeFile)) {
+    summary.scope = JSON.parse(fs.readFileSync(scopeFile, 'utf8'));
+    summary.release_gate_eligible = false;
+  }
   summary.final_report = path.join(outDir, '最终自动化测试报告.md');
   summary.evidence_gallery_html = path.join(outDir, '所有证据截图图集.html');
   summary.evidence_gallery_md = path.join(outDir, '所有证据截图图集.md');

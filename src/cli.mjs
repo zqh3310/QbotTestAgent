@@ -63,6 +63,9 @@ ui-agent-casebook-run:
   --core-beta-fixture-control-url <url>
                                   Strict Core Beta fixture controller
   --production-gate true         Enable release-identity gate
+  --scoped-execution true        Explicit non-release subset execution
+  --excluded-case <id[,id...]>   Exact Case IDs omitted from the scope
+  --scope-reason <text>          Required immutable exclusion reason
   --backend-version <id>
   --prompt-policy-version <id>
   --feature-flags-hash <sha256>

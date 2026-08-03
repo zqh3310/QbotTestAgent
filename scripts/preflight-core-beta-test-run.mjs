@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   validateCoreBetaCasePlan,
+  validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import {
   inspectCoreBetaFixtureReadiness,
@@ -56,12 +57,16 @@ Local lane:
 Controls:
   --production-gate true         Requires every frozen identity input
   --case <id[,id...]>             Optional targeted ordered selection
+  --scoped-execution true        Explicit non-release subset execution
+  --excluded-case <id[,id...]>   Exact Case IDs omitted from the scope
+  --scope-reason <text>          Required immutable exclusion reason
   --no-framework-checks          Skip npm checks only for diagnostics/tests;
                                   never use for a formal release run
 
 This command never starts a runner, launches/restarts 360Teams, opens QWork,
-sends a message, or writes synthetic Case results. READY is required before a
-real Casebook batch.
+sends a message, or writes synthetic Case results. READY is required for a
+full batch; READY_SCOPED only authorizes the exact matching scoped runner and
+is never release-gate eligible.
 `;
 }
 
@@ -198,7 +203,7 @@ function markdown(report) {
     lines.push('## 阻塞项', '', ...report.blockers.map((item) => `- ${item}`), '');
   }
   lines.push(
-    '只有结论为 `READY` 才能启动真实 Casebook runner；本报告不包含任何 synthetic Case 结果。',
+    '只有 `READY` 才能启动完整批次；`READY_SCOPED` 只允许启动完全匹配的 scoped runner，且不具备发布门禁资格。本报告不包含任何 synthetic Case 结果。',
     '',
   );
   return `${lines.join('\n')}\n`;
@@ -226,6 +231,7 @@ async function main() {
   const sheet = String(options.sheet);
   const profile = String(options.profile || 'mandatory');
   const productionGate = TRUE_VALUES.has(String(options['production-gate'] || '').toLowerCase());
+  const scopedExecution = TRUE_VALUES.has(String(options['scoped-execution'] || '').toLowerCase());
   const checks = [];
   const blockers = [];
   const addCheck = (id, ok, detail, { warning = false } = {}) => {
@@ -279,7 +285,9 @@ async function main() {
   addCheck('casebook_exists', fs.existsSync(casebook) && fs.statSync(casebook).isFile(), casebook);
   let casebookSha = '';
   let cases = [];
+  let fullCases = [];
   let protocol = null;
+  let scope = null;
   if (fs.existsSync(casebook) && fs.statSync(casebook).isFile()) {
     casebookSha = sha256File(casebook);
     const expectedSha = String(options['expected-sha256'] || '').trim().toLowerCase();
@@ -309,7 +317,73 @@ async function main() {
       addCheck('case_count', Number.isInteger(expectedCount) && cases.length === expectedCount,
         `actual=${cases.length}; expected=${Number.isInteger(expectedCount) ? expectedCount : '(missing --expected-count)'}`);
       addCheck('case_id_unique', new Set(ids).size === ids.length, `unique=${new Set(ids).size}; total=${ids.length}`);
-      protocol = validateCoreBetaCasePlan(cases, { fixtureRoot: path.join(ROOT, 'testflies') });
+      if (scopedExecution) {
+        const fullCasesFile = path.join(outDir, 'casebook-full-cases.json');
+        const fullExporter = commandResult(String(options.python || process.env.PYTHON || 'python3'), [
+          path.join(ROOT, 'skills', 'qbot-execute-automation-tests', 'scripts', 'casebook_io.py'),
+          'export-cases',
+          '--casebook', casebook,
+          '--sheet', sheet,
+          '--profile', profile,
+          '--output', fullCasesFile,
+        ], { timeout: 120_000 });
+        fs.writeFileSync(path.join(outDir, 'logs', 'export-full-cases.log'), `${fullExporter.stdout}\n${fullExporter.stderr}\n`);
+        addCheck('scoped_full_casebook_export', fullExporter.ok, fullExporter.ok
+          ? `sheet=${sheet}; profile=${profile}`
+          : `exit=${fullExporter.status}; ${fullExporter.stderr || fullExporter.error}`);
+        if (fullExporter.ok) {
+          fullCases = JSON.parse(fs.readFileSync(fullCasesFile, 'utf8')).cases || [];
+          const excludedCaseIds = String(options['excluded-case'] || '')
+            .split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean);
+          scope = validateCoreBetaScopedSelection({
+            fullCases,
+            selectedCases: cases,
+            excludedCaseIds,
+            reason: options['scope-reason'] || '',
+          });
+          addCheck('scoped_selection_contract', scope.ok, scope.ok
+            ? `selected=${scope.selected_count}; excluded=${scope.excluded_count}; release_gate_eligible=false`
+            : scope.errors.join('; '));
+          const fullFixtureReadiness = await inspectCoreBetaFixtureReadiness({
+            options: {
+              ...options,
+              'core-beta-fixture-control-url': '',
+            },
+            cases: fullCases,
+          });
+          const unavailableFixtureIds = Array.isArray(fullFixtureReadiness?.missing_case_ids)
+            ? fullFixtureReadiness.missing_case_ids
+            : [];
+          const exactFixtureExclusions = JSON.stringify(unavailableFixtureIds)
+            === JSON.stringify(scope.excluded_case_ids);
+          if (!exactFixtureExclusions) {
+            scope.ok = false;
+            scope.errors.push(
+              'excluded Case 必须精确等于当前环境不可用的 fixture Case；'
+              + `expected=${unavailableFixtureIds.join(',')}; actual=${scope.excluded_case_ids.join(',')}`,
+            );
+          }
+          addCheck(
+            'scoped_exclusions_match_unavailable_fixtures',
+            exactFixtureExclusions,
+            exactFixtureExclusions
+              ? `excluded=${unavailableFixtureIds.length}`
+              : `expected unavailable fixture cases=${unavailableFixtureIds.join(',')}; actual=${scope.excluded_case_ids.join(',')}`,
+          );
+          scope.full_fixture_readiness = fullFixtureReadiness;
+          fs.writeFileSync(path.join(outDir, 'scoped-execution.json'), `${JSON.stringify(scope, null, 2)}\n`);
+        }
+      } else {
+        addCheck(
+          'scoped_execution_not_implicit',
+          !options['excluded-case'] && !options['scope-reason'],
+          'scoped options require --scoped-execution true',
+        );
+      }
+      protocol = validateCoreBetaCasePlan(cases, {
+        fixtureRoot: path.join(ROOT, 'testflies'),
+        allowPartialInitialization: scopedExecution && scope?.ok === true,
+      });
       addCheck('core_beta_protocol', protocol.ok && protocol.executable_count === cases.length,
         protocol.ok ? `executable=${protocol.executable_count}/${cases.length}` : protocol.errors.slice(0, 20).join('; '));
     }
@@ -442,9 +516,11 @@ async function main() {
   const report = {
     schema_version: 'qbot-core-beta-pretest/v1',
     generated_at: new Date().toISOString(),
-    status: blockers.length ? 'BLOCKED' : 'READY',
+    status: blockers.length ? 'BLOCKED' : scopedExecution ? 'READY_SCOPED' : 'READY',
     lane,
     production_gate: productionGate,
+    release_gate_eligible: !scopedExecution,
+    scope,
     framework: {
       branch,
       head,

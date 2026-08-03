@@ -223,6 +223,34 @@ npm run ui-agent:casebook-run -- \
 
 `--skip-run` 生成的是 dry-run/synthetic 诊断结果，不能计入可信通过、稳定轮次或生产放行。
 
+### 5.1 显式缩减范围批次
+
+当真实 fixture provider 暂不可用、且操作者明确要求先执行其余基础功能时，
+只允许使用显式 scoped lane。它不会修改 Casebook，也不能作为 74/160 门禁或
+生产放行证据：
+
+```bash
+npm run core-beta:pretest -- \
+  --casebook "$CASEBOOK" \
+  --sheet 核心内测Case \
+  --profile mandatory \
+  --case "$SELECTED_CASE_IDS" \
+  --expected-count <selected-count> \
+  --expected-sha256 <full-casebook-sha256> \
+  --scoped-execution true \
+  --excluded-case "$EXCLUDED_FIXTURE_CASE_IDS" \
+  --scope-reason fixture_provider_unavailable \
+  ...冻结发布身份参数
+```
+
+scoped 预检必须返回 `READY_SCOPED`。框架会再次读取完整 Case 集，证明选择集
+严格等于“完整 Case 集减去 excluded Case”、顺序未漂移、排除项精确等于当前
+缺少 provider 的 fixture Case，并且仍以前四个本地初始化 Case 开场。真实
+runner 必须携带完全相同的 `--case`、`--scoped-execution`、
+`--excluded-case` 和 `--scope-reason`。输出中的 `scoped-execution.json`、
+summary `scope` 以及 `release_gate_eligible=false` 永久标记该批次；即使全部
+可信通过，也只能得出范围内基础功能结论。
+
 ## 6. 360Teams 正式包执行
 
 360Teams 场景必须走专用适配层，不使用本地 QBot 的 `9224`，也不能直接操作 runner 临时 WebView/CDP 代理。

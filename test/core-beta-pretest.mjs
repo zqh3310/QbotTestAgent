@@ -49,7 +49,10 @@ const pretestHelp = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
   '--help',
 ], { cwd: root, encoding: 'utf8' });
-if (pretestHelp.status !== 0 || !/never starts a runner/.test(pretestHelp.stdout)) {
+if (pretestHelp.status !== 0
+  || !/never starts a runner/.test(pretestHelp.stdout)
+  || !/READY_SCOPED/.test(pretestHelp.stdout)
+  || !/--excluded-case/.test(pretestHelp.stdout)) {
   throw new Error(`Pretest help failed: ${pretestHelp.stderr || pretestHelp.stdout}`);
 }
 

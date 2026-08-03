@@ -11,6 +11,7 @@ import {
   evaluateMachineAssertions,
   validateCoreBetaCase,
   validateCoreBetaCasePlan,
+  validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
 
 assert.equal(CORE_BETA_SCENARIO_IDS.size, 160);
@@ -180,6 +181,26 @@ const misorderedPlan = [
 assert.match(
   validateCoreBetaCasePlan(misorderedPlan).errors.join('\n'),
   /前五个初始化硬门禁开场且顺序固定/,
+);
+const scopedPlan = initializedPlan.filter((item) => item.id !== 'BETA-INIT-005');
+const scopedSelection = validateCoreBetaScopedSelection({
+  fullCases: initializedPlan,
+  selectedCases: scopedPlan,
+  excludedCaseIds: ['BETA-INIT-005'],
+  reason: 'fixture_provider_unavailable',
+});
+assert.equal(scopedSelection.ok, true, scopedSelection.errors.join('\n'));
+assert.equal(scopedSelection.release_gate_eligible, false);
+assert.equal(validateCoreBetaCasePlan(scopedPlan, { allowPartialInitialization: true }).ok, true);
+assert.equal(
+  validateCoreBetaScopedSelection({
+    fullCases: initializedPlan,
+    selectedCases: scopedPlan,
+    excludedCaseIds: ['BETA-INIT-005'],
+    reason: '',
+  }).ok,
+  false,
+  'scoped execution 不得省略排除原因',
 );
 
 const placeholder = structuredClone(sample);
