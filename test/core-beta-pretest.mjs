@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,6 +50,11 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
+const grayExpectedSha = '92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7';
+const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
+if (grayActualSha !== grayExpectedSha) {
+  throw new Error(`184 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
+}
 const grayAuditOut = path.join(temp, 'gray-audit');
 const grayAudit = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),

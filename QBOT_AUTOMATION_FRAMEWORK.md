@@ -35,7 +35,7 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `d72aba1cee18f6ec16d66c56920ae3e7b8f31106541cb275507dc4cfe328ba03` |
-| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `1fe1a38e942b51ec41357863716c0ce76fdc37627c56a1eebe15afb7cd5e8e5b` |
+| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7` |
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 
@@ -95,7 +95,7 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 184 \
-     --expected-sha256 1fe1a38e942b51ec41357863716c0ce76fdc37627c56a1eebe15afb7cd5e8e5b \
+     --expected-sha256 92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7 \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
