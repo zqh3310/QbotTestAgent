@@ -1117,6 +1117,28 @@ if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负�
 }, '请结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。')) {
   throw new Error('多 Skill 联合处理的真实回复不应被通用相关性启发式误判');
 }
+const feedbackCollectionCase = {
+  id: 'BETA-CHAT-001',
+  module: '会话',
+  submodule: '普通业务问答',
+  scenario: '干净任务中提出普通业务问题并收到完整、相关、无技术噪音的回复',
+  test_data: '请给新产品内测设计 5 条可执行的用户反馈收集建议。',
+};
+const feedbackCollectionPrompt = '请给新产品内测设计 5 条可执行的用户反馈收集建议。';
+if (!replyLooksRelevant(
+  '以下是 5 条可执行的用户反馈收集建议：在关键流程嵌入评分、按用户分层访谈、设置问卷渠道、跟踪样本与闭环。',
+  feedbackCollectionCase,
+  feedbackCollectionPrompt,
+)) {
+  throw new Error('用户反馈收集建议的有效回复不得因长中文 prompt 未分词而误判为不相关');
+}
+if (replyLooksRelevant(
+  '今天北京天气晴朗，建议携带雨具。',
+  feedbackCollectionCase,
+  feedbackCollectionPrompt,
+)) {
+  throw new Error('用户反馈收集主题不得把无关天气回复判为相关');
+}
 if (attachmentReplyMissingEvidence(
   '附件读取完成：qbot-pdf-summary.pdf，读取成功。下面是主要内容和结论摘要。如需分析其它文件，请重新上传。',
   ['/tmp/qbot-pdf-summary.pdf'],
