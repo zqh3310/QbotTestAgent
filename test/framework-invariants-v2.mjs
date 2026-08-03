@@ -34,11 +34,13 @@ import {
   latestAssistantReplyForPrompt,
   memoryLifecycleVerdict,
   modelServiceStateEvidence,
+  nextTerminalNoReplyObservation,
   obviousDuplicateEvidence,
   probeConnectorRegressionFixture,
   parseSingleHostPipelineSize,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
+  replySendObservedRunning,
   reviewCaseCredibility,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
@@ -86,6 +88,53 @@ assert.match(
   automationFramework,
   /pipeline 回收结果进入 `completed` 前[\s\S]*原始 Case[\s\S]*manifest 完整性门禁[\s\S]*`automation_error` 硬停止/,
   '框架手册必须要求 pipeline 解包原始 Case 后执行与串行路径一致的 completed 门禁',
+);
+assert.equal(
+  replySendObservedRunning([{
+    attempts: [{ receipt: { ok: true, snapshot: { running: true } } }],
+  }]),
+  true,
+  '终止无回复判断必须读取确认发送后的真实运行态证据',
+);
+let noReplyObservation = nextTerminalNoReplyObservation({
+  elapsedMs: 60_000,
+  minWaitMs: 60_000,
+  expectedUserVisible: true,
+  observedRunningAfterSend: true,
+});
+assert.equal(noReplyObservation.ready, false, '单次无回复观察不得提前结束等待');
+noReplyObservation = nextTerminalNoReplyObservation({
+  previous: noReplyObservation.consecutive,
+  elapsedMs: 61_000,
+  minWaitMs: 60_000,
+  expectedUserVisible: true,
+  observedRunningAfterSend: true,
+});
+assert.equal(noReplyObservation.ready, false, '两次无回复观察不得提前结束等待');
+noReplyObservation = nextTerminalNoReplyObservation({
+  previous: noReplyObservation.consecutive,
+  elapsedMs: 62_000,
+  minWaitMs: 60_000,
+  expectedUserVisible: true,
+  observedRunningAfterSend: true,
+});
+assert.equal(noReplyObservation.ready, true, '最小等待后连续三次终止无回复应形成产品失败终态');
+assert.equal(
+  nextTerminalNoReplyObservation({
+    previous: 2,
+    elapsedMs: 62_000,
+    minWaitMs: 60_000,
+    generating: true,
+    expectedUserVisible: true,
+    observedRunningAfterSend: true,
+  }).ready,
+  false,
+  '仍在运行的任务不得被终止无回复规则截断',
+);
+assert.match(
+  runner,
+  /terminal_outcome:\s*'no_reply'[\s\S]*no_reply_stable_observations[\s\S]*after-terminal-no-reply/,
+  'v2 runner 必须把稳定终止无回复写成可截图、可校验且绝不误判 pass 的失败终态',
 );
 assert.match(
   runner,

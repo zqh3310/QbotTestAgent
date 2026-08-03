@@ -59,6 +59,50 @@ import {
     false,
     '等待窗口不足时不得把无回复包装成完整失败证据',
   );
+  fs.writeFileSync(completion, JSON.stringify({
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: 'no_reply',
+    assistant_reply_present: false,
+    confirmed_send_receipt: true,
+    observed_running_after_send: true,
+    running_after: false,
+    no_reply_stable_observations: 3,
+    waited_ms: 60_330,
+    min_wait_ms: 60_000,
+    timeout_ms: 600_000,
+    terminal_reason: 'Agent 进入运行态后停止，连续三次稳定采样没有助手正文。',
+    terminal_screenshot: screenshot,
+    terminal_screenshot_sha256: screenshotSha256,
+  }));
+  assert.deepEqual(
+    validateEvidenceFile('reply_completion', completion),
+    { valid: true },
+    '确认运行后停止、最小等待足额和连续稳定无回复应构成完整产品失败终态证据',
+  );
+  fs.writeFileSync(completion, JSON.stringify({
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: 'no_reply',
+    assistant_reply_present: false,
+    confirmed_send_receipt: true,
+    observed_running_after_send: false,
+    running_after: false,
+    no_reply_stable_observations: 3,
+    waited_ms: 60_330,
+    min_wait_ms: 60_000,
+    timeout_ms: 600_000,
+    terminal_reason: '没有运行态证明。',
+    terminal_screenshot: screenshot,
+    terminal_screenshot_sha256: screenshotSha256,
+  }));
+  assert.equal(
+    validateEvidenceFile('reply_completion', completion).valid,
+    false,
+    '没有确认进入运行态时不得把排队中的任务误判为终止无回复',
+  );
   fs.rmSync(root, { recursive: true, force: true });
 }
 

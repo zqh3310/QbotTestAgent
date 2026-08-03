@@ -26,6 +26,7 @@ import {
   isCoreBetaCase,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
+  validateReplyCompletionPayload,
 } from './core-beta-case-protocol.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
@@ -33,6 +34,7 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const MIN_REPLY_WAIT_MS = 60000;
 const MAX_REPLY_WAIT_MS = 600000;
 const SHORT_REPLY_WAIT_MS = 90000;
+const NO_REPLY_TERMINAL_STABLE_OBSERVATIONS = 3;
 const COMBO_REPLY_WAIT_MS = 180000;
 const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000;
 const LONG_CONTEXT_REPLY_WAIT_MS = 600000;
@@ -16439,15 +16441,22 @@ function writeReplyArtifacts(state, caseDir, replies) {
     const label = String(reply?.label || `回复 ${state.artifacts.reply_records.length + 1}`);
     const fullText = String(reply?.fullText || reply?.deltaText || '');
     const deltaText = String(reply?.deltaText || '');
-    const timedOut = Boolean(reply?.incomplete);
-    const terminalRecord = timedOut
+    const incomplete = Boolean(reply?.incomplete);
+    const terminalOutcome = incomplete
+      ? String(reply?.terminal_outcome || 'timed_out')
+      : 'completed';
+    const terminalRecord = incomplete
       ? [
         '## TERMINAL_EVENT',
         '',
-        'type=assistant_reply_timeout',
+        `type=assistant_reply_${terminalOutcome}`,
         `assistant_reply_present=${String(Boolean(deltaText.trim()))}`,
         `waited_ms=${Number(reply?.waited_ms || 0)}`,
+        `min_wait_ms=${Number(reply?.min_wait_ms || 0)}`,
         `timeout_ms=${Number(reply?.timeout_ms || 0)}`,
+        `observed_running_after_send=${String(Boolean(reply?.observed_running_after_send))}`,
+        `running_after=${String(Boolean(reply?.running_after))}`,
+        `no_reply_stable_observations=${Number(reply?.no_reply_stable_observations || 0)}`,
         `observation=${String(reply?.incomplete_reason || 'Agent reply timed out.')}`,
       ].join('\n')
       : '';
@@ -16456,10 +16465,18 @@ function writeReplyArtifacts(state, caseDir, replies) {
       fullText: fullText || terminalRecord,
       deltaText: deltaText || terminalRecord,
       assistant_reply_present: Boolean(deltaText.trim()),
-      terminal_outcome: timedOut ? 'timed_out' : 'completed',
+      terminal_outcome: terminalOutcome,
       waited_ms: Number(reply?.waited_ms || 0),
+      min_wait_ms: Number(reply?.min_wait_ms || 0),
       timeout_ms: Number(reply?.timeout_ms || 0),
-      terminal_reason: timedOut ? String(reply?.incomplete_reason || 'Agent reply timed out.') : '',
+      observed_running_after_send: Boolean(reply?.observed_running_after_send),
+      running_after: reply?.running_after === false
+        ? false
+        : reply?.running_after === true
+          ? true
+          : null,
+      no_reply_stable_observations: Number(reply?.no_reply_stable_observations || 0),
+      terminal_reason: incomplete ? String(reply?.incomplete_reason || 'Agent reply timed out.') : '',
       recorded_at: new Date().toISOString(),
     };
     const existing = state.artifacts.reply_records.findIndex((item) => item.label === label);
@@ -16477,10 +16494,10 @@ function writeReplyArtifacts(state, caseDir, replies) {
       Array.isArray(receipt?.attempts)
       && receipt.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
     ));
-  const timeoutScreenshot = Object.entries(state.screenshots || {})
+  const terminalScreenshot = Object.entries(state.screenshots || {})
     .reverse()
     .find(([key, file]) => (
-      /after[_-]?timeout|timeout/i.test(String(key || ''))
+      /after[_-]?(?:timeout|terminal[_-]?no[_-]?reply)|timeout|no[_-]?reply/i.test(String(key || ''))
       && typeof file === 'string'
       && file
       && fs.existsSync(file)
@@ -16489,13 +16506,36 @@ function writeReplyArtifacts(state, caseDir, replies) {
     ))?.[1] || '';
   const terminalReply = [...state.artifacts.reply_records]
     .reverse()
-    .find((reply) => reply.terminal_outcome === 'timed_out');
+    .find((reply) => ['timed_out', 'no_reply'].includes(reply.terminal_outcome));
+  const terminalScreenshotSha256 = terminalScreenshot
+    ? createHash('sha256').update(fs.readFileSync(terminalScreenshot)).digest('hex')
+    : '';
+  const terminalFailureCandidate = {
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: terminalReply?.terminal_outcome || '',
+    assistant_reply_present: Boolean(terminalReply?.assistant_reply_present),
+    confirmed_send_receipt: confirmedSendReceipt,
+    waited_ms: Number(terminalReply?.waited_ms || 0),
+    min_wait_ms: Number(terminalReply?.min_wait_ms || 0),
+    timeout_ms: Number(terminalReply?.timeout_ms || 0),
+    observed_running_after_send: Boolean(terminalReply?.observed_running_after_send),
+    running_after: terminalReply?.running_after === false
+      ? false
+      : terminalReply?.running_after === true
+        ? true
+        : null,
+    no_reply_stable_observations: Number(terminalReply?.no_reply_stable_observations || 0),
+    terminal_reason: String(terminalReply?.terminal_reason || ''),
+    terminal_screenshot: terminalScreenshot,
+    terminal_screenshot_sha256: terminalScreenshotSha256,
+    timeout_screenshot: terminalScreenshot,
+    timeout_screenshot_sha256: terminalScreenshotSha256,
+  };
   const terminalFailureVerified = Boolean(
     terminalReply
-    && terminalReply.timeout_ms >= MIN_REPLY_WAIT_MS
-    && terminalReply.waited_ms >= terminalReply.timeout_ms
-    && confirmedSendReceipt
-    && timeoutScreenshot
+    && validateReplyCompletionPayload(terminalFailureCandidate).valid
   );
   const replyComplete = state.artifacts.reply_records.length > 0
     && state.artifacts.reply_records.every((reply) => (
@@ -16505,7 +16545,7 @@ function writeReplyArtifacts(state, caseDir, replies) {
   const evidenceComplete = state.artifacts.reply_records.length > 0
     && state.artifacts.reply_records.every((reply) => (
       reply.assistant_reply_present === true
-      || (reply.terminal_outcome === 'timed_out' && terminalFailureVerified)
+      || (['timed_out', 'no_reply'].includes(reply.terminal_outcome) && terminalFailureVerified)
     ));
   writeJsonFile(state.artifacts.reply_completion, {
     complete: replyComplete,
@@ -16518,13 +16558,21 @@ function writeReplyArtifacts(state, caseDir, replies) {
       ? terminalReply.assistant_reply_present
       : state.artifacts.reply_records.every((reply) => reply.assistant_reply_present === true),
     waited_ms: Number(terminalReply?.waited_ms || 0),
+    min_wait_ms: Number(terminalReply?.min_wait_ms || 0),
     timeout_ms: Number(terminalReply?.timeout_ms || 0),
+    observed_running_after_send: Boolean(terminalReply?.observed_running_after_send),
+    running_after: terminalReply?.running_after === false
+      ? false
+      : terminalReply?.running_after === true
+        ? true
+        : null,
+    no_reply_stable_observations: Number(terminalReply?.no_reply_stable_observations || 0),
     terminal_reason: String(terminalReply?.terminal_reason || ''),
     confirmed_send_receipt: confirmedSendReceipt,
-    timeout_screenshot: timeoutScreenshot,
-    timeout_screenshot_sha256: timeoutScreenshot
-      ? createHash('sha256').update(fs.readFileSync(timeoutScreenshot)).digest('hex')
-      : '',
+    terminal_screenshot: terminalScreenshot,
+    terminal_screenshot_sha256: terminalScreenshotSha256,
+    timeout_screenshot: terminalScreenshot,
+    timeout_screenshot_sha256: terminalScreenshotSha256,
   });
   writeJsonFile(state.artifacts.send_receipt, {
     valid: Array.isArray(state.artifacts.send_receipts)
@@ -19803,6 +19851,38 @@ export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = ''
   return { ok: reasons.length > 0, reasons };
 }
 
+export function replySendObservedRunning(sendReceipts = []) {
+  return (Array.isArray(sendReceipts) ? sendReceipts : []).some((receipt) => (
+    Array.isArray(receipt?.attempts)
+    && receipt.attempts.some((attempt) => (
+      attempt?.receipt?.ok === true
+      && attempt?.receipt?.snapshot?.running === true
+    ))
+  ));
+}
+
+export function nextTerminalNoReplyObservation({
+  previous = 0,
+  elapsedMs = 0,
+  minWaitMs = MIN_REPLY_WAIT_MS,
+  generating = false,
+  hasReply = false,
+  expectedUserVisible = false,
+  observedRunningAfterSend = false,
+} = {}) {
+  const stoppedWithoutReply = expectedUserVisible
+    && !generating
+    && !hasReply
+    && observedRunningAfterSend;
+  const consecutive = stoppedWithoutReply ? Number(previous || 0) + 1 : 0;
+  return {
+    consecutive,
+    ready: stoppedWithoutReply
+      && Number(elapsedMs || 0) >= Number(minWaitMs || MIN_REPLY_WAIT_MS)
+      && consecutive >= NO_REPLY_TERMINAL_STABLE_OBSERVATIONS,
+  };
+}
+
 async function waitForSendReceipt(page, before, expectedPrompt, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   let snapshot = await sendReceiptSnapshot(page);
@@ -19898,6 +19978,8 @@ async function waitForReply(page, beforeState, timeoutMs, {
   let lastCandidateFullText = '';
   let boundTaskId = String(before.activeTaskId || '');
   let taskDrift = '';
+  let noReplyStableObservations = 0;
+  const observedRunningAfterSend = replySendObservedRunning(state?.artifacts?.send_receipts);
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     // Do not turn the normal reply deadline into a framework exception merely
@@ -19974,6 +20056,36 @@ async function waitForReply(page, beforeState, timeoutMs, {
           screenshot_file_suffix: 'after-reply',
         };
       }
+    }
+    const noReplyObservation = nextTerminalNoReplyObservation({
+      previous: noReplyStableObservations,
+      elapsedMs: Date.now() - startedAt,
+      minWaitMs: effectiveMinWaitMs,
+      generating,
+      hasReply: hasDelta,
+      expectedUserVisible,
+      observedRunningAfterSend,
+    });
+    noReplyStableObservations = noReplyObservation.consecutive;
+    if (noReplyObservation.ready) {
+      const waitedMs = Date.now() - startedAt;
+      return {
+        fullText: '',
+        deltaText: '',
+        incomplete: true,
+        terminal_outcome: 'no_reply',
+        incomplete_reason: `Agent 已确认接收并进入运行态，但随后停止，连续 ${noReplyStableObservations} 次稳定采样均未观察到可归属本轮的助手正文；实际等待 ${waitedMs}ms。`,
+        waited_ms: waitedMs,
+        min_wait_ms: effectiveMinWaitMs,
+        timeout_ms: effectiveTimeoutMs,
+        wait_kind: waitKind,
+        stable_observations: 0,
+        no_reply_stable_observations: noReplyStableObservations,
+        observed_running_after_send: true,
+        running_after: false,
+        screenshot_phase: 'after_terminal_no_reply',
+        screenshot_file_suffix: 'after-terminal-no-reply',
+      };
     }
     await page.waitForTimeout(1000);
   }

@@ -883,10 +883,11 @@ export function validateEvidenceFile(role, file) {
 
 export function validateReplyCompletionPayload(parsed) {
   if (parsed?.complete === true) return { valid: true };
+  const terminalOutcome = String(parsed?.terminal_outcome || '');
   if (
     parsed?.evidence_complete !== true
     || parsed?.terminal_failure !== true
-    || parsed?.terminal_outcome !== 'timed_out'
+    || !['timed_out', 'no_reply'].includes(terminalOutcome)
     || typeof parsed?.assistant_reply_present !== 'boolean'
     || parsed?.confirmed_send_receipt !== true
   ) {
@@ -894,11 +895,24 @@ export function validateReplyCompletionPayload(parsed) {
   }
   const waitedMs = Number(parsed?.waited_ms || 0);
   const timeoutMs = Number(parsed?.timeout_ms || 0);
-  if (timeoutMs < 60_000 || waitedMs < timeoutMs) {
-    return { valid: false, error: 'reply_timeout_window_unverified' };
+  const minWaitMs = Number(parsed?.min_wait_ms || 0);
+  if (terminalOutcome === 'timed_out') {
+    if (timeoutMs < 60_000 || waitedMs < timeoutMs) {
+      return { valid: false, error: 'reply_timeout_window_unverified' };
+    }
+  } else if (
+    minWaitMs < 60_000
+    || waitedMs < minWaitMs
+    || parsed?.observed_running_after_send !== true
+    || parsed?.running_after !== false
+    || Number(parsed?.no_reply_stable_observations || 0) < 3
+  ) {
+    return { valid: false, error: 'reply_no_reply_terminal_unverified' };
   }
-  const screenshot = String(parsed?.timeout_screenshot || '').trim();
-  const screenshotSha256 = String(parsed?.timeout_screenshot_sha256 || '').trim();
+  const screenshot = String(parsed?.terminal_screenshot || parsed?.timeout_screenshot || '').trim();
+  const screenshotSha256 = String(
+    parsed?.terminal_screenshot_sha256 || parsed?.timeout_screenshot_sha256 || '',
+  ).trim();
   if (
     !screenshot
     || !path.isAbsolute(screenshot)
@@ -906,16 +920,16 @@ export function validateReplyCompletionPayload(parsed) {
     || !fs.statSync(screenshot).isFile()
     || fs.statSync(screenshot).size < 128
   ) {
-    return { valid: false, error: 'reply_timeout_screenshot_missing' };
+    return { valid: false, error: 'reply_terminal_screenshot_missing' };
   }
   if (
     !/^[a-f0-9]{64}$/i.test(screenshotSha256)
     || sha256File(screenshot) !== screenshotSha256
   ) {
-    return { valid: false, error: 'reply_timeout_screenshot_sha256_mismatch' };
+    return { valid: false, error: 'reply_terminal_screenshot_sha256_mismatch' };
   }
   if (!String(parsed?.terminal_reason || '').trim()) {
-    return { valid: false, error: 'reply_timeout_reason_missing' };
+    return { valid: false, error: 'reply_terminal_reason_missing' };
   }
   return { valid: true };
 }
