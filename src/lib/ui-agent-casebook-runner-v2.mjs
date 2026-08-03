@@ -18,6 +18,7 @@ import {
 import {
   CORE_BETA_MAX_BATCH_SIZE,
   buildCoreEvidenceManifest,
+  classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
   coreBetaScenarioSpec,
@@ -247,13 +248,19 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     const unavailableFixtureIds = Array.isArray(fullFixtureReadiness?.missing_case_ids)
       ? fullFixtureReadiness.missing_case_ids
       : [];
-    if (JSON.stringify(unavailableFixtureIds) !== JSON.stringify(scopeAudit.excluded_case_ids)) {
+    const fixtureExclusionCoverage = classifyCoreBetaScopedFixtureExclusions({
+      unavailableCaseIds: unavailableFixtureIds,
+      excludedCaseIds: scopeAudit.excluded_case_ids,
+    });
+    if (!fixtureExclusionCoverage.ok) {
       scopeAudit.errors.push(
-        'excluded Case 必须精确等于当前环境不可用的 fixture Case；'
-        + `expected=${unavailableFixtureIds.join(',')}; actual=${scopeAudit.excluded_case_ids.join(',')}`,
+        'excluded Case 必须覆盖当前环境全部不可用 fixture Case；'
+        + `missing=${fixtureExclusionCoverage.missing_unavailable_fixture_case_ids.join(',')}; `
+        + `actual=${scopeAudit.excluded_case_ids.join(',')}`,
       );
       scopeAudit.ok = false;
     }
+    Object.assign(scopeAudit, fixtureExclusionCoverage);
     scopeAudit.full_fixture_readiness = fullFixtureReadiness;
     writeJsonFile(path.join(outDir, 'scoped-execution.json'), scopeAudit);
     if (fullExport.status !== 0 || !scopeAudit.ok) {

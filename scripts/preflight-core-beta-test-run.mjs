@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  classifyCoreBetaScopedFixtureExclusions,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
@@ -354,22 +355,26 @@ async function main() {
           const unavailableFixtureIds = Array.isArray(fullFixtureReadiness?.missing_case_ids)
             ? fullFixtureReadiness.missing_case_ids
             : [];
-          const exactFixtureExclusions = JSON.stringify(unavailableFixtureIds)
-            === JSON.stringify(scope.excluded_case_ids);
-          if (!exactFixtureExclusions) {
+          const fixtureExclusionCoverage = classifyCoreBetaScopedFixtureExclusions({
+            unavailableCaseIds: unavailableFixtureIds,
+            excludedCaseIds: scope.excluded_case_ids,
+          });
+          if (!fixtureExclusionCoverage.ok) {
             scope.ok = false;
             scope.errors.push(
-              'excluded Case 必须精确等于当前环境不可用的 fixture Case；'
-              + `expected=${unavailableFixtureIds.join(',')}; actual=${scope.excluded_case_ids.join(',')}`,
+              'excluded Case 必须覆盖当前环境全部不可用 fixture Case；'
+              + `missing=${fixtureExclusionCoverage.missing_unavailable_fixture_case_ids.join(',')}; `
+              + `actual=${scope.excluded_case_ids.join(',')}`,
             );
           }
           addCheck(
-            'scoped_exclusions_match_unavailable_fixtures',
-            exactFixtureExclusions,
-            exactFixtureExclusions
-              ? `excluded=${unavailableFixtureIds.length}`
-              : `expected unavailable fixture cases=${unavailableFixtureIds.join(',')}; actual=${scope.excluded_case_ids.join(',')}`,
+            'scoped_exclusions_cover_unavailable_fixtures',
+            fixtureExclusionCoverage.ok,
+            fixtureExclusionCoverage.ok
+              ? `unavailable=${unavailableFixtureIds.length}; additional_explicit_fixture_exclusions=${fixtureExclusionCoverage.additional_fixture_exclusion_ids.length}`
+              : `missing unavailable fixture cases=${fixtureExclusionCoverage.missing_unavailable_fixture_case_ids.join(',')}; actual=${scope.excluded_case_ids.join(',')}`,
           );
+          Object.assign(scope, fixtureExclusionCoverage);
           scope.full_fixture_readiness = fullFixtureReadiness;
           fs.writeFileSync(path.join(outDir, 'scoped-execution.json'), `${JSON.stringify(scope, null, 2)}\n`);
         }

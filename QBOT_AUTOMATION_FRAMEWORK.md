@@ -244,12 +244,20 @@ npm run core-beta:pretest -- \
 ```
 
 scoped 预检必须返回 `READY_SCOPED`。框架会再次读取完整 Case 集，证明选择集
-严格等于“完整 Case 集减去 excluded Case”、顺序未漂移、排除项精确等于当前
+严格等于“完整 Case 集减去 excluded Case”、顺序未漂移、排除项覆盖当前
 缺少 provider 的 fixture Case，并且仍以前四个本地初始化 Case 开场。真实
 runner 必须携带完全相同的 `--case`、`--scoped-execution`、
 `--excluded-case` 和 `--scope-reason`。输出中的 `scoped-execution.json`、
 summary `scope` 以及 `release_gate_eligible=false` 永久标记该批次；即使全部
 可信通过，也只能得出范围内基础功能结论。
+
+由于 360Teams 包装器会在 runner 启动时补充受管重启能力，预检与 runner
+观察到的“当前不可用 fixture”集合可能不同。scoped 合同因此要求 excluded
+Case 覆盖运行时全部不可用 fixture Case；允许额外显式排除的 Case 仍只能是
+Casebook 注册表中的专项 fixture Case，且必须写入
+`additional_fixture_exclusion_ids`。这不会扩大可信结论，批次仍永久
+`release_gate_eligible=false`；漏排任何运行时不可用 fixture Case 则继续
+fail-closed。
 
 ## 6. 360Teams 正式包执行
 

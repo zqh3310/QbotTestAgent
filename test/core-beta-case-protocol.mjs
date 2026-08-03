@@ -6,6 +6,7 @@ import {
   CORE_BETA_SCENARIO_IDS,
   CORE_BETA_SCENARIO_REGISTRY,
   buildCoreEvidenceManifest,
+  classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
   evaluateMachineAssertions,
@@ -192,6 +193,27 @@ const scopedSelection = validateCoreBetaScopedSelection({
 assert.equal(scopedSelection.ok, true, scopedSelection.errors.join('\n'));
 assert.equal(scopedSelection.release_gate_eligible, false);
 assert.equal(validateCoreBetaCasePlan(scopedPlan, { allowPartialInitialization: true }).ok, true);
+assert.deepEqual(
+  classifyCoreBetaScopedFixtureExclusions({
+    unavailableCaseIds: ['BETA-INIT-005'],
+    excludedCaseIds: ['BETA-INIT-005', 'BETA-REC-001'],
+  }),
+  {
+    ok: true,
+    unavailable_fixture_case_ids: ['BETA-INIT-005'],
+    missing_unavailable_fixture_case_ids: [],
+    additional_fixture_exclusion_ids: ['BETA-REC-001'],
+  },
+  'scoped execution 可额外显式排除专项 fixture Case，但必须单独记录',
+);
+assert.equal(
+  classifyCoreBetaScopedFixtureExclusions({
+    unavailableCaseIds: ['BETA-INIT-005', 'BETA-AUTH-001'],
+    excludedCaseIds: ['BETA-INIT-005'],
+  }).ok,
+  false,
+  'scoped execution 漏排任一不可用 fixture Case 必须 fail-closed',
+);
 assert.equal(
   validateCoreBetaScopedSelection({
     fullCases: initializedPlan,

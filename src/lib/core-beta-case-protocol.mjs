@@ -714,6 +714,24 @@ export function validateCoreBetaScopedSelection({
   };
 }
 
+export function classifyCoreBetaScopedFixtureExclusions({
+  unavailableCaseIds = [],
+  excludedCaseIds = [],
+} = {}) {
+  const unavailableIds = unavailableCaseIds.map((item) => String(item || '').trim()).filter(Boolean);
+  const excludedIds = excludedCaseIds.map((item) => String(item || '').trim()).filter(Boolean);
+  const unavailableSet = new Set(unavailableIds);
+  const excludedSet = new Set(excludedIds);
+  const missingRequiredIds = unavailableIds.filter((id) => !excludedSet.has(id));
+  const additionalFixtureExclusionIds = excludedIds.filter((id) => !unavailableSet.has(id));
+  return {
+    ok: missingRequiredIds.length === 0,
+    unavailable_fixture_case_ids: unavailableIds,
+    missing_unavailable_fixture_case_ids: missingRequiredIds,
+    additional_fixture_exclusion_ids: additionalFixtureExclusionIds,
+  };
+}
+
 export function parseFixtureSpec(value) {
   const raw = String(value || '').trim();
   if (!raw) return [];
