@@ -19,6 +19,8 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaBatchStopReason,
+  coreBetaV2MaintenanceConfirmationContract,
+  coreBetaV2RuntimeMaintenanceState,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
   inspectCoreBetaFixtureReadiness,
@@ -82,6 +84,57 @@ assert.match(
   /findQbotPage[\s\S]*rankQbotPageCandidates[\s\S]*await page\.title\(\)[\s\S]*\\bQWork\\b/,
   'CDP 页面发现必须 await 标题并优先真实 QWork WebView，不能按返回顺序误选 360Teams 外壳',
 );
+assert.match(
+  runner,
+  /executeCoreBetaInitializationCase[\s\S]*assistant-runtime-reset-all[\s\S]*waitForCoreBetaV2MaintenanceTerminal/,
+  'Core Beta v2 全量重初始化必须通过真实设置 UI 后等待稳定终态，不能只调用 bridge 后立即截图',
+);
+assert.match(
+  runner,
+  /waitForCoreBetaV2MaintenanceTerminal[\s\S]*runtimeStatus[\s\S]*stableReadyObservations/,
+  'Core Beta v2 初始化终态必须读取 SDK 状态并连续稳定采样',
+);
+assert.match(
+  runner,
+  /resolveCoreBetaV2MaintenancePage[\s\S]*reconnectCoreBetaV2Runtime/,
+  'Core Beta v2 初始化终态必须支持 replacement renderer 重连',
+);
+assert.match(
+  runner,
+  /framework-exception\.json[\s\S]*state\.artifacts\.framework_exception/,
+  'Core Beta v2 异常必须保留原始 message/stack 诊断文件，不能只输出泛化精准断言失败',
+);
+const resetConfirmation = coreBetaV2MaintenanceConfirmationContract('assistant-runtime-reset-all');
+assert.ok(resetConfirmation.prompt.test('确认全量重初始化？将清空本地运行时并重新下载。'));
+assert.ok(resetConfirmation.confirm.test('全量重初始化'));
+const pendingV2Runtime = coreBetaV2RuntimeMaintenanceState({
+  text: '本进程已加载并校验：v0.0.27-RC5；正在重置中',
+  composerReady: true,
+  workbenchReady: true,
+  buttonEnabled: false,
+  capabilitiesReadable: true,
+  sdkStatuses: [
+    { family: 'claude-code', phase: 'provisioning' },
+    { family: 'codex', phase: 'ready' },
+  ],
+  stableReadyObservations: 0,
+});
+assert.equal(pendingV2Runtime.ready, false);
+assert.equal(pendingV2Runtime.pending, true);
+const readyV2Runtime = coreBetaV2RuntimeMaintenanceState({
+  text: '本进程已加载并校验：v0.0.27-RC5；Claude Code SDK：就绪；Codex SDK：就绪',
+  composerReady: true,
+  workbenchReady: true,
+  buttonEnabled: true,
+  capabilitiesReadable: true,
+  sdkStatuses: [
+    { family: 'claude-code', phase: 'ready' },
+    { family: 'codex', phase: 'ready' },
+  ],
+  stableReadyObservations: 3,
+  minimumReadyObservations: 3,
+});
+assert.equal(readyV2Runtime.ready, true);
 assert.equal(coreGateIds.at(-1), 'SIT-AUTH-005', '核心门禁用例簿末条必须是退出登录闭环');
 for (const id of [
   'SIT-INIT-004',

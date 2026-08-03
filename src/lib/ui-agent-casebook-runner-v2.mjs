@@ -2399,6 +2399,17 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
     }
     state.screenshots.error = await shot(page, caseDir, '99-error').catch((err) => ({ error: err.message }));
     const message = error.message || String(error);
+    const diagnosticFile = path.join(caseDir, 'framework-exception.json');
+    writeJsonFile(diagnosticFile, {
+      case_id: testCase.id,
+      captured_at: new Date().toISOString(),
+      message,
+      name: String(error?.name || ''),
+      code: String(error?.code || ''),
+      stack: String(error?.stack || ''),
+      page_url: await page?.url?.() || '',
+    });
+    state.artifacts.framework_exception = diagnosticFile;
     if (isCdpDisconnectedMessage(message)) markFailed(state, message, 'automation_error');
     else if (isEnvironmentBlocker(message)) markBlocked(state, message);
     else if (isAutomationExecutionError(message)) markFailed(state, message, 'automation_error');
@@ -2409,7 +2420,8 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
 }
 
 async function executeCoreBetaCase(context) {
-  const { page, state, testCase, caseDir, options = {} } = context;
+  let { page } = context;
+  const { state, testCase, caseDir, options = {} } = context;
   const route = String(testCase.case_type || '');
   const scenario = coreBetaScenarioSpec(testCase);
   if (!scenario) throw new Error(`${testCase.id} 没有 Core Beta 场景注册`);
@@ -2418,6 +2430,8 @@ async function executeCoreBetaCase(context) {
   state.artifacts.core_beta_scenario_driver = scenario.driver;
   let publicState = null;
   for (const action of testCase.action_plan || []) {
+    page = context.runtime?.page || context.page || page;
+    context.page = page;
     const prefix = `action-${String(action.number).padStart(2, '0')}-${action.operation}`;
     const receipt = {
       action_id: action.action_id,
@@ -2453,6 +2467,8 @@ async function executeCoreBetaCase(context) {
       };
     } else if (action.operation === 'execute') {
       await executeCoreBetaRoute(context, route);
+      page = context.runtime?.page || context.page || page;
+      context.page = page;
       publicState = await captureCoreBetaPublicState(page, testCase);
       receipt.observed_state = {
         step_count: state.steps.length,
@@ -2495,6 +2511,8 @@ async function executeCoreBetaCase(context) {
       break;
     }
   }
+  page = context.runtime?.page || context.page || page;
+  context.page = page;
   publicState ||= await captureCoreBetaPublicState(page, testCase);
   const readbackFile = path.join(caseDir, 'public-state-readback.json');
   writeJsonFile(readbackFile, publicState);
@@ -3299,39 +3317,627 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
   return file;
 }
 
-async function executeCoreBetaInitializationCase({ page, state, testCase, caseDir, selectors, timeoutMs, options = {} }) {
-  const methodByCase = {
-    'BETA-INIT-001': 'runtimeUpdateCheck',
-    'BETA-INIT-002': 'runtimeResetAll',
-    'BETA-INIT-003': 'skillsReinstall',
-    'BETA-INIT-004': 'sessionsPurgeAllEnvs',
+export function coreBetaV2MaintenanceConfirmationContract(testId) {
+  const contracts = {
+    'assistant-runtime-reset-all': {
+      prompt: /确认.*(?:全量重初始化|重置)|(?:全量重初始化|一键重置)[\s\S]*(?:清空|不可恢复|重新下载)/i,
+      confirm: /^(?:确认)?(?:全量重初始化|一键重置|重置全部运行时)$/,
+    },
+    'assistant-skills-reinstall': {
+      prompt: /确认.*(?:重装|Skill)|(?:一键重装|重装 Skill)[\s\S]*(?:清理|重新物化|确定)/i,
+      confirm: /^(?:确认)?(?:一键)?重装\s*Skill$/,
+    },
+    'assistant-sessions-purge': {
+      prompt: /确认.*清空|清空[\s\S]*(?:全部|所有环境)[\s\S]*(?:会话|不可恢复)/i,
+      confirm: /^(?:确认)?清空(?:全部)?会话$/,
+    },
   };
-  const method = methodByCase[testCase.id];
-  if (method) {
-    await ensureSidebarExpanded(page, state);
-    const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
-    if (await visible(settingsMenu, 1_500)) {
-      await settingsMenu.click({ force: true });
-      const settings = page.locator('[data-testid="nav-settings"]').first();
-      if (await visible(settings, 1_500)) await settings.click({ force: true });
+  return contracts[testId] || null;
+}
+
+async function openCoreBetaV2SystemSettings(page, state) {
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  if (await visible(maintenance, 800)) return { ok: true, reason: '运行时维护区已打开。' };
+  await ensureSidebarExpanded(page, state);
+  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
+  if (!(await visible(menu, 2500))) return { ok: false, reason: '未找到设置菜单。' };
+  await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
+  if (await visible(maintenance, 1200)) return { ok: true, reason: '设置菜单已直接打开运行时维护区。' };
+  const settings = page.locator('[data-testid="nav-settings"]').first();
+  if (!(await visible(settings, 2500))) return { ok: false, reason: '设置菜单未展示个人设置入口。' };
+  await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+  const ready = await visible(maintenance, 90_000);
+  return {
+    ok: ready,
+    reason: ready ? '已进入运行时维护区。' : '个人设置打开后运行时维护区未在 90000ms 内出现。',
+  };
+}
+
+async function acceptCoreBetaV2MaintenanceConfirmation(page, action, {
+  testId,
+  state,
+  caseDir,
+  timeoutMs = 5000,
+} = {}) {
+  const contract = coreBetaV2MaintenanceConfirmationContract(testId);
+  if (!contract) {
+    await action();
+    return { message: '', source: 'not-required', accepted: true, confirmation_label: '', screenshot: '' };
+  }
+
+  let nativeResult = null;
+  const listener = async (dialog) => {
+    const message = dialog.message();
+    const expected = contract.prompt.test(message);
+    nativeResult = {
+      message,
+      source: 'native-dialog',
+      accepted: expected,
+      confirmation_label: expected ? 'dialog.accept' : 'dialog.dismiss',
+      screenshot: '',
+    };
+    if (expected) await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
+    else await dialog.dismiss().catch(() => {});
+  };
+  page.once('dialog', listener);
+  await action();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (nativeResult) {
+      page.off('dialog', listener);
+      return nativeResult;
     }
+    const dialogs = page.locator('[role="dialog"], .modal');
+    const count = await dialogs.count().catch(() => 0);
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const dialog = dialogs.nth(index);
+      if (!(await visible(dialog, 200))) continue;
+      const message = await dialog.innerText({ timeout: 600 }).catch(() => '');
+      if (!contract.prompt.test(message)) continue;
+      const controls = dialog.locator('button, [role="button"]');
+      const controlCount = await controls.count().catch(() => 0);
+      let confirmation = null;
+      let confirmationLabel = '';
+      for (let controlIndex = 0; controlIndex < controlCount; controlIndex += 1) {
+        const candidate = controls.nth(controlIndex);
+        if (!(await visible(candidate, 150))) continue;
+        const label = String(await candidate.innerText({ timeout: 300 }).catch(() => '')).trim();
+        if (!contract.confirm.test(label)) continue;
+        confirmation = candidate;
+        confirmationLabel = label;
+        break;
+      }
+      const sequence = Number(state?._coreBetaV2MaintenanceConfirmationCount || 0) + 1;
+      if (state) state._coreBetaV2MaintenanceConfirmationCount = sequence;
+      const screenshot = caseDir
+        ? await shot(page, caseDir, `maintenance-confirm-${String(sequence).padStart(2, '0')}-${slugify(testId)}`)
+        : '';
+      if (state && screenshot) {
+        state.screenshots[`maintenance_confirmation_${String(sequence).padStart(2, '0')}`] = screenshot;
+      }
+      if (!confirmation) {
+        page.off('dialog', listener);
+        return {
+          message,
+          source: 'custom-dialog-missing-confirm',
+          accepted: false,
+          confirmation_label: '',
+          screenshot,
+        };
+      }
+      await confirmation.click({ force: true }).catch(async () => confirmation.evaluate((element) => element.click()));
+      const closed = await dialog.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false);
+      page.off('dialog', listener);
+      return {
+        message,
+        source: 'custom-dialog',
+        accepted: closed,
+        confirmation_label: confirmationLabel,
+        screenshot,
+      };
+    }
+    await page.waitForTimeout(100).catch(() => {});
+  }
+  page.off('dialog', listener);
+  return { message: '', source: 'none', accepted: false, confirmation_label: '', screenshot: '' };
+}
+
+async function clickCoreBetaV2MaintenanceAction({
+  page,
+  state,
+  caseDir,
+  testId,
+  destructive,
+}) {
+  const button = page.locator(`[data-testid="${testId}"]`).first();
+  if (!(await visible(button, 3000))) return { ok: false, reason: `未找到维护按钮 ${testId}。` };
+  const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
+  const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  const click = async () => button.click({ force: true }).catch(async () => button.evaluate((element) => element.click()));
+  const confirmation = destructive
+    ? await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
+      testId,
+      state,
+      caseDir,
+      timeoutMs: 5000,
+    })
+    : await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
+      testId: '',
+      state,
+      caseDir,
+      timeoutMs: 0,
+    });
+  if (!confirmation.accepted) {
+    return { ok: false, reason: `${testId} 未出现可验证的预期确认弹窗。`, confirmation };
+  }
+  const busyObserved = await page.waitForFunction(({ id }) => {
+    const target = document.querySelector(`[data-testid="${id}"]`);
+    const region = document.querySelector('[data-testid="assistant-runtime-maintenance"]');
+    return Boolean(
+      target?.getAttribute('aria-busy') === 'true'
+      || target?.hasAttribute('disabled')
+      || /检查中|重置中|重装中|清空中|处理中|准备中|正在|下载中|安装中/.test(
+        `${target?.textContent || ''}\n${region?.textContent || ''}`,
+      )
+    );
+  }, { id: testId }, { timeout: 8000 }).then(() => true).catch(() => false);
+  const actionText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  const busyScreenshot = await shot(page, caseDir, `${slugify(testId)}-busy`).catch(() => '');
+  if (busyScreenshot) state.screenshots[`${testId.replaceAll('-', '_')}_busy`] = busyScreenshot;
+  return {
+    ok: true,
+    testid: testId,
+    before_text: clip(beforeText, 1600),
+    action_text: clip(actionText, 1600),
+    confirmation,
+    busy_observed: busyObserved,
+    busy_screenshot: busyScreenshot,
+  };
+}
+
+export function coreBetaV2RuntimeMaintenanceState({
+  text = '',
+  composerReady = false,
+  workbenchReady = false,
+  buttonEnabled = false,
+  capabilitiesReadable = false,
+  sdkStatuses = [],
+  stableReadyObservations = 0,
+  minimumReadyObservations = 2,
+} = {}) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const statuses = Array.isArray(sdkStatuses) ? sdkStatuses : [];
+  const families = new Set(statuses.map((item) => String(item?.family || '').toLowerCase()));
+  const familiesPresent = families.has('codex') && [...families].some((family) => family.startsWith('claude'));
+  const sdkReady = familiesPresent
+    && statuses.every((item) => String(item?.phase || '').toLowerCase() === 'ready');
+  const sdkFailed = statuses.some((item) => ['error', 'failed'].includes(String(item?.phase || '').toLowerCase()));
+  const sdkPending = statuses.length === 0
+    || statuses.some((item) => !['ready', 'error', 'failed'].includes(String(item?.phase || '').toLowerCase()));
+  const visibleActivity = /检查中|初始化中|重置中|重装中|清空中|处理中|准备中|下载中|安装中|\b(?:pending|provisioning|installing|downloading)\b/i.test(normalized);
+  const failed = sdkFailed || /失败|不可用|ENOTEMPTY|exception|runtime[^。\n]*(?:error|failed)/i.test(normalized);
+  const loaded = /本进程已加载并校验|Claude Code SDK[^。；\n]*就绪|Codex SDK[^。；\n]*就绪|运行时[^。；\n]*(?:完成|就绪|ready)/i.test(normalized);
+  const stable = Number(stableReadyObservations) >= Math.max(1, Number(minimumReadyObservations) || 1);
+  const ready = Boolean(
+    normalized
+    && loaded
+    && composerReady
+    && workbenchReady
+    && buttonEnabled
+    && capabilitiesReadable
+    && sdkReady
+    && stable
+    && !visibleActivity
+    && !failed
+  );
+  return {
+    ready,
+    pending: visibleActivity || sdkPending || !buttonEnabled,
+    failed,
+    loaded,
+    sdk_ready: sdkReady,
+    sdk_status_count: statuses.length,
+    stable_ready_observations: Number(stableReadyObservations) || 0,
+    minimum_ready_observations: Math.max(1, Number(minimumReadyObservations) || 1),
+    button_enabled: Boolean(buttonEnabled),
+    composer_ready: Boolean(composerReady),
+    workbench_ready: Boolean(workbenchReady),
+    capabilities_readable: Boolean(capabilitiesReadable),
+    reason: ready
+      ? '运行时维护区、Claude/Codex SDK、工作台、输入区与 capabilities 已连续稳定就绪。'
+      : failed
+        ? '运行时维护区或 SDK 状态出现明确失败终态。'
+        : sdkPending
+          ? 'Claude/Codex SDK 尚未全部达到 ready。'
+          : !familiesPresent
+            ? '缺少 Claude/Codex 两类 SDK 的完整状态读回。'
+            : visibleActivity || !buttonEnabled
+              ? '运行时维护动作仍在处理中。'
+              : !loaded
+                ? '尚未读到已加载并校验的运行时终态。'
+                : !workbenchReady || !composerReady
+                  ? '工作台或输入区尚未恢复。'
+                  : !capabilitiesReadable
+                    ? '公开 capabilities 尚不可读。'
+                    : !stable
+                      ? '就绪状态尚未达到连续稳定采样下限。'
+                      : '运行时尚未达到稳定终态。',
+  };
+}
+
+async function reconnectCoreBetaV2Runtime({ runtime, options, state, caseDir, timeoutMs = 120000 }) {
+  if (!runtime?.playwright?.chromium || !runtime?.cdpUrl) {
+    return { ok: false, reason: 'runner 缺少可变 CDP runtime，无法接管 replacement renderer。' };
+  }
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(1000, Number(timeoutMs) || 120000);
+  let lastError = '';
+  while (Date.now() < deadline) {
+    let nextBrowser = null;
+    try {
+      const reconnectHook = typeof options['restart-reconnect-hook'] === 'function'
+        ? options['restart-reconnect-hook']
+        : null;
+      const reconnected = reconnectHook
+        ? await reconnectHook({ runtime, options, state, caseDir, label: 'Core Beta v2 runtime maintenance' })
+        : null;
+      nextBrowser = reconnected?.browser
+        || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
+      const nextPage = reconnected?.page || await findQbotPage(nextBrowser);
+      if (!nextPage) throw new Error('CDP 已恢复，但未找到 QWork 页面。');
+      if (reconnected?.cdpUrl) runtime.cdpUrl = reconnected.cdpUrl;
+      nextPage.setDefaultTimeout(12000);
+      nextPage.setDefaultNavigationTimeout(30000);
+      runtime.browser = nextBrowser;
+      runtime.page = nextPage;
+      state.artifacts.runtime_reconnects ||= [];
+      state.artifacts.runtime_reconnects.push({
+        label: 'Core Beta v2 runtime maintenance',
+        elapsed_ms: Date.now() - startedAt,
+        cdp_url: runtime.cdpUrl,
+      });
+      return { ok: true, browser: nextBrowser, page: nextPage };
+    } catch (error) {
+      lastError = error?.message || String(error);
+      if (nextBrowser) await nextBrowser.close().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  return { ok: false, reason: `未能在时限内重连 QWork：${clip(lastError, 320)}` };
+}
+
+async function resolveCoreBetaV2MaintenancePage({ page, runtime, options, state, caseDir, errorStreak }) {
+  const candidates = [
+    runtime?.page,
+    page,
+    ...(runtime?.browser?.contexts?.().flatMap((context) => context.pages()) || []),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate.isClosed?.()) continue;
+    const alive = await candidate.evaluate(() => Boolean(document?.documentElement)).then(() => true).catch(() => false);
+    if (alive) {
+      if (runtime) runtime.page = candidate;
+      return { ok: true, page: candidate, reconnected: false };
+    }
+  }
+  if (errorStreak < 3) return { ok: false, page, reconnected: false };
+  const reconnected = await reconnectCoreBetaV2Runtime({
+    runtime,
+    options,
+    state,
+    caseDir,
+    timeoutMs: Number(options['restart-reconnect-timeout-ms'] || 120000),
+  });
+  return reconnected.ok
+    ? { ok: true, page: reconnected.page, reconnected: true }
+    : { ok: false, page, reconnected: false, reason: reconnected.reason };
+}
+
+async function waitForCoreBetaV2MaintenanceTerminal({
+  page,
+  runtime,
+  options,
+  state,
+  caseDir,
+  testCase,
+  maintenance,
+  timeoutMs,
+}) {
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(30_000, Number(timeoutMs) || 0);
+  const observations = [];
+  let activePage = page;
+  let stableReadyObservations = 0;
+  let errorStreak = 0;
+  let lastReadback = { ready: false, reason: '尚未开始终态采样。' };
+  while (Date.now() < deadline) {
+    const resolved = await resolveCoreBetaV2MaintenancePage({
+      page: activePage,
+      runtime,
+      options,
+      state,
+      caseDir,
+      errorStreak,
+    });
+    if (!resolved.ok) {
+      errorStreak += 1;
+      lastReadback = {
+        ...lastReadback,
+        ready: false,
+        reason: resolved.reason || 'QWork renderer 暂时不可读，等待导航或 replacement renderer。',
+      };
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      continue;
+    }
+    activePage = resolved.page;
+    try {
+      const body = await bodyText(activePage);
+      const workbenchReady = /新建任务/.test(body) && /专家|连接器|知识/.test(body);
+      const composerReady = await visible(
+        activePage.locator('[data-testid="composer-input"], .aui-composer-input').first(),
+        800,
+      );
+      let maintenanceRegion = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
+      if (!(await visible(maintenanceRegion, 800))) {
+        await openCoreBetaV2SystemSettings(activePage, state);
+        maintenanceRegion = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
+      }
+      const text = await maintenanceRegion.innerText({ timeout: 2000 }).catch(() => '');
+      const button = activePage.locator(`[data-testid="${maintenance.testId}"]`).first();
+      const buttonEnabled = await button.isEnabled({ timeout: 800 }).catch(() => false);
+      const runtimeData = await activePage.evaluate(async () => {
+        const withTimeout = async (promise, label) => await Promise.race([
+          promise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 5000)),
+        ]);
+        let sdkStatuses = [];
+        let capabilities = null;
+        let sessions = null;
+        try {
+          sdkStatuses = typeof window.agent?.runtimeStatus === 'function'
+            ? await withTimeout(window.agent.runtimeStatus(), 'runtimeStatus')
+            : [];
+        } catch (error) {
+          sdkStatuses = [{ family: 'readback', phase: 'error', error: String(error?.message || error) }];
+        }
+        try {
+          capabilities = typeof window.agent?.capabilities === 'function'
+            ? await withTimeout(window.agent.capabilities(), 'capabilities')
+            : null;
+        } catch (error) {
+          capabilities = { __error: String(error?.message || error) };
+        }
+        try {
+          sessions = typeof window.agent?.listSessions === 'function'
+            ? await withTimeout(window.agent.listSessions(), 'listSessions')
+            : null;
+        } catch (error) {
+          sessions = { __error: String(error?.message || error) };
+        }
+        return { sdkStatuses, capabilities, sessions };
+      });
+      const capabilitiesReadable = Boolean(
+        runtimeData.capabilities
+        && typeof runtimeData.capabilities === 'object'
+        && !runtimeData.capabilities.__error,
+      );
+      const elapsedMs = Date.now() - startedAt;
+      const baseState = coreBetaV2RuntimeMaintenanceState({
+        text,
+        composerReady,
+        workbenchReady,
+        buttonEnabled,
+        capabilitiesReadable,
+        sdkStatuses: runtimeData.sdkStatuses,
+        stableReadyObservations: 1,
+        minimumReadyObservations: 1,
+      });
+      const updateReady = maintenance.terminal === 'update'
+        && elapsedMs >= 1000
+        && buttonEnabled
+        && capabilitiesReadable
+        && !baseState.pending
+        && !baseState.failed
+        && /当前|完成|就绪|ready|已开始|远端|同版本|无需更新/i.test(text);
+      const sessionsEmpty = maintenance.terminal === 'sessions-empty'
+        && elapsedMs >= 1500
+        && workbenchReady
+        && capabilitiesReadable
+        && Array.isArray(runtimeData.sessions)
+        && runtimeData.sessions.length === 0;
+      const runtimeReady = maintenance.terminal === 'runtime-ready'
+        && elapsedMs >= 5000
+        && baseState.ready;
+      const sampleReady = updateReady || sessionsEmpty || runtimeReady;
+      stableReadyObservations = sampleReady ? stableReadyObservations + 1 : 0;
+      const stableRequired = maintenance.terminal === 'update' ? 2 : 3;
+      const stable = stableReadyObservations >= stableRequired;
+      lastReadback = {
+        ...baseState,
+        ready: stable,
+        reason: stable
+          ? maintenance.terminal === 'sessions-empty'
+            ? '工作台已恢复，公开会话列表连续稳定为空。'
+            : maintenance.terminal === 'update'
+              ? '检查更新动作已收敛，维护按钮与公开 capabilities 连续稳定可用。'
+              : '运行时维护区、SDK、工作台、输入区与 capabilities 连续稳定就绪。'
+          : baseState.failed
+            ? baseState.reason
+            : `终态尚未达到连续 ${stableRequired} 次稳定采样：current=${stableReadyObservations}`,
+        elapsed_ms: elapsedMs,
+        terminal_kind: maintenance.terminal,
+        stable_ready_observations: stableReadyObservations,
+        stable_required: stableRequired,
+        maintenance_text: clip(text, 1800),
+        sdk_statuses: runtimeData.sdkStatuses,
+        capabilities: runtimeData.capabilities,
+        sessions: runtimeData.sessions,
+        reconnected: resolved.reconnected,
+      };
+      observations.push({
+        captured_at: new Date().toISOString(),
+        elapsed_ms: elapsedMs,
+        ready: lastReadback.ready,
+        pending: lastReadback.pending,
+        failed: lastReadback.failed,
+        stable_ready_observations: stableReadyObservations,
+        maintenance_text: clip(text, 500),
+        sdk_statuses: runtimeData.sdkStatuses,
+        session_count: Array.isArray(runtimeData.sessions) ? runtimeData.sessions.length : null,
+      });
+      if (observations.length > 60) observations.shift();
+      errorStreak = 0;
+      if (lastReadback.failed || stable) break;
+    } catch (error) {
+      errorStreak += 1;
+      lastReadback = {
+        ...lastReadback,
+        ready: false,
+        reason: `终态采样暂时失败：${clip(error?.message || String(error), 320)}`,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  const screenshot = await shot(activePage, caseDir, `${slugify(maintenance.testId)}-terminal`).catch(() => '');
+  if (screenshot) state.screenshots[`${maintenance.testId.replaceAll('-', '_')}_terminal`] = screenshot;
+  const diagnosticFile = path.join(caseDir, `${slugify(maintenance.method)}-terminal-observations.json`);
+  writeJsonFile(diagnosticFile, {
+    case_id: testCase.id,
+    method: maintenance.method,
+    terminal_kind: maintenance.terminal,
+    timeout_ms: timeoutMs,
+    completed_at: new Date().toISOString(),
+    final: lastReadback,
+    observations,
+  });
+  state.artifacts.core_beta_runtime_maintenance_observations = diagnosticFile;
+  return {
+    ok: lastReadback.ready === true,
+    page: activePage,
+    readback: lastReadback,
+    screenshot,
+    observations_file: diagnosticFile,
+  };
+}
+
+async function executeCoreBetaInitializationCase(context) {
+  let {
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    options = {},
+    runtime,
+  } = context;
+  const maintenanceByCase = {
+    'BETA-INIT-001': {
+      method: 'runtimeUpdateCheck',
+      testId: 'assistant-runtime-update-check',
+      destructive: false,
+      terminal: 'update',
+    },
+    'BETA-INIT-002': {
+      method: 'runtimeResetAll',
+      testId: 'assistant-runtime-reset-all',
+      destructive: true,
+      terminal: 'runtime-ready',
+    },
+    'BETA-INIT-003': {
+      method: 'skillsReinstall',
+      testId: 'assistant-skills-reinstall',
+      destructive: true,
+      terminal: 'runtime-ready',
+    },
+    'BETA-INIT-004': {
+      method: 'sessionsPurgeAllEnvs',
+      testId: 'assistant-sessions-purge',
+      destructive: true,
+      terminal: 'sessions-empty',
+    },
+  };
+  const maintenance = maintenanceByCase[testCase.id];
+  if (maintenance) {
     const before = await captureCoreBetaPublicState(page, testCase);
     const startedAt = Date.now();
-    const result = await page.evaluate(async (bridgeMethod) => {
-      const fn = window.agent?.[bridgeMethod];
-      if (typeof fn !== 'function') return { ok: false, error: `missing bridge method ${bridgeMethod}` };
-      return await fn.call(window.agent);
-    }, method);
-    const after = await captureCoreBetaPublicState(page, testCase);
-    const file = path.join(caseDir, `${slugify(method)}-readback.json`);
-    writeJsonFile(file, { valid: result?.ok !== false, method, elapsed_ms: Date.now() - startedAt, before, result, after });
-    state.artifacts.capability_execution_event = file;
-    if (testCase.id === 'BETA-INIT-004') {
-      const sessions = await page.evaluate(() => window.agent.listSessions());
-      recordAssertion(state, '清空全部会话终态', '清理后本机desktop-local会话应为空。', Array.isArray(sessions) && sessions.length === 0, `sessions=${sessions?.length ?? 'unreadable'}`);
-    } else {
-      recordAssertion(state, `${method}公开桥接执行终态`, `${method} 必须存在且返回非失败终态。`, result?.ok !== false, JSON.stringify(result));
+    const opened = await openCoreBetaV2SystemSettings(page, state);
+    if (!opened.ok) {
+      throw new Error(`${maintenance.method} 无法进入系统设置：${opened.reason}`);
     }
+    const clicked = await clickCoreBetaV2MaintenanceAction({
+      page,
+      state,
+      caseDir,
+      ...maintenance,
+    });
+    if (!clicked.ok) {
+      throw new Error(`${maintenance.method} 真实 UI 动作失败：${clicked.reason}`);
+    }
+    const terminal = await waitForCoreBetaV2MaintenanceTerminal({
+      page,
+      runtime,
+      options,
+      state,
+      caseDir,
+      testCase,
+      maintenance,
+      timeoutMs: Math.max(Number(timeoutMs || 0), maintenance.terminal === 'update' ? 90_000 : 600_000),
+    });
+    page = terminal.page || runtime?.page || page;
+    context.page = page;
+    if (runtime) runtime.page = page;
+    const after = await captureCoreBetaPublicState(page, testCase);
+    const file = path.join(caseDir, `${slugify(maintenance.method)}-readback.json`);
+    const readback = {
+      valid: terminal.ok,
+      method: maintenance.method,
+      testid: maintenance.testId,
+      elapsed_ms: Date.now() - startedAt,
+      before,
+      action: clicked,
+      terminal: terminal.readback,
+      after,
+    };
+    writeJsonFile(file, readback);
+    state.artifacts.capability_execution_event = file;
+    state.artifacts.core_beta_runtime_maintenance = file;
+    recordStep(
+      state,
+      `${maintenance.method} 真实 UI 操作与终态采样`,
+      '必须从系统设置点击真实维护按钮；破坏性操作须捕获并确认弹窗，随后等待公开状态连续稳定。',
+      `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
+      terminal.ok ? 'passed' : 'failed',
+      terminal.screenshot || clicked.busy_screenshot || '',
+      terminal.ok ? '' : 'automation_error',
+    );
+    if (maintenance.destructive) {
+      recordAssertion(
+        state,
+        `${maintenance.method} 确认弹窗证据`,
+        '破坏性初始化操作必须通过真实 UI 触发，并捕获与动作匹配的确认弹窗后才能继续。',
+        clicked.confirmation?.accepted === true && Boolean(clicked.confirmation?.message),
+        JSON.stringify(clicked.confirmation),
+        'automation_error',
+      );
+    }
+    recordAssertion(
+      state,
+      `${maintenance.method} 处理中状态可见`,
+      '点击后必须读到按钮 busy/disabled 或维护区处理中状态，证明动作真实发生。',
+      clicked.busy_observed === true,
+      JSON.stringify({ busy_observed: clicked.busy_observed, action_text: clicked.action_text }),
+      'automation_error',
+    );
+    recordAssertion(
+      state,
+      `${maintenance.method} 稳定终态`,
+      maintenance.terminal === 'sessions-empty'
+        ? '页面刷新后工作台应恢复，且公开会话列表必须为空。'
+        : '维护区、SDK 状态、输入区与公开 capabilities 必须连续稳定就绪。',
+      terminal.ok,
+      JSON.stringify(terminal.readback),
+      'automation_error',
+    );
     return;
   }
   if (testCase.id === 'BETA-INIT-005') {
@@ -20201,7 +20807,12 @@ async function finishCase({ page, state, caseDir }) {
       );
     }
     if (evaluated.some((item) => !item.ok) && state.status !== 'blocked') {
-      markFailed(state, 'Core Beta v2 精准断言未全部成立。', 'automation_error');
+      const prior = String(state.actual_result || '').trim();
+      markFailed(
+        state,
+        `${prior && prior !== 'Core Beta v2 精准断言未全部成立。' ? `${prior}；` : ''}Core Beta v2 精准断言未全部成立。`,
+        'automation_error',
+      );
     }
   }
   if (state.status === 'failed' && state.result_category === 'bug' && !state.problem_description) {
