@@ -29,6 +29,9 @@ export const CORE_BETA_CASE_TYPES = new Set([
   'host_integration',
   'security_privacy',
   'performance_capacity',
+  'model_routing',
+  'capability_activation',
+  'release_deployment',
 ]);
 
 export const CORE_BETA_PIPELINE_POLICIES = new Set([
@@ -59,6 +62,9 @@ export const CORE_BETA_EXECUTOR_ROUTES = Object.freeze({
   host_integration: 'core-beta/host-integration-v2',
   security_privacy: 'core-beta/security-privacy-v2',
   performance_capacity: 'core-beta/performance-capacity-v2',
+  model_routing: 'core-beta/model-routing-v2',
+  capability_activation: 'core-beta/capability-activation-v2',
+  release_deployment: 'core-beta/release-deployment-v2',
 });
 
 const CORE_BETA_CASE_RANGES = Object.freeze({
@@ -68,7 +74,7 @@ const CORE_BETA_CASE_RANGES = Object.freeze({
   ART: 11,
   SKILL: 20,
   EXPERT: 24,
-  MCP: 14,
+  MCP: 16,
   REC: 4,
   AUTH: 6,
   TASK: 10,
@@ -80,6 +86,10 @@ const CORE_BETA_CASE_RANGES = Object.freeze({
   HOST: 6,
   SEC: 8,
   PERF: 6,
+  ROUTE: 6,
+  CAP: 4,
+  STATE: 4,
+  DEPLOY: 8,
 });
 
 export const CORE_BETA_SCENARIO_IDS = new Set(
@@ -183,6 +193,8 @@ const registerScenario = (id, driver, {
   ['BETA-MCP-006', 'mcp_collaboration_two_turn'],
   ['BETA-MCP-007', 'mcp_other_tool_two_turn'],
   ['BETA-MCP-008', 'mcp_last_good_failure_recovery', { fixture_control: 'mcp_discovery_fault' }],
+  ['BETA-MCP-015', 'mcp_owned_stdio_node_teams_host', { fixture_control: 'mcp_owned_stdio_node_matrix' }],
+  ['BETA-MCP-016', 'mcp_current_session_model_id_loopback', { fixture_control: 'mcp_model_id_loopback_matrix' }],
   ['BETA-REC-001', 'teams_embedded_reopen_running', { fixture_control: 'managed_teams_restart' }],
   ['BETA-REC-002', 'runtime_crash_recovery', { fixture_control: 'managed_runtime_restart' }],
   ['BETA-REC-003', 'codex_proxy_no_proxy_matrix', { fixture_control: 'codex_proxy_matrix' }],
@@ -190,6 +202,28 @@ const registerScenario = (id, driver, {
   ['BETA-AUTH-001', 'auth_refresh_expiry_recovery', { fixture_control: 'auth_refresh_fault' }],
   ['BETA-TASK-004', 'task_hitl_answer_skip_timeout', { fixture_control: 'hitl_answer_skip_timeout' }],
   ['BETA-SEC-005', 'security_ssrf_advanced_matrix', { fixture_control: 'ssrf_advanced_matrix' }],
+  ['BETA-ROUTE-001', 'auto_policy_composer_single_select', { fixture_control: 'auto_route_ui_matrix' }],
+  ['BETA-ROUTE-002', 'auto_company_aware_m1_m4_routing', { fixture_control: 'auto_route_classification_matrix' }],
+  ['BETA-ROUTE-003', 'auto_conservative_fallback_and_exhaustion', { fixture_control: 'auto_route_failure_matrix' }],
+  ['BETA-ROUTE-004', 'auto_session_pin_reload_and_manual_isolation', { fixture_control: 'auto_route_session_lifecycle' }],
+  ['BETA-ROUTE-005', 'auto_cas_conflict_bounded_recovery', { fixture_control: 'auto_route_cas_matrix' }],
+  ['BETA-ROUTE-006', 'auto_host_private_router_security', { fixture_control: 'auto_route_private_router_matrix' }],
+  ['BETA-CAP-001', 'capability_skill_mcp_mode_cross_product', { fixture_control: 'capability_activation_mode_matrix' }],
+  ['BETA-CAP-002', 'capability_expert_dependency_overlay', { fixture_control: 'capability_activation_expert_overlay' }],
+  ['BETA-CAP-003', 'capability_required_optional_failure_semantics', { fixture_control: 'capability_activation_failure_matrix' }],
+  ['BETA-CAP-004', 'capability_snapshot_recompile_and_stale_fencing', { fixture_control: 'capability_activation_snapshot_matrix' }],
+  ['BETA-STATE-001', 'sqlite_structured_last_good_restart_recovery', { fixture_control: 'sqlite_last_good_restart_matrix' }],
+  ['BETA-STATE-002', 'sqlite_schema_upgrade_order_and_failure_recovery', { fixture_control: 'sqlite_schema_upgrade_matrix' }],
+  ['BETA-STATE-003', 'pending_ask_hydrate_refresh_and_settlement', { fixture_control: 'pending_ask_recovery_matrix' }],
+  ['BETA-STATE-004', 'terminal_receiver_release_and_immediate_followup', { fixture_control: 'terminal_admission_matrix' }],
+  ['BETA-DEPLOY-001', 'release_policy_activation_observation', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-002', 'protected_migration_authority_and_evidence', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-003', 'legacy_helm_workload_adoption', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-004', 'helm_adoption_resumable_retry', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-005', 'failed_brownfield_helm_recovery', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-006', 'ingress_service_port_baseline_preservation', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-007', 'bounded_redacted_deployment_diagnostics', { fixture_control: 'protected_release_deployment' }],
+  ['BETA-DEPLOY-008', 'retire_remote_qbot_ui_service', { fixture_control: 'protected_release_deployment' }],
 ].forEach(([id, driver, options]) => registerScenario(id, driver, options));
 
 const productionExtensionLegacyDrivers = Object.freeze({
@@ -340,6 +374,14 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'accessibility_scan',
   'external_navigation_trace',
   'rollback_trace',
+  'model_route_trace',
+  'activation_snapshot',
+  'sqlite_state_readback',
+  'ask_lifecycle_trace',
+  'dashboard_policy_readback',
+  'deployment_receipt',
+  'migration_receipt',
+  'helm_lifecycle_trace',
 ]);
 
 const REQUIRED_CASE_FIELDS = [
@@ -397,6 +439,8 @@ const CONVERSATION_TYPES = new Set([
   'host_integration',
   'security_privacy',
   'performance_capacity',
+  'model_routing',
+  'capability_activation',
 ]);
 
 const CAPABILITY_TYPES = new Set([
@@ -406,6 +450,7 @@ const CAPABILITY_TYPES = new Set([
   'expert_use',
   'mcp_lifecycle',
   'mcp_use',
+  'capability_activation',
 ]);
 
 const PLACEHOLDER_COMMAND = /^beta_[a-z]+_\d+_step_\d+$/i;

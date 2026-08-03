@@ -7,16 +7,16 @@ import {
 function greenRun(index, identity = 'release-identity-sha256', { soak = false } = {}) {
   const run = {
     run_id: `green-${index}`,
-    total: 160,
-    completed: 160,
-    executed: 160,
+    total: 184,
+    completed: 184,
+    executed: 184,
     inherited: 0,
     synthetic: 0,
-    unique_case_count: 160,
+    unique_case_count: 184,
     release_identity_sha256: identity,
     release_identity_drift: [],
     trusted_counts: {
-      trusted_pass: 160,
+      trusted_pass: 184,
       trusted_bug: 0,
       trusted_fail: 0,
       trusted_blocked: 0,
@@ -24,10 +24,10 @@ function greenRun(index, identity = 'release-identity-sha256', { soak = false } 
       testcase_issue: 0,
     },
     evidence: {
-      complete_count: 160,
+      complete_count: 184,
       missing_count: 0,
       invalid_count: 0,
-      action_receipts_passed: 160,
+      action_receipts_passed: 184,
     },
     single_runner_unique: true,
     cleanup_complete: true,
@@ -62,7 +62,7 @@ assert.equal(go.release_identity_stable, true);
 assert.equal(go.soak_passed, true);
 
 const synthetic = greenRun(4);
-synthetic.executed = 159;
+synthetic.executed = 183;
 synthetic.synthetic = 1;
 const noGoSynthetic = evaluateCoreBetaGrayGate([
   greenRun(1),

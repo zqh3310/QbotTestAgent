@@ -35,7 +35,7 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `d72aba1cee18f6ec16d66c56920ae3e7b8f31106541cb275507dc4cfe328ba03` |
-| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx` | `核心内测Case` | 160 | `5f93402ef1586d2af16201daaf92aba8b6616825766c0d08c7ed2ed7929eeb6a` |
+| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `1fe1a38e942b51ec41357863716c0ce76fdc37627c56a1eebe15afb7cd5e8e5b` |
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 
@@ -66,14 +66,14 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx
+     PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx \
+     --casebook PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx \
      --sheet 核心内测Case \
      --out outputs/core-beta-capability-audit
    ```
@@ -82,13 +82,13 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx \
+     --casebook PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx \
      --sheet 核心内测Case \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
-     --expected-count 160 \
-     --expected-sha256 5f93402ef1586d2af16201daaf92aba8b6616825766c0d08c7ed2ed7929eeb6a \
+     --expected-count 184 \
+     --expected-sha256 1fe1a38e942b51ec41357863716c0ce76fdc37627c56a1eebe15afb7cd5e8e5b \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
@@ -112,11 +112,11 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 
 7. 确认本轮只有一个受管 runner、一个固定宿主和一个不可变输出目录。禁止启动第二 runner。
 
-8. 确认所需真实资源已经就绪。160 条中需要第二账号、OAuth、GitLab、重启、原生 IME、故障矩阵或安全矩阵的 Case，不得用普通 UI 会话替代。
+8. 确认所需真实资源已经就绪。184 条中需要第二账号、OAuth、GitLab、重启、原生 IME、故障矩阵、安全矩阵、Auto 路由故障、能力激活快照、SQLite/Ask 竞态或受保护 UAT 部署的 Case，不得用普通 UI 会话替代。
 
 ## 4. Fixture 控制器合同
 
-74 条和 160 条 Casebook 都包含不能由裸 UI 环境独立构造的场景。需要严格控制器的 Case 必须配置：
+74 条和 184 条 Casebook 都包含不能由裸 UI 环境独立构造的场景。需要严格控制器的 Case 必须配置：
 
 ```text
 --core-beta-fixture-control-url http://127.0.0.1:<port>
@@ -166,17 +166,29 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 
 证据会被复制进当前 Case 目录并重新计算 SHA-256。字段不匹配、证据为空、路径越界或控制器不可用时，必须在 Case 0 前或当前 Case 收尾时停止；禁止绕过。
 
+### 4.1 184 条新增高风险合同
+
+完整生产灰度门禁在原 160 条基础上新增 24 条，全部属于一票否决范围：
+
+- `BETA-ROUTE-001~006`：Auto 固定 Claude Code family、公司感知 M1–M4、保守 fallback、host-private router、CAS 与手动选择隔离；必须记录 `model_route_trace`。
+- `BETA-CAP-001~004`：Skill/MCP auto/manual 四象限、Expert overlay、required/optional failure 和 stale/principal/generation fencing；必须记录 `activation_snapshot`。
+- `BETA-STATE-001~004`：结构化 SQLite last-good、schema migration、Ask pending 重建、terminal receiver admission；必须记录 `sqlite_state_readback` 或 `ask_lifecycle_trace`。
+- `BETA-MCP-015~016`：Teams owned Node stdio 生命周期和当前会话 model ID 权威覆盖；不得只凭回复文本判定。
+- `BETA-DEPLOY-001~008`：Dashboard 策略、受保护迁移、Helm legacy 接管/重试/恢复、Ingress、诊断和 qbot-ui 退役。必须在隔离 UAT namespace 使用真实部署控制器，记录 `dashboard_policy_readback`、`deployment_receipt`、`migration_receipt` 或 `helm_lifecycle_trace`；本地 mock/fixture 不能替代。
+
+上述 Case 均不得 pipeline 并发执行。缺少受保护环境、控制器或任一证据角色时只能 `trusted_blocked` 或 `framework_issue`，不能缩减后宣称完整生产门禁通过。
+
 ## 5. 直接连接 QBot/QWork 执行
 
 适用于已经启动并登录、能够通过 CDP 访问的 QBot/QWork。产品环境必须在启动前由操作者确认；框架不会替操作者把 PROD、UAT 或 DEV 互相切换。
 
-完整 160 条示例：
+完整 184 条示例：
 
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx"
-OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-160_<release-id>"
+CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx"
+OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-184_<release-id>"
 
 npm run ui-agent:casebook-run -- \
   --casebook "$CASEBOOK" \
@@ -226,7 +238,7 @@ npm run ui-agent:casebook-run -- \
 ### 5.1 显式缩减范围批次
 
 当真实 fixture provider 暂不可用、且操作者明确要求先执行其余基础功能时，
-只允许使用显式 scoped lane。它不会修改 Casebook，也不能作为 74/160 门禁或
+只允许使用显式 scoped lane。它不会修改 Casebook，也不能作为 74/184 门禁或
 生产放行证据：
 
 ```bash
@@ -273,7 +285,7 @@ fail-closed。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx"
+   CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx"
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX.json)"
 
    python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
@@ -288,7 +300,7 @@ fail-closed。
 3. 启动唯一 runner：
 
    ```bash
-   OUT="teams360-automation/output/$(date +%Y%m%d%H%M)_core-beta-160_<release-id>"
+   OUT="teams360-automation/output/$(date +%Y%m%d%H%M)_core-beta-184_<release-id>"
 
    npm --prefix teams360-automation run casebook -- \
      --casebook "$CASEBOOK" \
@@ -380,7 +392,7 @@ manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Ca
 
 - 输出目录一旦产生真实 Case 结果，就视为不可变批次。
 - 框架或 Case 修复后使用新的输出目录。
-- Core Beta v2 的生产灰度轮次要求 `executed=total`、`inherited=0`、`synthetic=0`，因此正式 74/160 全量门禁不使用跨批次继承；中断后重新执行完整新批次。
+- Core Beta v2 的生产灰度轮次要求 `executed=total`、`inherited=0`、`synthetic=0`，因此正式 74/184 全量门禁不使用跨批次继承；中断后重新执行完整新批次。
 - 旧协议的 360Teams lineage 只有在显式 `--resume-from` 加 `--impact-case` 或 `--impact-all true` 时允许使用，且源批次必须冻结、证据完整、发布身份兼容。
 - 发布身份变化时必须执行全量新批次，不能继承旧发布结果。
 - 明确 identity drift、重复 runner、manifest 不完整仍 completed 或 synthetic completed 时，立即停止并冻结当前批次。
@@ -410,13 +422,13 @@ manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Ca
 
 ## 12. 多轮生产灰度门禁
 
-单轮全绿不授权生产。完整 160 条必须在同一冻结发布身份下连续通过 3–5 轮，且每轮满足：
+单轮全绿不授权生产。完整 184 条必须在同一冻结发布身份下连续通过 5 轮，且每轮满足：
 
-- `total=completed=executed=unique_case_count=trusted_pass=160`
+- `total=completed=executed=unique_case_count=trusted_pass=184`
 - `inherited=0`
 - `synthetic=0`
 - `trusted_bug/trusted_fail/trusted_blocked/framework_issue/testcase_issue=0`
-- evidence complete 和 action receipts 均为 160，missing/invalid 为 0
+- evidence complete 和 action receipts 均为 184，missing/invalid 为 0
 - 单 runner 唯一、cleanup 完成、fixture 恢复、真实产品执行成立
 - flaky 为 0
 
@@ -429,7 +441,7 @@ npm run core-beta:gray-gate -- \
   /absolute/path/to/runs.json \
   /absolute/path/to/core-beta-gray-gate.json \
   5 \
-  160
+  184
 ```
 
 仅 `decision=GO_CONTROLLED_GRAY` 表示可进入受控生产灰度内测，不等同于正式 GA。

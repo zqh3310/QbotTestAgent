@@ -112,7 +112,7 @@ function auditCoreBetaSoak(run, {
   };
 }
 
-export function auditCoreBetaRun(run, { expectedCases = 160 } = {}) {
+export function auditCoreBetaRun(run, { expectedCases = 184 } = {}) {
   const failures = [];
   const runId = String(firstDefined(run, ['run_id', 'id', 'name'], '') || '').trim();
   const total = numericSignal(run, ['total', 'case_count', 'summary.total']);
@@ -232,7 +232,7 @@ export function auditCoreBetaRun(run, { expectedCases = 160 } = {}) {
 }
 
 export function evaluateCoreBetaGrayGate(runs, {
-  expectedCases = 160,
+  expectedCases = 184,
   requiredConsecutiveRuns = 5,
   minimumSoakTasks = 100,
   minimumSoakRestarts = 3,

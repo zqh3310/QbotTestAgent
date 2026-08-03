@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { evaluateCoreBetaGrayGate } from '../src/lib/core-beta-gray-gate.mjs';
 
-const [input, output, runCount = '5', expectedCases = '160'] = process.argv.slice(2);
+const [input, output, runCount = '5', expectedCases = '184'] = process.argv.slice(2);
 if (!input) {
   console.error('Usage: node scripts/evaluate-core-beta-gray-gate.mjs <runs.json> [output.json] [required-runs:3-5] [expected-cases]');
   process.exit(2);

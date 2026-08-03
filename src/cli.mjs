@@ -72,7 +72,7 @@ ui-agent-casebook-run:
   --skip-run                     Protocol/fixture dry-run only; synthetic and
                                   never eligible for trusted pass
 
-Run npm run core-beta:pretest before a real 74/160 Casebook batch.
+Run npm run core-beta:pretest before a real 74/184 Casebook batch.
 `;
 }
 

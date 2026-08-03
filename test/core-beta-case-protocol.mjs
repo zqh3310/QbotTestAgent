@@ -15,11 +15,11 @@ import {
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
 
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 160);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 160);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 184);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 184);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  160,
+  184,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 assert.equal(
@@ -45,6 +45,16 @@ assert.equal(
   CORE_BETA_SCENARIO_REGISTRY.get('BETA-SEC-005').fixture_control,
   'ssrf_advanced_matrix',
   '高级 SSRF 矩阵不得复用仅 localhost 探测的旧执行器',
+);
+assert.equal(
+  CORE_BETA_SCENARIO_REGISTRY.get('BETA-DEPLOY-001').fixture_control,
+  'protected_release_deployment',
+  '生产灰度部署门禁必须绑定受保护环境逐 Case 控制器',
+);
+assert.equal(
+  CORE_BETA_SCENARIO_REGISTRY.get('BETA-ROUTE-005').fixture_control,
+  'auto_route_cas_matrix',
+  'Auto CAS 冲突必须绑定受控并发矩阵',
 );
 const verifiedLegacyDrivers = [...CORE_BETA_SCENARIO_REGISTRY.values()]
   .filter((item) => item.legacy_case_id)
