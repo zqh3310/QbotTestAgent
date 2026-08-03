@@ -81,6 +81,11 @@ assert.match(
 );
 assert.match(
   runner,
+  /'BETA-INIT-001':[\s\S]*method: 'preparePythonRuntimes'[\s\S]*testId: 'assistant-prepare-python-runtimes'/,
+  'BETA-INIT-001 必须点击当前发布界面的真实“立即检查运行时”入口',
+);
+assert.match(
+  runner,
   /executeSitInit002[\s\S]*composerProductEntrySnapshot/,
   'SIT-INIT-002 必须通过产品入口快照兼容统一“+”菜单，不能只依赖旧版独立技能/连接器按钮',
 );
@@ -571,7 +576,7 @@ const required = [
   ['受管 runtime 必须追溯到 Volumes 下 360Teams 主进程', /selectManagedRuntimeProcess[\s\S]*Contents\\\/MacOS\\\/360Teams[\s\S]*ancestor_chain/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
-  ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
+  ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-prepare-python-runtimes[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
   ['CONN-019 真实执行 Web 搜索并断言官方来源日期与工具证据', /SIT-CONN-019'[\s\S]*executeSitConnectorWebSearchQuality[\s\S]*webSearchQualityVerdict[\s\S]*Web 搜索新鲜度、相关性与可追溯性/],
   ['CONN-019 日期证据兼容带空格的中文年月日', /dateEvidence = \([\s\S]*20\\d\{2\}\\s\*[\s\S]*年[\s\S]*月[\s\S]*日/],
   ['KNOWLEDGE-001 生成成果后进入知识页并回到来源任务', /SIT-KNOWLEDGE-001'[\s\S]*executeSitKnowledgeClosedLoop[\s\S]*knowledge_gate\.md[\s\S]*知识成果可回到来源任务复核/],

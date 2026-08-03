@@ -3850,8 +3850,8 @@ async function executeCoreBetaInitializationCase(context) {
   } = context;
   const maintenanceByCase = {
     'BETA-INIT-001': {
-      method: 'runtimeUpdateCheck',
-      testId: 'assistant-runtime-update-check',
+      method: 'preparePythonRuntimes',
+      testId: 'assistant-prepare-python-runtimes',
       destructive: false,
       terminal: 'update',
     },
@@ -7622,7 +7622,9 @@ async function executeSitInit009({ page, state, caseDir }) {
   }
   await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
-  const update = page.locator('[data-testid="assistant-runtime-update-check"]').first();
+  const update = page.locator(
+    '[data-testid="assistant-prepare-python-runtimes"], [data-testid="assistant-runtime-update-check"]',
+  ).first();
   const ready = await visible(maintenance, 4000) && await visible(update, 2000);
   state.screenshots.init_009_before_update = await shot(page, caseDir, 'init-009-before-update-check');
   recordStep(state, '进入个人设置的运行时维护区', '应看到当前 release 状态与【检查云端版本】入口。', `maintenanceVisible=${ready}`, ready ? 'passed' : 'failed', state.screenshots.init_009_before_update);
@@ -7631,7 +7633,9 @@ async function executeSitInit009({ page, state, caseDir }) {
   const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
   await update.click({ force: true }).catch(async () => update.evaluate((el) => el.click()));
   const busyObserved = await page.waitForFunction(() => {
-    const button = document.querySelector('[data-testid="assistant-runtime-update-check"]');
+    const button = document.querySelector(
+      '[data-testid="assistant-prepare-python-runtimes"], [data-testid="assistant-runtime-update-check"]',
+    );
     const region = document.querySelector('[data-testid="assistant-runtime-maintenance"]');
     return /验签对账中|处理中|检查中/.test(`${button?.textContent || ''}\n${region?.textContent || ''}`);
   }, null, { timeout: 4000 }).then(() => true).catch(() => false);
