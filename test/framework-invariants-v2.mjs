@@ -13,6 +13,7 @@ import {
   buildCredibilityReview,
   buildSingleHostPipelineBatch,
   buildConversationTurns,
+  caseRequiresModelTier,
   caseAwareReplyAssertion,
   createControlPlaneFaultProxy,
   createConnectorRegressionServer,
@@ -69,6 +70,15 @@ assert.match(
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
+assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-001' }), false, '运行时检查维护 Case 不得被模型门禁挡在初始化之前');
+assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-004' }), false, '清空会话维护 Case 不得依赖模型连接');
+assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-005' }), true, '包含首发验证的初始化 Case 仍必须锁定模型档位');
+assert.equal(caseRequiresModelTier({ id: 'BETA-CHAT-001' }), true, '业务会话 Case 必须锁定模型档位');
+assert.match(
+  runner,
+  /modelTierRecoveryPrefix[\s\S]*deferred_by_initialization_recovery[\s\S]*caseRequiresModelTier\(testCase\)/,
+  '模型连接未恢复时只允许初始化维护前缀延后门禁，业务 Case 仍必须逐条校验',
+);
 assert.match(
   runner,
   /executeSitInit002[\s\S]*composerProductEntrySnapshot/,

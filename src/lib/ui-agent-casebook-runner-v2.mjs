@@ -562,11 +562,25 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       eligible_cases: selectedCases.filter((testCase) => singleHostPipelineEligibility(testCase).eligible).map((testCase) => testCase.id),
       policy: '仅连续、单轮、无附件、无技能/MCP、无HITL、无重启、无共享状态的白名单会话进入流水线；其余自动串行。',
     };
+    const modelTierRecoveryPrefix = selectedCases.length > 0
+      && !caseRequiresModelTier(selectedCases[0]);
     precheck.model_tier = modelTier
       ? (precheck.login_required
         ? { requested: modelTier, status: 'deferred', reason: '当前仍在登录前置阶段，模型档位检查延后到登录后每条 case 执行前。' }
         : await inspectModelTierAvailability(page, modelTier))
       : { requested: '', status: 'skipped', reason: '未请求固定模型档位。' };
+    if (
+      modelTier
+      && modelTierRecoveryPrefix
+      && ['unavailable', 'error'].includes(precheck.model_tier.status)
+    ) {
+      precheck.model_tier = {
+        ...precheck.model_tier,
+        status: 'deferred',
+        reason: `初始化维护 Case 不依赖模型连接；先执行真实初始化恢复，首个需要模型的 Case 发送前仍强制锁定 ${modelTier}。原始检查：${precheck.model_tier.reason || 'unknown'}`,
+        deferred_by_initialization_recovery: true,
+      };
+    }
     if (modelTier && ['unavailable', 'error'].includes(precheck.model_tier.status)) {
       const results = selectedCases.map((testCase, index) => buildSyntheticResult({
         outDir,
@@ -769,6 +783,10 @@ export function coreBetaBatchStopReason(testCase, result) {
       + '必须修复执行、取证、manifest、断言或清理能力后新建不可变批次。';
   }
   return '';
+}
+
+export function caseRequiresModelTier(testCase) {
+  return !/^BETA-INIT-00[1-4]$/.test(String(testCase?.id || '').trim().toUpperCase());
 }
 
 function normalizeProductionRiskDomain(value) {
@@ -1847,7 +1865,7 @@ async function dispatchSingleHostPipelineCase({
     if (await isLoginRequiredNow(page)) {
       throw new Error('单宿主流水线派发前检测到登录态失效；流水线不会在后台自动穿插登录流程。');
     }
-    if (modelTier) {
+    if (modelTier && caseRequiresModelTier(testCase)) {
       const modelResult = await ensureModelTier(page, state, caseDir, modelTier);
       if (!modelResult.ok) {
         markBlocked(state, modelResult.reason || `未能切换到 ${modelTier} 模型档位。`);
@@ -2334,7 +2352,7 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       recordStep(state, '自动登录前置完成', '完成登录后应回到 QBot 工作台并继续执行原用例。', workbench.reason, 'passed', state.screenshots.after_auto_auth);
     }
 
-    if (modelTier) {
+    if (modelTier && caseRequiresModelTier(testCase)) {
       const modelResult = await ensureModelTier(page, state, caseDir, modelTier);
       if (!modelResult.ok) {
         markBlocked(state, modelResult.reason || `未能切换到 ${modelTier} 模型档位。`);
