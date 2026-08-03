@@ -12,6 +12,7 @@ import {
   brokenAttachmentFabricationEvidence,
   buildCredibilityReview,
   buildSingleHostPipelineBatch,
+  buildSummary,
   buildConversationTurns,
   caseRequiresModelTier,
   caseAwareReplyAssertion,
@@ -21,6 +22,7 @@ import {
   countEnumeratedItems,
   coreBetaBatchStopReason,
   coreBetaCompletionBlockReason,
+  coreBetaInitializationContinuation,
   coreBetaRuntimeExecutorBinding,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
@@ -38,6 +40,7 @@ import {
   obviousDuplicateEvidence,
   probeConnectorRegressionFixture,
   parseSingleHostPipelineSize,
+  partitionCasebookResults,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   replySendObservedRunning,
@@ -409,11 +412,69 @@ const localFixtureAudit = await inspectCoreBetaFixtureReadiness({
 assert.equal(localFixtureAudit.ok, true, '公开产品状态型 Core Beta Case 不需要外部 fixture controller');
 assert.match(
   coreBetaBatchStopReason(
-    { id: 'BETA-INIT-002', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
+    { id: 'BETA-INIT-001', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
     { status: 'failed', result_category: 'bug' },
   ),
-  /初始化硬门禁/,
-  '全量初始化失败必须停止后续 Core Beta Case',
+  /初始化执行门禁/,
+  '发布身份与运行时基础初始化失败必须停止后续 Core Beta Case',
+);
+const safeInitializationContinuation = coreBetaInitializationContinuation({
+  testCase: { id: 'BETA-INIT-003' },
+  terminalReadback: {
+    pending: false,
+    failed: true,
+    loaded: true,
+    sdk_ready: true,
+    button_enabled: true,
+    composer_ready: true,
+    workbench_ready: true,
+    capabilities_readable: true,
+  },
+  afterReadback: { page: { body_text_length: 100 } },
+});
+assert.equal(
+  safeInitializationContinuation.safe,
+  true,
+  '维护动作产品失败但公开工作台完整可用时应允许继续收集独立 Case 证据',
+);
+assert.equal(
+  coreBetaBatchStopReason(
+    { id: 'BETA-INIT-003', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
+    {
+      status: 'failed',
+      result_category: 'bug',
+      initialization_continuation: safeInitializationContinuation,
+    },
+  ),
+  '',
+  '初始化产品 Bug 在安全连续性已证明时不应浪费后续独立 Case',
+);
+assert.match(
+  coreBetaBatchStopReason(
+    { id: 'BETA-INIT-003', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
+    {
+      status: 'failed',
+      result_category: 'bug',
+      initialization_continuation: {
+        eligible: true,
+        safe: false,
+      },
+    },
+  ),
+  /初始化执行门禁/,
+  '初始化失败后公开工作台不可用或证据不足时必须停止',
+);
+assert.match(
+  coreBetaBatchStopReason(
+    { id: 'BETA-INIT-003', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
+    {
+      status: 'failed',
+      result_category: 'automation_error',
+      initialization_continuation: safeInitializationContinuation,
+    },
+  ),
+  /框架硬门禁/,
+  '初始化 automation_error 即使页面看似可用也必须停止',
 );
 assert.match(
   coreBetaBatchStopReason(
@@ -430,6 +491,45 @@ assert.equal(
   ),
   '',
   '可信产品 Bug 不应阻止后续独立 Case 收集',
+);
+assert.deepEqual(
+  partitionCasebookResults([
+    { id: 'BETA-CHAT-001', status: 'passed', synthetic: false },
+    { id: 'BETA-CHAT-002', status: 'blocked', synthetic: true },
+  ]),
+  {
+    completed: [{ id: 'BETA-CHAT-001', status: 'passed', synthetic: false }],
+    syntheticDiagnostics: [{ id: 'BETA-CHAT-002', status: 'blocked', synthetic: true }],
+  },
+  'synthetic 只能进入非执行诊断，绝不能进入 completed/results/counts',
+);
+const syntheticOnlySummary = buildSummary({
+  status: 'blocked',
+  startedAt: new Date('2026-08-03T00:00:00.000Z'),
+  outDir: '/tmp/qbot-synthetic-summary-regression',
+  casebook: '/tmp/casebook.xlsx',
+  resultExcel: '/tmp/result.xlsx',
+  profile: 'mandatory',
+  cdpUrl: 'http://127.0.0.1:9224',
+  results: [{
+    id: 'BETA-CHAT-001',
+    status: 'blocked',
+    result_category: 'automation_error',
+    actual_result: 'Case 0 preflight failed',
+    synthetic: true,
+  }],
+});
+assert.equal(syntheticOnlySummary.counts.total, 0, 'synthetic summary 的 completed total 必须为 0');
+assert.deepEqual(syntheticOnlySummary.results, [], 'synthetic summary 不得包含已完成 Case');
+assert.equal(
+  syntheticOnlySummary.non_executed_diagnostics.length,
+  1,
+  'synthetic preflight 失败只可保留为 non_executed_diagnostics',
+);
+assert.match(
+  runner,
+  /const completedResults = partition\.completed[\s\S]*counts: countResults\(completedResults\)[\s\S]*results: completedResults\.map/,
+  '最终 summary 必须集中排除 synthetic，防止 Case 0 失败伪造整批 completed',
 );
 assert.match(
   runner,

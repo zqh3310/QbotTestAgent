@@ -827,15 +827,70 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
 export function coreBetaBatchStopReason(testCase, result) {
   if (!isCoreBetaCase(testCase)) return '';
   const id = String(testCase?.id || '');
-  if (String(testCase?.case_type || '') === 'run_initialization' && result?.status !== 'passed') {
-    return `初始化硬门禁 ${id} 未通过（${result?.status || 'unknown'}/${result?.result_category || 'unknown'}），`
-      + '停止后续 Case，禁止在未完成全量初始化的环境继续产生无效结果。';
-  }
   if (result?.result_category === 'automation_error') {
     return `框架硬门禁 ${id} 发生 automation_error，停止后续 Case；`
       + '必须修复执行、取证、manifest、断言或清理能力后新建不可变批次。';
   }
+  if (String(testCase?.case_type || '') === 'run_initialization' && result?.status !== 'passed') {
+    const continuation = result?.initialization_continuation;
+    if (
+      result?.result_category === 'bug'
+      && continuation?.eligible === true
+      && continuation?.safe === true
+    ) {
+      return '';
+    }
+    return `初始化执行门禁 ${id} 未通过（${result?.status || 'unknown'}/${result?.result_category || 'unknown'}），`
+      + '且未证明产品失败后的公开工作台可安全继续；停止后续 Case。';
+  }
   return '';
+}
+
+export function coreBetaInitializationContinuation({
+  testCase,
+  terminalReadback = {},
+  afterReadback = {},
+} = {}) {
+  const id = String(testCase?.id || '');
+  const eligible = ['BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004'].includes(id);
+  const signals = {
+    terminal_pending: terminalReadback?.pending === true,
+    terminal_failed: terminalReadback?.failed === true,
+    runtime_loaded: terminalReadback?.loaded === true,
+    sdk_ready: terminalReadback?.sdk_ready === true,
+    button_enabled: terminalReadback?.button_enabled === true,
+    composer_ready: terminalReadback?.composer_ready === true,
+    workbench_ready: terminalReadback?.workbench_ready === true,
+    capabilities_readable: terminalReadback?.capabilities_readable === true,
+    after_page_readable: Number(
+      afterReadback?.page?.body_text_length
+      || afterReadback?.body_text_length
+      || 0,
+    ) > 0,
+  };
+  const safe = eligible
+    && signals.terminal_failed
+    && !signals.terminal_pending
+    && signals.runtime_loaded
+    && signals.sdk_ready
+    && signals.button_enabled
+    && signals.composer_ready
+    && signals.workbench_ready
+    && signals.capabilities_readable
+    && signals.after_page_readable;
+  return {
+    schema_version: 'qbot-core-beta-initialization-continuation/v1',
+    case_id: id,
+    eligible,
+    safe,
+    release_gate_eligible: false,
+    reason: safe
+      ? '初始化维护动作存在可信产品失败，但运行时、SDK、工作台、输入区、按钮和 capabilities 均已确认可用；允许继续收集独立 Case 证据，整轮仍为发布 NO-GO。'
+      : eligible
+        ? '初始化失败后的公开可用性信号不完整，禁止继续执行。'
+        : '该初始化 Case 不允许降级继续。',
+    signals,
+  };
 }
 
 export function coreBetaCompletionBlockReason(testCase, result) {
@@ -4199,6 +4254,14 @@ async function executeCoreBetaInitializationCase(context) {
       terminal: terminal.readback,
       after,
     };
+    if (!terminal.ok) {
+      state.initialization_continuation = coreBetaInitializationContinuation({
+        testCase,
+        terminalReadback: terminal.readback,
+        afterReadback: after,
+      });
+      readback.initialization_continuation = state.initialization_continuation;
+    }
     writeJsonFile(file, readback);
     state.artifacts.capability_execution_event = file;
     state.artifacts.core_beta_runtime_maintenance = file;
@@ -21663,6 +21726,16 @@ function countResults(results) {
   };
 }
 
+export function partitionCasebookResults(results = []) {
+  const completed = [];
+  const syntheticDiagnostics = [];
+  for (const result of Array.isArray(results) ? results : []) {
+    if (result?.synthetic === true) syntheticDiagnostics.push(result);
+    else completed.push(result);
+  }
+  return { completed, syntheticDiagnostics };
+}
+
 function statusFromResults(results) {
   const counts = countResults(results);
   if (counts.failed) return 'failed';
@@ -21671,8 +21744,10 @@ function statusFromResults(results) {
   return 'passed';
 }
 
-function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profile, cdpUrl, modelTier = '', results, reason = '', precheck = null }) {
+export function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profile, cdpUrl, modelTier = '', results, reason = '', precheck = null }) {
   const endedAt = new Date();
+  const partition = partitionCasebookResults(results);
+  const completedResults = partition.completed;
   const summary = {
     command: 'ui-agent-casebook-run',
     status,
@@ -21696,8 +21771,20 @@ function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profil
     ended_at: endedAt.toISOString(),
     duration_ms: Math.max(0, endedAt.getTime() - startedAt.getTime()),
     precheck,
-    counts: countResults(results),
-    results: results.map((result) => ({
+    counts: countResults(completedResults),
+    result_accounting: {
+      observed: Array.isArray(results) ? results.length : 0,
+      completed: completedResults.length,
+      synthetic_diagnostics: partition.syntheticDiagnostics.length,
+    },
+    non_executed_diagnostics: partition.syntheticDiagnostics.map((result) => ({
+      id: result?.id || '',
+      status: result?.status || 'blocked',
+      result_category: result?.result_category || 'blocked',
+      reason: result?.actual_result || result?.conclusion || '',
+      case_report: result?.case_report || '',
+    })),
+    results: completedResults.map((result) => ({
       ...result,
       screenshots_flat: result.screenshots_flat?.length ? result.screenshots_flat : Object.values(result.screenshots || {}).filter((item) => typeof item === 'string'),
     })),
