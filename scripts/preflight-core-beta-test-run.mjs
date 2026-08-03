@@ -243,7 +243,10 @@ async function main() {
   addCheck('git_tracked_clean', !trackedDirty, trackedDirty || 'tracked dirty=false');
   const requiredFrameworkEntrypoints = [
     fileURLToPath(import.meta.url),
+    path.join(ROOT, 'scripts', 'core-beta-fixture-controller.mjs'),
+    path.join(ROOT, 'src', 'lib', 'core-beta-fixture-controller.mjs'),
     path.join(ROOT, 'test', 'core-beta-pretest.mjs'),
+    path.join(ROOT, 'test', 'core-beta-fixture-controller.mjs'),
   ];
   const untrackedFrameworkEntrypoints = requiredFrameworkEntrypoints
     .filter((file) => !isGitTracked(file))

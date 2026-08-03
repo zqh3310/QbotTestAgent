@@ -73,13 +73,22 @@ const report = JSON.parse(fs.readFileSync(path.join(pretestOut, 'core-beta-prete
 if (report.status !== 'BLOCKED') throw new Error(`Expected BLOCKED pretest, got ${report.status}`);
 const entrypointTracking = report.checks.find((item) => item.id === 'git_framework_entrypoints_tracked');
 if (!entrypointTracking) throw new Error('Pretest must audit whether its own executable contract is tracked by Git.');
-const pretestIsTracked = spawnSync('git', [
-  'ls-files',
-  '--error-unmatch',
-  '--',
+const requiredEntrypoints = [
   'scripts/preflight-core-beta-test-run.mjs',
-], { cwd: root, encoding: 'utf8' }).status === 0;
-if (entrypointTracking.status !== (pretestIsTracked ? 'passed' : 'blocked')) {
+  'scripts/core-beta-fixture-controller.mjs',
+  'src/lib/core-beta-fixture-controller.mjs',
+  'test/core-beta-pretest.mjs',
+  'test/core-beta-fixture-controller.mjs',
+];
+const allEntrypointsTracked = requiredEntrypoints.every((entrypoint) => (
+  spawnSync('git', [
+    'ls-files',
+    '--error-unmatch',
+    '--',
+    entrypoint,
+  ], { cwd: root, encoding: 'utf8' }).status === 0
+));
+if (entrypointTracking.status !== (allEntrypointsTracked ? 'passed' : 'blocked')) {
   throw new Error(`Framework entrypoint tracking mismatch: ${JSON.stringify(entrypointTracking)}`);
 }
 for (const id of ['casebook_sha256', 'casebook_exact_sheet_export', 'case_count', 'case_id_unique', 'core_beta_protocol']) {

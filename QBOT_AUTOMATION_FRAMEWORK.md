@@ -122,6 +122,31 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 --core-beta-fixture-control-url http://127.0.0.1:<port>
 ```
 
+仓库提供统一、仅监听 loopback 的控制器入口：
+
+```bash
+npm run core-beta:fixture-controller -- \
+  --providers /absolute/path/to/real-provider-manifest.json \
+  --work-dir "$PWD/.runtime/core-beta-fixture-controller" \
+  --host 127.0.0.1 \
+  --port 58432
+```
+
+Provider manifest 的结构示例位于
+`config/core-beta-fixture-providers.example.json`。示例不是可运行 provider，
+不得直接用于正式预检。每个 provider 都必须是可执行 argv，必须从 stdin
+读取 `qbot-core-beta-fixture-provider-request/v1`，并在 preflight 返回
+`qbot-core-beta-fixture-provider-response/v1`。控制器会实际启动 provider 探针，
+逐 Case 比对 adapter、driver、executor route、contract、action、evidence 与
+Oracle；缺 provider、探针超时/失败、字段不一致、lease 不匹配或 execute
+响应不是 `qbot-core-beta-driver-response/v1` 时 fail-closed。Provider
+stdout/stderr 不回显，只保留字节数与 SHA-256，防止凭据进入预检报告。
+
+控制器不会把 manifest 声明本身当作能力，也不会生成测试证据。第二账号、
+OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME 和受管
+重启仍须由对应测试环境提供，并由 provider 探针实测成功后才能进入
+`ready_cases`。
+
 控制器 preflight 必须逐 Case 返回：
 
 - `case_id`
