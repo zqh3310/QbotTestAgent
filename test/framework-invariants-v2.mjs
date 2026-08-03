@@ -384,6 +384,32 @@ assert.equal(
   false,
   '动作前已经存在的陈旧完成文案不能替代本次状态转换',
 );
+assert.deepEqual(
+  coreBetaV2MaintenanceActionObservation({
+    testId: 'assistant-sessions-purge',
+    busyObserved: false,
+    navigationObserved: true,
+    beforeText: '清空全部会话(各环境)',
+    actionText: '',
+  }),
+  {
+    observed: true,
+    source: 'causal-main-frame-reload',
+    completion_transition: '',
+  },
+  '清空会话成功路径的因果主框架刷新必须作为动作信号，避免刷新销毁瞬时 busy/完成回执后误判',
+);
+assert.equal(
+  coreBetaV2MaintenanceActionObservation({
+    testId: 'assistant-skills-reinstall',
+    busyObserved: false,
+    navigationObserved: true,
+    beforeText: '一键重装 Skill',
+    actionText: '',
+  }).observed,
+  false,
+  '通用导航不得替代没有刷新成功契约的维护动作状态转换',
+);
 const completeEvidence = {
   complete: true,
   missing_roles: [],

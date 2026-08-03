@@ -3657,21 +3657,41 @@ async function clickCoreBetaV2MaintenanceAction({
   if (!(await visible(button, 3000))) return { ok: false, reason: `未找到维护按钮 ${testId}。` };
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   const beforeText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  // 清空会话的成功路径会在短暂完成回执后主动刷新 renderer。刷新可能早于
+  // Playwright 对 busy/完成文案的下一次采样，因此必须在点击确认前订阅主框架
+  // 导航，避免把真实成功误判成“无动作”。该信号只用于明确约定会刷新的 purge
+  // 动作，并且外层仍强制要求匹配确认弹窗与连续稳定空会话终态。
+  let navigationObserved = false;
+  let navigationUrl = '';
+  const mainFrame = page.mainFrame();
+  const navigationListener = (frame) => {
+    if (frame !== mainFrame) return;
+    navigationObserved = true;
+    navigationUrl = frame.url();
+  };
+  if (testId === 'assistant-sessions-purge') page.on('framenavigated', navigationListener);
   const click = async () => button.click({ force: true }).catch(async () => button.evaluate((element) => element.click()));
-  const confirmation = destructive
-    ? await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
-      testId,
-      state,
-      caseDir,
-      timeoutMs: 5000,
-    })
-    : await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
-      testId: '',
-      state,
-      caseDir,
-      timeoutMs: 0,
-    });
+  let confirmation;
+  try {
+    confirmation = destructive
+      ? await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
+        testId,
+        state,
+        caseDir,
+        timeoutMs: 5000,
+      })
+      : await acceptCoreBetaV2MaintenanceConfirmation(page, click, {
+        testId: '',
+        state,
+        caseDir,
+        timeoutMs: 0,
+      });
+  } catch (error) {
+    if (testId === 'assistant-sessions-purge') page.off('framenavigated', navigationListener);
+    throw error;
+  }
   if (!confirmation.accepted) {
+    if (testId === 'assistant-sessions-purge') page.off('framenavigated', navigationListener);
     return { ok: false, reason: `${testId} 未出现可验证的预期确认弹窗。`, confirmation };
   }
   const busyObserved = await page.waitForFunction(({ id }) => {
@@ -3686,9 +3706,11 @@ async function clickCoreBetaV2MaintenanceAction({
     );
   }, { id: testId }, { timeout: 8000 }).then(() => true).catch(() => false);
   const actionText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  if (testId === 'assistant-sessions-purge') page.off('framenavigated', navigationListener);
   const actionObservation = coreBetaV2MaintenanceActionObservation({
     testId,
     busyObserved,
+    navigationObserved,
     beforeText,
     actionText,
   });
@@ -3701,6 +3723,8 @@ async function clickCoreBetaV2MaintenanceAction({
     action_text: clip(actionText, 1600),
     confirmation,
     busy_observed: busyObserved,
+    navigation_observed: navigationObserved,
+    navigation_url: navigationUrl,
     action_observed: actionObservation.observed,
     action_observation_source: actionObservation.source,
     completion_transition: actionObservation.completion_transition,
@@ -3711,6 +3735,7 @@ async function clickCoreBetaV2MaintenanceAction({
 export function coreBetaV2MaintenanceActionObservation({
   testId = '',
   busyObserved = false,
+  navigationObserved = false,
   beforeText = '',
   actionText = '',
 } = {}) {
@@ -3718,6 +3743,13 @@ export function coreBetaV2MaintenanceActionObservation({
     return {
       observed: true,
       source: 'busy',
+      completion_transition: '',
+    };
+  }
+  if (String(testId || '') === 'assistant-sessions-purge' && navigationObserved === true) {
+    return {
+      observed: true,
+      source: 'causal-main-frame-reload',
       completion_transition: '',
     };
   }
@@ -4184,6 +4216,8 @@ async function executeCoreBetaInitializationCase(context) {
         action_observed: clicked.action_observed,
         source: clicked.action_observation_source,
         busy_observed: clicked.busy_observed,
+        navigation_observed: clicked.navigation_observed,
+        navigation_url: clicked.navigation_url,
         completion_transition: clicked.completion_transition,
         before_text: clicked.before_text,
         action_text: clicked.action_text,
