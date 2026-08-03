@@ -21,6 +21,7 @@ import {
   countEnumeratedItems,
   coreBetaBatchStopReason,
   coreBetaCompletionBlockReason,
+  coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
   forbiddenMatchesForCase,
@@ -333,6 +334,30 @@ assert.equal(
   ),
   '',
   '可信产品 Bug 不应阻止后续独立 Case 收集',
+);
+assert.deepEqual(
+  coreBetaV2MaintenanceActionObservation({
+    testId: 'assistant-skills-reinstall',
+    busyObserved: false,
+    beforeText: '一键重装 Skill',
+    actionText: '一键重装 Skill\n完成：技能运行环境已清理,重物化与连接器探测在后台继续。',
+  }),
+  {
+    observed: true,
+    source: 'explicit-completion-transition',
+    completion_transition: '完成：技能运行环境已清理',
+  },
+  '过快完成的维护动作必须用相对动作前新增的精确完成回执证明，不得因漏采 transient busy 误判',
+);
+assert.equal(
+  coreBetaV2MaintenanceActionObservation({
+    testId: 'assistant-skills-reinstall',
+    busyObserved: false,
+    beforeText: '完成：技能运行环境已清理',
+    actionText: '完成：技能运行环境已清理',
+  }).observed,
+  false,
+  '动作前已经存在的陈旧完成文案不能替代本次状态转换',
 );
 const completeEvidence = {
   complete: true,

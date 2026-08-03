@@ -3594,6 +3594,12 @@ async function clickCoreBetaV2MaintenanceAction({
     );
   }, { id: testId }, { timeout: 8000 }).then(() => true).catch(() => false);
   const actionText = await maintenance.innerText({ timeout: 1500 }).catch(() => '');
+  const actionObservation = coreBetaV2MaintenanceActionObservation({
+    testId,
+    busyObserved,
+    beforeText,
+    actionText,
+  });
   const busyScreenshot = await shot(page, caseDir, `${slugify(testId)}-busy`).catch(() => '');
   if (busyScreenshot) state.screenshots[`${testId.replaceAll('-', '_')}_busy`] = busyScreenshot;
   return {
@@ -3603,7 +3609,48 @@ async function clickCoreBetaV2MaintenanceAction({
     action_text: clip(actionText, 1600),
     confirmation,
     busy_observed: busyObserved,
+    action_observed: actionObservation.observed,
+    action_observation_source: actionObservation.source,
+    completion_transition: actionObservation.completion_transition,
     busy_screenshot: busyScreenshot,
+  };
+}
+
+export function coreBetaV2MaintenanceActionObservation({
+  testId = '',
+  busyObserved = false,
+  beforeText = '',
+  actionText = '',
+} = {}) {
+  if (busyObserved === true) {
+    return {
+      observed: true,
+      source: 'busy',
+      completion_transition: '',
+    };
+  }
+  const completionPatterns = {
+    'assistant-prepare-python-runtimes': /(?:完成|就绪|无需更新|已是最新|同版本)[^。\n]*(?:运行时|runtime)/i,
+    'assistant-runtime-reset-all': /完成[：:][^。\n]*(?:运行时|环境|重初始化)/i,
+    'assistant-skills-reinstall': /完成[：:][^。\n]*技能运行环境已清理/i,
+    'assistant-sessions-purge': /完成[：:][^。\n]*(?:会话|任务)[^。\n]*(?:清空|清理|删除)/i,
+  };
+  const pattern = completionPatterns[String(testId || '')];
+  if (!pattern) {
+    return {
+      observed: false,
+      source: 'none',
+      completion_transition: '',
+    };
+  }
+  const before = String(beforeText || '');
+  const after = String(actionText || '');
+  const match = after.match(pattern)?.[0] || '';
+  const changed = Boolean(match) && !before.includes(match);
+  return {
+    observed: changed,
+    source: changed ? 'explicit-completion-transition' : 'none',
+    completion_transition: changed ? match : '',
   };
 }
 
@@ -4019,7 +4066,9 @@ async function executeCoreBetaInitializationCase(context) {
       state,
       `${maintenance.method} 真实 UI 操作与终态采样`,
       '必须从系统设置点击真实维护按钮；破坏性操作须捕获并确认弹窗，随后等待公开状态连续稳定。',
-      `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
+      `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；`
+        + `action_observed=${clicked.action_observed}(${clicked.action_observation_source || 'none'})；`
+        + `busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
       terminal.ok ? 'passed' : 'failed',
       terminal.screenshot || clicked.busy_screenshot || '',
       terminal.ok ? '' : terminalFailureCategory,
@@ -4036,10 +4085,17 @@ async function executeCoreBetaInitializationCase(context) {
     }
     recordAssertion(
       state,
-      `${maintenance.method} 处理中状态可见`,
-      '点击后必须读到按钮 busy/disabled 或维护区处理中状态，证明动作真实发生。',
-      clicked.busy_observed === true,
-      JSON.stringify({ busy_observed: clicked.busy_observed, action_text: clicked.action_text }),
+      `${maintenance.method} 动作状态转换可见`,
+      '点击后必须读到按钮 busy/disabled、维护区处理中状态，或相对动作前新增且与该动作精确匹配的完成回执。',
+      clicked.action_observed === true,
+      JSON.stringify({
+        action_observed: clicked.action_observed,
+        source: clicked.action_observation_source,
+        busy_observed: clicked.busy_observed,
+        completion_transition: clicked.completion_transition,
+        before_text: clicked.before_text,
+        action_text: clicked.action_text,
+      }),
       productTerminalFailure ? 'bug' : 'automation_error',
     );
     recordAssertion(
