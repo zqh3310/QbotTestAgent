@@ -83,6 +83,11 @@ assert.match(
   '框架手册必须固化冻结、修复、校验、推送和新批次续测闭环',
 );
 assert.match(
+  automationFramework,
+  /pipeline 回收结果进入 `completed` 前[\s\S]*原始 Case[\s\S]*manifest 完整性门禁[\s\S]*`automation_error` 硬停止/,
+  '框架手册必须要求 pipeline 解包原始 Case 后执行与串行路径一致的 completed 门禁',
+);
+assert.match(
   runner,
   /--profile'[\s\S]*profile[\s\S]*options\.sheet[\s\S]*--sheet/,
   'Core Beta v2 二次导出必须透传精确 Sheet，禁止多 Sheet Casebook 被静默合并',
@@ -466,6 +471,19 @@ assert.match(
   ),
   /拒绝不完整 manifest/,
   'manifest complete=false 或 invalid_roles 非空不得进入 completed',
+);
+const pipelineCompletionGateSource = runner.match(
+  /for \(let batchOffset = 0; batchOffset < batchResults\.length; batchOffset \+= 1\) \{[\s\S]*?if \(pipelineStopped\) break;/,
+)?.[0] || '';
+assert.match(
+  pipelineCompletionGateSource,
+  /const batchEntry = pipelineBatch\[batchOffset\];[\s\S]*const batchCase = batchEntry\?\.testCase;[\s\S]*coreBetaCompletionBlockReason\(batchCase, result\)/,
+  'pipeline completed 门禁必须解包 batchEntry.testCase，不能让 Core Beta manifest 校验因包装对象而被跳过',
+);
+assert.match(
+  pipelineCompletionGateSource,
+  /coreBetaBatchStopReason\(batchCase, result\)[\s\S]*stopRemainderWithoutSynthetic/,
+  'pipeline 路径必须与串行路径一致，在完整 automation_error 进入 completed 后立即硬停止',
 );
 assert.match(
   runner,

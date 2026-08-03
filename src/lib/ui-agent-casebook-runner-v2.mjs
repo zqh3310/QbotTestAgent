@@ -648,13 +648,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         let pipelineStopped = false;
         for (let batchOffset = 0; batchOffset < batchResults.length; batchOffset += 1) {
           const result = batchResults[batchOffset];
-          const batchCase = pipelineBatch[batchOffset];
+          const batchEntry = pipelineBatch[batchOffset];
+          const batchCase = batchEntry?.testCase;
           const completionBlock = coreBetaCompletionBlockReason(batchCase, result);
           if (completionBlock) {
             stopRemainderWithoutSynthetic({
               outDir,
               selectedCases,
-              startIndex: index + batchOffset,
+              startIndex: batchEntry?.index ?? (index + batchOffset),
               results,
               progressFile,
               status: 'stopped',
@@ -675,6 +676,21 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             pipeline_size: pipelineBatch.length,
             results,
           });
+          const hardStopReason = coreBetaBatchStopReason(batchCase, result);
+          if (hardStopReason) {
+            stopRemainderWithoutSynthetic({
+              outDir,
+              selectedCases,
+              startIndex: (batchEntry?.index ?? (index + batchOffset)) + 1,
+              results,
+              progressFile,
+              status: 'blocked',
+              resultCategory: 'automation_error',
+              reason: hardStopReason,
+            });
+            pipelineStopped = true;
+            break;
+          }
         }
         if (pipelineStopped) break;
         index += pipelineBatch.length - 1;
