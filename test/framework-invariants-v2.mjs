@@ -21,6 +21,7 @@ import {
   countEnumeratedItems,
   coreBetaBatchStopReason,
   coreBetaCompletionBlockReason,
+  coreBetaRuntimeExecutorBinding,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
@@ -76,6 +77,30 @@ assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-001' }), false, '运行时�
 assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-004' }), false, '清空会话维护 Case 不得依赖模型连接');
 assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-005' }), true, '包含首发验证的初始化 Case 仍必须锁定模型档位');
 assert.equal(caseRequiresModelTier({ id: 'BETA-CHAT-001' }), true, '业务会话 Case 必须锁定模型档位');
+for (const [id, caseType, expectedMode] of [
+  ['BETA-ROUTE-001', 'model_routing', 'strict_controller'],
+  ['BETA-CAP-001', 'capability_activation', 'strict_controller'],
+  ['BETA-DEPLOY-001', 'release_deployment', 'strict_controller'],
+  ['BETA-MCP-015', 'mcp_use', 'strict_controller'],
+  ['BETA-MCP-016', 'mcp_use', 'strict_controller'],
+  ['BETA-MCP-009', 'mcp_lifecycle', 'strict_controller'],
+  ['BETA-AUTH-002', 'auth_recovery', 'strict_controller'],
+  ['BETA-ART-006', 'artifact', 'strict_controller'],
+  ['BETA-SKILL-016', 'skill_lifecycle', 'strict_controller'],
+  ['BETA-EXPERT-021', 'expert_lifecycle', 'strict_controller'],
+  ['BETA-STATE-001', 'recovery', 'strict_controller'],
+  ['BETA-STATE-002', 'recovery', 'strict_controller'],
+  ['BETA-CHAT-001', 'conversation', 'native'],
+]) {
+  const binding = coreBetaRuntimeExecutorBinding({ id, case_type: caseType });
+  assert.equal(binding.dispatchable, true, `${id} 必须绑定可调用 runtime executor`);
+  assert.equal(binding.mode, expectedMode, `${id} runtime executor 模式必须固定`);
+}
+assert.equal(
+  coreBetaRuntimeExecutorBinding({ id: 'BETA-ROUTE-001', case_type: 'unknown_route' }).dispatchable,
+  false,
+  '未知 Case type 必须在静态能力审计或执行前 fail-closed',
+);
 assert.match(
   runner,
   /modelTierRecoveryPrefix[\s\S]*deferred_by_initialization_recovery[\s\S]*caseRequiresModelTier\(testCase\)/,

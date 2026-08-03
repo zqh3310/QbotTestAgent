@@ -78,6 +78,13 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --out outputs/core-beta-capability-audit
    ```
 
+   审计报告必须是 `qbot-core-beta-capability-audit/v2`，且同时满足
+   `protocol.executable_count=184`、`runtime_dispatch.ok=true`、
+   `runtime_dispatch.dispatchable_count=184` 和
+   `capability_summary.unsupported_runtime=0`。仅有场景注册、但没有真实
+   runtime 分发路径的 Case 必须在静态审计阶段失败，禁止拖到正式批次中途
+   才报“缺少 executor”。
+
 5. 执行统一真实运行前自检。以下以 360Teams 为例；所有字段必须替换为本轮冻结发布值：
 
    ```bash
@@ -164,7 +171,11 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 - 每个硬 Oracle 的结果和证据引用
 - Case 声明的所有非 runner 证据文件
 
-证据会被复制进当前 Case 目录并重新计算 SHA-256。字段不匹配、证据为空、路径越界或控制器不可用时，必须在 Case 0 前或当前 Case 收尾时停止；禁止绕过。
+控制器会为每个 lease 创建独立 `evidence_output_dir`，provider 只能把证据写入
+这个目录。符号链接、目录、空文件、超过大小上限、未声明角色或 realpath
+越出 lease evidence root 的文件一律拒绝；runner 还会再次校验 evidence root
+边界后才复制进当前 Case 目录并重新计算 SHA-256。字段不匹配、证据为空、
+路径越界或控制器不可用时，必须在 Case 0 前或当前 Case 收尾时停止；禁止绕过。
 
 ### 4.1 184 条新增高风险合同
 

@@ -8,6 +8,8 @@ import { createCoreBetaFixtureController } from '../src/lib/core-beta-fixture-co
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-fixture-controller-'));
 const providerScript = path.join(tempRoot, 'provider.mjs');
 fs.writeFileSync(providerScript, `
+import fs from 'node:fs';
+import path from 'node:path';
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -23,6 +25,10 @@ if (request.phase === 'preflight') {
 } else if (request.phase === 'prepare') {
   process.stdout.write(JSON.stringify({ ok: true, lease_id: 'provider-lease-1' }));
 } else if (request.phase === 'execute') {
+  const evidenceFile = process.env.QBOT_TEST_EVIDENCE_ESCAPE === '1'
+    ? path.join(process.cwd(), 'outside-test-trace.json')
+    : path.join(request.controller.evidence_output_dir, 'test-trace.json');
+  fs.writeFileSync(evidenceFile, JSON.stringify({ valid: true }));
   process.stdout.write(JSON.stringify({
     schema_version: 'qbot-core-beta-driver-response/v1',
     ok: true,
@@ -35,7 +41,7 @@ if (request.phase === 'preflight') {
     operations: [],
     assertions: [],
     oracle_results: [],
-    evidence_files: {}
+    evidence_files: { test_trace: evidenceFile }
   }));
 } else if (request.phase === 'restore') {
   process.stdout.write(JSON.stringify({ ok: true, restored: true }));
@@ -149,6 +155,7 @@ test('fixture controller probes exact Case contract and enforces lease lifecycle
     const prepared = await prepareResponse.json();
     assert.equal(prepared.ok, true);
     assert.equal(prepared.lease_id, 'provider-lease-1');
+    assert.equal(fs.existsSync(prepared.evidence_root), true);
 
     const executeResponse = await fetch(
       `${baseUrl}/v1/core-beta/cases/${requirement.case_id}/execute`,
@@ -166,6 +173,7 @@ test('fixture controller probes exact Case contract and enforces lease lifecycle
     const executed = await executeResponse.json();
     assert.equal(executed.schema_version, 'qbot-core-beta-driver-response/v1');
     assert.equal(executed.case_id, requirement.case_id);
+    assert.equal(path.dirname(executed.evidence_files.test_trace), executed.evidence_root);
 
     const restoreResponse = await fetch(
       `${baseUrl}/v1/core-beta/cases/${requirement.case_id}/restore`,
@@ -196,5 +204,55 @@ test('fixture controller probes exact Case contract and enforces lease lifecycle
       },
     );
     assert.equal(repeatedRestore.status, 409);
+  });
+});
+
+test('fixture controller rejects provider evidence outside the lease evidence root', async () => {
+  await withController([{
+    id: 'escaping-provider',
+    adapter: 'test_adapter',
+    case_ids: [requirement.case_id],
+    command: [process.execPath, providerScript],
+    cwd: tempRoot,
+    timeout_ms: 5_000,
+    env: { QBOT_TEST_EVIDENCE_ESCAPE: '1' },
+  }], async (baseUrl) => {
+    const preflightResponse = await fetch(`${baseUrl}/v1/core-beta/preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 'qbot-core-beta-fixture-preflight/v1',
+        required_adapters: ['test_adapter'],
+        cases: [requirement],
+      }),
+    });
+    assert.equal(preflightResponse.status, 200);
+
+    const prepareResponse = await fetch(
+      `${baseUrl}/v1/core-beta/cases/${requirement.case_id}/prepare`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...requirement, fixture_control: requirement.adapter }),
+      },
+    );
+    const prepared = await prepareResponse.json();
+    assert.equal(prepared.ok, true);
+
+    const executeResponse = await fetch(
+      `${baseUrl}/v1/core-beta/cases/${requirement.case_id}/execute`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...requirement,
+          fixture_control: requirement.adapter,
+          lease_id: prepared.lease_id,
+        }),
+      },
+    );
+    assert.equal(executeResponse.status, 424);
+    const executed = await executeResponse.json();
+    assert.match(executed.reason, /evidence_path_outside_lease_root/);
   });
 });

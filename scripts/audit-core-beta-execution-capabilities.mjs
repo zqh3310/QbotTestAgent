@@ -7,6 +7,9 @@ import {
   coreBetaCaseContractSha256,
   validateCoreBetaCasePlan,
 } from '../src/lib/core-beta-case-protocol.mjs';
+import {
+  coreBetaRuntimeExecutorBinding,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 function option(name, fallback = '') {
   const index = process.argv.indexOf(`--${name}`);
@@ -86,27 +89,23 @@ const localOptionAdapters = new Set([
   'native_ime_input',
   'expert_publish_fault_matrix',
 ]);
-const controllerOnlyRoutes = new Set([
-  'task_lifecycle',
-  'project_lifecycle',
-  'project_automation',
-  'knowledge_lifecycle',
-  'memory_lifecycle',
-  'settings_lifecycle',
-  'host_integration',
-  'security_privacy',
-  'performance_capacity',
-]);
 const rows = cases.map((testCase) => {
   const scenario = CORE_BETA_SCENARIO_REGISTRY.get(testCase.id);
+  const runtimeBinding = coreBetaRuntimeExecutorBinding(testCase, scenario);
   const nativePublic = scenario?.fixture_control === 'public_product_state';
-  const localOption = !nativePublic
+  const localOption = runtimeBinding.mode === 'native'
+    && !nativePublic
     && localOptionAdapters.has(scenario?.fixture_control)
-    && !controllerOnlyRoutes.has(testCase.case_type);
-  const capabilityClass = nativePublic
-    ? (scenario?.legacy_case_id ? 'runner_legacy_verified' : 'runner_native')
-    : localOption ? 'runner_native_with_fixture_option'
-      : 'strict_controller_required';
+  const capabilityClass = !runtimeBinding.dispatchable
+    ? 'unsupported_runtime'
+    : runtimeBinding.mode === 'verified_legacy'
+      ? 'runner_legacy_verified'
+      : runtimeBinding.mode === 'strict_controller'
+        ? 'strict_controller_required'
+        : nativePublic
+          ? 'runner_native'
+          : localOption ? 'runner_native_with_fixture_option'
+            : 'strict_controller_required';
   return {
     case_id: testCase.id,
     case_type: testCase.case_type,
@@ -117,6 +116,9 @@ const rows = cases.map((testCase) => {
     fixture_control: scenario?.fixture_control || '',
     legacy_case_id: scenario?.legacy_case_id || '',
     runtime_fixture: scenario?.runtime_fixture || '',
+    runtime_executor_mode: runtimeBinding.mode,
+    runtime_dispatchable: runtimeBinding.dispatchable,
+    runtime_executor_reason: runtimeBinding.reason,
     capability_class: capabilityClass,
     directly_runnable_without_controller: nativePublic || localOption,
     local_option_required: localOption ? scenario.fixture_control : '',
@@ -139,7 +141,7 @@ const counts = rows.reduce((acc, row) => {
   return acc;
 }, {});
 const report = {
-  schema_version: 'qbot-core-beta-capability-audit/v1',
+  schema_version: 'qbot-core-beta-capability-audit/v2',
   generated_at: new Date().toISOString(),
   casebook: {
     path: casebook,
@@ -155,12 +157,19 @@ const report = {
     errors: protocol.errors,
     warnings: protocol.warnings,
   },
+  runtime_dispatch: {
+    ok: rows.every((row) => row.runtime_dispatchable),
+    dispatchable_count: rows.filter((row) => row.runtime_dispatchable).length,
+    unsupported_count: rows.filter((row) => !row.runtime_dispatchable).length,
+    unsupported_case_ids: rows.filter((row) => !row.runtime_dispatchable).map((row) => row.case_id),
+  },
   capability_summary: {
     total: rows.length,
     runner_native: counts.runner_native || 0,
     runner_native_with_fixture_option: counts.runner_native_with_fixture_option || 0,
     runner_legacy_verified: counts.runner_legacy_verified || 0,
     strict_controller_required: counts.strict_controller_required || 0,
+    unsupported_runtime: counts.unsupported_runtime || 0,
     directly_runnable_without_controller: rows.filter((row) => row.directly_runnable_without_controller).length,
     fail_closed_without_required_controller: true,
   },
@@ -176,6 +185,7 @@ const lines = [
   '',
   `- Casebook SHA-256：\`${report.casebook.sha256}\``,
   `- 协议校验：${protocol.ok ? '通过' : '失败'}（${protocol.executable_count}/${protocol.case_count}）`,
+  `- Runtime 分发闭环：${report.runtime_dispatch.ok ? '通过' : '失败'}（${report.runtime_dispatch.dispatchable_count}/${rows.length}）`,
   `- Runner 原生专项执行器：${report.capability_summary.runner_native}`,
   `- Runner 原生执行器（需明确 fixture 选项/凭证）：${report.capability_summary.runner_native_with_fixture_option}`,
   `- 经语义复核的旧执行器：${report.capability_summary.runner_legacy_verified}`,
@@ -184,10 +194,11 @@ const lines = [
   '',
   '“需要严格逐 Case 控制器”不等于可跳过。控制器必须在 preflight 回显完整 Case contract/action/evidence/oracle 哈希，并在执行时返回逐动作时间戳、证据引用、全部硬 Oracle 结果与真实证据文件；否则该 Case 不得进入 completed。',
   '',
-  '| Case | 类型 | 能力类别 | Driver / Legacy | Fixture adapter | Pipeline | Contract SHA |',
-  '|---|---|---|---|---|---|---|',
+  '| Case | 类型 | 能力类别 | Runtime | Driver / Legacy | Fixture adapter | Pipeline | Contract SHA |',
+  '|---|---|---|---|---|---|---|---|',
   ...rows.map((row) => (
     `| ${markdownEscape(row.case_id)} | ${markdownEscape(row.case_type)} | ${row.capability_class}`
+    + ` | ${markdownEscape(row.runtime_executor_mode)}`
     + ` | ${markdownEscape(row.driver)}${row.legacy_case_id ? `<br>${markdownEscape(row.legacy_case_id)}` : ''}`
     + ` | ${markdownEscape(row.fixture_control)} | ${markdownEscape(row.pipeline_policy)}/${row.batch_size}`
     + ` | \`${row.contract_sha256.slice(0, 16)}…\` |`
@@ -196,3 +207,4 @@ const lines = [
 ];
 fs.writeFileSync(path.join(outDir, 'capability-audit.md'), `${lines.join('\n')}\n`);
 process.stdout.write(`${JSON.stringify(report.capability_summary)}\n`);
+if (!protocol.ok || !report.runtime_dispatch.ok) process.exitCode = 2;

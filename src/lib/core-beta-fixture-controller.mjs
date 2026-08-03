@@ -9,6 +9,7 @@ const PROVIDER_RESPONSE_SCHEMA = 'qbot-core-beta-fixture-provider-response/v1';
 const PREFLIGHT_SCHEMA = 'qbot-core-beta-fixture-preflight/v1';
 const DRIVER_RESPONSE_SCHEMA = 'qbot-core-beta-driver-response/v1';
 const MAX_PROVIDER_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MAX_EVIDENCE_FILE_BYTES = 512 * 1024 * 1024;
 
 function json(response, status, body) {
   const payload = Buffer.from(`${JSON.stringify(body)}\n`);
@@ -119,6 +120,44 @@ function providerPublicView(provider) {
     cwd: provider.cwd,
     timeout_ms: provider.timeout_ms,
   };
+}
+
+function safePathSegment(value) {
+  return String(value || '').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'unknown';
+}
+
+function pathInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function validateProviderEvidenceFiles(body, evidenceRoot, declaredRoles = []) {
+  const raw = body?.evidence_files;
+  if (raw == null) return { ok: true, evidence_files: {} };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, reason: 'evidence_files_must_be_object' };
+  }
+  const root = fs.realpathSync(evidenceRoot);
+  const declared = new Set(normalizeStringArray(declaredRoles));
+  const normalized = {};
+  for (const [role, value] of Object.entries(raw)) {
+    if (!declared.has(role)) return { ok: false, reason: `evidence_role_not_declared:${role}` };
+    const rawPath = String(value || '').trim();
+    if (!rawPath) return { ok: false, reason: `evidence_path_missing:${role}` };
+    const resolved = path.resolve(root, rawPath);
+    if (!fs.existsSync(resolved)) return { ok: false, reason: `evidence_file_missing:${role}` };
+    const stats = fs.lstatSync(resolved);
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      return { ok: false, reason: `evidence_file_not_regular:${role}` };
+    }
+    const real = fs.realpathSync(resolved);
+    if (!pathInside(root, real)) return { ok: false, reason: `evidence_path_outside_lease_root:${role}` };
+    if (stats.size <= 0 || stats.size > MAX_EVIDENCE_FILE_BYTES) {
+      return { ok: false, reason: `evidence_file_size_invalid:${role}:${stats.size}` };
+    }
+    normalized[role] = real;
+  }
+  return { ok: true, evidence_files: normalized };
 }
 
 function invokeProvider(provider, requestBody) {
@@ -382,9 +421,10 @@ export function createCoreBetaFixtureController({
           return;
         }
         const leaseId = String(body.lease_id || '');
+        let activeLease = null;
         if (phase !== 'prepare') {
-          const lease = leases.get(leaseId);
-          if (!lease || lease.case_id !== caseId || lease.contract_sha256 !== requirement.contract_sha256) {
+          activeLease = leases.get(leaseId);
+          if (!activeLease || activeLease.case_id !== caseId || activeLease.contract_sha256 !== requirement.contract_sha256) {
             json(response, 409, { ok: false, reason: 'fixture_lease_missing_or_mismatched', case_id: caseId, phase });
             return;
           }
@@ -398,6 +438,7 @@ export function createCoreBetaFixtureController({
           controller: {
             provider_manifest_sha256: manifest.sha256,
             provider: providerPublicView(prepared.provider),
+            evidence_output_dir: activeLease?.evidence_root || '',
           },
         });
         if (!invoked.ok || invoked.body?.ok !== true) {
@@ -412,10 +453,18 @@ export function createCoreBetaFixtureController({
         }
         if (phase === 'prepare') {
           const createdLeaseId = String(invoked.body.lease_id || randomUUID());
+          const evidenceRoot = path.join(
+            outputRoot,
+            'leases',
+            safePathSegment(caseId),
+            safePathSegment(createdLeaseId),
+          );
+          fs.mkdirSync(evidenceRoot, { recursive: true });
           leases.set(createdLeaseId, {
             case_id: caseId,
             contract_sha256: requirement.contract_sha256,
             provider_id: prepared.provider.id,
+            evidence_root: fs.realpathSync(evidenceRoot),
             created_at: now().toISOString(),
           });
           json(response, 200, {
@@ -423,15 +472,34 @@ export function createCoreBetaFixtureController({
             ok: true,
             case_id: caseId,
             lease_id: createdLeaseId,
+            evidence_root: fs.realpathSync(evidenceRoot),
             provider: invoked.provider,
           });
           return;
         }
-        if (phase === 'restore') leases.delete(leaseId);
         if (phase === 'execute' && invoked.body.schema_version !== DRIVER_RESPONSE_SCHEMA) {
           json(response, 424, { ok: false, reason: `execute_response_schema_must_be:${DRIVER_RESPONSE_SCHEMA}` });
           return;
         }
+        if (phase === 'execute') {
+          const evidenceValidation = validateProviderEvidenceFiles(
+            invoked.body,
+            activeLease.evidence_root,
+            requirement.evidence_roles,
+          );
+          if (!evidenceValidation.ok) {
+            json(response, 424, {
+              ok: false,
+              reason: evidenceValidation.reason,
+              case_id: caseId,
+              phase,
+            });
+            return;
+          }
+          invoked.body.evidence_files = evidenceValidation.evidence_files;
+          invoked.body.evidence_root = activeLease.evidence_root;
+        }
+        if (phase === 'restore') leases.delete(leaseId);
         json(response, 200, {
           ...invoked.body,
           ok: true,

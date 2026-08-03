@@ -44,6 +44,29 @@ if (auditReport.casebook.sheet !== '核心内测Case') throw new Error('Capabili
 if (auditReport.protocol.case_count !== 74 || auditReport.protocol.executable_count !== 74) {
   throw new Error(`Capability audit count mismatch: ${JSON.stringify(auditReport.protocol)}`);
 }
+if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchable_count !== 74) {
+  throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
+}
+
+const grayCasebook = path.join(root, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
+const grayAuditOut = path.join(temp, 'gray-audit');
+const grayAudit = spawnSync(process.execPath, [
+  path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),
+  '--casebook', grayCasebook,
+  '--sheet', '核心内测Case',
+  '--out', grayAuditOut,
+], { cwd: root, encoding: 'utf8' });
+if (grayAudit.status !== 0) throw new Error(`184 capability audit failed: ${grayAudit.stderr || grayAudit.stdout}`);
+const grayAuditReport = JSON.parse(fs.readFileSync(path.join(grayAuditOut, 'capability-audit.json'), 'utf8'));
+if (grayAuditReport.protocol.case_count !== 184
+  || grayAuditReport.protocol.executable_count !== 184
+  || !grayAuditReport.runtime_dispatch?.ok
+  || grayAuditReport.runtime_dispatch.dispatchable_count !== 184) {
+  throw new Error(`184 runtime dispatch audit mismatch: ${JSON.stringify({
+    protocol: grayAuditReport.protocol,
+    runtime_dispatch: grayAuditReport.runtime_dispatch,
+  })}`);
+}
 
 const pretestHelp = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),

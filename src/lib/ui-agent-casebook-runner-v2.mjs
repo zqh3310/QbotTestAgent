@@ -2655,7 +2655,15 @@ async function executeCoreBetaRoute(context, route) {
   if (!scenario || scenario.executor_route !== coreBetaExecutorRoute(context.testCase)) {
     throw new Error(`${context.testCase.id} 场景执行器绑定漂移`);
   }
-  if (scenario.legacy_case_id) {
+  const runtimeBinding = coreBetaRuntimeExecutorBinding(context.testCase, scenario);
+  context.state.artifacts.core_beta_runtime_executor_binding = runtimeBinding;
+  if (!runtimeBinding.dispatchable) {
+    throw new Error(
+      `${context.testCase.id} Core Beta runtime executor 未绑定：`
+      + `case_type=${runtimeBinding.case_type || '(missing)'}；driver=${runtimeBinding.driver || '(missing)'}`,
+    );
+  }
+  if (runtimeBinding.mode === 'verified_legacy') {
     context.state.artifacts.core_beta_legacy_driver = {
       core_beta_case_id: context.testCase.id,
       legacy_case_id: scenario.legacy_case_id,
@@ -2670,6 +2678,9 @@ async function executeCoreBetaRoute(context, route) {
       },
     });
   }
+  if (runtimeBinding.mode === 'strict_controller') {
+    return await executeCoreBetaExtendedProductCase(context, scenario);
+  }
   if (route === 'conversation') return await executeCoreBetaConversationCase(context, scenario);
   if (route === 'attachment') return await executeCoreBetaAttachmentCase(context, scenario);
   if (route === 'artifact') return await executeCoreBetaArtifactCase(context, scenario);
@@ -2679,19 +2690,6 @@ async function executeCoreBetaRoute(context, route) {
   if (route === 'auth_recovery') return await executeCoreBetaAuthRecoveryCase({ ...context, scenario });
   if (route === 'recovery') return await executeCoreBetaRecoveryCase({ ...context, scenario });
   if (route === 'run_initialization') return await executeCoreBetaInitializationCase(context);
-  if ([
-    'task_lifecycle',
-    'project_lifecycle',
-    'project_automation',
-    'knowledge_lifecycle',
-    'memory_lifecycle',
-    'settings_lifecycle',
-    'host_integration',
-    'security_privacy',
-    'performance_capacity',
-  ].includes(route)) {
-    return await executeCoreBetaExtendedProductCase(context, scenario);
-  }
   throw new Error(`Core Beta v2 缺少 executor：${route}`);
 }
 
@@ -2874,6 +2872,10 @@ function validateCoreBetaExtendedDriverResponse({ response, testCase, scenario }
   const evidenceFiles = response?.evidence_files && typeof response.evidence_files === 'object'
     ? response.evidence_files
     : {};
+  const evidenceRoot = path.resolve(String(response?.evidence_root || ''));
+  if (!response?.evidence_root || !fs.existsSync(evidenceRoot) || !fs.statSync(evidenceRoot).isDirectory()) {
+    reasons.push('evidence_root_missing_or_invalid');
+  }
   const declaredRoles = new Set(Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles.map(String) : []);
   const allEvidenceRefs = [
     ...operations.flatMap((item) => (Array.isArray(item?.evidence_refs) ? item.evidence_refs : [])),
@@ -2888,7 +2890,15 @@ function validateCoreBetaExtendedDriverResponse({ response, testCase, scenario }
   const invalidEvidenceRoles = [];
   for (const role of requiredRemoteRoles) {
     const file = path.resolve(String(evidenceFiles[role] || ''));
-    if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size <= 0) {
+    const relative = response?.evidence_root ? path.relative(evidenceRoot, file) : '..';
+    const insideEvidenceRoot = relative === ''
+      || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+    if (!file
+      || !insideEvidenceRoot
+      || !fs.existsSync(file)
+      || fs.lstatSync(file).isSymbolicLink()
+      || !fs.statSync(file).isFile()
+      || fs.statSync(file).size <= 0) {
       invalidEvidenceRoles.push(role);
       continue;
     }
@@ -2903,6 +2913,7 @@ function validateCoreBetaExtendedDriverResponse({ response, testCase, scenario }
     expected_action_ids: expectedActions,
     expected_oracle_sha256s: expectedOracleHashes,
     required_remote_roles: requiredRemoteRoles,
+    evidence_root: response?.evidence_root || '',
     invalid_evidence_roles: invalidEvidenceRoles,
   };
 }
@@ -2920,7 +2931,7 @@ function coreBetaLocalFixtureReadiness(options = {}) {
   };
 }
 
-const CORE_BETA_REMOTE_EXECUTION_ROUTES = new Set([
+export const CORE_BETA_CONTROLLER_CASE_TYPES = new Set([
   'task_lifecycle',
   'project_lifecycle',
   'project_automation',
@@ -2930,7 +2941,89 @@ const CORE_BETA_REMOTE_EXECUTION_ROUTES = new Set([
   'host_integration',
   'security_privacy',
   'performance_capacity',
+  'model_routing',
+  'capability_activation',
+  'release_deployment',
 ]);
+
+export const CORE_BETA_CONTROLLER_SCENARIO_DRIVERS = new Set([
+  'mcp_owned_stdio_node_teams_host',
+  'mcp_current_session_model_id_loopback',
+  'sqlite_structured_last_good_restart_recovery',
+  'sqlite_schema_upgrade_order_and_failure_recovery',
+]);
+
+export const CORE_BETA_NATIVE_CASE_TYPES = new Set([
+  'run_initialization',
+  'conversation',
+  'attachment',
+  'artifact',
+  'skill_lifecycle',
+  'skill_use',
+  'expert_lifecycle',
+  'expert_use',
+  'mcp_lifecycle',
+  'mcp_use',
+  'recovery',
+  'auth_recovery',
+]);
+
+export function coreBetaRuntimeExecutorBinding(testCase, providedScenario = null) {
+  const scenario = providedScenario || coreBetaScenarioSpec(testCase);
+  const caseType = String(testCase?.case_type || '');
+  const driver = String(scenario?.driver || '');
+  if (!scenario) {
+    return {
+      dispatchable: false,
+      mode: 'unsupported',
+      case_type: caseType,
+      driver,
+      reason: 'scenario_missing',
+    };
+  }
+  if (scenario.legacy_case_id) {
+    return {
+      dispatchable: true,
+      mode: 'verified_legacy',
+      case_type: caseType,
+      driver,
+      legacy_case_id: scenario.legacy_case_id,
+      reason: '',
+    };
+  }
+  if (
+    CORE_BETA_CONTROLLER_CASE_TYPES.has(caseType)
+    || CORE_BETA_CONTROLLER_SCENARIO_DRIVERS.has(driver)
+    || driver.startsWith('production_gate_')
+  ) {
+    return {
+      dispatchable: true,
+      mode: 'strict_controller',
+      case_type: caseType,
+      driver,
+      legacy_case_id: '',
+      reason: '',
+    };
+  }
+  if (CORE_BETA_NATIVE_CASE_TYPES.has(caseType)) {
+    return {
+      dispatchable: true,
+      mode: 'native',
+      case_type: caseType,
+      driver,
+      legacy_case_id: '',
+      reason: '',
+    };
+  }
+  return {
+    dispatchable: false,
+    mode: 'unsupported',
+    case_type: caseType,
+    driver,
+    legacy_case_id: '',
+    reason: 'case_type_not_bound',
+  };
+}
 
 function coreBetaLocalFixtureReady({
   options = {},
@@ -2941,12 +3034,11 @@ function coreBetaLocalFixtureReady({
   if (!scenario || !readiness[scenario.fixture_control]) return false;
   if (scenario.fixture_control === 'public_product_state') return true;
   if (scenario.legacy_case_id) return true;
-  const route = String(testCase?.case_type || '');
   // A local credential, restart command or fault toggle only makes the fixture
   // available. It does not constitute an executor for the full declared action
   // plan. Extended product domains therefore require the strict per-Case
   // controller unless a semantically verified legacy driver exists.
-  if (CORE_BETA_REMOTE_EXECUTION_ROUTES.has(route)) return false;
+  if (coreBetaRuntimeExecutorBinding(testCase, scenario).mode === 'strict_controller') return false;
   return true;
 }
 
