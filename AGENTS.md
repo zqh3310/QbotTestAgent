@@ -5,6 +5,7 @@
 - Before designing, starting, monitoring, resuming, or adjudicating any QBot Casebook run, read and follow `/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md`.
 - Treat that file as the canonical execution contract for the 74-Case internal-beta gate, the 160-Case production-gray gate, Core Beta v2 routing, 360Teams execution, fixture-controller preflight, evidence manifests, read-only monitoring, trusted adjudication, and multi-run release decisions.
 - Never start a second runner, reuse a mutable output directory, bypass initialization or fixture preflight, mark synthetic/incomplete evidence completed, or treat raw `passed/failed` as a trusted conclusion.
+- Before any real 74/160 Casebook batch, run `npm run core-beta:pretest -- ...` with the exact Casebook, Sheet, release identity, lane and fixture controller; only `READY` authorizes runner startup.
 - If framework behavior, CLI options, evidence schemas, Casebook identity, or release-gate rules change, update `QBOT_AUTOMATION_FRAMEWORK.md` and its invariant tests in the same commit.
 
 ## DeepbankV2 Boundary

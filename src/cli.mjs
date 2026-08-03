@@ -20,6 +20,58 @@ import { renderIssueIntelligence, renderMonitor, writeReports } from './lib/repo
 import { generateTestCases } from './lib/testcases.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const COMMANDS = [
+  'run',
+  'monitor',
+  'generate',
+  'analyze',
+  'automation-doctor',
+  'automation-run',
+  'release-package-doctor',
+  'release-package-run',
+  'ui-agent-doctor',
+  'ui-agent-run',
+  'ui-agent-fixtures',
+  'ui-agent-explore',
+  'ui-agent-module-run',
+  'ui-agent-casebook-run',
+];
+
+export function usage(command = '') {
+  const common = `QbotTestAgent
+
+Usage:
+  node src/cli.mjs <command> [options]
+  node src/cli.mjs <command> --help
+
+Commands:
+${COMMANDS.map((item) => `  ${item}`).join('\n')}
+`;
+  if (command !== 'ui-agent-casebook-run') return common;
+  return `${common}
+ui-agent-casebook-run:
+  --casebook <xlsx>              Casebook path
+  --sheet <exact-name>           Exact visible Sheet name
+  --profile <name>               Case profile (default: mandatory)
+  --case <id[,id...]>            Ordered Case IDs
+  --offset <n> --limit <n>       Selection window
+  --cdp <loopback-url>           QBot/QWork CDP endpoint
+  --out <new-directory>          Immutable output directory
+  --model-tier <tier>            Model tier, for example M3
+  --timeout-ms <ms>              Per-Case wait limit
+  --single-host-pipeline <1-20>  Ordered single-host pipeline size
+  --core-beta-fixture-control-url <url>
+                                  Strict Core Beta fixture controller
+  --production-gate true         Enable release-identity gate
+  --backend-version <id>
+  --prompt-policy-version <id>
+  --feature-flags-hash <sha256>
+  --skip-run                     Protocol/fixture dry-run only; synthetic and
+                                  never eligible for trusted pass
+
+Run npm run core-beta:pretest before a real 74/160 Casebook batch.
+`;
+}
 
 function defaultRepoRoot() {
   return process.env.DEEPBANK_REPO || (process.platform === 'win32' ? 'D:\\deepbankV2' : path.resolve(ROOT, '..', 'deepbankV2'));
@@ -202,8 +254,17 @@ export async function run(command, rawOptions = {}) {
 }
 
 if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
-  const { command, options } = parseArgs(process.argv.slice(2));
-  if (!['run', 'monitor', 'generate', 'analyze', 'automation-doctor', 'automation-run', 'release-package-doctor', 'release-package-run', 'ui-agent-doctor', 'ui-agent-run', 'ui-agent-fixtures', 'ui-agent-explore', 'ui-agent-module-run', 'ui-agent-casebook-run'].includes(command)) {
+  const argv = process.argv.slice(2);
+  if (['--help', '-h', 'help'].includes(argv[0])) {
+    console.log(usage(argv[1] || ''));
+    process.exit(0);
+  }
+  const { command, options } = parseArgs(argv);
+  if (options.help === true) {
+    console.log(usage(command));
+    process.exit(0);
+  }
+  if (!COMMANDS.includes(command)) {
     console.error(`Unknown command: ${command}`);
     process.exit(2);
   }

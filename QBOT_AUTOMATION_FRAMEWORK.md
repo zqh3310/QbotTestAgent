@@ -74,10 +74,35 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    ```bash
    npm run core-beta:capability-audit -- \
      --casebook PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx \
+     --sheet 核心内测Case \
      --out outputs/core-beta-capability-audit
    ```
 
-5. 冻结并记录发布身份：
+5. 执行统一真实运行前自检。以下以 360Teams 为例；所有字段必须替换为本轮冻结发布值：
+
+   ```bash
+   npm run core-beta:pretest -- \
+     --casebook PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx \
+     --sheet 核心内测Case \
+     --profile mandatory \
+     --lane teams \
+     --out outputs/<new-immutable-pretest-dir> \
+     --expected-count 160 \
+     --expected-sha256 5f93402ef1586d2af16201daaf92aba8b6616825766c0d08c7ed2ed7929eeb6a \
+     --expected-teams-version "<teams-version>" \
+     --expected-teams-build "<teams-build>" \
+     --expected-qwork-version "<qwork-version>" \
+     --expected-control-plane-origin "<exact-control-plane-origin>" \
+     --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
+     --production-gate true \
+     --backend-version "<backend-release-id>" \
+     --prompt-policy-version "<prompt-policy-id>" \
+     --feature-flags-hash "<feature-flags-sha256>"
+   ```
+
+   `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
+
+6. 冻结并记录发布身份：
 
    - 360Teams 版本和 build。
    - QWork runtime、UI URL、环境（DEV/UAT/PROD）。
@@ -85,9 +110,9 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    - 模型档位和模型/引擎。
    - Casebook SHA、框架 commit、CDP、宿主 PID、profile、session。
 
-6. 确认本轮只有一个受管 runner、一个固定宿主和一个不可变输出目录。禁止启动第二 runner。
+7. 确认本轮只有一个受管 runner、一个固定宿主和一个不可变输出目录。禁止启动第二 runner。
 
-7. 确认所需真实资源已经就绪。160 条中需要第二账号、OAuth、GitLab、重启、原生 IME、故障矩阵或安全矩阵的 Case，不得用普通 UI 会话替代。
+8. 确认所需真实资源已经就绪。160 条中需要第二账号、OAuth、GitLab、重启、原生 IME、故障矩阵或安全矩阵的 Case，不得用普通 UI 会话替代。
 
 ## 4. Fixture 控制器合同
 
@@ -366,6 +391,8 @@ npm --prefix teams360-automation run production-gate -- \
 ```bash
 npm run check
 npm --prefix teams360-automation run check
+node src/cli.mjs ui-agent-casebook-run --help
+npm run core-beta:pretest -- --help
 git diff --check
 ```
 

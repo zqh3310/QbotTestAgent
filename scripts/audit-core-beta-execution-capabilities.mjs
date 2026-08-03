@@ -13,6 +13,26 @@ function option(name, fallback = '') {
   return index >= 0 ? String(process.argv[index + 1] || '') : fallback;
 }
 
+function usage() {
+  return `Audit Core Beta Casebook execution capabilities
+
+Usage:
+  node scripts/audit-core-beta-execution-capabilities.mjs \\
+    --casebook <xlsx> \\
+    --sheet <exact-name> \\
+    --out <directory> \\
+    [--profile mandatory] [--root <repo>] [--python <python3>]
+
+The audit is static and does not operate QWork UI. Use core-beta:pretest for
+dynamic runner, host, CDP, release-identity and fixture-controller readiness.
+`;
+}
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+
 function sha256File(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -22,7 +42,12 @@ function markdownEscape(value) {
 }
 
 const root = path.resolve(option('root', process.cwd()));
-const casebook = path.resolve(option('casebook'));
+const casebookOption = option('casebook');
+const sheet = option('sheet');
+const profile = option('profile', 'mandatory');
+if (!casebookOption) throw new Error('缺少 --casebook；使用 --help 查看命令。');
+if (!sheet) throw new Error('缺少 --sheet；能力审计必须绑定精确可见 Sheet。');
+const casebook = path.resolve(casebookOption);
 const outDir = path.resolve(option('out', path.join(root, 'outputs', 'core-beta-capability-audit')));
 const python = option('python', process.env.PYTHON || 'python3');
 if (!casebook || !fs.existsSync(casebook)) {
@@ -35,10 +60,12 @@ const exporter = spawnSync(python, [
   'export-cases',
   '--casebook',
   casebook,
+  '--sheet',
+  sheet,
   '--output',
   exportedFile,
   '--profile',
-  'mandatory',
+  profile,
 ], {
   cwd: root,
   encoding: 'utf8',
@@ -118,6 +145,8 @@ const report = {
     path: casebook,
     filename: path.basename(casebook),
     sha256: sha256File(casebook),
+    sheet,
+    profile,
   },
   protocol: {
     ok: protocol.ok,
