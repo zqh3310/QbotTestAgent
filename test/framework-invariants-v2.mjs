@@ -20,6 +20,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaBatchStopReason,
+  coreBetaCompletionBlockReason,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
   forbiddenMatchesForCase,
@@ -332,6 +333,56 @@ assert.equal(
   ),
   '',
   '可信产品 Bug 不应阻止后续独立 Case 收集',
+);
+const completeEvidence = {
+  complete: true,
+  missing_roles: [],
+  invalid_roles: [],
+  evidence: [{
+    role: 'action_receipt',
+    missing: false,
+    valid: true,
+    sha256: 'a'.repeat(64),
+  }],
+};
+assert.equal(
+  coreBetaCompletionBlockReason(
+    { id: 'BETA-CHAT-001', contract_version: 'qbot-core-beta/v2' },
+    { id: 'BETA-CHAT-001', status: 'failed', result_category: 'bug', evidence_manifest: completeEvidence },
+  ),
+  '',
+  '证据完整的真实产品失败可以进入 completed，供 trusted_bug 复核',
+);
+assert.match(
+  coreBetaCompletionBlockReason(
+    { id: 'BETA-CHAT-001', contract_version: 'qbot-core-beta/v2' },
+    { id: 'BETA-CHAT-001', status: 'blocked', synthetic: true },
+  ),
+  /拒绝 synthetic/,
+  'Core Beta synthetic 结果不得进入 completed',
+);
+assert.match(
+  coreBetaCompletionBlockReason(
+    { id: 'BETA-CHAT-001', contract_version: 'qbot-core-beta/v2' },
+    {
+      id: 'BETA-CHAT-001',
+      status: 'failed',
+      result_category: 'automation_error',
+      evidence_manifest: { complete: false, missing_roles: [], invalid_roles: ['action_receipt'], evidence: [] },
+    },
+  ),
+  /拒绝不完整 manifest/,
+  'manifest complete=false 或 invalid_roles 非空不得进入 completed',
+);
+assert.match(
+  runner,
+  /function stopRemainderWithoutSynthetic(?=[\s\S]*framework-stop-diagnostic\.json)(?=[\s\S]*synthetic: false)/,
+  'Core Beta 硬停止必须保留诊断且不得批量生成 synthetic completed',
+);
+assert.doesNotMatch(
+  runner,
+  /function appendSyntheticRemainder/,
+  '旧 synthetic remainder 写入路径必须移除',
 );
 const missingFixtureAudit = await inspectCoreBetaFixtureReadiness({
   cases: [coreBetaPipelineCase('BETA-PROJECT-001', 'project_lifecycle')],

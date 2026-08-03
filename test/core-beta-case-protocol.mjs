@@ -289,6 +289,35 @@ try {
   });
   assert.equal(manifest.complete, true, JSON.stringify(manifest.missing_roles));
   assert.equal(manifest.evidence.every((item) => /^[a-f0-9]{64}$/.test(item.sha256)), true);
+  fs.writeFileSync(files.action_receipt, JSON.stringify(sample.action_plan.map((action) => ({
+    action_id: action.action_id,
+    status: 'failed',
+    before_screenshot: files.before,
+    after_screenshot: files.after,
+    assertions: [{ id: 'business-oracle', ok: false }],
+  }))));
+  const failedProductManifest = buildCoreEvidenceManifest({
+    testCase: sample,
+    caseDir: temp,
+    screenshots: { before: files.before, final: files.after },
+    actions: sample.action_plan,
+    artifacts: {
+      action_receipt: files.action_receipt,
+      public_state_readback: files.public_state_readback,
+      cleanup_readback: files.cleanup_readback,
+      task_id: files.task_id,
+      send_receipt: files.send_receipt,
+      prompt: files.prompt,
+      transcript: files.transcript,
+      reply_delta: files.reply_delta,
+      reply_completion: files.reply_completion,
+    },
+  });
+  assert.equal(
+    failedProductManifest.complete,
+    true,
+    '结构完整的 failed action receipt 是可信产品失败证据，不得被误判为 manifest 不完整',
+  );
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

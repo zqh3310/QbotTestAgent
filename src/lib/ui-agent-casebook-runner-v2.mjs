@@ -615,7 +615,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       ensureDir(caseDir);
       if (!isLiveCdpPage(browser, page)) {
         const reason = `自动化框架检测到 QBot CDP/page 已断开，停止本批次，避免把后续用例误判为产品 Bug。CDP=${cdpUrl}`;
-        appendSyntheticRemainder({
+        stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index,
@@ -645,7 +645,26 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         });
         browser = runtime.browser;
         page = runtime.page;
-        for (const result of batchResults) {
+        let pipelineStopped = false;
+        for (let batchOffset = 0; batchOffset < batchResults.length; batchOffset += 1) {
+          const result = batchResults[batchOffset];
+          const batchCase = pipelineBatch[batchOffset];
+          const completionBlock = coreBetaCompletionBlockReason(batchCase, result);
+          if (completionBlock) {
+            stopRemainderWithoutSynthetic({
+              outDir,
+              selectedCases,
+              startIndex: index + batchOffset,
+              results,
+              progressFile,
+              status: 'stopped',
+              resultCategory: 'automation_error',
+              reason: completionBlock,
+              failedResult: result,
+            });
+            pipelineStopped = true;
+            break;
+          }
           results.push(result);
           writeJsonFile(progressFile, {
             updated_at: new Date().toISOString(),
@@ -657,11 +676,12 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             results,
           });
         }
+        if (pipelineStopped) break;
         index += pipelineBatch.length - 1;
         const disconnected = batchResults.find(isCdpDisconnectedResult);
         if (disconnected || !isLiveCdpPage(browser, page)) {
           const reason = `单宿主流水线执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。${disconnected ? `原始现象：${clip(disconnected.actual_result || disconnected.conclusion || '', 260)}` : ''}`;
-          appendSyntheticRemainder({
+          stopRemainderWithoutSynthetic({
             outDir,
             selectedCases,
             startIndex: index + 1,
@@ -690,6 +710,21 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       });
       browser = runtime.browser;
       page = runtime.page;
+      const completionBlock = coreBetaCompletionBlockReason(testCase, result);
+      if (completionBlock) {
+        stopRemainderWithoutSynthetic({
+          outDir,
+          selectedCases,
+          startIndex: index,
+          results,
+          progressFile,
+          status: 'stopped',
+          resultCategory: 'automation_error',
+          reason: completionBlock,
+          failedResult: result,
+        });
+        break;
+      }
       results.push(result);
       writeJsonFile(progressFile, {
         updated_at: new Date().toISOString(),
@@ -699,7 +734,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       });
       const hardStopReason = coreBetaBatchStopReason(testCase, result);
       if (hardStopReason) {
-        appendSyntheticRemainder({
+        stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index + 1,
@@ -713,7 +748,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
       if (isCdpDisconnectedResult(result) || !isLiveCdpPage(browser, page)) {
         const reason = `用例 ${testCase.id} 执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。原始现象：${clip(result.actual_result || result.conclusion || '', 260)}`;
-        appendSyntheticRemainder({
+        stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index + 1,
@@ -781,6 +816,37 @@ export function coreBetaBatchStopReason(testCase, result) {
   if (result?.result_category === 'automation_error') {
     return `框架硬门禁 ${id} 发生 automation_error，停止后续 Case；`
       + '必须修复执行、取证、manifest、断言或清理能力后新建不可变批次。';
+  }
+  return '';
+}
+
+export function coreBetaCompletionBlockReason(testCase, result) {
+  if (!isCoreBetaCase(testCase)) return '';
+  const id = String(testCase?.id || result?.id || 'unknown');
+  if (result?.synthetic === true) {
+    return `框架发布门禁 ${id} 拒绝 synthetic 结果进入 completed。`;
+  }
+  const manifest = result?.evidence_manifest;
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    return `框架发布门禁 ${id} 拒绝缺失的内嵌 evidence manifest 进入 completed。`;
+  }
+  if (!Array.isArray(manifest.missing_roles) || !Array.isArray(manifest.invalid_roles)) {
+    return `框架发布门禁 ${id} 拒绝结构异常的 manifest 进入 completed：missing_roles/invalid_roles 必须为数组。`;
+  }
+  if (
+    manifest.complete !== true
+    || manifest.missing_roles.length > 0
+    || manifest.invalid_roles.length > 0
+  ) {
+    return `框架发布门禁 ${id} 拒绝不完整 manifest 进入 completed：`
+      + `complete=${String(manifest.complete)}；missing=${manifest.missing_roles.join(',')}；invalid=${manifest.invalid_roles.join(',')}。`;
+  }
+  if (!Array.isArray(manifest.evidence) || manifest.evidence.some((item) => (
+    item?.missing === true
+    || item?.valid !== true
+    || !/^[a-f0-9]{64}$/i.test(String(item?.sha256 || ''))
+  ))) {
+    return `框架发布门禁 ${id} 拒绝缺失、无效或 SHA 不完整的 evidence 进入 completed。`;
   }
   return '';
 }
@@ -1058,24 +1124,41 @@ function isLiveCdpPage(browser, page) {
   return true;
 }
 
-function appendSyntheticRemainder({ outDir, selectedCases, startIndex, results, progressFile, status, resultCategory, reason }) {
-  for (let index = startIndex; index < selectedCases.length; index += 1) {
-    results.push(buildSyntheticResult({
-      outDir,
-      testCase: selectedCases[index],
-      index,
-      status,
-      resultCategory,
-      reason,
-    }));
-  }
+function stopRemainderWithoutSynthetic({
+  outDir,
+  selectedCases,
+  startIndex,
+  results,
+  progressFile,
+  status,
+  resultCategory,
+  reason,
+  failedResult = null,
+}) {
+  const diagnosticFile = path.join(outDir, 'framework-stop-diagnostic.json');
+  const diagnostic = {
+    schema_version: 'qbot-core-beta-framework-stop/v1',
+    generated_at: new Date().toISOString(),
+    status,
+    result_category: resultCategory,
+    reason,
+    completed: results.length,
+    total: selectedCases.length,
+    stopped_at_index: startIndex,
+    stopped_case_id: String(failedResult?.id || selectedCases[startIndex]?.id || ''),
+    failed_result: failedResult || null,
+    unexecuted_case_ids: selectedCases.slice(startIndex + (failedResult ? 1 : 0)).map((item) => item.id),
+  };
+  writeJsonFile(diagnosticFile, diagnostic);
   writeJsonFile(progressFile, {
     updated_at: new Date().toISOString(),
     completed: results.length,
     total: selectedCases.length,
     stopped: true,
-    synthetic: true,
+    synthetic: false,
     stop_reason: reason,
+    current_case: diagnostic.stopped_case_id,
+    framework_stop_diagnostic: diagnosticFile,
     results,
   });
 }
@@ -1434,6 +1517,7 @@ function createCaseState({ testCase, caseDir, order, modelTier }) {
     capability_sampling: testCase.capability_sampling || null,
     precise_assertions: testCase.precise_assertions || null,
     kind: testCase.kind,
+    execution_provenance: 'executed',
     status: 'failed',
     result_category: 'bug',
     actual_result: '',
@@ -2295,13 +2379,18 @@ async function finalizeCoreBetaPipelineEvidence({ page, state, testCase, caseDir
       : 'failed';
     actionReceipts.push(receipt);
     if (receipt.status !== 'passed') {
+      const productFailureObserved = state.steps.some((item) => (
+        item.status === 'failed' && item.category !== 'automation_error'
+      )) || state.assertions.some((item) => (
+        item.status === 'failed' && item.category !== 'automation_error'
+      ));
       recordAssertion(
         state,
         `批量动作 ${receipt.action_id} 可机判 Oracle`,
         '动作声明的全部 assertions、before 与 after 截图必须齐全。',
         false,
         JSON.stringify(receipt),
-        'automation_error',
+        productFailureObserved ? 'bug' : 'automation_error',
       );
     }
   }
@@ -2518,13 +2607,18 @@ async function executeCoreBetaCase(context) {
     receipt.after_screenshot = await shot(page, caseDir, `${prefix}-after`);
     actionReceipts.push(receipt);
     if (receipt.status !== 'passed') {
+      const productFailureObserved = state.steps.some((item) => (
+        item.status === 'failed' && item.category !== 'automation_error'
+      )) || state.assertions.some((item) => (
+        item.status === 'failed' && item.category !== 'automation_error'
+      ));
       recordAssertion(
         state,
         `动作 ${receipt.action_id} 可机判 Oracle`,
         '动作声明的全部 assertions 应成立。',
         false,
         JSON.stringify(receipt.assertions),
-        'automation_error',
+        productFailureObserved ? 'bug' : 'automation_error',
       );
       break;
     }
@@ -3919,6 +4013,8 @@ async function executeCoreBetaInitializationCase(context) {
     writeJsonFile(file, readback);
     state.artifacts.capability_execution_event = file;
     state.artifacts.core_beta_runtime_maintenance = file;
+    const productTerminalFailure = terminal.readback?.failed === true;
+    const terminalFailureCategory = productTerminalFailure ? 'bug' : 'automation_error';
     recordStep(
       state,
       `${maintenance.method} 真实 UI 操作与终态采样`,
@@ -3926,7 +4022,7 @@ async function executeCoreBetaInitializationCase(context) {
       `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
       terminal.ok ? 'passed' : 'failed',
       terminal.screenshot || clicked.busy_screenshot || '',
-      terminal.ok ? '' : 'automation_error',
+      terminal.ok ? '' : terminalFailureCategory,
     );
     if (maintenance.destructive) {
       recordAssertion(
@@ -3944,7 +4040,7 @@ async function executeCoreBetaInitializationCase(context) {
       '点击后必须读到按钮 busy/disabled 或维护区处理中状态，证明动作真实发生。',
       clicked.busy_observed === true,
       JSON.stringify({ busy_observed: clicked.busy_observed, action_text: clicked.action_text }),
-      'automation_error',
+      productTerminalFailure ? 'bug' : 'automation_error',
     );
     recordAssertion(
       state,
@@ -3954,7 +4050,7 @@ async function executeCoreBetaInitializationCase(context) {
         : '维护区、SDK 状态、输入区与公开 capabilities 必须连续稳定就绪。',
       terminal.ok,
       JSON.stringify(terminal.readback),
-      'automation_error',
+      terminalFailureCategory,
     );
     return;
   }
@@ -20819,22 +20915,28 @@ async function finishCase({ page, state, caseDir }) {
     const evaluated = evaluateMachineAssertions(machineAssertions, assertionSnapshot);
     state.core_beta_machine_assertions = evaluated;
     for (const assertion of evaluated) {
+      const assertionCategory = assertion.id === 'evidence-complete'
+        ? 'automation_error'
+        : state.result_category === 'bug' ? 'bug' : 'automation_error';
       recordAssertion(
         state,
         `Core Beta Oracle: ${assertion.id || assertion.path}`,
         `${assertion.path} ${assertion.operator} ${JSON.stringify(assertion.expected)}`,
         assertion.ok,
         JSON.stringify(assertion.actual),
-        'automation_error',
+        assertionCategory,
       );
     }
     if (evaluated.some((item) => !item.ok) && state.status !== 'blocked') {
-      const prior = String(state.actual_result || '').trim();
-      markFailed(
-        state,
-        `${prior && prior !== 'Core Beta v2 精准断言未全部成立。' ? `${prior}；` : ''}Core Beta v2 精准断言未全部成立。`,
-        'automation_error',
-      );
+      const evidenceIncomplete = manifest.complete !== true;
+      if (evidenceIncomplete || state.result_category !== 'bug') {
+        const prior = String(state.actual_result || '').trim();
+        markFailed(
+          state,
+          `${prior && prior !== 'Core Beta v2 精准断言未全部成立。' ? `${prior}；` : ''}Core Beta v2 精准断言未全部成立。`,
+          'automation_error',
+        );
+      }
     }
   }
   if (state.status === 'failed' && state.result_category === 'bug' && !state.problem_description) {

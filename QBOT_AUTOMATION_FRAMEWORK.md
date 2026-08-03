@@ -355,6 +355,7 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 - 证据文件存在、非空、SHA-256 与 manifest 一致且路径位于当前 Case 目录
 
 manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Case 目录越界或 synthetic 结果进入 completed，全部属于框架异常。
+产品动作失败本身不等于证据不完整：结构完整、包含 before/after 截图的 failed/blocked action receipt 仍是有效证据，最终业务结论可以是 `trusted_bug` 或 `trusted_blocked`。runner 只能把 manifest 完整的真实执行结果计入 `completed`；发现 synthetic、manifest 缺失/结构异常/不完整、角色无效或 SHA 缺失时，必须写 `framework-stop-diagnostic.json` 并停止，后续 Case 保持未执行，禁止批量补 synthetic blocked。
 
 ## 9. 长批次只读监控
 

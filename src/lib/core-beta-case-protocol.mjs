@@ -823,10 +823,10 @@ export function validateEvidenceFile(role, file) {
     }
     if (role === 'action_receipt') {
       if (!Array.isArray(parsed) || !parsed.length) return { valid: false, error: 'action_receipts_missing' };
-      if (parsed.some((item) => item?.status !== 'passed'
+      if (parsed.some((item) => !['passed', 'failed', 'blocked'].includes(String(item?.status || ''))
         || !String(item?.before_screenshot || '').trim()
         || !String(item?.after_screenshot || '').trim())) {
-        return { valid: false, error: 'action_receipt_not_passed_or_missing_screenshot' };
+        return { valid: false, error: 'action_receipt_invalid_status_or_missing_screenshot' };
       }
     }
   } else if (['prompt', 'transcript', 'reply_delta'].includes(role)) {
