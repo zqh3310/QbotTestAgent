@@ -8,6 +8,15 @@
 - Before any real 74/160 Casebook batch, run `npm run core-beta:pretest -- ...` with the exact Casebook, Sheet, release identity, lane and fixture controller; only `READY` authorizes runner startup.
 - If framework behavior, CLI options, evidence schemas, Casebook identity, or release-gate rules change, update `QBOT_AUTOMATION_FRAMEWORK.md` and its invariant tests in the same commit.
 
+## Monitor Self-Healing Rule
+
+- When read-only monitoring finds a confirmed `framework_issue` or `testcase_issue`, do not stop at reporting it. Preserve the current immutable output and diagnostics, stop the unique runner, pause the stale monitor, identify the root cause, and autonomously repair the QbotTestAgent framework or Casebook.
+- Every repair must add or strengthen a regression/invariant test, update `QBOT_AUTOMATION_FRAMEWORK.md` when the contract changes, run the mandatory framework checks, and establish a clean pushed `main == origin/main` baseline before testing continues.
+- Never edit or append to the failed output directory. Run a new pretest and continue in a new immutable output directory with one runner and the same frozen release identity. Core Beta v2 reruns the complete selected scope with `inherited=0` and `synthetic=0`; older protocols may resume only through their documented lineage and explicit impact rules.
+- Preserve the original issue and evidence in release reporting. A later passing rerun never erases an earlier framework failure, testcase failure, product bug, or flake.
+- Product defects are not framework repairs: do not modify `/Users/qifu/Documents/deepbankV2`. Record the defect and continue only with independent Cases when the Casebook fail policy and evidence integrity allow it.
+- Do not auto-continue when safe repair is impossible, credentials or protected resources are missing, human approval is required, the requested release is unavailable, or release identity cannot be restored exactly. In those cases, keep the batch frozen and report the single concrete blocker.
+
 ## DeepbankV2 Boundary
 
 - The agent team is a QA/test team for QBot/deepbankV2, not the development owner.

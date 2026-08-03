@@ -54,6 +54,8 @@ import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
+const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-electron-control-plane.sh'), 'utf8');
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
@@ -65,6 +67,21 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+assert.match(
+  projectMemory,
+  /Monitor Self-Healing Rule[\s\S]*confirmed `framework_issue` or `testcase_issue`[\s\S]*new immutable output directory[\s\S]*inherited=0[\s\S]*synthetic=0/,
+  '项目记忆必须要求监控发现框架或 Case 问题后自主修复，并以新不可变批次续测',
+);
+assert.match(
+  projectMemory,
+  /Product defects are not framework repairs[\s\S]*do not modify `\/Users\/qifu\/Documents\/deepbankV2`/,
+  '监控自愈不得越界修改 deepbankV2 或掩盖产品缺陷',
+);
+assert.match(
+  automationFramework,
+  /监控发现 Issue 后的自主修复闭环[\s\S]*停止唯一 runner[\s\S]*main == origin\/main[\s\S]*READY_SCOPED[\s\S]*后续通过不得抹去原始 issue/,
+  '框架手册必须固化冻结、修复、校验、推送和新批次续测闭环',
+);
 assert.match(
   runner,
   /--profile'[\s\S]*profile[\s\S]*options\.sheet[\s\S]*--sheet/,
