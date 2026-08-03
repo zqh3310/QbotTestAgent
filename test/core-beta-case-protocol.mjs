@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,10 +11,56 @@ import {
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
   evaluateMachineAssertions,
+  validateEvidenceFile,
   validateCoreBetaCase,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
+
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-timeout-evidence-'));
+  const screenshot = path.join(root, 'after-timeout.png');
+  const completion = path.join(root, 'reply-completion.json');
+  fs.writeFileSync(screenshot, Buffer.alloc(256, 7));
+  const screenshotSha256 = createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex');
+  fs.writeFileSync(completion, JSON.stringify({
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: 'timed_out',
+    assistant_reply_present: false,
+    confirmed_send_receipt: true,
+    waited_ms: 600_330,
+    timeout_ms: 600_000,
+    terminal_reason: '等待 Agent 回复完成超时，未观察到助手正文。',
+    timeout_screenshot: screenshot,
+    timeout_screenshot_sha256: screenshotSha256,
+  }));
+  assert.deepEqual(
+    validateEvidenceFile('reply_completion', completion),
+    { valid: true },
+    '完整发送回执、等待窗口和超时截图必须构成有效的产品失败终态证据',
+  );
+  fs.writeFileSync(completion, JSON.stringify({
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: 'timed_out',
+    assistant_reply_present: false,
+    confirmed_send_receipt: true,
+    waited_ms: 59_999,
+    timeout_ms: 600_000,
+    terminal_reason: '等待不足。',
+    timeout_screenshot: screenshot,
+    timeout_screenshot_sha256: screenshotSha256,
+  }));
+  assert.equal(
+    validateEvidenceFile('reply_completion', completion).valid,
+    false,
+    '等待窗口不足时不得把无回复包装成完整失败证据',
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+}
 
 assert.equal(CORE_BETA_SCENARIO_IDS.size, 184);
 assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 184);

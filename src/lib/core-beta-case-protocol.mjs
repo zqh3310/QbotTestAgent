@@ -863,8 +863,9 @@ export function validateEvidenceFile(role, file) {
     if (role === 'task_id' && !String(parsed?.task_id || '').trim()) {
       return { valid: false, error: 'task_id_missing' };
     }
-    if (role === 'reply_completion' && parsed?.complete !== true) {
-      return { valid: false, error: 'reply_incomplete' };
+    if (role === 'reply_completion') {
+      const replyCompletion = validateReplyCompletionPayload(parsed);
+      if (!replyCompletion.valid) return replyCompletion;
     }
     if (role === 'action_receipt') {
       if (!Array.isArray(parsed) || !parsed.length) return { valid: false, error: 'action_receipts_missing' };
@@ -876,6 +877,45 @@ export function validateEvidenceFile(role, file) {
     }
   } else if (['prompt', 'transcript', 'reply_delta'].includes(role)) {
     if (!fs.readFileSync(file, 'utf8').trim()) return { valid: false, error: 'text_evidence_empty' };
+  }
+  return { valid: true };
+}
+
+export function validateReplyCompletionPayload(parsed) {
+  if (parsed?.complete === true) return { valid: true };
+  if (
+    parsed?.evidence_complete !== true
+    || parsed?.terminal_failure !== true
+    || parsed?.terminal_outcome !== 'timed_out'
+    || typeof parsed?.assistant_reply_present !== 'boolean'
+    || parsed?.confirmed_send_receipt !== true
+  ) {
+    return { valid: false, error: 'reply_incomplete' };
+  }
+  const waitedMs = Number(parsed?.waited_ms || 0);
+  const timeoutMs = Number(parsed?.timeout_ms || 0);
+  if (timeoutMs < 60_000 || waitedMs < timeoutMs) {
+    return { valid: false, error: 'reply_timeout_window_unverified' };
+  }
+  const screenshot = String(parsed?.timeout_screenshot || '').trim();
+  const screenshotSha256 = String(parsed?.timeout_screenshot_sha256 || '').trim();
+  if (
+    !screenshot
+    || !path.isAbsolute(screenshot)
+    || !fs.existsSync(screenshot)
+    || !fs.statSync(screenshot).isFile()
+    || fs.statSync(screenshot).size < 128
+  ) {
+    return { valid: false, error: 'reply_timeout_screenshot_missing' };
+  }
+  if (
+    !/^[a-f0-9]{64}$/i.test(screenshotSha256)
+    || sha256File(screenshot) !== screenshotSha256
+  ) {
+    return { valid: false, error: 'reply_timeout_screenshot_sha256_mismatch' };
+  }
+  if (!String(parsed?.terminal_reason || '').trim()) {
+    return { valid: false, error: 'reply_timeout_reason_missing' };
   }
   return { valid: true };
 }

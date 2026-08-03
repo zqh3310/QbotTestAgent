@@ -16437,10 +16437,29 @@ function writeReplyArtifacts(state, caseDir, replies) {
   if (!Array.isArray(state.artifacts.reply_records)) state.artifacts.reply_records = [];
   for (const reply of replies || []) {
     const label = String(reply?.label || `回复 ${state.artifacts.reply_records.length + 1}`);
+    const fullText = String(reply?.fullText || reply?.deltaText || '');
+    const deltaText = String(reply?.deltaText || '');
+    const timedOut = Boolean(reply?.incomplete);
+    const terminalRecord = timedOut
+      ? [
+        '## TERMINAL_EVENT',
+        '',
+        'type=assistant_reply_timeout',
+        `assistant_reply_present=${String(Boolean(deltaText.trim()))}`,
+        `waited_ms=${Number(reply?.waited_ms || 0)}`,
+        `timeout_ms=${Number(reply?.timeout_ms || 0)}`,
+        `observation=${String(reply?.incomplete_reason || 'Agent reply timed out.')}`,
+      ].join('\n')
+      : '';
     const record = {
       label,
-      fullText: String(reply?.fullText || reply?.deltaText || ''),
-      deltaText: String(reply?.deltaText || ''),
+      fullText: fullText || terminalRecord,
+      deltaText: deltaText || terminalRecord,
+      assistant_reply_present: Boolean(deltaText.trim()),
+      terminal_outcome: timedOut ? 'timed_out' : 'completed',
+      waited_ms: Number(reply?.waited_ms || 0),
+      timeout_ms: Number(reply?.timeout_ms || 0),
+      terminal_reason: timedOut ? String(reply?.incomplete_reason || 'Agent reply timed out.') : '',
       recorded_at: new Date().toISOString(),
     };
     const existing = state.artifacts.reply_records.findIndex((item) => item.label === label);
@@ -16453,10 +16472,59 @@ function writeReplyArtifacts(state, caseDir, replies) {
   );
   writeTextFile(state.artifacts.transcript, state.artifacts.reply_records.map((reply) => `## ${reply.label}\n\n${reply.fullText || reply.deltaText}`).join('\n\n---\n\n'));
   writeTextFile(state.artifacts.reply_delta, state.artifacts.reply_records.map((reply) => `## ${reply.label}\n\n${reply.deltaText}`).join('\n\n---\n\n'));
+  const confirmedSendReceipt = Array.isArray(state.artifacts.send_receipts)
+    && state.artifacts.send_receipts.some((receipt) => (
+      Array.isArray(receipt?.attempts)
+      && receipt.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
+    ));
+  const timeoutScreenshot = Object.entries(state.screenshots || {})
+    .reverse()
+    .find(([key, file]) => (
+      /after[_-]?timeout|timeout/i.test(String(key || ''))
+      && typeof file === 'string'
+      && file
+      && fs.existsSync(file)
+      && fs.statSync(file).isFile()
+      && fs.statSync(file).size >= 128
+    ))?.[1] || '';
+  const terminalReply = [...state.artifacts.reply_records]
+    .reverse()
+    .find((reply) => reply.terminal_outcome === 'timed_out');
+  const terminalFailureVerified = Boolean(
+    terminalReply
+    && terminalReply.timeout_ms >= MIN_REPLY_WAIT_MS
+    && terminalReply.waited_ms >= terminalReply.timeout_ms
+    && confirmedSendReceipt
+    && timeoutScreenshot
+  );
+  const replyComplete = state.artifacts.reply_records.length > 0
+    && state.artifacts.reply_records.every((reply) => (
+      reply.terminal_outcome === 'completed'
+      && reply.assistant_reply_present === true
+    ));
+  const evidenceComplete = state.artifacts.reply_records.length > 0
+    && state.artifacts.reply_records.every((reply) => (
+      reply.assistant_reply_present === true
+      || (reply.terminal_outcome === 'timed_out' && terminalFailureVerified)
+    ));
   writeJsonFile(state.artifacts.reply_completion, {
-    complete: state.artifacts.reply_records.every((reply) => String(reply.fullText || reply.deltaText || '').trim().length > 0),
+    complete: replyComplete,
+    evidence_complete: evidenceComplete,
     reply_count: state.artifacts.reply_records.length,
     labels: state.artifacts.reply_records.map((reply) => reply.label),
+    terminal_failure: terminalFailureVerified,
+    terminal_outcome: terminalReply?.terminal_outcome || (replyComplete ? 'completed' : ''),
+    assistant_reply_present: terminalReply
+      ? terminalReply.assistant_reply_present
+      : state.artifacts.reply_records.every((reply) => reply.assistant_reply_present === true),
+    waited_ms: Number(terminalReply?.waited_ms || 0),
+    timeout_ms: Number(terminalReply?.timeout_ms || 0),
+    terminal_reason: String(terminalReply?.terminal_reason || ''),
+    confirmed_send_receipt: confirmedSendReceipt,
+    timeout_screenshot: timeoutScreenshot,
+    timeout_screenshot_sha256: timeoutScreenshot
+      ? createHash('sha256').update(fs.readFileSync(timeoutScreenshot)).digest('hex')
+      : '',
   });
   writeJsonFile(state.artifacts.send_receipt, {
     valid: Array.isArray(state.artifacts.send_receipts)

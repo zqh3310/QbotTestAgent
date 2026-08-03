@@ -382,6 +382,11 @@ assert.equal(
   '',
   '可信产品 Bug 不应阻止后续独立 Case 收集',
 );
+assert.match(
+  runner,
+  /terminal_failure:\s*terminalFailureVerified[\s\S]*timeout_screenshot_sha256:/,
+  'Core Beta v2 必须把完整等待后的无回复保存为可校验的产品失败终态，不能误报 manifest 缺失',
+);
 assert.deepEqual(
   coreBetaV2MaintenanceActionObservation({
     testId: 'assistant-skills-reinstall',

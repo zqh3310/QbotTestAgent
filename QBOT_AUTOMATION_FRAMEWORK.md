@@ -342,6 +342,7 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 - 不得同时启用单宿主 pipeline 和多 CDP `--parallel`。
 - pipeline 必须保存唯一 wave、task ID、能力绑定和 dispatch/collect 证据；重复 task ID 或跨 Case 取证立即视为框架异常。
 - pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 Core Beta manifest 完整性门禁和 `automation_error` 硬停止；不得因 `{testCase,index,eligibility}` 包装对象使 `isCoreBetaCase` 判断失效。
+- 模型在完整等待窗口后无回复属于产品失败，不等于证据缺失。只有发送回执、`waited_ms >= timeout_ms >= 60000`、明确的 terminal reason、`after-timeout` 截图及其 SHA-256 同时成立时，`reply_completion` 才可标记为“失败终态证据完整”；其产品完成状态仍必须为 `complete=false`，Case 仍判失败/bug，禁止借此形成 pass。
 - 全量执行必须先按固定顺序完成 `BETA-INIT-001` 至 `BETA-INIT-005`。初始化失败后不得执行后续业务 Case。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - 初始化动作必须证明本次点击引起了状态转换。优先取证按钮 busy/disabled 或维护区处理中状态；若动作短于轮询采样窗口，只有“动作前不存在、动作后新增、且与当前按钮精确匹配”的完成回执，加上确认弹窗和连续稳定终态，才可替代 transient busy。产品成功契约明确会刷新 renderer 的维护动作（当前仅清空全部会话），允许把确认动作后发生的主框架刷新作为因果动作信号，但仍必须同时满足匹配确认弹窗和刷新后的连续稳定终态；其他导航不得复用。陈旧完成文案不得复用。
@@ -381,6 +382,7 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 
 manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Case 目录越界或 synthetic 结果进入 completed，全部属于框架异常。
 产品动作失败本身不等于证据不完整：结构完整、包含 before/after 截图的 failed/blocked action receipt 仍是有效证据，最终业务结论可以是 `trusted_bug` 或 `trusted_blocked`。runner 只能把 manifest 完整的真实执行结果计入 `completed`；发现 synthetic、manifest 缺失/结构异常/不完整、角色无效或 SHA 缺失时，必须写 `framework-stop-diagnostic.json` 并停止，后续 Case 保持未执行，禁止批量补 synthetic blocked。
+对已确认发送但完整等待至超时仍没有可归属助手回复的 Case，manifest 的“完整”只表示失败证据链完整，不表示产品回复完成。`reply-completion.json` 必须同时保存 `complete=false`、`terminal_failure=true`、`terminal_outcome=timed_out`、发送回执、等待时长、失败原因和超时截图 SHA；缺少任一字段仍按框架异常停止。
 
 ## 9. 长批次只读监控
 
