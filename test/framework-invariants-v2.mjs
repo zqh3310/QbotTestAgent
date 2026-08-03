@@ -533,6 +533,11 @@ assert.match(
 );
 assert.match(
   runner,
+  /const observedResults = \[\.\.\.resultsByIndex\.entries\(\)\][\s\S]*const partition = partitionCasebookResults\(observedResults\)[\s\S]*completed: completedResults\.length[\s\S]*synthetic_diagnostics: partition\.syntheticDiagnostics\.length[\s\S]*results: completedResults/,
+  '多 CDP 并行进度也必须排除 synthetic，并把它只记入非执行诊断',
+);
+assert.match(
+  runner,
   /terminal_failure:\s*terminalFailureVerified[\s\S]*timeout_screenshot_sha256:/,
   'Core Beta v2 必须把完整等待后的无回复保存为可校验的产品失败终态，不能误报 manifest 缺失',
 );

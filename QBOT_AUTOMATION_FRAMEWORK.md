@@ -338,9 +338,11 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 
 - `--single-host-pipeline N` 支持 `1–20`；`true` 等价于 `20`。
 - 仅 Casebook 声明且运行时判定安全的独立会话可以批量 dispatch/collect。
-- 附件、Skill/MCP/专家的创建安装授权删除、HITL、成果、重启、共享状态、故障注入和多轮会话都是串行屏障。
+- Core Beta v2 中由 Casebook 明确声明为 `dispatch_collect/round_robin`、动作互不依赖且证据可按唯一 task ID 归属的独立附件、成果生成、Skill 使用、专家使用和 MCP 使用 Case 可以进入单宿主 pipeline；框架仍须按 `case_type`、policy 与 `batch_size` 隔离 wave。
+- Skill/MCP/专家的创建、安装、授权、删除等生命周期变更，以及 HITL、重启、共享状态、故障注入、跨 Case 依赖和不满足精确 task ID 归属条件的多轮会话都是串行屏障。
 - 不得同时启用单宿主 pipeline 和多 CDP `--parallel`。
 - pipeline 必须保存唯一 wave、task ID、能力绑定和 dispatch/collect 证据；重复 task ID 或跨 Case 取证立即视为框架异常。
+- 多 CDP 并行执行的实时 `automation-progress.json` 与最终 summary 使用同一结果分区规则：`synthetic=true` 只能写入 `non_executed_diagnostics`，不得计入 `completed`、`results` 或状态计数。
 - pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 Core Beta manifest 完整性门禁和 `automation_error` 硬停止；不得因 `{testCase,index,eligibility}` 包装对象使 `isCoreBetaCase` 判断失效。
 - 模型无回复属于产品失败，不等于证据缺失。允许两种失败终态：一是完整等待窗口耗尽（`terminal_outcome=timed_out`，`waited_ms >= timeout_ms >= 60000`）；二是确认发送且真实进入运行态后已经停止、等待至少 `60000ms`、连续至少 3 次稳定采样仍无可归属助手正文（`terminal_outcome=no_reply`）。两者都必须保存明确 terminal reason、任务绑定、发送回执、终态截图及其 SHA-256，`reply_completion` 才可标记为“失败终态证据完整”；其产品完成状态仍必须为 `complete=false`，Case 仍判失败/bug，禁止借此形成 pass。没有“曾进入运行态”证据时不得把排队任务提前判为 `no_reply`。
 - 全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-005`。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：`BETA-INIT-001` 失败、任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-002` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。降级继续必须在 Case 结果中保存 `initialization_continuation`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。

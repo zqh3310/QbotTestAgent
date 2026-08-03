@@ -1134,13 +1134,27 @@ async function runParallelUiAgentCasebook({
     onResult: async ({ index, result }) => {
       resultsByIndex.set(index, result);
       progressWrite = progressWrite.then(() => {
-        const completedResults = [...resultsByIndex.entries()]
+        const observedResults = [...resultsByIndex.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, value]) => value);
+        const partition = partitionCasebookResults(observedResults);
+        const completedResults = partition.completed;
         writeJsonFile(progressFile, {
           updated_at: new Date().toISOString(),
           completed: completedResults.length,
           total: selectedCases.length,
+          result_accounting: {
+            observed: observedResults.length,
+            completed: completedResults.length,
+            synthetic_diagnostics: partition.syntheticDiagnostics.length,
+          },
+          non_executed_diagnostics: partition.syntheticDiagnostics.map((diagnostic) => ({
+            id: diagnostic?.id || '',
+            status: diagnostic?.status || 'blocked',
+            result_category: diagnostic?.result_category || 'blocked',
+            reason: diagnostic?.actual_result || diagnostic?.conclusion || '',
+            case_report: diagnostic?.case_report || '',
+          })),
           parallel_scheduler: scheduling,
           results: completedResults,
         });
