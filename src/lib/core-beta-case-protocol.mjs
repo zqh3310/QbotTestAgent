@@ -992,6 +992,10 @@ export function validateReplyCompletionPayload(parsed) {
     || parsed?.observed_running_after_send !== true
     || parsed?.running_after !== false
     || Number(parsed?.no_reply_stable_observations || 0) < 3
+    || parsed?.terminal_reconciliation_performed !== true
+    || parsed?.terminal_reconciliation_task_bound !== true
+    || parsed?.terminal_reconciliation_prompt_bound !== true
+    || parsed?.terminal_reconciliation_reply_present !== false
   ) {
     return { valid: false, error: 'reply_no_reply_terminal_unverified' };
   }

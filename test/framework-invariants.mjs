@@ -768,6 +768,9 @@ const required = [
   ['运行汇总写入真实 duration_ms', /duration_ms: Math\.max\(0, endedAt\.getTime\(\) - startedAt\.getTime\(\)\)/],
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
   ['回复采集覆盖 assistant-thread 下的分支消息', /conversationMessageTimeline[\s\S]*assistant-thread.*data-role="user"[\s\S]*assistant-thread.*data-role="assistant"/],
+  ['已按 prompt 绑定的短回复不受通用长度门槛拦截', /const hasDelta = promptBoundCandidate[\s\S]*cleanDelta\.length > 0[\s\S]*cleanDelta\.length > 15/],
+  ['结构化短回复通过通用非空断言并继续接受业务相关性复核', /Agent 有效回复[\s\S]*reply\.deltaText\.trim\(\)\.length > 0/],
+  ['确定性相关性先于通用短文本拒绝', /for \(const \[scenarioPattern, replyPattern\] of targetedRules\)[\s\S]*if \(text\.length < 15\) return false/],
   ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
   ['新版推荐选项按精确跳过入口处理并保留结构化证据', /assistantConfirmationSurfaceVerdict[\s\S]*具体指[\s\S]*option_count[\s\S]*assistant_confirmation_interactions[\s\S]*处理 Agent 推荐选项/],
   ['新 Case 开始前先显式处理残留推荐选项再执行通用 Escape 清理', /executeCasebookCase[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)[\s\S]*openNewTask[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)/],
@@ -1595,6 +1598,20 @@ const promptBoundReply = latestAssistantReplyForPrompt({
   ],
 }, '报名人数是多少？');
 if (promptBoundReply !== '报名人数是 100 人。') throw new Error(`回复必须按本轮用户消息绑定，实际=${promptBoundReply}`);
+if (!replyLooksRelevant(
+  '项目代号是 Orion。',
+  { id: 'BETA-CHAT-007', scenario: '侧栏刷新后完整恢复两轮对话' },
+  '项目代号是什么？',
+)) {
+  throw new Error('已命中项目代号确定性规则的短回复不得被通用长度门槛误判');
+}
+if (replyLooksRelevant(
+  '不知道。',
+  { id: 'BETA-CHAT-007', scenario: '侧栏刷新后完整恢复两轮对话' },
+  '项目代号是什么？',
+)) {
+  throw new Error('放宽短回复采集后仍必须拒绝未命中业务答案的短文本');
+}
 const inlineSkillPromptBoundReply = latestAssistantReplyForPrompt({
   messages: [
     {

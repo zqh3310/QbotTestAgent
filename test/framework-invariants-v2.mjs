@@ -71,6 +71,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  terminalPromptBoundReplyEvidence,
   unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
@@ -1069,6 +1070,11 @@ assert.match(
 );
 assert.match(
   runner,
+  /terminal no-reply reconciliation snapshot[\s\S]*terminalPromptBoundReplyEvidence[\s\S]*reconciled_before_no_reply[\s\S]*terminal_outcome:\s*'no_reply'/,
+  'v2 runner 写 no_reply 前必须用新快照按 taskId 和 prompt 复核可见助手回复',
+);
+assert.match(
+  runner,
   /--profile'[\s\S]*profile[\s\S]*options\.sheet[\s\S]*--sheet/,
   'Core Beta v2 二次导出必须透传精确 Sheet，禁止多 Sheet Casebook 被静默合并',
 );
@@ -2021,6 +2027,9 @@ const required = [
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
   ['Core Beta v2 停止生成使用独立助手正文提取器', /async function assistantBodyTexts/],
+  ['Core Beta v2 分支回复采集不依赖 message-list 包装', /conversationMessageTimeline[\s\S]*page\.locator\('\[data-testid="assistant-thread"\] \[data-role="user"\], \[data-testid="assistant-thread"\] \[data-role="assistant"\]'\)/],
+  ['Core Beta v2 已按 prompt 绑定的短回复不受通用长度门槛拦截', /const hasDelta = promptBoundCandidate[\s\S]*cleanDelta\.length > 0[\s\S]*cleanDelta\.length > 15/],
+  ['Core Beta v2 确定性相关性先于通用短文本拒绝', /for \(const \[scenarioPattern, replyPattern\] of targetedRules\)[\s\S]*if \(text\.length < 15\) return false/],
   ['Core Beta v2 助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
   ['Core Beta v2 停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
@@ -2931,6 +2940,58 @@ const promptBoundReply = latestAssistantReplyForPrompt({
   ],
 }, '报名人数是多少？');
 if (promptBoundReply !== '报名人数是 100 人。') throw new Error(`回复必须按本轮用户消息绑定，实际=${promptBoundReply}`);
+const orionTerminalReply = terminalPromptBoundReplyEvidence({
+  activeTaskId: 'task-orion',
+  userTexts: ['记住项目代号是Orion。', '项目代号是什么？'],
+  messages: [
+    { role: 'user', text: '记住项目代号是Orion。' },
+    { role: 'assistant', text: '已记住项目代号。' },
+    { role: 'user', text: '项目代号是什么？' },
+    { role: 'assistant', text: '项目代号是 Orion。' },
+  ],
+}, '项目代号是什么？', { boundTaskId: 'task-orion' });
+assert.equal(orionTerminalReply.reply_present, true, '同 taskId/prompt 后的短回复必须在 no_reply 前被复核命中');
+assert.equal(orionTerminalReply.delta_text, '项目代号是 Orion。');
+assert.equal(
+  replyLooksRelevant(
+    '项目代号是 Orion。',
+    { id: 'BETA-CHAT-007', scenario: '侧栏刷新后完整恢复两轮对话' },
+    '项目代号是什么？',
+  ),
+  true,
+  '已命中项目代号确定性规则的短回复不得被通用长度门槛误判',
+);
+assert.equal(
+  replyLooksRelevant(
+    '不知道。',
+    { id: 'BETA-CHAT-007', scenario: '侧栏刷新后完整恢复两轮对话' },
+    '项目代号是什么？',
+  ),
+  false,
+  '放宽短回复采集后仍必须拒绝未命中业务答案的短文本',
+);
+assert.equal(
+  terminalPromptBoundReplyEvidence({
+    activeTaskId: '',
+    userTexts: ['项目代号是什么？'],
+    messages: [
+      { role: 'user', text: '项目代号是什么？' },
+      { role: 'assistant', text: '项目代号是 Orion。' },
+    ],
+  }, '项目代号是什么？', { boundTaskId: 'task-orion' }).reply_present,
+  false,
+  '缺少当前 taskId 时不得用可见文本冒充任务绑定回复',
+);
+assert.equal(
+  terminalPromptBoundReplyEvidence({
+    activeTaskId: 'task-orion',
+    bodyText: '项目代号是 Orion。',
+    userTexts: ['其他问题'],
+    messages: [{ role: 'user', text: '其他问题' }],
+  }, '项目代号是什么？', { boundTaskId: 'task-orion' }).reply_present,
+  false,
+  '缺少结构化 prompt 绑定时不得用整页文本冒充助手回复',
+);
 const inlineSkillPromptBoundReply = latestAssistantReplyForPrompt({
   messages: [
     {

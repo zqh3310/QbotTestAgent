@@ -9025,7 +9025,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
       !reply.incomplete,
       reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
     );
-    recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
+    recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
     const caseAware = caseAwareReplyAssertion(testCase, turn, reply.deltaText);
     if (caseAware.applicable) {
       recordAssertion(
@@ -20340,7 +20340,7 @@ function recordReplyAssertions(state, testCase, prompt, reply, label) {
     !reply.incomplete,
     reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
   );
-  recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
+  recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
   const caseAware = caseAwareReplyAssertion(testCase, { prompt, label }, reply.deltaText);
   if (caseAware.applicable) {
     recordAssertion(state, `${caseAware.name}（${label}）`, caseAware.expected, caseAware.ok, caseAware.actual);
@@ -24916,8 +24916,8 @@ async function waitForReply(page, beforeState, timeoutMs, {
     // counts are only a fallback: React may recycle an assistant node while
     // replacing its text, which previously made a visibly completed answer
     // look like an empty timeout.
-    const candidate = latestAssistantReplyForPrompt(snapshot, expectedUserText)
-      || latestAssistantReplySince(snapshot, before);
+    const promptBoundCandidate = latestAssistantReplyForPrompt(snapshot, expectedUserText);
+    const candidate = promptBoundCandidate || latestAssistantReplySince(snapshot, before);
     const assistantNodeSeen = Number(before.assistantNodeCount || 0) > 0 || Number(snapshot.assistantNodeCount || 0) > 0;
     const canUseThreadDiffFallback = !candidate
       && !assistantNodeSeen
@@ -24929,7 +24929,9 @@ async function waitForReply(page, beforeState, timeoutMs, {
       lastCandidate = cleanDelta;
       lastCandidateFullText = cleanAssistantText(candidate || cleanDelta);
     }
-    const hasDelta = cleanDelta.length > 15;
+    const hasDelta = promptBoundCandidate
+      ? cleanDelta.length > 0
+      : cleanDelta.length > 15;
     const generating = await withReplyPollHardTimeout(
       isAgentGenerating(page),
       Math.min(5_000, Math.max(1, deadline - Date.now())),
@@ -24972,10 +24974,10 @@ async function waitForReply(page, beforeState, timeoutMs, {
   const finalUserVisible = !expectedUserText
     || finalSnapshot.userTexts.some((text) => userMessageMatchesPrompt(text, expectedUserText));
   if (finalTaskMatches && finalUserVisible) {
-    const finalCandidate = latestAssistantReplyForPrompt(finalSnapshot, expectedUserText)
-      || latestAssistantReplySince(finalSnapshot, before);
+    const finalPromptBoundCandidate = latestAssistantReplyForPrompt(finalSnapshot, expectedUserText);
+    const finalCandidate = finalPromptBoundCandidate || latestAssistantReplySince(finalSnapshot, before);
     const finalClean = stripTextValues(finalCandidate || '', ignoredText).trim();
-    if (finalClean.length > 15) {
+    if (finalClean.length > (finalPromptBoundCandidate ? 0 : 15)) {
       lastCandidate = finalClean;
       lastCandidateFullText = cleanAssistantText(finalCandidate || finalClean);
       lastGenerating = await withReplyPollHardTimeout(
@@ -26237,7 +26239,6 @@ function expectedKeywordsForCase(testCase) {
 
 export function replyLooksRelevant(reply, testCase, prompt = '') {
   const text = semanticReplyText(reply);
-  if (text.length < 15) return false;
   const scenario = String(testCase.scenario || '');
   const relevanceInput = `${scenario}\n${String(prompt || testCase.test_data || '')}`;
   // A concise artifact acknowledgement is relevant when it repeats the exact
@@ -26289,6 +26290,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   for (const [scenarioPattern, replyPattern] of targetedRules) {
     if (scenarioPattern.test(relevanceInput) && replyPattern.test(text)) return true;
   }
+  if (text.length < 15) return false;
   const constraintTerms = [
     '输出格式', '风险', '验证方法', '验证方式', '样本量', '用户分层', '渠道',
     '转化路径', '数据结论', '可能原因', '下一步动作', '指标', '口径', '验收',

@@ -9239,7 +9239,7 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
       !reply.incomplete,
       reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
     );
-    recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
+    recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
     const caseAware = caseAwareReplyAssertion(testCase, turn, reply.deltaText);
     if (caseAware.applicable) {
       recordAssertion(
@@ -19309,6 +19309,10 @@ function writeReplyArtifacts(state, caseDir, replies) {
           ? true
           : null,
       no_reply_stable_observations: Number(reply?.no_reply_stable_observations || 0),
+      terminal_reconciliation_performed: Boolean(reply?.terminal_reconciliation_performed),
+      terminal_reconciliation_task_bound: Boolean(reply?.terminal_reconciliation_task_bound),
+      terminal_reconciliation_prompt_bound: Boolean(reply?.terminal_reconciliation_prompt_bound),
+      terminal_reconciliation_reply_present: Boolean(reply?.terminal_reconciliation_reply_present),
       terminal_reason: incomplete ? String(reply?.incomplete_reason || 'Agent reply timed out.') : '',
       recorded_at: new Date().toISOString(),
     };
@@ -19360,6 +19364,10 @@ function writeReplyArtifacts(state, caseDir, replies) {
         ? true
         : null,
     no_reply_stable_observations: Number(terminalReply?.no_reply_stable_observations || 0),
+    terminal_reconciliation_performed: Boolean(terminalReply?.terminal_reconciliation_performed),
+    terminal_reconciliation_task_bound: Boolean(terminalReply?.terminal_reconciliation_task_bound),
+    terminal_reconciliation_prompt_bound: Boolean(terminalReply?.terminal_reconciliation_prompt_bound),
+    terminal_reconciliation_reply_present: Boolean(terminalReply?.terminal_reconciliation_reply_present),
     terminal_reason: String(terminalReply?.terminal_reason || ''),
     terminal_screenshot: terminalScreenshot,
     terminal_screenshot_sha256: terminalScreenshotSha256,
@@ -19400,6 +19408,10 @@ function writeReplyArtifacts(state, caseDir, replies) {
         ? true
         : null,
     no_reply_stable_observations: Number(terminalReply?.no_reply_stable_observations || 0),
+    terminal_reconciliation_performed: Boolean(terminalReply?.terminal_reconciliation_performed),
+    terminal_reconciliation_task_bound: Boolean(terminalReply?.terminal_reconciliation_task_bound),
+    terminal_reconciliation_prompt_bound: Boolean(terminalReply?.terminal_reconciliation_prompt_bound),
+    terminal_reconciliation_reply_present: Boolean(terminalReply?.terminal_reconciliation_reply_present),
     terminal_reason: String(terminalReply?.terminal_reason || ''),
     confirmed_send_receipt: confirmedSendReceipt,
     terminal_screenshot: terminalScreenshot,
@@ -19424,7 +19436,7 @@ function recordReplyAssertions(state, testCase, prompt, reply, label) {
     !reply.incomplete,
     reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
   );
-  recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 15, `回复增量长度：${reply.deltaText.trim().length}`);
+  recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
   const caseAware = caseAwareReplyAssertion(testCase, { prompt, label }, reply.deltaText);
   if (caseAware.applicable) {
     recordAssertion(state, `${caseAware.name}（${label}）`, caseAware.expected, caseAware.ok, caseAware.actual);
@@ -22947,8 +22959,8 @@ async function waitForReply(page, beforeState, timeoutMs, {
     // counts are only a fallback: React may recycle an assistant node while
     // replacing its text, which previously made a visibly completed answer
     // look like an empty timeout.
-    const candidate = latestAssistantReplyForPrompt(snapshot, expectedUserText)
-      || latestAssistantReplySince(snapshot, before);
+    const promptBoundCandidate = latestAssistantReplyForPrompt(snapshot, expectedUserText);
+    const candidate = promptBoundCandidate || latestAssistantReplySince(snapshot, before);
     const assistantNodeSeen = Number(before.assistantNodeCount || 0) > 0 || Number(snapshot.assistantNodeCount || 0) > 0;
     const canUseThreadDiffFallback = !candidate
       && !assistantNodeSeen
@@ -22960,7 +22972,9 @@ async function waitForReply(page, beforeState, timeoutMs, {
       lastCandidate = cleanDelta;
       lastCandidateFullText = cleanAssistantText(candidate || cleanDelta);
     }
-    const hasDelta = cleanDelta.length > 15;
+    const hasDelta = promptBoundCandidate
+      ? cleanDelta.length > 0
+      : cleanDelta.length > 15;
     const generating = await withReplyPollHardTimeout(
       isAgentGenerating(page),
       Math.min(5_000, Math.max(1, deadline - Date.now())),
@@ -22998,7 +23012,64 @@ async function waitForReply(page, beforeState, timeoutMs, {
     });
     noReplyStableObservations = noReplyObservation.consecutive;
     if (noReplyObservation.ready) {
+      const terminalSnapshot = await withReplyPollHardTimeout(
+        conversationSnapshot(page),
+        Math.min(15_000, Math.max(1, deadline - Date.now())),
+        'terminal no-reply reconciliation snapshot',
+      );
+      const reconciliation = terminalPromptBoundReplyEvidence(terminalSnapshot, expectedUserText, {
+        boundTaskId,
+        ignoredText,
+      });
+      const terminalGenerating = await withReplyPollHardTimeout(
+        isAgentGenerating(page),
+        Math.min(5_000, Math.max(1, deadline - Date.now())),
+        'terminal no-reply generation status inspection',
+      );
+      if (reconciliation.reply_present && !terminalGenerating) {
+        return {
+          fullText: reconciliation.full_text,
+          deltaText: reconciliation.delta_text,
+          waited_ms: Date.now() - startedAt,
+          min_wait_ms: effectiveMinWaitMs,
+          timeout_ms: effectiveTimeoutMs,
+          wait_kind: waitKind,
+          stable_observations: Math.max(stable, 1),
+          reconciled_before_no_reply: true,
+          screenshot_phase: 'after_reply',
+          screenshot_file_suffix: 'after-reply',
+        };
+      }
+      if (terminalGenerating) {
+        noReplyStableObservations = 0;
+        lastGenerating = true;
+        await page.waitForTimeout(1000);
+        continue;
+      }
       const waitedMs = Date.now() - startedAt;
+      if (!reconciliation.task_bound || !reconciliation.prompt_bound) {
+        return {
+          fullText: '',
+          deltaText: '',
+          incomplete: true,
+          terminal_outcome: 'unverified_no_reply',
+          incomplete_reason: `无法在终态复核中同时绑定当前 taskId 与本轮 prompt，禁止生成产品 no_reply：${reconciliation.reason}。`,
+          waited_ms: waitedMs,
+          min_wait_ms: effectiveMinWaitMs,
+          timeout_ms: effectiveTimeoutMs,
+          wait_kind: waitKind,
+          stable_observations: 0,
+          no_reply_stable_observations: noReplyStableObservations,
+          observed_running_after_send: true,
+          running_after: false,
+          terminal_reconciliation_performed: true,
+          terminal_reconciliation_task_bound: reconciliation.task_bound,
+          terminal_reconciliation_prompt_bound: reconciliation.prompt_bound,
+          terminal_reconciliation_reply_present: reconciliation.reply_present,
+          screenshot_phase: 'after_terminal_unverified_no_reply',
+          screenshot_file_suffix: 'after-terminal-unverified-no-reply',
+        };
+      }
       return {
         fullText: '',
         deltaText: '',
@@ -23013,6 +23084,10 @@ async function waitForReply(page, beforeState, timeoutMs, {
         no_reply_stable_observations: noReplyStableObservations,
         observed_running_after_send: true,
         running_after: false,
+        terminal_reconciliation_performed: true,
+        terminal_reconciliation_task_bound: true,
+        terminal_reconciliation_prompt_bound: true,
+        terminal_reconciliation_reply_present: false,
         screenshot_phase: 'after_terminal_no_reply',
         screenshot_file_suffix: 'after-terminal-no-reply',
       };
@@ -23033,12 +23108,13 @@ async function waitForReply(page, beforeState, timeoutMs, {
   const finalUserVisible = !expectedUserText
     || finalSnapshot.userTexts.some((text) => userMessageMatchesPrompt(text, expectedUserText));
   if (finalTaskMatches && finalUserVisible) {
-    const finalCandidate = latestAssistantReplyForPrompt(finalSnapshot, expectedUserText)
-      || latestAssistantReplySince(finalSnapshot, before);
-    const finalClean = stripTextValues(finalCandidate || '', ignoredText).trim();
-    if (finalClean.length > 15) {
-      lastCandidate = finalClean;
-      lastCandidateFullText = cleanAssistantText(finalCandidate || finalClean);
+    const finalReconciliation = terminalPromptBoundReplyEvidence(finalSnapshot, expectedUserText, {
+      boundTaskId,
+      ignoredText,
+    });
+    if (finalReconciliation.reply_present) {
+      lastCandidate = finalReconciliation.delta_text;
+      lastCandidateFullText = finalReconciliation.full_text;
       lastGenerating = await withReplyPollHardTimeout(
         isAgentGenerating(page),
         5_000,
@@ -23047,7 +23123,7 @@ async function waitForReply(page, beforeState, timeoutMs, {
       if (!lastGenerating) {
         return {
           fullText: lastCandidateFullText,
-          deltaText: finalClean,
+          deltaText: finalReconciliation.delta_text,
           waited_ms: Date.now() - startedAt,
           min_wait_ms: effectiveMinWaitMs,
           timeout_ms: effectiveTimeoutMs,
@@ -23297,7 +23373,10 @@ async function conversationSnapshot(page) {
 }
 
 async function conversationMessageTimeline(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="user"], [data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
+  // QWork can render branched/follow-up messages outside the first
+  // message-list wrapper. Keep the assistant-thread boundary and collect only
+  // structured role nodes so visible replies remain prompt-bindable.
+  return page.locator('[data-testid="assistant-thread"] [data-role="user"], [data-testid="assistant-thread"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
     const role = node.getAttribute('data-role') === 'user' ? 'user' : 'assistant';
     const selector = role === 'user'
       ? '.aui-user-message-content, [data-testid="user-message-content"], .user-message-content'
@@ -23316,7 +23395,7 @@ async function conversationMessageTimeline(page) {
 }
 
 async function assistantMessageTexts(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
+  return page.locator('[data-testid="assistant-thread"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
     const content = node.querySelector('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content');
     if (content) return String(content.innerText || content.textContent || '');
     const clone = node.cloneNode(true);
@@ -23347,7 +23426,7 @@ async function assistantBodyTexts(page) {
 }
 
 async function userMessageTexts(page) {
-  return page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="user"]').evaluateAll((nodes) => nodes.map((node) => {
+  return page.locator('[data-testid="assistant-thread"] [data-role="user"]').evaluateAll((nodes) => nodes.map((node) => {
     const content = node.querySelector('.aui-user-message-content, [data-testid="user-message-content"], .user-message-content');
     const text = content?.innerText || node.innerText || node.textContent || '';
     return String(text).trim();
@@ -23392,6 +23471,49 @@ export function latestAssistantReplyForPrompt(snapshot, prompt) {
     if (text) return text;
   }
   return '';
+}
+
+export function terminalPromptBoundReplyEvidence(snapshot, prompt, {
+  boundTaskId = '',
+  ignoredText = [],
+} = {}) {
+  const expectedTaskId = String(boundTaskId || '').trim();
+  const activeTaskId = String(snapshot?.activeTaskId || '').trim();
+  const expectedPrompt = String(prompt || '').trim();
+  const taskBound = Boolean(expectedTaskId && activeTaskId && expectedTaskId === activeTaskId);
+  const promptBound = Boolean(
+    expectedPrompt
+    && Array.isArray(snapshot?.userTexts)
+    && snapshot.userTexts.some((text) => userMessageMatchesPrompt(text, expectedPrompt)),
+  );
+  const candidate = taskBound && promptBound
+    ? latestAssistantReplyForPrompt(snapshot, expectedPrompt)
+    : '';
+  const deltaText = stripTextValues(candidate, ignoredText).trim();
+  const replyPresent = Boolean(deltaText);
+  const reason = !expectedTaskId
+    ? 'bound_task_id_missing'
+    : !activeTaskId
+      ? 'active_task_id_missing'
+      : !taskBound
+        ? `task_id_mismatch:${expectedTaskId}:${activeTaskId}`
+        : !expectedPrompt
+          ? 'expected_prompt_missing'
+          : !promptBound
+            ? 'expected_prompt_not_found_in_structured_timeline'
+            : replyPresent
+              ? 'prompt_bound_reply_present'
+              : 'prompt_bound_reply_absent';
+  return {
+    task_bound: taskBound,
+    prompt_bound: promptBound,
+    reply_present: replyPresent,
+    expected_task_id: expectedTaskId,
+    active_task_id: activeTaskId,
+    full_text: replyPresent ? cleanAssistantText(candidate) : '',
+    delta_text: replyPresent ? deltaText : '',
+    reason,
+  };
 }
 
 function userMessageMatchesPrompt(message, prompt) {
@@ -24262,7 +24384,6 @@ function expectedKeywordsForCase(testCase) {
 
 export function replyLooksRelevant(reply, testCase, prompt = '') {
   const text = semanticReplyText(reply);
-  if (text.length < 15) return false;
   const scenario = String(testCase.scenario || '');
   const relevanceInput = `${scenario}\n${String(prompt || testCase.test_data || '')}`;
   if (isNumericMemoryScenario(testCase)) {
@@ -24305,6 +24426,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   for (const [scenarioPattern, replyPattern] of targetedRules) {
     if (scenarioPattern.test(relevanceInput) && replyPattern.test(text)) return true;
   }
+  if (text.length < 15) return false;
   const constraintTerms = [
     '输出格式', '风险', '验证方法', '验证方式', '样本量', '用户分层', '渠道',
     '转化路径', '数据结论', '可能原因', '下一步动作', '指标', '口径', '验收',
