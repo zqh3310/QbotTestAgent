@@ -41,6 +41,7 @@ import {
   latestAssistantReplyForPrompt,
   memoryLifecycleVerdict,
   modelServiceStateEvidence,
+  nativeDialogClosedOrAdvanced,
   nextTerminalNoReplyObservation,
   obviousDuplicateEvidence,
   probeConnectorRegressionFixture,
@@ -141,6 +142,30 @@ assert.equal(
   }),
   false,
   'Core Beta v2 不得自动点击多按钮 AXSheet',
+);
+assert.equal(
+  nativeDialogClosedOrAdvanced(
+    { observed: true, message: '暂不支持的附件类型：.bin' },
+    { observed: true, message: '单个文档不能超过 30 MiB' },
+  ),
+  true,
+  '排队 alert 切换到下一条不同文案时，应判定原 AXSheet 已关闭并继续循环清理',
+);
+assert.equal(
+  nativeDialogClosedOrAdvanced(
+    { observed: true, message: '暂不支持的附件类型：.bin' },
+    { observed: true, message: '暂不支持的附件类型：.bin' },
+  ),
+  false,
+  '点击后同文案 AXSheet 仍在时不得误判关闭',
+);
+assert.equal(
+  nativeDialogClosedOrAdvanced(
+    { observed: true, message: '暂不支持的附件类型：.bin' },
+    { observed: false, message: '' },
+  ),
+  true,
+  '辅助功能树不再观察到 AXSheet 时应判定原弹窗已关闭',
 );
 assert.equal(
   coreBetaAttachmentRejectionProbeVerdict(validAttachmentRejectionProbe),

@@ -76,6 +76,13 @@ export function safeNativeAttachmentInfoDialog({ message = '', buttons = [] } = 
     && SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL.test(labels[0]);
 }
 
+export function nativeDialogClosedOrAdvanced(before = {}, after = {}) {
+  if (after?.observed !== true) return true;
+  const beforeMessage = String(before?.message || '').replace(/\s+/g, ' ').trim();
+  const afterMessage = String(after?.message || '').replace(/\s+/g, ' ').trim();
+  return Boolean(beforeMessage && afterMessage && beforeMessage !== afterMessage);
+}
+
 export function coreBetaAttachmentRejectionProbeVerdict(probe = {}) {
   const composer = probe.composer_state || {};
   const noTaskNoSend = probe.no_task_no_send_state || {};
@@ -10498,11 +10505,11 @@ async function prepareTeamsNativeDialogEvidence(upstreamCdpUrl) {
         const completedAt = new Date().toISOString();
         let after = teamsAccessibilitySheet({ dismiss: false });
         const closeDeadline = Date.now() + 3_000;
-        while (after.observed && Date.now() < closeDeadline) {
+        while (!nativeDialogClosedOrAdvanced(accessibility, after) && Date.now() < closeDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 80));
           after = teamsAccessibilitySheet({ dismiss: false });
         }
-        const closed = after.observed !== true;
+        const closed = nativeDialogClosedOrAdvanced(accessibility, after);
         const record = {
           schema_version: 1,
           source: 'playwright-dialog+macos-accessibility-axsheet',
@@ -18941,15 +18948,20 @@ async function dismissBlockingOverlays(page, state = null) {
         };
     let after = teamsAccessibilitySheet({ dismiss: false });
     const deadline = Date.now() + 3_000;
-    while (confirmation.clicked && after.observed && Date.now() < deadline) {
+    while (
+      confirmation.clicked
+      && !nativeDialogClosedOrAdvanced(accessibilitySheet, after)
+      && Date.now() < deadline
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 80));
       after = teamsAccessibilitySheet({ dismiss: false });
     }
+    const originalSheetClosed = nativeDialogClosedOrAdvanced(accessibilitySheet, after);
     const recovered = Boolean(
       safeInformationDialog
       && confirmation.ok
       && confirmation.clicked
-      && after.observed !== true
+      && originalSheetClosed
     );
     const afterFile = recovered && state?.case_dir
       ? await shot(page, state.case_dir, `${base}-after`).catch(() => '')
@@ -18965,6 +18977,7 @@ async function dismissBlockingOverlays(page, state = null) {
         safe_information_dialog: safeInformationDialog,
         confirmation,
         after_confirmation: after,
+        original_sheet_closed_or_advanced: originalSheetClosed,
         before_screenshot: beforeFile,
         after_screenshot: afterFile,
       });
@@ -18976,7 +18989,7 @@ async function dismissBlockingOverlays(page, state = null) {
         buttons: accessibilitySheet.buttons,
         confirmation_label: confirmation.confirmation_label,
         clicked: confirmation.clicked === true,
-        closed_after_click: after.observed !== true,
+        closed_after_click: originalSheetClosed,
         before_screenshot: beforeFile,
         after_screenshot: afterFile,
         ledger: ledgerFile,
@@ -18986,7 +18999,7 @@ async function dismissBlockingOverlays(page, state = null) {
         state,
         '清理上一轮 360Teams 附件信息 AXSheet',
         '仅允许自动点击受支持附件提示中唯一的 OK/确定/知道了；多按钮、破坏性或文案不匹配弹窗必须 fail-closed。',
-        `message=${accessibilitySheet.message || '无'}；buttons=${(accessibilitySheet.buttons || []).join(',') || '无'}；clicked=${confirmation.clicked === true}；closed=${after.observed !== true}`,
+        `message=${accessibilitySheet.message || '无'}；buttons=${(accessibilitySheet.buttons || []).join(',') || '无'}；clicked=${confirmation.clicked === true}；closed=${originalSheetClosed}；next=${after.observed ? after.message || '未知' : '无'}`,
         recovered ? 'passed' : 'failed',
         afterFile || beforeFile,
         recovered ? '' : 'automation_error',
