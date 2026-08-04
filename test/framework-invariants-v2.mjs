@@ -35,6 +35,8 @@ import {
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
+  coreBetaV2SettingsLoadTimeoutMs,
+  coreBetaV2SettingsSurfaceState,
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
   inspectCoreBetaFixtureReadiness,
@@ -948,6 +950,52 @@ assert.equal(
   syntheticOnlySummary.non_executed_diagnostics.length,
   1,
   'synthetic preflight 失败只可保留为 non_executed_diagnostics',
+);
+const stoppedSummary = buildSummary({
+  status: 'passed',
+  startedAt: new Date('2026-08-04T00:00:00.000Z'),
+  outDir: '/tmp/qbot-framework-stop-summary-regression',
+  casebook: '/tmp/casebook.xlsx',
+  resultExcel: '/tmp/result.xlsx',
+  profile: 'mandatory',
+  cdpUrl: 'http://127.0.0.1:9224',
+  expectedTotal: 55,
+  results: [{ id: 'BETA-INIT-001', status: 'passed', synthetic: false }],
+  frameworkStop: {
+    status: 'stopped',
+    reason: 'BETA-INIT-002 manifest incomplete',
+    stopped_case_id: 'BETA-INIT-002',
+    stopped_at_index: 1,
+  },
+});
+assert.equal(stoppedSummary.status, 'stopped', 'framework stop 不能被已完成 Case 的 passed 覆盖');
+assert.equal(stoppedSummary.stopped, true, 'framework stop 必须传播到最终 summary');
+assert.equal(stoppedSummary.counts.total, 1, '停止 Case 不得伪造为 completed');
+assert.equal(stoppedSummary.result_accounting.planned, 55, 'summary 必须保留完整计划总数');
+assert.equal(stoppedSummary.result_accounting.unexecuted, 54, 'summary 必须明确未完成 Case 数');
+assert.equal(stoppedSummary.stopped_case_id, 'BETA-INIT-002');
+assert.match(
+  runner,
+  /let frameworkStop = null[\s\S]*frameworkStop = stopRemainderWithoutSynthetic\([\s\S]*buildSummary\(\{[\s\S]*expectedTotal: selectedCases\.length,[\s\S]*frameworkStop,/,
+  '真实主循环必须把硬停止诊断与完整计划数传入最终 summary',
+);
+assert.equal(coreBetaV2SettingsLoadTimeoutMs({}), 90_000);
+assert.equal(coreBetaV2SettingsLoadTimeoutMs({ QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '1000' }), 30_000);
+assert.equal(coreBetaV2SettingsLoadTimeoutMs({ QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS: '999999' }), 180_000);
+assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n正在加载个人设置...'), {
+  open: true,
+  loading: true,
+  error: '',
+});
+assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n加载个人设置失败：网络错误'), {
+  open: true,
+  loading: false,
+  error: '加载个人设置失败：网络错误',
+});
+assert.match(
+  runner,
+  /async function openCoreBetaV2SystemSettings[\s\S]*initialSettings = await waitForOpenSettingsMaintenance\(\)[\s\S]*ensureSidebarExpanded/,
+  'Core Beta v2 必须先等待已打开的系统设置加载，不能把加载态误判成个人设置入口缺失',
 );
 assert.match(
   runner,

@@ -722,6 +722,20 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
   }
 }
 
+export function teamsCasebookExitCode(summary = {}) {
+  const counts = summary?.counts || {};
+  const planned = Number(summary?.result_accounting?.planned);
+  const completed = Number(summary?.result_accounting?.completed ?? counts.total ?? 0);
+  const incomplete = Number.isFinite(planned) && planned > 0 && completed < planned;
+  const failed = Number(counts.failed || 0) > 0 || Number(counts.blocked || 0) > 0;
+  return summary?.status === 'passed'
+    && summary?.stopped !== true
+    && !incomplete
+    && !failed
+    ? 0
+    : 1;
+}
+
 export async function configureTeamsFixtureRuntime(options, browser) {
   const page = browser.contexts().flatMap((context) => context.pages())
     .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
@@ -829,9 +843,8 @@ function shellArgument(value) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const summary = await runTeamsCasebook();
-  const counts = summary?.counts || {};
   // runTeamsCasebook has already restored cwd, closed its CDP proxy and
   // completed managed-host cleanup. Exit explicitly so stale HTTP keep-alive
   // handles cannot leave a completed runner looking alive to the monitor.
-  process.exit((counts.failed || 0) > 0 || (counts.blocked || 0) > 0 ? 1 : 0);
+  process.exit(teamsCasebookExitCode(summary));
 }

@@ -47,6 +47,7 @@ import {
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
+  teamsCasebookExitCode,
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
 } from '../lib/casebook-runner.mjs';
@@ -1293,7 +1294,28 @@ test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaun
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /let connection = await resolveTeamsCasebookConnection/);
   assert.match(source, /connection = await resolveTeamsCasebookConnection\(\{ \.\.\.options, cdp: undefined \}\)/);
-  assert.match(source, /process\.exit\(\(counts\.failed \|\| 0\) > 0 \|\| \(counts\.blocked \|\| 0\) > 0 \? 1 : 0\)/);
+  assert.match(source, /process\.exit\(teamsCasebookExitCode\(summary\)\)/);
+});
+
+test('managed Teams Casebook exits nonzero for a stopped or incomplete summary', () => {
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: true,
+    counts: { total: 1, passed: 1, failed: 0, blocked: 0 },
+    result_accounting: { planned: 55, completed: 1 },
+  }), 1);
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: false,
+    counts: { total: 1, passed: 1, failed: 0, blocked: 0 },
+    result_accounting: { planned: 2, completed: 1 },
+  }), 1);
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: false,
+    counts: { total: 55, passed: 55, failed: 0, blocked: 0 },
+    result_accounting: { planned: 55, completed: 55 },
+  }), 0);
 });
 
 test('managed Teams Casebook refreshes only QWork after a stale renderer CDP attach', () => {

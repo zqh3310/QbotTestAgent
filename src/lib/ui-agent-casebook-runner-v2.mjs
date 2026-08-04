@@ -657,13 +657,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     }
     const resume = loadResumeProgress(progressFile, selectedCases, options.resume === true || options.resume === 'true');
     const results = resume.results;
+    let frameworkStop = null;
     for (let index = resume.startIndex; index < selectedCases.length; index += 1) {
       const testCase = selectedCases[index];
       const caseDir = path.join(outDir, 'cases', `${String(index + 1).padStart(3, '0')}-${testCase.id}-${slugify(testCase.scenario)}`);
       ensureDir(caseDir);
       if (!isLiveCdpPage(browser, page)) {
         const reason = `自动化框架检测到 QBot CDP/page 已断开，停止本批次，避免把后续用例误判为产品 Bug。CDP=${cdpUrl}`;
-        stopRemainderWithoutSynthetic({
+        frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index,
@@ -700,7 +701,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           const batchCase = batchEntry?.testCase;
           const completionBlock = coreBetaCompletionBlockReason(batchCase, result);
           if (completionBlock) {
-            stopRemainderWithoutSynthetic({
+            frameworkStop = stopRemainderWithoutSynthetic({
               outDir,
               selectedCases,
               startIndex: batchEntry?.index ?? (index + batchOffset),
@@ -726,7 +727,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           });
           const hardStopReason = coreBetaBatchStopReason(batchCase, result);
           if (hardStopReason) {
-            stopRemainderWithoutSynthetic({
+            frameworkStop = stopRemainderWithoutSynthetic({
               outDir,
               selectedCases,
               startIndex: (batchEntry?.index ?? (index + batchOffset)) + 1,
@@ -745,7 +746,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         const disconnected = batchResults.find(isCdpDisconnectedResult);
         if (disconnected || !isLiveCdpPage(browser, page)) {
           const reason = `单宿主流水线执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。${disconnected ? `原始现象：${clip(disconnected.actual_result || disconnected.conclusion || '', 260)}` : ''}`;
-          stopRemainderWithoutSynthetic({
+          frameworkStop = stopRemainderWithoutSynthetic({
             outDir,
             selectedCases,
             startIndex: index + 1,
@@ -776,7 +777,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       page = runtime.page;
       const completionBlock = coreBetaCompletionBlockReason(testCase, result);
       if (completionBlock) {
-        stopRemainderWithoutSynthetic({
+        frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index,
@@ -798,7 +799,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       });
       const hardStopReason = coreBetaBatchStopReason(testCase, result);
       if (hardStopReason) {
-        stopRemainderWithoutSynthetic({
+        frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index + 1,
@@ -812,7 +813,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
       if (isCdpDisconnectedResult(result) || !isLiveCdpPage(browser, page)) {
         const reason = `用例 ${testCase.id} 执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。原始现象：${clip(result.actual_result || result.conclusion || '', 260)}`;
-        stopRemainderWithoutSynthetic({
+        frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
           startIndex: index + 1,
@@ -827,7 +828,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     }
 
     const summary = buildSummary({
-      status: statusFromResults(results),
+      status: frameworkStop?.status || statusFromResults(results),
       startedAt,
       outDir,
       casebook,
@@ -837,6 +838,8 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       modelTier,
       results,
       precheck,
+      expectedTotal: selectedCases.length,
+      frameworkStop,
     });
     writeRunArtifacts(outDir, summary);
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
@@ -1224,6 +1227,7 @@ async function runParallelUiAgentCasebook({
     modelTier,
     results,
     precheck: { parallel_scheduler: { status: 'ready', ...scheduling } },
+    expectedTotal: selectedCases.length,
   });
   summary.parallel_scheduler = scheduling;
   writeRunArtifacts(outDir, summary);
@@ -1294,6 +1298,7 @@ function stopRemainderWithoutSynthetic({
     framework_stop_diagnostic: diagnosticFile,
     results,
   });
+  return diagnostic;
 }
 
 function isCdpDisconnectedResult(result) {
@@ -3837,21 +3842,79 @@ export function coreBetaV2MaintenanceConfirmationContract(testId) {
   return contracts[testId] || null;
 }
 
+export function coreBetaV2SettingsLoadTimeoutMs(env = process.env) {
+  const configured = Number(env.QBOT_CORE_BETA_SETTINGS_LOAD_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 90_000;
+  return Math.min(180_000, Math.max(30_000, Math.trunc(configured)));
+}
+
+export function coreBetaV2SettingsSurfaceState(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const open = /系统设置|正在加载个人设置/.test(normalized);
+  const errorMatch = normalized.match(/(?:加载个人设置失败|个人设置加载失败|加载失败|网络错误|请求失败)[^。\n]*/);
+  return {
+    open,
+    loading: open && /正在加载个人设置/.test(normalized) && !errorMatch,
+    error: errorMatch ? errorMatch[0] : '',
+  };
+}
+
 async function openCoreBetaV2SystemSettings(page, state) {
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   if (await visible(maintenance, 800)) return { ok: true, reason: '运行时维护区已打开。' };
+  const settingsSurface = page.locator('[role="dialog"], .modal').filter({
+    hasText: /系统设置|正在加载个人设置/,
+  }).first();
+  const waitForOpenSettingsMaintenance = async (
+    timeoutMs = coreBetaV2SettingsLoadTimeoutMs(),
+  ) => {
+    if (!(await visible(settingsSurface, 500))) return { open: false, text: '', error: '' };
+    const deadline = Date.now() + timeoutMs;
+    let surfaceText = '';
+    while (Date.now() < deadline) {
+      if (await visible(maintenance, 500)) return { open: true, text: surfaceText, error: '' };
+      surfaceText = await settingsSurface.innerText({ timeout: 700 }).catch(() => '');
+      const surfaceState = coreBetaV2SettingsSurfaceState(surfaceText);
+      if (surfaceState.error) return { open: true, text: surfaceText, error: surfaceState.error };
+      await page.waitForTimeout(250);
+    }
+    surfaceText = await settingsSurface.innerText({ timeout: 700 }).catch(() => surfaceText);
+    return {
+      open: true,
+      text: surfaceText,
+      error: `系统设置已打开，但运行时维护区在 ${timeoutMs}ms 内未完成加载。`,
+    };
+  };
+  const initialSettings = await waitForOpenSettingsMaintenance();
+  if (initialSettings.error) {
+    return { ok: false, reason: `${initialSettings.error} 页面=${clip(initialSettings.text, 300)}` };
+  }
+  if (await visible(maintenance, 800)) return { ok: true, reason: '已打开的系统设置完成加载。' };
   await ensureSidebarExpanded(page, state);
   const menu = page.locator('[data-testid="nav-settings-menu"]').first();
   if (!(await visible(menu, 2500))) return { ok: false, reason: '未找到设置菜单。' };
   await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
-  if (await visible(maintenance, 1200)) return { ok: true, reason: '设置菜单已直接打开运行时维护区。' };
-  const settings = page.locator('[data-testid="nav-settings"]').first();
-  if (!(await visible(settings, 2500))) return { ok: false, reason: '设置菜单未展示个人设置入口。' };
-  await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
-  const ready = await visible(maintenance, 90_000);
+  if (!(await visible(maintenance, 1200))) {
+    const directlyOpened = await waitForOpenSettingsMaintenance();
+    if (directlyOpened.error) {
+      return { ok: false, reason: `${directlyOpened.error} 页面=${clip(directlyOpened.text, 300)}` };
+    }
+    if (!(await visible(maintenance, 800))) {
+      const settings = page.locator('[data-testid="nav-settings"]').first();
+      if (!(await visible(settings, 2500))) {
+        return { ok: false, reason: '设置菜单未展示个人设置入口，且系统设置维护区未直接打开。' };
+      }
+      await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+      const selectedSettings = await waitForOpenSettingsMaintenance();
+      if (selectedSettings.error) {
+        return { ok: false, reason: `${selectedSettings.error} 页面=${clip(selectedSettings.text, 300)}` };
+      }
+    }
+  }
+  const ready = await visible(maintenance, 5000);
   return {
     ok: ready,
-    reason: ready ? '已进入运行时维护区。' : '个人设置打开后运行时维护区未在 90000ms 内出现。',
+    reason: ready ? '已进入运行时维护区。' : '个人设置打开后未进入运行时维护区。',
   };
 }
 
@@ -23147,14 +23210,38 @@ function statusFromResults(results) {
   return 'passed';
 }
 
-export function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profile, cdpUrl, modelTier = '', results, reason = '', precheck = null }) {
+export function buildSummary({
+  status,
+  startedAt,
+  outDir,
+  casebook,
+  resultExcel,
+  profile,
+  cdpUrl,
+  modelTier = '',
+  results,
+  reason = '',
+  precheck = null,
+  expectedTotal = null,
+  frameworkStop = null,
+}) {
   const endedAt = new Date();
   const partition = partitionCasebookResults(results);
   const completedResults = partition.completed;
+  const parsedExpectedTotal = Number(expectedTotal);
+  const plannedTotal = Number.isInteger(parsedExpectedTotal) && parsedExpectedTotal >= 0
+    ? parsedExpectedTotal
+    : completedResults.length;
+  const stopped = Boolean(frameworkStop && typeof frameworkStop === 'object');
   const summary = {
     command: 'ui-agent-casebook-run',
-    status,
-    reason,
+    status: stopped ? String(frameworkStop.status || 'stopped') : status,
+    reason: stopped ? String(frameworkStop.reason || reason || '') : reason,
+    stopped,
+    stop_reason: stopped ? String(frameworkStop.reason || '') : '',
+    stopped_case_id: stopped ? String(frameworkStop.stopped_case_id || '') : '',
+    stopped_at_index: stopped ? Number(frameworkStop.stopped_at_index ?? -1) : null,
+    framework_stop_diagnostic: stopped ? path.join(outDir, 'framework-stop-diagnostic.json') : '',
     out_dir: outDir,
     run_dir: outDir,
     casebook,
@@ -23176,8 +23263,10 @@ export function buildSummary({ status, startedAt, outDir, casebook, resultExcel,
     precheck,
     counts: countResults(completedResults),
     result_accounting: {
+      planned: plannedTotal,
       observed: Array.isArray(results) ? results.length : 0,
       completed: completedResults.length,
+      unexecuted: Math.max(0, plannedTotal - completedResults.length),
       synthetic_diagnostics: partition.syntheticDiagnostics.length,
     },
     non_executed_diagnostics: partition.syntheticDiagnostics.map((result) => ({
