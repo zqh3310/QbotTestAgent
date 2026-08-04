@@ -1943,8 +1943,16 @@ function writeSingleHostPipelineLedger(outDir, ledger) {
   writeJsonFile(singleHostPipelineLedgerFile(outDir), ledger);
 }
 
+function sha256Text(value) {
+  return createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
 function pipelinePromptHash(prompt) {
-  return createHash('sha256').update(String(prompt || ''), 'utf8').digest('hex');
+  return sha256Text(prompt);
+}
+
+export function coreBetaBatchTaskMarker(caseId, index) {
+  return `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${caseId}:${index}`).slice(0, 8)}`;
 }
 
 function pipelineLedgerKey(testCase, order) {
@@ -6881,7 +6889,7 @@ async function coreBetaDispatchBatch(ctx) {
     ? ctx.batch
     : Array.from({ length: requested }, (_, index) => ({
       index,
-      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${ctx.state.id}:${index}`).slice(0, 8)}`,
+      marker: coreBetaBatchTaskMarker(ctx.state.id, index),
     }));
   const entries = prepared.map((preparedEntry, index) => ({
       index,
@@ -7350,7 +7358,7 @@ async function executeCoreBetaConversationDispatchCollect20(context) {
     assertionContract: context.testCase.precise_assertions || {},
     batch: Array.from({ length: expected }, (_item, index) => ({
       index,
-      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${context.state.id}:${index}`).slice(0, 8)}`,
+      marker: coreBetaBatchTaskMarker(context.state.id, index),
     })),
   };
   const dispatch = await coreBetaDispatchBatch(batchContext);

@@ -22,6 +22,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaArtifactReadback,
+  coreBetaBatchTaskMarker,
   coreBetaBatchStopReason,
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
@@ -1043,6 +1044,27 @@ const internalBatchCase = coreBetaPipelineCase('BETA-CHAT-008', 'conversation', 
     oracle: '20 条任务逐 taskId 回收',
   }],
 });
+const internalBatchMarkers = Array.from(
+  { length: 20 },
+  (_item, index) => coreBetaBatchTaskMarker(internalBatchCase.id, index),
+);
+assert.equal(
+  new Set(internalBatchMarkers).size,
+  20,
+  'BETA-CHAT-008 必须能在运行时生成 20 个唯一 marker，不能依赖未定义的哈希 helper',
+);
+assert.deepEqual(
+  internalBatchMarkers,
+  Array.from({ length: 20 }, (_item, index) => coreBetaBatchTaskMarker(internalBatchCase.id, index)),
+  'BETA-CHAT-008 marker 必须在相同 Case 身份下稳定可复现',
+);
+assert.ok(
+  internalBatchMarkers.every((marker, index) => (
+    marker.startsWith(`QBOT-BETA-${String(index + 1).padStart(2, '0')}-`)
+    && /^QBOT-BETA-\d{2}-[0-9a-f]{8}$/.test(marker)
+  )),
+  'BETA-CHAT-008 marker 必须保留序号和 8 位 SHA-256 身份后缀',
+);
 assert.equal(
   singleHostPipelineEligibility(internalBatchCase).eligible,
   false,
