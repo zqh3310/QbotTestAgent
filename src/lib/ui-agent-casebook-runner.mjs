@@ -25563,7 +25563,52 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     if (!/(?:总计|合计)/.test(previousLine)) return false;
     const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
     return Number(rowValues.at(-1)) === Number(expectedTotal);
-  });
+  }) || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
+}
+
+const TABLE_ALIAS_TOKEN = '[A-Z]|[1-9]\\d?';
+const TABLE_ALIAS_PREFIX = '(?:^|[\\s([{（【,:：，;；])表(?:格)?\\s*';
+const TABLE_ALIAS_SUFFIX = '(?=$|[\\s([{（【)\\]}）】,:：，;；+\\-−—=])';
+
+function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal) {
+  const bindings = new Map();
+  for (const line of lines) {
+    const aliasMatches = [...line.matchAll(new RegExp(`${TABLE_ALIAS_PREFIX}(${TABLE_ALIAS_TOKEN})${TABLE_ALIAS_SUFFIX}`, 'gi'))];
+    for (const [index, match] of aliasMatches.entries()) {
+      const alias = String(match[1] || '').toUpperCase();
+      const segmentStart = Number(match.index || 0) + match[0].length;
+      const segmentEnd = Number(aliasMatches[index + 1]?.index ?? line.length);
+      const identitySegment = line.slice(segmentStart, segmentEnd);
+      const families = new Set();
+      if (/qbot-table\.csv|\bCSV\b/i.test(identitySegment)) families.add('csv');
+      if (/qbot-data-table-diff\.xlsx|\bXLSX\b|\bExcel\b/i.test(identitySegment)) families.add('xlsx');
+      if (families.size === 0) continue;
+      const entries = bindings.get(alias) || [];
+      entries.push({ line: identitySegment, families });
+      bindings.set(alias, entries);
+    }
+  }
+
+  for (const [alias, entries] of bindings) {
+    const families = new Set(entries.flatMap((entry) => [...entry.families]));
+    if (families.size !== 1 || !entries.every((entry) => identityPattern.test(entry.line))) continue;
+    const aliasPattern = new RegExp(`${TABLE_ALIAS_PREFIX}${escapeRegExp(alias)}${TABLE_ALIAS_SUFFIX}`, 'i');
+    const matched = lines.some((line) => {
+      const aliasMatch = line.match(aliasPattern);
+      if (!aliasMatch) return false;
+      const aliasEnd = Number(aliasMatch.index || 0) + aliasMatch[0].length;
+      const afterAlias = line.slice(aliasEnd);
+      const nextAlias = afterAlias.match(new RegExp(`${TABLE_ALIAS_PREFIX}(?:${TABLE_ALIAS_TOKEN})${TABLE_ALIAS_SUFFIX}`, 'i'));
+      const aliasSegment = nextAlias ? afterAlias.slice(0, Number(nextAlias.index || 0)) : afterAlias;
+      if (directTotal.test(aliasSegment) || calculatedTotal.test(aliasSegment)) return true;
+      const values = aliasSegment.match(/\d+(?:\.\d+)?/g) || [];
+      const hasTotalContext = /(?:总计|合计)/.test(aliasSegment)
+        || /(?:总计|合计)/.test(line.slice(0, Number(aliasMatch.index || 0)));
+      return hasTotalContext && Number(values.at(-1)) === Number(expectedTotal);
+    });
+    if (matched) return true;
+  }
+  return false;
 }
 
 export function caseAwareReplyAssertion(testCase, turn, replyText) {

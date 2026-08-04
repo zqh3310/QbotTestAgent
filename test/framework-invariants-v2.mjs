@@ -2047,6 +2047,35 @@ assert.equal(
   true,
   '表格 Case 应接受文件名先绑定唯一表别名、再以该别名标注双方总计的真实回复',
 );
+const observedNumericAliasedCoreTableReply = [
+  '指标\t表1 (qbot-table.csv)\t表2 (qbot-data-table-diff.xlsx)\t差异\t变化幅度',
+  '报名人数\t100\t120\t+20\t+20%',
+  '到场人数\t70\t80\t+10\t+14.3%',
+  '成交单数\t12\t15\t+3\t+25%',
+  '合计：表1 = 182，表2 = 215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedNumericAliasedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受本轮真实回复中由文件名唯一绑定的表1/表2及行首合计表达',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  [
+    '指标\t表1 (qbot-table.csv)\t表2 (qbot-data-table-diff.xlsx)',
+    '报名人数\t100\t120；到场人数\t70\t80；成交单数\t12\t15',
+    '合计：表1 = 215，表2 = 182',
+  ].join('\n'),
+).ok, false, '数字表别名的总计交换时不得形成通过');
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  [
+    '报名人数：100→120；到场人数：70→80；成交单数：12→15。',
+    '合计：表1 = 182，表2 = 215',
+  ].join('\n'),
+).ok, false, '数字表别名未与文件身份绑定时不得形成通过');
 assert.equal(caseAwareReplyAssertion(
   coreTableCase,
   { prompt: coreTablePrompt },
