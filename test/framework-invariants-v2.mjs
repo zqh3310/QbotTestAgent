@@ -33,6 +33,7 @@ import {
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaPartialReplyReady,
   coreBetaRuntimeExecutorBinding,
+  coreBetaSkillInstallBatchAssessment,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
@@ -587,6 +588,93 @@ assert.equal(
   }).valid,
   false,
   '任一清理桥动作失败时，即使最终 capabilities 看似为空也必须 fail-closed',
+);
+const skillInstallReceipts = Array.from({ length: 5 }, (_, index) => ({
+  qualified_identity: `global/qa-skill-${index + 1}/1.0.0`,
+  before: `/tmp/qa-skill-${index + 1}-before.png`,
+  pending: `/tmp/qa-skill-${index + 1}-pending.png`,
+  after: `/tmp/qa-skill-${index + 1}-after.png`,
+  pending_observed: true,
+  terminal_feedback: {
+    observed: true,
+    status: index === 0 ? 'error' : 'success',
+    message: index === 0 ? '安装失败：SkillHub package metadata cannot contain agent_created' : '安装成功，本机对账已完成',
+  },
+  api_receipt: { install_ok: index !== 0 },
+  reconcile_receipt: { ok: index !== 0 },
+  catalog_installed_checked: true,
+  installed: index !== 0,
+  installed_readback: index === 0 ? null : { slug: `qa-skill-${index + 1}` },
+  feedback: index === 0 ? '安装失败：SkillHub package metadata cannot contain agent_created' : '安装成功',
+}));
+const skillInstallProductFailureAssessment = coreBetaSkillInstallBatchAssessment(skillInstallReceipts, 5);
+assert.deepEqual(
+  skillInstallProductFailureAssessment,
+  {
+    valid: true,
+    oracle_valid: false,
+    expected_count: 5,
+    attempted_count: 5,
+    installed_count: 4,
+    failed_count: 1,
+    installed_identities: skillInstallReceipts.slice(1).map((item) => item.qualified_identity),
+    failed_identities: [skillInstallReceipts[0].qualified_identity],
+  },
+  'Skill 安装产品失败必须保留完整 evidence，并以 oracle_valid=false 进入产品 Bug 判定',
+);
+const skillInstallEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-skill-install-'));
+try {
+  const eventFile = path.join(skillInstallEvidenceDir, 'capability-execution-event.json');
+  writeJsonFile(eventFile, { ...skillInstallProductFailureAssessment, receipts: skillInstallReceipts });
+  const manifest = buildCoreEvidenceManifest({
+    testCase: {
+      id: 'BETA-SKILL-003',
+      evidence_roles: ['capability_inventory', 'capability_selection', 'capability_execution_event'],
+    },
+    caseDir: skillInstallEvidenceDir,
+    artifacts: {
+      capability_inventory: eventFile,
+      capability_selection: eventFile,
+      capability_execution_event: eventFile,
+    },
+  });
+  assert.equal(manifest.complete, true, 'Skill 产品安装失败的完整结构化证据不得被 manifest 误判为缺失');
+} finally {
+  fs.rmSync(skillInstallEvidenceDir, { recursive: true, force: true });
+}
+assert.equal(
+  coreBetaSkillInstallBatchAssessment(
+    skillInstallReceipts.map((item, index) => (index === 0 ? { ...item, pending: '' } : item)),
+    5,
+  ).valid,
+  false,
+  'Skill 安装失败缺少 pending 截图时仍必须 fail-closed，不能用产品 Bug 掩盖证据缺失',
+);
+assert.deepEqual(
+  coreBetaSkillInstallBatchAssessment(skillInstallReceipts.map((item, index) => (
+    index === 0
+      ? {
+          ...item,
+          installed: true,
+          installed_readback: { slug: 'qa-skill-1' },
+          api_receipt: { install_ok: true },
+          reconcile_receipt: { ok: false },
+          terminal_feedback: { observed: true, status: 'error', message: '已写入安装记录，但本机对账失败' },
+        }
+      : item
+  )), 5).failed_identities,
+  [skillInstallReceipts[0].qualified_identity],
+  '服务端已安装但本机 reconcile 失败的 Skill 仍必须记为产品失败，不能进入成功账本',
+);
+assert.doesNotMatch(
+  runner,
+  /if \(!installed\) throw new Error\(`技能安装没有catalog\.installed终态/,
+  'BETA-SKILL-003/004 不得把产品安装失败直接抛成不完整 manifest 框架异常',
+);
+assert.match(
+  runner,
+  /receipts\.filter\(\(item\) => item\.oracle_passed\)[\s\S]*install_attempt_receipts[\s\S]*assessment\.oracle_valid/,
+  'Skill 安装批次必须分离尝试账本与成功账本，并保留产品 Oracle 结果',
 );
 assert.match(
   runner,

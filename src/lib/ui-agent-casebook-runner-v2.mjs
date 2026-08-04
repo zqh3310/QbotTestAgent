@@ -4839,6 +4839,100 @@ function chooseCoreBetaMarketSkills(catalog, count = 10) {
     .slice(0, count);
 }
 
+export function coreBetaSkillInstallBatchAssessment(receipts = [], expectedCount = 5) {
+  const normalized = Array.isArray(receipts) ? receipts : [];
+  const identities = normalized.map((item) => String(item?.qualified_identity || '')).filter(Boolean);
+  const evidenceValid = normalized.length === expectedCount
+    && identities.length === expectedCount
+    && new Set(identities).size === expectedCount
+    && normalized.every((item) => (
+      typeof item?.installed === 'boolean'
+      && item.catalog_installed_checked === true
+      && typeof item.before === 'string' && item.before.length > 0
+      && typeof item.pending === 'string' && item.pending.length > 0
+      && typeof item.after === 'string' && item.after.length > 0
+      && typeof item.pending_observed === 'boolean'
+      && item.terminal_feedback?.observed === true
+      && ['success', 'error'].includes(item.terminal_feedback?.status)
+      && typeof item.api_receipt?.install_ok !== 'undefined'
+      && typeof item.reconcile_receipt?.ok !== 'undefined'
+      && (!item.installed || Boolean(item.installed_readback))
+    ));
+  const installedReceipts = normalized.filter((item) => item?.installed === true);
+  const successfulReceipts = normalized.filter((item) => (
+    item?.installed === true
+    && item.pending_observed === true
+    && item.terminal_feedback?.status === 'success'
+    && item.api_receipt?.install_ok === true
+    && item.reconcile_receipt?.ok === true
+  ));
+  const failedReceipts = normalized.filter((item) => !successfulReceipts.includes(item));
+  return {
+    valid: evidenceValid,
+    oracle_valid: evidenceValid && successfulReceipts.length === expectedCount,
+    expected_count: expectedCount,
+    attempted_count: normalized.length,
+    installed_count: installedReceipts.length,
+    failed_count: failedReceipts.length,
+    installed_identities: installedReceipts.map((item) => item.qualified_identity),
+    failed_identities: failedReceipts.map((item) => item.qualified_identity),
+  };
+}
+
+async function readCoreBetaSkillOperationFeedback(page, targetLabel) {
+  return await page.locator('[data-testid="skill-operation-feedback"]').first().evaluate((node, label) => {
+    const text = String(node.textContent || '').trim();
+    const status = node.classList.contains('success')
+      ? 'success'
+      : node.classList.contains('error')
+        ? 'error'
+        : node.classList.contains('pending') ? 'pending' : 'unknown';
+    return {
+      observed: text.includes(label),
+      target_label: label,
+      status,
+      message: text,
+      role: node.getAttribute('role') || '',
+      captured_at: new Date().toISOString(),
+    };
+  }, targetLabel).catch(() => ({
+    observed: false,
+    target_label: targetLabel,
+    status: 'missing',
+    message: '',
+    role: '',
+    captured_at: new Date().toISOString(),
+  }));
+}
+
+function coreBetaSkillInstallReceiptsFromFeedback(feedback = {}, installed = null) {
+  const message = String(feedback.message || '');
+  const installFailed = feedback.status === 'error' && /^安装失败[：:]/.test(message);
+  const installSucceeded = feedback.status === 'success'
+    || (feedback.status === 'error' && !installFailed)
+    || Boolean(installed);
+  const reconcileFailed = /对账失败|运行时未就绪|未安装[：:]/.test(message);
+  return {
+    api_receipt: {
+      source: 'skill-operation-feedback',
+      derived_from_product_feedback: true,
+      install_ok: installFailed ? false : installSucceeded ? true : null,
+      message,
+    },
+    reconcile_receipt: {
+      source: 'skill-operation-feedback+catalog.installed',
+      derived_from_product_feedback: true,
+      attempted: !installFailed,
+      ok: installFailed
+        ? null
+        : feedback.status === 'success' && Boolean(installed)
+          ? true
+          : reconcileFailed || feedback.status === 'error' ? false : null,
+      message,
+    },
+  };
+}
+
 async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeoutMs, options = {} }) {
   if (testCase.case_type === 'skill_lifecycle') {
     await openCoreBetaSkillSurface(page);
@@ -4948,39 +5042,102 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         const button = card.locator('.skill-install').first();
         if (!await visible(button, 2_000)) throw new Error(`安装技能按钮不可见：${target.qualified_identity}`);
         const before = await shot(page, caseDir, `skill-install-${slugify(target.slug)}-before`);
+        const startedAt = new Date().toISOString();
         await button.click({ force: true });
         const feedback = page.locator('[data-testid="skill-operation-feedback"]').first();
         await feedback.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
-        await page.waitForFunction((slug) => {
+        await page.waitForFunction((label) => {
+          const node = document.querySelector('[data-testid="skill-operation-feedback"]');
+          return Boolean(node && (node.textContent || '').includes(label));
+        }, target.label, { timeout: 5_000 }).catch(() => {});
+        const pendingFeedback = await readCoreBetaSkillOperationFeedback(page, target.label);
+        const pending = await shot(page, caseDir, `skill-install-${slugify(target.slug)}-pending`);
+        await page.waitForFunction((label) => {
+          const feedbackNode = document.querySelector('[data-testid="skill-operation-feedback"]');
+          if (feedbackNode && (feedbackNode.textContent || '').includes(label)
+            && (feedbackNode.classList.contains('success') || feedbackNode.classList.contains('error'))) {
+            return true;
+          }
           const cards = Array.from(document.querySelectorAll('.skill-card'));
-          return cards.some((card) => (card.textContent || '').includes(slug)
+          return cards.some((card) => (card.textContent || '').includes(label)
             && (card.querySelector('.skill-card-installed') || !card.querySelector('.skill-install')));
         }, target.label, { timeout: 120_000 }).catch(() => {});
+        const terminalFeedback = await readCoreBetaSkillOperationFeedback(page, target.label);
         const catalog = await readCoreBetaSkillCatalog(page);
         const installed = catalog.installed.find((item) => (
           (item.slug || item.name) === target.slug
           && (!target.namespace || !item.namespace || item.namespace === target.namespace)
         ));
         const after = await shot(page, caseDir, `skill-install-${slugify(target.slug)}-after`);
+        const operationReceipts = coreBetaSkillInstallReceiptsFromFeedback(terminalFeedback, installed);
         const receipt = {
           qualified_identity: target.qualified_identity,
           before,
+          pending,
           after,
+          started_at: startedAt,
+          ended_at: new Date().toISOString(),
+          clicked: true,
+          pending_observed: pendingFeedback.observed && pendingFeedback.status === 'pending',
+          pending_feedback: pendingFeedback,
+          terminal_feedback: terminalFeedback,
+          catalog_installed_checked: true,
           installed: Boolean(installed),
           installed_readback: installed || null,
-          feedback: await feedback.innerText({ timeout: 500 }).catch(() => ''),
+          feedback: terminalFeedback.message,
+          ...operationReceipts,
         };
+        receipt.oracle_passed = Boolean(
+          receipt.installed
+          && receipt.pending_observed
+          && receipt.terminal_feedback.status === 'success'
+          && receipt.api_receipt.install_ok === true
+          && receipt.reconcile_receipt.ok === true
+        );
+        receipt.status = receipt.oracle_passed ? 'passed' : 'failed';
+        receipt.failure_category = receipt.oracle_passed ? '' : 'bug';
+        receipt.failure_reason = receipt.oracle_passed
+          ? ''
+          : !receipt.installed
+            ? `技能安装未进入catalog.installed终态：${target.qualified_identity}`
+            : !receipt.pending_observed
+              ? `技能安装未观察到pending终态：${target.qualified_identity}`
+              : `技能安装或本机reconcile未成功：${target.qualified_identity}；feedback=${receipt.feedback}`;
         receipts.push(receipt);
-        if (!installed) throw new Error(`技能安装没有catalog.installed终态：${target.qualified_identity}`);
+        recordStep(
+          state,
+          `安装固定 Skill 样本：${target.qualified_identity}`,
+          '必须从市场卡点击安装并保存 pending、终态反馈和 catalog.installed 读回。',
+          receipt.oracle_passed
+            ? `安装成功并进入 catalog.installed；feedback=${receipt.feedback}`
+            : `${receipt.failure_reason}；feedback=${receipt.feedback}`,
+          receipt.oracle_passed ? 'passed' : 'failed',
+          after,
+          receipt.oracle_passed ? '' : 'bug',
+        );
       }
-      ledger.skills.install_receipts = [...(ledger.skills.install_receipts || []), ...receipts];
+      const assessment = coreBetaSkillInstallBatchAssessment(receipts, 5);
+      ledger.skills.install_receipts = [
+        ...(ledger.skills.install_receipts || []),
+        ...receipts.filter((item) => item.oracle_passed),
+      ];
+      ledger.skills.install_attempt_receipts = [
+        ...(ledger.skills.install_attempt_receipts || []),
+        ...receipts,
+      ];
       writeCoreBetaSuiteLedger(caseDir, ledger);
       const file = path.join(caseDir, 'capability-execution-event.json');
-      writeJsonFile(file, { valid: receipts.length === 5 && receipts.every((item) => item.installed), receipts });
+      writeJsonFile(file, { ...assessment, receipts });
       state.artifacts.capability_inventory = file;
       state.artifacts.capability_selection = file;
       state.artifacts.capability_execution_event = file;
-      recordAssertion(state, '5个Skill逐项安装终态', '每个样本必须有UI按钮动作、前后截图及catalog.installed读回。', receipts.length === 5 && receipts.every((item) => item.installed), `installed=${receipts.filter((item) => item.installed).length}/5`);
+      recordAssertion(
+        state,
+        '5个Skill逐项安装终态',
+        '每个固定样本必须有UI按钮动作、before/pending/terminal截图及catalog.installed读回；产品失败项不得写入成功账本。',
+        assessment.oracle_valid,
+        `evidence_valid=${assessment.valid}; installed=${assessment.installed_count}/5; failed=${assessment.failed_identities.join(',')}`,
+      );
       return;
     }
     if (testCase.id === 'BETA-SKILL-005') {
