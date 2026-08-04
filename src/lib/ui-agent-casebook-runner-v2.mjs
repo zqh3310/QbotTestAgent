@@ -2700,7 +2700,7 @@ async function finalizeCoreBetaPipelineEvidence({ page, state, testCase, caseDir
   const actionReceiptFile = path.join(caseDir, 'action-receipts.json');
   writeJsonFile(actionReceiptFile, actionReceipts);
   state.artifacts.action_receipt = actionReceiptFile;
-  state.artifacts.cleanup_readback = await writeCleanupReadback({ page, testCase, caseDir });
+  state.artifacts.cleanup_readback = await writeCleanupReadback({ page, state, testCase, caseDir });
   await materializeCoreBetaEvidence({
     page,
     state,
@@ -2941,7 +2941,7 @@ async function executeCoreBetaCase(context) {
   const actionReceiptFile = path.join(caseDir, 'action-receipts.json');
   writeJsonFile(actionReceiptFile, actionReceipts);
   state.artifacts.action_receipt = actionReceiptFile;
-  state.artifacts.cleanup_readback = await writeCleanupReadback({ page, testCase, caseDir });
+  state.artifacts.cleanup_readback = await writeCleanupReadback({ page, state, testCase, caseDir });
   if (state.artifacts.core_beta_fixture_lease?.ok) {
     state.artifacts.core_beta_fixture_restore = await invokeCoreBetaFixtureControl({
       options,
@@ -3784,6 +3784,16 @@ export function coreBetaCleanupCapabilitiesNeedsRetry(value) {
   return !value || typeof value !== 'object' || Boolean(value.__error);
 }
 
+export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
+  const attempts = Array.isArray(snapshot.capabilities_readback_attempts)
+    ? snapshot.capabilities_readback_attempts
+    : [];
+  return snapshot.capability_cleanup_required === true
+    && attempts.length >= 3
+    && coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after)
+    && snapshot.composer_surface_available !== true;
+}
+
 export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
   const requiredMethods = Array.isArray(snapshot.required_bridge_methods)
     ? snapshot.required_bridge_methods
@@ -3815,6 +3825,12 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
   if (snapshot.capability_cleanup_required && !selectionSource) {
     errors.push('capability_selection_not_confirmed_empty');
   }
+  if (snapshot.cleanup_surface_recovery?.attempted === true && (
+    snapshot.cleanup_surface_recovery.completed !== true
+    || !/^[a-f0-9]{64}$/i.test(String(snapshot.cleanup_surface_recovery.screenshot_sha256 || ''))
+  )) {
+    errors.push('cleanup_surface_recovery_incomplete');
+  }
   return {
     valid: errors.length === 0,
     selection_source: selectionSource,
@@ -3824,7 +3840,150 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
   };
 }
 
-async function writeCleanupReadback({ page, testCase, caseDir }) {
+async function captureCleanupSelectionReadbacks(page, bridgeResults, {
+  readCapabilities = true,
+  capabilitiesTimeoutMs = 6_500,
+} = {}) {
+  return page.evaluate(async ({ cleanupBridgeResults, shouldReadCapabilities, timeoutMs }) => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E || null;
+    const call = async (fn) => {
+      if (typeof fn !== 'function') return null;
+      try { return await fn(); } catch (error) {
+        return { __error: String(error?.message || error) };
+      }
+    };
+    const callBounded = async (fn) => {
+      if (typeof fn !== 'function') return { __error: 'missing bridge method capabilities' };
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => fn()),
+          new Promise((_, reject) => window.setTimeout(
+            () => reject(new Error(`Core Beta cleanup capabilities timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          )),
+        ]);
+      } catch (error) {
+        return { __error: String(error?.message || error) };
+      }
+    };
+    const compactSelection = (value, {
+      skillsKey,
+      connectorsKey,
+      expertKeys,
+    }) => {
+      const object = value && typeof value === 'object' ? value : null;
+      const expertKey = object
+        ? expertKeys.find((key) => Object.hasOwn(object, key))
+        : '';
+      return {
+        available: Boolean(object && !object.__error),
+        error: String(object?.__error || ''),
+        selected_skills_observed: Boolean(object && Object.hasOwn(object, skillsKey)),
+        selected_skills: object?.[skillsKey] ?? null,
+        selected_connectors_observed: Boolean(object && Object.hasOwn(object, connectorsKey)),
+        selected_connectors: object?.[connectorsKey] ?? null,
+        current_expert_observed: Boolean(expertKey),
+        current_expert: expertKey ? object?.[expertKey] ?? null : null,
+      };
+    };
+    const [e2eState, session, capabilities] = await Promise.all([
+      call(e2e?.state?.bind(e2e)),
+      call(e2e?.currentSession?.bind(e2e)),
+      shouldReadCapabilities
+        ? callBounded(window.agent?.capabilities?.bind(window.agent))
+        : null,
+    ]);
+    const visibleNodes = (selector) => Array.from(document.querySelectorAll(selector)).filter((node) => {
+      const rect = node.getBoundingClientRect();
+      const style = globalThis.getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    const skillControl = visibleNodes('[data-testid="composer-skills-menu"]').at(0) || null;
+    const connectorControl = visibleNodes('[data-testid="composer-connectors-menu"]').at(0) || null;
+    const unifiedPlusControl = visibleNodes('[data-testid="composer-plus-menu"]').at(0) || null;
+    const composer = visibleNodes('[data-testid="composer-input"], .aui-composer-input').at(0) || null;
+    const skillControlText = String(skillControl?.textContent || '').replace(/\s+/g, ' ').trim();
+    const connectorControlText = String(connectorControl?.textContent || '').replace(/\s+/g, ' ').trim();
+    const skillChips = visibleNodes(
+      '[data-testid^="composer-skill-chip-"]:not(.composer-reference-chip), .skill-chip:not(.composer-reference-chip)',
+    ).filter((node) => composer?.contains(node))
+      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const connectorChips = visibleNodes(
+      '[data-testid^="composer-connector-chip-"], [data-testid="composer-connector-chip"], .connector-chip',
+    ).filter((node) => composer?.contains(node))
+      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const expertObserved = Boolean(e2eState && !e2eState.__error
+      && (Object.hasOwn(e2eState, 'currentExpertIdentity') || Object.hasOwn(e2eState, 'currentExpert')));
+    const expertValue = e2eState?.currentExpertIdentity ?? e2eState?.currentExpert ?? null;
+    const expertAvatars = visibleNodes('.ctools .ctool-btn-ava');
+    const skillDisabled = /技能[^\n]*禁用/.test(skillControlText);
+    const connectorDisabled = /(?:连应用|连接器)[^\n]*禁用/.test(connectorControlText);
+    const skillBridgeCleared = Array.isArray(cleanupBridgeResults.setSkillsDisabled)
+      && cleanupBridgeResults.setSkillsDisabled.length === 0;
+    const connectorBridgeCleared = Array.isArray(cleanupBridgeResults.setConnectorsDisabled)
+      && cleanupBridgeResults.setConnectorsDisabled.length === 0;
+    const expertBridgeCleared = Boolean(
+      cleanupBridgeResults.setExpert
+      && typeof cleanupBridgeResults.setExpert === 'object'
+      && (cleanupBridgeResults.setExpert.expert ?? cleanupBridgeResults.setExpert.expertIdentity) == null
+    );
+    const skillSurfaceReady = skillControl ? skillDisabled : Boolean(unifiedPlusControl && composer);
+    const connectorSurfaceReady = connectorControl ? connectorDisabled : Boolean(unifiedPlusControl && composer);
+    return {
+      capabilities_after: capabilities,
+      selection_readbacks: {
+        e2e_state: compactSelection(e2eState, {
+          skillsKey: 'selectedSkills',
+          connectorsKey: 'selectedConnectors',
+          expertKeys: ['currentExpertIdentity', 'currentExpert'],
+        }),
+        current_session: compactSelection(session, {
+          skillsKey: 'skills',
+          connectorsKey: 'connectors',
+          expertKeys: ['expertIdentity', 'expert'],
+        }),
+        visible_ui: {
+          available: Boolean(
+            skillSurfaceReady
+            && connectorSurfaceReady
+            && expertObserved
+            && skillBridgeCleared
+            && connectorBridgeCleared
+            && expertBridgeCleared
+          ),
+          error: '',
+          selected_skills_observed: Boolean(skillControl || (unifiedPlusControl && composer)),
+          selected_skills: skillSurfaceReady && skillBridgeCleared
+            ? skillChips
+            : [`cleanup-not-confirmed:${skillControlText || 'unified-skill'}`],
+          selected_connectors_observed: Boolean(connectorControl || (unifiedPlusControl && composer)),
+          selected_connectors: connectorSurfaceReady && connectorBridgeCleared
+            ? connectorChips
+            : [`cleanup-not-confirmed:${connectorControlText || 'unified-connector'}`],
+          current_expert_observed: expertObserved,
+          current_expert: expertBridgeCleared && expertValue == null && expertAvatars.length === 0
+            ? null
+            : expertValue || 'expert-cleanup-not-confirmed',
+          surface: unifiedPlusControl && composer ? 'unified-plus' : 'legacy-separate-controls',
+          skill_control_text: skillControlText,
+          connector_control_text: connectorControlText,
+          visible_skill_chips: skillChips,
+          visible_connector_chips: connectorChips,
+          visible_expert_avatar_count: expertAvatars.length,
+        },
+      },
+      composer_surface_available: Boolean(composer),
+      dialogs_open: document.querySelectorAll('[role="dialog"],.modal-mask').length,
+      url: location.href,
+    };
+  }, {
+    cleanupBridgeResults: bridgeResults,
+    shouldReadCapabilities: readCapabilities,
+    timeoutMs: capabilitiesTimeoutMs,
+  });
+}
+
+async function writeCleanupReadback({ page, state, testCase, caseDir }) {
   const file = path.join(caseDir, 'cleanup-readback.json');
   const snapshot = await page.evaluate(async ({ cleanupPolicy }) => {
     const clicked = [];
@@ -3861,103 +4020,6 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
       await invoke('setConnectorsDisabled');
       await invoke('setExpert', null);
     }
-    const e2e = window.__qbotE2E || window.__deepbankE2E || null;
-    const call = async (fn) => {
-      if (typeof fn !== 'function') return null;
-      try { return await fn(); } catch (error) {
-        return { __error: String(error?.message || error) };
-      }
-    };
-    const compactSelection = (value, {
-      skillsKey,
-      connectorsKey,
-      expertKeys,
-    }) => {
-      const object = value && typeof value === 'object' ? value : null;
-      const expertKey = object
-        ? expertKeys.find((key) => Object.hasOwn(object, key))
-        : '';
-      return {
-        available: Boolean(object && !object.__error),
-        error: String(object?.__error || ''),
-        selected_skills_observed: Boolean(object && Object.hasOwn(object, skillsKey)),
-        selected_skills: object?.[skillsKey] ?? null,
-        selected_connectors_observed: Boolean(object && Object.hasOwn(object, connectorsKey)),
-        selected_connectors: object?.[connectorsKey] ?? null,
-        current_expert_observed: Boolean(expertKey),
-        current_expert: expertKey ? object?.[expertKey] ?? null : null,
-      };
-    };
-    const e2eState = await call(e2e?.state?.bind(e2e));
-    const [session, capabilities] = await Promise.all([
-      call(e2e?.currentSession?.bind(e2e)),
-      call(window.agent?.capabilities?.bind(window.agent)),
-    ]);
-    const visibleNodes = (selector) => Array.from(document.querySelectorAll(selector)).filter((node) => {
-      const rect = node.getBoundingClientRect();
-      const style = globalThis.getComputedStyle(node);
-      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-    });
-    const skillControl = visibleNodes('[data-testid="composer-skills-menu"]').at(0) || null;
-    const connectorControl = visibleNodes('[data-testid="composer-connectors-menu"]').at(0) || null;
-    const unifiedPlusControl = visibleNodes('[data-testid="composer-plus-menu"]').at(0) || null;
-    const composer = visibleNodes('[data-testid="composer-input"]').at(0) || null;
-    const skillControlText = String(skillControl?.textContent || '').replace(/\s+/g, ' ').trim();
-    const connectorControlText = String(connectorControl?.textContent || '').replace(/\s+/g, ' ').trim();
-    const skillChips = visibleNodes(
-      '[data-testid^="composer-skill-chip-"]:not(.composer-reference-chip), .skill-chip:not(.composer-reference-chip)',
-    ).filter((node) => composer?.contains(node))
-      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const connectorChips = visibleNodes(
-      '[data-testid^="composer-connector-chip-"], [data-testid="composer-connector-chip"], .connector-chip',
-    ).filter((node) => composer?.contains(node))
-      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const expertObserved = Boolean(e2eState && !e2eState.__error
-      && (Object.hasOwn(e2eState, 'currentExpertIdentity') || Object.hasOwn(e2eState, 'currentExpert')));
-    const expertValue = e2eState?.currentExpertIdentity ?? e2eState?.currentExpert ?? null;
-    const expertAvatars = visibleNodes('.ctools .ctool-btn-ava');
-    const skillDisabled = /技能[^\n]*禁用/.test(skillControlText);
-    const connectorDisabled = /(?:连应用|连接器)[^\n]*禁用/.test(connectorControlText);
-    const skillBridgeCleared = Array.isArray(bridgeResults.setSkillsDisabled)
-      && bridgeResults.setSkillsDisabled.length === 0;
-    const connectorBridgeCleared = Array.isArray(bridgeResults.setConnectorsDisabled)
-      && bridgeResults.setConnectorsDisabled.length === 0;
-    const expertBridgeCleared = Boolean(
-      bridgeResults.setExpert
-      && typeof bridgeResults.setExpert === 'object'
-      && (bridgeResults.setExpert.expert ?? bridgeResults.setExpert.expertIdentity) == null
-    );
-    const skillSurfaceReady = skillControl ? skillDisabled : Boolean(unifiedPlusControl && composer);
-    const connectorSurfaceReady = connectorControl ? connectorDisabled : Boolean(unifiedPlusControl && composer);
-    const visibleUiReadback = {
-      available: Boolean(
-        skillSurfaceReady
-        && connectorSurfaceReady
-        && expertObserved
-        && skillBridgeCleared
-        && connectorBridgeCleared
-        && expertBridgeCleared
-      ),
-      error: '',
-      selected_skills_observed: Boolean(skillControl || (unifiedPlusControl && composer)),
-      selected_skills: skillSurfaceReady && skillBridgeCleared
-        ? skillChips
-        : [`cleanup-not-confirmed:${skillControlText || 'unified-skill'}`],
-      selected_connectors_observed: Boolean(connectorControl || (unifiedPlusControl && composer)),
-      selected_connectors: connectorSurfaceReady && connectorBridgeCleared
-        ? connectorChips
-        : [`cleanup-not-confirmed:${connectorControlText || 'unified-connector'}`],
-      current_expert_observed: expertObserved,
-      current_expert: expertBridgeCleared && expertValue == null && expertAvatars.length === 0
-        ? null
-        : expertValue || 'expert-cleanup-not-confirmed',
-      surface: unifiedPlusControl && composer ? 'unified-plus' : 'legacy-separate-controls',
-      skill_control_text: skillControlText,
-      connector_control_text: connectorControlText,
-      visible_skill_chips: skillChips,
-      visible_connector_chips: connectorChips,
-      visible_expert_avatar_count: expertAvatars.length,
-    };
     return {
       valid: true,
       captured_at: new Date().toISOString(),
@@ -3968,24 +4030,9 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
       bridge_invocations: bridgeInvocations,
       clicked_dialog_closers: clicked,
       bridge_results: bridgeResults,
-      capabilities_after: capabilities,
-      selection_readbacks: {
-        e2e_state: compactSelection(e2eState, {
-          skillsKey: 'selectedSkills',
-          connectorsKey: 'selectedConnectors',
-          expertKeys: ['currentExpertIdentity', 'currentExpert'],
-        }),
-        current_session: compactSelection(session, {
-          skillsKey: 'skills',
-          connectorsKey: 'connectors',
-          expertKeys: ['expertIdentity', 'expert'],
-        }),
-        visible_ui: visibleUiReadback,
-      },
-      dialogs_open: document.querySelectorAll('[role="dialog"],.modal-mask').length,
-      url: location.href,
     };
   }, { cleanupPolicy: testCase.cleanup_policy || '' });
+  Object.assign(snapshot, await captureCleanupSelectionReadbacks(page, snapshot.bridge_results));
   const capabilitiesReadbackAttempts = [{
     attempt: 1,
     ok: !coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after),
@@ -4023,6 +4070,46 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
     });
   }
   snapshot.capabilities_readback_attempts = capabilitiesReadbackAttempts;
+  if (coreBetaCleanupReadbackNeedsComposerRecovery(snapshot)) {
+    const previousReadbacks = snapshot.selection_readbacks;
+    const previousUrl = snapshot.url;
+    snapshot.cleanup_surface_recovery = {
+      attempted: true,
+      started_at: new Date().toISOString(),
+      reason: 'capabilities_readback_exhausted_without_composer_surface',
+      before_url: previousUrl,
+    };
+    try {
+      await openNewTask(page, state);
+      const recovered = await captureCleanupSelectionReadbacks(
+        page,
+        snapshot.bridge_results,
+        { readCapabilities: false },
+      );
+      snapshot.pre_navigation_selection_readbacks = previousReadbacks;
+      snapshot.selection_readbacks = recovered.selection_readbacks;
+      snapshot.composer_surface_available = recovered.composer_surface_available;
+      snapshot.dialogs_open = recovered.dialogs_open;
+      snapshot.url = recovered.url;
+      const recoveryScreenshot = await shot(page, caseDir, 'cleanup-readback-composer');
+      snapshot.cleanup_surface_recovery = {
+        ...snapshot.cleanup_surface_recovery,
+        completed: true,
+        completed_at: new Date().toISOString(),
+        after_url: recovered.url,
+        composer_surface_available: recovered.composer_surface_available,
+        screenshot: recoveryScreenshot,
+        screenshot_sha256: createHash('sha256').update(fs.readFileSync(recoveryScreenshot)).digest('hex'),
+      };
+    } catch (error) {
+      snapshot.cleanup_surface_recovery = {
+        ...snapshot.cleanup_surface_recovery,
+        completed: false,
+        completed_at: new Date().toISOString(),
+        error: String(error?.stack || error?.message || error),
+      };
+    }
+  }
   snapshot.validation = coreBetaCleanupReadbackVerdict(snapshot);
   snapshot.valid = snapshot.validation.valid;
   writeJsonFile(file, snapshot);

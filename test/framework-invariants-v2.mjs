@@ -27,6 +27,7 @@ import {
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupCapabilitiesNeedsRetry,
+  coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
@@ -510,6 +511,29 @@ assert.equal(
   false,
   '明确的 capabilities 空态不得重复读取或扩大清理副作用',
 );
+const cleanupMarketTimeout = {
+  capability_cleanup_required: true,
+  capabilities_after: { __error: 'Teams QWork capabilities timed out after 5000ms' },
+  capabilities_readback_attempts: [1, 2, 3].map((attempt) => ({
+    attempt,
+    ok: false,
+    error: 'Teams QWork capabilities timed out after 5000ms',
+  })),
+  composer_surface_available: false,
+};
+assert.equal(
+  coreBetaCleanupReadbackNeedsComposerRecovery(cleanupMarketTimeout),
+  true,
+  'Skill 市场无 composer 且三次 capabilities 读回都超时时，必须导航到干净输入区恢复只读交叉取证',
+);
+assert.equal(
+  coreBetaCleanupReadbackNeedsComposerRecovery({
+    ...cleanupMarketTimeout,
+    composer_surface_available: true,
+  }),
+  false,
+  '当前输入区已经可见时不得通过再次导航隐藏真实能力残留',
+);
 assert.deepEqual(
   coreBetaCleanupReadbackVerdict({
     ...cleanupBase,
@@ -557,6 +581,58 @@ assert.equal(
   }).selection_source,
   'visible_ui',
   'capabilities IPC 超时时，必须允许可见禁用控件与 E2E 专家状态对空选择做独立交叉读回',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    ...cleanupMarketTimeout,
+    composer_surface_available: true,
+    cleanup_surface_recovery: {
+      attempted: true,
+      completed: true,
+      screenshot_sha256: 'a'.repeat(64),
+    },
+    selection_readbacks: {
+      visible_ui: {
+        available: true,
+        error: '',
+        selected_skills_observed: true,
+        selected_skills: [],
+        selected_connectors_observed: true,
+        selected_connectors: [],
+        current_expert_observed: true,
+        current_expert: null,
+      },
+    },
+  }).valid,
+  true,
+  '导航到 composer 后，无能力 chip、无专家头像且清理桥为空的交叉读回应通过',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    ...cleanupMarketTimeout,
+    composer_surface_available: true,
+    cleanup_surface_recovery: {
+      attempted: true,
+      completed: true,
+      screenshot_sha256: 'b'.repeat(64),
+    },
+    selection_readbacks: {
+      visible_ui: {
+        available: true,
+        error: '',
+        selected_skills_observed: true,
+        selected_skills: ['leftover-skill'],
+        selected_connectors_observed: true,
+        selected_connectors: [],
+        current_expert_observed: true,
+        current_expert: null,
+      },
+    },
+  }).valid,
+  false,
+  '导航恢复读回后发现任一能力残留仍必须失败',
 );
 assert.equal(
   coreBetaCleanupReadbackVerdict({
@@ -679,13 +755,37 @@ assert.match(
 );
 assert.match(
   runner,
-  /composer-skills-menu[\s\S]*composer-connectors-menu[\s\S]*composer-plus-menu[\s\S]*composer-input[\s\S]*ctool-btn-ava[\s\S]*skillBridgeCleared[\s\S]*connectorBridgeCleared[\s\S]*expertBridgeCleared[\s\S]*visible_ui: visibleUiReadback/,
+  /composer-skills-menu[\s\S]*composer-connectors-menu[\s\S]*composer-plus-menu[\s\S]*composer-input[\s\S]*ctool-btn-ava[\s\S]*skillBridgeCleared[\s\S]*connectorBridgeCleared[\s\S]*expertBridgeCleared[\s\S]*visible_ui: \{/,
   '清理读回必须实际采集技能/连接器禁用标签、chip 残留与专家头像，不能只测试未接入的判定函数',
 );
 assert.match(
   runner,
   /capabilitiesReadbackAttempts[\s\S]*attempt <= 3[\s\S]*coreBetaCleanupCapabilitiesNeedsRetry\(snapshot\.capabilities_after\)[\s\S]*window\.agent\.capabilities\(\)[\s\S]*capabilities_readback_attempts/,
   '清理读回在 capabilities 传输超时后必须执行最多三次有界只读尝试并保存尝试账本',
+);
+const cleanupImplementation = runner.slice(
+  runner.indexOf('async function writeCleanupReadback'),
+  runner.indexOf('export function coreBetaV2MaintenanceConfirmationContract'),
+);
+assert.equal(
+  (cleanupImplementation.match(/await invoke\('setSkillsDisabled'\)/g) || []).length,
+  1,
+  '清理读回恢复导航不得重复执行技能清理动作',
+);
+assert.equal(
+  (cleanupImplementation.match(/await invoke\('setConnectorsDisabled'\)/g) || []).length,
+  1,
+  '清理读回恢复导航不得重复执行连接器清理动作',
+);
+assert.equal(
+  (cleanupImplementation.match(/await invoke\('setExpert', null\)/g) || []).length,
+  1,
+  '清理读回恢复导航不得重复执行专家清理动作',
+);
+assert.match(
+  cleanupImplementation,
+  /coreBetaCleanupReadbackNeedsComposerRecovery\(snapshot\)[\s\S]*openNewTask\(page, state\)[\s\S]*captureCleanupSelectionReadbacks[\s\S]*readCapabilities: false/,
+  '市场页无 composer 且 capabilities 重试耗尽后，必须通过框架新任务入口只读采集输入区终态',
 );
 assert.match(
   projectMemory,
