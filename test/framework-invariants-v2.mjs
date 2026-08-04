@@ -974,6 +974,7 @@ const required = [
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],
   ['附件源文件在上传前记录非零字节证据', /attachment_sources[\s\S]*附件源文件非空[\s\S]*size_bytes/],
   ['附件 Case 使用 Excel 真实任务而非通用提示', /attachmentTaskPromptFromCase[\s\S]*实际输入与 Case 测试数据一致/],
+  ['BETA-FILE-004 使用专用三差异 XLSX fixture', /testCase\.id === 'BETA-FILE-004'[\s\S]*qbot-table\.csv[\s\S]*qbot-data-table-diff\.xlsx/],
   ['新增 UX Case 使用成功标准驱动的确定性断言', /caseAwareReplyAssertion[\s\S]*三句结构与事实落地[\s\S]*跨格式事实与决策摘要/],
   ['新增成果 Case 回读真实文件并校验列表唯一', /assertUxArtifactReadback[\s\S]*成果文件真实落地[\s\S]*成果列表唯一[\s\S]*活动复盘聊天与文件一致/],
   ['二次复核检查实际发送提示与确定性断言', /sentPromptFidelity[\s\S]*hasDeterministicAssertion[\s\S]*实际发送内容与 Case 测试数据不一致/],
@@ -1589,6 +1590,57 @@ for (const sample of coreConversationRelevanceSamples) {
   if (replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', sample.testCase, sample.prompt)) {
     throw new Error(`${sample.testCase.id} 不得把无关天气回复判为相关`);
   }
+}
+const corePdfCase = {
+  id: 'BETA-FILE-001',
+  module: '核心内测',
+  submodule: '附件与多模态',
+  scenario: '上传真实PDF并提炼带页码的关键结论',
+  test_data: '带已知页码和锚点内容的PDF fixture。',
+};
+const corePdfPrompt = '请提炼附件中的三条关键结论，并标注页码。';
+const corePdfReply = [
+  'QBot PDF Summary 的三条关键信息如下：',
+  '1. 文档用途是验证 Agent 能够读取 PDF 附件（第 1 页）。',
+  '2. 核心验收包含摘要总结和发现风险（第 1 页）。',
+  '3. 输出必须保持产品友好措辞 product-friendly（第 1 页）。',
+].join('\n');
+assert.equal(replyLooksRelevant(corePdfReply, corePdfCase, corePdfPrompt), true, 'PDF 页码结论不得被通用相关性误判');
+assert.equal(caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, corePdfReply).ok, true, 'PDF 三条结论必须命中页码和 fixture 锚点');
+assert.equal(caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, 'PDF 第 1 页没有可总结内容。').ok, false, '只有页码但没有三条 fixture 事实不得通过 PDF 硬 Oracle');
+assert.equal(replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', corePdfCase, corePdfPrompt), false, 'PDF Case 不得接受无关天气回复');
+
+const coreTableCase = {
+  id: 'BETA-FILE-004',
+  module: '核心内测',
+  submodule: '附件与多模态',
+  scenario: '比较CSV与XLSX中的差异并精确计算汇总值',
+  test_data: '两份结构化数据含三处已知差异和可复核总计。',
+};
+const coreTablePrompt = '比较两个表格，列出所有差异并计算各自总计。';
+const coreTableReply = [
+  '三处数值差异如下：',
+  '报名人数：CSV 100，XLSX 120。',
+  '到场人数：CSV 70，XLSX 80。',
+  '成交单数：CSV 12，XLSX 15。',
+  'CSV 总计 182；XLSX 总计 215。',
+].join('\n');
+assert.equal(replyLooksRelevant(coreTableReply, coreTableCase, coreTablePrompt), true, '表格差异与总计回复不得被通用相关性误判');
+assert.equal(caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, coreTableReply).ok, true, '表格 Case 必须精确校验三处差异和双方总计');
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  '两个表格数值完全一致，报名100、到场70、成交12，CSV 总计182，XLSX 总计182。',
+).ok, false, '数值相同的旧通用 fixture 不得通过三处差异硬 Oracle');
+assert.equal(replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', coreTableCase, coreTablePrompt), false, '表格 Case 不得接受无关天气回复');
+
+const generalWorkbookBytes = fs.readFileSync(path.join(root, 'testflies', 'qbot-data-table.xlsx')).toString('utf8');
+const comparisonWorkbookBytes = fs.readFileSync(path.join(root, 'testflies', 'qbot-data-table-diff.xlsx')).toString('utf8');
+for (const value of ['100', '70', '12']) {
+  assert.match(generalWorkbookBytes, new RegExp(`<v>${value}</v>`), '通用 XLSX fixture 必须保持原有 100/70/12 数据');
+}
+for (const value of ['120', '80', '15']) {
+  assert.match(comparisonWorkbookBytes, new RegExp(`<v>${value}</v>`), '差异 XLSX fixture 必须包含 120/80/15 三个新值');
 }
 if (attachmentReplyMissingEvidence(
   '附件读取完成：qbot-pdf-summary.pdf，读取成功。下面是主要内容和结论摘要。如需分析其它文件，请重新上传。',

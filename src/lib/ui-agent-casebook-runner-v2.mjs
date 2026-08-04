@@ -20936,6 +20936,37 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const result = (name, expected, ok, actual = clip(reply, 360)) => ({ applicable: true, name, expected, ok, actual });
   const notApplicable = { applicable: false };
 
+  if (id === 'BETA-FILE-001') {
+    const pageReferences = reply.match(/第\s*1\s*页/g) || [];
+    const fixtureFacts = /QBot PDF Summary/i.test(reply)
+      && /Agent.{0,20}(?:读取|read).{0,20}PDF/i.test(reply)
+      && /摘要|总结/.test(reply)
+      && /风险/.test(reply)
+      && /产品.{0,8}友好|product-friendly/i.test(reply);
+    return result(
+      'PDF 三条结论与页码锚点',
+      '应基于真实 PDF 给出三条可核对结论，每条标注第 1 页，并命中文档标题、读取目标及摘要/风险/产品友好验收锚点。',
+      pageReferences.length >= 3 && fixtureFacts,
+      `page_references=${pageReferences.length}；fixture_facts=${fixtureFacts}；reply=${clip(reply, 460)}`,
+    );
+  }
+
+  if (id === 'BETA-FILE-004') {
+    const metricDiffs = [
+      /报名人数[\s\S]{0,100}(?:100[\s\S]{0,40}120|120[\s\S]{0,40}100)/,
+      /到场人数[\s\S]{0,100}(?:70[\s\S]{0,40}80|80[\s\S]{0,40}70)/,
+      /成交单数[\s\S]{0,100}(?:12[\s\S]{0,40}15|15[\s\S]{0,40}12)/,
+    ].every((pattern) => pattern.test(reply));
+    const totals = /CSV[\s\S]{0,100}(?:总计|合计)[^0-9]{0,30}182/i.test(reply)
+      && /(?:XLSX|Excel)[\s\S]{0,100}(?:总计|合计)[^0-9]{0,30}215/i.test(reply);
+    return result(
+      'CSV/XLSX 三处差异与总计',
+      '应逐项列出报名 100→120、到场 70→80、成交 12→15 三处差异，并给出 CSV 总计 182、XLSX 总计 215。',
+      metricDiffs && totals,
+      `metric_diffs=${metricDiffs}；totals=${totals}；reply=${clip(reply, 500)}`,
+    );
+  }
+
   if (id === 'SIT-MEM-001') {
     const context = `${label}\n${prompt}`;
     if (/验证偏好已删除|没有记录|没有固定偏好/.test(context)) {
@@ -21399,6 +21430,11 @@ function inferAttachments(testCase, fixturesDir) {
     add('qbot-data.json');
     return dedupe(files, (item) => item);
   }
+  if (testCase.id === 'BETA-FILE-004') {
+    add('qbot-table.csv');
+    add('qbot-data-table-diff.xlsx');
+    return dedupe(files, (item) => item);
+  }
   const explicitText = String(testCase.test_data || '');
   for (const match of explicitText.matchAll(/(?:testflies\/)?([A-Za-z0-9_.-]+\.(?:txt|md|markdown|docx|xlsx|xls|pdf|pptx|png|jpg|jpeg|json|csv|html|js|svg))/gi)) {
     add(match[1]);
@@ -21467,6 +21503,8 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/用户分层|用户分群/, /用户分层|用户分群|新客|沉默客|高价值老客/],
     [/运营视角|不涉及技术|不要技术/, /运营视角|运营动作|不涉及技术|技术实现|渠道策略|用户分群/],
     [/(?:概括.*附件|附件.*概括|读取.*附件|当前保留.*附件|保留的两个附件)/, /附件|文本|结构化|JSON|概括|材料|文件/],
+    [/(?:三条|3条).*(?:关键)?结论.*页码|(?:PDF).*(?:结论|页码)/i, /(?=[\s\S]*(?:结论|关键信息|文档用途|核心目标|验收标准))(?=[\s\S]*(?:第\s*\d+\s*页|页码))/i],
+    [/(?:比较.*(?:表格|CSV|XLSX)|(?:所有)?差异.*(?:总计|汇总)|(?:总计|汇总).*(?:差异))/i, /(?=[\s\S]*(?:差异|不同|相同|一致))(?=[\s\S]*(?:总计|合计|汇总))/i],
     [/(?:查看|读取|分析).*(?:图片|图像)|(?:图片|图像).*(?:内容|问题)/, /图片|图像|文字|图表|界面|数据|内容/],
   ];
   for (const [scenarioPattern, replyPattern] of targetedRules) {
