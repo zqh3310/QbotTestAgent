@@ -21879,7 +21879,41 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     if (!/(?:总计|合计)/.test(previousLine)) return false;
     const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
     return Number(rowValues.at(-1)) === Number(expectedTotal);
-  });
+  }) || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
+}
+
+function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal) {
+  const bindings = new Map();
+  for (const line of lines) {
+    const aliases = [...line.matchAll(/(?:^|[\s([{（【,:：，;；])表(?:格)?\s*([A-Z])(?=$|[\s([{（【)\]}）】,:：，;；+\-−—])/gi)]
+      .map((match) => String(match[1] || '').toUpperCase());
+    if (aliases.length === 0) continue;
+    const families = new Set();
+    if (/qbot-table\.csv|\bCSV\b/i.test(line)) families.add('csv');
+    if (/qbot-data-table-diff\.xlsx|\bXLSX\b|\bExcel\b/i.test(line)) families.add('xlsx');
+    if (families.size === 0) continue;
+    for (const alias of aliases) {
+      const entries = bindings.get(alias) || [];
+      entries.push({ line, families });
+      bindings.set(alias, entries);
+    }
+  }
+
+  for (const [alias, entries] of bindings) {
+    const families = new Set(entries.flatMap((entry) => [...entry.families]));
+    if (families.size !== 1 || !entries.every((entry) => identityPattern.test(entry.line))) continue;
+    const aliasPattern = new RegExp(`(?:^|[\\s([{（【,:：，;；])表(?:格)?\\s*${escapeRegExp(alias)}(?=$|[\\s([{（【)\\]}）】,:：，;；+\\-−—])`, 'i');
+    const matched = lines.some((line) => {
+      const aliasMatch = line.match(aliasPattern);
+      if (!aliasMatch) return false;
+      const afterAlias = line.slice(Number(aliasMatch.index || 0) + aliasMatch[0].length);
+      if (directTotal.test(afterAlias) || calculatedTotal.test(afterAlias)) return true;
+      const values = afterAlias.match(/\d+(?:\.\d+)?/g) || [];
+      return /(?:总计|合计)/.test(afterAlias) && Number(values.at(-1)) === Number(expectedTotal);
+    });
+    if (matched) return true;
+  }
+  return false;
 }
 
 export function caseAwareReplyAssertion(testCase, turn, replyText) {

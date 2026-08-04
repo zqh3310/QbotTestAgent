@@ -1987,6 +1987,27 @@ assert.equal(
   true,
   '表格 Case 应接受文件标签绑定的表格行及算式总计，不得被跨段固定字符窗口误判',
 );
+const aliasedCoreTableReply = [
+  '表 A（qbot-table.csv）包含报名人数 100、到场人数 70、成交单数 12。',
+  '表 B（qbot-data-table-diff.xlsx）包含报名人数 120、到场人数 80、成交单数 15。',
+  '报名人数：100→120；到场人数：70→80；成交单数：12→15。',
+  '表 A 总计：100 + 70 + 12 = 182',
+  '表 B 总计：120 + 80 + 15 = 215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, aliasedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受文件名先绑定唯一表别名、再以该别名标注双方总计的真实回复',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  [
+    '表 A（qbot-table.csv）和表 A（qbot-data-table-diff.xlsx）用于本次比较。',
+    '报名人数：100→120；到场人数：70→80；成交单数：12→15。',
+    '表 A 总计 182；表 A 总计 215。',
+  ].join('\n'),
+).ok, false, '同一表别名绑定双方文件时属于歧义，不得用散落的两个总计形成通过');
 assert.equal(caseAwareReplyAssertion(
   coreTableCase,
   { prompt: coreTablePrompt },
