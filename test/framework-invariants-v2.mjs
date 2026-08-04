@@ -22,6 +22,8 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaBatchStopReason,
+  coreBetaAttachmentRejectionMatrixVerdict,
+  coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
@@ -48,6 +50,7 @@ import {
   replyLooksRelevant,
   replySendObservedRunning,
   reviewCaseCredibility,
+  safeNativeAttachmentInfoDialog,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
   seedLocalSkillReadiness,
@@ -103,6 +106,80 @@ assert.equal(
   }).handle,
   false,
   'Core Beta v2 不得把普通向导的跳过误当成 Agent 澄清面板',
+);
+
+const validAttachmentRejectionProbe = {
+  expected_pattern_matched: true,
+  visible_rejection_evidence: true,
+  dialog_message: '暂不支持的附件类型：.bin',
+  dialog_settled: true,
+  managed_teams_ax_required: true,
+  structured_dialog_evidence: true,
+  composer_state: { count: 0, names: [] },
+  no_task_no_send_state: { valid: true },
+};
+assert.equal(
+  safeNativeAttachmentInfoDialog({
+    message: '暂不支持的附件类型：.bin',
+    buttons: ['OK'],
+  }),
+  true,
+  'Core Beta v2 应识别只有唯一 OK 的 .bin 附件信息 AXSheet',
+);
+assert.equal(
+  safeNativeAttachmentInfoDialog({
+    message: '确定删除全部会话吗？',
+    buttons: ['确定'],
+  }),
+  false,
+  'Core Beta v2 不得把破坏性单按钮弹窗当作附件信息弹窗',
+);
+assert.equal(
+  safeNativeAttachmentInfoDialog({
+    message: '暂不支持的附件类型：.bin',
+    buttons: ['取消', '确定'],
+  }),
+  false,
+  'Core Beta v2 不得自动点击多按钮 AXSheet',
+);
+assert.equal(
+  coreBetaAttachmentRejectionProbeVerdict(validAttachmentRejectionProbe),
+  true,
+  '附件拒绝 probe 必须接受文案、AXSheet 收尾、Composer 空态和 no-task/no-send 同时成立的证据',
+);
+assert.equal(
+  coreBetaAttachmentRejectionProbeVerdict({
+    ...validAttachmentRejectionProbe,
+    structured_dialog_evidence: false,
+  }),
+  false,
+  '受管 Teams 附件拒绝不得在缺失 AXSheet 双通道证据时通过',
+);
+assert.equal(
+  coreBetaAttachmentRejectionProbeVerdict({
+    ...validAttachmentRejectionProbe,
+    composer_state: { count: 1, names: ['qbot-unsupported.bin'] },
+  }),
+  false,
+  '附件拒绝后 Composer 仍有残留时不得通过',
+);
+assert.equal(
+  coreBetaAttachmentRejectionMatrixVerdict([
+    { label: 'unsupported_type', ...validAttachmentRejectionProbe },
+    { label: 'single_file_oversize', ...validAttachmentRejectionProbe, dialog_message: '单个文档不能超过 30 MiB' },
+    { label: 'aggregate_oversize', ...validAttachmentRejectionProbe, dialog_message: '文档附件总大小不能超过 80 MiB' },
+  ]),
+  true,
+  'BETA-FILE-006 应按三个独立干净草稿 probe 聚合有效拒绝证据',
+);
+assert.equal(
+  coreBetaAttachmentRejectionMatrixVerdict([
+    { label: 'unsupported_type', ...validAttachmentRejectionProbe },
+    { label: 'single_file_oversize', ...validAttachmentRejectionProbe },
+    { label: 'single_file_oversize', ...validAttachmentRejectionProbe },
+  ]),
+  false,
+  'BETA-FILE-006 不得用重复 probe 冒充三类拒绝矩阵',
 );
 assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', []),
@@ -911,6 +988,34 @@ assert.match(
   runner,
   /暂不支持\|附件类型\|上传失败[\s\S]{0,1200}\^\(\?:OK\|确定\|知道了/,
   '全局弹窗清理必须覆盖不支持附件提示，并明确确认 OK/确定/知道了按钮',
+);
+assert.match(
+  runner,
+  /teamsAccessibilitySheet[\s\S]*processes\.byName\('360Teams'\)[\s\S]*role = 'AXSheet'[\s\S]*result\.buttons\.length === 1[\s\S]*\^\(OK\|确定\|知道了\)\$[\s\S]*safeButton\.click\(\)/,
+  'Core Beta v2 必须通过 360Teams AXSheet 读取文案，并且只点击唯一安全确认按钮',
+);
+assert.match(
+  runner,
+  /(?=[\s\S]*stageAttachmentPathsThroughComposer[\s\S]*nativeEvidence\.capture\(evidenceFile, dialogMessage, nativeFile\))(?=[\s\S]*message_matched: messageMatched)(?=[\s\S]*confirmation_clicked)(?=[\s\S]*sheet_closed_after_confirmation)(?=[\s\S]*postDismissalScreenshot)/,
+  'Core Beta v2 附件拒绝必须绑定 Playwright 与 AXSheet 文案并验证点击后关闭',
+);
+assert.match(
+  runner,
+  /executeCasebookCase[\s\S]{0,500}dismissAllBlockingOverlays\(page, state\)[\s\S]{0,120}clearUi\(page\)[\s\S]{0,120}dismissAllBlockingOverlays\(page, state\)/,
+  '每条 Case 必须先处理残留原生/Agent 弹窗，再执行通用键盘和 DOM 清理',
+);
+const attachmentMatrixStart = runner.indexOf('async function executeCoreBetaAttachmentCase');
+const attachmentMatrixEnd = runner.indexOf('async function executeCoreBetaAttachmentLimitsRecovery', attachmentMatrixStart);
+const attachmentMatrixSource = runner.slice(attachmentMatrixStart, attachmentMatrixEnd);
+assert.match(
+  attachmentMatrixSource,
+  /coreBetaAttachmentRejectionMatrixVerdict\(results\)[\s\S]*composer-attachment-state\.json/,
+  'BETA-FILE-006 必须聚合逐 probe verdict 并单独落盘 Composer 空态证据',
+);
+assert.doesNotMatch(
+  attachmentMatrixSource,
+  /message_count_before|message_count_after|send_count_before|send_count_after/,
+  'BETA-FILE-006 不得跨三次新建草稿比较全局消息计数并制造假失败',
 );
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-061'),

@@ -64,6 +64,45 @@ const TECHNICAL_FAILURE_PATTERNS = [
   /错误码\s*[:：]?\s*(?:[A-Z_]+[-_]?\d{2,}|\d{4,}|HTTP\s*5\d{2}|5\d{2})/i,
 ];
 
+const SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL = /^(?:OK|确定|知道了)$/;
+const SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE = /(?:暂不支持的附件类型|附件类型.*不支持|上传失败|单个(?:文档|文件).*超过|(?:文档)?附件总大小.*超过|每轮最多添加\s*\d+\s*个附件|一次最多选择\s*\d+\s*个附件)/i;
+
+export function safeNativeAttachmentInfoDialog({ message = '', buttons = [] } = {}) {
+  const labels = Array.isArray(buttons)
+    ? buttons.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  return SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(String(message || '').replace(/\s+/g, ' ').trim())
+    && labels.length === 1
+    && SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL.test(labels[0]);
+}
+
+export function coreBetaAttachmentRejectionProbeVerdict(probe = {}) {
+  const composer = probe.composer_state || {};
+  const noTaskNoSend = probe.no_task_no_send_state || {};
+  const dialogObserved = Boolean(String(probe.dialog_message || '').trim());
+  return Boolean(
+    probe.expected_pattern_matched === true
+    && probe.visible_rejection_evidence === true
+    && Number(composer.count) === 0
+    && Array.isArray(composer.names)
+    && composer.names.length === 0
+    && noTaskNoSend.valid === true
+    && (!dialogObserved || (
+      probe.dialog_settled === true
+      && (!probe.managed_teams_ax_required || probe.structured_dialog_evidence === true)
+    ))
+  );
+}
+
+export function coreBetaAttachmentRejectionMatrixVerdict(probes = []) {
+  const requiredLabels = new Set(['unsupported_type', 'single_file_oversize', 'aggregate_oversize']);
+  return Array.isArray(probes)
+    && probes.length === requiredLabels.size
+    && probes.every((probe) => requiredLabels.delete(String(probe?.label || ''))
+      && coreBetaAttachmentRejectionProbeVerdict(probe))
+    && requiredLabels.size === 0;
+}
+
 const CONNECTOR_MODE_LABELS = {
   disabled: '禁用',
   auto: '自动',
@@ -2030,6 +2069,7 @@ async function dispatchSingleHostPipelineCase({
 }) {
   const state = createCaseState({ testCase, caseDir, order, modelTier });
   try {
+    await dismissAllBlockingOverlays(page, state);
     await clearUi(page);
     await dismissAllBlockingOverlays(page, state);
     state.screenshots.before = await shot(page, caseDir, '01-before');
@@ -2499,6 +2539,7 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
   const state = createCaseState({ testCase, caseDir, order, modelTier });
 
   try {
+    await dismissAllBlockingOverlays(page, state);
     await clearUi(page);
     await dismissAllBlockingOverlays(page, state);
     state.screenshots.before = await shot(page, caseDir, '01-before');
@@ -6375,46 +6416,59 @@ async function executeCoreBetaAttachmentCase(context, scenario) {
     return await executeCoreBetaDuplicateAttachmentIdentity(context);
   }
   if (scenario.driver !== 'attachment_pre_send_rejection_matrix') return await executeConversationCase(context);
-  const { page, state, testCase, caseDir, fixturesDir } = context;
-  const before = await qbotE2EState(page);
+  const { page, state, testCase, caseDir, fixturesDir, options = {} } = context;
   const probes = [
     { id: `${testCase.id}-UNSUPPORTED`, label: 'unsupported_type' },
     { id: 'SIT-HOME-043', label: 'single_file_oversize' },
     { id: 'SIT-HOME-044', label: 'aggregate_oversize' },
   ];
+  const results = [];
   for (const probe of probes) {
-    await executeSitHomeAttachmentLimit({
+    const result = await executeSitHomeAttachmentLimit({
       page,
       state,
       testCase: { ...testCase, id: probe.id },
       caseDir,
       fixturesDir,
+      options,
     });
+    results.push({ label: probe.label, ...result });
   }
-  const after = await qbotE2EState(page);
+  const currentComposer = await composerAttachmentSnapshot(page);
   const rejection = {
-    valid: state.assertions.filter((item) => item.name === '附件限制提示符合当前产品契约')
-      .every((item) => item.status === 'passed'),
-    probes: state.steps.filter((item) => item.action.startsWith('通过产品统一附件入口选择测试文件')),
-    send_count_before: before?.sendCount || 0,
-    send_count_after: after?.sendCount || 0,
-    message_count_before: before?.messageCount || 0,
-    message_count_after: after?.messageCount || 0,
+    schema_version: 2,
+    case_id: testCase.id,
+    valid: coreBetaAttachmentRejectionMatrixVerdict(results),
+    product_rejected_before_send: results.every((item) => item.rejected_before_send === true),
+    probes: results,
   };
-  rejection.valid = rejection.valid
-    && rejection.probes.length === 3
-    && rejection.send_count_before === rejection.send_count_after
-    && rejection.message_count_before === rejection.message_count_after;
   const file = path.join(caseDir, 'attachment-rejection-matrix.json');
   writeJsonFile(file, rejection);
   state.artifacts.attachment_readback = file;
-  state.artifacts.composer_attachment_state = file;
+  const composerEvidence = {
+    schema_version: 1,
+    case_id: testCase.id,
+    valid: rejection.valid
+      && results.every((item) => Number(item.composer_state?.count) === 0)
+      && Number(currentComposer.count) === 0,
+    composer_empty: Number(currentComposer.count) === 0,
+    current: currentComposer,
+    probe_states: results.map((item) => ({
+      label: item.label,
+      valid: item.valid,
+      composer_state: item.composer_state,
+    })),
+  };
+  const composerFile = path.join(caseDir, 'composer-attachment-state.json');
+  writeJsonFile(composerFile, composerEvidence);
+  state.artifacts.composer_attachment_state = composerFile;
   recordAssertion(
     state,
     '三类附件发送前拒绝且无任务消息',
-    '不支持类型、单文件超限、总大小超限必须各自显示准确拒绝；sendCount/messageCount不得增加。',
-    rejection.valid,
+    '不支持类型、单文件超限、总大小超限必须各自显示准确拒绝；每个独立干净草稿内均不得创建任务、发送消息或残留附件。',
+    rejection.valid && composerEvidence.valid,
     JSON.stringify(rejection),
+    rejection.valid && composerEvidence.valid ? '' : 'automation_error',
   );
 }
 
@@ -6425,6 +6479,7 @@ async function executeCoreBetaAttachmentLimitsRecovery({
   caseDir,
   timeoutMs,
   fixturesDir,
+  options = {},
 }) {
   const probeFixtureRoot = path.join(caseDir, 'runtime-fixtures');
   ensureDir(probeFixtureRoot);
@@ -6442,9 +6497,10 @@ async function executeCoreBetaAttachmentLimitsRecovery({
       testCase: { ...testCase, id: probe.id },
       caseDir,
       fixturesDir: probeFixtureRoot,
+      options,
     });
     results.push({ label: probe.label, ...result });
-    await dismissAllBlockingOverlays(page, state, caseDir, `附件拒绝后关闭提示-${probe.label}`);
+    await dismissAllBlockingOverlays(page, state);
   }
 
   const rejectionValid = results.length === 4
@@ -7708,7 +7764,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-HOME-023') return executeSitHomeStopGeneration({ page, state, caseDir });
   if (id === 'SIT-HOME-027') return executeSitHomeEmptySend({ page, state, caseDir });
   if (['SIT-HOME-042', 'SIT-HOME-043', 'SIT-HOME-044', 'SIT-HOME-045'].includes(id)) {
-    return executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir });
+    return executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir, options });
   }
   if (id === 'SIT-HOME-046') return executeSitHomeAttachmentDrop({ page, state, caseDir, fixturesDir });
   if (['SIT-HOME-047', 'SIT-HOME-048', 'SIT-HOME-049', 'SIT-HOME-050', 'SIT-HOME-051'].includes(id)) {
@@ -9697,7 +9753,7 @@ async function executeSitHomeEmptySend({ page, state, caseDir }) {
   );
 }
 
-async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir }) {
+async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, fixturesDir, options = {} }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const before = await qbotE2EState(page);
@@ -9730,9 +9786,20 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     expectedPattern = /暂不支持的附件类型|不支持.*\.bin|unsupported/i;
     expectedDescription = '选择不支持的 .bin 文件时应给出可理解的格式提示。';
   }
-  const result = await stageAttachmentPathsThroughComposer(page, files, caseDir, id.toLowerCase());
+  const managedTeamsAxRequired = options['renderer-control-adapter'] === 'teams360';
+  const result = await stageAttachmentPathsThroughComposer(
+    page,
+    files,
+    caseDir,
+    id.toLowerCase(),
+    {
+      upstreamCdpUrl: options['teams-upstream-cdp-url'] || '',
+      managedTeamsAxRequired,
+    },
+  );
   const after = await qbotE2EState(page);
   const observedText = result.dialogMessage || result.feedbackText || result.pageText || '';
+  const composerState = await composerAttachmentSnapshot(page);
   const noTaskNoSendState = {
     active_task_absent_before: !String(before?.activeId || ''),
     active_task_absent_after: !String(after?.activeId || ''),
@@ -9750,39 +9817,104 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
   if (!Array.isArray(state.artifacts.attachment_sources)) state.artifacts.attachment_sources = [];
   state.artifacts.attachment_sources.push(...evidenceFiles);
   state.artifacts.attachment_limit_probe = result;
-  state.screenshots.attachment_limit = result.evidenceScreenshot
+  const structuredDialogEvidence = Boolean(
+    result.dialogMessage
+    && result.dialogEvidenceArtifact
+    && fs.existsSync(result.dialogEvidenceArtifact)
+    && result.dialogAccessibilityRole === 'AXSheet'
+    && result.dialogAccessibilityMessageMatched === true
+    && result.dialogAccessibilityConfirmationClicked === true
+    && result.dialogAccessibilitySheetClosed === true
+  );
+  const dialogSettled = !result.dialogMessage || Boolean(
+    result.dialogHandled === true
+    && result.dialogClosed === true
+    && result.pageResponsiveAfterDialog === true
+    && result.postDismissalScreenshot
+  );
+  const rejectionScreenshot = result.postDismissalScreenshot
+    || result.dialogEvidenceScreenshot
+    || result.evidenceScreenshot;
+  const probe = {
+    id,
+    expected_description: expectedDescription,
+    expected_pattern_matched: expectedPattern.test(observedText),
+    visible_rejection_evidence: Boolean(
+      rejectionScreenshot
+      || result.dialogEvidenceArtifact
+    ),
+    dialog_message: String(result.dialogMessage || ''),
+    dialog_settled: dialogSettled,
+    managed_teams_ax_required: managedTeamsAxRequired,
+    structured_dialog_evidence: structuredDialogEvidence,
+    composer_state: composerState,
+    no_task_no_send_state: noTaskNoSendState,
+    product_result: result,
+    sources: evidenceFiles,
+  };
+  probe.valid = coreBetaAttachmentRejectionProbeVerdict(probe);
+  probe.rejected_before_send = probe.valid;
+  if (!Array.isArray(state.artifacts.attachment_rejection_probes)) {
+    state.artifacts.attachment_rejection_probes = [];
+  }
+  state.artifacts.attachment_rejection_probes.push(probe);
+  if (result.dialogMessage) {
+    if (!Array.isArray(state.artifacts.native_dialog_interactions)) {
+      state.artifacts.native_dialog_interactions = [];
+    }
+    state.artifacts.native_dialog_interactions.push({
+      kind: 'attachment_rejection_info',
+      message: result.dialogMessage,
+      buttons: result.dialogAccessibilityButtons,
+      confirmation_label: result.dialogConfirmationLabel,
+      action: result.dialogAction,
+      before_screenshot: result.beforeDispatchScreenshot,
+      native_dialog_screenshot: result.dialogEvidenceScreenshot,
+      structured_evidence: result.dialogEvidenceArtifact,
+      after_screenshot: result.postDismissalScreenshot,
+      handled: result.dialogHandled === true,
+      closed: result.dialogClosed === true,
+      page_responsive: result.pageResponsiveAfterDialog === true,
+    });
+  }
+  state.screenshots.attachment_limit = rejectionScreenshot
     || await shot(page, caseDir, `${id.toLowerCase()}-attachment-limit`);
   recordStep(
     state,
     `通过产品统一附件入口选择测试文件（${id}）`,
     expectedDescription,
     `文件=${files.map((file) => `${path.basename(file)}:${fs.statSync(file).size}`).join(', ')}；提示=${result.dialogMessage || '无'}；附件区=${clip(result.attachmentText, 240)}`,
-    'passed',
+    probe.valid ? 'passed' : 'failed',
     state.screenshots.attachment_limit,
+    probe.valid ? '' : 'automation_error',
   );
   recordAssertion(
     state,
     '附件限制提示符合当前产品契约',
-    expectedDescription,
-    expectedPattern.test(observedText) && Boolean(result.evidenceScreenshot),
-    `dialog=${result.dialogMessage || '无'}；page=${clip(result.pageText, 360)}`,
+    `${expectedDescription} 360Teams 原生弹窗必须由 Playwright 文案与 AXSheet 文案双通道一致确认，且只能点击唯一的 OK/确定/知道了。`,
+    probe.expected_pattern_matched
+      && probe.visible_rejection_evidence
+      && (!result.dialogMessage || !managedTeamsAxRequired || structuredDialogEvidence),
+    `dialog=${result.dialogMessage || '无'}；ax=${result.dialogAccessibilityMessage || '无'}；structured=${structuredDialogEvidence}；page=${clip(result.pageText, 360)}`,
+    'automation_error',
+  );
+  recordAssertion(
+    state,
+    '附件拒绝信息弹窗已安全关闭',
+    '记录拒绝文案后必须点击唯一安全确认按钮，验证 AXSheet 消失、页面恢复响应，并保存关闭前后证据。',
+    dialogSettled && (!result.dialogMessage || !managedTeamsAxRequired || structuredDialogEvidence),
+    `handled=${result.dialogHandled === true}；closed=${result.dialogClosed === true}；responsive=${result.pageResponsiveAfterDialog === true}；action=${result.dialogAction || '无'}；post=${result.postDismissalScreenshot || '缺失'}；error=${result.dialogCaptureError || result.dialogCloseError || '无'}`,
+    'automation_error',
   );
   recordAssertion(
     state,
     '附件拒绝未创建任务或发送',
-    '拒绝动作前后 activeId 必须为空、sendCount/messageCount 不变、running=false。',
-    noTaskNoSendState.valid,
-    JSON.stringify(noTaskNoSendState),
+    '每个独立干净草稿内，拒绝动作前后 activeId 必须为空、sendCount/messageCount 不变、running=false，Composer 附件数必须为 0。',
+    noTaskNoSendState.valid && Number(composerState.count) === 0,
+    JSON.stringify({ no_task_no_send_state: noTaskNoSendState, composer_state: composerState }),
+    'automation_error',
   );
-  return {
-    id,
-    expected_description: expectedDescription,
-    expected_pattern_matched: expectedPattern.test(observedText),
-    rejected_before_send: expectedPattern.test(observedText) && Boolean(result.evidenceScreenshot),
-    no_task_no_send_state: noTaskNoSendState,
-    product_result: result,
-    sources: evidenceFiles,
-  };
+  return probe;
 }
 
 async function executeSitHomeAttachmentDrop({ page, state, caseDir, fixturesDir }) {
@@ -10158,15 +10290,378 @@ function ensureSizedFixture(dir, name, size) {
   return file;
 }
 
-async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) {
+function managedTeamsPageTargetWebSocket(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password) return '';
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) return '';
+  if (!/^\/devtools\/page\/[A-Za-z0-9_-]+$/.test(url.pathname)) return '';
+  return url.toString();
+}
+
+function managedTeamsLoopbackOrigin(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+  if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)) return '';
+  return url.origin;
+}
+
+async function readManagedTeamsCdpTargets(origin) {
+  const endpoint = new URL('/json/list', origin);
+  const response = await fetch(endpoint, { signal: AbortSignal.timeout(5_000) });
+  if (!response.ok) throw new Error(`360Teams CDP target list HTTP ${response.status}。`);
+  const targets = await response.json();
+  if (!Array.isArray(targets)) throw new Error('360Teams CDP target list 不是数组。');
+  return targets.filter((target) => managedTeamsPageTargetWebSocket(target?.webSocketDebuggerUrl));
+}
+
+function normalizedNativeDialogText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function teamsAccessibilitySheet({ dismiss = false, expectedMessage = '' } = {}) {
+  if (process.platform !== 'darwin') {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: '当前平台不是 macOS，无法读取 360Teams AXSheet。',
+    };
+  }
+  const dismissLiteral = dismiss ? 'true' : 'false';
+  const expectedLiteral = JSON.stringify(normalizedNativeDialogText(expectedMessage));
+  const script = `JSON.stringify((() => {
+    const expectedMessage = ${expectedLiteral};
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const result = {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      role: '',
+      message: '',
+      texts: [],
+      buttons: [],
+      confirmation_label: '',
+      message_matched: false,
+      clicked: false,
+      observed_at: new Date().toISOString(),
+      clicked_at: '',
+      error: '',
+    };
+    try {
+      const systemEvents = Application('System Events');
+      const process = systemEvents.processes.byName('360Teams');
+      if (!process.exists()) {
+        result.error = '360Teams accessibility process 不存在。';
+        return result;
+      }
+      for (const window of process.windows()) {
+        for (const sheet of window.sheets()) {
+          result.observed = true;
+          result.role = 'AXSheet';
+          result.texts = sheet.staticTexts().map((item) => {
+            try { return clean(item.name() || item.value()); } catch { return ''; }
+          }).filter(Boolean);
+          const buttons = sheet.buttons();
+          result.buttons = buttons.map((item) => {
+            try { return clean(item.name() || item.description()); } catch { return ''; }
+          }).filter(Boolean);
+          result.message = result.texts.find(Boolean) || '';
+          result.message_matched = !expectedMessage || clean(result.message) === expectedMessage;
+          const safeButton = buttons.find((item) => {
+            try { return /^(OK|确定|知道了)$/.test(clean(item.name())); } catch { return false; }
+          });
+          const onlySafeConfirmation = Boolean(
+            safeButton
+            && result.buttons.length === 1
+            && /^(OK|确定|知道了)$/.test(result.buttons[0])
+          );
+          result.confirmation_label = onlySafeConfirmation ? result.buttons[0] : '';
+          result.ok = Boolean(result.message && result.message_matched && onlySafeConfirmation);
+          if (${dismissLiteral}) {
+            if (!result.ok) {
+              result.error = !result.message_matched
+                ? 'AXSheet 文案与预期不一致，拒绝自动点击。'
+                : 'AXSheet 不是唯一安全确认按钮，拒绝自动点击。';
+              return result;
+            }
+            safeButton.click();
+            result.clicked = true;
+            result.clicked_at = new Date().toISOString();
+          }
+          if (!result.ok && !result.error) result.error = 'AXSheet 缺少可读文案或唯一安全确认按钮。';
+          return result;
+        }
+      }
+      result.error = '未发现 360Teams AXSheet。';
+      return result;
+    } catch (error) {
+      result.error = error && error.message ? error.message : String(error);
+      return result;
+    }
+  })())`;
+  const command = spawnSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (command.error || command.status !== 0) {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: String(command.error?.message || command.stderr || `osascript status=${command.status}`),
+    };
+  }
+  try {
+    const parsed = JSON.parse(String(command.stdout || '').trim());
+    return {
+      ...parsed,
+      source: 'macos-accessibility-axsheet',
+      error: String(parsed?.error || ''),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: 'macos-accessibility-axsheet',
+      observed: false,
+      error: `360Teams AXSheet 输出不是 JSON：${error.message}`,
+    };
+  }
+}
+
+function captureNativeDialogScreenshot(file) {
+  if (!file || process.platform !== 'darwin') return '';
+  const captured = spawnSync('/usr/sbin/screencapture', ['-x', file], {
+    timeout: 10_000,
+    encoding: 'utf8',
+  });
+  return captured.status === 0 && fs.existsSync(file) && fs.statSync(file).size >= 128
+    ? file
+    : '';
+}
+
+async function prepareTeamsNativeDialogEvidence(upstreamCdpUrl) {
+  const origin = managedTeamsLoopbackOrigin(upstreamCdpUrl);
+  if (!origin) {
+    return {
+      ok: false,
+      source: 'playwright-dialog+macos-accessibility-axsheet',
+      error: '缺少受管 360Teams 上游 loopback CDP，不能绑定固定宿主原生弹窗。',
+      capture: async () => ({
+        ok: false,
+        source: 'playwright-dialog+macos-accessibility-axsheet',
+        error: '原生弹窗证据通道未准备。',
+      }),
+      close: async () => {},
+    };
+  }
+
+  try {
+    const targets = await readManagedTeamsCdpTargets(origin);
+    const host = targets.find((candidate) => (
+      /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/#\/main\/apps\/qbot(?:\/|$|\?)/i
+        .test(String(candidate.url || ''))
+    ));
+    if (!host) throw new Error('受管 CDP 中未发现固定 360Teams QWork 宿主页。');
+
+    return {
+      ok: true,
+      source: 'playwright-dialog+macos-accessibility-axsheet',
+      error: '',
+      capture: async (file, expectedMessage, screenshotFile = '') => {
+        const requestedAt = new Date().toISOString();
+        let accessibility = null;
+        const accessibilityDeadline = Date.now() + 3_000;
+        while (Date.now() < accessibilityDeadline) {
+          accessibility = teamsAccessibilitySheet({ dismiss: false, expectedMessage });
+          if (accessibility.observed) break;
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        accessibility ||= teamsAccessibilitySheet({ dismiss: false, expectedMessage });
+        const expected = normalizedNativeDialogText(expectedMessage);
+        const observed = normalizedNativeDialogText(accessibility.message);
+        const messageMatched = Boolean(expected && observed && expected === observed);
+        const safeInformationDialog = safeNativeAttachmentInfoDialog({
+          message: accessibility.message,
+          buttons: accessibility.buttons,
+        });
+        const nativeScreenshot = captureNativeDialogScreenshot(screenshotFile);
+        const confirmation = messageMatched && safeInformationDialog
+          ? teamsAccessibilitySheet({ dismiss: true, expectedMessage })
+          : {
+              ...accessibility,
+              clicked: false,
+              clicked_at: '',
+              error: accessibility.error || 'Playwright 与 AXSheet 文案/安全按钮合同不一致，拒绝自动点击。',
+            };
+        const completedAt = new Date().toISOString();
+        let after = teamsAccessibilitySheet({ dismiss: false });
+        const closeDeadline = Date.now() + 3_000;
+        while (after.observed && Date.now() < closeDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          after = teamsAccessibilitySheet({ dismiss: false });
+        }
+        const closed = after.observed !== true;
+        const record = {
+          schema_version: 1,
+          source: 'playwright-dialog+macos-accessibility-axsheet',
+          managed_host_target: {
+            id: String(host.id || ''),
+            url: String(host.url || ''),
+          },
+          expected_dialog_message: expected,
+          playwright_dialog_message: String(expectedMessage || ''),
+          accessibility,
+          safe_information_dialog: safeInformationDialog,
+          native_dialog_screenshot: nativeScreenshot,
+          confirmation,
+          after_confirmation: after,
+          message_matched: messageMatched,
+          evidence_observed_before_confirmation: accessibility.observed === true,
+          confirmation_clicked: confirmation.clicked === true,
+          sheet_closed_after_confirmation: closed,
+          requested_at: requestedAt,
+          completed_at: completedAt,
+        };
+        if (file) writeJsonFile(file, record);
+        const saved = Boolean(file && fs.existsSync(file) && fs.statSync(file).size > 0);
+        const ok = Boolean(
+          accessibility.ok
+          && accessibility.role === 'AXSheet'
+          && safeInformationDialog
+          && confirmation.ok
+          && confirmation.clicked
+          && messageMatched
+          && closed
+          && saved
+        );
+        return {
+          ok,
+          source: 'playwright-dialog+macos-accessibility-axsheet',
+          message: String(expectedMessage || ''),
+          requested_at: requestedAt,
+          observed_at: String(accessibility.observed_at || ''),
+          confirmation_clicked_at: String(confirmation.clicked_at || ''),
+          completed_at: completedAt,
+          artifact: saved ? file : '',
+          native_dialog_screenshot: nativeScreenshot,
+          role: String(accessibility.role || ''),
+          buttons: Array.isArray(confirmation.buttons) ? confirmation.buttons : [],
+          confirmation_label: String(confirmation.confirmation_label || ''),
+          accessibility_message: String(accessibility.message || ''),
+          message_matched: messageMatched,
+          evidence_observed_before_confirmation: accessibility.observed === true,
+          confirmation_clicked: confirmation.clicked === true,
+          sheet_closed_after_confirmation: closed,
+          error: ok
+            ? ''
+            : [
+                accessibility.error,
+                !accessibility.observed ? 'macOS 辅助功能树未观察到 AXSheet。' : '',
+                accessibility.role !== 'AXSheet' ? `辅助功能角色异常：${accessibility.role || '缺失'}。` : '',
+                !safeInformationDialog ? '弹窗不是受允许的附件信息弹窗或不含唯一安全确认按钮。' : '',
+                confirmation.error,
+                !confirmation.clicked ? '未点击 AXSheet 唯一安全确认按钮。' : '',
+                !messageMatched ? `Playwright 与 AXSheet 文案不一致：${expected || '<missing>'} != ${observed || '<missing>'}。` : '',
+                !closed ? '点击确认后 AXSheet 仍然存在。' : '',
+                !saved ? 'AXSheet 结构化证据文件未落盘。' : '',
+              ].filter(Boolean).join('；'),
+        };
+      },
+      close: async () => {},
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: 'playwright-dialog+macos-accessibility-axsheet',
+      error: String(error?.message || error),
+      capture: async () => ({
+        ok: false,
+        source: 'playwright-dialog+macos-accessibility-axsheet',
+        error: String(error?.message || error),
+      }),
+      close: async () => {},
+    };
+  }
+}
+
+async function stageAttachmentPathsThroughComposer(
+  page,
+  files,
+  caseDir,
+  label,
+  { upstreamCdpUrl = '', managedTeamsAxRequired = false } = {},
+) {
   let dialogMessage = '';
   let evidenceScreenshot = '';
-  const dialogListener = async (dialog) => {
+  let dialogEvidenceScreenshot = '';
+  let dialogEvidenceArtifact = '';
+  let dialogHandling = null;
+  const nativeEvidence = await prepareTeamsNativeDialogEvidence(upstreamCdpUrl);
+  const beforeDispatchScreenshot = await shot(page, caseDir, `${label}-before-attachment-dispatch`).catch(() => '');
+  const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
-    const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
-    const captured = spawnSync('/usr/sbin/screencapture', ['-x', nativeFile], { timeout: 10_000, encoding: 'utf8' });
-    if (captured.status === 0 && fs.existsSync(nativeFile) && fs.statSync(nativeFile).size > 0) evidenceScreenshot = nativeFile;
-    await dialog.dismiss().catch(() => {});
+    dialogHandling = (async () => {
+      const evidenceFile = path.join(caseDir, `${label}-product-ax-dialog.json`);
+      const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
+      const captured = await nativeEvidence.capture(evidenceFile, dialogMessage, nativeFile);
+      dialogEvidenceScreenshot = String(captured.native_dialog_screenshot || '');
+      if (captured.artifact) dialogEvidenceArtifact = captured.artifact;
+      let closeError = '';
+      let acceptedAt = String(captured.confirmation_clicked_at || '');
+      let action = captured.confirmation_clicked ? 'macos_accessibility_click' : '';
+      if (!captured.confirmation_clicked) {
+        try {
+          acceptedAt = new Date().toISOString();
+          const safeFallback = SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(dialogMessage)
+            && dialog.type() === 'alert';
+          if (safeFallback) {
+            action = 'playwright_accept_fallback';
+            await dialog.accept();
+          } else {
+            action = 'playwright_dismiss_unexpected';
+            await dialog.dismiss();
+            closeError = '附件入口出现非白名单或非 alert 弹窗，已安全 dismiss；拒绝记为框架异常。';
+          }
+        } catch (error) {
+          closeError = String(error?.message || error);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const pageResponsive = await page.evaluate(() => (
+        document.readyState === 'interactive' || document.readyState === 'complete'
+      )).catch(() => false);
+      return {
+        observed: true,
+        message: dialogMessage,
+        handled: !closeError,
+        closed: !closeError && pageResponsive && (
+          captured.sheet_closed_after_confirmation === true
+          || !captured.confirmation_clicked
+        ),
+        page_responsive: pageResponsive,
+        action,
+        confirmation_label: String(captured.confirmation_label || (action === 'playwright_accept_fallback' ? 'OK' : '')),
+        evidence_screenshot: dialogEvidenceScreenshot,
+        evidence_artifact: dialogEvidenceArtifact,
+        evidence_source: captured.source,
+        capture_requested_at: captured.requested_at,
+        evidence_observed_at: captured.observed_at,
+        capture_completed_at: captured.completed_at,
+        capture_completed_before_accept: captured.evidence_observed_before_confirmation === true,
+        captured_dialog_message: captured.message,
+        accessibility_message: captured.accessibility_message,
+        accessibility_role: captured.role,
+        accessibility_buttons: captured.buttons,
+        accessibility_message_matched: captured.message_matched === true,
+        accessibility_confirmation_clicked: captured.confirmation_clicked === true,
+        accessibility_sheet_closed: captured.sheet_closed_after_confirmation === true,
+        dialog_accepted_at: acceptedAt,
+        capture_error: captured.error,
+        close_error: closeError,
+      };
+    })();
   };
   page.on('dialog', dialogListener);
   let dispatched = false;
@@ -10205,8 +10700,50 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
     }
     await page.waitForTimeout(100);
   }
+  let dialogOutcome = {
+    observed: false,
+    message: '',
+    handled: false,
+    closed: false,
+    page_responsive: false,
+    action: '',
+    confirmation_label: '',
+    evidence_screenshot: '',
+    evidence_artifact: '',
+    evidence_source: '',
+    capture_error: '',
+    close_error: '',
+  };
+  if (dialogMessage) {
+    let handlingTimeout = null;
+    try {
+      dialogOutcome = await Promise.race([
+        dialogHandling,
+        new Promise((_, reject) => {
+          handlingTimeout = setTimeout(
+            () => reject(new Error('产品附件拒绝弹窗在 15 秒内未完成安全收尾。')),
+            15_000,
+          );
+        }),
+      ]);
+    } catch (error) {
+      dialogOutcome = {
+        ...dialogOutcome,
+        observed: true,
+        message: dialogMessage,
+        close_error: String(error?.message || error),
+      };
+    } finally {
+      if (handlingTimeout) clearTimeout(handlingTimeout);
+    }
+  }
   page.off('dialog', dialogListener);
+  await nativeEvidence.close();
+  const postDismissalScreenshot = dialogOutcome.closed
+    ? await shot(page, caseDir, `${label}-product-dialog-dismissed`).catch(() => '')
+    : '';
   const attachmentText = await visibleComposerAttachmentText(page);
+  const attachmentCount = await page.locator('.aui-composer-attachments .aui-attachment-root').count().catch(() => -1);
   const pageText = await mainSurfaceText(page);
   if (!evidenceScreenshot && caseDir && label) {
     evidenceScreenshot = await shot(page, caseDir, `${label}-product-attachment-result`).catch(() => '');
@@ -10215,10 +10752,40 @@ async function stageAttachmentPathsThroughComposer(page, files, caseDir, label) 
     dialogMessage,
     feedbackText,
     attachmentText,
+    attachmentCount,
     pageText,
     dispatched,
     dispatchError,
     evidenceScreenshot,
+    beforeDispatchScreenshot,
+    dialogEvidenceScreenshot,
+    dialogEvidenceArtifact,
+    postDismissalScreenshot,
+    dialogHandled: dialogOutcome.handled,
+    dialogClosed: dialogOutcome.closed,
+    pageResponsiveAfterDialog: dialogOutcome.page_responsive,
+    dialogAction: dialogOutcome.action,
+    dialogConfirmationLabel: dialogOutcome.confirmation_label,
+    dialogEvidenceSource: dialogOutcome.evidence_source,
+    dialogNativeCapturePrepared: nativeEvidence.ok === true,
+    dialogNativeCapturePrepareError: String(nativeEvidence.error || ''),
+    dialogCaptureRequestedAt: String(dialogOutcome.capture_requested_at || ''),
+    dialogEvidenceObservedAt: String(dialogOutcome.evidence_observed_at || ''),
+    dialogCaptureCompletedAt: String(dialogOutcome.capture_completed_at || ''),
+    dialogCaptureCompletedBeforeAccept: dialogOutcome.capture_completed_before_accept === true,
+    dialogAcceptedAt: String(dialogOutcome.dialog_accepted_at || ''),
+    capturedDialogMessage: String(dialogOutcome.captured_dialog_message || ''),
+    dialogAccessibilityMessage: String(dialogOutcome.accessibility_message || ''),
+    dialogAccessibilityRole: String(dialogOutcome.accessibility_role || ''),
+    dialogAccessibilityButtons: Array.isArray(dialogOutcome.accessibility_buttons)
+      ? dialogOutcome.accessibility_buttons
+      : [],
+    dialogAccessibilityMessageMatched: dialogOutcome.accessibility_message_matched === true,
+    dialogAccessibilityConfirmationClicked: dialogOutcome.accessibility_confirmation_clicked === true,
+    dialogAccessibilitySheetClosed: dialogOutcome.accessibility_sheet_closed === true,
+    dialogCaptureError: String(dialogOutcome.capture_error || ''),
+    dialogCloseError: String(dialogOutcome.close_error || ''),
+    managedTeamsAxRequired,
     patched: false,
   };
 }
@@ -18348,6 +18915,92 @@ async function captureDialogDuringWithAction(page, action, { accept = false, tim
 }
 
 async function dismissBlockingOverlays(page, state = null) {
+  const accessibilitySheet = teamsAccessibilitySheet({ dismiss: false });
+  if (accessibilitySheet.observed) {
+    const safeInformationDialog = safeNativeAttachmentInfoDialog({
+      message: accessibilitySheet.message,
+      buttons: accessibilitySheet.buttons,
+    });
+    const count = state
+      ? (state._nativeDialogRecoveryCount = Number(state._nativeDialogRecoveryCount || 0) + 1)
+      : 1;
+    const base = `native-dialog-recovery-${String(count).padStart(2, '0')}`;
+    const beforeFile = state?.case_dir
+      ? captureNativeDialogScreenshot(path.join(state.case_dir, `${base}-before.png`))
+      : '';
+    const confirmation = safeInformationDialog
+      ? teamsAccessibilitySheet({
+          dismiss: true,
+          expectedMessage: accessibilitySheet.message,
+        })
+      : {
+          ...accessibilitySheet,
+          clicked: false,
+          clicked_at: '',
+          error: '残留 AXSheet 不符合附件信息弹窗白名单或不是唯一安全确认按钮，拒绝自动点击。',
+        };
+    let after = teamsAccessibilitySheet({ dismiss: false });
+    const deadline = Date.now() + 3_000;
+    while (confirmation.clicked && after.observed && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      after = teamsAccessibilitySheet({ dismiss: false });
+    }
+    const recovered = Boolean(
+      safeInformationDialog
+      && confirmation.ok
+      && confirmation.clicked
+      && after.observed !== true
+    );
+    const afterFile = recovered && state?.case_dir
+      ? await shot(page, state.case_dir, `${base}-after`).catch(() => '')
+      : '';
+    let ledgerFile = '';
+    if (state?.case_dir) {
+      ledgerFile = path.join(state.case_dir, `${base}.json`);
+      writeJsonFile(ledgerFile, {
+        schema_version: 1,
+        kind: 'stale_attachment_information_dialog',
+        valid: recovered,
+        observed: accessibilitySheet,
+        safe_information_dialog: safeInformationDialog,
+        confirmation,
+        after_confirmation: after,
+        before_screenshot: beforeFile,
+        after_screenshot: afterFile,
+      });
+      if (!Array.isArray(state.artifacts.native_dialog_recoveries)) {
+        state.artifacts.native_dialog_recoveries = [];
+      }
+      state.artifacts.native_dialog_recoveries.push({
+        message: accessibilitySheet.message,
+        buttons: accessibilitySheet.buttons,
+        confirmation_label: confirmation.confirmation_label,
+        clicked: confirmation.clicked === true,
+        closed_after_click: after.observed !== true,
+        before_screenshot: beforeFile,
+        after_screenshot: afterFile,
+        ledger: ledgerFile,
+        error: String(confirmation.error || after.error || ''),
+      });
+      recordStep(
+        state,
+        '清理上一轮 360Teams 附件信息 AXSheet',
+        '仅允许自动点击受支持附件提示中唯一的 OK/确定/知道了；多按钮、破坏性或文案不匹配弹窗必须 fail-closed。',
+        `message=${accessibilitySheet.message || '无'}；buttons=${(accessibilitySheet.buttons || []).join(',') || '无'}；clicked=${confirmation.clicked === true}；closed=${after.observed !== true}`,
+        recovered ? 'passed' : 'failed',
+        afterFile || beforeFile,
+        recovered ? '' : 'automation_error',
+      );
+    }
+    return recovered;
+  }
+
+  if (await resolveAssistantConfirmationModal(page, {
+    state,
+    caseDir: state?.case_dir || '',
+    label: '上一轮残留',
+  })) return true;
+
   const dialog = page.locator('.modal, [role="dialog"], .ant-modal, .el-message-box').filter({
     hasText: /需要你确认|确认以下|请确认|请选择|提示|暂不支持|附件类型|上传失败|操作失败|发生错误|新版本/,
   }).first();
@@ -19803,6 +20456,7 @@ function locatorFor(page, selector) {
 }
 
 async function openNewTask(page, state) {
+  await dismissAllBlockingOverlays(page, state);
   await clearUi(page);
   await dismissAllBlockingOverlays(page, state);
   await ensureSidebarExpanded(page, state);
@@ -19812,7 +20466,9 @@ async function openNewTask(page, state) {
   if (!(await visible(composer, 5000))) {
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(1500);
+    await dismissAllBlockingOverlays(page, state);
     await clearUi(page);
+    await dismissAllBlockingOverlays(page, state);
     await ensureSidebarExpanded(page, state);
     await triggerNewTask(page, state, '重载后再次点击【新建任务】');
   }
@@ -19824,7 +20480,9 @@ async function openNewTask(page, state) {
     // from one stable transition instead of stacking multiple newTask calls.
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(1200);
+    await dismissAllBlockingOverlays(page, state);
     await clearUi(page);
+    await dismissAllBlockingOverlays(page, state);
     await ensureSidebarExpanded(page, state);
     await triggerNewTask(page, state, '隔离校验失败并重载后再次点击【新建任务】');
     cleanDraft = await waitForCleanDraftTask(page, 15000);
