@@ -762,14 +762,20 @@ test('Core Beta fail-closed, partial-stop, and capability identity helpers rejec
   assert.equal(coreBetaPartialReplyReady({
     running: true,
     cancelVisible: true,
-    baselineAssistantText: 'before',
-    latestAssistantText: 'beforepartial reply',
+    baselineAssistantBodyText: 'before',
+    latestAssistantBodyText: 'beforepartial reply',
   }).ready, true);
   assert.equal(coreBetaPartialReplyReady({
     running: true,
     cancelVisible: true,
-    baselineAssistantText: 'same',
-    latestAssistantText: 'same',
+    baselineAssistantBodyText: 'same',
+    latestAssistantBodyText: 'same',
+  }).ready, false);
+  assert.equal(coreBetaPartialReplyReady({
+    running: true,
+    cancelVisible: true,
+    latestAssistantText: 'Long visible reasoning summary without an assistant answer body.',
+    latestAssistantBodyText: '',
   }).ready, false);
   const stoppedEvidence = coreBetaStoppedTurnTerminalEvidence({
     task_id: 'task-stop-1',

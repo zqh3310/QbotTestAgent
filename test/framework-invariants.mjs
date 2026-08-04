@@ -837,7 +837,10 @@ const required = [
   ['RUNTIME-RECOVER-001 只终止受控宿主树内真实执行子进程', /executeSitRuntimeRecovery[\s\S]*selectManagedRuntimeProcess[\s\S]*SIGTERM[\s\S]*waitForManagedProcessExit[\s\S]*不得用 cancelTurn 冒充 runtime 崩溃[\s\S]*retryRuntime[\s\S]*copies === 1/],
   ['受管 runtime 必须追溯到 Applications 或 Volumes 下 360Teams 主进程', /selectManagedRuntimeProcess[\s\S]*Applications\\\/360Teams[\s\S]*Volumes\\\/360Teams[\s\S]*ancestor_chain/],
   ['Core Beta 动作失败后后续真实动作 fail-closed', /coreBetaActionStopsPlan[\s\S]*core-beta-fail-closed-action-gate[\s\S]*skipped-after-failed-prerequisite/],
-  ['停止生成必须先观察非空 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
+  ['停止生成使用独立助手正文提取器', /async function assistantBodyTexts/],
+  ['助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
+  ['停止生成只消费助手正文字段', /latestAssistantBodyText/],
+  ['停止生成观察非空正文 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
   ['统一能力子菜单使用最新可见 Portal 并保留 click 与键盘回退', /openUnifiedComposerSubmenu[\s\S]*lastVisibleLocator[\s\S]*row\.click[\s\S]*ArrowRight[\s\S]*row\.press\('Enter'\)/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
@@ -944,20 +947,26 @@ assert.equal(coreBetaActionStopsPlan(null), false, '空结果不得错误停止�
 const partialReady = coreBetaPartialReplyReady({
   running: true,
   cancelVisible: true,
-  baselineAssistantText: '旧回复',
-  latestAssistantText: '旧回复正在生成新内容',
+  baselineAssistantBodyText: '旧回复',
+  latestAssistantBodyText: '旧回复正在生成新内容',
 });
 assert.equal(partialReady.ready, true, `非空增量应允许停止：${JSON.stringify(partialReady)}`);
 assert.equal(coreBetaPartialReplyReady({
   running: true,
   cancelVisible: true,
-  baselineAssistantText: '旧回复',
-  latestAssistantText: '旧回复',
+  baselineAssistantBodyText: '旧回复',
+  latestAssistantBodyText: '旧回复',
 }).ready, false, '没有新 partial delta 时禁止点击停止');
+assert.equal(coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  latestAssistantText: 'Let me inspect the request before producing the answer. This remains reasoning only.',
+  latestAssistantBodyText: '',
+}).ready, false, '长 reasoning 摘要不得冒充正文 partial');
 assert.equal(coreBetaPartialReplyReady({
   running: false,
   cancelVisible: true,
-  latestAssistantText: '已有内容',
+  latestAssistantBodyText: '已有内容',
 }).ready, false, '任务已结束后不得补点停止');
 assert.deepEqual(
   coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'connector-b' }, 'plain-c']),

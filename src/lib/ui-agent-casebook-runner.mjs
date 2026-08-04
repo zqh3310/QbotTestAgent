@@ -4729,12 +4729,12 @@ async function coreBetaCollectPendingTurn(ctx) {
 export function coreBetaPartialReplyReady({
   running = false,
   cancelVisible = false,
-  baselineAssistantText = '',
-  latestAssistantText = '',
+  baselineAssistantBodyText = '',
+  latestAssistantBodyText = '',
   minimumChars = 4,
 } = {}) {
-  const baseline = String(baselineAssistantText || '');
-  const latest = String(latestAssistantText || '');
+  const baseline = String(baselineAssistantBodyText || '');
+  const latest = String(latestAssistantBodyText || '');
   const delta = latest.startsWith(baseline)
     ? latest.slice(baseline.length)
     : latest === baseline
@@ -4776,7 +4776,7 @@ async function coreBetaStopGeneration(ctx) {
   if (!ctx.pending) throw new Error('停止生成前没有运行中的派发任务。');
   const { page, state, caseDir } = ctx;
   const cancel = page.locator('[data-testid="composer-cancel"], [aria-label*="停止"], button:has-text("停止生成")').first();
-  const baselineAssistantText = String(ctx.pending.before?.latestAssistantText || '');
+  const baselineAssistantBodyText = String(ctx.pending.before?.latestAssistantBodyText || '');
   const partialDeadline = Math.min(
     Date.now() + 90_000,
     Number(ctx.pending.startedAtMs || Date.now()) + Math.max(90_000, Number(ctx.timeoutMs || 0)),
@@ -4787,8 +4787,8 @@ async function coreBetaStopGeneration(ctx) {
   let partial = coreBetaPartialReplyReady({
     running: runningBefore,
     cancelVisible,
-    baselineAssistantText,
-    latestAssistantText: snapshot.latestAssistantText,
+    baselineAssistantBodyText,
+    latestAssistantBodyText: snapshot.latestAssistantBodyText,
   });
   while (!partial.ready && runningBefore && Date.now() < partialDeadline) {
     await page.waitForTimeout(250);
@@ -4798,8 +4798,8 @@ async function coreBetaStopGeneration(ctx) {
     partial = coreBetaPartialReplyReady({
       running: runningBefore,
       cancelVisible,
-      baselineAssistantText,
-      latestAssistantText: snapshot.latestAssistantText,
+      baselineAssistantBodyText,
+      latestAssistantBodyText: snapshot.latestAssistantBodyText,
     });
   }
   if (!partial.ready) {
@@ -4810,6 +4810,7 @@ async function coreBetaStopGeneration(ctx) {
       selector_or_testid: 'composer-cancel',
       event: 'partial-reply-precondition-readback',
       state_readback: {
+        assistant_body_source: 'rendered assistant body excluding reasoning, chain-of-thought, thinking status, and tool regions',
         running_before: runningBefore,
         cancel_visible: cancelVisible,
         partial_reply_ready: false,
@@ -4828,8 +4829,8 @@ async function coreBetaStopGeneration(ctx) {
   const retained = coreBetaPartialReplyReady({
     running: true,
     cancelVisible: true,
-    baselineAssistantText,
-    latestAssistantText: snapshot.latestAssistantText,
+    baselineAssistantBodyText,
+    latestAssistantBodyText: snapshot.latestAssistantBodyText,
   });
   const reply = {
     fullText: snapshot.latestAssistantText,
@@ -4842,6 +4843,7 @@ async function coreBetaStopGeneration(ctx) {
   ctx.replies[ctx.pending.turnIndex] = reply;
   writeReplyArtifacts(state, caseDir, [{ ...reply, label: `${ctx.pending.label}（停止后）` }]);
   state.artifacts.core_beta_stopped_task = {
+    assistant_body_source: 'rendered assistant body excluding reasoning, chain-of-thought, thinking status, and tool regions',
     task_id: ctx.pending.taskId,
     running_before: runningBefore,
     running_after: runningAfter,
@@ -25208,8 +25210,10 @@ async function conversationSnapshot(page) {
   const bridge = await qbotE2EState(page);
   const messages = await conversationMessageTimeline(page);
   const assistantTexts = messages.filter((item) => item.role === 'assistant').map((item) => item.text);
+  const assistantBodies = await assistantBodyTexts(page);
   const userTexts = messages.filter((item) => item.role === 'user').map((item) => item.text);
   const normalizedAssistantTexts = assistantTexts.map(cleanAssistantText).filter(Boolean);
+  const normalizedAssistantBodies = assistantBodies.map(cleanAssistantText).filter(Boolean);
   const threadText = await currentThreadText(page).catch(() => '');
   return {
     bodyText: body,
@@ -25219,11 +25223,13 @@ async function conversationSnapshot(page) {
       text: item.role === 'assistant' ? cleanAssistantText(item.text) : String(item.text || '').trim(),
     })).filter((item) => item.text),
     assistantTexts: normalizedAssistantTexts,
+    assistantBodyTexts: normalizedAssistantBodies,
     userTexts,
     userCount: userTexts.length,
     assistantCount: normalizedAssistantTexts.length,
     assistantNodeCount: assistantTexts.length,
     latestAssistantText: normalizedAssistantTexts.at(-1) || '',
+    latestAssistantBodyText: normalizedAssistantBodies.at(-1) || '',
     activeTaskId: bridge?.available ? String(bridge.activeId || '') : '',
     bridgeMessageCount: bridge?.available ? Number(bridge.messageCount || 0) : null,
   };
@@ -25263,6 +25269,23 @@ async function assistantMessageTexts(page) {
     if (!normalized) return false;
     return !/^(?:动手|问答|规划|禁用|自动|手动|技能|连应用|连接器|M[1-4]|发送|停止生成)(?:\s+(?:动手|问答|规划|禁用|自动|手动|技能|连应用|连接器|M[1-4]|发送|停止生成))*$/.test(normalized);
   })).catch(() => []);
+}
+
+async function assistantBodyTexts(page) {
+  return page.locator('[data-testid="assistant-thread"] [data-role="assistant"]').evaluateAll((nodes) => nodes.map((node) => {
+    const content = node.querySelector('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content');
+    if (!content) return '';
+    const excluded = '[data-slot="aui_chain-of-thought"], [data-slot="aui_reasoning"], [data-slot^="reasoning-"], [data-slot="aui_thinking-progress"], .aui-reasoning-root, .aui-reasoning-cot, .aui-reasoning-cli, .aui-tool-flat, [data-slot^="aui_tool"]';
+    const bodyNodes = Array.from(content.querySelectorAll('.aui-cli-line > .aui-cli-body'))
+      .filter((element) => !element.closest(excluded));
+    if (bodyNodes.length) {
+      return bodyNodes.map((element) => String(element.innerText || element.textContent || '')).join('\n');
+    }
+    if (content.querySelector(excluded)) return '';
+    const clone = content.cloneNode(true);
+    clone.querySelectorAll('button, [role="button"], [data-testid*="toolbar"], [data-testid*="action"], [data-testid*="composer"], .ctools, .ctool-menu, .ctool-pop, .message-actions, .aui-message-actions').forEach((element) => element.remove());
+    return String(clone.innerText || clone.textContent || '');
+  }).filter((text) => String(text || '').trim())).catch(() => []);
 }
 
 async function userMessageTexts(page) {

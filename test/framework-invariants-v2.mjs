@@ -1104,21 +1104,27 @@ assert.equal(caseAwareReplyAssertion(
 const partialReplyReady = coreBetaPartialReplyReady({
   running: true,
   cancelVisible: true,
-  baselineAssistantText: '',
-  latestAssistantText: '第一章：测试目标',
+  baselineAssistantBodyText: '',
+  latestAssistantBodyText: '第一章：测试目标',
 });
 assert.equal(partialReplyReady.ready, true, '运行态中的非空可见增量应允许停止');
 assert.equal(partialReplyReady.delta_chars > 0, true);
 assert.equal(coreBetaPartialReplyReady({
   running: true,
   cancelVisible: true,
-  latestAssistantText: '思考',
+  latestAssistantBodyText: '思考',
   minimumChars: 4,
 }).ready, false, '过短的状态文本不能冒充可保留的部分回复');
 assert.equal(coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  latestAssistantText: 'Let me understand what the user is asking for. This is reasoning, not the assistant answer.',
+  latestAssistantBodyText: '',
+}).ready, false, '长 reasoning 摘要也不能冒充助手正文触发停止');
+assert.equal(coreBetaPartialReplyReady({
   running: false,
   cancelVisible: false,
-  latestAssistantText: '第一章：测试目标',
+  latestAssistantBodyText: '第一章：测试目标',
 }).ready, false, '非运行态不能执行停止点击');
 
 const required = [
@@ -1134,7 +1140,10 @@ const required = [
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
-  ['Core Beta v2 停止生成必须先观察可见 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
+  ['Core Beta v2 停止生成使用独立助手正文提取器', /async function assistantBodyTexts/],
+  ['Core Beta v2 助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
+  ['Core Beta v2 停止生成只消费助手正文字段', /latestAssistantBodyText/],
+  ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
   ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
