@@ -153,17 +153,29 @@ export async function resolveTeamsCasebookConnection(options) {
   };
 }
 
+export function extendTeamsPreconnectDeadlineAfterRecovery(
+  currentDeadline,
+  recoveredAt,
+  verificationWindowMs = 60_000,
+) {
+  const deadline = Number(currentDeadline) || 0;
+  const recovered = Number(recoveredAt) || Date.now();
+  const verificationWindow = Math.max(1_000, Number(verificationWindowMs) || 60_000);
+  return Math.max(deadline, recovered + verificationWindow);
+}
+
 export async function connectTeamsCasebookBrowser(cdpUrl, {
   attempts = 80,
   timeoutMs = 15_000,
   retryDelayMs = 1_500,
   readyTimeoutMs = 120_000,
+  postRecoveryReadyMs = 60_000,
   recoveryCdpUrl = '',
   resetConnection = null,
 } = {}) {
   let lastError = null;
   const startedWaitingAt = Date.now();
-  const readyDeadline = startedWaitingAt + Math.max(timeoutMs, Number(readyTimeoutMs) || 120_000);
+  let readyDeadline = startedWaitingAt + Math.max(timeoutMs, Number(readyTimeoutMs) || 120_000);
   let attemptsUsed = 0;
   for (let attempt = 1; attempt <= attempts && Date.now() < readyDeadline; attempt += 1) {
     attemptsUsed = attempt;
@@ -271,19 +283,30 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         elapsed_ms: Date.now() - startedAt,
         reason: String(error?.message || error).split('\n')[0],
       }));
-      const canRetry = attempt < attempts && Date.now() < readyDeadline;
-      if (recoveryCdpUrl && canRetry) {
+      const canRecover = attempt < attempts && Date.now() < readyDeadline;
+      if (recoveryCdpUrl && canRecover) {
         await resetConnection?.().catch(() => {});
         const recovery = await recoverTeamsQworkWorkbench(recoveryCdpUrl).catch((recoveryError) => ({
           recovered: false,
           reason: String(recoveryError?.message || recoveryError).split('\n')[0],
         }));
+        if (recovery.recovered) {
+          readyDeadline = extendTeamsPreconnectDeadlineAfterRecovery(
+            readyDeadline,
+            Date.now(),
+            Math.max(timeoutMs, Number(postRecoveryReadyMs) || 60_000),
+          );
+        }
         console.error(JSON.stringify({
           teams_casebook_preconnect_recovery: recovery.recovered ? 'ready' : 'skipped',
           attempt,
           reason: recovery.reason || '',
+          post_recovery_ready_ms: recovery.recovered
+            ? Math.max(timeoutMs, Number(postRecoveryReadyMs) || 60_000)
+            : 0,
         }));
       }
+      const canRetry = attempt < attempts && Date.now() < readyDeadline;
       if (canRetry) {
         await new Promise((resolve) => setTimeout(
           resolve,

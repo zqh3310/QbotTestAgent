@@ -43,6 +43,7 @@ import {
 } from '../lib/teams-profile-qbot-config.mjs';
 import {
   configureTeamsFixtureRuntime,
+  extendTeamsPreconnectDeadlineAfterRecovery,
   installTeamsPageGuards,
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
@@ -499,9 +500,25 @@ test('Teams preconnect waits through a full managed-host QWork remount window', 
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /attempts = 80/);
   assert.match(source, /readyTimeoutMs = 120_000/);
-  assert.match(source, /const readyDeadline = startedWaitingAt \+ Math\.max/);
+  assert.match(source, /let readyDeadline = startedWaitingAt \+ Math\.max/);
   assert.match(source, /attempt <= attempts && Date\.now\(\) < readyDeadline/);
   assert.match(source, /preconnect failed after \$\{attemptsUsed\} attempts/);
+});
+
+test('Teams preconnect re-verifies a recovered host after the original deadline expires', () => {
+  assert.equal(
+    extendTeamsPreconnectDeadlineAfterRecovery(10_000, 20_000, 60_000),
+    80_000,
+    'a completed recovery must receive one fresh bounded readiness window',
+  );
+  assert.equal(
+    extendTeamsPreconnectDeadlineAfterRecovery(100_000, 20_000, 60_000),
+    100_000,
+    'recovery must not shorten an existing readiness window',
+  );
+  const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(source, /recovery\.recovered[\s\S]*extendTeamsPreconnectDeadlineAfterRecovery/);
+  assert.match(source, /const canRetry = attempt < attempts && Date\.now\(\) < readyDeadline;[\s\S]*if \(canRetry\)/);
 });
 
 test('Teams fixture runtime restores the packaged host and keeps the local-QBot lane untouched', async () => {
