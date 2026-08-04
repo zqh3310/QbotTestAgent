@@ -28,6 +28,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
+  managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaPartialReplyReady,
   coreBetaRuntimeExecutorBinding,
@@ -124,6 +125,7 @@ const validAttachmentRejectionProbe = {
   dialog_settled: true,
   managed_teams_ax_required: true,
   structured_dialog_evidence: true,
+  managed_dialog_evidence: true,
   composer_state: { count: 0, names: [] },
   no_task_no_send_state: { valid: true },
 };
@@ -184,10 +186,104 @@ assert.equal(
   coreBetaAttachmentRejectionProbeVerdict({
     ...validAttachmentRejectionProbe,
     structured_dialog_evidence: false,
+    managed_dialog_evidence: false,
   }),
   false,
-  '受管 Teams 附件拒绝不得在缺失 AXSheet 双通道证据时通过',
+  '受管 Teams 附件拒绝不得在 AXSheet 和受管 Playwright 证据都缺失时通过',
 );
+
+const managedDialogEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-managed-dialog-'));
+try {
+  const before = path.join(managedDialogEvidenceDir, 'before.png');
+  const native = path.join(managedDialogEvidenceDir, 'native.png');
+  const after = path.join(managedDialogEvidenceDir, 'after.png');
+  const artifact = path.join(managedDialogEvidenceDir, 'dialog.json');
+  for (const file of [before, native, after]) fs.writeFileSync(file, Buffer.alloc(256, 1));
+  const message = '暂不支持的附件类型：.bin';
+  const common = {
+    dialogMessage: message,
+    capturedDialogMessage: message,
+    dialogConfirmationLabel: 'OK',
+    dialogHandled: true,
+    dialogClosed: true,
+    pageResponsiveAfterDialog: true,
+    dialogCloseError: '',
+    beforeDispatchScreenshot: before,
+    dialogEvidenceScreenshot: native,
+    dialogEvidenceArtifact: artifact,
+    postDismissalScreenshot: after,
+  };
+  fs.writeFileSync(artifact, JSON.stringify({
+    expected_dialog_message: message,
+    playwright_dialog_message: message,
+    confirmation_clicked: true,
+    sheet_closed_after_confirmation: true,
+  }, null, 2));
+  assert.equal(
+    managedAttachmentDialogEvidenceVerdict({
+      ...common,
+      dialogAction: 'macos_accessibility_click',
+      dialogAccessibilityRole: 'AXSheet',
+      dialogAccessibilityMessageMatched: true,
+      dialogAccessibilityConfirmationClicked: true,
+      dialogAccessibilitySheetClosed: true,
+    }),
+    true,
+    'AXSheet 可见时应继续接受 Playwright 与 Accessibility 双通道证据',
+  );
+
+  fs.writeFileSync(artifact, JSON.stringify({
+    expected_dialog_message: message,
+    playwright_dialog_message: message,
+    playwright_dialog: {
+      observed_before_confirmation: true,
+      type: 'alert',
+      message,
+      allowlisted_attachment_info: true,
+      action: 'playwright_accept_fallback',
+      accepted: true,
+      evidence_captured_before_accept: true,
+      page_responsive_after: true,
+      close_error: '',
+    },
+  }, null, 2));
+  const fallback = {
+    ...common,
+    dialogAction: 'playwright_accept_fallback',
+    dialogType: 'alert',
+    dialogPlaywrightObservedBeforeAccept: true,
+    dialogPlaywrightAllowlisted: true,
+    dialogPlaywrightAccepted: true,
+    dialogEvidenceCapturedBeforeAccept: true,
+    dialogFallbackEvidenceRecorded: true,
+  };
+  assert.equal(
+    managedAttachmentDialogEvidenceVerdict(fallback),
+    true,
+    'AXSheet 不可见时应接受证据完整的白名单 Playwright alert',
+  );
+  assert.equal(
+    managedAttachmentDialogEvidenceVerdict({ ...fallback, dialogType: 'confirm' }),
+    false,
+    '受管 fallback 不得接受 confirm 或多按钮弹窗',
+  );
+  assert.equal(
+    managedAttachmentDialogEvidenceVerdict({
+      ...fallback,
+      dialogMessage: '确定删除全部会话吗？',
+      capturedDialogMessage: '确定删除全部会话吗？',
+    }),
+    false,
+    '受管 fallback 不得接受破坏性或非附件白名单弹窗',
+  );
+  assert.equal(
+    managedAttachmentDialogEvidenceVerdict({ ...fallback, postDismissalScreenshot: '' }),
+    false,
+    '受管 fallback 缺少关闭后截图时必须 fail-closed',
+  );
+} finally {
+  fs.rmSync(managedDialogEvidenceDir, { recursive: true, force: true });
+}
 assert.equal(
   coreBetaAttachmentRejectionProbeVerdict({
     ...validAttachmentRejectionProbe,
@@ -1190,6 +1286,11 @@ assert.match(
   runner,
   /(?=[\s\S]*stageAttachmentPathsThroughComposer[\s\S]*nativeEvidence\.capture\(evidenceFile, dialogMessage, nativeFile\))(?=[\s\S]*message_matched: messageMatched)(?=[\s\S]*confirmation_clicked)(?=[\s\S]*sheet_closed_after_confirmation)(?=[\s\S]*postDismissalScreenshot)/,
   'Core Beta v2 附件拒绝必须绑定 Playwright 与 AXSheet 文案并验证点击后关闭',
+);
+assert.match(
+  runner,
+  /(?=[\s\S]*playwrightAllowlisted[\s\S]*dialogType === 'alert')(?=[\s\S]*action = 'playwright_accept_fallback'[\s\S]*await dialog\.accept\(\))(?=[\s\S]*playwright_dialog[\s\S]*observed_before_confirmation[\s\S]*evidence_captured_before_accept[\s\S]*page_responsive_after)(?=[\s\S]*dialogFallbackEvidenceRecorded)/,
+  'AXSheet 不可见时只允许证据完整的白名单 Playwright alert fallback',
 );
 assert.match(
   runner,

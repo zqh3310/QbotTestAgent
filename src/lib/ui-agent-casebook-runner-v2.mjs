@@ -83,6 +83,72 @@ export function nativeDialogClosedOrAdvanced(before = {}, after = {}) {
   return Boolean(beforeMessage && afterMessage && beforeMessage !== afterMessage);
 }
 
+export function managedAttachmentDialogEvidenceVerdict(result = {}) {
+  const message = normalizedNativeDialogText(result.dialogMessage);
+  const capturedMessage = normalizedNativeDialogText(result.capturedDialogMessage);
+  const validFile = (file) => Boolean(
+    file
+    && fs.existsSync(file)
+    && fs.statSync(file).isFile()
+    && fs.statSync(file).size >= 128
+  );
+  let artifact = {};
+  if (validFile(result.dialogEvidenceArtifact)) {
+    try {
+      artifact = JSON.parse(fs.readFileSync(result.dialogEvidenceArtifact, 'utf8'));
+    } catch {
+      artifact = {};
+    }
+  }
+  const artifactBindsPlaywrightMessage = Boolean(
+    normalizedNativeDialogText(artifact.expected_dialog_message) === message
+    && normalizedNativeDialogText(artifact.playwright_dialog_message) === message
+  );
+  const commonEvidence = Boolean(
+    message
+    && SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(message)
+    && capturedMessage === message
+    && SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL.test(String(result.dialogConfirmationLabel || ''))
+    && result.dialogHandled === true
+    && result.dialogClosed === true
+    && result.pageResponsiveAfterDialog === true
+    && !String(result.dialogCloseError || '')
+    && validFile(result.beforeDispatchScreenshot)
+    && validFile(result.dialogEvidenceScreenshot)
+    && validFile(result.dialogEvidenceArtifact)
+    && validFile(result.postDismissalScreenshot)
+    && artifactBindsPlaywrightMessage
+  );
+  const accessibilityEvidence = Boolean(
+    result.dialogAccessibilityRole === 'AXSheet'
+    && result.dialogAccessibilityMessageMatched === true
+    && result.dialogAccessibilityConfirmationClicked === true
+    && result.dialogAccessibilitySheetClosed === true
+    && artifact.confirmation_clicked === true
+    && artifact.sheet_closed_after_confirmation === true
+  );
+  const fallbackRecord = artifact.playwright_dialog || {};
+  const playwrightFallbackEvidence = Boolean(
+    result.dialogAction === 'playwright_accept_fallback'
+    && result.dialogType === 'alert'
+    && result.dialogPlaywrightObservedBeforeAccept === true
+    && result.dialogPlaywrightAllowlisted === true
+    && result.dialogPlaywrightAccepted === true
+    && result.dialogEvidenceCapturedBeforeAccept === true
+    && result.dialogFallbackEvidenceRecorded === true
+    && fallbackRecord.observed_before_confirmation === true
+    && fallbackRecord.type === 'alert'
+    && normalizedNativeDialogText(fallbackRecord.message) === message
+    && fallbackRecord.allowlisted_attachment_info === true
+    && fallbackRecord.action === 'playwright_accept_fallback'
+    && fallbackRecord.accepted === true
+    && fallbackRecord.evidence_captured_before_accept === true
+    && fallbackRecord.page_responsive_after === true
+    && !String(fallbackRecord.close_error || '')
+  );
+  return commonEvidence && (accessibilityEvidence || playwrightFallbackEvidence);
+}
+
 export function coreBetaAttachmentRejectionProbeVerdict(probe = {}) {
   const composer = probe.composer_state || {};
   const noTaskNoSend = probe.no_task_no_send_state || {};
@@ -96,7 +162,7 @@ export function coreBetaAttachmentRejectionProbeVerdict(probe = {}) {
     && noTaskNoSend.valid === true
     && (!dialogObserved || (
       probe.dialog_settled === true
-      && (!probe.managed_teams_ax_required || probe.structured_dialog_evidence === true)
+      && (!probe.managed_teams_ax_required || probe.managed_dialog_evidence === true)
     ))
   );
 }
@@ -10113,6 +10179,8 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     && result.dialogAccessibilityConfirmationClicked === true
     && result.dialogAccessibilitySheetClosed === true
   );
+  const managedDialogEvidence = !managedTeamsAxRequired
+    || managedAttachmentDialogEvidenceVerdict(result);
   const dialogSettled = !result.dialogMessage || Boolean(
     result.dialogHandled === true
     && result.dialogClosed === true
@@ -10134,6 +10202,7 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     dialog_settled: dialogSettled,
     managed_teams_ax_required: managedTeamsAxRequired,
     structured_dialog_evidence: structuredDialogEvidence,
+    managed_dialog_evidence: managedDialogEvidence,
     composer_state: composerState,
     no_task_no_send_state: noTaskNoSendState,
     product_result: result,
@@ -10158,6 +10227,8 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
       before_screenshot: result.beforeDispatchScreenshot,
       native_dialog_screenshot: result.dialogEvidenceScreenshot,
       structured_evidence: result.dialogEvidenceArtifact,
+      evidence_source: result.dialogEvidenceSource,
+      dialog_type: result.dialogType,
       after_screenshot: result.postDismissalScreenshot,
       handled: result.dialogHandled === true,
       closed: result.dialogClosed === true,
@@ -10178,18 +10249,18 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
   recordAssertion(
     state,
     '附件限制提示符合当前产品契约',
-    `${expectedDescription} 360Teams 原生弹窗必须由 Playwright 文案与 AXSheet 文案双通道一致确认，且只能点击唯一的 OK/确定/知道了。`,
+    `${expectedDescription} 360Teams 弹窗必须由受管 Playwright alert 或可见 AXSheet 留下结构化文案与确认账本，且只能接受白名单信息提示。`,
     probe.expected_pattern_matched
       && probe.visible_rejection_evidence
-      && (!result.dialogMessage || !managedTeamsAxRequired || structuredDialogEvidence),
-    `dialog=${result.dialogMessage || '无'}；ax=${result.dialogAccessibilityMessage || '无'}；structured=${structuredDialogEvidence}；page=${clip(result.pageText, 360)}`,
+      && (!result.dialogMessage || managedDialogEvidence),
+    `dialog=${result.dialogMessage || '无'}；type=${result.dialogType || '无'}；action=${result.dialogAction || '无'}；ax=${result.dialogAccessibilityMessage || '无'}；structuredAx=${structuredDialogEvidence}；managed=${managedDialogEvidence}；page=${clip(result.pageText, 360)}`,
     'automation_error',
   );
   recordAssertion(
     state,
     '附件拒绝信息弹窗已安全关闭',
-    '记录拒绝文案后必须点击唯一安全确认按钮，验证 AXSheet 消失、页面恢复响应，并保存关闭前后证据。',
-    dialogSettled && (!result.dialogMessage || !managedTeamsAxRequired || structuredDialogEvidence),
+    '记录拒绝文案后必须通过受管通道接受唯一安全信息提示，验证弹窗关闭、页面恢复响应，并保存关闭前后证据。',
+    dialogSettled && (!result.dialogMessage || managedDialogEvidence),
     `handled=${result.dialogHandled === true}；closed=${result.dialogClosed === true}；responsive=${result.pageResponsiveAfterDialog === true}；action=${result.dialogAction || '无'}；post=${result.postDismissalScreenshot || '缺失'}；error=${result.dialogCaptureError || result.dialogCloseError || '无'}`,
     'automation_error',
   );
@@ -10890,6 +10961,8 @@ async function stageAttachmentPathsThroughComposer(
   const dialogListener = (dialog) => {
     dialogMessage = dialog.message();
     dialogHandling = (async () => {
+      const playwrightObservedAt = new Date().toISOString();
+      const dialogType = String(dialog.type() || '');
       const evidenceFile = path.join(caseDir, `${label}-product-ax-dialog.json`);
       const nativeFile = path.join(caseDir, `${label}-product-native-dialog.png`);
       const captured = await nativeEvidence.capture(evidenceFile, dialogMessage, nativeFile);
@@ -10898,14 +10971,16 @@ async function stageAttachmentPathsThroughComposer(
       let closeError = '';
       let acceptedAt = String(captured.confirmation_clicked_at || '');
       let action = captured.confirmation_clicked ? 'macos_accessibility_click' : '';
+      let playwrightAccepted = false;
+      const playwrightAllowlisted = SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(dialogMessage)
+        && dialogType === 'alert';
       if (!captured.confirmation_clicked) {
         try {
-          acceptedAt = new Date().toISOString();
-          const safeFallback = SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(dialogMessage)
-            && dialog.type() === 'alert';
-          if (safeFallback) {
+          if (playwrightAllowlisted) {
             action = 'playwright_accept_fallback';
             await dialog.accept();
+            playwrightAccepted = true;
+            acceptedAt = new Date().toISOString();
           } else {
             action = 'playwright_dismiss_unexpected';
             await dialog.dismiss();
@@ -10919,6 +10994,39 @@ async function stageAttachmentPathsThroughComposer(
       const pageResponsive = await page.evaluate(() => (
         document.readyState === 'interactive' || document.readyState === 'complete'
       )).catch(() => false);
+      const captureCompletedAt = String(captured.completed_at || '');
+      const evidenceCapturedBeforeAccept = Boolean(
+        captured.artifact
+        && captured.native_dialog_screenshot
+        && acceptedAt
+        && captureCompletedAt
+        && Date.parse(captureCompletedAt) <= Date.parse(acceptedAt)
+      );
+      let fallbackEvidenceRecorded = false;
+      if (captured.artifact && fs.existsSync(captured.artifact)) {
+        try {
+          const existing = JSON.parse(fs.readFileSync(captured.artifact, 'utf8'));
+          writeJsonFile(captured.artifact, {
+            ...existing,
+            playwright_dialog: {
+              observed_before_confirmation: true,
+              observed_at: playwrightObservedAt,
+              type: dialogType,
+              message: dialogMessage,
+              allowlisted_attachment_info: playwrightAllowlisted,
+              action,
+              accepted: playwrightAccepted,
+              accepted_at: acceptedAt,
+              evidence_captured_before_accept: evidenceCapturedBeforeAccept,
+              page_responsive_after: pageResponsive,
+              close_error: closeError,
+            },
+          });
+          fallbackEvidenceRecorded = true;
+        } catch (error) {
+          closeError = closeError || `Playwright 弹窗账本落盘失败：${error.message}`;
+        }
+      }
       return {
         observed: true,
         message: dialogMessage,
@@ -10929,6 +11037,12 @@ async function stageAttachmentPathsThroughComposer(
         ),
         page_responsive: pageResponsive,
         action,
+        dialog_type: dialogType,
+        playwright_observed_before_accept: true,
+        playwright_allowlisted: playwrightAllowlisted,
+        playwright_accepted: playwrightAccepted,
+        evidence_captured_before_accept: evidenceCapturedBeforeAccept,
+        fallback_evidence_recorded: fallbackEvidenceRecorded,
         confirmation_label: String(captured.confirmation_label || (action === 'playwright_accept_fallback' ? 'OK' : '')),
         evidence_screenshot: dialogEvidenceScreenshot,
         evidence_artifact: dialogEvidenceArtifact,
@@ -11054,12 +11168,18 @@ async function stageAttachmentPathsThroughComposer(
     dialogAction: dialogOutcome.action,
     dialogConfirmationLabel: dialogOutcome.confirmation_label,
     dialogEvidenceSource: dialogOutcome.evidence_source,
+    dialogType: String(dialogOutcome.dialog_type || ''),
     dialogNativeCapturePrepared: nativeEvidence.ok === true,
     dialogNativeCapturePrepareError: String(nativeEvidence.error || ''),
     dialogCaptureRequestedAt: String(dialogOutcome.capture_requested_at || ''),
     dialogEvidenceObservedAt: String(dialogOutcome.evidence_observed_at || ''),
     dialogCaptureCompletedAt: String(dialogOutcome.capture_completed_at || ''),
     dialogCaptureCompletedBeforeAccept: dialogOutcome.capture_completed_before_accept === true,
+    dialogPlaywrightObservedBeforeAccept: dialogOutcome.playwright_observed_before_accept === true,
+    dialogPlaywrightAllowlisted: dialogOutcome.playwright_allowlisted === true,
+    dialogPlaywrightAccepted: dialogOutcome.playwright_accepted === true,
+    dialogEvidenceCapturedBeforeAccept: dialogOutcome.evidence_captured_before_accept === true,
+    dialogFallbackEvidenceRecorded: dialogOutcome.fallback_evidence_recorded === true,
     dialogAcceptedAt: String(dialogOutcome.dialog_accepted_at || ''),
     capturedDialogMessage: String(dialogOutcome.captured_dialog_message || ''),
     dialogAccessibilityMessage: String(dialogOutcome.accessibility_message || ''),
