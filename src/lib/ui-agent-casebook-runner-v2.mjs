@@ -15964,8 +15964,11 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
   const invoked = await page.evaluate(async ({ methodName }) => {
     const api = globalThis.window?.agent?.[methodName];
     if (typeof api !== 'function') return { ok: false, reason: `${methodName} unavailable` };
-    await api();
-    return { ok: true };
+    const selection = await api();
+    return {
+      ok: true,
+      selection: selection === null || Array.isArray(selection) ? selection : undefined,
+    };
   }, { methodName: method }).catch((error) => ({ ok: false, reason: error.message }));
   if (!invoked.ok) {
     recordAssertion(
@@ -15984,25 +15987,33 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
   while (Date.now() < deadline) {
     await page.waitForTimeout(150);
     capabilities = await currentCapabilities(page);
-    const selected = capabilities?.selectedSkills;
-    if ((mode === 'disabled' && Array.isArray(selected) && selected.length === 0)
-      || (mode === 'auto' && selected === null)) break;
+    if (unifiedSkillModeApplied(capabilities, mode, invoked.selection)) break;
   }
   const selected = capabilities?.selectedSkills;
-  const ok = mode === 'disabled'
-    ? Array.isArray(selected) && selected.length === 0
-    : selected === null;
+  const ok = unifiedSkillModeApplied(capabilities, mode, invoked.selection);
   state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
   recordStep(
     state,
     `设置统一菜单技能模式：${mode}`,
     '该调用只用于隔离用例前置状态；技能选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；capabilities.selectedSkills=${JSON.stringify(selected)}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
     ok ? '' : 'automation_error',
   );
   return ok;
+}
+
+export function unifiedSkillModeApplied(capabilities, mode, bridgeSelection = undefined) {
+  const selectedSkills = capabilities?.selectedSkills;
+  if (mode === 'auto') {
+    return selectedSkills === null || bridgeSelection === null;
+  }
+  if (mode === 'disabled') {
+    return (Array.isArray(selectedSkills) && selectedSkills.length === 0)
+      || (Array.isArray(bridgeSelection) && bridgeSelection.length === 0);
+  }
+  return false;
 }
 
 async function setUnifiedConnectorMode(page, state, caseDir, mode) {

@@ -54,6 +54,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   validateProductionCasePlan,
@@ -101,6 +102,31 @@ assert.equal(
   }).handle,
   false,
   'Core Beta v2 不得把普通向导的跳过误当成 Agent 澄清面板',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', []),
+  true,
+  'Core Beta v2 在 capabilities 省略 selectedSkills 时，应使用 setSkillsDisabled 返回的空数组确认禁用态',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', undefined),
+  false,
+  'Core Beta v2 不能只因 capabilities 缺少 selectedSkills 就误判技能已禁用',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: [] }, 'disabled', undefined),
+  true,
+  'Core Beta v2 应继续接受旧版 capabilities 的明确空数组读回',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'auto', null),
+  true,
+  'Core Beta v2 技能自动态应接受 setSkillsAuto 返回的 null',
+);
+assert.equal(
+  unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', null),
+  false,
+  'Core Beta v2 不能把自动态 null 误判为技能禁用态',
 );
 const cleanupBase = {
   dialogs_open: 0,
