@@ -3551,6 +3551,58 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
   state.artifacts.evidence_adapter_coverage = coverageFile;
 }
 
+function cleanupSelectionSourceVerdict(source) {
+  if (!source || source.available !== true || source.error) return false;
+  return source.selected_skills_observed === true
+    && Array.isArray(source.selected_skills)
+    && source.selected_skills.length === 0
+    && source.selected_connectors_observed === true
+    && Array.isArray(source.selected_connectors)
+    && source.selected_connectors.length === 0
+    && source.current_expert_observed === true
+    && source.current_expert == null;
+}
+
+export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
+  const requiredMethods = Array.isArray(snapshot.required_bridge_methods)
+    ? snapshot.required_bridge_methods
+    : [];
+  const bridgeFailures = requiredMethods.filter((name) => {
+    if (snapshot.bridge_availability?.[name] !== true) return true;
+    if (snapshot.bridge_invocations?.[name]?.ok !== true) return true;
+    return Boolean(snapshot.bridge_results?.[name]?.__error);
+  });
+  const capabilities = snapshot.capabilities_after;
+  const directCapabilitiesCleared = Boolean(
+    capabilities
+    && !capabilities.__error
+    && Array.isArray(capabilities.selectedSkills)
+    && capabilities.selectedSkills.length === 0
+    && Array.isArray(capabilities.selectedConnectors)
+    && capabilities.selectedConnectors.length === 0
+    && (Object.hasOwn(capabilities, 'currentExpert') || Object.hasOwn(capabilities, 'expertIdentity'))
+    && (capabilities.currentExpert ?? capabilities.expertIdentity) == null
+  );
+  const fallbackSource = Object.entries(snapshot.selection_readbacks || {})
+    .find(([, source]) => cleanupSelectionSourceVerdict(source))?.[0] || '';
+  const selectionSource = directCapabilitiesCleared
+    ? 'agent.capabilities'
+    : fallbackSource;
+  const errors = [];
+  if (Number(snapshot.dialogs_open || 0) !== 0) errors.push('dialogs_still_open');
+  if (bridgeFailures.length) errors.push(`bridge_failed:${bridgeFailures.join(',')}`);
+  if (snapshot.capability_cleanup_required && !selectionSource) {
+    errors.push('capability_selection_not_confirmed_empty');
+  }
+  return {
+    valid: errors.length === 0,
+    selection_source: selectionSource,
+    direct_capabilities_error: String(capabilities?.__error || ''),
+    bridge_failures: bridgeFailures,
+    errors,
+  };
+}
+
 async function writeCleanupReadback({ page, testCase, caseDir }) {
   const file = path.join(caseDir, 'cleanup-readback.json');
   const snapshot = await page.evaluate(async ({ cleanupPolicy }) => {
@@ -3561,6 +3613,7 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
       try { node.click(); clicked.push(node.getAttribute('data-testid') || node.getAttribute('aria-label') || 'close'); } catch {}
     }
     const bridgeResults = {};
+    const bridgeInvocations = {};
     const needsCapabilityCleanup = /能力|capabilit|selection|残留|隔离|clean/i.test(cleanupPolicy);
     const requiredBridgeMethods = needsCapabilityCleanup
       ? ['setSkillsDisabled', 'setConnectorsDisabled', 'setExpert']
@@ -3571,19 +3624,119 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
     const invoke = async (name, ...args) => {
       if (typeof window.agent?.[name] !== 'function') {
         bridgeResults[name] = { __error: `missing bridge method ${name}` };
+        bridgeInvocations[name] = { attempted: false, ok: false };
         return;
       }
-      try { bridgeResults[name] = await window.agent[name](...args); }
-      catch (error) { bridgeResults[name] = { __error: String(error?.message || error) }; }
+      try {
+        bridgeResults[name] = await window.agent[name](...args);
+        bridgeInvocations[name] = { attempted: true, ok: true };
+      } catch (error) {
+        bridgeResults[name] = { __error: String(error?.message || error) };
+        bridgeInvocations[name] = { attempted: true, ok: false };
+      }
     };
     if (needsCapabilityCleanup) {
       await invoke('setSkillsDisabled');
       await invoke('setConnectorsDisabled');
       await invoke('setExpert', null);
     }
-    const capabilities = typeof window.agent?.capabilities === 'function'
-      ? await window.agent.capabilities().catch((error) => ({ __error: String(error?.message || error) }))
-      : null;
+    const e2e = window.__qbotE2E || window.__deepbankE2E || null;
+    const call = async (fn) => {
+      if (typeof fn !== 'function') return null;
+      try { return await fn(); } catch (error) {
+        return { __error: String(error?.message || error) };
+      }
+    };
+    const compactSelection = (value, {
+      skillsKey,
+      connectorsKey,
+      expertKeys,
+    }) => {
+      const object = value && typeof value === 'object' ? value : null;
+      const expertKey = object
+        ? expertKeys.find((key) => Object.hasOwn(object, key))
+        : '';
+      return {
+        available: Boolean(object && !object.__error),
+        error: String(object?.__error || ''),
+        selected_skills_observed: Boolean(object && Object.hasOwn(object, skillsKey)),
+        selected_skills: object?.[skillsKey] ?? null,
+        selected_connectors_observed: Boolean(object && Object.hasOwn(object, connectorsKey)),
+        selected_connectors: object?.[connectorsKey] ?? null,
+        current_expert_observed: Boolean(expertKey),
+        current_expert: expertKey ? object?.[expertKey] ?? null : null,
+      };
+    };
+    const e2eState = await call(e2e?.state?.bind(e2e));
+    const [session, capabilities] = await Promise.all([
+      call(e2e?.currentSession?.bind(e2e)),
+      call(window.agent?.capabilities?.bind(window.agent)),
+    ]);
+    const visibleNodes = (selector) => Array.from(document.querySelectorAll(selector)).filter((node) => {
+      const rect = node.getBoundingClientRect();
+      const style = globalThis.getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    const skillControl = visibleNodes('[data-testid="composer-skills-menu"]').at(0) || null;
+    const connectorControl = visibleNodes('[data-testid="composer-connectors-menu"]').at(0) || null;
+    const unifiedPlusControl = visibleNodes('[data-testid="composer-plus-menu"]').at(0) || null;
+    const composer = visibleNodes('[data-testid="composer-input"]').at(0) || null;
+    const skillControlText = String(skillControl?.textContent || '').replace(/\s+/g, ' ').trim();
+    const connectorControlText = String(connectorControl?.textContent || '').replace(/\s+/g, ' ').trim();
+    const skillChips = visibleNodes(
+      '[data-testid^="composer-skill-chip-"]:not(.composer-reference-chip), .skill-chip:not(.composer-reference-chip)',
+    ).filter((node) => composer?.contains(node))
+      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const connectorChips = visibleNodes(
+      '[data-testid^="composer-connector-chip-"], [data-testid="composer-connector-chip"], .connector-chip',
+    ).filter((node) => composer?.contains(node))
+      .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const expertObserved = Boolean(e2eState && !e2eState.__error
+      && (Object.hasOwn(e2eState, 'currentExpertIdentity') || Object.hasOwn(e2eState, 'currentExpert')));
+    const expertValue = e2eState?.currentExpertIdentity ?? e2eState?.currentExpert ?? null;
+    const expertAvatars = visibleNodes('.ctools .ctool-btn-ava');
+    const skillDisabled = /技能[^\n]*禁用/.test(skillControlText);
+    const connectorDisabled = /(?:连应用|连接器)[^\n]*禁用/.test(connectorControlText);
+    const skillBridgeCleared = Array.isArray(bridgeResults.setSkillsDisabled)
+      && bridgeResults.setSkillsDisabled.length === 0;
+    const connectorBridgeCleared = Array.isArray(bridgeResults.setConnectorsDisabled)
+      && bridgeResults.setConnectorsDisabled.length === 0;
+    const expertBridgeCleared = Boolean(
+      bridgeResults.setExpert
+      && typeof bridgeResults.setExpert === 'object'
+      && (bridgeResults.setExpert.expert ?? bridgeResults.setExpert.expertIdentity) == null
+    );
+    const skillSurfaceReady = skillControl ? skillDisabled : Boolean(unifiedPlusControl && composer);
+    const connectorSurfaceReady = connectorControl ? connectorDisabled : Boolean(unifiedPlusControl && composer);
+    const visibleUiReadback = {
+      available: Boolean(
+        skillSurfaceReady
+        && connectorSurfaceReady
+        && expertObserved
+        && skillBridgeCleared
+        && connectorBridgeCleared
+        && expertBridgeCleared
+      ),
+      error: '',
+      selected_skills_observed: Boolean(skillControl || (unifiedPlusControl && composer)),
+      selected_skills: skillSurfaceReady && skillBridgeCleared
+        ? skillChips
+        : [`cleanup-not-confirmed:${skillControlText || 'unified-skill'}`],
+      selected_connectors_observed: Boolean(connectorControl || (unifiedPlusControl && composer)),
+      selected_connectors: connectorSurfaceReady && connectorBridgeCleared
+        ? connectorChips
+        : [`cleanup-not-confirmed:${connectorControlText || 'unified-connector'}`],
+      current_expert_observed: expertObserved,
+      current_expert: expertBridgeCleared && expertValue == null && expertAvatars.length === 0
+        ? null
+        : expertValue || 'expert-cleanup-not-confirmed',
+      surface: unifiedPlusControl && composer ? 'unified-plus' : 'legacy-separate-controls',
+      skill_control_text: skillControlText,
+      connector_control_text: connectorControlText,
+      visible_skill_chips: skillChips,
+      visible_connector_chips: connectorChips,
+      visible_expert_avatar_count: expertAvatars.length,
+    };
     return {
       valid: true,
       captured_at: new Date().toISOString(),
@@ -3591,19 +3744,29 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
       capability_cleanup_required: needsCapabilityCleanup,
       required_bridge_methods: requiredBridgeMethods,
       bridge_availability: bridgeAvailability,
+      bridge_invocations: bridgeInvocations,
       clicked_dialog_closers: clicked,
       bridge_results: bridgeResults,
       capabilities_after: capabilities,
+      selection_readbacks: {
+        e2e_state: compactSelection(e2eState, {
+          skillsKey: 'selectedSkills',
+          connectorsKey: 'selectedConnectors',
+          expertKeys: ['currentExpertIdentity', 'currentExpert'],
+        }),
+        current_session: compactSelection(session, {
+          skillsKey: 'skills',
+          connectorsKey: 'connectors',
+          expertKeys: ['expertIdentity', 'expert'],
+        }),
+        visible_ui: visibleUiReadback,
+      },
       dialogs_open: document.querySelectorAll('[role="dialog"],.modal-mask').length,
       url: location.href,
     };
   }, { cleanupPolicy: testCase.cleanup_policy || '' });
-  snapshot.valid = snapshot.dialogs_open === 0
-    && !Object.values(snapshot.bridge_results || {}).some((item) => item?.__error)
-    && (!snapshot.capability_cleanup_required
-      || (Object.values(snapshot.bridge_availability || {}).every(Boolean)
-        && snapshot.capabilities_after != null
-        && !snapshot.capabilities_after?.__error));
+  snapshot.validation = coreBetaCleanupReadbackVerdict(snapshot);
+  snapshot.valid = snapshot.validation.valid;
   writeJsonFile(file, snapshot);
   return file;
 }

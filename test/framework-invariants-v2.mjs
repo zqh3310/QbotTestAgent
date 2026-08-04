@@ -22,6 +22,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaBatchStopReason,
+  coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
   coreBetaRuntimeExecutorBinding,
@@ -100,6 +101,111 @@ assert.equal(
   }).handle,
   false,
   'Core Beta v2 不得把普通向导的跳过误当成 Agent 澄清面板',
+);
+const cleanupBase = {
+  dialogs_open: 0,
+  capability_cleanup_required: true,
+  required_bridge_methods: ['setSkillsDisabled', 'setConnectorsDisabled', 'setExpert'],
+  bridge_availability: {
+    setSkillsDisabled: true,
+    setConnectorsDisabled: true,
+    setExpert: true,
+  },
+  bridge_invocations: {
+    setSkillsDisabled: { attempted: true, ok: true },
+    setConnectorsDisabled: { attempted: true, ok: true },
+    setExpert: { attempted: true, ok: true },
+  },
+  bridge_results: {
+    setSkillsDisabled: [],
+    setConnectorsDisabled: [],
+    setExpert: { expert: null, expertIdentity: null },
+  },
+};
+assert.deepEqual(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    capabilities_after: {
+      selectedSkills: [],
+      selectedConnectors: [],
+      currentExpert: null,
+    },
+  }),
+  {
+    valid: true,
+    selection_source: 'agent.capabilities',
+    direct_capabilities_error: '',
+    bridge_failures: [],
+    errors: [],
+  },
+  '清理读回应优先接受 capabilities 中明确为空的技能、连接器和专家状态',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    capabilities_after: { __error: 'Teams QWork capabilities timed out after 5000ms' },
+    selection_readbacks: {
+      e2e_state: {
+        available: true,
+        error: '',
+        selected_skills_observed: false,
+        selected_skills: null,
+        selected_connectors_observed: false,
+        selected_connectors: null,
+        current_expert_observed: true,
+        current_expert: null,
+      },
+      visible_ui: {
+        available: true,
+        error: '',
+        selected_skills_observed: true,
+        selected_skills: [],
+        selected_connectors_observed: true,
+        selected_connectors: [],
+        current_expert_observed: true,
+        current_expert: null,
+      },
+    },
+  }).selection_source,
+  'visible_ui',
+  'capabilities IPC 超时时，必须允许可见禁用控件与 E2E 专家状态对空选择做独立交叉读回',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    capabilities_after: { __error: 'timeout' },
+    selection_readbacks: {
+      visible_ui: {
+        available: true,
+        error: '',
+        selected_skills_observed: true,
+        selected_skills: [{ slug: 'leftover-skill' }],
+        selected_connectors_observed: true,
+        selected_connectors: [],
+        current_expert_observed: true,
+        current_expert: null,
+      },
+    },
+  }).valid,
+  false,
+  'capabilities 超时不能掩盖可见输入区中真实残留的技能选择',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    capabilities_after: { selectedSkills: [], selectedConnectors: [], currentExpert: null },
+    bridge_invocations: {
+      ...cleanupBase.bridge_invocations,
+      setExpert: { attempted: true, ok: false },
+    },
+  }).valid,
+  false,
+  '任一清理桥动作失败时，即使最终 capabilities 看似为空也必须 fail-closed',
+);
+assert.match(
+  runner,
+  /composer-skills-menu[\s\S]*composer-connectors-menu[\s\S]*composer-plus-menu[\s\S]*composer-input[\s\S]*ctool-btn-ava[\s\S]*skillBridgeCleared[\s\S]*connectorBridgeCleared[\s\S]*expertBridgeCleared[\s\S]*visible_ui: visibleUiReadback/,
+  '清理读回必须实际采集技能/连接器禁用标签、chip 残留与专家头像，不能只测试未接入的判定函数',
 );
 assert.match(
   projectMemory,
