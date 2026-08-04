@@ -3935,7 +3935,14 @@ export function coreBetaV2RuntimeMaintenanceState({
   };
 }
 
-async function reconnectCoreBetaV2Runtime({ runtime, options, state, caseDir, timeoutMs = 120000 }) {
+async function reconnectCoreBetaV2Runtime({
+  runtime,
+  options,
+  state,
+  caseDir,
+  timeoutMs = 120000,
+  label = 'Core Beta v2 runtime maintenance',
+}) {
   if (!runtime?.playwright?.chromium || !runtime?.cdpUrl) {
     return { ok: false, reason: 'runner 缺少可变 CDP runtime，无法接管 replacement renderer。' };
   }
@@ -3949,7 +3956,7 @@ async function reconnectCoreBetaV2Runtime({ runtime, options, state, caseDir, ti
         ? options['restart-reconnect-hook']
         : null;
       const reconnected = reconnectHook
-        ? await reconnectHook({ runtime, options, state, caseDir, label: 'Core Beta v2 runtime maintenance' })
+        ? await reconnectHook({ runtime, options, state, caseDir, label })
         : null;
       nextBrowser = reconnected?.browser
         || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
@@ -3962,7 +3969,7 @@ async function reconnectCoreBetaV2Runtime({ runtime, options, state, caseDir, ti
       runtime.page = nextPage;
       state.artifacts.runtime_reconnects ||= [];
       state.artifacts.runtime_reconnects.push({
-        label: 'Core Beta v2 runtime maintenance',
+        label,
         elapsed_ms: Date.now() - startedAt,
         cdp_url: runtime.cdpUrl,
       });
@@ -6029,7 +6036,17 @@ async function executeCoreBetaConversationCase(context, scenario) {
   }
 }
 
-async function executeCoreBetaSidebarPersistenceCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
+async function executeCoreBetaSidebarPersistenceCase(context) {
+  let { page } = context;
+  const {
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    fixturesDir,
+    runtime,
+    options = {},
+  } = context;
   await executeConversationCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
   const session = await qbotE2EState(page);
   if (!session?.activeId || session.running) {
@@ -6053,7 +6070,32 @@ async function executeCoreBetaSidebarPersistenceCase({ page, state, testCase, ca
     return { ok: false, reason: 'renameSession bridge unavailable' };
   }, { id: taskId, label: renamed });
   if (!renameResult.ok) throw new Error(`任务重命名执行失败：${renameResult.reason}`);
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
+  } catch (error) {
+    if (!coreBetaV2NeedsRendererReconnect(error)) throw error;
+    const reconnected = await reconnectCoreBetaV2Runtime({
+      runtime,
+      options,
+      state,
+      caseDir,
+      timeoutMs: Number(options['restart-reconnect-timeout-ms'] || 120_000),
+      label: 'Core Beta v2 sidebar persistence reload',
+    });
+    if (!reconnected.ok) {
+      throw new Error(`刷新关闭旧 QWork renderer 后重连失败：${reconnected.reason}`);
+    }
+    page = reconnected.page;
+    context.page = page;
+    if (runtime) runtime.page = page;
+    recordStep(
+      state,
+      '刷新后接管 replacement QWork renderer',
+      '受管 Teams WebView 刷新销毁旧 target 时，必须重建 CDP 连接并继续核对同一 taskId。',
+      `已重连 ${runtime.cdpUrl}，继续核对 taskId=${taskId}。`,
+      'passed',
+    );
+  }
   await page.waitForTimeout(1_000);
   const reopened = await reopenSessionAndReadback(page, taskId);
   const afterSha = createHash('sha256').update(reopened.text || '').digest('hex');
@@ -21253,6 +21295,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/(?:曝光.*点击.*报名|点击率|报名转化率|修正.*报名|重算.*转化率)/, /(?=[\s\S]*(?:曝光|点击|报名))(?=[\s\S]*(?:复述|点击率|转化率|重算|8\s*[%％]|25\s*[%％]|31\.25\s*[%％]))/],
     [/(?:活动方案|活动.*(?:类型|对象|目标|预算|渠道))/, /(?=[\s\S]*(?:活动|方案))(?=[\s\S]*(?:类型|对象|目标|预算|渠道|团队|营销|培训|内测|时间|流程|产出|风险|通用))/],
     [/(?:ROI|成本.*收入|收入.*成本)/i, /(?=[\s\S]*(?:ROI|投入|成本|收入|收益))(?=[\s\S]*(?:不足|缺少|公式|计算|150\s*[%％]|30,?000|2\s*万元|5\s*万元))/i],
+    [/(?:项目代号|记住.*代号)/, /Orion|项目代号|已记住|已记录/],
     [/产品经理|需求拆解|核心需求|PRD/, /产品|需求|场景|用户|流程|边界|指标|验收|MVP|风险/],
     [/(?:用户)?反馈(?:收集)?|内测.*(?:建议|反馈)/, /用户|反馈|收集|问卷|访谈|评分|渠道|样本/],
     [/当前可用连接器|获取外部信息|连接器不能使用/, /连接器|外部|信息|获取|工具|不可用|来源/],
@@ -21812,6 +21855,12 @@ function isAutomationExecutionError(message) {
 
 function isCdpDisconnectedMessage(message) {
   return /Target page, context or browser has been closed|Browser has been closed|browser disconnected|Connection closed|Session closed|Target closed|Protocol error.*Target closed|WebSocket.*closed|ECONNREFUSED.*9224|connect.*127\.0\.0\.1:9224/i.test(String(message || ''));
+}
+
+export function coreBetaV2NeedsRendererReconnect(error) {
+  return /Target page, context or browser has been closed|Browser has been closed|browser disconnected|Connection closed|Session closed|Target closed|Execution context was destroyed|context mutation was superseded/i.test(
+    String(error?.message || error || ''),
+  );
 }
 
 function buildSyntheticResult({ outDir, testCase, index, status, resultCategory, reason }) {

@@ -25,6 +25,7 @@ import {
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
   coreBetaRuntimeExecutorBinding,
+  coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
@@ -119,6 +120,21 @@ assert.match(
   automationFramework,
   /pipeline 回收结果进入 `completed` 前[\s\S]*原始 Case[\s\S]*manifest 完整性门禁[\s\S]*`automation_error` 硬停止/,
   '框架手册必须要求 pipeline 解包原始 Case 后执行与串行路径一致的 completed 门禁',
+);
+assert.equal(
+  coreBetaV2NeedsRendererReconnect(new Error('page.reload: Target page, context or browser has been closed')),
+  true,
+  'Core Beta v2 必须识别 Teams WebView 刷新销毁旧 target 的重连信号',
+);
+assert.equal(
+  coreBetaV2NeedsRendererReconnect(new Error('page.reload: net::ERR_FAILED')),
+  false,
+  '普通页面加载失败不能冒充 replacement renderer 重连信号',
+);
+assert.match(
+  runner,
+  /executeCoreBetaSidebarPersistenceCase[\s\S]*page\.reload[\s\S]*coreBetaV2NeedsRendererReconnect[\s\S]*reconnectCoreBetaV2Runtime[\s\S]*context\.page = page/,
+  'BETA-CHAT-007 刷新销毁 Teams WebView target 后必须重连并更新共享 page',
 );
 assert.equal(
   replySendObservedRunning([{
@@ -1447,6 +1463,17 @@ const coreConversationRelevanceSamples = [
     },
     prompt: '补充：成本2万元，预计收入5万元，请计算ROI并展示过程。',
     reply: 'ROI = (收入 5 万元 - 成本 2 万元) / 成本 2 万元 = 150%，净收益为 3 万元。',
+  },
+  {
+    testCase: {
+      id: 'BETA-CHAT-007',
+      module: '核心内测',
+      submodule: '纯会话',
+      scenario: '侧栏选中态、重命名、刷新并重开任务后完整恢复对话，任务归属与选中态不漂移',
+      test_data: '两轮简短任务；记录 prompt hash、taskId、transcript hash。',
+    },
+    prompt: '记住项目代号是Orion。',
+    reply: '项目代号 Orion 已经记录在案了，后续涉及项目名称时会继续使用 Orion。',
   },
 ];
 for (const sample of coreConversationRelevanceSamples) {

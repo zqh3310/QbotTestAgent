@@ -1417,6 +1417,17 @@ const coreConversationRelevanceSamples = [
     prompt: '补充：成本2万元，预计收入5万元，请计算ROI并展示过程。',
     reply: 'ROI = (收入 5 万元 - 成本 2 万元) / 成本 2 万元 = 150%，净收益为 3 万元。',
   },
+  {
+    testCase: {
+      id: 'BETA-CHAT-007',
+      module: '核心内测',
+      submodule: '纯会话',
+      scenario: '侧栏选中态、重命名、刷新并重开任务后完整恢复对话，任务归属与选中态不漂移',
+      test_data: '两轮简短任务；记录 prompt hash、taskId、transcript hash。',
+    },
+    prompt: '记住项目代号是Orion。',
+    reply: '项目代号 Orion 已经记录在案了，后续涉及项目名称时会继续使用 Orion。',
+  },
 ];
 for (const sample of coreConversationRelevanceSamples) {
   if (!replyLooksRelevant(sample.reply, sample.testCase, sample.prompt)) {
