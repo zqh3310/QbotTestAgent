@@ -6835,20 +6835,34 @@ async function verifyCoreBetaArtifactOutput({ page, state, testCase, caseDir }, 
     && expectedReadback.every((item) => item.valid)
     && validateCoreBetaArtifactOracle(scenario.driver, expectedReadback);
   const pathFile = path.join(caseDir, 'artifact-path-sha256.json');
-  writeJsonFile(pathFile, { valid: validFiles, workspace, expected_extensions: expectedExtensions, files: readback });
+  writeJsonFile(pathFile, {
+    valid: true,
+    oracle_valid: validFiles,
+    workspace,
+    expected_extensions: expectedExtensions,
+    files: readback,
+  });
   const contentFile = path.join(caseDir, 'artifact-content-readback.json');
-  writeJsonFile(contentFile, { valid: validFiles, files: readback });
+  writeJsonFile(contentFile, { valid: true, oracle_valid: validFiles, files: readback });
   const panelText = await artifactPanelText(page);
   const previewScreenshot = await shot(page, caseDir, 'core-beta-artifact-preview');
   const previewBytes = typeof previewScreenshot === 'string' && fs.existsSync(previewScreenshot)
     ? fs.statSync(previewScreenshot).size
     : 0;
+  const previewReadback = scenario.driver === 'artifact_markdown_html_validation'
+    ? await verifyCoreBetaMarkdownHtmlPreview(page, caseDir, expectedReadback, panelText)
+    : null;
+  const previewOracleValid = previewReadback
+    ? coreBetaMarkdownHtmlPreviewVerdict(previewReadback)
+    : Boolean(panelText.trim()) && previewBytes >= 128;
   const previewFile = path.join(caseDir, 'artifact-preview.json');
   writeJsonFile(previewFile, {
-    valid: Boolean(panelText.trim()) && previewBytes >= 128,
+    valid: previewBytes >= 128,
+    oracle_valid: previewOracleValid,
     panel_text: clip(panelText, 2_000),
     screenshot: previewScreenshot,
     screenshot_bytes: previewBytes,
+    markdown_html_preview: previewReadback,
   });
   state.artifacts.artifact_path_sha256 = pathFile;
   state.artifacts.artifact_content_readback = contentFile;
@@ -6859,7 +6873,8 @@ async function verifyCoreBetaArtifactOutput({ page, state, testCase, caseDir }, 
     const svg = readback.find((item) => item.extension === '.svg');
     const svgFile = path.join(caseDir, 'svg-dom-readback.json');
     writeJsonFile(svgFile, {
-      valid: Boolean(svg?.valid && svg?.svg_safe),
+      valid: true,
+      oracle_valid: Boolean(svg?.valid && svg?.svg_safe),
       svg,
     });
     state.artifacts.svg_dom_readback = svgFile;
@@ -6871,6 +6886,15 @@ async function verifyCoreBetaArtifactOutput({ page, state, testCase, caseDir }, 
     validFiles,
     JSON.stringify(readback),
   );
+  if (previewReadback) {
+    recordAssertion(
+      state,
+      'Markdown与HTML成果展示及安全源码预览',
+      '成果区必须同时展示并打开 Markdown 与 HTML；HTML 内联交互脚本只能作为源码显示，不得弹窗或影响宿主页面。',
+      previewOracleValid,
+      JSON.stringify(previewReadback),
+    );
+  }
 }
 
 function listCoreBetaArtifactFiles(root) {
@@ -6888,7 +6912,7 @@ function listCoreBetaArtifactFiles(root) {
   return result;
 }
 
-function coreBetaArtifactReadback(file) {
+export function coreBetaArtifactReadback(file) {
   const extension = path.extname(file).toLowerCase();
   const stats = fs.statSync(file);
   const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -6914,7 +6938,6 @@ function coreBetaArtifactReadback(file) {
       result.html_remote_resource_count = (text.match(/\b(?:src|href)\s*=\s*["']https?:/gi) || []).length;
       result.html_has_document_structure = /<(?:html|main|article|section|body)\b/i.test(text);
       result.valid = result.valid
-        && result.html_script_count === 0
         && result.html_remote_resource_count === 0
         && result.html_has_document_structure;
     }
@@ -7008,14 +7031,14 @@ function stripXmlText(xml) {
     .trim();
 }
 
-function validateCoreBetaArtifactOracle(driver, files) {
+export function validateCoreBetaArtifactOracle(driver, files) {
   const byExtension = new Map(files.map((item) => [item.extension, item]));
   if (driver === 'artifact_markdown_html_validation') {
     const markdown = byExtension.get('.md');
     const html = byExtension.get('.html');
     return Boolean(markdown?.markdown_heading_count >= 1
       && html?.html_has_document_structure
-      && html?.html_script_count === 0
+      && html?.html_script_count >= 1
       && html?.html_remote_resource_count === 0);
   }
   if (driver === 'artifact_docx_validation') {
@@ -7044,6 +7067,98 @@ function validateCoreBetaArtifactOracle(driver, files) {
       && svg?.svg_data_anchors?.length === 6);
   }
   return false;
+}
+
+export function coreBetaMarkdownHtmlPreviewVerdict(readback = {}) {
+  const expectedNames = Array.isArray(readback.expected_names) ? readback.expected_names : [];
+  const overviewText = String(readback.overview_text || '');
+  const markdown = readback.markdown || {};
+  const html = readback.html || {};
+  return Boolean(
+    expectedNames.length === 2
+    && expectedNames.every((name) => name && overviewText.includes(name))
+    && markdown.clicked === true
+    && markdown.code_viewer_visible === true
+    && /markdown|md/i.test(String(markdown.language || ''))
+    && /12/.test(String(markdown.source_text || ''))
+    && /8/.test(String(markdown.source_text || ''))
+    && html.clicked === true
+    && html.code_viewer_visible === true
+    && /html/i.test(String(html.language || ''))
+    && html.script_source_visible === true
+    && html.script_dom_nodes === 0
+    && html.iframe_dom_nodes === 0
+    && /12/.test(String(html.source_text || ''))
+    && /8/.test(String(html.source_text || ''))
+    && html.parent_script_executed === false
+    && Array.isArray(html.dialogs)
+    && html.dialogs.length === 0
+  );
+}
+
+async function verifyCoreBetaMarkdownHtmlPreview(page, caseDir, files, overviewText) {
+  const markdownFile = files.find((item) => item.extension === '.md');
+  const htmlFile = files.find((item) => item.extension === '.html');
+  const inspectSourcePreview = async (file, label) => {
+    if (!file?.name) return { clicked: false, code_viewer_visible: false, language: '', source_text: '' };
+    const clicked = await clickArtifactEntry(page, new RegExp(`^${escapeRegExp(file.name)}$`, 'i'));
+    await page.waitForTimeout(700);
+    const viewer = page.locator('[data-testid="artifact-panel"] .artifact-code-viewer').first();
+    const codeViewerVisible = await visible(viewer, 1200);
+    const language = codeViewerVisible ? await viewer.getAttribute('data-language').catch(() => '') : '';
+    const sourceText = codeViewerVisible ? await viewer.innerText({ timeout: 1500 }).catch(() => '') : '';
+    const scriptDomNodes = codeViewerVisible ? await viewer.locator('script').count().catch(() => -1) : -1;
+    const iframeDomNodes = codeViewerVisible ? await viewer.locator('iframe').count().catch(() => -1) : -1;
+    const screenshot = await shot(page, caseDir, `core-beta-artifact-${label}-source-preview`);
+    const back = page.locator('[data-testid="artifact-panel"] .artifact-back').first();
+    if (await visible(back, 700)) {
+      await back.click({ force: true }).catch(async () => back.evaluate((element) => element.click()));
+      await page.waitForTimeout(400);
+    }
+    return {
+      name: file.name,
+      clicked,
+      code_viewer_visible: codeViewerVisible,
+      language: String(language || ''),
+      source_text: clip(sourceText, 8_000),
+      source_has_script: /<script\b/i.test(sourceText),
+      script_dom_nodes: scriptDomNodes,
+      iframe_dom_nodes: iframeDomNodes,
+      screenshot,
+    };
+  };
+
+  const markdown = await inspectSourcePreview(markdownFile, 'markdown');
+  const dialogs = [];
+  const dialogListener = async (dialog) => {
+    dialogs.push({ type: dialog.type(), message: dialog.message() });
+    await dialog.dismiss().catch(() => {});
+  };
+  await page.evaluate(() => { delete globalThis.__QBOT_CORE_BETA_ARTIFACT_SCRIPT_EXECUTED__; }).catch(() => {});
+  page.on('dialog', dialogListener);
+  let html;
+  try {
+    html = await inspectSourcePreview(htmlFile, 'html');
+  } finally {
+    page.off('dialog', dialogListener);
+  }
+  const parentScriptExecuted = await page.evaluate(
+    () => Boolean(globalThis.__QBOT_CORE_BETA_ARTIFACT_SCRIPT_EXECUTED__),
+  ).catch(() => false);
+  html = {
+    ...html,
+    script_source_visible: Number(htmlFile?.html_script_count || 0) > 0
+      && html?.source_has_script === true,
+    parent_script_executed: parentScriptExecuted,
+    dialogs,
+  };
+  return {
+    schema_version: 1,
+    expected_names: [markdownFile?.name || '', htmlFile?.name || ''].filter(Boolean),
+    overview_text: clip(overviewText, 4_000),
+    markdown,
+    html,
+  };
 }
 
 async function executeCoreBetaMcpCase({
@@ -21739,11 +21854,7 @@ function scenarioConversationTurns(testCase, attachments) {
       { label: '第二轮追问', prompt: '那请继续帮我把一个运营活动复盘整理成 3 条结论和 3 个待办。' },
     ];
   }
-  if (
-    testCase.kind === 'attachment'
-    || /附件|上传|文件上传|图片附件|多模态附件/.test(text)
-    || /读取.*(?:Word|Excel|PDF|PPT|Office|Markdown|TXT|CSV|JSON|HTML|附件|上传)/i.test(text)
-  ) {
+  if (isAttachmentPromptFidelityCase(testCase)) {
     return [{ label: '第一轮：基于附件提问', prompt: withAttachmentHint(attachmentPromptForScenario(testCase)) }];
   }
   return [];
@@ -22026,9 +22137,26 @@ function recordTurnSpecificAssertions(state, replyText, turn, testCase) {
   }
 }
 
+export function isAttachmentPromptFidelityCase(testCase = {}) {
+  const text = [
+    testCase.id,
+    testCase.kind,
+    testCase.case_type,
+    testCase.core_domain,
+    testCase.submodule,
+    testCase.scenario,
+    testCase.test_data,
+  ].map((item) => String(item || '')).join('\n');
+  return testCase.kind === 'attachment'
+    || testCase.case_type === 'attachment'
+    || /^BETA-FILE-/.test(String(testCase.id || ''))
+    || /附件|上传|文件上传|图片附件|多模态附件/.test(text)
+    || /读取.*(?:Word|Excel|PDF|PPT|Office|Markdown|TXT|CSV|JSON|HTML|文件)/i.test(text);
+}
+
 function recordTurnInputAssertions(state, turn, testCase) {
   const expectedAttachmentTask = attachmentTaskPromptFromCase(testCase);
-  if (expectedAttachmentTask && /附件|上传|文件|Word|Excel|Markdown|JSON/i.test(`${testCase.kind || ''}\n${testCase.scenario || ''}\n${testCase.test_data || ''}`)) {
+  if (expectedAttachmentTask && isAttachmentPromptFidelityCase(testCase)) {
     const actualTask = String(turn.prompt || '')
       .replace(/\n+我已经上传了相关附件，请先读取附件内容再回答；如果某个附件无法读取，请直接说明。\s*$/u, '')
       .trim();

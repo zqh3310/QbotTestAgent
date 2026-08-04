@@ -21,12 +21,14 @@ import {
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
   countEnumeratedItems,
+  coreBetaArtifactReadback,
   coreBetaBatchStopReason,
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
+  coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaPartialReplyReady,
   coreBetaRuntimeExecutorBinding,
   coreBetaV2NeedsRendererReconnect,
@@ -36,6 +38,7 @@ import {
   forbiddenMatchesForCase,
   inferQbotHomeForElectronRestart,
   inspectCoreBetaFixtureReadiness,
+  isAttachmentPromptFidelityCase,
   isContinuedOldLoginAnswer,
   isTransientCredentialRotation,
   isSuccessfulSendStep,
@@ -64,7 +67,9 @@ import {
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   validateProductionCasePlan,
+  validateCoreBetaArtifactOracle,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+import { buildCoreEvidenceManifest } from '../src/lib/core-beta-case-protocol.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -206,6 +211,119 @@ assert.equal(
   ]),
   false,
   'BETA-FILE-006 不得用重复 probe 冒充三类拒绝矩阵',
+);
+
+const artifactRegressionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-artifact-'));
+try {
+  const markdownFile = path.join(artifactRegressionDir, 'report.md');
+  const interactiveHtmlFile = path.join(artifactRegressionDir, 'summary.html');
+  const remoteHtmlFile = path.join(artifactRegressionDir, 'remote.html');
+  fs.writeFileSync(markdownFile, '# A/B 报告\n\nA=12，B=8。\n');
+  fs.writeFileSync(interactiveHtmlFile, '<!doctype html><html><body>A=12 B=8<button id="inc">增加</button><script>document.querySelector("#inc").onclick=()=>{};</script></body></html>');
+  fs.writeFileSync(remoteHtmlFile, '<!doctype html><html><body>A=12 B=8<script src="https://example.invalid/app.js"></script></body></html>');
+  const markdownReadback = coreBetaArtifactReadback(markdownFile);
+  const interactiveHtmlReadback = coreBetaArtifactReadback(interactiveHtmlFile);
+  const remoteHtmlReadback = coreBetaArtifactReadback(remoteHtmlFile);
+  assert.equal(interactiveHtmlReadback.valid, true, '交互式 HTML 的内联 script 不应被文件结构校验误判为无效');
+  assert.equal(remoteHtmlReadback.valid, false, '引用远程资源的 HTML 仍必须失败');
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_markdown_html_validation', [markdownReadback, interactiveHtmlReadback]),
+    true,
+    'BETA-ART-001 应接受包含内联交互脚本且无远程资源的 HTML',
+  );
+  assert.equal(
+    coreBetaMarkdownHtmlPreviewVerdict({
+      expected_names: ['report.md', 'summary.html'],
+      overview_text: '本任务共 2 个成果 report.md summary.html',
+      markdown: { clicked: true, code_viewer_visible: true, language: 'markdown', source_text: '# A/B 报告 A=12 B=8' },
+      html: {
+        clicked: true,
+        code_viewer_visible: true,
+        language: 'html',
+        source_text: '<html>A=12 B=8<script>interactive()</script></html>',
+        script_source_visible: true,
+        script_dom_nodes: 0,
+        iframe_dom_nodes: 0,
+        parent_script_executed: false,
+        dialogs: [],
+      },
+    }),
+    true,
+    'BETA-ART-001 必须用双成果源码预览和宿主隔离证据判定交互 HTML',
+  );
+  assert.equal(
+    coreBetaMarkdownHtmlPreviewVerdict({
+      expected_names: ['report.md', 'summary.html'],
+      overview_text: '本任务共 1 个成果 summary.html',
+      markdown: { clicked: false, code_viewer_visible: false, language: '', source_text: '' },
+      html: {
+        clicked: true,
+        code_viewer_visible: true,
+        language: 'html',
+        source_text: '<html>A=12 B=8<script>interactive()</script></html>',
+        script_source_visible: true,
+        script_dom_nodes: 0,
+        iframe_dom_nodes: 0,
+        parent_script_executed: false,
+        dialogs: [],
+      },
+    }),
+    false,
+    '成果区缺少 Markdown 时不得仅凭工作区文件存在通过',
+  );
+  assert.equal(
+    coreBetaMarkdownHtmlPreviewVerdict({
+      expected_names: ['report.md', 'summary.html'],
+      overview_text: '本任务共 2 个成果 report.md summary.html',
+      markdown: { clicked: true, code_viewer_visible: true, language: 'markdown', source_text: '# A/B 报告 A=12 B=8' },
+      html: {
+        clicked: true,
+        code_viewer_visible: true,
+        language: 'html',
+        source_text: '<html>A=12 B=8<script>interactive()</script></html>',
+        script_source_visible: true,
+        script_dom_nodes: 1,
+        iframe_dom_nodes: 0,
+        parent_script_executed: false,
+        dialogs: [],
+      },
+    }),
+    false,
+    'HTML 源码预览区出现真实 script DOM 节点时必须按安全 Oracle 失败',
+  );
+
+  const productFailureEvidence = path.join(artifactRegressionDir, 'artifact-path-sha256.json');
+  writeJsonFile(productFailureEvidence, { valid: true, oracle_valid: false, files: [] });
+  const productFailureManifest = buildCoreEvidenceManifest({
+    testCase: { id: 'BETA-ART-001', evidence_roles: ['artifact_path_sha256'] },
+    caseDir: artifactRegressionDir,
+    artifacts: { artifact_path_sha256: productFailureEvidence },
+  });
+  assert.equal(productFailureManifest.complete, true, '产品成果 Oracle 失败不得被误判为证据 manifest 不完整');
+} finally {
+  fs.rmSync(artifactRegressionDir, { recursive: true, force: true });
+}
+
+assert.equal(
+  isAttachmentPromptFidelityCase({
+    id: 'BETA-ART-001',
+    case_type: 'artifact',
+    core_domain: '成果输出',
+    scenario: '生成Markdown与HTML成果并核对内容、预览和安全沙箱',
+    test_data: '要求同一组已知事实分别输出Markdown报告和交互HTML摘要。',
+  }),
+  false,
+  '成果 Case 仅提到 Markdown/HTML 时不得套用附件 prompt 一致性检查',
+);
+assert.equal(
+  isAttachmentPromptFidelityCase({
+    id: 'BETA-FILE-001',
+    case_type: 'attachment',
+    scenario: '上传真实PDF并提炼结论',
+    test_data: '上传 qbot-test.pdf；请提炼三条结论。',
+  }),
+  true,
+  '真实附件 Case 必须继续执行 prompt 一致性检查',
 );
 assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', []),
