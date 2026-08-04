@@ -1418,6 +1418,8 @@ const coreConversationRelevanceSamples = [
   {
     testCase: {
       id: 'BETA-CHAT-002',
+      module: '核心内测',
+      submodule: '纯会话',
       scenario: '三轮业务数字追问保持上下文、计算一致且不串任务',
       test_data: '首轮给出曝光12000、点击960、报名240；第二轮问点击率和报名转化率；第三轮修改报名为300并重算。',
     },
@@ -1427,6 +1429,8 @@ const coreConversationRelevanceSamples = [
   {
     testCase: {
       id: 'BETA-CHAT-003',
+      module: '核心内测',
+      submodule: '纯会话',
       scenario: '需求信息不足时先问最少必要问题，不直接编造完整交付物',
       test_data: '先只说“帮我做一份下周活动方案”；第二轮补充目标人群、目标、预算和渠道。',
     },
@@ -1436,6 +1440,8 @@ const coreConversationRelevanceSamples = [
   {
     testCase: {
       id: 'BETA-CHAT-004',
+      module: '核心内测',
+      submodule: '纯会话',
       scenario: '缺少成本与收入数据时拒绝编造 ROI，并给出可复核计算方法',
       test_data: '仅给出曝光、点击和报名，第二轮补充成本与预计收入。',
     },
