@@ -25,6 +25,7 @@ import {
   coreBetaBatchStopReason,
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
+  coreBetaCleanupCapabilitiesNeedsRetry,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
@@ -493,6 +494,20 @@ const cleanupBase = {
     setExpert: { expert: null, expertIdentity: null },
   },
 };
+assert.equal(
+  coreBetaCleanupCapabilitiesNeedsRetry({ __error: 'Teams QWork capabilities timed out after 5000ms' }),
+  true,
+  '清理 capabilities 的受管超时必须触发有界重试',
+);
+assert.equal(
+  coreBetaCleanupCapabilitiesNeedsRetry({
+    selectedSkills: [],
+    selectedConnectors: [],
+    currentExpert: null,
+  }),
+  false,
+  '明确的 capabilities 空态不得重复读取或扩大清理副作用',
+);
 assert.deepEqual(
   coreBetaCleanupReadbackVerdict({
     ...cleanupBase,
@@ -577,6 +592,11 @@ assert.match(
   runner,
   /composer-skills-menu[\s\S]*composer-connectors-menu[\s\S]*composer-plus-menu[\s\S]*composer-input[\s\S]*ctool-btn-ava[\s\S]*skillBridgeCleared[\s\S]*connectorBridgeCleared[\s\S]*expertBridgeCleared[\s\S]*visible_ui: visibleUiReadback/,
   '清理读回必须实际采集技能/连接器禁用标签、chip 残留与专家头像，不能只测试未接入的判定函数',
+);
+assert.match(
+  runner,
+  /capabilitiesReadbackAttempts[\s\S]*attempt <= 3[\s\S]*coreBetaCleanupCapabilitiesNeedsRetry\(snapshot\.capabilities_after\)[\s\S]*window\.agent\.capabilities\(\)[\s\S]*capabilities_readback_attempts/,
+  '清理读回在 capabilities 传输超时后必须执行最多三次有界只读尝试并保存尝试账本',
 );
 assert.match(
   projectMemory,

@@ -3682,6 +3682,10 @@ function cleanupSelectionSourceVerdict(source) {
     && source.current_expert == null;
 }
 
+export function coreBetaCleanupCapabilitiesNeedsRetry(value) {
+  return !value || typeof value !== 'object' || Boolean(value.__error);
+}
+
 export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
   const requiredMethods = Array.isArray(snapshot.required_bridge_methods)
     ? snapshot.required_bridge_methods
@@ -3884,6 +3888,43 @@ async function writeCleanupReadback({ page, testCase, caseDir }) {
       url: location.href,
     };
   }, { cleanupPolicy: testCase.cleanup_policy || '' });
+  const capabilitiesReadbackAttempts = [{
+    attempt: 1,
+    ok: !coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after),
+    error: String(snapshot.capabilities_after?.__error || ''),
+  }];
+  for (let attempt = 2;
+    snapshot.capability_cleanup_required
+      && attempt <= 3
+      && coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after);
+    attempt += 1) {
+    await page.waitForTimeout(250 * (attempt - 1));
+    const capabilities = await page.evaluate(async ({ timeoutMs }) => {
+      if (typeof window.agent?.capabilities !== 'function') {
+        return { __error: 'missing bridge method capabilities' };
+      }
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => window.agent.capabilities()),
+          new Promise((_, reject) => window.setTimeout(
+            () => reject(new Error(`Core Beta cleanup capabilities timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          )),
+        ]);
+      } catch (error) {
+        return { __error: String(error?.message || error) };
+      }
+    }, { timeoutMs: 6_500 }).catch((error) => ({
+      __error: `cleanup capabilities evaluate failed: ${String(error?.message || error)}`,
+    }));
+    snapshot.capabilities_after = capabilities;
+    capabilitiesReadbackAttempts.push({
+      attempt,
+      ok: !coreBetaCleanupCapabilitiesNeedsRetry(capabilities),
+      error: String(capabilities?.__error || ''),
+    });
+  }
+  snapshot.capabilities_readback_attempts = capabilitiesReadbackAttempts;
   snapshot.validation = coreBetaCleanupReadbackVerdict(snapshot);
   snapshot.valid = snapshot.validation.valid;
   writeJsonFile(file, snapshot);
