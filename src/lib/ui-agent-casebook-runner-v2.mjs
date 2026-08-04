@@ -16027,8 +16027,11 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   const invoked = await page.evaluate(async ({ methodName }) => {
     const api = globalThis.window?.agent?.[methodName];
     if (typeof api !== 'function') return { ok: false, reason: `${methodName} unavailable` };
-    await api();
-    return { ok: true };
+    const selection = await api();
+    return {
+      ok: true,
+      selection: selection === null || Array.isArray(selection) ? selection : undefined,
+    };
   }, { methodName: method }).catch((error) => ({ ok: false, reason: error.message }));
   if (!invoked.ok) {
     recordAssertion(
@@ -16047,21 +16050,34 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   while (Date.now() < deadline) {
     await page.waitForTimeout(150);
     capabilities = await currentCapabilities(page);
-    if (String(capabilities?.connectorRouting?.mode || '') === mode) break;
+    if (unifiedConnectorModeApplied(capabilities, mode, invoked.selection)) break;
   }
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
-  const ok = storedMode === mode;
+  const selectedConnectors = capabilities?.selectedConnectors;
+  const ok = unifiedConnectorModeApplied(capabilities, mode, invoked.selection);
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
   recordStep(
     state,
     `设置统一菜单连接器模式：${mode}`,
     '该调用只用于隔离用例前置状态；连接器选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`connector_mode_${mode}`],
     ok ? '' : 'automation_error',
   );
   return ok;
+}
+
+export function unifiedConnectorModeApplied(capabilities, mode, bridgeSelection = undefined) {
+  const storedMode = String(capabilities?.connectorRouting?.mode || '');
+  const selectedConnectors = capabilities?.selectedConnectors;
+  if (storedMode === mode) return true;
+  if (mode === 'auto') return selectedConnectors === null || bridgeSelection === null;
+  if (mode === 'disabled') {
+    return (Array.isArray(selectedConnectors) && selectedConnectors.length === 0)
+      || (Array.isArray(bridgeSelection) && bridgeSelection.length === 0);
+  }
+  return false;
 }
 
 async function setWorkMode(page, state, caseDir, mode) {

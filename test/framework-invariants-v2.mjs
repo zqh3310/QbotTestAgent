@@ -54,6 +54,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
@@ -127,6 +128,31 @@ assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', null),
   false,
   'Core Beta v2 不能把自动态 null 误判为技能禁用态',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', []),
+  true,
+  'Core Beta v2 在 capabilities 省略连接器字段时，应使用 setConnectorsDisabled 返回的空数组确认禁用态',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', undefined),
+  false,
+  'Core Beta v2 不能只因 capabilities 缺少连接器字段就误判连接器已禁用',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined),
+  true,
+  'Core Beta v2 应继续接受旧版 capabilities 的明确连接器空数组读回',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'auto', null),
+  true,
+  'Core Beta v2 连接器自动态应接受 setConnectorsAuto 返回的 null',
+);
+assert.equal(
+  unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', null),
+  false,
+  'Core Beta v2 不能把连接器自动态 null 误判为禁用态',
 );
 const cleanupBase = {
   dialogs_open: 0,
