@@ -10170,6 +10170,52 @@ export function coreBetaPartialReplyReady({
   };
 }
 
+export function coreBetaStopGenerationTimeoutVerdict({
+  partialReady = false,
+  taskId = '',
+  runningBefore = false,
+  cancelVisible = false,
+  waitedMs = 0,
+  timeoutMs = SHORT_REPLY_WAIT_MS,
+  confirmedSendReceipt = false,
+  timeoutScreenshot = '',
+} = {}) {
+  const screenshot = String(timeoutScreenshot || '');
+  let screenshotValid = false;
+  try {
+    screenshotValid = Boolean(
+      path.isAbsolute(screenshot)
+      && fs.existsSync(screenshot)
+      && fs.statSync(screenshot).isFile()
+      && fs.statSync(screenshot).size >= 128
+    );
+  } catch {
+    screenshotValid = false;
+  }
+  const reasons = [];
+  if (partialReady) reasons.push('partial_reply_already_ready');
+  if (!String(taskId || '').trim()) reasons.push('task_id_missing');
+  if (runningBefore !== true) reasons.push('running_state_not_observed');
+  if (cancelVisible !== true) reasons.push('cancel_entry_not_observed');
+  if (confirmedSendReceipt !== true) reasons.push('confirmed_send_receipt_missing');
+  if (Number(timeoutMs || 0) < MIN_REPLY_WAIT_MS || Number(waitedMs || 0) < Number(timeoutMs || 0)) {
+    reasons.push('full_timeout_window_not_observed');
+  }
+  if (!screenshotValid) reasons.push('timeout_screenshot_missing_or_invalid');
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    task_id: String(taskId || ''),
+    running_before: runningBefore === true,
+    cancel_visible: cancelVisible === true,
+    confirmed_send_receipt: confirmedSendReceipt === true,
+    waited_ms: Number(waitedMs || 0),
+    timeout_ms: Number(timeoutMs || 0),
+    timeout_screenshot: screenshot,
+    timeout_screenshot_valid: screenshotValid,
+  };
+}
+
 async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
@@ -10220,6 +10266,27 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   }
   state.screenshots.home_023_running = await shot(page, caseDir, 'home-023-running-before-stop');
   state.screenshots.core_beta_partial_before_stop = state.screenshots.home_023_running;
+  if (!partial.ready) {
+    state.screenshots.home_023_partial_timeout = await shot(page, caseDir, 'home-023-partial-reply-timeout');
+  }
+  const partialWaitedMs = Date.now() - partialStartedAt;
+  const confirmedSendReceipt = Array.isArray(state.artifacts.send_receipts)
+    && state.artifacts.send_receipts.some((receipt) => (
+      Array.isArray(receipt?.attempts)
+      && receipt.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
+    ));
+  const partialTimeoutVerdict = !partial.ready
+    ? coreBetaStopGenerationTimeoutVerdict({
+      partialReady: partial.ready,
+      taskId: bridgeBeforeStop?.activeId,
+      runningBefore: running,
+      cancelVisible,
+      waitedMs: partialWaitedMs,
+      timeoutMs: SHORT_REPLY_WAIT_MS,
+      confirmedSendReceipt,
+      timeoutScreenshot: state.screenshots.home_023_partial_timeout,
+    })
+    : null;
   const partialPreconditionFile = path.join(caseDir, 'partial-reply-precondition-readback.json');
   const partialPrecondition = {
     valid: partial.ready,
@@ -10230,8 +10297,10 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     partial_reply_ready_before_click: partial.ready,
     partial_chars_before_click: partial.delta_chars,
     partial_sha256: createHash('sha256').update(partial.delta).digest('hex'),
-    waited_ms: Date.now() - partialStartedAt,
+    waited_ms: partialWaitedMs,
     before_screenshot: state.screenshots.home_023_running,
+    case_stop_click_performed: false,
+    timeout_evidence: partialTimeoutVerdict,
   };
   writeJsonFile(partialPreconditionFile, partialPrecondition);
   state.artifacts.core_beta_partial_reply_precondition = partialPreconditionFile;
@@ -10241,10 +10310,55 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     '只有当当前 task 仍在运行、停止入口可见且已出现非空助手正文增量时，才允许点击停止。',
     partial.ready,
     `beforeSendCount=${before?.sendCount || 0}；taskId=${partialPrecondition.task_id || '未读取'}；running=${running}；cancelVisible=${cancelVisible}；partialChars=${partial.delta_chars}；waitedMs=${partialPrecondition.waited_ms}`,
-    'automation_error',
+    partialTimeoutVerdict?.valid ? 'bug' : 'automation_error',
   );
   if (!partial.ready) {
-    markBlocked(state, `停止生成前置未成立：running=${running}；cancelVisible=${cancelVisible}；partialChars=${partial.delta_chars}。框架未点击停止。`);
+    const terminalReason = `当前 task 在 ${SHORT_REPLY_WAIT_MS}ms 完整窗口内持续运行且停止入口可见，但未生成可归属助手正文；框架未执行 Case 的停止点击。`;
+    if (partialTimeoutVerdict?.valid) {
+      writeReplyArtifacts(state, caseDir, [{
+        label: '停止生成前正文等待终态',
+        deltaText: '',
+        fullText: '',
+        incomplete: true,
+        terminal_outcome: 'timed_out',
+        timeout_ms: SHORT_REPLY_WAIT_MS,
+        waited_ms: partialWaitedMs,
+        min_wait_ms: MIN_REPLY_WAIT_MS,
+        observed_running_after_send: true,
+        running_after: true,
+        incomplete_reason: terminalReason,
+      }]);
+    }
+    const cleanupSucceeded = await cancelRunningReplyAfterTimeout(
+      page,
+      state,
+      caseDir,
+      '停止生成 Case 正文超时后的隔离清理',
+    );
+    const cleanupFile = path.join(caseDir, 'stop-generation-timeout-cleanup-readback.json');
+    writeJsonFile(cleanupFile, {
+      valid: Boolean(partialTimeoutVerdict?.valid && cleanupSucceeded),
+      task_id: partialPrecondition.task_id,
+      terminal_outcome: partialTimeoutVerdict?.valid ? 'timed_out' : 'unverified_timeout',
+      case_stop_click_performed: false,
+      timeout_failure_evidence_written: Boolean(partialTimeoutVerdict?.valid),
+      cleanup_click_is_case_action: false,
+      cleanup_attempted: true,
+      cleanup_succeeded: cleanupSucceeded,
+      timeout_evidence: partialTimeoutVerdict,
+    });
+    state.artifacts.stop_generation_timeout_cleanup = cleanupFile;
+    if (!partialTimeoutVerdict?.valid) {
+      markFailed(
+        state,
+        `停止生成前置未成立且无法形成完整超时证据：${partialTimeoutVerdict?.reasons?.join(',') || 'unknown'}。框架未执行 Case 的停止点击。`,
+        'automation_error',
+      );
+    } else if (!cleanupSucceeded) {
+      markFailed(state, `${terminalReason} 超时失败证据已写入，但框架未能清理仍在运行的任务。`, 'automation_error');
+    } else {
+      markFailed(state, `${terminalReason} 超时失败证据完整，隔离清理成功。`, 'bug');
+    }
     return;
   }
   await cancel.click({ force: true }).catch(async () => cancel.evaluate((el) => el.click()));

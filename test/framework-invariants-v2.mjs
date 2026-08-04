@@ -34,6 +34,7 @@ import {
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaPartialReplyReady,
+  coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
@@ -1972,6 +1973,40 @@ assert.equal(coreBetaPartialReplyReady({
   latestAssistantBodyText: '第一章：测试目标',
 }).ready, false, '非运行态不能执行停止点击');
 
+const stopTimeoutEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-stop-timeout-'));
+try {
+  const timeoutScreenshot = path.join(stopTimeoutEvidenceDir, 'partial-reply-timeout.png');
+  fs.writeFileSync(timeoutScreenshot, Buffer.alloc(256, 1));
+  const validStopTimeout = {
+    taskId: 'task-stop-timeout-1',
+    runningBefore: true,
+    cancelVisible: true,
+    waitedMs: 90_001,
+    timeoutMs: 90_000,
+    confirmedSendReceipt: true,
+    timeoutScreenshot,
+  };
+  assert.equal(
+    coreBetaStopGenerationTimeoutVerdict(validStopTimeout).valid,
+    true,
+    '停止生成 Case 等满 90 秒仍无助手正文时，应形成证据完整的产品超时失败',
+  );
+  for (const invalid of [
+    { ...validStopTimeout, waitedMs: 59_999 },
+    { ...validStopTimeout, taskId: '' },
+    { ...validStopTimeout, confirmedSendReceipt: false },
+    { ...validStopTimeout, timeoutScreenshot: '' },
+  ]) {
+    assert.equal(
+      coreBetaStopGenerationTimeoutVerdict(invalid).valid,
+      false,
+      `停止生成超时证据缺少硬前置时必须 fail-closed：${JSON.stringify(invalid)}`,
+    );
+  }
+} finally {
+  fs.rmSync(stopTimeoutEvidenceDir, { recursive: true, force: true });
+}
+
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
@@ -1989,6 +2024,7 @@ const required = [
   ['Core Beta v2 助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
   ['Core Beta v2 停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
+  ['Core Beta v2 停止生成无正文完整超时后写齐失败证据再隔离清理', /(?=[\s\S]*if \(!partial\.ready\))(?=[\s\S]*terminal_outcome: 'timed_out')(?=[\s\S]*writeReplyArtifacts\(state, caseDir)(?=[\s\S]*cancelRunningReplyAfterTimeout)(?=[\s\S]*cleanup_click_is_case_action: false)(?=[\s\S]*超时失败证据完整，隔离清理成功。`?, 'bug'\))/],
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
   ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
