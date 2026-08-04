@@ -3957,7 +3957,7 @@ export function coreBetaV2SettingsLoadTimeoutMs(env = process.env) {
 
 export function coreBetaV2SettingsSurfaceState(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  const open = /系统设置|正在加载个人设置/.test(normalized);
+  const open = /系统设置|个人设置/.test(normalized);
   const errorMatch = normalized.match(/(?:加载个人设置失败|个人设置加载失败|加载失败|网络错误|请求失败)[^。\n]*/);
   return {
     open,
@@ -3966,11 +3966,59 @@ export function coreBetaV2SettingsSurfaceState(text) {
   };
 }
 
+async function dismissCoreBetaV2SettingsObstruction(page, state) {
+  const feedback = page.locator('[data-testid="skill-operation-feedback"]').first();
+  if (!(await visible(feedback, 500))) return { ok: true, dismissed: false, text: '' };
+  const text = await feedback.innerText({ timeout: 1000 }).catch(() => '');
+  const dismiss = feedback.locator('[aria-label="关闭操作提示"], .skill-operation-dismiss').first();
+  if (!(await visible(dismiss, 800))) {
+    const becameTerminal = await visible(dismiss, 30_000);
+    if (!becameTerminal) {
+      return {
+        ok: false,
+        dismissed: false,
+        text,
+        reason: `技能操作提示仍处于不可关闭状态，不能绕过遮挡点击设置：${clip(text, 220)}`,
+      };
+    }
+  }
+  try {
+    await dismiss.click({ timeout: 5000 });
+  } catch (error) {
+    return {
+      ok: false,
+      dismissed: false,
+      text,
+      reason: `无法关闭遮挡设置入口的技能操作提示：${clip(error?.message || error, 220)}`,
+    };
+  }
+  const closed = await feedback.waitFor({ state: 'hidden', timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  if (state) {
+    recordStep(
+      state,
+      '关闭遮挡设置入口的终态技能提示',
+      '进入系统设置前必须关闭可安全关闭的上一轮终态提示，不能 force 点击被遮挡的入口。',
+      closed ? `已关闭：${clip(text, 180)}` : `关闭后提示仍可见：${clip(text, 180)}`,
+      closed ? 'passed' : 'failed',
+      '',
+      closed ? '' : 'automation_error',
+    );
+  }
+  return {
+    ok: closed,
+    dismissed: closed,
+    text,
+    reason: closed ? '' : '关闭技能操作提示后仍检测到遮挡。',
+  };
+}
+
 async function openCoreBetaV2SystemSettings(page, state) {
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   if (await visible(maintenance, 800)) return { ok: true, reason: '运行时维护区已打开。' };
-  const settingsSurface = page.locator('[role="dialog"], .modal').filter({
-    hasText: /系统设置|正在加载个人设置/,
+  const settingsSurface = page.locator('[data-testid="assistant-config-view"], [role="dialog"], .modal').filter({
+    hasText: /系统设置|个人设置/,
   }).first();
   const waitForOpenSettingsMaintenance = async (
     timeoutMs = coreBetaV2SettingsLoadTimeoutMs(),
@@ -3997,10 +4045,17 @@ async function openCoreBetaV2SystemSettings(page, state) {
     return { ok: false, reason: `${initialSettings.error} 页面=${clip(initialSettings.text, 300)}` };
   }
   if (await visible(maintenance, 800)) return { ok: true, reason: '已打开的系统设置完成加载。' };
+  const obstruction = await dismissCoreBetaV2SettingsObstruction(page, state);
+  if (!obstruction.ok) return { ok: false, reason: obstruction.reason };
   await ensureSidebarExpanded(page, state);
   const menu = page.locator('[data-testid="nav-settings-menu"]').first();
   if (!(await visible(menu, 2500))) return { ok: false, reason: '未找到设置菜单。' };
-  await menu.click({ force: true }).catch(async () => menu.evaluate((element) => element.click()));
+  try {
+    await menu.scrollIntoViewIfNeeded({ timeout: 2500 });
+    await menu.click({ timeout: 5000 });
+  } catch (error) {
+    return { ok: false, reason: `设置入口无法按真实可命中状态点击：${clip(error?.message || error, 260)}` };
+  }
   if (!(await visible(maintenance, 1200))) {
     const directlyOpened = await waitForOpenSettingsMaintenance();
     if (directlyOpened.error) {
@@ -4011,7 +4066,11 @@ async function openCoreBetaV2SystemSettings(page, state) {
       if (!(await visible(settings, 2500))) {
         return { ok: false, reason: '设置菜单未展示个人设置入口，且系统设置维护区未直接打开。' };
       }
-      await settings.click({ force: true }).catch(async () => settings.evaluate((element) => element.click()));
+      try {
+        await settings.click({ timeout: 5000 });
+      } catch (error) {
+        return { ok: false, reason: `个人设置子菜单无法按真实可命中状态点击：${clip(error?.message || error, 260)}` };
+      }
       const selectedSettings = await waitForOpenSettingsMaintenance();
       if (selectedSettings.error) {
         return { ok: false, reason: `${selectedSettings.error} 页面=${clip(selectedSettings.text, 300)}` };

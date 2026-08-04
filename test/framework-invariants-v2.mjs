@@ -1191,6 +1191,11 @@ assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n正在加载个�
   loading: true,
   error: '',
 });
+assert.deepEqual(coreBetaV2SettingsSurfaceState('个人设置\n系统设置\n运行时 release'), {
+  open: true,
+  loading: false,
+  error: '',
+});
 assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n加载个人设置失败：网络错误'), {
   open: true,
   loading: false,
@@ -1200,6 +1205,16 @@ assert.match(
   runner,
   /async function openCoreBetaV2SystemSettings[\s\S]*initialSettings = await waitForOpenSettingsMaintenance\(\)[\s\S]*ensureSidebarExpanded/,
   'Core Beta v2 必须先等待已打开的系统设置加载，不能把加载态误判成个人设置入口缺失',
+);
+assert.match(
+  runner,
+  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*skill-operation-feedback[\s\S]*关闭操作提示[\s\S]*state: 'hidden'[\s\S]*openCoreBetaV2SystemSettings[\s\S]*dismissCoreBetaV2SettingsObstruction/,
+  'Core Beta v2 必须先关闭遮挡设置入口的终态技能提示，并确认提示确实消失',
+);
+assert.match(
+  runner,
+  /assistant-config-view[\s\S]*menu\.scrollIntoViewIfNeeded[\s\S]*menu\.click\(\{ timeout: 5000 \}\)[\s\S]*nav-settings/,
+  'Core Beta v2 必须兼容直接进入设置与旧版个人设置子菜单，并禁止 force 点击被遮挡入口',
 );
 assert.match(
   runner,
