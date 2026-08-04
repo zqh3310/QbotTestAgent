@@ -5086,18 +5086,32 @@ function chooseCoreBetaMarketSkills(catalog, count = 10) {
 export function coreBetaSkillInstallBatchAssessment(receipts = [], expectedCount = 5) {
   const normalized = Array.isArray(receipts) ? receipts : [];
   const identities = normalized.map((item) => String(item?.qualified_identity || '')).filter(Boolean);
+  const terminalEvidenceValid = (item) => {
+    const status = String(item?.terminal_feedback?.status || '');
+    const feedbackTerminal = ['success', 'error'].includes(status)
+      && (
+        item?.terminal_feedback?.action_bound === true
+        || item?.terminal_feedback?.observed === true
+      );
+    const terminalTimeoutMs = Number(item?.terminal_timeout_ms || 0);
+    const terminalWaitedMs = Number(item?.terminal_waited_ms || 0);
+    const timedOut = item?.terminal_outcome === 'timed_out'
+      && terminalTimeoutMs >= 60_000
+      && terminalWaitedMs >= terminalTimeoutMs;
+    return feedbackTerminal || timedOut;
+  };
   const evidenceValid = normalized.length === expectedCount
     && identities.length === expectedCount
     && new Set(identities).size === expectedCount
     && normalized.every((item) => (
-      typeof item?.installed === 'boolean'
+      item.clicked === true
+      && typeof item?.installed === 'boolean'
       && item.catalog_installed_checked === true
       && typeof item.before === 'string' && item.before.length > 0
       && typeof item.pending === 'string' && item.pending.length > 0
       && typeof item.after === 'string' && item.after.length > 0
       && typeof item.pending_observed === 'boolean'
-      && item.terminal_feedback?.observed === true
-      && ['success', 'error'].includes(item.terminal_feedback?.status)
+      && terminalEvidenceValid(item)
       && typeof item.api_receipt?.install_ok !== 'undefined'
       && typeof item.reconcile_receipt?.ok !== 'undefined'
       && (!item.installed || Boolean(item.installed_readback))
@@ -5132,7 +5146,9 @@ async function readCoreBetaSkillOperationFeedback(page, targetLabel) {
         ? 'error'
         : node.classList.contains('pending') ? 'pending' : 'unknown';
     return {
+      surface_observed: true,
       observed: text.includes(label),
+      matches_target_label: text.includes(label),
       target_label: label,
       status,
       message: text,
@@ -5140,7 +5156,9 @@ async function readCoreBetaSkillOperationFeedback(page, targetLabel) {
       captured_at: new Date().toISOString(),
     };
   }, targetLabel).catch(() => ({
+    surface_observed: false,
     observed: false,
+    matches_target_label: false,
     target_label: targetLabel,
     status: 'missing',
     message: '',
@@ -5296,17 +5314,40 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         }, target.label, { timeout: 5_000 }).catch(() => {});
         const pendingFeedback = await readCoreBetaSkillOperationFeedback(page, target.label);
         const pending = await shot(page, caseDir, `skill-install-${slugify(target.slug)}-pending`);
-        await page.waitForFunction((label) => {
+        const terminalTimeoutMs = 120_000;
+        const terminalWaitStartedAt = Date.now();
+        let terminalWaitTimedOut = false;
+        await page.waitForFunction(({ label, allowUnlabeledTerminal }) => {
           const feedbackNode = document.querySelector('[data-testid="skill-operation-feedback"]');
-          if (feedbackNode && (feedbackNode.textContent || '').includes(label)
-            && (feedbackNode.classList.contains('success') || feedbackNode.classList.contains('error'))) {
-            return true;
-          }
-          const cards = Array.from(document.querySelectorAll('.skill-card'));
-          return cards.some((card) => (card.textContent || '').includes(label)
-            && (card.querySelector('.skill-card-installed') || !card.querySelector('.skill-install')));
-        }, target.label, { timeout: 120_000 }).catch(() => {});
+          if (!feedbackNode) return false;
+          const text = String(feedbackNode.textContent || '');
+          const terminal = feedbackNode.classList.contains('success')
+            || feedbackNode.classList.contains('error');
+          return terminal && (text.includes(label) || allowUnlabeledTerminal);
+        }, {
+          label: target.label,
+          allowUnlabeledTerminal: pendingFeedback.observed === true
+            && pendingFeedback.status === 'pending',
+        }, { timeout: terminalTimeoutMs }).catch(() => {
+          terminalWaitTimedOut = true;
+        });
+        let terminalWaitedMs = Date.now() - terminalWaitStartedAt;
+        if (terminalWaitTimedOut && terminalWaitedMs < terminalTimeoutMs) {
+          await new Promise((resolve) => setTimeout(resolve, terminalTimeoutMs - terminalWaitedMs));
+          terminalWaitedMs = Date.now() - terminalWaitStartedAt;
+        }
         const terminalFeedback = await readCoreBetaSkillOperationFeedback(page, target.label);
+        const terminalStatus = ['success', 'error'].includes(terminalFeedback.status);
+        terminalFeedback.action_bound = terminalFeedback.observed === true
+          || (
+            pendingFeedback.observed === true
+            && pendingFeedback.status === 'pending'
+            && terminalFeedback.surface_observed === true
+            && terminalStatus
+          );
+        const terminalOutcome = terminalStatus && terminalFeedback.action_bound
+          ? 'feedback_terminal'
+          : terminalWaitTimedOut ? 'timed_out' : 'unbound_terminal';
         const catalog = await readCoreBetaSkillCatalog(page);
         const installed = catalog.installed.find((item) => (
           (item.slug || item.name) === target.slug
@@ -5325,6 +5366,9 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
           pending_observed: pendingFeedback.observed && pendingFeedback.status === 'pending',
           pending_feedback: pendingFeedback,
           terminal_feedback: terminalFeedback,
+          terminal_outcome: terminalOutcome,
+          terminal_timeout_ms: terminalTimeoutMs,
+          terminal_waited_ms: terminalWaitedMs,
           catalog_installed_checked: true,
           installed: Boolean(installed),
           installed_readback: installed || null,

@@ -668,6 +668,7 @@ assert.equal(
 );
 const skillInstallReceipts = Array.from({ length: 5 }, (_, index) => ({
   qualified_identity: `global/qa-skill-${index + 1}/1.0.0`,
+  clicked: true,
   before: `/tmp/qa-skill-${index + 1}-before.png`,
   pending: `/tmp/qa-skill-${index + 1}-pending.png`,
   after: `/tmp/qa-skill-${index + 1}-after.png`,
@@ -719,6 +720,69 @@ try {
 } finally {
   fs.rmSync(skillInstallEvidenceDir, { recursive: true, force: true });
 }
+const genericTerminalFailureReceipts = skillInstallReceipts.map((item, index) => (
+  index === 0
+    ? {
+        ...item,
+        terminal_feedback: {
+          surface_observed: true,
+          observed: false,
+          action_bound: true,
+          status: 'error',
+          message: '安装失败：SkillHub package metadata cannot contain agent_created',
+        },
+      }
+    : item
+));
+assert.equal(
+  coreBetaSkillInstallBatchAssessment(genericTerminalFailureReceipts, 5).valid,
+  true,
+  '已观察当前样本 pending 后出现的通用 error 文案必须作为动作绑定的完整终态证据',
+);
+const timedOutPendingReceipts = skillInstallReceipts.map((item, index) => (
+  index === 0
+    ? {
+        ...item,
+        installed: false,
+        installed_readback: null,
+        terminal_feedback: {
+          surface_observed: true,
+          observed: true,
+          status: 'pending',
+          message: '正在安装技能「qa-skill-1」…',
+        },
+        terminal_outcome: 'timed_out',
+        terminal_timeout_ms: 120_000,
+        terminal_waited_ms: 120_000,
+        api_receipt: { install_ok: null },
+        reconcile_receipt: { ok: null },
+      }
+    : item
+));
+assert.deepEqual(
+  coreBetaSkillInstallBatchAssessment(timedOutPendingReceipts, 5),
+  {
+    valid: true,
+    oracle_valid: false,
+    expected_count: 5,
+    attempted_count: 5,
+    installed_count: 4,
+    failed_count: 1,
+    installed_identities: timedOutPendingReceipts.slice(1).map((item) => item.qualified_identity),
+    failed_identities: [timedOutPendingReceipts[0].qualified_identity],
+  },
+  '完整等待窗口耗尽后的 pending 必须作为证据完整的产品失败终态，而不是 invalid manifest',
+);
+assert.equal(
+  coreBetaSkillInstallBatchAssessment(
+    timedOutPendingReceipts.map((item, index) => (
+      index === 0 ? { ...item, terminal_waited_ms: 59_999 } : item
+    )),
+    5,
+  ).valid,
+  false,
+  '未等满至少 60 秒的 pending 不得伪装成 timed_out 完整终态',
+);
 assert.equal(
   coreBetaSkillInstallBatchAssessment(
     skillInstallReceipts.map((item, index) => (index === 0 ? { ...item, pending: '' } : item)),
@@ -752,6 +816,11 @@ assert.match(
   runner,
   /receipts\.filter\(\(item\) => item\.oracle_passed\)[\s\S]*install_attempt_receipts[\s\S]*assessment\.oracle_valid/,
   'Skill 安装批次必须分离尝试账本与成功账本，并保留产品 Oracle 结果',
+);
+assert.match(
+  runner,
+  /allowUnlabeledTerminal[\s\S]*terminal_feedback: terminalFeedback[\s\S]*terminal_outcome: terminalOutcome[\s\S]*terminal_waited_ms: terminalWaitedMs/,
+  'Skill 安装必须绑定通用终态反馈，并为完整等待后的 pending 保存明确 timed_out 证据',
 );
 assert.match(
   runner,
