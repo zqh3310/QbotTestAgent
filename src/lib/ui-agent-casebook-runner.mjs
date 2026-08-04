@@ -25521,6 +25521,28 @@ function scenarioConversationTurns(testCase, attachments) {
   return [];
 }
 
+function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
+  const lines = String(replyText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const exactTotal = `${expectedTotal}(?:\\.0+)?(?=$|[^0-9])`;
+  const directTotal = new RegExp(`(?:总计|合计)[^0-9\\r\\n]{0,30}${exactTotal}`, 'i');
+  const calculatedTotal = new RegExp(`(?:总计|合计)[^\\r\\n]{0,160}(?:=|为)\\s*${exactTotal}`, 'i');
+
+  return lines.some((line, index) => {
+    const identity = line.match(identityPattern);
+    if (!identity) return false;
+    const afterIdentity = line.slice(Number(identity.index || 0) + identity[0].length);
+    if (directTotal.test(afterIdentity) || calculatedTotal.test(afterIdentity)) return true;
+
+    const previousLine = lines[index - 1] || '';
+    if (!/(?:总计|合计)/.test(previousLine)) return false;
+    const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
+    return Number(rowValues.at(-1)) === Number(expectedTotal);
+  });
+}
+
 export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const id = String(testCase?.id || '');
   const reply = semanticReplyText(replyText);
@@ -25550,8 +25572,8 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
       /到场人数[\s\S]{0,100}(?:70[\s\S]{0,40}80|80[\s\S]{0,40}70)/,
       /成交单数[\s\S]{0,100}(?:12[\s\S]{0,40}15|15[\s\S]{0,40}12)/,
     ].every((pattern) => pattern.test(reply));
-    const totals = /CSV[\s\S]{0,100}(?:总计|合计)[^0-9]{0,30}182/i.test(reply)
-      && /(?:XLSX|Excel)[\s\S]{0,100}(?:总计|合计)[^0-9]{0,30}215/i.test(reply);
+    const totals = tableFileTotalMatches(reply, /qbot-table\.csv|\bCSV\b/i, 182)
+      && tableFileTotalMatches(reply, /qbot-data-table-diff\.xlsx|\bXLSX\b|\bExcel\b/i, 215);
     return result(
       'CSV/XLSX 三处差异与总计',
       '应逐项列出报名 100→120、到场 70→80、成交 12→15 三处差异，并给出 CSV 总计 182、XLSX 总计 215。',

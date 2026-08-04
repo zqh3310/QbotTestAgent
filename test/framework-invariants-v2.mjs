@@ -1679,11 +1679,36 @@ const coreTableReply = [
 ].join('\n');
 assert.equal(replyLooksRelevant(coreTableReply, coreTableCase, coreTablePrompt), true, '表格差异与总计回复不得被通用相关性误判');
 assert.equal(caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, coreTableReply).ok, true, '表格 Case 必须精确校验三处差异和双方总计');
+const observedCoreTableReply = [
+  '两个表格都已读取成功，对比结果如下：',
+  '数据对比',
+  '指标\t报名人数\t到场人数\t成交单数\t各表总计',
+  'qbot-table.csv\t100\t70\t12\t182',
+  'qbot-data-table-diff.xlsx\t120\t80\t15\t215',
+  '差异（xlsx - csv）\t+20\t+10\t+3\t+33',
+  '报名人数：120 - 100 = +20；到场人数：80 - 70 = +10；成交单数：15 - 12 = +3。',
+  'qbot-table.csv 总计：100 + 70 + 12 = 182',
+  'qbot-data-table-diff.xlsx 总计：120 + 80 + 15 = 215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受文件标签绑定的表格行及算式总计，不得被跨段固定字符窗口误判',
+);
 assert.equal(caseAwareReplyAssertion(
   coreTableCase,
   { prompt: coreTablePrompt },
   '两个表格数值完全一致，报名100、到场70、成交12，CSV 总计182，XLSX 总计182。',
 ).ok, false, '数值相同的旧通用 fixture 不得通过三处差异硬 Oracle');
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  [
+    '报名人数：CSV 100，XLSX 120；到场人数：CSV 70，XLSX 80；成交单数：CSV 12，XLSX 15。',
+    'CSV 总计 215；XLSX 总计 182。',
+    '其它说明中散落出现数字 182 和 215，但它们没有绑定正确文件。',
+  ].join('\n'),
+).ok, false, '双方总计交换或数字只在其它段落散落时不得通过表格硬 Oracle');
 assert.equal(replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', coreTableCase, coreTablePrompt), false, '表格 Case 不得接受无关天气回复');
 
 const generalWorkbookBytes = fs.readFileSync(path.join(root, 'testflies', 'qbot-data-table.xlsx')).toString('utf8');
