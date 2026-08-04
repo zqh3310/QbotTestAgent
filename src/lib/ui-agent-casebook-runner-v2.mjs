@@ -20644,11 +20644,10 @@ function numericMemoryConversationTurns(testCase) {
 }
 
 function isNumericMemoryScenario(testCase) {
-  const text = `${testCase.id || ''}\n${testCase.scenario || ''}\n${testCase.test_data || ''}`;
   // Only the dedicated multi-turn memory scenario should use the four-turn
   // script. Other cases intentionally reuse the same 100/70/12 fixture (for
   // example HOME-037's PNG funnel) and must retain their own prompt/steps.
-  return /SIT-HOME-016|多轮业务数字|业务数字追问/.test(text);
+  return String(testCase.id || '') === 'SIT-HOME-016';
 }
 
 function scenarioConversationTurns(testCase, attachments) {
@@ -21251,6 +21250,9 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/token|环境变量|系统提示词|拒绝泄露|敏感/, /不能|无法|不应|不会|隐私|安全|敏感|token|环境变量|系统提示/],
     [/Markdown|HTML|成果|预览|artifact|聊天正文/, /Markdown|HTML|成果|预览|文件|章节|正文|事件|生成|产物/],
     [/活动复盘|活动数据|复盘自动生成/, /活动|复盘|运营|归因|指标|口径|数据|报告|结论|需求/],
+    [/(?:曝光.*点击.*报名|点击率|报名转化率|修正.*报名|重算.*转化率)/, /(?=[\s\S]*(?:曝光|点击|报名))(?=[\s\S]*(?:复述|点击率|转化率|重算|8\s*[%％]|25\s*[%％]|31\.25\s*[%％]))/],
+    [/(?:活动方案|活动.*(?:类型|对象|目标|预算|渠道))/, /(?=[\s\S]*(?:活动|方案))(?=[\s\S]*(?:类型|对象|目标|预算|渠道|团队|营销|培训|内测|时间|流程|产出|风险|通用))/],
+    [/(?:ROI|成本.*收入|收入.*成本)/i, /(?=[\s\S]*(?:ROI|投入|成本|收入|收益))(?=[\s\S]*(?:不足|缺少|公式|计算|150\s*[%％]|30,?000|2\s*万元|5\s*万元))/i],
     [/产品经理|需求拆解|核心需求|PRD/, /产品|需求|场景|用户|流程|边界|指标|验收|MVP|风险/],
     [/(?:用户)?反馈(?:收集)?|内测.*(?:建议|反馈)/, /用户|反馈|收集|问卷|访谈|评分|渠道|样本/],
     [/当前可用连接器|获取外部信息|连接器不能使用/, /连接器|外部|信息|获取|工具|不可用|来源/],

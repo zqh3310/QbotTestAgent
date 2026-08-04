@@ -1383,6 +1383,43 @@ if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负�
 }, '请结合已选的两个技能，完成一次联合处理并分别说明两项能力的作用。')) {
   throw new Error('多 Skill 联合处理的真实回复不应被通用相关性启发式误判');
 }
+const coreConversationRelevanceSamples = [
+  {
+    testCase: {
+      id: 'BETA-CHAT-002',
+      scenario: '三轮业务数字追问保持上下文、计算一致且不串任务',
+      test_data: '首轮给出曝光12000、点击960、报名240；第二轮问点击率和报名转化率；第三轮修改报名为300并重算。',
+    },
+    prompt: '修正：报名应为300，请重算报名转化率。',
+    reply: '已按修正数据重算：曝光 12,000、点击 960、报名 300。\n\n点击率 8%，报名转化率 31.25%。',
+  },
+  {
+    testCase: {
+      id: 'BETA-CHAT-003',
+      scenario: '需求信息不足时先问最少必要问题，不直接编造完整交付物',
+      test_data: '先只说“帮我做一份下周活动方案”；第二轮补充目标人群、目标、预算和渠道。',
+    },
+    prompt: '帮我做一份下周活动方案。',
+    reply: '活动类型、对象和目标还不明确；跳过默认选项后，我先给出一份通用活动方案，再按预算和渠道调整。',
+  },
+  {
+    testCase: {
+      id: 'BETA-CHAT-004',
+      scenario: '缺少成本与收入数据时拒绝编造 ROI，并给出可复核计算方法',
+      test_data: '仅给出曝光、点击和报名，第二轮补充成本与预计收入。',
+    },
+    prompt: '补充：成本2万元，预计收入5万元，请计算ROI并展示过程。',
+    reply: 'ROI = (收入 5 万元 - 成本 2 万元) / 成本 2 万元 = 150%，净收益为 3 万元。',
+  },
+];
+for (const sample of coreConversationRelevanceSamples) {
+  if (!replyLooksRelevant(sample.reply, sample.testCase, sample.prompt)) {
+    throw new Error(`${sample.testCase.id} 的真实相关回复不得因中文长提示未分词而误判`);
+  }
+  if (replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', sample.testCase, sample.prompt)) {
+    throw new Error(`${sample.testCase.id} 不得把无关天气回复判为相关`);
+  }
+}
 if (!replyLooksRelevant('已生成文件，文件名：teams_local_execution.txt', {
   id: 'SIT-TEAMS-NEW-003',
   scenario: 'Teams 内发起普通个人任务时仍应在本机执行',
