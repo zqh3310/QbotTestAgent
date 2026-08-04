@@ -2179,6 +2179,26 @@ assert.equal(
   true,
   '表格 Case 应接受文件标签绑定的表格行及算式总计，不得被跨段固定字符窗口误判',
 );
+const observedHeaderScopedCoreTableReply = [
+  'CSV（qbot-table.csv）vs XLSX（qbot-data-table-diff.xlsx）',
+  '指标\tCSV\tXLSX\t差异（XLSX - CSV）',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '表格\t总计（三项之和）',
+  'CSV\t182',
+  'XLSX\t215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedHeaderScopedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受总计表头约束的连续 CSV/XLSX 文件行，不得只识别第一条数据行',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedHeaderScopedCoreTableReply.replace('CSV\t182\nXLSX\t215', 'CSV\t215\nXLSX\t182'),
+).ok, false, '总计表头约束的连续文件行交换总计时不得形成通过');
 const aliasedCoreTableReply = [
   '表 A（qbot-table.csv）包含报名人数 100、到场人数 70、成交单数 12。',
   '表 B（qbot-data-table-diff.xlsx）包含报名人数 120、到场人数 80、成交单数 15。',

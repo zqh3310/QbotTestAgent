@@ -22108,6 +22108,20 @@ function pdfPageOneCoverage(replyText) {
   };
 }
 
+const TABLE_FILE_ROW_IDENTITY_PATTERN = /qbot-table\.csv|qbot-data-table-diff\.xlsx|\bCSV\b|\bXLSX\b|\bExcel\b/i;
+
+function tableHeaderScopedTotalMatches(lines, rowIndex, afterIdentity, expectedTotal) {
+  const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
+  if (Number(rowValues.at(-1)) !== Number(expectedTotal)) return false;
+
+  for (let index = rowIndex - 1; index >= 0; index -= 1) {
+    const precedingLine = lines[index];
+    if (/(?:总计|合计)/.test(precedingLine)) return true;
+    if (!TABLE_FILE_ROW_IDENTITY_PATTERN.test(precedingLine) || !/\d/.test(precedingLine)) return false;
+  }
+  return false;
+}
+
 function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
   const lines = String(replyText || '')
     .split(/\r?\n/)
@@ -22123,10 +22137,7 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     const afterIdentity = line.slice(Number(identity.index || 0) + identity[0].length);
     if (directTotal.test(afterIdentity) || calculatedTotal.test(afterIdentity)) return true;
 
-    const previousLine = lines[index - 1] || '';
-    if (!/(?:总计|合计)/.test(previousLine)) return false;
-    const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
-    return Number(rowValues.at(-1)) === Number(expectedTotal);
+    return tableHeaderScopedTotalMatches(lines, index, afterIdentity, expectedTotal);
   }) || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
 }
 

@@ -1489,6 +1489,34 @@ assert.equal(
   false,
   '通用 runner 不得接受 PDF 结论与第 1 页的否定统一绑定',
 );
+const coreTableCase = {
+  id: 'BETA-FILE-004',
+  module: '核心内测',
+  submodule: '附件与多模态',
+  scenario: '比较CSV与XLSX中的差异并精确计算汇总值',
+  test_data: '两份结构化数据含三处已知差异和可复核总计。',
+};
+const coreTablePrompt = '比较两个表格，列出所有差异并计算各自总计。';
+const observedHeaderScopedCoreTableReply = [
+  'CSV（qbot-table.csv）vs XLSX（qbot-data-table-diff.xlsx）',
+  '指标\tCSV\tXLSX\t差异（XLSX - CSV）',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '表格\t总计（三项之和）',
+  'CSV\t182',
+  'XLSX\t215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedHeaderScopedCoreTableReply).ok,
+  true,
+  '通用 runner 应接受总计表头约束的连续 CSV/XLSX 文件行',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedHeaderScopedCoreTableReply.replace('CSV\t182\nXLSX\t215', 'CSV\t215\nXLSX\t182'),
+).ok, false, '通用 runner 不得接受总计表头下交换双方总计的连续文件行');
 if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
   throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
 }
