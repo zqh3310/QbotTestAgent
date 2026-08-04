@@ -798,6 +798,15 @@ export function sha256File(file) {
 export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, screenshots = {}, actions = [] }) {
   const declared = Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [];
   const candidates = new Map();
+  const notApplicable = new Map();
+  const prerequisiteNotApplicableRoles = new Set([
+    'prompt',
+    'task_id',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file);
@@ -810,6 +819,75 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       validation_error: validation.error || '',
     });
   };
+  for (const item of Array.isArray(artifacts?.core_beta_not_applicable_roles)
+    ? artifacts.core_beta_not_applicable_roles
+    : []) {
+    const role = String(item?.role || '');
+    const blockerFile = String(item?.blocker_path || '');
+    if (!declared.includes(role)
+      || !prerequisiteNotApplicableRoles.has(role)
+      || !blockerFile
+      || !fs.existsSync(blockerFile)
+      || !fs.statSync(blockerFile).isFile()
+      || fs.statSync(blockerFile).size <= 0) continue;
+    const resolvedCaseDir = path.resolve(caseDir);
+    const resolvedBlocker = path.resolve(blockerFile);
+    const relative = path.relative(resolvedCaseDir, resolvedBlocker);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    let blocker;
+    try {
+      blocker = JSON.parse(fs.readFileSync(resolvedBlocker, 'utf8'));
+    } catch {
+      continue;
+    }
+    const allowedRoles = Array.isArray(blocker?.not_applicable_roles)
+      ? blocker.not_applicable_roles.map(String)
+      : [];
+    const expectedCount = Number(blocker?.expected_count);
+    const attemptedCount = Number(blocker?.attempted_count);
+    const successfulCount = Number(blocker?.successful_count);
+    const failedCount = Number(blocker?.failed_count);
+    const failedIdentities = Array.isArray(blocker?.failed_identities)
+      ? blocker.failed_identities.map(String).filter(Boolean)
+      : [];
+    const sourceCaseIds = Array.isArray(blocker?.source_case_ids)
+      ? blocker.source_case_ids.map(String)
+      : [];
+    const verified = blocker?.schema_version === 'qbot-core-beta-upstream-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && blocker?.kind === 'skill_install_terminal_shortage'
+      && blocker?.source === 'exact_run_owned_install_attempt_ledger'
+      && blocker?.dependent_case_id === testCase?.id
+      && expectedCount === 10
+      && attemptedCount === expectedCount
+      && successfulCount >= 0
+      && successfulCount < expectedCount
+      && failedCount === expectedCount - successfulCount
+      && failedIdentities.length === failedCount
+      && sourceCaseIds.length === 2
+      && sourceCaseIds[0] === 'BETA-SKILL-003'
+      && sourceCaseIds[1] === 'BETA-SKILL-004'
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.receipts_sha256 || ''))
+      && String(blocker?.target_identity || '').trim()
+      && failedIdentities.includes(String(blocker.target_identity))
+      && allowedRoles.includes(role)
+      && allowedRoles.every((itemRole) => prerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
+    if (!verified) continue;
+    notApplicable.set(role, {
+      role,
+      path: resolvedBlocker,
+      bytes: fs.statSync(resolvedBlocker).size,
+      sha256: sha256File(resolvedBlocker),
+      valid: true,
+      validation_error: '',
+      missing: false,
+      not_applicable: true,
+      source: blocker.source,
+      reason: blocker.reason,
+    });
+  }
   Object.entries(screenshots || {}).forEach(([key, file]) => {
     const role = key.includes('before') ? 'before_screenshot'
       : key.includes('after') || key === 'final' ? 'after_screenshot'
@@ -823,6 +901,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   }
   const evidence = declared.map((role) => {
     const item = candidates.get(role);
+    if (!item && notApplicable.has(role)) return notApplicable.get(role);
     if (!item) return { role, missing: true, valid: false, validation_error: 'file_missing' };
     if (!item.valid) return { ...item, missing: false };
     return { ...item, missing: false };
@@ -836,6 +915,13 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     complete: missingRoles.length === 0 && invalidRoles.length === 0,
     missing_roles: missingRoles,
     invalid_roles: invalidRoles,
+    not_applicable_roles: evidence.filter((item) => item.not_applicable).map((item) => ({
+      role: item.role,
+      source: item.source,
+      reason: item.reason,
+      path: item.path,
+      sha256: item.sha256,
+    })),
     evidence,
   };
 }

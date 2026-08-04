@@ -36,6 +36,7 @@ import {
   coreBetaPartialReplyReady,
   coreBetaRuntimeExecutorBinding,
   coreBetaSkillInstallBatchAssessment,
+  coreBetaSkillInstallPrerequisiteBlocker,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
@@ -814,13 +815,140 @@ assert.doesNotMatch(
 );
 assert.match(
   runner,
-  /receipts\.filter\(\(item\) => item\.oracle_passed\)[\s\S]*install_attempt_receipts[\s\S]*assessment\.oracle_valid/,
+  /persistedReceipts\.filter\(\(item\) => item\.oracle_passed\)[\s\S]*install_attempt_receipts[\s\S]*assessment\.oracle_valid/,
   'Skill 安装批次必须分离尝试账本与成功账本，并保留产品 Oracle 结果',
 );
 assert.match(
   runner,
   /allowUnlabeledTerminal[\s\S]*terminal_feedback: terminalFeedback[\s\S]*terminal_outcome: terminalOutcome[\s\S]*terminal_waited_ms: terminalWaitedMs/,
   'Skill 安装必须绑定通用终态反馈，并为完整等待后的 pending 保存明确 timed_out 证据',
+);
+const prerequisiteAttempts = Array.from({ length: 10 }, (_, index) => {
+  const succeeded = index === 9;
+  return {
+    qualified_identity: `global/qa-prerequisite-${index + 1}/1.0.0`,
+    source_case_id: index < 5 ? 'BETA-SKILL-003' : 'BETA-SKILL-004',
+    clicked: true,
+    before: `/tmp/qa-prerequisite-${index + 1}-before.png`,
+    pending: `/tmp/qa-prerequisite-${index + 1}-pending.png`,
+    after: `/tmp/qa-prerequisite-${index + 1}-after.png`,
+    pending_observed: true,
+    terminal_feedback: {
+      observed: true,
+      status: succeeded ? 'success' : 'error',
+      message: succeeded ? '安装成功，本机对账已完成' : '安装失败：产品返回错误',
+    },
+    api_receipt: { install_ok: succeeded },
+    reconcile_receipt: { ok: succeeded },
+    catalog_installed_checked: true,
+    installed: succeeded,
+    installed_readback: succeeded ? { slug: `qa-prerequisite-${index + 1}` } : null,
+    oracle_passed: succeeded,
+  };
+});
+const prerequisiteLedger = {
+  skills: {
+    selected: prerequisiteAttempts.map((item) => ({
+      qualified_identity: item.qualified_identity,
+      slug: item.qualified_identity.split('/')[1],
+    })),
+    install_attempt_receipts: prerequisiteAttempts,
+    install_receipts: prerequisiteAttempts.filter((item) => item.oracle_passed),
+  },
+};
+const completeSetBlocker = coreBetaSkillInstallPrerequisiteBlocker(prerequisiteLedger, {
+  expectedCount: 10,
+  dependentCaseId: 'BETA-SKILL-005',
+});
+assert.equal(completeSetBlocker.valid, true);
+assert.equal(completeSetBlocker.applicable, true);
+assert.equal(completeSetBlocker.successful_count, 1);
+assert.deepEqual(completeSetBlocker.source_case_ids, ['BETA-SKILL-003', 'BETA-SKILL-004']);
+assert.equal(
+  coreBetaSkillInstallPrerequisiteBlocker(prerequisiteLedger, {
+    expectedCount: 10,
+    targetIdentity: prerequisiteAttempts[0].qualified_identity,
+    dependentCaseId: 'BETA-SKILL-006',
+  }).applicable,
+  true,
+  '依赖明确安装失败Skill的使用Case必须由真实尝试账本阻塞，禁止随机替换后发送',
+);
+assert.equal(
+  coreBetaSkillInstallPrerequisiteBlocker(prerequisiteLedger, {
+    expectedCount: 10,
+    targetIdentity: prerequisiteAttempts[9].qualified_identity,
+    dependentCaseId: 'BETA-SKILL-010',
+  }).applicable,
+  false,
+  '真实安装成功的目标Skill不应被全局短缺误阻塞',
+);
+assert.equal(
+  coreBetaSkillInstallPrerequisiteBlocker({
+    skills: {
+      ...prerequisiteLedger.skills,
+      install_attempt_receipts: prerequisiteAttempts.slice(0, 9),
+    },
+  }, { expectedCount: 10, dependentCaseId: 'BETA-SKILL-005' }).valid,
+  false,
+  '缺少任一安装终态收据时不得传播可信上游阻塞',
+);
+assert.equal(
+  coreBetaSkillInstallPrerequisiteBlocker({
+    skills: {
+      ...prerequisiteLedger.skills,
+      install_attempt_receipts: prerequisiteAttempts.map((item, index) => (
+        index === 0 ? { ...item, source_case_id: 'BETA-SKILL-004' } : item
+      )),
+    },
+  }, { expectedCount: 10, dependentCaseId: 'BETA-SKILL-005' }).valid,
+  false,
+  '安装收据的003/004批次归属漂移时不得传播可信上游阻塞',
+);
+const prerequisiteEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-skill-prerequisite-'));
+try {
+  const blockerFile = path.join(prerequisiteEvidenceDir, 'upstream-skill-install-prerequisite.json');
+  const blocker = coreBetaSkillInstallPrerequisiteBlocker(prerequisiteLedger, {
+    expectedCount: 10,
+    targetIdentity: prerequisiteAttempts[0].qualified_identity,
+    dependentCaseId: 'BETA-SKILL-006',
+  });
+  const notApplicableRoles = ['prompt', 'task_id', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion'];
+  writeJsonFile(blockerFile, { ...blocker, not_applicable_roles: notApplicableRoles });
+  const manifest = buildCoreEvidenceManifest({
+    testCase: {
+      id: 'BETA-SKILL-006',
+      evidence_roles: [...notApplicableRoles, 'capability_selection', 'capability_execution_event'],
+    },
+    caseDir: prerequisiteEvidenceDir,
+    artifacts: {
+      capability_selection: blockerFile,
+      capability_execution_event: blockerFile,
+      core_beta_not_applicable_roles: notApplicableRoles.map((role) => ({ role, blocker_path: blockerFile })),
+    },
+  });
+  assert.equal(manifest.complete, true);
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), notApplicableRoles);
+  assert.ok(manifest.evidence.filter((item) => item.not_applicable).every(
+    (item) => item.source === 'exact_run_owned_install_attempt_ledger' && item.sha256 === manifest.evidence[0].sha256,
+  ));
+
+  writeJsonFile(blockerFile, { ...blocker, dependent_case_id: 'BETA-SKILL-007', not_applicable_roles: notApplicableRoles });
+  const mismatched = buildCoreEvidenceManifest({
+    testCase: { id: 'BETA-SKILL-006', evidence_roles: ['task_id'] },
+    caseDir: prerequisiteEvidenceDir,
+    artifacts: {
+      core_beta_not_applicable_roles: [{ role: 'task_id', blocker_path: blockerFile }],
+    },
+  });
+  assert.deepEqual(mismatched.missing_roles, ['task_id']);
+} finally {
+  fs.rmSync(prerequisiteEvidenceDir, { recursive: true, force: true });
+}
+assert.match(
+  runner,
+  /installedTargets[\s\S]*cancelReceipt[\s\S]*cleanupValid[\s\S]*applyCoreBetaSkillPrerequisiteBlocker/,
+  'BETA-SKILL-012 必须清理本轮真实成功安装的资源，再传播上游短缺阻塞',
 );
 assert.match(
   runner,

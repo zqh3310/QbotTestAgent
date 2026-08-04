@@ -5137,6 +5137,115 @@ export function coreBetaSkillInstallBatchAssessment(receipts = [], expectedCount
   };
 }
 
+export function coreBetaSkillInstallPrerequisiteBlocker(ledger = {}, {
+  expectedCount = 10,
+  targetIdentity = '',
+  dependentCaseId = '',
+} = {}) {
+  const selected = Array.isArray(ledger?.skills?.selected) ? ledger.skills.selected : [];
+  const attempts = Array.isArray(ledger?.skills?.install_attempt_receipts)
+    ? ledger.skills.install_attempt_receipts
+    : [];
+  const selectedIdentities = selected.map((item) => String(item?.qualified_identity || '')).filter(Boolean);
+  const attemptIdentities = attempts.map((item) => String(item?.qualified_identity || '')).filter(Boolean);
+  const sourceCaseIds = [...new Set(attempts.map((item) => String(item?.source_case_id || '')).filter(Boolean))];
+  const target = targetIdentity
+    ? attempts.find((item) => item?.qualified_identity === targetIdentity) || null
+    : null;
+  const expected = Number(expectedCount);
+  const batchEvidenceValid = expected === 10
+    && coreBetaSkillInstallBatchAssessment(attempts.slice(0, 5), 5).valid
+    && coreBetaSkillInstallBatchAssessment(attempts.slice(5, 10), 5).valid;
+  const valid = Number.isInteger(expected)
+    && expected > 0
+    && selected.length === expected
+    && attempts.length === expected
+    && selectedIdentities.length === expected
+    && attemptIdentities.length === expected
+    && new Set(selectedIdentities).size === expected
+    && new Set(attemptIdentities).size === expected
+    && selectedIdentities.every((identity, index) => identity === attemptIdentities[index])
+    && attempts.every((item) => typeof item?.oracle_passed === 'boolean')
+    && attempts.slice(0, 5).every((item) => item?.source_case_id === 'BETA-SKILL-003')
+    && attempts.slice(5, 10).every((item) => item?.source_case_id === 'BETA-SKILL-004')
+    && sourceCaseIds.length === 2
+    && sourceCaseIds[0] === 'BETA-SKILL-003'
+    && sourceCaseIds[1] === 'BETA-SKILL-004'
+    && (!targetIdentity || Boolean(target && selectedIdentities.includes(targetIdentity)))
+    && batchEvidenceValid;
+  const successful = attempts.filter((item) => item?.oracle_passed === true);
+  const applicable = valid && (targetIdentity
+    ? Boolean(target && target.oracle_passed !== true)
+    : successful.length < expected);
+  const failedIdentities = attempts
+    .filter((item) => item?.oracle_passed !== true)
+    .map((item) => item.qualified_identity);
+  const reason = !valid
+    ? 'Skill 安装尝试账本不完整，不能传播上游前置阻塞。'
+    : targetIdentity
+      ? applicable
+        ? `指定 Skill 安装前置失败：${targetIdentity}；依赖该身份的 Case 不得发送或随机替换。`
+        : `指定 Skill 安装前置已满足：${targetIdentity}。`
+      : applicable
+        ? `技能安装前置未完成：要求 ${expected} 个，真实成功 ${successful.length} 个；依赖完整安装集的 Case 不得重复归因为自身产品 Bug。`
+        : `技能安装前置已满足：${successful.length}/${expected}。`;
+  return {
+    schema_version: 'qbot-core-beta-upstream-prerequisite/v1',
+    valid,
+    oracle_valid: valid && !applicable,
+    applicable,
+    kind: 'skill_install_terminal_shortage',
+    source: 'exact_run_owned_install_attempt_ledger',
+    dependent_case_id: String(dependentCaseId || ''),
+    reason,
+    expected_count: expected,
+    attempted_count: attempts.length,
+    successful_count: successful.length,
+    failed_count: failedIdentities.length,
+    target_identity: String(targetIdentity || ''),
+    failed_identities: failedIdentities,
+    source_case_ids: sourceCaseIds,
+    receipts_sha256: createHash('sha256').update(JSON.stringify(attempts)).digest('hex'),
+  };
+}
+
+const CORE_BETA_SKILL_PREREQUISITE_NA_ROLES = Object.freeze([
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+function applyCoreBetaSkillPrerequisiteBlocker({ state, testCase, caseDir, blocker, extra = {} }) {
+  const notApplicableRoles = (testCase.evidence_roles || [])
+    .filter((role) => CORE_BETA_SKILL_PREREQUISITE_NA_ROLES.includes(role));
+  const file = path.join(caseDir, 'upstream-skill-install-prerequisite.json');
+  writeJsonFile(file, {
+    ...blocker,
+    dependent_case_id: testCase.id,
+    not_applicable_roles: notApplicableRoles,
+    ...extra,
+  });
+  state.artifacts.capability_inventory = file;
+  state.artifacts.capability_selection = file;
+  state.artifacts.capability_execution_event = file;
+  state.artifacts.core_beta_not_applicable_roles = notApplicableRoles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  recordAssertion(
+    state,
+    'Skill 上游安装前置账本',
+    '只有10个固定样本的安装终态证据完整且目标依赖确实未安装时，才允许阻塞后续发送并将发送后证据标为不适用。',
+    true,
+    blocker.reason,
+  );
+  markBlocked(state, blocker.reason);
+  return file;
+}
+
 async function readCoreBetaSkillOperationFeedback(page, targetLabel) {
   return await page.locator('[data-testid="skill-operation-feedback"]').first().evaluate((node, label) => {
     const text = String(node.textContent || '').trim();
@@ -5405,13 +5514,17 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         );
       }
       const assessment = coreBetaSkillInstallBatchAssessment(receipts, 5);
+      const persistedReceipts = receipts.map((item) => ({
+        ...item,
+        source_case_id: testCase.id,
+      }));
       ledger.skills.install_receipts = [
         ...(ledger.skills.install_receipts || []),
-        ...receipts.filter((item) => item.oracle_passed),
+        ...persistedReceipts.filter((item) => item.oracle_passed),
       ];
       ledger.skills.install_attempt_receipts = [
         ...(ledger.skills.install_attempt_receipts || []),
-        ...receipts,
+        ...persistedReceipts,
       ];
       writeCoreBetaSuiteLedger(caseDir, ledger);
       const file = path.join(caseDir, 'capability-execution-event.json');
@@ -5429,69 +5542,185 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       return;
     }
     if (testCase.id === 'BETA-SKILL-005') {
+      const prerequisite = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
+        expectedCount: 10,
+        dependentCaseId: testCase.id,
+      });
+      if (!prerequisite.valid) {
+        throw new Error(`${testCase.id} 无法验证上游10个Skill安装终态账本：${prerequisite.reason}`);
+      }
+      if (prerequisite.applicable) {
+        applyCoreBetaSkillPrerequisiteBlocker({ state, testCase, caseDir, blocker: prerequisite });
+        return;
+      }
       await selectCoreBetaSkillTab(page, '技能市场');
       const catalog = await readCoreBetaSkillCatalog(page);
       const selected = Array.isArray(ledger.skills.selected) ? ledger.skills.selected : [];
       const installedKeys = new Set(catalog.installed.map(skillQualifiedIdentity));
       const present = selected.filter((item) => installedKeys.has(item.qualified_identity));
+      const marketByIdentity = new Map(catalog.market.map((item) => [skillQualifiedIdentity(item), item]));
+      const marketInstalled = selected.filter((item) => marketByIdentity.get(item.qualified_identity)?.installed === true);
       await selectCoreBetaSkillTab(page, '历史');
       const historyCatalog = await readCoreBetaSkillCatalog(page);
+      const historyText = JSON.stringify(historyCatalog.history || []);
+      const historyPresent = selected.filter((item) => (
+        historyText.includes(item.qualified_identity)
+        || historyText.includes(item.slug)
+      ));
       await openNewTask(page, state);
-      if (!await setSkillMode(page, state, caseDir, 'manual')) return;
+      const manualMenuOpened = await setSkillMode(page, state, caseDir, 'manual');
       const menuText = await activeMenuText(page, 'skill');
       const composerVisible = selected.filter((item) => menuText.includes(item.label));
       const file = path.join(caseDir, 'capability-inventory.json');
+      const oracleValid = marketInstalled.length === 10
+        && present.length === 10
+        && historyPresent.length === 10
+        && manualMenuOpened
+        && composerVisible.length === 10;
       writeJsonFile(file, {
-        valid: present.length === 10 && composerVisible.length === 10,
+        valid: true,
+        oracle_valid: oracleValid,
         selected,
+        market_installed: marketInstalled.map((item) => item.qualified_identity),
         installed: present.map((item) => item.qualified_identity),
         history: historyCatalog.history,
+        history_present: historyPresent.map((item) => item.qualified_identity),
+        composer_menu_opened: manualMenuOpened,
+        composer_menu_text: menuText,
         composer_visible: composerVisible.map((item) => item.qualified_identity),
       });
       state.artifacts.capability_inventory = file;
       state.artifacts.capability_selection = file;
       state.artifacts.capability_execution_event = file;
-      recordAssertion(state, '10个Skill市场/已安装/历史/Composer闭环', '同一10个qualified identity必须全部已安装并出现在Composer手动列表。', present.length === 10 && composerVisible.length === 10, `installed=${present.length}; composer=${composerVisible.length}`);
+      recordAssertion(
+        state,
+        '10个Skill市场/已安装/历史/Composer闭环',
+        '同一10个qualified identity必须在市场、已安装、历史和Composer手动列表中一致。',
+        oracleValid,
+        `marketInstalled=${marketInstalled.length}; installed=${present.length}; history=${historyPresent.length}; composerMenu=${manualMenuOpened}; composer=${composerVisible.length}`,
+      );
       return;
     }
     if (testCase.id === 'BETA-SKILL-012') {
       await selectCoreBetaSkillTab(page, '已安装');
       const selected = Array.isArray(ledger.skills.selected) ? ledger.skills.selected : [];
       if (selected.length !== 10) throw new Error('BETA-SKILL-012 缺少10个QA安装账本样本');
+      const prerequisite = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
+        expectedCount: 10,
+        dependentCaseId: testCase.id,
+      });
+      if (!prerequisite.valid) {
+        throw new Error(`${testCase.id} 无法验证上游10个Skill安装终态账本：${prerequisite.reason}`);
+      }
       const before = await readCoreBetaSkillCatalog(page);
-      const first = selected[0];
-      const firstCard = page.locator('.skill-card').filter({ hasText: first.label }).first();
-      await firstCard.locator('.skill-card-more-trigger').click({ force: true });
-      await firstCard.locator('.skill-card-more-delete').click({ force: true });
-      await expectVisibleCoreLocator(page, '[data-testid="skill-uninstall-dialog"]', 'Skill卸载确认框');
-      await page.locator('[data-testid="skill-uninstall-cancel"]').click({ force: true });
+      const installedTargets = selected.filter((target) => (
+        before.installed.some((item) => skillQualifiedIdentity(item) === target.qualified_identity)
+      ));
+      const first = installedTargets[0] || null;
+      const cancelReceipt = {
+        target_identity: first?.qualified_identity || '',
+        card_visible: false,
+        menu_visible: false,
+        delete_visible: false,
+        dialog_visible: false,
+        cancel_visible: false,
+        clicked: false,
+      };
+      if (first) {
+        const firstCard = page.locator('.skill-card').filter({ hasText: first.label }).first();
+        cancelReceipt.card_visible = await visible(firstCard, 2_000);
+        const more = firstCard.locator('.skill-card-more-trigger').first();
+        cancelReceipt.menu_visible = cancelReceipt.card_visible && await visible(more, 1_000);
+        if (cancelReceipt.menu_visible) {
+          await more.click({ force: true }).catch(() => {});
+          const remove = firstCard.locator('.skill-card-more-delete').first();
+          cancelReceipt.delete_visible = await visible(remove, 1_000);
+          if (cancelReceipt.delete_visible) {
+            await remove.click({ force: true }).catch(() => {});
+            const dialog = page.locator('[data-testid="skill-uninstall-dialog"]').first();
+            cancelReceipt.dialog_visible = await visible(dialog, 2_000);
+            const cancel = page.locator('[data-testid="skill-uninstall-cancel"]').first();
+            cancelReceipt.cancel_visible = cancelReceipt.dialog_visible && await visible(cancel, 1_000);
+            if (cancelReceipt.cancel_visible) {
+              await cancel.click({ force: true }).catch(() => {});
+              cancelReceipt.clicked = true;
+            }
+          }
+        }
+      }
+      cancelReceipt.screenshot = await shot(page, caseDir, 'skill-uninstall-cancel-terminal');
       const afterCancel = await readCoreBetaSkillCatalog(page);
-      const cancelKept = afterCancel.installed.some((item) => skillQualifiedIdentity(item) === first.qualified_identity);
+      const cancelKept = Boolean(first && cancelReceipt.clicked && afterCancel.installed.some(
+        (item) => skillQualifiedIdentity(item) === first.qualified_identity,
+      ));
       const receipts = [];
-      for (const target of selected) {
+      for (const target of installedTargets) {
         const installed = afterCancel.installed.find((item) => skillQualifiedIdentity(item) === target.qualified_identity);
         if (!installed) continue;
-        const result = await page.evaluate((item) => window.agent.uninstallSkill(item), installed);
+        const result = await page.evaluate((item) => window.agent.uninstallSkill(item), installed)
+          .catch((error) => ({ ok: false, error: error.message }));
         receipts.push({ qualified_identity: target.qualified_identity, result });
-        if (!result?.ok) throw new Error(`Skill卸载失败：${target.qualified_identity}`);
       }
       const after = await readCoreBetaSkillCatalog(page);
       const remaining = after.installed.filter((item) => selected.some((target) => target.qualified_identity === skillQualifiedIdentity(item)));
       const baseline = new Set(ledger.skills.baseline_installed || []);
       const unrelatedAfter = after.installed.map(skillQualifiedIdentity).filter((key) => baseline.has(key)).sort();
+      const unrelatedBefore = before.installed.map(skillQualifiedIdentity).filter((key) => baseline.has(key)).sort();
+      const cleanupValid = receipts.length === installedTargets.length
+        && receipts.every((item) => typeof item?.result?.ok === 'boolean')
+        && remaining.length === 0
+        && JSON.stringify(unrelatedBefore) === JSON.stringify(unrelatedAfter);
+      const oracleValid = !prerequisite.applicable
+        && installedTargets.length === 10
+        && cancelKept
+        && cleanupValid
+        && receipts.every((item) => item.result.ok === true);
       const file = path.join(caseDir, 'capability-execution-event.json');
       writeJsonFile(file, {
-        valid: cancelKept && receipts.length === 10 && remaining.length === 0,
+        valid: true,
+        oracle_valid: oracleValid,
         before,
+        installed_target_count: installedTargets.length,
+        cancel_receipt: cancelReceipt,
         cancel_kept: cancelKept,
         receipts,
         after,
+        remaining: remaining.map(skillQualifiedIdentity),
+        unrelated_before: unrelatedBefore,
         unrelated_after: unrelatedAfter,
+        cleanup_valid: cleanupValid,
       });
       state.artifacts.capability_inventory = file;
       state.artifacts.capability_selection = file;
       state.artifacts.capability_execution_event = file;
-      recordAssertion(state, 'Skill取消卸载与确认卸载闭环', '取消必须保留样本，确认后10个样本全部移除且不影响基线技能。', cancelKept && receipts.length === 10 && remaining.length === 0, `cancelKept=${cancelKept}; removed=${receipts.length}; remaining=${remaining.length}`);
+      recordAssertion(
+        state,
+        '本轮成功安装 Skill 定向清理',
+        '不论上游安装是否全量成功，都必须清理本轮真实安装成功的identity且不影响基线技能。',
+        cleanupValid,
+        `installedTargets=${installedTargets.length}; receipts=${receipts.length}; remaining=${remaining.length}; unrelatedPreserved=${JSON.stringify(unrelatedBefore) === JSON.stringify(unrelatedAfter)}`,
+        cleanupValid ? 'bug' : 'automation_error',
+      );
+      if (prerequisite.applicable) {
+        applyCoreBetaSkillPrerequisiteBlocker({
+          state,
+          testCase,
+          caseDir,
+          blocker: prerequisite,
+          extra: {
+            cleanup_evidence: file,
+            cleanup_valid: cleanupValid,
+          },
+        });
+        return;
+      }
+      recordAssertion(
+        state,
+        'Skill取消卸载与确认卸载闭环',
+        '取消必须保留样本，确认后10个样本全部移除且不影响基线技能。',
+        oracleValid,
+        `cancelKept=${cancelKept}; removed=${receipts.length}; remaining=${remaining.length}`,
+      );
       return;
     }
     if (testCase.id === 'BETA-SKILL-014') {
@@ -5547,6 +5776,27 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
     return;
   }
   const ledger = readCoreBetaSuiteLedger(caseDir);
+  const deepUseIndex = Number(testCase.id.split('-').at(-1)) - 6;
+  const selectedSkill = /^BETA-SKILL-0(?:06|07|08|09|10)$/.test(testCase.id)
+    ? ledger.skills?.deep_use?.[deepUseIndex]
+    : ledger.skills?.deep_use?.[0];
+  if (/^BETA-SKILL-0(?:06|07|08|09|10|11)$/.test(testCase.id)) {
+    if (!selectedSkill?.qualified_identity) {
+      throw new Error(`${testCase.id} 缺少可验证的deep_use Skill账本身份`);
+    }
+    const prerequisite = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
+      expectedCount: 10,
+      targetIdentity: selectedSkill.qualified_identity,
+      dependentCaseId: testCase.id,
+    });
+    if (!prerequisite.valid) {
+      throw new Error(`${testCase.id} 无法验证目标Skill安装终态账本：${prerequisite.reason}`);
+    }
+    if (prerequisite.applicable) {
+      applyCoreBetaSkillPrerequisiteBlocker({ state, testCase, caseDir, blocker: prerequisite });
+      return;
+    }
+  }
   if (testCase.id === 'BETA-SKILL-011') {
     return await executeCoreBetaSkillIsolationCase({ page, state, testCase, caseDir, timeoutMs, ledger });
   }
@@ -5556,10 +5806,6 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
   if (testCase.id === 'BETA-SKILL-015') {
     return await executeCoreBetaSkillConnectorBoundaryCase({ page, state, testCase, caseDir, timeoutMs, ledger, options });
   }
-  const deepUseIndex = Number(testCase.id.split('-').at(-1)) - 6;
-  const selectedSkill = /^BETA-SKILL-0(?:06|07|08|09|10)$/.test(testCase.id)
-    ? ledger.skills?.deep_use?.[deepUseIndex]
-    : ledger.skills?.deep_use?.[0];
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'disabled' })) return;
   if (selectedSkill) {
