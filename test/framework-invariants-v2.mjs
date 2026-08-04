@@ -1999,6 +1999,29 @@ const corePdfReply = [
 ].join('\n');
 assert.equal(replyLooksRelevant(corePdfReply, corePdfCase, corePdfPrompt), true, 'PDF 页码结论不得被通用相关性误判');
 assert.equal(caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, corePdfReply).ok, true, 'PDF 三条结论必须命中页码和 fixture 锚点');
+const observedCollectivePagePdfReply = [
+  '这是一份单页测试文档（共 1 页）。',
+  '三条关键结论（均位于第 1 页）：',
+  '核心目标：验证 Agent 能够读取 PDF 测试文件。',
+  '验收要求：需进行摘要总结、发现风险，并保持产品友好表述 product-friendly。',
+  '文档标题：QBot PDF Summary。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, observedCollectivePagePdfReply).ok,
+  true,
+  'PDF 三条结论的无歧义统一页码标注不得被误判',
+);
+const splitPagePdfReply = [
+  'QBot PDF Summary 的三条关键信息如下，但不都在第 1 页：',
+  '1. 验证 Agent 能够读取 PDF 附件（第 1 页）。',
+  '2. 核心验收包含摘要总结和发现风险（第 2 页，不在第 1 页）。',
+  '3. 输出必须保持产品友好措辞 product-friendly（第 3 页，不在第 1 页）。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, splitPagePdfReply).ok,
+  false,
+  'PDF 统一页码规则不得接受否定绑定或分散页码',
+);
 assert.equal(caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, 'PDF 第 1 页没有可总结内容。').ok, false, '只有页码但没有三条 fixture 事实不得通过 PDF 硬 Oracle');
 assert.equal(replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', corePdfCase, corePdfPrompt), false, 'PDF Case 不得接受无关天气回复');
 

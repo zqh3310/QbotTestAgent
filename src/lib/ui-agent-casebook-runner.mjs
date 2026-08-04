@@ -25544,6 +25544,30 @@ function scenarioConversationTurns(testCase, attachments) {
   return [];
 }
 
+function pdfPageOneCoverage(replyText) {
+  const reply = String(replyText || '');
+  const explicitReferences = (reply.match(/第\s*1\s*页/g) || []).length;
+  const conclusionGroup = '(?:以下\\s*)?(?:三|3)\\s*(?:条|点|项)(?:\\s*关键)?\\s*(?:结论|信息|内容)?';
+  const pageOne = '第\\s*1\\s*页';
+  const collectivePatterns = [
+    new RegExp(`${conclusionGroup}[\\s\\S]{0,80}(?:均|全部|全都|都)(?:\\s*(?:位于|来自|在|见于|出自))?[\\s\\S]{0,20}${pageOne}`, 'i'),
+    new RegExp(`${pageOne}[\\s\\S]{0,50}(?:包含|涵盖|列出|给出|有|承载)[\\s\\S]{0,30}${conclusionGroup}`, 'i'),
+  ];
+  const negatedCollectiveReference = [
+    new RegExp(`${conclusionGroup}[\\s\\S]{0,80}(?:并非|不是|不\\s*(?:均|都|全))[\\s\\S]{0,20}${pageOne}`, 'i'),
+    new RegExp(`${pageOne}[\\s\\S]{0,50}(?:不|未)\\s*(?:包含|涵盖|列出|给出|有|承载)[\\s\\S]{0,30}${conclusionGroup}`, 'i'),
+  ].some((pattern) => pattern.test(reply));
+  const collectiveReference = collectivePatterns.some((pattern) => {
+    const matched = reply.match(pattern)?.[0] || '';
+    return Boolean(matched) && !/(?:并非|不是|不|未)\s*(?:均|全部|全都|都|包含|涵盖|列出|给出|有|承载)/.test(matched);
+  });
+  return {
+    explicitReferences,
+    collectiveReference,
+    ok: !negatedCollectiveReference && (explicitReferences >= 3 || collectiveReference),
+  };
+}
+
 function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
   const lines = String(replyText || '')
     .split(/\r?\n/)
@@ -25620,7 +25644,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const notApplicable = { applicable: false };
 
   if (id === 'BETA-FILE-001') {
-    const pageReferences = reply.match(/第\s*1\s*页/g) || [];
+    const pageCoverage = pdfPageOneCoverage(reply);
     const fixtureFacts = /QBot PDF Summary/i.test(reply)
       && /Agent.{0,20}(?:读取|read).{0,20}PDF/i.test(reply)
       && /摘要|总结/.test(reply)
@@ -25629,8 +25653,8 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
     return result(
       'PDF 三条结论与页码锚点',
       '应基于真实 PDF 给出三条可核对结论，每条标注第 1 页，并命中文档标题、读取目标及摘要/风险/产品友好验收锚点。',
-      pageReferences.length >= 3 && fixtureFacts,
-      `page_references=${pageReferences.length}；fixture_facts=${fixtureFacts}；reply=${clip(reply, 460)}`,
+      pageCoverage.ok && fixtureFacts,
+      `page_references=${pageCoverage.explicitReferences}；collective_page_reference=${pageCoverage.collectiveReference}；fixture_facts=${fixtureFacts}；reply=${clip(reply, 460)}`,
     );
   }
 

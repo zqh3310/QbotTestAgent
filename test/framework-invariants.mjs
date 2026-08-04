@@ -1460,6 +1460,35 @@ if (!replyLooksRelevant('已记录三类用户分群：新客、沉默客、高�
 }, '用户分层包括新客、沉默客、高价值老客')) {
   throw new Error('用户分层/用户分群同义回复不应被相关性启发式误判');
 }
+const corePdfCase = {
+  id: 'BETA-FILE-001',
+  module: '核心内测',
+  submodule: '附件与多模态',
+  scenario: '上传真实PDF并提炼带页码的关键结论',
+  test_data: '带已知页码和锚点内容的PDF fixture。',
+};
+const corePdfPrompt = '请提炼附件中的三条关键结论，并标注页码。';
+const collectivePagePdfReply = [
+  '第 1 页包含以下三条关键结论：',
+  '文档标题是 QBot PDF Summary。',
+  '目标是验证 Agent 能够读取 PDF。',
+  '验收要求包括摘要总结、发现风险和产品友好措辞 product-friendly。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, collectivePagePdfReply).ok,
+  true,
+  '通用 runner 必须接受 PDF 三条结论的无歧义统一页码标注',
+);
+const negatedCollectivePagePdfReply = [
+  'QBot PDF Summary 有三条信息，但不都在第 1 页。',
+  '目标是验证 Agent 能够读取 PDF（第 1 页）。',
+  '摘要总结和风险在第 2 页，不在第 1 页；产品友好措辞 product-friendly 在第 3 页。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, negatedCollectivePagePdfReply).ok,
+  false,
+  '通用 runner 不得接受 PDF 结论与第 1 页的否定统一绑定',
+);
 if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
   throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
 }
