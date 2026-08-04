@@ -1036,6 +1036,92 @@ export function coreBetaCompletionBlockReason(testCase, result) {
   ))) {
     return `框架发布门禁 ${id} 拒绝缺失、无效或 SHA 不完整的 evidence 进入 completed。`;
   }
+  const batchEvidenceBlock = coreBetaDispatchCollect20CompletionBlockReason(testCase, result);
+  if (batchEvidenceBlock) return batchEvidenceBlock;
+  return '';
+}
+
+export function coreBetaDispatchCollect20CompletionBlockReason(testCase, result) {
+  const id = String(testCase?.id || result?.id || '');
+  if (id !== 'BETA-CHAT-008') return '';
+  const expected = Number(testCase?.batch_size || result?.batch_size || 20);
+  const artifacts = result?.artifacts && typeof result.artifacts === 'object'
+    ? result.artifacts
+    : {};
+  if (expected !== 20) return `框架发布门禁 ${id} 要求 batch_size=20，actual=${expected}。`;
+  if (artifacts.core_beta_scenario_driver !== 'conversation_dispatch_collect_20') {
+    return `框架发布门禁 ${id} 拒绝错误 scenario driver：${artifacts.core_beta_scenario_driver || 'missing'}。`;
+  }
+  const dispatch = artifacts.core_beta_batch_dispatch;
+  if (!Array.isArray(dispatch) || dispatch.length !== expected) {
+    return `框架发布门禁 ${id} 拒绝缺失的 20 条批量派发账本：actual=${Array.isArray(dispatch) ? dispatch.length : 'missing'}。`;
+  }
+  const taskIds = dispatch.map((entry) => String(entry?.task_id || ''));
+  if (
+    taskIds.some((taskId) => !taskId)
+    || new Set(taskIds).size !== expected
+    || dispatch.some((entry) => (
+      entry?.send_receipt?.confirmed !== true
+      || !String(entry?.send_receipt?.confirmed_at || '')
+      || !String(entry?.marker || '')
+      || !String(entry?.prompt || '').includes(String(entry?.marker || ''))
+      || !coreBetaBatchEvidenceFilePresent(entry?.dispatch_screenshot)
+    ))
+  ) {
+    return `框架发布门禁 ${id} 拒绝 taskId、marker、确认发送回执或逐任务发送后截图不完整的派发账本。`;
+  }
+  const pending = artifacts.core_beta_batch_pending_pool;
+  const pendingTaskIds = Array.isArray(pending?.observations)
+    ? pending.observations.map((entry) => String(entry?.task_id || ''))
+    : [];
+  if (
+    !pending
+    || Number(pending.expected_task_count || 0) !== expected
+    || Number(pending.minimum_pending_required || 0) !== 5
+    || pendingTaskIds.length !== expected
+    || new Set(pendingTaskIds).size !== expected
+    || pendingTaskIds.some((taskId) => !taskIds.includes(taskId))
+    || !coreBetaBatchEvidenceFilePresent(pending.screenshot)
+  ) {
+    return `框架发布门禁 ${id} 拒绝缺失或结构不完整的末条派发后待回复池读回。`;
+  }
+  const collected = artifacts.core_beta_batch_collect;
+  if (
+    !Array.isArray(collected)
+    || collected.length !== expected
+    || collected.some((entry) => (
+      !taskIds.includes(String(entry?.task_id || ''))
+      || !String(entry?.terminal_outcome || '')
+      || !String(entry?.terminal_at || '')
+      || Number(entry?.observation_count || 0) < 1
+      || !entry?.last_observation
+      || !coreBetaBatchEvidenceFilePresent(entry?.terminal_screenshot)
+    ))
+  ) {
+    return `框架发布门禁 ${id} 拒绝缺失逐 taskId 终态观察或终态截图的批量回收账本。`;
+  }
+  const terminal = artifacts.core_beta_batch_collection_summary?.terminal_evidence;
+  if (
+    !terminal
+    || terminal.available !== true
+    || terminal.task_ids_unique !== true
+    || terminal.dispatch_receipts_complete !== true
+    || terminal.terminal_rows_complete !== true
+    || Number(terminal.dispatched || 0) !== expected
+  ) {
+    return `框架发布门禁 ${id} 拒绝缺失或不完整的批量共享截止时间终态证据。`;
+  }
+  const caseDir = String(result?.case_dir || '');
+  const requiredFiles = [
+    'batch-dispatch-ledger.json',
+    'batch-pending-pool.json',
+    'batch-collect-observations.ndjson',
+    'batch-collect-ledger.json',
+    'batch-collection-summary.json',
+  ];
+  if (!caseDir || requiredFiles.some((name) => !coreBetaBatchEvidenceFilePresent(path.join(caseDir, name)))) {
+    return `框架发布门禁 ${id} 拒绝缺失的不可变批量证据文件：${requiredFiles.join(',')}。`;
+  }
   return '';
 }
 
@@ -1765,6 +1851,10 @@ export function singleHostPipelineEligibility(testCase) {
   if (isCoreBetaCase(testCase)) {
     const policy = String(testCase?.pipeline_policy || '');
     const batchSize = Number(testCase?.batch_size || 1);
+    const scenario = coreBetaScenarioSpec(testCase);
+    if (scenario?.driver === 'conversation_dispatch_collect_20') {
+      reasons.push('conversation_dispatch_collect_20 owns an internal 20-task dispatch/collect lifecycle');
+    }
     if (!['dispatch_collect', 'dispatch_collect_round_robin'].includes(policy)) reasons.push(`pipeline_policy=${policy || '空'} 非批量策略`);
     if (!Number.isInteger(batchSize) || batchSize < 2 || batchSize > MAX_SINGLE_HOST_PIPELINE_SIZE) reasons.push(`batch_size=${batchSize} 非 2-${MAX_SINGLE_HOST_PIPELINE_SIZE}`);
     if (!['conversation', 'attachment', 'artifact', 'skill_use', 'expert_use', 'mcp_use'].includes(String(testCase?.case_type || ''))) {
@@ -6603,9 +6693,713 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   state.artifacts.capability_execution_event = identityFile;
 }
 
+function setCoreBetaEvidence(state, role, evidence) {
+  state.artifacts.core_beta_evidence ||= {};
+  state.artifacts.core_beta_evidence[role] = {
+    available: true,
+    captured_at: new Date().toISOString(),
+    ...evidence,
+  };
+  return state.artifacts.core_beta_evidence[role];
+}
+
+export function coreBetaBatchSharedDeadline(
+  entries = [],
+  requestedTimeoutMs = DEFAULT_TIMEOUT_MS,
+  collectionStartedAtMs = Date.now(),
+) {
+  const requested = Number(requestedTimeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Math.min(
+    MAX_REPLY_WAIT_MS,
+    Math.max(MIN_REPLY_WAIT_MS, Number.isFinite(requested) ? requested : DEFAULT_TIMEOUT_MS),
+  );
+  const startedAtMs = Number(collectionStartedAtMs || Date.now());
+  const dispatchTimes = (Array.isArray(entries) ? entries : [])
+    .map((entry) => Date.parse(String(entry?.dispatched_at || '')))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const latestDispatchAtMs = dispatchTimes.length ? Math.max(...dispatchTimes) : startedAtMs;
+  // One shared deadline covers the whole batch.  It is intentionally anchored
+  // to the last confirmed dispatch so the final task receives the same reply
+  // budget as a serial task, while the collector revisits every task in rounds
+  // instead of multiplying the timeout by the batch size.
+  const deadlineAtMs = Math.max(
+    latestDispatchAtMs + timeoutMs,
+    startedAtMs + MIN_REPLY_WAIT_MS,
+  );
+  return {
+    collection_started_at_ms: startedAtMs,
+    latest_dispatch_at_ms: latestDispatchAtMs,
+    timeout_ms: timeoutMs,
+    deadline_at_ms: deadlineAtMs,
+    additive_per_task_timeout: false,
+  };
+}
+
+function coreBetaBatchEvidenceFilePresent(file) {
+  return typeof file === 'string'
+    && Boolean(file)
+    && fs.existsSync(file)
+    && fs.statSync(file).isFile()
+    && fs.statSync(file).size > 0;
+}
+
+export function coreBetaBatchTerminalEvidence(entries = [], {
+  deadlineAtMs = 0,
+  deadlineReached = false,
+} = {}) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const taskIds = rows.map((entry) => String(entry?.task_id || ''));
+  const taskIdsUnique = rows.length > 0
+    && taskIds.every(Boolean)
+    && new Set(taskIds).size === rows.length;
+  const dispatchReceiptsComplete = rows.length > 0 && rows.every((entry) => (
+    entry?.send_receipt?.confirmed === true
+    && String(entry?.send_receipt?.confirmed_at || '')
+    && coreBetaBatchEvidenceFilePresent(entry?.dispatch_screenshot)
+  ));
+  const terminalRowsComplete = rows.length > 0 && rows.every((entry) => (
+    String(entry?.terminal_outcome || '')
+    && String(entry?.terminal_at || '')
+    && Number(entry?.observation_count || 0) > 0
+    && entry?.last_observation
+    && typeof entry.last_observation === 'object'
+    && coreBetaBatchEvidenceFilePresent(entry?.terminal_screenshot)
+  ));
+  const allCompleted = terminalRowsComplete && rows.every((entry) => (
+    entry?.ok === true
+    && entry?.terminal_outcome === 'reply_completed'
+  ));
+  const allTerminalBeforeDeadline = terminalRowsComplete && rows.every((entry) => (
+    !['', 'pending'].includes(String(entry?.terminal_outcome || ''))
+  ));
+  const available = taskIdsUnique
+    && dispatchReceiptsComplete
+    && terminalRowsComplete
+    && (allCompleted || allTerminalBeforeDeadline || deadlineReached);
+  const completedCount = rows.filter((entry) => entry?.terminal_outcome === 'reply_completed').length;
+  const replyPresentCount = rows.filter((entry) => entry?.last_observation?.assistant_reply_present === true).length;
+  const timeoutCount = rows.filter((entry) => (
+    /batch_deadline|deadline/.test(String(entry?.terminal_outcome || ''))
+  )).length;
+  const terminalOutcome = allCompleted
+    ? 'batch_completed'
+    : deadlineReached && timeoutCount > 0
+      ? 'batch_partial_timeout'
+      : 'batch_terminal_failure';
+  return {
+    available,
+    completion_observed: allCompleted,
+    terminal_failure: available && !allCompleted,
+    terminal_outcome: terminalOutcome,
+    source: 'per-task confirmed send receipt + round-robin taskId collection + per-task terminal screenshot',
+    dispatched: rows.length,
+    completed: completedCount,
+    reply_present: replyPresentCount,
+    failed_or_timed_out: Math.max(0, rows.length - completedCount),
+    timeout_count: timeoutCount,
+    task_ids_unique: taskIdsUnique,
+    dispatch_receipts_complete: dispatchReceiptsComplete,
+    terminal_rows_complete: terminalRowsComplete,
+    shared_deadline_reached: Boolean(deadlineReached),
+    shared_deadline_at: Number(deadlineAtMs || 0)
+      ? new Date(Number(deadlineAtMs)).toISOString()
+      : '',
+    reason: available
+      ? ''
+      : '批量终态证据必须覆盖每条唯一 taskId 的确认发送回执、发送后截图、任务状态观察和终态截图。',
+  };
+}
+
+export function coreBetaBatchPendingPoolEvidence(rows = [], {
+  expectedTaskIds = [],
+  minimumPending = 1,
+  capturedAt = '',
+} = {}) {
+  const expected = [...new Set((Array.isArray(expectedTaskIds) ? expectedTaskIds : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean))];
+  const observations = Array.isArray(rows) ? rows : [];
+  const byTaskId = new Map(observations.map((item) => [String(item?.task_id || ''), item]));
+  const normalized = expected.map((taskId) => {
+    const observed = byTaskId.get(taskId) || {};
+    return {
+      task_id: taskId,
+      item_present: observed.item_present === true,
+      running_indicator_present: observed.running_indicator_present === true,
+      running_indicator_visible: observed.running_indicator_visible === true,
+    };
+  });
+  const minimum = Number(minimumPending || 0);
+  const pendingTaskIds = normalized
+    .filter((item) => item.running_indicator_present)
+    .map((item) => item.task_id);
+  const visiblePendingTaskIds = normalized
+    .filter((item) => item.running_indicator_visible)
+    .map((item) => item.task_id);
+  const taskItemsComplete = expected.length > 0
+    && normalized.every((item) => item.item_present);
+  const thresholdValid = Number.isInteger(minimum)
+    && minimum >= 1
+    && minimum <= expected.length;
+  return {
+    available: taskItemsComplete && thresholdValid,
+    completion_observed: taskItemsComplete
+      && thresholdValid
+      && pendingTaskIds.length >= minimum,
+    source: 'visible sidebar session-item + run-dot[title="正在执行"]',
+    captured_at: String(capturedAt || ''),
+    expected_task_count: expected.length,
+    task_item_count: normalized.filter((item) => item.item_present).length,
+    pending_count: pendingTaskIds.length,
+    visible_pending_count: visiblePendingTaskIds.length,
+    minimum_pending_required: minimum,
+    pending_task_ids: pendingTaskIds,
+    visible_pending_task_ids: visiblePendingTaskIds,
+    observations: normalized,
+    reason: taskItemsComplete && thresholdValid
+      ? pendingTaskIds.length >= minimum
+        ? ''
+        : `末条派发后待回复会话仅 ${pendingTaskIds.length} 条，低于要求 ${minimum} 条。`
+      : `待回复池证据不完整：taskItems=${normalized.filter((item) => item.item_present).length}/${expected.length}；minimum=${minimum}`,
+  };
+}
+
+function coreBetaSanitizeBatchEntries(entries = []) {
+  return entries.map(({ before, reply, _last_stable_reply, _last_observed_reply, ...entry }) => ({
+    ...entry,
+    reply_excerpt: clip(reply, 240),
+  }));
+}
+
+async function coreBetaDispatchBatch(ctx) {
+  const requested = Math.min(20, Math.max(1, Number(ctx.state.batch_size || 20)));
+  const minimumReplyChars = Number(ctx.assertionContract?.batch_reply_min_chars || 0);
+  if (!Number.isInteger(minimumReplyChars) || minimumReplyChars < 500 || minimumReplyChars > 5000) {
+    throw new Error(`批量派发缺少有效 batch_reply_min_chars：${minimumReplyChars || 'missing'}`);
+  }
+  const prepared = Array.isArray(ctx.batch) && ctx.batch.length === requested
+    ? ctx.batch
+    : Array.from({ length: requested }, (_, index) => ({
+      index,
+      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${ctx.state.id}:${index}`).slice(0, 8)}`,
+    }));
+  const entries = prepared.map((preparedEntry, index) => ({
+      index,
+      marker: preparedEntry.marker,
+      prompt: `请为“${preparedEntry.marker}”撰写一份不少于${minimumReplyChars}字的内测风险评估。必须原样包含该标记，并使用“范围与假设、用户风险、数据与隐私风险、稳定性与恢复、上线建议”五个明确标题；每节都给出可执行检查项，不要省略任何章节。`,
+      minimum_reply_chars: minimumReplyChars,
+      task_id: '',
+      dispatched_at: '',
+      collected_at: '',
+      reply_sha256: '',
+      dispatch_screenshot: '',
+      send_receipt: null,
+      observation_count: 0,
+      stable_observations: 0,
+      last_observation: null,
+      terminal_outcome: '',
+      terminal_at: '',
+      terminal_screenshot: '',
+      ok: false,
+    }));
+  ctx.batch = entries;
+  for (const entry of entries) {
+    await openNewTask(ctx.page, ctx.state);
+    const reset = await resetComposerControls(ctx.page, ctx.state, ctx.caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    });
+    if (!reset) throw new Error(`批量派发第 ${entry.index + 1} 条能力清理失败。`);
+    const before = await conversationSnapshot(ctx.page);
+    if (!Array.isArray(ctx.state.artifacts.sent_prompts)) ctx.state.artifacts.sent_prompts = [];
+    ctx.state.artifacts.sent_prompts.push({
+      label: `批量派发 ${entry.index + 1}`,
+      prompt: entry.prompt,
+      recorded_at: new Date().toISOString(),
+    });
+    await fillComposer(ctx.page, entry.prompt, ctx.state, `批量派发 ${entry.index + 1} 输入`);
+    const receipt = await send(ctx.page, ctx.state, `批量派发 ${entry.index + 1}`);
+    const task = await qbotE2EState(ctx.page);
+    entry.task_id = String(task?.activeId || receipt?.snapshot?.activeId || '');
+    entry.dispatched_at = new Date().toISOString();
+    entry.before = before;
+    if (!entry.task_id) throw new Error(`批量派发第 ${entry.index + 1} 条缺少 taskId。`);
+    const dispatchScreenshot = await shot(
+      ctx.page,
+      ctx.caseDir,
+      `batch-dispatch-${String(entry.index + 1).padStart(2, '0')}-after-send`,
+    );
+    const screenshotKey = `batch_dispatch_${String(entry.index + 1).padStart(2, '0')}_after_send`;
+    ctx.state.screenshots[screenshotKey] = dispatchScreenshot;
+    const confirmedReceipt = Array.isArray(ctx.state.artifacts.send_receipts)
+      ? [...ctx.state.artifacts.send_receipts].reverse().find((item) => (
+        item?.action === `批量派发 ${entry.index + 1}`
+        && String(item?.confirmed_at || '')
+      ))
+      : null;
+    entry.dispatch_screenshot = dispatchScreenshot;
+    entry.send_receipt = {
+      confirmed: receipt?.ok === true && Boolean(confirmedReceipt),
+      confirmed_at: String(confirmedReceipt?.confirmed_at || ''),
+      action: String(confirmedReceipt?.action || `批量派发 ${entry.index + 1}`),
+      task_id: entry.task_id,
+      reasons: Array.isArray(receipt?.reasons) ? receipt.reasons : [],
+      state_readback: {
+        active_id: String(task?.activeId || ''),
+        running: Boolean(task?.running),
+        message_count: Number(task?.messageCount || 0),
+      },
+    };
+    ctx.state.artifacts.core_beta_batch_dispatch = coreBetaSanitizeBatchEntries(entries);
+    // Persist after every confirmed send.  A host/runner failure must not erase
+    // proof that an individual task was accepted by the product.
+    writeJsonFile(
+      path.join(ctx.caseDir, 'batch-dispatch-ledger.json'),
+      ctx.state.artifacts.core_beta_batch_dispatch,
+    );
+  }
+  const ids = entries.map((item) => item.task_id);
+  const unique = new Set(ids).size === entries.length;
+  const receiptsComplete = entries.every((entry) => (
+    entry.send_receipt?.confirmed === true
+    && coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)
+  ));
+  ctx.state.artifacts.core_beta_batch_dispatch = coreBetaSanitizeBatchEntries(entries);
+  writeJsonFile(path.join(ctx.caseDir, 'batch-dispatch-ledger.json'), ctx.state.artifacts.core_beta_batch_dispatch);
+  setCoreBetaEvidence(ctx.state, 'send_receipt', {
+    available: unique && receiptsComplete,
+    source: 'per-task confirmed product send receipt + after-send screenshot',
+    expected_count: entries.length,
+    confirmed_count: entries.filter((entry) => entry.send_receipt?.confirmed === true).length,
+    screenshot_count: entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length,
+    task_ids_unique: unique,
+    task_id_sha256s: entries.map((entry) => sha256Text(entry.task_id)),
+  });
+  return {
+    ok: unique && receiptsComplete,
+    selector_or_testid: 'composer-send',
+    event: 'dispatch-batch',
+    state_readback: {
+      requested,
+      dispatched: entries.length,
+      unique_task_ids: new Set(ids).size,
+      confirmed_send_receipts: entries.filter((entry) => entry.send_receipt?.confirmed === true).length,
+      after_send_screenshots: entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length,
+    },
+    actual: `dispatched=${entries.length}；uniqueTaskIds=${new Set(ids).size}；confirmedReceipts=${entries.filter((entry) => entry.send_receipt?.confirmed === true).length}；afterSendScreenshots=${entries.filter((entry) => coreBetaBatchEvidenceFilePresent(entry.dispatch_screenshot)).length}`,
+  };
+}
+
+async function coreBetaAssertBatchPendingPool(ctx) {
+  if (!Array.isArray(ctx.batch) || !ctx.batch.length) {
+    throw new Error('待回复池取证前没有批量派发账本。');
+  }
+  const minimumPending = Number(ctx.assertionContract?.batch_min_pending_after_dispatch || 0);
+  if (
+    !Number.isInteger(minimumPending)
+    || minimumPending < 1
+    || minimumPending > ctx.batch.length
+  ) {
+    throw new Error(`批量待回复池缺少有效 batch_min_pending_after_dispatch：${minimumPending || 'missing'}`);
+  }
+  await ensureSidebarExpanded(ctx.page, ctx.state);
+  const taskToggle = ctx.page.locator('[data-testid="sidebar-task-toggle"]').first();
+  if (await visible(taskToggle, 1000)) {
+    const expanded = await taskToggle.getAttribute('aria-expanded').catch(() => '');
+    if (expanded !== 'true') {
+      await taskToggle.click({ force: true }).catch(async () => taskToggle.evaluate((element) => element.click()));
+      await ctx.page.waitForTimeout(250);
+    }
+  }
+  const expectedTaskIds = ctx.batch.map((entry) => entry.task_id);
+  const rows = await ctx.page.evaluate((taskIds) => {
+    const itemById = new Map(
+      Array.from(document.querySelectorAll('[data-testid^="session-item-"]')).map((item) => [
+        String(item.getAttribute('data-testid') || '').replace(/^session-item-/, ''),
+        item,
+      ]),
+    );
+    return taskIds.map((taskId) => {
+      const item = itemById.get(taskId) || null;
+      const indicator = item?.querySelector('.run-dot[title="正在执行"]') || null;
+      const rect = indicator?.getBoundingClientRect();
+      const style = indicator ? getComputedStyle(indicator) : null;
+      const visible = Boolean(
+        indicator
+        && rect
+        && rect.width > 0
+        && rect.height > 0
+        && style?.display !== 'none'
+        && style?.visibility !== 'hidden',
+      );
+      return {
+        task_id: taskId,
+        item_present: Boolean(item),
+        running_indicator_present: Boolean(indicator),
+        running_indicator_visible: visible,
+      };
+    });
+  }, expectedTaskIds);
+  const capturedAt = new Date().toISOString();
+  const evidence = coreBetaBatchPendingPoolEvidence(rows, {
+    expectedTaskIds,
+    minimumPending,
+    capturedAt,
+  });
+  const active = await qbotE2EState(ctx.page);
+  const screenshot = await shot(ctx.page, ctx.caseDir, 'batch-dispatch-pending-pool');
+  ctx.state.screenshots.batch_dispatch_pending_pool = screenshot;
+  const record = {
+    ...evidence,
+    active_task_id: String(active?.activeId || ''),
+    active_task_running: Boolean(active?.running),
+    screenshot,
+  };
+  ctx.state.artifacts.core_beta_batch_pending_pool = record;
+  writeJsonFile(path.join(ctx.caseDir, 'batch-pending-pool.json'), record);
+  setCoreBetaEvidence(ctx.state, 'public_state_readback', record);
+  recordAssertion(
+    ctx.state,
+    '批量派发后形成可见待回复池',
+    `末条派发后、统一回收前，左侧任务列表至少 ${minimumPending} 条本批次 taskId 必须显示“正在执行”。`,
+    evidence.completion_observed,
+    `pending=${evidence.pending_count}/${evidence.expected_task_count}；minimum=${minimumPending}；visible=${evidence.visible_pending_count}；activeRunning=${Boolean(active?.running)}`,
+    evidence.completion_observed
+      ? ''
+      : active?.running
+        ? 'bug'
+        : 'test_data',
+  );
+  return {
+    ok: evidence.completion_observed,
+    category: evidence.completion_observed
+      ? ''
+      : active?.running
+        ? 'bug'
+        : 'test_data',
+    selector_or_testid: 'sidebar-task-list .run-dot[title="正在执行"]',
+    event: 'readback-pending-pool',
+    state_readback: record,
+    screenshot,
+    actual: `pending=${evidence.pending_count}/${evidence.expected_task_count}；minimum=${minimumPending}；visible=${evidence.visible_pending_count}；activeRunning=${Boolean(active?.running)}`,
+  };
+}
+
+async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) {
+  const observedAt = new Date().toISOString();
+  let reopened;
+  try {
+    reopened = await withReplyPollHardTimeout(
+      reopenSessionAndReadback(ctx.page, entry.task_id),
+      15_000,
+      `batch task ${entry.index + 1} reopen`,
+    );
+  } catch (error) {
+    reopened = { ok: false, reason: error.message, activeId: '', running: false };
+  }
+  let snapshot = null;
+  let publicState = null;
+  let reply = '';
+  let generating = false;
+  if (reopened.ok && String(reopened.activeId || '') === entry.task_id) {
+    snapshot = await conversationSnapshot(ctx.page).catch(() => null);
+    publicState = await qbotE2EState(ctx.page).catch(() => null);
+    reply = latestAssistantReplyForPrompt(snapshot || {}, entry.prompt);
+    generating = Boolean(publicState?.running)
+      || await isAgentGenerating(ctx.page).catch(() => false);
+  }
+  const activeTaskId = String(snapshot?.activeTaskId || publicState?.activeId || reopened?.activeId || '');
+  const userPromptPresent = Boolean(
+    snapshot?.userTexts?.some((text) => userMessageMatchesPrompt(text, entry.prompt)),
+  );
+  const assistantReplyPresent = Boolean(String(reply || '').trim());
+  if (assistantReplyPresent) entry._last_observed_reply = reply;
+  if (
+    assistantReplyPresent
+    && !generating
+    && activeTaskId === entry.task_id
+    && userPromptPresent
+  ) {
+    if (entry._last_stable_reply === reply) entry.stable_observations = Number(entry.stable_observations || 0) + 1;
+    else {
+      entry._last_stable_reply = reply;
+      entry.stable_observations = 1;
+    }
+  } else {
+    entry.stable_observations = 0;
+    if (assistantReplyPresent) entry._last_stable_reply = reply;
+  }
+  entry.observation_count = Number(entry.observation_count || 0) + 1;
+  const observation = {
+    round,
+    observed_at: observedAt,
+    reopen_ok: Boolean(reopened?.ok),
+    reopen_reason: String(reopened?.reason || ''),
+    expected_task_id: entry.task_id,
+    active_task_id: activeTaskId,
+    task_identity_matches: activeTaskId === entry.task_id,
+    user_prompt_present: userPromptPresent,
+    assistant_reply_present: assistantReplyPresent,
+    running: generating,
+    message_count: Number(publicState?.messageCount ?? snapshot?.bridgeMessageCount ?? 0),
+    stable_observations: Number(entry.stable_observations || 0),
+    reply_sha256: assistantReplyPresent ? sha256Text(reply) : '',
+    reply_excerpt: clip(reply, 240),
+  };
+  entry.last_observation = observation;
+  fs.appendFileSync(observationLogFile, `${JSON.stringify({ index: entry.index, marker: entry.marker, task_id: entry.task_id, ...observation })}\n`);
+  const dispatchedAtMs = Date.parse(String(entry.dispatched_at || ''));
+  const waitedMs = Number.isFinite(dispatchedAtMs) ? Date.now() - dispatchedAtMs : 0;
+  const otherMarkerPresent = ctx.batch.some((other) => (
+    other !== entry && String(reply || '').includes(other.marker)
+  ));
+  if (
+    assistantReplyPresent
+    && !generating
+    && activeTaskId === entry.task_id
+    && userPromptPresent
+    && Number(entry.stable_observations || 0) >= 2
+    && waitedMs >= MIN_REPLY_WAIT_MS
+  ) {
+    entry.reply = reply;
+    entry.reply_sha256 = sha256Text(reply);
+    entry.collected_at = observedAt;
+    entry.ok = reply.includes(entry.marker)
+      && !otherMarkerPresent
+      && cleanAssistantText(reply).length >= Number(entry.minimum_reply_chars || 0);
+    entry.terminal_outcome = entry.ok ? 'reply_completed' : 'reply_oracle_mismatch';
+    entry.terminal_at = observedAt;
+  }
+  return observation;
+}
+
+async function coreBetaCaptureBatchTerminalScreenshot(ctx, entry) {
+  if (entry.terminal_screenshot && coreBetaBatchEvidenceFilePresent(entry.terminal_screenshot)) {
+    return entry.terminal_screenshot;
+  }
+  if (String(entry.last_observation?.active_task_id || '') !== entry.task_id) {
+    await reopenSessionAndReadback(ctx.page, entry.task_id).catch(() => null);
+  }
+  const screenshot = await shot(
+    ctx.page,
+    ctx.caseDir,
+    `batch-collect-${String(entry.index + 1).padStart(2, '0')}-${slugify(entry.terminal_outcome || 'terminal')}`,
+  );
+  const key = `batch_collect_${String(entry.index + 1).padStart(2, '0')}_terminal`;
+  ctx.state.screenshots[key] = screenshot;
+  entry.terminal_screenshot = screenshot;
+  return screenshot;
+}
+
+async function coreBetaCollectBatch(ctx) {
+  if (!Array.isArray(ctx.batch) || !ctx.batch.length) throw new Error('批量回收前没有派发账本。');
+  const waitConfig = replyWaitConfig(ctx.testCase, ctx.timeoutMs);
+  const collectionStartedAtMs = Date.now();
+  const sharedDeadline = coreBetaBatchSharedDeadline(
+    ctx.batch,
+    waitConfig.timeoutMs,
+    collectionStartedAtMs,
+  );
+  const observationLogFile = path.join(ctx.caseDir, 'batch-collect-observations.ndjson');
+  writeTextFile(observationLogFile, '');
+  ctx.state.artifacts.core_beta_batch_observations = observationLogFile;
+  let round = 0;
+  let deadlineReached = false;
+  do {
+    round += 1;
+    for (const entry of ctx.batch.filter((item) => !item.terminal_outcome)) {
+      await coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile);
+      if (entry.terminal_outcome) await coreBetaCaptureBatchTerminalScreenshot(ctx, entry);
+    }
+    const sanitized = coreBetaSanitizeBatchEntries(ctx.batch);
+    ctx.state.artifacts.core_beta_batch_collect = sanitized;
+    writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
+    if (ctx.batch.every((item) => item.terminal_outcome)) break;
+    deadlineReached = Date.now() >= sharedDeadline.deadline_at_ms;
+    if (!deadlineReached) await ctx.page.waitForTimeout(500);
+  } while (!deadlineReached);
+
+  deadlineReached = Date.now() >= sharedDeadline.deadline_at_ms;
+  for (const entry of ctx.batch.filter((item) => !item.terminal_outcome)) {
+    // Capture one final task-bound observation at/after the shared deadline.
+    await coreBetaObserveBatchEntry(ctx, entry, round + 1, observationLogFile);
+    if (!entry.terminal_outcome) {
+      const observation = entry.last_observation || {};
+      entry.reply = String(entry._last_observed_reply || '');
+      entry.reply_sha256 = entry.reply ? sha256Text(entry.reply) : '';
+      entry.terminal_outcome = !observation.reopen_ok
+        ? 'task_reopen_failed_by_batch_deadline'
+        : observation.running
+          ? 'running_at_batch_deadline'
+          : observation.assistant_reply_present
+            ? 'reply_unstable_at_batch_deadline'
+            : 'no_attributable_reply_by_batch_deadline';
+      entry.terminal_at = new Date().toISOString();
+      entry.ok = false;
+    }
+    await coreBetaCaptureBatchTerminalScreenshot(ctx, entry);
+  }
+
+  const replies = ctx.batch.map((entry) => {
+    const dispatchedAtMs = Date.parse(String(entry.dispatched_at || ''));
+    const terminalAtMs = Date.parse(String(entry.terminal_at || ''));
+    const waitedMs = Number.isFinite(dispatchedAtMs) && Number.isFinite(terminalAtMs)
+      ? Math.max(0, terminalAtMs - dispatchedAtMs)
+      : Math.max(0, Date.now() - collectionStartedAtMs);
+    const completedReply = ['reply_completed', 'reply_oracle_mismatch'].includes(entry.terminal_outcome);
+    return {
+      label: `批量任务 ${entry.index + 1}`,
+      fullText: entry.reply || '',
+      deltaText: entry.reply || '',
+      incomplete: !completedReply,
+      incomplete_reason: completedReply
+        ? ''
+        : `批量共享截止时间终态：${entry.terminal_outcome}；taskId=${entry.task_id}`,
+      stable_observations: Number(entry.stable_observations || 0),
+      waited_ms: waitedMs,
+      min_wait_ms: MIN_REPLY_WAIT_MS,
+      timeout_ms: waitConfig.timeoutMs,
+      wait_kind: 'batch_shared_deadline',
+    };
+  });
+  writeReplyArtifacts(ctx.state, ctx.caseDir, replies);
+  for (let index = 0; index < replies.length; index += 1) {
+    const entry = ctx.batch[index];
+    const reply = replies[index];
+    recordReplyWaitAssertion(ctx.state, reply, `批量任务 ${entry.index + 1}`);
+    recordAssertion(
+      ctx.state,
+      `批量任务归属与回复 Oracle（${entry.index + 1}）`,
+      '确认发送回执、taskId、用户 prompt 和助手回复必须归属同一任务；回复只包含本任务 marker，且在共享截止时间前稳定完成。',
+      entry.ok === true,
+      `taskId=${entry.task_id}；terminal=${entry.terminal_outcome}；stable=${entry.stable_observations}；reply=${clip(entry.reply, 180)}`,
+    );
+  }
+
+  const terminalEvidence = coreBetaBatchTerminalEvidence(ctx.batch, {
+    deadlineAtMs: sharedDeadline.deadline_at_ms,
+    deadlineReached,
+  });
+  const complete = ctx.batch.every((item) => item.ok);
+  const sanitized = coreBetaSanitizeBatchEntries(ctx.batch);
+  ctx.state.artifacts.core_beta_batch_collect = sanitized;
+  ctx.state.artifacts.core_beta_batch_collection_summary = {
+    ...sharedDeadline,
+    collection_started_at: new Date(collectionStartedAtMs).toISOString(),
+    collection_finished_at: new Date().toISOString(),
+    rounds: round,
+    deadline_reached: deadlineReached,
+    terminal_evidence: terminalEvidence,
+  };
+  writeJsonFile(path.join(ctx.caseDir, 'batch-collect-ledger.json'), sanitized);
+  writeJsonFile(
+    path.join(ctx.caseDir, 'batch-collection-summary.json'),
+    ctx.state.artifacts.core_beta_batch_collection_summary,
+  );
+  setCoreBetaEvidence(ctx.state, 'reply_completion', terminalEvidence);
+  setCoreBetaEvidence(ctx.state, 'public_state_readback', {
+    source: 'round-robin public task state collection ledger',
+    dispatched: ctx.batch.length,
+    terminal_rows: ctx.batch.filter((item) => item.terminal_outcome).length,
+    completed: ctx.batch.filter((item) => item.ok).length,
+    shared_deadline_reached: deadlineReached,
+  });
+  const reopenFailure = ctx.batch.some((item) => item.terminal_outcome === 'task_reopen_failed_by_batch_deadline');
+  return {
+    ok: complete,
+    category: reopenFailure ? 'automation_error' : 'bug',
+    selector_or_testid: 'task-list',
+    event: 'collect-batch',
+    state_readback: {
+      dispatched: ctx.batch.length,
+      terminal_rows: ctx.batch.filter((item) => item.terminal_outcome).length,
+      collected: ctx.batch.filter((item) => item.collected_at).length,
+      passed: ctx.batch.filter((item) => item.ok).length,
+      rounds: round,
+      shared_deadline_reached: deadlineReached,
+      terminal_evidence_available: terminalEvidence.available,
+    },
+    actual: `terminal=${ctx.batch.filter((item) => item.terminal_outcome).length}/${ctx.batch.length}；collected=${ctx.batch.filter((item) => item.collected_at).length}；passed=${ctx.batch.filter((item) => item.ok).length}；rounds=${round}；deadlineReached=${deadlineReached}；terminalEvidence=${terminalEvidence.available}`,
+  };
+}
+
+
+function recordCoreBetaBatchOperation(context, action, expected, result, defaultCategory = 'bug') {
+  const ok = result?.ok === true;
+  const actual = String(result?.actual || JSON.stringify(result?.state_readback || {}));
+  const category = ok ? '' : String(result?.category || defaultCategory);
+  recordStep(
+    context.state,
+    action,
+    expected,
+    actual,
+    ok ? 'passed' : 'failed',
+    String(result?.screenshot || ''),
+    category,
+  );
+  recordAssertion(context.state, action, expected, ok, actual, category || defaultCategory);
+}
+
+async function executeCoreBetaConversationDispatchCollect20(context) {
+  const expected = Number(context.testCase.batch_size || 20);
+  if (expected !== 20) {
+    throw new Error(`${context.testCase.id} conversation_dispatch_collect_20 要求 batch_size=20，actual=${expected}`);
+  }
+  const batchContext = {
+    ...context,
+    assertionContract: context.testCase.precise_assertions || {},
+    batch: Array.from({ length: expected }, (_item, index) => ({
+      index,
+      marker: `QBOT-BETA-${String(index + 1).padStart(2, '0')}-${sha256Text(`${context.state.id}:${index}`).slice(0, 8)}`,
+    })),
+  };
+  const dispatch = await coreBetaDispatchBatch(batchContext);
+  recordCoreBetaBatchOperation(
+    context,
+    '20 条长任务逐条确认发送并固化派发账本',
+    '每条任务必须使用唯一 marker，获得唯一 taskId、确认发送回执和发送后截图，且发送后立即切换到下一新任务。',
+    dispatch,
+    'automation_error',
+  );
+  if (!dispatch.ok) return;
+
+  const pending = await coreBetaAssertBatchPendingPool(batchContext);
+  recordCoreBetaBatchOperation(
+    context,
+    '末条派发后读取可见待回复池',
+    '统一回收前必须读回全部 20 个 taskId 的侧栏条目，且至少 5 条显示正在执行。',
+    pending,
+    'bug',
+  );
+
+  const collect = await coreBetaCollectBatch(batchContext);
+  recordCoreBetaBatchOperation(
+    context,
+    '按 taskId 轮询回收 20 条批量任务',
+    '共享截止时间内逐 taskId 轮询；每条都必须保存终态观察和截图，并核对 marker、长度及跨任务隔离。',
+    collect,
+    'bug',
+  );
+  context.state.artifacts.core_beta_batch_execution_summary = {
+    schema_version: 'qbot-core-beta-batch-execution/v1',
+    case_id: context.testCase.id,
+    expected,
+    dispatch: dispatch.state_readback,
+    pending_pool: pending.state_readback,
+    collection: collect.state_readback,
+    completed_at: new Date().toISOString(),
+  };
+  writeJsonFile(
+    path.join(context.caseDir, 'batch-execution-summary.json'),
+    context.state.artifacts.core_beta_batch_execution_summary,
+  );
+}
+
 async function executeCoreBetaConversationCase(context, scenario) {
   const { page, state, testCase, caseDir, timeoutMs } = context;
   switch (scenario.driver) {
+    case 'conversation_dispatch_collect_20':
+      return await executeCoreBetaConversationDispatchCollect20(context);
     case 'conversation_streaming_scroll':
       return await executeIssue793StreamingScrollFollow({ page, state, testCase, caseDir, timeoutMs });
     case 'conversation_stop_and_resume': {

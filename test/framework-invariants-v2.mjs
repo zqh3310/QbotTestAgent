@@ -1035,6 +1035,40 @@ assert.deepEqual(
   ['BETA-CHAT-001'],
   'Core Beta 流水线不得跨 pipeline_policy 混批',
 );
+const internalBatchCase = coreBetaPipelineCase('BETA-CHAT-008', 'conversation', {
+  batch_size: 20,
+  conversation_turns: [{
+    turn: 1,
+    prompt: '使用由 Runner 注入的唯一业务问题与 case marker。',
+    oracle: '20 条任务逐 taskId 回收',
+  }],
+});
+assert.equal(
+  singleHostPipelineEligibility(internalBatchCase).eligible,
+  false,
+  'BETA-CHAT-008 自己拥有 20 条派发/回收生命周期，必须是外层 pipeline 硬屏障',
+);
+assert.deepEqual(
+  buildSingleHostPipelineBatch([
+    internalBatchCase,
+    coreBetaPipelineCase('BETA-CHAT-009'),
+  ], 0, 20),
+  [],
+  '外层 pipeline 不得先把 BETA-CHAT-008 当普通单会话发送占位 prompt',
+);
+assert.match(
+  runner,
+  /case 'conversation_dispatch_collect_20':[\s\S]{0,160}executeCoreBetaConversationDispatchCollect20\(context\)/,
+  'BETA-CHAT-008 必须绑定 v2 专用执行分支，不能落入通用 executeConversationCase',
+);
+const internalBatchExecutorSource = runner.match(
+  /async function executeCoreBetaConversationDispatchCollect20\(context\) \{[\s\S]*?\n\}/,
+)?.[0] || '';
+assert.match(
+  internalBatchExecutorSource,
+  /coreBetaDispatchBatch\([\s\S]*coreBetaAssertBatchPendingPool\([\s\S]*coreBetaCollectBatch\(/,
+  'v2 专用执行分支必须依次真实派发 20 条、读取待回复池并按 taskId 回收',
+);
 const localFixtureAudit = await inspectCoreBetaFixtureReadiness({
   cases: [coreBetaPipelineCase('BETA-CHAT-001')],
 });
@@ -1300,6 +1334,108 @@ assert.equal(
   '',
   '证据完整的真实产品失败可以进入 completed，供 trusted_bug 复核',
 );
+assert.match(
+  coreBetaCompletionBlockReason(
+    internalBatchCase,
+    {
+      id: 'BETA-CHAT-008',
+      status: 'passed',
+      result_category: 'pass',
+      artifacts: {
+        core_beta_scenario_driver: 'conversation_dispatch_collect_20',
+        core_beta_batch_dispatch: null,
+        core_beta_batch_pending_pool: null,
+        core_beta_batch_collect: null,
+      },
+      evidence_manifest: completeEvidence,
+    },
+  ),
+  /20 条批量派发账本/,
+  'BETA-CHAT-008 不得在 batch 证据全空时仅凭通用 manifest raw passed',
+);
+const batchCompletionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-beta-chat-008-'));
+try {
+  const writeEvidence = (name, bytes = 256) => {
+    const file = path.join(batchCompletionRoot, name);
+    fs.writeFileSync(file, Buffer.alloc(bytes, 1));
+    return file;
+  };
+  const dispatch = Array.from({ length: 20 }, (_item, index) => {
+    const marker = `QBOT-BETA-${String(index + 1).padStart(2, '0')}-marker`;
+    return {
+      index,
+      marker,
+      prompt: `请为 ${marker} 撰写风险评估。`,
+      task_id: `task-${String(index + 1).padStart(2, '0')}`,
+      dispatch_screenshot: writeEvidence(`dispatch-${index + 1}.png`),
+      send_receipt: {
+        confirmed: true,
+        confirmed_at: '2026-08-04T18:00:00.000Z',
+      },
+    };
+  });
+  const collected = dispatch.map((entry, index) => ({
+    ...entry,
+    terminal_outcome: index === 0 ? 'reply_oracle_mismatch' : 'reply_completed',
+    terminal_at: '2026-08-04T18:01:00.000Z',
+    observation_count: 2,
+    last_observation: {
+      active_task_id: entry.task_id,
+      assistant_reply_present: true,
+    },
+    terminal_screenshot: writeEvidence(`terminal-${index + 1}.png`),
+    ok: index !== 0,
+  }));
+  for (const name of [
+    'batch-dispatch-ledger.json',
+    'batch-pending-pool.json',
+    'batch-collect-observations.ndjson',
+    'batch-collect-ledger.json',
+    'batch-collection-summary.json',
+  ]) writeEvidence(name, 32);
+  assert.equal(
+    coreBetaCompletionBlockReason(
+      internalBatchCase,
+      {
+        id: 'BETA-CHAT-008',
+        status: 'failed',
+        result_category: 'bug',
+        case_dir: batchCompletionRoot,
+        artifacts: {
+          core_beta_scenario_driver: 'conversation_dispatch_collect_20',
+          core_beta_batch_dispatch: dispatch,
+          core_beta_batch_pending_pool: {
+            available: false,
+            completion_observed: false,
+            expected_task_count: 20,
+            minimum_pending_required: 5,
+            pending_count: 4,
+            observations: dispatch.map((entry, index) => ({
+              task_id: entry.task_id,
+              item_present: index !== 0,
+            })),
+            screenshot: writeEvidence('pending-pool.png'),
+          },
+          core_beta_batch_collect: collected,
+          core_beta_batch_collection_summary: {
+            terminal_evidence: {
+              available: true,
+              task_ids_unique: true,
+              dispatch_receipts_complete: true,
+              terminal_rows_complete: true,
+              dispatched: 20,
+            },
+          },
+        },
+        evidence_manifest: completeEvidence,
+      },
+    ),
+    '',
+    '20 条 taskId、发送回执、待回复池和逐任务终态证据完整时，产品 Oracle 失败仍可进入 completed 供 trusted_bug 复核',
+  );
+} finally {
+  fs.rmSync(batchCompletionRoot, { recursive: true, force: true });
+}
 assert.match(
   coreBetaCompletionBlockReason(
     { id: 'BETA-CHAT-001', contract_version: 'qbot-core-beta/v2' },

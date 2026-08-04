@@ -339,6 +339,9 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 - `--single-host-pipeline N` 支持 `1–20`；`true` 等价于 `20`。
 - 仅 Casebook 声明且运行时判定安全的独立会话可以批量 dispatch/collect。
 - Core Beta v2 中由 Casebook 明确声明为 `dispatch_collect/round_robin`、动作互不依赖且证据可按唯一 task ID 归属的独立附件、成果生成、Skill 使用、专家使用和 MCP 使用 Case 可以进入单宿主 pipeline；框架仍须按 `case_type`、policy 与 `batch_size` 隔离 wave。
+- `BETA-CHAT-008` 的 `conversation_dispatch_collect_20` 是 Case 内部自带的 20 任务调度器，必须作为外层单宿主 pipeline 的硬屏障串行执行。禁止外层 pipeline 把它当作普通单会话发送 Casebook 占位 prompt；运行时必须为 20 个唯一 marker 逐条新建任务、确认发送并固化唯一 taskId。
+- `BETA-CHAT-008` 每个确认发送后必须立即持久化 `batch-dispatch-ledger.json` 和发送后截图；末条派发后、统一回收前必须保存覆盖全部 20 个 taskId 的 `batch-pending-pool.json`，并验证至少 5 条显示正在执行。回收必须在同一共享截止时间内逐 taskId 轮询，保存 `batch-collect-observations.ndjson`、逐任务终态截图、`batch-collect-ledger.json` 和 `batch-collection-summary.json`，不得按当前页面或单条通用回复猜测归属。
+- `BETA-CHAT-008` 进入 completed 前必须通过专用强证据门禁：20 个 taskId 唯一，20 份确认发送回执与发送后截图完整，待回复池读回结构完整，20 条终态观察与截图完整，共享截止时间终态证据可用。产品 Oracle 失败可在上述证据完整时进入 completed 供 `trusted_bug` 复核；缺少任一批量证据时必须 `framework_issue` 并停止批次，即使通用 manifest 或 raw status 显示 passed 也不得继续。
 - Skill/MCP/专家的创建、安装、授权、删除等生命周期变更，以及 HITL、重启、共享状态、故障注入、跨 Case 依赖和不满足精确 task ID 归属条件的多轮会话都是串行屏障。
 - 不得同时启用单宿主 pipeline 和多 CDP `--parallel`。
 - pipeline 必须保存唯一 wave、task ID、能力绑定和 dispatch/collect 证据；重复 task ID 或跨 Case 取证立即视为框架异常。
