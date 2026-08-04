@@ -8469,10 +8469,32 @@ async function executeSitHomeSafetyLevelAfterTask({ page, state, testCase, caseD
   );
 }
 
+export function coreBetaPartialReplyReady({
+  running = false,
+  cancelVisible = false,
+  baselineAssistantText = '',
+  latestAssistantText = '',
+  minimumChars = 4,
+} = {}) {
+  const baseline = String(baselineAssistantText || '');
+  const latest = String(latestAssistantText || '');
+  const delta = latest.startsWith(baseline)
+    ? latest.slice(baseline.length)
+    : latest === baseline
+      ? ''
+      : latest;
+  return {
+    ready: Boolean(running && cancelVisible && delta.trim().length >= Number(minimumChars || 4)),
+    delta,
+    delta_chars: delta.length,
+  };
+}
+
 async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const prompt = '请生成一份非常详细的 QBot 全量测试方案，至少包含 20 个章节，每章都说明目标、步骤、风险、证据和退出条件。';
+  const conversationBefore = await conversationSnapshot(page);
   const before = await qbotE2EState(page);
   await fillComposer(page, prompt, state, '输入长任务以验证停止生成');
   if (state.requested_model_tier) {
@@ -8480,21 +8502,68 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     if (!tier.ok) return markBlocked(state, tier.reason);
   }
   await send(page, state, '发送长任务');
-  const deadline = Date.now() + 20000;
+  const cancel = page.locator('[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label="停止生成"]').first();
+  const partialStartedAt = Date.now();
+  const partialDeadline = partialStartedAt + 90000;
   let running = false;
-  while (Date.now() < deadline) {
-    const bridge = await qbotE2EState(page);
-    const cancel = page.locator('[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label="停止生成"]').first();
-    if (bridge?.running || await visible(cancel, 300)) { running = true; break; }
-    await page.waitForTimeout(300);
+  let cancelVisible = false;
+  let bridgeBeforeStop = null;
+  let partialSnapshot = await conversationSnapshot(page);
+  let partial = coreBetaPartialReplyReady({
+    running,
+    cancelVisible,
+    baselineAssistantText: conversationBefore.latestAssistantText,
+    latestAssistantText: partialSnapshot.latestAssistantText,
+  });
+  while (!partial.ready && Date.now() < partialDeadline) {
+    const handledConfirmation = await resolveAssistantConfirmationModal(page, {
+      state,
+      caseDir,
+      label: '停止生成前等待部分回复',
+    });
+    if (handledConfirmation) {
+      await page.waitForTimeout(800);
+      continue;
+    }
+    bridgeBeforeStop = await qbotE2EState(page);
+    cancelVisible = await visible(cancel, 300);
+    running = Boolean(bridgeBeforeStop?.running) || cancelVisible;
+    partialSnapshot = await conversationSnapshot(page);
+    partial = coreBetaPartialReplyReady({
+      running,
+      cancelVisible,
+      baselineAssistantText: conversationBefore.latestAssistantText,
+      latestAssistantText: partialSnapshot.latestAssistantText,
+    });
+    if (!running && !cancelVisible) break;
+    if (!partial.ready) await page.waitForTimeout(250);
   }
   state.screenshots.home_023_running = await shot(page, caseDir, 'home-023-running-before-stop');
-  recordAssertion(state, '停止生成前运行态可见', '发送长任务后应进入运行态，并出现停止入口。', running, `beforeSendCount=${before?.sendCount || 0}；running=${running}`, running ? '' : 'automation_error');
-  if (!running) return;
-  const cancel = page.locator('[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label="停止生成"]').first();
-  const cancelVisible = await visible(cancel, 1500);
-  if (!cancelVisible) {
-    recordStep(state, '点击停止生成', '运行态中必须出现可点击停止入口。', '已进入运行态，但停止入口不可见。', 'failed', state.screenshots.home_023_running, 'automation_error');
+  state.screenshots.core_beta_partial_before_stop = state.screenshots.home_023_running;
+  const partialPreconditionFile = path.join(caseDir, 'partial-reply-precondition-readback.json');
+  const partialPrecondition = {
+    valid: partial.ready,
+    task_id: String(bridgeBeforeStop?.activeId || ''),
+    running_before: running,
+    cancel_visible: cancelVisible,
+    partial_reply_ready_before_click: partial.ready,
+    partial_chars_before_click: partial.delta_chars,
+    partial_sha256: createHash('sha256').update(partial.delta).digest('hex'),
+    waited_ms: Date.now() - partialStartedAt,
+    before_screenshot: state.screenshots.home_023_running,
+  };
+  writeJsonFile(partialPreconditionFile, partialPrecondition);
+  state.artifacts.core_beta_partial_reply_precondition = partialPreconditionFile;
+  recordAssertion(
+    state,
+    '停止生成前可见部分回复',
+    '只有当当前 task 仍在运行、停止入口可见且已出现非空助手正文增量时，才允许点击停止。',
+    partial.ready,
+    `beforeSendCount=${before?.sendCount || 0}；taskId=${partialPrecondition.task_id || '未读取'}；running=${running}；cancelVisible=${cancelVisible}；partialChars=${partial.delta_chars}；waitedMs=${partialPrecondition.waited_ms}`,
+    'automation_error',
+  );
+  if (!partial.ready) {
+    markBlocked(state, `停止生成前置未成立：running=${running}；cancelVisible=${cancelVisible}；partialChars=${partial.delta_chars}。框架未点击停止。`);
     return;
   }
   await cancel.click({ force: true }).catch(async () => cancel.evaluate((el) => el.click()));
@@ -8512,16 +8581,47 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     await page.waitForTimeout(400);
   }
   state.screenshots.home_023_stopped = await shot(page, caseDir, 'home-023-after-stop');
+  const retainedSnapshot = await conversationSnapshot(page);
+  const retained = coreBetaPartialReplyReady({
+    running: true,
+    cancelVisible: true,
+    baselineAssistantText: conversationBefore.latestAssistantText,
+    latestAssistantText: retainedSnapshot.latestAssistantText,
+  });
   const users = await userMessageTexts(page);
   const composerVisible = await visible(page.locator('[data-testid="composer-input"]').first(), 1000);
-  state.artifacts.stop_generation = {
+  const stoppedPartialFile = path.join(caseDir, 'stopped-partial-reply.txt');
+  writeTextFile(stoppedPartialFile, retained.delta);
+  const stopReadback = {
     click_performed: true,
+    task_id: String(lastBridge?.activeId || bridgeBeforeStop?.activeId || ''),
+    running_before: running,
+    running_after: Boolean(lastBridge?.running),
     stopped,
     cancel_accepted: cancelAccepted,
+    partial_reply_ready_before_click: partial.ready,
+    partial_chars_before_click: partial.delta_chars,
+    partial_sha256_before_click: createHash('sha256').update(partial.delta).digest('hex'),
+    retained_chars: retained.delta_chars,
+    retained_sha256: createHash('sha256').update(retained.delta).digest('hex'),
+    before_screenshot: state.screenshots.home_023_running,
+    after_screenshot: state.screenshots.home_023_stopped,
     bridge: lastBridge,
     user_message_count: users.length,
     composer_visible: composerVisible,
   };
+  const stopReadbackFile = path.join(caseDir, 'stop-generation-readback.json');
+  writeJsonFile(stopReadbackFile, stopReadback);
+  state.artifacts.stop_generation = stopReadback;
+  state.artifacts.stop_generation_readback = stopReadbackFile;
+  state.artifacts.stopped_partial_reply = stoppedPartialFile;
+  recordAssertion(
+    state,
+    '停止后部分回复保留',
+    '点击停止后应结束运行态，且停止前已可见的助手正文不应消失。',
+    stopped && !stopReadback.running_after && retained.delta_chars > 0,
+    `stopped=${stopped}；runningAfter=${stopReadback.running_after}；partialChars=${partial.delta_chars}；retainedChars=${retained.delta_chars}`,
+  );
   recordAssertion(
     state,
     '停止后问题和恢复入口保留',
@@ -21655,6 +21755,17 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   const label = String(turn?.label || '');
   const result = (name, expected, ok, actual = clip(reply, 360)) => ({ applicable: true, name, expected, ok, actual });
   const notApplicable = { applicable: false };
+
+  if (id === 'BETA-CHAT-006' && /停止后继续追问|总结.*(?:三条|3条|关键结论)/.test(`${label}\n${prompt}`)) {
+    const addressesFollowup = /总结|结论|三条|3条/.test(reply);
+    const acknowledgesTaskContext = /QBot|测试方案|上文|前文|刚才|已写|生成|内容/.test(reply);
+    return result(
+      '停止后同任务追问',
+      '新回复应围绕“总结已生成内容/关键结论”作答，并体现对当前 QBot 测试方案任务上下文的识别。',
+      addressesFollowup && acknowledgesTaskContext,
+      `addresses_followup=${addressesFollowup}；acknowledges_context=${acknowledgesTaskContext}；reply=${clip(reply, 420)}`,
+    );
+  }
 
   if (id === 'BETA-FILE-001') {
     const pageReferences = reply.match(/第\s*1\s*页/g) || [];

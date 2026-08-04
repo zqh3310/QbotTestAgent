@@ -27,6 +27,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaInitializationContinuation,
+  coreBetaPartialReplyReady,
   coreBetaRuntimeExecutorBinding,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
@@ -1087,6 +1088,39 @@ assert.equal(caseAwareReplyAssertion(
   '当前没有关于默认测试报告格式的固定偏好记录。',
 ).ok, true, 'MEM-001 删除后的直接回答应通过确定性用例断言');
 
+const betaChatStopCase = { id: 'BETA-CHAT-006', scenario: '回复生成中停止后保留已生成内容' };
+const betaChatStopTurn = { label: '停止后继续追问', prompt: '请只总结你已经写出的三条关键结论。' };
+assert.equal(caseAwareReplyAssertion(
+  betaChatStopCase,
+  betaChatStopTurn,
+  '需要如实说明：在本轮 QBot 测试方案上下文中，当前可总结的三条关键结论尚未完整成文。',
+).ok, true, 'BETA-CHAT-006 对同任务已生成内容的直接说明不应被通用相关性误报');
+assert.equal(caseAwareReplyAssertion(
+  betaChatStopCase,
+  betaChatStopTurn,
+  '今天天气晴朗，适合户外活动。',
+).ok, false, 'BETA-CHAT-006 仍必须拦截与停止后追问无关的回复');
+
+const partialReplyReady = coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  baselineAssistantText: '',
+  latestAssistantText: '第一章：测试目标',
+});
+assert.equal(partialReplyReady.ready, true, '运行态中的非空可见增量应允许停止');
+assert.equal(partialReplyReady.delta_chars > 0, true);
+assert.equal(coreBetaPartialReplyReady({
+  running: true,
+  cancelVisible: true,
+  latestAssistantText: '思考',
+  minimumChars: 4,
+}).ready, false, '过短的状态文本不能冒充可保留的部分回复');
+assert.equal(coreBetaPartialReplyReady({
+  running: false,
+  cancelVisible: false,
+  latestAssistantText: '第一章：测试目标',
+}).ready, false, '非运行态不能执行停止点击');
+
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
@@ -1100,6 +1134,7 @@ const required = [
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
   ['HOME-023 记录真实停止点击', /recordStep\(state, '点击停止生成'/],
+  ['Core Beta v2 停止生成必须先观察可见 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
   ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
