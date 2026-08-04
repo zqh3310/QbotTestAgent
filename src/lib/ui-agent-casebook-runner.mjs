@@ -28132,12 +28132,12 @@ export function reviewCaseCredibility(result) {
     ? result.artifacts.model_tier_before_send
     : [];
   const successfulSendCount = steps.filter(isSuccessfulSendStep).length;
-  const missingModelTierEvidence = requiresModelTier && (
+  const missingModelTierEvidence = requiresModelTier && successfulSendCount > 0 && (
     modelTierArtifact?.ok !== true
-    || (successfulSendCount > 0 && (
+    || (
       preSendTierChecks.length < successfulSendCount
       || preSendTierChecks.some((item) => item?.ok !== true || String(item?.requested || '') !== requestedModelTier)
-    ))
+    )
   );
   const replyWaits = Array.isArray(result.artifacts?.reply_waits) ? result.artifacts.reply_waits : [];
   const controlledFailureEvidence = result.id === 'SIT-HOME-025' && result.artifacts?.controlled_failure?.injected === true;
@@ -28310,10 +28310,10 @@ export function isSuccessfulSendStep(step) {
   return /^(?:点击)?发送/.test(action);
 }
 
-const USER_REVIEW_TECHNICAL_ASSERTION = /模型档位|fixture|代理|控制面|route\s*hits?|请求计数|环境恢复|配置恢复|数据库|\bdb\b|\bcdp\b|selector|locator|runner|自动化|测试数据准备|安全与技术噪音|页面可见$|入口可见$|工作区绑定|截图采集/i;
+const USER_REVIEW_TECHNICAL_ASSERTION = /模型档位|fixture|代理|控制面|route\s*hits?|请求计数|环境恢复|配置恢复|数据库|\bdb\b|\bcdp\b|selector|locator|runner|自动化|测试数据准备|安全与技术噪音|页面可见$|入口可见$|工作区绑定|截图采集|Core Beta Oracle|可机判 Oracle|evidence-complete|no-step-failure|no-assertion-failure/i;
 const USER_REVIEW_SETUP_ACTION = /^(?:切换|确认)模型档位|发送.*前.*(?:复核|检查|校验|确认|证据)|^执行 restart-command|^恢复|^准备 .*测试数据|^准备 SIT-|^清理输入区|^绑定可预览 QA 工作区|^构造.*数据|^超时后清理运行态|^停止后续多轮追问|^点击用例入口：composer-input$/i;
 const USER_REVIEW_TECHNICAL_OBSERVATION = /^(?:true|false|null|undefined|\d+|[a-zA-Z_]+\s*=\s*[^；]+)(?:[；,]\s*[a-zA-Z_]+\s*=\s*[^；]+)*$/i;
-const USER_REVIEW_SCREENSHOT_OUTCOME = /after[-_. ]|no[-_. ]|missing|empty|error|fail|retry|reopen|deleted|uninstall|auth|market|dialog|panel|detail|preview|artifact|result|success|installed|dependency|cycle|sandbox|duplicate|feedback|interrupt|hint|page/i;
+const USER_REVIEW_SCREENSHOT_OUTCOME = /after[-_. ]|terminal|ready|no[-_. ]|missing|empty|error|fail|retry|reopen|deleted|uninstall|auth|market|dialog|panel|detail|preview|artifact|result|success|installed|dependency|cycle|sandbox|duplicate|feedback|interrupt|hint|page/i;
 const USER_REVIEW_SCREENSHOT_SETUP = /(?:^|[-_.])(before|model[-_. ]?tier|fixture[-_. ]?prepared|attachments?[-_. ]?cleared|scene[-_. ]?tag[-_. ]?cleared|selection[-_. ]?cleared|workspace[-_. ]?selected)(?:[-_. ]|$)|after[-_. ]?(?:fill|send)(?:\.png)?(?:\s|$)/i;
 const USER_REVIEW_SEMANTIC_ORACLE_ASSERTION = /回复(?:相关性|可读性|准确性|完整性|正确性|质量)|回答(?:相关性|准确性|完整性|正确性|质量)|语义|上下文(?:沿用|记忆|一致性)|约束(?:更新|保留|一致性)|事实(?:准确|一致)|计算(?:正确|准确)|内容(?:相关|完整|准确)|是否(?:虚构|幻觉)|重复输出|三点待办|条目数量|公式正确/i;
 const USER_REVIEW_COPY_OR_NOMENCLATURE_ASSERTION = /文案|标签|名称|占位符|提示词|M1\s*[-~至到]\s*M4|安全(?:级别|档位).*(?:显示|名称|标签)/i;
@@ -28356,7 +28356,7 @@ function userReviewScreenshots(result, explicitEvidence = []) {
 
 function meaningfulUserActions(result) {
   return (Array.isArray(result.steps) ? result.steps : [])
-    .filter((step) => step?.status === 'passed')
+    .filter((step) => step?.status === 'passed' || step?.status === 'failed' && step?.category === 'bug')
     .filter((step) => {
       const action = String(step.action || '').trim();
       if (!action) return false;
@@ -28501,7 +28501,7 @@ function hasMatchingProductAction(actions, targetAssertion) {
 function isAutomationReviewFailure(item) {
   const text = `${item?.name || ''}\n${item?.action || ''}\n${item?.expected || ''}\n${item?.actual || ''}`;
   return item?.category === 'automation_error'
-    || item?.status === 'failed' && /selector|locator|runner|自动化|无法定位|无法点击|步骤未执行|fixture.*(?:缺失|失败)|\bcdp\b/i.test(text);
+    || item?.status === 'failed' && /selector|locator|runner|自动化(?:框架|链路|执行(?:失败|错误)|能力(?:不足|缺失))|无法定位|无法点击|步骤未执行|fixture.*(?:缺失|失败)|\bcdp\b/i.test(text);
 }
 
 function isVerifiedCapabilitySelectionTrailReviewItem(item) {

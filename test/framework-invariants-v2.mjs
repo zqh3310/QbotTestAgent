@@ -1135,6 +1135,58 @@ const pureUi = reviewCaseCredibility(reviewFixture());
 if (pureUi.review_category !== '可信通过-用户可接受' || !pureUi.trusted) {
   throw new Error('纯 UI 用例不应因缺少 transcript 被判为框架问题');
 }
+const noSendInitialization = reviewCaseCredibility(reviewFixture({
+  id: 'BETA-INIT-001',
+  requested_model_tier: 'M3',
+  steps: [{ action: '点击立即检查运行时', status: 'passed' }],
+}));
+if (noSendInitialization.review_category !== '可信通过-用户可接受' || !noSendInitialization.trusted) {
+  throw new Error('不发送模型请求的初始化 Case 不得因缺少模型档位证据被判为框架问题');
+}
+const sentWithoutModelTierEvidence = reviewCaseCredibility(reviewFixture({
+  id: 'BETA-CHAT-001',
+  requested_model_tier: 'M3',
+  steps: [{ action: '发送消息', status: 'passed' }],
+  artifacts: {
+    transcript: evidenceFile,
+    reply_delta: evidenceFile,
+    reply_waits: [{ waited_ms: 60_000 }],
+  },
+}));
+if (
+  sentWithoutModelTierEvidence.review_category !== '不可信-框架问题'
+  || sentWithoutModelTierEvidence.trusted
+  || !sentWithoutModelTierEvidence.reason.includes('缺少可信的模型档位证据')
+) {
+  throw new Error('真实发送仍必须同时提供 Case 档位和逐次发送前模型档位证据');
+}
+const maintenanceProductBug = reviewCaseCredibility(reviewFixture({
+  id: 'BETA-INIT-003',
+  scenario: '一键重装技能运行层并等待稳定终态',
+  status: 'failed',
+  result_category: 'bug',
+  requested_model_tier: 'M3',
+  steps: [{
+    action: '点击一键重装技能',
+    status: 'failed',
+    category: 'bug',
+    expected: '点击真实维护按钮并等待稳定终态。',
+    actual: '技能安装未生效，界面新增失败回执：ENOTEMPTY, Directory not empty: skill-venvs。',
+  }],
+  assertions: [{
+    name: '技能安装稳定终态',
+    status: 'failed',
+    category: 'bug',
+    expected: '技能运行层重装成功并恢复 ready。',
+    actual: '技能安装未生效，界面显示失败：ENOTEMPTY, Directory not empty: skill-venvs。',
+  }],
+  screenshots: { maintenance_terminal: evidenceScreenshot },
+  screenshots_flat: [evidenceScreenshot],
+  actual_result: '用户点击并确认重装后，维护区显示 ENOTEMPTY 失败。',
+}));
+if (maintenanceProductBug.review_category !== '可信失败-产品Bug候选' || !maintenanceProductBug.trusted) {
+  throw new Error('有失败终态截图的已执行维护动作必须保留为可信产品 Bug，不能因 failed 状态或普通“自动化”文本误判为框架问题');
+}
 const productionSingleRunPass = buildCredibilityReview([reviewFixture()]);
 if (productionSingleRunPass.production_release_gate?.decision !== 'ELIGIBLE_FOR_MULTI_RUN_GATE') {
   throw new Error('单轮全可信通过应只允许进入多轮生产门禁聚合');
