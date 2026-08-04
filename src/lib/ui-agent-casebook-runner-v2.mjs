@@ -20241,13 +20241,102 @@ async function waitForReply(page, beforeState, timeoutMs, {
   };
 }
 
-async function resolveAssistantConfirmationModal(page, { state = null, caseDir = '', label = '' } = {}) {
-  const dialog = page.locator('.modal, [role="dialog"]').filter({
-    hasText: /需要你确认|选择一项回答|直接按\s*Escape|用默认答案|请选择|请确认/,
-  }).first();
-  if (!(await visible(dialog, 300))) return false;
+export function assistantConfirmationSurfaceVerdict({
+  actionLabel = '',
+  surfaceText = '',
+  optionLabels = [],
+  hasDialogAncestor = false,
+} = {}) {
+  const action = String(actionLabel || '').replace(/\s+/g, '');
+  const text = String(surfaceText || '').replace(/\s+/g, ' ').trim();
+  const options = (Array.isArray(optionLabels) ? optionLabels : [])
+    .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter((item) => !/^(?:跳过(?:（用默认）)?|关闭并使用默认答案|确定|提交|取消|关闭|×|X)$/i.test(item));
+  const supportedAction = /^(?:跳过(?:（用默认）)?|关闭并使用默认答案)$/.test(action);
+  const questionLike = /(?:[?？]|具体指(?:哪|哪个|哪一)|选择一项|请选择|请确认|需要你确认|其他补充|其他（自己说）|用默认答案)/.test(text);
+  const structuredOptions = options.length >= 2;
+  return {
+    handle: supportedAction && questionLike && (structuredOptions || hasDialogAncestor),
+    policy: 'skip',
+    action_label: String(actionLabel || '').trim(),
+    question_like: questionLike,
+    has_dialog_ancestor: Boolean(hasDialogAncestor),
+    option_count: options.length,
+    option_labels: options,
+  };
+}
 
-  const text = await dialog.innerText({ timeout: 1000 }).catch(() => '');
+async function assistantConfirmationSurfaceFromAction(action) {
+  return action.evaluate((element) => {
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const ownLabel = clean(element.getAttribute('aria-label') || element.innerText || element.textContent);
+    let selected = null;
+    let node = element.parentElement;
+    while (node && node !== document.body) {
+      const text = clean(node.innerText || node.textContent);
+      const controls = Array.from(node.querySelectorAll(
+        'button, [role="button"], [role="radio"], [role="option"], [data-uiux-primitive="choice-button"]',
+      ));
+      if (
+        controls.length >= 2
+        && text.length >= 12
+        && text.length <= 8_000
+        && /(?:[?？]|具体指(?:哪|哪个|哪一)|选择一项|请选择|请确认|需要你确认|其他补充|其他（自己说）|用默认答案)/.test(text)
+      ) {
+        selected = node;
+        break;
+      }
+      node = node.parentElement;
+    }
+    const surface = selected || element.closest('[role="dialog"], .ask-modal, [data-testid*="ask"]');
+    if (!surface) {
+      return {
+        actionLabel: ownLabel,
+        surfaceText: '',
+        optionLabels: [],
+        hasDialogAncestor: false,
+      };
+    }
+    const optionLabels = Array.from(surface.querySelectorAll(
+      'button, [role="button"], [role="radio"], [role="option"], [data-uiux-primitive="choice-button"]',
+    )).map((control) => clean(
+      control.getAttribute('aria-label') || control.innerText || control.textContent,
+    )).filter(Boolean);
+    return {
+      actionLabel: ownLabel,
+      surfaceText: clean(surface.innerText || surface.textContent),
+      optionLabels,
+      hasDialogAncestor: Boolean(surface.matches('[role="dialog"]') || surface.closest('[role="dialog"]')),
+    };
+  }).catch(() => ({
+    actionLabel: '',
+    surfaceText: '',
+    optionLabels: [],
+    hasDialogAncestor: false,
+  }));
+}
+
+async function resolveAssistantConfirmationModal(page, { state = null, caseDir = '', label = '' } = {}) {
+  const actionCandidates = [
+    page.getByRole('button', { name: /^跳过(?:（用默认）)?$/ }).first(),
+    page.locator('button, [role="button"]').filter({ hasText: /^\s*跳过(?:（用默认）)?\s*$/ }).first(),
+    page.getByRole('button', { name: /^关闭并使用默认答案$/ }).first(),
+  ];
+  let actionButton = null;
+  let surface = null;
+  for (const candidate of actionCandidates) {
+    if (!(await visible(candidate, 300))) continue;
+    const facts = await assistantConfirmationSurfaceFromAction(candidate);
+    const verdict = assistantConfirmationSurfaceVerdict(facts);
+    if (!verdict.handle) continue;
+    actionButton = candidate;
+    surface = { ...facts, ...verdict };
+    break;
+  }
+  if (!actionButton || !surface) return false;
+
+  const text = surface.surfaceText;
   const count = state ? (state._assistantConfirmationCount = Number(state._assistantConfirmationCount || 0) + 1) : 1;
   const base = `assistant-confirm-${String(count).padStart(2, '0')}${label ? `-${slugify(label)}` : ''}`;
   let beforeShot = '';
@@ -20256,40 +20345,72 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
     state.screenshots[`${base}_before`] = beforeShot;
   }
 
-  const preferred = [
-    dialog.locator('button, [role="button"], .btn, .modal-btn').filter({ hasText: /跳过|默认/ }).first(),
-    dialog.locator('button, [role="button"], .btn, .modal-btn').filter({ hasText: /关闭|取消|稍后/ }).first(),
-  ];
-  let action = '';
-  for (const button of preferred) {
-    if (await visible(button, 500)) {
-      action = (await button.innerText({ timeout: 500 }).catch(() => '')).trim() || '点击默认/关闭按钮';
-      await button.click({ force: true }).catch(async () => button.evaluate((el) => el.click()).catch(() => {}));
+  const action = surface.action_label || '跳过';
+  const clickedAt = new Date().toISOString();
+  let clicked = false;
+  try {
+    await actionButton.click({ force: true });
+    clicked = true;
+  } catch {
+    clicked = await actionButton.evaluate((element) => {
+      element.click();
+      return true;
+    }).catch(() => false);
+  }
+  const oldSignature = `${surface.action_label}\n${surface.surfaceText}`;
+  let stillVisible = true;
+  let changedSurface = false;
+  const closeDeadline = Date.now() + 5_000;
+  while (Date.now() < closeDeadline) {
+    await page.waitForTimeout(250);
+    if (!(await visible(actionButton, 300))) {
+      stillVisible = false;
+      break;
+    }
+    const afterFacts = await assistantConfirmationSurfaceFromAction(actionButton);
+    const afterSignature = `${afterFacts.actionLabel}\n${afterFacts.surfaceText}`;
+    if (afterSignature !== oldSignature) {
+      changedSurface = true;
+      stillVisible = false;
       break;
     }
   }
-  if (!action) {
-    await page.keyboard.press('Escape').catch(() => {});
-    action = '按 Escape 使用默认答案/关闭确认弹窗';
-  }
-  await page.waitForTimeout(800);
-
-  const stillVisible = await visible(dialog, 500);
   let afterShot = '';
   if (state && caseDir) {
     afterShot = await shot(page, caseDir, `${base}-after`);
     state.screenshots[`${base}_after`] = afterShot;
+    const interactions = Array.isArray(state.artifacts.assistant_confirmation_interactions)
+      ? state.artifacts.assistant_confirmation_interactions
+      : [];
+    interactions.push({
+      policy: 'skip',
+      label: label || `第 ${count} 次`,
+      detected_at: clickedAt,
+      action_label: action,
+      prompt_text: clip(text, 800),
+      option_count: surface.option_count,
+      option_labels: surface.option_labels.slice(0, 12).map((item) => clip(item, 240)),
+      before_screenshot: beforeShot,
+      after_screenshot: afterShot,
+      clicked,
+      closed_or_advanced: !stillVisible,
+      advanced_to_next_question: changedSurface,
+    });
+    state.artifacts.assistant_confirmation_interactions = interactions;
     recordStep(
       state,
-      `处理 Agent 确认弹窗（${label || `第 ${count} 次`}）`,
-      '会话中出现“需要你确认”时，自动化应按页面提示使用默认答案继续，避免卡住后续多轮追问。',
-      `${action}；弹窗=${clip(text, 180)}${stillVisible ? '；处理后仍可见' : '；处理后已关闭'}`,
+      `处理 Agent 推荐选项（${label || `第 ${count} 次`}）`,
+      '会话中出现推荐选项/澄清问题时，自动化默认点击“跳过”使用默认答案，保留前后截图后继续等待 Agent。',
+      `${action}；选项数=${surface.option_count}；面板=${clip(text, 180)}${stillVisible ? '；处理后仍可见' : changedSurface ? '；已进入下一问题' : '；处理后已关闭'}`,
       stillVisible ? 'failed' : 'passed',
       afterShot || beforeShot,
       stillVisible ? 'automation_error' : '',
     );
   }
-  return !stillVisible;
+  if (!clicked || stillVisible) {
+    throw new Error(`Agent 推荐选项默认跳过失败：action=${action || 'missing'} clicked=${clicked} stillVisible=${stillVisible}`);
+  }
+  return true;
 }
 
 async function conversationSnapshot(page) {
