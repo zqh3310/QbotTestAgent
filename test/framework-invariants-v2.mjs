@@ -39,6 +39,8 @@ import {
   coreBetaRuntimeExecutorBinding,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
+  coreBetaRunOwnedSkillCleanupVerdict,
+  coreBetaSkillUninstallRequestName,
   coreBetaSkillUsePrerequisiteDecision,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
@@ -994,6 +996,66 @@ assert.match(
   runner,
   /installedTargets[\s\S]*cancelReceipt[\s\S]*cleanupValid[\s\S]*applyCoreBetaSkillPrerequisiteBlocker/,
   'BETA-SKILL-012 必须清理本轮真实成功安装的资源，再传播上游短缺阻塞',
+);
+const cleanupAttemptedIdentities = prerequisiteAttempts.slice(0, 5).map((item) => item.qualified_identity);
+const cleanupReceipts = cleanupAttemptedIdentities.map((qualifiedIdentity) => ({
+  qualified_identity: qualifiedIdentity,
+  request_name: qualifiedIdentity.split('/')[1],
+  result: { ok: true },
+}));
+assert.equal(
+  coreBetaSkillUninstallRequestName({ name: 'doc-coauthoring', slug: 'ignored-slug' }),
+  'doc-coauthoring',
+  'Skill 卸载必须使用产品 UI 同款字符串 name 请求，不能把 catalog 对象传给 preload',
+);
+assert.throws(
+  () => coreBetaSkillUninstallRequestName({}),
+  /缺少产品 API 要求的字符串 name/,
+  '缺少字符串卸载目标时必须 fail-closed',
+);
+assert.equal(
+  coreBetaRunOwnedSkillCleanupVerdict({
+    attemptedIdentities: cleanupAttemptedIdentities,
+    receipts: cleanupReceipts,
+    remainingIdentities: [cleanupAttemptedIdentities[0]],
+    untouchedBefore: ['global/user-owned/1.0.0'],
+    untouchedAfter: ['global/user-owned/1.0.0'],
+    absenceReadback: { valid: false, stable_required: 2, stable_absent_observations: 0 },
+  }).valid,
+  false,
+  'uninstall API 返回 ok 但目标仍在 catalog.installed 时不得把清理判为 passed',
+);
+assert.equal(
+  coreBetaRunOwnedSkillCleanupVerdict({
+    attemptedIdentities: cleanupAttemptedIdentities,
+    receipts: cleanupReceipts,
+    remainingIdentities: [],
+    untouchedBefore: ['global/user-owned/1.0.0'],
+    untouchedAfter: ['global/user-owned/1.0.0'],
+    absenceReadback: { valid: true, stable_required: 2, stable_absent_observations: 2 },
+  }).valid,
+  true,
+  '只有目标稳定缺席、卸载收据成功且基线技能不变时清理才能通过',
+);
+assert.match(
+  runner,
+  /waitForCoreBetaSkillIdentitiesAbsent[\s\S]*stableAbsentObservations >= stableRequired/,
+  'Skill 清理必须有界轮询并要求目标连续稳定缺席',
+);
+assert.match(
+  runner,
+  /testCase\.id === 'BETA-SKILL-001'[\s\S]*waitForCoreBetaSkillIdentitiesAbsent[\s\S]*remaining[\s\S]*coreBetaRunOwnedSkillCleanupVerdict/,
+  'BETA-SKILL-001 必须把 remaining=0 稳定读回纳入 pass 条件',
+);
+assert.doesNotMatch(
+  runner,
+  /window\.agent\.uninstallSkill\((?:target|item|installed)\)/,
+  'Skill 生命周期清理不得把 catalog 对象传给只接受字符串 name 的产品卸载 API',
+);
+assert.match(
+  runner,
+  /coreBetaSkillUninstallRequestName\(installed\)[\s\S]*window\.agent\.uninstallSkill\(name\)/,
+  'Skill 生命周期清理必须保存并传递产品 API 要求的字符串卸载名',
 );
 const runOwnedSkillCleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-run-owned-cleanup-'));
 try {

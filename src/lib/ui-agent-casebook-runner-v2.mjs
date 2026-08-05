@@ -5301,6 +5301,12 @@ function skillQualifiedIdentity(skill) {
   ].join('/');
 }
 
+export function coreBetaSkillUninstallRequestName(skill = {}) {
+  const name = String(skill?.name || skill?.slug || '').trim();
+  if (!name) throw new Error('Skill 卸载目标缺少产品 API 要求的字符串 name。');
+  return name;
+}
+
 async function openCoreBetaSkillSurface(page) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await page.locator('[data-testid="skills-tab"]').click({ timeout: 15_000 });
@@ -5327,6 +5333,110 @@ async function readCoreBetaSkillCatalog(page) {
       history: Array.isArray(catalog?.history) ? catalog.history : [],
     };
   });
+}
+
+async function waitForCoreBetaSkillIdentitiesAbsent(page, targetIdentities, {
+  timeoutMs = 60_000,
+  stableRequired = 2,
+  pollMs = 1_000,
+} = {}) {
+  const targets = new Set((Array.isArray(targetIdentities) ? targetIdentities : []).map(String).filter(Boolean));
+  const startedAt = Date.now();
+  const observations = [];
+  let stableAbsentObservations = 0;
+  let catalog = null;
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      catalog = await readCoreBetaSkillCatalog(page);
+      const remainingIdentities = catalog.installed
+        .map(skillQualifiedIdentity)
+        .filter((identity) => targets.has(identity));
+      stableAbsentObservations = remainingIdentities.length === 0
+        ? stableAbsentObservations + 1
+        : 0;
+      observations.push({
+        captured_at: new Date().toISOString(),
+        elapsed_ms: Date.now() - startedAt,
+        installed_count: catalog.installed.length,
+        remaining_identities: remainingIdentities,
+        stable_absent_observations: stableAbsentObservations,
+      });
+      if (stableAbsentObservations >= stableRequired) {
+        return {
+          valid: true,
+          timeout_ms: timeoutMs,
+          elapsed_ms: Date.now() - startedAt,
+          stable_required: stableRequired,
+          stable_absent_observations: stableAbsentObservations,
+          remaining_identities: [],
+          observations,
+          catalog,
+        };
+      }
+    } catch (error) {
+      stableAbsentObservations = 0;
+      observations.push({
+        captured_at: new Date().toISOString(),
+        elapsed_ms: Date.now() - startedAt,
+        error: String(error?.message || error),
+        stable_absent_observations: 0,
+      });
+    }
+    await page.waitForTimeout(pollMs);
+  }
+  const remainingIdentities = (catalog?.installed || [])
+    .map(skillQualifiedIdentity)
+    .filter((identity) => targets.has(identity));
+  return {
+    valid: false,
+    timeout_ms: timeoutMs,
+    elapsed_ms: Date.now() - startedAt,
+    stable_required: stableRequired,
+    stable_absent_observations: stableAbsentObservations,
+    remaining_identities: remainingIdentities,
+    observations,
+    catalog,
+  };
+}
+
+export function coreBetaRunOwnedSkillCleanupVerdict({
+  attemptedIdentities = [],
+  receipts = [],
+  remainingIdentities = [],
+  untouchedBefore = [],
+  untouchedAfter = [],
+  absenceReadback = {},
+} = {}) {
+  const attempted = (Array.isArray(attemptedIdentities) ? attemptedIdentities : []).map(String).filter(Boolean);
+  const normalizedReceipts = Array.isArray(receipts) ? receipts : [];
+  const remaining = (Array.isArray(remainingIdentities) ? remainingIdentities : []).map(String).filter(Boolean);
+  const unrelatedPreserved = JSON.stringify(untouchedBefore) === JSON.stringify(untouchedAfter);
+  const receiptIdentities = normalizedReceipts
+    .map((item) => String(item?.qualified_identity || ''))
+    .filter(Boolean);
+  const receiptsValid = normalizedReceipts.length === attempted.length
+    && new Set(attempted).size === attempted.length
+    && new Set(receiptIdentities).size === receiptIdentities.length
+    && attempted.every((identity) => receiptIdentities.includes(identity))
+    && normalizedReceipts.every((item) => (
+      typeof item?.request_name === 'string'
+      && item.request_name.trim().length > 0
+      && item?.result?.ok === true
+    ));
+  return {
+    valid: receiptsValid
+      && remaining.length === 0
+      && absenceReadback?.valid === true
+      && Number(absenceReadback?.stable_absent_observations || 0)
+        >= Number(absenceReadback?.stable_required || 2)
+      && unrelatedPreserved,
+    attempted_count: attempted.length,
+    receipt_count: normalizedReceipts.length,
+    receipts_valid: receiptsValid,
+    remaining_identities: remaining,
+    absence_readback_valid: absenceReadback?.valid === true,
+    unrelated_preserved: unrelatedPreserved,
+  };
 }
 
 function chooseCoreBetaMarketSkills(catalog, count = 10) {
@@ -5608,6 +5718,9 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       const before = await readCoreBetaSkillCatalog(page);
       const qaSkills = Array.isArray(ledger.skills.selected) ? ledger.skills.selected : [];
       const qaKeys = new Set(qaSkills.map((item) => item.qualified_identity));
+      const attemptedIdentities = before.installed
+        .map(skillQualifiedIdentity)
+        .filter((identity) => qaKeys.has(identity));
       const untouchedBefore = before.installed
         .filter((item) => !qaKeys.has(skillQualifiedIdentity(item)))
         .map(skillQualifiedIdentity).sort();
@@ -5615,22 +5728,37 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       for (const skill of qaSkills) {
         const installed = before.installed.find((item) => skillQualifiedIdentity(item) === skill.qualified_identity);
         if (!installed) continue;
-        const result = await page.evaluate((target) => window.agent.uninstallSkill(target), installed);
-        removed.push({ qualified_identity: skill.qualified_identity, result });
+        const requestName = coreBetaSkillUninstallRequestName(installed);
+        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName);
+        removed.push({ qualified_identity: skill.qualified_identity, request_name: requestName, result });
         if (!result?.ok) throw new Error(`QA Skill 清理失败：${skill.qualified_identity} ${result?.msg || ''}`);
       }
-      const after = await readCoreBetaSkillCatalog(page);
+      const absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(page, [...qaKeys]);
+      const after = absenceReadback.catalog || { installed: [], market: [], history: [] };
+      const remaining = after.installed.map(skillQualifiedIdentity).filter((identity) => qaKeys.has(identity));
       const untouchedAfter = after.installed.map(skillQualifiedIdentity).filter((key) => !qaKeys.has(key)).sort();
+      const cleanupVerdict = coreBetaRunOwnedSkillCleanupVerdict({
+        attemptedIdentities,
+        receipts: removed,
+        remainingIdentities: remaining,
+        untouchedBefore,
+        untouchedAfter,
+        absenceReadback,
+      });
       await selectCoreBetaSkillTab(page, '技能市场');
       const file = path.join(caseDir, 'capability-inventory.json');
       writeJsonFile(file, {
-        valid: JSON.stringify(untouchedBefore) === JSON.stringify(untouchedAfter),
+        valid: cleanupVerdict.valid,
         source: 'catalog.installed',
         active_tab_before: 'installed',
         active_tab_after: 'market',
         before,
+        attempted_identities: attemptedIdentities,
         removed,
         after,
+        remaining,
+        absence_readback: { ...absenceReadback, catalog: undefined },
+        cleanup_verdict: cleanupVerdict,
         untouched_before: untouchedBefore,
         untouched_after: untouchedAfter,
       });
@@ -5640,9 +5768,10 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       recordAssertion(
         state,
         'QA Skill 精确清理不影响用户技能',
-        '只允许卸载上一轮QA账本精确命中的qualified identity，其他已安装identity/version必须保持。',
-        JSON.stringify(untouchedBefore) === JSON.stringify(untouchedAfter),
-        `removed=${removed.length}; untouched=${untouchedAfter.length}`,
+        '只允许卸载上一轮QA账本精确命中的qualified identity；目标必须连续两次从已安装目录消失，其他identity/version必须保持。',
+        cleanupVerdict.valid,
+        `attempted=${attemptedIdentities.length}; removed=${removed.length}; remaining=${remaining.length}; stableAbsent=${absenceReadback.stable_absent_observations}; untouched=${untouchedAfter.length}`,
+        cleanupVerdict.valid ? '' : 'automation_error',
       );
       return;
     }
@@ -5951,19 +6080,29 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       for (const target of installedTargets) {
         const installed = afterCancel.installed.find((item) => skillQualifiedIdentity(item) === target.qualified_identity);
         if (!installed) continue;
-        const result = await page.evaluate((item) => window.agent.uninstallSkill(item), installed)
+        const requestName = coreBetaSkillUninstallRequestName(installed);
+        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName)
           .catch((error) => ({ ok: false, error: error.message }));
-        receipts.push({ qualified_identity: target.qualified_identity, result });
+        receipts.push({ qualified_identity: target.qualified_identity, request_name: requestName, result });
       }
-      const after = await readCoreBetaSkillCatalog(page);
+      const absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(
+        page,
+        selected.map((target) => target.qualified_identity),
+      );
+      const after = absenceReadback.catalog || { installed: [], market: [], history: [] };
       const remaining = after.installed.filter((item) => selected.some((target) => target.qualified_identity === skillQualifiedIdentity(item)));
       const baseline = new Set(ledger.skills.baseline_installed || []);
       const unrelatedAfter = after.installed.map(skillQualifiedIdentity).filter((key) => baseline.has(key)).sort();
       const unrelatedBefore = before.installed.map(skillQualifiedIdentity).filter((key) => baseline.has(key)).sort();
-      const cleanupValid = receipts.length === installedTargets.length
-        && receipts.every((item) => typeof item?.result?.ok === 'boolean')
-        && remaining.length === 0
-        && JSON.stringify(unrelatedBefore) === JSON.stringify(unrelatedAfter);
+      const cleanupVerdict = coreBetaRunOwnedSkillCleanupVerdict({
+        attemptedIdentities: installedTargets.map((item) => item.qualified_identity),
+        receipts,
+        remainingIdentities: remaining.map(skillQualifiedIdentity),
+        untouchedBefore: unrelatedBefore,
+        untouchedAfter: unrelatedAfter,
+        absenceReadback,
+      });
+      const cleanupValid = cleanupVerdict.valid;
       const oracleValid = !prerequisite.applicable
         && installedTargets.length === 10
         && cancelKept
@@ -5980,6 +6119,8 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         receipts,
         after,
         remaining: remaining.map(skillQualifiedIdentity),
+        absence_readback: { ...absenceReadback, catalog: undefined },
+        cleanup_verdict: cleanupVerdict,
         unrelated_before: unrelatedBefore,
         unrelated_after: unrelatedAfter,
         cleanup_valid: cleanupValid,
