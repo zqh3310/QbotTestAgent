@@ -494,6 +494,45 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     }
   }
 
+  let runOwnedSkillCleanupSeed = null;
+  if (options['core-beta-cleanup-from']) {
+    try {
+      runOwnedSkillCleanupSeed = seedCoreBetaRunOwnedSkillCleanupLedger({
+        sourceOut: options['core-beta-cleanup-from'],
+        currentOut: outDir,
+        casebook,
+        selectedCases,
+      });
+    } catch (error) {
+      const reason = `Core Beta run-owned Skill 清理源验证失败：${error.message}`;
+      const diagnostic = {
+        schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v1',
+        valid: false,
+        generated_at: new Date().toISOString(),
+        source_out: String(options['core-beta-cleanup-from'] || ''),
+        current_out: outDir,
+        reason,
+      };
+      writeJsonFile(path.join(outDir, 'core-beta-run-owned-skill-cleanup-source.json'), diagnostic);
+      const summary = buildSummary({
+        status: 'blocked',
+        startedAt,
+        outDir,
+        casebook,
+        resultExcel,
+        profile,
+        cdpUrl,
+        modelTier,
+        results: [],
+        reason,
+        precheck: { run_owned_skill_cleanup_source: diagnostic },
+      });
+      writeRunArtifacts(outDir, summary);
+      await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
+      return summary;
+    }
+  }
+
   const productionGateEnabled = options['production-gate'] === true
     || options['production-gate'] === 'true'
     || String(options['gate-profile'] || '').toLowerCase() === 'release';
@@ -669,6 +708,9 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     // handlers and previously made delete/confirm cases look like product bugs.
     const runtime = { browser, page, playwright: loaded, cdpUrl };
     const precheck = await inspectPrecheck(page, outDir);
+    if (runOwnedSkillCleanupSeed) {
+      precheck.run_owned_skill_cleanup_source = runOwnedSkillCleanupSeed;
+    }
     precheck.single_host_pipeline = {
       enabled: singleHostPipelineSize > 1,
       requested_size: singleHostPipelineSize,
@@ -5059,6 +5101,177 @@ async function executeCoreBetaInitializationCase(context) {
 
 function coreBetaSuiteLedgerPath(caseDir) {
   return path.join(path.dirname(path.dirname(caseDir)), 'core-beta-suite-ledger.json');
+}
+
+function coreBetaCleanupReleaseIdentity(metadata = {}) {
+  return {
+    host: {
+      product: String(metadata.host?.product || ''),
+      version: String(metadata.host?.version || ''),
+      build: String(metadata.host?.build || ''),
+      app_path: String(metadata.host?.app_path || ''),
+    },
+    qwork: {
+      version: String(metadata.qwork?.version || ''),
+      url: String(metadata.qwork?.url || ''),
+    },
+    control_plane: {
+      origin: String(metadata.control_plane?.origin || ''),
+    },
+    artifacts: {
+      host_info_plist_sha256: String(metadata.artifacts?.host_info_plist_sha256 || ''),
+      host_main_binary_sha256: String(metadata.artifacts?.host_main_binary_sha256 || ''),
+      qwork_index_sha256: String(metadata.artifacts?.qwork_index_sha256 || ''),
+      qwork_install_metadata_sha256: String(metadata.artifacts?.qwork_install_metadata_sha256 || ''),
+      casebook_sha256: String(metadata.artifacts?.casebook_sha256 || ''),
+    },
+    release_inputs: {
+      backend_version: String(metadata.release_inputs?.backend_version || ''),
+      prompt_policy_version: String(metadata.release_inputs?.prompt_policy_version || ''),
+      feature_flags_hash: String(metadata.release_inputs?.feature_flags_hash || ''),
+      qwork_ui_git_commit: String(metadata.release_inputs?.qwork_ui_git_commit || ''),
+      qwork_build_id: String(metadata.release_inputs?.qwork_build_id || ''),
+      qwork_release_manifest_sha256: String(metadata.release_inputs?.qwork_release_manifest_sha256 || ''),
+    },
+    model_tier: String(metadata.model_tier || ''),
+  };
+}
+
+function coreBetaCleanupSourceResult(sourceOut, progress, caseId) {
+  const result = (Array.isArray(progress?.results) ? progress.results : [])
+    .find((item) => String(item?.id || '') === caseId);
+  if (!result || result.synthetic === true || result.execution_provenance !== 'executed') {
+    throw new Error(`${caseId} 缺少真实 executed 源结果。`);
+  }
+  const declaredCaseDir = path.resolve(String(result.case_dir || ''));
+  if (!result.case_dir || !fs.existsSync(declaredCaseDir)) {
+    throw new Error(`${caseId} 源 Case 目录缺失。`);
+  }
+  const sourceCaseDir = fs.realpathSync(declaredCaseDir);
+  const sourceRelative = path.relative(sourceOut, sourceCaseDir);
+  if (sourceRelative.startsWith('..') || path.isAbsolute(sourceRelative)) {
+    throw new Error(`${caseId} 源 Case 目录越出冻结批次。`);
+  }
+  const resultFile = path.join(sourceCaseDir, 'case-result.json');
+  const manifestFile = path.join(sourceCaseDir, 'evidence-manifest.json');
+  if (!fs.existsSync(resultFile) || !fs.existsSync(manifestFile)) {
+    throw new Error(`${caseId} 源结果或 manifest 文件缺失。`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  if (
+    manifest.complete !== true
+    || (manifest.missing_roles || []).length > 0
+    || (manifest.invalid_roles || []).length > 0
+  ) {
+    throw new Error(`${caseId} 源 manifest 不完整。`);
+  }
+  return {
+    case_id: caseId,
+    status: String(result.status || ''),
+    result_category: String(result.result_category || ''),
+    case_result_sha256: createHash('sha256').update(fs.readFileSync(resultFile)).digest('hex'),
+    evidence_manifest_sha256: createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex'),
+  };
+}
+
+export function seedCoreBetaRunOwnedSkillCleanupLedger({
+  sourceOut,
+  currentOut,
+  casebook,
+  selectedCases = [],
+} = {}) {
+  const sourceDirectory = fs.realpathSync(path.resolve(String(sourceOut || '')));
+  const currentDirectory = fs.realpathSync(path.resolve(String(currentOut || '')));
+  if (sourceDirectory === currentDirectory || path.dirname(sourceDirectory) !== path.dirname(currentDirectory)) {
+    throw new Error('清理源必须是当前输出目录的冻结同级批次。');
+  }
+  if (
+    selectedCases.length !== 1
+    || String(selectedCases[0]?.id || '') !== 'BETA-SKILL-001'
+    || String(selectedCases[0]?.case_type || '') !== 'skill_lifecycle'
+  ) {
+    throw new Error('--core-beta-cleanup-from 只允许单独执行 BETA-SKILL-001。');
+  }
+
+  const sourceLedgerFile = path.join(sourceDirectory, 'core-beta-suite-ledger.json');
+  const sourceProgressFile = path.join(sourceDirectory, 'automation-progress.json');
+  const sourceMetadataFile = path.join(sourceDirectory, 'run-metadata.json');
+  const currentMetadataFile = path.join(currentDirectory, 'run-metadata.json');
+  const currentLedgerFile = path.join(currentDirectory, 'core-beta-suite-ledger.json');
+  for (const file of [sourceLedgerFile, sourceProgressFile, sourceMetadataFile, currentMetadataFile]) {
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) {
+      throw new Error(`清理源合同文件缺失或为空：${file}`);
+    }
+  }
+  if (fs.existsSync(currentLedgerFile)) {
+    throw new Error(`当前清理输出已存在 suite ledger，禁止覆盖：${currentLedgerFile}`);
+  }
+
+  const sourceMetadata = JSON.parse(fs.readFileSync(sourceMetadataFile, 'utf8'));
+  const currentMetadata = JSON.parse(fs.readFileSync(currentMetadataFile, 'utf8'));
+  const casebookFile = fs.realpathSync(path.resolve(String(casebook || '')));
+  const casebookSha256 = createHash('sha256').update(fs.readFileSync(casebookFile)).digest('hex');
+  if (
+    sourceMetadata.artifacts?.casebook_sha256 !== casebookSha256
+    || currentMetadata.artifacts?.casebook_sha256 !== casebookSha256
+  ) {
+    throw new Error('清理源、当前批次与 Casebook SHA-256 不一致。');
+  }
+  const sourceIdentity = coreBetaCleanupReleaseIdentity(sourceMetadata);
+  const currentIdentity = coreBetaCleanupReleaseIdentity(currentMetadata);
+  if (JSON.stringify(sourceIdentity) !== JSON.stringify(currentIdentity)) {
+    throw new Error('清理源与当前受管宿主发布身份不一致。');
+  }
+
+  const sourceProgress = JSON.parse(fs.readFileSync(sourceProgressFile, 'utf8'));
+  const sourceResults = ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']
+    .map((caseId) => coreBetaCleanupSourceResult(sourceDirectory, sourceProgress, caseId));
+  const ledger = JSON.parse(fs.readFileSync(sourceLedgerFile, 'utf8'));
+  const selected = Array.isArray(ledger.skills?.selected) ? ledger.skills.selected : [];
+  const selectedIdentities = selected.map((item) => String(item?.qualified_identity || '')).filter(Boolean);
+  if (selected.length !== 10 || selectedIdentities.length !== 10 || new Set(selectedIdentities).size !== 10) {
+    throw new Error('清理源必须包含10个唯一的 QA Skill qualified identity。');
+  }
+  const baseline = new Set(Array.isArray(ledger.skills?.baseline_installed)
+    ? ledger.skills.baseline_installed.map(String)
+    : []);
+  const baselineOverlap = selectedIdentities.filter((identity) => baseline.has(identity));
+  if (baselineOverlap.length > 0) {
+    throw new Error(`清理目标与安装前基线重叠：${baselineOverlap.join(',')}`);
+  }
+  const prerequisite = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
+    expectedCount: 10,
+    dependentCaseId: 'BETA-SKILL-012',
+  });
+  if (!prerequisite.valid) {
+    throw new Error(`清理源安装尝试账本无效：${prerequisite.reason}`);
+  }
+
+  const temporary = `${currentLedgerFile}.tmp-${process.pid}`;
+  fs.copyFileSync(sourceLedgerFile, temporary);
+  fs.renameSync(temporary, currentLedgerFile);
+  const record = {
+    schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v1',
+    valid: true,
+    seeded_at: new Date().toISOString(),
+    source_out: sourceDirectory,
+    current_out: currentDirectory,
+    source_ledger: sourceLedgerFile,
+    source_ledger_sha256: createHash('sha256').update(fs.readFileSync(sourceLedgerFile)).digest('hex'),
+    imported_ledger: currentLedgerFile,
+    imported_ledger_sha256: createHash('sha256').update(fs.readFileSync(currentLedgerFile)).digest('hex'),
+    source_progress: sourceProgressFile,
+    source_progress_sha256: createHash('sha256').update(fs.readFileSync(sourceProgressFile)).digest('hex'),
+    casebook_sha256: casebookSha256,
+    release_identity_sha256: sha256Text(JSON.stringify(currentIdentity)),
+    selected_identities: selectedIdentities,
+    baseline_overlap: baselineOverlap,
+    install_attempts_sha256: prerequisite.receipts_sha256,
+    source_results: sourceResults,
+    cleanup_case_id: 'BETA-SKILL-001',
+  };
+  writeJsonFile(path.join(currentDirectory, 'core-beta-run-owned-skill-cleanup-source.json'), record);
+  return record;
 }
 
 function readCoreBetaSuiteLedger(caseDir) {

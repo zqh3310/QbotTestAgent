@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
@@ -69,6 +70,7 @@ import {
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
   seedLocalSkillReadiness,
+  seedCoreBetaRunOwnedSkillCleanupLedger,
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
@@ -992,6 +994,130 @@ assert.match(
   runner,
   /installedTargets[\s\S]*cancelReceipt[\s\S]*cleanupValid[\s\S]*applyCoreBetaSkillPrerequisiteBlocker/,
   'BETA-SKILL-012 必须清理本轮真实成功安装的资源，再传播上游短缺阻塞',
+);
+const runOwnedSkillCleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-run-owned-cleanup-'));
+try {
+  const sourceOut = path.join(runOwnedSkillCleanupRoot, 'frozen-source');
+  const currentOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-run');
+  const driftOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-drift');
+  const wrongCaseOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-wrong-case');
+  const casebook = path.join(runOwnedSkillCleanupRoot, 'casebook.xlsx');
+  for (const directory of [sourceOut, currentOut, driftOut, wrongCaseOut]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.writeFileSync(casebook, 'immutable-casebook');
+  const casebookSha256 = createHash('sha256').update(fs.readFileSync(casebook)).digest('hex');
+  const releaseMetadata = {
+    host: { product: '360Teams', version: '5.2.38', build: '2119080433', app_path: '/Applications/360Teams.app' },
+    qwork: { version: '0.0.29', url: 'file:///Users/qa/.deepbank-uat/ui/0.0.29/index.html' },
+    control_plane: { origin: 'https://deepbank-control-uat.example.test' },
+    artifacts: {
+      host_info_plist_sha256: 'a'.repeat(64),
+      host_main_binary_sha256: 'b'.repeat(64),
+      qwork_index_sha256: 'c'.repeat(64),
+      qwork_install_metadata_sha256: 'd'.repeat(64),
+      casebook_sha256: casebookSha256,
+    },
+    release_inputs: {
+      backend_version: 'uat-backend',
+      prompt_policy_version: 'prompt-policy',
+      feature_flags_hash: 'e'.repeat(64),
+      qwork_ui_git_commit: '',
+      qwork_build_id: '0.0.29',
+      qwork_release_manifest_sha256: '',
+    },
+    model_tier: 'M3',
+  };
+  writeJsonFile(path.join(sourceOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(currentOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(driftOut, 'run-metadata.json'), {
+    ...releaseMetadata,
+    qwork: { ...releaseMetadata.qwork, version: '0.0.30' },
+  });
+  writeJsonFile(path.join(wrongCaseOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(sourceOut, 'core-beta-suite-ledger.json'), {
+    schema_version: 1,
+    skills: {
+      ...prerequisiteLedger.skills,
+      baseline_installed: ['global/user-owned/9.9.9'],
+    },
+    experts: {},
+    mcps: {},
+  });
+  const sourceResults = [];
+  for (const caseId of ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']) {
+    const caseDir = path.join(sourceOut, 'cases', caseId);
+    fs.mkdirSync(caseDir, { recursive: true });
+    writeJsonFile(path.join(caseDir, 'case-result.json'), { id: caseId, status: caseId === 'BETA-SKILL-002' ? 'passed' : 'failed' });
+    writeJsonFile(path.join(caseDir, 'evidence-manifest.json'), {
+      case_id: caseId,
+      complete: true,
+      missing_roles: [],
+      invalid_roles: [],
+      evidence: [],
+    });
+    sourceResults.push({
+      id: caseId,
+      status: caseId === 'BETA-SKILL-002' ? 'passed' : 'failed',
+      result_category: caseId === 'BETA-SKILL-002' ? 'passed' : 'bug',
+      execution_provenance: 'executed',
+      synthetic: false,
+      case_dir: caseDir,
+    });
+  }
+  writeJsonFile(path.join(sourceOut, 'automation-progress.json'), {
+    completed: sourceResults.length,
+    total: 55,
+    results: sourceResults,
+  });
+  const cleanupCase = [{ id: 'BETA-SKILL-001', case_type: 'skill_lifecycle' }];
+  const seeded = seedCoreBetaRunOwnedSkillCleanupLedger({
+    sourceOut,
+    currentOut,
+    casebook,
+    selectedCases: cleanupCase,
+  });
+  assert.equal(seeded.valid, true);
+  assert.equal(seeded.selected_identities.length, 10);
+  assert.deepEqual(seeded.baseline_overlap, []);
+  assert.equal(seeded.source_results.length, 3);
+  assert.equal(
+    fs.readFileSync(path.join(currentOut, 'core-beta-suite-ledger.json'), 'utf8'),
+    fs.readFileSync(path.join(sourceOut, 'core-beta-suite-ledger.json'), 'utf8'),
+    '清理批次必须原样导入冻结 suite ledger，不能改写目标 identity',
+  );
+  assert.throws(
+    () => seedCoreBetaRunOwnedSkillCleanupLedger({
+      sourceOut,
+      currentOut: driftOut,
+      casebook,
+      selectedCases: cleanupCase,
+    }),
+    /发布身份不一致/,
+    '清理源与当前宿主发布身份漂移时必须 fail-closed',
+  );
+  assert.throws(
+    () => seedCoreBetaRunOwnedSkillCleanupLedger({
+      sourceOut,
+      currentOut: wrongCaseOut,
+      casebook,
+      selectedCases: [{ id: 'BETA-SKILL-012', case_type: 'skill_lifecycle' }],
+    }),
+    /只允许单独执行 BETA-SKILL-001/,
+    '冻结账本导入不得用于普通批次或其他 Case',
+  );
+} finally {
+  fs.rmSync(runOwnedSkillCleanupRoot, { recursive: true, force: true });
+}
+assert.match(
+  runner,
+  /options\['core-beta-cleanup-from'\][\s\S]*seedCoreBetaRunOwnedSkillCleanupLedger/,
+  'Core Beta v2 必须在连接产品前验证并导入冻结的 run-owned Skill 清理账本',
+);
+assert.match(
+  automationFramework,
+  /--core-beta-cleanup-from <frozen-source-out>/,
+  '框架合同必须记录 framework issue 中断后的受管 Skill 清理路径',
 );
 assert.match(
   runner,

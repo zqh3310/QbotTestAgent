@@ -69,6 +69,9 @@ export function validateTeamsCasebookOptions(options) {
   } else if (options['impact-case'] || options['impact-all']) {
     throw new Error('--impact-case/--impact-all require --resume-from.');
   }
+  if (options['core-beta-cleanup-from'] && options['resume-from']) {
+    throw new Error('--core-beta-cleanup-from cannot be combined with cross-run resume.');
+  }
   if (options['restart-command']) {
     throw new Error('360Teams Casebook runs must not configure a local-QBot restart-command.');
   }
@@ -94,6 +97,17 @@ export function validateTeamsCasebookOptions(options) {
   }
   options.session = path.resolve(String(options.session || DEFAULT_SESSION));
   options.out = out;
+  if (options['core-beta-cleanup-from']) {
+    const rawCleanupFrom = String(options['core-beta-cleanup-from']);
+    const cleanupFrom = path.isAbsolute(rawCleanupFrom)
+      ? path.resolve(rawCleanupFrom)
+      : path.resolve(ROOT, rawCleanupFrom);
+    const cleanupRelative = path.relative(TEAMS_OUTPUT_ROOT, cleanupFrom);
+    if (cleanupRelative.startsWith('..') || path.isAbsolute(cleanupRelative) || cleanupFrom === out) {
+      throw new Error(`--core-beta-cleanup-from must be a different frozen batch under ${TEAMS_OUTPUT_ROOT}.`);
+    }
+    options['core-beta-cleanup-from'] = cleanupFrom;
+  }
   if (options['resume-from']) {
     const resumeFrom = path.resolve(String(options['resume-from']));
     const resumeRelative = path.relative(TEAMS_OUTPUT_ROOT, resumeFrom);

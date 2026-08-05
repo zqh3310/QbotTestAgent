@@ -494,6 +494,26 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     ...options,
     'impact-case': 'SIT-HOME-001',
   }), /require --resume-from/);
+  const cleanupOptions = parseCasebookRunnerOptions([
+    '--casebook', 'PRD/cases.xlsx',
+    '--case', 'BETA-SKILL-001',
+    '--out', 'teams360-automation/output/cleanup-run',
+    '--core-beta-cleanup-from', 'teams360-automation/output/frozen-run',
+  ]);
+  validateTeamsCasebookOptions(cleanupOptions);
+  assert.equal(
+    cleanupOptions['core-beta-cleanup-from'],
+    path.join(PROJECT_ROOT, 'teams360-automation', 'output', 'frozen-run'),
+  );
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...cleanupOptions,
+    'core-beta-cleanup-from': cleanupOptions.out,
+  }), /must be a different frozen batch/);
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...cleanupOptions,
+    'resume-from': 'teams360-automation/output/old-run',
+    'impact-all': 'true',
+  }), /cannot be combined/);
 });
 
 test('Teams preconnect waits through a full managed-host QWork remount window', () => {

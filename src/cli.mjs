@@ -62,6 +62,8 @@ ui-agent-casebook-run:
   --single-host-pipeline <1-20>  Ordered single-host pipeline size
   --core-beta-fixture-control-url <url>
                                   Strict Core Beta fixture controller
+  --core-beta-cleanup-from <dir>  Frozen sibling batch whose exact QA Skill
+                                  ledger seeds a BETA-SKILL-001 cleanup run
   --production-gate true         Enable release-identity gate
   --scoped-execution true        Explicit non-release subset execution
   --excluded-case <id[,id...]>   Exact Case IDs omitted from the scope
