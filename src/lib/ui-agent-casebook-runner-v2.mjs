@@ -598,8 +598,15 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   }
 
-  const parallelism = Number(options.parallel || (options['worker-cdps'] ? DEFAULT_CASE_PARALLELISM : 1));
-  const singleHostPipelineSize = parseSingleHostPipelineSize(options['single-host-pipeline']);
+  const requestedParallelism = Number(options.parallel || (options['worker-cdps'] ? DEFAULT_CASE_PARALLELISM : 1));
+  const requestedSingleHostPipelineSize = parseSingleHostPipelineSize(options['single-host-pipeline']);
+  const concurrencyPolicy = coreBetaExecutionConcurrencyPolicy({
+    selectedCases,
+    requestedParallelism,
+    requestedSingleHostPipelineSize,
+  });
+  const parallelism = concurrencyPolicy.effective_parallelism;
+  const singleHostPipelineSize = concurrencyPolicy.effective_single_host_pipeline_size;
   if (parallelism > 1 && singleHostPipelineSize > 1) {
     const reason = '单宿主会话流水线与多 CDP --parallel 不能同时启用；请选择一种并发模型。';
     const results = selectedCases.map((testCase, index) => buildSyntheticResult({
@@ -713,11 +720,15 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     }
     precheck.single_host_pipeline = {
       enabled: singleHostPipelineSize > 1,
-      requested_size: singleHostPipelineSize,
+      requested_size: requestedSingleHostPipelineSize,
+      effective_size: singleHostPipelineSize,
       max_size: MAX_SINGLE_HOST_PIPELINE_SIZE,
       eligible_cases: selectedCases.filter((testCase) => singleHostPipelineEligibility(testCase).eligible).map((testCase) => testCase.id),
-      policy: '仅连续、单轮、无附件、无技能/MCP、无HITL、无重启、无共享状态的白名单会话进入流水线；其余自动串行。',
+      policy: concurrencyPolicy.forced_serial
+        ? 'core-beta-v2-forced-serial'
+        : '仅连续、单轮、无附件、无技能/MCP、无HITL、无重启、无共享状态的白名单会话进入流水线；其余自动串行。',
     };
+    precheck.execution_concurrency = concurrencyPolicy;
     const modelTierRecoveryPrefix = selectedCases.length > 0
       && !caseRequiresModelTier(selectedCases[0]);
     precheck.model_tier = modelTier
@@ -983,10 +994,50 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   }
 }
 
+function automationErrorFailureItems(result = {}) {
+  return [
+    ...(Array.isArray(result?.steps) ? result.steps : []),
+    ...(Array.isArray(result?.assertions) ? result.assertions : []),
+  ].filter((item) => item?.status === 'failed' && item?.category === 'automation_error');
+}
+
+export function resultHasAutomationError(result = {}) {
+  return result?.result_category === 'automation_error'
+    || automationErrorFailureItems(result).length > 0;
+}
+
+export function applyBlockedOutcome(state, reason) {
+  if (resultHasAutomationError(state)) {
+    const failures = automationErrorFailureItems(state);
+    const evidenceReason = failures
+      .map((item) => `${item.name || item.action || '自动化步骤'}：${item.actual || 'failed'}`)
+      .join('；');
+    const existingReason = state.result_category === 'automation_error'
+      ? String(state.actual_result || '').trim()
+      : '';
+    state.status = 'failed';
+    state.result_category = 'automation_error';
+    state.actual_result = existingReason || evidenceReason || '自动化链路存在失败证据。';
+    state.conclusion = `失败：${state.actual_result}`;
+    state.problem_description = '';
+    state.secondary_blockers = Array.from(new Set([
+      ...(Array.isArray(state.secondary_blockers) ? state.secondary_blockers : []),
+      String(reason || '').trim(),
+    ].filter(Boolean)));
+    return { preserved_automation_error: true };
+  }
+  state.status = 'blocked';
+  state.result_category = 'blocked';
+  state.blocked_reason = reason;
+  state.actual_result = reason;
+  state.conclusion = `阻塞：${reason}`;
+  return { preserved_automation_error: false };
+}
+
 export function coreBetaBatchStopReason(testCase, result) {
   if (!isCoreBetaCase(testCase)) return '';
   const id = String(testCase?.id || '');
-  if (result?.result_category === 'automation_error') {
+  if (resultHasAutomationError(result)) {
     return `框架硬门禁 ${id} 发生 automation_error，停止后续 Case；`
       + '必须修复执行、取证、manifest、断言或清理能力后新建不可变批次。';
   }
@@ -1880,6 +1931,24 @@ export function parseSingleHostPipelineSize(value) {
   return parsed;
 }
 
+export function coreBetaExecutionConcurrencyPolicy({
+  selectedCases = [],
+  requestedParallelism = 1,
+  requestedSingleHostPipelineSize = 1,
+} = {}) {
+  const requestedPipelineSize = parseSingleHostPipelineSize(requestedSingleHostPipelineSize);
+  const requestedWorkers = Number(requestedParallelism);
+  const forcedSerial = (Array.isArray(selectedCases) ? selectedCases : []).some(isCoreBetaCase);
+  return {
+    policy: forcedSerial ? 'core-beta-v2-forced-serial' : 'configured',
+    forced_serial: forcedSerial,
+    requested_parallelism: requestedWorkers,
+    effective_parallelism: forcedSerial ? 1 : requestedWorkers,
+    requested_single_host_pipeline_size: requestedPipelineSize,
+    effective_single_host_pipeline_size: forcedSerial ? 1 : requestedPipelineSize,
+  };
+}
+
 export function singleHostPipelineEligibility(testCase) {
   const id = String(testCase?.id || '');
   const kind = String(testCase?.kind || '');
@@ -1899,15 +1968,9 @@ export function singleHostPipelineEligibility(testCase) {
     if (scenario?.driver === 'conversation_dispatch_collect_20') {
       reasons.push('conversation_dispatch_collect_20 owns an internal 20-task dispatch/collect lifecycle');
     }
-    if (!['dispatch_collect', 'dispatch_collect_round_robin'].includes(policy)) reasons.push(`pipeline_policy=${policy || '空'} 非批量策略`);
-    if (!Number.isInteger(batchSize) || batchSize < 2 || batchSize > MAX_SINGLE_HOST_PIPELINE_SIZE) reasons.push(`batch_size=${batchSize} 非 2-${MAX_SINGLE_HOST_PIPELINE_SIZE}`);
-    if (!['conversation', 'attachment', 'artifact', 'skill_use', 'expert_use', 'mcp_use'].includes(String(testCase?.case_type || ''))) {
-      reasons.push(`case_type=${testCase?.case_type || 'unknown'} 不是 dispatch/collect 类型`);
-    }
-    if (!Array.isArray(testCase?.conversation_turns) || !testCase.conversation_turns.length) reasons.push('缺少 conversation_turns');
-    if (!Array.isArray(testCase?.action_plan) || !testCase.action_plan.length) reasons.push('缺少 action_plan');
+    reasons.push('Core Beta v2 Case 间强制串行执行');
     return {
-      eligible: reasons.length === 0,
+      eligible: false,
       reasons,
       turn_count: Array.isArray(testCase?.conversation_turns) ? testCase.conversation_turns.length : 0,
       prompt: testCase?.conversation_turns?.[0]?.prompt || '',
@@ -1938,6 +2001,7 @@ export function buildSingleHostPipelineBatch(selectedCases, startIndex, size = D
   const limit = parseSingleHostPipelineSize(size);
   if (limit <= 1 || startIndex < 0 || startIndex >= selectedCases.length) return [];
   const firstCase = selectedCases[startIndex];
+  if (isCoreBetaCase(firstCase)) return [];
   const firstEligibility = singleHostPipelineEligibility(firstCase);
   if (!firstEligibility.eligible) return [];
   const isCoreBetaBatch = isCoreBetaCase(firstCase);
@@ -25009,6 +25073,14 @@ function finalizeState(state) {
   // other automation prerequisite cannot be prepared.  Do not let the generic
   // assertion aggregation below turn that explicit terminal failure into a
   // false pass merely because no assertion was recorded afterwards.
+  if (resultHasAutomationError(state)) {
+    const failures = automationErrorFailureItems(state);
+    const reason = failures
+      .map((item) => `${item.name || item.action || '自动化步骤'}：${item.actual || 'failed'}`)
+      .join('；');
+    markFailed(state, reason || state.actual_result || '自动化链路存在失败证据。', 'automation_error');
+    return;
+  }
   if (state.status === 'blocked' || (state.status === 'failed' && state.actual_result)) return;
   if (state.llm_review?.status === 'needed') {
     const hardFailures = state.assertions.filter((item) => item.status === 'failed');
@@ -25122,12 +25194,9 @@ async function finishCase({ page, state, caseDir }) {
 }
 
 function markBlocked(state, reason) {
-  state.status = 'blocked';
-  state.result_category = 'blocked';
-  state.blocked_reason = reason;
-  state.actual_result = reason;
-  state.conclusion = `阻塞：${reason}`;
+  const outcome = applyBlockedOutcome(state, reason);
   recordStep(state, '阻塞判定', '达到产品断言前的环境、登录、权限或自动化能力应可用。', reason, 'blocked');
+  return outcome;
 }
 
 function markFailed(state, reason, category = 'bug') {

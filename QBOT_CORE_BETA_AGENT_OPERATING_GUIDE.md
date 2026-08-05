@@ -10,11 +10,11 @@
 
 - 框架仓库：`/Users/qifu/Documents/QbotTestAgent`
 - 产品仓库：`/Users/qifu/Documents/deepbankV2`，只读，禁止修改。
-- 当前框架基线：`0ff6749959e35b8b214834c5d25c06cc030c032e`
+- 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.2.34(2119080368)`。
-- 当前 QWork 身份：UAT `0.0.28-rc.1`。
+- 当前正式宿主身份：360Teams `5.2.38(2119080433)`。
+- 当前 QWork 身份：UAT `0.0.29`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
@@ -22,7 +22,7 @@
 最近一次确认可用的 scoped 预检：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/outputs/202608031812_uat-core-beta70-scoped55_framework-0ff6749-final-pretest/core-beta-pretest-report.json
+/Users/qifu/Documents/QbotTestAgent/outputs/20260805084049_uat-core-beta70-scoped55-pretest_framework-71b25fa_teams-5.2.38_qwork-0.0.29/core-beta-pretest-report.json
 ```
 
 该预检结果为 `READY_SCOPED`，27 checks，0 blockers。
@@ -88,7 +88,7 @@ npm --prefix teams360-automation run check
 最近基线通过情况：
 
 - 根框架：80/80。
-- Teams 适配层：86/86。
+- Teams 适配层：88/88。
 
 静态能力审计：
 
@@ -115,7 +115,7 @@ npm run core-beta:capability-audit -- \
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-SOURCE_PRETEST="$PWD/outputs/202608031812_uat-core-beta70-scoped55_framework-0ff6749-final-pretest/core-beta-pretest-report.json"
+SOURCE_PRETEST="$PWD/outputs/20260805084049_uat-core-beta70-scoped55-pretest_framework-71b25fa_teams-5.2.38_qwork-0.0.29/core-beta-pretest-report.json"
 CASEBOOK="$PWD/outputs/qbot-core-gate-redesign-20260730/QBot核心内测Casebook_MR源码严选门禁_70条_2026-07-30.xlsx"
 CASE_IDS="$(jq -r '.scope.selected_case_ids | join(",")' "$SOURCE_PRETEST")"
 EXCLUDED_CASE_IDS="$(jq -r '.scope.excluded_case_ids | join(",")' "$SOURCE_PRETEST")"
@@ -129,13 +129,13 @@ npm run core-beta:pretest -- \
   --expected-count 55 \
   --expected-sha256 108ccbb6cadabcfd323ed408217c1bf2082244a272ae2532ccf370b7977aa27c \
   --production-gate true \
-  --expected-teams-version 5.2.34 \
-  --expected-teams-build 2119080368 \
-  --expected-qwork-version 0.0.28-rc.1 \
+  --expected-teams-version 5.2.38 \
+  --expected-teams-build 2119080433 \
+  --expected-qwork-version 0.0.29 \
   --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.28-rc.1-sha256-6e42b56d8c74db873a9dd0be7b7da9bfff2b52e369cbbd0268c257dfce9f4bd5 \
-  --feature-flags-hash a651f668f624f9bcd544ad60086addd6b7d3187b9cb661c8ed9e8d98755b9f7e \
+  --prompt-policy-version qwork-runtime-0.0.29-sha256-29d64654090a26f5222ad7ea1e9b63888a1546742e14482ef9cde631d03015ef \
+  --feature-flags-hash 47809cea8774e0b84e4bd50aec6498a4d96850bb1b5b59257f396bd0f48fb315 \
   --case "$CASE_IDS" \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
@@ -152,7 +152,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta70-scoped55_teams360-5.2.34-2119080368_qwork-0.0.28-rc.1_M3_pipeline20_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.29_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -162,12 +162,12 @@ npm --prefix teams360-automation run casebook -- \
   --model-tier M3 \
   --out "$OUT" \
   --timeout-ms 600000 \
-  --single-host-pipeline 20 \
+  --single-host-pipeline 1 \
   --production-gate true \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.28-rc.1-sha256-6e42b56d8c74db873a9dd0be7b7da9bfff2b52e369cbbd0268c257dfce9f4bd5 \
-  --feature-flags-hash a651f668f624f9bcd544ad60086addd6b7d3187b9cb661c8ed9e8d98755b9f7e \
-  --qwork-build-id 0.0.28-rc.1 \
+  --prompt-policy-version qwork-runtime-0.0.29-sha256-29d64654090a26f5222ad7ea1e9b63888a1546742e14482ef9cde631d03015ef \
+  --feature-flags-hash 47809cea8774e0b84e4bd50aec6498a4d96850bb1b5b59257f396bd0f48fb315 \
+  --qwork-build-id 0.0.29 \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
   --scope-reason fixture_provider_unavailable
@@ -184,6 +184,11 @@ jq '{completed,total,updated_at,current_case,results:(.results|length)}' "$OUT/a
 不要只看 PID。必须确认 `automation-progress.json`、runner log、证据目录或
 run metadata 在持续更新。若没有真实会话、没有 taskId、没有证据 mtime 变化，
 先诊断，不要创建 monitor。
+
+Core Beta v2 的 Case 间执行固定串行。即使旧命令残留 `--parallel > 1` 或
+`--single-host-pipeline > 1`，runner 的有效值也必须是 `1`，precheck 必须记录
+`core-beta-v2-forced-serial`。`BETA-CHAT-008` 的 20 任务派发是单个 Case 内部合同，
+不是 Case 间并行。
 
 ## 7. 监控规则
 
@@ -225,8 +230,15 @@ run metadata 在持续更新。若没有真实会话、没有 taskId、没有证
 10. 新建不可变输出目录，从完整 selected scope 重跑，Core Beta v2 保持
     `inherited=0`、`synthetic=0`。
 
+上述第 1 步停止旧 runner 只用于保护不可变证据，不是允许结束执行。只要发布身份、
+凭据和受保护资源仍可恢复，Agent 必须继续完成第 4–10 步并启动新完整串行批次，
+不得停在“修复完成但后续未执行”的状态。
+
 产品 Bug 不属于框架修复。证据完整且 fail policy 允许时，可以继续后续独立
-Case；初始化硬门禁类抖动必须保留缺陷，不得因后续重试通过而抹去。
+Case；普通 prerequisite `blocked` 也只记录后继续独立 Case。失败 step/assertion
+中已有 `category=automation_error` 时，其优先级高于顶层 `blocked` 或 `bug`，必须
+按 framework issue 进入上述自主闭环。初始化硬门禁类抖动必须保留缺陷，不得因
+后续重试通过而抹去。
 
 ## 9. 结果复核
 

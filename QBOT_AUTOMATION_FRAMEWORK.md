@@ -209,7 +209,7 @@ npm run ui-agent:casebook-run -- \
   --out "$OUT" \
   --model-tier M3 \
   --timeout-ms 600000 \
-  --single-host-pipeline 20 \
+  --single-host-pipeline 1 \
   --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
   --production-gate true \
   --backend-version "<backend-release-id>" \
@@ -321,7 +321,7 @@ fail-closed。
      --model-tier M3 \
      --out "$OUT" \
      --timeout-ms 600000 \
-     --single-host-pipeline 20 \
+     --single-host-pipeline 1 \
      --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
      --production-gate true \
      --backend-version "<backend-release-id>" \
@@ -336,24 +336,25 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 
 ## 7. 批量、串行屏障与初始化
 
-- `--single-host-pipeline N` 支持 `1–20`；`true` 等价于 `20`。
-- 仅 Casebook 声明且运行时判定安全的独立会话可以批量 dispatch/collect。
-- Core Beta v2 中由 Casebook 明确声明为 `dispatch_collect/round_robin`、动作互不依赖且证据可按唯一 task ID 归属的独立附件、成果生成、Skill 使用、专家使用和 MCP 使用 Case 可以进入单宿主 pipeline；框架仍须按 `case_type`、policy 与 `batch_size` 隔离 wave。
-- `BETA-CHAT-008` 的 `conversation_dispatch_collect_20` 是 Case 内部自带的 20 任务调度器，必须作为外层单宿主 pipeline 的硬屏障串行执行。禁止外层 pipeline 把它当作普通单会话发送 Casebook 占位 prompt；运行时必须为 20 个唯一 marker 逐条新建任务、确认发送并固化唯一 taskId。
+- Core Beta v2 的 Case 间执行永久强制串行：`--parallel` 和 `--single-host-pipeline` 的有效值都固定为 `1`。调用者即使传入大于 `1` 的历史参数，precheck 也必须同时记录 requested/effective 值和 `core-beta-v2-forced-serial` policy，runner 不得进入多 CDP 调度或外层 pipeline。
+- 非 Core Beta 旧协议仍可使用 `--single-host-pipeline N`（`1–20`），但不改变 Core Beta v2 的强制串行合同。
+- Core Beta Casebook 中保留的 `pipeline_policy` 和 `batch_size` 只描述 Case 自身的动作/证据合同，不能授权 Case 间并发。
+- `BETA-CHAT-008` 的 `conversation_dispatch_collect_20` 是单个 Case 内部自带的 20 任务调度器，不属于 Case 间并发。该 Case 必须独占外层串行位置；运行时为 20 个唯一 marker 逐条新建任务、确认发送并固化唯一 taskId。
 - `BETA-CHAT-008` 每个确认发送后必须立即持久化 `batch-dispatch-ledger.json` 和发送后截图；末条派发后、统一回收前必须保存覆盖全部 20 个 taskId 的 `batch-pending-pool.json`，并验证至少 5 条显示正在执行。回收必须在同一共享截止时间内逐 taskId 轮询，保存 `batch-collect-observations.ndjson`、逐任务终态截图、`batch-collect-ledger.json` 和 `batch-collection-summary.json`，不得按当前页面或单条通用回复猜测归属。
 - `BETA-CHAT-008` 进入 completed 前必须通过专用强证据门禁：20 个 taskId 唯一，20 份确认发送回执与发送后截图完整，待回复池读回结构完整，20 条终态观察与截图完整，共享截止时间终态证据可用。产品 Oracle 失败可在上述证据完整时进入 completed 供 `trusted_bug` 复核；缺少任一批量证据时必须 `framework_issue` 并停止批次，即使通用 manifest 或 raw status 显示 passed 也不得继续。
 - Skill/MCP/专家的创建、安装、授权、删除等生命周期变更，以及 HITL、重启、共享状态、故障注入、跨 Case 依赖和不满足精确 task ID 归属条件的多轮会话都是串行屏障。
-- 不得同时启用单宿主 pipeline 和多 CDP `--parallel`。
+- 非 Core Beta 旧协议不得同时启用单宿主 pipeline 和多 CDP `--parallel`；Core Beta v2 两者都会被强制降为有效值 `1`。
 - pipeline 必须保存唯一 wave、task ID、能力绑定和 dispatch/collect 证据；重复 task ID 或跨 Case 取证立即视为框架异常。
 - 多 CDP 并行执行的实时 `automation-progress.json` 与最终 summary 使用同一结果分区规则：`synthetic=true` 只能写入 `non_executed_diagnostics`，不得计入 `completed`、`results` 或状态计数。
-- pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 Core Beta manifest 完整性门禁和 `automation_error` 硬停止；不得因 `{testCase,index,eligibility}` 包装对象使 `isCoreBetaCase` 判断失效。
+- 历史 pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 manifest 完整性门禁；Core Beta v2 不得进入该路径。
+- 结果分类优先级必须是 `automation_error` 高于 `blocked` 和 `bug`。顶层 `result_category` 之外还必须扫描失败的 step/assertion；只要其中存在 `category=automation_error`，后续前置阻塞、清理阻塞或产品断言都不得覆盖它。普通 prerequisite `blocked` 和 manifest 完整的产品 Bug 只记录结果并继续后续独立 Case；只有确认的 framework/testcase issue、manifest/取证不完整、身份漂移或运行宿主失效才停止当前批次进入自主修复闭环。
 - Core Beta v2 打开系统设置时，若设置壳已经显示“正在加载个人设置”，必须先在 30–180 秒有界窗口内等待运行时维护区出现；只有明确加载错误或窗口耗尽才能失败，禁止继续点击背景设置菜单并误报“个人设置入口缺失”。
 - Core Beta v2 进入系统设置前必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 点击遮挡层下方。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。
 - `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。360Teams 包装器对 stopped、非 passed 或计划未完成的 summary 必须返回非零退出码，不能只看已完成结果中的 `failed/blocked` 计数。
 - Core Beta 清理证据必须证明清理桥动作全部成功且技能、连接器、专家选择明确为空。优先使用 `agent.capabilities` 读回；Teams 中该 IPC 被超时保护器中止时，必须在不重复执行清理动作的前提下最多执行三次有界只读尝试，并把每次成功/错误写入 `capabilities_readback_attempts`。任一次读回得到权威空态即可继续；全部尝试失败且当前页面没有可见输入区时，框架必须通过受管 `openNewTask` 导航到干净 composer 表面，只重新采集可见状态和 E2E 状态，不得再次调用任一清理桥或把导航算作第四次 capabilities 尝试。此时允许组合使用首次精确为空的禁用桥回执、输入区无能力 chip、`__qbotE2E.state/currentSession` 的空专家身份和无专家头像作为独立交叉读回，并在 `cleanup_surface_recovery`、`pre_navigation_selection_readbacks` 和导航后截图中保存证据；旧版分离控件还必须明确显示“禁用”，新版统一“+”菜单必须有可见输入区。全部读回超时、恢复导航失败、只有动作返回值、缺少可见状态或任一来源仍有残留时必须保持 `cleanup_readback.valid=false`，不得把未知状态当作清理完成。
 - 新版统一“+”菜单通过公共能力桥隔离 Case 前置技能或连接器状态时，优先使用 `agent.capabilities` 中 `selectedSkills`、`selectedConnectors` 或 `connectorRouting.mode` 的明确读回；若当前 QWork capabilities 省略对应字段，只有 `setSkillsDisabled()` 或 `setConnectorsDisabled()` 明确返回空数组才可确认禁用态。桥返回 `undefined`、`null`、非数组或调用失败都不得把未知状态判为禁用成功；自动态只接受 capabilities 或对应 `set*Auto()` 的明确 `null`。
 - `BETA-SKILL-003/004` 必须对固定 5 个样本逐项保存安装前、pending、终态截图、`skill-operation-feedback` 结构化操作/API 收据和 `catalog.installed` 读回，并分别记录服务端安装与本机 reconcile 结论。产品反馈已经进入 error/success 终态时必须立即收尾该项，禁止继续空等完整超时；若当前样本已观察到带身份的 pending，随后出现不重复技能名的通用 error/success 文案，该终态仍绑定当前动作。反馈持续 pending 时必须等待完整有界窗口并保存 `terminal_outcome=timed_out`、等待时长和终态截图，禁止把未等满窗口的 pending 当作完整失败。安装按钮已真实点击但产品返回失败或未进入已安装终态时，必须继续其余固定样本，将完整取证文件标记为 `valid=true`、业务结果标记为 `oracle_valid=false`，并形成证据完整的产品 Bug；不得直接抛异常造成 manifest 缺失。失败项只能进入安装尝试账本，不得写入成功安装账本，也不得随机换样本。缺少任一动作、截图、结构化反馈或读回，点击本身无法执行，或取证失败时仍属于框架异常并 fail-closed。
-- 固定 10 个 Skill 的安装尝试全部形成完整终态收据后，若成功数不足 10，框架必须从精确的本轮安装尝试账本生成 `qbot-core-beta-upstream-prerequisite/v1` 阻塞证据。`BETA-SKILL-005` 等依赖完整安装集的 Case，以及 `BETA-SKILL-006~011` 中目标 identity 本身安装失败的 Case，必须记为上游前置阻塞，禁止发送、随机换 Skill 或把同一上游失败重复报成当前 Case 的新产品 Bug；未发生的 prompt/task/reply 角色只能在阻塞文件位于当前 Case 目录、账本 SHA 和目标 Case 均验证通过时显式标记 `not_applicable`，不得用伪 taskId、空回复或 synthetic 证据补齐 manifest。single-host pipeline 必须在打开手动 Skill 模式、清理 Composer 或发送之前执行同一前置判定；命中阻塞时必须走标准串行阻塞取证，不能进入 pipeline 派发。pipeline 派发阶段若产生不完整 manifest 或 `automation_error`，必须立即截断当前 wave，尚未触碰的后续 Case 保持未执行。`BETA-SKILL-012` 即使因上游短缺而阻塞，也必须先定向清理本轮实际安装成功的 identity，并证明没有影响基线技能；安装尝试账本不完整、目标身份不匹配、阻塞文件越界或清理证据缺失仍属于框架异常并 fail-closed。
+- 固定 10 个 Skill 的安装尝试全部形成完整终态收据后，若成功数不足 10，框架必须从精确的本轮安装尝试账本生成 `qbot-core-beta-upstream-prerequisite/v1` 阻塞证据。`BETA-SKILL-005` 等依赖完整安装集的 Case，以及 `BETA-SKILL-006~011` 中目标 identity 本身安装失败的 Case，必须记为上游前置阻塞，禁止发送、随机换 Skill 或把同一上游失败重复报成当前 Case 的新产品 Bug；未发生的 prompt/task/reply 角色只能在阻塞文件位于当前 Case 目录、账本 SHA 和目标 Case 均验证通过时显式标记 `not_applicable`，不得用伪 taskId、空回复或 synthetic 证据补齐 manifest。命中阻塞时必须走标准串行阻塞取证。`BETA-SKILL-012` 即使因上游短缺而阻塞，也必须先定向清理本轮实际安装成功的 identity，并证明没有影响基线技能；安装尝试账本不完整、目标身份不匹配、阻塞文件越界或清理证据缺失仍属于框架异常并 fail-closed。清理已经产生失败的 `automation_error` 时，后续上游 blocker 只能写入 `secondary_blockers`，不得把最终结果改写成 `blocked`。
 - framework/testcase issue 若使批次在 `BETA-SKILL-003/004` 安装后、`BETA-SKILL-012` 清理前中止，后续初始化不得忽略遗留 Skill，也不得人工或用临时 CDP 脚本卸载。先永久冻结源批次，再在同一发布身份、同一 Casebook 和同一 Teams 输出根的新目录中单独执行 `BETA-SKILL-001`，并传入 `--core-beta-cleanup-from <frozen-source-out>`。框架只允许导入源批次的 `core-beta-suite-ledger.json`，且必须验证 003/004 为真实 executed 且 manifest 完整、10 个 qualified identity 唯一、与安装前基线无重叠、安装尝试账本完整、Casebook SHA 和宿主/QWork/control plane/release inputs/产物指纹完全一致；验证结果、源账本 SHA、源 progress SHA 和目标 identity 必须写入 `core-beta-run-owned-skill-cleanup-source.json`。任何漂移或缺失都 fail-closed。清理 Case 必须逐项仅移除当前仍存在的目标 identity；调用产品 `uninstallSkill(name)` 时必须传入与真实 UI 相同的非空字符串 name，禁止传入 catalog 对象，并保存 identity、request name 和 API 收据的一一对应账本。API `ok=true` 只表示动作收据，不能单独证明清理成功；框架必须在最长 `60000ms` 的有界窗口内轮询真实 `catalog.installed`，要求全部目标 `remaining=0` 且至少连续 2 次读回缺席，同时证明无基线 Skill 变化，才可令 `cleanup_verdict.valid=true` 并生成完整 manifest。清理成功后仍须新 pretest、新不可变目录和完整 selected scope 重跑，清理批次本身不能计入门禁结果。
 - 受管 360Teams WebView 在刷新验证时可能销毁当前 CDP target。执行刷新并重开任务的 Case 必须识别 closed target 或 execution context destroyed，重建受管 CDP 连接、接管 replacement QWork renderer、更新共享 page 并保存重连账本；不得把预期的 renderer replacement 直接落成不完整 manifest。
 - 360Teams 适配层为 replacement renderer 执行受管宿主恢复时，恢复动作本身可能耗尽原 QWork ready deadline。只要恢复明确成功且 Teams/QWork/control plane 身份未漂移，框架必须从恢复完成时重新给予一个最长 `60000ms` 的有界验证窗口，再次校验 QWork 页面、可见模型档位和 capabilities；禁止在“恢复成功但未做恢复后验证”的竞态下返回重连失败或生成不完整 manifest。
@@ -438,6 +439,8 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 6. 重新执行正式 pretest。只有新报告为 `READY` 或显式缩减范围时为 `READY_SCOPED`，才可在新的不可变输出目录启动唯一 runner。
 7. Core Beta v2 必须重新执行本轮完整 selected scope，保持 `inherited=0`、`synthetic=0`；旧协议只有满足第 10 节 lineage/impact 合同时才允许恢复。
 8. 用新 automation 替换或更新旧监控，使其只跟踪新目录和新 runner。旧批次仍必须进入最终发布报告，后续通过不得抹去原始 issue 或 flaky 记录。
+
+对具备自动恢复条件的 framework/testcase issue，“停止旧 runner”只是证据保护步骤，不是任务终态。执行 Agent 必须在同一闭环内继续完成修复、检查、提交推送、新 pretest 和新不可变目录完整重跑；禁止以“批次已停止”或“后续 Case 未执行”作为最终交付。只有凭据/受保护资源缺失、需要人工授权、发布身份无法精确恢复或 pretest 明确阻塞时，才允许冻结并报告唯一具体 blocker。
 
 若发现的是产品 Bug，监控不得把它改判为框架问题，也不得修改 deepbankV2；只在 Case 证据完整、fail policy 允许且后续 Case 独立时继续执行。若需要凭据、受保护资源、人工授权，或指定发布身份已经无法恢复，则不能安全自愈：保持冻结并向用户报告唯一具体阻塞，不得猜测、绕过或静默换环境。
 

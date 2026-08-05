@@ -117,6 +117,12 @@ wave is collected before they execute alone. The pipeline writes
 ordered Case IDs, globally unique task IDs, capability plans, and dispatch snapshots so
 interrupted runs can be audited without mixing Case or capability evidence.
 
+Core Beta v2 is stricter: Cases always execute serially. Requested `--parallel` and
+`--single-host-pipeline` values are retained for audit, but their effective values are both
+forced to `1` with policy `core-beta-v2-forced-serial`. Casebook `pipeline_policy` metadata
+does not override this rule. Internal fan-out owned by one Case, such as BETA-CHAT-008, stays
+inside that Case and does not permit overlap with another Case.
+
 ### Teams-only fault and fixture lane
 
 Cases that need SkillHub catalogs, MCPHub connector states, control-plane faults, or a host

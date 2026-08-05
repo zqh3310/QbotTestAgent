@@ -59,7 +59,8 @@ ui-agent-casebook-run:
   --out <new-directory>          Immutable output directory
   --model-tier <tier>            Model tier, for example M3
   --timeout-ms <ms>              Per-Case wait limit
-  --single-host-pipeline <1-20>  Ordered single-host pipeline size
+  --single-host-pipeline <1-20>  Ordered single-host pipeline size; Core Beta
+                                  v2 always executes Cases serially (effective 1)
   --core-beta-fixture-control-url <url>
                                   Strict Core Beta fixture controller
   --core-beta-cleanup-from <dir>  Frozen sibling batch whose exact QA Skill

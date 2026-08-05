@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
   assistantConfirmationSurfaceVerdict,
+  applyBlockedOutcome,
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
   assessUserCenteredOutcome,
@@ -31,6 +32,7 @@ import {
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
+  coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
@@ -66,6 +68,7 @@ import {
   partitionCasebookResults,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
+  resultHasAutomationError,
   replySendObservedRunning,
   reviewCaseCredibility,
   safeNativeAttachmentInfoDialog,
@@ -1232,8 +1235,13 @@ assert.match(
 );
 assert.match(
   automationFramework,
-  /pipeline 回收结果进入 `completed` 前[\s\S]*原始 Case[\s\S]*manifest 完整性门禁[\s\S]*`automation_error` 硬停止/,
-  '框架手册必须要求 pipeline 解包原始 Case 后执行与串行路径一致的 completed 门禁',
+  /Core Beta v2 的 Case 间执行永久强制串行[\s\S]*requested\/effective[\s\S]*core-beta-v2-forced-serial[\s\S]*不得进入多 CDP 调度或外层 pipeline/,
+  '框架手册必须要求 Core Beta v2 忽略历史并发请求并以可审计的有效值 1 串行执行',
+);
+assert.match(
+  automationFramework,
+  /停止旧 runner[\s\S]*不是任务终态[\s\S]*提交推送[\s\S]*新 pretest[\s\S]*完整重跑[\s\S]*禁止以“批次已停止”或“后续 Case 未执行”作为最终交付/,
+  '框架手册必须禁止修复流程停在中断状态而不启动新完整批次',
 );
 assert.equal(
   coreBetaV2NeedsRendererReconnect(new Error('page.reload: Target page, context or browser has been closed')),
@@ -1543,31 +1551,60 @@ const coreBetaPipelineCase = (id, caseType = 'conversation', overrides = {}) => 
   action_plan: [{ number: 1, operation: 'prepare' }],
   ...overrides,
 });
+const forcedSerialPolicy = coreBetaExecutionConcurrencyPolicy({
+  selectedCases: [coreBetaPipelineCase('BETA-CHAT-001')],
+  requestedParallelism: 20,
+  requestedSingleHostPipelineSize: 20,
+});
+assert.deepEqual(
+  {
+    policy: forcedSerialPolicy.policy,
+    forced_serial: forcedSerialPolicy.forced_serial,
+    requested_parallelism: forcedSerialPolicy.requested_parallelism,
+    effective_parallelism: forcedSerialPolicy.effective_parallelism,
+    requested_single_host_pipeline_size: forcedSerialPolicy.requested_single_host_pipeline_size,
+    effective_single_host_pipeline_size: forcedSerialPolicy.effective_single_host_pipeline_size,
+  },
+  {
+    policy: 'core-beta-v2-forced-serial',
+    forced_serial: true,
+    requested_parallelism: 20,
+    effective_parallelism: 1,
+    requested_single_host_pipeline_size: 20,
+    effective_single_host_pipeline_size: 1,
+  },
+  'Core Beta v2 即使请求两种并发，Case 间实际并发也必须固定为 1',
+);
+assert.equal(
+  singleHostPipelineEligibility(coreBetaPipelineCase('BETA-CHAT-001')).eligible,
+  false,
+  'Core Beta v2 Case 永远不得进入外层 single-host pipeline',
+);
 assert.deepEqual(
   buildSingleHostPipelineBatch(
     Array.from({ length: 8 }, (_item, index) => coreBetaPipelineCase(`BETA-CHAT-${String(index + 1).padStart(3, '0')}`)),
     0,
     20,
-  ).map((entry) => entry.testCase.id),
-  Array.from({ length: 5 }, (_item, index) => `BETA-CHAT-${String(index + 1).padStart(3, '0')}`),
-  'Core Beta 单波不得超过首 Case 声明的 batch_size，即使全局配置更大',
+  ),
+  [],
+  'Core Beta 外层批次构建必须直接返回空并交给串行路径逐 Case 执行',
 );
 assert.deepEqual(
   buildSingleHostPipelineBatch([
     coreBetaPipelineCase('BETA-CHAT-001', 'conversation'),
     coreBetaPipelineCase('BETA-FILE-001', 'attachment'),
     coreBetaPipelineCase('BETA-CHAT-002', 'conversation'),
-  ], 0, 20).map((entry) => entry.testCase.id),
-  ['BETA-CHAT-001'],
-  'Core Beta 流水线不得跨 case_type 混批，避免附件/能力准备策略串扰',
+  ], 0, 20),
+  [],
+  'Core Beta 不得因 case_type 相同或不同而恢复外层并发',
 );
 assert.deepEqual(
   buildSingleHostPipelineBatch([
     coreBetaPipelineCase('BETA-CHAT-001', 'conversation', { pipeline_policy: 'dispatch_collect' }),
     coreBetaPipelineCase('BETA-CHAT-002', 'conversation', { pipeline_policy: 'dispatch_collect_round_robin' }),
-  ], 0, 20).map((entry) => entry.testCase.id),
-  ['BETA-CHAT-001'],
-  'Core Beta 流水线不得跨 pipeline_policy 混批',
+  ], 0, 20),
+  [],
+  'Casebook 的历史 pipeline_policy 元数据不得绕过 Core Beta 强制串行策略',
 );
 const internalBatchCase = coreBetaPipelineCase('BETA-CHAT-008', 'conversation', {
   batch_size: 20,
@@ -1702,6 +1739,37 @@ assert.match(
   /框架硬门禁/,
   'manifest/取证/执行 automation_error 必须冻结批次',
 );
+const maskedAutomationError = {
+  status: 'blocked',
+  result_category: 'blocked',
+  actual_result: '上游 Skill 前置阻塞',
+  assertions: [{
+    name: '清理读回',
+    expected: 'remaining=0',
+    actual: 'remaining=5',
+    status: 'failed',
+    category: 'automation_error',
+  }],
+  steps: [],
+};
+assert.equal(resultHasAutomationError(maskedAutomationError), true, '嵌套失败断言中的 automation_error 不得被顶层 blocked 隐藏');
+assert.match(
+  coreBetaBatchStopReason(
+    { id: 'BETA-SKILL-012', case_type: 'skill_lifecycle', contract_version: 'qbot-core-beta/v2' },
+    maskedAutomationError,
+  ),
+  /框架硬门禁/,
+  '顶层被错误写成 blocked 时，停批判断仍必须扫描断言并识别框架错误',
+);
+const preservedAutomationError = structuredClone(maskedAutomationError);
+applyBlockedOutcome(preservedAutomationError, '固定10个 Skill 的安装成功数不足10个');
+assert.equal(preservedAutomationError.status, 'failed', '前置阻塞不得把既有 automation_error 改成 blocked');
+assert.equal(preservedAutomationError.result_category, 'automation_error', 'automation_error 必须拥有高于 blocked 的结果优先级');
+assert.deepEqual(
+  preservedAutomationError.secondary_blockers,
+  ['固定10个 Skill 的安装成功数不足10个'],
+  '被保留的前置阻塞只作为次要上下文记录',
+);
 assert.equal(
   coreBetaBatchStopReason(
     { id: 'BETA-CHAT-001', case_type: 'conversation', contract_version: 'qbot-core-beta/v2' },
@@ -1709,6 +1777,14 @@ assert.equal(
   ),
   '',
   '可信产品 Bug 不应阻止后续独立 Case 收集',
+);
+assert.equal(
+  coreBetaBatchStopReason(
+    { id: 'BETA-SKILL-005', case_type: 'skill_lifecycle', contract_version: 'qbot-core-beta/v2' },
+    { status: 'blocked', result_category: 'blocked', steps: [], assertions: [] },
+  ),
+  '',
+  '没有框架错误的普通前置阻塞必须记录后继续执行后续独立 Case',
 );
 assert.deepEqual(
   partitionCasebookResults([
