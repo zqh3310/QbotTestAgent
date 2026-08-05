@@ -39,8 +39,15 @@ import {
   coreBetaPartialReplyReady,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
+  coreBetaQbotHomeFromUiUrl,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
+  coreBetaSkillCreatorCleanup,
+  coreBetaSkillCreatorConversationCase,
+  coreBetaSkillCreatorFixture,
+  coreBetaSkillCreatorFixtureSlug,
+  coreBetaSkillCreatorProjectionReadback,
+  coreBetaSkillCreatorSelectionEvidence,
   coreBetaRunOwnedSkillCleanupVerdict,
   coreBetaSkillUninstallRequestName,
   coreBetaSkillUsePrerequisiteDecision,
@@ -87,7 +94,7 @@ import {
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
-import { buildCoreEvidenceManifest } from '../src/lib/core-beta-case-protocol.mjs';
+import { buildCoreEvidenceManifest, validateEvidenceFile } from '../src/lib/core-beta-case-protocol.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,6 +112,129 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-skill-creator-fixture-'));
+  assert.equal(
+    coreBetaQbotHomeFromUiUrl('file:///Users/qa/.deepbank-uat/ui/0.0.29/index.html'),
+    '/Users/qa/.deepbank-uat',
+    'Teams file UI URL 必须精确推断 QWork home，不能退回用户全局 HOME',
+  );
+  const caseDir = path.join(root, 'out-a', 'cases', '036-BETA-SKILL-014');
+  const fixture = coreBetaSkillCreatorFixture({ qbotHome: root, caseDir });
+  assert.match(fixture.slug, /^qa-meeting-minutes-[a-f0-9]{12}$/);
+  assert.equal(
+    fixture.slug,
+    coreBetaSkillCreatorFixtureSlug(caseDir),
+    'Skill Creator fixture slug 必须按不可变 Case 路径稳定派生',
+  );
+  assert.notEqual(
+    fixture.slug,
+    coreBetaSkillCreatorFixtureSlug(path.join(root, 'out-b', 'cases', '036-BETA-SKILL-014')),
+    '不同不可变批次必须使用不同 Skill 名称，禁止撞上前序残留',
+  );
+  const isolatedCase = coreBetaSkillCreatorConversationCase({
+    id: 'BETA-SKILL-014',
+    conversation_turns: [{ prompt: '创建会议纪要 Skill' }, { prompt: '给出示例并完成创建' }],
+  }, fixture.slug);
+  assert.equal(isolatedCase.conversation_turns.length, 2);
+  assert.equal(
+    isolatedCase.conversation_turns.every((turn) => turn.prompt.includes(fixture.slug)),
+    true,
+    '每一轮 Skill Creator prompt 都必须绑定本轮唯一 slug',
+  );
+
+  const absent = coreBetaSkillCreatorProjectionReadback({
+    qbotHome: root,
+    slug: fixture.slug,
+    baseline: fixture.baseline,
+  });
+  assert.equal(absent.evidence_valid, true, '双投影均缺失仍是完整的产品失败读回证据');
+  assert.equal(absent.oracle_valid, false, '没有真实产物时业务 Oracle 必须失败');
+  const negativeReadbackFile = path.join(root, 'skill-creator-negative-readback.json');
+  fs.writeFileSync(negativeReadbackFile, JSON.stringify(absent));
+  assert.deepEqual(
+    validateEvidenceFile('content_readback', negativeReadbackFile),
+    { valid: true },
+    '产品未创建产物时，结构完整的 negative readback 必须满足 manifest 角色，不能触发 framework stop',
+  );
+
+  const skillText = [
+    '---',
+    `name: ${fixture.slug}`,
+    'description: QA unique meeting minutes skill',
+    'agent_created: true',
+    '---',
+    '',
+    `# ${fixture.slug}`,
+    '',
+    'Generate structured meeting minutes.',
+    '',
+  ].join('\n');
+  for (const projection of fixture.baseline.projections) {
+    fs.mkdirSync(projection.directory, { recursive: true });
+    fs.writeFileSync(projection.file, skillText);
+  }
+  const created = coreBetaSkillCreatorProjectionReadback({
+    qbotHome: root,
+    slug: fixture.slug,
+    baseline: fixture.baseline,
+  });
+  assert.equal(created.evidence_valid, true);
+  assert.equal(created.oracle_valid, true, 'Claude/Codex 双投影、frontmatter 和 SHA 一致时业务 Oracle 应通过');
+  assert.equal(created.created_runtimes.length, 2);
+  assert.equal(created.projection_sha256_equal, true);
+
+  const selection = coreBetaSkillCreatorSelectionEvidence({
+    before: {
+      task: { id: null, send_count: 7 },
+      capabilities: { selectedSkills: ['skillhub:global/skill-creator-qwork'] },
+    },
+    postSend: [
+      { task: { id: 'task-qa', send_count: 8 }, capabilities: { selectedSkills: ['skillhub:global/skill-creator-qwork'] } },
+      { task: { id: 'task-qa', send_count: 9 }, capabilities: { selectedSkills: ['skillhub:global/skill-creator-qwork'] } },
+    ],
+    after: { task: { id: 'task-qa', send_count: 9 }, capabilities: { selectedSkills: [] } },
+    prompts: isolatedCase.conversation_turns,
+  });
+  assert.equal(selection.evidence_valid, true);
+  assert.equal(selection.oracle_valid, true, 'exact creator、同一 taskId 和两轮唯一 prompt 必须形成 task-bound 选择证据');
+  assert.equal(
+    coreBetaSkillCreatorSelectionEvidence({
+      before: { task: { id: null, send_count: 7 }, capabilities: { selectedSkills: ['skillhub:global/skill-creator-qwork'] } },
+      postSend: [],
+      after: { task: { id: 'task-qa', send_count: 9 } },
+      prompts: isolatedCase.conversation_turns,
+    }).evidence_valid,
+    false,
+    '缺少发送后 task-bound 快照必须保持 framework evidence failure',
+  );
+
+  const cleanup = coreBetaSkillCreatorCleanup({
+    qbot_home: root,
+    slug: fixture.slug,
+    baseline: fixture.baseline,
+  });
+  assert.equal(cleanup.valid, true);
+  assert.equal(cleanup.actions.filter((item) => item.removed).length, 2);
+  assert.equal(created.projections.every((item) => !fs.existsSync(item.directory)), true);
+
+  const protectedSlug = coreBetaSkillCreatorFixtureSlug(path.join(root, 'protected-case'));
+  for (const projection of coreBetaSkillCreatorProjectionReadback({ qbotHome: root, slug: protectedSlug }).projections) {
+    fs.mkdirSync(projection.directory, { recursive: true });
+    fs.writeFileSync(projection.file, skillText.replaceAll(fixture.slug, protectedSlug));
+  }
+  const protectedBaseline = coreBetaSkillCreatorProjectionReadback({ qbotHome: root, slug: protectedSlug });
+  const refused = coreBetaSkillCreatorCleanup({
+    qbot_home: root,
+    slug: protectedSlug,
+    baseline: protectedBaseline,
+  });
+  assert.equal(refused.valid, false, '基线中已经存在的 Skill 必须拒绝删除');
+  assert.equal(protectedBaseline.projections.every((item) => fs.existsSync(item.directory)), true);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 assert.deepEqual(
   assistantConfirmationSurfaceVerdict({
     actionLabel: '跳过',

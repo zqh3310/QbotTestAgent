@@ -6,6 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { ensureDir, slugify, writeJsonFile, writeTextFile } from './fs.mjs';
 import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
 import {
@@ -2970,6 +2971,9 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       page_url: await page?.url?.() || '',
     });
     state.artifacts.framework_exception = diagnosticFile;
+    if (state.artifacts.core_beta_skill_creator_cleanup_plan) {
+      writeCoreBetaSkillCreatorCleanupEvidence({ state, caseDir });
+    }
     if (isCdpDisconnectedMessage(message)) markFailed(state, message, 'automation_error');
     else if (isEnvironmentBlocker(message)) markBlocked(state, message);
     else if (isAutomationExecutionError(message)) markFailed(state, message, 'automation_error');
@@ -4259,7 +4263,18 @@ async function writeCleanupReadback({ page, state, testCase, caseDir }) {
       };
     }
   }
+  if (state.artifacts.core_beta_skill_creator_cleanup_plan) {
+    const cleanup = writeCoreBetaSkillCreatorCleanupEvidence({ state, caseDir });
+    snapshot.skill_creator_fixture_cleanup = cleanup;
+  }
   snapshot.validation = coreBetaCleanupReadbackVerdict(snapshot);
+  if (snapshot.skill_creator_fixture_cleanup?.valid === false) {
+    snapshot.validation.valid = false;
+    snapshot.validation.errors = Array.from(new Set([
+      ...(snapshot.validation.errors || []),
+      'skill_creator_fixture_cleanup_failed',
+    ]));
+  }
   snapshot.valid = snapshot.validation.valid;
   writeJsonFile(file, snapshot);
   return file;
@@ -5772,6 +5787,291 @@ function coreBetaSkillInstallReceiptsFromFeedback(feedback = {}, installed = nul
   };
 }
 
+const CORE_BETA_SKILL_CREATOR_IDENTITY = 'skillhub:global/skill-creator-qwork';
+
+function coreBetaPathInside(root, target) {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return Boolean(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+export function coreBetaQbotHomeFromUiUrl(uiUrl = '') {
+  try {
+    const parsed = new URL(String(uiUrl || ''));
+    if (parsed.protocol !== 'file:') return '';
+    let current = path.dirname(fileURLToPath(parsed));
+    while (current && current !== path.dirname(current)) {
+      if (path.basename(current) === 'ui') return path.dirname(current);
+      current = path.dirname(current);
+    }
+  } catch {}
+  return '';
+}
+
+export function coreBetaSkillCreatorFixtureSlug(caseDir = '', attempt = 0) {
+  const seed = `${path.resolve(String(caseDir || '.'))}\n${Math.max(0, Number(attempt || 0))}`;
+  const digest = createHash('sha256').update(seed).digest('hex').slice(0, 12);
+  return `qa-meeting-minutes-${digest}`;
+}
+
+function coreBetaSkillCreatorProjectionPaths(qbotHome, slug) {
+  if (!path.isAbsolute(String(qbotHome || ''))) throw new Error('Skill Creator 缺少绝对 QWork home');
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(slug || ''))) throw new Error(`Skill Creator fixture slug 非法：${slug}`);
+  const home = path.resolve(qbotHome);
+  return [
+    { runtime: 'claude', directory: path.join(home, '.claude', 'skills', slug) },
+    { runtime: 'codex', directory: path.join(home, '.agents', 'skills', slug) },
+  ].map((item) => ({ ...item, file: path.join(item.directory, 'SKILL.md') }));
+}
+
+function readCoreBetaSkillCreatorProjection(item, slug) {
+  const directoryExists = fs.existsSync(item.directory);
+  const fileExists = fs.existsSync(item.file);
+  if (!directoryExists || !fileExists) {
+    return {
+      ...item,
+      observed: true,
+      exists: false,
+      directory_exists: directoryExists,
+      file_exists: fileExists,
+      regular_file: false,
+      symlink_free: true,
+      bytes: 0,
+      sha256: '',
+      frontmatter_name: '',
+      agent_created: false,
+      description_present: false,
+      content: '',
+    };
+  }
+  try {
+    const directoryStat = fs.lstatSync(item.directory);
+    const fileStat = fs.lstatSync(item.file);
+    const content = fs.readFileSync(item.file, 'utf8');
+    const frontmatter = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/)?.[1] || '';
+    const name = frontmatter.match(/^name:\s*["']?([^\n"']+)["']?\s*$/m)?.[1]?.trim() || '';
+    const agentCreated = /^agent_created:\s*true\s*$/mi.test(frontmatter);
+    const descriptionPresent = /^description:\s*\S+/mi.test(frontmatter);
+    return {
+      ...item,
+      observed: true,
+      exists: true,
+      directory_exists: true,
+      file_exists: true,
+      regular_file: fileStat.isFile(),
+      symlink_free: !directoryStat.isSymbolicLink() && !fileStat.isSymbolicLink(),
+      bytes: fileStat.size,
+      sha256: createHash('sha256').update(fs.readFileSync(item.file)).digest('hex'),
+      frontmatter_name: name,
+      expected_name: slug,
+      agent_created: agentCreated,
+      description_present: descriptionPresent,
+      content,
+    };
+  } catch (error) {
+    return {
+      ...item,
+      observed: false,
+      exists: true,
+      error: String(error?.message || error),
+    };
+  }
+}
+
+export function coreBetaSkillCreatorProjectionReadback({ qbotHome, slug, baseline = null } = {}) {
+  if (!path.isAbsolute(String(qbotHome || ''))) throw new Error('Skill Creator 投影读回缺少绝对 QWork home');
+  const home = path.resolve(String(qbotHome || '.'));
+  const projectionPaths = coreBetaSkillCreatorProjectionPaths(home, slug);
+  const projections = projectionPaths.map((item) => readCoreBetaSkillCreatorProjection(item, slug));
+  const baselineByRuntime = new Map(
+    (Array.isArray(baseline?.projections) ? baseline.projections : [])
+      .map((item) => [item.runtime, item]),
+  );
+  const baselineClean = projections.every((item) => baselineByRuntime.get(item.runtime)?.exists !== true);
+  const created = projections.filter((item) => (
+    item.exists === true && baselineByRuntime.get(item.runtime)?.exists !== true
+  ));
+  const evidenceValid = projections.every((item) => item.observed === true)
+    && projectionPaths.every((item) => coreBetaPathInside(home, item.file));
+  const hashes = projections.filter((item) => item.exists).map((item) => item.sha256);
+  const projectionOracleValid = projections.length === 2
+    && projections.every((item) => (
+      item.exists === true
+      && item.regular_file === true
+      && item.symlink_free === true
+      && item.bytes > 0
+      && item.sha256
+      && item.frontmatter_name === slug
+      && item.agent_created === true
+      && item.description_present === true
+    ))
+    && new Set(hashes).size === 1;
+  return {
+    schema_version: 'qbot-core-beta-skill-creator-projection/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: Boolean(evidenceValid && baseline && baselineClean && projectionOracleValid),
+    qbot_home: home,
+    slug,
+    baseline_clean: baseline ? baselineClean : null,
+    projection_sha256_equal: hashes.length === 2 && new Set(hashes).size === 1,
+    created_runtimes: created.map((item) => item.runtime),
+    projections,
+  };
+}
+
+export function coreBetaSkillCreatorFixture({ qbotHome, caseDir } = {}) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const slug = coreBetaSkillCreatorFixtureSlug(caseDir, attempt);
+    const baseline = coreBetaSkillCreatorProjectionReadback({ qbotHome, slug });
+    if (!baseline.evidence_valid) throw new Error(`Skill Creator fixture 基线不可读：${slug}`);
+    if (baseline.projections.every((item) => item.exists !== true)) {
+      return { qbot_home: baseline.qbot_home, slug, attempt, baseline };
+    }
+  }
+  throw new Error('Skill Creator 无法分配无冲突的唯一 QA slug');
+}
+
+export function coreBetaSkillCreatorConversationCase(testCase = {}, slug = '') {
+  const turns = Array.isArray(testCase.conversation_turns) ? testCase.conversation_turns : [];
+  const uniqueContract = `本轮唯一 Skill 名称必须是 ${slug}；必须新建该名称，不得复用、覆盖或更新任何已有 Skill。`;
+  return {
+    ...testCase,
+    conversation_turns: turns.map((turn, index) => ({
+      ...turn,
+      prompt: `${String(turn.prompt || '').trim()}\n\n${index === 0 ? uniqueContract : `继续完成 ${slug} 的创建；${uniqueContract}`}`,
+    })),
+  };
+}
+
+function coreBetaSkillCreatorStateSummary(snapshot = {}) {
+  return {
+    captured_at: snapshot.captured_at || null,
+    task: snapshot.task || null,
+    selected_skills: snapshot.capabilities?.selectedSkills || snapshot.skills?.selected || null,
+    visible_testids: snapshot.visible?.testids || [],
+  };
+}
+
+function coreBetaSelectedSkillIdentities(snapshot = {}) {
+  const values = snapshot.capabilities?.selectedSkills || snapshot.skills?.selected || [];
+  return (Array.isArray(values) ? values : []).map((item) => (
+    typeof item === 'string' ? item : String(item?.qualified_identity || item?.id || item?.key || item?.slug || '')
+  )).filter(Boolean);
+}
+
+export function coreBetaSkillCreatorSelectionEvidence({ before = {}, postSend = [], after = {}, prompts = [] } = {}) {
+  const snapshots = Array.isArray(postSend) ? postSend : [];
+  const taskIds = snapshots.map((item) => String(item?.task?.id || '')).filter(Boolean);
+  const selectedBefore = coreBetaSelectedSkillIdentities(before);
+  const selectedPostSend = snapshots.flatMap(coreBetaSelectedSkillIdentities);
+  const evidenceValid = Boolean(
+    before && typeof before === 'object'
+    && snapshots.length >= 1
+    && taskIds.length >= 1
+    && after?.task?.id
+    && Array.isArray(prompts)
+    && prompts.length >= 1
+  );
+  const taskId = String(after?.task?.id || taskIds[0] || '');
+  const oracleValid = Boolean(
+    evidenceValid
+    && selectedBefore.includes(CORE_BETA_SKILL_CREATOR_IDENTITY)
+    && taskIds.every((value) => value === taskId)
+    && Number(after?.task?.send_count || 0) >= Number(before?.task?.send_count || 0) + prompts.length
+    && prompts.every((item) => String(item?.prompt || '').includes('qa-meeting-minutes-'))
+    && (
+      selectedPostSend.includes(CORE_BETA_SKILL_CREATOR_IDENTITY)
+      || selectedBefore.includes(CORE_BETA_SKILL_CREATOR_IDENTITY)
+    )
+  );
+  return {
+    schema_version: 'qbot-core-beta-skill-creator-selection/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    exact_creator_expected: CORE_BETA_SKILL_CREATOR_IDENTITY,
+    task_id: taskId,
+    selected_before: selectedBefore,
+    selected_post_send: selectedPostSend,
+    before: coreBetaSkillCreatorStateSummary(before),
+    post_send: snapshots.map(coreBetaSkillCreatorStateSummary),
+    after: coreBetaSkillCreatorStateSummary(after),
+    prompts,
+  };
+}
+
+export function coreBetaSkillCreatorCleanup(plan = {}) {
+  const { qbot_home: qbotHome, slug, baseline } = plan;
+  const expected = coreBetaSkillCreatorProjectionPaths(qbotHome, slug);
+  const baselineByRuntime = new Map(
+    (Array.isArray(baseline?.projections) ? baseline.projections : [])
+      .map((item) => [item.runtime, item]),
+  );
+  const actions = [];
+  for (const item of expected) {
+    const baselineItem = baselineByRuntime.get(item.runtime);
+    const exactTarget = coreBetaPathInside(qbotHome, item.directory)
+      && path.basename(item.directory) === slug
+      && item.directory === path.join(path.resolve(qbotHome), item.runtime === 'claude' ? '.claude' : '.agents', 'skills', slug);
+    if (!exactTarget || baselineItem?.exists === true) {
+      actions.push({ runtime: item.runtime, directory: item.directory, removed: false, safe: false, reason: 'unsafe_or_preexisting_target' });
+      continue;
+    }
+    if (!fs.existsSync(item.directory)) {
+      actions.push({ runtime: item.runtime, directory: item.directory, removed: false, safe: true, reason: 'already_absent' });
+      continue;
+    }
+    try {
+      const stats = fs.lstatSync(item.directory);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) {
+        actions.push({ runtime: item.runtime, directory: item.directory, removed: false, safe: false, reason: 'target_not_real_directory' });
+        continue;
+      }
+      fs.rmSync(item.directory, { recursive: true, force: false });
+      actions.push({ runtime: item.runtime, directory: item.directory, removed: true, safe: true, reason: 'removed_run_owned_fixture' });
+    } catch (error) {
+      actions.push({
+        runtime: item.runtime,
+        directory: item.directory,
+        removed: false,
+        safe: false,
+        reason: 'cleanup_io_error',
+        error: String(error?.message || error),
+      });
+    }
+  }
+  const remaining = expected.filter((item) => fs.existsSync(item.directory)).map((item) => item.directory);
+  const valid = actions.length === 2 && actions.every((item) => item.safe) && remaining.length === 0;
+  return {
+    schema_version: 'qbot-core-beta-skill-creator-cleanup/v1',
+    valid,
+    slug,
+    qbot_home: path.resolve(qbotHome),
+    actions,
+    remaining,
+  };
+}
+
+function writeCoreBetaSkillCreatorCleanupEvidence({ state, caseDir }) {
+  const existing = state.artifacts.skill_creator_fixture_cleanup;
+  if (typeof existing === 'string' && fs.existsSync(existing)) {
+    return JSON.parse(fs.readFileSync(existing, 'utf8'));
+  }
+  const cleanup = coreBetaSkillCreatorCleanup(state.artifacts.core_beta_skill_creator_cleanup_plan);
+  const cleanupFile = path.join(caseDir, 'skill-creator-fixture-cleanup.json');
+  writeJsonFile(cleanupFile, cleanup);
+  state.artifacts.skill_creator_fixture_cleanup = cleanupFile;
+  recordAssertion(
+    state,
+    'Skill Creator本轮唯一QA产物清理',
+    '只允许删除本 Case 基线中不存在、由唯一 fixture slug 新建的 Claude/Codex 投影，并证明两个目录均已消失。',
+    cleanup.valid,
+    JSON.stringify(cleanup),
+    'automation_error',
+  );
+  return cleanup;
+}
+
 async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeoutMs, options = {} }) {
   if (testCase.case_type === 'skill_lifecycle') {
     await openCoreBetaSkillSurface(page);
@@ -6228,24 +6528,66 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       if (!await visible(create, 2_000)) throw new Error('创建技能入口不可见');
       await create.click({ force: true });
       await expectVisibleCoreLocator(page, '[data-testid="composer-input"]', 'Skill Creator任务输入区');
-      const identity = await captureCoreBetaPublicState(page, testCase);
-      const file = path.join(caseDir, 'capability-selection.json');
-      writeJsonFile(file, { valid: Boolean(identity.expert || identity.task?.id), identity });
-      state.artifacts.capability_selection = file;
-      state.artifacts.core_beta_capability_selection = identity;
-      await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
+      const qbotHome = inferQbotHomeForElectronRestart(options)
+        || coreBetaQbotHomeFromUiUrl(page.url());
+      if (!qbotHome) throw new Error(`无法从 QWork UI URL 推断 Skill Creator home：${page.url()}`);
+      const fixture = coreBetaSkillCreatorFixture({ qbotHome, caseDir });
+      state.artifacts.core_beta_skill_creator_cleanup_plan = {
+        qbot_home: fixture.qbot_home,
+        slug: fixture.slug,
+        baseline: fixture.baseline,
+      };
+      const fixtureCase = coreBetaSkillCreatorConversationCase(testCase, fixture.slug);
+      const identityBeforeSend = await captureCoreBetaPublicState(page, fixtureCase);
+      await executeConversationTurns({ page, state, testCase: fixtureCase, caseDir, timeoutMs });
+      const identityAfter = await captureCoreBetaPublicState(page, fixtureCase);
+      const selectionEvidence = coreBetaSkillCreatorSelectionEvidence({
+        before: identityBeforeSend,
+        postSend: state.artifacts.core_beta_skill_creator_post_send_snapshots || [],
+        after: identityAfter,
+        prompts: state.artifacts.sent_prompts || [],
+      });
+      const selectionFile = path.join(caseDir, 'capability-selection.json');
+      writeJsonFile(selectionFile, selectionEvidence);
+      state.artifacts.capability_selection = selectionFile;
+      state.artifacts.core_beta_capability_selection = selectionEvidence;
       const afterCatalog = await readCoreBetaSkillCatalog(page);
       const beforeKeys = new Set([
         ...beforeCatalog.installed,
         ...beforeCatalog.market,
       ].map(skillQualifiedIdentity));
-      const created = [...afterCatalog.installed, ...afterCatalog.market]
+      const catalogCreated = [...afterCatalog.installed, ...afterCatalog.market]
         .filter((item) => !beforeKeys.has(skillQualifiedIdentity(item)));
+      const projection = coreBetaSkillCreatorProjectionReadback({
+        qbotHome: fixture.qbot_home,
+        slug: fixture.slug,
+        baseline: fixture.baseline,
+      });
+      const creatorHidden = ![...afterCatalog.installed, ...afterCatalog.market]
+        .some((item) => JSON.stringify(item).includes(CORE_BETA_SKILL_CREATOR_IDENTITY));
+      const catalogIsolated = catalogCreated.every((item) => (
+        String(item?.slug || item?.name || '') === fixture.slug
+      ));
+      const evidenceValid = Boolean(selectionEvidence.evidence_valid && projection.evidence_valid);
+      const oracleValid = Boolean(
+        evidenceValid
+        && selectionEvidence.oracle_valid
+        && projection.oracle_valid
+        && creatorHidden
+        && catalogIsolated
+      );
       const output = {
-        valid: created.length >= 1,
-        exact_creator_expected: 'skillhub:global/skill-creator-qwork',
-        identity,
-        created,
+        schema_version: 'qbot-core-beta-skill-creator-readback/v2',
+        valid: evidenceValid,
+        evidence_valid: evidenceValid,
+        oracle_valid: oracleValid,
+        fixture_slug: fixture.slug,
+        exact_creator_expected: CORE_BETA_SKILL_CREATOR_IDENTITY,
+        selection: selectionEvidence,
+        projection,
+        creator_hidden_from_catalog: creatorHidden,
+        catalog_isolated: catalogIsolated,
+        catalog_created: catalogCreated,
         before_counts: { installed: beforeCatalog.installed.length, market: beforeCatalog.market.length },
         after_counts: { installed: afterCatalog.installed.length, market: afterCatalog.market.length },
       };
@@ -6253,16 +6595,60 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       writeJsonFile(contentFile, output);
       const shaFile = path.join(caseDir, 'skill-creator-artifact-sha256.json');
       writeJsonFile(shaFile, {
-        valid: output.valid,
-        sha256: createHash('sha256').update(JSON.stringify(created)).digest('hex'),
-        created,
+        schema_version: 'qbot-core-beta-skill-creator-artifact-sha256/v2',
+        valid: projection.evidence_valid,
+        evidence_valid: projection.evidence_valid,
+        oracle_valid: projection.oracle_valid,
+        fixture_slug: fixture.slug,
+        projections: projection.projections.map((item) => ({
+          runtime: item.runtime,
+          path: item.file,
+          exists: item.exists,
+          bytes: item.bytes || 0,
+          sha256: item.sha256 || '',
+        })),
       });
       state.artifacts.content_readback = contentFile;
       state.artifacts.artifact_path_sha256 = shaFile;
-      state.artifacts.core_beta_capability_execution = await captureCoreBetaPublicState(page, testCase);
-      state.artifacts.core_beta_skill_execution_trace = output;
+      state.artifacts.core_beta_content_readback = output;
+      state.artifacts.core_beta_artifact_path_sha256 = {
+        valid: projection.evidence_valid,
+        oracle_valid: projection.oracle_valid,
+        projections: projection.projections.map((item) => ({
+          runtime: item.runtime,
+          path: item.file,
+          sha256: item.sha256 || '',
+        })),
+      };
+      state.artifacts.core_beta_capability_execution = selectionEvidence;
+      state.artifacts.core_beta_skill_execution_trace = {
+        valid: evidenceValid,
+        oracle_valid: oracleValid,
+        fixture_slug: fixture.slug,
+        selection: selectionEvidence,
+        projection: {
+          evidence_valid: projection.evidence_valid,
+          oracle_valid: projection.oracle_valid,
+          created_runtimes: projection.created_runtimes,
+        },
+      };
       state.artifacts.skill_runtime_readiness = contentFile;
-      recordAssertion(state, 'Skill Creator真实产物读回', '两轮创建后目录必须出现新qualified identity，且内部creator identity固定、未混入普通市场卡。', output.valid, JSON.stringify(output));
+      recordAssertion(
+        state,
+        'Skill Creator task-bound与双投影取证完整',
+        '必须保存发送前 exact creator、发送后 taskId、实际 prompt、双投影存在/缺失终态和 SHA 读回；产品未创建产物不能让证据本身失效。',
+        evidenceValid,
+        JSON.stringify({ selection: selectionEvidence, projection_evidence_valid: projection.evidence_valid }),
+        'automation_error',
+      );
+      recordAssertion(
+        state,
+        'Skill Creator真实产物读回',
+        '唯一QA名称必须在Claude/Codex双投影中新建、内容与SHA一致，exact creator绑定当前task，且内部creator未混入普通市场库存。',
+        oracleValid,
+        JSON.stringify(output),
+        'bug',
+      );
       return;
     }
     const inventory = await readCoreBetaSkillCatalog(page);
@@ -19620,6 +20006,11 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
     state._composerPreparedSend = false;
   }
   state.screenshots[`${slugify(label)}_after_send`] = await shot(page, caseDir, `${slugify(label)}-after-send`);
+  if (testCase.id === 'BETA-SKILL-014') {
+    const taskBoundSnapshot = await captureCoreBetaPublicState(page, testCase);
+    state.artifacts.core_beta_skill_creator_post_send_snapshots ||= [];
+    state.artifacts.core_beta_skill_creator_post_send_snapshots.push(taskBoundSnapshot);
+  }
   const waitConfig = replyWaitConfig(testCase, timeoutMs);
   let reply = await waitForReply(page, before, waitConfig.timeoutMs, {
     ignoredText: [prompt, testCase.scenario, testCase.test_data],
