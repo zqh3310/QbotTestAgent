@@ -3937,6 +3937,58 @@ export function coreBetaCleanupCapabilitiesNeedsRetry(value) {
   return !value || typeof value !== 'object' || Boolean(value.__error);
 }
 
+export async function coreBetaCapabilitiesReadbackWithRetry(readCapabilities, {
+  maxAttempts = 3,
+  timeoutMs = 7_000,
+  retryDelayMs = 250,
+  delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const boundedAttempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+  const boundedTimeoutMs = Math.max(1, Number(timeoutMs) || 7_000);
+  const boundedRetryDelayMs = Math.max(0, Number(retryDelayMs) || 0);
+  const attempts = [];
+  let value = null;
+
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    const startedAt = new Date().toISOString();
+    const startedAtMs = Date.now();
+    let timeoutHandle = null;
+    try {
+      if (typeof readCapabilities !== 'function') {
+        throw new Error('missing capabilities read function');
+      }
+      value = await Promise.race([
+        Promise.resolve().then(() => readCapabilities(attempt)),
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error(`Core Beta capabilities readback timed out after ${boundedTimeoutMs}ms`)),
+            boundedTimeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      value = { __error: String(error?.message || error) };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+    const ok = !coreBetaCleanupCapabilitiesNeedsRetry(value);
+    attempts.push({
+      attempt,
+      started_at: startedAt,
+      ended_at: new Date().toISOString(),
+      duration_ms: Math.max(0, Date.now() - startedAtMs),
+      ok,
+      error: String(value?.__error || ''),
+    });
+    if (ok) return { ok: true, value, attempts };
+    if (attempt < boundedAttempts && boundedRetryDelayMs > 0) {
+      await delay(boundedRetryDelayMs * attempt);
+    }
+  }
+
+  return { ok: false, value, attempts };
+}
+
 export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
   const attempts = Array.isArray(snapshot.capabilities_readback_attempts)
     ? snapshot.capabilities_readback_attempts
@@ -7928,10 +7980,55 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const lifecycle = window.agent.expertLifecycle;
       const item = await lifecycle.get(expertId);
       const recent = await lifecycle.recordRecent?.(expertId);
-      await window.agent.setExpert(expertId);
-      return { item, recent, capabilities: await window.agent.capabilities() };
+      const setExpertResult = await window.agent.setExpert(expertId);
+      return { item, recent, set_expert_result: setExpertResult };
     }, selected.id);
+    const capabilitiesReadback = await coreBetaCapabilitiesReadbackWithRetry(
+      () => page.evaluate(async () => {
+        if (typeof window.agent?.capabilities !== 'function') {
+          return { __error: 'missing bridge method capabilities' };
+        }
+        try {
+          return await window.agent.capabilities();
+        } catch (error) {
+          return { __error: String(error?.message || error) };
+        }
+      }).catch((error) => ({
+        __error: `expert capabilities evaluate failed: ${String(error?.message || error)}`,
+      })),
+      {
+        maxAttempts: 3,
+        timeoutMs: 7_000,
+        retryDelayMs: 250,
+        delay: (ms) => page.waitForTimeout(ms),
+      },
+    );
     const selection = await captureCoreBetaPublicState(page, testCase);
+    detail.capabilities = capabilitiesReadback.value;
+    detail.capabilities_readback_ok = capabilitiesReadback.ok;
+    detail.capabilities_readback_attempts = capabilitiesReadback.attempts;
+    const selectedExpertId = String(selected.id || '');
+    const publicExpert = selection.expert;
+    const publicExpertId = String(
+      publicExpert?.id
+      || publicExpert?.expertId
+      || (typeof publicExpert === 'string' ? publicExpert : ''),
+    );
+    const capabilitiesExpert = detail.capabilities?.currentExpert
+      ?? detail.capabilities?.expertIdentity
+      ?? null;
+    const capabilitiesExpertId = String(
+      capabilitiesExpert?.id
+      || capabilitiesExpert?.expertId
+      || (typeof capabilitiesExpert === 'string' ? capabilitiesExpert : ''),
+    );
+    const publicIdentityMatches = Boolean(selectedExpertId && publicExpertId === selectedExpertId);
+    const capabilitiesIdentityMatches = Boolean(
+      capabilitiesReadback.ok
+      && selectedExpertId
+      && capabilitiesExpertId === selectedExpertId,
+    );
+    const expertSelectionReadbackOk = publicIdentityMatches || capabilitiesIdentityMatches;
     const informationArchitecture = /通用助手/.test(pageTextBefore)
       && /最近|召唤/.test(pageTextBefore)
       && /我的专家/.test(pageTextBefore)
@@ -7939,18 +8036,40 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       && /专家市场|市场/.test(pageTextBefore);
     writeExpertArtifact('expert_draft_lifecycle', { drafts: bridge.drafts });
     writeExpertArtifact('expert_dependency_graph', detail.item?.version || detail.item);
-    writeExpertArtifact('expert_runtime_trace', {
+    const runtimeOracleValid = informationArchitecture && cardVisible && publicIdentityMatches;
+    const runtimeTraceFile = writeExpertArtifact('expert_runtime_trace', {
+      valid: true,
+      oracle_valid: runtimeOracleValid,
       information_architecture: informationArchitecture,
       searched_card_visible: cardVisible,
       selected,
       selection,
       recent: detail.recent,
-    }, informationArchitecture && cardVisible && Boolean(selection.expert));
+      set_expert_result: detail.set_expert_result,
+      capabilities: detail.capabilities,
+      capabilities_readback_ok: detail.capabilities_readback_ok,
+      capabilities_readback_attempts: detail.capabilities_readback_attempts,
+      public_identity_matches: publicIdentityMatches,
+      capabilities_identity_matches: capabilitiesIdentityMatches,
+    }, true);
     state.artifacts.core_beta_capability_selection = selection;
     state.artifacts.core_beta_capability_execution = detail;
     state.artifacts.capability_selection = identityFile;
-    state.artifacts.capability_execution_event = identityFile;
-    recordAssertion(state, '专家中心分区、搜索、详情与召唤闭环', '五类分区必须可见，搜索命中exact expert，setExpert后task identity与最近召唤一致。', informationArchitecture && cardVisible && Boolean(selection.expert), JSON.stringify({ informationArchitecture, cardVisible, selected, selection: selection.expert }));
+    state.artifacts.capability_execution_event = runtimeTraceFile;
+    recordAssertion(
+      state,
+      '专家选择只读身份读回',
+      'capabilities 或独立公开状态必须精确读回本次 setExpert 的 expertId；IPC 超时只允许重试只读接口。',
+      expertSelectionReadbackOk,
+      JSON.stringify({
+        selected_expert_id: selectedExpertId,
+        public_expert_id: publicExpertId,
+        capabilities_expert_id: capabilitiesExpertId,
+        capabilities_readback_attempts: capabilitiesReadback.attempts,
+      }),
+      expertSelectionReadbackOk ? '' : 'automation_error',
+    );
+    recordAssertion(state, '专家中心分区、搜索、详情与召唤闭环', '五类分区必须可见，搜索命中exact expert，setExpert后task identity与最近召唤一致。', runtimeOracleValid, JSON.stringify({ informationArchitecture, cardVisible, selected, selection: selection.expert }));
     return;
   }
 

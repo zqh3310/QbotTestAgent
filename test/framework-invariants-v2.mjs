@@ -29,6 +29,7 @@ import {
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupCapabilitiesNeedsRetry,
+  coreBetaCapabilitiesReadbackWithRetry,
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
@@ -651,6 +652,34 @@ assert.equal(
   }),
   false,
   '明确的 capabilities 空态不得重复读取或扩大清理副作用',
+);
+let expertCapabilitiesReadCount = 0;
+const expertCapabilitiesRecovered = await coreBetaCapabilitiesReadbackWithRetry(async () => {
+  expertCapabilitiesReadCount += 1;
+  if (expertCapabilitiesReadCount === 1) {
+    throw new Error('Teams QWork capabilities timed out after 5000ms');
+  }
+  return { currentExpert: { id: 'expert-qa-001' } };
+}, {
+  maxAttempts: 3,
+  timeoutMs: 100,
+  retryDelayMs: 0,
+  delay: async () => {},
+});
+assert.equal(expertCapabilitiesRecovered.ok, true, 'Expert capabilities 首次超时后必须通过受管只读重试恢复');
+assert.equal(expertCapabilitiesReadCount, 2, 'Expert capabilities 恢复不得重复执行状态变更，只应重试只读接口');
+assert.deepEqual(
+  expertCapabilitiesRecovered.attempts.map((attempt) => ({ ok: attempt.ok, error: attempt.error })),
+  [
+    { ok: false, error: 'Teams QWork capabilities timed out after 5000ms' },
+    { ok: true, error: '' },
+  ],
+  'Expert capabilities 重试账本必须保留首次超时和随后成功',
+);
+assert.match(
+  runner,
+  /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*coreBetaCapabilitiesReadbackWithRetry[\s\S]*capabilities_readback_attempts/,
+  'BETA-EXPERT-001 必须把一次性 setExpert 与可重试 capabilities 读回分离并保存账本',
 );
 const cleanupMarketTimeout = {
   capability_cleanup_required: true,
