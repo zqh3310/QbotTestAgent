@@ -1791,6 +1791,16 @@ assert.match(
   /coreBetaDispatchBatch\([\s\S]*coreBetaAssertBatchPendingPool\([\s\S]*coreBetaCollectBatch\(/,
   'v2 专用执行分支必须依次真实派发 20 条、读取待回复池并按 taskId 回收',
 );
+assert.match(
+  runner,
+  /async function coreBetaObserveBatchEntry\([\s\S]*resolveAssistantConfirmationModal\([\s\S]*批量任务[\s\S]*conversationSnapshot\(/,
+  '批量 taskId 回收也必须自动处理标准 Agent 澄清面板，不能让“跳过”弹窗耗尽共享截止时间',
+);
+assert.match(
+  runner,
+  /coreBetaBatchReplyCompletionPayload\([\s\S]*writeJsonFile\(ctx\.state\.artifacts\.reply_completion[\s\S]*batch-timeout-cleanup-readback\.json[\s\S]*cleanup_click_is_case_action: false/,
+  '批量共享截止时间必须写成证据完整的产品失败，并在固化终态后隔离清理残留运行任务',
+);
 const localFixtureAudit = await inspectCoreBetaFixtureReadiness({
   cases: [coreBetaPipelineCase('BETA-CHAT-001')],
 });

@@ -50,6 +50,10 @@ import {
   validateCasebookExecutorReadiness,
   withCoreBetaOperationHardTimeout,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  coreBetaBatchReplyCompletionPayload,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+import { validateReplyCompletionPayload } from '../src/lib/core-beta-case-protocol.mjs';
 import { isSupportedQbotAttachmentPath } from '../src/lib/qbot-ui-attachments.mjs';
 
 function conversationCase() {
@@ -1567,8 +1571,8 @@ test('a fully evidenced partial batch deadline is complete failure evidence and 
   const entries = Array.from({ length: 20 }, (_, index) => {
     const dispatchScreenshot = path.join(root, `dispatch-${index + 1}.png`);
     const terminalScreenshot = path.join(root, `terminal-${index + 1}.png`);
-    fs.writeFileSync(dispatchScreenshot, `dispatch-${index + 1}`);
-    fs.writeFileSync(terminalScreenshot, `terminal-${index + 1}`);
+    fs.writeFileSync(dispatchScreenshot, `dispatch-${index + 1}`.padEnd(256, 'x'));
+    fs.writeFileSync(terminalScreenshot, `terminal-${index + 1}`.padEnd(256, 'x'));
     const completed = index < 9;
     return {
       index,
@@ -1606,6 +1610,20 @@ test('a fully evidenced partial batch deadline is complete failure evidence and 
   assert.equal(evidence.dispatch_receipts_complete, true);
   assert.equal(evidence.terminal_rows_complete, true);
 
+  const replyCompletion = coreBetaBatchReplyCompletionPayload(entries, evidence, {
+    timeoutMs: 600_000,
+    minWaitMs: 60_000,
+  });
+  assert.equal(replyCompletion.complete, false);
+  assert.equal(replyCompletion.evidence_complete, true);
+  assert.equal(replyCompletion.terminal_failure, true);
+  assert.equal(replyCompletion.terminal_outcome, 'timed_out');
+  assert.equal(replyCompletion.reply_count, 20);
+  assert.equal(replyCompletion.confirmed_send_receipt, true);
+  assert.equal(replyCompletion.batch_terminal_screenshots.length, 20);
+  assert.match(replyCompletion.terminal_screenshot_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(validateReplyCompletionPayload(replyCompletion).valid, true);
+
   fs.rmSync(entries[9].terminal_screenshot);
   const missingTerminalFrame = coreBetaBatchTerminalEvidence(entries, {
     deadlineAtMs: Date.parse('2026-07-29T00:10:19.000Z'),
@@ -1614,7 +1632,7 @@ test('a fully evidenced partial batch deadline is complete failure evidence and 
   assert.equal(missingTerminalFrame.available, false);
   assert.equal(missingTerminalFrame.terminal_rows_complete, false);
 
-  fs.writeFileSync(entries[9].terminal_screenshot, 'restored');
+  fs.writeFileSync(entries[9].terminal_screenshot, 'restored'.padEnd(256, 'x'));
   entries[10].send_receipt.confirmed = false;
   const missingSendReceipt = coreBetaBatchTerminalEvidence(entries, {
     deadlineAtMs: Date.parse('2026-07-29T00:10:19.000Z'),

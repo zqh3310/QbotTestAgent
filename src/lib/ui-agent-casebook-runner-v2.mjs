@@ -8010,6 +8010,11 @@ function coreBetaBatchEvidenceFilePresent(file) {
     && fs.statSync(file).size > 0;
 }
 
+function coreBetaBatchScreenshotPresent(file) {
+  return coreBetaBatchEvidenceFilePresent(file)
+    && fs.statSync(file).size >= 128;
+}
+
 export function coreBetaBatchTerminalEvidence(entries = [], {
   deadlineAtMs = 0,
   deadlineReached = false,
@@ -8022,7 +8027,7 @@ export function coreBetaBatchTerminalEvidence(entries = [], {
   const dispatchReceiptsComplete = rows.length > 0 && rows.every((entry) => (
     entry?.send_receipt?.confirmed === true
     && String(entry?.send_receipt?.confirmed_at || '')
-    && coreBetaBatchEvidenceFilePresent(entry?.dispatch_screenshot)
+    && coreBetaBatchScreenshotPresent(entry?.dispatch_screenshot)
   ));
   const terminalRowsComplete = rows.length > 0 && rows.every((entry) => (
     String(entry?.terminal_outcome || '')
@@ -8030,7 +8035,7 @@ export function coreBetaBatchTerminalEvidence(entries = [], {
     && Number(entry?.observation_count || 0) > 0
     && entry?.last_observation
     && typeof entry.last_observation === 'object'
-    && coreBetaBatchEvidenceFilePresent(entry?.terminal_screenshot)
+    && coreBetaBatchScreenshotPresent(entry?.terminal_screenshot)
   ));
   const allCompleted = terminalRowsComplete && rows.every((entry) => (
     entry?.ok === true
@@ -8074,6 +8079,74 @@ export function coreBetaBatchTerminalEvidence(entries = [], {
     reason: available
       ? ''
       : '批量终态证据必须覆盖每条唯一 taskId 的确认发送回执、发送后截图、任务状态观察和终态截图。',
+  };
+}
+
+export function coreBetaBatchReplyCompletionPayload(entries = [], terminalEvidence = {}, {
+  timeoutMs = MAX_REPLY_WAIT_MS,
+  minWaitMs = MIN_REPLY_WAIT_MS,
+} = {}) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const terminalRowsComplete = terminalEvidence?.terminal_rows_complete === true;
+  const evidenceComplete = terminalEvidence?.available === true;
+  const deadlineEntry = rows.find((entry) => (
+    /batch_deadline|deadline/.test(String(entry?.terminal_outcome || ''))
+  ));
+  const repliesReachedTerminal = rows.length > 0 && rows.every((entry) => (
+    ['reply_completed', 'reply_oracle_mismatch'].includes(String(entry?.terminal_outcome || ''))
+  ));
+  const complete = evidenceComplete && terminalRowsComplete && repliesReachedTerminal;
+  const terminalScreenshot = String(deadlineEntry?.terminal_screenshot || '');
+  const terminalScreenshotSha256 = coreBetaBatchScreenshotPresent(terminalScreenshot)
+    ? createHash('sha256').update(fs.readFileSync(terminalScreenshot)).digest('hex')
+    : '';
+  const dispatchedAtMs = Date.parse(String(deadlineEntry?.dispatched_at || ''));
+  const terminalAtMs = Date.parse(String(deadlineEntry?.terminal_at || ''));
+  const waitedMs = Number.isFinite(dispatchedAtMs) && Number.isFinite(terminalAtMs)
+    ? Math.max(0, terminalAtMs - dispatchedAtMs)
+    : 0;
+  const terminalScreenshots = rows.map((entry) => {
+    const file = String(entry?.terminal_screenshot || '');
+    return {
+      task_id: String(entry?.task_id || ''),
+      terminal_outcome: String(entry?.terminal_outcome || ''),
+      terminal_at: String(entry?.terminal_at || ''),
+      path: file,
+      sha256: coreBetaBatchScreenshotPresent(file)
+        ? createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+        : '',
+    };
+  });
+  return {
+    complete,
+    evidence_complete: evidenceComplete,
+    reply_count: rows.length,
+    labels: rows.map((entry) => `批量任务 ${Number(entry?.index || 0) + 1}`),
+    terminal_failure: Boolean(evidenceComplete && deadlineEntry),
+    terminal_outcome: deadlineEntry ? 'timed_out' : complete ? 'completed' : '',
+    assistant_reply_present: Boolean(deadlineEntry?.last_observation?.assistant_reply_present),
+    waited_ms: waitedMs,
+    min_wait_ms: Number(minWaitMs || MIN_REPLY_WAIT_MS),
+    timeout_ms: Number(timeoutMs || MAX_REPLY_WAIT_MS),
+    observed_running_after_send: Boolean(deadlineEntry?.send_receipt?.running_observed),
+    running_after: typeof deadlineEntry?.last_observation?.running === 'boolean'
+      ? deadlineEntry.last_observation.running
+      : null,
+    no_reply_stable_observations: 0,
+    terminal_reconciliation_performed: true,
+    terminal_reconciliation_task_bound: Boolean(deadlineEntry?.task_id),
+    terminal_reconciliation_prompt_bound: Boolean(deadlineEntry?.prompt),
+    terminal_reconciliation_reply_present: Boolean(deadlineEntry?.last_observation?.assistant_reply_present),
+    terminal_reason: deadlineEntry
+      ? `批量共享截止时间终态：${deadlineEntry.terminal_outcome}；taskId=${deadlineEntry.task_id}`
+      : '',
+    confirmed_send_receipt: terminalEvidence?.dispatch_receipts_complete === true,
+    terminal_screenshot: terminalScreenshot,
+    terminal_screenshot_sha256: terminalScreenshotSha256,
+    timeout_screenshot: terminalScreenshot,
+    timeout_screenshot_sha256: terminalScreenshotSha256,
+    batch_terminal_evidence: terminalEvidence,
+    batch_terminal_screenshots: terminalScreenshots,
   };
 }
 
@@ -8368,7 +8441,18 @@ async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) 
   let publicState = null;
   let reply = '';
   let generating = false;
+  let confirmationHandled = false;
   if (reopened.ok && String(reopened.activeId || '') === entry.task_id) {
+    confirmationHandled = await withReplyPollHardTimeout(
+      resolveAssistantConfirmationModal(ctx.page, {
+        state: ctx.state,
+        caseDir: ctx.caseDir,
+        label: `批量任务 ${entry.index + 1} 回收`,
+      }),
+      15_000,
+      `batch task ${entry.index + 1} confirmation inspection`,
+    );
+    if (confirmationHandled) await ctx.page.waitForTimeout(800);
     snapshot = await conversationSnapshot(ctx.page).catch(() => null);
     publicState = await qbotE2EState(ctx.page).catch(() => null);
     reply = latestAssistantReplyForPrompt(snapshot || {}, entry.prompt);
@@ -8409,6 +8493,7 @@ async function coreBetaObserveBatchEntry(ctx, entry, round, observationLogFile) 
     assistant_reply_present: assistantReplyPresent,
     running: generating,
     message_count: Number(publicState?.messageCount ?? snapshot?.bridgeMessageCount ?? 0),
+    confirmation_handled: confirmationHandled,
     stable_observations: Number(entry.stable_observations || 0),
     reply_sha256: assistantReplyPresent ? sha256Text(reply) : '',
     reply_excerpt: clip(reply, 240),
@@ -8547,6 +8632,11 @@ async function coreBetaCollectBatch(ctx) {
     deadlineAtMs: sharedDeadline.deadline_at_ms,
     deadlineReached,
   });
+  const replyCompletion = coreBetaBatchReplyCompletionPayload(ctx.batch, terminalEvidence, {
+    timeoutMs: waitConfig.timeoutMs,
+    minWaitMs: MIN_REPLY_WAIT_MS,
+  });
+  writeJsonFile(ctx.state.artifacts.reply_completion, replyCompletion);
   const complete = ctx.batch.every((item) => item.ok);
   const sanitized = coreBetaSanitizeBatchEntries(ctx.batch);
   ctx.state.artifacts.core_beta_batch_collect = sanitized;
@@ -8572,6 +8662,55 @@ async function coreBetaCollectBatch(ctx) {
     shared_deadline_reached: deadlineReached,
   });
   const reopenFailure = ctx.batch.some((item) => item.terminal_outcome === 'task_reopen_failed_by_batch_deadline');
+  const deadlineEntries = ctx.batch.filter((item) => (
+    /batch_deadline|deadline/.test(String(item?.terminal_outcome || ''))
+  ));
+  if (deadlineEntries.length) {
+    const cleanupRows = [];
+    for (const entry of deadlineEntries) {
+      const reopened = await reopenSessionAndReadback(ctx.page, entry.task_id).catch((error) => ({
+        ok: false,
+        reason: String(error?.message || error),
+      }));
+      let confirmationCount = 0;
+      if (reopened?.ok) {
+        while (confirmationCount < 8 && await resolveAssistantConfirmationModal(ctx.page, {
+          state: ctx.state,
+          caseDir: ctx.caseDir,
+          label: `批量任务 ${entry.index + 1} 超时清理`,
+        })) {
+          confirmationCount += 1;
+          await ctx.page.waitForTimeout(500);
+        }
+      }
+      const cleanupSucceeded = reopened?.ok
+        ? await cancelRunningReplyAfterTimeout(
+          ctx.page,
+          ctx.state,
+          ctx.caseDir,
+          `批量任务 ${entry.index + 1} 共享截止后的隔离清理`,
+        )
+        : false;
+      cleanupRows.push({
+        index: entry.index,
+        task_id: entry.task_id,
+        terminal_outcome: entry.terminal_outcome,
+        cleanup_click_is_case_action: false,
+        reopened: Boolean(reopened?.ok),
+        reopen_reason: String(reopened?.reason || ''),
+        assistant_confirmations_skipped: confirmationCount,
+        cleanup_attempted: true,
+        cleanup_succeeded: cleanupSucceeded,
+      });
+    }
+    const cleanupFile = path.join(ctx.caseDir, 'batch-timeout-cleanup-readback.json');
+    writeJsonFile(cleanupFile, {
+      valid: cleanupRows.every((item) => item.cleanup_succeeded),
+      cleanup_click_is_case_action: false,
+      rows: cleanupRows,
+    });
+    ctx.state.artifacts.core_beta_batch_timeout_cleanup = cleanupFile;
+  }
   return {
     ok: complete,
     category: reopenFailure ? 'automation_error' : 'bug',
