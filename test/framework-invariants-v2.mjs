@@ -38,6 +38,7 @@ import {
   coreBetaRuntimeExecutorBinding,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
+  coreBetaSkillUsePrerequisiteDecision,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
@@ -883,6 +884,46 @@ assert.equal(
   }).applicable,
   false,
   '真实安装成功的目标Skill不应被全局短缺误阻塞',
+);
+const pipelineSkillPrerequisiteLedger = {
+  skills: {
+    ...prerequisiteLedger.skills,
+    deep_use: prerequisiteLedger.skills.selected.slice(0, 5),
+  },
+};
+const pipelineSkillBlock = coreBetaSkillUsePrerequisiteDecision(
+  { id: 'BETA-SKILL-006', case_type: 'skill_use' },
+  pipelineSkillPrerequisiteLedger,
+);
+assert.equal(pipelineSkillBlock.applies, true);
+assert.equal(pipelineSkillBlock.valid, true);
+assert.equal(pipelineSkillBlock.blocker.applicable, true);
+assert.equal(pipelineSkillBlock.selected_skill.qualified_identity, prerequisiteAttempts[0].qualified_identity);
+assert.equal(
+  coreBetaSkillUsePrerequisiteDecision(
+    { id: 'BETA-SKILL-006', case_type: 'skill_use' },
+    { skills: { ...pipelineSkillPrerequisiteLedger.skills, deep_use: [] } },
+  ).valid,
+  false,
+  'pipeline 派发前缺少目标 Skill 身份时必须 fail-closed，不能先进入 manual 模式或发送',
+);
+const pipelineExecutorSource = runner.match(
+  /async function executeSingleHostPipelineBatch\([\s\S]*?\n}\n\nasync function prepareCoreBetaPipelineCase/,
+)?.[0] || '';
+assert.match(
+  pipelineExecutorSource,
+  /coreBetaSkillUsePrerequisiteDecision[\s\S]*requiresSerialPrerequisite[\s\S]*executeCasebookCase[\s\S]*dispatchSingleHostPipelineCase/,
+  'single-host pipeline 必须在 composer 清理与发送前传播 Skill 安装阻塞',
+);
+assert.match(
+  pipelineExecutorSource,
+  /dispatchStopped = Boolean\([\s\S]*coreBetaCompletionBlockReason[\s\S]*coreBetaBatchStopReason/,
+  'single-host pipeline 必须识别首个不完整 manifest 或 automation_error 结果',
+);
+assert.match(
+  pipelineExecutorSource,
+  /writeSingleHostPipelineLedger\(outDir, ledger\);\s*if \(dispatchStopped\) break/,
+  'single-host pipeline 必须在保存结果账本后立即截断当前 wave',
 );
 assert.equal(
   coreBetaSkillInstallPrerequisiteBlocker({
@@ -1788,8 +1829,8 @@ const pipelineCompletionGateSource = runner.match(
 )?.[0] || '';
 assert.match(
   pipelineCompletionGateSource,
-  /const batchEntry = pipelineBatch\[batchOffset\];[\s\S]*const batchCase = batchEntry\?\.testCase;[\s\S]*coreBetaCompletionBlockReason\(batchCase, result\)/,
-  'pipeline completed 门禁必须解包 batchEntry.testCase，不能让 Core Beta manifest 校验因包装对象而被跳过',
+  /const batchEntry = executedPipelineBatch\[batchOffset\];[\s\S]*const batchCase = batchEntry\?\.testCase;[\s\S]*coreBetaCompletionBlockReason\(batchCase, result\)/,
+  'pipeline completed 门禁必须从实际处理批次解包 batchEntry.testCase，不能让 Core Beta manifest 校验因包装对象而被跳过',
 );
 assert.match(
   pipelineCompletionGateSource,

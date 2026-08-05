@@ -746,7 +746,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         ? buildSingleHostPipelineBatch(selectedCases, index, singleHostPipelineSize)
         : [];
       if (pipelineBatch.length > 1) {
-        const batchResults = await executeSingleHostPipelineBatch({
+        const pipelineExecution = await executeSingleHostPipelineBatch({
           page,
           batch: pipelineBatch,
           outDir,
@@ -758,12 +758,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           playwright: loaded,
           runtime,
         });
+        const batchResults = pipelineExecution.results;
+        const executedPipelineBatch = pipelineExecution.batch;
         browser = runtime.browser;
         page = runtime.page;
         let pipelineStopped = false;
         for (let batchOffset = 0; batchOffset < batchResults.length; batchOffset += 1) {
           const result = batchResults[batchOffset];
-          const batchEntry = pipelineBatch[batchOffset];
+          const batchEntry = executedPipelineBatch[batchOffset];
           const batchCase = batchEntry?.testCase;
           const completionBlock = coreBetaCompletionBlockReason(batchCase, result);
           if (completionBlock) {
@@ -788,7 +790,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             total: selectedCases.length,
             current_case: result.id,
             execution_mode: 'single-host-pipeline',
-            pipeline_size: pipelineBatch.length,
+            pipeline_size: executedPipelineBatch.length,
             results,
           });
           const hardStopReason = coreBetaBatchStopReason(batchCase, result);
@@ -808,7 +810,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           }
         }
         if (pipelineStopped) break;
-        index += pipelineBatch.length - 1;
+        index += executedPipelineBatch.length - 1;
         const disconnected = batchResults.find(isCdpDisconnectedResult);
         if (disconnected || !isLiveCdpPage(browser, page)) {
           const reason = `单宿主流水线执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。${disconnected ? `原始现象：${clip(disconnected.actual_result || disconnected.conclusion || '', 260)}` : ''}`;
@@ -1975,8 +1977,11 @@ async function executeSingleHostPipelineBatch({
   const waveId = `wave-${String(batch[0].index + 1).padStart(3, '0')}-${String(batch.at(-1).index + 1).padStart(3, '0')}`;
   const contexts = [];
   const resultsByKey = new Map();
+  let processedCount = 0;
+  let dispatchStopped = false;
 
   for (const entry of batch) {
+    processedCount += 1;
     const { testCase, index } = entry;
     const order = index + 1;
     const key = pipelineLedgerKey(testCase, order);
@@ -1987,6 +1992,11 @@ async function executeSingleHostPipelineBatch({
     if (saved?.status === 'collected' && fs.existsSync(resultFile)) {
       const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
       resultsByKey.set(key, result);
+      dispatchStopped = Boolean(
+        coreBetaCompletionBlockReason(testCase, result)
+        || coreBetaBatchStopReason(testCase, result),
+      );
+      if (dispatchStopped) break;
       continue;
     }
     if (saved?.status === 'dispatched' && saved.task_id && saved.state && saved.before && saved.turn) {
@@ -2007,19 +2017,43 @@ async function executeSingleHostPipelineBatch({
       continue;
     }
 
-    const dispatched = await dispatchSingleHostPipelineCase({
-      page,
-      testCase,
-      caseDir,
-      order,
-      modelTier,
-      precheck,
-      options,
-      playwright,
-      runtime,
-      waveId,
-      fixturesDir,
-    });
+    const skillPrerequisite = testCase.case_type === 'skill_use'
+      ? coreBetaSkillUsePrerequisiteDecision(testCase, readCoreBetaSuiteLedger(caseDir))
+      : { applies: false, valid: true, blocker: null };
+    // A verified upstream shortage is a real blocked Case, not a dispatchable
+    // conversation. Run it through the standard serial evidence path before
+    // touching composer state so prompt/task/reply roles can be marked N/A.
+    const requiresSerialPrerequisite = skillPrerequisite.applies
+      && (!skillPrerequisite.valid || skillPrerequisite.blocker?.applicable === true);
+    const dispatched = requiresSerialPrerequisite
+      ? {
+          result: await executeCasebookCase({
+            page,
+            testCase,
+            caseDir,
+            order,
+            timeoutMs,
+            fixturesDir,
+            precheck,
+            modelTier,
+            options,
+            playwright,
+            runtime,
+          }),
+        }
+      : await dispatchSingleHostPipelineCase({
+          page,
+          testCase,
+          caseDir,
+          order,
+          modelTier,
+          precheck,
+          options,
+          playwright,
+          runtime,
+          waveId,
+          fixturesDir,
+        });
     if (dispatched.result) {
       resultsByKey.set(key, dispatched.result);
       ledger.entries[key] = {
@@ -2032,6 +2066,10 @@ async function executeSingleHostPipelineBatch({
         result_file: resultFile,
         collected_at: new Date().toISOString(),
       };
+      dispatchStopped = Boolean(
+        coreBetaCompletionBlockReason(testCase, dispatched.result)
+        || coreBetaBatchStopReason(testCase, dispatched.result),
+      );
     } else {
       contexts.push({ key, ...dispatched });
       ledger.entries[key] = {
@@ -2052,6 +2090,7 @@ async function executeSingleHostPipelineBatch({
       };
     }
     writeSingleHostPipelineLedger(outDir, ledger);
+    if (dispatchStopped) break;
   }
 
   let pendingContexts = contexts;
@@ -2100,17 +2139,21 @@ async function executeSingleHostPipelineBatch({
     pendingContexts = nextRound;
   }
 
-  return batch.map(({ testCase, index }) => {
-    const key = pipelineLedgerKey(testCase, index + 1);
-    return resultsByKey.get(key) || buildSyntheticResult({
-      outDir,
-      testCase,
-      index,
-      status: 'failed',
-      resultCategory: 'automation_error',
-      reason: `单宿主流水线未返回 ${testCase.id} 的结果。`,
-    });
-  });
+  const processedBatch = batch.slice(0, processedCount);
+  return {
+    batch: processedBatch,
+    results: processedBatch.map(({ testCase, index }) => {
+      const key = pipelineLedgerKey(testCase, index + 1);
+      return resultsByKey.get(key) || buildSyntheticResult({
+        outDir,
+        testCase,
+        index,
+        status: 'failed',
+        resultCategory: 'automation_error',
+        reason: `单宿主流水线未返回 ${testCase.id} 的结果。`,
+      });
+    }),
+  };
 }
 
 async function prepareCoreBetaPipelineCase({
@@ -5209,6 +5252,44 @@ export function coreBetaSkillInstallPrerequisiteBlocker(ledger = {}, {
   };
 }
 
+export function coreBetaSkillUsePrerequisiteDecision(testCase = {}, ledger = {}) {
+  const id = String(testCase?.id || '');
+  if (!/^BETA-SKILL-0(?:06|07|08|09|10|11)$/.test(id)) {
+    return {
+      applies: false,
+      valid: true,
+      selected_skill: null,
+      blocker: null,
+      reason: '',
+    };
+  }
+  const deepUseIndex = id === 'BETA-SKILL-011'
+    ? 0
+    : Number(id.split('-').at(-1)) - 6;
+  const selectedSkill = ledger.skills?.deep_use?.[deepUseIndex] || null;
+  if (!selectedSkill?.qualified_identity) {
+    return {
+      applies: true,
+      valid: false,
+      selected_skill: selectedSkill,
+      blocker: null,
+      reason: `${id} 缺少可验证的 deep_use[${deepUseIndex}] Skill 账本身份。`,
+    };
+  }
+  const blocker = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
+    expectedCount: 10,
+    targetIdentity: selectedSkill.qualified_identity,
+    dependentCaseId: id,
+  });
+  return {
+    applies: true,
+    valid: blocker.valid === true,
+    selected_skill: selectedSkill,
+    blocker,
+    reason: blocker.reason,
+  };
+}
+
 const CORE_BETA_SKILL_PREREQUISITE_NA_ROLES = Object.freeze([
   'prompt',
   'task_id',
@@ -5776,24 +5857,21 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
     return;
   }
   const ledger = readCoreBetaSuiteLedger(caseDir);
-  const deepUseIndex = Number(testCase.id.split('-').at(-1)) - 6;
-  const selectedSkill = /^BETA-SKILL-0(?:06|07|08|09|10)$/.test(testCase.id)
-    ? ledger.skills?.deep_use?.[deepUseIndex]
+  const prerequisiteDecision = coreBetaSkillUsePrerequisiteDecision(testCase, ledger);
+  const selectedSkill = prerequisiteDecision.applies
+    ? prerequisiteDecision.selected_skill
     : ledger.skills?.deep_use?.[0];
-  if (/^BETA-SKILL-0(?:06|07|08|09|10|11)$/.test(testCase.id)) {
-    if (!selectedSkill?.qualified_identity) {
-      throw new Error(`${testCase.id} 缺少可验证的deep_use Skill账本身份`);
+  if (prerequisiteDecision.applies) {
+    if (!prerequisiteDecision.valid) {
+      throw new Error(`${testCase.id} 无法验证目标 Skill 安装终态账本：${prerequisiteDecision.reason}`);
     }
-    const prerequisite = coreBetaSkillInstallPrerequisiteBlocker(ledger, {
-      expectedCount: 10,
-      targetIdentity: selectedSkill.qualified_identity,
-      dependentCaseId: testCase.id,
-    });
-    if (!prerequisite.valid) {
-      throw new Error(`${testCase.id} 无法验证目标Skill安装终态账本：${prerequisite.reason}`);
-    }
-    if (prerequisite.applicable) {
-      applyCoreBetaSkillPrerequisiteBlocker({ state, testCase, caseDir, blocker: prerequisite });
+    if (prerequisiteDecision.blocker.applicable) {
+      applyCoreBetaSkillPrerequisiteBlocker({
+        state,
+        testCase,
+        caseDir,
+        blocker: prerequisiteDecision.blocker,
+      });
       return;
     }
   }
