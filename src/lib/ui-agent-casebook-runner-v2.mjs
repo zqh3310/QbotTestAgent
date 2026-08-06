@@ -26367,13 +26367,26 @@ function pdfPageOneCoverage(replyText) {
 
 const TABLE_FILE_ROW_IDENTITY_PATTERN = /qbot-table\.csv|qbot-data-table-diff\.xlsx|\bCSV\b|\bXLSX\b|\bExcel\b/i;
 
-function tableHeaderScopedTotalMatches(lines, rowIndex, afterIdentity, expectedTotal) {
-  const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
-  if (Number(rowValues.at(-1)) !== Number(expectedTotal)) return false;
-
+function tableHeaderScopedTotalMatches(lines, rowIndex, line, afterIdentity, expectedTotal) {
   for (let index = rowIndex - 1; index >= 0; index -= 1) {
     const precedingLine = lines[index];
-    if (/(?:总计|合计)/.test(precedingLine)) return true;
+    if (/(?:总计|合计)/.test(precedingLine)) {
+      const header = splitStructuredTableRow(precedingLine);
+      const row = splitStructuredTableRow(line);
+      if (header.delimiter && row.delimiter === header.delimiter) {
+        const totalIndex = header.cells.findIndex((cell) => /(?:总计|合计)/.test(cell));
+        if (totalIndex >= 1 && row.cells.length > totalIndex) {
+          const totalCell = row.cells[totalIndex];
+          const values = totalCell.match(/\d+(?:\.\d+)?/g) || [];
+          const displayedTotalMatches = Number(values[0]) === Number(expectedTotal);
+          const calculatedTotalMatches = /(?:=|为)/.test(totalCell)
+            && Number(values.at(-1)) === Number(expectedTotal);
+          return displayedTotalMatches || calculatedTotalMatches;
+        }
+      }
+      const rowValues = afterIdentity.match(/\d+(?:\.\d+)?/g) || [];
+      return Number(rowValues.at(-1)) === Number(expectedTotal);
+    }
     if (!TABLE_FILE_ROW_IDENTITY_PATTERN.test(precedingLine) || !/\d/.test(precedingLine)) return false;
   }
   return false;
@@ -26445,7 +26458,7 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     if (directTotal.test(afterIdentity) || calculatedTotal.test(afterIdentity)) return true;
     if (tableInlineScopedTotalMatches(line, identity, expectedTotal)) return true;
 
-    return tableHeaderScopedTotalMatches(lines, index, afterIdentity, expectedTotal);
+    return tableHeaderScopedTotalMatches(lines, index, line, afterIdentity, expectedTotal);
   })
     || tableColumnScopedTotalMatches(lines, identityPattern, expectedTotal)
     || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);

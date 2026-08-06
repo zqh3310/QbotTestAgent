@@ -4053,6 +4053,33 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: coreTablePrompt },
   observedHeaderScopedCoreTableReply.replace('CSV\t182\nXLSX\t215', 'CSV\t215\nXLSX\t182'),
 ).ok, false, '总计表头约束的连续文件行交换总计时不得形成通过');
+const observedVerificationScopedCoreTableReply = [
+  '两表内容',
+  '指标\tqbot-table.csv\tqbot-data-table-diff.xlsx',
+  '报名人数\t100\t120',
+  '到场人数\t70\t80',
+  '成交单数\t12\t15',
+  '差异明细（xlsx - csv）',
+  '报名人数\t+20\t+20.0%',
+  '到场人数\t+10\t+14.3%',
+  '成交单数\t+3\t+25.0%',
+  '各自总计',
+  '表格\t合计',
+  'qbot-table.csv\t182（100 + 70 + 12）',
+  'qbot-data-table-diff.xlsx\t215（120 + 80 + 15）',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedVerificationScopedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受总计列单元格先展示总计、再用括号列出验算因子的真实回复',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedVerificationScopedCoreTableReply
+    .replace('182（100 + 70 + 12）', '215（100 + 70 + 12）')
+    .replace('215（120 + 80 + 15）', '182（120 + 80 + 15）'),
+).ok, false, '总计列单元格即使附带验算因子，交换双方展示总计仍不得形成通过');
 const observedInlineScopedCoreTableReply = [
   '指标\tqbot-table.csv\tqbot-data-table-diff.xlsx\t差异',
   '报名人数\t100\t120\t+20',

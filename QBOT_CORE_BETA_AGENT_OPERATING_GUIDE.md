@@ -19,6 +19,21 @@
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
+最新一次已冻结的 scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807020734_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7f99cac
+```
+
+该批次完成 17/55 后，在 `BETA-FILE-004` 确认 framework issue：产品回复
+正确列出报名 100→120、到场 70→80、成交 12→15，并在 `表格\t合计` 表头后
+分别给出 `qbot-table.csv\t182（100 + 70 + 12）` 与
+`qbot-data-table-diff.xlsx\t215（120 + 80 + 15）`。解析器错误地读取合计
+单元格内最后一个验算因子 12/15，而不是开头展示总计 182/215，输出
+`metric_diffs=true/totals=false` 并把产品正确结果误标为 Bug。该目录已冻结，
+不得续写；修复必须按结构化表头定位合计单元格、保留交换总计反例，并在新推送
+干净基线上从第 1 条完整重跑 55 条。
+
 最近一次已冻结的 scoped 批次：
 
 ```text
