@@ -10465,7 +10465,9 @@ async function verifyCoreBetaArtifactOutput({ page, state, testCase, caseDir }, 
   recordAssertion(
     state,
     '成果文件格式、内容与SHA闭环',
-    `必须生成并读回 ${expectedExtensions.join(', ')}，每个文件非空、SHA256有效且结构可解析。`,
+    scenario.driver === 'artifact_pptx_pdf_validation'
+      ? '必须生成并读回 PPTX 与 PDF；两者均恰好五页、无空白页，五个标题与曝光1000/点击100/转化20一致，且 PPTX 至少包含一个承载三项指标的可见图表页。'
+      : `必须生成并读回 ${expectedExtensions.join(', ')}，每个文件非空、SHA256有效且结构可解析。`,
     validFiles,
     JSON.stringify(readback),
   );
@@ -10575,10 +10577,41 @@ export function coreBetaArtifactReadback(file) {
         && result.xlsx_cell_count >= 4;
     }
     if (extension === '.pptx') {
-      const slideEntries = result.zip_entries.filter((entry) => /^ppt\/slides\/slide\d+\.xml$/i.test(entry));
-      const slideXml = slideEntries.map((entry) => unzipEntryText(file, entry)).join('\n');
+      const slideEntries = result.zip_entries
+        .filter((entry) => /^ppt\/slides\/slide\d+\.xml$/i.test(entry))
+        .sort((left, right) => Number(left.match(/slide(\d+)\.xml/i)?.[1] || 0)
+          - Number(right.match(/slide(\d+)\.xml/i)?.[1] || 0));
+      const slideXmlEntries = slideEntries.map((entry) => unzipEntryText(file, entry));
+      const slideXml = slideXmlEntries.join('\n');
+      const slideTexts = slideXmlEntries.map((xml) => stripXmlText(xml));
+      const slideTitles = slideXmlEntries.map((xml) => officeXmlTextNodes(xml)[0] || '');
+      const shapeCounts = slideXmlEntries.map((xml) => (
+        (xml.match(/<p:(?:sp|pic|graphicFrame|cxnSp)(?:\s|>)/g) || []).length
+      ));
+      const nonRectShapeCounts = slideXmlEntries.map((xml) => (
+        Array.from(xml.matchAll(/<a:prstGeom\s+prst="([^"]+)"/g))
+          .filter((match) => !['rect', 'roundRect'].includes(String(match[1] || ''))).length
+      ));
+      const mediaShapeCounts = slideXmlEntries.map((xml) => (
+        (xml.match(/<p:(?:pic|graphicFrame)(?:\s|>)/g) || []).length
+      ));
+      const chartCandidateSlides = slideTexts.reduce((indexes, text, index) => {
+        const hasChartGeometry = nonRectShapeCounts[index] >= 3 || mediaShapeCounts[index] >= 1;
+        if (shapeCounts[index] >= 6
+          && hasChartGeometry
+          && coreBetaFunnelMetricCoverage(text).length === 3) indexes.push(index + 1);
+        return indexes;
+      }, []);
       result.pptx_slide_count = slideEntries.length;
       result.pptx_text_length = stripXmlText(slideXml).length;
+      result.pptx_slide_texts = slideTexts;
+      result.pptx_slide_titles = slideTitles;
+      result.pptx_slide_shape_counts = shapeCounts;
+      result.pptx_non_rect_shape_counts = nonRectShapeCounts;
+      result.pptx_media_shape_counts = mediaShapeCounts;
+      result.pptx_blank_slide_count = slideTexts.filter((text) => !text.trim()).length;
+      result.pptx_metric_anchors = coreBetaFunnelMetricCoverage(slideTexts.join('\n'));
+      result.pptx_chart_candidate_slides = chartCandidateSlides;
       result.valid = result.valid
         && result.zip_entries.includes('[Content_Types].xml')
         && result.zip_entries.includes('ppt/presentation.xml')
@@ -10594,6 +10627,45 @@ export function coreBetaArtifactReadback(file) {
     const fallbackPageCount = (pdfBuffer.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length;
     result.pdf_page_count = pageMatch ? Number(pageMatch[1]) : fallbackPageCount;
     result.pdf_validation_adapter = info.status === 0 ? 'pdfinfo' : 'pdf_object_scan';
+    const textReadback = spawnSync('pdftotext', [file, '-'], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    let pdfPages = [];
+    let pdfTextAdapter = 'unavailable';
+    if (textReadback.status === 0) {
+      pdfPages = String(textReadback.stdout || '').split('\f');
+      if (!pdfPages.at(-1)?.trim()) pdfPages.pop();
+      pdfTextAdapter = 'pdftotext';
+    } else {
+      const pymupdfReadback = spawnSync('python3', [
+        '-c',
+        'import fitz,json,sys; doc=fitz.open(sys.argv[1]); print(json.dumps([page.get_text("text") for page in doc], ensure_ascii=False))',
+        file,
+      ], {
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      if (pymupdfReadback.status === 0) {
+        try {
+          const parsed = JSON.parse(String(pymupdfReadback.stdout || '[]'));
+          if (Array.isArray(parsed)) {
+            pdfPages = parsed.map(String);
+            pdfTextAdapter = 'pymupdf';
+          }
+        } catch {
+          pdfPages = [];
+        }
+      }
+    }
+    const pdfText = pdfPages.join('\n\f\n');
+    result.pdf_text_adapter = pdfTextAdapter;
+    result.pdf_text_readback_valid = pdfTextAdapter !== 'unavailable';
+    result.pdf_text_length = pdfText.trim().length;
+    result.pdf_page_texts = pdfPages.map((text) => text.trim());
+    result.pdf_page_text_lengths = result.pdf_page_texts.map((text) => text.length);
+    result.pdf_blank_page_count = result.pdf_page_texts.filter((text) => !text).length;
+    result.pdf_metric_anchors = coreBetaFunnelMetricCoverage(pdfText);
     result.valid = result.valid
       && result.pdf_header === '%PDF-'
       && Number(result.pdf_page_count) >= 1;
@@ -10612,6 +10684,34 @@ function stripXmlText(xml) {
     .replace(/&(?:amp|lt|gt|quot|apos);/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function officeXmlTextNodes(xml) {
+  return Array.from(String(xml || '').matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g))
+    .map((match) => String(match[1] || '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .trim())
+    .filter(Boolean);
+}
+
+function normalizedArtifactText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[\s,，]/g, '')
+    .toLowerCase();
+}
+
+function coreBetaFunnelMetricCoverage(value) {
+  const text = normalizedArtifactText(value);
+  return [
+    ['曝光1000', /曝光.{0,40}1000(?![\d%％])/],
+    ['点击100', /点击.{0,40}100(?![\d%％])/],
+    ['转化20', /转化.{0,40}20(?![\d%％])/],
+  ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
 }
 
 export function validateCoreBetaArtifactOracle(driver, files) {
@@ -10639,9 +10739,20 @@ export function validateCoreBetaArtifactOracle(driver, files) {
   if (driver === 'artifact_pptx_pdf_validation') {
     const pptx = byExtension.get('.pptx');
     const pdf = byExtension.get('.pdf');
-    return Boolean(pptx?.pptx_slide_count >= 1
-      && pptx?.pptx_text_length >= 20
-      && pdf?.pdf_page_count >= 1);
+    const pptxTitles = Array.isArray(pptx?.pptx_slide_titles) ? pptx.pptx_slide_titles : [];
+    const pdfText = normalizedArtifactText((pdf?.pdf_page_texts || []).join('\n'));
+    const titlesMatch = pptxTitles.length === 5
+      && pptxTitles.every((title) => title && pdfText.includes(normalizedArtifactText(title)));
+    return Boolean(pptx?.pptx_slide_count === 5
+      && pptx?.pptx_blank_slide_count === 0
+      && pptx?.pptx_metric_anchors?.length === 3
+      && pptx?.pptx_chart_candidate_slides?.length >= 1
+      && pdf?.pdf_page_count === 5
+      && pdf?.pdf_text_readback_valid === true
+      && pdf?.pdf_page_texts?.length === 5
+      && pdf?.pdf_blank_page_count === 0
+      && pdf?.pdf_metric_anchors?.length === 3
+      && titlesMatch);
   }
   if (driver === 'artifact_svg_secure_preview') {
     const svg = byExtension.get('.svg');
@@ -26846,6 +26957,18 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
     );
   }
 
+  if (id === 'BETA-ART-004') {
+    const formats = /\bPPTX\b/i.test(reply) && /\bPDF\b/i.test(reply);
+    const fivePages = /(?:五|5)\s*页/.test(reply);
+    const metrics = coreBetaFunnelMetricCoverage(reply);
+    return result(
+      'PPTX/PDF 五页漏斗汇报回复',
+      '回复必须明确 PPTX 与 PDF 均已生成、均为五页，并准确复述曝光 1000、点击 100、转化 20。',
+      formats && fivePages && metrics.length === 3,
+      `formats=${formats}；five_pages=${fivePages}；metrics=${metrics.join(',')}；reply=${clip(reply, 500)}`,
+    );
+  }
+
   if (id === 'SIT-MEM-001') {
     const context = `${label}\n${prompt}`;
     if (/验证偏好已删除|没有记录|没有固定偏好/.test(context)) {
@@ -27370,6 +27493,12 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   if (requestedFiles.length
     && requestedFiles.some((filename) => text.includes(filename))
     && /已生成|生成完成|已创建|写入|保存|落地|文件名/.test(text)) return true;
+  if (testCase.id === 'BETA-ART-004') {
+    return /\bPPTX\b/i.test(text)
+      && /\bPDF\b/i.test(text)
+      && /(?:五|5)\s*页/.test(text)
+      && coreBetaFunnelMetricCoverage(text).length === 3;
+  }
   if (isNumericMemoryScenario(testCase)) {
     if (/成交率|到场率|成交单数/.test(String(prompt || ''))) {
       return /(^|[^0-9])12([^0-9]|$)/.test(text)

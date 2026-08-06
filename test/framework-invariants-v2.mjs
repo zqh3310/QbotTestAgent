@@ -670,12 +670,78 @@ try {
   const markdownReadback = coreBetaArtifactReadback(markdownFile);
   const interactiveHtmlReadback = coreBetaArtifactReadback(interactiveHtmlFile);
   const remoteHtmlReadback = coreBetaArtifactReadback(remoteHtmlFile);
+  const pptxFixtureReadback = coreBetaArtifactReadback(path.join(root, 'testflies', 'qbot-slide-deck.pptx'));
+  const pdfFixtureReadback = coreBetaArtifactReadback(path.join(root, 'testflies', 'qbot-pdf-summary.pdf'));
   assert.equal(interactiveHtmlReadback.valid, true, '交互式 HTML 的内联 script 不应被文件结构校验误判为无效');
   assert.equal(remoteHtmlReadback.valid, false, '引用远程资源的 HTML 仍必须失败');
+  assert.equal(pptxFixtureReadback.pptx_slide_count, 1, 'PPTX 读回必须按 slide XML 提取真实页数');
+  assert.deepEqual(pptxFixtureReadback.pptx_slide_titles, ['QBot PPT 测试：多模态与附件理解'], 'PPTX 读回必须提取逐页标题');
+  assert.equal(pdfFixtureReadback.pdf_text_readback_valid, true, 'PDF 读回必须通过 pdftotext 或 PyMuPDF 获得逐页文本');
+  assert.equal(pdfFixtureReadback.pdf_page_texts.length, pdfFixtureReadback.pdf_page_count, 'PDF 文本页数必须与结构页数一致');
+  assert.match(pdfFixtureReadback.pdf_page_texts.join('\n'), /QBot PDF Summary/, 'PDF 读回必须保留可核对的 fixture 标题');
   assert.equal(
     validateCoreBetaArtifactOracle('artifact_markdown_html_validation', [markdownReadback, interactiveHtmlReadback]),
     true,
     'BETA-ART-001 应接受包含内联交互脚本且无远程资源的 HTML',
+  );
+  const fivePagePptx = {
+    extension: '.pptx',
+    pptx_slide_count: 5,
+    pptx_blank_slide_count: 0,
+    pptx_metric_anchors: ['曝光1000', '点击100', '转化20'],
+    pptx_chart_candidate_slides: [3],
+    pptx_slide_titles: ['营销效果转化漏斗汇报', '核心指标总览', '转化漏斗分析', '关键洞察与结论', '行动建议与后续计划'],
+  };
+  const fivePagePdf = {
+    extension: '.pdf',
+    pdf_page_count: 5,
+    pdf_text_readback_valid: true,
+    pdf_page_texts: [
+      '营销效果转化漏斗汇报 曝光 1,000 点击 100 转化 20',
+      '核心指标总览',
+      '转化漏斗分析',
+      '关键洞察与结论',
+      '行动建议与后续计划',
+    ],
+    pdf_blank_page_count: 0,
+    pdf_metric_anchors: ['曝光1000', '点击100', '转化20'],
+  };
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_pptx_pdf_validation', [fivePagePptx, fivePagePdf]),
+    true,
+    'BETA-ART-004 必须接受五页、无空白页、标题与三项指标一致且含图表的 PPTX/PDF',
+  );
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_pptx_pdf_validation', [
+      { ...fivePagePptx, pptx_slide_count: 1 },
+      { ...fivePagePdf, pdf_page_count: 1, pdf_page_texts: [fivePagePdf.pdf_page_texts[0]] },
+    ]),
+    false,
+    'BETA-ART-004 不得再把至少一页的可解析文件当作五页业务 Oracle 通过',
+  );
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_pptx_pdf_validation', [
+      { ...fivePagePptx, pptx_chart_candidate_slides: [] },
+      fivePagePdf,
+    ]),
+    false,
+    'BETA-ART-004 缺少可见数据图表时必须失败',
+  );
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_pptx_pdf_validation', [
+      { ...fivePagePptx, pptx_slide_titles: [...fivePagePptx.pptx_slide_titles.slice(0, 4), 'PDF 中缺失的标题'] },
+      fivePagePdf,
+    ]),
+    false,
+    'BETA-ART-004 的 PPTX 标题未在 PDF 中一致出现时必须失败',
+  );
+  assert.equal(
+    validateCoreBetaArtifactOracle('artifact_pptx_pdf_validation', [
+      fivePagePptx,
+      { ...fivePagePdf, pdf_blank_page_count: 1, pdf_page_texts: [...fivePagePdf.pdf_page_texts.slice(0, 4), ''] },
+    ]),
+    false,
+    'BETA-ART-004 任一 PDF 空白页必须失败',
   );
   assert.equal(
     coreBetaMarkdownHtmlPreviewVerdict({
@@ -3914,6 +3980,47 @@ const coreArtifactTableCase = {
   scenario: '生成XLSX与CSV并验证公式、总计、格式和聊天事实一致',
   test_data: '三行明细，要求XLSX使用公式求和并同时输出CSV。',
 };
+const coreArtifactDeckCase = {
+  id: 'BETA-ART-004',
+  module: '核心内测',
+  submodule: '成果输出',
+  scenario: '生成PPTX与PDF汇报材料并验证页数、标题、图表和内容一致',
+  test_data: '五页汇报结构、三个固定指标、一个图表。',
+};
+const coreArtifactDeckPrompt = '基于曝光1000、点击100、转化20生成五页PPTX汇报并同时输出PDF。';
+const coreArtifactDeckReply = [
+  '已完成。基于曝光 1,000 / 点击 100 / 转化 20 生成了 5 页汇报，同时输出 PPTX 和 PDF。',
+  '转化漏斗分析页包含三层漏斗图，两个文件的五页标题和指标一致。',
+].join('\n');
+assert.equal(
+  replyLooksRelevant(coreArtifactDeckReply, coreArtifactDeckCase, coreArtifactDeckPrompt),
+  true,
+  'BETA-ART-004 的真实五页双格式漏斗回复不得被通用相关性误判',
+);
+assert.equal(
+  caseAwareReplyAssertion(coreArtifactDeckCase, { prompt: coreArtifactDeckPrompt }, coreArtifactDeckReply).ok,
+  true,
+  'BETA-ART-004 必须通过专用回复业务 Oracle，而不是依赖通用中文 token 重合',
+);
+assert.equal(
+  replyLooksRelevant('已生成 5 页 PPTX 和 PDF，但没有可核对的数据。', coreArtifactDeckCase, coreArtifactDeckPrompt),
+  false,
+  'BETA-ART-004 不得接受缺少曝光、点击、转化固定指标的双格式回复',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    coreArtifactDeckCase,
+    { prompt: coreArtifactDeckPrompt },
+    '已生成 5 页 PPTX 和 PDF，曝光 1000、点击 100、转化 99。',
+  ).ok,
+  false,
+  'BETA-ART-004 的专用回复 Oracle 必须拒绝错误转化指标',
+);
+assert.equal(
+  replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', coreArtifactDeckCase, coreArtifactDeckPrompt),
+  false,
+  'BETA-ART-004 不得把无关天气回复判为相关',
+);
 const coreArtifactTablePrompt = '用数据(甲,10),(乙,20),(丙,30)生成带SUM公式的XLSX和同数据CSV。';
 const coreArtifactTableReply = [
   '两个文件已生成并验证：',

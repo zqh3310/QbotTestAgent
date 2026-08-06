@@ -22,6 +22,22 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807055814_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-87d4ed3
+```
+
+该批次完成 23/55 后，在 `BETA-ART-004` 确认 framework issue：产品回复明确
+给出 PPTX、PDF、五页、曝光 1000、点击 100、转化 20，并生成两个真实五页成果；
+原 `artifact-content-readback` 也写为 `oracle_valid=true`，但通用回复相关性仍因
+长中文 prompt 分词失败而把本条误标为产品 Bug。进一步复核确认原成果 Oracle
+只校验 PPTX 可解压且 PDF 至少一页，没有执行 Casebook 声明的五页、标题、指标、
+图表和空白页硬断言。第 24 条 `BETA-SKILL-001` 只生成了能力 inventory，未形成
+Case 结果或执行 Skill 安装/卸载动作。该目录已冻结，不得续写；修复必须增加
+`BETA-ART-004` 专用回复 Oracle、真实 PPTX/PDF 内容读回及正反 invariant，并在
+新的已推送干净基线上从第 1 条完整重跑 55 条。
+
+最新一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807042142_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-b9ef898
 ```
 
