@@ -22,6 +22,18 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806141103_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-245a3e7
+```
+
+该批次完成 37/55 后，在 `BETA-EXPERT-002` 暴露框架将“产品复用历史草稿、
+未创建本轮 owner draft”的完整负向读回误标为无效证据，导致 4 个专项角色
+manifest 缺失并错误停止。该目录已冻结，不得续写。产品 Bug、此前确认的其他
+产品缺陷以及 17 条未执行 Case 都必须保留在最终报告；框架修复后须从第 1 条
+完整重跑 55 条，`inherited=0`、`synthetic=0`。
+
+更早的冻结批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806125939_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-62fd6ff
 ```
 

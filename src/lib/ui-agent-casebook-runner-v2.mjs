@@ -7429,6 +7429,173 @@ function applyCoreBetaRunOwnedExpertPrerequisite({ state, testCase, caseDir, blo
   return file;
 }
 
+export function coreBetaExpertBuilderOutcomeEvidence({
+  runtimeFamily = '',
+  observedRuntimeFamily = '',
+  builderIdentity = '',
+  beforeDrafts = null,
+  afterDrafts = null,
+  createdDrafts = null,
+  createdDetail = null,
+  taskId = '',
+  replyRecords = null,
+  authoringToolTrace = null,
+} = {}) {
+  const normalizedRuntimeFamily = String(runtimeFamily || '').trim();
+  const normalizedObservedRuntimeFamily = String(observedRuntimeFamily || '').trim();
+  const normalizedBuilderIdentity = String(builderIdentity || '').trim();
+  const normalizedTaskId = String(taskId || '').trim();
+  const baselineCaptured = Array.isArray(beforeDrafts);
+  const afterCaptured = Array.isArray(afterDrafts);
+  const repliesCaptured = Array.isArray(replyRecords) && replyRecords.length > 0
+    && replyRecords.every((item) => (
+      String(item?.label || '').trim()
+      && typeof item?.assistant_reply_present === 'boolean'
+      && String(item?.terminal_outcome || '').trim()
+    ));
+  const toolTraceCaptured = Boolean(
+    authoringToolTrace
+    && typeof authoringToolTrace === 'object'
+    && String(authoringToolTrace.task_id || '').trim()
+    && Number.isFinite(Number(authoringToolTrace.call_count))
+    && Array.isArray(authoringToolTrace.calls),
+  );
+  const taskBound = Boolean(
+    normalizedTaskId
+    && toolTraceCaptured
+    && String(authoringToolTrace.task_id || '').trim() === normalizedTaskId,
+  );
+  const evidenceValid = Boolean(
+    normalizedRuntimeFamily
+    && normalizedObservedRuntimeFamily
+    && normalizedBuilderIdentity
+    && baselineCaptured
+    && afterCaptured
+    && repliesCaptured
+    && taskBound,
+  );
+  const before = baselineCaptured ? beforeDrafts : [];
+  const after = afterCaptured ? afterDrafts : [];
+  const beforeIds = new Set(before.map((item) => String(item?.id || '')).filter(Boolean));
+  const observedCreated = Array.isArray(createdDrafts)
+    ? createdDrafts
+    : after.filter((item) => !beforeIds.has(String(item?.id || '')));
+  const createdIds = observedCreated.map((item) => String(item?.id || '')).filter(Boolean);
+  const replyText = (Array.isArray(replyRecords) ? replyRecords : [])
+    .map((item) => `${item?.fullText || ''}\n${item?.deltaText || ''}`)
+    .join('\n');
+  const reusedExistingDraftIds = before
+    .map((item) => String(item?.id || ''))
+    .filter((id) => id && after.some((item) => String(item?.id || '') === id) && replyText.includes(id));
+  const serializedDraft = observedCreated.length
+    ? JSON.stringify(createdDetail?.draft || observedCreated[0])
+    : '';
+  const dependencyGraph = createdDetail?.dependencies ?? null;
+  const dependencyItems = Array.isArray(dependencyGraph)
+    ? dependencyGraph
+    : Array.isArray(dependencyGraph?.dependencies) ? dependencyGraph.dependencies : [];
+  const stagedSkillValid = normalizedRuntimeFamily !== 'claude-code'
+    || dependencyItems.some((item) => (
+      String(item?.kind || '') === 'skill'
+      && String(item?.source || '') === 'skillhub-draft'
+      && String(item?.assetId || '').trim()
+      && /^[a-f0-9]{64}$/i.test(String(item?.packageDigest || ''))
+    ));
+  const createdDraftDetailValid = Boolean(
+    createdIds.length > 0
+    && String(createdDetail?.draft?.id || observedCreated[0]?.id || '').trim()
+    && serializedDraft.length >= 20,
+  );
+  const oracleValid = Boolean(
+    evidenceValid
+    && normalizedObservedRuntimeFamily === normalizedRuntimeFamily
+    && normalizedBuilderIdentity === 'qwork.builtin.expert-authoring'
+    && createdDraftDetailValid
+    && stagedSkillValid
+    && Number(authoringToolTrace.call_count) > 0,
+  );
+  const reason = !evidenceValid
+    ? 'expert_builder_negative_readback_incomplete'
+    : !createdIds.length
+      ? 'no_run_owned_draft_created'
+      : normalizedObservedRuntimeFamily !== normalizedRuntimeFamily
+        ? 'expert_builder_runtime_family_mismatch'
+        : normalizedBuilderIdentity !== 'qwork.builtin.expert-authoring'
+          ? 'expert_builder_identity_mismatch'
+          : Number(authoringToolTrace.call_count) <= 0
+            ? 'expert_authoring_tool_call_missing'
+            : !stagedSkillValid
+              ? 'staged_skill_dependency_missing'
+            : !createdDraftDetailValid
+                ? 'created_draft_detail_incomplete'
+                : 'run_owned_draft_created';
+  const common = {
+    schema_version: 'qbot-core-beta-expert-builder-outcome/v1',
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    reason,
+    runtime_family: normalizedRuntimeFamily,
+    observed_runtime_family: normalizedObservedRuntimeFamily,
+    builder_identity: normalizedBuilderIdentity,
+    task_binding: {
+      valid: taskBound,
+      task_id: normalizedTaskId || null,
+      tool_trace_task_id: String(authoringToolTrace?.task_id || '').trim() || null,
+    },
+    baseline_draft_inventory: before,
+    after_draft_inventory: after,
+    created_draft_ids: createdIds,
+    reused_existing_draft_ids: reusedExistingDraftIds,
+    reply_records: Array.isArray(replyRecords) ? replyRecords : [],
+    authoring_tool_trace: authoringToolTrace || null,
+  };
+  return {
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    reason,
+    expert_builder_trace: {
+      ...common,
+      created_drafts: observedCreated,
+      created_detail: createdDetail,
+    },
+    expert_authoring_mcp_trace: {
+      ...common,
+      call_count: Number(authoringToolTrace?.call_count || 0),
+      calls: Array.isArray(authoringToolTrace?.calls) ? authoringToolTrace.calls : [],
+    },
+    expert_draft_lifecycle: {
+      ...common,
+      created_drafts: observedCreated,
+      created_detail: createdDetail,
+    },
+    expert_dependency_graph: {
+      ...common,
+      draft_id: String(createdDetail?.draft?.id || observedCreated[0]?.id || '').trim() || null,
+      dependencies: dependencyGraph,
+      staged_skill_valid: stagedSkillValid,
+    },
+    content_readback: {
+      ...common,
+      draft: createdDetail?.draft || observedCreated[0] || null,
+    },
+    artifact_path_sha256: {
+      ...common,
+      logical_path: createdDraftDetailValid
+        ? `expert-draft://${createdDetail?.draft?.id || observedCreated[0].id}`
+        : null,
+      sha256: createdDraftDetailValid
+        ? createHash('sha256').update(serializedDraft).digest('hex')
+        : null,
+      baseline_inventory_sha256: baselineCaptured
+        ? createHash('sha256').update(JSON.stringify(before)).digest('hex')
+        : null,
+      after_inventory_sha256: afterCaptured
+        ? createHash('sha256').update(JSON.stringify(after)).digest('hex')
+        : null,
+    },
+  };
+}
+
 async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
@@ -7503,7 +7670,8 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
 
   if (['BETA-EXPERT-002', 'BETA-EXPERT-003'].includes(testCase.id)) {
     const runtimeFamily = testCase.id.endsWith('002') ? 'claude-code' : 'codex';
-    const beforeDraftIds = new Set(bridge.drafts.map((item) => item.id));
+    const beforeDrafts = bridge.drafts;
+    const beforeDraftIds = new Set(beforeDrafts.map((item) => item.id));
     await openNewTask(page, state);
     const runtimeBefore = await captureCoreBetaPublicState(page, testCase);
     state.screenshots.runtime_family_precondition_before = await shot(
@@ -7553,10 +7721,8 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     });
     const beforeIdentity = await captureCoreBetaPublicState(page, testCase);
     await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
-    const created = await page.evaluate(async (known) => {
-      const drafts = await window.agent.expertLifecycle.listDrafts();
-      return drafts.filter((item) => !known.includes(item.id));
-    }, [...beforeDraftIds]);
+    const afterDrafts = await page.evaluate(async () => window.agent.expertLifecycle.listDrafts());
+    const created = afterDrafts.filter((item) => !beforeDraftIds.has(item.id));
     const createdDetail = created[0]?.id
       ? await page.evaluate(async (draftId) => {
         const lifecycle = window.agent.expertLifecycle;
@@ -7567,56 +7733,51 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       }, created[0].id)
       : null;
     const authoringToolTrace = await captureCoreBetaToolTrace(page, '');
+    const afterIdentity = await captureCoreBetaPublicState(page, testCase);
     const builderIdentity = String(
       beforeIdentity.expert?.id
       || beforeIdentity.expert?.expertId
       || beforeIdentity.expert?.slug
       || '',
     );
-    const trace = {
-      runtime_family: runtimeFamily,
-      builder_identity_before: beforeIdentity.expert,
-      builder_identity_exact: builderIdentity === 'qwork.builtin.expert-authoring',
-      authoring_tool_trace: authoringToolTrace,
-      created_drafts: created,
-      created_detail: createdDetail,
-      task_id: beforeIdentity.task?.id || null,
-      reply_records: state.artifacts.reply_records || [],
-    };
+    const builderOutcome = coreBetaExpertBuilderOutcomeEvidence({
+      runtimeFamily,
+      observedRuntimeFamily: beforeIdentity.runtime?.family || '',
+      builderIdentity,
+      beforeDrafts,
+      afterDrafts,
+      createdDrafts: created,
+      createdDetail,
+      taskId: afterIdentity.task?.id || authoringToolTrace.task_id || '',
+      replyRecords: state.artifacts.reply_records || [],
+      authoringToolTrace,
+    });
     writeExpertArtifact(
       'expert_builder_trace',
-      trace,
-      created.length > 0
-        && beforeIdentity.runtime.family === runtimeFamily
-        && builderIdentity === 'qwork.builtin.expert-authoring'
-        && authoringToolTrace.call_count > 0,
+      builderOutcome.expert_builder_trace,
+      builderOutcome.evidence_valid,
     );
     if (testCase.id === 'BETA-EXPERT-002') {
-      writeExpertArtifact('expert_authoring_mcp_trace', {
-        runtime_family: runtimeFamily,
-        builder_identity: builderIdentity,
-        trace: authoringToolTrace,
-      }, builderIdentity === 'qwork.builtin.expert-authoring' && authoringToolTrace.call_count > 0);
+      writeExpertArtifact(
+        'expert_authoring_mcp_trace',
+        builderOutcome.expert_authoring_mcp_trace,
+        builderOutcome.evidence_valid,
+      );
     }
-    writeExpertArtifact('expert_draft_lifecycle', created, created.length > 0);
-    if (!created.length) {
-      recordAssertion(state, `${runtimeFamily} Expert Builder结构化handoff`, '两轮Builder对话后必须产生owner draft，禁止用文本声称代替。', false, 'listDrafts未出现新draft。');
-      return;
+    for (const role of ['expert_draft_lifecycle', 'expert_dependency_graph', 'content_readback', 'artifact_path_sha256']) {
+      writeExpertArtifact(role, builderOutcome[role], builderOutcome.evidence_valid);
     }
-    writeExpertArtifact('expert_dependency_graph', {
-      draft_id: createdDetail?.draft?.id || created[0].id,
-      dependencies: createdDetail?.dependencies || [],
-    }, Boolean(createdDetail?.draft?.id));
-    const serializedDraft = JSON.stringify(createdDetail?.draft || created[0]);
-    writeExpertArtifact('content_readback', {
-      draft: createdDetail?.draft || created[0],
-      runtime_family: runtimeFamily,
-      reply_records: state.artifacts.reply_records || [],
-    }, serializedDraft.length >= 20);
-    writeExpertArtifact('artifact_path_sha256', {
-      logical_path: `expert-draft://${createdDetail?.draft?.id || created[0].id}`,
-      sha256: createHash('sha256').update(serializedDraft).digest('hex'),
-    }, serializedDraft.length >= 20);
+    recordAssertion(
+      state,
+      `${runtimeFamily} Expert Builder结构化handoff`,
+      '两轮Builder对话后必须通过精确 builtin Expert Builder 工具产生本轮 owner draft，禁止复用历史草稿或用文本声称代替。',
+      builderOutcome.oracle_valid,
+      builderOutcome.oracle_valid
+        ? `created=${builderOutcome.expert_draft_lifecycle.created_draft_ids.join(',')}`
+        : `${builderOutcome.reason}；created=${builderOutcome.expert_draft_lifecycle.created_draft_ids.length}；reused=${builderOutcome.expert_draft_lifecycle.reused_existing_draft_ids.join(',') || 'none'}；toolCalls=${authoringToolTrace.call_count}`,
+      'bug',
+    );
+    if (!builderOutcome.oracle_valid) return;
     ledger.experts[`${runtimeFamily}_draft`] = created[0];
     writeCoreBetaSuiteLedger(caseDir, ledger);
     state.artifacts.capability_selection = identityFile;

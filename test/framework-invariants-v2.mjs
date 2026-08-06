@@ -34,6 +34,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
   coreBetaConversationTurnLabel,
+  coreBetaExpertBuilderOutcomeEvidence,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
@@ -117,6 +118,114 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+
+{
+  const historicalDraft = {
+    id: 'historical-draft-001',
+    revision: 5,
+    status: 'editable',
+    dependencies: [{ kind: 'skill', identity: 'global/source-verification' }],
+  };
+  const taskId = 'task-expert-builder-negative-001';
+  const negative = coreBetaExpertBuilderOutcomeEvidence({
+    runtimeFamily: 'claude-code',
+    observedRuntimeFamily: 'claude-code',
+    builderIdentity: 'qwork.builtin.expert-authoring',
+    beforeDrafts: [historicalDraft],
+    afterDrafts: [historicalDraft],
+    createdDrafts: [],
+    taskId,
+    replyRecords: [{
+      label: '第1轮',
+      assistant_reply_present: true,
+      terminal_outcome: 'completed',
+      fullText: `复用已有草稿 ${historicalDraft.id}，未创建新草稿。`,
+    }],
+    authoringToolTrace: { task_id: taskId, call_count: 0, calls: [] },
+  });
+  assert.equal(negative.evidence_valid, true, '历史草稿复用仍应形成完整、task-bound 的负向读回证据');
+  assert.equal(negative.oracle_valid, false, '没有本轮新 owner draft 时产品 Oracle 必须失败');
+  assert.equal(negative.reason, 'no_run_owned_draft_created');
+  assert.deepEqual(negative.expert_draft_lifecycle.reused_existing_draft_ids, [historicalDraft.id]);
+
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-builder-negative-'));
+  try {
+    const roles = ['expert_draft_lifecycle', 'expert_dependency_graph', 'artifact_path_sha256', 'content_readback'];
+    const artifacts = {};
+    for (const role of roles) {
+      const file = path.join(evidenceDir, `${role}.json`);
+      writeJsonFile(file, { valid: negative[role].evidence_valid, ...negative[role] });
+      artifacts[role] = file;
+      assert.deepEqual(
+        validateEvidenceFile(role, file),
+        { valid: true },
+        `${role} 的结构化产品失败读回必须满足 manifest 证据角色`,
+      );
+    }
+    const manifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-002', evidence_roles: roles },
+      caseDir: evidenceDir,
+      artifacts,
+    });
+    assert.equal(manifest.complete, true, '产品未创建本轮 ExpertDraft 不得再触发 framework stop');
+    assert.deepEqual(manifest.missing_roles, []);
+    assert.deepEqual(manifest.invalid_roles, []);
+    assert.equal(
+      resultHasAutomationError({
+        result_category: 'bug',
+        steps: [],
+        assertions: [{ status: 'failed', category: 'bug', actual: negative.reason }],
+      }),
+      false,
+      '证据完整的 Expert Builder 产品失败必须保持 bug 分类并允许串行批次继续',
+    );
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+
+  const incomplete = coreBetaExpertBuilderOutcomeEvidence({
+    runtimeFamily: 'claude-code',
+    observedRuntimeFamily: 'claude-code',
+    builderIdentity: 'qwork.builtin.expert-authoring',
+    beforeDrafts: [historicalDraft],
+    afterDrafts: [historicalDraft],
+    createdDrafts: [],
+    taskId: '',
+    replyRecords: [{ label: '第1轮', assistant_reply_present: true, terminal_outcome: 'completed' }],
+    authoringToolTrace: { task_id: '', call_count: 0, calls: [] },
+  });
+  assert.equal(incomplete.evidence_valid, false, '缺少 task-bound 负向读回时必须继续 fail-closed');
+  assert.equal(incomplete.reason, 'expert_builder_negative_readback_incomplete');
+
+  const createdDraft = { id: 'run-owned-draft-001', revision: 1, status: 'editable' };
+  const positive = coreBetaExpertBuilderOutcomeEvidence({
+    runtimeFamily: 'claude-code',
+    observedRuntimeFamily: 'claude-code',
+    builderIdentity: 'qwork.builtin.expert-authoring',
+    beforeDrafts: [historicalDraft],
+    afterDrafts: [historicalDraft, createdDraft],
+    createdDrafts: [createdDraft],
+    createdDetail: {
+      draft: createdDraft,
+      dependencies: {
+        draftId: createdDraft.id,
+        dependencies: [{
+          kind: 'skill',
+          source: 'skillhub-draft',
+          assetId: 'asset-skill-001',
+          packageDigest: 'a'.repeat(64),
+          required: true,
+        }],
+      },
+    },
+    taskId,
+    replyRecords: [{ label: '第1轮', assistant_reply_present: true, terminal_outcome: 'completed' }],
+    authoringToolTrace: { task_id: taskId, call_count: 2, calls: [{ name: 'create_expert_draft' }] },
+  });
+  assert.equal(positive.evidence_valid, true);
+  assert.equal(positive.oracle_valid, true, '本轮新 draft、staged Skill 与 task-bound tool trace 完整时 Oracle 应通过');
+  assert.equal(positive.expert_dependency_graph.staged_skill_valid, true);
+}
 
 assert.doesNotMatch(
   runner,
