@@ -33,6 +33,7 @@ import {
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCompletionBlockReason,
+  coreBetaConversationTurnLabel,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
@@ -3271,6 +3272,49 @@ const imageJsonAssertion = caseAwareReplyAssertion(
 if (!imageJsonAssertion.applicable || !imageJsonAssertion.ok) {
   throw new Error(`HOME-039 双文件分来源确定性断言应通过：${JSON.stringify(imageJsonAssertion)}`);
 }
+assert.equal(coreBetaConversationTurnLabel({}, 0), '第1轮', 'Core Beta 缺失 turn 时必须按数组顺序生成标签');
+assert.equal(coreBetaConversationTurnLabel({ turn: 4 }, 0), '第4轮', 'Core Beta 必须保留合法的显式轮次');
+assert.equal(coreBetaConversationTurnLabel({ label: '成果生成请求' }, 0), '成果生成请求', 'Core Beta 必须优先保留显式标签');
+assert.equal(coreBetaConversationTurnLabel({}, Number.NaN).includes('undefined'), false, 'Core Beta 轮次标签不得包含 undefined');
+const coreArtifactTableCase = {
+  id: 'BETA-ART-003',
+  module: '核心内测',
+  submodule: '成果与下载',
+  scenario: '生成XLSX与CSV并验证公式、总计、格式和聊天事实一致',
+  test_data: '三行明细，要求XLSX使用公式求和并同时输出CSV。',
+};
+const coreArtifactTablePrompt = '用数据(甲,10),(乙,20),(丙,30)生成带SUM公式的XLSX和同数据CSV。';
+const coreArtifactTableReply = [
+  '两个文件已生成并验证：',
+  'data_sum.xlsx 包含 =SUM(B2:B4) 公式，合计 60。',
+  'data_sum.csv 包含甲 10、乙 20、丙 30。',
+].join('\n');
+assert.equal(
+  replyLooksRelevant(coreArtifactTableReply, coreArtifactTableCase, coreArtifactTablePrompt),
+  true,
+  'BETA-ART-003 的 XLSX、CSV、SUM 和总计回复不得被通用相关性误判',
+);
+assert.equal(
+  replyLooksRelevant('已生成 data_sum.xlsx。', coreArtifactTableCase, coreArtifactTablePrompt),
+  false,
+  'BETA-ART-003 不得接受缺少 CSV 和 SUM/总计的不完整回复',
+);
+assert.equal(
+  replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', coreArtifactTableCase, coreArtifactTablePrompt),
+  false,
+  'BETA-ART-003 不得把无关天气回复判为相关',
+);
+assert.equal(
+  replyLooksRelevant('已生成文件 teams_local_execution.txt。', {
+    id: 'SIT-HOME-059',
+    module: '会话',
+    submodule: '本地执行',
+    scenario: '生成指定文件',
+    test_data: '生成 teams_local_execution.txt',
+  }, '请生成 teams_local_execution.txt，内容为 TEAMS_LOCAL_EXECUTION_OK。'),
+  true,
+  '精确请求文件名的简短成果确认应判为相关',
+);
 if (!replyLooksRelevant('收到，我会按“数据结论、可能原因、下一步动作”的格式输出。', {
   id: 'SIT-HOME-053',
   scenario: '连续追问补充输出格式',

@@ -10759,6 +10759,19 @@ async function executeCoreBetaAuthRecoveryCase({
   recordAssertion(state, '认证主动刷新失败与真实过期边界', '未过期bearer刷新失败不得推进epoch或中断同task；真实过期后才允许进入登录恢复。', lifecycle.valid, JSON.stringify(lifecycle));
 }
 
+export function coreBetaConversationTurnLabel(turn = {}, index = 0) {
+  const explicitLabel = String(turn?.label || '').trim();
+  if (explicitLabel) return explicitLabel;
+  const declaredTurn = Number(turn?.turn);
+  const fallbackTurn = Number(index) + 1;
+  const turnNumber = Number.isInteger(declaredTurn) && declaredTurn > 0
+    ? declaredTurn
+    : Number.isInteger(fallbackTurn) && fallbackTurn > 0
+      ? fallbackTurn
+      : 1;
+  return `第${turnNumber}轮`;
+}
+
 function resolveCoreBetaConversationTurns(testCase, caseDir) {
   const declaredTurns = Array.isArray(testCase.conversation_turns) ? testCase.conversation_turns : [];
   const ledger = readCoreBetaSuiteLedger(caseDir);
@@ -10779,8 +10792,12 @@ function resolveCoreBetaConversationTurns(testCase, caseDir) {
         : `同一task继续使用${sample.qualified_identity}，存在第二轮Skill执行追踪，增量结果符合README且包含QA_SKILL_FOLLOWUP。`;
     },
   );
-  const turns = declaredTurns.map((turn) => ({
+  const turns = declaredTurns.map((turn, index) => ({
     ...turn,
+    turn: Number.isInteger(Number(turn?.turn)) && Number(turn.turn) > 0
+      ? Number(turn.turn)
+      : index + 1,
+    label: coreBetaConversationTurnLabel(turn, index),
     prompt: resolveTemplate(turn.prompt),
     oracle: resolveTemplate(turn.oracle),
   }));
@@ -10798,7 +10815,7 @@ async function executeConversationTurns({ page, state, testCase, caseDir, timeou
       caseDir,
       timeoutMs,
       prompt: turn.prompt,
-      label: `第${turn.turn}轮`,
+      label: turn.label,
     });
   }
 }
@@ -26058,6 +26075,11 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   const text = semanticReplyText(reply);
   const scenario = String(testCase.scenario || '');
   const relevanceInput = `${scenario}\n${String(prompt || testCase.test_data || '')}`;
+  const requestedFiles = Array.from(relevanceInput.matchAll(/[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}\b/g))
+    .map((match) => match[0]);
+  if (requestedFiles.length
+    && requestedFiles.some((filename) => text.includes(filename))
+    && /已生成|生成完成|已创建|写入|保存|落地|文件名/.test(text)) return true;
   if (isNumericMemoryScenario(testCase)) {
     if (/成交率|到场率|成交单数/.test(String(prompt || ''))) {
       return /(^|[^0-9])12([^0-9]|$)/.test(text)
@@ -26093,6 +26115,7 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     [/(?:概括.*附件|附件.*概括|读取.*附件|当前保留.*附件|保留的两个附件)/, /附件|文本|结构化|JSON|概括|材料|文件/],
     [/(?:三条|3条).*(?:关键)?结论.*页码|(?:PDF).*(?:结论|页码)/i, /(?=[\s\S]*(?:结论|关键信息|文档用途|核心目标|验收标准))(?=[\s\S]*(?:第\s*\d+\s*页|页码))/i],
     [/(?:比较.*(?:表格|CSV|XLSX)|(?:所有)?差异.*(?:总计|汇总)|(?:总计|汇总).*(?:差异))/i, /(?=[\s\S]*(?:差异|不同|相同|一致))(?=[\s\S]*(?:总计|合计|汇总))/i],
+    [/(?:生成|输出|制作).*(?:XLSX|Excel).*(?:CSV)|(?:XLSX|Excel).*(?:CSV).*(?:生成|输出|制作)/i, /(?=[\s\S]*(?:\.xlsx\b|XLSX|Excel))(?=[\s\S]*(?:\.csv\b|CSV))(?=[\s\S]*(?:SUM|=SUM\s*\(|合计|总计|(^|[^0-9])60([^0-9]|$)))/i],
     [/(?:查看|读取|分析).*(?:图片|图像)|(?:图片|图像).*(?:内容|问题)/, /图片|图像|文字|图表|界面|数据|内容/],
   ];
   for (const [scenarioPattern, replyPattern] of targetedRules) {

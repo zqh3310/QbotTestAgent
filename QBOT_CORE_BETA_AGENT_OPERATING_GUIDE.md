@@ -22,12 +22,14 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806105200_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-6255455
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806125939_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-62fd6ff
 ```
 
-该批次在 `BETA-EXPERT-008` 发现 testcase/framework issue 后正确冻结，完成
-41/55；不得续写该目录。修复后必须基于本指南中的正式 74 条 Casebook 新建
-pretest 和 runner 输出目录，从第 1 条重跑 55 条。
+该批次完成 22/55 后，在 `BETA-ART-003` 确认 Core Beta v2 回复相关性
+误报和 `第undefined轮` 证据标签的 framework issue；第 23 条仅有中间证据，
+未形成 Case 结果。该目录已冻结，不得续写。修复后必须基于本指南中的
+正式 74 条 Casebook 新建 pretest 和 runner 输出目录，从第 1 条重跑
+55 条，不得继承本批次的 22 条结果。
 
 ## 2. 当前 Casebook 和执行范围
 
