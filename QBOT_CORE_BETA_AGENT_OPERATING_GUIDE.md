@@ -22,6 +22,21 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807000421_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-c012a5a
+```
+
+该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：5 个固定
+connector 均已进入真实手动模式并逐项点击、读回，其中 3 个成功选中，
+`mcphub:dis` 与 `mcphub:wecom` 点击后产品返回 `selectedConnectors=[]`，属于
+证据完整的产品失败。runner 错误地把“5 个业务 Oracle 全部通过”的布尔值写入
+`capability-selection.json.valid`，导致 5 份结构化负向收据被 manifest 判为
+`capability_selection/capability_execution_event` 无效并硬停止。该目录已冻结，
+不得续写；修复必须分离 `evidence_valid` 与 `oracle_valid`，并在新推送干净基线上
+从第 1 条完整重跑 55 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806222136_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-80f8e53
 ```
 

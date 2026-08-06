@@ -85,6 +85,36 @@ export function coreBetaSelectedCapabilityIdentities(items) {
     .filter(Boolean);
 }
 
+export function coreBetaMcpCrossSurfaceOutcome(receipts, expectedCount = 5) {
+  const normalized = Array.isArray(receipts) ? receipts : [];
+  const keys = normalized.map((item) => String(item?.key || '').trim()).filter(Boolean);
+  const evidenceValid = normalized.length === expectedCount
+    && keys.length === expectedCount
+    && new Set(keys).size === expectedCount
+    && normalized.every((item) => (
+      typeof item?.selected === 'boolean'
+      && typeof item?.capability_selected === 'boolean'
+      && Array.isArray(item?.tools)
+      && item?.health !== null
+      && typeof item?.health === 'object'
+      && typeof item?.visible_text === 'string'
+    ));
+  const oracleValid = evidenceValid && normalized.every((item) => (
+    item.selected
+    && item.capability_selected
+    && item.tools.length > 0
+  ));
+  return {
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    expected_count: expectedCount,
+    observed_count: normalized.length,
+    unique_key_count: new Set(keys).size,
+    receipts: normalized,
+  };
+}
+
 export function safeNativeAttachmentInfoDialog({ message = '', buttons = [] } = {}) {
   const labels = Array.isArray(buttons)
     ? buttons.map((item) => String(item || '').trim()).filter(Boolean)
@@ -10727,12 +10757,27 @@ async function executeCoreBetaMcpCase({
         visible_text: clip(visibleText, 500),
       });
     }
-    const valid = receipts.length === 5 && receipts.every((item) => item.selected && item.capability_selected && item.tools.length > 0);
+    const outcome = coreBetaMcpCrossSurfaceOutcome(receipts, 5);
     const selectionFile = path.join(caseDir, 'capability-selection.json');
-    writeJsonFile(selectionFile, { valid, receipts });
+    writeJsonFile(selectionFile, outcome);
     state.artifacts.capability_selection = selectionFile;
     state.artifacts.capability_execution_event = selectionFile;
-    recordAssertion(state, 'MCP卡片、Composer与capabilities身份一致', '5个服务逐项选择后key、工具清单、健康状态和task capabilities必须一致。', valid, JSON.stringify(receipts));
+    recordAssertion(
+      state,
+      'MCP跨表面负向取证完整',
+      '5个固定服务必须逐项保存key、点击后选择读回、capabilities读回、工具清单、健康状态和可见状态；产品拒绝选择不能令证据本身失效。',
+      outcome.evidence_valid,
+      JSON.stringify(outcome),
+      'automation_error',
+    );
+    recordAssertion(
+      state,
+      'MCP卡片、Composer与capabilities身份一致',
+      '5个服务逐项选择后key、工具清单、健康状态和task capabilities必须一致。',
+      outcome.oracle_valid,
+      JSON.stringify(outcome),
+      'bug',
+    );
     return;
   }
 

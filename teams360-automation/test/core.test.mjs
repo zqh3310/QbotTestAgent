@@ -69,6 +69,7 @@ import {
   workModeSelectionVerdict,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import {
+  coreBetaMcpCrossSurfaceOutcome,
   coreBetaSelectedCapabilityIdentities as coreBetaV2SelectedCapabilityIdentities,
 } from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 
@@ -878,6 +879,24 @@ test('Core Beta fail-closed, partial-stop, and capability identity helpers rejec
     ]),
     ['mcphub:fkai-wiki-llm', 'mcphub:dis', 'mcphub:iops'],
   );
+  const mcpReceipts = [
+    ['mcphub:wiki', true],
+    ['mcphub:dis', false],
+    ['mcphub:iops', true],
+    ['mcphub:wecom', false],
+    ['mcphub:qbi', true],
+  ].map(([key, selected]) => ({
+    key,
+    selected,
+    capability_selected: selected,
+    tools: [{ name: `${key}-read` }],
+    health: {},
+    visible_text: '',
+  }));
+  const mcpOutcome = coreBetaMcpCrossSurfaceOutcome(mcpReceipts);
+  assert.equal(mcpOutcome.evidence_valid, true);
+  assert.equal(mcpOutcome.oracle_valid, false);
+  assert.equal(coreBetaMcpCrossSurfaceOutcome(mcpReceipts.slice(0, 4)).evidence_valid, false);
   assert.equal(coreBetaSkillSelectionReadbackMatches({
     selectedSkillCount: 1,
     selectedSkills: [{ slug: 'skill-a' }],

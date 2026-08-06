@@ -43,6 +43,7 @@ import {
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaManualConnectorModeReady,
+  coreBetaMcpCrossSurfaceOutcome,
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
   coreBetaPartialReplyReady,
@@ -151,6 +152,34 @@ assert.deepEqual(
   ['mcphub:fkai-wiki-llm', 'skill-a', 'plain-capability'],
   'Core Beta v2 必须在手动连接器点击后直接读回 selectedConnectors identity，不能依赖未定义的旧 runner helper',
 );
+
+{
+  const receipts = [
+    ['mcphub:wiki', true, true],
+    ['mcphub:dis', false, false],
+    ['mcphub:iops', true, true],
+    ['mcphub:wecom', false, false],
+    ['mcphub:qbi', true, true],
+  ].map(([key, selected, capabilitySelected]) => ({
+    key,
+    selected,
+    capability_selected: capabilitySelected,
+    tools: [{ name: `${key}-read`, read_only: true }],
+    health: {},
+    visible_text: '',
+  }));
+  const outcome = coreBetaMcpCrossSurfaceOutcome(receipts);
+  assert.equal(outcome.valid, true, 'MCP产品拒绝选择时完整负向证据仍须通过manifest有效性门禁');
+  assert.equal(outcome.evidence_valid, true);
+  assert.equal(outcome.oracle_valid, false, '任一固定connector未选中时业务Oracle必须失败');
+  assert.equal(outcome.observed_count, 5);
+  assert.equal(outcome.unique_key_count, 5);
+  assert.equal(
+    coreBetaMcpCrossSurfaceOutcome(receipts.slice(0, 4)).evidence_valid,
+    false,
+    '缺少任一固定connector收据仍须按框架证据缺口失败',
+  );
+}
 
 {
   const historicalDraft = {
@@ -3243,7 +3272,7 @@ const required = [
   ['统一加号菜单使用稳定 section testid 与最新可见 Portal', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*section: 'mode'[\s\S]*section: 'skill'[\s\S]*section: 'connector'[\s\S]*lastVisibleLocator[\s\S]*visibleUnifiedComposerSubmenu[\s\S]*composer-plus-section-\$\{config\.section\}/],
   ['统一加号子菜单支持 hover click ArrowRight Enter 四路打开', /openUnifiedComposerSubmenu[\s\S]*\.hover\(\{ force: true \}\)[\s\S]*pointermove[\s\S]*\.click\(\{ force: true \}\)[\s\S]*ArrowRight[\s\S]*Enter/],
   ['手动连接器模式真实点击并读回列表 routing 或 radio', /setUnifiedConnectorMode[\s\S]*composer-connector-mode-manual[\s\S]*manual\.click[\s\S]*composer-plus-list[\s\S]*composer-connector-option-[\s\S]*currentCapabilities[\s\S]*coreBetaManualConnectorModeReady/],
-  ['BETA-MCP-002 手动选择成功后必须注册选择与执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile/],
+  ['BETA-MCP-002 手动选择后必须分离证据有效性与产品Oracle并注册选择/执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*coreBetaMcpCrossSurfaceOutcome[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile[\s\S]*MCP跨表面负向取证完整/],
   ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
