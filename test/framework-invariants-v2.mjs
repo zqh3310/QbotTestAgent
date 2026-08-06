@@ -3276,6 +3276,7 @@ const required = [
   ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
+  ['Core Beta v2 精确选择 Skill 前会重新打开被同级控件关闭的最新技能菜单', /selectManualSkillByName[\s\S]*let menu = await activeMenuLocator\(page, 'skill'\)[\s\S]*if \(!menu\) \{[\s\S]*ensureComposerToolMenu\(page, state,[\s\S]*重新打开【技能】菜单以选择：[\s\S]*menuKind: 'skill'[\s\S]*menu = await activeMenuLocator\(page, 'skill'\)/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],

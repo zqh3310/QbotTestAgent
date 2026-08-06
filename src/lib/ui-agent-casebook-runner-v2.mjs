@@ -21374,7 +21374,19 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     const manualOk = await setSkillMode(page, state, caseDir, 'manual');
     if (!manualOk) return false;
   }
-  const menu = await activeMenuLocator(page, 'skill');
+  let menu = await activeMenuLocator(page, 'skill');
+  // Resetting a sibling composer control can close the unified Skill portal
+  // while leaving manual mode active. Reopen the current portal before the
+  // exact selection instead of treating that transient UI state as a failure.
+  if (!menu) {
+    await ensureComposerToolMenu(page, state, {
+      selector: '[data-testid="composer-skills-menu"]',
+      action: `重新打开【技能】菜单以选择：${expectedLabel}`,
+      matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+      menuKind: 'skill',
+    });
+    menu = await activeMenuLocator(page, 'skill');
+  }
   if (!menu) {
     recordAssertion(state, '同技能手动菜单定位', '安装后应能打开手动技能菜单。', false, '当前技能菜单不可见。', 'automation_error');
     return false;
