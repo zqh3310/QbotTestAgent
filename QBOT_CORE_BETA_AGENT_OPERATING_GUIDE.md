@@ -22,6 +22,19 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806163632_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-dea7e07
+```
+
+该批次在更新后的 360Teams `5.2.41(2119080662)`、QWork `0.0.30-rc.2`
+完成 48/55 后，于 `BETA-MCP-001` 暴露框架只识别旧 health probe 字段、没有识别
+当前 connector catalog 的 `statusKind=ready` 与 `usable=true`，把 31 个目录项全部
+误判为不健康；样本不足分支随后直接抛异常，导致 manifest 缺少 5 个角色并硬停止。
+该目录已冻结，不得续写。修复必须兼容当前 catalog 合同、增加 MCP prerequisite
+blocked 传播与 invariant，并在已推送干净基线上从第 1 条完整重跑 55 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806155958_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-997972e
 ```
 

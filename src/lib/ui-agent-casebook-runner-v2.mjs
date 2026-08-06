@@ -10628,13 +10628,39 @@ async function executeCoreBetaMcpCase({
   state.artifacts.capability_inventory = inventoryFile;
 
   if (scenario.driver === 'mcp_catalog_deterministic_sample_5') {
-    const selected = chooseCoreBetaConnectors(catalog.items, 5);
+    const selectionSeed = coreBetaMcpReleaseSelectionSeed(options);
+    const selected = chooseCoreBetaConnectors(catalog.items, 5, { seed: selectionSeed });
     if (selected.length < 5) {
-      throw new Error(`MCP目录健康、已授权、含只读工具的样本不足5个：eligible=${selected.length}`);
+      await openNewTask(page, state);
+      if (!await resetComposerControls(page, state, caseDir, {
+        skillMode: 'disabled',
+        connectorMode: 'disabled',
+      })) {
+        throw new Error('BETA-MCP-001 样本不足阻塞前无法建立空任务零能力状态');
+      }
+      const blocker = coreBetaMcpSelectionPrerequisiteBlocker({
+        testCase,
+        catalog,
+        selected,
+        selectionSeed,
+        publicState: await captureCoreBetaPublicState(page, testCase),
+      });
+      if (!blocker.valid || !blocker.applicable) {
+        throw new Error(`BETA-MCP-001 样本不足证据无效：${blocker.reason}`);
+      }
+      ledger.mcps = {
+        selected: [],
+        selection_seed: selectionSeed,
+        selection_prerequisite: blocker,
+        captured_at: new Date().toISOString(),
+      };
+      writeCoreBetaSuiteLedger(caseDir, ledger);
+      applyCoreBetaMcpSelectionPrerequisite({ state, testCase, caseDir, blocker });
+      return;
     }
     ledger.mcps = {
       selected,
-      selection_seed: String(testCase.version_scope || testCase.id),
+      selection_seed: selectionSeed,
       captured_at: new Date().toISOString(),
     };
     writeCoreBetaSuiteLedger(caseDir, ledger);
@@ -10646,9 +10672,29 @@ async function executeCoreBetaMcpCase({
     return;
   }
 
+  const selectedSample = Array.isArray(ledger.mcps?.selected) ? ledger.mcps.selected : [];
+  if (selectedSample.length !== 5) {
+    await openNewTask(page, state);
+    if (!await resetComposerControls(page, state, caseDir, {
+      skillMode: 'disabled',
+      connectorMode: 'disabled',
+    })) {
+      throw new Error(`${testCase.id} MCP上游阻塞前无法建立空任务零能力状态`);
+    }
+    const blocker = coreBetaMcpSelectionPrerequisiteBlocker({
+      testCase,
+      sourceBlocker: ledger.mcps?.selection_prerequisite,
+      publicState: await captureCoreBetaPublicState(page, testCase),
+    });
+    if (!blocker.valid || !blocker.applicable) {
+      throw new Error(`${testCase.id} 缺少BETA-MCP-001的5个MCP样本账本，且上游阻塞证据无效：${blocker.reason}`);
+    }
+    applyCoreBetaMcpSelectionPrerequisite({ state, testCase, caseDir, blocker });
+    return;
+  }
+
   if (scenario.driver === 'mcp_cross_surface_identity_reconcile') {
-    const selected = ledger.mcps?.selected || [];
-    if (selected.length !== 5) throw new Error('BETA-MCP-002 缺少BETA-MCP-001的5个MCP样本账本');
+    const selected = selectedSample;
     const receipts = [];
     for (const connector of selected) {
       await openNewTask(page, state);
@@ -10675,8 +10721,7 @@ async function executeCoreBetaMcpCase({
   }
 
   if (scenario.driver === 'mcp_last_good_failure_recovery') {
-    const selected = ledger.mcps?.selected?.[0];
-    if (!selected) throw new Error('BETA-MCP-008 缺少已提交last-good的MCP账本样本');
+    const selected = selectedSample[0];
     const injected = await invokeCoreBetaFixtureControl({
       options,
       testCase,
@@ -10728,7 +10773,7 @@ async function executeCoreBetaMcpCase({
   }
 
   const sampleIndex = Number(testCase.id.split('-').at(-1)) - 3;
-  const selected = ledger.mcps?.selected?.[sampleIndex];
+  const selected = selectedSample[sampleIndex];
   if (!selected) throw new Error(`${testCase.id} 缺少MCP样本 index=${sampleIndex}`);
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'manual' })) return;
@@ -10744,61 +10789,340 @@ async function executeCoreBetaMcpCase({
   recordAssertion(state, 'MCP真实工具调用', '两轮会话必须在同一task绑定指定MCP并至少产生一次可追溯tools/call。', toolTrace.call_count > 0 && toolTrace.connector_match, JSON.stringify(toolTrace));
 }
 
+export function coreBetaMcpReleaseSelectionSeed(options = {}) {
+  const releaseIdentity = {
+    backend_version: String(options['backend-version'] || process.env.QBOT_BACKEND_VERSION || ''),
+    prompt_policy_version: String(options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || ''),
+    feature_flags_hash: String(options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || ''),
+    qwork_ui_git_commit: String(options['qwork-ui-git-commit'] || ''),
+    qwork_build_id: String(options['qwork-build-id'] || ''),
+    qwork_release_manifest_sha256: String(options['qwork-release-manifest-sha256'] || ''),
+  };
+  return createHash('sha256').update(JSON.stringify(releaseIdentity)).digest('hex');
+}
+
+function coreBetaConnectorSemanticCategory(item = {}, tools = []) {
+  const identity = [
+    item.category,
+    item.group,
+    item.key,
+    item.id,
+    item.serviceId,
+    item.slug,
+    item.name,
+    item.label,
+    item.displayName,
+    item.description,
+    ...tools.flatMap((tool) => [tool?.name, tool?.description]),
+  ].map((value) => String(value || '')).join(' ');
+  if (/chart|visual|svg|plot|图表|可视化/i.test(identity)) return 'visualization';
+  if (/wiki|knowledge|document|\bdoc\b|文档|知识库/i.test(identity)) return 'document';
+  if (/wecom|teams|collab|chat|message|企微|协作|会话|消息/i.test(identity)) return 'collaboration';
+  if (/web|search|crawl|browser|网页|搜索|检索/i.test(identity)) return 'search';
+  if (/\bdata\b|database|sql|table|metric|\bdds\b|\bqbi\b|数据|指标|报表/i.test(identity)) return 'data';
+  return 'other';
+}
+
+function coreBetaConnectorToolReadOnly(item = {}, tool = {}) {
+  const text = `${String(tool.name || tool.id || '')} ${String(tool.description || '')}`;
+  const tokenized = text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, ' ');
+  const destructive = /\b(create|update|delete|remove|send|write|save|commit|approve|reject|publish|install|uninstall|set|put|post|patch)\b|创建|更新|删除|移除|发送|写入|保存|提交|审批|发布|安装|卸载/i;
+  if (destructive.test(tokenized)) return false;
+  if (tool.readOnly === true || tool.read_only === true || tool.annotations?.readOnlyHint === true) return true;
+  const readSignal = /read|list|get|search|query|fetch|crawl|inspect|answer|reason|analy[sz]e|render|recognize|查看|查询|搜索|读取|检索|问答|分析|识别|图表/i;
+  return readSignal.test(text) || String(item.source || item.__catalog_bucket || '') === 'builtin';
+}
+
+export function normalizeCoreBetaConnectorCatalogSnapshot({
+  catalog = null,
+  health = null,
+  capabilities = null,
+  capturedAt = new Date().toISOString(),
+} = {}) {
+  const arrays = [];
+  for (const [name, value] of Object.entries(catalog || {})) {
+    if (Array.isArray(value)) arrays.push(...value.map((item) => ({ ...item, __catalog_bucket: name })));
+  }
+  if (Array.isArray(catalog)) arrays.push(...catalog);
+  const healthByKey = new Map((Array.isArray(health) ? health : []).map((item) => [
+    String(item.connectorKey || item.key || item.id || item.serviceId || item.name || ''),
+    item,
+  ]));
+  const items = arrays.map((item) => {
+    const key = String(item.key || item.id || item.connectorKey || item.serviceId || item.slug || item.name || '');
+    const healthItem = healthByKey.get(key) || item.health || {};
+    const rawTools = Array.isArray(item.tools) ? item.tools
+      : Array.isArray(item.toolDefinitions) ? item.toolDefinitions
+        : Array.isArray(healthItem.tools) ? healthItem.tools : [];
+    const tools = rawTools.map((tool) => ({
+      name: String(tool.name || tool.id || ''),
+      description: String(tool.description || ''),
+      enabled: tool.enabled !== false
+        && tool.effectiveEnabled !== false
+        && tool.upstreamEnabled !== false
+        && tool.userEnabled !== false,
+      read_only: coreBetaConnectorToolReadOnly(item, tool),
+    }));
+    const healthStatus = String(healthItem.status || healthItem.phase || '');
+    const catalogStatus = String(item.statusKind || item.status || item.phase || item.statusLabel || '');
+    const explicitlyUnhealthy = /unhealthy|error|failed|offline|unavailable/i.test(`${healthStatus} ${catalogStatus}`);
+    const healthy = !explicitlyUnhealthy && Boolean(
+      item.healthy === true
+      || /healthy|ready|connected|available|ok|last_good_retained/i.test(healthStatus)
+      || (item.usable === true
+        && /healthy|ready|connected|available|ok|last_good_retained|已接入/i.test(catalogStatus)),
+    );
+    const category = coreBetaConnectorSemanticCategory({ ...item, key }, tools);
+    return {
+      key,
+      label: String(item.label || item.displayName || item.name || key),
+      category,
+      source: String(item.source || item.__catalog_bucket || ''),
+      enabled: item.enabled !== false && item.disabled !== true && item.usable !== false,
+      authorized: item.authorized !== false
+        && !/unauthorized|permission.denied|未授权|无权限/i.test(JSON.stringify({ item, health: healthItem })),
+      healthy,
+      using_last_good: Boolean(healthItem.usingLastGood || item.usingLastGood),
+      health: healthItem,
+      catalog_status: catalogStatus,
+      usable: item.usable === true,
+      tools,
+    };
+  }).filter((item) => item.key);
+  return {
+    captured_at: capturedAt,
+    source: 'window.agent.getConnectorCatalog/getConnectorHealth',
+    raw_catalog: catalog,
+    raw_health: health,
+    capabilities,
+    items,
+  };
+}
+
 async function captureCoreBetaConnectorCatalog(page) {
-  return await page.evaluate(async () => {
+  const snapshot = await page.evaluate(async () => {
     const catalog = await window.agent?.getConnectorCatalog?.({ forceRefresh: true }).catch((error) => ({ __error: String(error?.message || error) }));
     const health = await window.agent?.getConnectorHealth?.().catch(() => []);
     const capabilities = await window.agent?.capabilities?.().catch(() => null);
-    const arrays = [];
-    for (const [name, value] of Object.entries(catalog || {})) {
-      if (Array.isArray(value)) arrays.push(...value.map((item) => ({ ...item, __catalog_bucket: name })));
-    }
-    if (Array.isArray(catalog)) arrays.push(...catalog);
-    const healthByKey = new Map((Array.isArray(health) ? health : []).map((item) => [
-      String(item.key || item.id || item.serviceId || ''),
-      item,
-    ]));
-    const items = arrays.map((item) => {
-      const key = String(item.key || item.id || item.serviceId || item.slug || item.name || '');
-      const healthItem = healthByKey.get(key) || item.health || {};
-      const tools = Array.isArray(item.tools) ? item.tools
-        : Array.isArray(item.toolDefinitions) ? item.toolDefinitions
-          : Array.isArray(healthItem.tools) ? healthItem.tools : [];
-      return {
-        key,
-        label: String(item.label || item.displayName || item.name || key),
-        source: String(item.source || item.__catalog_bucket || ''),
-        enabled: item.enabled !== false && item.disabled !== true,
-        authorized: item.authorized !== false && !/unauthorized|permission.denied/i.test(JSON.stringify(healthItem)),
-        healthy: item.healthy === true
-          || /healthy|ready|last_good_retained/i.test(String(healthItem.status || item.status || '')),
-        using_last_good: Boolean(healthItem.usingLastGood || item.usingLastGood),
-        health: healthItem,
-        tools: tools.map((tool) => ({
-          name: String(tool.name || tool.id || ''),
-          description: String(tool.description || ''),
-          read_only: tool.readOnly === true
-            || tool.annotations?.readOnlyHint === true
-            || /read|list|get|search|query|fetch|查看|查询|搜索|读取/i.test(String(tool.name || '')),
-        })),
-      };
-    }).filter((item) => item.key);
     return {
       captured_at: new Date().toISOString(),
-      source: 'window.agent.getConnectorCatalog/getConnectorHealth',
-      raw_catalog: catalog,
-      raw_health: health,
+      catalog,
+      health,
       capabilities,
-      items,
     };
+  });
+  return normalizeCoreBetaConnectorCatalogSnapshot({
+    catalog: snapshot.catalog,
+    health: snapshot.health,
+    capabilities: snapshot.capabilities,
+    capturedAt: snapshot.captured_at,
   });
 }
 
-function chooseCoreBetaConnectors(items, count) {
-  return (items || [])
-    .filter((item) => item.enabled && item.authorized && item.healthy && item.tools.some((tool) => tool.read_only))
-    .sort((left, right) => left.key.localeCompare(right.key))
-    .slice(0, count);
+export function chooseCoreBetaConnectors(items, count, { seed = '' } = {}) {
+  const requiredStrata = ['document', 'search', 'data', 'collaboration', 'visualization'];
+  const eligible = (items || []).filter((item) => (
+    item.enabled
+    && item.authorized
+    && item.healthy
+    && item.tools.some((tool) => tool.enabled && tool.read_only)
+  ));
+  const rank = (item) => createHash('sha256')
+    .update(`${seed}\0${item.category}\0${item.key}`)
+    .digest('hex');
+  const selected = [];
+  const seen = new Set();
+  const requestedStrata = count >= requiredStrata.length ? requiredStrata : [];
+  for (const category of requestedStrata) {
+    const candidate = eligible
+      .filter((item) => item.category === category && !seen.has(item.key))
+      .sort((left, right) => rank(left).localeCompare(rank(right)))[0];
+    if (!candidate) return [];
+    selected.push(candidate);
+    seen.add(candidate.key);
+  }
+  if (selected.length < count) {
+    const remaining = eligible
+      .filter((item) => !seen.has(item.key))
+      .sort((left, right) => rank(left).localeCompare(rank(right)));
+    selected.push(...remaining.slice(0, count - selected.length));
+  }
+  return selected;
+}
+
+const CORE_BETA_MCP_PREREQUISITE_NA_ROLES = new Set([
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+  'capability_selection',
+  'capability_execution_event',
+  'connection_snapshot_diagnostics',
+  'log_excerpt',
+]);
+
+function coreBetaMcpEmptyMutationGuard(publicState, expectedCaseId) {
+  const task = publicState?.task || {};
+  const selectedSkills = Array.isArray(publicState?.skills?.selected) ? publicState.skills.selected : [];
+  const selectedConnectors = Array.isArray(publicState?.connectors?.selected) ? publicState.connectors.selected : [];
+  const guard = {
+    readback_shape_valid: Boolean(
+      publicState
+      && typeof publicState === 'object'
+      && publicState.task && typeof publicState.task === 'object'
+      && typeof publicState.task.running === 'boolean'
+      && Number.isFinite(Number(publicState.task.message_count))
+      && publicState.skills && Array.isArray(publicState.skills.selected)
+      && publicState.connectors && Array.isArray(publicState.connectors.selected)
+      && Object.hasOwn(publicState, 'expert')
+    ),
+    case_bound: String(publicState?.case_id || '') === String(expectedCaseId || ''),
+    task_absent: task?.id == null,
+    no_messages: Number(task?.message_count || 0) === 0,
+    not_running: task?.running !== true,
+    expert_absent: publicState?.expert == null,
+    skills_absent: selectedSkills.length === 0,
+    connectors_absent: selectedConnectors.length === 0,
+  };
+  return { ...guard, valid: Object.values(guard).every(Boolean) };
+}
+
+export function coreBetaMcpSelectionPrerequisiteBlocker({
+  testCase = {},
+  catalog = null,
+  selected = [],
+  selectionSeed = '',
+  sourceBlocker = null,
+  publicState = null,
+} = {}) {
+  const source = sourceBlocker || {};
+  const isSourceCase = String(testCase?.id || '') === 'BETA-MCP-001';
+  const catalogItems = Array.isArray(catalog?.items) ? catalog.items : [];
+  const eligibleItems = isSourceCase
+    ? catalogItems.filter((item) => (
+      item.enabled && item.authorized && item.healthy
+      && item.tools.some((tool) => tool.enabled && tool.read_only)
+    ))
+    : [];
+  const eligibleCount = isSourceCase ? eligibleItems.length : Number(source.eligible_count);
+  const requiredStrata = ['document', 'search', 'data', 'collaboration', 'visualization'];
+  const availableStrata = isSourceCase
+    ? [...new Set(eligibleItems.map((item) => String(item.category || 'other')))].sort()
+    : Array.isArray(source.available_strata) ? source.available_strata.map(String).sort() : [];
+  const missingStrata = isSourceCase
+    ? requiredStrata.filter((category) => !availableStrata.includes(category))
+    : Array.isArray(source.missing_strata) ? source.missing_strata.map(String) : [];
+  const catalogItemCount = isSourceCase ? catalogItems.length : Number(source.catalog_item_count);
+  const catalogSha256 = isSourceCase
+    ? createHash('sha256').update(JSON.stringify(catalogItems)).digest('hex')
+    : String(source.catalog_sha256 || '');
+  const mutationGuard = coreBetaMcpEmptyMutationGuard(publicState, testCase?.id);
+  const sourceCatalogValid = isSourceCase && Boolean(
+    catalog
+    && catalog.source === 'window.agent.getConnectorCatalog/getConnectorHealth'
+    && catalog.raw_catalog
+    && typeof catalog.raw_catalog === 'object'
+    && !String(catalog.raw_catalog?.__error || '')
+    && Array.isArray(catalog.items)
+  );
+  const sourceValid = sourceCatalogValid || Boolean(
+    !isSourceCase
+    && source.schema_version === 'qbot-core-beta-mcp-prerequisite/v1'
+    && source.valid === true
+    && source.applicable === true
+    && source.outcome === 'blocked'
+    && source.kind === 'mcp_catalog_sample_shortage'
+    && source.source === 'live_connector_catalog_and_exact_suite_ledger'
+    && source.source_case_id === 'BETA-MCP-001'
+    && JSON.stringify(source.source_case_ids) === JSON.stringify(['BETA-MCP-001'])
+    && source.dependent_case_id === 'BETA-MCP-001'
+    && Number(source.required_count) === 5
+    && Number(source.eligible_count) >= 0
+    && Number(source.selected_count) === 0
+    && Number(source.catalog_item_count) >= Number(source.eligible_count)
+    && /^[a-f0-9]{64}$/i.test(String(source.catalog_sha256 || ''))
+    && /^[a-f0-9]{64}$/i.test(String(source.selection_seed || ''))
+    && JSON.stringify(source.required_strata) === JSON.stringify(requiredStrata)
+    && Array.isArray(source.available_strata)
+    && Array.isArray(source.missing_strata)
+    && JSON.stringify(source.missing_strata) === JSON.stringify(
+      requiredStrata.filter((category) => !source.available_strata.includes(category)),
+    )
+    && (Number(source.eligible_count) < 5 || source.missing_strata.length > 0)
+    && source.arbitrary_connector_fallback_forbidden === true
+    && source.mutation_guard?.valid === true
+    && source.mutation_guard?.readback_shape_valid === true
+    && source.mutation_guard?.case_bound === true
+    && source.mutation_guard?.task_absent === true
+    && source.mutation_guard?.no_messages === true
+    && source.mutation_guard?.not_running === true
+    && source.mutation_guard?.expert_absent === true
+    && source.mutation_guard?.skills_absent === true
+    && source.mutation_guard?.connectors_absent === true
+  );
+  const selectedCount = isSourceCase ? selected.length : 0;
+  const applicable = sourceValid
+    && catalogItemCount >= 0
+    && eligibleCount >= 0
+    && selectedCount === 0
+    && (eligibleCount < 5 || missingStrata.length > 0)
+    && mutationGuard.valid;
+  const notApplicableRoles = isSourceCase ? [] : (testCase.evidence_roles || [])
+    .filter((role) => CORE_BETA_MCP_PREREQUISITE_NA_ROLES.has(role));
+  const reason = applicable
+    ? `MCP目录健康、已授权、含有效只读工具的分类样本不足5个：eligible=${eligibleCount}；missing_strata=${missingStrata.join(',') || 'none'}；依赖Case不得发送或随机替换。`
+    : 'MCP目录样本不足未满足可信 prerequisite blocked 合同。';
+  return {
+    schema_version: 'qbot-core-beta-mcp-prerequisite/v1',
+    valid: applicable,
+    oracle_valid: false,
+    applicable,
+    outcome: 'blocked',
+    kind: 'mcp_catalog_sample_shortage',
+    source: 'live_connector_catalog_and_exact_suite_ledger',
+    source_case_id: 'BETA-MCP-001',
+    source_case_ids: ['BETA-MCP-001'],
+    dependent_case_id: String(testCase?.id || ''),
+    required_count: 5,
+    eligible_count: eligibleCount,
+    selected_count: selectedCount,
+    catalog_item_count: catalogItemCount,
+    catalog_sha256: catalogSha256,
+    required_strata: requiredStrata,
+    available_strata: availableStrata,
+    missing_strata: missingStrata,
+    selection_seed: isSourceCase ? selectionSeed : String(source.selection_seed || ''),
+    arbitrary_connector_fallback_forbidden: true,
+    mutation_guard: mutationGuard,
+    not_applicable_roles: notApplicableRoles,
+    reason,
+  };
+}
+
+function applyCoreBetaMcpSelectionPrerequisite({ state, testCase, caseDir, blocker }) {
+  const file = path.join(caseDir, 'mcp-selection-prerequisite.json');
+  writeJsonFile(file, blocker);
+  state.artifacts.capability_selection = file;
+  state.artifacts.capability_execution_event = file;
+  state.artifacts.core_beta_mcp_prerequisite = blocker;
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  recordAssertion(
+    state,
+    'MCP确定性分类样本前置',
+    '目录不足5个健康、已授权、含有效只读工具的分类样本时，必须阻止依赖Case发送并生成完整 prerequisite manifest。',
+    blocker.valid === true && blocker.applicable === true,
+    blocker.reason,
+    'automation_error',
+  );
+  markBlocked(state, blocker.reason);
+  return file;
 }
 
 async function captureCoreBetaToolTrace(page, connectorKey) {

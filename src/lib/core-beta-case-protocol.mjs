@@ -937,6 +937,13 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'expert_history_readback',
     'negative_ui_trace',
   ]);
+  const mcpPrerequisiteNotApplicableRoles = new Set([
+    ...skillPrerequisiteNotApplicableRoles,
+    'capability_selection',
+    'capability_execution_event',
+    'connection_snapshot_diagnostics',
+    'log_excerpt',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file);
@@ -957,7 +964,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     if (!declared.includes(role)
       || (!skillPrerequisiteNotApplicableRoles.has(role)
         && !runtimePrerequisiteNotApplicableRoles.has(role)
-        && !expertPrerequisiteNotApplicableRoles.has(role))
+        && !expertPrerequisiteNotApplicableRoles.has(role)
+        && !mcpPrerequisiteNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1068,9 +1076,49 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => expertPrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const mcpMutationGuard = blocker?.mutation_guard || {};
+    const mcpPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-mcp-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && blocker?.outcome === 'blocked'
+      && blocker?.kind === 'mcp_catalog_sample_shortage'
+      && blocker?.source === 'live_connector_catalog_and_exact_suite_ledger'
+      && blocker?.source_case_id === 'BETA-MCP-001'
+      && JSON.stringify(sourceCaseIds) === JSON.stringify(['BETA-MCP-001'])
+      && blocker?.dependent_case_id === testCase?.id
+      && Number(blocker?.required_count) === 5
+      && Number(blocker?.eligible_count) >= 0
+      && Number(blocker?.selected_count) === 0
+      && Number(blocker?.catalog_item_count) >= Number(blocker?.eligible_count)
+      && JSON.stringify(blocker?.required_strata) === JSON.stringify([
+        'document', 'search', 'data', 'collaboration', 'visualization',
+      ])
+      && Array.isArray(blocker?.available_strata)
+      && Array.isArray(blocker?.missing_strata)
+      && JSON.stringify(blocker.missing_strata) === JSON.stringify(
+        blocker.required_strata.filter((category) => !blocker.available_strata.includes(category)),
+      )
+      && (Number(blocker?.eligible_count) < 5 || blocker.missing_strata.length > 0)
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.catalog_sha256 || ''))
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.selection_seed || ''))
+      && blocker?.arbitrary_connector_fallback_forbidden === true
+      && mcpMutationGuard?.valid === true
+      && mcpMutationGuard?.readback_shape_valid === true
+      && mcpMutationGuard?.case_bound === true
+      && mcpMutationGuard?.task_absent === true
+      && mcpMutationGuard?.no_messages === true
+      && mcpMutationGuard?.not_running === true
+      && mcpMutationGuard?.expert_absent === true
+      && mcpMutationGuard?.skills_absent === true
+      && mcpMutationGuard?.connectors_absent === true
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => mcpPrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || runtimePrerequisiteVerified
-      || expertPrerequisiteVerified;
+      || expertPrerequisiteVerified
+      || mcpPrerequisiteVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

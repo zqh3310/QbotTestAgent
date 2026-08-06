@@ -19,6 +19,7 @@ import {
   buildConversationTurns,
   caseRequiresModelTier,
   caseAwareReplyAssertion,
+  chooseCoreBetaConnectors,
   createControlPlaneFaultProxy,
   createConnectorRegressionServer,
   createSkillHubRegressionServer,
@@ -39,6 +40,8 @@ import {
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
+  coreBetaMcpReleaseSelectionSeed,
+  coreBetaMcpSelectionPrerequisiteBlocker,
   coreBetaPartialReplyReady,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
@@ -76,6 +79,7 @@ import {
   modelServiceStateEvidence,
   nativeDialogClosedOrAdvanced,
   nextTerminalNoReplyObservation,
+  normalizeCoreBetaConnectorCatalogSnapshot,
   obviousDuplicateEvidence,
   probeConnectorRegressionFixture,
   parseSingleHostPipelineSize,
@@ -1305,6 +1309,216 @@ try {
 } finally {
   fs.rmSync(prerequisiteEvidenceDir, { recursive: true, force: true });
 }
+const mcpReleaseOptions = {
+  'backend-version': 'uat-backend-20260806',
+  'prompt-policy-version': 'qwork-runtime-0.0.30-rc.2',
+  'feature-flags-hash': 'a'.repeat(64),
+  'qwork-build-id': '0.0.30-rc.2',
+};
+const mcpSelectionSeed = coreBetaMcpReleaseSelectionSeed(mcpReleaseOptions);
+assert.match(mcpSelectionSeed, /^[a-f0-9]{64}$/);
+assert.equal(
+  mcpSelectionSeed,
+  coreBetaMcpReleaseSelectionSeed(structuredClone(mcpReleaseOptions)),
+  '相同发布身份必须产生稳定的 MCP 选择种子',
+);
+assert.notEqual(
+  mcpSelectionSeed,
+  coreBetaMcpReleaseSelectionSeed({ ...mcpReleaseOptions, 'qwork-build-id': '0.0.31' }),
+  'QWork 发布身份变化必须改变 MCP 选择种子',
+);
+const readyConnector = ({ key, label, description, tools }) => ({
+  key,
+  label,
+  description,
+  source: key.startsWith('builtin:') ? 'builtin' : 'platform',
+  statusKind: 'ready',
+  statusLabel: '已接入',
+  usable: true,
+  enabled: true,
+  tools: tools.map((tool) => ({
+    enabled: true,
+    effectiveEnabled: true,
+    upstreamEnabled: true,
+    userEnabled: true,
+    ...tool,
+  })),
+});
+const mcpCatalogSnapshot = normalizeCoreBetaConnectorCatalogSnapshot({
+  capturedAt: '2026-08-06T00:00:00.000Z',
+  catalog: {
+    connectorCatalogStatus: { platform: 'ok' },
+    connectors: [
+      readyConnector({
+        key: 'mcphub:wiki',
+        label: '公司知识库',
+        description: '文档问答与知识库检索',
+        tools: [{ name: 'quick_answer', description: '查询知识库并返回来源文档' }],
+      }),
+      readyConnector({
+        key: 'builtin:qbot_web',
+        label: '网页搜索',
+        description: '搜索公开网页',
+        tools: [{ name: 'web_search', description: '搜索公开网页' }],
+      }),
+      readyConnector({
+        key: 'mcphub:dds',
+        label: '数据查询',
+        description: '数据指标查询',
+        tools: [{ name: 'query_metric', description: '读取指标' }],
+      }),
+      readyConnector({
+        key: 'mcphub:wecom',
+        label: '企微协作',
+        description: '企业微信协作服务',
+        tools: [
+          { name: 'list_chat_records', description: '查询聊天记录' },
+          {
+            name: 'sendCustomerMessage',
+            description: '客户消息动作',
+            readOnly: true,
+            annotations: { readOnlyHint: true },
+          },
+        ],
+      }),
+      readyConnector({
+        key: 'builtin:qbot_chart',
+        label: 'SVG 图表',
+        description: '将数据生成为可视化图表',
+        tools: [{ name: 'render_chart', description: '渲染 SVG 图表' }],
+      }),
+    ],
+  },
+  health: [{
+    connectorKey: 'builtin:qbot_web',
+    status: 'skipped',
+    reason: 'stdio_not_probed',
+  }],
+  capabilities: { connectorRouting: { mode: 'auto' } },
+});
+assert.equal(mcpCatalogSnapshot.items.length, 5);
+assert.ok(mcpCatalogSnapshot.items.every((item) => item.healthy), 'statusKind=ready + usable=true 必须被识别为权威健康目录状态');
+assert.equal(
+  mcpCatalogSnapshot.items.find((item) => item.key === 'mcphub:wecom')
+    .tools.find((tool) => tool.name === 'sendCustomerMessage').read_only,
+  false,
+  '破坏性 camelCase 工具即使错误携带 readOnly hint 也不得被误选',
+);
+const mcpSelected = chooseCoreBetaConnectors(mcpCatalogSnapshot.items, 5, { seed: mcpSelectionSeed });
+assert.deepEqual(
+  mcpSelected.map((item) => item.category),
+  ['document', 'search', 'data', 'collaboration', 'visualization'],
+  'MCP样本必须按文档、搜索、数据、协作、可视化顺序确定性分层',
+);
+assert.deepEqual(
+  chooseCoreBetaConnectors(mcpCatalogSnapshot.items, 5, { seed: mcpSelectionSeed }).map((item) => item.key),
+  mcpSelected.map((item) => item.key),
+  '相同发布种子必须稳定选择相同 connector key',
+);
+assert.equal(
+  chooseCoreBetaConnectors(
+    mcpCatalogSnapshot.items.filter((item) => item.category !== 'document'),
+    1,
+    { seed: mcpSelectionSeed },
+  ).length,
+  1,
+  '非五样本调用必须保留任意健康只读 Connector 的既有选择语义',
+);
+const emptyMcpPublicState = {
+  case_id: 'BETA-MCP-001',
+  task: { id: null, running: false, message_count: 0 },
+  expert: null,
+  skills: { selected: [] },
+  connectors: { selected: [] },
+};
+const shortageCatalog = {
+  ...mcpCatalogSnapshot,
+  items: mcpCatalogSnapshot.items.filter((item) => item.category !== 'visualization'),
+};
+const sourceMcpBlocker = coreBetaMcpSelectionPrerequisiteBlocker({
+  testCase: { id: 'BETA-MCP-001', evidence_roles: [] },
+  catalog: shortageCatalog,
+  selected: [],
+  selectionSeed: mcpSelectionSeed,
+  publicState: emptyMcpPublicState,
+});
+assert.equal(sourceMcpBlocker.valid, true, '缺少可视化分类样本时应形成可信 MCP 前置 blocker，而不是抛异常');
+assert.equal(sourceMcpBlocker.outcome, 'blocked');
+assert.deepEqual(sourceMcpBlocker.missing_strata, ['visualization']);
+assert.equal(sourceMcpBlocker.mutation_guard.readback_shape_valid, true);
+assert.equal(sourceMcpBlocker.mutation_guard.case_bound, true);
+assert.equal(coreBetaMcpSelectionPrerequisiteBlocker({
+  testCase: { id: 'BETA-MCP-001', evidence_roles: [] },
+  catalog: shortageCatalog,
+  selected: [],
+  selectionSeed: mcpSelectionSeed,
+  publicState: {},
+}).valid, false, '缺少 Case-bound 公开空态读回时不得生成可信 MCP blocker');
+const mcpPrerequisiteRoles = [
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+  'capability_selection',
+  'capability_execution_event',
+  'connection_snapshot_diagnostics',
+  'log_excerpt',
+];
+const downstreamMcpCase = { id: 'BETA-MCP-003', evidence_roles: mcpPrerequisiteRoles };
+const downstreamMcpBlocker = coreBetaMcpSelectionPrerequisiteBlocker({
+  testCase: downstreamMcpCase,
+  sourceBlocker: sourceMcpBlocker,
+  publicState: { ...emptyMcpPublicState, case_id: 'BETA-MCP-003' },
+});
+assert.equal(downstreamMcpBlocker.valid, true);
+assert.equal(downstreamMcpBlocker.dependent_case_id, 'BETA-MCP-003');
+assert.deepEqual(downstreamMcpBlocker.not_applicable_roles, mcpPrerequisiteRoles);
+const mcpPrerequisiteEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-mcp-prerequisite-'));
+try {
+  const blockerFile = path.join(mcpPrerequisiteEvidenceDir, 'mcp-selection-prerequisite.json');
+  writeJsonFile(blockerFile, downstreamMcpBlocker);
+  const artifacts = {
+    core_beta_not_applicable_roles: mcpPrerequisiteRoles.map((role) => ({
+      role,
+      blocker_path: blockerFile,
+    })),
+  };
+  const manifest = buildCoreEvidenceManifest({
+    testCase: downstreamMcpCase,
+    caseDir: mcpPrerequisiteEvidenceDir,
+    artifacts,
+  });
+  assert.equal(manifest.complete, true, '可信 MCP 上游短缺必须生成完整 downstream N/A manifest');
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), mcpPrerequisiteRoles);
+
+  writeJsonFile(blockerFile, { ...downstreamMcpBlocker, dependent_case_id: 'BETA-MCP-004' });
+  const tampered = buildCoreEvidenceManifest({
+    testCase: downstreamMcpCase,
+    caseDir: mcpPrerequisiteEvidenceDir,
+    artifacts,
+  });
+  assert.deepEqual(tampered.missing_roles, mcpPrerequisiteRoles, 'MCP blocker Case 身份漂移后必须重新 fail-closed');
+} finally {
+  fs.rmSync(mcpPrerequisiteEvidenceDir, { recursive: true, force: true });
+}
+assert.match(
+  runner,
+  /statusKind[\s\S]*usable/,
+  'MCP目录必须识别当前ready\/usable合同',
+);
+assert.match(
+  runner,
+  /mcp_catalog_deterministic_sample_5[\s\S]*coreBetaMcpSelectionPrerequisiteBlocker/,
+  'MCP样本不足必须走 prerequisite blocked 而不是 throw',
+);
+assert.match(
+  automationFramework,
+  /BETA-MCP-001[\s\S]*statusKind=ready[\s\S]*qbot-core-beta-mcp-prerequisite\/v1[\s\S]*BETA-MCP-002~008[\s\S]*继续后续独立 Case/,
+  '框架合同必须固定 MCP 当前目录字段、五类抽样与上游短缺继续执行语义',
+);
 const runtimePrerequisiteRoles = [
   'expert_draft_lifecycle',
   'expert_builder_trace',
