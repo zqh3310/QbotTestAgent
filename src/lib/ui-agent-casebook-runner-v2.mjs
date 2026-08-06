@@ -26331,6 +26331,43 @@ function tableInlineScopedTotalMatches(line, identity, expectedTotal) {
   return Number(values.at(-1)) === Number(expectedTotal);
 }
 
+function splitStructuredTableRow(line) {
+  const text = String(line || '').trim();
+  if (text.includes('\t')) {
+    return { delimiter: 'tab', cells: text.split(/\t+/).map((cell) => cell.trim()) };
+  }
+  if (text.includes('|')) {
+    const body = text.replace(/^\|/, '').replace(/\|$/, '');
+    return { delimiter: 'pipe', cells: body.split('|').map((cell) => cell.trim()) };
+  }
+  return { delimiter: '', cells: [] };
+}
+
+function tableColumnScopedTotalMatches(lines, identityPattern, expectedTotal) {
+  for (let headerIndex = 0; headerIndex < lines.length; headerIndex += 1) {
+    const header = splitStructuredTableRow(lines[headerIndex]);
+    if (!header.delimiter || header.cells.length < 3) continue;
+
+    const identityIndex = header.cells.findIndex((cell) => identityPattern.test(cell));
+    if (identityIndex < 1) continue;
+    const hasDistinctPeerIdentity = header.cells.some((cell, index) => (
+      index !== identityIndex && TABLE_FILE_ROW_IDENTITY_PATTERN.test(cell)
+    ));
+    if (!hasDistinctPeerIdentity) continue;
+
+    const scanEnd = Math.min(lines.length, headerIndex + 12);
+    for (let rowIndex = headerIndex + 1; rowIndex < scanEnd; rowIndex += 1) {
+      const row = splitStructuredTableRow(lines[rowIndex]);
+      if (row.delimiter !== header.delimiter || row.cells.length <= identityIndex) continue;
+      if (!/(?:总计|合计)/.test(row.cells[0])) continue;
+
+      const values = row.cells[identityIndex].match(/\d+(?:\.\d+)?/g) || [];
+      return values.length === 1 && Number(values[0]) === Number(expectedTotal);
+    }
+  }
+  return false;
+}
+
 function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
   const lines = String(replyText || '')
     .split(/\r?\n/)
@@ -26348,7 +26385,9 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     if (tableInlineScopedTotalMatches(line, identity, expectedTotal)) return true;
 
     return tableHeaderScopedTotalMatches(lines, index, afterIdentity, expectedTotal);
-  }) || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
+  })
+    || tableColumnScopedTotalMatches(lines, identityPattern, expectedTotal)
+    || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
 }
 
 const TABLE_ALIAS_TOKEN = '[A-Z]|[1-9]\\d?';

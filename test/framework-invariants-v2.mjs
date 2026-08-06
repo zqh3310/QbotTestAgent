@@ -4028,6 +4028,33 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: coreTablePrompt },
   observedInlineScopedCoreTableReply.replace('CSV = 182，XLSX = 215', 'CSV = 215，XLSX = 182'),
 ).ok, false, '行首总计上下文中交换 CSV/XLSX 总计时不得形成通过');
+const observedColumnScopedCoreTableReply = [
+  '表格对比（CSV vs Excel）',
+  '指标\tCSV（qbot-table.csv）\tExcel（qbot-data-table-diff.xlsx）\t差异',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '总计\t182\t215\t+33',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedColumnScopedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受表头绑定 CSV/Excel 列、后续总计行按同一列归属的真实回复',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedColumnScopedCoreTableReply.replace('总计\t182\t215\t+33', '总计\t215\t182\t+33'),
+).ok, false, '表头列身份约束下交换 CSV/Excel 总计时不得形成通过');
+const observedPipeColumnScopedCoreTableReply = observedColumnScopedCoreTableReply
+  .split('\n')
+  .map((line) => (line.includes('\t') ? `| ${line.split('\t').join(' | ')} |` : line))
+  .join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedPipeColumnScopedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受 Markdown pipe 表头列身份约束的总计行',
+);
 const aliasedCoreTableReply = [
   '表 A（qbot-table.csv）包含报名人数 100、到场人数 70、成交单数 12。',
   '表 B（qbot-data-table-diff.xlsx）包含报名人数 120、到场人数 80、成交单数 15。',

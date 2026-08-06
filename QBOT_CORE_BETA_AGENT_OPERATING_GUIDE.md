@@ -22,6 +22,20 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806213321_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-45f49ce
+```
+
+该批次完成 17/55 后，在 `BETA-FILE-004` 再次确认总计 Oracle 的 framework
+issue：产品回复以 TSV 表格给出 `CSV（qbot-table.csv）` 与
+`Excel（qbot-data-table-diff.xlsx）` 两个表头列，后续总计行在对应列明确给出
+`182` 与 `215`，三处差异也全部正确；解析器只覆盖同行文件身份，没有把表头
+列身份传播到后续总计行，错误输出 `totals=false`。第 18 条仅有中间证据，未形成
+Case 结果。该目录已冻结，不得续写；修复后必须在新推送基线上从第 1 条完整重跑
+55 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806203032_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-5c9f1b5
 ```
 
