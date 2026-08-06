@@ -34,8 +34,8 @@
 
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
-| 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `d72aba1cee18f6ec16d66c56920ae3e7b8f31106541cb275507dc4cfe328ba03` |
-| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7` |
+| 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
+| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d` |
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 
@@ -95,7 +95,7 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 184 \
-     --expected-sha256 92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7 \
+     --expected-sha256 def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
@@ -282,6 +282,13 @@ Casebook 注册表中的专项 fixture Case，且必须写入
 `release_gate_eligible=false`；漏排任何运行时不可用 fixture Case 则继续
 fail-closed。
 
+显式 scoped 范围还必须计算跨 Case 上游依赖。若已选择的下游 Case 依赖一个
+被排除的发布、安装、版本或授权 Case，预检以 warning 列出 dependency gap；
+runner 到达该下游 Case 时必须从本轮不可变 suite ledger 生成可信 prerequisite
+blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。禁止使用账号
+中任意既有 active Skill、Expert、release 或 version 代替本轮缺失身份，也禁止把
+这种可信 blocked 误判为 framework stop。
+
 ## 6. 360Teams 正式包执行
 
 360Teams 场景必须走专用适配层，不使用本地 QBot 的 `9224`，也不能直接操作 runner 临时 WebView/CDP 代理。
@@ -360,6 +367,8 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 - `BETA-SKILL-014` 每个不可变批次必须从 Case 目录派生唯一、合法的 `qa-meeting-minutes-<digest>` fixture slug，并把该精确名称写入每一轮真实 prompt；不得复用固定 `meeting-minutes`、覆盖已有用户 Skill，或把前序冻结批次的残留当成本轮产物。创建入口选择证据必须同时包含发送前 exact `skillhub:global/skill-creator-qwork`、每轮发送后的同一 taskId 快照、实际 prompts 和发送后终态。产物必须独立读回 QWork home 下 `.claude/skills/<slug>/SKILL.md` 与 `.agents/skills/<slug>/SKILL.md`，校验普通文件、非符号链接、frontmatter name、`agent_created: true`、非空 description、字节数和一致 SHA；同时证明内部 creator 未混入普通市场库存。证据结构完整与业务 Oracle 必须分开：双投影缺失或产品未创建时，专项文件仍应 `valid=true/evidence_valid=true/oracle_valid=false` 并形成可继续批次的产品 Bug；只有路径/读回/task-bound 证据本身缺失才属于 framework issue。证据固化后，清理阶段只能删除基线中不存在且精确匹配本轮唯一 slug 的两个目录，并保存 `skill-creator-fixture-cleanup.json`；任一预存、越界、符号链接、删除失败或残留都必须以 `automation_error` fail-closed。
 - `BETA-EXPERT-001` 的 `recordRecent` 与 `setExpert` 是一次性状态变更，必须与后续只读 `agent.capabilities` 分离。Teams IPC 首次超时时，只允许对 capabilities 最多执行三次有界重试并保存逐次账本；不得重复召唤、重复写最近列表或重复设置专家。首次失败后恢复成功必须继续完成当前 Case；三次读回均失败且没有独立公开状态可验证精确专家 identity 时，才按 framework issue fail-closed。
 - `BETA-EXPERT-003` 切换 Codex runtime 时，若产品桥精确返回“没有匹配协议的 LLM connection”，框架必须在调用 `setExpert` 和发送前捕获公开 connection view、错误码/文案、前后任务/runtime/专家/草稿快照及截图。只有目标 Codex connection 确实不存在、任务未创建消息、send count 未变化、runtime/专家/草稿均未变更时，才能生成 `qbot-core-beta-runtime-prerequisite/v1` 并记为普通 `blocked`；本 Case 不可能产生的 Expert Builder、能力选择/执行和 task/prompt/reply 角色可由该文件显式标为 `not_applicable`，manifest 仍须完整并继续后续独立 Case。未知错误、connection view 缺失、已发生发送/专家选择/草稿变化或 blocker 文件校验失败一律保持 `automation_error` 并进入框架自愈闭环。
+- `BETA-EXPERT-008~016` 中依赖已发布专家的 Case 必须使用本轮 suite ledger 中按上游 Case 写入的精确 expertId/releaseId/versionId，并与 live expert inventory 三字段完全一致。账本键缺失时必须忽略账号内所有其他 active expert，建立空任务零能力状态，生成 `qbot-core-beta-expert-prerequisite/v1` 可信 blocked 并继续；本轮身份存在但产品目录不可见时形成证据完整的产品 Bug 并继续；账本身份字段残缺、空态读回失败、blocker 越出当前 Case 目录或 N/A 角色越权时属于 `automation_error` 并冻结自愈。禁止 `activeReleaseId` 任意 fallback。
+- Agent 澄清/推荐选项仍按统一策略自动点击精确“跳过/跳过（用默认）/关闭并使用默认答案”并保存前后证据。因此正式 Casebook 的测试数据和首轮 prompt 必须自包含且确定，不得保留“目标问题”“给定问题”等占位语句，也不得依赖运行时澄清来补齐主题、时间点或业务 Oracle。`BETA-EXPERT-008` 必须冻结 as-of 日期、具体研究主题和至少两个官方来源要求。
 - framework/testcase issue 若使批次在 `BETA-SKILL-003/004` 安装后、`BETA-SKILL-012` 清理前中止，后续初始化不得忽略遗留 Skill，也不得人工或用临时 CDP 脚本卸载。先永久冻结源批次，再在同一发布身份、同一 Casebook 和同一 Teams 输出根的新目录中单独执行 `BETA-SKILL-001`，并传入 `--core-beta-cleanup-from <frozen-source-out>`。框架只允许导入源批次的 `core-beta-suite-ledger.json`，且必须验证 003/004 为真实 executed 且 manifest 完整、10 个 qualified identity 唯一、与安装前基线无重叠、安装尝试账本完整、Casebook SHA 和宿主/QWork/control plane/release inputs/产物指纹完全一致；验证结果、源账本 SHA、源 progress SHA 和目标 identity 必须写入 `core-beta-run-owned-skill-cleanup-source.json`。任何漂移或缺失都 fail-closed。清理 Case 必须逐项仅移除当前仍存在的目标 identity；调用产品 `uninstallSkill(name)` 时必须传入与真实 UI 相同的非空字符串 name，禁止传入 catalog 对象，并保存 identity、request name 和 API 收据的一一对应账本。API `ok=true` 只表示动作收据，不能单独证明清理成功；框架必须在最长 `60000ms` 的有界窗口内轮询真实 `catalog.installed`，要求全部目标 `remaining=0` 且至少连续 2 次读回缺席，同时证明无基线 Skill 变化，才可令 `cleanup_verdict.valid=true` 并生成完整 manifest。清理成功后仍须新 pretest、新不可变目录和完整 selected scope 重跑，清理批次本身不能计入门禁结果。
 - 受管 360Teams WebView 在刷新验证时可能销毁当前 CDP target。执行刷新并重开任务的 Case 必须识别 closed target 或 execution context destroyed，重建受管 CDP 连接、接管 replacement QWork renderer、更新共享 page 并保存重连账本；不得把预期的 renderer replacement 直接落成不完整 manifest。
 - replacement renderer 或受管宿主恢复必须始终以本轮首次连接后冻结并写入 `run-metadata.json` 的 QWork versioned file URL 为唯一 pin。Teams profile、刷新后临时 renderer 或宿主内置 manifest 中出现的旧 URL 只能作为漂移观测，不能覆盖冻结身份；即使该旧版本已经从本机卸载，也必须用冻结 URL 重写 profile、重启并 remount，再校验实际 URL 精确一致。冻结 URL 缺失、安装不完整或恢复后仍不一致时必须以 identity/framework issue fail-closed。

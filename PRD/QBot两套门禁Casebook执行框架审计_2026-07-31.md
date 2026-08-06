@@ -1,13 +1,13 @@
 # QBot 两套门禁 Casebook 执行框架审计
 
-审计日期：2026-07-31
+审计日期：2026-07-31；合同更新：2026-08-06
 
 ## 审计对象
 
 - `QBot核心内测门禁Casebook_74条_2026-07-31.xlsx`
-  - SHA-256：`d72aba1cee18f6ec16d66c56920ae3e7b8f31106541cb275507dc4cfe328ba03`
-- `QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx`
-  - SHA-256：`5f93402ef1586d2af16201daaf92aba8b6616825766c0d08c7ed2ed7929eeb6a`
+  - SHA-256：`25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6`
+- `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx`
+  - SHA-256：`def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d`
 
 两份 Casebook 均位于本目录，固定 Sheet 为 `核心内测Case`。
 
@@ -16,17 +16,17 @@
 | Casebook | Case 数 | 协议可解析/可路由 | Runner 原生 | Runner 原生但需明确 fixture 选项 | 经语义复核的旧执行器 | 必须使用严格逐 Case 控制器 |
 |---|---:|---:|---:|---:|---:|---:|
 | 核心内测 | 74 | 74/74 | 55 | 7 | 0 | 12 |
-| 完整生产灰度 | 160 | 160/160 | 58 | 8 | 5 | 89 |
+| 完整生产灰度 | 184 | 184/184 | 58 | 7 | 5 | 114 |
 
 “协议可解析/可路由”只表示 Case 的动作、执行器路由、Oracle、证据角色和清理契约完整，不表示裸机环境已经具备第二账号、OAuth、GitLab、故障注入、网络安全矩阵、宿主升级/回滚等真实资源。
 
 ## 完整执行的硬条件
 
-160 条可以进入正式全量执行的前提是：
+184 条可以进入正式全量执行的前提是：
 
 1. 前五条初始化 Case 必须按 `BETA-INIT-001` 至 `BETA-INIT-005` 固定顺序执行。
 2. Runner 原生但需要 fixture 选项的 Case，必须提供对应重启命令、第二账号凭证、原生 IME 命令或明确的受控故障开关。
-3. 89 条严格控制器 Case 必须配置 `--core-beta-fixture-control-url`。
+3. 114 条严格控制器 Case 必须配置 `--core-beta-fixture-control-url`。
 4. 控制器 preflight 必须逐 Case 回显：
    - `case_id`
    - `driver`
@@ -55,14 +55,16 @@
 - 旧执行器只有在完整业务 Oracle 语义复核后才允许保留；语义扩展但执行器未同步的 Case 全部改为严格控制器。
 - 初始化硬门禁失败立即停止后续业务 Case。
 - 任一执行、取证、manifest、断言或清理 `automation_error` 立即冻结本批次；可信产品 Bug 仍允许继续收集其他独立 Case。
+- scoped 上游 Case 被排除时，下游只能使用本轮 suite ledger 的精确能力身份；缺失时生成可信 prerequisite blocked 并继续，禁止任意 active Expert/Skill/MCP fallback。
+- Agent 澄清弹窗按框架策略自动跳过并留证，因此正式 Case 的测试数据和 prompt 必须自包含、确定，不能把主题或关键 Oracle 留给运行时澄清。
 - 每个 Case 必须具备 before/action/after 截图、动作收据、公开状态、任务 ID、完整 prompt/transcript/reply delta、能力/工具调用/成果/附件专项证据和清理读回；manifest 缺一项即失败。
 
 ## QA 结论
 
 - Case 设计层：两份 Casebook 均达到严格门禁协议要求。
 - 框架层：已经具备完整路由、配置化批量、初始化、真实动作、证据、精准断言、清理、恢复和 fail-closed 能力。
-- 环境层：裸机不能宣称 160 条“可直接全量执行”；必须先部署并通过 89 条严格控制器能力握手。缺少这些真实资源时停止是正确结果，不是用 mock 文本补齐。
-- 放行规则：只有同一冻结发布身份下，160 条全量证据可信、无 framework/testcase issue、无阻断性产品 Bug，并连续达到 Casebook 规定轮次后，才允许生产灰度。
+- 环境层：裸机不能宣称 184 条“可直接全量执行”；必须先部署并通过全部严格控制器能力握手。缺少这些真实资源时停止是正确结果，不是用 mock 文本补齐。
+- 放行规则：只有同一冻结发布身份下，184 条全量证据可信、无 framework/testcase issue、无阻断性产品 Bug，并连续达到 Casebook 规定轮次后，才允许生产灰度。
 
 ## 可重复审计命令
 
@@ -70,8 +72,8 @@
 npm run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot完整生产灰度门禁Casebook_160条_2026-07-31.xlsx \
-  --out outputs/qbot-160-framework-audit-20260731
+  --casebook PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx \
+  --out outputs/qbot-184-framework-audit-20260806
 
 npm run core-beta:capability-audit -- \
   --casebook PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \

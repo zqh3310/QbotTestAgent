@@ -18,6 +18,7 @@ import {
 } from './ui-agent-case-scheduler.mjs';
 import {
   CORE_BETA_MAX_BATCH_SIZE,
+  CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
   buildCoreEvidenceManifest,
   classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
@@ -7250,6 +7251,184 @@ function applyCoreBetaRuntimePrerequisiteBlocker({ state, testCase, caseDir, blo
   return file;
 }
 
+const CORE_BETA_EXPERT_PREREQUISITE_NA_ROLES = new Set([
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+  'expert_runtime_trace',
+  'capability_selection',
+  'capability_execution_event',
+  'attachment_name_size_sha256',
+  'attachment_readback',
+  'artifact_path_sha256',
+  'content_readback',
+  'preview',
+  'credential_redaction_scan',
+  'expert_history_readback',
+  'negative_ui_trace',
+]);
+
+function coreBetaPublishedExpertIdentity(value = {}) {
+  return {
+    expert_id: String(value?.id || value?.expertId || ''),
+    release_id: String(value?.activeReleaseId || value?.releaseId || value?.release?.id || ''),
+    version_id: String(
+      value?.activeVersionId
+      || value?.versionId
+      || value?.version?.id
+      || value?.release?.versionId
+      || '',
+    ),
+  };
+}
+
+export function coreBetaRunOwnedExpertPrerequisiteBlocker({
+  testCase = {},
+  ledgerExperts = {},
+  availableExperts = [],
+  publicState = null,
+} = {}) {
+  const id = String(testCase?.id || '');
+  const requirement = CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS.get(id);
+  if (!requirement) {
+    return {
+      applies: false,
+      ready: true,
+      valid: true,
+      selected_expert: null,
+      not_applicable_roles: [],
+    };
+  }
+  const ledgerEntry = ledgerExperts?.[requirement.ledger_key] || null;
+  const expectedIdentity = coreBetaPublishedExpertIdentity(ledgerEntry || {});
+  const ledgerIdentityComplete = Boolean(
+    expectedIdentity.expert_id
+    && expectedIdentity.release_id
+    && expectedIdentity.version_id
+  );
+  const inventory = (Array.isArray(availableExperts) ? availableExperts : [])
+    .map((item) => ({ item, identity: coreBetaPublishedExpertIdentity(item) }));
+  const exactMatches = ledgerIdentityComplete
+    ? inventory.filter(({ identity }) => (
+      identity.expert_id === expectedIdentity.expert_id
+      && identity.release_id === expectedIdentity.release_id
+      && identity.version_id === expectedIdentity.version_id
+    ))
+    : [];
+  if (exactMatches.length === 1) {
+    return {
+      applies: true,
+      ready: true,
+      valid: true,
+      selected_expert: exactMatches[0].item,
+      required_ledger_key: requirement.ledger_key,
+      source_case_ids: requirement.source_case_ids,
+      expected_identity: expectedIdentity,
+      not_applicable_roles: [],
+    };
+  }
+  const task = publicState?.task || {};
+  const selectedSkills = Array.isArray(publicState?.skills?.selected) ? publicState.skills.selected : [];
+  const selectedConnectors = Array.isArray(publicState?.connectors?.selected) ? publicState.connectors.selected : [];
+  const mutationGuard = {
+    task_absent: task?.id == null,
+    no_messages: Number(task?.message_count || 0) === 0,
+    not_running: task?.running !== true,
+    expert_absent: publicState?.expert == null,
+    skills_absent: selectedSkills.length === 0,
+    connectors_absent: selectedConnectors.length === 0,
+  };
+  mutationGuard.valid = Boolean(publicState) && Object.values(mutationGuard).every(Boolean);
+  const outcome = !ledgerEntry
+    ? 'blocked'
+    : !ledgerIdentityComplete ? 'automation_error' : 'bug';
+  const kind = outcome === 'blocked'
+    ? 'run_owned_published_expert_missing'
+    : outcome === 'bug'
+      ? 'run_owned_published_expert_not_visible'
+      : 'run_owned_published_expert_identity_incomplete';
+  const notApplicableRoles = (Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [])
+    .filter((role) => CORE_BETA_EXPERT_PREREQUISITE_NA_ROLES.has(role));
+  const activeIdentities = inventory.map(({ identity }) => identity)
+    .filter((identity) => identity.expert_id && identity.release_id && identity.version_id)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  const reason = outcome === 'blocked'
+    ? `${id} 的本轮精确已发布专家前置缺失：ledger.experts.${requirement.ledger_key} 不存在；已忽略账号中 ${activeIdentities.length} 个非本轮 active expert，未发送且未随机替换。`
+    : outcome === 'bug'
+      ? `${id} 的本轮已发布专家存在于运行账本，但产品专家目录没有相同 expert/release/version；未发送且未随机替换。`
+      : `${id} 的本轮发布账本身份不完整：ledger.experts.${requirement.ledger_key} 缺少 expert/release/version。`;
+  return {
+    schema_version: 'qbot-core-beta-expert-prerequisite/v1',
+    applies: true,
+    ready: false,
+    valid: outcome !== 'automation_error' && mutationGuard.valid,
+    oracle_valid: false,
+    applicable: true,
+    outcome,
+    kind,
+    source: 'exact_run_suite_ledger_and_live_expert_inventory',
+    dependent_case_id: id,
+    required_ledger_key: requirement.ledger_key,
+    source_case_ids: requirement.source_case_ids,
+    ledger_entry_present: Boolean(ledgerEntry),
+    ledger_identity_complete: ledgerIdentityComplete,
+    expected_identity: expectedIdentity,
+    exact_live_match_count: exactMatches.length,
+    active_expert_count: activeIdentities.length,
+    active_expert_identities_sha256: createHash('sha256')
+      .update(JSON.stringify(activeIdentities)).digest('hex'),
+    arbitrary_active_expert_fallback_forbidden: true,
+    mutation_guard: mutationGuard,
+    selected_expert: null,
+    not_applicable_roles: notApplicableRoles,
+    reason,
+  };
+}
+
+function applyCoreBetaRunOwnedExpertPrerequisite({ state, testCase, caseDir, blocker }) {
+  if (blocker?.valid !== true || blocker?.applicable !== true) {
+    recordAssertion(
+      state,
+      '本轮精确已发布 Expert 前置',
+      '只有本轮账本身份缺失或产品目录与本轮精确身份不一致，且空任务零能力状态成立时，才允许停止当前 Case 发送。',
+      false,
+      blocker?.reason || 'expert prerequisite evidence invalid',
+      'automation_error',
+    );
+    return '';
+  }
+  const file = path.join(caseDir, 'run-owned-expert-prerequisite.json');
+  writeJsonFile(file, blocker);
+  state.artifacts.core_beta_expert_prerequisite = blocker;
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  if (blocker.outcome === 'blocked') {
+    recordAssertion(
+      state,
+      '本轮精确已发布 Expert 前置',
+      '缺少本轮账本的精确已发布身份时必须阻止发送，忽略账号中任意非本轮 active expert，并生成完整 blocker manifest。',
+      true,
+      blocker.reason,
+    );
+    markBlocked(state, blocker.reason);
+  } else {
+    recordAssertion(
+      state,
+      '本轮精确已发布 Expert 目录一致性',
+      '本轮账本中的 expert/release/version 必须在产品目录精确可见；禁止回退到其他 active expert。',
+      false,
+      blocker.reason,
+      'bug',
+    );
+  }
+  return file;
+}
+
 async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
@@ -7284,6 +7463,36 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   );
   const ledger = readCoreBetaSuiteLedger(caseDir);
   ledger.experts ||= {};
+  let runOwnedExpert = null;
+  const initialExpertPrerequisite = coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase,
+    ledgerExperts: ledger.experts,
+    availableExperts: bridge.experts,
+  });
+  if (initialExpertPrerequisite.applies) {
+    if (initialExpertPrerequisite.ready) {
+      runOwnedExpert = initialExpertPrerequisite.selected_expert;
+    } else {
+      await openNewTask(page, state);
+      await page.evaluate(async () => {
+        if (typeof window.agent?.setExpert === 'function') await window.agent.setExpert(null);
+      });
+      if (!await resetComposerControls(page, state, caseDir, {
+        skillMode: 'disabled',
+        connectorMode: 'disabled',
+      })) {
+        throw new Error(`${testCase.id} 精确 Expert 前置阻塞前无法建立空任务零能力状态`);
+      }
+      const blocker = coreBetaRunOwnedExpertPrerequisiteBlocker({
+        testCase,
+        ledgerExperts: ledger.experts,
+        availableExperts: bridge.experts,
+        publicState: await captureCoreBetaPublicState(page, testCase),
+      });
+      applyCoreBetaRunOwnedExpertPrerequisite({ state, testCase, caseDir, blocker });
+      return;
+    }
+  }
   const writeExpertArtifact = (role, data, valid = nonEmptyObject(data)) => {
     const file = path.join(caseDir, `${role.replace(/_/g, '-')}.json`);
     writeJsonFile(file, { valid, case_id: testCase.id, captured_at: new Date().toISOString(), data });
@@ -7577,7 +7786,10 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     }, { id: draftId, key: `qbot-beta-${testCase.id}-${Date.now()}` });
     writeExpertArtifact('expert_publish_operation', operation, Boolean(operation.operation_id && operation.states.length));
     const published = operation.expert;
-    if (published?.id) ledger.experts.published = published;
+    if (published?.id) {
+      ledger.experts.published = published;
+      ledger.experts.published_delivery = published;
+    }
     writeCoreBetaSuiteLedger(caseDir, ledger);
     writeExpertArtifact('restart_trace', { operation_id: operation.operation_id, resumed: operation.states.length > 1 }, operation.states.length > 1);
     writeExpertArtifact('credential_redaction_scan', {
@@ -7589,7 +7801,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-014') {
-    const selected = ledger.experts?.published || bridge.experts.find((item) => item?.activeReleaseId);
+    const selected = runOwnedExpert;
     if (!selected?.id) throw new Error('BETA-EXPERT-014 需要至少一个已发布专家');
     const turns = testCase.conversation_turns || [];
     if (turns.length !== 3) throw new Error('BETA-EXPERT-014 必须声明3个身份隔离轮次');
@@ -7643,14 +7855,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     await openNewTask(page, state);
     if (testCase.id === 'BETA-EXPERT-010'
       && !await prepareVisibleQaWorkspace(page, state, caseDir)) return;
-    const selected = bridge.experts.find((item) => (
-      item?.id === ledger.experts?.published?.id
-      || item?.activeReleaseId && item?.id
-    ));
-    if (!selected) {
-      markBlocked(state, 'Expert use fixture 缺失：当前账号没有 active release 专家。');
-      return;
-    }
+    const selected = runOwnedExpert;
     await page.evaluate((expertId) => window.agent.setExpert(expertId), selected.id);
     const selection = await captureCoreBetaPublicState(page, testCase);
     state.artifacts.core_beta_capability_selection = selection;
@@ -7775,7 +7980,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   if (['BETA-EXPERT-011', 'BETA-EXPERT-013'].includes(testCase.id)) {
     const tokenEnv = String(options['expert-secondary-token-env'] || 'QBOT_EXPERT_SECONDARY_ACCESS_TOKEN');
     const secondaryToken = process.env[tokenEnv];
-    const published = ledger.experts?.published || bridge.experts.find((item) => item?.activeReleaseId);
+    const published = runOwnedExpert;
     if (!published?.id || !(published.activeReleaseId || published.release?.id)) {
       markBlocked(state, `${testCase.id} 需要真实第二账号token(${tokenEnv})和QA发布专家；缺失时禁止单账号伪造授权结论。`);
       return;
@@ -7826,11 +8031,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-012') {
-    const published = ledger.experts?.published || bridge.experts.find((item) => item?.activeReleaseId);
-    if (!published?.id) {
-      markBlocked(state, 'BETA-EXPERT-012 需要本轮QA发布专家。');
-      return;
-    }
+    const published = runOwnedExpert;
     const versioned = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
       const before = {
@@ -7864,6 +8065,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     writeExpertArtifact('expert_history_readback', versioned, versioned.after.versions.length > versioned.before.versions.length);
     writeExpertArtifact('expert_runtime_trace', { base_version_id: versioned.base_version_id, latest: versioned.after.expert });
     ledger.experts.published = versioned.after.expert;
+    ledger.experts.published_versioned = versioned.after.expert;
     writeCoreBetaSuiteLedger(caseDir, ledger);
     state.artifacts.capability_selection = identityFile;
     state.artifacts.capability_execution_event = state.artifacts.expert_history_readback;
@@ -7871,11 +8073,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-015') {
-    const published = ledger.experts?.published || bridge.experts.find((item) => item?.activeReleaseId);
-    if (!published?.id) {
-      markBlocked(state, 'BETA-EXPERT-015 需要本轮QA发布专家。');
-      return;
-    }
+    const published = runOwnedExpert;
     const roundtrip = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
       const exported = await lifecycle.export(expertId);
@@ -7913,11 +8111,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-016') {
-    const published = ledger.experts?.published || bridge.experts.find((item) => item?.activeReleaseId);
-    if (!published?.id) {
-      markBlocked(state, 'BETA-EXPERT-016 需要本轮QA发布专家。');
-      return;
-    }
+    const published = runOwnedExpert;
     const retired = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
       const before = {

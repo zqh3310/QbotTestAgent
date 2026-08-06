@@ -345,6 +345,16 @@ async function main() {
           addCheck('scoped_selection_contract', scope.ok, scope.ok
             ? `selected=${scope.selected_count}; excluded=${scope.excluded_count}; release_gate_eligible=false`
             : scope.errors.join('; '));
+          const dependencyGaps = Array.isArray(scope.dependency_gaps) ? scope.dependency_gaps : [];
+          addCheck(
+            'scoped_upstream_dependency_visibility',
+            dependencyGaps.length === 0,
+            dependencyGaps.length
+              ? '以下 Case 的本轮上游已被显式排除，runner 必须生成可信 prerequisite blocked 并继续，禁止使用账号中的任意资源替代：'
+                + dependencyGaps.map((item) => `${item.case_id}<-${item.excluded_upstream_case_ids.join('+')}`).join(',')
+              : 'selected Case 的跨 Case 上游依赖闭合',
+            { warning: true },
+          );
           const fullFixtureReadiness = await inspectCoreBetaFixtureReadiness({
             options: {
               ...options,

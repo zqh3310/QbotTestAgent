@@ -301,6 +301,58 @@ if (CORE_BETA_SCENARIO_REGISTRY.size !== CORE_BETA_SCENARIO_IDS.size
   throw new Error(`Core Beta 场景注册表没有覆盖全部 ${CORE_BETA_SCENARIO_IDS.size} 条 Case。`);
 }
 
+export const CORE_BETA_CASE_DEPENDENCIES = new Map([
+  ['BETA-EXPERT-007', ['BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-006']],
+  ['BETA-EXPERT-008', ['BETA-EXPERT-002', 'BETA-EXPERT-007']],
+  ['BETA-EXPERT-009', ['BETA-EXPERT-003', 'BETA-EXPERT-007']],
+  ['BETA-EXPERT-010', ['BETA-EXPERT-004', 'BETA-EXPERT-007']],
+  ['BETA-EXPERT-011', ['BETA-EXPERT-007']],
+  ['BETA-EXPERT-012', ['BETA-EXPERT-007']],
+  ['BETA-EXPERT-013', ['BETA-EXPERT-012']],
+  ['BETA-EXPERT-014', ['BETA-EXPERT-012']],
+  ['BETA-EXPERT-015', ['BETA-EXPERT-007']],
+  ['BETA-EXPERT-016', ['BETA-EXPERT-007']],
+]);
+
+export const CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS = new Map([
+  ['BETA-EXPERT-008', {
+    ledger_key: 'published_research',
+    source_case_ids: ['BETA-EXPERT-002', 'BETA-EXPERT-007'],
+  }],
+  ['BETA-EXPERT-009', {
+    ledger_key: 'published_data',
+    source_case_ids: ['BETA-EXPERT-003', 'BETA-EXPERT-007'],
+  }],
+  ['BETA-EXPERT-010', {
+    ledger_key: 'published_delivery',
+    source_case_ids: ['BETA-EXPERT-004', 'BETA-EXPERT-007'],
+  }],
+  ['BETA-EXPERT-012', {
+    ledger_key: 'published_delivery',
+    source_case_ids: ['BETA-EXPERT-004', 'BETA-EXPERT-007'],
+  }],
+  ['BETA-EXPERT-011', {
+    ledger_key: 'published_delivery',
+    source_case_ids: ['BETA-EXPERT-004', 'BETA-EXPERT-007'],
+  }],
+  ['BETA-EXPERT-013', {
+    ledger_key: 'published_versioned',
+    source_case_ids: ['BETA-EXPERT-012'],
+  }],
+  ['BETA-EXPERT-014', {
+    ledger_key: 'published_versioned',
+    source_case_ids: ['BETA-EXPERT-012'],
+  }],
+  ['BETA-EXPERT-015', {
+    ledger_key: 'published_versioned',
+    source_case_ids: ['BETA-EXPERT-012'],
+  }],
+  ['BETA-EXPERT-016', {
+    ledger_key: 'published_versioned',
+    source_case_ids: ['BETA-EXPERT-012'],
+  }],
+]);
+
 export function coreBetaScenarioSpec(testCaseOrId) {
   const id = typeof testCaseOrId === 'string'
     ? testCaseOrId.trim()
@@ -620,6 +672,20 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
       }
     }
   }
+  if (id === 'BETA-EXPERT-008') {
+    const turns = Array.isArray(testCase?.conversation_turns) ? testCase.conversation_turns : [];
+    const firstPrompt = String(turns[0]?.prompt || '').trim();
+    const researchInput = `${String(testCase?.test_data || '')}\n${firstPrompt}`;
+    if (/目标问题|给定问题|某个问题|某项问题/.test(researchInput)) {
+      errors.push('BETA-EXPERT-008 研究主题不得保留“目标问题”等占位输入。');
+    }
+    if (firstPrompt.length < 40 || !/官方来源/.test(firstPrompt)) {
+      errors.push('BETA-EXPERT-008 首轮必须声明可直接执行的具体主题和至少两个官方来源。');
+    }
+    if (!/20\d{2}-\d{2}-\d{2}/.test(researchInput)) {
+      errors.push('BETA-EXPERT-008 必须冻结明确的 as-of 日期，禁止把主题选择留给运行时澄清。');
+    }
+  }
   if (CAPABILITY_TYPES.has(String(testCase?.case_type || ''))) {
     for (const role of ['capability_selection', 'capability_execution_event']) {
       if (!evidenceRoles.has(role)) errors.push(`${id} 能力 Case 缺少证据角色 ${role}`);
@@ -696,6 +762,38 @@ export function validateCoreBetaCasePlan(cases, options = {}) {
   };
 }
 
+export function classifyCoreBetaScopedDependencyGaps({
+  selectedCaseIds = [],
+  excludedCaseIds = [],
+} = {}) {
+  const selectedIds = selectedCaseIds.map((item) => String(item || '').trim()).filter(Boolean);
+  const excludedSet = new Set(
+    excludedCaseIds.map((item) => String(item || '').trim()).filter(Boolean),
+  );
+  const resolveExcludedDependencies = (caseId, visiting = new Set()) => {
+    if (visiting.has(caseId)) return [];
+    const nextVisiting = new Set(visiting).add(caseId);
+    const missing = new Set();
+    for (const dependencyId of CORE_BETA_CASE_DEPENDENCIES.get(caseId) || []) {
+      if (excludedSet.has(dependencyId)) {
+        missing.add(dependencyId);
+        continue;
+      }
+      for (const nested of resolveExcludedDependencies(dependencyId, nextVisiting)) missing.add(nested);
+    }
+    return [...missing];
+  };
+  const gaps = selectedIds.map((caseId) => ({
+    case_id: caseId,
+    excluded_upstream_case_ids: resolveExcludedDependencies(caseId),
+  })).filter((item) => item.excluded_upstream_case_ids.length > 0);
+  return {
+    ok: gaps.length === 0,
+    affected_case_ids: gaps.map((item) => item.case_id),
+    gaps,
+  };
+}
+
 export function validateCoreBetaScopedSelection({
   fullCases = [],
   selectedCases = [],
@@ -742,6 +840,10 @@ export function validateCoreBetaScopedSelection({
   if (nonFixtureExclusions.length) {
     errors.push(`scoped execution 只允许排除需要专项 fixture 的 Case：${nonFixtureExclusions.join(',')}`);
   }
+  const dependencyGaps = classifyCoreBetaScopedDependencyGaps({
+    selectedCaseIds: selectedIds,
+    excludedCaseIds: excludedIds,
+  });
   return {
     schema_version: 'qbot-core-beta-scoped-execution/v1',
     generated_at: new Date().toISOString(),
@@ -755,6 +857,8 @@ export function validateCoreBetaScopedSelection({
     full_case_ids: fullIds,
     selected_case_ids: selectedIds,
     excluded_case_ids: excludedIds,
+    dependency_gaps: dependencyGaps.gaps,
+    dependency_blocked_case_ids: dependencyGaps.affected_case_ids,
     errors,
   };
 }
@@ -814,6 +918,25 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'capability_execution_event',
     ...skillPrerequisiteNotApplicableRoles,
   ]);
+  const expertPrerequisiteNotApplicableRoles = new Set([
+    'task_id',
+    'prompt',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+    'expert_runtime_trace',
+    'capability_selection',
+    'capability_execution_event',
+    'attachment_name_size_sha256',
+    'attachment_readback',
+    'artifact_path_sha256',
+    'content_readback',
+    'preview',
+    'credential_redaction_scan',
+    'expert_history_readback',
+    'negative_ui_trace',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file);
@@ -833,7 +956,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     const blockerFile = String(item?.blocker_path || '');
     if (!declared.includes(role)
       || (!skillPrerequisiteNotApplicableRoles.has(role)
-        && !runtimePrerequisiteNotApplicableRoles.has(role))
+        && !runtimePrerequisiteNotApplicableRoles.has(role)
+        && !expertPrerequisiteNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -908,7 +1032,45 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.includes(role)
       && allowedRoles.every((itemRole) => runtimePrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
-    const verified = skillPrerequisiteVerified || runtimePrerequisiteVerified;
+    const expertRequirement = CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS.get(String(testCase?.id || ''));
+    const expertMutationGuard = blocker?.mutation_guard || {};
+    const expertPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-expert-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && ['blocked', 'bug'].includes(String(blocker?.outcome || ''))
+      && ['run_owned_published_expert_missing', 'run_owned_published_expert_not_visible']
+        .includes(String(blocker?.kind || ''))
+      && blocker?.source === 'exact_run_suite_ledger_and_live_expert_inventory'
+      && blocker?.dependent_case_id === testCase?.id
+      && Boolean(expertRequirement)
+      && blocker?.required_ledger_key === expertRequirement?.ledger_key
+      && JSON.stringify(sourceCaseIds) === JSON.stringify(expertRequirement?.source_case_ids || [])
+      && blocker?.arbitrary_active_expert_fallback_forbidden === true
+      && blocker?.selected_expert == null
+      && blocker?.exact_live_match_count === 0
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.active_expert_identities_sha256 || ''))
+      && expertMutationGuard?.valid === true
+      && expertMutationGuard?.task_absent === true
+      && expertMutationGuard?.no_messages === true
+      && expertMutationGuard?.not_running === true
+      && expertMutationGuard?.expert_absent === true
+      && expertMutationGuard?.skills_absent === true
+      && expertMutationGuard?.connectors_absent === true
+      && (blocker?.outcome !== 'blocked'
+        || (blocker?.ledger_entry_present === false
+          && blocker?.ledger_identity_complete === false
+          && blocker?.kind === 'run_owned_published_expert_missing'))
+      && (blocker?.outcome !== 'bug'
+        || (blocker?.ledger_entry_present === true
+          && blocker?.ledger_identity_complete === true
+          && blocker?.kind === 'run_owned_published_expert_not_visible'))
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => expertPrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
+    const verified = skillPrerequisiteVerified
+      || runtimePrerequisiteVerified
+      || expertPrerequisiteVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

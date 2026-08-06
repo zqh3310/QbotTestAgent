@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const casebook = path.join(root, 'PRD', 'QBot核心内测门禁Casebook_74条_2026-07-31.xlsx');
-const expectedSha = 'd72aba1cee18f6ec16d66c56920ae3e7b8f31106541cb275507dc4cfe328ba03';
+const expectedSha = '25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6';
 const autoTest = path.join(root, 'autoTest');
 const autoTestBefore = fs.existsSync(autoTest) ? fs.readdirSync(autoTest).sort() : [];
 
@@ -50,7 +50,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
-const grayExpectedSha = '92cefc45dfb2ec56dd9da00e910abc26f56d545bb447d8d4648487aded4378d7';
+const grayExpectedSha = 'def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`184 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -83,6 +83,15 @@ if (pretestHelp.status !== 0
   || !/READY_SCOPED/.test(pretestHelp.stdout)
   || !/--excluded-case/.test(pretestHelp.stdout)) {
   throw new Error(`Pretest help failed: ${pretestHelp.stderr || pretestHelp.stdout}`);
+}
+const pretestSource = fs.readFileSync(
+  path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
+  'utf8',
+);
+if (!/scoped_upstream_dependency_visibility/.test(pretestSource)
+  || !/dependency_gaps/.test(pretestSource)
+  || !/可信 prerequisite blocked 并继续/.test(pretestSource)) {
+  throw new Error('Scoped pretest must expose excluded upstream dependency gaps as non-blocking visibility.');
 }
 
 const pretestOut = path.join(temp, 'pretest');

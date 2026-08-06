@@ -51,6 +51,7 @@ import {
   coreBetaSkillCreatorProjectionReadback,
   coreBetaSkillCreatorSelectionEvidence,
   coreBetaRunOwnedSkillCleanupVerdict,
+  coreBetaRunOwnedExpertPrerequisiteBlocker,
   coreBetaSkillUninstallRequestName,
   coreBetaSkillUsePrerequisiteDecision,
   coreBetaV2NeedsRendererReconnect,
@@ -115,6 +116,31 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+
+assert.doesNotMatch(
+  runner,
+  /\['BETA-EXPERT-008',[\s\S]{0,12000}?bridge\.experts\.find\(\(item\) =>[\s\S]{0,500}?activeReleaseId/,
+  '发布专家依赖 Case 禁止回退到账号内任意 active expert',
+);
+assert.equal(
+  coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase: { id: 'BETA-EXPERT-010', evidence_roles: [] },
+    ledgerExperts: {},
+    availableExperts: [{
+      id: 'arbitrary-active',
+      activeReleaseId: 'arbitrary-release',
+      version: { id: 'arbitrary-version' },
+    }],
+    publicState: {
+      task: { id: null, running: false, message_count: 0 },
+      expert: null,
+      skills: { selected: [] },
+      connectors: { selected: [] },
+    },
+  }).selected_expert,
+  null,
+  '本轮 ledger 缺失时，即使账号存在 active expert 也必须忽略并可信阻塞',
+);
 
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-skill-creator-fixture-'));

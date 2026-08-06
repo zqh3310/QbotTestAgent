@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
   CORE_BETA_SCENARIO_IDS,
   CORE_BETA_SCENARIO_REGISTRY,
   buildCoreEvidenceManifest,
+  classifyCoreBetaScopedDependencyGaps,
   classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
@@ -16,6 +18,9 @@ import {
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
+import {
+  coreBetaRunOwnedExpertPrerequisiteBlocker,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-timeout-evidence-'));
@@ -360,6 +365,125 @@ assert.equal(
   'scoped execution 不得省略排除原因',
 );
 
+const expertScopedDependencies = classifyCoreBetaScopedDependencyGaps({
+  selectedCaseIds: [
+    'BETA-EXPERT-008',
+    'BETA-EXPERT-009',
+    'BETA-EXPERT-010',
+    'BETA-EXPERT-012',
+    'BETA-EXPERT-014',
+    'BETA-EXPERT-015',
+    'BETA-EXPERT-016',
+  ],
+  excludedCaseIds: ['BETA-EXPERT-007'],
+});
+assert.deepEqual(
+  expertScopedDependencies.affected_case_ids,
+  [
+    'BETA-EXPERT-008',
+    'BETA-EXPERT-009',
+    'BETA-EXPERT-010',
+    'BETA-EXPERT-012',
+    'BETA-EXPERT-014',
+    'BETA-EXPERT-015',
+    'BETA-EXPERT-016',
+  ],
+  '排除发布上游时，全部仍在范围内的发布专家依赖 Case 必须显式列为 dependency gap',
+);
+assert.equal(
+  expertScopedDependencies.gaps.every((item) => (
+    item.excluded_upstream_case_ids.includes('BETA-EXPERT-007')
+  )),
+  true,
+);
+
+const expertResearchCase = planCase('BETA-EXPERT-008', 'expert_use');
+expertResearchCase.test_data = '选择一个当天可验证的产品/行业问题；要求至少两个官方来源。';
+expertResearchCase.conversation_turns = [
+  { turn: 1, prompt: '检索两个官方来源说明目标问题现状。', oracle: '来源可打开' },
+  { turn: 2, prompt: '比较两份来源。', oracle: '比较完整' },
+  { turn: 3, prompt: '给出结论。', oracle: '结论完整' },
+];
+expertResearchCase.evidence_roles.push('capability_selection', 'capability_execution_event');
+assert.match(
+  validateCoreBetaCase(expertResearchCase).errors.join('\n'),
+  /占位输入|具体主题|as-of 日期/,
+  '研究 Expert Case 不得把主题选择留给运行时澄清',
+);
+expertResearchCase.test_data = '固定研究主题：截至2026-08-06，比较 OpenAI Responses API 与 Chat Completions API；要求至少两个可打开的 OpenAI 官方来源。';
+expertResearchCase.conversation_turns[0].prompt = '检索至少两个 OpenAI 官方来源，说明截至2026-08-06 Responses API 与 Chat Completions API 的官方定位、主要能力差异和迁移建议。';
+assert.equal(
+  validateCoreBetaCase(expertResearchCase).ok,
+  true,
+  validateCoreBetaCase(expertResearchCase).errors.join('\n'),
+);
+
+{
+  const exactExpert = {
+    id: 'expert-run-owned',
+    activeReleaseId: 'release-run-owned',
+    version: { id: 'version-run-owned' },
+  };
+  const arbitraryActiveExpert = {
+    id: 'qwork.builtin.expert-authoring',
+    activeReleaseId: 'qwork.builtin.expert-authoring.release.v3',
+    release: { versionId: 'qwork.builtin.expert-authoring.version.v3' },
+  };
+  const requirement = CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS.get('BETA-EXPERT-008');
+  const absent = coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase: expertResearchCase,
+    ledgerExperts: {},
+    availableExperts: [arbitraryActiveExpert],
+    publicState: {
+      task: { id: null, running: false, message_count: 0 },
+      expert: null,
+      skills: { selected: [] },
+      connectors: { selected: [] },
+    },
+  });
+  assert.equal(absent.valid, true);
+  assert.equal(absent.outcome, 'blocked');
+  assert.equal(absent.selected_expert, null);
+  assert.equal(absent.active_expert_count, 1);
+  assert.equal(absent.arbitrary_active_expert_fallback_forbidden, true);
+
+  const ready = coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase: expertResearchCase,
+    ledgerExperts: { [requirement.ledger_key]: exactExpert },
+    availableExperts: [arbitraryActiveExpert, exactExpert],
+  });
+  assert.equal(ready.ready, true);
+  assert.deepEqual(ready.selected_expert, exactExpert);
+
+  const incomplete = coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase: expertResearchCase,
+    ledgerExperts: { [requirement.ledger_key]: { id: 'expert-run-owned' } },
+    availableExperts: [arbitraryActiveExpert],
+    publicState: {
+      task: { id: null, running: false, message_count: 0 },
+      expert: null,
+      skills: { selected: [] },
+      connectors: { selected: [] },
+    },
+  });
+  assert.equal(incomplete.outcome, 'automation_error');
+  assert.equal(incomplete.valid, false);
+
+  const missingFromInventory = coreBetaRunOwnedExpertPrerequisiteBlocker({
+    testCase: expertResearchCase,
+    ledgerExperts: { [requirement.ledger_key]: exactExpert },
+    availableExperts: [arbitraryActiveExpert],
+    publicState: {
+      task: { id: null, running: false, message_count: 0 },
+      expert: null,
+      skills: { selected: [] },
+      connectors: { selected: [] },
+    },
+  });
+  assert.equal(missingFromInventory.outcome, 'bug');
+  assert.equal(missingFromInventory.valid, true);
+}
+
 const placeholder = structuredClone(sample);
 placeholder.action_plan[1].command = 'beta_chat_001_step_2';
 assert.match(validateCoreBetaCase(placeholder).errors.join('\n'), /占位命令/);
@@ -455,6 +579,65 @@ try {
   );
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
+}
+
+{
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-expert-prerequisite-'));
+  try {
+    const testCase = {
+      id: 'BETA-EXPERT-008',
+      evidence_roles: [
+        'task_id',
+        'prompt',
+        'send_receipt',
+        'transcript',
+        'reply_delta',
+        'reply_completion',
+        'expert_runtime_trace',
+        'capability_selection',
+        'capability_execution_event',
+      ],
+    };
+    const blocker = coreBetaRunOwnedExpertPrerequisiteBlocker({
+      testCase,
+      ledgerExperts: {},
+      availableExperts: [{
+        id: 'unrelated-active-expert',
+        activeReleaseId: 'unrelated-release',
+        version: { id: 'unrelated-version' },
+      }],
+      publicState: {
+        task: { id: null, running: false, message_count: 0 },
+        expert: null,
+        skills: { selected: [] },
+        connectors: { selected: [] },
+      },
+    });
+    const blockerFile = path.join(temp, 'run-owned-expert-prerequisite.json');
+    fs.writeFileSync(blockerFile, JSON.stringify(blocker));
+    const artifacts = {
+      core_beta_not_applicable_roles: blocker.not_applicable_roles.map((role) => ({
+        role,
+        blocker_path: blockerFile,
+      })),
+    };
+    const manifest = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
+    assert.equal(manifest.complete, true, JSON.stringify(manifest));
+    assert.deepEqual(
+      manifest.not_applicable_roles.map((item) => item.role),
+      testCase.evidence_roles,
+      '可信专家前置阻塞必须显式补齐全部未发生的发送与专家执行角色',
+    );
+
+    fs.writeFileSync(blockerFile, JSON.stringify({
+      ...blocker,
+      required_ledger_key: 'wrong-ledger-key',
+    }));
+    const tampered = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
+    assert.equal(tampered.complete, false, '账本键不匹配时 N/A manifest 必须 fail-closed');
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
 }
 
 console.log('core-beta-case-protocol: ok');

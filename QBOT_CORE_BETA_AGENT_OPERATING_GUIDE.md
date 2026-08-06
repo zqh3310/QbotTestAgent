@@ -2,7 +2,7 @@
 
 适用对象：后续接手 `/Users/qifu/Documents/QbotTestAgent` 的 QA Agent。
 
-本文是当前 Core Beta 70 条门禁工作的接力指南。规范性合同仍以
+本文是当前 Core Beta 74 条门禁工作的接力指南。规范性合同仍以
 `/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准；
 本指南只回答“当前进度是什么、下一位 Agent 应该怎么安全继续”。
 
@@ -19,36 +19,38 @@
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
-最近一次确认可用的 scoped 预检：
+最近一次已冻结的 scoped 批次：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/outputs/20260806100253_uat-core-beta70-scoped55-pretest_framework-da264de_teams-5.2.38_qwork-0.0.30-rc.1/core-beta-pretest-report.json
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806105200_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-6255455
 ```
 
-该预检结果为 `READY_SCOPED`，27 checks，0 blockers。
+该批次在 `BETA-EXPERT-008` 发现 testcase/framework issue 后正确冻结，完成
+41/55；不得续写该目录。修复后必须基于本指南中的正式 74 条 Casebook 新建
+pretest 和 runner 输出目录，从第 1 条重跑 55 条。
 
 ## 2. 当前 Casebook 和执行范围
 
-当前 Core Beta 70 条 Casebook：
+当前正式 Core Beta 74 条 Casebook：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/outputs/qbot-core-gate-redesign-20260730/QBot核心内测Casebook_MR源码严选门禁_70条_2026-07-30.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx
 ```
 
 - Sheet：`核心内测Case`
-- SHA-256：`108ccbb6cadabcfd323ed408217c1bf2082244a272ae2532ccf370b7977aa27c`
-- 静态能力审计：70/70 executable，70/70 dispatchable，unsupported=0。
-- 当前可裸 UI 执行范围：55/70。
-- 当前排除范围：15 条真实 fixture provider 不可用 Case。
-- 当前 scoped 执行永久 `release_gate_eligible=false`，即使 55 条全绿，也不能宣称完整 70 条发布门禁通过。
+- SHA-256：`25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6`
+- 静态能力审计：74/74 executable，74/74 dispatchable，unsupported=0。
+- 当前可执行选择集：55/74。
+- 当前排除范围：19 条，包括 15 条真实 fixture provider 不可用 Case和 4 条不属于原 scoped 55 选择集的新增专家 Case。
+- 当前 scoped 执行永久 `release_gate_eligible=false`，即使 55 条全绿，也不能宣称完整 74 条发布门禁通过。
 
-当前 15 条排除 Case：
+当前 19 条排除 Case：
 
 ```text
-BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001
+BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-EXPERT-017,BETA-EXPERT-018,BETA-EXPERT-019,BETA-EXPERT-020,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001
 ```
 
-完整 70 条要作为发布门禁，必须补齐这些 Case 需要的真实 fixture provider，
+完整 74 条要作为发布门禁，必须补齐这些 Case 需要的真实 fixture provider，
 重新跑 `READY` 预检，而不是 `READY_SCOPED`。
 
 ## 3. 接手后第一件事
@@ -93,9 +95,9 @@ npm --prefix teams360-automation run check
 静态能力审计：
 
 ```bash
-OUT_AUDIT="$PWD/outputs/$(date +%Y%m%d%H%M)_core70-capability-audit"
+OUT_AUDIT="$PWD/outputs/$(date +%Y%m%d%H%M)_core74-capability-audit"
 npm run core-beta:capability-audit -- \
-  --casebook "$PWD/outputs/qbot-core-gate-redesign-20260730/QBot核心内测Casebook_MR源码严选门禁_70条_2026-07-30.xlsx" \
+  --casebook "$PWD/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx" \
   --sheet 核心内测Case \
   --out "$OUT_AUDIT" \
   --profile mandatory
@@ -104,30 +106,32 @@ npm run core-beta:capability-audit -- \
 必须满足：
 
 - `protocol.ok=true`
-- `protocol.case_count=70`
+- `protocol.case_count=74`
 - `runtime_dispatch.ok=true`
 - `runtime_dispatch.unsupported_count=0`
 
 ## 5. 当前 55 条 scoped 预检
 
-如果用户要求继续执行当前 55 条，先用最近成功预检报告取出精确选择集：
+如果用户要求继续执行当前 55 条，必须从正式 74 条 Casebook 重新导出并计算精确选择集：
 
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-SOURCE_PRETEST="$PWD/outputs/20260806100253_uat-core-beta70-scoped55-pretest_framework-da264de_teams-5.2.38_qwork-0.0.30-rc.1/core-beta-pretest-report.json"
-CASEBOOK="$PWD/outputs/qbot-core-gate-redesign-20260730/QBot核心内测Casebook_MR源码严选门禁_70条_2026-07-30.xlsx"
-CASE_IDS="$(jq -r '.scope.selected_case_ids | join(",")' "$SOURCE_PRETEST")"
-EXCLUDED_CASE_IDS="$(jq -r '.scope.excluded_case_ids | join(",")' "$SOURCE_PRETEST")"
+CASEBOOK="$PWD/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx"
+EXCLUDED_CASE_IDS="BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-EXPERT-017,BETA-EXPERT-018,BETA-EXPERT-019,BETA-EXPERT-020,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001"
+PLAN="$(mktemp /tmp/qbot-core74-plan.XXXXXX.json)"
+python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
+  --casebook "$CASEBOOK" --sheet 核心内测Case --profile mandatory --output "$PLAN"
+CASE_IDS="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1])); const x=new Set(process.argv[2].split(",")); process.stdout.write(p.cases.map(c=>c.id).filter(id=>!x.has(id)).join(","))' "$PLAN" "$EXCLUDED_CASE_IDS")"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
   --sheet 核心内测Case \
   --profile mandatory \
   --lane teams \
-  --out "$PWD/outputs/$(date +%Y%m%d%H%M)_uat-core-beta70-scoped55-pretest_framework-$(git rev-parse --short HEAD)" \
+  --out "$PWD/outputs/$(date +%Y%m%d%H%M)_uat-core-beta74-scoped55-pretest_framework-$(git rev-parse --short HEAD)" \
   --expected-count 55 \
-  --expected-sha256 108ccbb6cadabcfd323ed408217c1bf2082244a272ae2532ccf370b7977aa27c \
+  --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
   --production-gate true \
   --expected-teams-version 5.2.38 \
   --expected-teams-build 2119080433 \
@@ -143,6 +147,10 @@ npm run core-beta:pretest -- \
 ```
 
 只有新报告返回 `READY_SCOPED` 且 0 blockers，才允许启动 scoped runner。
+预检会把 `BETA-EXPERT-008/009/010/012/014/015/016` 列为上游发布 Case 已排除
+的 dependency gaps；这不是 pretest blocker。runner 到达这些 Case 时必须使用
+本轮 suite ledger 精确身份；账本缺失则生成可信 prerequisite blocked 并继续，
+禁止回退到账号中其他 active expert。
 
 如果 360Teams、QWork、control plane、backend、prompt policy 或 feature flags
 任一字段变化，必须重新冻结发布身份并更新命令。不要沿用上面的值假装同一发布。
@@ -152,7 +160,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -197,6 +205,10 @@ Core Beta v2 的 Case 间执行固定串行。即使旧命令残留 `--parallel 
 刷新或受管宿主重启后，Teams 恢复器必须继续使用本轮首次连接冻结的精确
 QWork versioned file URL。profile 或临时 renderer 中的旧版本只能触发漂移恢复，
 不得成为新的 pin；恢复后必须再次校验 URL、模型档位和 capabilities。
+
+Agent 澄清/推荐选项弹窗继续由框架点击精确“跳过/跳过（用默认）”并留证，
+不使用 Computer Use。正式 Case prompt 必须已经包含主题、日期和 Oracle，不能
+依赖弹窗补充测试数据。
 
 ## 7. 监控规则
 
@@ -277,15 +289,15 @@ testcase_issue
 
 可以说：
 
-- 当前框架具备执行 70 条 Core Beta Case 的能力。
+- 当前框架具备执行 74 条 Core Beta Case 的能力。
 - 当前没有 fixture provider 时，只能执行 55 条 scoped 范围。
 - 55 条 scoped 全绿只能证明范围内核心能力有效。
 
 不能说：
 
-- 55 条 scoped 全绿等于完整 70 条门禁通过。
+- 55 条 scoped 全绿等于完整 74 条门禁通过。
 - `READY_SCOPED` 等于可发布。
 - raw passed 等于 trusted pass。
 - 后续重试通过可以抹去旧批次中已取证的产品缺陷、框架问题或 flaky。
 
-完整 70 条发布门禁必须补齐 15 条 fixture provider，预检返回 `READY`，再在同一冻结发布身份下执行完整门禁和多轮可信复核。
+完整 74 条发布门禁必须补齐所需 fixture provider，预检返回 `READY`，再在同一冻结发布身份下执行完整门禁和多轮可信复核。
