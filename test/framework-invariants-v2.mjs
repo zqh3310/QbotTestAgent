@@ -108,6 +108,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
 const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
+const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
 const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-electron-control-plane.sh'), 'utf8');
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
@@ -119,6 +120,17 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+
+assert.doesNotMatch(
+  automationFramework,
+  /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
+  'macOS mktemp 要求 XXXXXX 位于模板末尾，框架合同不得在其后追加扩展名',
+);
+assert.doesNotMatch(
+  coreBetaOperatingGuide,
+  /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
+  'Core Beta 操作指南不得重新引入 macOS 不兼容的 mktemp 后缀',
+);
 
 {
   const historicalDraft = {

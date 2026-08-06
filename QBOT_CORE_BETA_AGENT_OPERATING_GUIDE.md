@@ -144,7 +144,7 @@ cd /Users/qifu/Documents/QbotTestAgent
 
 CASEBOOK="$PWD/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx"
 EXCLUDED_CASE_IDS="BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-EXPERT-017,BETA-EXPERT-018,BETA-EXPERT-019,BETA-EXPERT-020,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001"
-PLAN="$(mktemp /tmp/qbot-core74-plan.XXXXXX.json)"
+PLAN="$(mktemp /tmp/qbot-core74-plan.XXXXXX)"
 python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
   --casebook "$CASEBOOK" --sheet 核心内测Case --profile mandatory --output "$PLAN"
 CASE_IDS="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1])); const x=new Set(process.argv[2].split(",")); process.stdout.write(p.cases.map(c=>c.id).filter(id=>!x.has(id)).join(","))' "$PLAN" "$EXCLUDED_CASE_IDS")"

@@ -304,7 +304,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 
    ```bash
    CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx"
-   PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX.json)"
+   PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
    python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
      --casebook "$CASEBOOK" \
