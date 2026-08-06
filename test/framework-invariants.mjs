@@ -1520,6 +1520,23 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: coreTablePrompt },
   observedHeaderScopedCoreTableReply.replace('CSV\t182\nXLSX\t215', 'CSV\t215\nXLSX\t182'),
 ).ok, false, '通用 runner 不得接受总计表头下交换双方总计的连续文件行');
+const observedInlineScopedCoreTableReply = [
+  '指标\tqbot-table.csv\tqbot-data-table-diff.xlsx\t差异',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '总计：CSV = 182，XLSX = 215，XLSX 高出 33。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedInlineScopedCoreTableReply).ok,
+  true,
+  '通用 runner 应接受行首总计上下文中同一行分别绑定 CSV/XLSX 的真实回复',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedInlineScopedCoreTableReply.replace('CSV = 182，XLSX = 215', 'CSV = 215，XLSX = 182'),
+).ok, false, '通用 runner 不得接受行首总计上下文中交换的 CSV/XLSX 总计');
 if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
   throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
 }

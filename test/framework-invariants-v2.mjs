@@ -4011,6 +4011,23 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: coreTablePrompt },
   observedHeaderScopedCoreTableReply.replace('CSV\t182\nXLSX\t215', 'CSV\t215\nXLSX\t182'),
 ).ok, false, '总计表头约束的连续文件行交换总计时不得形成通过');
+const observedInlineScopedCoreTableReply = [
+  '指标\tqbot-table.csv\tqbot-data-table-diff.xlsx\t差异',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '总计：CSV = 182，XLSX = 215，XLSX 高出 33。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedInlineScopedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受行首总计上下文中同一行分别绑定 CSV/XLSX 的真实回复',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedInlineScopedCoreTableReply.replace('CSV = 182，XLSX = 215', 'CSV = 215，XLSX = 182'),
+).ok, false, '行首总计上下文中交换 CSV/XLSX 总计时不得形成通过');
 const aliasedCoreTableReply = [
   '表 A（qbot-table.csv）包含报名人数 100、到场人数 70、成交单数 12。',
   '表 B（qbot-data-table-diff.xlsx）包含报名人数 120、到场人数 80、成交单数 15。',

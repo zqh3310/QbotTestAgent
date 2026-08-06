@@ -25584,6 +25584,19 @@ function tableHeaderScopedTotalMatches(lines, rowIndex, afterIdentity, expectedT
   return false;
 }
 
+function tableInlineScopedTotalMatches(line, identity, expectedTotal) {
+  const identityStart = Number(identity.index || 0);
+  if (!/(?:总计|合计)/.test(line.slice(0, identityStart))) return false;
+
+  const afterIdentity = line.slice(identityStart + identity[0].length);
+  const nextIdentity = afterIdentity.match(TABLE_FILE_ROW_IDENTITY_PATTERN);
+  const identitySegment = nextIdentity
+    ? afterIdentity.slice(0, Number(nextIdentity.index || 0))
+    : afterIdentity;
+  const values = identitySegment.match(/\d+(?:\.\d+)?/g) || [];
+  return Number(values.at(-1)) === Number(expectedTotal);
+}
+
 function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
   const lines = String(replyText || '')
     .split(/\r?\n/)
@@ -25598,6 +25611,7 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     if (!identity) return false;
     const afterIdentity = line.slice(Number(identity.index || 0) + identity[0].length);
     if (directTotal.test(afterIdentity) || calculatedTotal.test(afterIdentity)) return true;
+    if (tableInlineScopedTotalMatches(line, identity, expectedTotal)) return true;
 
     return tableHeaderScopedTotalMatches(lines, index, afterIdentity, expectedTotal);
   }) || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);

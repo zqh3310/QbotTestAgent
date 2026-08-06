@@ -22,6 +22,18 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806203032_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-5c9f1b5
+```
+
+该批次完成 17/55 后，在 `BETA-FILE-004` 确认总计 Oracle 的 framework issue：
+产品回复明确给出 `总计：CSV = 182，XLSX = 215`，三处差异也全部正确，但
+解析器没有按同一行的下一个文件身份切分数值区间，错误地把行尾 215 当作 CSV
+总计并将 Case 误标为产品 Bug。第 18 条仅有中间证据，未形成 Case 结果。
+该目录已冻结，不得续写；修复后必须在新推送基线上从第 1 条完整重跑 55 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806183239_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7b12d99
 ```
 
