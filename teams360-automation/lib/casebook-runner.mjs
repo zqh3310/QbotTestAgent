@@ -186,7 +186,11 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
   postRecoveryReadyMs = 60_000,
   recoveryCdpUrl = '',
   resetConnection = null,
+  expectedQworkUiUrl = '',
 } = {}) {
+  const expectedQworkUi = expectedQworkUiUrl
+    ? validatePinnedQworkUiUrl(expectedQworkUiUrl)
+    : null;
   let lastError = null;
   const startedWaitingAt = Date.now();
   let readyDeadline = startedWaitingAt + Math.max(timeoutMs, Number(readyTimeoutMs) || 120_000);
@@ -197,9 +201,19 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
     const startedAt = Date.now();
     try {
       browser = await chromium.connectOverCDP(cdpUrl, { timeout: timeoutMs });
-      const page = browser.contexts().flatMap((context) => context.pages())
-        .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+      const qworkPages = browser.contexts().flatMap((context) => context.pages())
+        .filter((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+      const page = (expectedQworkUi
+        ? qworkPages.find((candidate) => {
+          try { return new URL(candidate.url()).href === expectedQworkUi.url; } catch { return false; }
+        })
+        : null) || qworkPages[0];
       if (!page) throw new Error('CDP connected, but the full QWork QBot page is unavailable.');
+      if (expectedQworkUi && new URL(page.url()).href !== expectedQworkUi.url) {
+        throw new Error(
+          `Managed QWork release identity drift: expected=${expectedQworkUi.url} actual=${page.url()}`,
+        );
+      }
       await page.evaluate(qworkRuntimeBridgeSource());
       // A runner can be terminated after installing a stateful renderer
       // fixture but before its finally block restores window.agent.  Those
@@ -300,7 +314,9 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
       const canRecover = attempt < attempts && Date.now() < readyDeadline;
       if (recoveryCdpUrl && canRecover) {
         await resetConnection?.().catch(() => {});
-        const recovery = await recoverTeamsQworkWorkbench(recoveryCdpUrl).catch((recoveryError) => ({
+        const recovery = await recoverTeamsQworkWorkbench(recoveryCdpUrl, {
+          expectedUiUrl: expectedQworkUi?.url || '',
+        }).catch((recoveryError) => ({
           recovered: false,
           reason: String(recoveryError?.message || recoveryError).split('\n')[0],
         }));
@@ -335,7 +351,23 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
   );
 }
 
-export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = {}) {
+export function resolveTeamsRecoveryQworkUi(
+  expectedUiUrl,
+  observedUiUrl,
+  validationOptions = {},
+) {
+  const frozen = String(expectedUiUrl || '').trim();
+  const observed = String(observedUiUrl || '').trim();
+  if (!frozen && !observed) {
+    throw new Error('QWork WebView is unavailable; pinned UI cannot be preserved.');
+  }
+  return validatePinnedQworkUiUrl(frozen || observed, validationOptions);
+}
+
+export async function recoverTeamsQworkWorkbench(cdpUrl, {
+  settleMs = 8_000,
+  expectedUiUrl = '',
+} = {}) {
   const normalizedCdpUrl = normalizeCdpUrl(cdpUrl);
   const targetsResponse = await fetch(new URL('/json/list', normalizedCdpUrl), {
     signal: AbortSignal.timeout(5_000),
@@ -349,10 +381,12 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, { settleMs = 8_000 } = 
     && (/^QWork$/i.test(String(target.title || ''))
       || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(target.url || '')))
   )) : null;
-  if (!qworkTarget?.url) {
+  if (!qworkTarget?.url && !expectedUiUrl) {
     return { recovered: false, reason: 'QWork WebView is unavailable; pinned UI cannot be preserved.' };
   }
-  const pinnedQworkUi = validatePinnedQworkUiUrl(qworkTarget.url);
+  // A renderer refresh may briefly expose the host's stale persisted URL. The
+  // frozen run identity is authoritative once the Casebook run has started.
+  const pinnedQworkUi = resolveTeamsRecoveryQworkUi(expectedUiUrl, qworkTarget?.url || '');
   const browser = await chromium.connectOverCDP(normalizedCdpUrl, { timeout: 10_000 });
   let browserClosed = false;
   try {
@@ -632,6 +666,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
   const recoveryStarts = new Map();
   let summary = null;
   let recoveryPass = 0;
+  let pinnedQworkUiUrl = String(options['qwork-ui-url'] || '').trim();
   try {
     while (true) {
       // Playwright's Electron CDP handshake must start from the project root.
@@ -642,8 +677,10 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
       const browser = await connectTeamsCasebookBrowser(connection.cdpUrl, {
         recoveryCdpUrl: connection.upstreamCdpUrl || '',
         resetConnection: connection.reset,
+        expectedQworkUiUrl: pinnedQworkUiUrl,
       });
       const runtimeIdentity = await configureTeamsFixtureRuntime(options, browser);
+      pinnedQworkUiUrl = runtimeIdentity.qworkUiUrl;
       pinManagedSessionControlPlane(options.session, runtimeIdentity.controlPlane);
       if (!callerManagedCdp) {
         options['restart-reconnect-hook'] = async () => {
@@ -657,6 +694,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
           const nextBrowser = await connectTeamsCasebookBrowser(connection.cdpUrl, {
             recoveryCdpUrl: connection.upstreamCdpUrl || '',
             resetConnection: connection.reset,
+            expectedQworkUiUrl: runtimeIdentity.qworkUiUrl,
           });
           const nextPage = nextBrowser.contexts().flatMap((context) => context.pages())
             .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));

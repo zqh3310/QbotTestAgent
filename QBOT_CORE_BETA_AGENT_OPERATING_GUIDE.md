@@ -88,7 +88,7 @@ npm --prefix teams360-automation run check
 最近基线通过情况：
 
 - 根框架：80/80。
-- Teams 适配层：88/88。
+- Teams 适配层：89/89。
 
 静态能力审计：
 
@@ -193,6 +193,10 @@ Core Beta v2 的 Case 间执行固定串行。即使旧命令残留 `--parallel 
 若 QWork 显示遮挡左下设置入口的“新版本已就绪”提示，框架会在 Case 开始和
 进入系统设置前点击精确的“稍后/跳过更新”并保存前后证据；不得点击“立即更新”
 或在批次中改变冻结发布身份。
+
+刷新或受管宿主重启后，Teams 恢复器必须继续使用本轮首次连接冻结的精确
+QWork versioned file URL。profile 或临时 renderer 中的旧版本只能触发漂移恢复，
+不得成为新的 pin；恢复后必须再次校验 URL、模型档位和 capabilities。
 
 ## 7. 监控规则
 

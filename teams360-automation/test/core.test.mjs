@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import {
   LIVE_PROFILE_ALIAS,
@@ -48,6 +49,7 @@ import {
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
+  resolveTeamsRecoveryQworkUi,
   teamsCasebookExitCode,
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
@@ -539,6 +541,32 @@ test('Teams preconnect re-verifies a recovered host after the original deadline 
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /recovery\.recovered[\s\S]*extendTeamsPreconnectDeadlineAfterRecovery/);
   assert.match(source, /const canRetry = attempt < attempts && Date\.now\(\) < readyDeadline;[\s\S]*if \(canRetry\)/);
+});
+
+test('Teams recovery keeps the frozen QWork release when the refreshed renderer exposes an uninstalled stale pin', () => {
+  const runtimeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-frozen-qwork-'));
+  const expectedDir = path.join(runtimeHome, 'ui', '0.0.30-rc.1');
+  const staleDir = path.join(runtimeHome, 'ui', '0.0.29');
+  fs.mkdirSync(expectedDir, { recursive: true });
+  fs.mkdirSync(staleDir, { recursive: true });
+  fs.writeFileSync(path.join(expectedDir, 'index.html'), '<!doctype html>');
+  fs.writeFileSync(path.join(expectedDir, '.installed.json'), JSON.stringify({
+    status: 'ready',
+    version: '0.0.30-rc.1',
+  }));
+  const expectedUrl = pathToFileURL(path.join(expectedDir, 'index.html')).href;
+  const staleUrl = pathToFileURL(path.join(staleDir, 'index.html')).href;
+  try {
+    const selected = resolveTeamsRecoveryQworkUi(expectedUrl, staleUrl, { runtimeHome });
+    assert.equal(selected.version, '0.0.30-rc.1');
+    assert.equal(selected.url, expectedUrl);
+    assert.throws(
+      () => resolveTeamsRecoveryQworkUi('', staleUrl, { runtimeHome }),
+      /0\.0\.29 is not fully installed/,
+    );
+  } finally {
+    fs.rmSync(runtimeHome, { recursive: true, force: true });
+  }
 });
 
 test('Teams fixture runtime restores the packaged host and keeps the local-QBot lane untouched', async () => {
@@ -1362,7 +1390,9 @@ test('managed Teams Casebook refreshes only QWork after a stale renderer CDP att
   assert.match(source, /Teams QWork capabilities precheck timed out after 5000ms/);
   assert.match(source, /new URL\('\/json\/list', normalizedCdpUrl\)/);
   assert.match(source, /target\?\.type === 'webview'/);
-  assert.match(source, /validatePinnedQworkUiUrl\(qworkTarget\.url\)/);
+  assert.match(source, /resolveTeamsRecoveryQworkUi\(expectedUiUrl, qworkTarget\?\.url \|\| ''\)/);
+  assert.match(source, /Managed QWork release identity drift/);
+  assert.match(source, /expectedQworkUiUrl: runtimeIdentity\.qworkUiUrl/);
   assert.match(source, /applyManagedQbotProfileConfig/);
   assert.match(source, /remountPinnedManagedQworkUi\(relaunched\.cdp_url, pinnedQworkUi\.url/);
   assert.match(source, /launchLiveTeams/);
