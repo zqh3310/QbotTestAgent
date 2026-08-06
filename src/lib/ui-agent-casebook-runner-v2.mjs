@@ -4373,9 +4373,132 @@ export function coreBetaV2SettingsSurfaceState(text) {
   };
 }
 
+export function coreBetaV2RuntimeUpdateSkipAction(promptText, buttonText) {
+  const prompt = String(promptText || '').replace(/\s+/g, ' ').trim();
+  const button = String(buttonText || '').replace(/\s+/g, ' ').trim();
+  return /新版本(?:已就绪|可用|可以更新)|发现新版本/i.test(prompt)
+    && /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/.test(button);
+}
+
+async function dismissCoreBetaV2RuntimeUpdateObstruction(page, state = null) {
+  const toast = page.locator('[data-testid="runtime-update-ready-toast"], [role="status"]').filter({
+    hasText: /新版本(?:已就绪|可用|可以更新)|发现新版本/i,
+  }).first();
+  if (!(await visible(toast, 500))) {
+    return { observed: false, ok: true, dismissed: false, text: '', button_text: '' };
+  }
+
+  const text = await toast.innerText({ timeout: 1000 }).catch(() => '');
+  const skip = toast.locator('button, [role="button"]').filter({
+    hasText: /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/,
+  }).first();
+  const buttonText = await skip.innerText({ timeout: 1000 }).catch(() => '');
+  const safeAction = coreBetaV2RuntimeUpdateSkipAction(text, buttonText);
+  const count = state
+    ? (state._runtimeUpdateSkipCount = Number(state._runtimeUpdateSkipCount || 0) + 1)
+    : 1;
+  const base = `runtime-update-prompt-skip-${String(count).padStart(2, '0')}`;
+  const beforeScreenshot = state?.case_dir
+    ? await shot(page, state.case_dir, `${base}-before`).catch(() => '')
+    : '';
+  let clickError = '';
+  let clicked = false;
+  if (safeAction && (!state?.case_dir || beforeScreenshot)) {
+    try {
+      await skip.click({ timeout: 5000 });
+      clicked = true;
+    } catch (error) {
+      clickError = clip(error?.message || error, 320);
+    }
+  }
+  const hidden = clicked
+    ? await toast.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false)
+    : false;
+  const afterScreenshot = hidden && state?.case_dir
+    ? await shot(page, state.case_dir, `${base}-after`).catch(() => '')
+    : '';
+  const evidenceComplete = !state?.case_dir || Boolean(beforeScreenshot && afterScreenshot);
+  const valid = safeAction && clicked && hidden && evidenceComplete;
+  const reason = !safeAction
+    ? `更新提示没有精确安全的“稍后/跳过更新”动作：prompt=${clip(text, 180)}；button=${clip(buttonText, 80) || '未找到'}`
+    : !beforeScreenshot && state?.case_dir
+      ? '点击“稍后”前无法保存更新提示截图，拒绝无证据操作。'
+      : clickError
+        ? `更新提示“稍后”点击失败：${clickError}`
+        : !hidden
+          ? '点击“稍后”后更新提示仍可见。'
+          : !afterScreenshot && state?.case_dir
+            ? '更新提示消失后无法保存页面截图。'
+            : '';
+  let ledger = '';
+  if (state?.case_dir) {
+    ledger = path.join(state.case_dir, `${base}.json`);
+    writeJsonFile(ledger, {
+      schema_version: 'qbot-core-beta-runtime-update-prompt-skip/v1',
+      captured_at: new Date().toISOString(),
+      valid,
+      prompt_text: text,
+      safe_action: safeAction,
+      button_text: buttonText,
+      clicked,
+      hidden_after_click: hidden,
+      before_screenshot: beforeScreenshot,
+      after_screenshot: afterScreenshot,
+      error: reason,
+    });
+    state.screenshots[`${base}_before`] = beforeScreenshot;
+    if (afterScreenshot) state.screenshots[`${base}_after`] = afterScreenshot;
+    if (!Array.isArray(state.artifacts.runtime_update_prompt_skips)) {
+      state.artifacts.runtime_update_prompt_skips = [];
+    }
+    state.artifacts.runtime_update_prompt_skips.push({
+      valid,
+      prompt_text: text,
+      button_text: buttonText,
+      clicked,
+      hidden_after_click: hidden,
+      before_screenshot: beforeScreenshot,
+      after_screenshot: afterScreenshot,
+      ledger,
+      error: reason,
+    });
+    recordStep(
+      state,
+      '跳过遮挡操作区的 QWork 版本更新提示',
+      '自动化批次必须保持冻结发布身份；只允许点击“稍后/跳过更新”，禁止在测试中安装新版本。',
+      valid
+        ? `已点击“${buttonText}”并确认提示消失：${clip(text, 180)}`
+        : reason,
+      valid ? 'passed' : 'failed',
+      afterScreenshot || beforeScreenshot,
+      valid ? '' : 'automation_error',
+    );
+  }
+  return {
+    observed: true,
+    ok: valid,
+    dismissed: valid,
+    text,
+    button_text: buttonText,
+    before_screenshot: beforeScreenshot,
+    after_screenshot: afterScreenshot,
+    ledger,
+    reason,
+  };
+}
+
 async function dismissCoreBetaV2SettingsObstruction(page, state) {
+  const runtimeUpdate = await dismissCoreBetaV2RuntimeUpdateObstruction(page, state);
+  if (!runtimeUpdate.ok) return runtimeUpdate;
   const feedback = page.locator('[data-testid="skill-operation-feedback"]').first();
-  if (!(await visible(feedback, 500))) return { ok: true, dismissed: false, text: '' };
+  if (!(await visible(feedback, 500))) {
+    return {
+      ok: true,
+      dismissed: runtimeUpdate.dismissed,
+      text: runtimeUpdate.text,
+      runtime_update: runtimeUpdate,
+    };
+  }
   const text = await feedback.innerText({ timeout: 1000 }).catch(() => '');
   const dismiss = feedback.locator('[aria-label="关闭操作提示"], .skill-operation-dismiss').first();
   if (!(await visible(dismiss, 800))) {
@@ -4415,8 +4538,9 @@ async function dismissCoreBetaV2SettingsObstruction(page, state) {
   }
   return {
     ok: closed,
-    dismissed: closed,
+    dismissed: closed || runtimeUpdate.dismissed,
     text,
+    runtime_update: runtimeUpdate,
     reason: closed ? '' : '关闭技能操作提示后仍检测到遮挡。',
   };
 }
@@ -22230,6 +22354,14 @@ async function captureDialogDuringWithAction(page, action, { accept = false, tim
 }
 
 async function dismissBlockingOverlays(page, state = null) {
+  const runtimeUpdate = await dismissCoreBetaV2RuntimeUpdateObstruction(page, state);
+  if (runtimeUpdate.observed) {
+    if (!runtimeUpdate.ok) {
+      throw new Error(`无法安全跳过 QWork 版本更新提示：${runtimeUpdate.reason}`);
+    }
+    return true;
+  }
+
   const accessibilitySheet = teamsAccessibilitySheet({ dismiss: false });
   if (accessibilitySheet.observed) {
     const safeInformationDialog = safeNativeAttachmentInfoDialog({

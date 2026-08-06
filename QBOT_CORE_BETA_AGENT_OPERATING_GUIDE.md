@@ -14,7 +14,7 @@
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
 - 当前正式宿主身份：360Teams `5.2.38(2119080433)`。
-- 当前 QWork 身份：UAT `0.0.29`。
+- 当前 QWork 身份：UAT `0.0.30-rc.1`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
@@ -22,7 +22,7 @@
 最近一次确认可用的 scoped 预检：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/outputs/20260805084049_uat-core-beta70-scoped55-pretest_framework-71b25fa_teams-5.2.38_qwork-0.0.29/core-beta-pretest-report.json
+/Users/qifu/Documents/QbotTestAgent/outputs/20260806100253_uat-core-beta70-scoped55-pretest_framework-da264de_teams-5.2.38_qwork-0.0.30-rc.1/core-beta-pretest-report.json
 ```
 
 该预检结果为 `READY_SCOPED`，27 checks，0 blockers。
@@ -115,7 +115,7 @@ npm run core-beta:capability-audit -- \
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-SOURCE_PRETEST="$PWD/outputs/20260805084049_uat-core-beta70-scoped55-pretest_framework-71b25fa_teams-5.2.38_qwork-0.0.29/core-beta-pretest-report.json"
+SOURCE_PRETEST="$PWD/outputs/20260806100253_uat-core-beta70-scoped55-pretest_framework-da264de_teams-5.2.38_qwork-0.0.30-rc.1/core-beta-pretest-report.json"
 CASEBOOK="$PWD/outputs/qbot-core-gate-redesign-20260730/QBot核心内测Casebook_MR源码严选门禁_70条_2026-07-30.xlsx"
 CASE_IDS="$(jq -r '.scope.selected_case_ids | join(",")' "$SOURCE_PRETEST")"
 EXCLUDED_CASE_IDS="$(jq -r '.scope.excluded_case_ids | join(",")' "$SOURCE_PRETEST")"
@@ -131,11 +131,11 @@ npm run core-beta:pretest -- \
   --production-gate true \
   --expected-teams-version 5.2.38 \
   --expected-teams-build 2119080433 \
-  --expected-qwork-version 0.0.29 \
+  --expected-qwork-version 0.0.30-rc.1 \
   --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.29-sha256-29d64654090a26f5222ad7ea1e9b63888a1546742e14482ef9cde631d03015ef \
-  --feature-flags-hash 47809cea8774e0b84e4bd50aec6498a4d96850bb1b5b59257f396bd0f48fb315 \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.1-sha256-99fae130c7fa3a6dbff9301806eb181cc97017912108a6f98f1d2c42f9725cf3 \
+  --feature-flags-hash 3209348fca087c85f93a7c7aebe5699280ae88a9625e7b2afda71b81129704ef \
   --case "$CASE_IDS" \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
@@ -152,7 +152,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.29_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta70-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -165,9 +165,9 @@ npm --prefix teams360-automation run casebook -- \
   --single-host-pipeline 1 \
   --production-gate true \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.29-sha256-29d64654090a26f5222ad7ea1e9b63888a1546742e14482ef9cde631d03015ef \
-  --feature-flags-hash 47809cea8774e0b84e4bd50aec6498a4d96850bb1b5b59257f396bd0f48fb315 \
-  --qwork-build-id 0.0.29 \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.1-sha256-99fae130c7fa3a6dbff9301806eb181cc97017912108a6f98f1d2c42f9725cf3 \
+  --feature-flags-hash 3209348fca087c85f93a7c7aebe5699280ae88a9625e7b2afda71b81129704ef \
+  --qwork-build-id 0.0.30-rc.1 \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
   --scope-reason fixture_provider_unavailable
@@ -189,6 +189,10 @@ Core Beta v2 的 Case 间执行固定串行。即使旧命令残留 `--parallel 
 `--single-host-pipeline > 1`，runner 的有效值也必须是 `1`，precheck 必须记录
 `core-beta-v2-forced-serial`。`BETA-CHAT-008` 的 20 任务派发是单个 Case 内部合同，
 不是 Case 间并行。
+
+若 QWork 显示遮挡左下设置入口的“新版本已就绪”提示，框架会在 Case 开始和
+进入系统设置前点击精确的“稍后/跳过更新”并保存前后证据；不得点击“立即更新”
+或在批次中改变冻结发布身份。
 
 ## 7. 监控规则
 

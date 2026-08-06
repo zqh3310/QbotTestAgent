@@ -57,6 +57,7 @@ import {
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2RuntimeMaintenanceState,
+  coreBetaV2RuntimeUpdateSkipAction,
   coreBetaV2SettingsLoadTimeoutMs,
   coreBetaV2SettingsSurfaceState,
   forbiddenMatchesForCase,
@@ -2167,6 +2168,26 @@ assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n加载个人设�
   loading: false,
   error: '加载个人设置失败：网络错误',
 });
+assert.equal(
+  coreBetaV2RuntimeUpdateSkipAction('新版本已就绪 v0.0.30-rc.2', '稍后'),
+  true,
+  '新版 QWork 更新提示必须允许精确点击“稍后”以保持冻结发布身份',
+);
+assert.equal(
+  coreBetaV2RuntimeUpdateSkipAction('发现新版本 v0.0.31', '跳过更新'),
+  true,
+  '更新提示兼容精确“跳过更新”动作',
+);
+assert.equal(
+  coreBetaV2RuntimeUpdateSkipAction('新版本已就绪 v0.0.30-rc.2', '立即更新'),
+  false,
+  '自动化批次禁止点击“立即更新”导致发布身份漂移',
+);
+assert.equal(
+  coreBetaV2RuntimeUpdateSkipAction('普通业务提示', '稍后'),
+  false,
+  '非更新提示不得复用版本更新跳过规则',
+);
 assert.match(
   runner,
   /async function openCoreBetaV2SystemSettings[\s\S]*initialSettings = await waitForOpenSettingsMaintenance\(\)[\s\S]*ensureSidebarExpanded/,
@@ -2176,6 +2197,21 @@ assert.match(
   runner,
   /async function dismissCoreBetaV2SettingsObstruction[\s\S]*skill-operation-feedback[\s\S]*关闭操作提示[\s\S]*state: 'hidden'[\s\S]*openCoreBetaV2SystemSettings[\s\S]*dismissCoreBetaV2SettingsObstruction/,
   'Core Beta v2 必须先关闭遮挡设置入口的终态技能提示，并确认提示确实消失',
+);
+assert.match(
+  runner,
+  /async function dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*runtime-update-ready-toast[\s\S]*稍后[\s\S]*skip\.click\(\{ timeout: 5000 \}\)[\s\S]*state: 'hidden'[\s\S]*runtime-update-prompt-skip/,
+  'Core Beta v2 必须用真实“稍后/跳过更新”按钮关闭版本更新遮挡，并保存前后证据',
+);
+assert.match(
+  runner,
+  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*async function openCoreBetaV2SystemSettings/,
+  '进入系统设置前必须再次检查异步晚到的 QWork 更新提示',
+);
+assert.match(
+  runner,
+  /async function dismissBlockingOverlays[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*无法安全跳过 QWork 版本更新提示/,
+  '每条 Case 开始时必须处理版本更新提示，未知或无法关闭时 fail-closed',
 );
 assert.match(
   runner,
