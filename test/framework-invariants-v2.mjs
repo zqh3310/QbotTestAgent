@@ -40,6 +40,7 @@ import {
   coreBetaPartialReplyReady,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
+  coreBetaRuntimeFamilyPrerequisiteBlocker,
   coreBetaQbotHomeFromUiUrl,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
@@ -1154,6 +1155,137 @@ try {
 } finally {
   fs.rmSync(prerequisiteEvidenceDir, { recursive: true, force: true });
 }
+const runtimePrerequisiteRoles = [
+  'expert_draft_lifecycle',
+  'expert_builder_trace',
+  'capability_selection',
+  'capability_execution_event',
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+];
+const runtimePrerequisiteTestCase = {
+  id: 'BETA-EXPERT-003',
+  evidence_roles: ['connection_view_snapshot', ...runtimePrerequisiteRoles],
+};
+const runtimePrerequisiteView = {
+  runtimeOptions: {
+    runtimeFamily: 'claude-code',
+    options: [{
+      runtimeFamily: 'claude-code',
+      connectionId: 'qa-anthropic',
+      protocol: 'anthropic',
+      modelId: 'qa-model',
+      disabled: false,
+    }],
+    selected: {
+      runtimeFamily: 'claude-code',
+      connectionId: 'qa-anthropic',
+      protocol: 'anthropic',
+      modelId: 'qa-model',
+    },
+  },
+};
+const runtimePrerequisiteState = {
+  task: { id: null, running: false, send_count: 36, message_count: 0 },
+  runtime: { family: 'claude-code' },
+  expert: null,
+  expert_drafts: [{ id: 'existing-draft', revision: 4, etag: 'draft-etag', status: 'editable' }],
+  connection_view: runtimePrerequisiteView,
+};
+const runtimePrerequisiteBlocker = coreBetaRuntimeFamilyPrerequisiteBlocker({
+  testCase: runtimePrerequisiteTestCase,
+  targetRuntimeFamily: 'codex',
+  error: { name: 'Error', code: '', message: '没有匹配协议的 LLM connection' },
+  before: runtimePrerequisiteState,
+  after: structuredClone(runtimePrerequisiteState),
+});
+assert.equal(runtimePrerequisiteBlocker.valid, true, '精确 Codex connection 前置缺失且零状态变更时应形成可信 blocker');
+assert.equal(runtimePrerequisiteBlocker.normalized_error_code, 'runtime_connection_protocol_unavailable');
+assert.deepEqual(runtimePrerequisiteBlocker.not_applicable_roles, runtimePrerequisiteRoles);
+assert.equal(runtimePrerequisiteBlocker.mutation_guard.no_user_action, true, '全局 send count 可非零，但当前空任务前后必须稳定且未发送');
+assert.equal(runtimePrerequisiteBlocker.mutation_guard.expert_absent, true, 'runtime 前置阻塞前后不得残留或选择专家');
+assert.equal(
+  coreBetaRuntimeFamilyPrerequisiteBlocker({
+    testCase: runtimePrerequisiteTestCase,
+    targetRuntimeFamily: 'codex',
+    error: { message: 'setRuntimeFamily IPC timeout' },
+    before: runtimePrerequisiteState,
+    after: structuredClone(runtimePrerequisiteState),
+  }).applicable,
+  false,
+  '未知 runtime 切换错误必须保留为 automation_error',
+);
+const mutatedRuntimePrerequisiteState = structuredClone(runtimePrerequisiteState);
+mutatedRuntimePrerequisiteState.task.id = 'unexpected-task';
+mutatedRuntimePrerequisiteState.task.message_count = 1;
+assert.equal(
+  coreBetaRuntimeFamilyPrerequisiteBlocker({
+    testCase: runtimePrerequisiteTestCase,
+    targetRuntimeFamily: 'codex',
+    error: { message: '没有匹配协议的 LLM connection' },
+    before: runtimePrerequisiteState,
+    after: mutatedRuntimePrerequisiteState,
+  }).applicable,
+  false,
+  'runtime 切换失败后若已产生任务或消息，禁止降级为前置 blocked',
+);
+const expertMutatedRuntimePrerequisiteState = structuredClone(runtimePrerequisiteState);
+expertMutatedRuntimePrerequisiteState.expert = { expertId: 'qwork.builtin.expert-authoring' };
+assert.equal(
+  coreBetaRuntimeFamilyPrerequisiteBlocker({
+    testCase: runtimePrerequisiteTestCase,
+    targetRuntimeFamily: 'codex',
+    error: { message: '没有匹配协议的 LLM connection' },
+    before: runtimePrerequisiteState,
+    after: expertMutatedRuntimePrerequisiteState,
+  }).applicable,
+  false,
+  'runtime 切换失败后若专家状态变化，禁止降级为前置 blocked',
+);
+const runtimePrerequisiteEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-runtime-prerequisite-'));
+try {
+  const blockerFile = path.join(runtimePrerequisiteEvidenceDir, 'runtime-family-prerequisite.json');
+  writeJsonFile(blockerFile, runtimePrerequisiteBlocker);
+  const artifacts = {
+    connection_view_snapshot: blockerFile,
+    core_beta_not_applicable_roles: runtimePrerequisiteRoles.map((role) => ({ role, blocker_path: blockerFile })),
+  };
+  const manifest = buildCoreEvidenceManifest({
+    testCase: runtimePrerequisiteTestCase,
+    caseDir: runtimePrerequisiteEvidenceDir,
+    artifacts,
+  });
+  assert.equal(manifest.complete, true, '可信 runtime prerequisite 必须生成完整 manifest');
+  assert.deepEqual(manifest.missing_roles, []);
+  assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), runtimePrerequisiteRoles);
+
+  writeJsonFile(blockerFile, {
+    ...runtimePrerequisiteBlocker,
+    mutation_guard: { ...runtimePrerequisiteBlocker.mutation_guard, valid: false },
+  });
+  const tampered = buildCoreEvidenceManifest({
+    testCase: runtimePrerequisiteTestCase,
+    caseDir: runtimePrerequisiteEvidenceDir,
+    artifacts,
+  });
+  assert.deepEqual(tampered.missing_roles, runtimePrerequisiteRoles, '零状态变更校验被篡改后，N/A 角色必须重新变为缺失');
+} finally {
+  fs.rmSync(runtimePrerequisiteEvidenceDir, { recursive: true, force: true });
+}
+assert.match(
+  runner,
+  /const runtimeSwitch = await page\.evaluate[\s\S]*if \(!runtimeSwitch\.ok\)[\s\S]*applyCoreBetaRuntimePrerequisiteBlocker[\s\S]*return;[\s\S]*await page\.evaluate\(async \(\) => \{[\s\S]*setExpert\('qwork\.builtin\.expert-authoring'\)/,
+  'Expert Builder 必须先确认 runtime 切换成功；可信前置阻塞后不得调用 setExpert',
+);
+assert.match(
+  automationFramework,
+  /BETA-EXPERT-003[\s\S]*qbot-core-beta-runtime-prerequisite\/v1[\s\S]*未知错误[\s\S]*automation_error/,
+  '框架合同必须固定 runtime prerequisite 的 blocked 与 automation_error 边界',
+);
 assert.match(
   runner,
   /installedTargets[\s\S]*cancelReceipt[\s\S]*cleanupValid[\s\S]*applyCoreBetaSkillPrerequisiteBlocker/,

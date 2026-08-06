@@ -799,13 +799,20 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   const declared = Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [];
   const candidates = new Map();
   const notApplicable = new Map();
-  const prerequisiteNotApplicableRoles = new Set([
+  const skillPrerequisiteNotApplicableRoles = new Set([
     'prompt',
     'task_id',
     'send_receipt',
     'transcript',
     'reply_delta',
     'reply_completion',
+  ]);
+  const runtimePrerequisiteNotApplicableRoles = new Set([
+    'expert_draft_lifecycle',
+    'expert_builder_trace',
+    'capability_selection',
+    'capability_execution_event',
+    ...skillPrerequisiteNotApplicableRoles,
   ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
@@ -825,7 +832,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     const role = String(item?.role || '');
     const blockerFile = String(item?.blocker_path || '');
     if (!declared.includes(role)
-      || !prerequisiteNotApplicableRoles.has(role)
+      || (!skillPrerequisiteNotApplicableRoles.has(role)
+        && !runtimePrerequisiteNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -853,7 +861,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     const sourceCaseIds = Array.isArray(blocker?.source_case_ids)
       ? blocker.source_case_ids.map(String)
       : [];
-    const verified = blocker?.schema_version === 'qbot-core-beta-upstream-prerequisite/v1'
+    const skillPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-upstream-prerequisite/v1'
       && blocker?.valid === true
       && blocker?.applicable === true
       && blocker?.kind === 'skill_install_terminal_shortage'
@@ -872,8 +880,35 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && String(blocker?.target_identity || '').trim()
       && failedIdentities.includes(String(blocker.target_identity))
       && allowedRoles.includes(role)
-      && allowedRoles.every((itemRole) => prerequisiteNotApplicableRoles.has(itemRole))
+      && allowedRoles.every((itemRole) => skillPrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const runtimePrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-runtime-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && blocker?.kind === 'runtime_family_connection_unavailable'
+      && blocker?.source === 'public_connection_view_and_typed_runtime_switch_error'
+      && blocker?.dependent_case_id === testCase?.id
+      && blocker?.target_runtime_family === 'codex'
+      && blocker?.normalized_error_code === 'runtime_connection_protocol_unavailable'
+      && /没有匹配协议的\s*LLM connection/i.test(String(blocker?.error?.message || ''))
+      && Number(blocker?.connection_view?.before_options_count) > 0
+      && Number(blocker?.connection_view?.after_options_count) > 0
+      && Number(blocker?.connection_view?.target_match_count) === 0
+      && Number(blocker?.connection_view?.after_target_match_count) === 0
+      && blocker?.connection_view?.selection_stable === true
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.connection_view?.before_sha256 || ''))
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.connection_view?.after_sha256 || ''))
+      && blocker?.mutation_guard?.valid === true
+      && blocker?.mutation_guard?.no_user_action === true
+      && blocker?.mutation_guard?.task_stable === true
+      && blocker?.mutation_guard?.runtime_stable === true
+      && blocker?.mutation_guard?.expert_absent === true
+      && blocker?.mutation_guard?.expert_stable === true
+      && blocker?.mutation_guard?.drafts_stable === true
+      && allowedRoles.includes(role)
+      && allowedRoles.every((itemRole) => runtimePrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
+    const verified = skillPrerequisiteVerified || runtimePrerequisiteVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

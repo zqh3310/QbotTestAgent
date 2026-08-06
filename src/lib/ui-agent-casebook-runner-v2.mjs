@@ -3827,6 +3827,11 @@ function nonEmptyObject(value) {
 
 async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, publicState, actionReceipts }) {
   const declared = Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [];
+  const notApplicableRoles = new Set(
+    (Array.isArray(state.artifacts?.core_beta_not_applicable_roles)
+      ? state.artifacts.core_beta_not_applicable_roles
+      : []).map((item) => String(item?.role || '')).filter(Boolean),
+  );
   const snapshot = publicState || await captureCoreBetaPublicState(page, testCase);
   const artifacts = state.artifacts || {};
   const uploaded = artifacts.upload || null;
@@ -3896,6 +3901,7 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
   };
   for (const role of declared) {
     if (CORE_BETA_BASE_ROLES.has(role)) continue;
+    if (notApplicableRoles.has(role)) continue;
     if (typeof artifacts[role] === 'string' && fs.existsSync(artifacts[role])) continue;
     const signal = evidenceSignals[role];
     const valid = Array.isArray(signal) ? signal.length > 0 : nonEmptyObject(signal);
@@ -6967,6 +6973,159 @@ function coreBetaExpertTypedFailureValid(value, expectedCode) {
     && value?.no_partial_state !== false;
 }
 
+const CORE_BETA_RUNTIME_PREREQUISITE_NA_ROLES = Object.freeze([
+  'expert_draft_lifecycle',
+  'expert_builder_trace',
+  'capability_selection',
+  'capability_execution_event',
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+function coreBetaRuntimePrerequisiteSnapshot(value = {}) {
+  const task = value?.task || {};
+  const draftFingerprints = (Array.isArray(value?.expert_drafts) ? value.expert_drafts : [])
+    .map((item) => ({
+      id: String(item?.id || ''),
+      revision: Number(item?.revision || 0),
+      etag: String(item?.etag || ''),
+      status: String(item?.status || ''),
+      sha256: createHash('sha256').update(JSON.stringify(item || null)).digest('hex'),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    task: {
+      id: task?.id || null,
+      running: Boolean(task?.running),
+      send_count: Number(task?.send_count || 0),
+      message_count: Number(task?.message_count || 0),
+    },
+    runtime_family: String(value?.runtime?.family || ''),
+    expert: value?.expert || null,
+    draft_fingerprints: draftFingerprints,
+  };
+}
+
+export function coreBetaRuntimeFamilyPrerequisiteBlocker({
+  testCase = {},
+  targetRuntimeFamily = '',
+  error = {},
+  before = {},
+  after = {},
+} = {}) {
+  const targetFamily = String(targetRuntimeFamily || '');
+  const message = String(error?.message || error || '');
+  const reportedCode = String(error?.code || '');
+  const beforeView = before?.connection_view || null;
+  const afterView = after?.connection_view || null;
+  const options = Array.isArray(beforeView?.runtimeOptions?.options)
+    ? beforeView.runtimeOptions.options
+    : [];
+  const afterOptions = Array.isArray(afterView?.runtimeOptions?.options)
+    ? afterView.runtimeOptions.options
+    : [];
+  const targetMatches = options.filter((item) => (
+    String(item?.runtimeFamily || '') === targetFamily && item?.disabled !== true
+  ));
+  const afterTargetMatches = afterOptions.filter((item) => (
+    String(item?.runtimeFamily || '') === targetFamily && item?.disabled !== true
+  ));
+  const beforeSnapshot = coreBetaRuntimePrerequisiteSnapshot(before);
+  const afterSnapshot = coreBetaRuntimePrerequisiteSnapshot(after);
+  const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+  const mutationGuard = {
+    no_user_action: beforeSnapshot.task.id == null
+      && afterSnapshot.task.id == null
+      && beforeSnapshot.task.message_count === 0
+      && afterSnapshot.task.message_count === 0
+      && beforeSnapshot.task.running === false
+      && afterSnapshot.task.running === false
+      && beforeSnapshot.task.send_count === afterSnapshot.task.send_count,
+    task_stable: same(beforeSnapshot.task, afterSnapshot.task),
+    runtime_stable: beforeSnapshot.runtime_family === afterSnapshot.runtime_family,
+    expert_absent: beforeSnapshot.expert == null && afterSnapshot.expert == null,
+    expert_stable: same(beforeSnapshot.expert, afterSnapshot.expert),
+    drafts_stable: same(beforeSnapshot.draft_fingerprints, afterSnapshot.draft_fingerprints),
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const recognized = targetFamily === 'codex'
+    && /没有匹配协议的\s*LLM connection/i.test(message);
+  const connectionEvidenceValid = options.length > 0
+    && afterOptions.length > 0
+    && targetMatches.length === 0
+    && afterTargetMatches.length === 0
+    && same(beforeView?.runtimeOptions?.selected || null, afterView?.runtimeOptions?.selected || null);
+  const applicable = Boolean(recognized && connectionEvidenceValid && mutationGuard.valid);
+  const declaredRoles = Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [];
+  const notApplicableRoles = CORE_BETA_RUNTIME_PREREQUISITE_NA_ROLES
+    .filter((role) => declaredRoles.includes(role));
+  const viewHash = (view) => createHash('sha256').update(JSON.stringify(view)).digest('hex');
+  return {
+    schema_version: 'qbot-core-beta-runtime-prerequisite/v1',
+    valid: applicable,
+    oracle_valid: !applicable,
+    applicable,
+    kind: 'runtime_family_connection_unavailable',
+    source: 'public_connection_view_and_typed_runtime_switch_error',
+    dependent_case_id: String(testCase?.id || ''),
+    target_runtime_family: targetFamily,
+    normalized_error_code: recognized ? 'runtime_connection_protocol_unavailable' : 'unrecognized_runtime_switch_error',
+    error: {
+      name: String(error?.name || ''),
+      reported_code: reportedCode,
+      message,
+    },
+    connection_view: {
+      before_options_count: options.length,
+      after_options_count: afterOptions.length,
+      target_match_count: targetMatches.length,
+      after_target_match_count: afterTargetMatches.length,
+      selection_stable: same(beforeView?.runtimeOptions?.selected || null, afterView?.runtimeOptions?.selected || null),
+      observed_runtime_families: [...new Set(options.map((item) => String(item?.runtimeFamily || '')).filter(Boolean))],
+      observed_protocols: [...new Set(options.map((item) => String(item?.protocol || '')).filter(Boolean))],
+      before_sha256: viewHash(beforeView),
+      after_sha256: viewHash(afterView),
+      before: beforeView,
+      after: afterView,
+    },
+    mutation_guard: {
+      ...mutationGuard,
+      before: beforeSnapshot,
+      after: afterSnapshot,
+    },
+    not_applicable_roles: notApplicableRoles,
+    reason: applicable
+      ? `运行时前置不可用：${targetFamily} 没有匹配协议的 LLM connection；已确认未发送、未选择专家且未创建草稿。`
+      : `运行时切换失败未满足可信前置阻塞合同：${message || 'missing_error_message'}`,
+  };
+}
+
+function applyCoreBetaRuntimePrerequisiteBlocker({ state, testCase, caseDir, blocker }) {
+  const file = path.join(caseDir, 'runtime-family-prerequisite.json');
+  writeJsonFile(file, blocker);
+  state.artifacts.connection_view_snapshot = file;
+  state.artifacts.core_beta_runtime_prerequisite = blocker;
+  state.artifacts.core_beta_connection_snapshot_diagnostics = blocker.connection_view;
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  recordAssertion(
+    state,
+    '目标 runtime connection 前置',
+    '只有公开 connection view、精确协议错误与零状态变更同时成立时，才允许在发送前阻塞并标记后续证据不适用。',
+    blocker.valid === true && blocker.applicable === true,
+    blocker.reason,
+    'automation_error',
+  );
+  markBlocked(state, blocker.reason);
+  return file;
+}
+
 async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
@@ -7013,10 +7172,52 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     const runtimeFamily = testCase.id.endsWith('002') ? 'claude-code' : 'codex';
     const beforeDraftIds = new Set(bridge.drafts.map((item) => item.id));
     await openNewTask(page, state);
-    await page.evaluate(async ({ family }) => {
-      await window.agent.setRuntimeFamily(family);
-      await window.agent.setExpert('qwork.builtin.expert-authoring');
+    const runtimeBefore = await captureCoreBetaPublicState(page, testCase);
+    state.screenshots.runtime_family_precondition_before = await shot(
+      page,
+      caseDir,
+      'runtime-family-precondition-before',
+    );
+    const runtimeSwitch = await page.evaluate(async ({ family }) => {
+      try {
+        await window.agent.setRuntimeFamily(family);
+        return { ok: true, error: null };
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            name: String(error?.name || ''),
+            code: String(error?.code || ''),
+            message: String(error?.message || error),
+          },
+        };
+      }
     }, { family: runtimeFamily });
+    if (!runtimeSwitch.ok) {
+      const runtimeAfter = await captureCoreBetaPublicState(page, testCase);
+      state.screenshots.runtime_family_precondition_after = await shot(
+        page,
+        caseDir,
+        'runtime-family-precondition-after',
+      );
+      const blocker = coreBetaRuntimeFamilyPrerequisiteBlocker({
+        testCase,
+        targetRuntimeFamily: runtimeFamily,
+        error: runtimeSwitch.error,
+        before: runtimeBefore,
+        after: runtimeAfter,
+      });
+      if (blocker.applicable) {
+        applyCoreBetaRuntimePrerequisiteBlocker({ state, testCase, caseDir, blocker });
+        return;
+      }
+      const runtimeError = new Error(runtimeSwitch.error?.message || `setRuntimeFamily(${runtimeFamily}) failed`);
+      runtimeError.code = runtimeSwitch.error?.code || '';
+      throw runtimeError;
+    }
+    await page.evaluate(async () => {
+      await window.agent.setExpert('qwork.builtin.expert-authoring');
+    });
     const beforeIdentity = await captureCoreBetaPublicState(page, testCase);
     await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
     const created = await page.evaluate(async (known) => {
