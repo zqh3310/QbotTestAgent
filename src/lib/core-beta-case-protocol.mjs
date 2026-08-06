@@ -944,6 +944,10 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'connection_snapshot_diagnostics',
     'log_excerpt',
   ]);
+  const preSendCapabilityFailureNotApplicableRoles = new Set([
+    'capability_execution_event',
+    ...skillPrerequisiteNotApplicableRoles,
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file);
@@ -965,7 +969,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || (!skillPrerequisiteNotApplicableRoles.has(role)
         && !runtimePrerequisiteNotApplicableRoles.has(role)
         && !expertPrerequisiteNotApplicableRoles.has(role)
-        && !mcpPrerequisiteNotApplicableRoles.has(role))
+        && !mcpPrerequisiteNotApplicableRoles.has(role)
+        && !preSendCapabilityFailureNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1115,10 +1120,83 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => mcpPrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const interaction = blocker?.interaction || {};
+    const preSendMutationGuard = blocker?.mutation_guard || {};
+    const failureScreenshot = String(blocker?.screenshot?.path || '');
+    const resolvedFailureScreenshot = failureScreenshot ? path.resolve(failureScreenshot) : '';
+    const failureScreenshotRelative = resolvedFailureScreenshot
+      ? path.relative(path.resolve(caseDir), resolvedFailureScreenshot)
+      : '';
+    const failureScreenshotValid = Boolean(
+      resolvedFailureScreenshot
+      && failureScreenshotRelative
+      && !failureScreenshotRelative.startsWith('..')
+      && !path.isAbsolute(failureScreenshotRelative)
+      && fs.existsSync(resolvedFailureScreenshot)
+      && fs.statSync(resolvedFailureScreenshot).isFile()
+      && fs.statSync(resolvedFailureScreenshot).size >= 128
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.screenshot?.sha256 || ''))
+      && sha256File(resolvedFailureScreenshot) === blocker.screenshot.sha256
+      && interaction?.screenshot === resolvedFailureScreenshot
+    );
+    const preSendCapabilityFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-capability-failure/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'bug'
+      && blocker?.kind === 'visible_capability_control_product_failure'
+      && blocker?.source === 'visible_capability_control_click_and_zero_send_readback'
+      && blocker?.dependent_case_id === testCase?.id
+      && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
+      && String(blocker?.expected_identity || '').trim()
+      && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
+      && interaction?.capability_kind === blocker?.capability_kind
+      && interaction?.control_located === true
+      && interaction?.click_dispatched === true
+      && interaction?.expected_state_observed === false
+      && interaction?.category === 'bug'
+      && typeof interaction?.aria_checked === 'string'
+      && interaction?.manual_surface
+      && typeof interaction.manual_surface === 'object'
+      && typeof interaction.manual_surface.list_visible === 'boolean'
+      && Number.isFinite(Number(interaction.manual_surface.option_count))
+      && typeof interaction.manual_surface.empty_visible === 'boolean'
+      && (blocker?.capability_kind !== 'skill'
+        || typeof interaction.manual_surface.search_visible === 'boolean')
+      && preSendMutationGuard?.valid === true
+      && preSendMutationGuard?.task_absent_before === true
+      && preSendMutationGuard?.task_absent_after === true
+      && preSendMutationGuard?.not_running_before === true
+      && preSendMutationGuard?.not_running_after === true
+      && preSendMutationGuard?.message_count_zero_before === true
+      && preSendMutationGuard?.message_count_zero_after === true
+      && preSendMutationGuard?.send_count_observed === true
+      && preSendMutationGuard?.send_count_unchanged === true
+      && preSendMutationGuard?.capability_selection_empty_before === true
+      && preSendMutationGuard?.capability_selection_empty_after === true
+      && preSendMutationGuard?.no_prompt_recorded === true
+      && preSendMutationGuard?.no_send_receipt_recorded === true
+      && preSendMutationGuard?.before_task?.id == null
+      && preSendMutationGuard?.after_task?.id == null
+      && Number(preSendMutationGuard?.before_task?.message_count) === 0
+      && Number(preSendMutationGuard?.after_task?.message_count) === 0
+      && Number(preSendMutationGuard?.before_task?.send_count)
+        === Number(preSendMutationGuard?.after_task?.send_count)
+      && Array.isArray(preSendMutationGuard?.before_selection)
+      && preSendMutationGuard.before_selection.length === 0
+      && Array.isArray(preSendMutationGuard?.after_selection)
+      && preSendMutationGuard.after_selection.length === 0
+      && failureScreenshotValid
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => preSendCapabilityFailureNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || runtimePrerequisiteVerified
       || expertPrerequisiteVerified
-      || mcpPrerequisiteVerified;
+      || mcpPrerequisiteVerified
+      || preSendCapabilityFailureVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

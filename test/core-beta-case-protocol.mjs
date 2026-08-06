@@ -19,6 +19,7 @@ import {
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import {
+  coreBetaPreSendCapabilityFailureEvidence,
   coreBetaRunOwnedExpertPrerequisiteBlocker,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
@@ -635,6 +636,89 @@ try {
     }));
     const tampered = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
     assert.equal(tampered.complete, false, '账本键不匹配时 N/A manifest 必须 fail-closed');
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+{
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-pre-send-capability-failure-'));
+  try {
+    const screenshot = path.join(temp, 'manual-skill-failure.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 9));
+    const notApplicableRoles = [
+      'capability_execution_event',
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ];
+    const blocker = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'BETA-SKILL-009',
+      capabilityKind: 'skill',
+      expectedIdentity: 'skillhub:global/qfin-ppt-brand-assets@1.0.0',
+      before: {
+        task: { id: null, running: false, send_count: 31, message_count: 0 },
+        skills: { selected: [] },
+      },
+      after: {
+        task: { id: null, running: false, send_count: 31, message_count: 0 },
+        skills: { selected: [] },
+      },
+      interaction: {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'skill',
+        stage: 'manual_mode',
+        control_testid: 'composer-skill-mode-manual',
+        control_located: true,
+        click_dispatched: true,
+        expected_state_observed: false,
+        aria_checked: 'false',
+        manual_surface: {
+          search_visible: false,
+          list_visible: false,
+          option_count: 0,
+          empty_visible: false,
+        },
+        screenshot,
+        category: 'bug',
+      },
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+      notApplicableRoles,
+    });
+    const blockerFile = path.join(temp, 'pre-send-capability-failure.json');
+    fs.writeFileSync(blockerFile, JSON.stringify(blocker));
+    const testCase = {
+      id: 'BETA-SKILL-009',
+      evidence_roles: ['capability_selection', ...notApplicableRoles],
+    };
+    const artifacts = {
+      capability_selection: blockerFile,
+      core_beta_not_applicable_roles: notApplicableRoles.map((role) => ({
+        role,
+        blocker_path: blockerFile,
+      })),
+    };
+    const manifest = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
+    assert.equal(manifest.complete, true, JSON.stringify(manifest));
+    assert.deepEqual(manifest.missing_roles, []);
+    assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), notApplicableRoles);
+    assert.equal(
+      manifest.evidence.find((item) => item.role === 'capability_selection')?.not_applicable,
+      undefined,
+      '能力选择负向收据本身必须是有效证据，不能标为 N/A',
+    );
+
+    fs.writeFileSync(blockerFile, JSON.stringify({
+      ...blocker,
+      mutation_guard: { ...blocker.mutation_guard, send_count_unchanged: false },
+    }));
+    const tampered = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
+    assert.equal(tampered.complete, false, '发送计数守卫被篡改后 N/A manifest 必须 fail-closed');
+    assert.ok(tampered.missing_roles.includes('capability_execution_event'));
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

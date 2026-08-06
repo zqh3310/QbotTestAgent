@@ -6984,7 +6984,21 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
     return await executeCoreBetaSkillConnectorBoundaryCase({ page, state, testCase, caseDir, timeoutMs, ledger, options });
   }
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'disabled' })) return;
+  const beforeSelection = await captureCoreBetaPublicState(page, testCase);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'disabled' })) {
+    if (state.artifacts.core_beta_composer_control_reset?.failure_category === 'bug') {
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: selectedSkill?.qualified_identity || selectedSkill?.slug || selectedSkill?.label || 'first_available_skill',
+        before: beforeSelection,
+      });
+    }
+    return;
+  }
   if (selectedSkill) {
     if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) return;
     state.artifacts.core_beta_capability_selection = selectedSkill;
@@ -7012,7 +7026,21 @@ async function executeCoreBetaSkillIsolationCase({ page, state, testCase, caseDi
   const selectedSkill = ledger.skills?.deep_use?.[0];
   if (!selectedSkill) throw new Error(`${testCase.id} 缺少deep_use Skill账本`);
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'disabled' })) return;
+  const beforeSelection = await captureCoreBetaPublicState(page, testCase);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'disabled' })) {
+    if (state.artifacts.core_beta_composer_control_reset?.failure_category === 'bug') {
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: selectedSkill.qualified_identity || selectedSkill.slug || selectedSkill.label,
+        before: beforeSelection,
+      });
+    }
+    return;
+  }
   if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) return;
   await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
   const taskA = await captureCoreBetaPublicState(page, testCase);
@@ -7050,6 +7078,64 @@ async function executeCoreBetaSkillIsolationCase({ page, state, testCase, caseDi
   state.artifacts.core_beta_capability_selection = { selected_skill: selectedSkill, task_id: taskAId };
   state.artifacts.core_beta_capability_execution = trace;
   recordAssertion(state, 'Skill按task隔离且Connector禁用硬关', '刷新同task保持Skill；新task清空Skill/Connector；禁用Connector不得出现connector tools/call。', trace.valid, JSON.stringify(trace));
+}
+
+async function materializeCoreBetaPreSendCapabilityFailure({
+  page,
+  state,
+  testCase,
+  caseDir,
+  capabilityKind,
+  expectedIdentity,
+  before,
+}) {
+  const after = await captureCoreBetaPublicState(page, testCase);
+  const declaredRoles = Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [];
+  const notApplicableRoles = CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES
+    .filter((role) => declaredRoles.includes(role));
+  const noPromptRecorded = !state.artifacts.prompt
+    && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0);
+  const noSendReceiptRecorded = !state.artifacts.send_receipt
+    && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0);
+  const evidence = coreBetaPreSendCapabilityFailureEvidence({
+    testCaseId: testCase.id,
+    capabilityKind,
+    expectedIdentity,
+    before,
+    after,
+    interaction: state.artifacts.core_beta_capability_interaction,
+    noPromptRecorded,
+    noSendReceiptRecorded,
+    notApplicableRoles,
+  });
+  const file = path.join(caseDir, 'pre-send-capability-failure.json');
+  writeJsonFile(file, evidence);
+  state.artifacts.core_beta_pre_send_capability_failure = file;
+  if (!evidence.valid) {
+    recordAssertion(
+      state,
+      '发送前能力失败负向证据闭环',
+      '产品能力控件点击后未生效时，必须证明任务为空、消息数为0、发送计数未变化且截图完整。',
+      false,
+      evidence.reason,
+      'automation_error',
+    );
+    return false;
+  }
+  state.artifacts.capability_selection = file;
+  state.artifacts.core_beta_capability_selection = evidence;
+  state.artifacts.core_beta_not_applicable_roles = notApplicableRoles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  recordAssertion(
+    state,
+    '发送前能力失败负向证据闭环',
+    '产品能力控件点击后未生效时，必须证明任务为空、消息数为0、发送计数未变化且截图完整。',
+    true,
+    evidence.reason,
+  );
+  return true;
 }
 
 async function executeCoreBetaBuiltinSkillCase({ page, state, testCase, caseDir, timeoutMs, options }) {
@@ -20323,6 +20409,8 @@ async function resetComposerControls(page, state, caseDir, {
   clearScene = true,
   clearAttachments = true,
 } = {}) {
+  const initialStepCount = state.steps.length;
+  const initialAssertionCount = state.assertions.length;
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(150);
   await closeWorkspacePicker(page);
@@ -20356,7 +20444,31 @@ async function resetComposerControls(page, state, caseDir, {
   const sceneTagText = await visibleSceneTagText(page);
   const attachmentText = await visibleComposerAttachmentText(page);
   state.screenshots.composer_controls_reset = await shot(page, caseDir, 'composer-controls-reset');
-  const ok = results.every(Boolean) && !skillChipText.trim() && !sceneTagText.trim() && !attachmentText.trim();
+  const residueObserved = Boolean(skillChipText.trim() || sceneTagText.trim() || attachmentText.trim());
+  const newFailures = [
+    ...state.steps.slice(initialStepCount),
+    ...state.assertions.slice(initialAssertionCount),
+  ].filter((item) => item.status === 'failed');
+  const failureCategory = coreBetaComposerResetFailureCategory({
+    operationResults: results,
+    residueObserved,
+    failureCategories: newFailures.map((item) => item.category),
+  });
+  const ok = failureCategory === '';
+  state.artifacts.core_beta_composer_control_reset = {
+    schema_version: 'qbot-core-beta-composer-control-reset/v1',
+    valid: true,
+    ok,
+    failure_category: failureCategory,
+    operation_results: results.map(Boolean),
+    residue_observed: residueObserved,
+    failed_operations: newFailures.map((item) => ({
+      name: item.name || item.action || '',
+      category: item.category || '',
+      actual: item.actual || '',
+      screenshot: item.screenshot || '',
+    })),
+  };
   recordAssertion(
     state,
     '输入区能力状态隔离',
@@ -20369,10 +20481,23 @@ async function resetComposerControls(page, state, caseDir, {
       attachmentText.trim() ? `残留附件：${clip(attachmentText, 180)}` : '未发现残留附件',
       skillChipText.trim() ? `残留技能 chip：${clip(skillChipText, 180)}` : '未发现残留技能 chip',
     ].join('；'),
-    ok ? '' : 'automation_error',
+    failureCategory,
   );
-  if (!ok) markFailed(state, '自动化框架未能清理输入区场景/附件/技能/连接器状态，当前用例结果不可信，已中止本用例。', 'automation_error');
+  if (!ok && failureCategory === 'automation_error') {
+    markFailed(state, '自动化框架未能清理输入区场景/附件/技能/连接器状态，当前用例结果不可信，已中止本用例。', 'automation_error');
+  }
   return ok;
+}
+
+export function coreBetaComposerResetFailureCategory({
+  operationResults = [],
+  residueObserved = false,
+  failureCategories = [],
+} = {}) {
+  const operationsOk = (Array.isArray(operationResults) ? operationResults : []).every(Boolean);
+  if (operationsOk && !residueObserved) return '';
+  if (residueObserved || failureCategories.includes('automation_error')) return 'automation_error';
+  return failureCategories.includes('bug') ? 'bug' : 'automation_error';
 }
 
 async function clearSceneTag(page, state, caseDir) {
@@ -20857,8 +20982,35 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       return false;
     }
     let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    const beforeChecked = checked;
+    let clickDispatched = checked === 'true';
     if (checked !== 'true') {
-      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+      try {
+        await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+        clickDispatched = true;
+      } catch (error) {
+        state.artifacts.core_beta_capability_interaction = {
+          schema_version: 'qbot-core-beta-capability-interaction/v1',
+          capability_kind: 'skill',
+          stage: 'manual_mode',
+          control_testid: 'composer-skill-mode-manual',
+          control_located: true,
+          click_dispatched: false,
+          expected_state_observed: false,
+          before_aria_checked: beforeChecked,
+          error: String(error?.message || error),
+          category: 'automation_error',
+        };
+        recordAssertion(
+          state,
+          '统一菜单技能手动模式点击',
+          '定位到用户可见的【手动】控件后必须成功派发真实点击。',
+          false,
+          String(error?.message || error),
+          'automation_error',
+        );
+        return false;
+      }
     }
     let afterText = '';
     let manualSurface = null;
@@ -20901,6 +21053,26 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       && manualSurface?.list_visible
       && (manualSurface.option_count > 0 || manualSurface.empty_visible);
     state.screenshots.skill_mode_manual = await shot(page, caseDir, 'skill-mode-manual');
+    const interactionCategory = coreBetaCapabilityInteractionCategory({
+      controlLocated: true,
+      clickDispatched,
+      expectedStateObserved: ok,
+    });
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_mode',
+      control_testid: 'composer-skill-mode-manual',
+      control_located: true,
+      click_dispatched: clickDispatched,
+      expected_state_observed: ok,
+      before_aria_checked: beforeChecked,
+      aria_checked: checked,
+      manual_surface: manualSurface,
+      menu_text: afterText,
+      screenshot: state.screenshots.skill_mode_manual,
+      category: interactionCategory,
+    };
     recordStep(
       state,
       '通过可见 UI 切换技能模式：manual',
@@ -20908,11 +21080,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 220)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.skill_mode_manual,
-      coreBetaCapabilityInteractionCategory({
-        controlLocated: true,
-        clickDispatched: true,
-        expectedStateObserved: ok,
-      }),
+      interactionCategory,
     );
     return ok;
   }
@@ -20998,6 +21166,113 @@ export function coreBetaCapabilityInteractionCategory({
 } = {}) {
   if (!controlLocated || !clickDispatched) return 'automation_error';
   return expectedStateObserved ? '' : 'bug';
+}
+
+const CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES = Object.freeze([
+  'capability_execution_event',
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+export function coreBetaPreSendCapabilityFailureEvidence({
+  testCaseId = '',
+  capabilityKind = 'skill',
+  expectedIdentity = '',
+  before = {},
+  after = {},
+  interaction = {},
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+  notApplicableRoles = CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES,
+} = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const beforeSelection = capabilityKind === 'connector'
+    ? before?.connectors?.selected
+    : before?.skills?.selected;
+  const afterSelection = capabilityKind === 'connector'
+    ? after?.connectors?.selected
+    : after?.skills?.selected;
+  const screenshot = String(interaction?.screenshot || '');
+  const manualSurface = interaction?.manual_surface;
+  const interactionValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
+    && interaction?.capability_kind === capabilityKind
+    && interaction?.control_located === true
+    && interaction?.click_dispatched === true
+    && interaction?.expected_state_observed === false
+    && interaction?.category === 'bug'
+    && typeof interaction?.aria_checked === 'string'
+    && manualSurface && typeof manualSurface === 'object'
+    && typeof manualSurface.list_visible === 'boolean'
+    && Number.isFinite(Number(manualSurface.option_count))
+    && typeof manualSurface.empty_visible === 'boolean'
+    && (capabilityKind !== 'skill' || typeof manualSurface.search_visible === 'boolean')
+    && coreBetaBatchScreenshotPresent(screenshot);
+  const mutationGuard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+    capability_selection_empty_before: Array.isArray(beforeSelection) && beforeSelection.length === 0,
+    capability_selection_empty_after: Array.isArray(afterSelection) && afterSelection.length === 0,
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const roles = (Array.isArray(notApplicableRoles) ? notApplicableRoles : [])
+    .map(String)
+    .filter((role, index, items) => (
+      CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES.includes(role)
+      && items.indexOf(role) === index
+    ));
+  const evidenceValid = Boolean(
+    String(testCaseId || '').trim()
+    && String(expectedIdentity || '').trim()
+    && ['skill', 'connector'].includes(capabilityKind)
+    && interactionValid
+    && mutationGuard.valid
+    && roles.length > 0
+  );
+  return {
+    schema_version: 'qbot-core-beta-pre-send-capability-failure/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: false,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'bug' : 'automation_error',
+    kind: 'visible_capability_control_product_failure',
+    source: 'visible_capability_control_click_and_zero_send_readback',
+    dependent_case_id: String(testCaseId || ''),
+    capability_kind: capabilityKind,
+    expected_identity: String(expectedIdentity || ''),
+    interaction,
+    mutation_guard: {
+      ...mutationGuard,
+      before_task: beforeTask,
+      after_task: afterTask,
+      before_selection: Array.isArray(beforeSelection) ? beforeSelection : null,
+      after_selection: Array.isArray(afterSelection) ? afterSelection : null,
+    },
+    screenshot: {
+      path: screenshot,
+      sha256: coreBetaBatchScreenshotPresent(screenshot)
+        ? createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex')
+        : '',
+    },
+    not_applicable_roles: roles,
+    reason: evidenceValid
+      ? `已真实点击 ${capabilityKind} 能力控件，但产品未进入期望状态；已证明当前任务为空、消息数为0且发送计数未变化。`
+      : '发送前能力产品失败的点击、状态读回、截图或零发送变更证据不完整。',
+  };
 }
 
 export function coreBetaConnectorOptionTestId(connectorKey = '') {

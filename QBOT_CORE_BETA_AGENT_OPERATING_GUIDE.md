@@ -22,6 +22,25 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807042142_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-b9ef898
+```
+
+该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：runner 已真实
+定位并点击 `composer-skill-mode-manual`，产品读回仍为 `aria-checked=false`，
+手动搜索、列表和空态均不可见，属于产品 Bug；通用 composer reset 随后错误追加
+`automation_error` 并提前返回，导致发送前的能力选择负向收据和 7 个 N/A 角色未
+物化，manifest 不完整后停止。当前已推送 main 必须包含
+`qbot-core-beta-pre-send-capability-failure/v1` 修复：reset 保留已确认的 `bug`，
+并且只有任务为空、消息数为 0、send count 未变化、选择为空、无 prompt/send
+receipt 且截图/SHA 完整时，才允许把未发生的执行和会话角色标为 N/A 并继续后续
+独立 Case。该冻结目录不得续写；由于它在 `BETA-SKILL-012` 清理前停止，重新
+pretest 和 55 条完整重跑前必须先按第 8 节从该目录执行单独的
+`BETA-SKILL-001 --core-beta-cleanup-from ...` 清理并证明 `remaining=0`、连续两次
+稳定缺席。
+
+最新一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807020734_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7f99cac
 ```
 

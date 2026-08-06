@@ -34,6 +34,7 @@ import {
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCapabilityInteractionCategory,
+  coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
   coreBetaConnectorOptionTestId,
   coreBetaConversationTurnLabel,
@@ -47,6 +48,7 @@ import {
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
   coreBetaPartialReplyReady,
+  coreBetaPreSendCapabilityFailureEvidence,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
   coreBetaRuntimeFamilyPrerequisiteBlocker,
@@ -869,6 +871,92 @@ assert.equal(
   '',
   '真实控件点击且读回成功时不应产生错误分类',
 );
+assert.equal(
+  coreBetaComposerResetFailureCategory({
+    operationResults: [true, false, true],
+    residueObserved: false,
+    failureCategories: ['bug'],
+  }),
+  'bug',
+  '通用 reset 不得把已确认的产品交互失败覆盖成 automation_error',
+);
+assert.equal(
+  coreBetaComposerResetFailureCategory({
+    operationResults: [true, false],
+    residueObserved: false,
+    failureCategories: ['automation_error'],
+  }),
+  'automation_error',
+  '定位、点击或读回本身失败时 reset 必须保持框架错误',
+);
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-capability-'));
+  try {
+    const screenshot = path.join(evidenceDir, 'manual-skill-failure.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 7));
+    const interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_mode',
+      control_testid: 'composer-skill-mode-manual',
+      control_located: true,
+      click_dispatched: true,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: {
+        search_visible: false,
+        list_visible: false,
+        option_count: 0,
+        empty_visible: false,
+      },
+      screenshot,
+      category: 'bug',
+    };
+    const before = {
+      task: { id: null, running: false, send_count: 31, message_count: 0 },
+      skills: { selected: [] },
+    };
+    const after = structuredClone(before);
+    const evidence = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'BETA-SKILL-009',
+      capabilityKind: 'skill',
+      expectedIdentity: 'skillhub:global/qfin-ppt-brand-assets@1.0.0',
+      before,
+      after,
+      interaction,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(evidence.valid, true);
+    assert.equal(evidence.oracle_valid, false);
+    assert.equal(evidence.mutation_guard.send_count_unchanged, true);
+    assert.deepEqual(evidence.not_applicable_roles, [
+      'capability_execution_event',
+      'prompt',
+      'task_id',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ]);
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'BETA-SKILL-009',
+        capabilityKind: 'skill',
+        expectedIdentity: 'skillhub:global/qfin-ppt-brand-assets@1.0.0',
+        before,
+        after: { ...after, task: { ...after.task, send_count: 32 } },
+        interaction,
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+      }).valid,
+      false,
+      '发送计数发生变化时不得把发送后角色标为 N/A',
+    );
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+}
 assert.equal(
   coreBetaConnectorOptionTestId('builtin:qbot_vision'),
   'composer-connector-option-builtin:qbot_vision',
@@ -3277,6 +3365,9 @@ const required = [
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['Core Beta v2 精确选择 Skill 前会重新打开被同级控件关闭的最新技能菜单', /selectManualSkillByName[\s\S]*let menu = await activeMenuLocator\(page, 'skill'\)[\s\S]*if \(!menu\) \{[\s\S]*ensureComposerToolMenu\(page, state,[\s\S]*重新打开【技能】菜单以选择：[\s\S]*menuKind: 'skill'[\s\S]*menu = await activeMenuLocator\(page, 'skill'\)/],
+  ['输入区 reset 保留能力产品失败分类', /resetComposerControls[\s\S]*coreBetaComposerResetFailureCategory[\s\S]*failure_category/],
+  ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],
+  ['发送前能力产品失败使用受校验证据协议', /qbot-core-beta-pre-send-capability-failure\/v1/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
   ['技能模式切换使用新 DOM 轮询', /async function setSkillMode[\s\S]*const freshLocator = await skillModeLocator[\s\S]*activeMenuText\(page, 'skill'\)[\s\S]*'automation_error'/],
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
