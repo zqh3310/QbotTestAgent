@@ -59,6 +59,7 @@ import {
   coreBetaSkillCreatorProjectionReadback,
   coreBetaSkillCreatorSelectionEvidence,
   coreBetaRunOwnedSkillCleanupVerdict,
+  coreBetaSelectedCapabilityIdentities,
   coreBetaRunOwnedExpertPrerequisiteBlocker,
   coreBetaSkillUninstallRequestName,
   coreBetaSkillUsePrerequisiteDecision,
@@ -137,6 +138,18 @@ assert.doesNotMatch(
   coreBetaOperatingGuide,
   /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
   'Core Beta 操作指南不得重新引入 macOS 不兼容的 mktemp 后缀',
+);
+
+assert.deepEqual(
+  coreBetaSelectedCapabilityIdentities([
+    { key: 'mcphub:fkai-wiki-llm' },
+    { slug: 'skill-a' },
+    'plain-capability',
+    null,
+    {},
+  ]),
+  ['mcphub:fkai-wiki-llm', 'skill-a', 'plain-capability'],
+  'Core Beta v2 必须在手动连接器点击后直接读回 selectedConnectors identity，不能依赖未定义的旧 runner helper',
 );
 
 {

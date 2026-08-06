@@ -68,6 +68,9 @@ import {
   unifiedConnectorModeApplied,
   workModeSelectionVerdict,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  coreBetaSelectedCapabilityIdentities as coreBetaV2SelectedCapabilityIdentities,
+} from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
@@ -866,6 +869,14 @@ test('Core Beta fail-closed, partial-stop, and capability identity helpers rejec
   assert.deepEqual(
     coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'mcp-b' }, 'plain-c']),
     ['skill-a', 'mcp-b', 'plain-c'],
+  );
+  assert.deepEqual(
+    coreBetaV2SelectedCapabilityIdentities([
+      { key: 'mcphub:fkai-wiki-llm' },
+      { id: 'mcphub:dis' },
+      'mcphub:iops',
+    ]),
+    ['mcphub:fkai-wiki-llm', 'mcphub:dis', 'mcphub:iops'],
   );
   assert.equal(coreBetaSkillSelectionReadbackMatches({
     selectedSkillCount: 1,

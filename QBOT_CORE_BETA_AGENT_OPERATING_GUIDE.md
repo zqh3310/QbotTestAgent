@@ -22,6 +22,20 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806222136_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-80f8e53
+```
+
+该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：新版手动连接器
+模式已经通过真实可见 UI 点击并读回 `aria-checked=true`、
+`connectorRouting.mode=manual`、28 个可见选项；随后 V2 runner 在按 key 点击首个
+样本后调用未定义的 `coreBetaSelectedCapabilityIdentities`，抛出
+`ReferenceError`，导致本 Case 的 action/public state/cleanup/selection/execution
+五个角色尚未注册就硬停止。该目录已冻结，不得续写；修复和 invariant 通过后
+必须在新的已推送干净基线上从第 1 条完整重跑 55 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806213321_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-45f49ce
 ```
 

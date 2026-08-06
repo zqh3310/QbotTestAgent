@@ -69,6 +69,22 @@ const TECHNICAL_FAILURE_PATTERNS = [
 const SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL = /^(?:OK|确定|知道了)$/;
 const SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE = /(?:暂不支持的附件类型|附件类型.*不支持|上传失败|单个(?:文档|文件).*超过|(?:文档)?附件总大小.*超过|每轮最多添加\s*\d+\s*个附件|一次最多选择\s*\d+\s*个附件)/i;
 
+function coreBetaCapabilityItemIdentity(item) {
+  if (item == null) return '';
+  if (typeof item === 'string' || typeof item === 'number') return String(item).trim();
+  for (const key of ['key', 'id', 'slug', 'name', 'label', 'title']) {
+    const value = String(item?.[key] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+export function coreBetaSelectedCapabilityIdentities(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(coreBetaCapabilityItemIdentity)
+    .filter(Boolean);
+}
+
 export function safeNativeAttachmentInfoDialog({ message = '', buttons = [] } = {}) {
   const labels = Array.isArray(buttons)
     ? buttons.map((item) => String(item || '').trim()).filter(Boolean)
