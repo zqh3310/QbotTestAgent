@@ -59,6 +59,7 @@ import {
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
   coreBetaV2MaintenanceConfirmationContract,
+  coreBetaV2MaintenanceProductStateConflict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
   coreBetaV2SettingsLoadTimeoutMs,
@@ -1850,6 +1851,105 @@ const readyV2Runtime = coreBetaV2RuntimeMaintenanceState({
   minimumReadyObservations: 3,
 });
 assert.equal(readyV2Runtime.ready, true);
+const staleVisibleMaintenance = coreBetaV2RuntimeMaintenanceState({
+  text: '本进程已加载并校验：v0.0.30-rc.1；Claude Code SDK：就绪；Codex SDK：就绪；准备中 0%',
+  composerReady: true,
+  workbenchReady: true,
+  buttonEnabled: true,
+  capabilitiesReadable: true,
+  sdkStatuses: [
+    { family: 'claude-code', phase: 'ready', progress: 100 },
+    { family: 'codex', phase: 'ready', progress: 100 },
+  ],
+  stableReadyObservations: 1,
+  minimumReadyObservations: 1,
+});
+assert.equal(staleVisibleMaintenance.ready, false);
+assert.equal(staleVisibleMaintenance.pending, true);
+assert.equal(staleVisibleMaintenance.authoritative_ready, true);
+assert.equal(staleVisibleMaintenance.visible_activity, true);
+assert.equal(
+  coreBetaV2MaintenanceProductStateConflict({
+    maintenanceState: staleVisibleMaintenance,
+    stableObservations: 2,
+    elapsedMs: 5000,
+  }).confirmed,
+  false,
+  '结构化 ready 与陈旧可见文案的矛盾必须至少连续稳定三次后才能落产品失败',
+);
+const confirmedMaintenanceConflict = coreBetaV2MaintenanceProductStateConflict({
+  maintenanceState: staleVisibleMaintenance,
+  stableObservations: 3,
+  elapsedMs: 5000,
+});
+assert.equal(confirmedMaintenanceConflict.confirmed, true);
+assert.equal(confirmedMaintenanceConflict.evidence_valid, true);
+assert.equal(confirmedMaintenanceConflict.oracle_valid, false);
+assert.equal(
+  coreBetaV2MaintenanceProductStateConflict({
+    maintenanceState: {},
+    stableObservations: 3,
+    elapsedMs: 5000,
+  }).evidence_valid,
+  false,
+  '空维护状态不得形成有效产品冲突证据',
+);
+const staleMaintenanceContinuation = coreBetaInitializationContinuation({
+  testCase: { id: 'BETA-INIT-002' },
+  terminalReadback: {
+    ...staleVisibleMaintenance,
+    pending: false,
+    failed: true,
+    product_ui_state_conflict: true,
+  },
+  afterReadback: { page: { body_text_length: 100 } },
+});
+assert.equal(
+  staleMaintenanceContinuation.safe,
+  true,
+  '稳定的维护区 UI 状态冲突应作为产品 Bug 保留，并在公开工作台全部可用时继续后续独立 Case',
+);
+assert.equal(
+  coreBetaBatchStopReason(
+    { id: 'BETA-INIT-002', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
+    {
+      status: 'failed',
+      result_category: 'bug',
+      initialization_continuation: staleMaintenanceContinuation,
+    },
+  ),
+  '',
+  'BETA-INIT-002 的稳定产品 UI 状态冲突不得错误升级为 automation_error 并中断剩余 Case',
+);
+const genuineProvisioning = coreBetaV2RuntimeMaintenanceState({
+  text: '本进程正在准备中 42%',
+  composerReady: true,
+  workbenchReady: true,
+  buttonEnabled: false,
+  capabilitiesReadable: true,
+  sdkStatuses: [
+    { family: 'claude-code', phase: 'provisioning', progress: 42 },
+    { family: 'codex', phase: 'ready', progress: 100 },
+  ],
+  stableReadyObservations: 1,
+  minimumReadyObservations: 1,
+});
+assert.equal(genuineProvisioning.authoritative_ready, false);
+assert.equal(genuineProvisioning.pending, true);
+assert.equal(
+  coreBetaV2MaintenanceProductStateConflict({
+    maintenanceState: genuineProvisioning,
+    stableObservations: 10,
+    elapsedMs: 600000,
+  }).confirmed,
+  false,
+  '任一 SDK、按钮或 capability 未 ready 时仍是真实 pending，不能伪装成可继续的产品 UI 状态冲突',
+);
+assert.match(
+  runner,
+  /visibleStateConflict\.confirmed[\s\S]*pending: false[\s\S]*failed: true[\s\S]*product_ui_state_conflict: true/,
+  '终态轮询必须把连续稳定的结构化 ready/可见 pending 矛盾转换为证据完整的产品失败',
+);
 assert.equal(coreGateIds.at(-1), 'SIT-AUTH-005', '核心门禁用例簿末条必须是退出登录闭环');
 for (const id of [
   'SIT-INIT-004',

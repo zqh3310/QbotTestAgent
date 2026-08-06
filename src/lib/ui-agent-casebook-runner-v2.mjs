@@ -4860,7 +4860,7 @@ export function coreBetaV2RuntimeMaintenanceState({
   const failed = sdkFailed || /失败|不可用|ENOTEMPTY|exception|runtime[^。\n]*(?:error|failed)/i.test(normalized);
   const loaded = /本进程已加载并校验|Claude Code SDK[^。；\n]*就绪|Codex SDK[^。；\n]*就绪|运行时[^。；\n]*(?:完成|就绪|ready)/i.test(normalized);
   const stable = Number(stableReadyObservations) >= Math.max(1, Number(minimumReadyObservations) || 1);
-  const ready = Boolean(
+  const authoritativeReady = Boolean(
     normalized
     && loaded
     && composerReady
@@ -4868,14 +4868,19 @@ export function coreBetaV2RuntimeMaintenanceState({
     && buttonEnabled
     && capabilitiesReadable
     && sdkReady
+    && !failed
+  );
+  const ready = Boolean(
+    authoritativeReady
     && stable
     && !visibleActivity
-    && !failed
   );
   return {
     ready,
     pending: visibleActivity || sdkPending || !buttonEnabled,
     failed,
+    authoritative_ready: authoritativeReady,
+    visible_activity: visibleActivity,
     loaded,
     sdk_ready: sdkReady,
     sdk_status_count: statuses.length,
@@ -4904,6 +4909,44 @@ export function coreBetaV2RuntimeMaintenanceState({
                     : !stable
                       ? '就绪状态尚未达到连续稳定采样下限。'
                       : '运行时尚未达到稳定终态。',
+  };
+}
+
+export function coreBetaV2MaintenanceProductStateConflict({
+  maintenanceState = {},
+  stableObservations = 0,
+  elapsedMs = 0,
+  minimumStableObservations = 3,
+  minimumElapsedMs = 5000,
+} = {}) {
+  const stableRequired = Math.max(3, Number(minimumStableObservations) || 3);
+  const elapsedRequired = Math.max(1000, Number(minimumElapsedMs) || 5000);
+  const evidenceValid = Boolean(
+    maintenanceState
+    && typeof maintenanceState === 'object'
+    && typeof maintenanceState.authoritative_ready === 'boolean'
+    && typeof maintenanceState.visible_activity === 'boolean'
+    && typeof maintenanceState.failed === 'boolean',
+  );
+  const confirmed = Boolean(
+    evidenceValid
+    && maintenanceState.authoritative_ready === true
+    && maintenanceState?.visible_activity === true
+    && maintenanceState?.failed !== true
+    && Number(stableObservations) >= stableRequired
+    && Number(elapsedMs) >= elapsedRequired,
+  );
+  return {
+    confirmed,
+    evidence_valid: evidenceValid,
+    oracle_valid: !confirmed,
+    stable_observations: Number(stableObservations) || 0,
+    stable_required: stableRequired,
+    elapsed_ms: Number(elapsedMs) || 0,
+    minimum_elapsed_ms: elapsedRequired,
+    reason: confirmed
+      ? 'structured_runtime_ready_but_visible_maintenance_still_active'
+      : 'visible_and_structured_runtime_state_not_yet_in_stable_conflict',
   };
 }
 
@@ -4997,6 +5040,7 @@ async function waitForCoreBetaV2MaintenanceTerminal({
   const observations = [];
   let activePage = page;
   let stableReadyObservations = 0;
+  let authoritativeReadyObservations = 0;
   let errorStreak = 0;
   let lastReadback = { ready: false, reason: '尚未开始终态采样。' };
   while (Date.now() < deadline) {
@@ -5081,12 +5125,31 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         stableReadyObservations: 1,
         minimumReadyObservations: 1,
       });
+      authoritativeReadyObservations = baseState.authoritative_ready
+        ? authoritativeReadyObservations + 1
+        : 0;
+      const visibleStateConflict = coreBetaV2MaintenanceProductStateConflict({
+        maintenanceState: baseState,
+        stableObservations: authoritativeReadyObservations,
+        elapsedMs,
+      });
+      const terminalState = visibleStateConflict.confirmed
+        ? {
+          ...baseState,
+          ready: false,
+          pending: false,
+          failed: true,
+          product_ui_state_conflict: true,
+          product_ui_state_conflict_evidence: visibleStateConflict,
+          reason: '结构化 SDK、capabilities、工作台、输入区和按钮已连续稳定 ready，但可见维护区仍显示处理中。',
+        }
+        : baseState;
       const updateReady = maintenance.terminal === 'update'
         && elapsedMs >= 1000
         && buttonEnabled
         && capabilitiesReadable
-        && !baseState.pending
-        && !baseState.failed
+        && !terminalState.pending
+        && !terminalState.failed
         && /当前|完成|就绪|ready|已开始|远端|同版本|无需更新/i.test(text);
       const sessionsEmpty = maintenance.terminal === 'sessions-empty'
         && elapsedMs >= 1500
@@ -5096,13 +5159,13 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         && runtimeData.sessions.length === 0;
       const runtimeReady = maintenance.terminal === 'runtime-ready'
         && elapsedMs >= 5000
-        && baseState.ready;
+        && terminalState.ready;
       const sampleReady = updateReady || sessionsEmpty || runtimeReady;
       stableReadyObservations = sampleReady ? stableReadyObservations + 1 : 0;
       const stableRequired = maintenance.terminal === 'update' ? 2 : 3;
       const stable = stableReadyObservations >= stableRequired;
       lastReadback = {
-        ...baseState,
+        ...terminalState,
         ready: stable,
         reason: stable
           ? maintenance.terminal === 'sessions-empty'
@@ -5110,12 +5173,13 @@ async function waitForCoreBetaV2MaintenanceTerminal({
             : maintenance.terminal === 'update'
               ? '检查更新动作已收敛，维护按钮与公开 capabilities 连续稳定可用。'
               : '运行时维护区、SDK、工作台、输入区与 capabilities 连续稳定就绪。'
-          : baseState.failed
-            ? baseState.reason
+          : terminalState.failed
+            ? terminalState.reason
             : `终态尚未达到连续 ${stableRequired} 次稳定采样：current=${stableReadyObservations}`,
         elapsed_ms: elapsedMs,
         terminal_kind: maintenance.terminal,
         stable_ready_observations: stableReadyObservations,
+        authoritative_ready_observations: authoritativeReadyObservations,
         stable_required: stableRequired,
         maintenance_text: clip(text, 1800),
         sdk_statuses: runtimeData.sdkStatuses,
@@ -5130,6 +5194,8 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         pending: lastReadback.pending,
         failed: lastReadback.failed,
         stable_ready_observations: stableReadyObservations,
+        authoritative_ready_observations: authoritativeReadyObservations,
+        product_ui_state_conflict: lastReadback.product_ui_state_conflict === true,
         maintenance_text: clip(text, 500),
         sdk_statuses: runtimeData.sdkStatuses,
         session_count: Array.isArray(runtimeData.sessions) ? runtimeData.sessions.length : null,

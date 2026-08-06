@@ -13,13 +13,24 @@
 - 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.2.38(2119080433)`。
-- 当前 QWork 身份：UAT `0.0.30-rc.1`。
+- 当前正式宿主身份：360Teams `5.2.41(2119080662)`。
+- 当前 QWork 身份：UAT `0.0.30-rc.2`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
 最近一次已冻结的 scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806155958_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-997972e
+```
+
+该批次完成 2/55 后，在 `BETA-INIT-002` 暴露框架让陈旧的可见“准备中 0%”
+覆盖 Claude/Codex `ready/100%`、capabilities、工作台、输入区和维护按钮等结构化
+ready 信号，并最终错误升级为 `automation_error`。该目录已冻结，不得续写；修复后
+须在新产品身份上从第 1 条完整重跑 55 条。
+
+更早的冻结批次：
 
 ```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806141103_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-245a3e7
@@ -31,7 +42,7 @@ manifest 缺失并错误停止。该目录已冻结，不得续写。产品 Bug�
 产品缺陷以及 17 条未执行 Case 都必须保留在最终报告；框架修复后须从第 1 条
 完整重跑 55 条，`inherited=0`、`synthetic=0`。
 
-更早的冻结批次：
+再早的冻结批次：
 
 ```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806125939_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-62fd6ff
@@ -147,13 +158,13 @@ npm run core-beta:pretest -- \
   --expected-count 55 \
   --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
   --production-gate true \
-  --expected-teams-version 5.2.38 \
-  --expected-teams-build 2119080433 \
-  --expected-qwork-version 0.0.30-rc.1 \
+  --expected-teams-version 5.2.41 \
+  --expected-teams-build 2119080662 \
+  --expected-qwork-version 0.0.30-rc.2 \
   --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.1-sha256-99fae130c7fa3a6dbff9301806eb181cc97017912108a6f98f1d2c42f9725cf3 \
-  --feature-flags-hash 3209348fca087c85f93a7c7aebe5699280ae88a9625e7b2afda71b81129704ef \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.2-sha256-84175ee2581496a57bb1ec7ad63b466fca503930b8d66729ce2a979f97f3215b \
+  --feature-flags-hash ac777398cf2f23a7fe636328f1defd45c1f4dc8d6e835b4d04a31a0052a752bc \
   --case "$CASE_IDS" \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
@@ -174,7 +185,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -187,9 +198,9 @@ npm --prefix teams360-automation run casebook -- \
   --single-host-pipeline 1 \
   --production-gate true \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.1-sha256-99fae130c7fa3a6dbff9301806eb181cc97017912108a6f98f1d2c42f9725cf3 \
-  --feature-flags-hash 3209348fca087c85f93a7c7aebe5699280ae88a9625e7b2afda71b81129704ef \
-  --qwork-build-id 0.0.30-rc.1 \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.2-sha256-84175ee2581496a57bb1ec7ad63b466fca503930b8d66729ce2a979f97f3215b \
+  --feature-flags-hash ac777398cf2f23a7fe636328f1defd45c1f4dc8d6e835b4d04a31a0052a752bc \
+  --qwork-build-id 0.0.30-rc.2 \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
   --scope-reason fixture_provider_unavailable
@@ -223,6 +234,12 @@ QWork versioned file URL。profile 或临时 renderer 中的旧版本只能触�
 Agent 澄清/推荐选项弹窗继续由框架点击精确“跳过/跳过（用默认）”并留证，
 不使用 Computer Use。正式 Case prompt 必须已经包含主题、日期和 Oracle，不能
 依赖弹窗补充测试数据。
+
+初始化维护终态要同时读取可见文案和结构化状态。可见区域持续显示“准备中/处理中”，
+但 Claude/Codex SDK、runtime loaded、维护按钮、capabilities、工作台和输入区连续至少
+3 次全部 ready 时，应固化为 `product_ui_state_conflict` 产品 Bug，并在页面仍可读时
+以 `initialization_continuation.safe=true` 继续后续独立 Case。只有结构化状态也未 ready
+或证据不完整时才保持 pending 并在有界超时后触发框架硬停止。
 
 ## 7. 监控规则
 

@@ -389,6 +389,7 @@ Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代
 - `BETA-INIT-001` 必须点击当前发布界面实际显示的“立即检查运行时”入口（当前 `assistant-prepare-python-runtimes`）；只有发布界面明确提供旧“检查更新运行时”入口时才兼容 `assistant-runtime-update-check`，不得因 testid 演进把可见入口误判为缺失。
 - `BETA-INIT-001` 至 `BETA-INIT-004` 本身不发送模型请求，不能被全局模型档位门禁挡在初始化之前，可信复核也不得因这四条没有 `model_tier_before_send` 而判为框架问题。若启动时连接视图尚未恢复，runner 只可把模型检查延后到真实初始化之后；首个需要模型的 Case 及其每次发送前仍必须读取连接视图并精确锁定请求档位，无可用档位时禁止发送。
 - 重初始化或清空会话可能触发页面导航或 replacement renderer。runner 必须刷新共享 page、必要时重建受管 WebView 连接，并在同一 Case 内等待公开维护区、Claude/Codex SDK、工作台、输入区和 capabilities 连续稳定；默认最长等待 `600000ms`，不得把“正在准备”截图当作 ready。
+- 若维护区可见文案持续显示“准备中/处理中”，但 Claude/Codex SDK 均为 `ready/100%`，且运行时 loaded、维护按钮、capabilities、工作台和输入区连续至少 3 次全部可用，框架必须把该稳定矛盾固化为 `product_ui_state_conflict` 产品 Bug：终态为 `failed=true/pending=false`，专项证据 `evidence_valid=true/oracle_valid=false`。`BETA-INIT-002` 至 `BETA-INIT-004` 在页面读回也完整时必须写入 `initialization_continuation.safe=true` 并继续后续独立 Case；不得继续空等到超时后误报 `automation_error`。任一结构化信号未 ready 时仍按真实 pending 处理，并在有界超时后 fail-closed。
 - 初始化异常必须保存原始 `message`、`stack`、动作回执和终态采样文件；最终结论可以是 `framework_issue`，但不得只留下“精准断言未全部成立”而丢失根因。
 - 每轮全量初始化的目标是相对干净且可审计，不是删除用户真实数据。只能清理 runner 创建并被账本标记的 QA 资源。
 
