@@ -33,13 +33,16 @@ import {
   coreBetaCapabilitiesReadbackWithRetry,
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
+  coreBetaCapabilityInteractionCategory,
   coreBetaCompletionBlockReason,
+  coreBetaConnectorOptionTestId,
   coreBetaConversationTurnLabel,
   coreBetaExpertBuilderOutcomeEvidence,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
+  coreBetaManualConnectorModeReady,
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
   coreBetaPartialReplyReady,
@@ -773,6 +776,61 @@ assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', null),
   false,
   'Core Beta v2 不能把连接器自动态 null 误判为禁用态',
+);
+assert.deepEqual(
+  coreBetaManualConnectorModeReady({
+    ariaChecked: 'false',
+    manualSurface: { list_visible: true, option_count: 5, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }),
+  { ok: true, list_ready: true, public_manual: true, aria_checked: false },
+  'Core Beta v2 连接器手动模式应接受手动列表加 connectorRouting.mode=manual 权威读回',
+);
+assert.equal(
+  coreBetaManualConnectorModeReady({
+    ariaChecked: 'true',
+    manualSurface: { list_visible: true, option_count: 0, empty_visible: true },
+    capabilities: {},
+  }).ok,
+  true,
+  'capabilities 暂未提供 routing 时，标准 radio 选中态与手动空列表应形成有效读回',
+);
+assert.equal(
+  coreBetaManualConnectorModeReady({
+    ariaChecked: 'true',
+    manualSurface: { list_visible: false, option_count: 5, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }).ok,
+  false,
+  '只有 radio/routing 手动态但没有真实手动列表时不得判定完成',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({ controlLocated: false, clickDispatched: false }),
+  'automation_error',
+  '未定位或未点击真实控件属于框架错误',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    expectedStateObserved: false,
+  }),
+  'bug',
+  '真实控件已点击但产品状态未生效时应归为产品 Bug',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    expectedStateObserved: true,
+  }),
+  '',
+  '真实控件点击且读回成功时不应产生错误分类',
+);
+assert.equal(
+  coreBetaConnectorOptionTestId('builtin:qbot_vision'),
+  'composer-connector-option-builtin:qbot_vision',
+  '含冒号的 connector key 必须保持 renderer 稳定 testid 合同',
 );
 const cleanupBase = {
   dialogs_open: 0,
@@ -3169,7 +3227,11 @@ const required = [
   ['#668 三条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-027'[\s\S]*executeSitSkillRejectedExplicitRetry[\s\S]*SIT-SKILL-028'[\s\S]*executeSitSkillAuditRejectNoAutoRetry[\s\S]*SIT-SKILL-029'[\s\S]*executeSitSkillRejectedUninstallCleanup/],
   ['#669 四条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
-  ['QWork 0.0.11 统一加号菜单按技能连接器模式子菜单兼容', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*composer-plus-sub-mode[\s\S]*composer-plus-sub-skill[\s\S]*composer-plus-sub-connector[\s\S]*openUnifiedComposerSubmenu/],
+  ['统一加号菜单使用稳定 section testid 与最新可见 Portal', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*section: 'mode'[\s\S]*section: 'skill'[\s\S]*section: 'connector'[\s\S]*lastVisibleLocator[\s\S]*visibleUnifiedComposerSubmenu[\s\S]*composer-plus-section-\$\{config\.section\}/],
+  ['统一加号子菜单支持 hover click ArrowRight Enter 四路打开', /openUnifiedComposerSubmenu[\s\S]*\.hover\(\{ force: true \}\)[\s\S]*pointermove[\s\S]*\.click\(\{ force: true \}\)[\s\S]*ArrowRight[\s\S]*Enter/],
+  ['手动连接器模式真实点击并读回列表 routing 或 radio', /setUnifiedConnectorMode[\s\S]*composer-connector-mode-manual[\s\S]*manual\.click[\s\S]*composer-plus-list[\s\S]*composer-connector-option-[\s\S]*currentCapabilities[\s\S]*coreBetaManualConnectorModeReady/],
+  ['BETA-MCP-002 手动选择成功后必须注册选择与执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile/],
+  ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],

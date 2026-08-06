@@ -20663,14 +20663,48 @@ async function composerProductEntrySnapshot(page, { state = null, caseDir = '' }
 }
 
 const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
-  workMode: { label: '模式', selector: '.composer-plus-sub-mode' },
-  skill: { label: '技能', selector: '.composer-plus-sub-skill' },
-  connector: { label: '连接器', selector: '.composer-plus-sub-connector' },
+  workMode: {
+    label: '模式',
+    section: 'mode',
+    selector: '.composer-plus-sub-mode',
+    optionSelector: '[data-testid^="composer-work-mode-"]',
+  },
+  skill: {
+    label: '技能',
+    section: 'skill',
+    selector: '.composer-plus-sub-skill',
+    optionSelector: '[data-testid^="composer-skill-mode-"], [data-testid^="composer-skill-option-"]',
+  },
+  connector: {
+    label: '连接器',
+    section: 'connector',
+    selector: '.composer-plus-sub-connector',
+    optionSelector: '[data-testid^="composer-connector-mode-"], [data-testid^="composer-connector-option-"]',
+  },
 });
+
+async function lastVisibleLocator(locator, timeout = 250) {
+  const count = await locator.count().catch(() => 0);
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const candidate = locator.nth(index);
+    if (await visible(candidate, timeout)) return candidate;
+  }
+  return null;
+}
+
+async function visibleUnifiedComposerSubmenu(page, config, timeout = 250) {
+  const submenu = await lastVisibleLocator(page.locator(config.selector), timeout);
+  if (!submenu) return null;
+  if (config.optionSelector && !(await submenu.locator(config.optionSelector).count().catch(() => 0))) return null;
+  return submenu;
+}
 
 async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
   if (!config || !(await unifiedComposerPlusAvailable(page))) return '';
+
+  let submenu = await visibleUnifiedComposerSubmenu(page, config, 150);
+  if (submenu) return (await submenu.innerText({ timeout: 1000 }).catch(() => '')) || config.label;
 
   await page.keyboard.press('Escape').catch(() => {});
   await closeWorkspacePicker(page);
@@ -20678,27 +20712,64 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   if (!(await visible(plus, 1000))) return '';
   await plus.click({ force: true }).catch(async () => plus.evaluate((element) => element.click()));
 
-  const main = page.locator('.composer-plus-main').first();
-  if (!(await visible(main, 1200))) return '';
-  const row = main.locator('.composer-plus-row, [role="menuitem"]')
-    .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(config.label)}(?:\\s|$)`) })
-    .first();
-  if (!(await visible(row, 1000))) return '';
+  let main = await lastVisibleLocator(page.locator('.composer-plus-main'), 1200);
+  if (!main) return '';
+  const triggerSelector = `[data-testid="composer-plus-section-${config.section}"]`;
+  const locateTrigger = async () => {
+    main = await lastVisibleLocator(page.locator('.composer-plus-main'), 500);
+    if (!main) return null;
+    const exact = main.locator(triggerSelector).first();
+    if (await visible(exact, 500)) return exact;
+    const fallback = main.locator('.composer-plus-row, [role="menuitem"]')
+      .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(config.label)}(?:\\s|$)`) })
+      .first();
+    return await visible(fallback, 500) ? fallback : null;
+  };
+  let row = await locateTrigger();
+  if (!row) return '';
 
-  await row.hover().catch(() => {});
-  let submenu = page.locator(config.selector).first();
-  if (!(await visible(submenu, 700))) {
+  const waitForSubmenu = async (timeoutMs) => {
+    let current = null;
+    const deadline = Date.now() + timeoutMs;
+    while (!current && Date.now() < deadline) {
+      current = await visibleUnifiedComposerSubmenu(page, config, 120);
+      if (!current) await page.waitForTimeout(60);
+    }
+    return current;
+  };
+  // QWork uses a real SubTrigger here. Reacquire the newest visible Portal
+  // after every attempt because capability refreshes can leave hidden copies.
+  await row.hover({ force: true }).catch(() => {});
+  await row.dispatchEvent('pointermove', { pointerType: 'mouse' }).catch(() => {});
+  submenu = await waitForSubmenu(1200);
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
     await row.click({ force: true }).catch(async () => row.evaluate((element) => element.click()));
-    submenu = page.locator(config.selector).first();
+    submenu = await waitForSubmenu(1800);
   }
-  if (!(await visible(submenu, 1200))) return '';
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
+    await row.focus().catch(() => {});
+    await row.press('ArrowRight').catch(async () => page.keyboard.press('ArrowRight').catch(() => {}));
+    submenu = await waitForSubmenu(2500);
+  }
+  if (!submenu) {
+    row = await locateTrigger();
+    if (!row) return '';
+    await row.focus().catch(() => {});
+    await row.press('Enter').catch(() => {});
+    submenu = await waitForSubmenu(1800);
+  }
+  if (!submenu) return '';
 
   const text = await submenu.innerText({ timeout: 1000 }).catch(() => '');
   recordStep(
     state,
     action || `打开输入区统一“+”菜单的【${config.label}】子菜单`,
-    `QWork 0.0.11 及后续统一菜单应可通过“+ > ${config.label}”进入对应能力选择区。`,
-    `已打开 ${config.selector}；${clip(text, 180)}`,
+    `统一菜单必须可通过“+ > ${config.label}”进入对应能力选择区。`,
+    `trigger=${triggerSelector}；submenu=${config.selector}；${clip(text, 180)}`,
     'passed',
   );
   return text || config.label;
@@ -20708,7 +20779,81 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
-    return Boolean(menuText.trim());
+    if (!menuText.trim()) return false;
+    let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 500);
+    let manual = submenu
+      ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 500)
+      : null;
+    if (!manual) {
+      recordAssertion(
+        state,
+        '统一菜单技能手动模式入口',
+        '“+ > 技能”子菜单必须提供用户可见的【手动】模式。',
+        false,
+        `子菜单已打开但未找到 composer-skill-mode-manual：${clip(menuText, 220)}`,
+        'automation_error',
+      );
+      return false;
+    }
+    let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    if (checked !== 'true') {
+      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+    }
+    let afterText = '';
+    let manualSurface = null;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(200);
+      submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 150);
+      if (!submenu) {
+        await openUnifiedComposerSubmenu(page, state, 'skill', '技能模式切换后重新打开【技能】子菜单');
+        submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 350);
+      }
+      manual = submenu
+        ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 150)
+        : null;
+      checked = manual ? await manual.getAttribute('aria-checked').catch(() => '') : '';
+      afterText = await activeMenuText(page, 'skill');
+      manualSurface = submenu ? await submenu.evaluate((menu) => {
+        const isVisible = (element) => {
+          if (!element || !element.getClientRects().length) return false;
+          const style = globalThis.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        return {
+          search_visible: isVisible(menu.querySelector('input[placeholder*="搜索技能"]')),
+          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
+          option_count: [...menu.querySelectorAll('[data-testid^="composer-skill-option-"]')]
+            .filter(isVisible).length,
+          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
+        };
+      }).catch(() => null) : null;
+      if (
+        checked === 'true'
+        && manualSurface?.search_visible
+        && manualSurface?.list_visible
+        && (manualSurface.option_count > 0 || manualSurface.empty_visible)
+      ) break;
+    }
+    const ok = checked === 'true'
+      && manualSurface?.search_visible
+      && manualSurface?.list_visible
+      && (manualSurface.option_count > 0 || manualSurface.empty_visible);
+    state.screenshots.skill_mode_manual = await shot(page, caseDir, 'skill-mode-manual');
+    recordStep(
+      state,
+      '通过可见 UI 切换技能模式：manual',
+      '必须真实点击“+ > 技能 > 手动”，并看到手动技能列表；仅打开自动模式说明页不算完成。',
+      `aria-checked=${checked || '未读取'}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 220)}`,
+      ok ? 'passed' : 'failed',
+      state.screenshots.skill_mode_manual,
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: ok,
+      }),
+    );
+    return ok;
   }
 
   const method = mode === 'auto' ? 'setSkillsAuto' : 'setSkillsDisabled';
@@ -20767,11 +20912,115 @@ export function unifiedSkillModeApplied(capabilities, mode, bridgeSelection = un
   return false;
 }
 
+export function coreBetaManualConnectorModeReady({
+  ariaChecked = '',
+  manualSurface = null,
+  capabilities = null,
+} = {}) {
+  const listReady = Boolean(
+    manualSurface?.list_visible
+    && (Number(manualSurface?.option_count || 0) > 0 || manualSurface?.empty_visible),
+  );
+  const publicManual = capabilities?.connectorRouting?.mode === 'manual';
+  return {
+    ok: listReady && (publicManual || ariaChecked === 'true'),
+    list_ready: listReady,
+    public_manual: publicManual,
+    aria_checked: ariaChecked === 'true',
+  };
+}
+
+export function coreBetaCapabilityInteractionCategory({
+  controlLocated = false,
+  clickDispatched = false,
+  expectedStateObserved = false,
+} = {}) {
+  if (!controlLocated || !clickDispatched) return 'automation_error';
+  return expectedStateObserved ? '' : 'bug';
+}
+
+export function coreBetaConnectorOptionTestId(connectorKey = '') {
+  return `composer-connector-option-${String(connectorKey || '').trim()}`;
+}
+
 async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
-    return Boolean(menuText.trim());
+    if (!menuText.trim()) return false;
+    let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 500);
+    let manual = submenu
+      ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 500)
+      : null;
+    if (!manual) {
+      recordAssertion(
+        state,
+        '统一菜单连接器手动模式入口',
+        '“+ > 连接器”子菜单必须提供用户可见的【手动】模式。',
+        false,
+        `子菜单已打开但未找到 composer-connector-mode-manual：${clip(menuText, 220)}`,
+        'automation_error',
+      );
+      return false;
+    }
+    let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    if (checked !== 'true') {
+      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+    }
+    let afterText = '';
+    let manualSurface = null;
+    let capabilities = null;
+    let readiness = null;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(200);
+      submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 150);
+      if (!submenu) {
+        await openUnifiedComposerSubmenu(page, state, 'connector', '连接器模式切换后重新打开【连接器】子菜单');
+        submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 350);
+      }
+      manual = submenu
+        ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 150)
+        : null;
+      checked = manual ? await manual.getAttribute('aria-checked').catch(() => '') : '';
+      afterText = await activeMenuText(page, 'connector');
+      manualSurface = submenu ? await submenu.evaluate((menu) => {
+        const isVisible = (element) => {
+          if (!element || !element.getClientRects().length) return false;
+          const style = globalThis.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        return {
+          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
+          option_count: [...menu.querySelectorAll('[data-testid^="composer-connector-option-"]')]
+            .filter(isVisible).length,
+          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
+        };
+      }).catch(() => null) : null;
+      capabilities = await currentCapabilities(page);
+      readiness = coreBetaManualConnectorModeReady({
+        ariaChecked: checked,
+        manualSurface,
+        capabilities,
+      });
+      if (readiness.ok) break;
+    }
+    const ok = Boolean(readiness?.ok);
+    state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual');
+    recordStep(
+      state,
+      '通过可见 UI 切换连接器模式：manual',
+      '必须真实点击“+ > 连接器 > 手动”，看到手动连接器列表，并由 connectorRouting.mode=manual 或标准 radio 状态确认。',
+      `aria-checked=${checked || '未读取'}；routing.mode=${capabilities?.connectorRouting?.mode || '未读取'}；readiness=${JSON.stringify(readiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
+      ok ? 'passed' : 'failed',
+      state.screenshots.connector_mode_manual,
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: ok,
+      }),
+    );
+    return ok;
   }
 
   const method = mode === 'auto' ? 'setConnectorsAuto' : 'setConnectorsDisabled';
@@ -21263,23 +21512,99 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   if (!manualOk) return false;
   const menu = await activeMenuLocator(page, 'connector');
   if (!menu) return false;
+  const capabilities = await currentCapabilities(page);
+  const catalogMatch = (capabilities?.connectors || []).find((item) => String(item?.key || '') === connectorKey);
+  const visibleLabels = [...new Set([
+    catalogMatch?.label,
+    catalogMatch?.title,
+    catalogMatch?.name,
+    catalogMatch?.displayName,
+  ].map((item) => String(item || '').trim()).filter(Boolean))];
   const candidates = menu.locator('.composer-plus-connector, [data-testid^="composer-connector-option-"]:not([data-testid$="-tag"]), .ctool-opt, [role="option"]');
   const count = await candidates.count().catch(() => 0);
+  const matches = [];
+  const exactTestId = coreBetaConnectorOptionTestId(connectorKey);
+  const exactByTestId = menu
+    .locator(`[data-testid=${JSON.stringify(exactTestId)}]`)
+    .first();
+  if (await visible(exactByTestId, 500)) {
+    const text = await exactByTestId.innerText({ timeout: 700 }).catch(() => '');
+    matches.push({
+      candidate: exactByTestId,
+      testId: exactTestId,
+      parsedKey: connectorKey,
+      text,
+      primaryText: firstLine(text).trim(),
+    });
+  }
   for (let index = 0; index < count; index += 1) {
     const candidate = candidates.nth(index);
     if (!(await visible(candidate, 250))) continue;
     const testId = await candidate.getAttribute('data-testid').catch(() => '');
     const parsedKey = String(testId || '').replace(/^composer-connector-option-/, '').replace(/-(?:tag|checkbox|row)$/, '');
-    if (parsedKey !== connectorKey) continue;
     const text = await candidate.innerText({ timeout: 700 }).catch(() => '');
-    await candidate.click({ force: true }).catch(async () => candidate.evaluate((el) => el.click()));
-    await page.waitForTimeout(700);
-    state.artifacts.selected_connector = { key: connectorKey, label: firstLine(text), testid: testId || '' };
-    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
-    recordStep(state, '按唯一标识手动选择连接器', '应按 connector key 选择本 Case 指定连接器，并在输入区保留选择状态。', `connector=${connectorKey}；${clip(text, 140)}`, 'passed', state.screenshots.manual_connector_reselected);
-    return true;
+    const primaryText = firstLine(text).trim();
+    if (
+      (parsedKey === connectorKey || visibleLabels.includes(primaryText))
+      && !matches.some((item) => item.testId === testId && item.primaryText === primaryText)
+    ) {
+      matches.push({ candidate, testId, parsedKey, text, primaryText });
+    }
   }
-  recordAssertion(state, '指定连接器可选择', `应能按 key=${connectorKey} 在手动模式中选择指定连接器。`, false, clip(await activeMenuText(page, 'connector'), 300), 'automation_error');
+  if (matches.length === 1) {
+    const match = matches[0];
+    await match.candidate.click({ force: true }).catch(async () => match.candidate.evaluate((el) => el.click()));
+    let selected = false;
+    let selectedConnectors = null;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      const current = await currentCapabilities(page);
+      selectedConnectors = current?.selectedConnectors;
+      selected = coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(connectorKey);
+      if (selected) break;
+    }
+    state.artifacts.selected_connector = {
+      key: connectorKey,
+      label: match.primaryText,
+      testid: match.testId || '',
+      selection_source: match.parsedKey === connectorKey ? 'dom-testid-key' : 'public-catalog-visible-label',
+      selected_connectors: selectedConnectors,
+    };
+    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
+    recordStep(
+      state,
+      '按唯一标识手动选择连接器',
+      '应由公共 catalog 将 connector key 唯一映射到用户可见名称，点击后再从 selectedConnectors 读回确认指定连接器已选中。',
+      `connector=${connectorKey}；label=${clip(match.primaryText, 100)}；source=${state.artifacts.selected_connector.selection_source}；selectedConnectors=${JSON.stringify(selectedConnectors)}`,
+      selected ? 'passed' : 'failed',
+      state.screenshots.manual_connector_reselected,
+      coreBetaCapabilityInteractionCategory({
+        controlLocated: true,
+        clickDispatched: true,
+        expectedStateObserved: selected,
+      }),
+    );
+    if (!selected) {
+      recordAssertion(
+        state,
+        '指定连接器选择读回',
+        `点击 ${match.primaryText || connectorKey} 后 selectedConnectors 必须包含 ${connectorKey}。`,
+        false,
+        `selectedConnectors=${JSON.stringify(selectedConnectors)}`,
+        'bug',
+      );
+    }
+    return selected;
+  }
+  recordAssertion(
+    state,
+    '指定连接器可选择',
+    `应能由公共 catalog 将 key=${connectorKey} 唯一映射到手动菜单中的用户可见连接器。`,
+    false,
+    `catalogLabels=${JSON.stringify(visibleLabels)}；matches=${matches.length}；menu=${clip(await activeMenuText(page, 'connector'), 300)}`,
+    'automation_error',
+  );
   return false;
 }
 

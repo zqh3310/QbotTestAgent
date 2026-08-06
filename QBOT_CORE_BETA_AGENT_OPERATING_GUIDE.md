@@ -22,6 +22,21 @@
 最近一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806183239_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7b12d99
+```
+
+该批次完成 49/55 后，于 `BETA-MCP-002` 暴露 Core Beta v2 runner 只将
+“打开连接器子菜单”当作手动模式成功，没有使用稳定 section
+testid、最新可见 Portal、键盘回退，也没有真实点击
+`composer-connector-mode-manual` 并读回手动列表与 routing/radio 状态。
+因前置 reset 失败，本 Case 的 `capability_selection` 和
+`capability_execution_event` 没有形成有效 manifest 证据，框架正确硬停。
+该目录已冻结，不得续写；修复后必须在新的已推送干净基线上从第 1 条
+完整重跑 55 条，不得只续跑剩余 5 条。
+
+此前冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806163632_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-dea7e07
 ```
 
