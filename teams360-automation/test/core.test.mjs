@@ -51,6 +51,7 @@ import {
   pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
   resolveTeamsRecoveryQworkUi,
+  teamsPreconnectRecoveryAllowed,
   teamsCasebookExitCode,
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
@@ -563,6 +564,22 @@ test('Teams preconnect re-verifies a recovered host after the original deadline 
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /recovery\.recovered[\s\S]*extendTeamsPreconnectDeadlineAfterRecovery/);
   assert.match(source, /const canRetry = attempt < attempts && Date\.now\(\) < readyDeadline;[\s\S]*if \(canRetry\)/);
+});
+
+test('Teams preconnect does not relaunch a host again after one completed recovery', () => {
+  const base = {
+    attempt: 2,
+    attempts: 80,
+    now: 20_000,
+    readyDeadline: 80_000,
+  };
+  assert.equal(teamsPreconnectRecoveryAllowed(base), true);
+  assert.equal(teamsPreconnectRecoveryAllowed({ ...base, recoveryCompleted: true }), false);
+  assert.equal(teamsPreconnectRecoveryAllowed({ ...base, attempt: 80 }), false);
+  assert.equal(teamsPreconnectRecoveryAllowed({ ...base, now: 80_000 }), false);
+  const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
+  assert.match(source, /let recoveryCompleted = false/);
+  assert.match(source, /if \(recovery\.recovered\) \{\s+recoveryCompleted = true;/);
 });
 
 test('Teams recovery keeps the frozen QWork release when the refreshed renderer exposes an uninstalled stale pin', () => {

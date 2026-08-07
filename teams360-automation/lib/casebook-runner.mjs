@@ -188,6 +188,18 @@ export function extendTeamsPreconnectDeadlineAfterRecovery(
   return Math.max(deadline, recovered + verificationWindow);
 }
 
+export function teamsPreconnectRecoveryAllowed({
+  attempt,
+  attempts,
+  now = Date.now(),
+  readyDeadline,
+  recoveryCompleted = false,
+} = {}) {
+  return !recoveryCompleted
+    && Number(attempt) < Number(attempts)
+    && Number(now) < Number(readyDeadline);
+}
+
 export async function connectTeamsCasebookBrowser(cdpUrl, {
   attempts = 80,
   timeoutMs = 15_000,
@@ -205,6 +217,7 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
   const startedWaitingAt = Date.now();
   let readyDeadline = startedWaitingAt + Math.max(timeoutMs, Number(readyTimeoutMs) || 120_000);
   let attemptsUsed = 0;
+  let recoveryCompleted = false;
   for (let attempt = 1; attempt <= attempts && Date.now() < readyDeadline; attempt += 1) {
     attemptsUsed = attempt;
     let browser = null;
@@ -321,7 +334,13 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         elapsed_ms: Date.now() - startedAt,
         reason: String(error?.message || error).split('\n')[0],
       }));
-      const canRecover = attempt < attempts && Date.now() < readyDeadline;
+      const canRecover = teamsPreconnectRecoveryAllowed({
+        attempt,
+        attempts,
+        now: Date.now(),
+        readyDeadline,
+        recoveryCompleted,
+      });
       if (recoveryCdpUrl && canRecover) {
         await resetConnection?.().catch(() => {});
         const recovery = await recoverTeamsQworkWorkbench(recoveryCdpUrl, {
@@ -331,6 +350,7 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
           reason: String(recoveryError?.message || recoveryError).split('\n')[0],
         }));
         if (recovery.recovered) {
+          recoveryCompleted = true;
           readyDeadline = extendTeamsPreconnectDeadlineAfterRecovery(
             readyDeadline,
             Date.now(),

@@ -341,6 +341,8 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 
 Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代理、宿主重连和内部重启命令。调用者不得传 `--restart-command`，不得连接临时代理执行额外 UI 操作，也不得把输出写到 `teams360-automation/output` 之外。
 
+Teams 预连接在一次连接周期内最多接受一次已完成的受管宿主恢复。恢复完成后若 QWork WebView 已连接、但模型档位或 capabilities 尚未就绪，必须在同一宿主上继续有界读回；不得再次重启宿主、重复延长截止时间，或形成永不收敛的恢复循环。超过恢复后的验证窗口仍未就绪时必须明确失败，由自愈闭环判定环境阻塞或框架问题。
+
 ## 7. 批量、串行屏障与初始化
 
 - Core Beta v2 的 Case 间执行永久强制串行：`--parallel` 和 `--single-host-pipeline` 的有效值都固定为 `1`。调用者即使传入大于 `1` 的历史参数，precheck 也必须同时记录 requested/effective 值和 `core-beta-v2-forced-serial` policy，runner 不得进入多 CDP 调度或外层 pipeline。
