@@ -14,14 +14,14 @@
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
 - 当前正式宿主身份：360Teams `5.2.42(2119080753)`。
-- 当前 QWork 身份：UAT `0.0.30-rc.10`。
+- 当前 QWork 身份：UAT `0.0.30-rc.12`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
 2026-08-07 用户更新产品后，旧冻结批次的发布身份已无法精确恢复：源批次为
 360Teams `5.2.41(2119080662)` / QWork `0.0.30-rc.2`，当前受管宿主为
-360Teams `5.2.42(2119080753)` / QWork `0.0.30-rc.10`。框架正在使用显式
+360Teams `5.2.42(2119080753)` / QWork `0.0.30-rc.12`。框架正在使用显式
 `--core-beta-cleanup-release-migration true` 安全门禁，从下述最新冻结目录只清理
 其账本记录的 QA Skill；完成清理、全量检查、推送和新 `READY_SCOPED` 预检后，
 必须在当前发布身份的新不可变目录从第 1 条完整串行重跑 55 条。
@@ -355,13 +355,13 @@ npm run core-beta:pretest -- \
   --expected-count 55 \
   --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
   --production-gate true \
-  --expected-teams-version 5.2.41 \
-  --expected-teams-build 2119080662 \
-  --expected-qwork-version 0.0.30-rc.2 \
+  --expected-teams-version 5.2.42 \
+  --expected-teams-build 2119080753 \
+  --expected-qwork-version 0.0.30-rc.12 \
   --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.2-sha256-84175ee2581496a57bb1ec7ad63b466fca503930b8d66729ce2a979f97f3215b \
-  --feature-flags-hash ac777398cf2f23a7fe636328f1defd45c1f4dc8d6e835b4d04a31a0052a752bc \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.12-sha256-55fb98587cfcaa66f674268701fc21229f331831210c46f5e954b49389202056 \
+  --feature-flags-hash 606f9bb535e902c6912121dcc96d32af322d40b5fb1fa7694f6aba8c12cadae9 \
   --case "$CASE_IDS" \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
@@ -382,7 +382,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -395,9 +395,9 @@ npm --prefix teams360-automation run casebook -- \
   --single-host-pipeline 1 \
   --production-gate true \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.2-sha256-84175ee2581496a57bb1ec7ad63b466fca503930b8d66729ce2a979f97f3215b \
-  --feature-flags-hash ac777398cf2f23a7fe636328f1defd45c1f4dc8d6e835b4d04a31a0052a752bc \
-  --qwork-build-id 0.0.30-rc.2 \
+  --prompt-policy-version qwork-runtime-0.0.30-rc.12-sha256-55fb98587cfcaa66f674268701fc21229f331831210c46f5e954b49389202056 \
+  --feature-flags-hash 606f9bb535e902c6912121dcc96d32af322d40b5fb1fa7694f6aba8c12cadae9 \
+  --qwork-build-id 0.0.30-rc.12 \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
   --scope-reason fixture_provider_unavailable
