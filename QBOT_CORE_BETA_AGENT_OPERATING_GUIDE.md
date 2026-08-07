@@ -22,6 +22,25 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807090204_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-2349c5a
+```
+
+该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：前三个固定
+connector 已执行真实卡片点击但产品持续读回 `selectedConnectors=[]`；第四个样本
+存在可选读回；第五个样本真实点击手动模式后仍读回 `routing.mode=auto`、
+`aria-checked=false` 且手动列表不可见。这些已点击但未生效的状态本应形成产品
+负向收据；原 runner 却在 reset 返回 false 时直接 return，只留下 3 个样本且没有
+注册连字符命名的 `capability-selection.json` 和 `capability-execution-event` 角色，
+最终由无效下划线诊断占位导致 manifest 缺失并硬停止。修复必须让 5 个样本分别
+绑定 Case、序号、前后公开状态、精确选择读回、任务零变更守卫和唯一截图/SHA；
+模式或卡片已真实点击但产品未生效时保持 `evidence_valid=true/oracle_valid=false`
+并继续剩余样本，只有控件/点击/读回/截图/守卫本身不完整才允许停止。修复推送后
+还必须先从本冻结目录独立执行 `BETA-SKILL-001 --core-beta-cleanup-from ...` 清理
+`BETA-SKILL-003/004` 的本轮安装遗留，再从第 1 条完整串行重跑 55 条。
+
+最新一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807071819_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-fe28758
 ```
 

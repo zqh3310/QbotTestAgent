@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -70,6 +71,7 @@ import {
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import {
   coreBetaMcpCrossSurfaceOutcome,
+  coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaSelectedCapabilityIdentities as coreBetaV2SelectedCapabilityIdentities,
 } from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 
@@ -879,24 +881,85 @@ test('Core Beta fail-closed, partial-stop, and capability identity helpers rejec
     ]),
     ['mcphub:fkai-wiki-llm', 'mcphub:dis', 'mcphub:iops'],
   );
-  const mcpReceipts = [
-    ['mcphub:wiki', true],
-    ['mcphub:dis', false],
-    ['mcphub:iops', true],
-    ['mcphub:wecom', false],
-    ['mcphub:qbi', true],
-  ].map(([key, selected]) => ({
-    key,
-    selected,
-    capability_selected: selected,
-    tools: [{ name: `${key}-read` }],
-    health: {},
-    visible_text: '',
-  }));
-  const mcpOutcome = coreBetaMcpCrossSurfaceOutcome(mcpReceipts);
-  assert.equal(mcpOutcome.evidence_valid, true);
-  assert.equal(mcpOutcome.oracle_valid, false);
-  assert.equal(coreBetaMcpCrossSurfaceOutcome(mcpReceipts.slice(0, 4)).evidence_valid, false);
+  const mcpScreenshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-mcp-receipts-'));
+  try {
+    const makeMcpReceipt = (index, key, selected, stage = 'manual_connector_selection') => {
+      const screenshotPath = path.join(mcpScreenshotRoot, `${index}.png`);
+      fs.writeFileSync(screenshotPath, Buffer.alloc(256, index + 1));
+      const selectedConnectors = selected ? [key] : [];
+      const task = { id: null, running: false, send_count: 12, message_count: 0 };
+      return {
+        schema_version: 'qbot-core-beta-mcp-cross-surface-receipt/v1',
+        case_id: 'BETA-MCP-002',
+        captured_at: '2026-08-07T00:00:02.000Z',
+        index,
+        key,
+        reset_ok: stage !== 'manual_mode',
+        selection_attempted: stage === 'manual_connector_selection',
+        selected,
+        capability_selected: selected,
+        selected_connectors: selectedConnectors,
+        tools: [{ name: `${key}-read` }],
+        health: {},
+        visible_text: 'connector menu',
+        interaction: {
+          schema_version: 'qbot-core-beta-capability-interaction/v1',
+          capability_kind: 'connector',
+          stage,
+          expected_identity: key,
+          control_located: true,
+          click_dispatched: true,
+          expected_state_observed: selected,
+          aria_checked: selected ? 'true' : 'false',
+          category: selected ? '' : 'bug',
+          screenshot: screenshotPath,
+          ...(stage === 'manual_connector_selection'
+            ? { selected_connectors: selectedConnectors }
+            : { manual_surface: { list_visible: false, option_count: 0, empty_visible: false } }),
+        },
+        public_readback: {
+          before: { captured_at: '2026-08-07T00:00:00.000Z', case_id: 'BETA-MCP-002', task, connectors: { selected: [] }, capabilities: { selectedConnectors: [] } },
+          after: { captured_at: '2026-08-07T00:00:01.000Z', case_id: 'BETA-MCP-002', task, connectors: { selected: selectedConnectors }, capabilities: { selectedConnectors } },
+        },
+        task_guard: {
+          task_absent_before: true,
+          task_absent_after: true,
+          not_running_before: true,
+          not_running_after: true,
+          message_count_zero_before: true,
+          message_count_zero_after: true,
+          send_count_observed: true,
+          send_count_unchanged: true,
+          valid: true,
+        },
+        screenshot: {
+          valid: true,
+          path: screenshotPath,
+          sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+        },
+      };
+    };
+    const mcpReceipts = [
+      makeMcpReceipt(0, 'mcphub:wiki', true),
+      makeMcpReceipt(1, 'mcphub:dis', false),
+      makeMcpReceipt(2, 'mcphub:iops', true),
+      makeMcpReceipt(3, 'mcphub:wecom', true),
+      makeMcpReceipt(4, 'mcphub:qbi', false, 'manual_mode'),
+    ];
+    const mcpOutcome = coreBetaMcpCrossSurfaceOutcome(mcpReceipts);
+    assert.equal(mcpOutcome.evidence_valid, true);
+    assert.equal(mcpOutcome.oracle_valid, false);
+    assert.equal(coreBetaMcpCrossSurfaceOutcome(mcpReceipts.slice(0, 4)).evidence_valid, false);
+    const missingClick = structuredClone(mcpReceipts[0]);
+    missingClick.interaction.click_dispatched = false;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(missingClick), false);
+    const incompleteGuard = structuredClone(mcpReceipts[0]);
+    incompleteGuard.task_guard.task_absent_after = false;
+    incompleteGuard.task_guard.valid = false;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(incompleteGuard), false);
+  } finally {
+    fs.rmSync(mcpScreenshotRoot, { recursive: true, force: true });
+  }
   assert.equal(coreBetaSkillSelectionReadbackMatches({
     selectedSkillCount: 1,
     selectedSkills: [{ slug: 'skill-a' }],

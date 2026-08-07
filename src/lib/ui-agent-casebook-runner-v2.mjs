@@ -85,20 +85,116 @@ export function coreBetaSelectedCapabilityIdentities(items) {
     .filter(Boolean);
 }
 
+function coreBetaMcpCrossSurfaceTaskGuard(before = {}, after = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const guard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+  };
+  guard.valid = Object.values(guard).every(Boolean);
+  return guard;
+}
+
+function coreBetaMcpReceiptScreenshotValid(screenshot = {}) {
+  const screenshotPath = String(screenshot?.path || '');
+  if (
+    screenshot?.valid !== true
+    || !coreBetaBatchScreenshotPresent(screenshotPath)
+    || !/^[a-f0-9]{64}$/i.test(String(screenshot?.sha256 || ''))
+  ) return false;
+  return createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex') === screenshot.sha256;
+}
+
+export function coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt = {}) {
+  const key = String(receipt?.key || '').trim();
+  const interaction = receipt?.interaction || {};
+  const stage = String(interaction?.stage || '');
+  const selectedConnectors = receipt?.selected_connectors;
+  const selectedByReadback = Array.isArray(selectedConnectors)
+    && coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(key);
+  const publicReadback = receipt?.public_readback || {};
+  const before = publicReadback?.before || {};
+  const after = publicReadback?.after || {};
+  const expectedTaskGuard = coreBetaMcpCrossSurfaceTaskGuard(before, after);
+  const taskGuard = receipt?.task_guard || {};
+  const selectedBefore = before?.connectors?.selected;
+  const selectedAfter = after?.connectors?.selected;
+  const publicStateValid = Boolean(
+    receipt?.case_id
+    && before?.case_id === receipt.case_id
+    && after?.case_id === receipt.case_id
+    && typeof before?.captured_at === 'string'
+    && typeof after?.captured_at === 'string'
+    && Array.isArray(selectedBefore)
+    && selectedBefore.length === 0
+    && Array.isArray(selectedAfter)
+    && JSON.stringify(selectedAfter) === JSON.stringify(selectedConnectors)
+    && after?.capabilities !== null
+    && typeof after?.capabilities === 'object'
+    && !after.capabilities?.__error
+  );
+  const selectionReceipt = stage === 'manual_connector_selection'
+    && receipt?.reset_ok === true
+    && receipt?.selection_attempted === true
+    && Array.isArray(interaction?.selected_connectors)
+    && JSON.stringify(interaction.selected_connectors) === JSON.stringify(selectedConnectors);
+  const manualModeFailureReceipt = stage === 'manual_mode'
+    && receipt?.reset_ok === false
+    && receipt?.selection_attempted === false
+    && receipt?.selected === false
+    && receipt?.capability_selected === false
+    && interaction?.expected_state_observed === false
+    && interaction?.category === 'bug'
+    && interaction?.aria_checked === 'false'
+    && interaction?.manual_surface
+    && typeof interaction.manual_surface === 'object';
+  return Boolean(
+    receipt?.schema_version === 'qbot-core-beta-mcp-cross-surface-receipt/v1'
+    && Number.isInteger(receipt?.index)
+    && typeof receipt?.captured_at === 'string'
+    && key
+    && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
+    && interaction?.capability_kind === 'connector'
+    && String(interaction?.expected_identity || '') === key
+    && interaction?.control_located === true
+    && interaction?.click_dispatched === true
+    && typeof interaction?.expected_state_observed === 'boolean'
+    && ['', 'bug'].includes(String(interaction?.category || ''))
+    && (selectionReceipt || manualModeFailureReceipt)
+    && typeof receipt?.selected === 'boolean'
+    && typeof receipt?.capability_selected === 'boolean'
+    && Array.isArray(selectedConnectors)
+    && receipt.selected === selectedByReadback
+    && receipt.capability_selected === selectedByReadback
+    && interaction.expected_state_observed === receipt.selected
+    && Array.isArray(receipt?.tools)
+    && receipt?.health !== null
+    && typeof receipt?.health === 'object'
+    && typeof receipt?.visible_text === 'string'
+    && publicStateValid
+    && taskGuard?.valid === true
+    && Object.entries(expectedTaskGuard).every(([field, value]) => taskGuard?.[field] === value)
+    && coreBetaMcpReceiptScreenshotValid(receipt?.screenshot)
+  );
+}
+
 export function coreBetaMcpCrossSurfaceOutcome(receipts, expectedCount = 5) {
   const normalized = Array.isArray(receipts) ? receipts : [];
   const keys = normalized.map((item) => String(item?.key || '').trim()).filter(Boolean);
   const evidenceValid = normalized.length === expectedCount
     && keys.length === expectedCount
     && new Set(keys).size === expectedCount
-    && normalized.every((item) => (
-      typeof item?.selected === 'boolean'
-      && typeof item?.capability_selected === 'boolean'
-      && Array.isArray(item?.tools)
-      && item?.health !== null
-      && typeof item?.health === 'object'
-      && typeof item?.visible_text === 'string'
-    ));
+    && normalized.every((item, index) => item?.index === index)
+    && new Set(normalized.map((item) => String(item?.case_id || ''))).size === 1
+    && normalized.every(coreBetaMcpCrossSurfaceReceiptEvidenceValid);
   const oracleValid = evidenceValid && normalized.every((item) => (
     item.selected
     && item.capability_selected
@@ -10972,20 +11068,65 @@ async function executeCoreBetaMcpCase({
   if (scenario.driver === 'mcp_cross_surface_identity_reconcile') {
     const selected = selectedSample;
     const receipts = [];
-    for (const connector of selected) {
+    for (const [index, connector] of selected.entries()) {
       await openNewTask(page, state);
-      if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'manual' })) return;
-      const ok = await selectManualConnectorByKey(page, state, caseDir, connector.key);
-      const snapshot = await captureCoreBetaPublicState(page, testCase);
+      delete state.artifacts.core_beta_capability_interaction;
+      const before = await captureCoreBetaPublicState(page, testCase);
+      const resetOk = await resetComposerControls(page, state, caseDir, {
+        skillMode: 'disabled',
+        connectorMode: 'manual',
+      });
+      let selectedOk = false;
+      if (resetOk) {
+        selectedOk = await selectManualConnectorByKey(page, state, caseDir, connector.key);
+      }
+      const after = await captureCoreBetaPublicState(page, testCase);
       const visibleText = await activeMenuText(page, 'connector').catch(() => '');
-      receipts.push({
+      const interaction = {
+        ...(state.artifacts.core_beta_capability_interaction || {}),
+        expected_identity: connector.key,
+      };
+      const selectedConnectors = Array.isArray(after.connectors?.selected)
+        ? after.connectors.selected
+        : null;
+      const capabilitySelected = Array.isArray(selectedConnectors)
+        && coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(connector.key);
+      const receiptScreenshot = await shot(
+        page,
+        caseDir,
+        `mcp-cross-surface-${String(index + 1).padStart(2, '0')}-${slugify(connector.key)}`,
+      );
+      const screenshotValid = coreBetaBatchScreenshotPresent(receiptScreenshot);
+      const taskGuard = coreBetaMcpCrossSurfaceTaskGuard(before, after);
+      const receipt = {
+        schema_version: 'qbot-core-beta-mcp-cross-surface-receipt/v1',
+        case_id: testCase.id,
+        captured_at: new Date().toISOString(),
+        index,
         key: connector.key,
-        selected: ok,
-        capability_selected: JSON.stringify(snapshot.connectors?.selected || []).includes(connector.key),
+        reset_ok: resetOk,
+        selection_attempted: Boolean(resetOk && interaction.stage === 'manual_connector_selection'),
+        selected: Boolean(selectedOk),
+        capability_selected: Boolean(capabilitySelected),
+        selected_connectors: selectedConnectors,
         tools: connector.tools,
         health: connector.health,
         visible_text: clip(visibleText, 500),
-      });
+        interaction,
+        composer_reset: state.artifacts.core_beta_composer_control_reset || null,
+        public_readback: { before, after },
+        task_guard: taskGuard,
+        screenshot: {
+          valid: screenshotValid,
+          path: receiptScreenshot,
+          sha256: screenshotValid
+            ? createHash('sha256').update(fs.readFileSync(receiptScreenshot)).digest('hex')
+            : '',
+        },
+      };
+      receipt.evidence_valid = coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt);
+      receipts.push(receipt);
+      if (!receipt.evidence_valid) break;
     }
     const outcome = coreBetaMcpCrossSurfaceOutcome(receipts, 5);
     const selectionFile = path.join(caseDir, 'capability-selection.json');
@@ -21442,6 +21583,18 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 500)
       : null;
     if (!manual) {
+      state.screenshots.connector_mode_manual_missing = await shot(page, caseDir, 'connector-mode-manual-missing');
+      state.artifacts.core_beta_capability_interaction = {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'connector',
+        stage: 'manual_mode',
+        control_testid: 'composer-connector-mode-manual',
+        control_located: false,
+        click_dispatched: false,
+        expected_state_observed: false,
+        screenshot: state.screenshots.connector_mode_manual_missing,
+        category: 'automation_error',
+      };
       recordAssertion(
         state,
         '统一菜单连接器手动模式入口',
@@ -21453,8 +21606,38 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       return false;
     }
     let checked = await manual.getAttribute('aria-checked').catch(() => '');
+    const beforeChecked = checked;
+    let clickDispatched = false;
     if (checked !== 'true') {
-      await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+      try {
+        await manual.click({ force: true }).catch(async () => manual.evaluate((element) => element.click()));
+        clickDispatched = true;
+      } catch (error) {
+        state.screenshots.connector_mode_manual_click_failed = await shot(page, caseDir, 'connector-mode-manual-click-failed');
+        state.artifacts.core_beta_capability_interaction = {
+          schema_version: 'qbot-core-beta-capability-interaction/v1',
+          capability_kind: 'connector',
+          stage: 'manual_mode',
+          control_testid: 'composer-connector-mode-manual',
+          control_located: true,
+          click_dispatched: false,
+          expected_state_observed: false,
+          before_aria_checked: beforeChecked,
+          aria_checked: checked,
+          screenshot: state.screenshots.connector_mode_manual_click_failed,
+          error: String(error?.message || error),
+          category: 'automation_error',
+        };
+        recordAssertion(
+          state,
+          '统一菜单连接器手动模式点击',
+          '定位到用户可见的【手动】控件后必须成功派发真实点击。',
+          false,
+          String(error?.message || error),
+          'automation_error',
+        );
+        return false;
+      }
     }
     let afterText = '';
     let manualSurface = null;
@@ -21496,6 +21679,27 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
     }
     const ok = Boolean(readiness?.ok);
     state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual');
+    const interactionCategory = coreBetaCapabilityInteractionCategory({
+      controlLocated: true,
+      clickDispatched: clickDispatched || ok,
+      expectedStateObserved: ok,
+    });
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'connector',
+      stage: 'manual_mode',
+      control_testid: 'composer-connector-mode-manual',
+      control_located: true,
+      click_dispatched: clickDispatched || ok,
+      expected_state_observed: ok,
+      before_aria_checked: beforeChecked,
+      aria_checked: checked,
+      manual_surface: manualSurface,
+      capabilities_connector_mode: capabilities?.connectorRouting?.mode || '',
+      menu_text: afterText,
+      screenshot: state.screenshots.connector_mode_manual,
+      category: interactionCategory,
+    };
     recordStep(
       state,
       '通过可见 UI 切换连接器模式：manual',
@@ -21503,11 +21707,7 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       `aria-checked=${checked || '未读取'}；routing.mode=${capabilities?.connectorRouting?.mode || '未读取'}；readiness=${JSON.stringify(readiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(afterText, 240)}`,
       ok ? 'passed' : 'failed',
       state.screenshots.connector_mode_manual,
-      coreBetaCapabilityInteractionCategory({
-        controlLocated: true,
-        clickDispatched: true,
-        expectedStateObserved: ok,
-      }),
+      interactionCategory,
     );
     return ok;
   }
@@ -22129,7 +22329,21 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   const manualOk = await setConnectorMode(page, state, caseDir, 'manual');
   if (!manualOk) return false;
   const menu = await activeMenuLocator(page, 'connector');
-  if (!menu) return false;
+  if (!menu) {
+    state.screenshots.manual_connector_menu_missing = await shot(page, caseDir, `manual-connector-${slugify(connectorKey)}-menu-missing`);
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'connector',
+      stage: 'manual_connector_selection',
+      expected_identity: connectorKey,
+      control_located: false,
+      click_dispatched: false,
+      expected_state_observed: false,
+      screenshot: state.screenshots.manual_connector_menu_missing,
+      category: 'automation_error',
+    };
+    return false;
+  }
   const capabilities = await currentCapabilities(page);
   const catalogMatch = (capabilities?.connectors || []).find((item) => String(item?.key || '') === connectorKey);
   const visibleLabels = [...new Set([
@@ -22171,7 +22385,38 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
   }
   if (matches.length === 1) {
     const match = matches[0];
-    await match.candidate.click({ force: true }).catch(async () => match.candidate.evaluate((el) => el.click()));
+    const beforeAriaChecked = await match.candidate.getAttribute('aria-checked').catch(() => '') || '';
+    let clickDispatched = false;
+    try {
+      await match.candidate.click({ force: true }).catch(async () => match.candidate.evaluate((el) => el.click()));
+      clickDispatched = true;
+    } catch (error) {
+      state.screenshots.manual_connector_click_failed = await shot(page, caseDir, `manual-connector-${slugify(connectorKey)}-click-failed`);
+      state.artifacts.core_beta_capability_interaction = {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'connector',
+        stage: 'manual_connector_selection',
+        expected_identity: connectorKey,
+        control_testid: match.testId || 'visible-connector-option-by-label',
+        control_located: true,
+        click_dispatched: false,
+        expected_state_observed: false,
+        before_aria_checked: beforeAriaChecked,
+        aria_checked: beforeAriaChecked,
+        screenshot: state.screenshots.manual_connector_click_failed,
+        error: String(error?.message || error),
+        category: 'automation_error',
+      };
+      recordAssertion(
+        state,
+        `按唯一标识手动选择连接器：${connectorKey}`,
+        '已定位的连接器卡片必须成功派发真实点击。',
+        false,
+        String(error?.message || error),
+        'automation_error',
+      );
+      return false;
+    }
     let selected = false;
     let selectedConnectors = null;
     const deadline = Date.now() + 8000;
@@ -22189,7 +22434,31 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
       selection_source: match.parsedKey === connectorKey ? 'dom-testid-key' : 'public-catalog-visible-label',
       selected_connectors: selectedConnectors,
     };
-    state.screenshots.manual_connector_reselected = await shot(page, caseDir, 'manual-connector-reselected');
+    const afterAriaChecked = await match.candidate.getAttribute('aria-checked').catch(() => '') || '';
+    const screenshotKey = `manual-connector-${slugify(connectorKey)}-selected`;
+    state.screenshots[screenshotKey] = await shot(page, caseDir, screenshotKey);
+    state.screenshots.manual_connector_reselected = state.screenshots[screenshotKey];
+    const interactionCategory = coreBetaCapabilityInteractionCategory({
+      controlLocated: true,
+      clickDispatched,
+      expectedStateObserved: selected,
+    });
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'connector',
+      stage: 'manual_connector_selection',
+      expected_identity: connectorKey,
+      control_testid: match.testId || 'visible-connector-option-by-label',
+      control_located: true,
+      click_dispatched: clickDispatched,
+      expected_state_observed: selected,
+      before_aria_checked: beforeAriaChecked,
+      aria_checked: afterAriaChecked || (selected ? 'true' : 'false'),
+      selected_connectors: selectedConnectors,
+      option_text: match.text,
+      screenshot: state.screenshots.manual_connector_reselected,
+      category: interactionCategory,
+    };
     recordStep(
       state,
       '按唯一标识手动选择连接器',
@@ -22197,11 +22466,7 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
       `connector=${connectorKey}；label=${clip(match.primaryText, 100)}；source=${state.artifacts.selected_connector.selection_source}；selectedConnectors=${JSON.stringify(selectedConnectors)}`,
       selected ? 'passed' : 'failed',
       state.screenshots.manual_connector_reselected,
-      coreBetaCapabilityInteractionCategory({
-        controlLocated: true,
-        clickDispatched: true,
-        expectedStateObserved: selected,
-      }),
+      interactionCategory,
     );
     if (!selected) {
       recordAssertion(
@@ -22215,6 +22480,18 @@ async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
     }
     return selected;
   }
+  state.screenshots.manual_connector_identity_missing = await shot(page, caseDir, `manual-connector-${slugify(connectorKey)}-identity-missing`);
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'connector',
+    stage: 'manual_connector_selection',
+    expected_identity: connectorKey,
+    control_located: false,
+    click_dispatched: false,
+    expected_state_observed: false,
+    screenshot: state.screenshots.manual_connector_identity_missing,
+    category: 'automation_error',
+  };
   recordAssertion(
     state,
     '指定连接器可选择',

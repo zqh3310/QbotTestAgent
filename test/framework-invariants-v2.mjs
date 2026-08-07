@@ -45,6 +45,7 @@ import {
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaManualConnectorModeReady,
   coreBetaMcpCrossSurfaceOutcome,
+  coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
   coreBetaPartialReplyReady,
@@ -156,31 +157,106 @@ assert.deepEqual(
 );
 
 {
-  const receipts = [
-    ['mcphub:wiki', true, true],
-    ['mcphub:dis', false, false],
-    ['mcphub:iops', true, true],
-    ['mcphub:wecom', false, false],
-    ['mcphub:qbi', true, true],
-  ].map(([key, selected, capabilitySelected]) => ({
-    key,
-    selected,
-    capability_selected: capabilitySelected,
-    tools: [{ name: `${key}-read`, read_only: true }],
-    health: {},
-    visible_text: '',
-  }));
-  const outcome = coreBetaMcpCrossSurfaceOutcome(receipts);
-  assert.equal(outcome.valid, true, 'MCP产品拒绝选择时完整负向证据仍须通过manifest有效性门禁');
-  assert.equal(outcome.evidence_valid, true);
-  assert.equal(outcome.oracle_valid, false, '任一固定connector未选中时业务Oracle必须失败');
-  assert.equal(outcome.observed_count, 5);
-  assert.equal(outcome.unique_key_count, 5);
-  assert.equal(
-    coreBetaMcpCrossSurfaceOutcome(receipts.slice(0, 4)).evidence_valid,
-    false,
-    '缺少任一固定connector收据仍须按框架证据缺口失败',
-  );
+  const screenshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-mcp-cross-surface-'));
+  try {
+    const makeReceipt = ({ index, key, selected = true, stage = 'manual_connector_selection' }) => {
+      const screenshotPath = path.join(screenshotRoot, `${index}-${key.replace(/[^a-z0-9]+/gi, '-')}.png`);
+      fs.writeFileSync(screenshotPath, Buffer.alloc(256, index + 1));
+      const selectedConnectors = selected ? [key] : [];
+      const before = {
+        captured_at: '2026-08-07T00:00:00.000Z',
+        case_id: 'BETA-MCP-002',
+        task: { id: null, running: false, send_count: 35, message_count: 0 },
+        connectors: { selected: [] },
+        capabilities: { selectedConnectors: [] },
+      };
+      const after = {
+        captured_at: '2026-08-07T00:00:01.000Z',
+        case_id: 'BETA-MCP-002',
+        task: { id: null, running: false, send_count: 35, message_count: 0 },
+        connectors: { selected: selectedConnectors },
+        capabilities: { selectedConnectors, connectorRouting: { mode: stage === 'manual_mode' ? 'auto' : 'manual' } },
+      };
+      const interaction = {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'connector',
+        stage,
+        expected_identity: key,
+        control_located: true,
+        click_dispatched: true,
+        expected_state_observed: selected,
+        aria_checked: selected ? 'true' : 'false',
+        category: selected ? '' : 'bug',
+        screenshot: screenshotPath,
+        ...(stage === 'manual_connector_selection'
+          ? { selected_connectors: selectedConnectors }
+          : { manual_surface: { list_visible: false, option_count: 0, empty_visible: false } }),
+      };
+      return {
+        schema_version: 'qbot-core-beta-mcp-cross-surface-receipt/v1',
+        case_id: 'BETA-MCP-002',
+        captured_at: '2026-08-07T00:00:02.000Z',
+        index,
+        key,
+        reset_ok: stage !== 'manual_mode',
+        selection_attempted: stage === 'manual_connector_selection',
+        selected,
+        capability_selected: selected,
+        selected_connectors: selectedConnectors,
+        tools: [{ name: `${key}-read`, read_only: true }],
+        health: {},
+        visible_text: 'manual connector surface',
+        interaction,
+        public_readback: { before, after },
+        task_guard: {
+          task_absent_before: true,
+          task_absent_after: true,
+          not_running_before: true,
+          not_running_after: true,
+          message_count_zero_before: true,
+          message_count_zero_after: true,
+          send_count_observed: true,
+          send_count_unchanged: true,
+          valid: true,
+        },
+        screenshot: {
+          valid: true,
+          path: screenshotPath,
+          sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+        },
+      };
+    };
+    const receipts = [
+      makeReceipt({ index: 0, key: 'mcphub:wiki' }),
+      makeReceipt({ index: 1, key: 'mcphub:dis', selected: false }),
+      makeReceipt({ index: 2, key: 'mcphub:iops' }),
+      makeReceipt({ index: 3, key: 'mcphub:wecom' }),
+      makeReceipt({ index: 4, key: 'mcphub:qbi', selected: false, stage: 'manual_mode' }),
+    ];
+    const outcome = coreBetaMcpCrossSurfaceOutcome(receipts);
+    assert.equal(outcome.valid, true, 'MCP产品拒绝选择或手动模式不生效时，完整负向收据仍须通过manifest有效性门禁');
+    assert.equal(outcome.evidence_valid, true);
+    assert.equal(outcome.oracle_valid, false, '任一固定connector未选中时业务Oracle必须失败');
+    assert.equal(outcome.observed_count, 5);
+    assert.equal(outcome.unique_key_count, 5);
+    assert.equal(coreBetaMcpCrossSurfaceOutcome(receipts.slice(0, 4)).evidence_valid, false, '缺少任一固定connector收据仍须按框架证据缺口失败');
+
+    const controlMissing = structuredClone(receipts[0]);
+    controlMissing.interaction.control_located = false;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(controlMissing), false, '精确控件未定位不能伪装成完整产品负向证据');
+    const clickMissing = structuredClone(receipts[0]);
+    clickMissing.interaction.click_dispatched = false;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(clickMissing), false, '真实点击未派发必须保持框架证据无效');
+    const guardMissing = structuredClone(receipts[0]);
+    guardMissing.task_guard.send_count_observed = false;
+    guardMissing.task_guard.valid = false;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(guardMissing), false, '任务零变更守卫不完整必须保持框架证据无效');
+    const readbackMissing = structuredClone(receipts[0]);
+    delete readbackMissing.public_readback.after.capabilities;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(readbackMissing), false, '公开 capabilities 读回缺失必须保持框架证据无效');
+  } finally {
+    fs.rmSync(screenshotRoot, { recursive: true, force: true });
+  }
 }
 
 {
@@ -3443,7 +3519,7 @@ const required = [
   ['统一加号菜单使用稳定 section testid 与最新可见 Portal', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*section: 'mode'[\s\S]*section: 'skill'[\s\S]*section: 'connector'[\s\S]*lastVisibleLocator[\s\S]*visibleUnifiedComposerSubmenu[\s\S]*composer-plus-section-\$\{config\.section\}/],
   ['统一加号子菜单支持 hover click ArrowRight Enter 四路打开', /openUnifiedComposerSubmenu[\s\S]*\.hover\(\{ force: true \}\)[\s\S]*pointermove[\s\S]*\.click\(\{ force: true \}\)[\s\S]*ArrowRight[\s\S]*Enter/],
   ['手动连接器模式真实点击并读回列表 routing 或 radio', /setUnifiedConnectorMode[\s\S]*composer-connector-mode-manual[\s\S]*manual\.click[\s\S]*composer-plus-list[\s\S]*composer-connector-option-[\s\S]*currentCapabilities[\s\S]*coreBetaManualConnectorModeReady/],
-  ['BETA-MCP-002 手动选择后必须分离证据有效性与产品Oracle并注册选择/执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*coreBetaMcpCrossSurfaceOutcome[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile[\s\S]*MCP跨表面负向取证完整/],
+  ['BETA-MCP-002 手动选择后必须分离证据有效性与产品Oracle并注册选择/执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*public_readback: \{ before, after \}[\s\S]*coreBetaMcpCrossSurfaceOutcome[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile[\s\S]*MCP跨表面负向取证完整/],
   ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
@@ -3568,6 +3644,18 @@ const required = [
 
 for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
+}
+
+{
+  const branchStart = runner.indexOf("if (scenario.driver === 'mcp_cross_surface_identity_reconcile')");
+  const branchEnd = runner.indexOf("if (scenario.driver === 'mcp_last_good_failure_recovery')", branchStart);
+  const branch = runner.slice(branchStart, branchEnd);
+  const loopStart = branch.indexOf('for (const [index, connector] of selected.entries())');
+  const loopEnd = branch.indexOf('const outcome = coreBetaMcpCrossSurfaceOutcome', loopStart);
+  const sampleLoop = branch.slice(loopStart, loopEnd);
+  assert.ok(branchStart >= 0 && branchEnd > branchStart && loopStart >= 0 && loopEnd > loopStart, '必须能定位 BETA-MCP-002 五样本循环源码');
+  assert.doesNotMatch(sampleLoop, /\breturn\b/, 'BETA-MCP-002 样本循环不得因证据完整的产品失败提前 return 丢失专项 artifact');
+  assert.match(sampleLoop, /receipts\.push\(receipt\)[\s\S]*if \(!receipt\.evidence_valid\) break/, 'BETA-MCP-002 必须先固化当前收据，且仅在框架证据无效时中止后续样本');
 }
 
 const hitlStart = runner.indexOf('async function executeHitlFixtureCase');
