@@ -50,6 +50,7 @@ import {
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
+  resolveTeamsPreconnectModelMode,
   resolveTeamsRecoveryQworkUi,
   teamsPreconnectRecoveryAllowed,
   teamsCasebookExitCode,
@@ -580,6 +581,42 @@ test('Teams preconnect does not relaunch a host again after one completed recove
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(source, /let recoveryCompleted = false/);
   assert.match(source, /if \(recovery\.recovered\) \{\s+recoveryCompleted = true;/);
+});
+
+test('Teams preconnect accepts visible Auto as readiness without claiming M3 evidence', () => {
+  assert.deepEqual(resolveTeamsPreconnectModelMode({
+    selectedTier: 'M3',
+    controlTier: 'auto',
+    controlText: 'Auto',
+    controlVisible: true,
+  }), {
+    ready: true,
+    mode: 'AUTO',
+    tier: '',
+    source: 'visible-control',
+  });
+  assert.deepEqual(resolveTeamsPreconnectModelMode({
+    controlTier: 'M3',
+    controlText: '高安全',
+    controlVisible: true,
+  }), {
+    ready: true,
+    mode: 'M3',
+    tier: 'M3',
+    source: 'visible-control',
+  });
+  assert.deepEqual(resolveTeamsPreconnectModelMode({
+    selectedTier: 'm3',
+  }), {
+    ready: true,
+    mode: 'M3',
+    tier: 'M3',
+    source: 'connection-view',
+  });
+  assert.equal(resolveTeamsPreconnectModelMode({
+    controlText: '选择模型',
+    controlVisible: true,
+  }).ready, false);
 });
 
 test('Teams recovery keeps the frozen QWork release when the refreshed renderer exposes an uninstalled stale pin', () => {

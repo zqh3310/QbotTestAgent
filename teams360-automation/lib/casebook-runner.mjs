@@ -200,6 +200,32 @@ export function teamsPreconnectRecoveryAllowed({
     && Number(now) < Number(readyDeadline);
 }
 
+export function resolveTeamsPreconnectModelMode({
+  selectedTier = '',
+  controlTier = '',
+  controlText = '',
+  controlVisible = false,
+} = {}) {
+  const selected = String(selectedTier).trim().toUpperCase();
+  const dataTier = String(controlTier).trim().toUpperCase();
+  const text = String(controlText).trim().toUpperCase();
+  if (controlVisible) {
+    const visibleTier = /^M[1-4]$/.test(dataTier)
+      ? dataTier
+      : text.match(/(?:^|\s)(M[1-4])(?:\s|$)/)?.[1] || '';
+    if (visibleTier) {
+      return { ready: true, mode: visibleTier, tier: visibleTier, source: 'visible-control' };
+    }
+    if (dataTier === 'AUTO' || /^AUTO(?:\s|$)/.test(text) || /^自动(?:\s|$)/.test(text)) {
+      return { ready: true, mode: 'AUTO', tier: '', source: 'visible-control' };
+    }
+  }
+  if (/^M[1-4]$/.test(selected)) {
+    return { ready: true, mode: selected, tier: selected, source: 'connection-view' };
+  }
+  return { ready: false, mode: '', tier: '', source: '' };
+}
+
 export async function connectTeamsCasebookBrowser(cdpUrl, {
   attempts = 80,
   timeoutMs = 15_000,
@@ -272,9 +298,10 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         delete root.__qbotAutomationControlId;
         return { restored, owner, stack_size: stackSize };
       });
-      const tier = await page.evaluate(async () => {
-        const deadline = Date.now() + 30_000;
-        while (Date.now() < deadline) {
+      const modelDeadline = Date.now() + 30_000;
+      let modelReadback = { ready: false, mode: '', tier: '', source: '' };
+      while (Date.now() < modelDeadline) {
+        const observation = await page.evaluate(async () => {
           const bridge = window.__qbotE2E || window.__deepbankE2E;
           let view = null;
           try {
@@ -287,16 +314,22 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
             ]);
           } catch {}
           const selected = String(view?.runtimeOptions?.selected?.complianceTier || '').toUpperCase();
-          if (/^M[1-4]$/.test(selected)) return selected;
-          const visible = String(document.querySelector('[data-testid="composer-safety-level-menu"]')?.textContent || '')
-            .trim()
-            .toUpperCase();
-          if (/^M[1-4]$/.test(visible)) return visible;
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-        return '';
-      });
-      if (!tier) throw new Error('QWork connected, but the visible model tier could not be read back.');
+          const control = document.querySelector('[data-testid="composer-safety-level-menu"]');
+          const rect = control?.getBoundingClientRect?.();
+          return {
+            selectedTier: selected,
+            controlTier: String(control?.getAttribute?.('data-tier') || ''),
+            controlText: String(control?.textContent || ''),
+            controlVisible: Boolean(control && rect && rect.width > 0 && rect.height > 0),
+          };
+        });
+        modelReadback = resolveTeamsPreconnectModelMode(observation);
+        if (modelReadback.ready) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (!modelReadback.ready) {
+        throw new Error('QWork connected, but the visible model mode could not be read back.');
+      }
       const capabilitiesHealth = await page.evaluate(async () => {
         try {
           const value = await Promise.race([
@@ -320,7 +353,9 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
         attempt,
         elapsed_ms: Date.now() - startedAt,
         qwork_url: page.url(),
-        model_tier: tier,
+        model_mode: modelReadback.mode,
+        model_tier: modelReadback.tier,
+        model_readback_source: modelReadback.source,
         capabilities_ipc: 'ready',
         stale_renderer_control_recovery: staleRendererControlRecovery,
       }));
