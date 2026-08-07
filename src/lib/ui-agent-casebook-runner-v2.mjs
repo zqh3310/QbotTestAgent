@@ -646,11 +646,14 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         currentOut: outDir,
         casebook,
         selectedCases,
+        allowReleaseMigration: /^(?:1|true|yes)$/i.test(String(
+          options['core-beta-cleanup-release-migration'] || '',
+        )),
       });
     } catch (error) {
       const reason = `Core Beta run-owned Skill 清理源验证失败：${error.message}`;
       const diagnostic = {
-        schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v1',
+        schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v2',
         valid: false,
         generated_at: new Date().toISOString(),
         source_out: String(options['core-beta-cleanup-from'] || ''),
@@ -5607,6 +5610,108 @@ function coreBetaCleanupReleaseIdentity(metadata = {}) {
   };
 }
 
+function coreBetaCleanupQworkReleaseRoot(qworkUrl = '') {
+  try {
+    const parsed = new URL(String(qworkUrl || ''));
+    if (parsed.protocol !== 'file:') return '';
+    const indexFile = fileURLToPath(parsed);
+    if (path.basename(indexFile) !== 'index.html') return '';
+    return path.dirname(path.dirname(indexFile));
+  } catch {
+    return '';
+  }
+}
+
+function coreBetaCleanupQworkVersionFromUrl(qworkUrl = '') {
+  try {
+    const parsed = new URL(String(qworkUrl || ''));
+    if (parsed.protocol !== 'file:') return '';
+    return path.basename(path.dirname(fileURLToPath(parsed)));
+  } catch {
+    return '';
+  }
+}
+
+function coreBetaCleanupIdentityDiff(sourceIdentity = {}, currentIdentity = {}) {
+  const changes = [];
+  const visit = (source, current, prefix = '') => {
+    const keys = [...new Set([
+      ...Object.keys(source && typeof source === 'object' ? source : {}),
+      ...Object.keys(current && typeof current === 'object' ? current : {}),
+    ])].sort();
+    for (const key of keys) {
+      const field = prefix ? `${prefix}.${key}` : key;
+      const before = source?.[key];
+      const after = current?.[key];
+      if (
+        before && after
+        && typeof before === 'object'
+        && typeof after === 'object'
+        && !Array.isArray(before)
+        && !Array.isArray(after)
+      ) {
+        visit(before, after, field);
+      } else if (JSON.stringify(before) !== JSON.stringify(after)) {
+        changes.push({ field, source: before ?? null, current: after ?? null });
+      }
+    }
+  };
+  visit(sourceIdentity, currentIdentity);
+  return changes;
+}
+
+export function coreBetaCleanupReleaseMigrationVerdict(sourceMetadata = {}, currentMetadata = {}) {
+  const sourceIdentity = coreBetaCleanupReleaseIdentity(sourceMetadata);
+  const currentIdentity = coreBetaCleanupReleaseIdentity(currentMetadata);
+  const sourceProfile = sourceMetadata?.profile || {};
+  const currentProfile = currentMetadata?.profile || {};
+  const sourceQworkRoot = coreBetaCleanupQworkReleaseRoot(sourceIdentity.qwork?.url);
+  const currentQworkRoot = coreBetaCleanupQworkReleaseRoot(currentIdentity.qwork?.url);
+  const hashFields = [
+    'host_info_plist_sha256',
+    'host_main_binary_sha256',
+    'qwork_index_sha256',
+    'qwork_install_metadata_sha256',
+    'casebook_sha256',
+  ];
+  const checks = {
+    identity_changed: JSON.stringify(sourceIdentity) !== JSON.stringify(currentIdentity),
+    host_product_same: sourceIdentity.host?.product === '360Teams'
+      && currentIdentity.host?.product === sourceIdentity.host.product,
+    host_app_path_same: Boolean(sourceIdentity.host?.app_path)
+      && currentIdentity.host?.app_path === sourceIdentity.host.app_path,
+    control_plane_same: Boolean(sourceIdentity.control_plane?.origin)
+      && currentIdentity.control_plane?.origin === sourceIdentity.control_plane.origin,
+    live_profile_same: sourceProfile.mode === 'live'
+      && currentProfile.mode === 'live'
+      && Boolean(sourceProfile.alias)
+      && currentProfile.alias === sourceProfile.alias,
+    qwork_release_root_same: Boolean(sourceQworkRoot)
+      && currentQworkRoot === sourceQworkRoot,
+    qwork_versions_bound_to_urls: coreBetaCleanupQworkVersionFromUrl(sourceIdentity.qwork?.url)
+      === sourceIdentity.qwork?.version
+      && coreBetaCleanupQworkVersionFromUrl(currentIdentity.qwork?.url)
+        === currentIdentity.qwork?.version,
+    model_tier_same: Boolean(sourceIdentity.model_tier)
+      && currentIdentity.model_tier === sourceIdentity.model_tier,
+    artifact_hashes_complete: hashFields.every((field) => (
+      /^[a-f0-9]{64}$/i.test(String(sourceIdentity.artifacts?.[field] || ''))
+      && /^[a-f0-9]{64}$/i.test(String(currentIdentity.artifacts?.[field] || ''))
+    )),
+  };
+  return {
+    schema_version: 'qbot-core-beta-cleanup-release-migration/v1',
+    valid: Object.values(checks).every(Boolean),
+    explicitly_authorized: true,
+    checks,
+    source_release_identity_sha256: sha256Text(JSON.stringify(sourceIdentity)),
+    current_release_identity_sha256: sha256Text(JSON.stringify(currentIdentity)),
+    source_qwork_release_root: sourceQworkRoot,
+    current_qwork_release_root: currentQworkRoot,
+    changed_fields: coreBetaCleanupIdentityDiff(sourceIdentity, currentIdentity),
+  };
+}
+
 function coreBetaCleanupSourceResult(sourceOut, progress, caseId) {
   const result = (Array.isArray(progress?.results) ? progress.results : [])
     .find((item) => String(item?.id || '') === caseId);
@@ -5649,6 +5754,7 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
   currentOut,
   casebook,
   selectedCases = [],
+  allowReleaseMigration = false,
 } = {}) {
   const sourceDirectory = fs.realpathSync(path.resolve(String(sourceOut || '')));
   const currentDirectory = fs.realpathSync(path.resolve(String(currentOut || '')));
@@ -5689,7 +5795,17 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
   }
   const sourceIdentity = coreBetaCleanupReleaseIdentity(sourceMetadata);
   const currentIdentity = coreBetaCleanupReleaseIdentity(currentMetadata);
-  if (JSON.stringify(sourceIdentity) !== JSON.stringify(currentIdentity)) {
+  const releaseIdentityEqual = JSON.stringify(sourceIdentity) === JSON.stringify(currentIdentity);
+  let releaseMigration = null;
+  if (!releaseIdentityEqual && allowReleaseMigration === true) {
+    releaseMigration = coreBetaCleanupReleaseMigrationVerdict(sourceMetadata, currentMetadata);
+    if (!releaseMigration.valid) {
+      const failedChecks = Object.entries(releaseMigration.checks)
+        .filter(([, valid]) => !valid)
+        .map(([check]) => check);
+      throw new Error(`跨发布清理安全门禁未通过：${failedChecks.join(',')}`);
+    }
+  } else if (!releaseIdentityEqual) {
     throw new Error('清理源与当前受管宿主发布身份不一致。');
   }
 
@@ -5721,7 +5837,7 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
   fs.copyFileSync(sourceLedgerFile, temporary);
   fs.renameSync(temporary, currentLedgerFile);
   const record = {
-    schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v1',
+    schema_version: 'qbot-core-beta-run-owned-skill-cleanup-source/v2',
     valid: true,
     seeded_at: new Date().toISOString(),
     source_out: sourceDirectory,
@@ -5733,7 +5849,13 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
     source_progress: sourceProgressFile,
     source_progress_sha256: createHash('sha256').update(fs.readFileSync(sourceProgressFile)).digest('hex'),
     casebook_sha256: casebookSha256,
-    release_identity_sha256: sha256Text(JSON.stringify(currentIdentity)),
+    release_identity_equal: releaseIdentityEqual,
+    release_identity_sha256: releaseIdentityEqual
+      ? sha256Text(JSON.stringify(currentIdentity))
+      : '',
+    source_release_identity_sha256: sha256Text(JSON.stringify(sourceIdentity)),
+    current_release_identity_sha256: sha256Text(JSON.stringify(currentIdentity)),
+    release_migration: releaseMigration,
     selected_identities: selectedIdentities,
     baseline_overlap: baselineOverlap,
     install_attempts_sha256: prerequisite.receipts_sha256,

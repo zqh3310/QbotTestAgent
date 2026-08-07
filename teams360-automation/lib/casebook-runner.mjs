@@ -72,6 +72,16 @@ export function validateTeamsCasebookOptions(options) {
   if (options['core-beta-cleanup-from'] && options['resume-from']) {
     throw new Error('--core-beta-cleanup-from cannot be combined with cross-run resume.');
   }
+  const cleanupReleaseMigration = options['core-beta-cleanup-release-migration'];
+  if (cleanupReleaseMigration && !options['core-beta-cleanup-from']) {
+    throw new Error('--core-beta-cleanup-release-migration requires --core-beta-cleanup-from.');
+  }
+  if (
+    cleanupReleaseMigration
+    && !/^(?:1|true|yes)$/i.test(String(cleanupReleaseMigration))
+  ) {
+    throw new Error('--core-beta-cleanup-release-migration must be explicitly true.');
+  }
   if (options['restart-command']) {
     throw new Error('360Teams Casebook runs must not configure a local-QBot restart-command.');
   }

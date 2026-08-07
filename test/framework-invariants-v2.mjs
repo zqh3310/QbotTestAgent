@@ -33,6 +33,7 @@ import {
   coreBetaCapabilitiesReadbackWithRetry,
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
+  coreBetaCleanupReleaseMigrationVerdict,
   coreBetaCapabilityInteractionCategory,
   coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
@@ -2166,9 +2167,10 @@ try {
   const sourceOut = path.join(runOwnedSkillCleanupRoot, 'frozen-source');
   const currentOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-run');
   const driftOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-drift');
+  const migrationOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-release-migration');
   const wrongCaseOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-wrong-case');
   const casebook = path.join(runOwnedSkillCleanupRoot, 'casebook.xlsx');
-  for (const directory of [sourceOut, currentOut, driftOut, wrongCaseOut]) {
+  for (const directory of [sourceOut, currentOut, driftOut, migrationOut, wrongCaseOut]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   fs.writeFileSync(casebook, 'immutable-casebook');
@@ -2193,6 +2195,30 @@ try {
       qwork_release_manifest_sha256: '',
     },
     model_tier: 'M3',
+    profile: {
+      mode: 'live',
+      alias: '/Users/qa/managed-live-profile',
+    },
+  };
+  const migratedReleaseMetadata = {
+    ...releaseMetadata,
+    host: { ...releaseMetadata.host, version: '5.2.42', build: '2119080753' },
+    qwork: {
+      version: '0.0.30-rc.10',
+      url: 'file:///Users/qa/.deepbank-uat/ui/0.0.30-rc.10/index.html',
+    },
+    artifacts: {
+      ...releaseMetadata.artifacts,
+      host_info_plist_sha256: '1'.repeat(64),
+      host_main_binary_sha256: '2'.repeat(64),
+      qwork_index_sha256: '3'.repeat(64),
+      qwork_install_metadata_sha256: '4'.repeat(64),
+    },
+    release_inputs: {
+      ...releaseMetadata.release_inputs,
+      prompt_policy_version: 'qwork-runtime-0.0.30-rc.10',
+      qwork_build_id: '0.0.30-rc.10',
+    },
   };
   writeJsonFile(path.join(sourceOut, 'run-metadata.json'), releaseMetadata);
   writeJsonFile(path.join(currentOut, 'run-metadata.json'), releaseMetadata);
@@ -2200,6 +2226,7 @@ try {
     ...releaseMetadata,
     qwork: { ...releaseMetadata.qwork, version: '0.0.30' },
   });
+  writeJsonFile(path.join(migrationOut, 'run-metadata.json'), migratedReleaseMetadata);
   writeJsonFile(path.join(wrongCaseOut, 'run-metadata.json'), releaseMetadata);
   writeJsonFile(path.join(sourceOut, 'core-beta-suite-ledger.json'), {
     schema_version: 1,
@@ -2265,6 +2292,61 @@ try {
   assert.throws(
     () => seedCoreBetaRunOwnedSkillCleanupLedger({
       sourceOut,
+      currentOut: migrationOut,
+      casebook,
+      selectedCases: cleanupCase,
+    }),
+    /发布身份不一致/,
+    '跨发布清理即使满足安全条件，未显式授权时仍必须 fail-closed',
+  );
+  const migrationVerdict = coreBetaCleanupReleaseMigrationVerdict(
+    releaseMetadata,
+    migratedReleaseMetadata,
+  );
+  assert.equal(migrationVerdict.valid, true);
+  assert.equal(migrationVerdict.checks.identity_changed, true);
+  assert.ok(migrationVerdict.changed_fields.some(({ field }) => field === 'qwork.version'));
+  const migratedSeed = seedCoreBetaRunOwnedSkillCleanupLedger({
+    sourceOut,
+    currentOut: migrationOut,
+    casebook,
+    selectedCases: cleanupCase,
+    allowReleaseMigration: true,
+  });
+  assert.equal(migratedSeed.valid, true);
+  assert.equal(migratedSeed.release_identity_equal, false);
+  assert.equal(migratedSeed.release_migration.valid, true);
+  assert.equal(migratedSeed.release_identity_sha256, '');
+  assert.equal(
+    coreBetaCleanupReleaseMigrationVerdict(releaseMetadata, {
+      ...migratedReleaseMetadata,
+      control_plane: { origin: 'https://other-control-plane.example.test' },
+    }).valid,
+    false,
+    '跨发布清理不得跨 control plane',
+  );
+  assert.equal(
+    coreBetaCleanupReleaseMigrationVerdict(releaseMetadata, {
+      ...migratedReleaseMetadata,
+      profile: { ...migratedReleaseMetadata.profile, alias: '/Users/qa/other-live-profile' },
+    }).valid,
+    false,
+    '跨发布清理不得跨 live profile',
+  );
+  assert.equal(
+    coreBetaCleanupReleaseMigrationVerdict(releaseMetadata, {
+      ...migratedReleaseMetadata,
+      qwork: {
+        version: '0.0.30-rc.10',
+        url: 'file:///Users/qa/other-runtime/ui/0.0.30-rc.10/index.html',
+      },
+    }).valid,
+    false,
+    '跨发布清理不得跨 QWork release root',
+  );
+  assert.throws(
+    () => seedCoreBetaRunOwnedSkillCleanupLedger({
+      sourceOut,
       currentOut: wrongCaseOut,
       casebook,
       selectedCases: [{ id: 'BETA-SKILL-012', case_type: 'skill_lifecycle' }],
@@ -2284,6 +2366,11 @@ assert.match(
   automationFramework,
   /--core-beta-cleanup-from <frozen-source-out>/,
   '框架合同必须记录 framework issue 中断后的受管 Skill 清理路径',
+);
+assert.match(
+  automationFramework,
+  /--core-beta-cleanup-release-migration true/,
+  '框架合同必须记录显式跨发布清理安全门禁',
 );
 assert.match(
   runner,

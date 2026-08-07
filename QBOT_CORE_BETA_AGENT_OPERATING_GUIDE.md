@@ -13,11 +13,18 @@
 - 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.2.41(2119080662)`。
-- 当前 QWork 身份：UAT `0.0.30-rc.2`。
+- 当前正式宿主身份：360Teams `5.2.42(2119080753)`。
+- 当前 QWork 身份：UAT `0.0.30-rc.10`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
+
+2026-08-07 用户更新产品后，旧冻结批次的发布身份已无法精确恢复：源批次为
+360Teams `5.2.41(2119080662)` / QWork `0.0.30-rc.2`，当前受管宿主为
+360Teams `5.2.42(2119080753)` / QWork `0.0.30-rc.10`。框架正在使用显式
+`--core-beta-cleanup-release-migration true` 安全门禁，从下述最新冻结目录只清理
+其账本记录的 QA Skill；完成清理、全量检查、推送和新 `READY_SCOPED` 预检后，
+必须在当前发布身份的新不可变目录从第 1 条完整串行重跑 55 条。
 
 最新一次已冻结的 scoped 批次：
 

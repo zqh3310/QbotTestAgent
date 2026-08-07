@@ -513,6 +513,22 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     cleanupOptions['core-beta-cleanup-from'],
     path.join(PROJECT_ROOT, 'teams360-automation', 'output', 'frozen-run'),
   );
+  const migrationCleanupOptions = parseCasebookRunnerOptions([
+    '--casebook', 'PRD/cases.xlsx',
+    '--case', 'BETA-SKILL-001',
+    '--out', 'teams360-automation/output/migration-cleanup-run',
+    '--core-beta-cleanup-from', 'teams360-automation/output/frozen-run',
+    '--core-beta-cleanup-release-migration', 'true',
+  ]);
+  assert.equal(validateTeamsCasebookOptions(migrationCleanupOptions), migrationCleanupOptions);
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...options,
+    'core-beta-cleanup-release-migration': 'true',
+  }), /requires --core-beta-cleanup-from/);
+  assert.throws(() => validateTeamsCasebookOptions({
+    ...cleanupOptions,
+    'core-beta-cleanup-release-migration': 'false',
+  }), /must be explicitly true/);
   assert.throws(() => validateTeamsCasebookOptions({
     ...cleanupOptions,
     'core-beta-cleanup-from': cleanupOptions.out,

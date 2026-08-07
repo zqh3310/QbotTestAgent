@@ -65,6 +65,9 @@ ui-agent-casebook-run:
                                   Strict Core Beta fixture controller
   --core-beta-cleanup-from <dir>  Frozen sibling batch whose exact QA Skill
                                   ledger seeds a BETA-SKILL-001 cleanup run
+  --core-beta-cleanup-release-migration true
+                                  Explicitly allow that cleanup across a product
+                                  upgrade after strict profile/origin/root checks
   --production-gate true         Enable release-identity gate
   --scoped-execution true        Explicit non-release subset execution
   --excluded-case <id[,id...]>   Exact Case IDs omitted from the scope
