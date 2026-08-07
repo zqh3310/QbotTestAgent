@@ -22,6 +22,24 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807112148_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-eba2613
+```
+
+该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：产品已真实
+进入 Skill 手动模式、精确点击 `Confluence文档迁移助手` 并读回
+`selectedSkills=["confluence-to-cloud-docs"]`；随后 runner 才发现
+`deep_use[3].detail.markdown` 为空并抛异常，造成当前 Case manifest 缺少角色后硬
+停止。冻结 suite ledger 证明 `BETA-SKILL-002` 的 10 个样本从抽样时就全部
+`detail=null`，旧框架只校验数组长度，没有冻结或校验市场 description 回退，
+并非安装后目录覆盖。修复必须在 002 中冻结 `README/body/market description`
+来源与 SHA，使用 Case 只能从冻结来源派生任务；真实缺失时在发送前形成完整
+`skill_prompt_source_unavailable` prerequisite blocked/N/A 证据并继续，禁止再抛出
+不完整 manifest。该目录永久冻结；其中 003/004 安装的本轮 Skill 必须先按第 8 节
+独立清理，再新 pretest、新目录并从第 1 条完整串行重跑 55 条。
+
+最新一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807090204_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-2349c5a
 ```
 

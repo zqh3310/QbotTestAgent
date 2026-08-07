@@ -56,6 +56,8 @@ import {
   coreBetaQbotHomeFromUiUrl,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
+  coreBetaSkillPromptSource,
+  coreBetaSkillPromptSourcePrerequisiteBlocker,
   coreBetaSkillCreatorCleanup,
   coreBetaSkillCreatorConversationCase,
   coreBetaSkillCreatorFixture,
@@ -1575,6 +1577,83 @@ assert.equal(
   false,
   'pipeline 派发前缺少目标 Skill 身份时必须 fail-closed，不能先进入 manual 模式或发送',
 );
+const installedPromptAttempts = prerequisiteAttempts.map((item) => ({
+  ...item,
+  terminal_feedback: {
+    observed: true,
+    status: 'success',
+    message: '安装成功，本机对账已完成',
+  },
+  api_receipt: { install_ok: true },
+  reconcile_receipt: { ok: true },
+  installed: true,
+  installed_readback: { slug: item.qualified_identity.split('/')[1] },
+  oracle_passed: true,
+  status: 'passed',
+  failure_category: '',
+  failure_reason: '',
+}));
+const promptReadySamples = prerequisiteLedger.skills.selected.map((item, index) => {
+  const promptSource = coreBetaSkillPromptSource({
+    detail: { markdown: `# QA Skill ${index + 1}\nUse the exact ${item.qualified_identity} workflow.` },
+  });
+  return {
+    ...item,
+    detail: null,
+    market: {},
+    prompt_source: promptSource,
+  };
+});
+const promptReadyLedger = {
+  skills: {
+    selected: promptReadySamples,
+    deep_use: promptReadySamples.slice(0, 5),
+    install_attempt_receipts: installedPromptAttempts,
+    install_receipts: installedPromptAttempts,
+  },
+};
+const promptReadyDecision = coreBetaSkillUsePrerequisiteDecision(
+  { id: 'BETA-SKILL-009', case_type: 'skill_use' },
+  promptReadyLedger,
+);
+assert.equal(promptReadyDecision.valid, true);
+assert.equal(promptReadyDecision.blocker.applicable, false);
+assert.equal(promptReadyDecision.blocker.prompt_source.valid, true);
+assert.equal(
+  coreBetaSkillPromptSource(promptReadyDecision.selected_skill).kind,
+  'skill_detail_markdown',
+  '安装后 live catalog 即使只剩简化条目，也必须继续使用 BETA-SKILL-002 冻结的说明内容与 SHA',
+);
+const missingPromptSample = {
+  ...promptReadySamples[3],
+  prompt_source: coreBetaSkillPromptSource({}),
+};
+const missingPromptLedger = {
+  skills: {
+    ...promptReadyLedger.skills,
+    deep_use: promptReadyLedger.skills.deep_use.map((item, index) => (
+      index === 3 ? missingPromptSample : item
+    )),
+  },
+};
+const missingPromptDecision = coreBetaSkillUsePrerequisiteDecision(
+  { id: 'BETA-SKILL-009', case_type: 'skill_use' },
+  missingPromptLedger,
+);
+assert.equal(missingPromptDecision.valid, true);
+assert.equal(missingPromptDecision.blocker.applicable, true);
+assert.equal(missingPromptDecision.blocker.kind, 'skill_prompt_source_unavailable');
+assert.equal(missingPromptDecision.blocker.outcome, 'blocked');
+assert.equal(missingPromptDecision.blocker.prompt_source.integrity_valid, true);
+assert.match(missingPromptDecision.blocker.sample_sha256, /^[a-f0-9]{64}$/);
+assert.equal(
+  coreBetaSkillPromptSourcePrerequisiteBlocker({
+    ...missingPromptSample,
+    prompt_source: { ...missingPromptSample.prompt_source, sha256: 'f'.repeat(64) },
+  }, { dependentCaseId: 'BETA-SKILL-009' }).valid,
+  false,
+  '冻结说明内容/SHA 漂移必须保持 framework issue，不能伪装成可信 blocked',
+);
 const pipelineExecutorSource = runner.match(
   /async function executeSingleHostPipelineBatch\([\s\S]*?\n}\n\nasync function prepareCoreBetaPipelineCase/,
 )?.[0] || '';
@@ -1642,6 +1721,26 @@ try {
   assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), notApplicableRoles);
   assert.ok(manifest.evidence.filter((item) => item.not_applicable).every(
     (item) => item.source === 'exact_run_owned_install_attempt_ledger' && item.sha256 === manifest.evidence[0].sha256,
+  ));
+
+  const promptBlocker = missingPromptDecision.blocker;
+  writeJsonFile(blockerFile, { ...promptBlocker, not_applicable_roles: notApplicableRoles });
+  const promptBlockedManifest = buildCoreEvidenceManifest({
+    testCase: {
+      id: 'BETA-SKILL-009',
+      evidence_roles: [...notApplicableRoles, 'capability_selection', 'capability_execution_event'],
+    },
+    caseDir: prerequisiteEvidenceDir,
+    artifacts: {
+      capability_selection: blockerFile,
+      capability_execution_event: blockerFile,
+      core_beta_not_applicable_roles: notApplicableRoles.map((role) => ({ role, blocker_path: blockerFile })),
+    },
+  });
+  assert.equal(promptBlockedManifest.complete, true);
+  assert.deepEqual(promptBlockedManifest.missing_roles, []);
+  assert.ok(promptBlockedManifest.evidence.filter((item) => item.not_applicable).every(
+    (item) => item.source === 'frozen_skill_sample_ledger',
   ));
 
   writeJsonFile(blockerFile, { ...blocker, dependent_case_id: 'BETA-SKILL-007', not_applicable_roles: notApplicableRoles });

@@ -1019,6 +1019,32 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.includes(role)
       && allowedRoles.every((itemRole) => skillPrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const promptSourceFields = Array.isArray(blocker?.prompt_source?.checked_fields)
+      ? blocker.prompt_source.checked_fields.map(String)
+      : [];
+    const skillPromptSourcePrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-upstream-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && blocker?.outcome === 'blocked'
+      && blocker?.kind === 'skill_prompt_source_unavailable'
+      && blocker?.source === 'frozen_skill_sample_ledger'
+      && blocker?.source_case_id === 'BETA-SKILL-002'
+      && JSON.stringify(sourceCaseIds) === JSON.stringify(['BETA-SKILL-002'])
+      && blocker?.dependent_case_id === testCase?.id
+      && String(blocker?.target_identity || '').trim()
+      && blocker?.prompt_source?.schema_version === 'qbot-core-beta-skill-prompt-source/v1'
+      && blocker?.prompt_source?.valid === false
+      && blocker?.prompt_source?.integrity_valid === true
+      && blocker?.prompt_source?.kind === 'missing'
+      && Number(blocker?.prompt_source?.bytes) === 0
+      && blocker?.prompt_source?.sha256 === ''
+      && promptSourceFields.includes('skill_detail_markdown')
+      && promptSourceFields.includes('catalog_market_description')
+      && String(blocker?.prompt_source?.reason || '').trim()
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.sample_sha256 || ''))
+      && allowedRoles.includes(role)
+      && allowedRoles.every((itemRole) => skillPrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const runtimePrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-runtime-prerequisite/v1'
       && blocker?.valid === true
       && blocker?.applicable === true
@@ -1198,6 +1224,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.every((itemRole) => preSendCapabilityFailureNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
+      || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
       || expertPrerequisiteVerified
       || mcpPrerequisiteVerified

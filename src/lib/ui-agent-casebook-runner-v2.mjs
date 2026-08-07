@@ -6045,6 +6045,131 @@ export function coreBetaSkillInstallPrerequisiteBlocker(ledger = {}, {
   };
 }
 
+const CORE_BETA_SKILL_PROMPT_SOURCE_FIELDS = Object.freeze([
+  ['skill_detail_markdown', (sample) => sample?.detail?.markdown],
+  ['skill_detail_body', (sample) => sample?.detail?.body],
+  ['skill_detail_readme', (sample) => sample?.detail?.readme],
+  ['catalog_market_description', (sample) => sample?.market?.description],
+  ['catalog_market_desc', (sample) => sample?.market?.desc],
+  ['sample_description', (sample) => sample?.description],
+  ['sample_desc', (sample) => sample?.desc],
+]);
+
+export function coreBetaSkillPromptSource(sample = {}) {
+  const frozen = sample?.prompt_source;
+  if (frozen && typeof frozen === 'object') {
+    const content = String(frozen.content || '').trim();
+    const sha256 = content
+      ? createHash('sha256').update(content).digest('hex')
+      : '';
+    const declaredSha256 = String(frozen.sha256 || '');
+    const valid = frozen.schema_version === 'qbot-core-beta-skill-prompt-source/v1'
+      && frozen.valid === true
+      && content.length > 0
+      && /^[a-f0-9]{64}$/i.test(declaredSha256)
+      && declaredSha256 === sha256;
+    const declaredMissing = frozen.schema_version === 'qbot-core-beta-skill-prompt-source/v1'
+      && frozen.valid === false
+      && content.length === 0
+      && declaredSha256 === '';
+    return {
+      schema_version: 'qbot-core-beta-skill-prompt-source/v1',
+      valid,
+      integrity_valid: valid || declaredMissing,
+      kind: String(frozen.kind || 'frozen_prompt_source'),
+      content,
+      bytes: Buffer.byteLength(content),
+      sha256,
+      checked_fields: Array.isArray(frozen.checked_fields)
+        ? frozen.checked_fields.map(String)
+        : CORE_BETA_SKILL_PROMPT_SOURCE_FIELDS.map(([field]) => field),
+      reason: valid
+        ? ''
+        : declaredMissing
+          ? String(frozen.reason || 'Skill README/body/description 均为空。')
+          : '冻结 Skill prompt source 的 schema、内容或 SHA-256 不一致。',
+    };
+  }
+
+  for (const [kind, read] of CORE_BETA_SKILL_PROMPT_SOURCE_FIELDS) {
+    const content = String(read(sample) || '').trim();
+    if (!content) continue;
+    return {
+      schema_version: 'qbot-core-beta-skill-prompt-source/v1',
+      valid: true,
+      integrity_valid: true,
+      kind,
+      content,
+      bytes: Buffer.byteLength(content),
+      sha256: createHash('sha256').update(content).digest('hex'),
+      checked_fields: CORE_BETA_SKILL_PROMPT_SOURCE_FIELDS.map(([field]) => field),
+      reason: '',
+    };
+  }
+
+  return {
+    schema_version: 'qbot-core-beta-skill-prompt-source/v1',
+    valid: false,
+    integrity_valid: true,
+    kind: 'missing',
+    content: '',
+    bytes: 0,
+    sha256: '',
+    checked_fields: CORE_BETA_SKILL_PROMPT_SOURCE_FIELDS.map(([field]) => field),
+    reason: 'Skill README/body/description 均为空。',
+  };
+}
+
+export function coreBetaSkillPromptSourcePrerequisiteBlocker(selectedSkill = {}, {
+  dependentCaseId = '',
+} = {}) {
+  const promptSource = coreBetaSkillPromptSource(selectedSkill);
+  const targetIdentity = String(selectedSkill?.qualified_identity || '');
+  const identityValid = Boolean(targetIdentity);
+  const sampleSha256 = identityValid
+    ? createHash('sha256').update(JSON.stringify({
+        qualified_identity: targetIdentity,
+        namespace: selectedSkill?.namespace || '',
+        slug: selectedSkill?.slug || '',
+        version: selectedSkill?.version || '',
+        prompt_source: selectedSkill?.prompt_source || null,
+        detail: selectedSkill?.detail || null,
+        market_description: selectedSkill?.market?.description || selectedSkill?.market?.desc || '',
+      })).digest('hex')
+    : '';
+  const valid = identityValid && promptSource.integrity_valid === true;
+  const applicable = valid && promptSource.valid !== true;
+  return {
+    schema_version: 'qbot-core-beta-upstream-prerequisite/v1',
+    valid,
+    oracle_valid: valid && !applicable,
+    applicable,
+    outcome: applicable ? 'blocked' : 'passed',
+    kind: 'skill_prompt_source_unavailable',
+    source: 'frozen_skill_sample_ledger',
+    source_case_id: 'BETA-SKILL-002',
+    source_case_ids: ['BETA-SKILL-002'],
+    dependent_case_id: String(dependentCaseId || ''),
+    target_identity: targetIdentity,
+    prompt_source: {
+      schema_version: promptSource.schema_version,
+      valid: promptSource.valid,
+      integrity_valid: promptSource.integrity_valid,
+      kind: promptSource.kind,
+      bytes: promptSource.bytes,
+      sha256: promptSource.sha256,
+      checked_fields: promptSource.checked_fields,
+      reason: promptSource.reason,
+    },
+    sample_sha256: sampleSha256,
+    reason: !valid
+      ? `Skill 冻结说明来源账本不可验证：${targetIdentity || 'missing_identity'}；${promptSource.reason}`
+      : applicable
+        ? `指定 Skill 缺少可派生任务与 Oracle 的冻结 README/body/description：${targetIdentity}。`
+        : `指定 Skill 已具备冻结说明来源：${targetIdentity}；${promptSource.kind}；sha256=${promptSource.sha256}`,
+  };
+}
+
 export function coreBetaSkillUsePrerequisiteDecision(testCase = {}, ledger = {}) {
   const id = String(testCase?.id || '');
   if (!/^BETA-SKILL-0(?:06|07|08|09|10|11)$/.test(id)) {
@@ -6074,12 +6199,28 @@ export function coreBetaSkillUsePrerequisiteDecision(testCase = {}, ledger = {})
     targetIdentity: selectedSkill.qualified_identity,
     dependentCaseId: id,
   });
+  if (!blocker.valid || blocker.applicable) {
+    return {
+      applies: true,
+      valid: blocker.valid === true,
+      selected_skill: selectedSkill,
+      blocker,
+      install_blocker: blocker,
+      prompt_source_blocker: null,
+      reason: blocker.reason,
+    };
+  }
+  const promptSourceBlocker = coreBetaSkillPromptSourcePrerequisiteBlocker(selectedSkill, {
+    dependentCaseId: id,
+  });
   return {
     applies: true,
-    valid: blocker.valid === true,
+    valid: promptSourceBlocker.valid === true,
     selected_skill: selectedSkill,
-    blocker,
-    reason: blocker.reason,
+    blocker: promptSourceBlocker,
+    install_blocker: blocker,
+    prompt_source_blocker: promptSourceBlocker,
+    reason: promptSourceBlocker.reason,
   };
 }
 
@@ -6111,8 +6252,8 @@ function applyCoreBetaSkillPrerequisiteBlocker({ state, testCase, caseDir, block
   }));
   recordAssertion(
     state,
-    'Skill 上游安装前置账本',
-    '只有10个固定样本的安装终态证据完整且目标依赖确实未安装时，才允许阻塞后续发送并将发送后证据标为不适用。',
+    'Skill 上游前置账本',
+    '只有安装终态或冻结 README/body/description 来源证据完整且目标依赖确实不可用时，才允许阻塞后续发送并将发送后证据标为不适用。',
     true,
     blocker.reason,
   );
@@ -6539,8 +6680,41 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       const selected = chooseCoreBetaMarketSkills(catalog, 10);
       const withDetail = [];
       for (const skill of selected) {
-        const detail = await page.evaluate((name) => window.agent.getSkillDetail(name), skill.slug || skill.name);
-        withDetail.push({
+        const detailLookup = await page.evaluate(async (item) => {
+          const candidates = [...new Set([
+            item.upstreamId,
+            item.resourceId,
+            item.id,
+            item.namespace && (item.slug || item.name)
+              ? `${item.namespace}/${item.slug || item.name}`
+              : '',
+            item.slug,
+            item.name,
+          ].map((value) => String(value || '').trim()).filter(Boolean))];
+          const attempts = [];
+          for (const candidate of candidates) {
+            try {
+              const raw = await window.agent.getSkillDetail(candidate);
+              const value = raw?.detail || raw?.data || raw || null;
+              attempts.push({
+                candidate,
+                returned: Boolean(value),
+                keys: value && typeof value === 'object' ? Object.keys(value).sort() : [],
+              });
+              if (value) return { value, selected_candidate: candidate, attempts };
+            } catch (error) {
+              attempts.push({
+                candidate,
+                returned: false,
+                keys: [],
+                error: String(error?.message || error),
+              });
+            }
+          }
+          return { value: null, selected_candidate: '', attempts };
+        }, skill);
+        const detail = detailLookup.value;
+        const frozenSample = {
           qualified_identity: skillQualifiedIdentity(skill),
           namespace: skill.namespace || 'global',
           slug: skill.slug || skill.name,
@@ -6549,9 +6723,17 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
           market: skill,
           detail: detail ? {
             markdown: detail.markdown || detail.body || '',
+            body: detail.body || '',
+            readme: detail.readme || detail.content || '',
             frontmatter: detail.frontmatter || {},
           } : null,
-        });
+          detail_lookup: {
+            selected_candidate: detailLookup.selected_candidate,
+            attempts: detailLookup.attempts,
+          },
+        };
+        frozenSample.prompt_source = coreBetaSkillPromptSource(frozenSample);
+        withDetail.push(frozenSample);
       }
       if (withDetail.length < 10) {
         markBlocked(state, `技能市场真实可安装样本不足10个：catalog.market eligible=${withDetail.length}`);
@@ -6563,19 +6745,35 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       ledger.skills.selection_seed = String(testCase.version_scope || testCase.id);
       const ledgerFile = writeCoreBetaSuiteLedger(caseDir, ledger);
       const file = path.join(caseDir, 'capability-selection.json');
+      const identitiesUnique = withDetail.length === 10
+        && new Set(withDetail.map((item) => item.qualified_identity)).size === 10;
+      const deepUsePromptSourcesValid = withDetail.slice(0, 5)
+        .every((item) => coreBetaSkillPromptSource(item).valid === true);
       writeJsonFile(file, {
         valid: true,
+        evidence_valid: true,
+        oracle_valid: identitiesUnique && deepUsePromptSourcesValid,
         source: 'catalog.market',
         active_tab: 'market',
         market_status: catalog.marketStatus || catalog.marketSource || null,
         eligible_market_count: chooseCoreBetaMarketSkills(catalog, Number.MAX_SAFE_INTEGER).length,
+        deep_use_prompt_source_valid_count: withDetail.slice(0, 5)
+          .filter((item) => coreBetaSkillPromptSource(item).valid === true).length,
         selected: withDetail,
         ledger_file: ledgerFile,
       });
       state.artifacts.capability_inventory = file;
       state.artifacts.capability_selection = file;
       state.artifacts.capability_execution_event = file;
-      recordAssertion(state, '技能市场10个确定性样本', '必须从catalog.market选择10个未安装且qualified identity唯一的样本。', withDetail.length === 10 && new Set(withDetail.map((item) => item.qualified_identity)).size === 10, `selected=${withDetail.length}`);
+      recordAssertion(state, '技能市场10个确定性样本', '必须从catalog.market选择10个未安装且qualified identity唯一的样本。', identitiesUnique, `selected=${withDetail.length}`);
+      recordAssertion(
+        state,
+        '深度使用样本冻结说明来源',
+        'deep_use前5个固定样本必须冻结可校验的README/body/市场description内容与SHA；来源缺失是产品负向结果，不能拖到使用Case抛异常。',
+        deepUsePromptSourcesValid,
+        `valid=${withDetail.slice(0, 5).filter((item) => coreBetaSkillPromptSource(item).valid === true).length}/5`,
+        'bug',
+      );
       return;
     }
     if (['BETA-SKILL-003', 'BETA-SKILL-004'].includes(testCase.id)) {
@@ -11763,16 +11961,20 @@ function resolveCoreBetaConversationTurns(testCase, caseDir) {
     (_match, indexText, phase, field) => {
       const sample = ledger.skills?.deep_use?.[Number(indexText)];
       if (!sample) throw new Error(`${testCase.id} 缺少 deep_use[${indexText}] 运行时样本账本`);
-      const readme = String(sample.detail?.markdown || '').trim();
-      if (!readme) throw new Error(`${testCase.id} 的 ${sample.qualified_identity} 缺少README内容，无法派生任务与Oracle`);
+      const promptSource = coreBetaSkillPromptSource(sample);
+      if (!promptSource.valid) {
+        throw new Error(`${testCase.id} 的 ${sample.qualified_identity} 冻结说明来源无效；Skill 前置判断未能在发送前阻塞`);
+      }
+      const sourceExcerpt = clip(promptSource.content.replace(/\s+/g, ' '), 1_200);
+      const sourceIdentity = `${promptSource.kind}/sha256:${promptSource.sha256}`;
       if (field === 'task') {
         return phase === 'primary'
-          ? `QA_SKILL_PRIMARY：请严格使用已选择的「${sample.label}」技能，根据其README完成一个最小但真实的专业示例；先列出输入，再给出符合README输出格式的结果。`
-          : `QA_SKILL_FOLLOWUP：继续使用同一「${sample.label}」技能，修正上一轮一个输入并只输出受影响的结果及校验说明。`;
+          ? `QA_SKILL_PRIMARY：请严格使用已选择的「${sample.label}」技能。依据本轮冻结说明（${sourceIdentity}）：${sourceExcerpt}。从说明中选择一个明确能力，先列出最小真实输入，再按说明的流程和输出格式完成结果；结果中原样保留标记 QA_SKILL_PRIMARY。`
+          : `QA_SKILL_FOLLOWUP：继续使用同一「${sample.label}」技能和上一轮输入，依据同一冻结说明（${sourceIdentity}）修正一个输入，只输出受影响的结果及校验说明；结果中原样保留标记 QA_SKILL_FOLLOWUP。`;
       }
       return phase === 'primary'
-        ? `task绑定的Skill identity必须为${sample.qualified_identity}，存在真实Skill执行追踪，输出符合README定义且包含QA_SKILL_PRIMARY。`
-        : `同一task继续使用${sample.qualified_identity}，存在第二轮Skill执行追踪，增量结果符合README且包含QA_SKILL_FOLLOWUP。`;
+        ? `task绑定的Skill identity必须为${sample.qualified_identity}，存在真实Skill执行追踪，输出响应冻结说明${sourceIdentity}定义的能力、流程或格式且包含QA_SKILL_PRIMARY。`
+        : `同一task继续使用${sample.qualified_identity}，存在第二轮Skill执行追踪，增量结果响应同一冻结说明${sourceIdentity}且包含QA_SKILL_FOLLOWUP。`;
     },
   );
   const turns = declaredTurns.map((turn, index) => ({
