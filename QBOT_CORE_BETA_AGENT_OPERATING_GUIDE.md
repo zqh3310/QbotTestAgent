@@ -28,6 +28,20 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807163850_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-476b894
+```
+
+该批次完成 17/55 后，在 `BETA-FILE-004` 确认 framework issue：产品回复明确
+给出报名 100→120、到场 70→80、成交 12→15，并以已绑定文件名的
+`表格一总计：100 + 70 + 12 = 182`、`表格二总计：120 + 80 + 15 = 215`
+给出正确双方总计；原解析器只支持字母和阿拉伯数字表别名，把中文数字表别名的
+正确回复误写为 `totals=false` 和产品 Bug。修复必须让中文表别名先与唯一文件
+身份绑定后再核对总计，并保留交换 182/215 必须失败的正反 invariant；修复推送后
+从第 1 条完整串行重跑，禁止续写该目录。
+
+最新一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807144309_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-4004005
 ```
 

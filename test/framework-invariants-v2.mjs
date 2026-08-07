@@ -4711,6 +4711,27 @@ assert.equal(caseAwareReplyAssertion(
     '合计：表1 = 215，表2 = 182',
   ].join('\n'),
 ).ok, false, '数字表别名的总计交换时不得形成通过');
+const observedChineseAliasedCoreTableReply = [
+  '指标\t表格一（qbot-table.csv）\t表格二（qbot-data-table-diff.xlsx）\t差异（表二 − 表一）',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '各自总计',
+  '表格一总计：100 + 70 + 12 = 182',
+  '表格二总计：120 + 80 + 15 = 215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedChineseAliasedCoreTableReply).ok,
+  true,
+  '表格 Case 应接受文件名唯一绑定的表格一/表格二中文别名总计表达',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedChineseAliasedCoreTableReply
+    .replace('表格一总计：100 + 70 + 12 = 182', '表格一总计：100 + 70 + 12 = 215')
+    .replace('表格二总计：120 + 80 + 15 = 215', '表格二总计：120 + 80 + 15 = 182'),
+).ok, false, '中文表别名绑定下交换双方总计时不得形成通过');
 assert.equal(caseAwareReplyAssertion(
   coreTableCase,
   { prompt: coreTablePrompt },

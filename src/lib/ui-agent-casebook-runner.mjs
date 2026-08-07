@@ -25669,9 +25669,9 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
     || tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal);
 }
 
-const TABLE_ALIAS_TOKEN = '[A-Z]|[1-9]\\d?';
+const TABLE_ALIAS_TOKEN = '[A-Z]|[1-9]\\d?|(?:十[一二三四五六七八九]?|[一二三四五六七八九])';
 const TABLE_ALIAS_PREFIX = '(?:^|[\\s([{（【,:：，;；])表(?:格)?\\s*';
-const TABLE_ALIAS_SUFFIX = '(?=$|[\\s([{（【)\\]}）】,:：，;；+\\-−—=])';
+const TABLE_ALIAS_SUFFIX = '(?=$|[\\s([{（【)\\]}）】,:：，;；+\\-−—=]|(?:总计|合计))';
 
 function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal) {
   const bindings = new Map();

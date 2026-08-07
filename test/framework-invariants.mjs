@@ -1591,6 +1591,27 @@ assert.equal(
   true,
   '通用 runner 应接受 Markdown pipe 表头列身份约束的总计行',
 );
+const observedChineseAliasedCoreTableReply = [
+  '指标\t表格一（qbot-table.csv）\t表格二（qbot-data-table-diff.xlsx）\t差异（表二 − 表一）',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '各自总计',
+  '表格一总计：100 + 70 + 12 = 182',
+  '表格二总计：120 + 80 + 15 = 215',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedChineseAliasedCoreTableReply).ok,
+  true,
+  '通用 runner 应接受文件名唯一绑定的表格一/表格二中文别名总计表达',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedChineseAliasedCoreTableReply
+    .replace('表格一总计：100 + 70 + 12 = 182', '表格一总计：100 + 70 + 12 = 215')
+    .replace('表格二总计：120 + 80 + 15 = 215', '表格二总计：120 + 80 + 15 = 182'),
+).ok, false, '通用 runner 不得接受中文表别名绑定下交换的双方总计');
 if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
   throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
 }
