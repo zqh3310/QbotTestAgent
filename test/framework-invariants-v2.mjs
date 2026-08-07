@@ -37,6 +37,7 @@ import {
   coreBetaCapabilityInteractionCategory,
   coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
+  coreBetaConnectorCatalogEvidenceValid,
   coreBetaConnectorOptionTestId,
   coreBetaConversationTurnLabel,
   coreBetaExpertBuilderOutcomeEvidence,
@@ -1878,6 +1879,56 @@ const emptyMcpPublicState = {
   skills: { selected: [] },
   connectors: { selected: [] },
 };
+const emptyMcpCatalog = normalizeCoreBetaConnectorCatalogSnapshot({
+  catalog: [],
+  health: [],
+  capabilities: { connectorRouting: { mode: 'disabled' } },
+});
+assert.equal(emptyMcpCatalog.items.length, 0);
+assert.equal(
+  coreBetaConnectorCatalogEvidenceValid(emptyMcpCatalog),
+  true,
+  '成功读取到的空 MCP 目录仍是结构完整的负向证据',
+);
+assert.equal(
+  coreBetaConnectorCatalogEvidenceValid(normalizeCoreBetaConnectorCatalogSnapshot({
+    catalog: { __error: 'catalog timeout' },
+    health: [],
+  })),
+  false,
+  'MCP 目录 bridge 读取错误必须继续 fail-closed',
+);
+const emptyMcpBlocker = coreBetaMcpSelectionPrerequisiteBlocker({
+  testCase: { id: 'BETA-MCP-001', evidence_roles: [] },
+  catalog: emptyMcpCatalog,
+  selected: [],
+  selectionSeed: mcpSelectionSeed,
+  publicState: emptyMcpPublicState,
+});
+assert.equal(emptyMcpBlocker.valid, true, '空目录必须形成可信 blocked，而不是无效 manifest');
+assert.equal(emptyMcpBlocker.eligible_count, 0);
+assert.deepEqual(emptyMcpBlocker.missing_strata, [
+  'document', 'search', 'data', 'collaboration', 'visualization',
+]);
+const emptyMcpInventoryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-empty-mcp-inventory-'));
+try {
+  const inventoryFile = path.join(emptyMcpInventoryDir, 'capability-inventory.json');
+  writeJsonFile(inventoryFile, {
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: false,
+    ...emptyMcpCatalog,
+  });
+  const manifest = buildCoreEvidenceManifest({
+    testCase: { id: 'BETA-MCP-001', evidence_roles: ['capability_inventory'] },
+    caseDir: emptyMcpInventoryDir,
+    artifacts: { capability_inventory: inventoryFile },
+  });
+  assert.equal(manifest.complete, true, '空 MCP inventory 必须作为有效负向证据进入完整 manifest');
+  assert.deepEqual(manifest.invalid_roles, []);
+} finally {
+  fs.rmSync(emptyMcpInventoryDir, { recursive: true, force: true });
+}
 const shortageCatalog = {
   ...mcpCatalogSnapshot,
   items: mcpCatalogSnapshot.items.filter((item) => item.category !== 'visualization'),
@@ -1960,6 +2011,16 @@ assert.match(
   runner,
   /mcp_catalog_deterministic_sample_5[\s\S]*coreBetaMcpSelectionPrerequisiteBlocker/,
   'MCP样本不足必须走 prerequisite blocked 而不是 throw',
+);
+assert.match(
+  runner,
+  /const inventoryEvidenceValid = coreBetaConnectorCatalogEvidenceValid\(catalog\);[\s\S]*valid: inventoryEvidenceValid,[\s\S]*evidence_valid: inventoryEvidenceValid/,
+  'MCP inventory 必须按读取结构判定证据有效性，不能按目录条目数判定',
+);
+assert.doesNotMatch(
+  runner,
+  /writeJsonFile\(inventoryFile, \{ valid: catalog\.items\.length > 0/,
+  '空 MCP 目录不得再被写成无效 capability inventory',
 );
 assert.match(
   automationFramework,

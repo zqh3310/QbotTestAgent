@@ -11316,7 +11316,13 @@ async function executeCoreBetaMcpCase({
   const ledger = readCoreBetaSuiteLedger(caseDir);
   const catalog = await captureCoreBetaConnectorCatalog(page);
   const inventoryFile = path.join(caseDir, 'capability-inventory.json');
-  writeJsonFile(inventoryFile, { valid: catalog.items.length > 0, ...catalog });
+  const inventoryEvidenceValid = coreBetaConnectorCatalogEvidenceValid(catalog);
+  writeJsonFile(inventoryFile, {
+    valid: inventoryEvidenceValid,
+    evidence_valid: inventoryEvidenceValid,
+    oracle_valid: catalog.items.length > 0,
+    ...catalog,
+  });
   state.artifacts.capability_inventory = inventoryFile;
 
   if (scenario.driver === 'mcp_catalog_deterministic_sample_5') {
@@ -11653,6 +11659,17 @@ export function normalizeCoreBetaConnectorCatalogSnapshot({
   };
 }
 
+export function coreBetaConnectorCatalogEvidenceValid(catalog) {
+  return Boolean(
+    catalog
+    && catalog.source === 'window.agent.getConnectorCatalog/getConnectorHealth'
+    && catalog.raw_catalog
+    && typeof catalog.raw_catalog === 'object'
+    && !String(catalog.raw_catalog?.__error || '')
+    && Array.isArray(catalog.items)
+  );
+}
+
 async function captureCoreBetaConnectorCatalog(page) {
   const snapshot = await page.evaluate(async () => {
     const catalog = await window.agent?.getConnectorCatalog?.({ forceRefresh: true }).catch((error) => ({ __error: String(error?.message || error) }));
@@ -11773,14 +11790,7 @@ export function coreBetaMcpSelectionPrerequisiteBlocker({
     ? createHash('sha256').update(JSON.stringify(catalogItems)).digest('hex')
     : String(source.catalog_sha256 || '');
   const mutationGuard = coreBetaMcpEmptyMutationGuard(publicState, testCase?.id);
-  const sourceCatalogValid = isSourceCase && Boolean(
-    catalog
-    && catalog.source === 'window.agent.getConnectorCatalog/getConnectorHealth'
-    && catalog.raw_catalog
-    && typeof catalog.raw_catalog === 'object'
-    && !String(catalog.raw_catalog?.__error || '')
-    && Array.isArray(catalog.items)
-  );
+  const sourceCatalogValid = isSourceCase && coreBetaConnectorCatalogEvidenceValid(catalog);
   const sourceValid = sourceCatalogValid || Boolean(
     !isSourceCase
     && source.schema_version === 'qbot-core-beta-mcp-prerequisite/v1'

@@ -19,14 +19,29 @@
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
-2026-08-07 用户更新产品后，旧冻结批次的发布身份已无法精确恢复：源批次为
-360Teams `5.2.41(2119080662)` / QWork `0.0.30-rc.2`，当前受管宿主为
-360Teams `5.2.42(2119080753)` / QWork `0.0.30-rc.12`。框架正在使用显式
-`--core-beta-cleanup-release-migration true` 安全门禁，从下述最新冻结目录只清理
-其账本记录的 QA Skill；完成清理、全量检查、推送和新 `READY_SCOPED` 预检后，
-必须在当前发布身份的新不可变目录从第 1 条完整串行重跑 55 条。
+2026-08-07 当前 55 条串行批次已在 360Teams `5.2.42(2119080753)` / QWork
+`0.0.30-rc.12` 精确身份下永久冻结。上一轮跨发布 QA Skill 清理、新
+`READY_SCOPED` 预检和从第 1 条完整重跑已经完成；不得回到旧清理批次，也不得
+复用本轮输出。修复、双框架检查、推送和新 `READY_SCOPED` 预检完成后，必须在
+当前发布身份的新不可变目录再次从第 1 条完整串行重跑 55 条。
 
 最新一次已冻结的 scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807144309_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-4004005
+```
+
+该批次完成 48/55 后，在 `BETA-MCP-001` 确认 framework issue：产品 bridge
+成功返回可解析的空 connector catalog，runner 也生成了 Case-bound 空任务、零能力
+读回和 `eligible=0`、五类全部缺失的可信 prerequisite blocked；但写
+`capability-inventory.json` 时错误使用 `catalog.items.length > 0` 作为 `valid`，
+把完整的产品负向读回标为无效证据，manifest 因 `capability_inventory` 无效而硬
+停止，`BETA-MCP-002~007` 未执行。修复必须按 bridge 来源、显式错误和结构判定
+`evidence_valid`，空目录写为 `valid=true/evidence_valid=true/oracle_valid=false`，
+由 prerequisite blocked 继续传播；真实读取异常仍须 fail-closed。新 invariant 必须
+同时覆盖空目录可信 blocked 和 bridge 读取错误反例，修复推送后从第 1 条完整重跑。
+
+前一次已冻结的 scoped 批次：
 
 ```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807112148_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-eba2613
