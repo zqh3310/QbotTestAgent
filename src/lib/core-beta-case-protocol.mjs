@@ -1152,11 +1152,13 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && String(blocker?.expected_identity || '').trim()
       && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
       && interaction?.capability_kind === blocker?.capability_kind
+      && ['manual_mode', 'manual_skill_selection'].includes(String(interaction?.stage || ''))
+      && interaction?.expected_identity === blocker?.expected_identity
       && interaction?.control_located === true
       && interaction?.click_dispatched === true
       && interaction?.expected_state_observed === false
       && interaction?.category === 'bug'
-      && typeof interaction?.aria_checked === 'string'
+      && interaction?.aria_checked === 'false'
       && interaction?.manual_surface
       && typeof interaction.manual_surface === 'object'
       && typeof interaction.manual_surface.list_visible === 'boolean'
@@ -1164,6 +1166,9 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && typeof interaction.manual_surface.empty_visible === 'boolean'
       && (blocker?.capability_kind !== 'skill'
         || typeof interaction.manual_surface.search_visible === 'boolean')
+      && (interaction?.stage !== 'manual_skill_selection'
+        || (interaction.manual_surface.list_visible === true
+          && Number(interaction.manual_surface.option_count) > 0))
       && preSendMutationGuard?.valid === true
       && preSendMutationGuard?.task_absent_before === true
       && preSendMutationGuard?.task_absent_after === true

@@ -22,6 +22,26 @@
 最新一次已冻结的 scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807071819_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-fe28758
+```
+
+该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：第 4 个代表
+Skill `Confluence文档迁移助手` 已真实安装并出现在手动列表，runner 真实点击了
+精确卡片，但产品没有生成 chip 或 `selectedSkills` 读回，任务也没有发送。这是
+发送前产品选择失败；原执行分支却直接 return，没有把精确卡片 interaction、
+零任务/零消息/发送计数不变读回和 7 个下游 N/A 角色物化，导致 manifest 缺少
+8 个角色并硬停止。修复必须让普通 Skill 使用和 Skill 隔离分支都调用
+`qbot-core-beta-pre-send-capability-failure/v1`，并要求稳定 identity、真实点击、
+`aria=false`、可见手动列表、失败截图和零发送守卫全部成立；证据完整时记产品
+Bug 并继续，取证不完整时才保持 framework issue。该目录已冻结，不得续写；
+其中 `BETA-SKILL-003/004` 安装成功的 `Confluence文档迁移助手` 与
+`Word 文档生成助手` 尚未由 `BETA-SKILL-012` 清理，重新 pretest 和完整重跑前
+必须按第 8 节执行独立 `BETA-SKILL-001 --core-beta-cleanup-from ...`，证明
+`remaining=0` 且连续两次稳定缺席。
+
+前一次已冻结的 scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807055814_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-87d4ed3
 ```
 

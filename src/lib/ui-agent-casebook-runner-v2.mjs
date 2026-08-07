@@ -7000,7 +7000,21 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
     return;
   }
   if (selectedSkill) {
-    if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) return;
+    if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) {
+      if (state.artifacts.core_beta_capability_interaction?.stage === 'manual_skill_selection'
+        && state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+        await materializeCoreBetaPreSendCapabilityFailure({
+          page,
+          state,
+          testCase,
+          caseDir,
+          capabilityKind: 'skill',
+          expectedIdentity: selectedSkill.qualified_identity || selectedSkill.slug || selectedSkill.label,
+          before: beforeSelection,
+        });
+      }
+      return;
+    }
     state.artifacts.core_beta_capability_selection = selectedSkill;
   } else if (!await selectFirstManualSkill(page, state, caseDir)) return;
   const selectionFile = path.join(caseDir, 'capability-selection.json');
@@ -7041,7 +7055,21 @@ async function executeCoreBetaSkillIsolationCase({ page, state, testCase, caseDi
     }
     return;
   }
-  if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) return;
+  if (!await selectManualSkillByName(page, state, caseDir, selectedSkill.label, { ensureMode: false })) {
+    if (state.artifacts.core_beta_capability_interaction?.stage === 'manual_skill_selection'
+      && state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: selectedSkill.qualified_identity || selectedSkill.slug || selectedSkill.label,
+        before: beforeSelection,
+      });
+    }
+    return;
+  }
   await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
   const taskA = await captureCoreBetaPublicState(page, testCase);
   const taskAId = taskA.task?.id;
@@ -7097,13 +7125,18 @@ async function materializeCoreBetaPreSendCapabilityFailure({
     && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0);
   const noSendReceiptRecorded = !state.artifacts.send_receipt
     && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0);
+  const interaction = {
+    ...(state.artifacts.core_beta_capability_interaction || {}),
+    expected_identity: String(expectedIdentity || ''),
+  };
+  state.artifacts.core_beta_capability_interaction = interaction;
   const evidence = coreBetaPreSendCapabilityFailureEvidence({
     testCaseId: testCase.id,
     capabilityKind,
     expectedIdentity,
     before,
     after,
-    interaction: state.artifacts.core_beta_capability_interaction,
+    interaction,
     noPromptRecorded,
     noSendReceiptRecorded,
     notApplicableRoles,
@@ -20996,6 +21029,24 @@ async function visibleUnifiedComposerSubmenu(page, config, timeout = 250) {
   return submenu;
 }
 
+async function readManualSkillSurface(menu) {
+  if (!menu) return null;
+  return menu.evaluate((surface) => {
+    const isVisible = (element) => {
+      if (!element || !element.getClientRects().length) return false;
+      const style = globalThis.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    return {
+      search_visible: isVisible(surface.querySelector('input[placeholder*="搜索技能"]')),
+      list_visible: isVisible(surface.querySelector('.composer-plus-list, .skill-list, .ctool-list')),
+      option_count: [...surface.querySelectorAll('[data-testid^="composer-skill-option-"], .composer-plus-skill, .skill-list .ctool-opt')]
+        .filter(isVisible).length,
+      empty_visible: isVisible(surface.querySelector('.composer-plus-empty')),
+    };
+  }).catch(() => null);
+}
+
 async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
   if (!config || !(await unifiedComposerPlusAvailable(page))) return '';
@@ -21138,20 +21189,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
         : null;
       checked = manual ? await manual.getAttribute('aria-checked').catch(() => '') : '';
       afterText = await activeMenuText(page, 'skill');
-      manualSurface = submenu ? await submenu.evaluate((menu) => {
-        const isVisible = (element) => {
-          if (!element || !element.getClientRects().length) return false;
-          const style = globalThis.getComputedStyle(element);
-          return style.display !== 'none' && style.visibility !== 'hidden';
-        };
-        return {
-          search_visible: isVisible(menu.querySelector('input[placeholder*="搜索技能"]')),
-          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
-          option_count: [...menu.querySelectorAll('[data-testid^="composer-skill-option-"]')]
-            .filter(isVisible).length,
-          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
-        };
-      }).catch(() => null) : null;
+      manualSurface = await readManualSkillSurface(submenu);
       if (
         checked === 'true'
         && manualSurface?.search_visible
@@ -21312,16 +21350,20 @@ export function coreBetaPreSendCapabilityFailureEvidence({
   const manualSurface = interaction?.manual_surface;
   const interactionValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
     && interaction?.capability_kind === capabilityKind
+    && ['manual_mode', 'manual_skill_selection'].includes(String(interaction?.stage || ''))
+    && String(interaction?.expected_identity || '') === String(expectedIdentity || '')
     && interaction?.control_located === true
     && interaction?.click_dispatched === true
     && interaction?.expected_state_observed === false
     && interaction?.category === 'bug'
-    && typeof interaction?.aria_checked === 'string'
+    && interaction?.aria_checked === 'false'
     && manualSurface && typeof manualSurface === 'object'
     && typeof manualSurface.list_visible === 'boolean'
     && Number.isFinite(Number(manualSurface.option_count))
     && typeof manualSurface.empty_visible === 'boolean'
     && (capabilityKind !== 'skill' || typeof manualSurface.search_visible === 'boolean')
+    && (interaction?.stage !== 'manual_skill_selection'
+      || (manualSurface.list_visible === true && Number(manualSurface.option_count) > 0))
     && coreBetaBatchScreenshotPresent(screenshot);
   const mutationGuard = {
     task_absent_before: beforeTask?.id == null,
@@ -21756,6 +21798,10 @@ async function selectFirstManualSkill(page, state, caseDir) {
 async function selectManualSkillByName(page, state, caseDir, skillName, { ensureMode = true } = {}) {
   const matcher = skillName instanceof RegExp ? skillName : new RegExp(escapeRegExp(String(skillName)), 'i');
   const expectedLabel = skillName instanceof RegExp ? String(skillName) : String(skillName);
+  const matchesExpected = (value) => {
+    matcher.lastIndex = 0;
+    return matcher.test(String(value || ''));
+  };
   if (ensureMode) {
     const manualOk = await setSkillMode(page, state, caseDir, 'manual');
     if (!manualOk) return false;
@@ -21782,18 +21828,131 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     .first();
   if (!(await visible(option, 2000))) {
     state.screenshots.manual_installed_skill_missing = await shot(page, caseDir, 'manual-installed-skill-missing');
-    recordAssertion(state, '刚安装技能可手动选择', '手动技能列表必须出现刚安装的同一技能。', false, `未找到技能：${expectedLabel}`);
+    recordAssertion(state, '刚安装技能可手动选择', '手动技能列表必须出现刚安装的同一技能。', false, `未找到技能：${expectedLabel}`, 'automation_error');
     return false;
   }
   const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');
-  await option.click({ force: true }).catch(async () => option.evaluate((el) => el.click()));
-  await page.waitForTimeout(600);
-  const chipText = await visibleSkillChipText(page);
-  const toolText = await visibleComposerToolStateText(page, 'skill');
-  const selected = matcher.test(chipText) || matcher.test(toolText) || page.locator('.ctool-opt.on').filter({ hasText: matcher }).first().isVisible({ timeout: 400 }).catch(() => false);
-  const selectedOk = typeof selected === 'boolean' ? selected : await selected;
+  const controlTestId = await option.getAttribute('data-testid').catch(() => '') || 'visible-skill-option-by-label';
+  const beforeAriaChecked = await option.getAttribute('aria-checked').catch(() => '') || '';
+  const beforeManualSurface = await readManualSkillSurface(menu);
+  let clickDispatched = false;
+  try {
+    await option.click({ force: true }).catch(async () => option.evaluate((el) => el.click()));
+    clickDispatched = true;
+  } catch (error) {
+    state.screenshots.manual_installed_skill_click_failed = await shot(page, caseDir, 'manual-installed-skill-click-failed');
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_skill_selection',
+      expected_identity: expectedLabel,
+      control_testid: controlTestId,
+      control_located: true,
+      click_dispatched: false,
+      expected_state_observed: false,
+      before_aria_checked: beforeAriaChecked,
+      aria_checked: beforeAriaChecked,
+      manual_surface: beforeManualSurface,
+      option_text: optionText,
+      screenshot: state.screenshots.manual_installed_skill_click_failed,
+      error: String(error?.message || error),
+      category: 'automation_error',
+    };
+    recordAssertion(
+      state,
+      `手动选择刚安装的技能：${expectedLabel}`,
+      '已定位的技能卡片必须成功派发真实点击。',
+      false,
+      String(error?.message || error),
+      'automation_error',
+    );
+    return false;
+  }
+
+  let chipText = '';
+  let toolText = '';
+  let selectedSkills = [];
+  let optionSelected = false;
+  let selectedOk = false;
+  const selectionDeadline = Date.now() + 4000;
+  while (Date.now() < selectionDeadline) {
+    await page.waitForTimeout(200);
+    chipText = await visibleSkillChipText(page);
+    toolText = await visibleComposerToolStateText(page, 'skill');
+    const capabilities = await currentCapabilities(page);
+    selectedSkills = coreBetaSelectedCapabilityIdentities(capabilities?.selectedSkills);
+    optionSelected = await page.locator('.ctool-opt.on, .composer-plus-skill.on, [aria-checked="true"], [aria-selected="true"]')
+      .filter({ hasText: matcher })
+      .first()
+      .isVisible({ timeout: 150 })
+      .catch(() => false);
+    selectedOk = matchesExpected(chipText)
+      || matchesExpected(toolText)
+      || selectedSkills.some(matchesExpected)
+      || optionSelected;
+    if (selectedOk) break;
+  }
+
+  let afterMenu = await activeMenuLocator(page, 'skill');
+  if (!selectedOk && !afterMenu) {
+    await ensureComposerToolMenu(page, state, {
+      selector: '[data-testid="composer-skills-menu"]',
+      action: `重新打开【技能】菜单以读取选择失败状态：${expectedLabel}`,
+      matchPattern: /技能|skill|SkillHub|已安装|本次对话不会使用任何技能|自动使用技能|手动选择技能/i,
+      menuKind: 'skill',
+    });
+    afterMenu = await activeMenuLocator(page, 'skill');
+  }
+  const afterOption = afterMenu
+    ? afterMenu.locator('.composer-plus-skill, .skill-list .ctool-opt, .ctool-opt, [role="option"], button')
+      .filter({ hasText: matcher })
+      .first()
+    : null;
+  const afterOptionVisible = afterOption ? await visible(afterOption, 500) : false;
+  const afterAriaChecked = afterOptionVisible
+    ? await afterOption.evaluate((element) => {
+      const explicit = element.getAttribute('aria-checked') || element.getAttribute('aria-selected');
+      if (explicit === 'true' || explicit === 'false') return explicit;
+      return element.classList.contains('on') ? 'true' : 'false';
+    }).catch(() => '')
+    : '';
+  const afterManualSurface = await readManualSkillSurface(afterMenu);
   state.screenshots.manual_installed_skill_selected = await shot(page, caseDir, 'manual-installed-skill-selected');
-  recordStep(state, `手动选择刚安装的技能：${expectedLabel}`, '必须选择安装步骤中记录的同一技能，不能退化为随机选择第一个技能。', clip(optionText, 180), selectedOk ? 'passed' : 'failed', state.screenshots.manual_installed_skill_selected);
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched,
+    expectedStateObserved: selectedOk,
+  });
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: 'manual_skill_selection',
+    expected_identity: expectedLabel,
+    control_testid: controlTestId,
+    control_located: true,
+    click_dispatched: clickDispatched,
+    expected_state_observed: selectedOk,
+    before_aria_checked: beforeAriaChecked,
+    aria_checked: afterAriaChecked,
+    manual_surface: afterManualSurface || beforeManualSurface,
+    before_manual_surface: beforeManualSurface,
+    option_text: optionText,
+    option_selected: optionSelected,
+    chip_text: chipText,
+    tool_text: toolText,
+    selected_skills: selectedSkills,
+    screenshot: state.screenshots.manual_installed_skill_selected,
+    category: interactionCategory,
+  };
+  recordStep(
+    state,
+    `手动选择刚安装的技能：${expectedLabel}`,
+    '必须选择安装步骤中记录的同一技能，不能退化为随机选择第一个技能。',
+    `option=${clip(optionText, 180)}；chip=${clip(chipText, 120)}；selectedSkills=${JSON.stringify(selectedSkills)}；aria-checked=${afterAriaChecked || '未读取'}`,
+    selectedOk ? 'passed' : 'failed',
+    state.screenshots.manual_installed_skill_selected,
+    interactionCategory,
+  );
   return selectedOk;
 }
 

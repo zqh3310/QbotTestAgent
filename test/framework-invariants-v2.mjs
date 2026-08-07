@@ -963,16 +963,17 @@ assert.equal(
     const interaction = {
       schema_version: 'qbot-core-beta-capability-interaction/v1',
       capability_kind: 'skill',
-      stage: 'manual_mode',
-      control_testid: 'composer-skill-mode-manual',
+      stage: 'manual_skill_selection',
+      expected_identity: 'skillhub:global/qfin-ppt-brand-assets@1.0.0',
+      control_testid: 'composer-skill-option-qfin-ppt-brand-assets',
       control_located: true,
       click_dispatched: true,
       expected_state_observed: false,
       aria_checked: 'false',
       manual_surface: {
-        search_visible: false,
-        list_visible: false,
-        option_count: 0,
+        search_visible: true,
+        list_visible: true,
+        option_count: 30,
         empty_visible: false,
       },
       screenshot,
@@ -994,6 +995,8 @@ assert.equal(
       noSendReceiptRecorded: true,
     });
     assert.equal(evidence.valid, true);
+    assert.equal(evidence.interaction.stage, 'manual_skill_selection');
+    assert.equal(evidence.interaction.expected_identity, evidence.expected_identity);
     assert.equal(evidence.oracle_valid, false);
     assert.equal(evidence.mutation_guard.send_count_unchanged, true);
     assert.deepEqual(evidence.not_applicable_roles, [
@@ -1018,6 +1021,20 @@ assert.equal(
       }).valid,
       false,
       '发送计数发生变化时不得把发送后角色标为 N/A',
+    );
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'BETA-SKILL-009',
+        capabilityKind: 'skill',
+        expectedIdentity: 'skillhub:global/another-skill@1.0.0',
+        before,
+        after,
+        interaction,
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+      }).valid,
+      false,
+      '精确 Skill 选择失败证据必须绑定当前 Case 期望的同一稳定 identity',
     );
   } finally {
     fs.rmSync(evidenceDir, { recursive: true, force: true });
@@ -3431,7 +3448,10 @@ const required = [
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
   ['新版统一菜单手动技能与连接器选择器可执行', /selectFirstManualSkill[\s\S]*composer-plus-skill[\s\S]*selectFirstManualConnector[\s\S]*composer-plus-connector/],
   ['Core Beta v2 精确选择 Skill 前会重新打开被同级控件关闭的最新技能菜单', /selectManualSkillByName[\s\S]*let menu = await activeMenuLocator\(page, 'skill'\)[\s\S]*if \(!menu\) \{[\s\S]*ensureComposerToolMenu\(page, state,[\s\S]*重新打开【技能】菜单以选择：[\s\S]*menuKind: 'skill'[\s\S]*menu = await activeMenuLocator\(page, 'skill'\)/],
+  ['精确 Skill 点击失败记录受校验的产品交互读回', /selectManualSkillByName[\s\S]*stage: 'manual_skill_selection'[\s\S]*control_testid: controlTestId[\s\S]*click_dispatched: clickDispatched[\s\S]*expected_state_observed: selectedOk[\s\S]*manual_surface: afterManualSurface \|\| beforeManualSurface[\s\S]*category: interactionCategory/],
   ['输入区 reset 保留能力产品失败分类', /resetComposerControls[\s\S]*coreBetaComposerResetFailureCategory[\s\S]*failure_category/],
+  ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
+  ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],
   ['发送前能力产品失败使用受校验证据协议', /qbot-core-beta-pre-send-capability-failure\/v1/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],
