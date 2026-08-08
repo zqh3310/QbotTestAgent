@@ -1209,7 +1209,7 @@ export function coreBetaInitializationContinuation({
   afterReadback = {},
 } = {}) {
   const id = String(testCase?.id || '');
-  const eligible = ['BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004'].includes(id);
+  const eligible = ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004'].includes(id);
   const signals = {
     terminal_pending: terminalReadback?.pending === true,
     terminal_failed: terminalReadback?.failed === true,

@@ -14,9 +14,9 @@
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
 - 当前正式宿主身份：360Teams `5.3.0(2119080783)`。
-- 当前 QWork 身份：UAT `0.0.30`。
+- 当前 QWork 身份：PROD `0.0.30`。
 - 当前 control plane：
-  `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
+  `https://qbot-api.360shuke.com`
 - 当前模型档位：M3。
 
 2026-08-08 当前 55 条串行批次已在 360Teams `5.3.0(2119080783)` / QWork
@@ -24,6 +24,20 @@
 `READY_SCOPED` 预检和从第 1 条完整重跑已经完成；不得回到旧清理批次，也不得
 复用本轮输出。修复、双框架检查、推送和新 `READY_SCOPED` 预检完成后，必须在
 当前发布身份的新不可变目录再次从第 1 条完整串行重跑 55 条。
+
+最新一次已冻结的 PROD scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130359_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-8a877eb
+```
+
+该批次在 `BETA-INIT-001` 后停止。产品运行时检查明确显示 Python 29 个就绪、
+1 个失败，但同一终态已证明 runtime loaded、Claude/Codex SDK、维护按钮、
+capabilities、工作台、输入区和页面读回全部可用。框架原来只允许
+`BETA-INIT-002~004` 在完整安全信号下保留产品 Bug 后继续，遗漏了同样可安全
+降级的 `BETA-INIT-001`，因此错误停止。修复必须把 `BETA-INIT-001` 纳入相同的
+`initialization_continuation` 正反合同；任一公开可用性信号缺失时仍须停止。
+修复推送后必须重新 pretest，并在新不可变目录从 `1/55` 完整串行重跑。
 
 最新一次已冻结的 scoped 批次：
 
@@ -393,15 +407,15 @@ npm run core-beta:pretest -- \
   --sheet 核心内测Case \
   --profile mandatory \
   --lane teams \
-  --out "$PWD/outputs/$(date +%Y%m%d%H%M)_uat-core-beta74-scoped55-pretest_framework-$(git rev-parse --short HEAD)" \
+  --out "$PWD/outputs/$(date +%Y%m%d%H%M)_prod-core-beta74-scoped55-pretest_framework-$(git rev-parse --short HEAD)" \
   --expected-count 55 \
   --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
   --production-gate true \
   --expected-teams-version 5.3.0 \
   --expected-teams-build 2119080783 \
   --expected-qwork-version 0.0.30 \
-  --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
-  --backend-version uat-health-cd24c9d3b3cf5dca \
+  --expected-control-plane-origin https://qbot-api.360shuke.com \
+  --backend-version prod-health-8b64febb4905af5a \
   --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
   --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
   --case "$CASE_IDS" \
@@ -424,7 +438,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -436,8 +450,8 @@ npm --prefix teams360-automation run casebook -- \
   --timeout-ms 600000 \
   --single-host-pipeline 1 \
   --production-gate true \
-  --control-plane-url https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
-  --backend-version uat-health-cd24c9d3b3cf5dca \
+  --control-plane-url https://qbot-api.360shuke.com \
+  --backend-version prod-health-8b64febb4905af5a \
   --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
   --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
   --qwork-build-id 0.0.30 \
@@ -478,8 +492,9 @@ Agent 澄清/推荐选项弹窗继续由框架点击精确“跳过/跳过（用
 初始化维护终态要同时读取可见文案和结构化状态。可见区域持续显示“准备中/处理中”，
 但 Claude/Codex SDK、runtime loaded、维护按钮、capabilities、工作台和输入区连续至少
 3 次全部 ready 时，应固化为 `product_ui_state_conflict` 产品 Bug，并在页面仍可读时
-以 `initialization_continuation.safe=true` 继续后续独立 Case。只有结构化状态也未 ready
-或证据不完整时才保持 pending 并在有界超时后触发框架硬停止。
+以 `initialization_continuation.safe=true` 继续后续独立 Case。`BETA-INIT-001` 的运行时
+检查若得到明确失败终态但上述公开可用性信号全部恢复，也必须保留产品 Bug 后继续。
+只有结构化状态未 ready 或证据不完整时才保持 pending 并在有界超时后触发框架硬停止。
 
 ## 7. 监控规则
 
