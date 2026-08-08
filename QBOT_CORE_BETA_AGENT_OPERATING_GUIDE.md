@@ -28,6 +28,21 @@
 最新一次已冻结的 PROD scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808170054_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-4403da6
+```
+
+该批次完成 `15/55` 后由监控确认 `BETA-FILE-001` 的 framework issue 并停止。
+产品回复先明确“三条关键结论如下”，随后以独立行 `第 1 页（全文仅 1 页）`
+约束后续三条列表，并正确命中 QBot PDF Summary、Agent 读取目标、摘要/风险和
+产品友好表述等全部 fixture 锚点；框架却只识别“结论均位于第 1 页”或“第 1 页
+包含三条结论”句式，错误写入 `collective_page_reference=false` 并误报产品 Bug。
+修复必须接受紧跟结论引导语的独立第 1 页范围标题，同时保留否定标题、分散页码和
+只有页码无锚点的失败反例。该目录已冻结，不得续写；修复、全检、推送、新能力审计
+和 `READY_SCOPED` pretest 后，必须在新目录从 `1/55` 完整串行重跑。
+
+上一份已冻结的 PROD scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808164730_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-831527b
 ```
 

@@ -27619,6 +27619,11 @@ function pdfPageOneCoverage(replyText) {
   const collectivePatterns = [
     new RegExp(`${conclusionGroup}[\\s\\S]{0,80}(?:均|全部|全都|都)(?:\\s*(?:位于|来自|在|见于|出自))?[\\s\\S]{0,20}${pageOne}`, 'i'),
     new RegExp(`${pageOne}[\\s\\S]{0,50}(?:包含|涵盖|列出|给出|有|承载)[\\s\\S]{0,30}${conclusionGroup}`, 'i'),
+    new RegExp(
+      `${conclusionGroup}\\s*(?:如下|为)?\\s*[:：]?\\s*(?:\\r?\\n)+\\s*${pageOne}`
+        + `(?:\\s*[（(](?:(?:全文\\s*)?(?:仅|共)?\\s*1\\s*页|1\\s*/\\s*1)[）)])?\\s*(?=\\r?\\n|$)`,
+      'im',
+    ),
   ];
   const negatedCollectiveReference = [
     new RegExp(`${conclusionGroup}[\\s\\S]{0,80}(?:并非|不是|不\\s*(?:均|都|全))[\\s\\S]{0,20}${pageOne}`, 'i'),

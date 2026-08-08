@@ -4740,6 +4740,32 @@ assert.equal(
   true,
   'PDF 三条结论的无歧义统一页码标注不得被误判',
 );
+const observedStandalonePageHeadingPdfReply = [
+  '已读取该 PDF（共 1 页）。文件内容为一行式测试文本，三条关键结论如下：',
+  '',
+  '第 1 页（全文仅 1 页）',
+  '',
+  '文件定位：本 PDF 是「QBot PDF Summary」测试样本。',
+  '核心目标（Core goal）：验证 Agent 能否读取 PDF 测试样本文件。',
+  '验收标准（Acceptance）：需完成摘要提炼、识别风险点，并保持产品友好的表述方式。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, observedStandalonePageHeadingPdfReply).ok,
+  true,
+  'PDF 三条结论引导语后的独立第 1 页范围标题必须统一绑定后续列表',
+);
+const negatedStandalonePageHeadingPdfReply = [
+  'QBot PDF Summary 的三条关键结论如下：',
+  '第 1 页不包含以下三条结论',
+  '验证 Agent 能够读取 PDF 附件。',
+  '核心验收包含摘要总结和发现风险。',
+  '输出必须保持产品友好措辞 product-friendly。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, negatedStandalonePageHeadingPdfReply).ok,
+  false,
+  '独立页码标题不得放行带否定文案的范围绑定',
+);
 const splitPagePdfReply = [
   'QBot PDF Summary 的三条关键信息如下，但不都在第 1 页：',
   '1. 验证 Agent 能够读取 PDF 附件（第 1 页）。',
