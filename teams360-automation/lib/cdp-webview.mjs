@@ -28,7 +28,17 @@ export async function discoverWebviewProbes(cdpUrl, { timeoutMs = 10_000 } = {})
         const qbotWorkbench = qbotLocalUi
           && qbotBridgeReady
           && (/新建任务/.test(bodyText) || visible('[data-testid="nav-new-task"]'));
+        let controlPlaneOrigin = '';
+        try {
+          const configuredControlPlane = typeof process !== 'undefined'
+            ? process.env.DEEPBANK_SERVER || process.env.QBOT_SERVER_URL || ''
+            : '';
+          controlPlaneOrigin = configuredControlPlane
+            ? new URL(configuredControlPlane).origin
+            : '';
+        } catch {}
         return {
+          controlPlaneOrigin,
           markers: {
             teamsQbotChat: /\\/miniapps\\/deepbank\\/home\\/chat\\//.test(location.pathname),
             qbotLocalUi,
@@ -56,6 +66,7 @@ export async function discoverWebviewProbes(cdpUrl, { timeoutMs = 10_000 } = {})
       url: safeUrl(target.url),
       title: redactText(target.title).slice(0, 200),
       surface: runtime.markers?.qbotWorkbench ? 'teams360-qwork-qbot' : '',
+      control_plane_origin: safeUrl(runtime.controlPlaneOrigin || ''),
       markers: runtime.markers || {},
       counts: runtime.counts || {},
       probe_error: runtime.probe_error || '',

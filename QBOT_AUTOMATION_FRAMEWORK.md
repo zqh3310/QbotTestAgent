@@ -107,7 +107,7 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --feature-flags-hash "<feature-flags-sha256>"
    ```
 
-   `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
+   `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。Teams lane 的 control plane 必须同时核对受管 session 与 QWork renderer 实际读取的 `DEEPBANK_SERVER/QBOT_SERVER_URL`；只看启动参数或 session 声明不能通过。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
 
 6. 冻结并记录发布身份：
 
@@ -331,6 +331,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
      --single-host-pipeline 1 \
      --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
      --production-gate true \
+     --control-plane-url "<exact-control-plane-origin>" \
      --backend-version "<backend-release-id>" \
      --prompt-policy-version "<prompt-policy-id>" \
      --feature-flags-hash "<feature-flags-sha256>" \
@@ -340,6 +341,11 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
    ```
 
 Teams 适配层会管理 live-profile alias、session、上游 CDP、WebView 代理、宿主重连和内部重启命令。调用者不得传 `--restart-command`，不得连接临时代理执行额外 UI 操作，也不得把输出写到 `teams360-automation/output` 之外。
+
+正式 Core Beta runner 必须显式携带与对应 `READY/READY_SCOPED` pretest 相同的
+`--control-plane-url`。启动前必须依次验证 session pin、QWork renderer 实际环境和
+run metadata 三者同源；任一缺失或漂移都必须在第 1 条 Case 前 fail-closed，且禁止
+用 renderer 观察值静默改写已经冻结的受管 session。
 
 Teams 预连接在一次连接周期内最多接受一次已完成的受管宿主恢复。恢复完成后若 QWork WebView 已连接、但模型入口或 capabilities 尚未就绪，必须在同一宿主上继续有界读回；不得再次重启宿主、重复延长截止时间，或形成永不收敛的恢复循环。超过恢复后的验证窗口仍未就绪时必须明确失败，由自愈闭环判定环境阻塞或框架问题。干净草稿的可见模型入口允许处于 `Auto`，这只证明工作台已加载，不能记为 M3 证据；初始化后首个模型 Case 及其每次发送前仍必须真实选择并精确读回本轮要求的 M3。
 

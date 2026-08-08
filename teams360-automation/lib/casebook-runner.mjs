@@ -62,6 +62,20 @@ export function parseCasebookRunnerOptions(argv = []) {
 export function validateTeamsCasebookOptions(options) {
   if (!options.casebook) throw new Error('--casebook is required.');
   if (!options.case) throw new Error('--case is required.');
+  const selectedCaseIds = String(options.case).split(',').map((item) => item.trim()).filter(Boolean);
+  const productionCoreBeta = /^(?:1|true|yes)$/i.test(String(options['production-gate'] || ''))
+    && selectedCaseIds.some((id) => /^BETA-/.test(id));
+  if (productionCoreBeta && !String(options['control-plane-url'] || '').trim()) {
+    throw new Error('Production Core Beta Teams runs require --control-plane-url from the matching READY/READY_SCOPED pretest.');
+  }
+  if (options['control-plane-url']) {
+    const controlPlane = new URL(String(options['control-plane-url']));
+    if (!['http:', 'https:'].includes(controlPlane.protocol)
+      || controlPlane.username || controlPlane.password) {
+      throw new Error('--control-plane-url must be a credential-free HTTP(S) URL.');
+    }
+    options['control-plane-url'] = controlPlane.origin;
+  }
   if (options['resume-from']) {
     if (!options['impact-case'] && !/^(?:1|true|yes)$/i.test(String(options['impact-all'] || ''))) {
       throw new Error('Cross-framework resume requires --impact-case or --impact-all true.');
@@ -165,6 +179,17 @@ export async function resolveTeamsCasebookConnection(options) {
       'The recorded 360Teams live session is stale. Quit any regular client, run launch:live, '
       + 'and confirm QWork is signed in before retrying.',
     );
+  }
+  const expectedControlPlane = String(options['control-plane-url'] || '').trim();
+  if (expectedControlPlane) {
+    const expectedOrigin = new URL(expectedControlPlane).origin;
+    const sessionOrigin = String(session.control_plane_origin || '').trim();
+    if (!sessionOrigin || new URL(sessionOrigin).origin !== expectedOrigin) {
+      throw new Error(
+        `Managed 360Teams session control plane drift: expected=${expectedOrigin} `
+        + `session=${sessionOrigin || 'missing'}`,
+      );
+    }
   }
   await waitForCdp({ cdpUrl: upstream, timeoutMs: Number(options['timeout-ms'] || 30_000) });
   const proxy = await startCdpWebviewProxy({ upstream });
@@ -917,7 +942,13 @@ export function pinManagedSessionControlPlane(sessionFile, controlPlane) {
     throw new Error('Cannot pin control plane without a managed live 360Teams session.');
   }
   const origin = new URL(String(controlPlane || '')).origin;
-  if (String(current.control_plane_origin || '') === origin) return { file, origin, changed: false };
+  const currentOrigin = String(current.control_plane_origin || '').trim();
+  if (currentOrigin === origin) return { file, origin, changed: false };
+  if (currentOrigin) {
+    throw new Error(
+      `Managed 360Teams session control plane drift: pinned=${currentOrigin} observed=${origin}`,
+    );
+  }
   const next = {
     ...current,
     control_plane_origin: origin,

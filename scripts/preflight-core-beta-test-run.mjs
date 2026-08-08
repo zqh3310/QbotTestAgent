@@ -492,6 +492,12 @@ async function main() {
             inspection.qbot_target
               ? `target=${inspection.qbot_target.url || inspection.qbot_target.title || 'identified'}`
               : inspection.host_precondition?.reason || 'No ready QWork/QBot target');
+          const actualQworkOrigin = normalizeOrigin(
+            inspection.qbot_target?.control_plane_origin || '',
+          );
+          addCheck('qwork_control_plane_identity',
+            Boolean(expectedOrigin) && actualQworkOrigin === expectedOrigin,
+            `renderer_actual=${actualQworkOrigin || '(missing)'}; expected=${expectedOrigin || '(missing --expected-control-plane-origin)'}`);
           const qworkUrl = String(inspection.qbot_target?.url || '');
           const versionMatch = qworkUrl.match(/\/ui\/([^/]+)\/index\.html/);
           const qworkVersion = versionMatch?.[1] || '';

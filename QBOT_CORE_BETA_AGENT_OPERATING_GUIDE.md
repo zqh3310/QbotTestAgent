@@ -13,17 +13,30 @@
 - 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.2.42(2119080753)`。
-- 当前 QWork 身份：UAT `0.0.30-rc.12`。
+- 当前正式宿主身份：360Teams `5.3.0(2119080783)`。
+- 当前 QWork 身份：UAT `0.0.30`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
-2026-08-07 当前 55 条串行批次已在 360Teams `5.2.42(2119080753)` / QWork
-`0.0.30-rc.12` 精确身份下永久冻结。上一轮跨发布 QA Skill 清理、新
+2026-08-08 当前 55 条串行批次已在 360Teams `5.3.0(2119080783)` / QWork
+`0.0.30` 精确身份声明下永久冻结。上一轮跨发布 QA Skill 清理、新
 `READY_SCOPED` 预检和从第 1 条完整重跑已经完成；不得回到旧清理批次，也不得
 复用本轮输出。修复、双框架检查、推送和新 `READY_SCOPED` 预检完成后，必须在
 当前发布身份的新不可变目录再次从第 1 条完整串行重跑 55 条。
+
+最新一次已冻结的 scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808124250_uat-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-85a41df
+```
+
+该批次在 `BETA-INIT-001` 后停止。pretest 只核对 session 中声明的 UAT，runner
+却从 QWork renderer 读到 PROD `https://qbot-api.360shuke.com`，随后还用该观察值
+覆盖了 session pin；`run-metadata.json` 已证明实际环境漂移。修复必须让 pretest
+直接核对 renderer control plane，正式 Core Beta runner 强制携带
+`--control-plane-url`，并禁止覆盖非空 session pin。修复推送后必须重新建立精确
+UAT 宿主、执行新 pretest，并从 `1/55` 在新目录完整串行重跑。
 
 最新一次已冻结的 scoped 批次：
 
@@ -341,7 +354,7 @@ npm --prefix teams360-automation run check
 最近基线通过情况：
 
 - 根框架：80/80。
-- Teams 适配层：89/89。
+- Teams 适配层：92/92。
 
 静态能力审计：
 
@@ -384,13 +397,13 @@ npm run core-beta:pretest -- \
   --expected-count 55 \
   --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
   --production-gate true \
-  --expected-teams-version 5.2.42 \
-  --expected-teams-build 2119080753 \
-  --expected-qwork-version 0.0.30-rc.12 \
+  --expected-teams-version 5.3.0 \
+  --expected-teams-build 2119080783 \
+  --expected-qwork-version 0.0.30 \
   --expected-control-plane-origin https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.12-sha256-55fb98587cfcaa66f674268701fc21229f331831210c46f5e954b49389202056 \
-  --feature-flags-hash 606f9bb535e902c6912121dcc96d32af322d40b5fb1fa7694f6aba8c12cadae9 \
+  --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
+  --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
   --case "$CASE_IDS" \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
@@ -411,7 +424,7 @@ npm run core-beta:pretest -- \
 只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-$(git rev-parse --short HEAD)"
+OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_uat-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-$(git rev-parse --short HEAD)"
 
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
@@ -423,10 +436,11 @@ npm --prefix teams360-automation run casebook -- \
   --timeout-ms 600000 \
   --single-host-pipeline 1 \
   --production-gate true \
+  --control-plane-url https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net \
   --backend-version uat-health-cd24c9d3b3cf5dca \
-  --prompt-policy-version qwork-runtime-0.0.30-rc.12-sha256-55fb98587cfcaa66f674268701fc21229f331831210c46f5e954b49389202056 \
-  --feature-flags-hash 606f9bb535e902c6912121dcc96d32af322d40b5fb1fa7694f6aba8c12cadae9 \
-  --qwork-build-id 0.0.30-rc.12 \
+  --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
+  --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
+  --qwork-build-id 0.0.30 \
   --scoped-execution true \
   --excluded-case "$EXCLUDED_CASE_IDS" \
   --scope-reason fixture_provider_unavailable

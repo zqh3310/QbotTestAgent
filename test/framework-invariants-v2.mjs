@@ -2492,6 +2492,16 @@ assert.match(
   /停止旧 runner[\s\S]*不是任务终态[\s\S]*提交推送[\s\S]*新 pretest[\s\S]*完整重跑[\s\S]*禁止以“批次已停止”或“后续 Case 未执行”作为最终交付/,
   '框架手册必须禁止修复流程停在中断状态而不启动新完整批次',
 );
+assert.match(
+  automationFramework,
+  /QWork renderer 实际读取[\s\S]*--control-plane-url[\s\S]*禁止[\s\S]*静默改写[\s\S]*受管 session/,
+  '正式 Teams Core Beta 必须交叉核对 renderer control plane 并禁止覆盖冻结 session',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /--control-plane-url https:\/\/deepbank-control-uat\.sandbox\.deepbank\.daikuan\.qihoo\.net/,
+  '当前 55 条操作指南必须把 pretest 的精确 control plane 传给正式 runner',
+);
 assert.equal(
   coreBetaV2NeedsRendererReconnect(new Error('page.reload: Target page, context or browser has been closed')),
   true,

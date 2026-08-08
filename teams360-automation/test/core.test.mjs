@@ -504,6 +504,22 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     ...options,
     'impact-case': 'SIT-HOME-001',
   }), /require --resume-from/);
+  const productionCoreBetaOptions = parseCasebookRunnerOptions([
+    '--casebook', 'PRD/cases.xlsx',
+    '--case', 'BETA-INIT-001',
+    '--out', 'teams360-automation/output/core-beta-production-run',
+    '--production-gate', 'true',
+  ]);
+  assert.throws(
+    () => validateTeamsCasebookOptions(productionCoreBetaOptions),
+    /require --control-plane-url/,
+  );
+  productionCoreBetaOptions['control-plane-url'] = 'https://deepbank-control-uat.example.test/path';
+  validateTeamsCasebookOptions(productionCoreBetaOptions);
+  assert.equal(
+    productionCoreBetaOptions['control-plane-url'],
+    'https://deepbank-control-uat.example.test',
+  );
   const cleanupOptions = parseCasebookRunnerOptions([
     '--casebook', 'PRD/cases.xlsx',
     '--case', 'BETA-SKILL-001',
@@ -666,6 +682,20 @@ test('Teams fixture runtime restores the packaged host and keeps the local-QBot 
   assert.match(options['qbot-stderr-log'], /teams360-automation\/state\/managed-360teams\.log$/);
 });
 
+test('Teams fixture runtime rejects renderer control-plane drift before Case execution', async () => {
+  const page = {
+    url: () => 'file:///Users/test/.deepbank/ui/0.0.30/index.html',
+    evaluate: async () => 'https://qbot-api.360shuke.com',
+  };
+  const browser = { contexts: () => [{ pages: () => [page] }] };
+  await assert.rejects(
+    configureTeamsFixtureRuntime({
+      'control-plane-url': 'https://deepbank-control-uat.example.test',
+    }, browser),
+    /Managed QWork control plane drift/,
+  );
+});
+
 test('managed session pins the observed external control plane for scoped host relaunch rollback', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-session-control-plane-'));
   const sessionFile = path.join(root, 'session.json');
@@ -692,6 +722,10 @@ test('managed session pins the observed external control plane for scoped host r
       'https://deepbank-control-dev.sandbox.deepbank.daikuan.qihoo.net',
     );
     assert.equal(second.changed, false);
+    assert.throws(
+      () => pinManagedSessionControlPlane(sessionFile, 'https://qbot-api.360shuke.com'),
+      /session control plane drift/,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
