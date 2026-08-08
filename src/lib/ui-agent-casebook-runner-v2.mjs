@@ -6006,21 +6006,44 @@ export function coreBetaRunOwnedSkillCleanupVerdict({
   const receiptIdentities = normalizedReceipts
     .map((item) => String(item?.qualified_identity || ''))
     .filter(Boolean);
+  const receiptRequestNames = normalizedReceipts
+    .map((item) => String(item?.request_name || '').trim())
+    .filter(Boolean);
+  const stableAbsenceValid = absenceReadback?.valid === true
+    && Number(absenceReadback?.stable_absent_observations || 0)
+      >= Number(absenceReadback?.stable_required || 2);
+  const remainingSet = new Set(remaining);
+  const receiptOutcomes = normalizedReceipts.map((item) => {
+    const identity = String(item?.qualified_identity || '');
+    const error = String(item?.result?.error || item?.result?.message || item?.result?.msg || '');
+    const apiOk = item?.result?.ok === true;
+    const ambiguousControlPlaneTimeout = item?.result?.ok === false
+      && /control-plane request timed out/i.test(error);
+    const terminalReconciled = !apiOk
+      && ambiguousControlPlaneTimeout
+      && stableAbsenceValid
+      && identity.length > 0
+      && !remainingSet.has(identity);
+    return {
+      qualified_identity: identity,
+      request_name: String(item?.request_name || ''),
+      api_ok: apiOk,
+      ambiguous_control_plane_timeout: ambiguousControlPlaneTimeout,
+      terminal_reconciled: terminalReconciled,
+      valid: apiOk || terminalReconciled,
+    };
+  });
   const receiptsValid = normalizedReceipts.length === attempted.length
     && new Set(attempted).size === attempted.length
     && new Set(receiptIdentities).size === receiptIdentities.length
+    && receiptRequestNames.length === normalizedReceipts.length
+    && new Set(receiptRequestNames).size === receiptRequestNames.length
     && attempted.every((identity) => receiptIdentities.includes(identity))
-    && normalizedReceipts.every((item) => (
-      typeof item?.request_name === 'string'
-      && item.request_name.trim().length > 0
-      && item?.result?.ok === true
-    ));
+    && receiptOutcomes.every((item) => item.request_name.trim().length > 0 && item.valid);
   return {
     valid: receiptsValid
       && remaining.length === 0
-      && absenceReadback?.valid === true
-      && Number(absenceReadback?.stable_absent_observations || 0)
-        >= Number(absenceReadback?.stable_required || 2)
+      && stableAbsenceValid
       && unrelatedPreserved,
     attempted_count: attempted.length,
     receipt_count: normalizedReceipts.length,
@@ -6028,6 +6051,8 @@ export function coreBetaRunOwnedSkillCleanupVerdict({
     remaining_identities: remaining,
     absence_readback_valid: absenceReadback?.valid === true,
     unrelated_preserved: unrelatedPreserved,
+    reconciled_timeout_count: receiptOutcomes.filter((item) => item.terminal_reconciled).length,
+    receipt_outcomes: receiptOutcomes,
   };
 }
 
@@ -6747,9 +6772,9 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         const installed = before.installed.find((item) => skillQualifiedIdentity(item) === skill.qualified_identity);
         if (!installed) continue;
         const requestName = coreBetaSkillUninstallRequestName(installed);
-        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName);
+        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName)
+          .catch((error) => ({ ok: false, error: String(error?.message || error) }));
         removed.push({ qualified_identity: skill.qualified_identity, request_name: requestName, result });
-        if (!result?.ok) throw new Error(`QA Skill 清理失败：${skill.qualified_identity} ${result?.msg || ''}`);
       }
       const absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(page, [...qaKeys]);
       const after = absenceReadback.catalog || { installed: [], market: [], history: [] };

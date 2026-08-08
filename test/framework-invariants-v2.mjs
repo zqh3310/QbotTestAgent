@@ -2203,6 +2203,72 @@ assert.equal(
   true,
   '只有目标稳定缺席、卸载收据成功且基线技能不变时清理才能通过',
 );
+const cleanupTimeoutReceipts = cleanupReceipts.map((item, index) => index === cleanupReceipts.length - 1
+  ? {
+      ...item,
+      result: {
+        ok: false,
+        error: "page.evaluate: Error invoking remote method 'lingxi-credential:control-plane-request': control-plane request timed out",
+      },
+    }
+  : item);
+const reconciledCleanupTimeout = coreBetaRunOwnedSkillCleanupVerdict({
+  attemptedIdentities: cleanupAttemptedIdentities,
+  receipts: cleanupTimeoutReceipts,
+  remainingIdentities: [],
+  untouchedBefore: ['global/user-owned/1.0.0'],
+  untouchedAfter: ['global/user-owned/1.0.0'],
+  absenceReadback: { valid: true, stable_required: 2, stable_absent_observations: 2 },
+});
+assert.equal(
+  reconciledCleanupTimeout.valid,
+  true,
+  '卸载请求 control-plane 超时但精确目标连续两次权威缺席时必须按终态对账成功',
+);
+assert.equal(reconciledCleanupTimeout.reconciled_timeout_count, 1);
+assert.equal(reconciledCleanupTimeout.receipt_outcomes.at(-1).terminal_reconciled, true);
+assert.equal(
+  coreBetaRunOwnedSkillCleanupVerdict({
+    attemptedIdentities: cleanupAttemptedIdentities,
+    receipts: cleanupTimeoutReceipts,
+    remainingIdentities: [cleanupAttemptedIdentities.at(-1)],
+    untouchedBefore: ['global/user-owned/1.0.0'],
+    untouchedAfter: ['global/user-owned/1.0.0'],
+    absenceReadback: { valid: false, stable_required: 2, stable_absent_observations: 0 },
+  }).valid,
+  false,
+  '卸载请求超时且目标仍在或缺少稳定终态时必须继续 fail-closed',
+);
+const cleanupPermissionErrorReceipts = cleanupReceipts.map((item, index) => index === cleanupReceipts.length - 1
+  ? { ...item, result: { ok: false, error: 'permission denied' } }
+  : item);
+assert.equal(
+  coreBetaRunOwnedSkillCleanupVerdict({
+    attemptedIdentities: cleanupAttemptedIdentities,
+    receipts: cleanupPermissionErrorReceipts,
+    remainingIdentities: [],
+    untouchedBefore: ['global/user-owned/1.0.0'],
+    untouchedAfter: ['global/user-owned/1.0.0'],
+    absenceReadback: { valid: true, stable_required: 2, stable_absent_observations: 2 },
+  }).valid,
+  false,
+  '非超时卸载错误不得仅凭目标缺席被对账成成功',
+);
+const duplicateCleanupRequestReceipts = cleanupTimeoutReceipts.map((item, index) => index === 0
+  ? { ...item, request_name: cleanupTimeoutReceipts[1].request_name }
+  : item);
+assert.equal(
+  coreBetaRunOwnedSkillCleanupVerdict({
+    attemptedIdentities: cleanupAttemptedIdentities,
+    receipts: duplicateCleanupRequestReceipts,
+    remainingIdentities: [],
+    untouchedBefore: ['global/user-owned/1.0.0'],
+    untouchedAfter: ['global/user-owned/1.0.0'],
+    absenceReadback: { valid: true, stable_required: 2, stable_absent_observations: 2 },
+  }).valid,
+  false,
+  '重复卸载 request name 破坏一一对应账本时不得对账放行',
+);
 assert.match(
   runner,
   /waitForCoreBetaSkillIdentitiesAbsent[\s\S]*stableAbsentObservations >= stableRequired/,
@@ -2212,6 +2278,11 @@ assert.match(
   runner,
   /testCase\.id === 'BETA-SKILL-001'[\s\S]*waitForCoreBetaSkillIdentitiesAbsent[\s\S]*remaining[\s\S]*coreBetaRunOwnedSkillCleanupVerdict/,
   'BETA-SKILL-001 必须把 remaining=0 稳定读回纳入 pass 条件',
+);
+assert.match(
+  runner,
+  /testCase\.id === 'BETA-SKILL-001'[\s\S]*uninstallSkill\(name\)[\s\S]*\.catch\([\s\S]*waitForCoreBetaSkillIdentitiesAbsent/,
+  'BETA-SKILL-001 遇到卸载传输超时时必须先完成权威终态读回，不能在回执处提前抛错',
 );
 assert.doesNotMatch(
   runner,

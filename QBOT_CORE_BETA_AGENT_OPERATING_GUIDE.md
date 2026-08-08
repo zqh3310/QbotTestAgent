@@ -28,6 +28,23 @@
 最新一次已冻结的 PROD scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130950_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-42a832b
+```
+
+该批次完成 `35/55` 后在 `BETA-SKILL-012` 停止。10 个本轮 QA Skill 均已收到
+精确卸载请求并最终从 `catalog.installed` 连续两次缺席，`remaining=0`，44 个
+非 QA 基线 Skill 完全未变；但最后一个 `lingxi-get-request-detail` 卸载调用返回
+`control-plane request timed out`。框架只接受即时 `result.ok=true`，没有用同一
+identity 的权威稳定缺席终态对歧义超时进行对账，因此把实际成功清理误记为
+`automation_error` 并漏执行后续 20 条。修复必须只对已知 control-plane 超时、
+精确 identity/name 绑定、连续两次权威缺席且基线未变的组合允许
+`terminal_reconciled=true`；目标仍在、读回不足、权限/业务错误和其他错误必须
+继续 fail-closed。修复、正反 invariant、合同更新、双框架检查和推送完成后，
+执行新 `READY_SCOPED` pretest，并在新目录从 `1/55` 完整串行重跑。
+
+上一份已冻结的 PROD scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130359_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-8a877eb
 ```
 
