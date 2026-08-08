@@ -1207,17 +1207,30 @@ export function coreBetaInitializationContinuation({
   testCase,
   terminalReadback = {},
   afterReadback = {},
+  continuationSurface = {},
 } = {}) {
   const id = String(testCase?.id || '');
   const eligible = ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004'].includes(id);
+  const recoveredSurfaceValid = continuationSurface?.valid === true;
+  const terminalComposerReady = terminalReadback?.composer_ready === true;
+  const recoveredComposerReady = recoveredSurfaceValid && continuationSurface?.composer_ready === true;
+  const terminalWorkbenchReady = terminalReadback?.workbench_ready === true;
+  const recoveredWorkbenchReady = recoveredSurfaceValid && continuationSurface?.workbench_ready === true;
   const signals = {
     terminal_pending: terminalReadback?.pending === true,
     terminal_failed: terminalReadback?.failed === true,
     runtime_loaded: terminalReadback?.loaded === true,
     sdk_ready: terminalReadback?.sdk_ready === true,
     button_enabled: terminalReadback?.button_enabled === true,
-    composer_ready: terminalReadback?.composer_ready === true,
-    workbench_ready: terminalReadback?.workbench_ready === true,
+    composer_ready: terminalComposerReady || recoveredComposerReady,
+    composer_ready_source: terminalComposerReady
+      ? 'maintenance_terminal'
+      : recoveredComposerReady ? 'recovered_workbench_surface' : 'unavailable',
+    workbench_ready: terminalWorkbenchReady || recoveredWorkbenchReady,
+    workbench_ready_source: terminalWorkbenchReady
+      ? 'maintenance_terminal'
+      : recoveredWorkbenchReady ? 'recovered_workbench_surface' : 'unavailable',
+    continuation_surface_valid: recoveredSurfaceValid,
     capabilities_readable: terminalReadback?.capabilities_readable === true,
     after_page_readable: Number(
       afterReadback?.page?.body_text_length
@@ -5380,6 +5393,64 @@ async function waitForCoreBetaV2MaintenanceTerminal({
   };
 }
 
+async function verifyCoreBetaInitializationContinuationSurface({ page, state, caseDir, testCase }) {
+  const beforeScreenshot = await shot(page, caseDir, 'initialization-continuation-surface-before').catch(() => '');
+  let error = '';
+  try {
+    await openNewTask(page, state);
+  } catch (caught) {
+    error = String(caught?.message || caught);
+  }
+  const composerReady = !error && await visible(
+    page.locator('[data-testid="composer-input"], .aui-composer-input').first(),
+    5000,
+  );
+  const body = await bodyText(page).catch(() => '');
+  const workbenchReady = /新建任务/.test(body) && /专家|连接器|知识/.test(body);
+  const cleanDraftState = !error
+    ? await qbotE2EState(page)
+    : { available: false, reason: 'open_new_task_failed' };
+  const cleanDraftSurface = !error
+    ? await draftSurfaceState(page)
+    : { ok: false, reason: 'open_new_task_failed' };
+  const cleanDraftIsolated = cleanDraftSurface.ok === true
+    && (
+      cleanDraftState.available !== true
+      || (!cleanDraftState.activeId && Number(cleanDraftState.messageCount || 0) === 0)
+    );
+  const publicState = await captureCoreBetaPublicState(page, testCase).catch((caught) => {
+    error ||= String(caught?.message || caught);
+    return null;
+  });
+  const afterScreenshot = await shot(page, caseDir, 'initialization-continuation-surface-after').catch(() => '');
+  const valid = !error
+    && composerReady
+    && workbenchReady
+    && cleanDraftIsolated
+    && Number(publicState?.page?.body_text_length || 0) > 0
+    && Boolean(beforeScreenshot)
+    && Boolean(afterScreenshot);
+  const readback = {
+    schema_version: 'qbot-core-beta-initialization-continuation-surface/v1',
+    case_id: testCase.id,
+    valid,
+    composer_ready: Boolean(composerReady),
+    workbench_ready: workbenchReady,
+    clean_draft_isolated: cleanDraftIsolated,
+    clean_draft_state: cleanDraftState,
+    clean_draft_surface: cleanDraftSurface,
+    public_state_readable: Number(publicState?.page?.body_text_length || 0) > 0,
+    before_screenshot: beforeScreenshot,
+    after_screenshot: afterScreenshot,
+    error,
+    public_state: publicState,
+  };
+  const file = path.join(caseDir, 'initialization-continuation-surface.json');
+  writeJsonFile(file, readback);
+  state.artifacts.initialization_continuation_surface = file;
+  return { ...readback, file };
+}
+
 async function executeCoreBetaInitializationCase(context) {
   let {
     page,
@@ -5446,7 +5517,11 @@ async function executeCoreBetaInitializationCase(context) {
     page = terminal.page || runtime?.page || page;
     context.page = page;
     if (runtime) runtime.page = page;
-    const after = await captureCoreBetaPublicState(page, testCase);
+    const continuationSurface = !terminal.ok && terminal.readback?.failed === true
+      ? await verifyCoreBetaInitializationContinuationSurface({ page, state, caseDir, testCase })
+      : null;
+    const after = continuationSurface?.public_state
+      || await captureCoreBetaPublicState(page, testCase);
     const file = path.join(caseDir, `${slugify(maintenance.method)}-readback.json`);
     const readback = {
       valid: terminal.ok,
@@ -5463,7 +5538,9 @@ async function executeCoreBetaInitializationCase(context) {
         testCase,
         terminalReadback: terminal.readback,
         afterReadback: after,
+        continuationSurface,
       });
+      readback.continuation_surface = continuationSurface;
       readback.initialization_continuation = state.initialization_continuation;
     }
     writeJsonFile(file, readback);

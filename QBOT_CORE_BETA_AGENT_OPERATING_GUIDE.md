@@ -28,6 +28,20 @@
 最新一次已冻结的 PROD scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808164730_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-831527b
+```
+
+该批次在 `BETA-INIT-001` 后停止。产品运行时检查为 Python 26 个就绪、1 个失败，
+但 runtime loaded、Claude/Codex SDK、维护按钮、capabilities 与工作台均可用；
+框架在仍打开的系统设置页中直接查询 composer 可见性，任务较多时设置页完整遮住
+输入区，因而写入 `composer_ready=false` 并拒绝安全继续。修复必须仅在明确产品失败
+后使用框架真实【新建任务】路径返回干净草稿，保存前后截图、空任务隔离和公开状态，
+再以可见 composer 判定是否可继续；恢复失败时仍须停止。修复推送后必须执行新的
+能力审计和 `READY_SCOPED` pretest，并在新不可变目录从 `1/55` 完整串行重跑。
+
+上一份已冻结的 PROD scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130950_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-42a832b
 ```
 

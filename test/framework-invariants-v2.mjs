@@ -2868,6 +2868,57 @@ const unsafeRuntimeCheckContinuation = coreBetaInitializationContinuation({
   afterReadback: { page: { body_text_length: 100 } },
 });
 assert.equal(unsafeRuntimeCheckContinuation.safe, false);
+const recoveredRuntimeCheckContinuation = coreBetaInitializationContinuation({
+  testCase: { id: 'BETA-INIT-001' },
+  terminalReadback: {
+    pending: false,
+    failed: true,
+    loaded: true,
+    sdk_ready: true,
+    button_enabled: true,
+    composer_ready: false,
+    workbench_ready: true,
+    capabilities_readable: true,
+  },
+  continuationSurface: {
+    valid: true,
+    composer_ready: true,
+    workbench_ready: true,
+  },
+  afterReadback: { page: { body_text_length: 100 } },
+});
+assert.equal(
+  recoveredRuntimeCheckContinuation.safe,
+  true,
+  '设置页遮住 composer 时必须返回干净工作台并以可见输入区独立证明可继续',
+);
+assert.equal(
+  recoveredRuntimeCheckContinuation.signals.composer_ready_source,
+  'recovered_workbench_surface',
+);
+assert.equal(
+  coreBetaInitializationContinuation({
+    testCase: { id: 'BETA-INIT-001' },
+    terminalReadback: {
+      pending: false,
+      failed: true,
+      loaded: true,
+      sdk_ready: true,
+      button_enabled: true,
+      composer_ready: false,
+      workbench_ready: true,
+      capabilities_readable: true,
+    },
+    continuationSurface: {
+      valid: false,
+      composer_ready: true,
+      workbench_ready: true,
+    },
+    afterReadback: { page: { body_text_length: 100 } },
+  }).safe,
+  false,
+  '恢复工作台证据无效时不得用可见性布尔值绕过初始化停止门禁',
+);
 assert.match(
   coreBetaBatchStopReason(
     { id: 'BETA-INIT-001', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
@@ -2879,6 +2930,16 @@ assert.match(
   ),
   /未证明产品失败后的公开工作台可安全继续/,
   'BETA-INIT-001 缺少任一公开可用性信号时仍必须停止',
+);
+assert.match(
+  runner,
+  /async function verifyCoreBetaInitializationContinuationSurface[\s\S]*openNewTask\(page, state\)[\s\S]*qbotE2EState\(page\)[\s\S]*draftSurfaceState\(page\)[\s\S]*clean_draft_isolated[\s\S]*initialization-continuation-surface\.json/,
+  '初始化恢复 helper 必须通过框架新建任务路径返回干净工作台并固化专项证据',
+);
+assert.match(
+  runner,
+  /terminal\.readback\?\.failed === true[\s\S]*verifyCoreBetaInitializationContinuationSurface[\s\S]*continuationSurface/,
+  '初始化产品失败后必须通过框架新建任务路径回到干净工作台，再判定 composer 是否可继续',
 );
 const genuineProvisioning = coreBetaV2RuntimeMaintenanceState({
   text: '本进程正在准备中 42%',
