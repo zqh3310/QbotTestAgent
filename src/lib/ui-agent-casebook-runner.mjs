@@ -25548,7 +25548,10 @@ function scenarioConversationTurns(testCase, attachments) {
 
 function pdfPageOneCoverage(replyText) {
   const reply = String(replyText || '');
-  const explicitReferences = (reply.match(/第\s*1\s*页/g) || []).length;
+  const explicitReferences = Math.max(
+    (reply.match(/第\s*1\s*页/g) || []).length,
+    structuredPdfPageOneReferenceCount(reply),
+  );
   const conclusionGroup = '(?:以下\\s*)?(?:三|3)\\s*(?:条|点|项)(?:\\s*关键)?\\s*(?:结论|信息|内容)?';
   const pageOne = '第\\s*1\\s*页';
   const collectivePatterns = [
@@ -25568,6 +25571,27 @@ function pdfPageOneCoverage(replyText) {
     collectiveReference,
     ok: !negatedCollectiveReference && (explicitReferences >= 3 || collectiveReference),
   };
+}
+
+function structuredPdfPageOneReferenceCount(replyText) {
+  const lines = String(replyText || '').split(/\r?\n/);
+  let maximum = 0;
+  for (let headerIndex = 0; headerIndex < lines.length; headerIndex += 1) {
+    const header = splitStructuredTableRow(lines[headerIndex]);
+    if (!header.delimiter || header.cells.length < 2) continue;
+    const pageIndex = header.cells.findIndex((cell) => /^(?:页码|页数|page)$/i.test(cell));
+    if (pageIndex < 0) continue;
+    let count = 0;
+    const scanEnd = Math.min(lines.length, headerIndex + 12);
+    for (let rowIndex = headerIndex + 1; rowIndex < scanEnd; rowIndex += 1) {
+      const row = splitStructuredTableRow(lines[rowIndex]);
+      if (row.delimiter !== header.delimiter || row.cells.length <= pageIndex) continue;
+      if (row.cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+      if (/^(?:P(?:age)?\s*1|第\s*1\s*页)$/i.test(row.cells[pageIndex])) count += 1;
+    }
+    maximum = Math.max(maximum, count);
+  }
+  return maximum;
 }
 
 const TABLE_FILE_ROW_IDENTITY_PATTERN = /qbot-table\.csv|qbot-data-table-diff\.xlsx|\bCSV\b|\bXLSX\b|\bExcel\b/i;
@@ -28027,7 +28051,7 @@ export function attachmentReplyMissingEvidence(text, attachments = []) {
   const patterns = [
     /没有.{0,12}(看到|接收|收到).{0,12}(附件|上传|文件|图片|文档)/,
     /(当前对话|本次对话).{0,20}(没有|未).{0,12}(附件|上传|文件|图片|文档)/,
-    /(没有|未).{0,12}(附件|文件|文档|图片).{0,12}(内容|引用|传达)/,
+    /(?:没有|未)(?:能|能够|成功)?(?:读取|获取|解析|识别|访问|看到|接收|收到).{0,8}(?:附件|文件|文档|图片)(?:内容|引用|数据)?/,
     /附件.{0,12}(可能)?上传失败/,
     /(?:未收到|没有收到|没收到|无法看到|无法访问|上传失败).{0,24}(?:请)?.{0,12}(重新上传|再次上传|拖拽|提供材料)/,
     /告诉我.{0,12}(附件|文件).{0,12}(路径|绝对路径)/,

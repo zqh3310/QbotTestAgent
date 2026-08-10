@@ -1632,11 +1632,23 @@ if (attachmentReplyMissingEvidence(
 )) {
   throw new Error('已明确读取成功的附件回复不应因条件式“请重新上传其它文件”误判失败');
 }
+if (attachmentReplyMissingEvidence(
+  'PDF 直接读取未成功，我改用附件识别工具来解析。附件引用未能通过视觉工具识别，我改用系统工具直接解析该 PDF 内容。已解析完成，以下是关键结论。',
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('附件适配器中途失败但随后成功解析真实内容时不得误判为附件未收到');
+}
 if (!attachmentReplyMissingEvidence(
   '我没有收到附件，请重新上传该 PDF。',
   ['/tmp/qbot-pdf-summary.pdf'],
 )) {
   throw new Error('真正未收到附件且要求重传时必须判失败');
+}
+if (!attachmentReplyMissingEvidence(
+  '未成功读取附件内容，请重新上传该 PDF。',
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('明确未成功读取附件内容时必须判失败');
 }
 
 const attachment066 = {

@@ -4841,6 +4841,29 @@ assert.equal(
   true,
   'PDF 三条结论的无歧义统一页码标注不得被误判',
 );
+const observedStructuredPageColumnPdfReply = [
+  'PDF 直接读取未成功，我改用附件识别工具来解析。',
+  '附件引用未能通过视觉工具识别，我改用系统工具直接解析该 PDF 内容。',
+  '已解析完成。以下是提炼出的关键结论，均位于 第 1 页：',
+  '#\t关键结论\t页码',
+  '1\t文档主题：QBot PDF Summary，用于验证 QBot/Agent PDF 读取能力。\tP1',
+  '2\t核心目标：验证 Agent 能够读取 PDF 测试文件并形成摘要。\tP1',
+  '3\t验收标准：识别风险并保持产品友好措辞 product-friendly。\tP1',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, observedStructuredPageColumnPdfReply).ok,
+  true,
+  'PDF 页码表格中的三行 P1 必须作为三条独立第 1 页引用',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    corePdfCase,
+    { prompt: corePdfPrompt },
+    observedStructuredPageColumnPdfReply.replace('3\t验收标准：识别风险并保持产品友好措辞 product-friendly。\tP1', '3\t验收标准：识别风险并保持产品友好措辞 product-friendly。\tP2'),
+  ).ok,
+  false,
+  'PDF 页码表格只有两行 P1 时不得满足三条第 1 页引用合同',
+);
 const observedStandalonePageHeadingPdfReply = [
   '已读取该 PDF（共 1 页）。文件内容为一行式测试文本，三条关键结论如下：',
   '',
@@ -5106,11 +5129,23 @@ if (attachmentReplyMissingEvidence(
 )) {
   throw new Error('已明确读取成功的附件回复不应因条件式“请重新上传其它文件”误判失败');
 }
+if (attachmentReplyMissingEvidence(
+  observedStructuredPageColumnPdfReply,
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('附件适配器中途失败但随后成功解析真实内容时不得误判为附件未收到');
+}
 if (!attachmentReplyMissingEvidence(
   '我没有收到附件，请重新上传该 PDF。',
   ['/tmp/qbot-pdf-summary.pdf'],
 )) {
   throw new Error('真正未收到附件且要求重传时必须判失败');
+}
+if (!attachmentReplyMissingEvidence(
+  '未成功读取附件内容，请重新上传该 PDF。',
+  ['/tmp/qbot-pdf-summary.pdf'],
+)) {
+  throw new Error('明确未成功读取附件内容时必须判失败');
 }
 
 const attachment066 = {
