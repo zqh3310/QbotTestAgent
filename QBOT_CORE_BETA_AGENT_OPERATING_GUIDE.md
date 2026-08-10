@@ -14,15 +14,18 @@
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
 - 当前正式宿主身份：360Teams `5.3.0(2119080776)`。
-- 当前 QWork 身份：UAT `0.0.30`。
+- 当前 QWork 身份：UAT `0.1.1-rc.2`。
 - 当前 control plane：
   `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
-2026-08-10 当前 55 条串行 UAT 批次已在 360Teams `5.3.0(2119080776)` / QWork
-`0.0.30` 精确身份声明下永久冻结。修复、双框架检查、推送和新
-`READY_SCOPED` 预检完成后，必须在同一发布身份的新不可变目录从第 1 条完整串行
-重跑 55 条。
+2026-08-10 上一轮 55 条串行 UAT 批次已在 360Teams `5.3.0(2119080776)` /
+QWork `0.0.30` 精确身份声明下永久冻结；随后 QWork 已更新并由 Teams doctor
+确认当前 renderer 为
+`file:///Users/qifu/.deepbank-uat/ui/0.1.1-rc.2/index.html`。旧轮次只能保留历史
+证据，不能继承到新发布。修复、双框架检查、推送、旧 QA 资源精确清理和新
+`READY_SCOPED` 预检完成后，必须以 QWork `0.1.1-rc.2` 的新不可变目录从第 1 条
+完整串行重跑 55 条。
 
 最新一次已冻结的 UAT scoped 批次：
 
@@ -40,6 +43,17 @@ connector 的手动模式点击已派发但产品仍读回 auto，均已正确�
 不一致时保持 `evidence_valid=true/oracle_valid=false` 并继续全部 5 个样本；任一
 阶段读回本身缺失时仍须 fail-closed。该目录已冻结，不得续写；修复、全检、推送、
 新能力审计和 `READY_SCOPED` pretest 后，必须在新目录从 `1/55` 完整串行重跑。
+
+同一冻结批次还确认 `BETA-SKILL-014` 的产品 home 解析 framework issue。QWork
+实际 UI 为 `file:///Users/qifu/.deepbank-uat/ui/0.0.30/index.html`，并已在
+`/Users/qifu/.deepbank-uat/.claude/skills/qa-meeting-minutes-6852fff34b25` 与
+`/Users/qifu/.deepbank-uat/.agents/skills/qa-meeting-minutes-6852fff34b25` 创建双投影；
+runner 却优先采用 Teams 注入的
+`teams360-automation/state/control-plane-home`，误报投影缺失并在错误目录生成
+`already_absent` 清理回执。修复必须让 versioned QWork file URL 的 release home
+优先于 fixture `--qbot-home`，并在新批次用正确 home 完成基线、产物读回和精确
+清理。旧 slug 属于该冻结 Case 的唯一 QA 资源，重跑前只能通过框架精确清理，
+禁止用临时 CDP、Computer Use 或不受约束的手工删除。
 
 最新一次已冻结的 UAT scoped 批次：
 

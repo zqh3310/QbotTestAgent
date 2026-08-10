@@ -6593,6 +6593,11 @@ export function coreBetaQbotHomeFromUiUrl(uiUrl = '') {
   return '';
 }
 
+export function coreBetaProductHomeForUi({ uiUrl = '', options = {} } = {}) {
+  return coreBetaQbotHomeFromUiUrl(uiUrl)
+    || inferQbotHomeForElectronRestart(options);
+}
+
 export function coreBetaSkillCreatorFixtureSlug(caseDir = '', attempt = 0) {
   const seed = `${path.resolve(String(caseDir || '.'))}\n${Math.max(0, Number(attempt || 0))}`;
   const digest = createHash('sha256').update(seed).digest('hex').slice(0, 12);
@@ -6663,11 +6668,62 @@ function readCoreBetaSkillCreatorProjection(item, slug) {
   }
 }
 
+function coreBetaSkillCreatorMemoryReadback(qbotHome, slug) {
+  const home = path.resolve(qbotHome);
+  const projectsRoot = path.join(home, 'runtime-homes', 'claude', 'projects');
+  if (!fs.existsSync(projectsRoot)) return { observed: true, files: [] };
+  try {
+    const rootStat = fs.lstatSync(projectsRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      return { observed: false, files: [], error: 'projects_root_not_real_directory' };
+    }
+    const files = [];
+    for (const entry of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const projectDir = path.join(projectsRoot, entry.name);
+      const memoryDir = path.join(projectDir, 'memory');
+      if (!fs.existsSync(memoryDir)) continue;
+      const projectStat = fs.lstatSync(projectDir);
+      const memoryStat = fs.lstatSync(memoryDir);
+      if (
+        !projectStat.isDirectory()
+        || projectStat.isSymbolicLink()
+        || !memoryStat.isDirectory()
+        || memoryStat.isSymbolicLink()
+      ) {
+        return { observed: false, files, error: 'memory_path_not_real_directory' };
+      }
+      const file = path.join(memoryDir, `${slug}.md`);
+      if (!fs.existsSync(file)) continue;
+      const fileStat = fs.lstatSync(file);
+      const content = fileStat.isFile() && !fileStat.isSymbolicLink()
+        ? fs.readFileSync(file, 'utf8')
+        : '';
+      files.push({
+        path: file,
+        observed: true,
+        exists: true,
+        regular_file: fileStat.isFile(),
+        symlink_free: !fileStat.isSymbolicLink(),
+        bytes: fileStat.size,
+        sha256: fileStat.isFile() && !fileStat.isSymbolicLink()
+          ? createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+          : '',
+        slug_present: content.includes(slug),
+      });
+    }
+    return { observed: true, files };
+  } catch (error) {
+    return { observed: false, files: [], error: String(error?.message || error) };
+  }
+}
+
 export function coreBetaSkillCreatorProjectionReadback({ qbotHome, slug, baseline = null } = {}) {
   if (!path.isAbsolute(String(qbotHome || ''))) throw new Error('Skill Creator 投影读回缺少绝对 QWork home');
   const home = path.resolve(String(qbotHome || '.'));
   const projectionPaths = coreBetaSkillCreatorProjectionPaths(home, slug);
   const projections = projectionPaths.map((item) => readCoreBetaSkillCreatorProjection(item, slug));
+  const memoryReadback = coreBetaSkillCreatorMemoryReadback(home, slug);
   const baselineByRuntime = new Map(
     (Array.isArray(baseline?.projections) ? baseline.projections : [])
       .map((item) => [item.runtime, item]),
@@ -6677,7 +6733,9 @@ export function coreBetaSkillCreatorProjectionReadback({ qbotHome, slug, baselin
     item.exists === true && baselineByRuntime.get(item.runtime)?.exists !== true
   ));
   const evidenceValid = projections.every((item) => item.observed === true)
-    && projectionPaths.every((item) => coreBetaPathInside(home, item.file));
+    && projectionPaths.every((item) => coreBetaPathInside(home, item.file))
+    && memoryReadback.observed === true
+    && memoryReadback.files.every((item) => coreBetaPathInside(home, item.path));
   const hashes = projections.filter((item) => item.exists).map((item) => item.sha256);
   const projectionOracleValid = projections.length === 2
     && projections.every((item) => (
@@ -6702,6 +6760,7 @@ export function coreBetaSkillCreatorProjectionReadback({ qbotHome, slug, baselin
     projection_sha256_equal: hashes.length === 2 && new Set(hashes).size === 1,
     created_runtimes: created.map((item) => item.runtime),
     projections,
+    memory_readback: memoryReadback,
   };
 }
 
@@ -6710,7 +6769,10 @@ export function coreBetaSkillCreatorFixture({ qbotHome, caseDir } = {}) {
     const slug = coreBetaSkillCreatorFixtureSlug(caseDir, attempt);
     const baseline = coreBetaSkillCreatorProjectionReadback({ qbotHome, slug });
     if (!baseline.evidence_valid) throw new Error(`Skill Creator fixture 基线不可读：${slug}`);
-    if (baseline.projections.every((item) => item.exists !== true)) {
+    if (
+      baseline.projections.every((item) => item.exists !== true)
+      && baseline.memory_readback.files.every((item) => item.exists !== true)
+    ) {
       return { qbot_home: baseline.qbot_home, slug, attempt, baseline };
     }
   }
@@ -6793,6 +6855,11 @@ export function coreBetaSkillCreatorCleanup(plan = {}) {
     (Array.isArray(baseline?.projections) ? baseline.projections : [])
       .map((item) => [item.runtime, item]),
   );
+  const baselineMemoryFiles = new Set(
+    (Array.isArray(baseline?.memory_readback?.files) ? baseline.memory_readback.files : [])
+      .filter((item) => item?.exists === true)
+      .map((item) => path.resolve(String(item.path || ''))),
+  );
   const actions = [];
   for (const item of expected) {
     const baselineItem = baselineByRuntime.get(item.runtime);
@@ -6826,8 +6893,44 @@ export function coreBetaSkillCreatorCleanup(plan = {}) {
       });
     }
   }
-  const remaining = expected.filter((item) => fs.existsSync(item.directory)).map((item) => item.directory);
-  const valid = actions.length === 2 && actions.every((item) => item.safe) && remaining.length === 0;
+  const memoryReadback = coreBetaSkillCreatorMemoryReadback(qbotHome, slug);
+  if (!memoryReadback.observed) {
+    actions.push({ runtime: 'claude-memory', removed: false, safe: false, reason: memoryReadback.error || 'memory_readback_failed' });
+  } else {
+    for (const item of memoryReadback.files) {
+      const target = path.resolve(item.path);
+      const safe = coreBetaPathInside(qbotHome, target)
+        && path.basename(target) === `${slug}.md`
+        && !baselineMemoryFiles.has(target)
+        && item.regular_file === true
+        && item.symlink_free === true
+        && item.slug_present === true;
+      if (!safe) {
+        actions.push({ runtime: 'claude-memory', file: target, removed: false, safe: false, reason: 'unsafe_or_preexisting_memory' });
+        continue;
+      }
+      try {
+        fs.unlinkSync(target);
+        actions.push({ runtime: 'claude-memory', file: target, removed: true, safe: true, reason: 'removed_run_owned_fixture_memory' });
+      } catch (error) {
+        actions.push({
+          runtime: 'claude-memory',
+          file: target,
+          removed: false,
+          safe: false,
+          reason: 'cleanup_io_error',
+          error: String(error?.message || error),
+        });
+      }
+    }
+  }
+  const remaining = [
+    ...expected.filter((item) => fs.existsSync(item.directory)).map((item) => item.directory),
+    ...coreBetaSkillCreatorMemoryReadback(qbotHome, slug).files
+      .filter((item) => fs.existsSync(item.path))
+      .map((item) => item.path),
+  ];
+  const valid = actions.length >= 2 && actions.every((item) => item.safe) && remaining.length === 0;
   return {
     schema_version: 'qbot-core-beta-skill-creator-cleanup/v1',
     valid,
@@ -7371,8 +7474,10 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       if (!await visible(create, 2_000)) throw new Error('创建技能入口不可见');
       await create.click({ force: true });
       await expectVisibleCoreLocator(page, '[data-testid="composer-input"]', 'Skill Creator任务输入区');
-      const qbotHome = inferQbotHomeForElectronRestart(options)
-        || coreBetaQbotHomeFromUiUrl(page.url());
+      const qbotHome = coreBetaProductHomeForUi({
+        uiUrl: page.url(),
+        options,
+      });
       if (!qbotHome) throw new Error(`无法从 QWork UI URL 推断 Skill Creator home：${page.url()}`);
       const fixture = coreBetaSkillCreatorFixture({ qbotHome, caseDir });
       state.artifacts.core_beta_skill_creator_cleanup_plan = {

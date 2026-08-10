@@ -58,6 +58,7 @@ import {
   coreBetaRuntimeExecutorBinding,
   coreBetaRuntimeFamilyPrerequisiteBlocker,
   coreBetaQbotHomeFromUiUrl,
+  coreBetaProductHomeForUi,
   coreBetaSkillInstallBatchAssessment,
   coreBetaSkillInstallPrerequisiteBlocker,
   coreBetaSkillPromptSource,
@@ -426,6 +427,22 @@ assert.equal(
     '/Users/qa/.deepbank-uat',
     'Teams file UI URL 必须精确推断 QWork home，不能退回用户全局 HOME',
   );
+  assert.equal(
+    coreBetaProductHomeForUi({
+      uiUrl: 'file:///Users/qa/.deepbank-uat/ui/0.0.30/index.html',
+      options: { 'qbot-home': '/tmp/teams-control-plane-home' },
+    }),
+    '/Users/qa/.deepbank-uat',
+    'Skill Creator 产品产物必须优先绑定当前 versioned QWork release home，不能误用 Teams 控制面 home',
+  );
+  assert.equal(
+    coreBetaProductHomeForUi({
+      uiUrl: 'https://example.test/qwork',
+      options: { 'qbot-home': '/tmp/local-qbot-home' },
+    }),
+    '/tmp/local-qbot-home',
+    '非 file UI 无法推导 release home 时才允许回退到显式本地 qbot-home',
+  );
   const caseDir = path.join(root, 'out-a', 'cases', '036-BETA-SKILL-014');
   const fixture = coreBetaSkillCreatorFixture({ qbotHome: root, caseDir });
   assert.match(fixture.slug, /^qa-meeting-minutes-[a-f0-9]{12}$/);
@@ -439,6 +456,22 @@ assert.equal(
     coreBetaSkillCreatorFixtureSlug(path.join(root, 'out-b', 'cases', '036-BETA-SKILL-014')),
     '不同不可变批次必须使用不同 Skill 名称，禁止撞上前序残留',
   );
+  const memoryCollisionCaseDir = path.join(root, 'out-memory-collision', 'cases', '036-BETA-SKILL-014');
+  const memoryCollisionSlug = coreBetaSkillCreatorFixtureSlug(memoryCollisionCaseDir);
+  const preexistingMemory = path.join(
+    root,
+    'runtime-homes',
+    'claude',
+    'projects',
+    'existing-project',
+    'memory',
+    `${memoryCollisionSlug}.md`,
+  );
+  fs.mkdirSync(path.dirname(preexistingMemory), { recursive: true });
+  fs.writeFileSync(preexistingMemory, `Preexisting memory for ${memoryCollisionSlug}\n`);
+  const collisionSafeFixture = coreBetaSkillCreatorFixture({ qbotHome: root, caseDir: memoryCollisionCaseDir });
+  assert.equal(collisionSafeFixture.attempt, 1, '候选 slug 已有同名 memory 时必须换用下一唯一 slug');
+  assert.notEqual(collisionSafeFixture.slug, memoryCollisionSlug);
   const isolatedCase = coreBetaSkillCreatorConversationCase({
     id: 'BETA-SKILL-014',
     conversation_turns: [{ prompt: '创建会议纪要 Skill' }, { prompt: '给出示例并完成创建' }],
@@ -481,6 +514,9 @@ assert.equal(
     fs.mkdirSync(projection.directory, { recursive: true });
     fs.writeFileSync(projection.file, skillText);
   }
+  const memoryFile = path.join(root, 'runtime-homes', 'claude', 'projects', 'qa-project', 'memory', `${fixture.slug}.md`);
+  fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
+  fs.writeFileSync(memoryFile, `Run-owned memory for ${fixture.slug}\n`);
   const created = coreBetaSkillCreatorProjectionReadback({
     qbotHome: root,
     slug: fixture.slug,
@@ -490,6 +526,8 @@ assert.equal(
   assert.equal(created.oracle_valid, true, 'Claude/Codex 双投影、frontmatter 和 SHA 一致时业务 Oracle 应通过');
   assert.equal(created.created_runtimes.length, 2);
   assert.equal(created.projection_sha256_equal, true);
+  assert.equal(created.memory_readback.observed, true);
+  assert.equal(created.memory_readback.files.length, 1);
 
   const selection = coreBetaSkillCreatorSelectionEvidence({
     before: {
@@ -522,8 +560,9 @@ assert.equal(
     baseline: fixture.baseline,
   });
   assert.equal(cleanup.valid, true);
-  assert.equal(cleanup.actions.filter((item) => item.removed).length, 2);
+  assert.equal(cleanup.actions.filter((item) => item.removed).length, 3);
   assert.equal(created.projections.every((item) => !fs.existsSync(item.directory)), true);
+  assert.equal(fs.existsSync(memoryFile), false, '本轮唯一 slug 的 Claude project memory 也必须精确清理');
 
   const protectedSlug = coreBetaSkillCreatorFixtureSlug(path.join(root, 'protected-case'));
   for (const projection of coreBetaSkillCreatorProjectionReadback({ qbotHome: root, slug: protectedSlug }).projections) {
