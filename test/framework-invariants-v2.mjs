@@ -4883,6 +4883,26 @@ assert.equal(
   true,
   'PDF 三条结论引导语后的独立第 1 页范围标题必须统一绑定后续列表',
 );
+const observedFilenameIdentityPdfReply = [
+  '这份 PDF 名为 qbot-pdf-summary.pdf，全文仅 1 页，是一份简短的“PDF 摘要”测试文档。',
+  '核心目标 —— 验证 Agent 的 PDF 读取能力（第 1 页）。',
+  '验收标准 —— 需输出摘要并识别风险（第 1 页）。',
+  '输出应保持产品友好表述 product-friendly（第 1 页）。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, observedFilenameIdentityPdfReply).ok,
+  true,
+  '精确冻结文件名与全部内容锚点并存时必须识别为 QBot PDF Summary fixture',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    corePdfCase,
+    { prompt: corePdfPrompt },
+    '附件名是 qbot-pdf-summary.pdf。三条结论分别在第 1 页、第 1 页、第 1 页。',
+  ).ok,
+  false,
+  '只回显冻结文件名和页码、但缺少内容锚点时不得通过 PDF 硬 Oracle',
+);
 const negatedStandalonePageHeadingPdfReply = [
   'QBot PDF Summary 的三条关键结论如下：',
   '第 1 页不包含以下三条结论',

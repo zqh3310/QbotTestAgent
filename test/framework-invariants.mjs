@@ -1482,6 +1482,22 @@ assert.equal(
   true,
   '通用 runner 必须接受 PDF 三条结论的无歧义统一页码标注',
 );
+const filenameIdentityPdfReply = [
+  '文件名为 qbot-pdf-summary.pdf。',
+  '目标是验证 Agent 读取 PDF（第 1 页）。',
+  '验收要求包含摘要总结和风险识别（第 1 页）。',
+  '输出必须保持产品友好表述 product-friendly（第 1 页）。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, filenameIdentityPdfReply).ok,
+  true,
+  '通用 runner 必须接受精确冻结文件名与完整内容锚点的组合',
+);
+assert.equal(
+  caseAwareReplyAssertion(corePdfCase, { prompt: corePdfPrompt }, 'qbot-pdf-summary.pdf 的三条结论都在第 1 页。').ok,
+  false,
+  '通用 runner 不得用文件名回显替代 PDF 内容锚点',
+);
 const negatedCollectivePagePdfReply = [
   'QBot PDF Summary 有三条信息，但不都在第 1 页。',
   '目标是验证 Agent 能够读取 PDF（第 1 页）。',

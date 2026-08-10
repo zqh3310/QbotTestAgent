@@ -27935,8 +27935,10 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
 
   if (id === 'BETA-FILE-001') {
     const pageCoverage = pdfPageOneCoverage(reply);
-    const fixtureFacts = /QBot PDF Summary/i.test(reply)
-      && /Agent.{0,20}(?:读取|read).{0,20}PDF/i.test(reply)
+    const fixtureIdentity = /QBot(?:[\s_-]+)PDF(?:[\s_-]+)Summary(?:\.pdf)?/i.test(reply);
+    const agentPdfReadTarget = /Agent.{0,20}(?:(?:读取|read).{0,20}PDF|PDF.{0,20}(?:读取|read))/i.test(reply);
+    const fixtureFacts = fixtureIdentity
+      && agentPdfReadTarget
       && /摘要|总结/.test(reply)
       && /风险/.test(reply)
       && /产品.{0,8}友好|product-friendly/i.test(reply);
@@ -27944,7 +27946,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
       'PDF 三条结论与页码锚点',
       '应基于真实 PDF 给出三条可核对结论，每条标注第 1 页，并命中文档标题、读取目标及摘要/风险/产品友好验收锚点。',
       pageCoverage.ok && fixtureFacts,
-      `page_references=${pageCoverage.explicitReferences}；collective_page_reference=${pageCoverage.collectiveReference}；fixture_facts=${fixtureFacts}；reply=${clip(reply, 460)}`,
+      `page_references=${pageCoverage.explicitReferences}；collective_page_reference=${pageCoverage.collectiveReference}；fixture_identity=${fixtureIdentity}；agent_pdf_read_target=${agentPdfReadTarget}；fixture_facts=${fixtureFacts}；reply=${clip(reply, 460)}`,
     );
   }
 

@@ -13,17 +13,32 @@
 - 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
 - 要求：`main == origin/main`，tracked dirty=false。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.3.0(2119080783)`。
-- 当前 QWork 身份：PROD `0.0.30`。
+- 当前正式宿主身份：360Teams `5.3.0(2119080776)`。
+- 当前 QWork 身份：UAT `0.0.30`。
 - 当前 control plane：
-  `https://qbot-api.360shuke.com`
+  `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
 - 当前模型档位：M3。
 
-2026-08-08 当前 55 条串行批次已在 360Teams `5.3.0(2119080783)` / QWork
-`0.0.30` 精确身份声明下永久冻结。上一轮跨发布 QA Skill 清理、新
-`READY_SCOPED` 预检和从第 1 条完整重跑已经完成；不得回到旧清理批次，也不得
-复用本轮输出。修复、双框架检查、推送和新 `READY_SCOPED` 预检完成后，必须在
-当前发布身份的新不可变目录再次从第 1 条完整串行重跑 55 条。
+2026-08-10 当前 55 条串行 UAT 批次已在 360Teams `5.3.0(2119080776)` / QWork
+`0.0.30` 精确身份声明下永久冻结。修复、双框架检查、推送和新
+`READY_SCOPED` 预检完成后，必须在同一发布身份的新不可变目录从第 1 条完整串行
+重跑 55 条。
+
+最新一次已冻结的 UAT scoped 批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810121500_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.0.30_M3_serial_framework-3fa0067
+```
+
+该批次完成 `14/55` 后由监控确认 `BETA-FILE-001` 的 framework issue 并停止。
+产品回复以四个独立 `第 1 页` 引用绑定三条结论，明确写出冻结附件名
+`qbot-pdf-summary.pdf`、中文标题“PDF 摘要”、Agent PDF 读取目标、摘要、风险和
+产品友好验收语义；解析器却只接受连续英文标题 `QBot PDF Summary` 和固定的
+“Agent…读取…PDF”词序，错误写入 `fixture_facts=false` 并误报产品 Bug。修复必须
+接受精确冻结文件名与全部内容锚点的组合，并兼容“Agent 的 PDF 读取能力”等等价
+词序，同时保留“只有文件名/页码、缺少内容锚点”必须失败的反例。该目录已冻结，
+不得续写；修复、全检、推送、新能力审计和 `READY_SCOPED` pretest 后，必须在新
+目录从 `1/55` 完整串行重跑。
 
 最新一次已冻结的 PROD scoped 批次：
 
