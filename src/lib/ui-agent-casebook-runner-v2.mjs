@@ -21,6 +21,7 @@ import {
   CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
   buildCoreEvidenceManifest,
   classifyCoreBetaScopedFixtureExclusions,
+  coreBetaAttachmentFixtureNames,
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
   coreBetaScenarioSpec,
@@ -2451,7 +2452,7 @@ async function prepareCoreBetaPipelineCase({
     await reset({ skillMode: 'disabled', connectorMode: 'disabled' });
   } else if (caseType === 'attachment') {
     await reset({ skillMode: 'disabled', connectorMode: 'disabled' });
-    const attachments = inferAttachments({ ...testCase, kind: 'attachment' }, fixturesDir);
+    const attachments = inferAttachments({ ...testCase, kind: 'attachment' }, fixturesDir, caseDir);
     if (!attachments.length) throw new Error(`${testCase.id} 批量附件任务没有可上传 fixture`);
     state.artifacts.attachment_sources = attachments.map((file) => {
       const stats = fs.statSync(file);
@@ -12252,7 +12253,20 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
     markBlocked(state, scenarioBlocker);
     return;
   }
-  const attachments = inferAttachments(testCase, fixturesDir);
+  const attachments = inferAttachments(testCase, fixturesDir, caseDir);
+  const attachmentFixtureContract = coreBetaAttachmentFixtureContractVerdict(testCase, attachments);
+  state.artifacts.core_beta_attachment_fixture_contract = attachmentFixtureContract;
+  if (attachmentFixtureContract.applicable) {
+    recordAssertion(
+      state,
+      'Core Beta 精确附件输入合同',
+      '协议声明的附件文件名、数量和顺序必须与 executor 实际准备的输入完全一致；框架输入漂移不得归因给产品。',
+      attachmentFixtureContract.valid,
+      JSON.stringify(attachmentFixtureContract),
+      attachmentFixtureContract.failure_category,
+    );
+    if (!attachmentFixtureContract.valid) return;
+  }
   if (attachments.length) {
     state.artifacts.attachment_sources = attachments.map((file) => {
       const stats = fs.statSync(file);
@@ -12289,6 +12303,71 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
       state.screenshots.after_upload,
     );
     if (upload.status !== 'passed') return;
+    if (testCase.id === 'BETA-FILE-002') {
+      const beforeRemove = await composerAttachmentSnapshot(page);
+      const removed = await removeComposerAttachmentByPosition(page, 0);
+      await page.waitForTimeout(500);
+      const afterRemove = await composerAttachmentSnapshot(page);
+      const restoredUpload = await uploadAttachmentsInComposer(page, [attachments[0]]);
+      await page.waitForTimeout(500);
+      const afterRestore = await composerAttachmentSnapshot(page);
+      const expectedNames = attachments.map((file) => path.basename(file));
+      const finalStateValid = afterRestore.count === expectedNames.length
+        && expectedNames.every((name) => afterRestore.names.includes(name));
+      const removeRestoreValid = removed
+        && afterRemove.count === expectedNames.length - 1
+        && !afterRemove.names.includes(expectedNames[0])
+        && restoredUpload.status === 'passed'
+        && finalStateValid;
+      const removeRestore = {
+        schema_version: 'qbot-core-beta-attachment-remove-restore/v1',
+        case_id: testCase.id,
+        valid: removeRestoreValid,
+        removed,
+        restored: restoredUpload.status === 'passed',
+        expected_names: expectedNames,
+        before_remove: beforeRemove,
+        after_remove: afterRemove,
+        after_restore: afterRestore,
+        restore_upload: restoredUpload,
+      };
+      const removeRestoreFile = path.join(caseDir, 'attachment-remove-restore-readback.json');
+      writeJsonFile(removeRestoreFile, removeRestore);
+      state.artifacts.core_beta_attachment_remove_restore = removeRestoreFile;
+      state.screenshots.attachment_remove_restore = await shot(page, caseDir, 'attachment-remove-restore');
+      recordAssertion(
+        state,
+        '两图删除并恢复闭环',
+        '必须精确删除第一张图片，再恢复同一文件；最终 Composer 仍只包含声明的两张图片。',
+        removeRestoreValid,
+        JSON.stringify(removeRestore),
+      );
+      if (!finalStateValid) {
+        const cleared = await clearComposerAttachments(page, state, caseDir);
+        const recoveryUpload = cleared
+          ? await uploadAttachmentsInComposer(page, attachments)
+          : { status: 'failed', reason: '恢复前无法清空 Composer 附件' };
+        const recoveryState = await composerAttachmentSnapshot(page);
+        const recovered = recoveryUpload.status === 'passed'
+          && recoveryState.count === expectedNames.length
+          && expectedNames.every((name) => recoveryState.names.includes(name));
+        state.artifacts.core_beta_attachment_input_recovery = {
+          cleared,
+          recovered,
+          upload: recoveryUpload,
+          state: recoveryState,
+        };
+        recordAssertion(
+          state,
+          '两图发送前输入恢复',
+          '删除/恢复产品行为失败后，框架必须重新建立精确的两图输入合同，才能继续发送并保留完整产品失败证据。',
+          recovered,
+          JSON.stringify(state.artifacts.core_beta_attachment_input_recovery),
+          'automation_error',
+        );
+        if (!recovered) return;
+      }
+    }
   }
 
   const turns = buildConversationTurns(testCase, attachments);
@@ -27818,6 +27897,41 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
     );
   }
 
+  if (id === 'BETA-FILE-002') {
+    const titles = /QBot Release Flow/i.test(reply) && /Release Risk Matrix/i.test(reply);
+    const flowAnchors = ['INPUT', 'ANALYZE', 'DELIVER'].every((value) => new RegExp(`\\b${value}\\b`, 'i').test(reply))
+      && /evidence must be reviewable before release/i.test(reply);
+    const riskAnchors = /P0\s*data loss/i.test(reply)
+      && /P1\s*timeout/i.test(reply)
+      && /P2\s*copy/i.test(reply)
+      && /IMPACT|影响/i.test(reply)
+      && /PROBABILITY|概率/i.test(reply);
+    return result(
+      '两张图片逐图视觉锚点',
+      '必须分别识别 QBot Release Flow 与 Release Risk Matrix，命中流程节点/发布证据门禁，以及 P0/P1/P2 风险矩阵锚点。',
+      titles && flowAnchors && riskAnchors,
+      `titles=${titles}；flow_anchors=${flowAnchors}；risk_anchors=${riskAnchors}；reply=${clip(reply, 560)}`,
+    );
+  }
+
+  if (id === 'BETA-FILE-003') {
+    const fileIdentities = /qbot-word-report\.docx|\bDOCX\b|\bWord\b/i.test(reply)
+      && /qbot-slide-deck\.pptx|\bPPTX\b|\bPPT\b/i.test(reply);
+    const wordFacts = /多轮对话/.test(reply)
+      && /附件理解/.test(reply)
+      && /中文报告/.test(reply);
+    const slideFacts = /多模态/.test(reply)
+      && /上传/.test(reply)
+      && /结构化输出/.test(reply);
+    const unifiedAdvice = /统一|行动建议|综合建议|下一步/.test(reply);
+    return result(
+      'DOCX/PPTX 分文件事实与统一建议',
+      '必须区分 Word 与 PPT，命中 Word 的多轮对话/附件理解/中文报告事实、PPT 的多模态/上传/结构化输出事实，并给出统一行动建议。',
+      fileIdentities && wordFacts && slideFacts && unifiedAdvice,
+      `identities=${fileIdentities}；word_facts=${wordFacts}；slide_facts=${slideFacts}；unified=${unifiedAdvice}；reply=${clip(reply, 560)}`,
+    );
+  }
+
   if (id === 'BETA-FILE-004') {
     const metricDiffs = [
       /报名人数[\s\S]{0,100}(?:100[\s\S]{0,40}120|120[\s\S]{0,40}100)/,
@@ -27831,6 +27945,23 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
       '应逐项列出报名 100→120、到场 70→80、成交 12→15 三处差异，并给出 CSV 总计 182、XLSX 总计 215。',
       metricDiffs && totals,
       `metric_diffs=${metricDiffs}；totals=${totals}；reply=${clip(reply, 500)}`,
+    );
+  }
+
+  if (id === 'BETA-FILE-005') {
+    const fourFormats = /\bJSON\b/i.test(reply)
+      && /\bHTML\b/i.test(reply)
+      && /\b(?:JavaScript|JS)\b/i.test(reply)
+      && /日志|\bLOG\b/i.test(reply);
+    const correlation = /QBOT-BETA-REQ-20260729/.test(reply);
+    const errorIdentity = /UPSTREAM_TIMEOUT/.test(reply)
+      && /upstream_service_timeout/.test(reply)
+      && /retryable\s*[:=：]?\s*true|可重试/i.test(reply);
+    return result(
+      '四格式 requestId 关联根因',
+      '必须识别 JSON、HTML、JS、日志四类文件，并沿 QBOT-BETA-REQ-20260729 关联到 UPSTREAM_TIMEOUT/upstream_service_timeout 和可重试结论。',
+      fourFormats && correlation && errorIdentity,
+      `formats=${fourFormats}；correlation=${correlation}；error_identity=${errorIdentity}；reply=${clip(reply, 560)}`,
     );
   }
 
@@ -28307,12 +28438,95 @@ function buildLongTextFixture(minChars = 5200) {
   return chunks.join('\n');
 }
 
-function inferAttachments(testCase, fixturesDir) {
+export function coreBetaAttachmentFixtureContractVerdict(testCase = {}, attachments = []) {
+  const expectedNames = coreBetaAttachmentFixtureNames(testCase);
+  const actualNames = (Array.isArray(attachments) ? attachments : []).map((file) => path.basename(String(file || '')));
+  const applicable = expectedNames.length > 0;
+  const missingNames = expectedNames.filter((name) => !actualNames.includes(name));
+  const unexpectedNames = actualNames.filter((name) => !expectedNames.includes(name));
+  const valid = !applicable || (
+    JSON.stringify(actualNames) === JSON.stringify(expectedNames)
+    && missingNames.length === 0
+    && unexpectedNames.length === 0
+  );
+  return {
+    schema_version: 'qbot-core-beta-attachment-fixture-contract/v1',
+    case_id: String(testCase?.id || ''),
+    applicable,
+    valid,
+    expected_names: expectedNames,
+    actual_names: actualNames,
+    missing_names: missingNames,
+    unexpected_names: unexpectedNames,
+    failure_category: valid ? '' : 'automation_error',
+  };
+}
+
+function materializeCoreBetaAttachmentFixtures(testCase, fixturesDir, caseDir) {
+  const names = coreBetaAttachmentFixtureNames(testCase);
+  if (!names.length) return [];
+  if (testCase.id !== 'BETA-FILE-005') {
+    return names
+      .map((name) => path.join(fixturesDir, name))
+      .filter((file) => fs.existsSync(file));
+  }
+  if (!caseDir) return [];
+  const fixtureRoot = path.join(caseDir, 'runtime-fixtures', 'mixed-format');
+  ensureDir(fixtureRoot);
+  const contents = coreBetaMixedFormatFixtureContents();
+  return names.map((name) => {
+    const file = path.join(fixtureRoot, name);
+    writeTextFile(file, contents[name]);
+    return file;
+  });
+}
+
+export function coreBetaMixedFormatFixtureContents(requestId = 'QBOT-BETA-REQ-20260729') {
+  const normalizedRequestId = String(requestId || '').trim();
+  if (!normalizedRequestId) throw new Error('mixed-format fixture requestId 不能为空');
+  return {
+    'qbot-data.json': `${JSON.stringify({
+      requestId: normalizedRequestId,
+      format: 'json',
+      service: 'qbot-analysis',
+      errorCode: 'UPSTREAM_TIMEOUT',
+      rootCause: 'upstream_service_timeout',
+      retryable: true,
+    }, null, 2)}\n`,
+    'qbot-page.html': [
+      '<!doctype html>',
+      '<html><head><title>QBot Correlation Fixture</title></head>',
+      `<body data-request-id="${normalizedRequestId}">`,
+      '<h1>Upstream request failure</h1>',
+      '<p data-error-code="UPSTREAM_TIMEOUT">rootCause=upstream_service_timeout retryable=true</p>',
+      '</body></html>',
+      '',
+    ].join('\n'),
+    'qbot-script.js': [
+      `export const requestId = '${normalizedRequestId}';`,
+      "export const errorCode = 'UPSTREAM_TIMEOUT';",
+      "export const rootCause = 'upstream_service_timeout';",
+      'export const retryable = true;',
+      '',
+    ].join('\n'),
+    'qbot-request-correlation.log': [
+      `2026-07-29T00:00:00Z requestId=${normalizedRequestId} level=ERROR code=UPSTREAM_TIMEOUT`,
+      `2026-07-29T00:00:01Z requestId=${normalizedRequestId} rootCause=upstream_service_timeout retryable=true`,
+      '',
+    ].join('\n'),
+  };
+}
+
+function inferAttachments(testCase, fixturesDir, caseDir = '') {
   const files = [];
   const add = (name) => {
     const file = path.join(fixturesDir, name);
     if (fs.existsSync(file)) files.push(file);
   };
+  const coreBetaFixtures = materializeCoreBetaAttachmentFixtures(testCase, fixturesDir, caseDir);
+  if (coreBetaAttachmentFixtureNames(testCase).length) {
+    return dedupe(coreBetaFixtures, (item) => item);
+  }
   if (testCase.id === 'SIT-HOME-037') {
     add('qbot-image-test.png');
     return dedupe(files, (item) => item);

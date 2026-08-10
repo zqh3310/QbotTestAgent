@@ -306,6 +306,29 @@ const planCase = (id, caseType) => {
   }));
   return item;
 };
+{
+  const attachmentCase = planCase('BETA-FILE-002', 'attachment');
+  attachmentCase.evidence_roles.push(
+    'attachment_name_size_sha256',
+    'composer_attachment_state',
+    'attachment_readback',
+  );
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-attachment-fixtures-'));
+  const missing = validateCoreBetaCase(attachmentCase, { fixtureRoot });
+  assert.equal(missing.ok, false, '精确两图 fixture 缺失时 pretest 协议检查必须失败');
+  assert.ok(
+    missing.errors.some((item) => item.includes('qbot-image-flow.png'))
+      && missing.errors.some((item) => item.includes('qbot-image-risk.png')),
+    missing.errors.join('\n'),
+  );
+  fs.writeFileSync(path.join(fixtureRoot, 'qbot-image-flow.png'), Buffer.alloc(64, 1));
+  fs.writeFileSync(path.join(fixtureRoot, 'qbot-image-risk.png'), Buffer.alloc(64, 2));
+  const ready = validateCoreBetaCase(attachmentCase, { fixtureRoot });
+  assert.equal(ready.ok, true, ready.errors.join('\n'));
+  assert.ok(ready.fixture_spec.includes('file:qbot-image-flow.png'));
+  assert.ok(ready.fixture_spec.includes('file:qbot-image-risk.png'));
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+}
 const initializedPlan = [
   planCase('BETA-INIT-001', 'run_initialization'),
   planCase('BETA-INIT-002', 'run_initialization'),

@@ -67,6 +67,28 @@ export const CORE_BETA_EXECUTOR_ROUTES = Object.freeze({
   release_deployment: 'core-beta/release-deployment-v2',
 });
 
+const CORE_BETA_ATTACHMENT_FIXTURE_NAMES = new Map([
+  ['BETA-FILE-001', ['qbot-pdf-summary.pdf']],
+  ['BETA-FILE-002', ['qbot-image-flow.png', 'qbot-image-risk.png']],
+  ['BETA-FILE-003', ['qbot-word-report.docx', 'qbot-slide-deck.pptx']],
+  ['BETA-FILE-004', ['qbot-table.csv', 'qbot-data-table-diff.xlsx']],
+  ['BETA-FILE-005', ['qbot-data.json', 'qbot-page.html', 'qbot-script.js', 'qbot-request-correlation.log']],
+]);
+
+const CORE_BETA_RUNTIME_GENERATED_ATTACHMENT_FIXTURES = new Map([
+  ['BETA-FILE-005', ['qbot-data.json', 'qbot-page.html', 'qbot-script.js', 'qbot-request-correlation.log']],
+]);
+
+export function coreBetaAttachmentFixtureNames(testCase = {}) {
+  const id = typeof testCase === 'string' ? testCase : String(testCase?.id || '');
+  return [...(CORE_BETA_ATTACHMENT_FIXTURE_NAMES.get(id) || [])];
+}
+
+export function coreBetaRuntimeGeneratedAttachmentFixtureNames(testCase = {}) {
+  const id = typeof testCase === 'string' ? testCase : String(testCase?.id || '');
+  return [...(CORE_BETA_RUNTIME_GENERATED_ATTACHMENT_FIXTURES.get(id) || [])];
+}
+
 const CORE_BETA_CASE_RANGES = Object.freeze({
   INIT: 5,
   CHAT: 10,
@@ -536,6 +558,7 @@ export function coreBetaCaseContractSha256(testCase) {
     executor_route: scenario?.executor_route || '',
     scenario_driver: scenario?.driver || '',
     fixture_control: scenario?.fixture_control || '',
+    executor_attachment_fixtures: coreBetaAttachmentFixtureNames(testCase),
   };
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
 }
@@ -692,14 +715,26 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
     }
   }
 
-  const fixtureSpec = parseFixtureSpec(testCase?.required_fixture);
+  const executorAttachmentFixtures = coreBetaAttachmentFixtureNames(testCase);
+  const fixtureSpec = [...new Set([
+    ...parseFixtureSpec(testCase?.required_fixture),
+    ...executorAttachmentFixtures.map((name) => `file:${name}`),
+  ])];
   if (!fixtureSpec.length) errors.push(`${id} required_fixture 必须声明至少一项 fixture`);
   if (fixtureRoot) {
+    const runtimeGeneratedFixtures = new Set(coreBetaRuntimeGeneratedAttachmentFixtureNames(testCase));
+    for (const name of executorAttachmentFixtures) {
+      if (runtimeGeneratedFixtures.has(name)) continue;
+      const file = path.resolve(fixtureRoot, name);
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size <= 0) {
+        errors.push(`${id} 精确附件 fixture 缺失或为空：${file}`);
+      }
+    }
     for (const fixture of fixtureSpec.filter((item) => item.startsWith('file:'))) {
       const file = path.resolve(fixtureRoot, fixture.slice(5));
       const runtimeGenerated = Boolean(
-        scenarioSpec?.runtime_fixture
-        && fixture.slice(5) === scenarioSpec.runtime_fixture,
+        runtimeGeneratedFixtures.has(fixture.slice(5))
+        || (scenarioSpec?.runtime_fixture && fixture.slice(5) === scenarioSpec.runtime_fixture),
       );
       if (!fs.existsSync(file) && !runtimeGenerated) warnings.push(`${id} 运行前需要生成 fixture：${file}`);
     }

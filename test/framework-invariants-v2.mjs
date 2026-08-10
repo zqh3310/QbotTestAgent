@@ -27,6 +27,7 @@ import {
   coreBetaArtifactReadback,
   coreBetaBatchTaskMarker,
   coreBetaBatchStopReason,
+  coreBetaAttachmentFixtureContractVerdict,
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupCapabilitiesNeedsRetry,
@@ -46,6 +47,7 @@ import {
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaManualConnectorModeReady,
+  coreBetaMixedFormatFixtureContents,
   coreBetaMcpCrossSurfaceOutcome,
   coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaMcpReleaseSelectionSeed,
@@ -117,7 +119,11 @@ import {
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
-import { buildCoreEvidenceManifest, validateEvidenceFile } from '../src/lib/core-beta-case-protocol.mjs';
+import {
+  buildCoreEvidenceManifest,
+  coreBetaAttachmentFixtureNames,
+  validateEvidenceFile,
+} from '../src/lib/core-beta-case-protocol.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -916,6 +922,101 @@ assert.equal(
   }),
   true,
   '真实附件 Case 必须继续执行 prompt 一致性检查',
+);
+assert.deepEqual(
+  coreBetaAttachmentFixtureNames('BETA-FILE-002'),
+  ['qbot-image-flow.png', 'qbot-image-risk.png'],
+  'BETA-FILE-002 必须冻结两张互异图片，不能回退为单张通用图片',
+);
+assert.deepEqual(
+  coreBetaAttachmentFixtureNames('BETA-FILE-005'),
+  ['qbot-data.json', 'qbot-page.html', 'qbot-script.js', 'qbot-request-correlation.log'],
+  'BETA-FILE-005 必须冻结共享 requestId 的四格式 fixture',
+);
+assert.deepEqual(
+  coreBetaAttachmentFixtureContractVerdict(
+    { id: 'BETA-FILE-002' },
+    ['/fixtures/qbot-image-flow.png'],
+  ),
+  {
+    schema_version: 'qbot-core-beta-attachment-fixture-contract/v1',
+    case_id: 'BETA-FILE-002',
+    applicable: true,
+    valid: false,
+    expected_names: ['qbot-image-flow.png', 'qbot-image-risk.png'],
+    actual_names: ['qbot-image-flow.png'],
+    missing_names: ['qbot-image-risk.png'],
+    unexpected_names: [],
+    failure_category: 'automation_error',
+  },
+  '框架只上传一张图片时必须 fail-closed 为 automation_error，不能误报产品 Bug',
+);
+assert.equal(
+  coreBetaAttachmentFixtureContractVerdict(
+    { id: 'BETA-FILE-002' },
+    ['/fixtures/qbot-image-flow.png', '/fixtures/qbot-image-risk.png'],
+  ).valid,
+  true,
+  '两张图片名称与顺序精确匹配时附件输入合同才成立',
+);
+
+const coreImageCase = { id: 'BETA-FILE-002' };
+const coreImageReply = [
+  '第一张标题是 QBot Release Flow，主要图形由 INPUT、ANALYZE、DELIVER 三个节点和箭头组成。',
+  '门禁文字是 Gate: evidence must be reviewable before release。',
+  '第二张标题是 Release Risk Matrix，横轴 PROBABILITY，纵轴 IMPACT。',
+  '风险点包括 P0 data loss、P1 timeout、P2 copy。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, coreImageReply).ok,
+  true,
+  '两图回复必须命中流程图和风险矩阵的确定性锚点',
+);
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, '只看到 QBot Release Flow。').ok,
+  false,
+  '只识别一张图片不得通过 BETA-FILE-002',
+);
+
+const coreOfficeCase = { id: 'BETA-FILE-003' };
+const coreOfficeReply = [
+  'Word/DOCX：验收点包括多轮对话、附件理解、截图留证和中文报告。',
+  'PPT/PPTX：主题是多模态与附件理解，重点包括上传、摘要、结构化输出和截图留证。',
+  '统一行动建议：先验证上传和附件理解，再核对结构化输出与中文报告。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreOfficeCase, { prompt: '分别概括两个附件。' }, coreOfficeReply).ok,
+  true,
+  'Office 双附件必须分别命中真实 fixture 事实并形成统一建议',
+);
+
+const coreMixedCase = { id: 'BETA-FILE-005' };
+const coreMixedFixtureContents = coreBetaMixedFormatFixtureContents();
+assert.deepEqual(
+  Object.keys(coreMixedFixtureContents),
+  ['qbot-data.json', 'qbot-page.html', 'qbot-script.js', 'qbot-request-correlation.log'],
+  '四格式 runtime fixture 文件名必须与协议冻结映射一致',
+);
+for (const [name, content] of Object.entries(coreMixedFixtureContents)) {
+  assert.match(content, /QBOT-BETA-REQ-20260729/, `${name} 必须包含共享 requestId`);
+  assert.match(content, /UPSTREAM_TIMEOUT/, `${name} 必须包含共享错误码`);
+  assert.match(content, /upstream_service_timeout/, `${name} 必须包含共享根因`);
+  assert.match(content, /retryable["']?\s*[:=]\s*true/i, `${name} 必须包含可重试标记`);
+}
+const coreMixedReply = [
+  '文件类型分别为 JSON、HTML、JavaScript (JS) 和日志 LOG。',
+  '四者共享 requestId QBOT-BETA-REQ-20260729。',
+  '错误码 UPSTREAM_TIMEOUT 对应根因 upstream_service_timeout，retryable=true，可重试。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreMixedCase, { prompt: '沿requestId分析错误根因。' }, coreMixedReply).ok,
+  true,
+  '四格式附件必须沿冻结 requestId 命中错误码、根因和重试结论',
+);
+assert.equal(
+  caseAwareReplyAssertion(coreMixedCase, { prompt: '沿requestId分析错误根因。' }, 'JSON 中出现超时。').ok,
+  false,
+  '缺少四格式关联证据不得通过 BETA-FILE-005',
 );
 assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', []),
