@@ -3557,8 +3557,13 @@ assert.match(
 );
 assert.match(
   runner,
-  /async function dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*runtime-update-ready-toast[\s\S]*稍后[\s\S]*skip\.click\(\{ timeout: 5000 \}\)[\s\S]*state: 'hidden'[\s\S]*runtime-update-prompt-skip/,
+  /async function dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*runtime-update-ready-toast[\s\S]*statuses = page\.locator\('\[role="status"\]'\)[\s\S]*coreBetaV2RuntimeUpdateSkipAction\(candidateText, candidateButtonText\)[\s\S]*skip\.click\(\{ timeout: 5000 \}\)[\s\S]*state: 'hidden'[\s\S]*runtime-update-prompt-skip/,
   'Core Beta v2 必须用真实“稍后/跳过更新”按钮关闭版本更新遮挡，并保存前后证据',
+);
+assert.match(
+  runner,
+  /if \(await visible\(dedicatedToast, 500\)\)[\s\S]*else \{[\s\S]*statuses = page\.locator\('\[role="status"\]'\)[\s\S]*if \(!coreBetaV2RuntimeUpdateSkipAction\(candidateText, candidateButtonText\)\) continue;[\s\S]*if \(!toast\) \{[\s\S]*observed: false, ok: true/,
+  '系统设置中的非阻塞版本状态没有安全跳过按钮时不得冒充遮挡弹窗；专用更新 toast 仍须 fail-closed',
 );
 assert.match(
   runner,

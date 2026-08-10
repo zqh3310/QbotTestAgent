@@ -4541,18 +4541,45 @@ export function coreBetaV2RuntimeUpdateSkipAction(promptText, buttonText) {
 }
 
 async function dismissCoreBetaV2RuntimeUpdateObstruction(page, state = null) {
-  const toast = page.locator('[data-testid="runtime-update-ready-toast"], [role="status"]').filter({
+  const dedicatedToast = page.locator('[data-testid="runtime-update-ready-toast"]').filter({
     hasText: /新版本(?:已就绪|可用|可以更新)|发现新版本/i,
   }).first();
-  if (!(await visible(toast, 500))) {
+  let toast = null;
+  let text = '';
+  let skip = null;
+  let buttonText = '';
+  if (await visible(dedicatedToast, 500)) {
+    toast = dedicatedToast;
+    text = await toast.innerText({ timeout: 1000 }).catch(() => '');
+    skip = toast.locator('button, [role="button"]').filter({
+      hasText: /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/,
+    }).first();
+    buttonText = await skip.innerText({ timeout: 1000 }).catch(() => '');
+  } else {
+    const statuses = page.locator('[role="status"]').filter({
+      hasText: /新版本(?:已就绪|可用|可以更新)|发现新版本/i,
+    });
+    const count = Math.min(await statuses.count(), 20);
+    for (let index = 0; index < count; index += 1) {
+      const candidate = statuses.nth(index);
+      if (!(await visible(candidate, 100))) continue;
+      const candidateText = await candidate.innerText({ timeout: 1000 }).catch(() => '');
+      const candidateSkip = candidate.locator('button, [role="button"]').filter({
+        hasText: /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/,
+      }).first();
+      const candidateButtonText = await candidateSkip.innerText({ timeout: 1000 }).catch(() => '');
+      if (!coreBetaV2RuntimeUpdateSkipAction(candidateText, candidateButtonText)) continue;
+      toast = candidate;
+      text = candidateText;
+      skip = candidateSkip;
+      buttonText = candidateButtonText;
+      break;
+    }
+  }
+  if (!toast) {
     return { observed: false, ok: true, dismissed: false, text: '', button_text: '' };
   }
 
-  const text = await toast.innerText({ timeout: 1000 }).catch(() => '');
-  const skip = toast.locator('button, [role="button"]').filter({
-    hasText: /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/,
-  }).first();
-  const buttonText = await skip.innerText({ timeout: 1000 }).catch(() => '');
   const safeAction = coreBetaV2RuntimeUpdateSkipAction(text, buttonText);
   const count = state
     ? (state._runtimeUpdateSkipCount = Number(state._runtimeUpdateSkipCount || 0) + 1)
