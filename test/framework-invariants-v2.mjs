@@ -169,10 +169,17 @@ assert.deepEqual(
 {
   const screenshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-mcp-cross-surface-'));
   try {
-    const makeReceipt = ({ index, key, selected = true, stage = 'manual_connector_selection' }) => {
+    const makeReceipt = ({
+      index,
+      key,
+      selected = true,
+      persisted = selected,
+      stage = 'manual_connector_selection',
+    }) => {
       const screenshotPath = path.join(screenshotRoot, `${index}-${key.replace(/[^a-z0-9]+/gi, '-')}.png`);
       fs.writeFileSync(screenshotPath, Buffer.alloc(256, index + 1));
-      const selectedConnectors = selected ? [key] : [];
+      const interactionSelectedConnectors = selected ? [key] : [];
+      const selectedConnectors = persisted ? [key] : [];
       const before = {
         captured_at: '2026-08-07T00:00:00.000Z',
         case_id: 'BETA-MCP-002',
@@ -199,7 +206,7 @@ assert.deepEqual(
         category: selected ? '' : 'bug',
         screenshot: screenshotPath,
         ...(stage === 'manual_connector_selection'
-          ? { selected_connectors: selectedConnectors }
+          ? { selected_connectors: interactionSelectedConnectors }
           : { manual_surface: { list_visible: false, option_count: 0, empty_visible: false } }),
       };
       return {
@@ -211,7 +218,7 @@ assert.deepEqual(
         reset_ok: stage !== 'manual_mode',
         selection_attempted: stage === 'manual_connector_selection',
         selected,
-        capability_selected: selected,
+        capability_selected: persisted,
         selected_connectors: selectedConnectors,
         tools: [{ name: `${key}-read`, read_only: true }],
         health: {},
@@ -239,7 +246,7 @@ assert.deepEqual(
     const receipts = [
       makeReceipt({ index: 0, key: 'mcphub:wiki' }),
       makeReceipt({ index: 1, key: 'mcphub:dis', selected: false }),
-      makeReceipt({ index: 2, key: 'mcphub:iops' }),
+      makeReceipt({ index: 2, key: 'mcphub:iops', selected: true, persisted: false }),
       makeReceipt({ index: 3, key: 'mcphub:wecom' }),
       makeReceipt({ index: 4, key: 'mcphub:qbi', selected: false, stage: 'manual_mode' }),
     ];
@@ -249,6 +256,13 @@ assert.deepEqual(
     assert.equal(outcome.oracle_valid, false, '任一固定connector未选中时业务Oracle必须失败');
     assert.equal(outcome.observed_count, 5);
     assert.equal(outcome.unique_key_count, 5);
+    assert.equal(receipts[2].selected, true, '点击后的瞬时UI读回应保留');
+    assert.equal(receipts[2].capability_selected, false, '稍后的公共读回未持久化时必须与瞬时UI读回分离');
+    assert.equal(
+      coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipts[2]),
+      true,
+      'connector瞬时选中但随后公共读回消失，仍是证据完整的产品负向收据',
+    );
     assert.equal(coreBetaMcpCrossSurfaceOutcome(receipts.slice(0, 4)).evidence_valid, false, '缺少任一固定connector收据仍须按框架证据缺口失败');
 
     const controlMissing = structuredClone(receipts[0]);
@@ -264,6 +278,9 @@ assert.deepEqual(
     const readbackMissing = structuredClone(receipts[0]);
     delete readbackMissing.public_readback.after.capabilities;
     assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(readbackMissing), false, '公开 capabilities 读回缺失必须保持框架证据无效');
+    const interactionReadbackMissing = structuredClone(receipts[2]);
+    delete interactionReadbackMissing.interaction.selected_connectors;
+    assert.equal(coreBetaMcpCrossSurfaceReceiptEvidenceValid(interactionReadbackMissing), false, '点击后的瞬时选择读回缺失仍须按框架证据缺口失败');
   } finally {
     fs.rmSync(screenshotRoot, { recursive: true, force: true });
   }

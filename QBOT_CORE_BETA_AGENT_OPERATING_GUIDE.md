@@ -27,6 +27,23 @@
 最新一次已冻结的 UAT scoped 批次：
 
 ```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810131000_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.0.30_M3_serial_framework-899cd29
+```
+
+该批次完成 `49/55` 后在 `BETA-MCP-002` 确认 framework issue。前两个固定
+connector 的手动模式点击已派发但产品仍读回 auto，均已正确形成有效产品负向
+收据；第三个 connector 的点击后瞬时 UI 读回为已选中，稍后的公共状态却再次读回
+`selectedConnectors=[]`。这同样是证据完整的产品持久化失败，但收据校验错误要求
+瞬时选择数组与稍后持久化数组完全相等，将第 3 份收据写为无效并提前停止，只固化
+3/5 个样本，最终使 manifest 的 `capability_selection` 和
+`capability_execution_event` 无效。修复必须分离瞬时点击读回与持久化读回，二者
+不一致时保持 `evidence_valid=true/oracle_valid=false` 并继续全部 5 个样本；任一
+阶段读回本身缺失时仍须 fail-closed。该目录已冻结，不得续写；修复、全检、推送、
+新能力审计和 `READY_SCOPED` pretest 后，必须在新目录从 `1/55` 完整串行重跑。
+
+最新一次已冻结的 UAT scoped 批次：
+
+```text
 /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810121500_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.0.30_M3_serial_framework-3fa0067
 ```
 

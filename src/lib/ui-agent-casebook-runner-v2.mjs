@@ -121,6 +121,9 @@ export function coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt = {}) {
   const selectedConnectors = receipt?.selected_connectors;
   const selectedByReadback = Array.isArray(selectedConnectors)
     && coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(key);
+  const interactionSelectedConnectors = interaction?.selected_connectors;
+  const selectedByInteraction = Array.isArray(interactionSelectedConnectors)
+    && coreBetaSelectedCapabilityIdentities(interactionSelectedConnectors).includes(key);
   const publicReadback = receipt?.public_readback || {};
   const before = publicReadback?.before || {};
   const after = publicReadback?.after || {};
@@ -145,8 +148,8 @@ export function coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt = {}) {
   const selectionReceipt = stage === 'manual_connector_selection'
     && receipt?.reset_ok === true
     && receipt?.selection_attempted === true
-    && Array.isArray(interaction?.selected_connectors)
-    && JSON.stringify(interaction.selected_connectors) === JSON.stringify(selectedConnectors);
+    && Array.isArray(interactionSelectedConnectors)
+    && receipt?.selected === selectedByInteraction;
   const manualModeFailureReceipt = stage === 'manual_mode'
     && receipt?.reset_ok === false
     && receipt?.selection_attempted === false
@@ -173,7 +176,6 @@ export function coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt = {}) {
     && typeof receipt?.selected === 'boolean'
     && typeof receipt?.capability_selected === 'boolean'
     && Array.isArray(selectedConnectors)
-    && receipt.selected === selectedByReadback
     && receipt.capability_selected === selectedByReadback
     && interaction.expected_state_observed === receipt.selected
     && Array.isArray(receipt?.tools)
