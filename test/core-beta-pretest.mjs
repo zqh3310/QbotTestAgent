@@ -49,11 +49,11 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
-const grayExpectedSha = 'def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d';
+const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx');
+const grayExpectedSha = '3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
-  throw new Error(`184 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
+  throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
 }
 const grayAuditOut = path.join(temp, 'gray-audit');
 const grayAudit = spawnSync(process.execPath, [
@@ -62,15 +62,18 @@ const grayAudit = spawnSync(process.execPath, [
   '--sheet', '核心内测Case',
   '--out', grayAuditOut,
 ], { cwd: root, encoding: 'utf8' });
-if (grayAudit.status !== 0) throw new Error(`184 capability audit failed: ${grayAudit.stderr || grayAudit.stdout}`);
+if (grayAudit.status !== 0) throw new Error(`70 capability audit failed: ${grayAudit.stderr || grayAudit.stdout}`);
 const grayAuditReport = JSON.parse(fs.readFileSync(path.join(grayAuditOut, 'capability-audit.json'), 'utf8'));
-if (grayAuditReport.protocol.case_count !== 184
-  || grayAuditReport.protocol.executable_count !== 184
+if (grayAuditReport.protocol.case_count !== 70
+  || grayAuditReport.protocol.executable_count !== 70
   || !grayAuditReport.runtime_dispatch?.ok
-  || grayAuditReport.runtime_dispatch.dispatchable_count !== 184) {
-  throw new Error(`184 runtime dispatch audit mismatch: ${JSON.stringify({
+  || grayAuditReport.runtime_dispatch.dispatchable_count !== 70
+  || grayAuditReport.capability_summary?.strict_controller_required !== 0
+  || grayAuditReport.capability_summary?.directly_runnable_without_controller !== 70) {
+  throw new Error(`70 runtime dispatch audit mismatch: ${JSON.stringify({
     protocol: grayAuditReport.protocol,
     runtime_dispatch: grayAuditReport.runtime_dispatch,
+    capability_summary: grayAuditReport.capability_summary,
   })}`);
 }
 
@@ -81,7 +84,8 @@ const pretestHelp = spawnSync(process.execPath, [
 if (pretestHelp.status !== 0
   || !/never starts a runner/.test(pretestHelp.stdout)
   || !/READY_SCOPED/.test(pretestHelp.stdout)
-  || !/--excluded-case/.test(pretestHelp.stdout)) {
+  || !/--excluded-case/.test(pretestHelp.stdout)
+  || !/QBOT_CORE_BETA_IME_PROBE=1/.test(pretestHelp.stdout)) {
   throw new Error(`Pretest help failed: ${pretestHelp.stderr || pretestHelp.stdout}`);
 }
 const pretestSource = fs.readFileSync(
@@ -144,6 +148,50 @@ if (!report.checks.some((item) => item.id === 'local_qbot_cdp' && item.status ==
 }
 if (fs.existsSync(path.join(pretestOut, 'automation-progress.json'))) {
   throw new Error('Pretest must never create synthetic Case progress.');
+}
+
+const nativeImeProbe = path.join(temp, 'native-ime-probe.sh');
+fs.writeFileSync(nativeImeProbe, `#!/bin/zsh
+if [[ "$QBOT_CORE_BETA_IME_PROBE" != "1" ]]; then
+  exit 7
+fi
+print -r -- '{"schema_version":"qbot-core-beta-native-ime-probe/v1","ok":true,"non_mutating":true,"accessibility_permission":true,"input_source_ready":true}'
+`);
+fs.chmodSync(nativeImeProbe, 0o700);
+const grayPretestOut = path.join(temp, 'gray-pretest');
+const grayPretest = spawnSync(process.execPath, [
+  path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
+  '--casebook', grayCasebook,
+  '--sheet', '核心内测Case',
+  '--profile', 'mandatory',
+  '--lane', 'local',
+  '--out', grayPretestOut,
+  '--expected-count', '70',
+  '--expected-sha256', grayExpectedSha,
+  '--cdp', 'http://127.0.0.1:1',
+  '--restart-command', '/usr/bin/true',
+  '--native-ime-command', nativeImeProbe,
+  '--no-framework-checks',
+], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+if (grayPretest.status !== 2) {
+  throw new Error(`Unavailable runtime gray pretest must still fail closed: ${grayPretest.stdout}\n${grayPretest.stderr}`);
+}
+const grayPretestReport = JSON.parse(fs.readFileSync(
+  path.join(grayPretestOut, 'core-beta-pretest-report.json'),
+  'utf8',
+));
+for (const id of [
+  'local_managed_restart_capability',
+  'native_ime_command_capability',
+  'fixture_controller_contract',
+]) {
+  const check = grayPretestReport.checks.find((item) => item.id === id);
+  if (check?.status !== 'passed') {
+    throw new Error(`Expected ${id} to pass for the 70 Casebook: ${JSON.stringify(check)}`);
+  }
+}
+if (grayPretestReport.runtime?.fixture_capabilities?.native_ime?.probe_ok !== true) {
+  throw new Error('70 pretest must persist the successful non-mutating native IME probe.');
 }
 
 console.log('core beta pretest ok');

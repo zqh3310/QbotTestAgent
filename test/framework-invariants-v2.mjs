@@ -36,6 +36,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCleanupReleaseMigrationVerdict,
   coreBetaCapabilityInteractionCategory,
+  coreBetaComposerHistoryVerdict,
   coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
   coreBetaConnectorCatalogEvidenceValid,
@@ -52,6 +53,8 @@ import {
   coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
+  coreBetaModelMenuExpectedSnapshot,
+  coreBetaModelMenuSdkFilterVerdict,
   coreBetaPartialReplyReady,
   coreBetaPreSendCapabilityFailureEvidence,
   coreBetaStopGenerationTimeoutVerdict,
@@ -902,8 +905,59 @@ try {
         dialogs: [],
       },
     }),
+    false,
+    '当前发布门禁不得用旧源码查看器替代真实网页预览和分享',
+  );
+  assert.equal(
+    coreBetaMarkdownHtmlPreviewVerdict({
+      expected_names: ['report.md', 'summary.html'],
+      overview_text: '本任务共 2 个成果 report.md summary.html',
+      markdown: { clicked: true, code_viewer_visible: true, language: 'markdown', source_text: '# A/B 报告 A=12 B=8' },
+      html: {
+        clicked: true,
+        code_viewer_visible: false,
+        file_source_text: '<html>A=12 B=8<script>interactive()</script></html>',
+        web_preview_visible: true,
+        web_preview_content_visible: true,
+        web_preview_loading_visible: false,
+        web_preview_error: '',
+        share_button_visible: true,
+        share_button_enabled: true,
+        share_dialog_visible: true,
+        share_ready: true,
+        share_url: 'https://report-share.example/report',
+        share_error: '',
+        parent_script_executed: false,
+        dialogs: [],
+      },
+    }),
     true,
-    'BETA-ART-001 必须用双成果源码预览和宿主隔离证据判定交互 HTML',
+    '新版HTML成果必须以受管网页预览和分享入口作为硬Oracle',
+  );
+  assert.equal(
+    coreBetaMarkdownHtmlPreviewVerdict({
+      expected_names: ['report.md', 'summary.html'],
+      overview_text: '本任务共 2 个成果 report.md summary.html',
+      markdown: { clicked: true, code_viewer_visible: true, language: 'markdown', source_text: '# A/B 报告 A=12 B=8' },
+      html: {
+        clicked: true,
+        file_source_text: '<html>A=12 B=8<script>interactive()</script></html>',
+        web_preview_visible: true,
+        web_preview_content_visible: true,
+        web_preview_loading_visible: true,
+        web_preview_error: '',
+        share_button_visible: true,
+        share_button_enabled: true,
+        share_dialog_visible: true,
+        share_ready: true,
+        share_url: 'https://report-share.example/report',
+        share_error: '',
+        parent_script_executed: false,
+        dialogs: [],
+      },
+    }),
+    false,
+    'HTML网页预览仍处于加载态时不得记为内容可见',
   );
   assert.equal(
     coreBetaMarkdownHtmlPreviewVerdict({
@@ -944,6 +998,89 @@ try {
     }),
     false,
     'HTML 源码预览区出现真实 script DOM 节点时必须按安全 Oracle 失败',
+  );
+  const composerHistoryReadback = {
+    prompts: ['QBOT-HISTORY-FIRST', 'QBOT-HISTORY-SECOND'],
+    unsent_draft: 'QBOT-HISTORY-DRAFT-NOT-SENT',
+    initial_task_id: 'task-a',
+    isolated_task_id: '',
+    isolated_is_draft: true,
+    isolated_message_count: 0,
+    isolated_draft_instance_id: 'draft-b',
+    navigation: {
+      up_latest: 'QBOT-HISTORY-SECOND',
+      up_older: 'QBOT-HISTORY-FIRST',
+      down_newer: 'QBOT-HISTORY-SECOND',
+      down_draft: 'QBOT-HISTORY-DRAFT-NOT-SENT',
+      isolated_new_task: '',
+      reopened_latest: 'QBOT-HISTORY-SECOND',
+    },
+  };
+  assert.equal(coreBetaComposerHistoryVerdict(composerHistoryReadback), true);
+  assert.equal(
+    coreBetaComposerHistoryVerdict({
+      ...composerHistoryReadback,
+      navigation: { ...composerHistoryReadback.navigation, isolated_new_task: 'QBOT-HISTORY-SECOND' },
+    }),
+    false,
+    'Composer历史输入跨任务泄漏必须失败',
+  );
+  assert.equal(
+    coreBetaComposerHistoryVerdict({ ...composerHistoryReadback, isolated_task_id: 'task-b' }),
+    false,
+    '新建任务应保持activeId为空的草稿态，不能要求或接受伪造taskId',
+  );
+  assert.deepEqual(
+    coreBetaModelMenuExpectedSnapshot({
+      state: {
+        runtimeFamily: 'claude-code',
+        executionScope: 'desktop-local',
+        modelPolicyState: { policy: 'auto', state: 'pending' },
+      },
+      view: {
+        runtimeOptions: {
+          runtimeFamily: 'claude-code',
+          options: [{ modelId: 'auto-only', runtimeFamily: 'claude-code', protocol: 'anthropic', complianceTier: 'M1' }],
+        },
+        manualModelOptions: [
+          { modelId: 'manual-claude', runtimeFamily: 'claude-code', protocol: 'anthropic', complianceTier: 'M2' },
+          { modelId: 'codex-leak', runtimeFamily: 'codex', protocol: 'response', complianceTier: 'M3' },
+        ],
+      },
+    }),
+    {
+      runtime_family: 'claude-code',
+      protocol: 'anthropic',
+      option_count: 1,
+      model_ids: ['manual-claude'],
+      options: [{ modelId: 'manual-claude', runtimeFamily: 'claude-code', protocol: 'anthropic', complianceTier: 'M2' }],
+      candidate_source: 'manualModelOptions',
+      policy: { policy: 'auto', state: 'pending' },
+      execution_scope: 'desktop-local',
+    },
+    'Auto草稿的模型菜单期望集合必须与产品一样优先取manualModelOptions',
+  );
+  const modelMenuReadback = {
+    expected: {
+      runtime_family: 'claude-code',
+      protocol: 'anthropic',
+      option_count: 2,
+      model_ids: ['claude-a', 'claude-b'],
+    },
+    rendered: {
+      model_ids: ['claude-b', 'claude-a'],
+      tiers: ['M2', 'M3'],
+      error: '',
+    },
+  };
+  assert.equal(coreBetaModelMenuSdkFilterVerdict(modelMenuReadback), true);
+  assert.equal(
+    coreBetaModelMenuSdkFilterVerdict({
+      ...modelMenuReadback,
+      rendered: { ...modelMenuReadback.rendered, model_ids: ['claude-a', 'codex-leak'] },
+    }),
+    false,
+    '模型菜单出现其他SDK候选时必须失败',
   );
 
   const productFailureEvidence = path.join(artifactRegressionDir, 'artifact-path-sha256.json');
@@ -2727,8 +2864,28 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /--control-plane-url https:\/\/qbot-api\.360shuke\.com/,
-  '当前 55 条操作指南必须把 pretest 的精确 control plane 传给正式 runner',
+  /QBot生产灰度发布门禁Casebook_70条_2026-08-10\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`/,
+  '当前操作指南必须以完整 70 条 READY 预检作为唯一生产灰度入口',
+);
+assert.equal(
+  (coreBetaOperatingGuide.match(/--(?:expected-)?control-plane-(?:origin|url) "<exact-uat-origin>"/g) || []).length,
+  2,
+  '70 条指南必须把 pretest 冻结的精确 control plane 原样传给正式 runner',
+);
+assert.equal(
+  (coreBetaOperatingGuide.match(/--native-ime-command "<(?:managed-native-ime-command|same-command-from-ready-pretest)>"/g) || []).length,
+  2,
+  '70 条指南必须把通过 probe 的同一 native IME command 传给 runner',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /Teams lane[\s\S]*不接受调用方 `--restart-command`[\s\S]*包装器构造并传入实际重启命令/,
+  '70 条指南必须由 Teams 包装器受管重启，禁止调用方伪造 restart command',
+);
+assert.doesNotMatch(
+  coreBetaOperatingGuide,
+  /## 5\. 当前 55 条 scoped 预检/,
+  '旧 55 条 scoped 流程不得继续作为当前发布入口',
 );
 assert.equal(
   coreBetaV2NeedsRendererReconnect(new Error('page.reload: Target page, context or browser has been closed')),
@@ -2810,7 +2967,8 @@ assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-004' }), false, '清空会�
 assert.equal(caseRequiresModelTier({ id: 'BETA-INIT-005' }), true, '包含首发验证的初始化 Case 仍必须锁定模型档位');
 assert.equal(caseRequiresModelTier({ id: 'BETA-CHAT-001' }), true, '业务会话 Case 必须锁定模型档位');
 for (const [id, caseType, expectedMode] of [
-  ['BETA-ROUTE-001', 'model_routing', 'strict_controller'],
+  ['BETA-ROUTE-001', 'model_routing', 'native'],
+  ['BETA-TASK-008', 'task_lifecycle', 'native'],
   ['BETA-CAP-001', 'capability_activation', 'strict_controller'],
   ['BETA-DEPLOY-001', 'release_deployment', 'strict_controller'],
   ['BETA-MCP-015', 'mcp_use', 'strict_controller'],

@@ -3314,6 +3314,12 @@ async function executeCoreBetaRoute(context, route) {
   if (route === 'auth_recovery') return await executeCoreBetaAuthRecoveryCase({ ...context, scenario });
   if (route === 'recovery') return await executeCoreBetaRecoveryCase({ ...context, scenario });
   if (route === 'run_initialization') return await executeCoreBetaInitializationCase(context);
+  if (route === 'task_lifecycle' && scenario.driver === 'composer_history_navigation') {
+    return await executeCoreBetaComposerHistoryCase(context);
+  }
+  if (route === 'model_routing' && scenario.driver === 'model_menu_sdk_filter') {
+    return await executeCoreBetaModelMenuSdkFilterCase(context);
+  }
   throw new Error(`Core Beta v2 缺少 executor：${route}`);
 }
 
@@ -3577,6 +3583,11 @@ export const CORE_BETA_CONTROLLER_SCENARIO_DRIVERS = new Set([
   'sqlite_schema_upgrade_order_and_failure_recovery',
 ]);
 
+export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
+  'composer_history_navigation',
+  'model_menu_sdk_filter',
+]);
+
 export const CORE_BETA_NATIVE_CASE_TYPES = new Set([
   'run_initialization',
   'conversation',
@@ -3612,6 +3623,21 @@ export function coreBetaRuntimeExecutorBinding(testCase, providedScenario = null
       case_type: caseType,
       driver,
       legacy_case_id: scenario.legacy_case_id,
+      reason: '',
+    };
+  }
+  const nativeScenarioTypeMatches = (
+    driver === 'composer_history_navigation' && caseType === 'task_lifecycle'
+  ) || (
+    driver === 'model_menu_sdk_filter' && caseType === 'model_routing'
+  );
+  if (CORE_BETA_NATIVE_SCENARIO_DRIVERS.has(driver) && nativeScenarioTypeMatches) {
+    return {
+      dispatchable: true,
+      mode: 'native',
+      case_type: caseType,
+      driver,
+      legacy_case_id: '',
       reason: '',
     };
   }
@@ -8809,42 +8835,75 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-007') {
-    if (!state.artifacts.core_beta_fixture_lease?.ok
-      && !['true', '1'].includes(String(options['expert-publish-failure-injection'] || process.env.QBOT_EXPERT_PUBLISH_FAILURE_INJECTION || '').toLowerCase())) {
-      markBlocked(state, 'BETA-EXPERT-007 需要受控expert publish失败注入（waiting/auth_required/timeout/restart）；未配置时禁止用普通发布伪装通过。');
-      return;
+    const targets = [
+      { ledger_key: 'published_research', draft: ledger.experts?.['claude-code_draft'] },
+      { ledger_key: 'published_data', draft: ledger.experts?.codex_draft },
+      { ledger_key: 'published_delivery', draft: ledger.experts?.manual_draft },
+    ];
+    if (targets.some((item) => !item.draft?.id)) {
+      throw new Error('BETA-EXPERT-007 缺少研究/数据/交付三类本轮草稿');
     }
-    const draftId = ledger.experts?.manual_draft?.id;
-    if (!draftId) throw new Error('BETA-EXPERT-007 缺少manual draft');
-    const operation = await page.evaluate(async ({ id, key }) => {
+    const operations = await page.evaluate(async ({ entries, keyPrefix }) => {
       const lifecycle = window.agent.expertLifecycle;
-      const draft = await lifecycle.getDraft(id);
-      const started = await lifecycle.publish(id, draft.etag, key);
-      const states = [started];
-      let current = started;
-      for (let index = 0; index < 30 && !['completed', 'failed'].includes(current.state); index += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        current = await lifecycle.getOperation(started.id || started.operationId);
-        states.push(current);
+      const results = [];
+      for (const [index, entry] of entries.entries()) {
+        const draft = await lifecycle.getDraft(entry.draft_id);
+        const started = await lifecycle.publish(
+          draft.id,
+          draft.etag,
+          `${keyPrefix}-${entry.ledger_key}-${index + 1}`,
+        );
+        const states = [started];
+        let current = started;
+        for (let attempt = 0; attempt < 30 && !['completed', 'failed'].includes(current.state); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          current = await lifecycle.getOperation(started.id || started.operationId);
+          states.push(current);
+        }
+        const expertId = current.expertId || started.expertId || null;
+        results.push({
+          ledger_key: entry.ledger_key,
+          draft_id: draft.id,
+          operation_id: started.id || started.operationId,
+          states,
+          expert: expertId ? await lifecycle.get(expertId) : null,
+        });
       }
-      return {
-        operation_id: started.id || started.operationId,
-        states,
-        drafts: await lifecycle.listDrafts(),
-        expert: started.expertId ? await lifecycle.get(started.expertId) : null,
-      };
-    }, { id: draftId, key: `qbot-beta-${testCase.id}-${Date.now()}` });
-    writeExpertArtifact('expert_publish_operation', operation, Boolean(operation.operation_id && operation.states.length));
-    const published = operation.expert;
-    if (published?.id) {
-      ledger.experts.published = published;
-      ledger.experts.published_delivery = published;
+      return results;
+    }, {
+      entries: targets.map((item) => ({ ledger_key: item.ledger_key, draft_id: item.draft.id })),
+      keyPrefix: `qbot-beta-${testCase.id}-${Date.now()}`,
+    });
+    const publishValid = operations.length === 3 && operations.every((item) => (
+      item.operation_id
+      && item.states.length > 0
+      && item.expert?.id
+      && ['completed', 'succeeded'].includes(String(item.states.at(-1)?.state || '').toLowerCase())
+    ));
+    writeExpertArtifact('expert_publish_operation', operations, publishValid);
+    for (const item of operations) {
+      if (item.expert?.id) ledger.experts[item.ledger_key] = item.expert;
     }
+    ledger.experts.published = ledger.experts.published_delivery || operations.at(-1)?.expert || null;
     writeCoreBetaSuiteLedger(caseDir, ledger);
-    writeExpertArtifact('restart_trace', { operation_id: operation.operation_id, resumed: operation.states.length > 1 }, operation.states.length > 1);
+    writeExpertArtifact('restart_trace', {
+      operations: operations.map((item) => ({
+        ledger_key: item.ledger_key,
+        operation_id: item.operation_id,
+        state_count: item.states.length,
+      })),
+      resumed: operations.every((item) => item.states.length > 1),
+    }, operations.every((item) => item.states.length > 1));
     writeExpertArtifact('credential_redaction_scan', {
-      secret_pattern_matches: (JSON.stringify(operation).match(/(?:Authorization:\s*Bearer|api[_-]?key|client[_-]?secret|refresh[_-]?token)/ig) || []).length,
-    }, !/(?:Authorization:\s*Bearer|api[_-]?key|client[_-]?secret|refresh[_-]?token)/i.test(JSON.stringify(operation)));
+      secret_pattern_matches: (JSON.stringify(operations).match(/(?:Authorization:\s*Bearer|api[_-]?key|client[_-]?secret|refresh[_-]?token)/ig) || []).length,
+    }, !/(?:Authorization:\s*Bearer|api[_-]?key|client[_-]?secret|refresh[_-]?token)/i.test(JSON.stringify(operations)));
+    recordAssertion(
+      state,
+      '三类本轮Expert发布闭环',
+      '研究、数据、交付三类草稿必须各自产生唯一发布operation和active expert，并写入本轮账本供后续Case使用。',
+      publishValid,
+      JSON.stringify(operations),
+    );
     state.artifacts.capability_selection = identityFile;
     state.artifacts.capability_execution_event = state.artifacts.expert_publish_operation;
     return;
@@ -9531,7 +9590,8 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-001') {
-    const selected = bridge.experts.find((item) => item?.activeReleaseId && item?.id);
+    const selected = bridge.experts.find((item) => item?.owned === true && item?.activeReleaseId && item?.id)
+      || bridge.experts.find((item) => item?.activeReleaseId && item?.id);
     if (!selected) {
       markBlocked(state, 'BETA-EXPERT-001 需要至少1个已发布专家用于搜索/详情/召唤。');
       return;
@@ -9545,6 +9605,39 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     const card = page.locator(`[data-testid="expert-card-${cssEscape(selected.id)}"], [data-expert-id="${cssEscape(selected.id)}"]`).first();
     const cardVisible = await visible(card, 1_500)
       || await page.locator('[data-testid^="expert-card-"]').filter({ hasText: String(selected.label || selected.name || '') }).first().isVisible({ timeout: 1_500 }).catch(() => false);
+    const ownedExpertIds = bridge.experts
+      .filter((item) => item?.owned === true)
+      .map((item) => String(item.id || ''))
+      .filter(Boolean);
+    const releaseNavigation = page.locator('[data-testid="expert-v2-nav-releases"]').first();
+    if (await visible(releaseNavigation, 1_500)) {
+      await releaseNavigation.click();
+      await page.waitForTimeout(500);
+    }
+    const ownedProjection = await page.evaluate((expectedIds) => {
+      const rows = Array.from(document.querySelectorAll(
+        '[data-testid^="expert-v2-expert-"], [data-testid^="expert-v2-archived-"]',
+      ));
+      const visibleIds = rows
+        .filter((row) => {
+          const style = getComputedStyle(row);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .map((row) => String(row.getAttribute('data-testid') || '')
+          .replace(/^expert-v2-(?:expert|archived)-/, ''));
+      const nav = document.querySelector('[data-testid="expert-v2-nav-releases"]');
+      return {
+        expected_owned_ids: expectedIds,
+        visible_ids: visibleIds,
+        nav_text: String(nav?.textContent || '').replace(/\s+/g, ' ').trim(),
+      };
+    }, ownedExpertIds);
+    ownedProjection.valid = ownedExpertIds.every((id) => ownedProjection.visible_ids.includes(id))
+      && ownedProjection.visible_ids.every((id) => ownedExpertIds.includes(id))
+      && new RegExp(`发布记录\\s*${ownedExpertIds.length}(?:\\D|$)`).test(ownedProjection.nav_text);
+    const ownedProjectionFile = path.join(caseDir, 'expert-owned-release-projection.json');
+    writeJsonFile(ownedProjectionFile, ownedProjection);
+    state.artifacts.product_state_diff = ownedProjectionFile;
     const detail = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
       const item = await lifecycle.get(expertId);
@@ -9605,7 +9698,10 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       && /专家市场|市场/.test(pageTextBefore);
     writeExpertArtifact('expert_draft_lifecycle', { drafts: bridge.drafts });
     writeExpertArtifact('expert_dependency_graph', detail.item?.version || detail.item);
-    const runtimeOracleValid = informationArchitecture && cardVisible && publicIdentityMatches;
+    const runtimeOracleValid = informationArchitecture
+      && cardVisible
+      && publicIdentityMatches
+      && ownedProjection.valid;
     const runtimeTraceFile = writeExpertArtifact('expert_runtime_trace', {
       valid: true,
       oracle_valid: runtimeOracleValid,
@@ -9620,6 +9716,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       capabilities_readback_attempts: detail.capabilities_readback_attempts,
       public_identity_matches: publicIdentityMatches,
       capabilities_identity_matches: capabilitiesIdentityMatches,
+      owned_release_projection: ownedProjection,
     }, true);
     state.artifacts.core_beta_capability_selection = selection;
     state.artifacts.core_beta_capability_execution = detail;
@@ -9639,6 +9736,13 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       expertSelectionReadbackOk ? '' : 'automation_error',
     );
     recordAssertion(state, '专家中心分区、搜索、详情与召唤闭环', '五类分区必须可见，搜索命中exact expert，setExpert后task identity与最近召唤一致。', runtimeOracleValid, JSON.stringify({ informationArchitecture, cardVisible, selected, selection: selection.expert }));
+    recordAssertion(
+      state,
+      '发布记录仅显示本人创建专家',
+      '发布记录计数与列表必须严格等于 expertLifecycle.list() 中 owned=true 的专家集合，共享和内置专家不得混入管理面。',
+      ownedProjection.valid,
+      JSON.stringify(ownedProjection),
+    );
     return;
   }
 
@@ -10686,6 +10790,249 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   recordAssertion(state, 'IME仅创建一次发送', '目标prompt只允许出现一次且只产生一次发送receipt。', !reply.incomplete, reply.incomplete_reason || 'reply complete');
 }
 
+function sameStringMultiset(left = [], right = []) {
+  return JSON.stringify(left.map(String).sort()) === JSON.stringify(right.map(String).sort());
+}
+
+export function coreBetaComposerHistoryVerdict(readback = {}) {
+  const prompts = Array.isArray(readback.prompts) ? readback.prompts.map(String) : [];
+  const navigation = readback.navigation || {};
+  return Boolean(
+    prompts.length === 2
+    && prompts.every(Boolean)
+    && String(readback.initial_task_id || '')
+    && String(readback.isolated_task_id || '') === ''
+    && readback.isolated_is_draft === true
+    && Number(readback.isolated_message_count) === 0
+    && String(readback.isolated_draft_instance_id || '')
+    && navigation.up_latest === prompts[1]
+    && navigation.up_older === prompts[0]
+    && navigation.down_newer === prompts[1]
+    && navigation.down_draft === String(readback.unsent_draft || '')
+    && navigation.isolated_new_task === ''
+    && navigation.reopened_latest === prompts[1]
+  );
+}
+
+async function executeCoreBetaComposerHistoryCase({ page, state, testCase, caseDir, timeoutMs }) {
+  const prompts = (testCase.conversation_turns || [])
+    .slice(0, 2)
+    .map((turn) => String(turn?.prompt || '').trim());
+  if (prompts.length !== 2 || prompts.some((prompt) => !prompt)) {
+    throw new Error(`${testCase.id} 必须声明两个可接受的历史输入样本`);
+  }
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, {
+    skillMode: 'disabled',
+    connectorMode: 'disabled',
+  })) return;
+  for (const [index, prompt] of prompts.entries()) {
+    await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt,
+      label: `历史输入样本${index + 1}`,
+    });
+  }
+  const initial = await qbotE2EState(page);
+  const input = page.locator('[data-testid="composer-input"]').first();
+  await input.waitFor({ state: 'visible', timeout: 15_000 });
+  const composerText = async () => page.evaluate(() => String(
+    window.__aui?.thread?.composer?.getState?.().text
+    ?? document.querySelector('[data-testid="composer-input"]')?.textContent
+    ?? '',
+  ).replaceAll('\uFEFF', ''));
+  const pressAndRead = async (key) => {
+    await input.focus();
+    await input.press(key);
+    await page.waitForTimeout(180);
+    return await composerText();
+  };
+  const unsentDraft = 'QBOT-HISTORY-DRAFT-NOT-SENT';
+  await input.fill(unsentDraft);
+  await input.press('Home');
+  const navigation = {
+    up_latest: await pressAndRead('ArrowUp'),
+    up_older: await pressAndRead('ArrowUp'),
+    down_newer: await pressAndRead('ArrowDown'),
+    down_draft: await pressAndRead('ArrowDown'),
+  };
+  const historyScreenshot = await shot(page, caseDir, 'composer-history-draft-restored');
+  await openNewTask(page, state);
+  const isolated = await qbotE2EState(page);
+  const isolatedInput = page.locator('[data-testid="composer-input"]').first();
+  await isolatedInput.focus();
+  await isolatedInput.press('ArrowUp');
+  await page.waitForTimeout(180);
+  navigation.isolated_new_task = await composerText();
+  const reopened = await reopenSessionAndReadback(page, initial?.activeId);
+  const reopenedInput = page.locator('[data-testid="composer-input"]').first();
+  await reopenedInput.fill('');
+  await reopenedInput.focus();
+  await reopenedInput.press('ArrowUp');
+  await page.waitForTimeout(180);
+  navigation.reopened_latest = await composerText();
+  const readback = {
+    schema_version: 'qbot-core-beta-composer-history/v1',
+    valid: true,
+    oracle_valid: false,
+    prompts,
+    unsent_draft: unsentDraft,
+    initial_task_id: String(initial?.activeId || ''),
+    isolated_task_id: String(isolated?.activeId || ''),
+    isolated_is_draft: isolated?.isDraft === true,
+    isolated_message_count: Number(isolated?.messageCount ?? -1),
+    isolated_draft_instance_id: String(isolated?.draftInstanceId || ''),
+    reopened,
+    navigation,
+    screenshots: { history: historyScreenshot },
+  };
+  readback.oracle_valid = coreBetaComposerHistoryVerdict(readback);
+  const file = path.join(caseDir, 'composer-history-readback.json');
+  writeJsonFile(file, readback);
+  state.artifacts.product_action_trace = file;
+  state.artifacts.data_integrity_readback = file;
+  recordAssertion(
+    state,
+    'Composer Up/Down历史输入与会话隔离',
+    'Up必须按当前会话从新到旧回放已接受输入，Down必须回到未发送草稿；新任务不得继承，重开原task后仍可回放。',
+    readback.oracle_valid,
+    JSON.stringify(readback),
+  );
+}
+
+export function coreBetaModelMenuExpectedSnapshot(source = {}) {
+  const state = source.state || {};
+  const view = source.view || {};
+  const runtimeFamily = String(
+    state.runtimeFamily
+    || view?.runtimeOptions?.runtimeFamily
+    || source.family
+    || 'claude-code',
+  );
+  const protocol = runtimeFamily === 'codex' ? 'response' : 'anthropic';
+  const policy = String(state?.modelPolicyState?.policy || '');
+  const autoPolicySelected = state.executionScope === 'desktop-local' && policy !== 'manual';
+  const autoOriginManualSelection = autoPolicySelected || (
+    policy === 'manual' && state?.modelPolicyState?.reason === 'manual_override_auto'
+  );
+  const manualOptions = Array.isArray(view?.manualModelOptions) ? view.manualModelOptions : [];
+  const runtimeOptions = Array.isArray(view?.runtimeOptions?.options) ? view.runtimeOptions.options : [];
+  const candidateSource = autoOriginManualSelection && manualOptions.length
+    ? 'manualModelOptions'
+    : 'runtimeOptions.options';
+  const candidates = candidateSource === 'manualModelOptions' ? manualOptions : runtimeOptions;
+  const eligible = candidates.filter((option) => (
+    !option?.disabled
+    && String(option?.runtimeFamily || '') === runtimeFamily
+    && String(option?.protocol || '') === protocol
+    && /^M[1-4]$/.test(String(option?.complianceTier || ''))
+  ));
+  return {
+    runtime_family: runtimeFamily,
+    protocol,
+    option_count: eligible.length,
+    model_ids: eligible.map((option) => String(option.modelId || '')),
+    options: eligible,
+    candidate_source: candidateSource,
+    policy: state?.modelPolicyState || null,
+    execution_scope: String(state.executionScope || ''),
+  };
+}
+
+export function coreBetaModelMenuSdkFilterVerdict(readback = {}) {
+  const expected = readback.expected || {};
+  const rendered = readback.rendered || {};
+  return Boolean(
+    ['claude-code', 'codex'].includes(String(expected.runtime_family || ''))
+    && String(expected.protocol || '') === (expected.runtime_family === 'codex' ? 'response' : 'anthropic')
+    && Number(expected.option_count || 0) > 0
+    && Array.isArray(expected.model_ids)
+    && expected.model_ids.length === Number(expected.option_count)
+    && expected.model_ids.every((modelId) => String(modelId || ''))
+    && !String(rendered.error || '')
+    && sameStringMultiset(expected.model_ids, rendered.model_ids)
+    && Array.isArray(rendered.tiers)
+    && rendered.tiers.length === rendered.model_ids.length
+    && rendered.tiers.every((tier) => /^M[1-4]$/.test(String(tier)))
+  );
+}
+
+async function executeCoreBetaModelMenuSdkFilterCase({ page, state, testCase, caseDir }) {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, {
+    skillMode: 'disabled',
+    connectorMode: 'disabled',
+  })) return;
+  const source = await page.evaluate(async () => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    const diagnostics = typeof e2e?.diagnostics === 'function' ? await e2e.diagnostics() : null;
+    const state = typeof e2e?.state === 'function' ? e2e.state() : null;
+    const family = String(
+      state?.runtimeFamily
+      || diagnostics?.runtimeFamily
+      || diagnostics?.e2eCurrentTurnAuthorityReadiness?.runtimeFamily
+      || 'claude-code',
+    );
+    let view = null;
+    if (typeof window.agent?.getConnections === 'function') {
+      try { view = await window.agent.getConnections(family, { forceRefresh: true }); }
+      catch { view = await window.agent.getConnections(); }
+    }
+    if (!view && typeof e2e?.getConnectionView === 'function') view = await e2e.getConnectionView();
+    return { family, view, diagnostics, state };
+  });
+  const expected = coreBetaModelMenuExpectedSnapshot(source);
+  await page.locator('[data-testid="composer-safety-level-menu"]').click({ timeout: 15_000 });
+  await page.locator('[aria-label="模型选择"]').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.locator('[data-testid="composer-models-loading"]').waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => {});
+  const rendered = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('[data-testid^="composer-safety-level-option-"]'));
+    return {
+      model_ids: rows.map((row) => {
+        const tier = String(row.closest('[data-tier]')?.getAttribute('data-tier') || '');
+        const prefix = `composer-safety-level-option-${tier}-`;
+        const testId = String(row.getAttribute('data-testid') || '');
+        return testId.startsWith(prefix) ? testId.slice(prefix.length) : testId;
+      }),
+      tiers: rows.map((row) => String(row.closest('[data-tier]')?.getAttribute('data-tier') || '')),
+      labels: rows.map((row) => String(row.textContent || '').trim()),
+      error: String(document.querySelector('[data-testid="composer-models-error"]')?.textContent || '').trim(),
+      auto_visible: Boolean(document.querySelector('[data-testid="composer-model-option-auto"]')),
+    };
+  });
+  const readback = {
+    schema_version: 'qbot-core-beta-model-menu-sdk-filter/v1',
+    valid: true,
+    oracle_valid: false,
+    expected,
+    rendered,
+    source: {
+      selected: source.view?.runtimeOptions?.selected || null,
+      runtime_option_count: Array.isArray(source.view?.runtimeOptions?.options)
+        ? source.view.runtimeOptions.options.length
+        : 0,
+      manual_option_count: Array.isArray(source.view?.manualModelOptions)
+        ? source.view.manualModelOptions.length
+        : 0,
+    },
+  };
+  readback.oracle_valid = coreBetaModelMenuSdkFilterVerdict(readback);
+  const file = path.join(caseDir, 'model-route-trace.json');
+  writeJsonFile(file, readback);
+  state.artifacts.model_route_trace = file;
+  recordAssertion(
+    state,
+    '模型菜单按当前SDK协议过滤',
+    'Claude Code只显示anthropic候选，Codex只显示response候选；disabled、其他runtime和其他协议模型不得进入菜单。',
+    readback.oracle_valid,
+    JSON.stringify(readback),
+  );
+}
+
 async function executeCoreBetaAttachmentCase(context, scenario) {
   if (scenario.driver === 'attachment_limits_recovery_send') {
     return await executeCoreBetaAttachmentLimitsRecovery(context);
@@ -11468,13 +11815,27 @@ export function coreBetaMarkdownHtmlPreviewVerdict(readback = {}) {
     && /12/.test(String(markdown.source_text || ''))
     && /8/.test(String(markdown.source_text || ''))
     && html.clicked === true
-    && html.code_viewer_visible === true
-    && /html/i.test(String(html.language || ''))
-    && html.script_source_visible === true
-    && html.script_dom_nodes === 0
-    && html.iframe_dom_nodes === 0
-    && /12/.test(String(html.source_text || ''))
-    && /8/.test(String(html.source_text || ''))
+    && (
+      html.code_viewer_visible !== true
+      || (
+        /html/i.test(String(html.language || ''))
+        && html.script_source_visible === true
+        && html.script_dom_nodes === 0
+        && html.iframe_dom_nodes === 0
+      )
+    )
+    && html.web_preview_visible === true
+    && html.web_preview_content_visible === true
+    && html.web_preview_loading_visible === false
+    && !String(html.web_preview_error || '').trim()
+    && html.share_button_visible === true
+    && html.share_button_enabled === true
+    && html.share_dialog_visible === true
+    && html.share_ready === true
+    && String(html.share_url || '').trim()
+    && !String(html.share_error || '').trim()
+    && /12/.test(String(html.file_source_text || html.source_text || ''))
+    && /8/.test(String(html.file_source_text || html.source_text || ''))
     && html.parent_script_executed === false
     && Array.isArray(html.dialogs)
     && html.dialogs.length === 0
@@ -11506,6 +11867,7 @@ async function verifyCoreBetaMarkdownHtmlPreview(page, caseDir, files, overviewT
       code_viewer_visible: codeViewerVisible,
       language: String(language || ''),
       source_text: clip(sourceText, 8_000),
+      file_source_text: clip(file.text_preview, 8_000),
       source_has_script: /<script\b/i.test(sourceText),
       script_dom_nodes: scriptDomNodes,
       iframe_dom_nodes: iframeDomNodes,
@@ -11524,6 +11886,87 @@ async function verifyCoreBetaMarkdownHtmlPreview(page, caseDir, files, overviewT
   let html;
   try {
     html = await inspectSourcePreview(htmlFile, 'html');
+    const webPreview = page.locator('[data-testid="web-preview-panel"]').first();
+    const webPreviewVisible = await visible(webPreview, 1_500);
+    if (webPreviewVisible) {
+      await page.waitForFunction(() => {
+        const shown = (node) => Boolean(node && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
+        const error = document.querySelector('[data-testid="web-preview-error"], [data-testid="web-preview-snapshot-error"], [data-testid="web-preview-snapshot-refresh-error"]');
+        if (shown(error)) return true;
+        const loading = document.querySelector('[data-testid="web-preview-loading"], [data-testid="web-preview-refresh-status"], [data-testid="web-preview-snapshot-loading"]');
+        const frame = document.querySelector('[data-testid="web-preview-iframe"]');
+        const image = document.querySelector('[data-testid="web-preview-snapshot-image"]');
+        return !shown(loading) && (shown(frame) || Boolean(shown(image) && image.complete && image.naturalWidth > 0));
+      }, { timeout: 30_000 }).catch(() => {});
+      const iframe = page.locator('[data-testid="web-preview-iframe"]').first();
+      const iframeVisible = await visible(iframe, 800);
+      let iframeBodyText = '';
+      let iframeContentVisible = false;
+      if (iframeVisible) {
+        const body = iframe.contentFrame().locator('body');
+        await body.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {});
+        iframeBodyText = await body.innerText({ timeout: 2_000 }).catch(() => '');
+        iframeContentVisible = await body.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const visual = element.querySelector('canvas, svg, img, video');
+          return rect.width > 0 && rect.height > 0
+            && (String(element.innerText || '').trim().length > 0 || Boolean(visual));
+        }).catch(() => false);
+      }
+      const snapshotImage = page.locator('[data-testid="web-preview-snapshot-image"]').first();
+      const snapshotContentVisible = await snapshotImage.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && element.complete && element.naturalWidth > 0;
+      }).catch(() => false);
+      const loadingVisible = await page.locator(
+        '[data-testid="web-preview-loading"], [data-testid="web-preview-refresh-status"], [data-testid="web-preview-snapshot-loading"]',
+      ).evaluateAll((nodes) => nodes.some((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })).catch(() => false);
+      const webPreviewError = await page.locator(
+        '[data-testid="web-preview-error"], [data-testid="web-preview-snapshot-error"], [data-testid="web-preview-snapshot-refresh-error"]',
+      ).allInnerTexts().then((items) => items.map((item) => item.trim()).filter(Boolean).join('\n')).catch(() => '');
+      const share = page.locator('[data-testid="web-preview-share"]').first();
+      const shareButtonVisible = await visible(share, 1_200);
+      const shareButtonEnabled = shareButtonVisible ? await share.isEnabled().catch(() => false) : false;
+      if (shareButtonEnabled) {
+        await share.click();
+        await page.locator('[data-testid="web-preview-share-dialog"]').waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+      }
+      const shareDialog = page.locator('[data-testid="web-preview-share-dialog"]').first();
+      const shareDialogVisible = await visible(shareDialog, 1_200);
+      if (shareDialogVisible) {
+        await shareDialog.locator('[aria-label="报告分享链接"], [role="alert"]')
+          .first()
+          .waitFor({ state: 'visible', timeout: 30_000 })
+          .catch(() => {});
+      }
+      const shareLink = shareDialog.locator('[aria-label="报告分享链接"]').first();
+      const shareReady = await visible(shareLink, 500);
+      html = {
+        ...html,
+        web_preview_visible: true,
+        web_preview_content_visible: !loadingVisible
+          && !webPreviewError
+          && (iframeContentVisible || snapshotContentVisible),
+        web_preview_loading_visible: loadingVisible,
+        web_preview_error: webPreviewError,
+        web_preview_iframe_body_text: clip(iframeBodyText, 2_000),
+        web_preview_url: await webPreview.locator('.web-preview-url').getAttribute('title').catch(() => ''),
+        share_button_visible: shareButtonVisible,
+        share_button_enabled: shareButtonEnabled,
+        share_dialog_visible: shareDialogVisible,
+        share_ready: shareReady,
+        share_url: shareReady ? await shareLink.inputValue().catch(() => '') : '',
+        share_error: await shareDialog.locator('[role="alert"]').innerText().catch(() => ''),
+        web_preview_screenshot: await shot(page, caseDir, 'core-beta-artifact-html-web-preview-share'),
+      };
+      const closeShare = shareDialog.locator(':scope > button').first();
+      if (await visible(closeShare, 500)) await closeShare.click().catch(() => {});
+      const closePreview = page.locator('[data-testid="web-preview-close"]').first();
+      if (await visible(closePreview, 700)) await closePreview.click().catch(() => {});
+    }
   } finally {
     page.off('dialog', dialogListener);
   }

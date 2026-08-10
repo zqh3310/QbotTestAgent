@@ -2,445 +2,95 @@
 
 适用对象：后续接手 `/Users/qifu/Documents/QbotTestAgent` 的 QA Agent。
 
-本文是当前 Core Beta 74 条门禁工作的接力指南。规范性合同仍以
-`/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准；
-本指南只回答“当前进度是什么、下一位 Agent 应该怎么安全继续”。
+规范性执行合同以
+`/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准。
+本指南只记录当前 70 条生产灰度发布门禁的接手状态、启动顺序和禁止事项。
 
-## 1. 当前基线
+## 1. 当前状态
 
-- 框架仓库：`/Users/qifu/Documents/QbotTestAgent`
-- 产品仓库：`/Users/qifu/Documents/deepbankV2`，只读，禁止修改。
-- 当前框架基线：以运行前 `git rev-parse HEAD` 的已推送 `main` 为准；不得使用本文中的历史提交启动。
-- 要求：`main == origin/main`，tracked dirty=false。
-- 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID 或旧监控。
-- 当前正式宿主身份：360Teams `5.3.0(2119080776)`。
-- 当前 QWork 身份：UAT `0.1.1-rc.2`。
-- 当前 control plane：
-  `https://deepbank-control-uat.sandbox.deepbank.daikuan.qihoo.net`
-- 当前模型档位：M3。
+- 测试已按用户要求暂停。当前不得启动 pretest、runner 或 monitor。
+- 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
+- 产品设计基线：`origin/release/0.1`，
+  commit `5f3f99b1dd24e04f36715ea236a3f70b132d25c7`，版本 `0.1.1`。
+- 下一轮目标 lane：UAT。实际 360Teams、QWork、control plane、backend、
+  prompt policy、feature flags 和模型身份必须在用户恢复测试后重新读取并冻结，
+  不得沿用历史值。
+- 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID、旧 CDP 或旧监控。
 
-2026-08-10 上一轮 55 条串行 UAT 批次已在 360Teams `5.3.0(2119080776)` /
-QWork `0.0.30` 精确身份声明下永久冻结；随后 QWork 已更新并由 Teams doctor
-确认当前 renderer 为
-`file:///Users/qifu/.deepbank-uat/ui/0.1.1-rc.2/index.html`。旧轮次只能保留历史
-证据，不能继承到新发布。修复、双框架检查、推送、旧 QA 资源精确清理和新
-`READY_SCOPED` 预检完成后，必须以 QWork `0.1.1-rc.2` 的新不可变目录从第 1 条
-完整串行重跑 55 条。
-
-最新一次已冻结的 QWork `0.1.1-rc.2` UAT scoped 启动批次：
+最新冻结的旧 55 条 scoped 批次：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810160918_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.1.1-rc.2_M3_serial_framework-3506228
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810165050_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.1.1-rc.2_M3_serial_framework-af1a4a7
 ```
 
-该批次在 Case 0 截图阶段确认 framework issue：Playwright 截图进入字体等待超时后，
-最后可见 CDP 操作为无回包的 `Page.captureScreenshot`。复核发现 360Teams 外层保护器
-缺少 `detach()` 硬超时，而 Core Beta v2 根 `shot()` 的 fallback session 创建、截图与
-`detach()` 均没有硬超时；任一层都可能让唯一 runner 无界等待且无法生成
-`automation-progress.json`。该目录没有真实 Case 结果并已冻结；诊断样本保存在相邻
-`.framework-diagnostics` 目录。修复必须让两层截图全链路有界，并增加“截图无回包和
-detach 永不返回也必须及时收敛”的回归测试；修复、全检、推送和新
-`READY_SCOPED` pretest 后，从 `1/55` 在新不可变目录完整串行重跑。
+该目录及此前所有 55/74 scoped 目录只作为历史证据保留，禁止续写、继承或作为
+发布结论。旧 55 条流程长期暴露过截图无界等待、回复/附件/成果 Oracle 误判、
+Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错误等框架问题。
+后续修复不能抹去这些历史 issue，但也不得继续围绕旧 55 条启动新发布批次。
 
-最新一次已冻结的 UAT scoped 批次：
+## 2. 当前正式 Casebook
+
+生产灰度发布唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810131000_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.0.30_M3_serial_framework-899cd29
-```
-
-该批次完成 `49/55` 后在 `BETA-MCP-002` 确认 framework issue。前两个固定
-connector 的手动模式点击已派发但产品仍读回 auto，均已正确形成有效产品负向
-收据；第三个 connector 的点击后瞬时 UI 读回为已选中，稍后的公共状态却再次读回
-`selectedConnectors=[]`。这同样是证据完整的产品持久化失败，但收据校验错误要求
-瞬时选择数组与稍后持久化数组完全相等，将第 3 份收据写为无效并提前停止，只固化
-3/5 个样本，最终使 manifest 的 `capability_selection` 和
-`capability_execution_event` 无效。修复必须分离瞬时点击读回与持久化读回，二者
-不一致时保持 `evidence_valid=true/oracle_valid=false` 并继续全部 5 个样本；任一
-阶段读回本身缺失时仍须 fail-closed。该目录已冻结，不得续写；修复、全检、推送、
-新能力审计和 `READY_SCOPED` pretest 后，必须在新目录从 `1/55` 完整串行重跑。
-
-同一冻结批次还确认 `BETA-SKILL-014` 的产品 home 解析 framework issue。QWork
-实际 UI 为 `file:///Users/qifu/.deepbank-uat/ui/0.0.30/index.html`，并已在
-`/Users/qifu/.deepbank-uat/.claude/skills/qa-meeting-minutes-6852fff34b25` 与
-`/Users/qifu/.deepbank-uat/.agents/skills/qa-meeting-minutes-6852fff34b25` 创建双投影；
-runner 却优先采用 Teams 注入的
-`teams360-automation/state/control-plane-home`，误报投影缺失并在错误目录生成
-`already_absent` 清理回执。修复必须让 versioned QWork file URL 的 release home
-优先于 fixture `--qbot-home`，并在新批次用正确 home 完成基线、产物读回和精确
-清理。旧 slug 属于该冻结 Case 的唯一 QA 资源，重跑前只能通过框架精确清理，
-禁止用临时 CDP、Computer Use 或不受约束的手工删除。
-
-最新一次已冻结的 UAT scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810121500_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.0.30_M3_serial_framework-3fa0067
-```
-
-该批次完成 `14/55` 后由监控确认 `BETA-FILE-001` 的 framework issue 并停止。
-产品回复以四个独立 `第 1 页` 引用绑定三条结论，明确写出冻结附件名
-`qbot-pdf-summary.pdf`、中文标题“PDF 摘要”、Agent PDF 读取目标、摘要、风险和
-产品友好验收语义；解析器却只接受连续英文标题 `QBot PDF Summary` 和固定的
-“Agent…读取…PDF”词序，错误写入 `fixture_facts=false` 并误报产品 Bug。修复必须
-接受精确冻结文件名与全部内容锚点的组合，并兼容“Agent 的 PDF 读取能力”等等价
-词序，同时保留“只有文件名/页码、缺少内容锚点”必须失败的反例。该目录已冻结，
-不得续写；修复、全检、推送、新能力审计和 `READY_SCOPED` pretest 后，必须在新
-目录从 `1/55` 完整串行重跑。
-
-最新一次已冻结的 PROD scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808170054_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-4403da6
-```
-
-该批次完成 `15/55` 后由监控确认 `BETA-FILE-001` 的 framework issue 并停止。
-产品回复先明确“三条关键结论如下”，随后以独立行 `第 1 页（全文仅 1 页）`
-约束后续三条列表，并正确命中 QBot PDF Summary、Agent 读取目标、摘要/风险和
-产品友好表述等全部 fixture 锚点；框架却只识别“结论均位于第 1 页”或“第 1 页
-包含三条结论”句式，错误写入 `collective_page_reference=false` 并误报产品 Bug。
-修复必须接受紧跟结论引导语的独立第 1 页范围标题，同时保留否定标题、分散页码和
-只有页码无锚点的失败反例。该目录已冻结，不得续写；修复、全检、推送、新能力审计
-和 `READY_SCOPED` pretest 后，必须在新目录从 `1/55` 完整串行重跑。
-
-上一份已冻结的 PROD scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808164730_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-831527b
-```
-
-该批次在 `BETA-INIT-001` 后停止。产品运行时检查为 Python 26 个就绪、1 个失败，
-但 runtime loaded、Claude/Codex SDK、维护按钮、capabilities 与工作台均可用；
-框架在仍打开的系统设置页中直接查询 composer 可见性，任务较多时设置页完整遮住
-输入区，因而写入 `composer_ready=false` 并拒绝安全继续。修复必须仅在明确产品失败
-后使用框架真实【新建任务】路径返回干净草稿，保存前后截图、空任务隔离和公开状态，
-再以可见 composer 判定是否可继续；恢复失败时仍须停止。修复推送后必须执行新的
-能力审计和 `READY_SCOPED` pretest，并在新不可变目录从 `1/55` 完整串行重跑。
-
-上一份已冻结的 PROD scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130950_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-42a832b
-```
-
-该批次完成 `35/55` 后在 `BETA-SKILL-012` 停止。10 个本轮 QA Skill 均已收到
-精确卸载请求并最终从 `catalog.installed` 连续两次缺席，`remaining=0`，44 个
-非 QA 基线 Skill 完全未变；但最后一个 `lingxi-get-request-detail` 卸载调用返回
-`control-plane request timed out`。框架只接受即时 `result.ok=true`，没有用同一
-identity 的权威稳定缺席终态对歧义超时进行对账，因此把实际成功清理误记为
-`automation_error` 并漏执行后续 20 条。修复必须只对已知 control-plane 超时、
-精确 identity/name 绑定、连续两次权威缺席且基线未变的组合允许
-`terminal_reconciled=true`；目标仍在、读回不足、权限/业务错误和其他错误必须
-继续 fail-closed。修复、正反 invariant、合同更新、双框架检查和推送完成后，
-执行新 `READY_SCOPED` pretest，并在新目录从 `1/55` 完整串行重跑。
-
-上一份已冻结的 PROD scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808130359_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-8a877eb
-```
-
-该批次在 `BETA-INIT-001` 后停止。产品运行时检查明确显示 Python 29 个就绪、
-1 个失败，但同一终态已证明 runtime loaded、Claude/Codex SDK、维护按钮、
-capabilities、工作台、输入区和页面读回全部可用。框架原来只允许
-`BETA-INIT-002~004` 在完整安全信号下保留产品 Bug 后继续，遗漏了同样可安全
-降级的 `BETA-INIT-001`，因此错误停止。修复必须把 `BETA-INIT-001` 纳入相同的
-`initialization_continuation` 正反合同；任一公开可用性信号缺失时仍须停止。
-修复推送后必须重新 pretest，并在新不可变目录从 `1/55` 完整串行重跑。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260808124250_uat-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-85a41df
-```
-
-该批次在 `BETA-INIT-001` 后停止。pretest 只核对 session 中声明的 UAT，runner
-却从 QWork renderer 读到 PROD `https://qbot-api.360shuke.com`，随后还用该观察值
-覆盖了 session pin；`run-metadata.json` 已证明实际环境漂移。修复必须让 pretest
-直接核对 renderer control plane，正式 Core Beta runner 强制携带
-`--control-plane-url`，并禁止覆盖非空 session pin。修复推送后必须重新建立精确
-UAT 宿主、执行新 pretest，并从 `1/55` 在新目录完整串行重跑。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807163850_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-476b894
-```
-
-该批次完成 17/55 后，在 `BETA-FILE-004` 确认 framework issue：产品回复明确
-给出报名 100→120、到场 70→80、成交 12→15，并以已绑定文件名的
-`表格一总计：100 + 70 + 12 = 182`、`表格二总计：120 + 80 + 15 = 215`
-给出正确双方总计；原解析器只支持字母和阿拉伯数字表别名，把中文数字表别名的
-正确回复误写为 `totals=false` 和产品 Bug。修复必须让中文表别名先与唯一文件
-身份绑定后再核对总计，并保留交换 182/215 必须失败的正反 invariant；修复推送后
-从第 1 条完整串行重跑，禁止续写该目录。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807144309_uat-core-beta74-scoped55_teams360-5.2.42-2119080753_qwork-0.0.30-rc.12_M3_serial_framework-4004005
-```
-
-该批次完成 48/55 后，在 `BETA-MCP-001` 确认 framework issue：产品 bridge
-成功返回可解析的空 connector catalog，runner 也生成了 Case-bound 空任务、零能力
-读回和 `eligible=0`、五类全部缺失的可信 prerequisite blocked；但写
-`capability-inventory.json` 时错误使用 `catalog.items.length > 0` 作为 `valid`，
-把完整的产品负向读回标为无效证据，manifest 因 `capability_inventory` 无效而硬
-停止，`BETA-MCP-002~007` 未执行。修复必须按 bridge 来源、显式错误和结构判定
-`evidence_valid`，空目录写为 `valid=true/evidence_valid=true/oracle_valid=false`，
-由 prerequisite blocked 继续传播；真实读取异常仍须 fail-closed。新 invariant 必须
-同时覆盖空目录可信 blocked 和 bridge 读取错误反例，修复推送后从第 1 条完整重跑。
-
-前一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807112148_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-eba2613
-```
-
-该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：产品已真实
-进入 Skill 手动模式、精确点击 `Confluence文档迁移助手` 并读回
-`selectedSkills=["confluence-to-cloud-docs"]`；随后 runner 才发现
-`deep_use[3].detail.markdown` 为空并抛异常，造成当前 Case manifest 缺少角色后硬
-停止。冻结 suite ledger 证明 `BETA-SKILL-002` 的 10 个样本从抽样时就全部
-`detail=null`，旧框架只校验数组长度，没有冻结或校验市场 description 回退，
-并非安装后目录覆盖。修复必须在 002 中冻结 `README/body/market description`
-来源与 SHA，使用 Case 只能从冻结来源派生任务；真实缺失时在发送前形成完整
-`skill_prompt_source_unavailable` prerequisite blocked/N/A 证据并继续，禁止再抛出
-不完整 manifest。该目录永久冻结；其中 003/004 安装的本轮 Skill 必须先按第 8 节
-独立清理，再新 pretest、新目录并从第 1 条完整串行重跑 55 条。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807090204_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-2349c5a
-```
-
-该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：前三个固定
-connector 已执行真实卡片点击但产品持续读回 `selectedConnectors=[]`；第四个样本
-存在可选读回；第五个样本真实点击手动模式后仍读回 `routing.mode=auto`、
-`aria-checked=false` 且手动列表不可见。这些已点击但未生效的状态本应形成产品
-负向收据；原 runner 却在 reset 返回 false 时直接 return，只留下 3 个样本且没有
-注册连字符命名的 `capability-selection.json` 和 `capability-execution-event` 角色，
-最终由无效下划线诊断占位导致 manifest 缺失并硬停止。修复必须让 5 个样本分别
-绑定 Case、序号、前后公开状态、精确选择读回、任务零变更守卫和唯一截图/SHA；
-模式或卡片已真实点击但产品未生效时保持 `evidence_valid=true/oracle_valid=false`
-并继续剩余样本，只有控件/点击/读回/截图/守卫本身不完整才允许停止。修复推送后
-还必须先从本冻结目录独立执行 `BETA-SKILL-001 --core-beta-cleanup-from ...` 清理
-`BETA-SKILL-003/004` 的本轮安装遗留，再从第 1 条完整串行重跑 55 条。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807071819_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-fe28758
-```
-
-该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：第 4 个代表
-Skill `Confluence文档迁移助手` 已真实安装并出现在手动列表，runner 真实点击了
-精确卡片，但产品没有生成 chip 或 `selectedSkills` 读回，任务也没有发送。这是
-发送前产品选择失败；原执行分支却直接 return，没有把精确卡片 interaction、
-零任务/零消息/发送计数不变读回和 7 个下游 N/A 角色物化，导致 manifest 缺少
-8 个角色并硬停止。修复必须让普通 Skill 使用和 Skill 隔离分支都调用
-`qbot-core-beta-pre-send-capability-failure/v1`，并要求稳定 identity、真实点击、
-`aria=false`、可见手动列表、失败截图和零发送守卫全部成立；证据完整时记产品
-Bug 并继续，取证不完整时才保持 framework issue。该目录已冻结，不得续写；
-其中 `BETA-SKILL-003/004` 安装成功的 `Confluence文档迁移助手` 与
-`Word 文档生成助手` 尚未由 `BETA-SKILL-012` 清理，重新 pretest 和完整重跑前
-必须按第 8 节执行独立 `BETA-SKILL-001 --core-beta-cleanup-from ...`，证明
-`remaining=0` 且连续两次稳定缺席。
-
-前一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807055814_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-87d4ed3
-```
-
-该批次完成 23/55 后，在 `BETA-ART-004` 确认 framework issue：产品回复明确
-给出 PPTX、PDF、五页、曝光 1000、点击 100、转化 20，并生成两个真实五页成果；
-原 `artifact-content-readback` 也写为 `oracle_valid=true`，但通用回复相关性仍因
-长中文 prompt 分词失败而把本条误标为产品 Bug。进一步复核确认原成果 Oracle
-只校验 PPTX 可解压且 PDF 至少一页，没有执行 Casebook 声明的五页、标题、指标、
-图表和空白页硬断言。第 24 条 `BETA-SKILL-001` 只生成了能力 inventory，未形成
-Case 结果或执行 Skill 安装/卸载动作。该目录已冻结，不得续写；修复必须增加
-`BETA-ART-004` 专用回复 Oracle、真实 PPTX/PDF 内容读回及正反 invariant，并在
-新的已推送干净基线上从第 1 条完整重跑 55 条。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807042142_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-b9ef898
-```
-
-该批次完成 31/55 后，在 `BETA-SKILL-009` 确认 framework issue：runner 已真实
-定位并点击 `composer-skill-mode-manual`，产品读回仍为 `aria-checked=false`，
-手动搜索、列表和空态均不可见，属于产品 Bug；通用 composer reset 随后错误追加
-`automation_error` 并提前返回，导致发送前的能力选择负向收据和 7 个 N/A 角色未
-物化，manifest 不完整后停止。当前已推送 main 必须包含
-`qbot-core-beta-pre-send-capability-failure/v1` 修复：reset 保留已确认的 `bug`，
-并且只有任务为空、消息数为 0、send count 未变化、选择为空、无 prompt/send
-receipt 且截图/SHA 完整时，才允许把未发生的执行和会话角色标为 N/A 并继续后续
-独立 Case。该冻结目录不得续写；由于它在 `BETA-SKILL-012` 清理前停止，重新
-pretest 和 55 条完整重跑前必须先按第 8 节从该目录执行单独的
-`BETA-SKILL-001 --core-beta-cleanup-from ...` 清理并证明 `remaining=0`、连续两次
-稳定缺席。
-
-最新一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807020734_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7f99cac
-```
-
-该批次完成 17/55 后，在 `BETA-FILE-004` 确认 framework issue：产品回复
-正确列出报名 100→120、到场 70→80、成交 12→15，并在 `表格\t合计` 表头后
-分别给出 `qbot-table.csv\t182（100 + 70 + 12）` 与
-`qbot-data-table-diff.xlsx\t215（120 + 80 + 15）`。解析器错误地读取合计
-单元格内最后一个验算因子 12/15，而不是开头展示总计 182/215，输出
-`metric_diffs=true/totals=false` 并把产品正确结果误标为 Bug。该目录已冻结，
-不得续写；修复必须按结构化表头定位合计单元格、保留交换总计反例，并在新推送
-干净基线上从第 1 条完整重跑 55 条。
-
-最近一次已冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260807000421_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-c012a5a
-```
-
-该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：5 个固定
-connector 均已进入真实手动模式并逐项点击、读回，其中 3 个成功选中，
-`mcphub:dis` 与 `mcphub:wecom` 点击后产品返回 `selectedConnectors=[]`，属于
-证据完整的产品失败。runner 错误地把“5 个业务 Oracle 全部通过”的布尔值写入
-`capability-selection.json.valid`，导致 5 份结构化负向收据被 manifest 判为
-`capability_selection/capability_execution_event` 无效并硬停止。该目录已冻结，
-不得续写；修复必须分离 `evidence_valid` 与 `oracle_valid`，并在新推送干净基线上
-从第 1 条完整重跑 55 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806222136_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-80f8e53
-```
-
-该批次完成 49/55 后，在 `BETA-MCP-002` 确认 framework issue：新版手动连接器
-模式已经通过真实可见 UI 点击并读回 `aria-checked=true`、
-`connectorRouting.mode=manual`、28 个可见选项；随后 V2 runner 在按 key 点击首个
-样本后调用未定义的 `coreBetaSelectedCapabilityIdentities`，抛出
-`ReferenceError`，导致本 Case 的 action/public state/cleanup/selection/execution
-五个角色尚未注册就硬停止。该目录已冻结，不得续写；修复和 invariant 通过后
-必须在新的已推送干净基线上从第 1 条完整重跑 55 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806213321_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-45f49ce
-```
-
-该批次完成 17/55 后，在 `BETA-FILE-004` 再次确认总计 Oracle 的 framework
-issue：产品回复以 TSV 表格给出 `CSV（qbot-table.csv）` 与
-`Excel（qbot-data-table-diff.xlsx）` 两个表头列，后续总计行在对应列明确给出
-`182` 与 `215`，三处差异也全部正确；解析器只覆盖同行文件身份，没有把表头
-列身份传播到后续总计行，错误输出 `totals=false`。第 18 条仅有中间证据，未形成
-Case 结果。该目录已冻结，不得续写；修复后必须在新推送基线上从第 1 条完整重跑
-55 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806203032_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-5c9f1b5
-```
-
-该批次完成 17/55 后，在 `BETA-FILE-004` 确认总计 Oracle 的 framework issue：
-产品回复明确给出 `总计：CSV = 182，XLSX = 215`，三处差异也全部正确，但
-解析器没有按同一行的下一个文件身份切分数值区间，错误地把行尾 215 当作 CSV
-总计并将 Case 误标为产品 Bug。第 18 条仅有中间证据，未形成 Case 结果。
-该目录已冻结，不得续写；修复后必须在新推送基线上从第 1 条完整重跑 55 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806183239_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-7b12d99
-```
-
-该批次完成 49/55 后，于 `BETA-MCP-002` 暴露 Core Beta v2 runner 只将
-“打开连接器子菜单”当作手动模式成功，没有使用稳定 section
-testid、最新可见 Portal、键盘回退，也没有真实点击
-`composer-connector-mode-manual` 并读回手动列表与 routing/radio 状态。
-因前置 reset 失败，本 Case 的 `capability_selection` 和
-`capability_execution_event` 没有形成有效 manifest 证据，框架正确硬停。
-该目录已冻结，不得续写；修复后必须在新的已推送干净基线上从第 1 条
-完整重跑 55 条，不得只续跑剩余 5 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806163632_uat-core-beta74-scoped55_teams360-5.2.41-2119080662_qwork-0.0.30-rc.2_M3_serial_framework-dea7e07
-```
-
-该批次在更新后的 360Teams `5.2.41(2119080662)`、QWork `0.0.30-rc.2`
-完成 48/55 后，于 `BETA-MCP-001` 暴露框架只识别旧 health probe 字段、没有识别
-当前 connector catalog 的 `statusKind=ready` 与 `usable=true`，把 31 个目录项全部
-误判为不健康；样本不足分支随后直接抛异常，导致 manifest 缺少 5 个角色并硬停止。
-该目录已冻结，不得续写。修复必须兼容当前 catalog 合同、增加 MCP prerequisite
-blocked 传播与 invariant，并在已推送干净基线上从第 1 条完整重跑 55 条。
-
-此前冻结的 scoped 批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806155958_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-997972e
-```
-
-该批次完成 2/55 后，在 `BETA-INIT-002` 暴露框架让陈旧的可见“准备中 0%”
-覆盖 Claude/Codex `ready/100%`、capabilities、工作台、输入区和维护按钮等结构化
-ready 信号，并最终错误升级为 `automation_error`。该目录已冻结，不得续写；修复后
-须在新产品身份上从第 1 条完整重跑 55 条。
-
-更早的冻结批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806141103_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-245a3e7
-```
-
-该批次完成 37/55 后，在 `BETA-EXPERT-002` 暴露框架将“产品复用历史草稿、
-未创建本轮 owner draft”的完整负向读回误标为无效证据，导致 4 个专项角色
-manifest 缺失并错误停止。该目录已冻结，不得续写。产品 Bug、此前确认的其他
-产品缺陷以及 17 条未执行 Case 都必须保留在最终报告；框架修复后须从第 1 条
-完整重跑 55 条，`inherited=0`、`synthetic=0`。
-
-再早的冻结批次：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260806125939_uat-core-beta74-scoped55_teams360-5.2.38-2119080433_qwork-0.0.30-rc.1_M3_serial_framework-62fd6ff
-```
-
-该批次完成 22/55 后，在 `BETA-ART-003` 确认 Core Beta v2 回复相关性
-误报和 `第undefined轮` 证据标签的 framework issue；第 23 条仅有中间证据，
-未形成 Case 结果。该目录已冻结，不得续写。修复后必须基于本指南中的
-正式 74 条 Casebook 新建 pretest 和 runner 输出目录，从第 1 条重跑
-55 条，不得继承本批次的 22 条结果。
-
-## 2. 当前 Casebook 和执行范围
-
-当前正式 Core Beta 74 条 Casebook：
-
-```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx
 ```
 
 - Sheet：`核心内测Case`
-- SHA-256：`25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6`
-- 静态能力审计：74/74 executable，74/74 dispatchable，unsupported=0。
-- 当前可执行选择集：55/74。
-- 当前排除范围：19 条，包括 15 条真实 fixture provider 不可用 Case和 4 条不属于原 scoped 55 选择集的新增专家 Case。
-- 当前 scoped 执行永久 `release_gate_eligible=false`，即使 55 条全绿，也不能宣称完整 74 条发布门禁通过。
+- Case 数：70
+- SHA-256：`3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc`
+- 协议：70/70 executable
+- 运行时分发：70/70 dispatchable
+- 直接可运行：70/70
+- `strict_controller_required=0`
+- `unsupported_runtime=0`
+- Case 间执行永久串行，有效 parallel/pipeline 均为 1
 
-当前 19 条排除 Case：
+能力构成：
 
-```text
-BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-EXPERT-017,BETA-EXPERT-018,BETA-EXPERT-019,BETA-EXPERT-020,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001
-```
+- 61 条原生/public-state executor。
+- 4 条原生 executor 需要本机受管选项：1 条 native IME、3 条 Teams/runtime
+  restart。
+- 5 条经过语义复核的 legacy executor。
 
-完整 74 条要作为发布门禁，必须补齐这些 Case 需要的真实 fixture provider，
-重新跑 `READY` 预检，而不是 `READY_SCOPED`。
+新版已删除网络异常、connection-cache fault、切换账号、第二账号授权等低频或
+当前框架不能无条件真实执行的场景。`BETA-INIT-005` 属于历史网络故障注入，
+不得拼回 70 条门禁。当前初始化固定为 `BETA-INIT-001~004`。
 
-## 3. 接手后第一件事
+新增或重写的关键回归：
 
-任何 Agent 接手后先执行只读确认：
+- `BETA-TASK-008`：Composer Up/Down 历史输入、未发送草稿恢复、任务隔离和重开持久化。
+- `BETA-ROUTE-001`：模型菜单按当前 SDK family/protocol 过滤。
+- `BETA-EXPERT-007`：单账号串行发布研究、数据、交付三类本轮专家。
+- `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合。
+- `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
+
+Casebook 的设计依据包括 2026-08-03 至 2026-08-10 直接合入
+`origin/release/0.1` 的 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
+删除清单、覆盖矩阵、执行配置和发布准入均在工作簿独立 Sheet 中。
+
+## 3. 发布级门禁
+
+单轮全绿不授权生产。只有同一冻结发布身份连续 5 轮完整通过 70 条，并且至少
+一个候选轮次完成不少于 100 个任务、3 次受管重启的 soak，才可进入 1%-5%
+受控生产灰度。
+
+每轮必须同时满足：
+
+- `total=completed=executed=unique_case_count=trusted_pass=70`
+- `inherited=0`
+- `synthetic=0`
+- `trusted_bug/trusted_fail/trusted_blocked/framework_issue/testcase_issue=0`
+- manifest、动作收据、任务归属和清理证据全部完整，missing/invalid=0
+- 单 runner、Case 间串行、发布身份全程不漂移
+- flaky=0
+
+任一轮出现非 pass、阻塞、框架问题、Case 问题、证据缺失或身份漂移，该轮不计入
+连续全绿，连续计数归零。`GO_CONTROLLED_GRAY` 只允许受控灰度，不等于 GA。
+
+## 4. 接手只读确认
+
+用户恢复测试后，先执行：
 
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
@@ -452,101 +102,95 @@ pgrep -af 'ui-agent-casebook-run|casebook-runner|core-beta.*run' || true
 find "$HOME/.codex/automations" -maxdepth 2 -type f -name 'automation.toml' -print 2>/dev/null || true
 ```
 
-期望：
+只有以下条件同时成立才能继续：
 
-- `HEAD` 等于 `origin/main`。
-- tracked dirty=false。
-- 没有正在执行的 Casebook runner。
-- 没有指向旧目录的 monitor。
+- `HEAD == origin/main`
+- tracked dirty=false
+- 正式 Casebook 已被 Git 跟踪且 SHA 精确一致
+- 没有旧 runner
+- 没有指向旧目录的 monitor
 
-如果发现旧 runner 或旧 monitor，先判断是否属于当前用户明确要求的批次。
-不能确认时，不要继续启动新 runner；先报告并清理 stale 监控。
-
-## 4. 必跑自检
-
-框架或测试启动前必须跑：
+然后运行：
 
 ```bash
-cd /Users/qifu/Documents/QbotTestAgent
 npm run check
 npm --prefix teams360-automation run check
-```
 
-最近基线通过情况：
-
-- 根框架：80/80。
-- Teams 适配层：92/92。
-
-静态能力审计：
-
-```bash
-OUT_AUDIT="$PWD/outputs/$(date +%Y%m%d%H%M)_core74-capability-audit"
 npm run core-beta:capability-audit -- \
-  --casebook "$PWD/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx" \
+  --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
   --sheet 核心内测Case \
-  --out "$OUT_AUDIT" \
-  --profile mandatory
+  --profile mandatory \
+  --out outputs/<new-capability-audit-dir>
 ```
 
-必须满足：
+能力审计必须仍为 70/70 executable、70/70 dispatchable、
+`directly_runnable_without_controller=70`、`strict_controller_required=0`、
+`unsupported_runtime=0`。
 
-- `protocol.ok=true`
-- `protocol.case_count=74`
-- `runtime_dispatch.ok=true`
-- `runtime_dispatch.unsupported_count=0`
+## 5. Native IME 与受管重启
 
-## 5. 当前 55 条 scoped 预检
+`BETA-CHAT-010` 必须使用 `--native-ime-command` 或
+`QBOT_CORE_BETA_NATIVE_IME_COMMAND`。该命令有两种模式：
 
-如果用户要求继续执行当前 55 条，必须从正式 74 条 Casebook 重新导出并计算精确选择集：
+1. pretest 设置 `QBOT_CORE_BETA_IME_PROBE=1` 时，不得产生任何输入，必须输出：
+
+   ```json
+   {"schema_version":"qbot-core-beta-native-ime-probe/v1","ok":true,"non_mutating":true,"accessibility_permission":true,"input_source_ready":true}
+   ```
+
+2. runner 模式读取 `QBOT_CORE_BETA_IME_TEXT`、
+   `QBOT_CORE_BETA_IME_TEXT_BASE64` 和 `QBOT_CORE_BETA_CASE_ID`，通过 macOS
+   真实输入源完成组合输入和候选确认。禁止 DOM 合成 composition 事件。
+
+Teams lane 的 `BETA-REC-001/002/004` 不接受调用方 `--restart-command`。
+pretest 会只读验证 Teams 包装器固定重启脚本存在、可执行且 shell 语法正确；
+runner 连接冻结 QWork versioned URL 后，由包装器构造并传入实际重启命令。
+local lane 才要求调用方显式提供 `--restart-command`。
+
+## 6. 正式 pretest
+
+用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-cd /Users/qifu/Documents/QbotTestAgent
-
-CASEBOOK="$PWD/PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx"
-EXCLUDED_CASE_IDS="BETA-INIT-005,BETA-CHAT-010,BETA-ART-005,BETA-SKILL-013,BETA-SKILL-015,BETA-EXPERT-006,BETA-EXPERT-007,BETA-EXPERT-011,BETA-EXPERT-013,BETA-EXPERT-017,BETA-EXPERT-018,BETA-EXPERT-019,BETA-EXPERT-020,BETA-MCP-008,BETA-REC-001,BETA-REC-002,BETA-REC-003,BETA-REC-004,BETA-AUTH-001"
-PLAN="$(mktemp /tmp/qbot-core74-plan.XXXXXX)"
-python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
-  --casebook "$CASEBOOK" --sheet 核心内测Case --profile mandatory --output "$PLAN"
-CASE_IDS="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1])); const x=new Set(process.argv[2].split(",")); process.stdout.write(p.cases.map(c=>c.id).filter(id=>!x.has(id)).join(","))' "$PLAN" "$EXCLUDED_CASE_IDS")"
+CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
   --sheet 核心内测Case \
   --profile mandatory \
   --lane teams \
-  --out "$PWD/outputs/$(date +%Y%m%d%H%M)_prod-core-beta74-scoped55-pretest_framework-$(git rev-parse --short HEAD)" \
-  --expected-count 55 \
-  --expected-sha256 25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6 \
+  --out "$PWD/outputs/<new-immutable-pretest-dir>" \
+  --expected-count 70 \
+  --expected-sha256 3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc \
+  --expected-teams-version "<actual-teams-version>" \
+  --expected-teams-build "<actual-teams-build>" \
+  --expected-qwork-version "<actual-qwork-version>" \
+  --expected-control-plane-origin "<exact-uat-origin>" \
+  --native-ime-command "<managed-native-ime-command>" \
   --production-gate true \
-  --expected-teams-version 5.3.0 \
-  --expected-teams-build 2119080783 \
-  --expected-qwork-version 0.0.30 \
-  --expected-control-plane-origin https://qbot-api.360shuke.com \
-  --backend-version prod-health-8b64febb4905af5a \
-  --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
-  --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
-  --case "$CASE_IDS" \
-  --scoped-execution true \
-  --excluded-case "$EXCLUDED_CASE_IDS" \
-  --scope-reason fixture_provider_unavailable
+  --backend-version "<backend-release-id>" \
+  --prompt-policy-version "<prompt-policy-id>" \
+  --feature-flags-hash "<feature-flags-sha256>"
 ```
 
-只有新报告返回 `READY_SCOPED` 且 0 blockers，才允许启动 scoped runner。
-预检会把 `BETA-EXPERT-008/009/010/012/014/015/016` 列为上游发布 Case 已排除
-的 dependency gaps；这不是 pretest blocker。runner 到达这些 Case 时必须使用
-本轮 suite ledger 精确身份；账本缺失则生成可信 prerequisite blocked 并继续，
-禁止回退到账号中其他 active expert。
+只接受 `READY`。`READY_SCOPED`、Case 数少于 70、缺少 IME probe、缺少 Teams
+受管重启、身份字段缺失、tracked dirty 或 runner 已存在都不得启动正式批次。
+pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。
 
-如果 360Teams、QWork、control plane、backend、prompt policy 或 feature flags
-任一字段变化，必须重新冻结发布身份并更新命令。不要沿用上面的值假装同一发布。
+## 7. 启动唯一 runner
 
-## 6. 启动唯一 runner
-
-只有通过第 5 节预检后才启动。输出目录必须新建，不得复用旧目录：
+只有第 6 节精确 pretest 为 `READY` 后才允许：
 
 ```bash
-OUT="$PWD/teams360-automation/output/$(date +%Y%m%d%H%M%S)_prod-core-beta74-scoped55_teams360-5.3.0-2119080783_qwork-0.0.30_M3_serial_framework-$(git rev-parse --short HEAD)"
+PLAN="$(mktemp /tmp/qbot-gray70-plan.XXXXXX)"
+python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
+  --casebook "$CASEBOOK" \
+  --sheet 核心内测Case \
+  --profile mandatory \
+  --output "$PLAN"
+CASE_IDS="$(python3 -c 'import json,sys; print(",".join(x["id"] for x in json.load(open(sys.argv[1]))["cases"]))' "$PLAN")"
 
+OUT="$PWD/teams360-automation/output/<new-immutable-gray70-run-dir>"
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
   --sheet 核心内测Case \
@@ -556,118 +200,45 @@ npm --prefix teams360-automation run casebook -- \
   --out "$OUT" \
   --timeout-ms 600000 \
   --single-host-pipeline 1 \
+  --native-ime-command "<same-command-from-ready-pretest>" \
   --production-gate true \
-  --control-plane-url https://qbot-api.360shuke.com \
-  --backend-version prod-health-8b64febb4905af5a \
-  --prompt-policy-version qwork-runtime-0.0.30-sha256-e1ad00b31645b94c8694813c05a93cac80ee35f31c00ad0bd139118310970152 \
-  --feature-flags-hash 57c2c536c84f136fba4ba1048145354aaa0447deceaf7f0cafdb7773f2ff6494 \
-  --qwork-build-id 0.0.30 \
-  --scoped-execution true \
-  --excluded-case "$EXCLUDED_CASE_IDS" \
-  --scope-reason fixture_provider_unavailable
+  --control-plane-url "<exact-uat-origin>" \
+  --backend-version "<backend-release-id>" \
+  --prompt-policy-version "<prompt-policy-id>" \
+  --feature-flags-hash "<feature-flags-sha256>" \
+  --qwork-ui-git-commit "<qwork-ui-commit>" \
+  --qwork-build-id "<qwork-build-id>" \
+  --qwork-release-manifest-sha256 "<manifest-sha256>"
 ```
 
-启动后先验证真的在执行，再创建监控：
+不得传 `--restart-command`，不得传 fixture controller，不得使用 scoped execution，
+不得排除任何 Case，不得写入旧输出目录。
 
-```bash
-pgrep -af 'ui-agent-casebook-run|casebook-runner|core-beta.*run' || true
-ls -lt "$OUT" "$OUT"/logs 2>/dev/null
-jq '{completed,total,updated_at,current_case,results:(.results|length)}' "$OUT/automation-progress.json" 2>/dev/null
-```
+## 8. 执行与自愈
 
-不要只看 PID。必须确认 `automation-progress.json`、runner log、证据目录或
-run metadata 在持续更新。若没有真实会话、没有 taskId、没有证据 mtime 变化，
-先诊断，不要创建 monitor。
+- Core Beta v2 Case 间永久串行；`BETA-CHAT-008` 的 20 任务是单 Case 内部合同。
+- Agent 澄清/推荐选项由框架点击精确“跳过/跳过（用默认）”并留证，不使用
+  Computer Use。
+- 产品 Bug 在证据完整且后续 Case 独立时继续；不得修改 deepbankV2。
+- 普通 prerequisite `blocked` 记录后继续独立 Case，不得覆盖更高优先级的
+  `automation_error`。
+- 确认 `framework_issue` 或 `testcase_issue` 时，冻结旧目录、停止唯一 runner、
+  修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
+  从 1/70 完整重跑。停止旧 runner 只是保护证据，不是允许放弃后续 Case。
+- 只有凭据/授权/受保护资源缺失、指定发布身份无法恢复或 pretest 明确阻塞时，
+  才能保持暂停并报告唯一具体 blocker。
 
-Core Beta v2 的 Case 间执行固定串行。即使旧命令残留 `--parallel > 1` 或
-`--single-host-pipeline > 1`，runner 的有效值也必须是 `1`，precheck 必须记录
-`core-beta-v2-forced-serial`。`BETA-CHAT-008` 的 20 任务派发是单个 Case 内部合同，
-不是 Case 间并行。
+## 9. 只读监控与可信复核
 
-若 QWork 显示遮挡左下设置入口的“新版本已就绪”提示，框架会在 Case 开始和
-进入系统设置前点击精确的“稍后/跳过更新”并保存前后证据；不得点击“立即更新”
-或在批次中改变冻结发布身份。
+监控不得操作 QWork、不得连接 runner 临时代理、不得启动第二 runner。每次至少报告：
 
-刷新或受管宿主重启后，Teams 恢复器必须继续使用本轮首次连接冻结的精确
-QWork versioned file URL。profile 或临时 renderer 中的旧版本只能触发漂移恢复，
-不得成为新的 pin；恢复后必须再次校验 URL、模型档位和 capabilities。
+- 北京时间、`completed/70`、executed/inherited/synthetic
+- 最后完成 Case 的 raw status、可信分类和 manifest 完整性
+- 当前 Case、progress 更新时间、最新证据 mtime、无进度时长
+- runner/宿主 PID、Teams/QWork/control plane/CDP
+- framework commit、`main == origin/main`、tracked dirty
 
-Agent 澄清/推荐选项弹窗继续由框架点击精确“跳过/跳过（用默认）”并留证，
-不使用 Computer Use。正式 Case prompt 必须已经包含主题、日期和 Oracle，不能
-依赖弹窗补充测试数据。
-
-初始化维护终态要同时读取可见文案和结构化状态。可见区域持续显示“准备中/处理中”，
-但 Claude/Codex SDK、runtime loaded、维护按钮、capabilities、工作台和输入区连续至少
-3 次全部 ready 时，应固化为 `product_ui_state_conflict` 产品 Bug，并在页面仍可读时
-以 `initialization_continuation.safe=true` 继续后续独立 Case。`BETA-INIT-001` 的运行时
-检查若得到明确失败终态但上述公开可用性信号全部恢复，也必须保留产品 Bug 后继续。
-只有结构化状态未 ready 或证据不完整时才保持 pending 并在有界超时后触发框架硬停止。
-
-## 7. 监控规则
-
-监控只能读文件和进程状态，不得操作 QWork UI，不得连接 runner 临时 CDP/WebView
-代理，不得启动第二 runner。
-
-每次监控至少报告：
-
-- 北京时间。
-- `completed/55`、executed/inherited/synthetic。
-- 最后完成 Case 的 raw status、result category、execution provenance。
-- manifest complete/missing/invalid。
-- 当前 Case 或等待阶段。
-- `automation-progress.json.updated_at`。
-- 最新证据路径和 mtime。
-- 唯一 runner PID、宿主 PID、Teams/QWork/control plane/CDP。
-- framework commit、main==origin/main、tracked dirty。
-- 无进度时长。
-
-20 分钟无进度时，先只读核验当前 Case、runner 日志、managed-360teams.log 和
-600000ms 等待窗口。任务仍真实运行就等；已确认停止且稳定无回复时，应形成
-`no_reply` 产品失败终态，不能无限空等。
-
-## 8. Issue 后自愈
-
-监控发现 confirmed `framework_issue` 或 `testcase_issue` 时，不要只报告。
-
-必须按顺序做：
-
-1. 保全当前输出目录、日志、诊断和证据。
-2. 停止唯一 runner，暂停旧 monitor。
-3. 冻结旧输出目录，禁止补写或覆盖。
-4. 在 QbotTestAgent 修框架或 Casebook，禁止修改 deepbankV2。
-5. 增加或强化 regression/invariant。
-6. 跑 `npm run check` 和 `npm --prefix teams360-automation run check`。
-7. 更新 `QBOT_AUTOMATION_FRAMEWORK.md`，如果合同变化。
-8. 提交并 push，确保 `main == origin/main`、tracked dirty=false。
-9. 重新跑 pretest。
-10. 新建不可变输出目录，从完整 selected scope 重跑，Core Beta v2 保持
-    `inherited=0`、`synthetic=0`。
-
-上述第 1 步停止旧 runner 只用于保护不可变证据，不是允许结束执行。只要发布身份、
-凭据和受保护资源仍可恢复，Agent 必须继续完成第 4–10 步并启动新完整串行批次，
-不得停在“修复完成但后续未执行”的状态。
-
-产品 Bug 不属于框架修复。证据完整且 fail policy 允许时，可以继续后续独立
-Case；普通 prerequisite `blocked` 也只记录后继续独立 Case。失败 step/assertion
-中已有 `category=automation_error` 时，其优先级高于顶层 `blocked` 或 `bug`，必须
-按 framework issue 进入上述自主闭环。初始化硬门禁类抖动必须保留缺陷，不得因
-后续重试通过而抹去。
-
-## 9. 结果复核
-
-summary total=55 后停止执行性操作，逐 Case 可信复核。不能采用 raw 结论。
-
-复核必须检查：
-
-- 编号步骤是否严格执行。
-- before/action/after 是否对应真实动作和状态变化。
-- prompt、taskId、send receipt、transcript、reply delta 是否属于同一任务。
-- 回复是否完整、相关、终态，且没有底层错误泄漏。
-- Skill、专家、MCP 是否真的选择并产生任务绑定执行事件。
-- 附件、成果、工具调用、清理和公开状态是否有独立读回。
-- manifest、SHA、日志和产品功能是否一致。
-
-输出分类只能是：
+summary 完整后逐 Case 复核，分类仅允许：
 
 ```text
 trusted_pass
@@ -678,19 +249,11 @@ framework_issue
 testcase_issue
 ```
 
-## 10. 什么结论可以说，什么不能说
+raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历史产品 Bug、框架
+问题、Case 问题或 flaky 记录。
 
-可以说：
+## 10. 当前交付边界
 
-- 当前框架具备执行 74 条 Core Beta Case 的能力。
-- 当前没有 fixture provider 时，只能执行 55 条 scoped 范围。
-- 55 条 scoped 全绿只能证明范围内核心能力有效。
-
-不能说：
-
-- 55 条 scoped 全绿等于完整 74 条门禁通过。
-- `READY_SCOPED` 等于可发布。
-- raw passed 等于 trusted pass。
-- 后续重试通过可以抹去旧批次中已取证的产品缺陷、框架问题或 flaky。
-
-完整 74 条发布门禁必须补齐所需 fixture provider，预检返回 `READY`，再在同一冻结发布身份下执行完整门禁和多轮可信复核。
+本次任务只更新 Casebook、执行器、动态能力门禁、文档和回归基线；测试保持暂停。
+完成代码提交和推送不等于 70 条已经执行，也不等于允许生产灰度。下一轮必须由用户
+明确恢复测试后，从新的 UAT release identity、`READY` pretest 和 1/70 开始。

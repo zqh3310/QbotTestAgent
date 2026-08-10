@@ -35,7 +35,12 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 完整生产灰度 | `PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` | `核心内测Case` | 184 | `def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d` |
+| 生产灰度发布 | `PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` | `核心内测Case` | 70 | `3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc` |
+
+`QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
+不再是发布入口。其协议层 `executable=184` 不能证明真实执行能力；旧审计确认
+其中 114 条依赖严格外部控制器。新版 70 条要求 `directly_runnable=70`、
+`strict_controller_required=0`，并删除网络异常、切换账号等低频场景。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 
@@ -66,21 +71,23 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx
+     PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx \
+     --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
      --sheet 核心内测Case \
      --out outputs/core-beta-capability-audit
    ```
 
    审计报告必须是 `qbot-core-beta-capability-audit/v2`，且同时满足
-   `protocol.executable_count=184`、`runtime_dispatch.ok=true`、
-   `runtime_dispatch.dispatchable_count=184` 和
+   `protocol.executable_count=70`、`runtime_dispatch.ok=true`、
+   `runtime_dispatch.dispatchable_count=70`、
+   `capability_summary.directly_runnable_without_controller=70`、
+   `capability_summary.strict_controller_required=0` 和
    `capability_summary.unsupported_runtime=0`。仅有场景注册、但没有真实
    runtime 分发路径的 Case 必须在静态审计阶段失败，禁止拖到正式批次中途
    才报“缺少 executor”。
@@ -89,18 +96,18 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx \
+     --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
      --sheet 核心内测Case \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
-     --expected-count 184 \
-     --expected-sha256 def41541d60cd28c70d7abc1087ca58f203f05c90fa0543e72029e461a0d4a8d \
+     --expected-count 70 \
+     --expected-sha256 3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
      --expected-control-plane-origin "<exact-control-plane-origin>" \
-     --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
+     --native-ime-command "<managed-native-ime-input-command>" \
      --production-gate true \
      --backend-version "<backend-release-id>" \
      --prompt-policy-version "<prompt-policy-id>" \
@@ -119,11 +126,26 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 
 7. 确认本轮只有一个受管 runner、一个固定宿主和一个不可变输出目录。禁止启动第二 runner。
 
-8. 确认所需真实资源已经就绪。184 条中需要第二账号、OAuth、GitLab、重启、原生 IME、故障矩阵、安全矩阵、Auto 路由故障、能力激活快照、SQLite/Ask 竞态或受保护 UAT 部署的 Case，不得用普通 UI 会话替代。
+8. 确认所需真实资源已经就绪。70 条门禁只保留框架原生路径；其中原生 IME、
+   Teams 重启和 runtime 重启仍必须由 pretest 实测对应命令可用。不得运行中临时
+   排除这些 Case，也不得降级成 scoped 发布门禁。
 
-## 4. Fixture 控制器合同
+## 4. Fixture 合同
 
-74 条和 184 条 Casebook 都包含不能由裸 UI 环境独立构造的场景。需要严格控制器的 Case 必须配置：
+当前 70 条生产灰度门禁的静态审计必须证明 `strict_controller_required=0`，
+因此不依赖通用逐 Case 外部控制器。`public_product_state` Case 由 runner 原生
+执行；原生 IME 使用 `--native-ime-command`，且同一命令必须在
+`QBOT_CORE_BETA_IME_PROBE=1` 时不输入任何内容，并返回
+`qbot-core-beta-native-ime-probe/v1`，证明 Accessibility 权限和中文输入源就绪。
+Teams lane 的 Teams/runtime 受管重启命令由包装器从固定、可执行且 shell 语法
+有效的 `restart-qbot-electron-control-plane.sh` 派生；调用者不得传
+`--restart-command`。local lane 才由调用者提供 `--restart-command`。缺少对应
+能力时 pretest 必须在 Case 0 前 BLOCKED。
+
+以下严格控制器合同仅适用于历史 74/184 或未来重新纳入的隔离矩阵，不得用于
+把当前 70 条之外的 Case 临时拼回发布门禁。
+
+历史 74 条和 184 条 Casebook 包含不能由裸 UI 环境独立构造的场景。需要严格控制器的 Case 必须配置：
 
 ```text
 --core-beta-fixture-control-url http://127.0.0.1:<port>
@@ -177,7 +199,7 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 边界后才复制进当前 Case 目录并重新计算 SHA-256。字段不匹配、证据为空、
 路径越界或控制器不可用时，必须在 Case 0 前或当前 Case 收尾时停止；禁止绕过。
 
-### 4.1 184 条新增高风险合同
+### 4.1 历史 184 条控制器场景
 
 完整生产灰度门禁在原 160 条基础上新增 24 条，全部属于一票否决范围：
 
@@ -187,19 +209,21 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 - `BETA-MCP-015~016`：Teams owned Node stdio 生命周期和当前会话 model ID 权威覆盖；不得只凭回复文本判定。
 - `BETA-DEPLOY-001~008`：Dashboard 策略、受保护迁移、Helm legacy 接管/重试/恢复、Ingress、诊断和 qbot-ui 退役。必须在隔离 UAT namespace 使用真实部署控制器，记录 `dashboard_policy_readback`、`deployment_receipt`、`migration_receipt` 或 `helm_lifecycle_trace`；本地 mock/fixture 不能替代。
 
-上述 Case 均不得 pipeline 并发执行。缺少受保护环境、控制器或任一证据角色时只能 `trusted_blocked` 或 `framework_issue`，不能缩减后宣称完整生产门禁通过。
+上述历史 Case 不属于当前 70 条桌面发布门禁。若未来重新纳入，必须先实现原生
+执行器或完整严格控制器、补充不变量测试并形成新的 Casebook SHA，不能在运行时
+缩减或临时拼接后宣称当前发布门禁通过。
 
 ## 5. 直接连接 QBot/QWork 执行
 
 适用于已经启动并登录、能够通过 CDP 访问的 QBot/QWork。产品环境必须在启动前由操作者确认；框架不会替操作者把 PROD、UAT 或 DEV 互相切换。
 
-完整 184 条示例：
+完整 70 条示例：
 
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx"
-OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-184_<release-id>"
+CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
+OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
 npm run ui-agent:casebook-run -- \
   --casebook "$CASEBOOK" \
@@ -210,14 +234,16 @@ npm run ui-agent:casebook-run -- \
   --model-tier M3 \
   --timeout-ms 600000 \
   --single-host-pipeline 1 \
-  --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
+  --restart-command "<managed-teams-and-runtime-restart-command>" \
+  --native-ime-command "<managed-native-ime-input-command>" \
   --production-gate true \
   --backend-version "<backend-release-id>" \
   --prompt-policy-version "<prompt-policy-id>" \
   --feature-flags-hash "<feature-flags-sha256>"
 ```
 
-核心 74 条只需替换 `CASEBOOK`，不要改变 Sheet。
+历史 74 条核心内测只可用于非发布回归；不得仅替换 Casebook 后把它解释为当前
+生产灰度门禁。
 
 执行单个或受影响 Case：
 
@@ -303,7 +329,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx"
+   CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
    python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
@@ -318,7 +344,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 3. 启动唯一 runner：
 
    ```bash
-   OUT="teams360-automation/output/$(date +%Y%m%d%H%M)_core-beta-184_<release-id>"
+   OUT="teams360-automation/output/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
    npm --prefix teams360-automation run casebook -- \
      --casebook "$CASEBOOK" \
@@ -329,7 +355,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
      --out "$OUT" \
      --timeout-ms 600000 \
      --single-host-pipeline 1 \
-     --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
+     --native-ime-command "<same-command-from-ready-pretest>" \
      --production-gate true \
      --control-plane-url "<exact-control-plane-origin>" \
      --backend-version "<backend-release-id>" \
@@ -399,7 +425,10 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - `BETA-FILE-002` 必须上传互异的 `qbot-image-flow.png` 与 `qbot-image-risk.png`，真实删除并恢复其中一张，最终 Composer 仍精确包含两张图片后才能发送。回复 Oracle 必须同时命中 `QBot Release Flow` 的 INPUT/ANALYZE/DELIVER 与发布证据门禁，以及 `Release Risk Matrix` 的 IMPACT/PROBABILITY 和 P0/P1/P2 锚点；只上传或只识别一张图片不得产生可信产品结论。
 - `BETA-FILE-005` 的 JSON、HTML、JS、日志必须由同一 Case 运行时确定性生成，四个文件共享 `QBOT-BETA-REQ-20260729`、`UPSTREAM_TIMEOUT`、`upstream_service_timeout` 和 `retryable=true`。回复必须识别四种格式并沿 requestId 关联错误码、根因和重试结论；不得复用不含 requestId 的通用 fixture。
 - 成果证据必须把“证据文件结构有效”和“产品业务 Oracle 通过”分开记录：`valid` 只表示证据 JSON 可解析、取证动作已完成，产品侧文件缺失、格式不符、内容不符或预览失败写入 `oracle_valid=false` 并形成 `trusted_bug/trusted_fail`，不得仅因产品失败把 `artifact_path_sha256`、`artifact_content_readback`、`artifact_preview` 或 `svg_dom_readback` 标成 manifest 无效。真正的证据缺失、空文件、越界、坏 JSON 或截图采集失败仍须 fail-closed。
-- `BETA-ART-001` 的“交互式 HTML”允许无远程资源的内联脚本；安全性不能用“文件中完全没有 `<script>`”替代。runner 必须在成果区同时看到并逐项打开 Markdown 与 HTML，确认两者都以源码预览呈现且包含 A=12、B=8，HTML 的脚本文本可见但源码查看器内不存在真实 `script`/`iframe` DOM 节点、没有弹窗、没有在宿主页面留下执行标记。任一成果只存在于工作区而未进入当前任务成果区，或 HTML 在源码预览外执行，均为产品失败；证据完整时不得升级成框架问题。
+- `BETA-ART-001` 的“交互式 HTML”允许无远程资源的内联脚本；安全性不能用“文件中完全没有 `<script>`”替代。runner 必须在成果区同时看到并逐项打开 Markdown 与 HTML，确认 Markdown 源码包含 A=12、B=8；HTML 必须进入当前 QWork 受管网页预览、内容可见、分享按钮 enabled、分享对话框无错误，同时不得在宿主 DOM 留下执行标记或非白名单弹窗。旧源码查看器只能作为补充安全证据：若存在，脚本文本可见但查看器内不得创建真实 `script`/`iframe` DOM；它不能替代网页预览或分享 Oracle。任一成果只存在于工作区而未进入当前任务成果区、网页预览/分享不可用，或 HTML 污染宿主，均为产品失败；证据完整时不得升级成框架问题。
+- `BETA-ART-001` 的网页预览只有在 iframe 正文或已解码快照真实可见、全部 loading 状态消失且没有预览错误时才算内容完成；`web-preview-loading`、刷新状态或只有空 iframe 不能通过。分享动作必须等待分享对话框进入 ready 并读回非空分享 URL；只看到 sharing 对话框不得通过。
+- `BETA-TASK-008` 的干净“新建任务”属于草稿态，权威状态必须是 `activeId=null`、`isDraft=true`、`messageCount=0` 和非空 `draftInstanceId`；不得要求框架伪造第二个 taskId。隔离 Oracle 仍必须证明新草稿 ArrowUp 为空，并能按原 taskId 重开旧任务后回放最新输入。
+- `BETA-ROUTE-001` 的期望模型集合必须复刻当前产品菜单策略：以当前任务 `runtimeFamily` 为准；桌面 Auto 或 `manual_override_auto` 状态且 `manualModelOptions` 非空时优先使用该集合，否则使用 `runtimeOptions.options`，再按 disabled、runtime family、Claude Code=anthropic、Codex=response 和 M1-M4 过滤。DOM 读回必须从 `composer-safety-level-option-<tier>-<modelId>` 和所属 `data-tier` 分组还原同一多重集合。
 - `BETA-ART-004` 必须从真实 PPTX slide XML 与 PDF 文本页读回执行业务 Oracle，不能用“PPTX 可解压、PDF 至少一页”代替。两者都必须恰好五页且无空白页；PPTX 五个页标题必须逐项出现在 PDF；两种格式都必须命中曝光 1000、点击 100、转化 20；PPTX 至少一页必须同时承载三项指标和足够的可见绘图 shape，证明漏斗图表实际存在。PDF 文本优先使用 `pdftotext`，不可用时使用 PyMuPDF 结构化逐页提取；两个适配器都不可用时不得判产品通过。对应回复还必须同时命中 PPTX、PDF、五页和三项固定指标，并由专用 Case Oracle 先于通用相关性判断。
 - 通用回复相关性只用于拦截明显答非所问，不能替代 Case 的确定性业务 Oracle。确定性主题/结果规则必须先于通用文本长度门槛执行，使“项目代号是 Orion。”等完整短答案能够通过，同时保留未命中业务结果的短文本反例。中文长提示不得依赖整句 token 精确重合；漏斗数字、活动方案、ROI、PDF 结论页码、CSV/XLSX 差异与总计等核心任务必须以“主题词 + 业务结果词”联合校验，并同时保留无关回复反例。成果回复若重复了请求中的精确文件名并明确说明已生成/写入，应视为主题相关；`BETA-ART-003` 必须同时命中 XLSX/Excel、CSV 以及 `SUM`/合计/总计 Oracle，不得因长中文 prompt 分词失败而误报产品 Bug，也不得放行仅生成其中一个文件的回复。Core Beta v2 的 `conversation_turns` 若未显式填写 `turn`，必须按数组顺序生成稳定的 `第1轮`、`第2轮` 标签，证据文件、动作回执和断言中不得出现 `undefined`。`BETA-FILE-001` 必须校验三条第 1 页结论及 PDF 已知锚点；页码既可逐条标注，也可用“三条结论均位于第 1 页”或“第 1 页包含以下三条结论”等无歧义范围语句统一绑定，但否定绑定、页码分散或只有页码没有已知锚点仍必须失败。`BETA-FILE-004` 必须使用专用 `qbot-data-table-diff.xlsx`，校验三处数值差异和双方总计，不能复用数值完全相同的通用表格。双方总计必须与各自 CSV/XLSX 文件标签、对应表格行，或先与文件唯一绑定再用于总计行的无歧义字母/数字表别名（如 `表 A/表 B`、`表1/表2`）关联；独立的 `总计/合计` 表头可以约束其后连续的文件标识数据行，且每行仍须按本行 CSV/XLSX 身份核对对应总计，不能只约束第一条数据行。行首 `总计/合计` 可以同时约束同一行的多个已绑定别名，但每个别名只允许读取到下一个表别名前的独立数值区间，防止交换总计误通过。允许表格列和求和算式等真实表达，但不得依赖跨段固定字符窗口，也不得用正文中散落的 `182/215` 形成通过。固定 `100/70/12` 的四轮数字记忆脚本只能由精确 Case ID `SIT-HOME-016` 使用，不得按“业务数字追问”等场景词误路由 Core Beta Case。若确定性 Oracle 已满足而通用相关性单独失败，必须按框架/Casebook 误判处理，不得上报为产品 Bug。
 - `BETA-FILE-001` 的正文先声明“三条关键结论如下”，紧接着以独立行 `第 1 页` 或 `第 1 页（全文仅 1 页）` 作为后续列表的范围标题时，属于无歧义统一页码绑定。该页码标题必须紧跟结论引导语且整行不得含否定文案；否定标题、分散页码或只有页码没有已知 fixture 锚点仍必须失败。
@@ -407,7 +436,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - `BETA-FILE-004` 的行首 `总计/合计` 可以同时约束同一行的多个直接 CSV/XLSX 文件标签或已绑定表别名。表别名允许字母、阿拉伯数字或中文数字，例如 `表 A/表 B`、`表1/表2` 和 `表格一/表格二`，但必须先与唯一文件身份绑定。解析器必须把每个身份的数值区间截断在下一个文件标签或表别名前，分别核对 182/215；不得读取到行尾并把后一个文件的总计错配给前一个，也不得放行双方总计交换的反例。
 - `BETA-FILE-004` 还必须识别制表符或 Markdown pipe 结构化表格中的列身份：当表头用不同列明确绑定 CSV 与 XLSX/Excel，后续 `总计/合计` 行可以沿用同一列位置而不重复文件名。解析器必须逐列核对 182/215，并保留交换两列总计必失败的 invariant；禁止脱离表头列映射，仅因总计行散落出现两个数字而通过。
 - `BETA-FILE-004` 的文件行若受 `表格\t合计` 等结构化表头约束，合计单元格可以先展示权威总计、再在同一单元格用括号列出验算因子，例如 `qbot-table.csv\t182（100 + 70 + 12）`。解析器必须按表头定位合计单元格并核对展示总计，不能把括号内最后一个因子 `12` 误当总计；双方展示总计交换时仍必须失败。
-- 全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-005`。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
+- 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - 初始化动作必须证明本次点击引起了状态转换。优先取证按钮 busy/disabled 或维护区处理中状态；若动作短于轮询采样窗口，只有“动作前不存在、动作后新增、且与当前按钮精确匹配”的完成回执，加上确认弹窗和连续稳定终态，才可替代 transient busy。产品成功契约明确会刷新 renderer 的维护动作（当前仅清空全部会话），允许把确认动作后发生的主框架刷新作为因果动作信号，但仍必须同时满足匹配确认弹窗和刷新后的连续稳定终态；其他导航不得复用。陈旧完成文案不得复用。
 - `BETA-INIT-001` 必须点击当前发布界面实际显示的“立即检查运行时”入口（当前 `assistant-prepare-python-runtimes`）；只有发布界面明确提供旧“检查更新运行时”入口时才兼容 `assistant-runtime-update-check`，不得因 testid 演进把可见入口误判为缺失。
@@ -489,7 +518,7 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 
 - 输出目录一旦产生真实 Case 结果，就视为不可变批次。
 - 框架或 Case 修复后使用新的输出目录。
-- Core Beta v2 的生产灰度轮次要求 `executed=total`、`inherited=0`、`synthetic=0`，因此正式 74/184 全量门禁不使用跨批次继承；中断后重新执行完整新批次。
+- Core Beta v2 的生产灰度轮次要求 `executed=total=70`、`inherited=0`、`synthetic=0`，因此当前 70 条正式门禁不使用跨批次继承；中断后重新执行完整新批次。
 - 旧协议的 360Teams lineage 只有在显式 `--resume-from` 加 `--impact-case` 或 `--impact-all true` 时允许使用，且源批次必须冻结、证据完整、发布身份兼容。
 - 发布身份变化时必须执行全量新批次，不能继承旧发布结果。
 - 明确 identity drift、重复 runner、manifest 不完整仍 completed 或 synthetic completed 时，立即停止并冻结当前批次；随后按第 9.1 节自主修复、校验并在新不可变目录重新执行，除非命中其中明确列出的不可自动恢复条件。
@@ -521,13 +550,13 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 
 ## 12. 多轮生产灰度门禁
 
-单轮全绿不授权生产。完整 184 条必须在同一冻结发布身份下连续通过 5 轮，且每轮满足：
+单轮全绿不授权生产。完整 70 条必须在同一冻结发布身份下连续通过 5 轮，且每轮满足：
 
-- `total=completed=executed=unique_case_count=trusted_pass=184`
+- `total=completed=executed=unique_case_count=trusted_pass=70`
 - `inherited=0`
 - `synthetic=0`
 - `trusted_bug/trusted_fail/trusted_blocked/framework_issue/testcase_issue=0`
-- evidence complete 和 action receipts 均为 184，missing/invalid 为 0
+- evidence complete 和 action receipts 均为 70，missing/invalid 为 0
 - 单 runner 唯一、cleanup 完成、fixture 恢复、真实产品执行成立
 - flaky 为 0
 
@@ -540,7 +569,7 @@ npm run core-beta:gray-gate -- \
   /absolute/path/to/runs.json \
   /absolute/path/to/core-beta-gray-gate.json \
   5 \
-  184
+  70
 ```
 
 仅 `decision=GO_CONTROLLED_GRAY` 表示可进入受控生产灰度内测，不等同于正式 GA。

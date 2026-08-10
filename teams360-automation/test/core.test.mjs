@@ -46,6 +46,7 @@ import {
 import {
   configureTeamsFixtureRuntime,
   extendTeamsPreconnectDeadlineAfterRecovery,
+  inspectManagedTeamsRestartCapability,
   installTeamsPageGuards,
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
@@ -553,6 +554,32 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     productionCoreBetaOptions['control-plane-url'],
     'https://deepbank-control-uat.example.test',
   );
+  const previousNativeImeCommand = process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND;
+  delete process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND;
+  try {
+    const imeOptions = parseCasebookRunnerOptions([
+      '--casebook', 'PRD/cases.xlsx',
+      '--case', 'BETA-CHAT-010,BETA-REC-001',
+      '--out', 'teams360-automation/output/core-beta-ime-run',
+      '--production-gate', 'true',
+      '--control-plane-url', 'https://deepbank-control-uat.example.test',
+    ]);
+    assert.throws(
+      () => validateTeamsCasebookOptions(imeOptions),
+      /require --native-ime-command/,
+    );
+    imeOptions['native-ime-command'] = '/bin/true';
+    assert.equal(validateTeamsCasebookOptions(imeOptions), imeOptions);
+  } finally {
+    if (previousNativeImeCommand == null) delete process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND;
+    else process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND = previousNativeImeCommand;
+  }
+  const managedRestart = inspectManagedTeamsRestartCapability();
+  assert.equal(managedRestart.ok, true);
+  assert.equal(managedRestart.exists, true);
+  assert.equal(managedRestart.executable, true);
+  assert.equal(managedRestart.syntax_ok, true);
+  assert.match(managedRestart.entrypoint, /restart-qbot-electron-control-plane\.sh$/);
   const cleanupOptions = parseCasebookRunnerOptions([
     '--casebook', 'PRD/cases.xlsx',
     '--case', 'BETA-SKILL-001',

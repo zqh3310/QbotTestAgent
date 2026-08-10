@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { runUiAgentCasebookCommand } from '../../src/lib/ui-agent-casebook-runner.mjs';
@@ -28,6 +29,11 @@ const ROOT = path.resolve(HERE, '../..');
 const TEAMS_OUTPUT_ROOT = path.resolve(HERE, '../output');
 const TEAMS_RUNTIME_ROOT = path.resolve(HERE, '../runtime');
 const TEAMS_CONTROL_PLANE_HOME = path.resolve(HERE, '../state/control-plane-home');
+const TEAMS_RESTART_SHIM = path.join(
+  TEAMS_RUNTIME_ROOT,
+  'scripts',
+  'restart-qbot-electron-control-plane.sh',
+);
 const CURRENT_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-origin-main');
 const LEGACY_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-main-b408a07a');
 const DEEPBANK_ROOT = process.env.QBOT_TEAMS_FIXTURE_QBOT_ROOT
@@ -67,6 +73,16 @@ export function validateTeamsCasebookOptions(options) {
     && selectedCaseIds.some((id) => /^BETA-/.test(id));
   if (productionCoreBeta && !String(options['control-plane-url'] || '').trim()) {
     throw new Error('Production Core Beta Teams runs require --control-plane-url from the matching READY/READY_SCOPED pretest.');
+  }
+  if (
+    productionCoreBeta
+    && selectedCaseIds.includes('BETA-CHAT-010')
+    && !String(options['native-ime-command'] || process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND || '').trim()
+  ) {
+    throw new Error(
+      'Production Core Beta Teams runs containing BETA-CHAT-010 require '
+      + '--native-ime-command (or QBOT_CORE_BETA_NATIVE_IME_COMMAND) from the matching READY pretest.',
+    );
   }
   if (options['control-plane-url']) {
     const controlPlane = new URL(String(options['control-plane-url']));
@@ -141,6 +157,32 @@ export function validateTeamsCasebookOptions(options) {
     options['resume-from'] = resumeFrom;
   }
   return options;
+}
+
+export function inspectManagedTeamsRestartCapability() {
+  let stat = null;
+  try {
+    stat = fs.statSync(TEAMS_RESTART_SHIM);
+  } catch {
+    // Report the missing entrypoint below without mutating the runtime.
+  }
+  const syntax = stat?.isFile()
+    ? spawnSync('/bin/zsh', ['-n', TEAMS_RESTART_SHIM], {
+      cwd: TEAMS_RUNTIME_ROOT,
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    : null;
+  const executable = Boolean(stat?.isFile() && (stat.mode & 0o111));
+  return {
+    ok: Boolean(stat?.isFile() && executable && syntax?.status === 0),
+    mode: 'teams_wrapper_managed_restart',
+    entrypoint: TEAMS_RESTART_SHIM,
+    exists: Boolean(stat?.isFile()),
+    executable,
+    syntax_ok: syntax?.status === 0,
+    syntax_error: String(syntax?.stderr || syntax?.error?.message || '').trim(),
+  };
 }
 
 export function validateLiveCasebookSession(session) {
@@ -974,7 +1016,12 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   if (!/\/\.deepbank(?:-(?:dev|local|uat))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(String(qworkUiUrl || ''))) {
     throw new Error('QWork did not expose a versioned UI URL; managed host relaunch is unsafe.');
   }
-  const restartShim = path.join(TEAMS_RUNTIME_ROOT, 'scripts', 'restart-qbot-electron-control-plane.sh');
+  const restartCapability = inspectManagedTeamsRestartCapability();
+  if (!restartCapability.ok) {
+    throw new Error(
+      `Managed Teams restart capability unavailable: ${JSON.stringify(restartCapability)}`,
+    );
+  }
   fs.mkdirSync(TEAMS_CONTROL_PLANE_HOME, { recursive: true });
   options['control-plane-url'] = normalized;
   options['qwork-ui-url'] = String(qworkUiUrl || '').trim();
@@ -1006,7 +1053,7 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   options['restart-timeout-ms'] ||= 480_000;
   options['restart-reconnect-timeout-ms'] ||= 90_000;
   options['restart-command'] = [
-    restartShim,
+    restartCapability.entrypoint,
     options['qbot-root'],
     normalized,
     '0',

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   classifyCoreBetaScopedFixtureExclusions,
+  coreBetaScenarioSpec,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
@@ -18,6 +19,7 @@ import {
   readSession,
 } from '../teams360-automation/lib/launcher.mjs';
 import {
+  inspectManagedTeamsRestartCapability,
   validateLiveCasebookSession,
 } from '../teams360-automation/lib/casebook-runner.mjs';
 import { inspectTeamsCdp } from '../teams360-automation/lib/targets.mjs';
@@ -50,10 +52,14 @@ Teams production-gate identity options:
   --backend-version <id>
   --prompt-policy-version <id>
   --feature-flags-hash <sha256>
+  --native-ime-command <command> Command used by the runner for BETA-CHAT-010.
+                                  With QBOT_CORE_BETA_IME_PROBE=1 it must make
+                                  no input and return the probe JSON contract.
 
 Local lane:
   --cdp <loopback-url>            Default: http://127.0.0.1:9224
   --health-url <http-url>         Optional runtime/control-plane health endpoint
+  --restart-command <command>     Required when selected Cases need managed restart
 
 Controls:
   --production-gate true         Requires every frozen identity input
@@ -119,6 +125,75 @@ function commandResult(command, args, options = {}) {
 function commandText(command, args, fallback = '') {
   const result = commandResult(command, args, { timeout: 30_000 });
   return result.ok ? result.stdout : fallback;
+}
+
+function inspectShellCommandAvailability(command) {
+  const normalized = String(command || '').trim();
+  if (!normalized) return { ok: false, reason: 'command_missing' };
+  const syntax = commandResult('/bin/zsh', ['-n', '-c', normalized], { timeout: 10_000 });
+  const resolution = commandResult('/bin/zsh', [
+    '-fc',
+    'words=(${(z)1}); (( ${#words[@]} > 0 )) || exit 2; '
+      + 'entry="$words[1]"; if [[ "$entry" == */* ]]; then [[ -x "$entry" ]] && print -r -- "$entry"; '
+      + 'else command -v -- "$entry"; fi',
+    'qbot-command-probe',
+    normalized,
+  ], { timeout: 10_000 });
+  return {
+    ok: syntax.ok && resolution.ok,
+    reason: syntax.ok ? (resolution.ok ? '' : 'command_entrypoint_unavailable') : 'command_syntax_invalid',
+    entrypoint: resolution.ok ? resolution.stdout : '',
+    syntax_ok: syntax.ok,
+    resolution_ok: resolution.ok,
+  };
+}
+
+function probeNativeImeCommand(command) {
+  const availability = inspectShellCommandAvailability(command);
+  if (!availability.ok) return { ...availability, probe_ok: false };
+  const result = spawnSync('/bin/zsh', ['-lc', String(command)], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      QBOT_CORE_BETA_IME_PROBE: '1',
+      QBOT_CORE_BETA_IME_TEXT: '',
+      QBOT_CORE_BETA_IME_TEXT_BASE64: '',
+      QBOT_CORE_BETA_CASE_ID: 'PRETEST-PROBE',
+    },
+  });
+  const stdout = String(result.stdout || '').trim();
+  let body = null;
+  for (const line of stdout.split('\n').map((item) => item.trim()).filter(Boolean).reverse()) {
+    try {
+      body = JSON.parse(line);
+      break;
+    } catch {
+      // Ignore non-JSON diagnostic lines; only the final probe contract is retained.
+    }
+  }
+  const contractOk = result.status === 0
+    && body?.schema_version === 'qbot-core-beta-native-ime-probe/v1'
+    && body?.ok === true
+    && body?.non_mutating === true
+    && body?.accessibility_permission === true
+    && body?.input_source_ready === true;
+  return {
+    ...availability,
+    ok: availability.ok && contractOk,
+    probe_ok: contractOk,
+    status: result.status,
+    schema_version: String(body?.schema_version || ''),
+    non_mutating: body?.non_mutating === true,
+    accessibility_permission: body?.accessibility_permission === true,
+    input_source_ready: body?.input_source_ready === true,
+    stdout_bytes: Buffer.byteLength(stdout),
+    stdout_sha256: createHash('sha256').update(stdout).digest('hex'),
+    reason: contractOk
+      ? ''
+      : String(body?.reason || result.error?.message || 'native_ime_probe_contract_failed'),
+  };
 }
 
 function isGitTracked(file) {
@@ -284,6 +359,11 @@ async function main() {
   }
 
   addCheck('casebook_exists', fs.existsSync(casebook) && fs.statSync(casebook).isFile(), casebook);
+  addCheck(
+    'casebook_git_tracked',
+    fs.existsSync(casebook) && isGitTracked(casebook),
+    isGitTracked(casebook) ? 'Casebook is tracked by Git' : `untracked=${path.relative(ROOT, casebook)}`,
+  );
   let casebookSha = '';
   let cases = [];
   let fullCases = [];
@@ -415,13 +495,64 @@ async function main() {
       : releaseAudit.errors.slice(0, 20).join('; '));
   }
 
+  const fixtureControls = new Set(cases.map((testCase) => (
+    coreBetaScenarioSpec(testCase)?.fixture_control || ''
+  )).filter(Boolean));
+  const needsManagedRestart = fixtureControls.has('managed_teams_restart')
+    || fixtureControls.has('managed_runtime_restart');
+  const needsNativeIme = fixtureControls.has('native_ime_input');
+  const effectiveFixtureOptions = { ...options };
+  const fixtureCapabilities = {};
+
+  if (needsManagedRestart) {
+    if (lane === 'teams') {
+      const callerRestartAbsent = !String(options['restart-command'] || '').trim();
+      addCheck(
+        'teams_restart_command_is_wrapper_managed',
+        callerRestartAbsent,
+        callerRestartAbsent
+          ? 'caller restart command absent; Teams wrapper owns the restart command'
+          : 'Teams pretest must not accept caller --restart-command',
+      );
+      fixtureCapabilities.managed_restart = inspectManagedTeamsRestartCapability();
+      addCheck(
+        'teams_managed_restart_capability',
+        fixtureCapabilities.managed_restart.ok,
+        JSON.stringify(fixtureCapabilities.managed_restart),
+      );
+      if (fixtureCapabilities.managed_restart.ok) {
+        effectiveFixtureOptions['restart-command'] = fixtureCapabilities.managed_restart.entrypoint;
+      }
+    } else {
+      fixtureCapabilities.managed_restart = inspectShellCommandAvailability(options['restart-command']);
+      addCheck(
+        'local_managed_restart_capability',
+        fixtureCapabilities.managed_restart.ok,
+        JSON.stringify(fixtureCapabilities.managed_restart),
+      );
+    }
+  }
+
+  if (needsNativeIme) {
+    const nativeImeCommand = String(
+      options['native-ime-command'] || process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND || '',
+    ).trim();
+    fixtureCapabilities.native_ime = probeNativeImeCommand(nativeImeCommand);
+    addCheck(
+      'native_ime_command_capability',
+      fixtureCapabilities.native_ime.ok,
+      JSON.stringify(fixtureCapabilities.native_ime),
+    );
+    if (nativeImeCommand) effectiveFixtureOptions['native-ime-command'] = nativeImeCommand;
+  }
+
   let fixtureReadiness = null;
   if (cases.length && protocol?.ok) {
     const fixtureUrl = String(options['core-beta-fixture-control-url'] || '').trim();
     if (fixtureUrl) normalizeLoopbackUrl(fixtureUrl);
     fixtureReadiness = await inspectCoreBetaFixtureReadiness({
       options: {
-        ...options,
+        ...effectiveFixtureOptions,
         'core-beta-fixture-control-url': fixtureUrl,
       },
       cases,
@@ -435,7 +566,7 @@ async function main() {
       : fixtureReadiness.reason);
   }
 
-  let runtime = {};
+  let runtime = { fixture_capabilities: fixtureCapabilities };
   if (lane === 'teams') {
     const appPath = path.resolve(String(options.app || DEFAULT_TEAMS_APP));
     const teamsVersion = plistValue(appPath, 'CFBundleShortVersionString');

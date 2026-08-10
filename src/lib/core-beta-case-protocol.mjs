@@ -193,7 +193,7 @@ const registerScenario = (id, driver, {
   ['BETA-EXPERT-004', 'expert_manual_draft_typed_dependencies'],
   ['BETA-EXPERT-005', 'expert_draft_etag_conflict'],
   ['BETA-EXPERT-006', 'expert_validate_debug_frozen_revision', { fixture_control: 'expert_skill_policy_matrix' }],
-  ['BETA-EXPERT-007', 'expert_publish_state_machine', { fixture_control: 'expert_publish_fault_matrix' }],
+  ['BETA-EXPERT-007', 'expert_publish_state_machine'],
   ['BETA-EXPERT-008', 'expert_research_three_turn'],
   ['BETA-EXPERT-009', 'expert_data_three_turn_attachment'],
   ['BETA-EXPERT-010', 'expert_delivery_three_turn_artifact'],
@@ -222,9 +222,10 @@ const registerScenario = (id, driver, {
   ['BETA-REC-003', 'codex_proxy_no_proxy_matrix', { fixture_control: 'codex_proxy_matrix' }],
   ['BETA-REC-004', 'claude_runtime_home_isolation', { fixture_control: 'managed_runtime_restart' }],
   ['BETA-AUTH-001', 'auth_refresh_expiry_recovery', { fixture_control: 'auth_refresh_fault' }],
+  ['BETA-TASK-008', 'composer_history_navigation'],
   ['BETA-TASK-004', 'task_hitl_answer_skip_timeout', { fixture_control: 'hitl_answer_skip_timeout' }],
   ['BETA-SEC-005', 'security_ssrf_advanced_matrix', { fixture_control: 'ssrf_advanced_matrix' }],
-  ['BETA-ROUTE-001', 'auto_policy_composer_single_select', { fixture_control: 'auto_route_ui_matrix' }],
+  ['BETA-ROUTE-001', 'model_menu_sdk_filter'],
   ['BETA-ROUTE-002', 'auto_company_aware_m1_m4_routing', { fixture_control: 'auto_route_classification_matrix' }],
   ['BETA-ROUTE-003', 'auto_conservative_fallback_and_exhaustion', { fixture_control: 'auto_route_failure_matrix' }],
   ['BETA-ROUTE-004', 'auto_session_pin_reload_and_manual_isolation', { fixture_control: 'auto_route_session_lifecycle' }],
@@ -266,7 +267,6 @@ const productionExtensionFixtureControls = Object.freeze({
   'BETA-TASK-005': 'task_work_mode_three_task_matrix',
   'BETA-TASK-006': 'task_security_tier_execution_matrix',
   'BETA-TASK-007': 'task_security_tier_immutability',
-  'BETA-TASK-008': 'task_prompt_enhance_undo_resend',
   'BETA-TASK-009': 'feedback_gitlab_fail_once',
   'BETA-TASK-010': 'workspace_two_root_execution_matrix',
   'BETA-ART-006': 'artifact_confirmation_cancel_failure_matrix',
@@ -324,7 +324,7 @@ if (CORE_BETA_SCENARIO_REGISTRY.size !== CORE_BETA_SCENARIO_IDS.size
 }
 
 export const CORE_BETA_CASE_DEPENDENCIES = new Map([
-  ['BETA-EXPERT-007', ['BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-006']],
+  ['BETA-EXPERT-007', ['BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004']],
   ['BETA-EXPERT-008', ['BETA-EXPERT-002', 'BETA-EXPERT-007']],
   ['BETA-EXPERT-009', ['BETA-EXPERT-003', 'BETA-EXPERT-007']],
   ['BETA-EXPERT-010', ['BETA-EXPERT-004', 'BETA-EXPERT-007']],
@@ -668,7 +668,9 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
     if (!evidenceRoles.has(role)) errors.push(`${id} evidence_roles 缺少 ${role}`);
   }
   const isPreSendAttachmentRejection = scenarioSpec?.driver === 'attachment_pre_send_rejection_matrix';
+  const isReadOnlyModelMenu = scenarioSpec?.driver === 'model_menu_sdk_filter';
   const requiresConversation = (!isPreSendAttachmentRejection
+      && !isReadOnlyModelMenu
       && CONVERSATION_TYPES.has(String(testCase?.case_type || '')))
     || evidenceRoles.has('prompt')
     || evidenceRoles.has('transcript')
@@ -763,17 +765,22 @@ export function validateCoreBetaCasePlan(cases, options = {}) {
     (item) => String(item?.initialization_policy || '') === 'run_full_reset_then_case_clean',
   );
   if (cases.length > 1 && requiresFullInitialization && options.allowPartialInitialization !== true) {
-    const requiredPrefix = [
+    const localInitializationPrefix = [
       'BETA-INIT-001',
       'BETA-INIT-002',
       'BETA-INIT-003',
       'BETA-INIT-004',
-      'BETA-INIT-005',
     ];
+    // INIT-005 injects a connection-cache fault. It remains valid for the
+    // historical 74/184 contracts, but is intentionally absent from the
+    // release/0.1 desktop gray gate, which excludes network-fault scenarios.
+    const requiredPrefix = ids.includes('BETA-INIT-005')
+      ? [...localInitializationPrefix, 'BETA-INIT-005']
+      : localInitializationPrefix;
     const actualPrefix = ids.slice(0, requiredPrefix.length);
     if (JSON.stringify(actualPrefix) !== JSON.stringify(requiredPrefix)) {
       errors.push(
-        `Core Beta 全量批次必须以前五个初始化硬门禁开场且顺序固定：`
+        `Core Beta 全量批次必须以初始化硬门禁开场且顺序固定：`
         + `${requiredPrefix.join(',')}；actual=${actualPrefix.join(',') || 'empty'}`,
       );
     }

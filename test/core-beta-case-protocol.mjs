@@ -187,6 +187,27 @@ assert.equal(
   'auto_route_cas_matrix',
   'Auto CAS 冲突必须绑定受控并发矩阵',
 );
+assert.deepEqual(
+  {
+    driver: CORE_BETA_SCENARIO_REGISTRY.get('BETA-TASK-008').driver,
+    fixture: CORE_BETA_SCENARIO_REGISTRY.get('BETA-TASK-008').fixture_control,
+  },
+  { driver: 'composer_history_navigation', fixture: 'public_product_state' },
+  'Composer历史输入必须由公开产品状态原生执行器覆盖',
+);
+assert.deepEqual(
+  {
+    driver: CORE_BETA_SCENARIO_REGISTRY.get('BETA-ROUTE-001').driver,
+    fixture: CORE_BETA_SCENARIO_REGISTRY.get('BETA-ROUTE-001').fixture_control,
+  },
+  { driver: 'model_menu_sdk_filter', fixture: 'public_product_state' },
+  '模型菜单SDK过滤必须由公开产品状态原生执行器覆盖',
+);
+assert.equal(
+  CORE_BETA_SCENARIO_REGISTRY.get('BETA-EXPERT-007').fixture_control,
+  'public_product_state',
+  '单账号灰度门禁的正常发布闭环不得依赖故障注入控制器',
+);
 const verifiedLegacyDrivers = [...CORE_BETA_SCENARIO_REGISTRY.values()]
   .filter((item) => item.legacy_case_id)
   .map((item) => `${item.id}:${item.legacy_case_id}`)
@@ -345,9 +366,14 @@ const misorderedPlan = [
 ];
 assert.match(
   validateCoreBetaCasePlan(misorderedPlan).errors.join('\n'),
-  /前五个初始化硬门禁开场且顺序固定/,
+  /初始化硬门禁开场且顺序固定/,
 );
 const scopedPlan = initializedPlan.filter((item) => item.id !== 'BETA-INIT-005');
+assert.equal(
+  validateCoreBetaCasePlan(scopedPlan).ok,
+  true,
+  '不含网络故障注入的正式灰度门禁必须允许以前四个本地初始化 Case 开场',
+);
 const scopedSelection = validateCoreBetaScopedSelection({
   fullCases: initializedPlan,
   selectedCases: scopedPlan,
