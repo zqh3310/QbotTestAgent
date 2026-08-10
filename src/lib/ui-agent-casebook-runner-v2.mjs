@@ -42,6 +42,11 @@ const COMBO_REPLY_WAIT_MS = 180000;
 const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000;
 const LONG_CONTEXT_REPLY_WAIT_MS = 600000;
 const MULTI_TURN_REPLY_WAIT_MS = 600000;
+const CORE_BETA_SCREENSHOT_PLAYWRIGHT_TIMEOUT_MS = 15_000;
+const CORE_BETA_SCREENSHOT_PRIMARY_HARD_TIMEOUT_MS = 41_000;
+const CORE_BETA_SCREENSHOT_SESSION_TIMEOUT_MS = 5_000;
+const CORE_BETA_SCREENSHOT_CAPTURE_TIMEOUT_MS = 15_000;
+const CORE_BETA_SCREENSHOT_DETACH_TIMEOUT_MS = 5_000;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -29122,11 +29127,39 @@ async function inspectPrecheck(page, outDir) {
   };
 }
 
-async function shot(page, dir, name) {
+async function withCoreBetaScreenshotHardTimeout(operation, timeoutMs, label) {
+  const boundedTimeoutMs = Math.max(1, Number(timeoutMs) || 1);
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Core Beta screenshot operation timed out: ${label} after ${boundedTimeoutMs}ms`)),
+          boundedTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function captureCoreBetaV2Screenshot(page, dir, name, {
+  playwrightTimeoutMs = CORE_BETA_SCREENSHOT_PLAYWRIGHT_TIMEOUT_MS,
+  primaryHardTimeoutMs = CORE_BETA_SCREENSHOT_PRIMARY_HARD_TIMEOUT_MS,
+  sessionCreateTimeoutMs = CORE_BETA_SCREENSHOT_SESSION_TIMEOUT_MS,
+  captureTimeoutMs = CORE_BETA_SCREENSHOT_CAPTURE_TIMEOUT_MS,
+  detachTimeoutMs = CORE_BETA_SCREENSHOT_DETACH_TIMEOUT_MS,
+} = {}) {
   const file = path.join(dir, `${name}.png`);
   ensureDir(path.dirname(file));
   try {
-    await page.screenshot({ path: file, fullPage: true, timeout: 15_000 });
+    await withCoreBetaScreenshotHardTimeout(
+      () => page.screenshot({ path: file, fullPage: true, timeout: playwrightTimeoutMs }),
+      primaryHardTimeoutMs,
+      'page.screenshot',
+    );
     return file;
   } catch (screenshotError) {
     const message = String(screenshotError?.message || screenshotError);
@@ -29135,20 +29168,44 @@ async function shot(page, dir, name) {
     }
     let session = null;
     try {
-      session = await page.context().newCDPSession(page);
-      const captured = await session.send('Page.captureScreenshot', {
-        format: 'png',
-        fromSurface: true,
-        captureBeyondViewport: true,
-      });
-      fs.writeFileSync(file, Buffer.from(captured.data, 'base64'));
+      session = await withCoreBetaScreenshotHardTimeout(
+        () => page.context().newCDPSession(page),
+        sessionCreateTimeoutMs,
+        'newCDPSession fallback',
+      );
+      const captured = await withCoreBetaScreenshotHardTimeout(
+        () => session.send('Page.captureScreenshot', {
+          format: 'png',
+          fromSurface: true,
+          captureBeyondViewport: true,
+        }),
+        captureTimeoutMs,
+        'Page.captureScreenshot fallback',
+      );
+      const buffer = typeof captured?.data === 'string'
+        ? Buffer.from(captured.data, 'base64')
+        : Buffer.alloc(0);
+      if (buffer.length === 0) throw new Error('Page.captureScreenshot returned no image data');
+      fs.writeFileSync(file, buffer);
       return file;
     } catch (fallbackError) {
       throw new Error(`截图失败：${message}；CDP fallback：${fallbackError.message}`, { cause: fallbackError });
     } finally {
-      await session?.detach?.().catch(() => {});
+      if (session?.detach) {
+        await withCoreBetaScreenshotHardTimeout(
+          () => session.detach(),
+          detachTimeoutMs,
+          'CDP screenshot session detach',
+        ).catch((detachError) => {
+          process.stderr.write(`[core-beta-screenshot] ${String(detachError?.message || detachError)}\n`);
+        });
+      }
     }
   }
+}
+
+async function shot(page, dir, name) {
+  return captureCoreBetaV2Screenshot(page, dir, name);
 }
 
 async function bodyText(page) {

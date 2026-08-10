@@ -604,6 +604,7 @@ export async function waitForManagedQworkUi(cdpUrl, expectedUiUrl, timeoutMs = 3
 export function installTeamsPageGuards(page, { screenshotTimeoutMs = 15_000 } = {}) {
   if (!page || page.__teams360ScreenshotGuard) return page;
   const originalScreenshot = page.screenshot.bind(page);
+  const sessionDetachTimeoutMs = Math.max(1, Math.min(5_000, Number(screenshotTimeoutMs) || 15_000));
   Object.defineProperty(page, '__teams360ScreenshotGuard', { value: true, configurable: true });
   page.screenshot = async (options = {}) => {
     const requestedTimeout = Number(options?.timeout || 0);
@@ -644,7 +645,15 @@ export function installTeamsPageGuards(page, { screenshotTimeoutMs = 15_000 } = 
         }
         return buffer;
       } finally {
-        await session?.detach?.().catch(() => {});
+        if (session?.detach) {
+          await teamsOperationWithHardTimeout(
+            Promise.resolve().then(() => session.detach()),
+            sessionDetachTimeoutMs,
+            'CDP screenshot session detach',
+          ).catch((detachError) => {
+            process.stderr.write(`[teams360-screenshot] ${String(detachError?.message || detachError)}\n`);
+          });
+        }
       }
     }
   };

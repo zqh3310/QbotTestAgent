@@ -51,6 +51,7 @@ import {
   withCoreBetaOperationHardTimeout,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import {
+  captureCoreBetaV2Screenshot,
   coreBetaBatchReplyCompletionPayload,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import { validateReplyCompletionPayload } from '../src/lib/core-beta-case-protocol.mjs';
@@ -1936,4 +1937,65 @@ test('runtime recovery invocation has a Node-side hard timeout', async () => {
     await withCoreBetaOperationHardTimeout(Promise.resolve({ phase: 'dispatched' }), 100),
     { phase: 'dispatched' },
   );
+});
+
+test('Core Beta v2 screenshot fallback remains bounded when capture never settles', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-v2-shot-capture-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const page = {
+    async screenshot() { return new Promise(() => {}); },
+    context() {
+      return {
+        async newCDPSession() {
+          return {
+            async send() { return new Promise(() => {}); },
+            async detach() {},
+          };
+        },
+      };
+    },
+  };
+  const startedAt = Date.now();
+  await assert.rejects(
+    captureCoreBetaV2Screenshot(page, root, 'capture-timeout', {
+      playwrightTimeoutMs: 10,
+      primaryHardTimeoutMs: 10,
+      sessionCreateTimeoutMs: 10,
+      captureTimeoutMs: 10,
+      detachTimeoutMs: 10,
+    }),
+    /Page\.captureScreenshot fallback after 10ms/,
+  );
+  assert.ok(Date.now() - startedAt < 500, 'fallback capture must not wait forever');
+});
+
+test('Core Beta v2 screenshot returns saved evidence when detach never settles', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-v2-shot-detach-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const page = {
+    async screenshot() { throw new Error('page.screenshot: Timeout while waiting for fonts to load'); },
+    context() {
+      return {
+        async newCDPSession() {
+          return {
+            async send(method) {
+              assert.equal(method, 'Page.captureScreenshot');
+              return { data: Buffer.from('root-fallback-evidence').toString('base64') };
+            },
+            async detach() { return new Promise(() => {}); },
+          };
+        },
+      };
+    },
+  };
+  const startedAt = Date.now();
+  const screenshot = await captureCoreBetaV2Screenshot(page, root, 'detach-timeout', {
+    playwrightTimeoutMs: 10,
+    primaryHardTimeoutMs: 10,
+    sessionCreateTimeoutMs: 10,
+    captureTimeoutMs: 10,
+    detachTimeoutMs: 10,
+  });
+  assert.equal(fs.readFileSync(screenshot, 'utf8'), 'root-fallback-evidence');
+  assert.ok(Date.now() - startedAt < 500, 'fallback cleanup must not wait forever');
 });

@@ -480,6 +480,39 @@ test('Teams screenshot guard hard-times-out a screenshot promise that never sett
   }
 });
 
+test('Teams screenshot guard does not hang when fallback CDP session detach never settles', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-shot-detach-timeout-'));
+  const screenshotPath = path.join(root, 'fallback.png');
+  const page = {
+    async screenshot() {
+      throw new Error('page.screenshot: Timeout while waiting for fonts to load');
+    },
+    context() {
+      return {
+        async newCDPSession() {
+          return {
+            async send(method) {
+              assert.equal(method, 'Page.captureScreenshot');
+              return { data: Buffer.from('detach-timeout-evidence').toString('base64') };
+            },
+            async detach() { return new Promise(() => {}); },
+          };
+        },
+      };
+    },
+  };
+  try {
+    const startedAt = Date.now();
+    installTeamsPageGuards(page, { screenshotTimeoutMs: 20 });
+    const result = await page.screenshot({ path: screenshotPath, fullPage: true });
+    assert.equal(result.toString(), 'detach-timeout-evidence');
+    assert.equal(fs.readFileSync(screenshotPath, 'utf8'), 'detach-timeout-evidence');
+    assert.ok(Date.now() - startedAt < 500, 'fallback cleanup must not wait forever on CDP detach');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot restarts', () => {
   const options = parseCasebookRunnerOptions([
     '--casebook', 'PRD/cases.xlsx',

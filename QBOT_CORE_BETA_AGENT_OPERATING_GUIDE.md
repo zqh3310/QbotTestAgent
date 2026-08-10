@@ -27,6 +27,21 @@ QWork `0.0.30` 精确身份声明下永久冻结；随后 QWork 已更新并由 
 `READY_SCOPED` 预检完成后，必须以 QWork `0.1.1-rc.2` 的新不可变目录从第 1 条
 完整串行重跑 55 条。
 
+最新一次已冻结的 QWork `0.1.1-rc.2` UAT scoped 启动批次：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/teams360-automation/output/20260810160918_uat-core-beta74-scoped55_teams360-5.3.0-2119080776_qwork-0.1.1-rc.2_M3_serial_framework-3506228
+```
+
+该批次在 Case 0 截图阶段确认 framework issue：Playwright 截图进入字体等待超时后，
+最后可见 CDP 操作为无回包的 `Page.captureScreenshot`。复核发现 360Teams 外层保护器
+缺少 `detach()` 硬超时，而 Core Beta v2 根 `shot()` 的 fallback session 创建、截图与
+`detach()` 均没有硬超时；任一层都可能让唯一 runner 无界等待且无法生成
+`automation-progress.json`。该目录没有真实 Case 结果并已冻结；诊断样本保存在相邻
+`.framework-diagnostics` 目录。修复必须让两层截图全链路有界，并增加“截图无回包和
+detach 永不返回也必须及时收敛”的回归测试；修复、全检、推送和新
+`READY_SCOPED` pretest 后，从 `1/55` 在新不可变目录完整串行重跑。
+
 最新一次已冻结的 UAT scoped 批次：
 
 ```text
