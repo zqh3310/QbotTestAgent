@@ -44,6 +44,7 @@ import {
   coreBetaConnectorOptionTestId,
   coreBetaConversationTurnLabel,
   coreBetaExpertBuilderOutcomeEvidence,
+  coreBetaExpertPublishPrerequisiteBlocker,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
@@ -427,6 +428,97 @@ assert.equal(
   }).selected_expert,
   null,
   '本轮 ledger 缺失时，即使账号存在 active expert 也必须忽略并可信阻塞',
+);
+
+const expertPublishPrerequisiteRoles = [
+  'expert_publish_operation',
+  'restart_trace',
+  'credential_redaction_scan',
+  'capability_selection',
+  'capability_execution_event',
+];
+const expertPublishPrerequisiteCase = {
+  id: 'BETA-EXPERT-007',
+  evidence_roles: expertPublishPrerequisiteRoles,
+};
+const emptyExpertPublishState = {
+  case_id: 'BETA-EXPERT-007',
+  task: { id: null, running: false, message_count: 0, send_count: 35 },
+  expert: null,
+  skills: { selected: [] },
+  connectors: { selected: [] },
+};
+const expertPublishBlocker = coreBetaExpertPublishPrerequisiteBlocker({
+  testCase: expertPublishPrerequisiteCase,
+  ledgerExperts: {
+    manual_draft: { id: 'delivery-draft', etag: 'delivery-etag' },
+  },
+  availableDrafts: [{ id: 'historical-draft', etag: 'historical-etag', revision: 4 }],
+  publicState: emptyExpertPublishState,
+});
+assert.equal(expertPublishBlocker.valid, true, '三类本轮草稿缺失时必须形成可信发布前置 blocker');
+assert.equal(expertPublishBlocker.outcome, 'blocked');
+assert.deepEqual(expertPublishBlocker.missing_draft_keys, ['claude-code_draft', 'codex_draft']);
+assert.deepEqual(expertPublishBlocker.not_applicable_roles, expertPublishPrerequisiteRoles);
+assert.equal(expertPublishBlocker.historical_draft_fallback_forbidden, true);
+assert.deepEqual(expertPublishBlocker.selected_draft_ids, []);
+assert.equal(
+  coreBetaExpertPublishPrerequisiteBlocker({
+    testCase: expertPublishPrerequisiteCase,
+    ledgerExperts: {
+      'claude-code_draft': { id: 'research-draft', etag: 'research-etag' },
+      codex_draft: { id: 'data-draft' },
+      manual_draft: { id: 'delivery-draft', etag: 'delivery-etag' },
+    },
+    publicState: emptyExpertPublishState,
+  }).outcome,
+  'automation_error',
+  '本轮草稿账本条目存在但 draftId/etag 残缺时必须 fail-closed',
+);
+const expertPublishEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-expert-publish-prerequisite-'));
+try {
+  const blockerFile = path.join(expertPublishEvidenceDir, 'run-owned-expert-publish-prerequisite.json');
+  writeJsonFile(blockerFile, expertPublishBlocker);
+  const artifacts = {
+    core_beta_not_applicable_roles: expertPublishPrerequisiteRoles.map((role) => ({
+      role,
+      blocker_path: blockerFile,
+    })),
+  };
+  const manifest = buildCoreEvidenceManifest({
+    testCase: expertPublishPrerequisiteCase,
+    caseDir: expertPublishEvidenceDir,
+    artifacts,
+  });
+  assert.equal(manifest.complete, true, 'BETA-EXPERT-007 上游草稿缺失必须生成完整 N/A manifest');
+  assert.deepEqual(manifest.missing_roles, []);
+
+  writeJsonFile(blockerFile, {
+    ...expertPublishBlocker,
+    missing_draft_keys: ['manual_draft'],
+  });
+  const tampered = buildCoreEvidenceManifest({
+    testCase: expertPublishPrerequisiteCase,
+    caseDir: expertPublishEvidenceDir,
+    artifacts,
+  });
+  assert.deepEqual(
+    tampered.missing_roles,
+    expertPublishPrerequisiteRoles,
+    '发布前置 blocker 的缺失键与逐项账本快照不一致时必须重新 fail-closed',
+  );
+} finally {
+  fs.rmSync(expertPublishEvidenceDir, { recursive: true, force: true });
+}
+assert.match(
+  runner,
+  /BETA-EXPERT-007[\s\S]*coreBetaExpertPublishPrerequisiteBlocker[\s\S]*applyCoreBetaExpertPublishPrerequisite[\s\S]*return;/,
+  'BETA-EXPERT-007 缺少上游草稿时必须走 prerequisite blocked 而不是 throw',
+);
+assert.doesNotMatch(
+  runner,
+  /throw new Error\('BETA-EXPERT-007 缺少研究\/数据\/交付三类本轮草稿'\)/,
+  'BETA-EXPERT-007 不得再因可预期的上游草稿缺失直接中断批次',
 );
 
 {

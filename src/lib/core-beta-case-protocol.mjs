@@ -1108,6 +1108,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'credential_redaction_scan',
     'expert_history_readback',
     'negative_ui_trace',
+    'expert_publish_operation',
+    'restart_trace',
   ]);
   const mcpPrerequisiteNotApplicableRoles = new Set([
     ...skillPrerequisiteNotApplicableRoles,
@@ -1288,6 +1290,74 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => expertPrerequisiteNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const expertPublishRequiredKeys = [
+      'claude-code_draft',
+      'codex_draft',
+      'manual_draft',
+    ];
+    const expertPublishSourceCaseIds = [
+      'BETA-EXPERT-002',
+      'BETA-EXPERT-003',
+      'BETA-EXPERT-004',
+    ];
+    const missingDraftKeys = Array.isArray(blocker?.missing_draft_keys)
+      ? blocker.missing_draft_keys.map(String)
+      : [];
+    const incompleteDraftKeys = Array.isArray(blocker?.incomplete_draft_keys)
+      ? blocker.incomplete_draft_keys.map(String)
+      : [];
+    const publishRequirements = Array.isArray(blocker?.requirements) ? blocker.requirements : [];
+    const availableDraftIdentities = Array.isArray(blocker?.available_draft_identities)
+      ? blocker.available_draft_identities
+      : [];
+    const expertPublishPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-expert-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.applicable === true
+      && blocker?.outcome === 'blocked'
+      && blocker?.kind === 'run_owned_draft_set_missing'
+      && blocker?.source === 'exact_run_suite_ledger_and_live_draft_inventory'
+      && testCase?.id === 'BETA-EXPERT-007'
+      && blocker?.dependent_case_id === 'BETA-EXPERT-007'
+      && JSON.stringify(sourceCaseIds) === JSON.stringify(expertPublishSourceCaseIds)
+      && JSON.stringify(blocker?.required_draft_keys || []) === JSON.stringify(expertPublishRequiredKeys)
+      && missingDraftKeys.length > 0
+      && new Set(missingDraftKeys).size === missingDraftKeys.length
+      && missingDraftKeys.every((key) => expertPublishRequiredKeys.includes(key))
+      && incompleteDraftKeys.length === 0
+      && publishRequirements.length === 3
+      && publishRequirements.every((item, index) => (
+        item?.ledger_key === expertPublishRequiredKeys[index]
+        && item?.source_case_id === expertPublishSourceCaseIds[index]
+        && item?.kind === ['research', 'data', 'delivery'][index]
+        && (item?.present === true || item?.present === false)
+        && (item?.complete === true || item?.complete === false)
+        && (missingDraftKeys.includes(item.ledger_key)
+          ? item.present === false && item.complete === false && item.id === '' && item.etag === ''
+          : item.present === true && item.complete === true
+            && String(item.id || '').trim() && String(item.etag || '').trim())
+      ))
+      && blocker?.ledger_snapshot_sha256 === createHash('sha256')
+        .update(JSON.stringify(publishRequirements)).digest('hex')
+      && Number(blocker?.available_draft_count) === availableDraftIdentities.length
+      && availableDraftIdentities.every((item) => String(item?.id || '').trim())
+      && blocker?.available_draft_identities_sha256 === createHash('sha256')
+        .update(JSON.stringify(availableDraftIdentities)).digest('hex')
+      && blocker?.historical_draft_fallback_forbidden === true
+      && Array.isArray(blocker?.selected_draft_ids)
+      && blocker.selected_draft_ids.length === 0
+      && expertMutationGuard?.valid === true
+      && expertMutationGuard?.case_bound === true
+      && expertMutationGuard?.task_absent === true
+      && expertMutationGuard?.no_messages === true
+      && expertMutationGuard?.not_running === true
+      && expertMutationGuard?.send_count_observed === true
+      && expertMutationGuard?.expert_absent === true
+      && expertMutationGuard?.skills_absent === true
+      && expertMutationGuard?.connectors_absent === true
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => expertPrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const mcpMutationGuard = blocker?.mutation_guard || {};
     const mcpPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-mcp-prerequisite/v1'
       && blocker?.valid === true
@@ -1448,6 +1518,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
       || expertPrerequisiteVerified
+      || expertPublishPrerequisiteVerified
       || mcpPrerequisiteVerified
       || preSendCapabilityFailureVerified
       || preSendImeFailureVerified;

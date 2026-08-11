@@ -8322,7 +8322,151 @@ const CORE_BETA_EXPERT_PREREQUISITE_NA_ROLES = new Set([
   'credential_redaction_scan',
   'expert_history_readback',
   'negative_ui_trace',
+  'expert_publish_operation',
+  'restart_trace',
 ]);
+
+const CORE_BETA_EXPERT_PUBLISH_DRAFT_REQUIREMENTS = Object.freeze([
+  { ledger_key: 'claude-code_draft', source_case_id: 'BETA-EXPERT-002', kind: 'research' },
+  { ledger_key: 'codex_draft', source_case_id: 'BETA-EXPERT-003', kind: 'data' },
+  { ledger_key: 'manual_draft', source_case_id: 'BETA-EXPERT-004', kind: 'delivery' },
+]);
+
+export function coreBetaExpertPublishPrerequisiteBlocker({
+  testCase = {},
+  ledgerExperts = {},
+  availableDrafts = [],
+  publicState = null,
+} = {}) {
+  const caseId = String(testCase?.id || '');
+  if (caseId !== 'BETA-EXPERT-007') {
+    return {
+      applies: false,
+      ready: true,
+      valid: true,
+      not_applicable_roles: [],
+    };
+  }
+  const requirements = CORE_BETA_EXPERT_PUBLISH_DRAFT_REQUIREMENTS.map((item) => {
+    const entry = ledgerExperts?.[item.ledger_key] || null;
+    return {
+      ...item,
+      present: Boolean(entry),
+      id: String(entry?.id || ''),
+      etag: String(entry?.etag || ''),
+      complete: Boolean(entry?.id && entry?.etag),
+    };
+  });
+  const missingDraftKeys = requirements
+    .filter((item) => !item.present)
+    .map((item) => item.ledger_key);
+  const incompleteDraftKeys = requirements
+    .filter((item) => item.present && !item.complete)
+    .map((item) => item.ledger_key);
+  const ready = requirements.every((item) => item.complete);
+  const availableDraftIdentities = (Array.isArray(availableDrafts) ? availableDrafts : [])
+    .map((item) => ({
+      id: String(item?.id || ''),
+      etag: String(item?.etag || ''),
+      revision: Number(item?.revision || 0),
+      status: String(item?.status || ''),
+    }))
+    .filter((item) => item.id)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  if (ready) {
+    return {
+      schema_version: 'qbot-core-beta-expert-prerequisite/v1',
+      applies: true,
+      ready: true,
+      valid: true,
+      applicable: false,
+      outcome: 'ready',
+      kind: 'run_owned_draft_set_ready',
+      dependent_case_id: caseId,
+      requirements,
+      not_applicable_roles: [],
+    };
+  }
+  const task = publicState?.task || {};
+  const selectedSkills = Array.isArray(publicState?.skills?.selected) ? publicState.skills.selected : [];
+  const selectedConnectors = Array.isArray(publicState?.connectors?.selected) ? publicState.connectors.selected : [];
+  const mutationGuard = {
+    case_bound: publicState?.case_id === caseId,
+    task_absent: task?.id == null,
+    no_messages: Number(task?.message_count || 0) === 0,
+    not_running: task?.running !== true,
+    send_count_observed: Number.isFinite(Number(task?.send_count)),
+    expert_absent: publicState?.expert == null,
+    skills_absent: selectedSkills.length === 0,
+    connectors_absent: selectedConnectors.length === 0,
+  };
+  mutationGuard.valid = Boolean(publicState) && Object.values(mutationGuard).every(Boolean);
+  const outcome = incompleteDraftKeys.length > 0 ? 'automation_error' : 'blocked';
+  const notApplicableRoles = (Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [])
+    .filter((role) => CORE_BETA_EXPERT_PREREQUISITE_NA_ROLES.has(role));
+  const reason = outcome === 'blocked'
+    ? `BETA-EXPERT-007 的本轮草稿前置缺失：${missingDraftKeys.join(',')}；已忽略账号中 ${availableDraftIdentities.length} 个非本轮草稿，未发布且未随机替换。`
+    : `BETA-EXPERT-007 的本轮草稿账本身份不完整：${incompleteDraftKeys.join(',')} 缺少 draftId/etag。`;
+  return {
+    schema_version: 'qbot-core-beta-expert-prerequisite/v1',
+    applies: true,
+    ready: false,
+    valid: outcome === 'blocked' && mutationGuard.valid,
+    oracle_valid: false,
+    applicable: true,
+    outcome,
+    kind: outcome === 'blocked'
+      ? 'run_owned_draft_set_missing'
+      : 'run_owned_draft_set_identity_incomplete',
+    source: 'exact_run_suite_ledger_and_live_draft_inventory',
+    dependent_case_id: caseId,
+    source_case_ids: requirements.map((item) => item.source_case_id),
+    required_draft_keys: requirements.map((item) => item.ledger_key),
+    missing_draft_keys: missingDraftKeys,
+    incomplete_draft_keys: incompleteDraftKeys,
+    requirements,
+    ledger_snapshot_sha256: createHash('sha256').update(JSON.stringify(requirements)).digest('hex'),
+    available_draft_count: availableDraftIdentities.length,
+    available_draft_identities: availableDraftIdentities,
+    available_draft_identities_sha256: createHash('sha256')
+      .update(JSON.stringify(availableDraftIdentities)).digest('hex'),
+    historical_draft_fallback_forbidden: true,
+    selected_draft_ids: [],
+    mutation_guard: mutationGuard,
+    not_applicable_roles: notApplicableRoles,
+    reason,
+  };
+}
+
+function applyCoreBetaExpertPublishPrerequisite({ state, testCase, caseDir, blocker }) {
+  const file = path.join(caseDir, 'run-owned-expert-publish-prerequisite.json');
+  writeJsonFile(file, blocker);
+  if (blocker?.valid !== true || blocker?.applicable !== true || blocker?.outcome !== 'blocked') {
+    recordAssertion(
+      state,
+      '三类本轮 Expert 草稿发布前置',
+      '只有精确上游草稿键缺失、账本身份未残缺且空任务零能力状态成立时，才允许阻塞发布并继续后续独立 Case。',
+      false,
+      blocker?.reason || 'expert publish prerequisite evidence invalid',
+      'automation_error',
+    );
+    return file;
+  }
+  state.artifacts.core_beta_expert_publish_prerequisite = blocker;
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: file,
+  }));
+  recordAssertion(
+    state,
+    '三类本轮 Expert 草稿发布前置',
+    '缺少任一本轮研究、数据或交付草稿时必须阻止发布，忽略账号中的历史草稿并生成完整 blocker manifest。',
+    true,
+    blocker.reason,
+  );
+  markBlocked(state, blocker.reason);
+  return file;
+}
 
 function coreBetaPublishedExpertIdentity(value = {}) {
   return {
@@ -8973,14 +9117,36 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   }
 
   if (testCase.id === 'BETA-EXPERT-007') {
+    const initialPublishPrerequisite = coreBetaExpertPublishPrerequisiteBlocker({
+      testCase,
+      ledgerExperts: ledger.experts,
+      availableDrafts: bridge.drafts,
+    });
+    if (!initialPublishPrerequisite.ready) {
+      await openNewTask(page, state);
+      await page.evaluate(async () => {
+        if (typeof window.agent?.setExpert === 'function') await window.agent.setExpert(null);
+      });
+      if (!await resetComposerControls(page, state, caseDir, {
+        skillMode: 'disabled',
+        connectorMode: 'disabled',
+      })) {
+        throw new Error('BETA-EXPERT-007 草稿前置阻塞前无法建立空任务零能力状态');
+      }
+      const blocker = coreBetaExpertPublishPrerequisiteBlocker({
+        testCase,
+        ledgerExperts: ledger.experts,
+        availableDrafts: bridge.drafts,
+        publicState: await captureCoreBetaPublicState(page, testCase),
+      });
+      applyCoreBetaExpertPublishPrerequisite({ state, testCase, caseDir, blocker });
+      return;
+    }
     const targets = [
       { ledger_key: 'published_research', draft: ledger.experts?.['claude-code_draft'] },
       { ledger_key: 'published_data', draft: ledger.experts?.codex_draft },
       { ledger_key: 'published_delivery', draft: ledger.experts?.manual_draft },
     ];
-    if (targets.some((item) => !item.draft?.id)) {
-      throw new Error('BETA-EXPERT-007 缺少研究/数据/交付三类本轮草稿');
-    }
     const operations = await page.evaluate(async ({ entries, keyPrefix }) => {
       const lifecycle = window.agent.expertLifecycle;
       const results = [];
