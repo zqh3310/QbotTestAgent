@@ -52,7 +52,10 @@ import {
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import {
   captureCoreBetaV2Screenshot,
+  coreBetaAttachmentEvidenceEnvelope,
+  coreBetaAttachmentIngressVerdict,
   coreBetaBatchReplyCompletionPayload,
+  coreBetaClipboardPasteObserved,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
   validateEvidenceFile,
@@ -1586,6 +1589,64 @@ test('an attachment collect step sends when no task-bound readback exists', () =
     source_names: ['fixture.png'],
     reply_sha256: 'a'.repeat(64),
   }), false);
+});
+
+test('a cancelled DOM paste return remains a successful dispatch when the attachment is observed', () => {
+  const paste = {
+    dispatched: true,
+    dispatch_returned: false,
+    default_prevented: true,
+    before_count: 2,
+    after_count: 3,
+    visible: true,
+  };
+  assert.equal(coreBetaClipboardPasteObserved(paste), true);
+
+  const verdict = coreBetaAttachmentIngressVerdict({
+    picker: { status: 'passed' },
+    drag: { dropped: true },
+    paste,
+    expectedNames: ['picker.txt', 'drag.json', 'paste.png'],
+    afterIngress: {
+      count: 3,
+      names: ['picker.txt', 'drag.json', 'paste.png'],
+    },
+  });
+  assert.deepEqual(verdict, {
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: true,
+  });
+});
+
+test('attachment product-oracle failure stays complete evidence and remains collectable', () => {
+  const verdict = coreBetaAttachmentIngressVerdict({
+    picker: { status: 'passed' },
+    drag: { dropped: true },
+    paste: {
+      dispatched: true,
+      dispatch_returned: true,
+      before_count: 2,
+      after_count: 2,
+      visible: false,
+    },
+    expectedNames: ['picker.txt', 'drag.json', 'paste.png'],
+    afterIngress: {
+      count: 2,
+      names: ['picker.txt', 'drag.json'],
+    },
+  });
+  assert.equal(verdict.evidence_valid, true);
+  assert.equal(verdict.oracle_valid, false);
+
+  const evidence = coreBetaAttachmentEvidenceEnvelope({
+    schema_version: 1,
+    ingress_verdict: verdict,
+    reply_referenced_all: false,
+  }, false);
+  assert.equal(evidence.valid, true);
+  assert.equal(evidence.evidence_valid, true);
+  assert.equal(evidence.oracle_valid, false);
 });
 
 test('a fully evidenced partial batch deadline is complete failure evidence and never success', (t) => {

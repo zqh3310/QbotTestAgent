@@ -11832,19 +11832,32 @@ async function executeCoreBetaAttachmentIngressEquivalence({
   state.screenshots.attachment_ingress_clipboard = await shot(page, caseDir, 'attachment-ingress-clipboard');
 
   const afterIngress = await composerAttachmentSnapshot(page);
-  const eachEntered = picker.status === 'passed'
-    && drag.dropped
-    && paste.dispatched
-    && files.every((file) => afterIngress.names.includes(path.basename(file)))
-    && afterIngress.count === 3;
+  const ingressVerdict = coreBetaAttachmentIngressVerdict({
+    picker,
+    drag,
+    paste,
+    expectedNames: files.map((file) => path.basename(file)),
+    afterIngress,
+  });
+  const eachEntered = ingressVerdict.oracle_valid;
   recordAssertion(
     state,
     '选择器、拖拽、剪贴板三入口状态一致',
     '三个入口必须各增加一个且仅一个附件卡片；名称、来源文件 SHA 和 Composer 顺序可回读。',
     eachEntered,
-    JSON.stringify({ ingress, afterIngress }),
+    JSON.stringify({ ingress, afterIngress, ingressVerdict }),
   );
-  if (!eachEntered) return;
+  if (!ingressVerdict.evidence_valid) {
+    recordAssertion(
+      state,
+      '三入口附件动作证据结构完整',
+      '选择器、拖拽和剪贴板动作必须保存结构化派发结果与可读 Composer 快照。',
+      false,
+      JSON.stringify(ingressVerdict),
+      'automation_error',
+    );
+    return;
+  }
 
   const preview = await openComposerImagePreview(page, pasteFile, caseDir);
   recordAssertion(
@@ -11854,7 +11867,6 @@ async function executeCoreBetaAttachmentIngressEquivalence({
     preview.valid,
     JSON.stringify(preview),
   );
-  if (!preview.valid) return;
 
   const removed = await removeComposerAttachmentByPosition(page, 2);
   const afterRemove = await composerAttachmentSnapshot(page);
@@ -11864,7 +11876,7 @@ async function executeCoreBetaAttachmentIngressEquivalence({
   const deleteRecoveryValid = removed
     && afterRemove.count === 2
     && !afterRemove.names.includes(path.basename(pasteFile))
-    && repaste.dispatched
+    && coreBetaClipboardPasteObserved(repaste)
     && afterRepaste.count === 3
     && afterRepaste.names.filter((name) => name === path.basename(pasteFile)).length === 1;
   state.screenshots.attachment_ingress_delete_readd = await shot(page, caseDir, 'attachment-ingress-delete-readd');
@@ -11875,7 +11887,6 @@ async function executeCoreBetaAttachmentIngressEquivalence({
     deleteRecoveryValid,
     JSON.stringify({ afterRemove, afterRepaste }),
   );
-  if (!deleteRecoveryValid) return;
 
   const prompt = String(testCase.conversation_turns?.[0]?.prompt || '逐项列出三个附件的文件名、类型和一个关键内容。');
   const reply = await runPromptInCurrentTask({
@@ -11897,16 +11908,17 @@ async function executeCoreBetaAttachmentIngressEquivalence({
     clip(reply.deltaText, 600),
   );
 
-  const readback = {
+  const readback = coreBetaAttachmentEvidenceEnvelope({
     schema_version: 1,
     case_id: testCase.id,
-    valid: eachEntered && preview.valid && deleteRecoveryValid && referenced,
     ingress,
+    ingress_verdict: ingressVerdict,
     preview,
     after_ingress: afterIngress,
     after_remove: afterRemove,
     after_repaste: afterRepaste,
-  };
+    reply_referenced_all: referenced,
+  }, eachEntered && preview.valid && deleteRecoveryValid && referenced);
   const readbackFile = path.join(caseDir, 'attachment-ingress-readback.json');
   writeJsonFile(readbackFile, readback);
   state.artifacts.attachment_readback = readbackFile;
@@ -11951,6 +11963,12 @@ async function executeCoreBetaDuplicateAttachmentIdentity({
   state.screenshots.attachment_duplicate_uploaded = await shot(page, caseDir, 'attachment-duplicate-uploaded');
   const twoDuplicateCards = beforeDelete.count === 3
     && beforeDelete.names.filter((name) => name === 'duplicate.txt').length === 2;
+  const uploadEvidenceValid = upload
+    && typeof upload === 'object'
+    && typeof upload.status === 'string'
+    && Number.isInteger(beforeDelete.count)
+    && Array.isArray(beforeDelete.names)
+    && !beforeDelete.error;
   recordAssertion(
     state,
     '同名不同SHA附件均独立进入Composer',
@@ -11960,7 +11978,17 @@ async function executeCoreBetaDuplicateAttachmentIdentity({
       && state.artifacts.attachment_sources[0].sha256 !== state.artifacts.attachment_sources[1].sha256,
     JSON.stringify({ sources: state.artifacts.attachment_sources, upload, beforeDelete }),
   );
-  if (upload.status !== 'passed' || !twoDuplicateCards) return;
+  if (!uploadEvidenceValid) {
+    recordAssertion(
+      state,
+      '同名附件上传证据结构完整',
+      '上传动作必须保存结构化结果与可读 Composer 快照。',
+      false,
+      JSON.stringify({ upload, beforeDelete }),
+      'automation_error',
+    );
+    return;
+  }
 
   const removed = await removeComposerAttachmentByPosition(page, 1);
   await page.waitForTimeout(700);
@@ -11977,7 +12005,6 @@ async function executeCoreBetaDuplicateAttachmentIdentity({
     deletionValid,
     JSON.stringify({ beforeDelete, afterDelete }),
   );
-  if (!deletionValid) return;
 
   const prompt = String(
     testCase.conversation_turns?.[0]?.prompt
@@ -12003,11 +12030,12 @@ async function executeCoreBetaDuplicateAttachmentIdentity({
     clip(reply.deltaText, 600),
   );
 
-  const readback = {
+  const readback = coreBetaAttachmentEvidenceEnvelope({
     schema_version: 1,
     case_id: testCase.id,
-    valid: deletionValid && replyIdentityValid,
     source_ledger: state.artifacts.attachment_sources,
+    upload_evidence_valid: uploadEvidenceValid,
+    two_duplicate_cards: twoDuplicateCards,
     before_delete: beforeDelete,
     deleted_identity: state.artifacts.attachment_sources[1],
     after_delete: afterDelete,
@@ -12016,7 +12044,7 @@ async function executeCoreBetaDuplicateAttachmentIdentity({
       deleted_b_absent: !/QBOT_DUPLICATE_DELETE_B=BRAVO-829/.test(reply.deltaText),
       kept_c: /QBOT_THIRD_KEEP_C=CHARLIE-463/.test(reply.deltaText),
     },
-  };
+  }, upload.status === 'passed' && twoDuplicateCards && deletionValid && replyIdentityValid);
   const readbackFile = path.join(caseDir, 'attachment-duplicate-identity-readback.json');
   writeJsonFile(readbackFile, readback);
   state.artifacts.attachment_readback = readbackFile;
@@ -16467,19 +16495,27 @@ async function pasteImageAttachmentThroughComposer(page, file) {
   const data = fs.readFileSync(file).toString('base64');
   const name = path.basename(file);
   const before = await composerAttachmentSnapshot(page);
-  const dispatched = await input.evaluate((node, attachment) => {
-    const bytes = Uint8Array.from(atob(attachment.base64), (char) => char.charCodeAt(0));
-    const fileObject = new File([bytes], attachment.name, { type: attachment.type });
-    const transfer = new DataTransfer();
-    transfer.items.add(fileObject);
-    const event = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: transfer,
-    });
-    node.focus();
-    return node.dispatchEvent(event);
-  }, { base64: data, name, type: 'image/png' }).catch(() => false);
+  let dispatched = false;
+  let dispatchReturned = null;
+  let dispatchError = '';
+  try {
+    dispatchReturned = await input.evaluate((node, attachment) => {
+      const bytes = Uint8Array.from(atob(attachment.base64), (char) => char.charCodeAt(0));
+      const fileObject = new File([bytes], attachment.name, { type: attachment.type });
+      const transfer = new DataTransfer();
+      transfer.items.add(fileObject);
+      const event = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      });
+      node.focus();
+      return node.dispatchEvent(event);
+    }, { base64: data, name, type: 'image/png' });
+    dispatched = true;
+  } catch (error) {
+    dispatchError = String(error?.message || error);
+  }
   const deadline = Date.now() + 8_000;
   let after = before;
   while (Date.now() < deadline) {
@@ -16489,10 +16525,63 @@ async function pasteImageAttachmentThroughComposer(page, file) {
   }
   return {
     dispatched,
+    dispatch_returned: dispatchReturned,
+    default_prevented: dispatched && dispatchReturned === false,
+    dispatch_error: dispatchError,
     name,
     before_count: before.count,
     after_count: after.count,
     visible: after.names.includes(name),
+  };
+}
+
+export function coreBetaClipboardPasteObserved(result = {}) {
+  const beforeCount = Number(result.before_count);
+  const afterCount = Number(result.after_count);
+  return result.dispatched === true
+    && Number.isInteger(beforeCount)
+    && Number.isInteger(afterCount)
+    && afterCount > beforeCount
+    && result.visible === true;
+}
+
+export function coreBetaAttachmentIngressVerdict({
+  picker = null,
+  drag = null,
+  paste = null,
+  expectedNames = [],
+  afterIngress = null,
+} = {}) {
+  const evidenceValid = Boolean(
+    picker && typeof picker === 'object' && typeof picker.status === 'string'
+    && drag && typeof drag === 'object' && typeof drag.dropped === 'boolean'
+    && paste && typeof paste === 'object' && typeof paste.dispatched === 'boolean'
+    && afterIngress && typeof afterIngress === 'object'
+    && Number.isInteger(afterIngress.count)
+    && Array.isArray(afterIngress.names)
+    && !afterIngress.error
+    && Array.isArray(expectedNames)
+    && expectedNames.length > 0
+  );
+  const oracleValid = evidenceValid
+    && picker.status === 'passed'
+    && drag.dropped === true
+    && coreBetaClipboardPasteObserved(paste)
+    && expectedNames.every((name) => afterIngress.names.includes(name))
+    && afterIngress.count === expectedNames.length;
+  return {
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+  };
+}
+
+export function coreBetaAttachmentEvidenceEnvelope(data = {}, oracleValid = false) {
+  return {
+    ...data,
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: Boolean(oracleValid),
   };
 }
 
