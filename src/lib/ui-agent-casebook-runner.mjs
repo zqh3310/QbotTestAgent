@@ -44,18 +44,23 @@ const AUTH_BROWSER_CANDIDATES = [
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
 ].filter(Boolean);
 
+const CREDENTIAL_VALUE_PATTERN = /(?<![A-Za-z0-9])(?:client_secret|access_token|refresh_token)\b["']?\s*[:=]\s*["']?(?!(?:\[?REDACTED\]?|<redacted>|\*{3,})(?:["'\s,;&}]|$))[^"'\s,;&}]+/i;
+const DEEPBANK_VALUE_PATTERN = /\bDEEPBANK_[A-Z0-9_]+\s*=\s*["']?(?!(?:\[?REDACTED\]?|<redacted>|\*{3,})(?:["'\s,;&}]|$))[^"'\s,;&}]+/i;
+const DEEPBANK_INTERNAL_MARKER_PATTERN = /(?:__)?DEEPBANK_(?:E2E|UNEXPECTED)_[A-Z0-9_]+(?:__)?/i;
+
 const TECHNICAL_FAILURE_PATTERNS = [
   /模型未配置/,
   /cannot execute/i,
   /SkillHub 地址未配置/,
-  /DEEPBANK_[A-Z0-9_]+/,
+  DEEPBANK_INTERNAL_MARKER_PATTERN,
+  DEEPBANK_VALUE_PATTERN,
   /Bearer\s+[A-Za-z0-9._-]+/,
-  /client_secret/i,
-  /access_token/i,
-  /refresh_token/i,
-  /\btraceback\b/i,
-  /\buncaught\b/i,
-  /\bexception\b/i,
+  /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+  /BEGIN (?:RSA|OPENSSH) PRIVATE KEY/i,
+  CREDENTIAL_VALUE_PATTERN,
+  /\bTraceback \(most recent call last\):/i,
+  /\bUncaught (?:Error|TypeError|ReferenceError|RangeError|SyntaxError|Exception)\b/i,
+  /(?:^|\n)\s*[A-Za-z_$][\w.$]*(?:Error|Exception):\s*\S/im,
   /\bAPI Error\b/i,
   /litellm\.BadRequestError/i,
   /发生内部错误/,

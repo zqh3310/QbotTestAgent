@@ -463,6 +463,51 @@ assert.ok(
     .some((item) => item.includes('DEEPBANK_UNEXPECTED_SECRET')),
   'HITL 精确豁免不得吞掉同一回复里的其他 DEEPBANK_* 泄漏',
 );
+assert.deepEqual(
+  forbiddenMatchesForCase(
+    '通过 SkillHub 注入的 QBOT_LINGXI_ACCESS_TOKEN 查询、搜索、创建和修改公司 Multica Issue。',
+    'BETA-SKILL-001',
+  ),
+  [],
+  'Skill 市场说明中的凭据变量名不是凭据值，不得误报为产品泄漏',
+);
+assert.deepEqual(
+  forbiddenMatchesForCase(
+    '配置项为 DEEPBANK_SERVER 和 DEEPBANK_LINGXI_CLIENT_SECRET；access_token=[REDACTED]',
+    'BETA-SKILL-002',
+  ),
+  [],
+  '环境变量名和已脱敏占位值应允许出现在产品说明中',
+);
+assert.ok(
+  forbiddenMatchesForCase('QBOT_LINGXI_ACCESS_TOKEN=live-secret-value', 'BETA-SKILL-001').length > 0,
+  '凭据变量带真实赋值时必须继续拦截',
+);
+assert.ok(
+  forbiddenMatchesForCase('{"access_token":"live-secret-value"}', 'BETA-SKILL-001').length > 0,
+  'JSON 凭据字段带真实值时必须继续拦截',
+);
+assert.ok(
+  forbiddenMatchesForCase('DEEPBANK_SERVER=https://internal.example.test', 'BETA-SKILL-001').length > 0,
+  '内部环境变量带真实值时必须继续拦截',
+);
+assert.ok(
+  forbiddenMatchesForCase('Authorization: Bearer abc.def-123', 'BETA-SKILL-001').length > 0,
+  'Bearer 凭据值必须继续拦截',
+);
+assert.deepEqual(
+  forbiddenMatchesForCase('参数 exception：按 exception 过滤；分组字段为 class/exception/keywords。', 'BETA-MCP-001'),
+  [],
+  '连接器工具参数名 exception 不是错误栈，不得误报为产品异常',
+);
+assert.ok(
+  forbiddenMatchesForCase('Uncaught TypeError: handler is not a function', 'BETA-MCP-001').length > 0,
+  '真实 Uncaught 错误必须继续拦截',
+);
+assert.ok(
+  forbiddenMatchesForCase('Traceback (most recent call last):\nRuntimeError: failed', 'BETA-MCP-001').length > 0,
+  '真实 traceback 必须继续拦截',
+);
 
 const pipelineCase = (id, overrides = {}) => ({
   id,
