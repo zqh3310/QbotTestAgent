@@ -118,7 +118,9 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  stopRemainderWithoutSynthetic,
   terminalPromptBoundReplyEvidence,
+  uninstallCoreBetaRunOwnedSkillTargets,
   unifiedConnectorModeApplied,
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
@@ -2738,6 +2740,58 @@ assert.equal(
   false,
   '重复卸载 request name 破坏一一对应账本时不得对账放行',
 );
+{
+  const installed = new Set(['first-skill', 'retry-skill']);
+  const uninstallCalls = [];
+  const fakePage = {
+    async evaluate(_fn, name) {
+      if (name !== undefined) {
+        uninstallCalls.push(name);
+        if (name === 'first-skill' || uninstallCalls.filter((item) => item === name).length >= 2) {
+          installed.delete(name);
+        }
+        return { ok: true, httpStatus: 200 };
+      }
+      return {
+        installed: [...installed].map((slug) => ({ namespace: 'global', slug, name: slug, version: '1.0.0' })),
+        market: [],
+        history: [],
+      };
+    },
+    async waitForTimeout() {},
+  };
+  const retryCleanup = await uninstallCoreBetaRunOwnedSkillTargets(fakePage, [
+    { namespace: 'global', slug: 'first-skill', name: 'first-skill', version: '1.0.0' },
+    { namespace: 'global', slug: 'retry-skill', name: 'retry-skill', version: '1.0.0' },
+  ], {
+    maxAttempts: 3,
+    timeoutMs: 1,
+    stableRequired: 2,
+    pollMs: 0,
+  });
+  assert.deepEqual(
+    uninstallCalls,
+    ['first-skill', 'retry-skill', 'retry-skill'],
+    '完整轮询后只能重试权威目录中仍存在的精确 run-owned identity',
+  );
+  assert.equal(retryCleanup.attempt_count, 2);
+  assert.deepEqual(retryCleanup.waves[1].target_identities, ['global/retry-skill/1.0.0']);
+  assert.equal(retryCleanup.receipts[0].attempts.length, 1);
+  assert.equal(retryCleanup.receipts[1].attempts.length, 2);
+  assert.equal(retryCleanup.absence_readback.valid, true);
+  assert.equal(
+    coreBetaRunOwnedSkillCleanupVerdict({
+      attemptedIdentities: retryCleanup.receipts.map((item) => item.qualified_identity),
+      receipts: retryCleanup.receipts,
+      remainingIdentities: retryCleanup.absence_readback.remaining_identities,
+      untouchedBefore: ['global/user-owned/1.0.0'],
+      untouchedAfter: ['global/user-owned/1.0.0'],
+      absenceReadback: retryCleanup.absence_readback,
+    }).valid,
+    true,
+    '幂等重试后仍必须通过同一个稳定缺席与用户基线保护 verdict',
+  );
+}
 assert.match(
   runner,
   /waitForCoreBetaSkillIdentitiesAbsent[\s\S]*stableAbsentObservations >= stableRequired/,
@@ -2745,12 +2799,12 @@ assert.match(
 );
 assert.match(
   runner,
-  /testCase\.id === 'BETA-SKILL-001'[\s\S]*waitForCoreBetaSkillIdentitiesAbsent[\s\S]*remaining[\s\S]*coreBetaRunOwnedSkillCleanupVerdict/,
+  /testCase\.id === 'BETA-SKILL-001'[\s\S]*uninstallCoreBetaRunOwnedSkillTargets[\s\S]*remaining[\s\S]*coreBetaRunOwnedSkillCleanupVerdict/,
   'BETA-SKILL-001 必须把 remaining=0 稳定读回纳入 pass 条件',
 );
 assert.match(
   runner,
-  /testCase\.id === 'BETA-SKILL-001'[\s\S]*uninstallSkill\(name\)[\s\S]*\.catch\([\s\S]*waitForCoreBetaSkillIdentitiesAbsent/,
+  /uninstallCoreBetaRunOwnedSkillTargets[\s\S]*uninstallSkill\(name\)[\s\S]*\.catch\([\s\S]*waitForCoreBetaSkillIdentitiesAbsent/,
   'BETA-SKILL-001 遇到卸载传输超时时必须先完成权威终态读回，不能在回执处提前抛错',
 );
 assert.doesNotMatch(
@@ -2760,8 +2814,13 @@ assert.doesNotMatch(
 );
 assert.match(
   runner,
-  /coreBetaSkillUninstallRequestName\(installed\)[\s\S]*window\.agent\.uninstallSkill\(name\)/,
+  /coreBetaSkillUninstallRequestName\(skill\)[\s\S]*window\.agent\.uninstallSkill\(name\)/,
   'Skill 生命周期清理必须保存并传递产品 API 要求的字符串卸载名',
+);
+assert.match(
+  automationFramework,
+  /仍存在的同一批 run-owned identity[\s\S]*最多 3 轮[\s\S]*禁止扩展到基线或其他 Skill/,
+  '框架合同必须固定清理重试的目标边界、次数与逐轮证据要求',
 );
 const runOwnedSkillCleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-run-owned-cleanup-'));
 try {
@@ -3972,9 +4031,36 @@ assert.equal(stoppedSummary.counts.total, 1, '停止 Case 不得伪造为 comple
 assert.equal(stoppedSummary.result_accounting.planned, 55, 'summary 必须保留完整计划总数');
 assert.equal(stoppedSummary.result_accounting.unexecuted, 54, 'summary 必须明确未完成 Case 数');
 assert.equal(stoppedSummary.stopped_case_id, 'BETA-INIT-002');
+{
+  const stopDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-framework-stop-case-id-'));
+  try {
+    const progressFile = path.join(stopDir, 'automation-progress.json');
+    const failedResult = { id: 'BETA-SKILL-012', status: 'failed', result_category: 'automation_error' };
+    const diagnostic = stopRemainderWithoutSynthetic({
+      outDir: stopDir,
+      selectedCases: [
+        { id: 'BETA-SKILL-012' },
+        { id: 'BETA-SKILL-014' },
+        { id: 'BETA-EXPERT-002' },
+      ],
+      startIndex: 0,
+      results: [failedResult],
+      progressFile,
+      status: 'blocked',
+      resultCategory: 'automation_error',
+      reason: 'BETA-SKILL-012 cleanup failed',
+      failedResult,
+    });
+    assert.equal(diagnostic.stopped_case_id, 'BETA-SKILL-012');
+    assert.deepEqual(diagnostic.unexecuted_case_ids, ['BETA-SKILL-014', 'BETA-EXPERT-002']);
+    assert.equal(JSON.parse(fs.readFileSync(progressFile, 'utf8')).current_case, 'BETA-SKILL-012');
+  } finally {
+    fs.rmSync(stopDir, { recursive: true, force: true });
+  }
+}
 assert.match(
   runner,
-  /let frameworkStop = null[\s\S]*frameworkStop = stopRemainderWithoutSynthetic\([\s\S]*buildSummary\(\{[\s\S]*expectedTotal: selectedCases\.length,[\s\S]*frameworkStop,/,
+  /let frameworkStop = null[\s\S]*frameworkStop = stopRemainderWithoutSynthetic\([\s\S]*failedResult: result[\s\S]*buildSummary\(\{[\s\S]*expectedTotal: selectedCases\.length,[\s\S]*frameworkStop,/,
   '真实主循环必须把硬停止诊断与完整计划数传入最终 summary',
 );
 assert.equal(coreBetaV2SettingsLoadTimeoutMs({}), 90_000);
@@ -5051,6 +5137,107 @@ const visionRuntimeBlocked = reviewCaseCredibility(reviewFixture({
 }));
 if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !visionRuntimeBlocked.trusted) {
   throw new Error('明确缺少兼容视觉运行时应归类为可信环境阻塞，而不是框架问题');
+}
+
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-credibility-structured-blockers-'));
+  try {
+    const reportFile = path.join(evidenceDir, 'case-report.md');
+    fs.writeFileSync(reportFile, '# evidence');
+    const upstreamFile = path.join(evidenceDir, 'upstream-skill-install-prerequisite.json');
+    writeJsonFile(upstreamFile, {
+      schema_version: 'qbot-core-beta-upstream-prerequisite/v1',
+      valid: true,
+      oracle_valid: false,
+      applicable: true,
+      kind: 'skill_install_terminal_shortage',
+      source: 'exact_run_owned_install_attempt_ledger',
+      dependent_case_id: 'BETA-SKILL-010',
+      reason: '指定 Skill 安装前置失败：global/exchange-mail-operation/2.1.2；依赖该身份的 Case 不得发送或随机替换。',
+      expected_count: 10,
+      attempted_count: 10,
+      successful_count: 6,
+      failed_count: 4,
+      failed_identities: ['skill-1', 'skill-2', 'skill-3', 'skill-4'],
+      receipts_sha256: 'a'.repeat(64),
+    });
+    const structuredBlocked = reviewCaseCredibility(reviewFixture({
+      id: 'BETA-SKILL-010',
+      case_dir: evidenceDir,
+      case_report: reportFile,
+      status: 'blocked',
+      result_category: 'blocked',
+      actual_result: '指定 Skill 安装前置失败：global/exchange-mail-operation/2.1.2。',
+      artifacts: { capability_inventory: upstreamFile },
+    }));
+    assert.equal(structuredBlocked.review_category, '可信阻塞-环境或数据');
+    assert.equal(structuredBlocked.trusted, true);
+    assert.match(structuredBlocked.reason, /结构化上游前置证据已验证/);
+
+    const screenshot = path.join(evidenceDir, 'manual-installed-skill-selected.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 7));
+    const preSendFile = path.join(evidenceDir, 'pre-send-capability-failure.json');
+    const preSendEvidence = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'BETA-SKILL-011',
+      capabilityKind: 'skill',
+      expectedIdentity: 'global/doc-coauthoring/20260616.103316',
+      before: {
+        task: { id: null, running: false, send_count: 31, message_count: 0 },
+        skills: { selected: [] },
+      },
+      after: {
+        task: { id: null, running: false, send_count: 31, message_count: 0 },
+        skills: { selected: [] },
+      },
+      interaction: {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'skill',
+        stage: 'manual_skill_selection',
+        expected_identity: 'global/doc-coauthoring/20260616.103316',
+        control_testid: 'composer-skill-option-doc-coauthoring',
+        control_located: true,
+        click_dispatched: true,
+        expected_state_observed: false,
+        aria_checked: 'false',
+        manual_surface: { search_visible: true, list_visible: true, option_count: 40, empty_visible: false },
+        screenshot,
+        category: 'bug',
+      },
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    writeJsonFile(preSendFile, preSendEvidence);
+    const structuredPreSendBug = reviewCaseCredibility(reviewFixture({
+      id: 'BETA-SKILL-011',
+      case_dir: evidenceDir,
+      case_report: reportFile,
+      scenario: '手动选择已安装 Skill 后保持选中态',
+      expected_result: '点击 Skill 后应显示选中态并保留到发送前。',
+      status: 'failed',
+      result_category: 'bug',
+      steps: [{
+        action: '手动选择刚安装的技能：结构化文档协作',
+        status: 'failed',
+        category: 'bug',
+        actual: '控件已点击，但 aria-checked=false 且 selectedSkills=[]。',
+        screenshot,
+      }],
+      assertions: [{
+        name: '动作 beta-skill-011-verify 可机判 Oracle',
+        status: 'failed',
+        category: 'bug',
+        actual: 'step_failures=1',
+      }],
+      screenshots: { manual_installed_skill_selected: screenshot },
+      screenshots_flat: [screenshot],
+      artifacts: { capability_selection: preSendFile },
+    }));
+    assert.equal(structuredPreSendBug.review_category, '可信失败-产品Bug候选');
+    assert.equal(structuredPreSendBug.trusted, true);
+    assert.match(structuredPreSendBug.reason, /aria-checked=false/);
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
 }
 
 if (obviousDuplicateEvidence('新建文件 first.md\n新建文件 first.md')) throw new Error('正常文件工具进度不应判为重复');

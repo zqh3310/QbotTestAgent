@@ -1011,12 +1011,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
             frameworkStop = stopRemainderWithoutSynthetic({
               outDir,
               selectedCases,
-              startIndex: (batchEntry?.index ?? (index + batchOffset)) + 1,
+              startIndex: batchEntry?.index ?? (index + batchOffset),
               results,
               progressFile,
               status: 'blocked',
               resultCategory: 'automation_error',
               reason: hardStopReason,
+              failedResult: result,
             });
             pipelineStopped = true;
             break;
@@ -1083,26 +1084,29 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
         frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
-          startIndex: index + 1,
+          startIndex: index,
           results,
           progressFile,
           status: 'blocked',
           resultCategory: 'automation_error',
           reason: hardStopReason,
+          failedResult: result,
         });
         break;
       }
       if (isCdpDisconnectedResult(result) || !isLiveCdpPage(browser, page)) {
+        const resultDisconnected = isCdpDisconnectedResult(result);
         const reason = `用例 ${testCase.id} 执行后 QBot CDP/page 已断开，停止本批次，避免把剩余用例误判为产品 Bug。原始现象：${clip(result.actual_result || result.conclusion || '', 260)}`;
         frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
-          startIndex: index + 1,
+          startIndex: resultDisconnected ? index : index + 1,
           results,
           progressFile,
           status: 'blocked',
           resultCategory: 'automation_error',
           reason,
+          failedResult: resultDisconnected ? result : null,
         });
         break;
       }
@@ -1681,7 +1685,7 @@ function isLiveCdpPage(browser, page) {
   return true;
 }
 
-function stopRemainderWithoutSynthetic({
+export function stopRemainderWithoutSynthetic({
   outDir,
   selectedCases,
   startIndex,
@@ -6192,6 +6196,88 @@ async function waitForCoreBetaSkillIdentitiesAbsent(page, targetIdentities, {
   };
 }
 
+export async function uninstallCoreBetaRunOwnedSkillTargets(page, installedTargets, {
+  maxAttempts = 3,
+  timeoutMs = 60_000,
+  stableRequired = 2,
+  pollMs = 1_000,
+} = {}) {
+  const targets = (Array.isArray(installedTargets) ? installedTargets : []).map((skill) => ({
+    qualified_identity: skillQualifiedIdentity(skill),
+    request_name: coreBetaSkillUninstallRequestName(skill),
+  }));
+  const identities = targets.map((item) => item.qualified_identity);
+  const requestNames = targets.map((item) => item.request_name);
+  if (new Set(identities).size !== identities.length || new Set(requestNames).size !== requestNames.length) {
+    throw new Error('Skill 清理目标的 qualified identity 或 API request name 不唯一。');
+  }
+
+  const attemptLimit = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+  const attemptsByIdentity = new Map(targets.map((item) => [item.qualified_identity, []]));
+  const waves = [];
+  let remainingIdentities = [...identities];
+  let absenceReadback = null;
+
+  for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+    const remainingSet = new Set(remainingIdentities);
+    const waveTargets = targets.filter((item) => remainingSet.has(item.qualified_identity));
+    const waveReceipts = [];
+    for (const target of waveTargets) {
+      const result = await page.evaluate((name) => window.agent.uninstallSkill(name), target.request_name)
+        .catch((error) => ({ ok: false, error: String(error?.message || error) }));
+      const receipt = {
+        attempt,
+        qualified_identity: target.qualified_identity,
+        request_name: target.request_name,
+        result,
+      };
+      attemptsByIdentity.get(target.qualified_identity).push(receipt);
+      waveReceipts.push(receipt);
+    }
+    absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(page, identities, {
+      timeoutMs,
+      stableRequired,
+      pollMs,
+    });
+    remainingIdentities = Array.isArray(absenceReadback.remaining_identities)
+      ? absenceReadback.remaining_identities.map(String)
+      : [];
+    waves.push({
+      attempt,
+      target_identities: waveTargets.map((item) => item.qualified_identity),
+      receipts: waveReceipts,
+      absence_readback: { ...absenceReadback, catalog: undefined },
+    });
+    if (absenceReadback.valid === true || remainingIdentities.length === 0) break;
+  }
+
+  const receipts = targets.map((target) => {
+    const attempts = attemptsByIdentity.get(target.qualified_identity) || [];
+    const accepted = attempts.find((item) => item?.result?.ok === true) || attempts.at(-1) || null;
+    return {
+      qualified_identity: target.qualified_identity,
+      request_name: target.request_name,
+      result: accepted?.result || { ok: false, error: '未执行 Skill 卸载动作。' },
+      attempts,
+    };
+  });
+  return {
+    max_attempts: attemptLimit,
+    attempt_count: waves.length,
+    waves,
+    receipts,
+    absence_readback: absenceReadback || {
+      valid: false,
+      timeout_ms: timeoutMs,
+      stable_required: stableRequired,
+      stable_absent_observations: 0,
+      remaining_identities: identities,
+      observations: [],
+      catalog: null,
+    },
+  };
+}
+
 export function coreBetaRunOwnedSkillCleanupVerdict({
   attemptedIdentities = [],
   receipts = [],
@@ -7071,16 +7157,10 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       const untouchedBefore = before.installed
         .filter((item) => !qaKeys.has(skillQualifiedIdentity(item)))
         .map(skillQualifiedIdentity).sort();
-      const removed = [];
-      for (const skill of qaSkills) {
-        const installed = before.installed.find((item) => skillQualifiedIdentity(item) === skill.qualified_identity);
-        if (!installed) continue;
-        const requestName = coreBetaSkillUninstallRequestName(installed);
-        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName)
-          .catch((error) => ({ ok: false, error: String(error?.message || error) }));
-        removed.push({ qualified_identity: skill.qualified_identity, request_name: requestName, result });
-      }
-      const absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(page, [...qaKeys]);
+      const cleanupTargets = before.installed.filter((item) => qaKeys.has(skillQualifiedIdentity(item)));
+      const uninstall = await uninstallCoreBetaRunOwnedSkillTargets(page, cleanupTargets);
+      const removed = uninstall.receipts;
+      const absenceReadback = uninstall.absence_readback;
       const after = absenceReadback.catalog || { installed: [], market: [], history: [] };
       const remaining = after.installed.map(skillQualifiedIdentity).filter((identity) => qaKeys.has(identity));
       const untouchedAfter = after.installed.map(skillQualifiedIdentity).filter((key) => !qaKeys.has(key)).sort();
@@ -7102,6 +7182,7 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         before,
         attempted_identities: attemptedIdentities,
         removed,
+        uninstall_attempt_waves: uninstall.waves,
         after,
         remaining,
         absence_readback: { ...absenceReadback, catalog: undefined },
@@ -7480,19 +7561,12 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
       const cancelKept = Boolean(first && cancelReceipt.clicked && afterCancel.installed.some(
         (item) => skillQualifiedIdentity(item) === first.qualified_identity,
       ));
-      const receipts = [];
-      for (const target of installedTargets) {
-        const installed = afterCancel.installed.find((item) => skillQualifiedIdentity(item) === target.qualified_identity);
-        if (!installed) continue;
-        const requestName = coreBetaSkillUninstallRequestName(installed);
-        const result = await page.evaluate((name) => window.agent.uninstallSkill(name), requestName)
-          .catch((error) => ({ ok: false, error: error.message }));
-        receipts.push({ qualified_identity: target.qualified_identity, request_name: requestName, result });
-      }
-      const absenceReadback = await waitForCoreBetaSkillIdentitiesAbsent(
-        page,
-        selected.map((target) => target.qualified_identity),
-      );
+      const cleanupTargets = installedTargets
+        .map((target) => afterCancel.installed.find((item) => skillQualifiedIdentity(item) === target.qualified_identity))
+        .filter(Boolean);
+      const uninstall = await uninstallCoreBetaRunOwnedSkillTargets(page, cleanupTargets);
+      const receipts = uninstall.receipts;
+      const absenceReadback = uninstall.absence_readback;
       const after = absenceReadback.catalog || { installed: [], market: [], history: [] };
       const remaining = after.installed.filter((item) => selected.some((target) => target.qualified_identity === skillQualifiedIdentity(item)));
       const baseline = new Set(ledger.skills.baseline_installed || []);
@@ -7521,6 +7595,7 @@ async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeou
         cancel_receipt: cancelReceipt,
         cancel_kept: cancelKept,
         receipts,
+        uninstall_attempt_waves: uninstall.waves,
         after,
         remaining: remaining.map(skillQualifiedIdentity),
         absence_readback: { ...absenceReadback, catalog: undefined },
@@ -30412,6 +30487,93 @@ export function sentPromptFidelity(result) {
   };
 }
 
+function readCaseBoundJsonEvidence(result, artifactPaths, expectedSchema) {
+  const rawCaseDir = String(result?.case_dir || '').trim();
+  if (!rawCaseDir) return null;
+  const caseDir = path.resolve(rawCaseDir);
+  if (caseDir === path.parse(caseDir).root) return null;
+  for (const candidate of artifactPaths.filter((item) => typeof item === 'string' && item)) {
+    const file = path.resolve(candidate);
+    const relative = path.relative(caseDir, file);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !fs.existsSync(file)) continue;
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (data?.schema_version !== expectedSchema) continue;
+      return { file, data };
+    } catch {}
+  }
+  return null;
+}
+
+function verifiedCoreBetaUpstreamPrerequisite(result) {
+  const evidence = readCaseBoundJsonEvidence(result, [
+    result?.artifacts?.capability_inventory,
+    result?.artifacts?.capability_selection,
+    result?.artifacts?.capability_execution_event,
+  ], 'qbot-core-beta-upstream-prerequisite/v1');
+  if (!evidence) return null;
+  const blocker = evidence.data;
+  const failedIdentities = Array.isArray(blocker.failed_identities)
+    ? blocker.failed_identities.map(String).filter(Boolean)
+    : [];
+  const expectedCount = Number(blocker.expected_count);
+  const attemptedCount = Number(blocker.attempted_count);
+  const successfulCount = Number(blocker.successful_count);
+  const failedCount = Number(blocker.failed_count);
+  const valid = blocker.valid === true
+    && blocker.applicable === true
+    && blocker.oracle_valid === false
+    && blocker.source === 'exact_run_owned_install_attempt_ledger'
+    && blocker.dependent_case_id === result.id
+    && Number.isInteger(expectedCount)
+    && expectedCount > 0
+    && attemptedCount === expectedCount
+    && successfulCount >= 0
+    && successfulCount < expectedCount
+    && failedCount === failedIdentities.length
+    && successfulCount + failedCount === attemptedCount
+    && /^[a-f0-9]{64}$/i.test(String(blocker.receipts_sha256 || ''))
+    && String(blocker.reason || '').trim().length > 0;
+  return valid ? evidence : null;
+}
+
+function verifiedCoreBetaPreSendCapabilityFailure(result) {
+  const evidence = readCaseBoundJsonEvidence(result, [
+    result?.artifacts?.capability_selection,
+    result?.artifacts?.capability_inventory,
+    result?.artifacts?.capability_execution_event,
+  ], 'qbot-core-beta-pre-send-capability-failure/v1');
+  if (!evidence) return null;
+  const blocker = evidence.data;
+  const capabilityKey = blocker.capability_kind === 'connector' ? 'connectors' : 'skills';
+  const rebuilt = coreBetaPreSendCapabilityFailureEvidence({
+    testCaseId: blocker.dependent_case_id,
+    capabilityKind: blocker.capability_kind,
+    expectedIdentity: blocker.expected_identity,
+    before: {
+      task: blocker.mutation_guard?.before_task,
+      [capabilityKey]: { selected: blocker.mutation_guard?.before_selection },
+    },
+    after: {
+      task: blocker.mutation_guard?.after_task,
+      [capabilityKey]: { selected: blocker.mutation_guard?.after_selection },
+    },
+    interaction: blocker.interaction,
+    noPromptRecorded: blocker.mutation_guard?.no_prompt_recorded,
+    noSendReceiptRecorded: blocker.mutation_guard?.no_send_receipt_recorded,
+    notApplicableRoles: blocker.not_applicable_roles,
+  });
+  const valid = blocker.dependent_case_id === result.id
+    && blocker.valid === true
+    && blocker.evidence_valid === true
+    && blocker.oracle_valid === false
+    && blocker.applicable === true
+    && blocker.outcome === 'bug'
+    && rebuilt.evidence_valid === true
+    && rebuilt.screenshot.sha256 === blocker.screenshot?.sha256;
+  return valid ? evidence : null;
+}
+
 export function reviewCaseCredibility(result) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
@@ -30441,9 +30603,10 @@ export function reviewCaseCredibility(result) {
     .concat(steps, assertions)
     .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`));
   const blockedText = `${result.actual_result || ''}\n${result.conclusion || ''}`;
+  const structuredUpstreamPrerequisite = verifiedCoreBetaUpstreamPrerequisite(result);
   const frameworkBlocked = /当前 runner|批量 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|dry-run|bridge.*(?:不可替换|unavailable|undefined)|无法安装.*捕获器|无法注入.*(?:快照|目录|网络|失败)|CDP|Playwright|handler|selector/.test(blockedText);
   const hardEnvironmentBlocked = /没有健康连接器|无可选技能|无已安装技能|当前没有已安装技能|已安装技能列表没有可删除技能|技能市场没有可安装技能|技能市场没有可见技能卡片|技能市场\/已安装列表未找到|要求已安装至少\s*2\s*个技能|当前手动模式只成功选择\s*\d+\s*个技能|未找到可识别.*runtime|runtime 技能卡片存在，但没有可点击安装入口|账号无权限|测试数据|未配置|登录|权限|DEEPBANK_E2E|启动方式|release-package|本地 E2E|辅助功能|原生文件框|filechooser|文件选择|文件名|期望文件|附件入口|图片识别.*暂不可用|视觉运行时|控制平面.*(?:未提供|不兼容)|没有可稳定用于产品\/业务类任务的专家卡片|产品\/业务类任务的专家|自动化测试残留专家|不能随机选择错误专家|专家页没有可稳定|技能市场未找到.*技能卡片|已安装技能列表未找到|当前已安装\/技能市场未找到|当前账号存在可选技能|该用例要求没有已安装技能|找到疑似(可更新|历史版本)技能，但未找到可点击(更新|回退)入口|故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|当前账号存在可见连接器|无 platform\/custom 连接器账号|未找到 unreachable 连接器|未找到 needs_auth 连接器|手动菜单未展示 needs_auth\/unreachable|无法到达连接器空状态判断点|无专家市场数据|专家市场存在专家卡片|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText);
-  const environmentBlocked = hardEnvironmentBlocked && !frameworkBlocked;
+  const environmentBlocked = (hardEnvironmentBlocked || Boolean(structuredUpstreamPrerequisite)) && !frameworkBlocked;
   const sentCaseInstruction = requiresConversationEvidence && hasReplyDelta && replyDeltaLooksLikeCaseInstruction(result);
   const missingConversationEvidence = status !== 'blocked' && requiresConversationEvidence && (!hasTranscript || !hasReplyDelta || !sentUserMessage);
   const modelTierArtifact = result.artifacts?.model_tier || null;
@@ -30564,7 +30727,9 @@ export function reviewCaseCredibility(result) {
     } else if (environmentBlocked) {
       reviewCategory = '可信阻塞-环境或数据';
       trusted = true;
-      reasons.push('阻塞原因可归因于测试数据、权限或当前环境状态缺失。');
+      reasons.push(structuredUpstreamPrerequisite
+        ? `结构化上游前置证据已验证：${structuredUpstreamPrerequisite.data.reason}`
+        : '阻塞原因可归因于测试数据、权限或当前环境状态缺失。');
       userViewConclusion = '真实用户路径被环境、数据或权限前置条件阻断，未进入产品体验判断点。';
     } else {
       reasons.push('阻塞原因不够具体，无法判断是环境问题还是框架问题。');
@@ -30890,6 +31055,27 @@ export function assessUserCenteredOutcome(result, {
 function assessUserExperience(result, { status, category, assertions }) {
   const text = userReviewText(result, assertions);
   if (status === 'failed' && category !== 'automation_error') {
+    const preSendCapabilityFailure = verifiedCoreBetaPreSendCapabilityFailure(result);
+    if (preSendCapabilityFailure) {
+      const evidence = preSendCapabilityFailure.data;
+      const assessment = assessUserCenteredOutcome(result, {
+        explicitEvidence: [evidence.screenshot.path],
+        intendedClassification: 'bug',
+        reviewReason: '结构化发送前能力负向证据已验证，控件定位、点击派发、公开状态和零发送守卫完整。',
+        productObservation: `${evidence.reason} expected=${evidence.expected_identity}; aria-checked=${evidence.interaction.aria_checked}; selected=${JSON.stringify(evidence.mutation_guard.after_selection)}`,
+        expectedOutcomeOverride: `点击 ${evidence.capability_kind} 能力 ${evidence.expected_identity} 后应进入选中态并保持到发送前。`,
+      });
+      if (assessment.classification === 'bug') {
+        return {
+          review_category: '可信失败-产品Bug候选',
+          trusted: true,
+          reason: assessment.description,
+          user_view_conclusion: assessment.impact,
+          action: '允许继续下一条；进入产品 Bug 候选清单，暂不自动提 issue。',
+          assessment,
+        };
+      }
+    }
     if (looksLikeAcceptableSafeRefusal(result, text)) {
       return {
         review_category: '可信执行-case需优化',
