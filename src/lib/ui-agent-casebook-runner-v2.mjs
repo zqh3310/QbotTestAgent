@@ -10775,8 +10775,10 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const prompt = String(testCase.conversation_turns?.[0]?.prompt || '').trim();
   if (!prompt) throw new Error(`${testCase.id} 缺少IME目标prompt`);
+  const beforeNativeInput = await captureCoreBetaPublicState(page, testCase);
   const input = page.locator('[data-testid="composer-input"]').first();
-  await input.focus();
+  const focusArm = await prepareCoreBetaNativeImeFocus(page, input);
+  state.artifacts.core_beta_native_ime_focus_arm = focusArm;
   await input.evaluate((node) => {
     window.__qbotCoreBetaImeTrace = [];
     const capture = (event) => window.__qbotCoreBetaImeTrace.push({
@@ -10820,17 +10822,74 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   await page.waitForTimeout(500);
   const trace = await page.evaluate(() => window.__qbotCoreBetaImeTrace || []);
   const readback = await input.inputValue().catch(async () => input.innerText().catch(() => ''));
+  const verdict = coreBetaNativeImeTraceVerdict({
+    prompt,
+    readback,
+    events: trace,
+    focusArm,
+    nativeCommandStatus: nativeInput.status,
+  });
   const traceData = {
-    valid: readback === prompt
-      && trace.some((item) => item.type === 'compositionstart')
-      && trace.some((item) => item.type === 'compositionend'),
+    ...verdict,
     target_utf8_sha256: createHash('sha256').update(prompt).digest('hex'),
     readback_utf8_sha256: createHash('sha256').update(readback).digest('hex'),
     readback,
     events: trace,
   };
   state.artifacts.core_beta_ime_event_trace = traceData;
+  const traceFile = path.join(caseDir, 'ime-event-trace.json');
+  writeJsonFile(traceFile, traceData);
+  state.artifacts.ime_event_trace = traceFile;
   recordAssertion(state, 'IME组合输入字节级一致', 'composition事件闭环后Composer值必须与目标prompt字节级一致，且组合期不得发送。', traceData.valid, JSON.stringify(traceData));
+  if (traceData.adapter_noop) {
+    throw new Error(
+      `${testCase.id} native IME command returned success but produced no composer text or composition events; `
+      + 'refusing to wait for or click Send because the native focus/command adapter did not execute.',
+    );
+  }
+  if (!traceData.valid) {
+    state.screenshots.ime_input_failure = await shot(page, caseDir, 'ime-input-failure');
+    const failureEvidence = coreBetaPreSendImeFailureEvidence({
+      testCaseId: testCase.id,
+      before: beforeNativeInput,
+      after: await captureCoreBetaPublicState(page, testCase),
+      focusArm,
+      traceData,
+      screenshot: state.screenshots.ime_input_failure,
+      noPromptRecorded: !state.artifacts.prompt
+        && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0),
+      noSendReceiptRecorded: !state.artifacts.send_receipt
+        && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0),
+      notApplicableRoles: CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES
+        .filter((role) => (testCase.evidence_roles || []).includes(role)),
+    });
+    const failureFile = path.join(caseDir, 'pre-send-ime-failure.json');
+    writeJsonFile(failureFile, failureEvidence);
+    state.artifacts.core_beta_pre_send_ime_failure = failureFile;
+    if (!failureEvidence.valid) {
+      recordAssertion(
+        state,
+        'IME发送前产品失败负向证据闭环',
+        '真实composition异常时必须证明前台焦点、原生事件、零task、零消息和零发送变更。',
+        false,
+        failureEvidence.reason,
+        'automation_error',
+      );
+      throw new Error(`${testCase.id} native IME failure evidence is incomplete; refusing to send mismatched text.`);
+    }
+    state.artifacts.core_beta_not_applicable_roles = failureEvidence.not_applicable_roles.map((role) => ({
+      role,
+      blocker_path: failureFile,
+    }));
+    recordAssertion(
+      state,
+      'IME发送前产品失败负向证据闭环',
+      '真实composition异常时必须证明前台焦点、原生事件、零task、零消息和零发送变更。',
+      true,
+      failureEvidence.reason,
+    );
+    return;
+  }
   const before = await conversationSnapshot(page);
   await send(page, state, '发送IME组合输入');
   const waitConfig = replyWaitConfig(testCase, timeoutMs);
@@ -10846,6 +10905,71 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   writeReplyArtifacts(state, caseDir, [{ ...reply, label: 'IME发送回复' }]);
   recordReplyWaitAssertion(state, reply, 'IME发送回复');
   recordAssertion(state, 'IME仅创建一次发送', '目标prompt只允许出现一次且只产生一次发送receipt。', !reply.incomplete, reply.incomplete_reason || 'reply complete');
+}
+
+export async function prepareCoreBetaNativeImeFocus(page, input, { attempts = 3 } = {}) {
+  const observations = [];
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await page.bringToFront();
+    await input.click({ force: true });
+    await input.focus();
+    const observation = await input.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        document_has_focus: document.hasFocus(),
+        active_element_matches: document.activeElement === node,
+        composer_visible: rect.width > 0
+          && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden',
+      };
+    });
+    const ready = observation.document_has_focus === true
+      && observation.active_element_matches === true
+      && observation.composer_visible === true;
+    observations.push({ attempt, ready, ...observation });
+    if (ready) {
+      return {
+        schema_version: 'qbot-core-beta-native-ime-focus/v1',
+        ready: true,
+        attempts: observations,
+      };
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(
+    `Native IME composer focus could not be armed after ${attempts} attempts: ${JSON.stringify(observations)}`,
+  );
+}
+
+export function coreBetaNativeImeTraceVerdict({
+  prompt = '',
+  readback = '',
+  events = [],
+  focusArm = {},
+  nativeCommandStatus = null,
+} = {}) {
+  const rows = Array.isArray(events) ? events : [];
+  const focusReady = focusArm?.ready === true;
+  const compositionStart = rows.some((item) => item?.type === 'compositionstart');
+  const compositionEnd = rows.some((item) => item?.type === 'compositionend');
+  const exact = String(readback) === String(prompt);
+  const adapterNoop = focusReady
+    && Number(nativeCommandStatus) === 0
+    && String(readback) === ''
+    && rows.length === 0;
+  return {
+    valid: focusReady && exact && compositionStart && compositionEnd,
+    focus_ready: focusReady,
+    exact_readback: exact,
+    composition_start: compositionStart,
+    composition_end: compositionEnd,
+    event_count: rows.length,
+    native_command_status: nativeCommandStatus,
+    adapter_noop: adapterNoop,
+    focus_arm: focusArm,
+  };
 }
 
 function sameStringMultiset(left = [], right = []) {
@@ -22625,6 +22749,104 @@ const CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES = Object.freeze([
   'reply_delta',
   'reply_completion',
 ]);
+
+const CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES = Object.freeze([
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+export function coreBetaPreSendImeFailureEvidence({
+  testCaseId = '',
+  before = {},
+  after = {},
+  focusArm = {},
+  traceData = {},
+  screenshot = '',
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+  notApplicableRoles = CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES,
+} = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const mutationGuard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const roles = (Array.isArray(notApplicableRoles) ? notApplicableRoles : [])
+    .map(String)
+    .filter((role, index, items) => (
+      CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES.includes(role)
+      && items.indexOf(role) === index
+    ));
+  const screenshotValid = coreBetaBatchScreenshotPresent(screenshot);
+  const traceValid = focusArm?.ready === true
+    && Number(traceData?.native_command_status) === 0
+    && traceData?.valid === false
+    && traceData?.adapter_noop === false
+    && Number(traceData?.event_count) > 0;
+  const evidenceValid = Boolean(
+    String(testCaseId || '').trim()
+    && traceValid
+    && mutationGuard.valid
+    && screenshotValid
+    && roles.length > 0
+  );
+  const interaction = {
+    schema_version: 'qbot-core-beta-native-ime-interaction/v1',
+    focus_arm: focusArm,
+    trace: {
+      valid: traceData?.valid === true,
+      exact_readback: traceData?.exact_readback === true,
+      composition_start: traceData?.composition_start === true,
+      composition_end: traceData?.composition_end === true,
+      event_count: Number(traceData?.event_count || 0),
+      native_command_status: traceData?.native_command_status,
+      adapter_noop: traceData?.adapter_noop === true,
+    },
+    screenshot: screenshotValid ? path.resolve(screenshot) : '',
+  };
+  return {
+    schema_version: 'qbot-core-beta-pre-send-ime-failure/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: false,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'bug' : 'automation_error',
+    kind: 'native_ime_product_failure_before_send',
+    source: 'native_ime_composition_and_zero_send_readback',
+    dependent_case_id: String(testCaseId || ''),
+    interaction,
+    mutation_guard: {
+      ...mutationGuard,
+      before_task: beforeTask,
+      after_task: afterTask,
+    },
+    screenshot: {
+      path: interaction.screenshot,
+      sha256: screenshotValid
+        ? createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex')
+        : '',
+    },
+    not_applicable_roles: roles,
+    reason: evidenceValid
+      ? '真实原生IME已产生composition事件但未满足文本Oracle；已证明当前任务为空、消息数为0且发送计数未变化。'
+      : '原生IME产品失败的前台焦点、事件、截图或零发送变更证据不完整。',
+  };
+}
 
 export function coreBetaPreSendCapabilityFailureEvidence({
   testCaseId = '',

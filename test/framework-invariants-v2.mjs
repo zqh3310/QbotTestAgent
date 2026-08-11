@@ -57,6 +57,8 @@ import {
   coreBetaModelMenuSdkFilterVerdict,
   coreBetaPartialReplyReady,
   coreBetaPreSendCapabilityFailureEvidence,
+  coreBetaPreSendImeFailureEvidence,
+  coreBetaNativeImeTraceVerdict,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
   coreBetaRuntimeFamilyPrerequisiteBlocker,
@@ -102,6 +104,7 @@ import {
   probeConnectorRegressionFixture,
   parseSingleHostPipelineSize,
   partitionCasebookResults,
+  prepareCoreBetaNativeImeFocus,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   resultHasAutomationError,
@@ -1420,6 +1423,133 @@ assert.equal(
       }).valid,
       false,
       '精确 Skill 选择失败证据必须绑定当前 Case 期望的同一稳定 identity',
+    );
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+}
+{
+  const calls = [];
+  const focusStates = [
+    { document_has_focus: false, active_element_matches: true, composer_visible: true },
+    { document_has_focus: true, active_element_matches: true, composer_visible: true },
+  ];
+  const page = {
+    async bringToFront() { calls.push('bringToFront'); },
+    async waitForTimeout() { calls.push('waitForTimeout'); },
+  };
+  const input = {
+    async click(options) { calls.push(`click:${options?.force === true}`); },
+    async focus() { calls.push('focus'); },
+    async evaluate() { calls.push('evaluate'); return focusStates.shift(); },
+  };
+  const focus = await prepareCoreBetaNativeImeFocus(page, input);
+  assert.equal(focus.ready, true);
+  assert.equal(focus.attempts.length, 2);
+  assert.deepEqual(calls.slice(0, 4), ['bringToFront', 'click:true', 'focus', 'evaluate']);
+  assert.deepEqual(calls.slice(5, 9), ['bringToFront', 'click:true', 'focus', 'evaluate']);
+
+  const validTrace = coreBetaNativeImeTraceVerdict({
+    prompt: '请用Skill A分析Q3收入，比较Beta版本。',
+    readback: '请用Skill A分析Q3收入，比较Beta版本。',
+    events: [{ type: 'compositionstart' }, { type: 'compositionend' }],
+    focusArm: focus,
+    nativeCommandStatus: 0,
+  });
+  assert.equal(validTrace.valid, true);
+  assert.equal(validTrace.adapter_noop, false);
+  const noOpTrace = coreBetaNativeImeTraceVerdict({
+    prompt: '请用Skill A分析Q3收入，比较Beta版本。',
+    readback: '',
+    events: [],
+    focusArm: focus,
+    nativeCommandStatus: 0,
+  });
+  assert.equal(noOpTrace.valid, false);
+  assert.equal(noOpTrace.adapter_noop, true, '原生命令成功但零文本零事件必须识别为框架适配器 no-op');
+}
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-ime-'));
+  try {
+    const screenshot = path.join(evidenceDir, 'ime-input-failure.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 9));
+    const task = { id: null, running: false, send_count: 41, message_count: 0 };
+    const traceData = {
+      valid: false,
+      exact_readback: false,
+      composition_start: true,
+      composition_end: true,
+      event_count: 8,
+      native_command_status: 0,
+      adapter_noop: false,
+    };
+    const evidence = coreBetaPreSendImeFailureEvidence({
+      testCaseId: 'BETA-CHAT-010',
+      before: { task },
+      after: { task: structuredClone(task) },
+      focusArm: { schema_version: 'qbot-core-beta-native-ime-focus/v1', ready: true, attempts: [] },
+      traceData,
+      screenshot,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(evidence.valid, true);
+    assert.equal(evidence.outcome, 'bug');
+    assert.equal(evidence.mutation_guard.send_count_unchanged, true);
+    assert.deepEqual(evidence.not_applicable_roles, [
+      'prompt', 'task_id', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion',
+    ]);
+    const blocker = path.join(evidenceDir, 'pre-send-ime-failure.json');
+    writeJsonFile(blocker, evidence);
+    const manifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-CHAT-010', evidence_roles: evidence.not_applicable_roles },
+      caseDir: evidenceDir,
+      artifacts: {
+        core_beta_not_applicable_roles: evidence.not_applicable_roles.map((role) => ({
+          role,
+          blocker_path: blocker,
+        })),
+      },
+    });
+    assert.equal(manifest.complete, true, '真实IME产品失败必须以零发送N/A证据继续批次');
+    assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), evidence.not_applicable_roles);
+    const tamperedEvidence = {
+      ...evidence,
+      not_applicable_roles: [...evidence.not_applicable_roles, 'capability_selection'],
+    };
+    writeJsonFile(blocker, tamperedEvidence);
+    const tamperedManifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'BETA-CHAT-010',
+        evidence_roles: tamperedEvidence.not_applicable_roles,
+      },
+      caseDir: evidenceDir,
+      artifacts: {
+        core_beta_not_applicable_roles: tamperedEvidence.not_applicable_roles.map((role) => ({
+          role,
+          blocker_path: blocker,
+        })),
+      },
+    });
+    assert.equal(
+      tamperedManifest.complete,
+      false,
+      'IME发送前产品失败不得越权把能力选择等无关证据角色标为N/A',
+    );
+    writeJsonFile(blocker, evidence);
+    assert.equal(
+      coreBetaPreSendImeFailureEvidence({
+        testCaseId: 'BETA-CHAT-010',
+        before: { task },
+        after: { task: structuredClone(task) },
+        focusArm: { ready: true },
+        traceData: { ...traceData, event_count: 0, adapter_noop: true },
+        screenshot,
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+      }).valid,
+      false,
+      '零文本零事件属于框架适配器失败，禁止伪装成可继续的产品Bug',
     );
   } finally {
     fs.rmSync(evidenceDir, { recursive: true, force: true });
@@ -2893,6 +3023,32 @@ assert.equal(
   2,
   '70 条指南必须把通过 probe 的同一 native IME command 传给 runner',
 );
+assert.match(
+  automationFramework,
+  /bringToFront[\s\S]*真实 Composer 点击[\s\S]*document\.hasFocus\(\)[\s\S]*零文本[\s\S]*framework issue[\s\S]*N\/A 负向证据/,
+  '框架合同必须覆盖 replacement WebView 的原生IME前台焦点、no-op fail-fast和产品失败继续策略',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /bringToFront[\s\S]*前台焦点[\s\S]*零文本、零 composition 事件[\s\S]*framework issue[\s\S]*产品 Bug/,
+  '当前运行指南必须明确原生IME框架失败与产品失败边界',
+);
+{
+  const imeStart = runner.indexOf('async function executeCoreBetaImeCase');
+  const imeEnd = runner.indexOf('function sameStringMultiset', imeStart);
+  assert.ok(imeStart >= 0 && imeEnd > imeStart, '必须保留 Core Beta native IME executor');
+  const imeBlock = runner.slice(imeStart, imeEnd);
+  assert.match(
+    imeBlock,
+    /prepareCoreBetaNativeImeFocus\(page, input\)[\s\S]*spawnSync\('\/bin\/zsh'[\s\S]*traceData\.adapter_noop[\s\S]*refusing to wait for or click Send/,
+    '原生IME必须先恢复前台焦点，命令no-op时在发送前立即fail-closed',
+  );
+  assert.match(
+    imeBlock,
+    /coreBetaPreSendImeFailureEvidence[\s\S]*core_beta_not_applicable_roles[\s\S]*return;[\s\S]*await send\(page, state, '发送IME组合输入'\)/,
+    '真实composition产品失败必须形成零发送N/A证据并在错误文本发送前返回',
+  );
+}
 assert.match(
   coreBetaOperatingGuide,
   /BETA-REC-001[\s\S]*BETA-REC-002[\s\S]*BETA-REC-004[\s\S]*BETA-TASK-003[\s\S]*BETA-EXPERT-016[\s\S]*不得进入70条门禁或160条全量回归/,

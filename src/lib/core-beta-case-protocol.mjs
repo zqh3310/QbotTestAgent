@@ -1120,6 +1120,14 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'capability_execution_event',
     ...skillPrerequisiteNotApplicableRoles,
   ]);
+  const preSendImeFailureNotApplicableRoles = new Set([
+    'prompt',
+    'task_id',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file);
@@ -1142,7 +1150,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && !runtimePrerequisiteNotApplicableRoles.has(role)
         && !expertPrerequisiteNotApplicableRoles.has(role)
         && !mcpPrerequisiteNotApplicableRoles.has(role)
-        && !preSendCapabilityFailureNotApplicableRoles.has(role))
+        && !preSendCapabilityFailureNotApplicableRoles.has(role)
+        && !preSendImeFailureNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1395,12 +1404,51 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => preSendCapabilityFailureNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const imeTrace = interaction?.trace || {};
+    const preSendImeFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-ime-failure/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'bug'
+      && blocker?.kind === 'native_ime_product_failure_before_send'
+      && blocker?.source === 'native_ime_composition_and_zero_send_readback'
+      && blocker?.dependent_case_id === testCase?.id
+      && interaction?.schema_version === 'qbot-core-beta-native-ime-interaction/v1'
+      && interaction?.focus_arm?.ready === true
+      && imeTrace?.valid === false
+      && imeTrace?.adapter_noop === false
+      && Number(imeTrace?.native_command_status) === 0
+      && Number(imeTrace?.event_count) > 0
+      && preSendMutationGuard?.valid === true
+      && preSendMutationGuard?.task_absent_before === true
+      && preSendMutationGuard?.task_absent_after === true
+      && preSendMutationGuard?.not_running_before === true
+      && preSendMutationGuard?.not_running_after === true
+      && preSendMutationGuard?.message_count_zero_before === true
+      && preSendMutationGuard?.message_count_zero_after === true
+      && preSendMutationGuard?.send_count_observed === true
+      && preSendMutationGuard?.send_count_unchanged === true
+      && preSendMutationGuard?.no_prompt_recorded === true
+      && preSendMutationGuard?.no_send_receipt_recorded === true
+      && preSendMutationGuard?.before_task?.id == null
+      && preSendMutationGuard?.after_task?.id == null
+      && Number(preSendMutationGuard?.before_task?.message_count) === 0
+      && Number(preSendMutationGuard?.after_task?.message_count) === 0
+      && Number(preSendMutationGuard?.before_task?.send_count)
+        === Number(preSendMutationGuard?.after_task?.send_count)
+      && failureScreenshotValid
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => preSendImeFailureNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
       || expertPrerequisiteVerified
       || mcpPrerequisiteVerified
-      || preSendCapabilityFailureVerified;
+      || preSendCapabilityFailureVerified
+      || preSendImeFailureVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

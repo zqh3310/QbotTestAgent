@@ -160,6 +160,11 @@ npm run core-beta:capability-audit -- \
    `QBOT_CORE_BETA_IME_TEXT_BASE64` 和 `QBOT_CORE_BETA_CASE_ID`，通过 macOS
    真实输入源完成组合输入和候选确认。禁止 DOM 合成 composition 事件。
 
+runner 必须先把当前 QWork WebView `bringToFront`，真实点击并聚焦 Composer，且
+读回前台焦点成立后才能执行同一命令。命令返回 0 但零文本、零 composition 事件属于
+framework issue；已产生真实事件但文本 Oracle 失败属于可继续批次的产品 Bug，必须
+保存零发送负向证据，禁止发送错误文本或盲目重放命令。
+
 当前 70/160 已删除全部需要 `managed_teams_restart` 或
 `managed_runtime_restart` 的正式 Case。pretest 不得要求 `--restart-command`；
 受管重启只属于独立 soak 或历史 74/184 回归，不得重新拼入当前 Casebook。
