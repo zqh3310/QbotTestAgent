@@ -1457,6 +1457,8 @@ assert.equal(
     nativeCommandStatus: 0,
   });
   assert.equal(validTrace.valid, true);
+  assert.equal(validTrace.evidence_valid, true);
+  assert.equal(validTrace.oracle_valid, true);
   assert.equal(validTrace.adapter_noop, false);
   const noOpTrace = coreBetaNativeImeTraceVerdict({
     prompt: '请用Skill A分析Q3收入，比较Beta版本。',
@@ -1466,7 +1468,20 @@ assert.equal(
     nativeCommandStatus: 0,
   });
   assert.equal(noOpTrace.valid, false);
+  assert.equal(noOpTrace.evidence_valid, false);
+  assert.equal(noOpTrace.oracle_valid, false);
   assert.equal(noOpTrace.adapter_noop, true, '原生命令成功但零文本零事件必须识别为框架适配器 no-op');
+
+  const productFailureTrace = coreBetaNativeImeTraceVerdict({
+    prompt: '请用Skill A分析Q3收入，比较Beta版本。',
+    readback: 'qingyong Skill Afenxi Q3收入，比较Beta版本。',
+    events: [{ type: 'beforeinput' }, { type: 'compositionstart' }, { type: 'compositionend' }],
+    focusArm: focus,
+    nativeCommandStatus: 0,
+  });
+  assert.equal(productFailureTrace.valid, false);
+  assert.equal(productFailureTrace.evidence_valid, true, '真实IME事件和读回完整时，产品文本失败不得污染证据有效性');
+  assert.equal(productFailureTrace.oracle_valid, false);
 }
 {
   const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-ime-'));
@@ -1476,6 +1491,8 @@ assert.equal(
     const task = { id: null, running: false, send_count: 41, message_count: 0 };
     const traceData = {
       valid: false,
+      evidence_valid: true,
+      oracle_valid: false,
       exact_readback: false,
       composition_start: true,
       composition_end: true,
@@ -1500,11 +1517,17 @@ assert.equal(
       'prompt', 'task_id', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion',
     ]);
     const blocker = path.join(evidenceDir, 'pre-send-ime-failure.json');
+    const traceFile = path.join(evidenceDir, 'ime-event-trace.json');
     writeJsonFile(blocker, evidence);
+    writeJsonFile(traceFile, traceData);
     const manifest = buildCoreEvidenceManifest({
-      testCase: { id: 'BETA-CHAT-010', evidence_roles: evidence.not_applicable_roles },
+      testCase: {
+        id: 'BETA-CHAT-010',
+        evidence_roles: ['ime_event_trace', ...evidence.not_applicable_roles],
+      },
       caseDir: evidenceDir,
       artifacts: {
+        ime_event_trace: traceFile,
         core_beta_not_applicable_roles: evidence.not_applicable_roles.map((role) => ({
           role,
           blocker_path: blocker,
@@ -1512,7 +1535,18 @@ assert.equal(
       },
     });
     assert.equal(manifest.complete, true, '真实IME产品失败必须以零发送N/A证据继续批次');
+    assert.deepEqual(manifest.invalid_roles, []);
     assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), evidence.not_applicable_roles);
+
+    writeJsonFile(traceFile, { ...traceData, evidence_valid: false });
+    const invalidTraceManifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-CHAT-010', evidence_roles: ['ime_event_trace'] },
+      caseDir: evidenceDir,
+      artifacts: { ime_event_trace: traceFile },
+    });
+    assert.equal(invalidTraceManifest.complete, false, 'IME取证本身无效时仍必须 fail-closed');
+    assert.deepEqual(invalidTraceManifest.invalid_roles, ['ime_event_trace']);
+    writeJsonFile(traceFile, traceData);
     const tamperedEvidence = {
       ...evidence,
       not_applicable_roles: [...evidence.not_applicable_roles, 'capability_selection'],

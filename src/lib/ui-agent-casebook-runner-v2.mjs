@@ -10840,14 +10840,14 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   const traceFile = path.join(caseDir, 'ime-event-trace.json');
   writeJsonFile(traceFile, traceData);
   state.artifacts.ime_event_trace = traceFile;
-  recordAssertion(state, 'IME组合输入字节级一致', 'composition事件闭环后Composer值必须与目标prompt字节级一致，且组合期不得发送。', traceData.valid, JSON.stringify(traceData));
+  recordAssertion(state, 'IME组合输入字节级一致', 'composition事件闭环后Composer值必须与目标prompt字节级一致，且组合期不得发送。', traceData.oracle_valid, JSON.stringify(traceData));
   if (traceData.adapter_noop) {
     throw new Error(
       `${testCase.id} native IME command returned success but produced no composer text or composition events; `
       + 'refusing to wait for or click Send because the native focus/command adapter did not execute.',
     );
   }
-  if (!traceData.valid) {
+  if (!traceData.oracle_valid) {
     state.screenshots.ime_input_failure = await shot(page, caseDir, 'ime-input-failure');
     const failureEvidence = coreBetaPreSendImeFailureEvidence({
       testCaseId: testCase.id,
@@ -10959,8 +10959,14 @@ export function coreBetaNativeImeTraceVerdict({
     && Number(nativeCommandStatus) === 0
     && String(readback) === ''
     && rows.length === 0;
+  const evidenceValid = focusReady
+    && Number(nativeCommandStatus) === 0
+    && rows.length > 0;
+  const oracleValid = focusReady && exact && compositionStart && compositionEnd;
   return {
-    valid: focusReady && exact && compositionStart && compositionEnd,
+    valid: oracleValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
     focus_ready: focusReady,
     exact_readback: exact,
     composition_start: compositionStart,
@@ -22796,6 +22802,8 @@ export function coreBetaPreSendImeFailureEvidence({
   const traceValid = focusArm?.ready === true
     && Number(traceData?.native_command_status) === 0
     && traceData?.valid === false
+    && traceData?.evidence_valid === true
+    && traceData?.oracle_valid === false
     && traceData?.adapter_noop === false
     && Number(traceData?.event_count) > 0;
   const evidenceValid = Boolean(
@@ -22810,6 +22818,8 @@ export function coreBetaPreSendImeFailureEvidence({
     focus_arm: focusArm,
     trace: {
       valid: traceData?.valid === true,
+      evidence_valid: traceData?.evidence_valid === true,
+      oracle_valid: traceData?.oracle_valid === true,
       exact_readback: traceData?.exact_readback === true,
       composition_start: traceData?.composition_start === true,
       composition_end: traceData?.composition_end === true,

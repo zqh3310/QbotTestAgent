@@ -1417,6 +1417,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && interaction?.schema_version === 'qbot-core-beta-native-ime-interaction/v1'
       && interaction?.focus_arm?.ready === true
       && imeTrace?.valid === false
+      && imeTrace?.evidence_valid === true
+      && imeTrace?.oracle_valid === false
       && imeTrace?.adapter_noop === false
       && Number(imeTrace?.native_command_status) === 0
       && Number(imeTrace?.event_count) > 0
@@ -1518,7 +1520,12 @@ export function validateEvidenceFile(role, file) {
     } catch {
       return { valid: false, error: 'invalid_json' };
     }
-    if (parsed && typeof parsed === 'object' && parsed.valid === false) {
+    if (parsed && typeof parsed === 'object' && parsed.evidence_valid === false) {
+      return { valid: false, error: String(parsed.reason || parsed.validation_error || 'evidence_invalid') };
+    }
+    if (parsed && typeof parsed === 'object'
+      && typeof parsed.evidence_valid !== 'boolean'
+      && parsed.valid === false) {
       return { valid: false, error: String(parsed.reason || parsed.validation_error || 'explicitly_invalid') };
     }
     if (role === 'task_id' && !String(parsed?.task_id || '').trim()) {
