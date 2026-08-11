@@ -40,15 +40,15 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf`
+- SHA-256：`c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
 
 能力构成：
 
-- 70 条门禁：61 条原生/public-state、4 条本机受管选项、5 条经过语义复核的 legacy executor。
-- 160 条全量：上述 70 条 + 90 条经过语义复核的正常功能 legacy executor；合计 61/4/95。
+- 70 条门禁：60 条原生/public-state、1 条原生 IME 选项、9 条经过语义复核的 legacy executor。
+- 160 条全量：上述 70 条 + 90 条经过语义复核的正常功能 legacy executor；合计 60/1/99。
 
 新版已删除网络异常、connection-cache fault、切换账号、第二账号授权、受保护部署
 和纯故障注入等低频或当前框架不能无条件真实执行的场景。全量增量明确排除
@@ -56,6 +56,13 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 `SIT-TEAMS-DOC-001`、`SIT-RUNTIME-RECOVER-001` 和 `SIT-FILE-NEW-001`。
 `BETA-INIT-005` 属于历史网络故障注入，不得拼回门禁。当前门禁初始化固定为
 `BETA-INIT-001~004`。
+
+本轮进一步从两个 Sheet 同步剔除 `BETA-REC-001`、`BETA-REC-002`、
+`BETA-REC-004`、`BETA-TASK-003`、`BETA-EXPERT-016`，这些 Case
+不得进入70条门禁或160条全量回归。门禁以 `SIT-SKILL-007`、
+`SIT-HOME-002`、`SIT-HOME-012`、`SIT-HOME-013`、`SIT-HOME-014`
+五条高频正常功能补齐；全量功能池新增 `SIT-HOME-028`、`SIT-HOME-046`、
+`SIT-HOME-051`、`SIT-CONN-005`、`SIT-HOME-048`，因此总量仍为70/160。
 
 新增或重写的关键回归：
 
@@ -138,7 +145,7 @@ npm run core-beta:capability-audit -- \
 `directly_runnable_without_controller=70/160`、`strict_controller_required=0`、
 `unsupported_runtime=0`。
 
-## 5. Native IME 与受管重启
+## 5. Native IME
 
 `BETA-CHAT-010` 必须使用 `--native-ime-command` 或
 `QBOT_CORE_BETA_NATIVE_IME_COMMAND`。该命令有两种模式：
@@ -153,10 +160,9 @@ npm run core-beta:capability-audit -- \
    `QBOT_CORE_BETA_IME_TEXT_BASE64` 和 `QBOT_CORE_BETA_CASE_ID`，通过 macOS
    真实输入源完成组合输入和候选确认。禁止 DOM 合成 composition 事件。
 
-Teams lane 的 `BETA-REC-001/002/004` 不接受调用方 `--restart-command`。
-pretest 会只读验证 Teams 包装器固定重启脚本存在、可执行且 shell 语法正确；
-runner 连接冻结 QWork versioned URL 后，由包装器构造并传入实际重启命令。
-local lane 才要求调用方显式提供 `--restart-command`。
+当前 70/160 已删除全部需要 `managed_teams_restart` 或
+`managed_runtime_restart` 的正式 Case。pretest 不得要求 `--restart-command`；
+受管重启只属于独立 soak 或历史 74/184 回归，不得重新拼入当前 Casebook。
 
 ## 6. 正式 pretest
 
@@ -172,7 +178,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf \
+  --expected-sha256 c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
@@ -184,8 +190,8 @@ npm run core-beta:pretest -- \
   --feature-flags-hash "<feature-flags-sha256>"
 ```
 
-只接受 `READY`。`READY_SCOPED`、Case 数少于 70、缺少 IME probe、缺少 Teams
-受管重启、身份字段缺失、tracked dirty 或 runner 已存在都不得启动正式批次。
+只接受 `READY`。`READY_SCOPED`、Case 数少于 70、缺少 IME probe、身份字段缺失、
+tracked dirty 或 runner 已存在都不得启动正式批次。
 pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。
 全量 160 条必须另行以同一 Casebook、`--sheet 全量功能回归Case`、
 `--expected-count 160` 和同一 SHA 执行 pretest；同样只接受 `READY`。测试当前暂停，

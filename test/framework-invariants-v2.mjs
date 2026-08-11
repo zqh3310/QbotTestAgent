@@ -2895,8 +2895,13 @@ assert.equal(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /Teams lane[\s\S]*不接受调用方 `--restart-command`[\s\S]*包装器构造并传入实际重启命令/,
-  '70 条指南必须由 Teams 包装器受管重启，禁止调用方伪造 restart command',
+  /BETA-REC-001[\s\S]*BETA-REC-002[\s\S]*BETA-REC-004[\s\S]*BETA-TASK-003[\s\S]*BETA-EXPERT-016[\s\S]*不得进入70条门禁或160条全量回归/,
+  '当前操作指南必须明确排除低频恢复、runtime故障和网络中断Case',
+);
+assert.doesNotMatch(
+  coreBetaOperatingGuide,
+  /Teams lane 的 `BETA-REC-001\/002\/004`/,
+  '操作指南不得继续把已删除的恢复Case声明为正式门禁fixture',
 );
 assert.doesNotMatch(
   coreBetaOperatingGuide,

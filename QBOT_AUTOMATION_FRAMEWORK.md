@@ -35,8 +35,8 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf` |
-| 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf` |
+| 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177` |
+| 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -45,7 +45,11 @@
 `directly_runnable=70/160`、`strict_controller_required=0`、
 `unsupported_runtime=0`。160 条 Sheet 的前 70 条必须与门禁 Sheet 的 ID、顺序
 和合同内容一致，后 90 条覆盖正常功能；网络异常、切换账号、受保护部署和纯故障
-注入不进入这套常规回归。
+注入不进入这套常规回归。`BETA-REC-001`、`BETA-REC-002`、
+`BETA-REC-004`、`BETA-TASK-003`、`BETA-EXPERT-016` 已从两个 Sheet 同步删除；
+70 条门禁以 `SIT-SKILL-007`、`SIT-HOME-002`、`SIT-HOME-012`、
+`SIT-HOME-013`、`SIT-HOME-014` 五条高频正常功能补齐，160 条全量再以五条
+正常功能增量保持总数不变。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 当前设计基线是 `origin/release/0.1@686b862ea9553215c2563d87db8339096acecb9d`，
@@ -115,7 +119,7 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 70 \
-     --expected-sha256 31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf \
+     --expected-sha256 c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177 \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
@@ -143,9 +147,9 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 
 7. 确认本轮只有一个受管 runner、一个固定宿主和一个不可变输出目录。禁止启动第二 runner。
 
-8. 确认所需真实资源已经就绪。70 条门禁只保留框架原生路径；其中原生 IME、
-   Teams 重启和 runtime 重启仍必须由 pretest 实测对应命令可用。不得运行中临时
-   排除这些 Case，也不得降级成 scoped 发布门禁。
+8. 确认所需真实资源已经就绪。70 条门禁只保留无低频故障注入的稳定路径；其中
+   原生 IME 必须由 pretest 实测对应命令可用。不得运行中临时排除这些 Case，也
+   不得降级成 scoped 发布门禁。
 
 ## 4. Fixture 合同
 
@@ -154,10 +158,9 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 执行；原生 IME 使用 `--native-ime-command`，且同一命令必须在
 `QBOT_CORE_BETA_IME_PROBE=1` 时不输入任何内容，并返回
 `qbot-core-beta-native-ime-probe/v1`，证明 Accessibility 权限和中文输入源就绪。
-Teams lane 的 Teams/runtime 受管重启命令由包装器从固定、可执行且 shell 语法
-有效的 `restart-qbot-electron-control-plane.sh` 派生；调用者不得传
-`--restart-command`。local lane 才由调用者提供 `--restart-command`。缺少对应
-能力时 pretest 必须在 Case 0 前 BLOCKED。
+当前 70/160 不包含 `managed_teams_restart` 或 `managed_runtime_restart` Case，
+pretest 不得把 `--restart-command` 当作正式 Casebook 的启动前置；受管重启只在
+独立 soak 或历史 74/184 回归合同中按对应规则验证。
 
 以下严格控制器合同仅适用于历史 74/184 或未来重新纳入的隔离矩阵，不得用于
 把当前 70 条之外的 Case 临时拼回发布门禁。
@@ -252,7 +255,6 @@ npm run ui-agent:casebook-run -- \
   --model-tier M3 \
   --timeout-ms 600000 \
   --single-host-pipeline 1 \
-  --restart-command "<managed-teams-and-runtime-restart-command>" \
   --native-ime-command "<managed-native-ime-input-command>" \
   --production-gate true \
   --backend-version "<backend-release-id>" \
@@ -318,10 +320,10 @@ runner 必须携带完全相同的 `--case`、`--scoped-execution`、
 summary `scope` 以及 `release_gate_eligible=false` 永久标记该批次；即使全部
 可信通过，也只能得出范围内基础功能结论。
 
-由于 360Teams 包装器会在 runner 启动时补充受管重启能力，预检与 runner
-观察到的“当前不可用 fixture”集合可能不同。scoped 合同因此要求 excluded
-Case 覆盖运行时全部不可用 fixture Case；允许额外显式排除的 Case 仍只能是
-Casebook 注册表中的专项 fixture Case，且必须写入
+历史 74/184 scoped 回归中，360Teams 包装器可能在 runner 启动时补充受管重启
+能力，预检与 runner 观察到的“当前不可用 fixture”集合可能不同。该历史 scoped
+合同因此要求 excluded Case 覆盖运行时全部不可用 fixture Case；允许额外显式
+排除的 Case 仍只能是 Casebook 注册表中的专项 fixture Case，且必须写入
 `additional_fixture_exclusion_ids`。这不会扩大可信结论，批次仍永久
 `release_gate_eligible=false`；漏排任何运行时不可用 fixture Case 则继续
 fail-closed。

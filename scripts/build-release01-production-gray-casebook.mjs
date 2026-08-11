@@ -8,6 +8,8 @@ import { FileBlob, SpreadsheetFile, Workbook } from '@oai/artifact-tool';
 import {
   CORE_BETA_SCENARIO_REGISTRY,
   FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
+  PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS,
+  PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import { coreBetaRuntimeExecutorBinding } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import { migrateProductionCase } from '../src/lib/production-casebook-contract.mjs';
@@ -46,6 +48,11 @@ const FULL_REGRESSION_SUPPLEMENTAL_LEGACY_IDS = new Set([
   'SIT-HOME-027',
   'SIT-HOME-047',
   'SIT-HOME-052',
+  'SIT-HOME-028',
+  'SIT-HOME-046',
+  'SIT-HOME-051',
+  'SIT-CONN-005',
+  'SIT-HOME-048',
 ]);
 const CORE_BETA_BASE_EVIDENCE_ROLES = Object.freeze([
   'before_screenshot',
@@ -417,11 +424,11 @@ function patchRecentCases(testCase) {
     next['测试场景'] = '串行发布本轮研究、数据、交付三类专家草稿，验证每类唯一operation、active release和suite ledger闭环';
     next['用户旅程'] = '本轮三类草稿 → 逐项发布 → 等待终态 → 写入本轮专家账本';
     next['前置条件'] = 'BETA-EXPERT-002/003/004已创建本轮研究、数据、交付三类草稿；使用当前单一测试账号。';
-    next['测试数据'] = '三个本轮draftId/etag；三个唯一幂等键；禁止故障注入、历史专家和第二账号。';
+    next['测试数据'] = '三个本轮draftId/etag；三个唯一幂等键；仅使用本轮单账号正常发布链路，不引入历史专家或特殊授权。';
     next['自动化执行步骤'] = '1. 读取三类本轮草稿身份\n2. 逐项发起发布并等待completed\n3. 读回三个active expert/release并写入published_research/data/delivery';
     next['预期结果'] = '三类草稿各自产生唯一发布operation和active expert；后续专家Case只消费本轮账本。';
     next['成功判定'] = 'operation=3且全部completed；expertId/releaseId完整；三类ledger key完整；无半版本、重复发布或历史复用。';
-    next['失败/阻塞判定'] = '任一发布失败、半状态、重复或账本缺失记trusted_bug/framework_issue；不得因缺少故障注入命令阻塞。';
+    next['失败/阻塞判定'] = '任一发布失败、半状态、重复或账本缺失记trusted_bug/framework_issue；不得因缺少非必要外部命令阻塞。';
     next['必需Fixture'] = 'runtime:ready,account:authenticated,run_owned_expert_drafts:3';
     next['来源ID'] = 'MR!972,MR!943,MR!1065';
     next['来源类型'] = '近7天MR回归+自包含门禁重构';
@@ -621,6 +628,9 @@ function deletionReason(testCase, cap) {
   const id = asString(testCase['用例ID']);
   const fixture = asString(cap.scenario?.fixture_control);
   const text = `${id} ${fixture} ${testCase['测试场景']}`.toLowerCase();
+  if (PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.has(id)) {
+    return ['低频恢复/故障注入', '按用户要求从70条门禁和160条全量回归同时删除；由正常高频功能Case补齐固定规模。'];
+  }
   if (EXCLUDED_ACCOUNT_CASES.has(id) || /secondary_account|second_account|切换账号|第二账号/.test(text)) {
     return ['低频账号场景', '按用户要求删除切换账号/第二账号场景；单账号owner投影由BETA-EXPERT-001覆盖。'];
   }
@@ -745,12 +755,26 @@ async function main() {
   const sourceWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(SOURCE));
   const sourceValues = sourceWorkbook.worksheets.getItem('核心内测Case').getRange('A1:AO188').values;
   const { headers, cases: allCases } = sourceCases(sourceValues);
-  const gateCases = orderCases(allCases
+  const gateCoreCases = orderCases(allCases
     .filter((testCase) => capability(testCase).directlyRunnable)
     .filter((testCase) => !EXCLUDED_ACCOUNT_CASES.has(asString(testCase['用例ID'])))
+    .filter((testCase) => !PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.has(asString(testCase['用例ID'])))
     .map(patchRecentCases));
-  const regressionAddons = await loadFullFunctionLegacyCases();
+  const fullFunctionPool = await loadFullFunctionLegacyCases();
+  const fullFunctionById = new Map(fullFunctionPool.map((testCase) => [asString(testCase['用例ID']), testCase]));
+  const gatePromotions = [...PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS].map((id) => {
+    const testCase = fullFunctionById.get(id);
+    if (!testCase) throw new Error(`门禁正常功能替补缺失：${id}`);
+    return testCase;
+  });
+  const gateCases = [...gateCoreCases, ...gatePromotions];
+  const regressionAddons = fullFunctionPool.filter(
+    (testCase) => !PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS.has(asString(testCase['用例ID'])),
+  );
   const fullCases = [...gateCases, ...regressionAddons];
+  if (gateCoreCases.length !== 65) throw new Error(`剔除低频恢复/账号切换后原生门禁必须恰好65条，actual=${gateCoreCases.length}`);
+  if (gatePromotions.length !== 5) throw new Error(`门禁正常功能替补必须恰好5条，actual=${gatePromotions.length}`);
+  if (fullFunctionPool.length !== 95) throw new Error(`正常功能池必须恰好95条，actual=${fullFunctionPool.length}`);
   if (gateCases.length !== 70) throw new Error(`新版门禁必须恰好70条，actual=${gateCases.length}`);
   if (regressionAddons.length !== 90) throw new Error(`全量功能增量必须恰好90条，actual=${regressionAddons.length}`);
   if (fullCases.length !== 160) throw new Error(`全量功能回归必须恰好160条，actual=${fullCases.length}`);
@@ -759,6 +783,11 @@ async function main() {
   if (new Set(fullIds).size !== fullIds.length) throw new Error('全量功能回归Case ID重复');
   if (JSON.stringify(fullIds.slice(0, 70)) !== JSON.stringify(gateIds)) {
     throw new Error('全量功能回归前70条必须与生产灰度门禁顺序完全一致');
+  }
+  for (const id of PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS) {
+    if (gateIds.includes(id) || fullIds.includes(id)) {
+      throw new Error(`低频恢复/故障注入Case不得进入正式70/160：${id}`);
+    }
   }
   const gateIdSet = new Set(gateIds);
   const gateCapability = capabilitySet(gateCases);
@@ -856,15 +885,16 @@ async function main() {
       ['严格外部控制器', 0, '两层strict_controller_required=0', '能力审计'],
       ['不支持运行时', 0, '两层unsupported_runtime=0', '能力审计'],
       ['全量原生公开状态执行器', fullCapability.counts.runner_native || 0, 'QWork UI/bridge/CDP真实动作与读回', 'runner_native'],
-      ['全量原生本机fixture选项', fullCapability.counts.runner_native_with_fixture_option || 0, 'IME、Teams重启、runtime重启；pretest必须就绪', 'runner_native_with_fixture_option'],
-      ['全量经语义复核旧执行器', fullCapability.counts.runner_legacy_verified || 0, '5条门禁映射 + 90条常规功能映射', 'runner_legacy_verified'],
+      ['全量原生本机fixture选项', fullCapability.counts.runner_native_with_fixture_option || 0, '原生IME；pretest必须就绪', 'runner_native_with_fixture_option'],
+      ['全量经语义复核旧执行器', fullCapability.counts.runner_legacy_verified || 0, '9条门禁映射 + 90条常规功能映射', 'runner_legacy_verified'],
       ['近7天直接合并MR', mrRows.length, '全部记录纳入/排除结论', '近7天MR覆盖'],
       ['全量回归排除', FULL_REGRESSION_EXCLUDED_LEGACY_IDS.size, '网络异常、账号/权限低频、纯故障注入不进入本套', '删除场景清单'],
+      ['门禁低频恢复剔除', PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.size, '从70条门禁及160条前缀同步删除', '删除场景清单'],
       ['全量准入', '至少1轮160/160', '候选release identity完整可信全绿', '生产灰度准入'],
       ['连续放行', '5轮70/70', '160轮的前70条可计其中一轮；任一阻塞/非pass/flaky归零', '生产灰度准入'],
       ['最终权限', '1%-5%受控生产灰度', '完成门禁不等于GA，仍需监控与回滚', '发布判定'],
     ], [180, 180, 520, 240]);
-  const coverageSheet = addSheet(workbook, '覆盖矩阵', '70条门禁与160条全量覆盖矩阵', '按范围、核心域和Case类型统计，会话、附件、成果、Skill、专家、MCP、恢复、安全、模型和常规设置均纳入。',
+  const coverageSheet = addSheet(workbook, '覆盖矩阵', '70条门禁与160条全量覆盖矩阵', '按范围、核心域和Case类型统计，会话、附件、成果、Skill、专家、MCP、安全、模型和常规设置均纳入。',
     ['范围', '维度', '名称', '用例数', '占比'], [
       ...[...byDomain.entries()].map(([key, count]) => {
         const [scope, name] = key.split('\u0000');
@@ -884,7 +914,7 @@ async function main() {
       ['casebook', OUTPUT_NAME, 'pretest', '精确路径+Sheet+SHA-256', 'Casebook变化即新测试合同'],
       ['product_source', `${PRODUCT_REF}@${PRODUCT_COMMIT}`, '设计/复核', 'deepbankV2只读', `package.version=${PRODUCT_VERSION}`],
       ['host_identity', 'Teams/QWork每轮精确冻结', 'pretest', '版本、build、control plane全部一致', '当前最低Teams 5.3.0 / QWork 0.1.1'],
-      ['fixture_options', 'native IME + Teams/runtime restart', 'pretest', '缺任一所选Case能力则BLOCKED', '不允许运行中临时降级'],
+      ['fixture_options', 'native IME', 'pretest', '缺少所选Case能力则BLOCKED', '不允许运行中临时降级'],
       ['gray_gate_runs', 5, '发布判定', '同一release identity连续5轮', '任一非pass或flaky归零'],
       ['soak', '至少100任务+3次受管重启', '灰度前稳定性', '至少一个候选轮次完成', '独立soak证据，不伪装成普通Case'],
       ['monitor_policy', 'read-only + self-healing', '执行期', '仅framework/testcase issue停runner修复', '产品Bug按独立Case策略继续'],

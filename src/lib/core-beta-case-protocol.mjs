@@ -120,7 +120,7 @@ export const CORE_BETA_BASE_SCENARIO_IDS = new Set(
   )),
 );
 
-// Normal-user functional regression extension. Each entry is backed by the
+// Normal-user functional pool. Each entry is backed by the
 // same explicit SIT executor whose semantics were reviewed for the Casebook;
 // fault injection, network interruption, second-account and protected
 // deployment scenarios are intentionally absent.
@@ -215,6 +215,27 @@ export const FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS = new Set([
   'SIT-HOME-027',
   'SIT-HOME-047',
   'SIT-HOME-052',
+  'SIT-HOME-028',
+  'SIT-HOME-046',
+  'SIT-HOME-051',
+  'SIT-CONN-005',
+  'SIT-HOME-048',
+]);
+
+export const PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS = new Set([
+  'BETA-REC-001',
+  'BETA-REC-002',
+  'BETA-REC-004',
+  'BETA-TASK-003',
+  'BETA-EXPERT-016',
+]);
+
+export const PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS = new Set([
+  'SIT-SKILL-007',
+  'SIT-HOME-002',
+  'SIT-HOME-012',
+  'SIT-HOME-013',
+  'SIT-HOME-014',
 ]);
 
 export const CORE_BETA_SCENARIO_IDS = new Set([

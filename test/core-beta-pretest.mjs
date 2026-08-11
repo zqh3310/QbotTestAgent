@@ -51,7 +51,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx');
-const grayExpectedSha = '31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf';
+const grayExpectedSha = 'c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -108,6 +108,11 @@ if (JSON.stringify(fullIds.slice(0, 70)) !== JSON.stringify(grayIds)) {
   throw new Error('160 Casebook first 70 IDs must exactly match the 70 gate Sheet.');
 }
 for (const id of [
+  'BETA-REC-001',
+  'BETA-REC-002',
+  'BETA-REC-004',
+  'BETA-TASK-003',
+  'BETA-EXPERT-016',
   'SIT-HOME-025',
   'SIT-TASK-RECOVER-001',
   'SIT-ISSUE-800',
@@ -118,7 +123,18 @@ for (const id of [
 ]) {
   if (fullIds.includes(id)) throw new Error(`160 Casebook must exclude low-frequency/fault Case ${id}.`);
 }
-for (const id of ['SIT-SKILL-002', 'SIT-EXPERT-002', 'SIT-HOME-027', 'SIT-HOME-047', 'SIT-HOME-052']) {
+for (const id of [
+  'SIT-SKILL-002',
+  'SIT-EXPERT-002',
+  'SIT-HOME-027',
+  'SIT-HOME-047',
+  'SIT-HOME-052',
+  'SIT-HOME-028',
+  'SIT-HOME-046',
+  'SIT-HOME-051',
+  'SIT-CONN-005',
+  'SIT-HOME-048',
+]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
 if (!fullCases.every((item) => String(item.version_scope || '').includes('686b862ea9553215c2563d87db8339096acecb9d'))) {
@@ -222,7 +238,6 @@ const grayPretest = spawnSync(process.execPath, [
   '--expected-count', '70',
   '--expected-sha256', grayExpectedSha,
   '--cdp', 'http://127.0.0.1:1',
-  '--restart-command', '/usr/bin/true',
   '--native-ime-command', nativeImeProbe,
   '--no-framework-checks',
 ], { cwd: root, encoding: 'utf8', timeout: 120_000 });
@@ -233,15 +248,14 @@ const grayPretestReport = JSON.parse(fs.readFileSync(
   path.join(grayPretestOut, 'core-beta-pretest-report.json'),
   'utf8',
 ));
-for (const id of [
-  'local_managed_restart_capability',
-  'native_ime_command_capability',
-  'fixture_controller_contract',
-]) {
+for (const id of ['native_ime_command_capability', 'fixture_controller_contract']) {
   const check = grayPretestReport.checks.find((item) => item.id === id);
   if (check?.status !== 'passed') {
     throw new Error(`Expected ${id} to pass for the 70 Casebook: ${JSON.stringify(check)}`);
   }
+}
+if (grayPretestReport.checks.some((item) => item.id === 'local_managed_restart_capability')) {
+  throw new Error('70 Casebook已剔除受管重启Case，pretest不得继续要求restart-command。');
 }
 if (grayPretestReport.runtime?.fixture_capabilities?.native_ime?.probe_ok !== true) {
   throw new Error('70 pretest must persist the successful non-mutating native IME probe.');

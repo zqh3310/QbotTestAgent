@@ -9,6 +9,8 @@ import {
   CORE_BETA_SCENARIO_IDS,
   CORE_BETA_SCENARIO_REGISTRY,
   FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
+  PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS,
+  PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS,
   buildCoreEvidenceManifest,
   classifyCoreBetaScopedDependencyGaps,
   classifyCoreBetaScopedFixtureExclusions,
@@ -149,12 +151,12 @@ import {
 }
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
-assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 90);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 274);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 274);
+assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 279);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 279);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  274,
+  279,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 assert.equal(
@@ -253,6 +255,23 @@ for (const id of ['SIT-SKILL-002', 'SIT-EXPERT-002', 'SIT-HOME-027', 'SIT-HOME-0
     FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.has(id),
     true,
     `全量正常功能增量必须保留高频功能Case：${id}`,
+  );
+}
+assert.deepEqual(
+  [...PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS],
+  ['BETA-REC-001', 'BETA-REC-002', 'BETA-REC-004', 'BETA-TASK-003', 'BETA-EXPERT-016'],
+  '正式70/160必须统一排除已确认的低频恢复与网络故障注入Case',
+);
+assert.deepEqual(
+  [...PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS],
+  ['SIT-SKILL-007', 'SIT-HOME-002', 'SIT-HOME-012', 'SIT-HOME-013', 'SIT-HOME-014'],
+  '门禁必须使用五条高频正常功能Case补齐固定70条规模',
+);
+for (const id of ['SIT-HOME-028', 'SIT-HOME-046', 'SIT-HOME-051', 'SIT-CONN-005', 'SIT-HOME-048']) {
+  assert.equal(
+    FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.has(id),
+    true,
+    `正常功能池必须包含门禁提升后的全量替补：${id}`,
   );
 }
 
