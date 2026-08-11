@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
+  CORE_BETA_BASE_SCENARIO_IDS,
   CORE_BETA_SCENARIO_IDS,
   CORE_BETA_SCENARIO_REGISTRY,
+  FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
   buildCoreEvidenceManifest,
   classifyCoreBetaScopedDependencyGaps,
   classifyCoreBetaScopedFixtureExclusions,
@@ -146,11 +148,13 @@ import {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 184);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 184);
+assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
+assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 90);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 274);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 274);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  184,
+  274,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 assert.equal(
@@ -209,7 +213,7 @@ assert.equal(
   '单账号灰度门禁的正常发布闭环不得依赖故障注入控制器',
 );
 const verifiedLegacyDrivers = [...CORE_BETA_SCENARIO_REGISTRY.values()]
-  .filter((item) => item.legacy_case_id)
+  .filter((item) => item.id.startsWith('BETA-') && item.legacy_case_id)
   .map((item) => `${item.id}:${item.legacy_case_id}`)
   .sort();
 assert.deepEqual(verifiedLegacyDrivers, [
@@ -219,6 +223,38 @@ assert.deepEqual(verifiedLegacyDrivers, [
   'BETA-SEC-002:SIT-WORKSPACE-001',
   'BETA-TASK-003:SIT-TASK-RECOVER-001',
 ], '只有完成语义复核并覆盖完整业务 Oracle 的旧执行器可以保留映射');
+assert.equal(
+  [...FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS].every((id) => {
+    const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id);
+    return scenario?.fixture_control === 'public_product_state'
+      && scenario?.legacy_case_id === id
+      && scenario?.executor_route;
+  }),
+  true,
+  '全量正常功能增量必须逐条绑定同 ID 的已复核 SIT 执行器且不依赖严格控制器',
+);
+for (const id of [
+  'SIT-HOME-025',
+  'SIT-TASK-RECOVER-001',
+  'SIT-ISSUE-800',
+  'SIT-CONN-008',
+  'SIT-TEAMS-DOC-001',
+  'SIT-RUNTIME-RECOVER-001',
+  'SIT-FILE-NEW-001',
+]) {
+  assert.equal(
+    FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.has(id),
+    false,
+    `全量正常功能增量不得重新纳入低频或故障注入Case：${id}`,
+  );
+}
+for (const id of ['SIT-SKILL-002', 'SIT-EXPERT-002', 'SIT-HOME-027', 'SIT-HOME-047', 'SIT-HOME-052']) {
+  assert.equal(
+    FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.has(id),
+    true,
+    `全量正常功能增量必须保留高频功能Case：${id}`,
+  );
+}
 
 const sample = {
   id: 'BETA-CHAT-001',

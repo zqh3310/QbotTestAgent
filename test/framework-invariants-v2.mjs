@@ -1008,15 +1008,26 @@ try {
     isolated_message_count: 0,
     isolated_draft_instance_id: 'draft-b',
     navigation: {
+      up_boundary_arm: 'QBOT-HISTORY-DRAFT-NOT-SENT',
       up_latest: 'QBOT-HISTORY-SECOND',
       up_older: 'QBOT-HISTORY-FIRST',
       down_newer: 'QBOT-HISTORY-SECOND',
       down_draft: 'QBOT-HISTORY-DRAFT-NOT-SENT',
+      isolated_boundary_arm: '',
       isolated_new_task: '',
+      reopened_boundary_arm: '',
       reopened_latest: 'QBOT-HISTORY-SECOND',
     },
   };
   assert.equal(coreBetaComposerHistoryVerdict(composerHistoryReadback), true);
+  assert.equal(
+    coreBetaComposerHistoryVerdict({
+      ...composerHistoryReadback,
+      navigation: { ...composerHistoryReadback.navigation, up_boundary_arm: 'QBOT-HISTORY-SECOND' },
+    }),
+    false,
+    '第一下物理ArrowUp必须只建立边界握手，不能直接进入历史',
+  );
   assert.equal(
     coreBetaComposerHistoryVerdict({
       ...composerHistoryReadback,
@@ -2864,8 +2875,13 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot生产灰度发布门禁Casebook_70条_2026-08-10\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`/,
-  '当前操作指南必须以完整 70 条 READY 预检作为唯一生产灰度入口',
+  /QBot生产灰度与全量功能回归Casebook_160条_2026-08-11\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
+  '当前操作指南必须把同一正式Casebook的70条门禁和160条全量回归分别绑定READY预检',
+);
+assert.match(
+  automationFramework,
+  /全量功能回归Case[\s\S]*directly_runnable=70\/160[\s\S]*前 70 条[\s\S]*至少 1 轮完整 160 条[\s\S]*可计入[\s\S]*5 轮门禁中的 1 轮/,
+  '框架合同必须固定70+160双层结构、全量可执行率和轮次复用边界',
 );
 assert.equal(
   (coreBetaOperatingGuide.match(/--(?:expected-)?control-plane-(?:origin|url) "<exact-uat-origin>"/g) || []).length,

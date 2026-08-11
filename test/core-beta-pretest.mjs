@@ -18,6 +18,7 @@ const cliHelp = spawnSync(process.execPath, [
 ], { cwd: root, encoding: 'utf8' });
 if (cliHelp.status !== 0) throw new Error(`CLI help failed: ${cliHelp.stderr}`);
 if (!/core-beta:pretest/.test(cliHelp.stdout)) throw new Error('CLI help must point to core-beta:pretest.');
+if (!/74\/70\/160 Casebook batch/.test(cliHelp.stdout)) throw new Error('CLI help must include the full 160 Casebook contract.');
 const autoTestAfter = fs.existsSync(autoTest) ? fs.readdirSync(autoTest).sort() : [];
 if (JSON.stringify(autoTestBefore) !== JSON.stringify(autoTestAfter)) {
   throw new Error('ui-agent-casebook-run --help must not create a run directory.');
@@ -49,8 +50,8 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx');
-const grayExpectedSha = '3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc';
+const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx');
+const grayExpectedSha = '31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -59,7 +60,7 @@ const grayAuditOut = path.join(temp, 'gray-audit');
 const grayAudit = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),
   '--casebook', grayCasebook,
-  '--sheet', '核心内测Case',
+  '--sheet', '生产灰度门禁Case',
   '--out', grayAuditOut,
 ], { cwd: root, encoding: 'utf8' });
 if (grayAudit.status !== 0) throw new Error(`70 capability audit failed: ${grayAudit.stderr || grayAudit.stdout}`);
@@ -69,12 +70,64 @@ if (grayAuditReport.protocol.case_count !== 70
   || !grayAuditReport.runtime_dispatch?.ok
   || grayAuditReport.runtime_dispatch.dispatchable_count !== 70
   || grayAuditReport.capability_summary?.strict_controller_required !== 0
+  || grayAuditReport.capability_summary?.unsupported_runtime !== 0
   || grayAuditReport.capability_summary?.directly_runnable_without_controller !== 70) {
   throw new Error(`70 runtime dispatch audit mismatch: ${JSON.stringify({
     protocol: grayAuditReport.protocol,
     runtime_dispatch: grayAuditReport.runtime_dispatch,
     capability_summary: grayAuditReport.capability_summary,
   })}`);
+}
+const fullAuditOut = path.join(temp, 'full-audit');
+const fullAudit = spawnSync(process.execPath, [
+  path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),
+  '--casebook', grayCasebook,
+  '--sheet', '全量功能回归Case',
+  '--out', fullAuditOut,
+], { cwd: root, encoding: 'utf8' });
+if (fullAudit.status !== 0) throw new Error(`160 capability audit failed: ${fullAudit.stderr || fullAudit.stdout}`);
+const fullAuditReport = JSON.parse(fs.readFileSync(path.join(fullAuditOut, 'capability-audit.json'), 'utf8'));
+if (fullAuditReport.protocol.case_count !== 160
+  || fullAuditReport.protocol.executable_count !== 160
+  || !fullAuditReport.runtime_dispatch?.ok
+  || fullAuditReport.runtime_dispatch.dispatchable_count !== 160
+  || fullAuditReport.capability_summary?.strict_controller_required !== 0
+  || fullAuditReport.capability_summary?.unsupported_runtime !== 0
+  || fullAuditReport.capability_summary?.directly_runnable_without_controller !== 160) {
+  throw new Error(`160 runtime dispatch audit mismatch: ${JSON.stringify({
+    protocol: fullAuditReport.protocol,
+    runtime_dispatch: fullAuditReport.runtime_dispatch,
+    capability_summary: fullAuditReport.capability_summary,
+  })}`);
+}
+const grayCases = JSON.parse(fs.readFileSync(path.join(grayAuditOut, 'casebook-cases.json'), 'utf8')).cases || [];
+const fullCases = JSON.parse(fs.readFileSync(path.join(fullAuditOut, 'casebook-cases.json'), 'utf8')).cases || [];
+const grayIds = grayCases.map((item) => item.id);
+const fullIds = fullCases.map((item) => item.id);
+if (JSON.stringify(fullIds.slice(0, 70)) !== JSON.stringify(grayIds)) {
+  throw new Error('160 Casebook first 70 IDs must exactly match the 70 gate Sheet.');
+}
+for (const id of [
+  'SIT-HOME-025',
+  'SIT-TASK-RECOVER-001',
+  'SIT-ISSUE-800',
+  'SIT-CONN-008',
+  'SIT-TEAMS-DOC-001',
+  'SIT-RUNTIME-RECOVER-001',
+  'SIT-FILE-NEW-001',
+]) {
+  if (fullIds.includes(id)) throw new Error(`160 Casebook must exclude low-frequency/fault Case ${id}.`);
+}
+for (const id of ['SIT-SKILL-002', 'SIT-EXPERT-002', 'SIT-HOME-027', 'SIT-HOME-047', 'SIT-HOME-052']) {
+  if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
+}
+if (!fullCases.every((item) => String(item.version_scope || '').includes('686b862ea9553215c2563d87db8339096acecb9d'))) {
+  throw new Error('Every 160 Case must freeze the latest product baseline.');
+}
+const composerHistory = fullCases.find((item) => item.id === 'BETA-TASK-008');
+if (!/第一次物理ArrowUp[^\n]*第二次/.test(String(composerHistory?.steps || ''))
+  || !/第一次物理ArrowUp[^\n]*第二次/.test(JSON.stringify(composerHistory?.precise_assertions || {}))) {
+  throw new Error('BETA-TASK-008 must preserve the two-physical-press boundary handshake.');
 }
 
 const pretestHelp = spawnSync(process.execPath, [
@@ -162,7 +215,7 @@ const grayPretestOut = path.join(temp, 'gray-pretest');
 const grayPretest = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
   '--casebook', grayCasebook,
-  '--sheet', '核心内测Case',
+  '--sheet', '生产灰度门禁Case',
   '--profile', 'mandatory',
   '--lane', 'local',
   '--out', grayPretestOut,

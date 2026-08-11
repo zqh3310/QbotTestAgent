@@ -3293,7 +3293,7 @@ async function executeCoreBetaRoute(context, route) {
       legacy_case_id: scenario.legacy_case_id,
       driver: scenario.driver,
     };
-    return await executeSitCase({
+    const result = await executeSitCase({
       ...context,
       testCase: {
         ...context.testCase,
@@ -3301,6 +3301,8 @@ async function executeCoreBetaRoute(context, route) {
         core_beta_case_id: context.testCase.id,
       },
     });
+    writeVerifiedLegacyCoreBetaTrace(context, scenario);
+    return result;
   }
   if (runtimeBinding.mode === 'strict_controller') {
     return await executeCoreBetaExtendedProductCase(context, scenario);
@@ -3321,6 +3323,62 @@ async function executeCoreBetaRoute(context, route) {
     return await executeCoreBetaModelMenuSdkFilterCase(context);
   }
   throw new Error(`Core Beta v2 缺少 executor：${route}`);
+}
+
+function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
+  const { state, testCase, caseDir } = context;
+  const insideCaseFile = (value) => {
+    if (typeof value !== 'string' || !value) return null;
+    const resolved = path.resolve(value);
+    const relative = path.relative(path.resolve(caseDir), resolved);
+    if (
+      relative === '..'
+      || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)
+      || !fs.existsSync(resolved)
+      || !fs.statSync(resolved).isFile()
+      || fs.statSync(resolved).size <= 0
+    ) return null;
+    return {
+      path: resolved,
+      bytes: fs.statSync(resolved).size,
+      sha256: createHash('sha256').update(fs.readFileSync(resolved)).digest('hex'),
+    };
+  };
+  const artifactFiles = Object.fromEntries(
+    Object.entries(state.artifacts || {})
+      .map(([role, value]) => [role, insideCaseFile(value)])
+      .filter(([, value]) => value),
+  );
+  const screenshotFiles = Object.fromEntries(
+    Object.entries(state.screenshots || {})
+      .map(([name, value]) => [name, insideCaseFile(value)])
+      .filter(([, value]) => value),
+  );
+  const failedAssertions = (state.assertions || []).filter((item) => item.status !== 'passed');
+  const trace = {
+    schema_version: 'qbot-core-beta-verified-legacy-trace/v1',
+    case_id: testCase.id,
+    legacy_case_id: scenario.legacy_case_id,
+    executor_route: scenario.executor_route,
+    driver: scenario.driver,
+    captured_at: new Date().toISOString(),
+    evidence_valid: (state.steps || []).length > 0
+      && (state.assertions || []).length > 0
+      && Object.keys(screenshotFiles).length > 0,
+    oracle_valid: failedAssertions.length === 0 && state.status !== 'failed',
+    result_status: state.status,
+    result_category: state.result_category,
+    steps: state.steps || [],
+    assertions: state.assertions || [],
+    failed_assertions: failedAssertions,
+    artifact_files: artifactFiles,
+    screenshot_files: screenshotFiles,
+  };
+  const traceFile = path.join(caseDir, 'verified-legacy-product-action-trace.json');
+  writeJsonFile(traceFile, trace);
+  state.artifacts.product_action_trace = traceFile;
+  state.artifacts.verified_legacy_product_action_trace = traceFile;
 }
 
 async function executeCoreBetaExtendedProductCase(context, scenario) {
@@ -10805,11 +10863,14 @@ export function coreBetaComposerHistoryVerdict(readback = {}) {
     && readback.isolated_is_draft === true
     && Number(readback.isolated_message_count) === 0
     && String(readback.isolated_draft_instance_id || '')
+    && navigation.up_boundary_arm === String(readback.unsent_draft || '')
     && navigation.up_latest === prompts[1]
     && navigation.up_older === prompts[0]
     && navigation.down_newer === prompts[1]
     && navigation.down_draft === String(readback.unsent_draft || '')
+    && navigation.isolated_boundary_arm === ''
     && navigation.isolated_new_task === ''
+    && navigation.reopened_boundary_arm === ''
     && navigation.reopened_latest === prompts[1]
   );
 }
@@ -10845,9 +10906,9 @@ async function executeCoreBetaComposerHistoryCase({ page, state, testCase, caseD
     ?? document.querySelector('[data-testid="composer-input"]')?.textContent
     ?? '',
   ).replaceAll('\uFEFF', ''));
-  const pressAndRead = async (key) => {
-    await input.focus();
-    await input.press(key);
+  const pressAndRead = async (locator, key) => {
+    await locator.focus();
+    await locator.press(key);
     await page.waitForTimeout(180);
     return await composerText();
   };
@@ -10855,28 +10916,28 @@ async function executeCoreBetaComposerHistoryCase({ page, state, testCase, caseD
   await input.fill(unsentDraft);
   await input.press('Home');
   const navigation = {
-    up_latest: await pressAndRead('ArrowUp'),
-    up_older: await pressAndRead('ArrowUp'),
-    down_newer: await pressAndRead('ArrowDown'),
-    down_draft: await pressAndRead('ArrowDown'),
+    // #1175: an idle outer-boundary arrow only arms history. The matching
+    // second physical key press enters browsing; once browsing, traversal is
+    // direct. Playwright locator.press emits the product's physical key path.
+    up_boundary_arm: await pressAndRead(input, 'ArrowUp'),
+    up_latest: await pressAndRead(input, 'ArrowUp'),
+    up_older: await pressAndRead(input, 'ArrowUp'),
+    down_newer: await pressAndRead(input, 'ArrowDown'),
+    down_draft: await pressAndRead(input, 'ArrowDown'),
   };
   const historyScreenshot = await shot(page, caseDir, 'composer-history-draft-restored');
   await openNewTask(page, state);
   const isolated = await qbotE2EState(page);
   const isolatedInput = page.locator('[data-testid="composer-input"]').first();
-  await isolatedInput.focus();
-  await isolatedInput.press('ArrowUp');
-  await page.waitForTimeout(180);
-  navigation.isolated_new_task = await composerText();
+  navigation.isolated_boundary_arm = await pressAndRead(isolatedInput, 'ArrowUp');
+  navigation.isolated_new_task = await pressAndRead(isolatedInput, 'ArrowUp');
   const reopened = await reopenSessionAndReadback(page, initial?.activeId);
   const reopenedInput = page.locator('[data-testid="composer-input"]').first();
   await reopenedInput.fill('');
-  await reopenedInput.focus();
-  await reopenedInput.press('ArrowUp');
-  await page.waitForTimeout(180);
-  navigation.reopened_latest = await composerText();
+  navigation.reopened_boundary_arm = await pressAndRead(reopenedInput, 'ArrowUp');
+  navigation.reopened_latest = await pressAndRead(reopenedInput, 'ArrowUp');
   const readback = {
-    schema_version: 'qbot-core-beta-composer-history/v1',
+    schema_version: 'qbot-core-beta-composer-history/v2',
     valid: true,
     oracle_valid: false,
     prompts,
@@ -10898,7 +10959,7 @@ async function executeCoreBetaComposerHistoryCase({ page, state, testCase, caseD
   recordAssertion(
     state,
     'Composer Up/Down历史输入与会话隔离',
-    'Up必须按当前会话从新到旧回放已接受输入，Down必须回到未发送草稿；新任务不得继承，重开原task后仍可回放。',
+    '空闲态第一下物理方向键只建立边界握手，第二下才进入历史；随后Up按当前会话从新到旧回放，Down回到未发送草稿；新任务不得继承，重开原task后仍可回放。',
     readback.oracle_valid,
     JSON.stringify(readback),
   );

@@ -35,14 +35,21 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 生产灰度发布 | `PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` | `核心内测Case` | 70 | `3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc` |
+| 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf` |
+| 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf` |
 
+`QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
 不再是发布入口。其协议层 `executable=184` 不能证明真实执行能力；旧审计确认
-其中 114 条依赖严格外部控制器。新版 70 条要求 `directly_runnable=70`、
-`strict_controller_required=0`，并删除网络异常、切换账号等低频场景。
+其中 114 条依赖严格外部控制器。新版 70/160 两层要求
+`directly_runnable=70/160`、`strict_controller_required=0`、
+`unsupported_runtime=0`。160 条 Sheet 的前 70 条必须与门禁 Sheet 的 ID、顺序
+和合同内容一致，后 90 条覆盖正常功能；网络异常、切换账号、受保护部署和纯故障
+注入不进入这套常规回归。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
+当前设计基线是 `origin/release/0.1@686b862ea9553215c2563d87db8339096acecb9d`，
+产品版本 `0.1.1`；`/Users/qifu/Documents/deepbankV2` 始终只读。
 
 ## 3. 启动前硬门禁
 
@@ -71,16 +78,21 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx
+     PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
-     --sheet 核心内测Case \
-     --out outputs/core-beta-capability-audit
+     --casebook PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx \
+     --sheet 生产灰度门禁Case \
+     --out outputs/gate70-capability-audit
+
+   npm run core-beta:capability-audit -- \
+     --casebook PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx \
+     --sheet 全量功能回归Case \
+     --out outputs/full160-capability-audit
    ```
 
    审计报告必须是 `qbot-core-beta-capability-audit/v2`，且同时满足
@@ -90,19 +102,20 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    `capability_summary.strict_controller_required=0` 和
    `capability_summary.unsupported_runtime=0`。仅有场景注册、但没有真实
    runtime 分发路径的 Case 必须在静态审计阶段失败，禁止拖到正式批次中途
-   才报“缺少 executor”。
+   才报“缺少 executor”。全量 Sheet 还必须满足对应计数为 160，并确认前 70 个
+   Case ID 与门禁 Sheet 完全同序。
 
 5. 执行统一真实运行前自检。以下以 360Teams 为例；所有字段必须替换为本轮冻结发布值：
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
-     --sheet 核心内测Case \
+     --casebook PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx \
+     --sheet 生产灰度门禁Case \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 70 \
-     --expected-sha256 3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc \
+     --expected-sha256 31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
@@ -113,6 +126,10 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
      --prompt-policy-version "<prompt-policy-id>" \
      --feature-flags-hash "<feature-flags-sha256>"
    ```
+
+   完整 160 条回归使用同一命令，将 Sheet 改为 `全量功能回归Case`、
+   `--expected-count` 改为 `160`，SHA 保持不变。70 与 160 必须分别得到精确
+   `READY`，不能用一个 Sheet 的 pretest 替代另一个。
 
    `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。Teams lane 的 control plane 必须同时核对受管 session 与 QWork renderer 实际读取的 `DEEPBANK_SERVER/QBOT_SERVER_URL`；只看启动参数或 session 声明不能通过。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
 
@@ -217,17 +234,18 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 
 适用于已经启动并登录、能够通过 CDP 访问的 QBot/QWork。产品环境必须在启动前由操作者确认；框架不会替操作者把 PROD、UAT 或 DEV 互相切换。
 
-完整 70 条示例：
+完整 70 条示例；完整 160 条只需把 `SHEET` 和输出目录中的数量改为对应值：
 
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
+CASEBOOK="$PWD/PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx"
+SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
 OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
 npm run ui-agent:casebook-run -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet "$SHEET" \
   --profile mandatory \
   --cdp http://127.0.0.1:9224 \
   --out "$OUT" \
@@ -250,7 +268,7 @@ npm run ui-agent:casebook-run -- \
 ```bash
 npm run ui-agent:casebook-run -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet "$SHEET" \
   --profile mandatory \
   --case BETA-CHAT-001,BETA-SKILL-001 \
   --cdp http://127.0.0.1:9224 \
@@ -263,7 +281,7 @@ npm run ui-agent:casebook-run -- \
 ```bash
 npm run ui-agent:casebook-run -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet "$SHEET" \
   --profile mandatory \
   --out "$PWD/outputs/$(date +%Y%m%d%H%M)_preflight" \
   --core-beta-fixture-control-url http://127.0.0.1:<fixture-port> \
@@ -281,7 +299,7 @@ npm run ui-agent:casebook-run -- \
 ```bash
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet "$SHEET" \
   --profile mandatory \
   --case "$SELECTED_CASE_IDS" \
   --expected-count <selected-count> \
@@ -329,12 +347,13 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
+   CASEBOOK="$PWD/PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx"
+   SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
    python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
      --casebook "$CASEBOOK" \
-     --sheet 核心内测Case \
+     --sheet "$SHEET" \
      --profile mandatory \
      --output "$PLAN"
 
@@ -348,7 +367,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 
    npm --prefix teams360-automation run casebook -- \
      --casebook "$CASEBOOK" \
-     --sheet 核心内测Case \
+     --sheet "$SHEET" \
      --profile mandatory \
      --case "$CASE_IDS" \
      --model-tier M3 \
@@ -427,7 +446,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - 成果证据必须把“证据文件结构有效”和“产品业务 Oracle 通过”分开记录：`valid` 只表示证据 JSON 可解析、取证动作已完成，产品侧文件缺失、格式不符、内容不符或预览失败写入 `oracle_valid=false` 并形成 `trusted_bug/trusted_fail`，不得仅因产品失败把 `artifact_path_sha256`、`artifact_content_readback`、`artifact_preview` 或 `svg_dom_readback` 标成 manifest 无效。真正的证据缺失、空文件、越界、坏 JSON 或截图采集失败仍须 fail-closed。
 - `BETA-ART-001` 的“交互式 HTML”允许无远程资源的内联脚本；安全性不能用“文件中完全没有 `<script>`”替代。runner 必须在成果区同时看到并逐项打开 Markdown 与 HTML，确认 Markdown 源码包含 A=12、B=8；HTML 必须进入当前 QWork 受管网页预览、内容可见、分享按钮 enabled、分享对话框无错误，同时不得在宿主 DOM 留下执行标记或非白名单弹窗。旧源码查看器只能作为补充安全证据：若存在，脚本文本可见但查看器内不得创建真实 `script`/`iframe` DOM；它不能替代网页预览或分享 Oracle。任一成果只存在于工作区而未进入当前任务成果区、网页预览/分享不可用，或 HTML 污染宿主，均为产品失败；证据完整时不得升级成框架问题。
 - `BETA-ART-001` 的网页预览只有在 iframe 正文或已解码快照真实可见、全部 loading 状态消失且没有预览错误时才算内容完成；`web-preview-loading`、刷新状态或只有空 iframe 不能通过。分享动作必须等待分享对话框进入 ready 并读回非空分享 URL；只看到 sharing 对话框不得通过。
-- `BETA-TASK-008` 的干净“新建任务”属于草稿态，权威状态必须是 `activeId=null`、`isDraft=true`、`messageCount=0` 和非空 `draftInstanceId`；不得要求框架伪造第二个 taskId。隔离 Oracle 仍必须证明新草稿 ArrowUp 为空，并能按原 taskId 重开旧任务后回放最新输入。
+- `BETA-TASK-008` 的干净“新建任务”属于草稿态，权威状态必须是 `activeId=null`、`isDraft=true`、`messageCount=0` 和非空 `draftInstanceId`；不得要求框架伪造第二个 taskId。空闲 Composer 的第一次物理 `ArrowUp` 只建立外边界握手且输入不得变化，第二次物理 `ArrowUp` 才进入历史；新草稿和重开原任务都必须按同一两阶段握手复核。隔离 Oracle 仍必须证明新草稿两次 `ArrowUp` 都为空，并能按原 taskId 重开旧任务后在第二次 `ArrowUp` 回放最新输入。
 - `BETA-ROUTE-001` 的期望模型集合必须复刻当前产品菜单策略：以当前任务 `runtimeFamily` 为准；桌面 Auto 或 `manual_override_auto` 状态且 `manualModelOptions` 非空时优先使用该集合，否则使用 `runtimeOptions.options`，再按 disabled、runtime family、Claude Code=anthropic、Codex=response 和 M1-M4 过滤。DOM 读回必须从 `composer-safety-level-option-<tier>-<modelId>` 和所属 `data-tier` 分组还原同一多重集合。
 - `BETA-ART-004` 必须从真实 PPTX slide XML 与 PDF 文本页读回执行业务 Oracle，不能用“PPTX 可解压、PDF 至少一页”代替。两者都必须恰好五页且无空白页；PPTX 五个页标题必须逐项出现在 PDF；两种格式都必须命中曝光 1000、点击 100、转化 20；PPTX 至少一页必须同时承载三项指标和足够的可见绘图 shape，证明漏斗图表实际存在。PDF 文本优先使用 `pdftotext`，不可用时使用 PyMuPDF 结构化逐页提取；两个适配器都不可用时不得判产品通过。对应回复还必须同时命中 PPTX、PDF、五页和三项固定指标，并由专用 Case Oracle 先于通用相关性判断。
 - 通用回复相关性只用于拦截明显答非所问，不能替代 Case 的确定性业务 Oracle。确定性主题/结果规则必须先于通用文本长度门槛执行，使“项目代号是 Orion。”等完整短答案能够通过，同时保留未命中业务结果的短文本反例。中文长提示不得依赖整句 token 精确重合；漏斗数字、活动方案、ROI、PDF 结论页码、CSV/XLSX 差异与总计等核心任务必须以“主题词 + 业务结果词”联合校验，并同时保留无关回复反例。成果回复若重复了请求中的精确文件名并明确说明已生成/写入，应视为主题相关；`BETA-ART-003` 必须同时命中 XLSX/Excel、CSV 以及 `SUM`/合计/总计 Oracle，不得因长中文 prompt 分词失败而误报产品 Bug，也不得放行仅生成其中一个文件的回复。Core Beta v2 的 `conversation_turns` 若未显式填写 `turn`，必须按数组顺序生成稳定的 `第1轮`、`第2轮` 标签，证据文件、动作回执和断言中不得出现 `undefined`。`BETA-FILE-001` 必须校验三条第 1 页结论及 PDF 已知锚点；页码既可逐条标注，也可用“三条结论均位于第 1 页”或“第 1 页包含以下三条结论”等无歧义范围语句统一绑定，但否定绑定、页码分散或只有页码没有已知锚点仍必须失败。`BETA-FILE-004` 必须使用专用 `qbot-data-table-diff.xlsx`，校验三处数值差异和双方总计，不能复用数值完全相同的通用表格。双方总计必须与各自 CSV/XLSX 文件标签、对应表格行，或先与文件唯一绑定再用于总计行的无歧义字母/数字表别名（如 `表 A/表 B`、`表1/表2`）关联；独立的 `总计/合计` 表头可以约束其后连续的文件标识数据行，且每行仍须按本行 CSV/XLSX 身份核对对应总计，不能只约束第一条数据行。行首 `总计/合计` 可以同时约束同一行的多个已绑定别名，但每个别名只允许读取到下一个表别名前的独立数值区间，防止交换总计误通过。允许表格列和求和算式等真实表达，但不得依赖跨段固定字符窗口，也不得用正文中散落的 `182/215` 形成通过。固定 `100/70/12` 的四轮数字记忆脚本只能由精确 Case ID `SIT-HOME-016` 使用，不得按“业务数字追问”等场景词误路由 Core Beta Case。若确定性 Oracle 已满足而通用相关性单独失败，必须按框架/Casebook 误判处理，不得上报为产品 Bug。
@@ -518,7 +537,10 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 
 - 输出目录一旦产生真实 Case 结果，就视为不可变批次。
 - 框架或 Case 修复后使用新的输出目录。
-- Core Beta v2 的生产灰度轮次要求 `executed=total=70`、`inherited=0`、`synthetic=0`，因此当前 70 条正式门禁不使用跨批次继承；中断后重新执行完整新批次。
+- Core Beta v2 的正式轮次要求所选 Sheet 全量真实执行：门禁为
+  `executed=total=70`，全量回归为 `executed=total=160`，两者都必须
+  `inherited=0`、`synthetic=0`。因此当前 70/160 正式批次都不使用跨批次继承；
+  中断后在新不可变目录重新执行同一完整 Sheet。
 - 旧协议的 360Teams lineage 只有在显式 `--resume-from` 加 `--impact-case` 或 `--impact-all true` 时允许使用，且源批次必须冻结、证据完整、发布身份兼容。
 - 发布身份变化时必须执行全量新批次，不能继承旧发布结果。
 - 明确 identity drift、重复 runner、manifest 不完整仍 completed 或 synthetic completed 时，立即停止并冻结当前批次；随后按第 9.1 节自主修复、校验并在新不可变目录重新执行，除非命中其中明确列出的不可自动恢复条件。
@@ -550,7 +572,13 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 
 ## 12. 多轮生产灰度门禁
 
-单轮全绿不授权生产。完整 70 条必须在同一冻结发布身份下连续通过 5 轮，且每轮满足：
+单轮全绿不授权生产。候选发布身份必须先完成至少 1 轮完整 160 条正常功能回归，
+满足 `total=completed=executed=unique_case_count=trusted_pass=160`、
+`inherited=synthetic=0`、全部证据完整、全部可信非 pass 分类为 0。160 条 Sheet 的
+前 70 条与门禁合同完全相同，因此该轮前缀可计入下述 5 轮门禁中的 1 轮；后 90 条
+不能拆算为额外门禁轮次，不完整的 160 批次也不能计数。
+
+完整 70 条还必须在同一冻结发布身份下连续通过 5 轮，且每轮满足：
 
 - `total=completed=executed=unique_case_count=trusted_pass=70`
 - `inherited=0`
@@ -560,7 +588,7 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
 - 单 runner 唯一、cleanup 完成、fixture 恢复、真实产品执行成立
 - flaky 为 0
 
-候选轮次中至少一轮还必须完成不少于 100 个任务和 3 次重启的 soak，且无 crash 或资源泄漏。
+候选轮次中至少一轮还必须完成不少于 100 个任务和 3 次重启的 soak，且无 crash 或资源泄漏。只有“至少1轮160/160 + 累计5轮70/70 + soak”全部成立，才可评估受控灰度。
 
 把各轮可信复核结果归一化为 `runs.json` 后执行：
 

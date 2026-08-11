@@ -4,14 +4,15 @@
 
 规范性执行合同以
 `/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准。
-本指南只记录当前 70 条生产灰度发布门禁的接手状态、启动顺序和禁止事项。
+本指南记录当前 70 条生产灰度发布门禁与 160 条全量正常功能回归的接手状态、
+启动顺序和禁止事项。
 
 ## 1. 当前状态
 
 - 测试已按用户要求暂停。当前不得启动 pretest、runner 或 monitor。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
-  commit `5f3f99b1dd24e04f36715ea236a3f70b132d25c7`，版本 `0.1.1`。
+  commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
 - 下一轮目标 lane：UAT。实际 360Teams、QWork、control plane、backend、
   prompt policy、feature flags 和模型身份必须在用户恢复测试后重新读取并冻结，
   不得沿用历史值。
@@ -30,50 +31,50 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 
 ## 2. 当前正式 Casebook
 
-生产灰度发布唯一入口：
+生产灰度发布与全量功能回归唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx
 ```
 
-- Sheet：`核心内测Case`
-- Case 数：70
-- SHA-256：`3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc`
-- 协议：70/70 executable
-- 运行时分发：70/70 dispatchable
-- 直接可运行：70/70
+- Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
+- Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
+- 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
+- SHA-256：`31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
-- Case 间执行永久串行，有效 parallel/pipeline 均为 1
+- 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
 
 能力构成：
 
-- 61 条原生/public-state executor。
-- 4 条原生 executor 需要本机受管选项：1 条 native IME、3 条 Teams/runtime
-  restart。
-- 5 条经过语义复核的 legacy executor。
+- 70 条门禁：61 条原生/public-state、4 条本机受管选项、5 条经过语义复核的 legacy executor。
+- 160 条全量：上述 70 条 + 90 条经过语义复核的正常功能 legacy executor；合计 61/4/95。
 
-新版已删除网络异常、connection-cache fault、切换账号、第二账号授权等低频或
-当前框架不能无条件真实执行的场景。`BETA-INIT-005` 属于历史网络故障注入，
-不得拼回 70 条门禁。当前初始化固定为 `BETA-INIT-001~004`。
+新版已删除网络异常、connection-cache fault、切换账号、第二账号授权、受保护部署
+和纯故障注入等低频或当前框架不能无条件真实执行的场景。全量增量明确排除
+`SIT-HOME-025`、`SIT-TASK-RECOVER-001`、`SIT-ISSUE-800`、`SIT-CONN-008`、
+`SIT-TEAMS-DOC-001`、`SIT-RUNTIME-RECOVER-001` 和 `SIT-FILE-NEW-001`。
+`BETA-INIT-005` 属于历史网络故障注入，不得拼回门禁。当前门禁初始化固定为
+`BETA-INIT-001~004`。
 
 新增或重写的关键回归：
 
-- `BETA-TASK-008`：Composer Up/Down 历史输入、未发送草稿恢复、任务隔离和重开持久化。
+- `BETA-TASK-008`：空闲态第一次物理 Arrow 只建立边界握手，第二次才进入历史；同时覆盖未发送草稿恢复、任务隔离和重开持久化。
 - `BETA-ROUTE-001`：模型菜单按当前 SDK family/protocol 过滤。
 - `BETA-EXPERT-007`：单账号串行发布研究、数据、交付三类本轮专家。
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
-Casebook 的设计依据包括 2026-08-03 至 2026-08-10 直接合入
+Casebook 的设计依据包括 2026-08-03 至 2026-08-11 直接合入
 `origin/release/0.1` 的 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
 删除清单、覆盖矩阵、执行配置和发布准入均在工作簿独立 Sheet 中。
 
 ## 3. 发布级门禁
 
-单轮全绿不授权生产。只有同一冻结发布身份连续 5 轮完整通过 70 条，并且至少
-一个候选轮次完成不少于 100 个任务、3 次受管重启的 soak，才可进入 1%-5%
-受控生产灰度。
+单轮全绿不授权生产。候选身份必须至少完成 1 轮 160/160 全量正常功能可信全绿，
+并在同一冻结发布身份下累计连续 5 轮 70/70 门禁可信全绿；160 条轮次因为前 70 条
+合同完全相同，可计为其中 1 轮。另需至少一个候选轮次完成不少于 100 个任务、
+3 次受管重启的 soak，三项全部满足才可进入 1%-5% 受控生产灰度。
 
 每轮必须同时满足：
 
@@ -84,6 +85,10 @@ Casebook 的设计依据包括 2026-08-03 至 2026-08-10 直接合入
 - manifest、动作收据、任务归属和清理证据全部完整，missing/invalid=0
 - 单 runner、Case 间串行、发布身份全程不漂移
 - flaky=0
+
+160 条全量轮次对应要求把上述计数从 70 改为 160。后 90 条不能拆算为额外门禁
+轮次，160 批次不完整、非可信全绿或发布身份漂移时，既不满足全量回归，也不能把
+其前缀计入连续门禁。
 
 任一轮出现非 pass、阻塞、框架问题、Case 问题、证据缺失或身份漂移，该轮不计入
 连续全绿，连续计数归零。`GO_CONTROLLED_GRAY` 只允许受控灰度，不等于 GA。
@@ -117,14 +122,20 @@ npm run check
 npm --prefix teams360-automation run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx \
-  --sheet 核心内测Case \
+  --casebook PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx \
+  --sheet 生产灰度门禁Case \
   --profile mandatory \
-  --out outputs/<new-capability-audit-dir>
+  --out outputs/<new-gate70-capability-audit-dir>
+
+npm run core-beta:capability-audit -- \
+  --casebook PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx \
+  --sheet 全量功能回归Case \
+  --profile mandatory \
+  --out outputs/<new-full160-capability-audit-dir>
 ```
 
-能力审计必须仍为 70/70 executable、70/70 dispatchable、
-`directly_runnable_without_controller=70`、`strict_controller_required=0`、
+两个能力审计必须分别为 70/70 和 160/160 executable、dispatchable、
+`directly_runnable_without_controller=70/160`、`strict_controller_required=0`、
 `unsupported_runtime=0`。
 
 ## 5. Native IME 与受管重启
@@ -152,16 +163,16 @@ local lane 才要求调用方显式提供 `--restart-command`。
 用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-CASEBOOK="$PWD/PRD/QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx"
+CASEBOOK="$PWD/PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet 生产灰度门禁Case \
   --profile mandatory \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 3376c88a12e40ed3b0808953c7c7cc58e8994607dd1a1b1a48056ffaa8fd20cc \
+  --expected-sha256 31c125fd3393081e576c76e1b7327258e1d6c6253107b5935c118e069cdfbcbf \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
@@ -176,6 +187,9 @@ npm run core-beta:pretest -- \
 只接受 `READY`。`READY_SCOPED`、Case 数少于 70、缺少 IME probe、缺少 Teams
 受管重启、身份字段缺失、tracked dirty 或 runner 已存在都不得启动正式批次。
 pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。
+全量 160 条必须另行以同一 Casebook、`--sheet 全量功能回归Case`、
+`--expected-count 160` 和同一 SHA 执行 pretest；同样只接受 `READY`。测试当前暂停，
+本次更新不得实际运行这两个 pretest。
 
 ## 7. 启动唯一 runner
 
@@ -185,7 +199,7 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 PLAN="$(mktemp /tmp/qbot-gray70-plan.XXXXXX)"
 python3 skills/qbot-execute-automation-tests/scripts/casebook_io.py export-cases \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet 生产灰度门禁Case \
   --profile mandatory \
   --output "$PLAN"
 CASE_IDS="$(python3 -c 'import json,sys; print(",".join(x["id"] for x in json.load(open(sys.argv[1]))["cases"]))' "$PLAN")"
@@ -193,7 +207,7 @@ CASE_IDS="$(python3 -c 'import json,sys; print(",".join(x["id"] for x in json.lo
 OUT="$PWD/teams360-automation/output/<new-immutable-gray70-run-dir>"
 npm --prefix teams360-automation run casebook -- \
   --casebook "$CASEBOOK" \
-  --sheet 核心内测Case \
+  --sheet 生产灰度门禁Case \
   --profile mandatory \
   --case "$CASE_IDS" \
   --model-tier M3 \
@@ -213,6 +227,9 @@ npm --prefix teams360-automation run casebook -- \
 
 不得传 `--restart-command`，不得传 fixture controller，不得使用 scoped execution，
 不得排除任何 Case，不得写入旧输出目录。
+完整 160 条使用其自己的 `READY` pretest，将导出与 runner 的 Sheet 都改为
+`全量功能回归Case`，输出目录改为新的 `full160` 不可变目录；不得与 70 条 runner
+并发，也不得在两个 Sheet 之间继承结果。
 
 ## 8. 执行与自愈
 
@@ -224,7 +241,8 @@ npm --prefix teams360-automation run casebook -- \
   `automation_error`。
 - 确认 `framework_issue` 或 `testcase_issue` 时，冻结旧目录、停止唯一 runner、
   修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
-  从 1/70 完整重跑。停止旧 runner 只是保护证据，不是允许放弃后续 Case。
+  从 1/70 或 1/160 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
+  放弃后续 Case。
 - 只有凭据/授权/受保护资源缺失、指定发布身份无法恢复或 pretest 明确阻塞时，
   才能保持暂停并报告唯一具体 blocker。
 
@@ -255,5 +273,6 @@ raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历
 ## 10. 当前交付边界
 
 本次任务只更新 Casebook、执行器、动态能力门禁、文档和回归基线；测试保持暂停。
-完成代码提交和推送不等于 70 条已经执行，也不等于允许生产灰度。下一轮必须由用户
-明确恢复测试后，从新的 UAT release identity、`READY` pretest 和 1/70 开始。
+完成代码提交和推送不等于 70/160 条已经执行，也不等于允许生产灰度。下一轮必须
+由用户明确恢复测试后，从新的 UAT release identity、对应 Sheet 的 `READY`
+pretest 和 1/70 或 1/160 开始。

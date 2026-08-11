@@ -120,9 +120,11 @@ const rows = cases.map((testCase) => {
     runtime_dispatchable: runtimeBinding.dispatchable,
     runtime_executor_reason: runtimeBinding.reason,
     capability_class: capabilityClass,
-    directly_runnable_without_controller: nativePublic || localOption,
+    directly_runnable_without_controller: runtimeBinding.mode === 'verified_legacy'
+      || nativePublic
+      || localOption,
     local_option_required: localOption ? scenario.fixture_control : '',
-    controller_contract: nativePublic || localOption
+    controller_contract: runtimeBinding.mode === 'verified_legacy' || nativePublic || localOption
       ? 'not_required'
       : 'preflight+prepare+execute+restore; exact contract/action/evidence/oracle hashes',
     contract_sha256: coreBetaCaseContractSha256(testCase),

@@ -114,11 +114,113 @@ const CORE_BETA_CASE_RANGES = Object.freeze({
   DEPLOY: 8,
 });
 
-export const CORE_BETA_SCENARIO_IDS = new Set(
+export const CORE_BETA_BASE_SCENARIO_IDS = new Set(
   Object.entries(CORE_BETA_CASE_RANGES).flatMap(([group, count]) => (
     Array.from({ length: count }, (_, index) => `BETA-${group}-${String(index + 1).padStart(3, '0')}`)
   )),
 );
+
+// Normal-user functional regression extension. Each entry is backed by the
+// same explicit SIT executor whose semantics were reviewed for the Casebook;
+// fault injection, network interruption, second-account and protected
+// deployment scenarios are intentionally absent.
+export const FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS = new Set([
+  'SIT-SKILL-007',
+  'SIT-CONN-003',
+  'SIT-INIT-002',
+  'SIT-AUTH-003',
+  'SIT-TEAMS-NEW-001',
+  'SIT-TEAMS-NEW-003',
+  'SIT-HOME-002',
+  'SIT-HOME-012',
+  'SIT-HOME-013',
+  'SIT-HOME-014',
+  'SIT-ISSUE-793',
+  'SIT-HOME-006',
+  'SIT-WORKSPACE-001',
+  'SIT-EXPERT-001',
+  'SIT-EXPERT-004',
+  'SIT-EXPERT-006',
+  'SIT-EXPERT-009',
+  'SIT-EXPERT-013',
+  'SIT-EXPERT-021',
+  'SIT-EXPERT-022',
+  'SIT-SKILL-001',
+  'SIT-SKILL-025',
+  'SIT-SKILL-003',
+  'SIT-SKILL-014',
+  'SIT-SKILL-016',
+  'SIT-SKILL-017',
+  'SIT-SKILL-026',
+  'SIT-SKILL-013',
+  'SIT-SKILL-030',
+  'SIT-SKILL-032',
+  'SIT-SKILL-SCOPE-001',
+  'SIT-CONN-001',
+  'SIT-CONN-002',
+  'SIT-CONN-004',
+  'SIT-CONN-009',
+  'SIT-CONN-010',
+  'SIT-CONN-011',
+  'SIT-CONN-015',
+  'SIT-CONN-019',
+  'SIT-ART-001',
+  'SIT-ART-002',
+  'SIT-ART-015',
+  'SIT-ART-017',
+  'SIT-ART-021',
+  'SIT-ART-022',
+  'SIT-ART-CONFIRM-001',
+  'SIT-ART-013',
+  'SIT-ART-014',
+  'SIT-ART-024',
+  'SIT-KNOWLEDGE-001',
+  'SIT-INIT-004',
+  'SIT-INIT-009',
+  'SIT-INIT-025',
+  'SIT-AUTH-001',
+  'SIT-AUTH-005',
+  'SIT-TEAMS-NEW-002',
+  'SIT-SKILL-002',
+  'SIT-EXPERT-002',
+  'SIT-HOME-023',
+  'SIT-HOME-030',
+  'SIT-HOME-049',
+  'SIT-HOME-050',
+  'SIT-HITL-002',
+  'SIT-TASK-EDIT-001',
+  'SIT-TASK-REGEN-001',
+  'SIT-HOME-037',
+  'SIT-HOME-038',
+  'SIT-HOME-040',
+  'SIT-HOME-041',
+  'SIT-HOME-043',
+  'SIT-HOME-044',
+  'SIT-HOME-056',
+  'SIT-CONN-016',
+  'SIT-MEM-001',
+  'SIT-HOME-015',
+  'SIT-HOME-016',
+  'SIT-HOME-022',
+  'SIT-HOME-053',
+  'SIT-HOME-057',
+  'SIT-HOME-058',
+  'SIT-HOME-060',
+  'SIT-HOME-062',
+  'SIT-HOME-019',
+  'SIT-HOME-054',
+  'SIT-HOME-055',
+  'SIT-HOME-065',
+  'SIT-HOME-066',
+  'SIT-HOME-027',
+  'SIT-HOME-047',
+  'SIT-HOME-052',
+]);
+
+export const CORE_BETA_SCENARIO_IDS = new Set([
+  ...CORE_BETA_BASE_SCENARIO_IDS,
+  ...FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
+]);
 
 const scenarioSpecs = [];
 const registerScenario = (id, driver, {
@@ -304,6 +406,13 @@ const productionExtensionFixtureControls = Object.freeze({
   'BETA-PERF-004': 'model_service_fail_once_ten_turn',
   'BETA-PERF-006': 'managed_runtime_restart',
 });
+
+for (const id of FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS) {
+  registerScenario(id, `verified_legacy_${id.toLowerCase().replaceAll('-', '_')}`, {
+    fixture_control: 'public_product_state',
+    legacy_case_id: id,
+  });
+}
 
 for (const id of CORE_BETA_SCENARIO_IDS) {
   if (scenarioSpecs.some(([registered]) => registered === id)) continue;
