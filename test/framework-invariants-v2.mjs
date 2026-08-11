@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
+  activateCoreBetaNativeImeHost,
   assistantConfirmationSurfaceVerdict,
   applyBlockedOutcome,
   attachmentReplyMissingEvidence,
@@ -1431,6 +1432,39 @@ assert.equal(
   }
 }
 {
+  const nativeCalls = [];
+  const activated = activateCoreBetaNativeImeHost('teams360', {
+    run(command, args) {
+      nativeCalls.push({ command, args });
+      return { status: 0, stdout: '360Teams\n', stderr: '' };
+    },
+  });
+  assert.equal(activated.required, true);
+  assert.equal(activated.ready, true);
+  assert.equal(activated.frontmost_process, '360Teams');
+  assert.equal(nativeCalls.length, 1);
+  assert.equal(nativeCalls[0].command, 'osascript');
+  assert.match(nativeCalls[0].args[1], /360Teams[\s\S]*frontmost is true/);
+  assert.deepEqual(
+    activateCoreBetaNativeImeHost('local', {
+      run() { throw new Error('non-Teams lane must not activate a native host'); },
+    }),
+    {
+      schema_version: 'qbot-core-beta-native-ime-host-activation/v1',
+      required: false,
+      ready: true,
+      application: '',
+      frontmost_process: '',
+    },
+  );
+  assert.throws(
+    () => activateCoreBetaNativeImeHost('teams360', {
+      run() { return { status: 0, stdout: 'Codex\n', stderr: '' }; },
+    }),
+    /activation failed before Composer focus/,
+    'Teams IME 必须在点击 Composer 前读回 360Teams 为 frontmost',
+  );
+
   const calls = [];
   const focusStates = [
     { document_has_focus: false, active_element_matches: true, composer_visible: true },
@@ -3118,12 +3152,12 @@ assert.equal(
 );
 assert.match(
   automationFramework,
-  /bringToFront[\s\S]*真实 Composer 点击[\s\S]*document\.hasFocus\(\)[\s\S]*零文本[\s\S]*framework issue[\s\S]*N\/A 负向证据/,
+  /激活受管 `360Teams`[\s\S]*frontmost[\s\S]*bringToFront[\s\S]*真实 Composer 点击[\s\S]*document\.hasFocus\(\)[\s\S]*零文本[\s\S]*framework issue[\s\S]*N\/A 负向证据/,
   '框架合同必须覆盖 replacement WebView 的原生IME前台焦点、no-op fail-fast和产品失败继续策略',
 );
 assert.match(
   coreBetaOperatingGuide,
-  /bringToFront[\s\S]*前台焦点[\s\S]*零文本、零 composition 事件[\s\S]*framework issue[\s\S]*产品 Bug/,
+  /激活受管 `360Teams`[\s\S]*frontmost[\s\S]*bringToFront[\s\S]*前台焦点[\s\S]*零文本、零 composition 事件[\s\S]*framework issue[\s\S]*产品 Bug/,
   '当前运行指南必须明确原生IME框架失败与产品失败边界',
 );
 {
@@ -3133,8 +3167,8 @@ assert.match(
   const imeBlock = runner.slice(imeStart, imeEnd);
   assert.match(
     imeBlock,
-    /prepareCoreBetaNativeImeFocus\(page, input\)[\s\S]*spawnSync\('\/bin\/zsh'[\s\S]*traceData\.adapter_noop[\s\S]*refusing to wait for or click Send/,
-    '原生IME必须先恢复前台焦点，命令no-op时在发送前立即fail-closed',
+    /activateCoreBetaNativeImeHost\(options\['renderer-control-adapter'\]\)[\s\S]*prepareCoreBetaNativeImeFocus\(page, input\)[\s\S]*spawnSync\('\/bin\/zsh'[\s\S]*traceData\.adapter_noop[\s\S]*refusing to wait for or click Send/,
+    'Teams 原生IME必须先激活并验证宿主，再恢复 Composer 焦点；命令no-op时在发送前立即fail-closed',
   );
   assert.match(
     imeBlock,

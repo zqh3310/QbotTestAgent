@@ -158,10 +158,12 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
 执行；原生 IME 使用 `--native-ime-command`，且同一命令必须在
 `QBOT_CORE_BETA_IME_PROBE=1` 时不输入任何内容，并返回
 `qbot-core-beta-native-ime-probe/v1`，证明 Accessibility 权限和中文输入源就绪。
-runner 在调用该命令前必须对当前 replacement WebView 依次执行
-`bringToFront`、真实 Composer 点击和 DOM focus，并读回 `document.hasFocus()`、
-`document.activeElement` 与 Composer 可见性全部成立；仅调用 DOM `focus()` 不能证明
-macOS 键盘焦点仍属于受管宿主。原生命令返回 0 但 Composer 零文本且没有任何
+Teams lane 的 runner 在调用该命令前必须先激活受管 `360Teams`，并通过
+System Events 读回 `frontmost=360Teams`；只有物理宿主激活成功后，才能对当前
+replacement WebView 依次执行 `bringToFront`、真实 Composer 点击和 DOM focus，
+并读回 `document.hasFocus()`、`document.activeElement` 与 Composer 可见性全部成立。
+宿主激活、WebView 聚焦和 Composer 点击的顺序不得颠倒；仅调用 DOM `focus()` 不能
+证明 macOS 键盘 first responder 仍属于受管宿主。原生命令返回 0 但 Composer 零文本且没有任何
 composition 事件时，必须立即记为 framework issue，禁止继续等待或点击发送，也
 禁止盲目重放原生命令造成重复输入。若前台焦点成立且已产生真实 composition 事件，
 但最终文本或事件闭环不满足 Oracle，则应保存截图、事件 trace、零 task/消息/发送计数

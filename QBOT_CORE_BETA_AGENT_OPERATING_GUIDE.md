@@ -160,8 +160,10 @@ npm run core-beta:capability-audit -- \
    `QBOT_CORE_BETA_IME_TEXT_BASE64` 和 `QBOT_CORE_BETA_CASE_ID`，通过 macOS
    真实输入源完成组合输入和候选确认。禁止 DOM 合成 composition 事件。
 
-runner 必须先把当前 QWork WebView `bringToFront`，真实点击并聚焦 Composer，且
-读回前台焦点成立后才能执行同一命令。命令返回 0 但零文本、零 composition 事件属于
+Teams lane 的 runner 必须先激活受管 `360Teams` 并通过 System Events 读回
+`frontmost=360Teams`，再把当前 QWork WebView `bringToFront`、真实点击并聚焦
+Composer；读回 DOM 前台焦点成立后才能执行同一命令。宿主激活必须早于 WebView
+和 Composer 聚焦，禁止颠倒顺序。命令返回 0 但零文本、零 composition 事件属于
 framework issue；已产生真实事件但文本 Oracle 失败属于可继续批次的产品 Bug，必须
 保存零发送负向证据，禁止发送错误文本或盲目重放命令。
 

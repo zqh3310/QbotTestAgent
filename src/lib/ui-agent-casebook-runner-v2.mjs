@@ -10850,6 +10850,49 @@ async function executeCoreBetaSidebarPersistenceCase(context) {
   );
 }
 
+export function activateCoreBetaNativeImeHost(rendererControlAdapter = '', { run = spawnSync } = {}) {
+  const teamsLane = String(rendererControlAdapter || '').trim() === 'teams360';
+  if (!teamsLane) {
+    return {
+      schema_version: 'qbot-core-beta-native-ime-host-activation/v1',
+      required: false,
+      ready: true,
+      application: '',
+      frontmost_process: '',
+    };
+  }
+  const script = [
+    'tell application "360Teams" to activate',
+    'delay 0.4',
+    'tell application "System Events" to get name of first application process whose frontmost is true',
+  ].join('\n');
+  const result = run('osascript', ['-e', script], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  const frontmostProcess = String(result?.stdout || '')
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .at(-1) || '';
+  const ready = result?.status === 0 && frontmostProcess === '360Teams';
+  const activation = {
+    schema_version: 'qbot-core-beta-native-ime-host-activation/v1',
+    required: true,
+    ready,
+    application: '360Teams',
+    frontmost_process: frontmostProcess,
+    command_status: result?.status ?? null,
+  };
+  if (!ready) {
+    throw new Error(
+      'Native IME host activation failed before Composer focus: '
+      + `${JSON.stringify(activation)}; ${clip(result?.stderr || result?.error?.message || '', 300)}`,
+    );
+  }
+  return activation;
+}
+
 async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutMs, options = {} }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
@@ -10857,7 +10900,12 @@ async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutM
   if (!prompt) throw new Error(`${testCase.id} 缺少IME目标prompt`);
   const beforeNativeInput = await captureCoreBetaPublicState(page, testCase);
   const input = page.locator('[data-testid="composer-input"]').first();
-  const focusArm = await prepareCoreBetaNativeImeFocus(page, input);
+  const hostActivation = activateCoreBetaNativeImeHost(options['renderer-control-adapter']);
+  state.artifacts.core_beta_native_ime_host_activation = hostActivation;
+  const focusArm = {
+    ...await prepareCoreBetaNativeImeFocus(page, input),
+    host_activation: hostActivation,
+  };
   state.artifacts.core_beta_native_ime_focus_arm = focusArm;
   await input.evaluate((node) => {
     window.__qbotCoreBetaImeTrace = [];
