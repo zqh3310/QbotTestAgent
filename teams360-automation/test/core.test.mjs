@@ -1172,6 +1172,7 @@ test('managed Teams restart rebuilds stale proxy before shared runner touches th
   const adapter = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(adapter, /options\['restart-reconnect-hook'\] = async \(\) =>/);
+  assert.match(adapter, /persistRunMetadata\(nextRuntimeIdentity\)/);
   assert.match(adapter, /await connection\.close\(\)\.catch\(\(\) => \{\}\);[\s\S]*resolveTeamsCasebookConnection/);
   assert.match(runner, /typeof options\['restart-reconnect-hook'\] === 'function'/);
   assert.match(runner, /if \(reconnected\?\.cdpUrl\) runtime\.cdpUrl = reconnected\.cdpUrl/);
@@ -1640,8 +1641,20 @@ test('managed Teams Casebook exits nonzero for a stopped or incomplete summary',
   }), 0);
 });
 
-test('managed Teams Casebook refreshes only QWork after a stale renderer CDP attach', () => {
+test('managed Teams replacement reconnect waits for QWork without relaunching the host', () => {
   const source = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
+  const hook = source.slice(
+    source.indexOf("options['restart-reconnect-hook'] = async () =>"),
+    source.indexOf('let handedToRunner = false'),
+  );
+  assert.match(hook, /await waitForManagedQworkUi\(/);
+  assert.match(hook, /recoveryCdpUrl: ''/);
+  assert.match(hook, /persistRunMetadata\(nextRuntimeIdentity\)/);
+  assert.doesNotMatch(hook, /recoverTeamsQworkWorkbench|stopIsolatedTeams|launchLiveTeams/);
+  assert.ok(
+    hook.indexOf('await waitForManagedQworkUi(') < hook.indexOf('await connection.close()'),
+    'the upstream QWork target must remount before the current proxy is replaced',
+  );
   assert.match(source, /recoverTeamsQworkWorkbench/);
   assert.match(source, /Teams QWork connection view timed out after 1500ms/);
   assert.match(source, /Teams QWork capabilities precheck timed out after 5000ms/);

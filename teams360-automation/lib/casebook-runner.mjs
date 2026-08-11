@@ -823,17 +823,46 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
       const runtimeIdentity = await configureTeamsFixtureRuntime(options, browser);
       pinnedQworkUiUrl = runtimeIdentity.qworkUiUrl;
       pinManagedSessionControlPlane(options.session, runtimeIdentity.controlPlane);
+      const persistRunMetadata = (identity = runtimeIdentity) => {
+        const session = readSession(options.session);
+        return writePinnedRunMetadata(options.out, buildTeamsRunMetadata({
+          session,
+          qworkUiUrl: identity.qworkUiUrl,
+          controlPlane: identity.controlPlane,
+          modelTier: options['model-tier'] || 'M3',
+          timeoutMs: options['timeout-ms'] || 600000,
+          caseIds: String(options.case || '').split(',').map((item) => item.trim()).filter(Boolean),
+          casebookPath: options.casebook,
+          frameworkRoot: ROOT,
+          deepbankRoot: DEEPBANK_ROOT,
+          releaseInputs: {
+            backend_version: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
+            prompt_policy_version: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
+            feature_flags_hash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+            qwork_ui_git_commit: options['qwork-ui-git-commit'] || process.env.QBOT_QWORK_UI_GIT_COMMIT || '',
+            qwork_build_id: options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
+            qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
+          },
+        }));
+      };
+      persistRunMetadata();
       if (!callerManagedCdp) {
         options['restart-reconnect-hook'] = async () => {
-          // The managed host restart invalidates both the browser and the
-          // proxy's auto-attach sessions. Rebuild the proxy immediately,
-          // before the shared runner attempts to touch the old page.
+          // A QWork reload temporarily removes the WebView target. Wait for
+          // the pinned renderer to remount before replacing the proxy; this
+          // reconnect path must never turn a renderer refresh into a Teams
+          // host relaunch.
+          await waitForManagedQworkUi(
+            connection.upstreamCdpUrl || connection.cdpUrl,
+            runtimeIdentity.qworkUiUrl,
+            Number(options['restart-reconnect-timeout-ms'] || 90_000),
+          );
           await connection.close().catch(() => {});
           connection = await resolveTeamsCasebookConnection({ ...options, cdp: undefined });
           options.cdp = connection.cdpUrl;
           options['teams-upstream-cdp-url'] = connection.upstreamCdpUrl || '';
           const nextBrowser = await connectTeamsCasebookBrowser(connection.cdpUrl, {
-            recoveryCdpUrl: connection.upstreamCdpUrl || '',
+            recoveryCdpUrl: '',
             resetConnection: connection.reset,
             expectedQworkUiUrl: runtimeIdentity.qworkUiUrl,
           });
@@ -843,6 +872,9 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             await nextBrowser.close().catch(() => {});
             throw new Error('Fresh Teams CDP proxy connected without a QWork page.');
           }
+          const nextRuntimeIdentity = await configureTeamsFixtureRuntime(options, nextBrowser);
+          pinManagedSessionControlPlane(options.session, nextRuntimeIdentity.controlPlane);
+          persistRunMetadata(nextRuntimeIdentity);
           return {
             browser: nextBrowser,
             page: nextPage,
@@ -851,26 +883,6 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
           };
         };
       }
-      const session = readSession(options.session);
-      writePinnedRunMetadata(options.out, buildTeamsRunMetadata({
-        session,
-        qworkUiUrl: runtimeIdentity.qworkUiUrl,
-        controlPlane: runtimeIdentity.controlPlane,
-        modelTier: options['model-tier'] || 'M3',
-        timeoutMs: options['timeout-ms'] || 600000,
-        caseIds: String(options.case || '').split(',').map((item) => item.trim()).filter(Boolean),
-        casebookPath: options.casebook,
-        frameworkRoot: ROOT,
-        deepbankRoot: DEEPBANK_ROOT,
-        releaseInputs: {
-          backend_version: options['backend-version'] || process.env.QBOT_BACKEND_VERSION || '',
-          prompt_policy_version: options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
-          feature_flags_hash: options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
-          qwork_ui_git_commit: options['qwork-ui-git-commit'] || process.env.QBOT_QWORK_UI_GIT_COMMIT || '',
-          qwork_build_id: options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
-          qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
-        },
-      }));
       let handedToRunner = false;
       chromium.connectOverCDP = async (...args) => {
         if (!handedToRunner) {
