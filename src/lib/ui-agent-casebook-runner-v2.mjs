@@ -4255,6 +4255,70 @@ export async function coreBetaCapabilitiesReadbackWithRetry(readCapabilities, {
   return { ok: false, value, attempts };
 }
 
+export function coreBetaExpertSummonTaskVerdict({
+  selected = {},
+  upstreamState = {},
+  cleanDraftState = {},
+  selectionState = {},
+  conversationState = {},
+  recent = {},
+  setExpertResult = {},
+} = {}) {
+  const expected = coreBetaPublishedExpertIdentity(selected);
+  const selectedIdentity = coreBetaPublishedExpertIdentity(selectionState?.expert || {});
+  const conversationIdentity = coreBetaPublishedExpertIdentity(conversationState?.expert || {});
+  const setExpertIdentity = coreBetaPublishedExpertIdentity(
+    setExpertResult?.expertIdentity || { expertId: setExpertResult?.expert },
+  );
+  const upstreamTaskId = String(upstreamState?.task?.id || '');
+  const taskId = String(conversationState?.task?.id || '');
+  const cleanDraft = Boolean(
+    cleanDraftState?.task?.id == null
+    && Number(cleanDraftState?.task?.message_count || 0) === 0
+    && cleanDraftState?.task?.running !== true
+  );
+  const freshTask = Boolean(taskId && (!upstreamTaskId || taskId !== upstreamTaskId));
+  const sendBound = Number(conversationState?.task?.send_count || 0)
+    > Number(cleanDraftState?.task?.send_count || 0);
+  const messageBound = Number(conversationState?.task?.message_count || 0) > 0;
+  const sameIdentity = (actual) => Boolean(
+    expected.expert_id
+    && actual.expert_id === expected.expert_id
+    && (!expected.version_id || actual.version_id === expected.version_id)
+    && (!expected.release_id || actual.release_id === expected.release_id)
+  );
+  const recentMatches = String(recent?.expertId || recent?.expert_id || '') === expected.expert_id;
+  const task_binding_valid = cleanDraft && freshTask && sendBound && messageBound;
+  const identity_binding_valid = sameIdentity(selectedIdentity)
+    && sameIdentity(conversationIdentity)
+    && sameIdentity(setExpertIdentity)
+    && recentMatches;
+  return {
+    valid: task_binding_valid && identity_binding_valid,
+    evidence_valid: true,
+    oracle_valid: task_binding_valid && identity_binding_valid,
+    expected_identity: expected,
+    selected_identity: selectedIdentity,
+    conversation_identity: conversationIdentity,
+    set_expert_identity: setExpertIdentity,
+    upstream_task_id: upstreamTaskId || null,
+    clean_draft_task: cleanDraftState?.task || null,
+    conversation_task: conversationState?.task || null,
+    checks: {
+      clean_draft: cleanDraft,
+      fresh_task_id: freshTask,
+      send_bound: sendBound,
+      message_bound: messageBound,
+      selection_identity_matches: sameIdentity(selectedIdentity),
+      conversation_identity_matches: sameIdentity(conversationIdentity),
+      set_expert_identity_matches: sameIdentity(setExpertIdentity),
+      recent_identity_matches: recentMatches,
+    },
+    task_binding_valid,
+    identity_binding_valid,
+  };
+}
+
 export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
   const attempts = Array.isArray(snapshot.capabilities_readback_attempts)
     ? snapshot.capabilities_readback_attempts
@@ -9900,15 +9964,22 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       markBlocked(state, 'BETA-EXPERT-001 需要至少1个已发布专家用于搜索/详情/召唤。');
       return;
     }
+    const selectedLabel = String(
+      selected?.display?.label
+      || selected?.label
+      || selected?.name
+      || selected?.id
+      || '',
+    );
     const pageTextBefore = await mainSurfaceText(page);
     const search = page.locator('[data-testid="expert-search-input"], input[placeholder*="搜索专家"]').first();
     if (await visible(search, 1_000)) {
-      await search.fill(String(selected.label || selected.name || selected.id));
+      await search.fill(selectedLabel);
       await page.waitForTimeout(500);
     }
     const card = page.locator(`[data-testid="expert-card-${cssEscape(selected.id)}"], [data-expert-id="${cssEscape(selected.id)}"]`).first();
     const cardVisible = await visible(card, 1_500)
-      || await page.locator('[data-testid^="expert-card-"]').filter({ hasText: String(selected.label || selected.name || '') }).first().isVisible({ timeout: 1_500 }).catch(() => false);
+      || await page.locator('[data-testid^="expert-card-"]').filter({ hasText: selectedLabel }).first().isVisible({ timeout: 1_500 }).catch(() => false);
     const ownedExpertIds = bridge.experts
       .filter((item) => item?.owned === true)
       .map((item) => String(item.id || ''))
@@ -9936,12 +10007,19 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         nav_text: String(nav?.textContent || '').replace(/\s+/g, ' ').trim(),
       };
     }, ownedExpertIds);
-    ownedProjection.valid = ownedExpertIds.every((id) => ownedProjection.visible_ids.includes(id))
+    const ownedProjectionOracleValid = ownedExpertIds.every((id) => ownedProjection.visible_ids.includes(id))
       && ownedProjection.visible_ids.every((id) => ownedExpertIds.includes(id))
       && new RegExp(`发布记录\\s*${ownedExpertIds.length}(?:\\D|$)`).test(ownedProjection.nav_text);
+    ownedProjection.valid = true;
+    ownedProjection.evidence_valid = true;
+    ownedProjection.oracle_valid = ownedProjectionOracleValid;
     const ownedProjectionFile = path.join(caseDir, 'expert-owned-release-projection.json');
     writeJsonFile(ownedProjectionFile, ownedProjection);
     state.artifacts.product_state_diff = ownedProjectionFile;
+
+    const upstreamState = await captureCoreBetaPublicState(page, testCase);
+    await openNewTask(page, state);
+    const cleanDraftState = await captureCoreBetaPublicState(page, testCase);
     const detail = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
       const item = await lifecycle.get(expertId);
@@ -9995,6 +10073,17 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       && capabilitiesExpertId === selectedExpertId,
     );
     const expertSelectionReadbackOk = publicIdentityMatches || capabilitiesIdentityMatches;
+    await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
+    const conversationState = await captureCoreBetaPublicState(page, testCase);
+    const taskVerdict = coreBetaExpertSummonTaskVerdict({
+      selected,
+      upstreamState,
+      cleanDraftState,
+      selectionState: selection,
+      conversationState,
+      recent: detail.recent,
+      setExpertResult: detail.set_expert_result,
+    });
     const informationArchitecture = /通用助手/.test(pageTextBefore)
       && /最近|召唤/.test(pageTextBefore)
       && /我的专家/.test(pageTextBefore)
@@ -10005,9 +10094,11 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     const runtimeOracleValid = informationArchitecture
       && cardVisible
       && publicIdentityMatches
-      && ownedProjection.valid;
+      && taskVerdict.valid
+      && ownedProjection.oracle_valid;
     const runtimeTraceFile = writeExpertArtifact('expert_runtime_trace', {
       valid: true,
+      evidence_valid: true,
       oracle_valid: runtimeOracleValid,
       information_architecture: informationArchitecture,
       searched_card_visible: cardVisible,
@@ -10021,6 +10112,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       public_identity_matches: publicIdentityMatches,
       capabilities_identity_matches: capabilitiesIdentityMatches,
       owned_release_projection: ownedProjection,
+      task_binding: taskVerdict,
     }, true);
     state.artifacts.core_beta_capability_selection = selection;
     state.artifacts.core_beta_capability_execution = detail;
@@ -10039,12 +10131,28 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       }),
       expertSelectionReadbackOk ? '' : 'automation_error',
     );
-    recordAssertion(state, '专家中心分区、搜索、详情与召唤闭环', '五类分区必须可见，搜索命中exact expert，setExpert后task identity与最近召唤一致。', runtimeOracleValid, JSON.stringify({ informationArchitecture, cardVisible, selected, selection: selection.expert }));
+    recordAssertion(
+      state,
+      '本Case独立专家任务归属',
+      '召唤前必须进入taskId为空的干净草稿；发送后必须产生不同于上游Case的新taskId，并绑定本次发送和消息。',
+      taskVerdict.task_binding_valid,
+      JSON.stringify(taskVerdict),
+      taskVerdict.task_binding_valid ? '' : 'automation_error',
+    );
+    recordAssertion(
+      state,
+      '专家召唤identity闭环',
+      'expertId/versionId/releaseId必须在选择读回、发送后task、setExpert回执与最近召唤中完全一致。',
+      taskVerdict.identity_binding_valid,
+      JSON.stringify(taskVerdict),
+      'bug',
+    );
+    recordAssertion(state, '专家中心分区、搜索、详情与召唤闭环', '五类分区必须可见，搜索命中exact expert，召唤后新task identity与最近召唤一致。', runtimeOracleValid, JSON.stringify({ informationArchitecture, cardVisible, selected, selection: selection.expert, task_binding: taskVerdict }));
     recordAssertion(
       state,
       '发布记录仅显示本人创建专家',
       '发布记录计数与列表必须严格等于 expertLifecycle.list() 中 owned=true 的专家集合，共享和内置专家不得混入管理面。',
-      ownedProjection.valid,
+      ownedProjection.oracle_valid,
       JSON.stringify(ownedProjection),
     );
     return;

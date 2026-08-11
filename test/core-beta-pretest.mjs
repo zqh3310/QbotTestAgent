@@ -51,7 +51,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx');
-const grayExpectedSha = 'c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177';
+const grayExpectedSha = '8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);

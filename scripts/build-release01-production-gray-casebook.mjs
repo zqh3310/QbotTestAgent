@@ -442,14 +442,32 @@ function patchRecentCases(testCase) {
   }
   if (id === 'BETA-EXPERT-001') {
     next['测试场景'] = '专家中心分区、搜索、详情、召唤与“发布记录仅显示本人创建专家”管理面投影';
-    next['自动化执行步骤'] = '1. 读取expertLifecycle完整列表和owned=true集合\n2. 打开发布记录并核对计数/可见ID严格等于owned集合\n3. 搜索本轮已发布专家、打开详情并召唤，读回exact expertId';
-    next['预期结果'] = '共享/内置专家只出现在专家中心对应分组，不进入发布记录；本人专家可搜索、查看和召唤。';
-    next['成功判定'] = '发布记录计数与可见ID严格等于owned=true集合；搜索命中；setExpert后公开状态读回exact expertId。';
+    next['前置条件'] = 'BETA-EXPERT-007已发布本轮专家；当前账号已登录；Expert v2 bridge与M3模型可用。';
+    next['测试数据'] = '按专家display.label和稳定expertId搜索；确定性短提示：请用一句话回答：你当前能以专家身份协助什么工作？';
+    next['自动化执行步骤'] = '1. 读取expertLifecycle完整列表和owned=true集合\n2. 打开发布记录并核对计数/可见ID严格等于owned集合\n3. 按display.label搜索本轮已发布专家并读回详情identity\n4. 新建taskId为空的干净草稿，执行recordRecent+setExpert后发送确定性短提示\n5. 核对新taskId、expertId/versionId/releaseId、Composer与最近召唤一致';
+    next['预期结果'] = '共享/内置专家只出现在专家中心对应分组，不进入发布记录；本人专家可搜索、查看并在本Case新任务中完成召唤。';
+    next['成功判定'] = '发布记录计数与可见ID严格等于owned=true集合；搜索命中；发送后产生非空且不同于上游Case的新taskId；expertId/versionId/releaseId在选择、任务与最近召唤中一致。';
     next['来源ID'] = `${asString(next['来源ID'])},MR!1065`.replace(/^,/, '');
-    next['证据要求'] = `${asString(next['证据要求'])},product_state_diff`;
-    next['证据角色'] = `${asString(next['证据角色'])},product_state_diff`;
+    const evidenceRoles = unique([
+      ...asString(next['证据要求']).split(',').map((role) => role.trim()),
+      ...CONVERSATION_EVIDENCE_ROLES,
+      'product_state_diff',
+    ]);
+    next['证据要求'] = evidenceRoles.join(',');
+    next['证据角色'] = evidenceRoles.join(',');
+    next['会话轮次JSON'] = json([{
+      turn: 1,
+      prompt: '请用一句话回答：你当前能以专家身份协助什么工作？',
+      oracle: '回复完成；发送后生成本Case独立taskId，且expertId/versionId/releaseId与本次召唤一致。',
+    }]);
+    next['动作计划JSON'] = json(actionPlan(id, 'expert_lifecycle', next['自动化执行步骤']));
     const precise = parseJson(next['精准断言JSON'], {});
-    precise.hard_oracles = unique([...(precise.hard_oracles || []), '发布记录可见ID与owned=true集合完全一致']);
+    precise.hard_oracles = unique([
+      ...(precise.hard_oracles || []),
+      '发布记录可见ID与owned=true集合完全一致',
+      '召唤前为干净草稿；发送后taskId非空且不等于上游Case taskId',
+      'expertId/versionId/releaseId在选择、任务与最近召唤中完全一致',
+    ]);
     next['精准断言JSON'] = json(precise);
   }
   if (id === 'BETA-ART-001') {
@@ -744,6 +762,15 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
     await fs.writeFile(file, new Uint8Array(await preview.arrayBuffer()));
     rendered.push(file);
   }
+  const expertCasePreview = await workbook.render({
+    sheetName: '生产灰度门禁Case',
+    range: 'A44:AO49',
+    scale: 0.75,
+    format: 'png',
+  });
+  const expertCaseFile = path.join(renderDir, '13-BETA-EXPERT-001-focused.png');
+  await fs.writeFile(expertCaseFile, new Uint8Array(await expertCasePreview.arrayBuffer()));
+  rendered.push(expertCaseFile);
   return { inspection_file: path.join(verificationDir, 'inspection.ndjson'), rendered };
 }
 

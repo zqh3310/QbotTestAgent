@@ -54,7 +54,10 @@ import {
   captureCoreBetaV2Screenshot,
   coreBetaBatchReplyCompletionPayload,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
-import { validateReplyCompletionPayload } from '../src/lib/core-beta-case-protocol.mjs';
+import {
+  validateEvidenceFile,
+  validateReplyCompletionPayload,
+} from '../src/lib/core-beta-case-protocol.mjs';
 import { isSupportedQbotAttachmentPath } from '../src/lib/qbot-ui-attachments.mjs';
 
 function conversationCase() {
@@ -705,6 +708,25 @@ test('captured capability failures remain complete evidence instead of becoming 
   fs.rmSync(executionFile);
   const missingExecutionArtifact = buildCaseEvidenceManifest(state, caseDir);
   assert.ok(missingExecutionArtifact.missing_roles.includes('capability_execution_event'));
+});
+
+test('product oracle failure remains valid product_state_diff evidence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-product-state-diff-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const evidenceFile = path.join(root, 'expert-owned-release-projection.json');
+  fs.writeFileSync(evidenceFile, `${JSON.stringify({
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: false,
+    expected_owned_ids: ['expert-1'],
+    visible_ids: [],
+    nav_text: '',
+  })}\n`);
+  assert.deepEqual(
+    validateEvidenceFile('product_state_diff', evidenceFile),
+    { valid: true },
+    '结构完整的产品失败读回必须进入可信Bug复核，而不是造成manifest invalid',
+  );
 });
 
 test('verified skill shortage propagates to dependent cases without executing product actions', () => {

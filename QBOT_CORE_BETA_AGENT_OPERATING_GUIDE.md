@@ -40,7 +40,7 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177`
+- SHA-256：`8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -69,7 +69,7 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 - `BETA-TASK-008`：空闲态第一次物理 Arrow 只建立边界握手，第二次才进入历史；同时覆盖未发送草稿恢复、任务隔离和重开持久化。
 - `BETA-ROUTE-001`：模型菜单按当前 SDK family/protocol 过滤。
 - `BETA-EXPERT-007`：单账号串行发布研究、数据、交付三类本轮专家。
-- `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合。
+- `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
 Casebook 的设计依据包括 2026-08-03 至 2026-08-11 直接合入
@@ -185,7 +185,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 c4e1110770ad28787d34cfcd6973d27852a9f9151b4ecdbc9bdebbdd055da177 \
+  --expected-sha256 8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \

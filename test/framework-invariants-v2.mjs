@@ -45,6 +45,7 @@ import {
   coreBetaConversationTurnLabel,
   coreBetaExpertBuilderOutcomeEvidence,
   coreBetaExpertPublishPrerequisiteBlocker,
+  coreBetaExpertSummonTaskVerdict,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
@@ -1783,6 +1784,53 @@ assert.match(
   runner,
   /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*coreBetaCapabilitiesReadbackWithRetry[\s\S]*capabilities_readback_attempts/,
   'BETA-EXPERT-001 必须把一次性 setExpert 与可重试 capabilities 读回分离并保存账本',
+);
+const expertSummonSelected = {
+  id: 'expert-qa-001',
+  activeReleaseId: 'release-qa-001',
+  version: { id: 'version-qa-001' },
+};
+const expertSummonIdentity = {
+  expertId: 'expert-qa-001',
+  releaseId: 'release-qa-001',
+  versionId: 'version-qa-001',
+};
+const expertSummonVerdict = coreBetaExpertSummonTaskVerdict({
+  selected: expertSummonSelected,
+  upstreamState: { task: { id: 'upstream-task-001' } },
+  cleanDraftState: { task: { id: null, message_count: 0, send_count: 9, running: false } },
+  selectionState: { expert: expertSummonIdentity },
+  conversationState: {
+    task: { id: 'expert-task-001', message_count: 2, send_count: 10, running: false },
+    expert: expertSummonIdentity,
+  },
+  recent: { ok: true, expertId: 'expert-qa-001' },
+  setExpertResult: { expertIdentity: expertSummonIdentity },
+});
+assert.equal(expertSummonVerdict.valid, true, '干净草稿生成的新taskId和四处专家identity一致时应通过');
+const reusedUpstreamExpertTask = coreBetaExpertSummonTaskVerdict({
+  selected: expertSummonSelected,
+  upstreamState: { task: { id: 'upstream-task-001' } },
+  cleanDraftState: { task: { id: null, message_count: 0, send_count: 9, running: false } },
+  selectionState: { expert: expertSummonIdentity },
+  conversationState: {
+    task: { id: 'upstream-task-001', message_count: 4, send_count: 10, running: false },
+    expert: expertSummonIdentity,
+  },
+  recent: { ok: true, expertId: 'expert-qa-001' },
+  setExpertResult: { expertIdentity: expertSummonIdentity },
+});
+assert.equal(reusedUpstreamExpertTask.valid, false, 'BETA-EXPERT-001 不得接受上一条Case的旧taskId');
+assert.equal(reusedUpstreamExpertTask.checks.fresh_task_id, false);
+assert.match(
+  runner,
+  /BETA-EXPERT-001[\s\S]*await openNewTask\(page, state\)[\s\S]*setExpert\(expertId\)[\s\S]*executeConversationTurns[\s\S]*coreBetaExpertSummonTaskVerdict/,
+  'BETA-EXPERT-001 必须从干净任务执行召唤和真实发送，再校验独立taskId',
+);
+assert.match(
+  runner,
+  /ownedProjection\.valid = true[\s\S]*ownedProjection\.evidence_valid = true[\s\S]*ownedProjection\.oracle_valid = ownedProjectionOracleValid/,
+  '发布记录业务Oracle失败不得把结构完整的product_state_diff标成无效证据',
 );
 const cleanupMarketTimeout = {
   capability_cleanup_required: true,
