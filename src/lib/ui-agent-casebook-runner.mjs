@@ -9391,6 +9391,44 @@ export function streamingScrollFollowVerdict(samples, { distanceThreshold = 180,
   };
 }
 
+export function streamingScrollPerformanceMetrics({ testCaseId, samplesFile, samples, verdict, everGenerating }) {
+  const observations = Array.isArray(samples) ? samples : [];
+  const resolvedSamplesFile = path.resolve(String(samplesFile || ''));
+  const samplesFileValid = Boolean(
+    samplesFile
+    && fs.existsSync(resolvedSamplesFile)
+    && fs.statSync(resolvedSamplesFile).isFile()
+    && fs.statSync(resolvedSamplesFile).size > 0
+  );
+  const elapsedValues = observations
+    .map((item) => Number(item?.elapsedMs))
+    .filter(Number.isFinite);
+  return {
+    schema_version: 'qbot-core-beta-performance-metrics/v1',
+    case_id: String(testCaseId || ''),
+    captured_at: new Date().toISOString(),
+    valid: Boolean(String(testCaseId || '').trim() && samplesFileValid && observations.length > 0),
+    metric: 'streaming_scroll_follow',
+    source: 'thread_scroll_samples',
+    source_samples_path: samplesFileValid ? resolvedSamplesFile : '',
+    source_samples_sha256: samplesFileValid
+      ? createHash('sha256').update(fs.readFileSync(resolvedSamplesFile)).digest('hex')
+      : '',
+    sample_count: observations.length,
+    generating_sample_count: observations.filter((item) => item?.generating === true).length,
+    observation_duration_ms: elapsedValues.length ? Math.max(...elapsedValues) : 0,
+    ever_generating: Boolean(everGenerating),
+    reproduced: Boolean(verdict?.reproduced),
+    overflow_observed: Boolean(verdict?.overflowObserved),
+    max_distance_bottom_px: Number(verdict?.maxDistanceBottom || 0),
+    max_scroll_height_px: Number(verdict?.maxScrollHeight || 0),
+    max_client_height_px: Number(verdict?.maxClientHeight || 0),
+    distance_threshold_px: Number(verdict?.distanceThreshold || 0),
+    consecutive_threshold: Number(verdict?.consecutiveThreshold || 0),
+    first_failure: verdict?.firstFailure || null,
+  };
+}
+
 export function modelServiceStateEvidence(text) {
   const value = String(text || '');
   const unavailablePattern = /模型服务(?:暂时)?不可达|当前无法连接模型服务|模型服务.*(?:连接失败|连接超时)|请连接公司\s*VPN\s*后重试/i;
@@ -9461,6 +9499,16 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   const verdict = streamingScrollFollowVerdict(samples);
   state.artifacts.thread_scroll_samples = path.join(caseDir, 'thread-scroll-samples.json');
   writeJsonFile(state.artifacts.thread_scroll_samples, { issue: 793, prompt, verdict, samples });
+  state.artifacts.performance_metrics = path.join(caseDir, 'performance-metrics.json');
+  const performanceMetrics = streamingScrollPerformanceMetrics({
+    testCaseId: testCase.id,
+    samplesFile: state.artifacts.thread_scroll_samples,
+    samples,
+    verdict,
+    everGenerating,
+  });
+  writeJsonFile(state.artifacts.performance_metrics, performanceMetrics);
+  state.artifacts.core_beta_performance_metrics = performanceMetrics;
   const after = await conversationSnapshot(page);
   const replyEvidence = {
     label: '长文本流式回复',

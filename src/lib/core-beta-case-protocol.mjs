@@ -1266,7 +1266,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
-    const validation = validateEvidenceFile(role, file);
+    const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
     candidates.set(role, {
       role,
       path: path.resolve(file),
@@ -1708,7 +1708,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   };
 }
 
-export function validateEvidenceFile(role, file) {
+export function validateEvidenceFile(role, file, { expectedCaseId = '' } = {}) {
   const stats = fs.statSync(file);
   if (!stats.isFile()) return { valid: false, error: 'not_a_file' };
   if (stats.size <= 0) return { valid: false, error: 'empty_file' };
@@ -1739,6 +1739,56 @@ export function validateEvidenceFile(role, file) {
     if (role === 'reply_completion') {
       const replyCompletion = validateReplyCompletionPayload(parsed);
       if (!replyCompletion.valid) return replyCompletion;
+    }
+    if (role === 'performance_metrics') {
+      const samplesPath = String(parsed?.source_samples_path || '');
+      const samplesSha256 = String(parsed?.source_samples_sha256 || '');
+      const resolvedMetricsFile = path.resolve(file);
+      const resolvedSamplesPath = samplesPath ? path.resolve(samplesPath) : '';
+      const relativeSamplesPath = resolvedSamplesPath
+        ? path.relative(path.dirname(resolvedMetricsFile), resolvedSamplesPath)
+        : '';
+      if (
+        parsed?.schema_version !== 'qbot-core-beta-performance-metrics/v1'
+        || !String(parsed?.case_id || '').trim()
+        || (String(expectedCaseId || '').trim() && parsed?.case_id !== expectedCaseId)
+        || parsed?.valid !== true
+        || parsed?.metric !== 'streaming_scroll_follow'
+        || parsed?.source !== 'thread_scroll_samples'
+        || !Number.isInteger(Number(parsed?.sample_count))
+        || Number(parsed.sample_count) <= 0
+        || !Number.isInteger(Number(parsed?.generating_sample_count))
+        || Number(parsed.generating_sample_count) < 0
+        || Number(parsed.generating_sample_count) > Number(parsed.sample_count)
+        || !Number.isFinite(Number(parsed?.observation_duration_ms))
+        || typeof parsed?.ever_generating !== 'boolean'
+        || typeof parsed?.reproduced !== 'boolean'
+        || typeof parsed?.overflow_observed !== 'boolean'
+        || !Number.isFinite(Number(parsed?.max_distance_bottom_px))
+        || !Number.isFinite(Number(parsed?.max_scroll_height_px))
+        || !Number.isFinite(Number(parsed?.max_client_height_px))
+        || !Number.isFinite(Number(parsed?.distance_threshold_px))
+        || !Number.isFinite(Number(parsed?.consecutive_threshold))
+        || !path.isAbsolute(samplesPath)
+        || !relativeSamplesPath
+        || relativeSamplesPath.startsWith('..')
+        || path.isAbsolute(relativeSamplesPath)
+        || !fs.existsSync(resolvedSamplesPath)
+        || !fs.statSync(resolvedSamplesPath).isFile()
+        || fs.statSync(resolvedSamplesPath).size <= 0
+        || !/^[a-f0-9]{64}$/i.test(samplesSha256)
+        || sha256File(resolvedSamplesPath) !== samplesSha256
+      ) return { valid: false, error: 'performance_metrics_invalid' };
+      let samplesPayload;
+      try {
+        samplesPayload = JSON.parse(fs.readFileSync(resolvedSamplesPath, 'utf8'));
+      } catch {
+        return { valid: false, error: 'performance_metrics_samples_invalid_json' };
+      }
+      if (!Array.isArray(samplesPayload?.samples)
+        || samplesPayload.samples.length !== Number(parsed.sample_count)) {
+        return { valid: false, error: 'performance_metrics_sample_count_mismatch' };
+      }
     }
     if (role === 'action_receipt') {
       if (!Array.isArray(parsed) || !parsed.length) return { valid: false, error: 'action_receipts_missing' };

@@ -124,6 +124,7 @@ import {
   sendReceiptEvidence,
   sentPromptFidelity,
   streamingScrollFollowVerdict,
+  streamingScrollPerformanceMetrics,
   stopRemainderWithoutSynthetic,
   terminalPromptBoundReplyEvidence,
   uninstallCoreBetaRunOwnedSkillTargets,
@@ -4976,7 +4977,7 @@ const required = [
   ['可信度审计使用逐次发送前证据', /preSendTierChecks[\s\S]*successfulSendCount[\s\S]*preSendTierChecks\.length < successfulSendCount/],
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
   ['今日 #793/#800 使用独立本地产品断言', /SIT-ISSUE-793'[\s\S]*executeIssue793StreamingScrollFollow[\s\S]*SIT-ISSUE-800'[\s\S]*executeIssue800ModelServiceStateConsistency/],
-  ['#793 生成中采样滚动位置并保存证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
+  ['#793 生成中采样滚动位置并保存正式性能证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*performance-metrics\.json)(?=[\s\S]*artifacts\.performance_metrics)(?=[\s\S]*streamingScrollPerformanceMetrics)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
   ['#800 多轮采样不可达状态与回复增长', /(?=[\s\S]*executeIssue800ModelServiceStateConsistency)(?=[\s\S]*model-service-state-samples\.json)(?=[\s\S]*growthAfterUnavailable)/],
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],
@@ -6517,6 +6518,41 @@ const scrollFollowFailure = streamingScrollFollowVerdict([
   { generating: true, scrollHeight: 2100, clientHeight: 700, distanceBottom: 780 },
 ]);
 if (!scrollFollowFailure.reproduced || scrollFollowFailure.maxDistanceBottom !== 780) throw new Error('#793 连续漂移样本未识别');
+const performanceMetricsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-performance-metrics-'));
+try {
+  const samplesFile = path.join(performanceMetricsDir, 'thread-scroll-samples.json');
+  const samples = [
+    { elapsedMs: 1000, generating: true, scrollHeight: 1600, clientHeight: 700, distanceBottom: 12 },
+    { elapsedMs: 2000, generating: true, scrollHeight: 2100, clientHeight: 700, distanceBottom: 24 },
+  ];
+  writeJsonFile(samplesFile, { issue: 793, samples, verdict: scrollFollowPass });
+  const metrics = streamingScrollPerformanceMetrics({
+    testCaseId: 'BETA-PERF-003',
+    samplesFile,
+    samples,
+    verdict: scrollFollowPass,
+    everGenerating: true,
+  });
+  const metricsFile = path.join(performanceMetricsDir, 'performance-metrics.json');
+  writeJsonFile(metricsFile, metrics);
+  assert.equal(validateEvidenceFile('performance_metrics', metricsFile).valid, true, '#793 性能指标应满足正式证据 schema');
+  const manifest = buildCoreEvidenceManifest({
+    testCase: { id: 'BETA-PERF-003', evidence_roles: ['performance_metrics'] },
+    caseDir: performanceMetricsDir,
+    artifacts: { performance_metrics: metricsFile },
+  });
+  assert.equal(manifest.complete, true, '#793 performance_metrics 映射后 manifest 必须完整');
+  const wrongCaseManifest = buildCoreEvidenceManifest({
+    testCase: { id: 'SIT-ISSUE-793', evidence_roles: ['performance_metrics'] },
+    caseDir: performanceMetricsDir,
+    artifacts: { performance_metrics: metricsFile },
+  });
+  assert.deepEqual(wrongCaseManifest.invalid_roles, ['performance_metrics'], '#793 性能指标不得跨 Case 复用');
+  writeJsonFile(metricsFile, { ...metrics, source_samples_sha256: '0'.repeat(64) });
+  assert.equal(validateEvidenceFile('performance_metrics', metricsFile).valid, false, '#793 性能指标不得接受错误样本 SHA');
+} finally {
+  fs.rmSync(performanceMetricsDir, { recursive: true, force: true });
+}
 if (!modelServiceStateEvidence('模型服务暂时不可达，请稍后再试').unavailable) throw new Error('#800 暂时不可达文案未识别');
 if (!modelServiceStateEvidence('抱歉，当前无法连接模型服务，请连接公司 VPN 后重试。').unavailable) throw new Error('#800 VPN 引导文案未识别');
 if (modelServiceStateEvidence('模型已正常完成回答。').unavailable) throw new Error('#800 正常回复不应误判不可达');
