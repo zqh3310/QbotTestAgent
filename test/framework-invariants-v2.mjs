@@ -150,6 +150,7 @@ const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restar
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
 const capabilityFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-capability-fixture-control-plane.sh'), 'utf8');
 const qworkDailyCasebookBuilder = fs.readFileSync(path.join(root, 'scripts', 'build-qwork-daily-regression-casebook.mjs'), 'utf8');
+const productionGrayCasebookBuilder = fs.readFileSync(path.join(root, 'scripts', 'build-release01-production-gray-casebook.mjs'), 'utf8');
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 const coreGateCasebook = JSON.parse(fs.readFileSync(
   path.join(root, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json'),
@@ -162,6 +163,16 @@ assert.doesNotMatch(
   automationFramework,
   /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
   'macOS mktemp 要求 XXXXXX 位于模板末尾，框架合同不得在其后追加扩展名',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /buildConversationTurns\(source, \[\]\)[\s\S]*const turns = conversationRequired \? legacyConversationTurns\(migrated\) : \[\]/,
+  '160 Casebook 生成器必须复用运行时多轮合同，禁止把 legacy Case 压成单轮',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /git\(\['cat-file', '-e', `\$\{PRODUCT_COMMIT\}\^\{commit\}`\]\)/,
+  '160 Casebook 生成器必须验证冻结设计提交存在，不能要求移动中的 origin ref 永远等于旧提交',
 );
 assert.doesNotMatch(
   coreBetaOperatingGuide,

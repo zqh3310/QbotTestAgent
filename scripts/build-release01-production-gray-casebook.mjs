@@ -11,7 +11,10 @@ import {
   PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS,
   PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS,
 } from '../src/lib/core-beta-case-protocol.mjs';
-import { coreBetaRuntimeExecutorBinding } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+import {
+  buildConversationTurns,
+  coreBetaRuntimeExecutorBinding,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import { migrateProductionCase } from '../src/lib/production-casebook-contract.mjs';
 
 const ROOT = path.resolve(process.env.QBOT_CASEBOOK_ROOT || path.resolve(import.meta.dirname, '..'));
@@ -247,10 +250,18 @@ function legacyCoreDomain(source, caseType) {
   return asString(source.module) || '全量功能';
 }
 
-function legacyConversationPrompt(source) {
-  const value = asString(source.test_data).trim();
-  if (value) return value;
-  return `执行 ${source.id}：${asString(source.scenario)}`;
+function legacyConversationTurns(source) {
+  const generated = buildConversationTurns(source, []);
+  const finalOracle = asString(source.success_criteria || source.expected_result);
+  return generated.map((turn, index) => ({
+    turn: index + 1,
+    label: asString(turn.label) || `第${index + 1}轮`,
+    prompt: asString(turn.prompt),
+    oracle: asString(turn.expectedDescription)
+      || (index === generated.length - 1
+        ? finalOracle
+        : '本轮回复应完成当前指令、保持同一任务上下文，且不得改写前序已确认的业务事实。'),
+  })).filter((turn) => turn.prompt);
 }
 
 function fullFunctionLegacyCase(source) {
@@ -296,9 +307,7 @@ function fullFunctionLegacyCase(source) {
     && /^SIT-(?:SKILL|CONN|EXPERT)-/.test(id);
   if (capabilityConversation) evidenceRoles.push('capability_selection', 'capability_execution_event');
   const roles = unique(evidenceRoles);
-  const turns = conversationRequired
-    ? [{ turn: 1, prompt: legacyConversationPrompt(migrated), oracle: asString(migrated.success_criteria || migrated.expected_result) }]
-    : [];
+  const turns = conversationRequired ? legacyConversationTurns(migrated) : [];
   const route = CORE_BETA_SCENARIO_REGISTRY.get(id)?.executor_route || '';
   if (!route) throw new Error(`${id} 缺少全量功能回归执行器注册`);
   const steps = asString(migrated.steps);
@@ -775,10 +784,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 }
 
 async function main() {
-  const actualCommit = git(['rev-parse', PRODUCT_REF]);
-  if (actualCommit !== PRODUCT_COMMIT) {
-    throw new Error(`${PRODUCT_REF} 已漂移：expected=${PRODUCT_COMMIT}; actual=${actualCommit}`);
-  }
+  git(['cat-file', '-e', `${PRODUCT_COMMIT}^{commit}`]);
   const sourceWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(SOURCE));
   const sourceValues = sourceWorkbook.worksheets.getItem('核心内测Case').getRange('A1:AO188').values;
   const { headers, cases: allCases } = sourceCases(sourceValues);
@@ -998,7 +1004,7 @@ async function main() {
     ], [170, 360, 500, 240]);
   addSheet(workbook, '源码依据', 'Casebook源码与审计依据', '所有依据均绑定固定commit；deepbankV2仓库只读，QbotTestAgent负责Case、执行器、证据和放行规则。',
     ['类型', '位置/版本', '用途', '校验'], [
-      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '近7天MR与产品行为设计依据', 'git rev-parse origin/release/0.1'],
+      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '近7天MR与产品行为设计依据', `git cat-file -e ${PRODUCT_COMMIT}^{commit}`],
       ['上一Casebook产品基线', PREVIOUS_PRODUCT_COMMIT, '限定本次MR增量审计起点', `git log ${PREVIOUS_PRODUCT_COMMIT}..${PRODUCT_COMMIT} --first-parent --merges`],
       ['产品版本', PRODUCT_VERSION, 'release/0.1 package.json', `git show ${PRODUCT_COMMIT}:package.json`],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],

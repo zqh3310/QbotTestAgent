@@ -35,9 +35,9 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
-| 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
-| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a` |
+| 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
+| 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
+| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -55,6 +55,16 @@
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 当前设计基线是 `origin/release/0.1@686b862ea9553215c2563d87db8339096acecb9d`，
 产品版本 `0.1.1`；`/Users/qifu/Documents/deepbankV2` 始终只读。
+Casebook 生成器只需用 `git cat-file -e <commit>^{commit}` 证明该冻结设计提交仍可读取；
+不得要求持续演进的 `origin/release/0.1` 永远指向旧设计提交，也不得因此改写冻结合同。
+
+全量 legacy 会话 Case 的 `conversation_turns` 必须复用 runner 的
+`buildConversationTurns()` 生成真实交互轮次，并为每一轮写入非空 Oracle。
+当前固定不变量为 `SIT-HOME-016=4`、`SIT-HOME-053=11`、
+`SIT-HOME-058=2`、`SIT-HOME-060=2`、`SIT-EXPERT-022=2`；禁止把包含
+“第一轮/第二轮”或长上下文脚本的完整测试数据压成一条 prompt。声明轮次优先于
+运行时 fallback，因此轮次错误属于 Casebook 合同问题，必须在 capability audit
+阶段失败，不得等正式批次中误判产品回复。
 
 QWork 日常回归 Casebook 的 `A1:P84` 必须与用户提供的源工作簿 `日常回归`
 Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用户 Case 是
@@ -145,7 +155,7 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 70 \
-     --expected-sha256 8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732 \
+     --expected-sha256 1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4 \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \

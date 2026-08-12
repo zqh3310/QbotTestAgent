@@ -51,7 +51,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx');
-const grayExpectedSha = '8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732';
+const grayExpectedSha = '1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -139,6 +139,19 @@ for (const id of [
 }
 if (!fullCases.every((item) => String(item.version_scope || '').includes('686b862ea9553215c2563d87db8339096acecb9d'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
+}
+for (const [id, expectedTurns] of [
+  ['SIT-HOME-016', 4],
+  ['SIT-HOME-053', 11],
+  ['SIT-HOME-058', 2],
+  ['SIT-HOME-060', 2],
+  ['SIT-EXPERT-022', 2],
+]) {
+  const testCase = fullCases.find((item) => item.id === id);
+  if (!testCase) throw new Error(`160 Casebook missing multi-turn Case ${id}.`);
+  if (testCase.conversation_turns?.length !== expectedTurns) {
+    throw new Error(`${id} must export ${expectedTurns} declared conversation turns, actual=${testCase.conversation_turns?.length || 0}.`);
+  }
 }
 const composerHistory = fullCases.find((item) => item.id === 'BETA-TASK-008');
 if (!/第一次物理ArrowUp[^\n]*第二次/.test(String(composerHistory?.steps || ''))

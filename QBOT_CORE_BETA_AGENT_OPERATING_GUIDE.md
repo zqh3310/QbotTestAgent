@@ -24,7 +24,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 ```text
 /Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx
 Sheet: 日常回归
-SHA-256: 49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a
+SHA-256: 979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c
 ```
 
 - 顶层 83：70 个 `compound` 父 Case + 13 个独立 `SIT-*` Case。
@@ -36,6 +36,9 @@ SHA-256: 49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a
 - `QW-ENTRY-002` 固定为 `BETA-INIT-004 + QWD-ENTRY-002`。后者是独立原生
   新任务 Auto/能力/附件/草稿隔离 driver，不依赖 Skill 安装账本。
 - 全程只有一个 runner、一个受管 360Teams 宿主；外层 Case 和复合叶子都串行。
+- legacy 多轮合同已从运行时 `buildConversationTurns()` 同源生成，并要求每轮都有
+  非空 Oracle：`SIT-HOME-016=4`、`SIT-HOME-053=11`、
+  `SIT-HOME-058=2`、`SIT-HOME-060=2`、`SIT-EXPERT-022=2`。
 
 首轮历史框架问题保留在不可变目录
 `teams360-automation/output/20260812165500_uat-qwork-daily83_teams360-5.3.0-2119080776_qwork-0.1.1-rc.4_M3_serial_framework-93b0958_casebook-c0119f4`：
@@ -66,7 +69,7 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732`
+- SHA-256：`1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -211,7 +214,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732 \
+  --expected-sha256 1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
@@ -231,7 +234,7 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 日常回归是不同测试合同，不能用 70/160 的 pretest 替代本轮 83 条 pretest。
 
 本轮日常回归使用 `日常回归` Sheet、`--expected-count 83` 和 SHA
-`49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a`；其余
+`979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c`；其余
 Teams/QWork/UAT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。
