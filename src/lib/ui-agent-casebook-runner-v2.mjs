@@ -24689,7 +24689,7 @@ async function readManualSkillSurface(menu) {
   }).catch(() => null);
 }
 
-async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
+async function openUnifiedComposerSubmenuOnce(page, state, menuKind, action = '') {
   const config = UNIFIED_COMPOSER_SUBMENUS[menuKind];
   if (!config || !(await unifiedComposerPlusAvailable(page))) return '';
 
@@ -24765,11 +24765,50 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   return text || config.label;
 }
 
+async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const opened = await openUnifiedComposerSubmenuOnce(
+      page,
+      state,
+      menuKind,
+      attempt === 1 ? action : `${action || `打开【${menuKind}】子菜单`}（重试 ${attempt}/3）`,
+    );
+    if (opened.trim()) return opened;
+    await page.keyboard.press('Escape').catch(() => {});
+    await closeWorkspacePicker(page);
+    await page.waitForTimeout(250 * attempt);
+  }
+  return '';
+}
+
 async function setUnifiedSkillMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
-    if (!menuText.trim()) return false;
+    if (!menuText.trim()) {
+      state.screenshots.skill_mode_manual_menu_missing = await shot(page, caseDir, 'skill-mode-manual-menu-missing');
+      state.artifacts.core_beta_capability_interaction = {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'skill',
+        stage: 'manual_mode',
+        control_testid: 'composer-plus-section-skill',
+        control_located: false,
+        click_dispatched: false,
+        expected_state_observed: false,
+        submenu_attempts: 3,
+        screenshot: state.screenshots.skill_mode_manual_menu_missing,
+        category: 'automation_error',
+      };
+      recordAssertion(
+        state,
+        '统一菜单技能子菜单可打开',
+        '“+ > 技能”应在三次完整开启尝试内展示最新可见技能 Portal。',
+        false,
+        '依次执行 hover、click、ArrowRight、Enter 的完整开启流程并重试三次后，技能子菜单仍不可见。',
+        'automation_error',
+      );
+      return false;
+    }
     let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.skill, 500);
     let manual = submenu
       ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 500)
@@ -25263,7 +25302,30 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
-    if (!menuText.trim()) return false;
+    if (!menuText.trim()) {
+      state.screenshots.connector_mode_manual_menu_missing = await shot(page, caseDir, 'connector-mode-manual-menu-missing');
+      state.artifacts.core_beta_capability_interaction = {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'connector',
+        stage: 'manual_mode',
+        control_testid: 'composer-plus-section-connector',
+        control_located: false,
+        click_dispatched: false,
+        expected_state_observed: false,
+        submenu_attempts: 3,
+        screenshot: state.screenshots.connector_mode_manual_menu_missing,
+        category: 'automation_error',
+      };
+      recordAssertion(
+        state,
+        '统一菜单连接器子菜单可打开',
+        '“+ > 连接器”应在三次完整开启尝试内展示最新可见连接器 Portal。',
+        false,
+        '依次执行 hover、click、ArrowRight、Enter 的完整开启流程并重试三次后，连接器子菜单仍不可见。',
+        'automation_error',
+      );
+      return false;
+    }
     let submenu = await visibleUnifiedComposerSubmenu(page, UNIFIED_COMPOSER_SUBMENUS.connector, 500);
     let manual = submenu
       ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 500)
