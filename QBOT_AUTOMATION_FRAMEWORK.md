@@ -198,6 +198,11 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   `desktop-local context mutation was superseded`，且上述公开读回完整成立时，才允许把
   这组幂等 superseded 记录为诊断后继续；任一真实能力残留、其他桥错误、字段缺失、
   公开状态不可读或弹窗未关闭仍必须 fail-closed。
+- 连接器统一菜单兼容两种受支持合同：旧版存在
+  `composer-connector-mode-manual` 时必须真实点击该控件并读回列表/radio；新版在
+  “+ > 连接器”后直接展示列表时，只有连接器 section 已真实打开、可见列表（或明确
+  空态）已渲染且公开 `connectorRouting.mode=manual` 三者同时成立，才能判定已经处于
+  manual。单凭菜单文字、单凭 routing，或旧控件仍存在但未点击都不得通过。
 
 ## 4. Fixture 合同
 

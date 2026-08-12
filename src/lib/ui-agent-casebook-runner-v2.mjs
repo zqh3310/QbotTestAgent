@@ -24936,6 +24936,27 @@ export function coreBetaManualConnectorModeReady({
   };
 }
 
+export function coreBetaDirectConnectorListModeReady({
+  manualControlPresent = false,
+  submenuOpened = false,
+  manualSurface = null,
+  capabilities = null,
+} = {}) {
+  const readiness = coreBetaManualConnectorModeReady({
+    ariaChecked: '',
+    manualSurface,
+    capabilities,
+  });
+  return {
+    ok: manualControlPresent !== true && submenuOpened === true
+      && readiness.list_ready && readiness.public_manual,
+    manual_control_present: manualControlPresent === true,
+    submenu_opened: submenuOpened === true,
+    list_ready: readiness.list_ready,
+    public_manual: readiness.public_manual,
+  };
+}
+
 export function coreBetaCapabilityInteractionCategory({
   controlLocated = false,
   clickDispatched = false,
@@ -25172,6 +25193,53 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
       ? await lastVisibleLocator(submenu.locator('[data-testid="composer-connector-mode-manual"]'), 500)
       : null;
     if (!manual) {
+      const manualSurface = submenu ? await submenu.evaluate((menu) => {
+        const isVisible = (element) => {
+          if (!element || !element.getClientRects().length) return false;
+          const style = globalThis.getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        return {
+          list_visible: isVisible(menu.querySelector('.composer-plus-list')),
+          option_count: [...menu.querySelectorAll('[data-testid^="composer-connector-option-"]')]
+            .filter(isVisible).length,
+          empty_visible: isVisible(menu.querySelector('.composer-plus-empty')),
+        };
+      }).catch(() => null) : null;
+      const capabilities = await currentCapabilities(page);
+      const directListReadiness = coreBetaDirectConnectorListModeReady({
+        manualControlPresent: false,
+        submenuOpened: Boolean(submenu && menuText.trim()),
+        manualSurface,
+        capabilities,
+      });
+      if (directListReadiness.ok) {
+        state.screenshots.connector_mode_manual = await shot(page, caseDir, 'connector-mode-manual-direct-list');
+        state.artifacts.core_beta_capability_interaction = {
+          schema_version: 'qbot-core-beta-capability-interaction/v1',
+          capability_kind: 'connector',
+          stage: 'manual_mode',
+          control_testid: 'composer-plus-section-connector',
+          control_located: true,
+          click_dispatched: true,
+          expected_state_observed: true,
+          direct_list_contract: true,
+          manual_surface: manualSurface,
+          capabilities_connector_mode: capabilities?.connectorRouting?.mode || '',
+          menu_text: menuText,
+          screenshot: state.screenshots.connector_mode_manual,
+          category: '',
+        };
+        recordStep(
+          state,
+          '确认新版连接器直接列表处于 manual 模式',
+          '真实打开“+ > 连接器”后，必须看到可见连接列表/空态，且公开 connectorRouting.mode=manual。',
+          `readiness=${JSON.stringify(directListReadiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(menuText, 240)}`,
+          'passed',
+          state.screenshots.connector_mode_manual,
+        );
+        return true;
+      }
       state.screenshots.connector_mode_manual_missing = await shot(page, caseDir, 'connector-mode-manual-missing');
       state.artifacts.core_beta_capability_interaction = {
         schema_version: 'qbot-core-beta-capability-interaction/v1',
@@ -25181,6 +25249,9 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
         control_located: false,
         click_dispatched: false,
         expected_state_observed: false,
+        direct_list_readiness: directListReadiness,
+        manual_surface: manualSurface,
+        capabilities_connector_mode: capabilities?.connectorRouting?.mode || '',
         screenshot: state.screenshots.connector_mode_manual_missing,
         category: 'automation_error',
       };
@@ -25189,7 +25260,7 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
         '统一菜单连接器手动模式入口',
         '“+ > 连接器”子菜单必须提供用户可见的【手动】模式。',
         false,
-        `子菜单已打开但未找到 composer-connector-mode-manual：${clip(menuText, 220)}`,
+        `子菜单未提供旧 manual 控件，且新版直接列表合同不成立：${JSON.stringify(directListReadiness)}；${clip(menuText, 220)}`,
         'automation_error',
       );
       return false;

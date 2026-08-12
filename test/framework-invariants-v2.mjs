@@ -37,6 +37,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCleanupReleaseMigrationVerdict,
   coreBetaCapabilityInteractionCategory,
+  coreBetaDirectConnectorListModeReady,
   coreBetaComposerHistoryVerdict,
   coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
@@ -1425,6 +1426,52 @@ assert.equal(
   }).ok,
   false,
   '只有 radio/routing 手动态但没有真实手动列表时不得判定完成',
+);
+assert.deepEqual(
+  coreBetaDirectConnectorListModeReady({
+    manualControlPresent: false,
+    submenuOpened: true,
+    manualSurface: { list_visible: true, option_count: 28, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }),
+  {
+    ok: true,
+    manual_control_present: false,
+    submenu_opened: true,
+    list_ready: true,
+    public_manual: true,
+  },
+  '新版连接器菜单直接展示列表时，可见 section、列表与公开 manual routing 必须共同成立',
+);
+assert.equal(
+  coreBetaDirectConnectorListModeReady({
+    manualControlPresent: false,
+    submenuOpened: true,
+    manualSurface: { list_visible: true, option_count: 28, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'auto' } },
+  }).ok,
+  false,
+  '直接列表可见但公开 routing 不是 manual 时不得绕过模式门禁',
+);
+assert.equal(
+  coreBetaDirectConnectorListModeReady({
+    manualControlPresent: false,
+    submenuOpened: true,
+    manualSurface: { list_visible: false, option_count: 28, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }).ok,
+  false,
+  '公开 routing=manual 但连接器列表未真实显示时不得通过',
+);
+assert.equal(
+  coreBetaDirectConnectorListModeReady({
+    manualControlPresent: true,
+    submenuOpened: true,
+    manualSurface: { list_visible: true, option_count: 28, empty_visible: false },
+    capabilities: { connectorRouting: { mode: 'manual' } },
+  }).ok,
+  false,
+  '旧 manual 控件仍存在时必须保留原点击合同，不能走直接列表兼容分支',
 );
 assert.equal(
   coreBetaCapabilityInteractionCategory({ controlLocated: false, clickDispatched: false }),
@@ -5088,6 +5135,7 @@ const required = [
   ['统一加号菜单使用稳定 section testid 与最新可见 Portal', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*section: 'mode'[\s\S]*section: 'skill'[\s\S]*section: 'connector'[\s\S]*lastVisibleLocator[\s\S]*visibleUnifiedComposerSubmenu[\s\S]*composer-plus-section-\$\{config\.section\}/],
   ['统一加号子菜单支持 hover click ArrowRight Enter 四路打开', /openUnifiedComposerSubmenu[\s\S]*\.hover\(\{ force: true \}\)[\s\S]*pointermove[\s\S]*\.click\(\{ force: true \}\)[\s\S]*ArrowRight[\s\S]*Enter/],
   ['手动连接器模式真实点击并读回列表 routing 或 radio', /setUnifiedConnectorMode[\s\S]*composer-connector-mode-manual[\s\S]*manual\.click[\s\S]*composer-plus-list[\s\S]*composer-connector-option-[\s\S]*currentCapabilities[\s\S]*coreBetaManualConnectorModeReady/],
+  ['新版连接器直接列表以 section、列表与公开 manual routing 三重读回', /setUnifiedConnectorMode[\s\S]*coreBetaDirectConnectorListModeReady[\s\S]*composer-plus-section-connector[\s\S]*direct_list_contract/],
   ['BETA-MCP-002 手动选择后必须分离证据有效性与产品Oracle并注册选择/执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*public_readback: \{ before, after \}[\s\S]*coreBetaMcpCrossSurfaceOutcome[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile[\s\S]*MCP跨表面负向取证完整/],
   ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
