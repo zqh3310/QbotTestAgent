@@ -12433,7 +12433,11 @@ async function materializeQworkDailyPreSendResetFailure({
 }) {
   const reset = state.artifacts.core_beta_composer_control_reset || {};
   const interaction = (Array.isArray(reset.failed_interactions) ? reset.failed_interactions : [])
-    .find((item) => item?.category === 'bug' && item?.expected_state_observed === false);
+    .find((item) => item?.category === 'bug' && item?.expected_state_observed === false)
+    || (state.artifacts.core_beta_capability_interaction?.category === 'bug'
+      && state.artifacts.core_beta_capability_interaction?.expected_state_observed === false
+      ? state.artifacts.core_beta_capability_interaction
+      : null);
   if (!interaction) {
     recordAssertion(
       state,
@@ -12446,7 +12450,7 @@ async function materializeQworkDailyPreSendResetFailure({
     return false;
   }
   const capabilityKind = interaction.capability_kind === 'connector' ? 'connector' : 'skill';
-  const expectedIdentity = `${capabilityKind}:manual-mode`;
+  const expectedIdentity = String(interaction.expected_identity || `${capabilityKind}:manual-mode`);
   const materialized = await materializeCoreBetaPreSendCapabilityFailure({
     page,
     state,
@@ -12504,8 +12508,18 @@ async function qworkDailyNewTaskAutoIsolationCase({ page, state, testCase, caseD
     }
     return;
   }
-  if (!await selectFirstManualSkill(page, state, caseDir)) return;
-  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  if (!await selectFirstManualSkill(page, state, caseDir)) {
+    if (state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+      await materializeQworkDailyPreSendResetFailure({ page, state, testCase, caseDir, before: beforeReset });
+    }
+    return;
+  }
+  if (!await selectFirstManualConnector(page, state, caseDir)) {
+    if (state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+      await materializeQworkDailyPreSendResetFailure({ page, state, testCase, caseDir, before: beforeReset });
+    }
+    return;
+  }
   const taskABefore = await captureCoreBetaPublicState(page, testCase);
   await runPromptInCurrentTask({
     page,
@@ -24761,12 +24775,47 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
       ? await lastVisibleLocator(submenu.locator('[data-testid="composer-skill-mode-manual"]'), 500)
       : null;
     if (!manual) {
+      const manualSurface = await readManualSkillSurface(submenu);
+      const capabilities = await currentCapabilities(page);
+      const directListReadiness = coreBetaDirectSkillListReady({
+        manualControlPresent: false,
+        submenuOpened: Boolean(submenu && menuText.trim()),
+        manualSurface,
+        capabilities,
+      });
+      if (directListReadiness.ok) {
+        state.screenshots.skill_mode_manual = await shot(page, caseDir, 'skill-manual-direct-list-ready');
+        state.artifacts.core_beta_capability_interaction = {
+          schema_version: 'qbot-core-beta-capability-interaction/v1',
+          capability_kind: 'skill',
+          stage: 'manual_selection_surface',
+          control_testid: 'composer-plus-section-skill',
+          control_located: true,
+          click_dispatched: true,
+          expected_state_observed: true,
+          direct_list_contract: true,
+          manual_surface: manualSurface,
+          selected_skills: capabilities?.selectedSkills,
+          menu_text: menuText,
+          screenshot: state.screenshots.skill_mode_manual,
+          category: '',
+        };
+        recordStep(
+          state,
+          '确认新版技能直接列表可选择',
+          '真实打开“+ > 技能”后必须看到搜索框和可见列表/空态；具体手动态由后续技能点击及 selectedSkills 读回证明。',
+          `readiness=${JSON.stringify(directListReadiness)}；selectedSkills=${JSON.stringify(capabilities?.selectedSkills)}；菜单=${clip(menuText, 220)}`,
+          'passed',
+          state.screenshots.skill_mode_manual,
+        );
+        return true;
+      }
       recordAssertion(
         state,
         '统一菜单技能手动模式入口',
-        '“+ > 技能”子菜单必须提供用户可见的【手动】模式。',
+        '“+ > 技能”子菜单必须提供用户可见的【手动】模式，或提供可读公开状态的新版直接选择列表。',
         false,
-        `子菜单已打开但未找到 composer-skill-mode-manual：${clip(menuText, 220)}`,
+        `子菜单未提供旧 manual 控件，且新版直接列表合同不成立：${JSON.stringify(directListReadiness)}；${clip(menuText, 220)}`,
         'automation_error',
       );
       return false;
@@ -24942,18 +24991,45 @@ export function coreBetaDirectConnectorListModeReady({
   manualSurface = null,
   capabilities = null,
 } = {}) {
-  const readiness = coreBetaManualConnectorModeReady({
-    ariaChecked: '',
-    manualSurface,
-    capabilities,
-  });
+  const listReady = Boolean(
+    manualSurface?.list_visible
+    && (Number(manualSurface?.option_count || 0) > 0 || manualSurface?.empty_visible),
+  );
+  const publicMode = String(capabilities?.connectorRouting?.mode || '');
+  const publicStateReadable = ['auto', 'manual', 'disabled'].includes(publicMode)
+    && (capabilities?.selectedConnectors === null || Array.isArray(capabilities?.selectedConnectors));
   return {
     ok: manualControlPresent !== true && submenuOpened === true
-      && readiness.list_ready && readiness.public_manual,
+      && listReady && publicStateReadable,
     manual_control_present: manualControlPresent === true,
     submenu_opened: submenuOpened === true,
-    list_ready: readiness.list_ready,
-    public_manual: readiness.public_manual,
+    list_ready: listReady,
+    public_state_readable: publicStateReadable,
+    public_mode: publicMode,
+  };
+}
+
+export function coreBetaDirectSkillListReady({
+  manualControlPresent = false,
+  submenuOpened = false,
+  manualSurface = null,
+  capabilities = null,
+} = {}) {
+  const listReady = Boolean(
+    manualSurface?.search_visible
+    && manualSurface?.list_visible
+    && (Number(manualSurface?.option_count || 0) > 0 || manualSurface?.empty_visible),
+  );
+  const publicStateReadable = capabilities !== null
+    && typeof capabilities === 'object'
+    && (capabilities?.selectedSkills === null || Array.isArray(capabilities?.selectedSkills));
+  return {
+    ok: manualControlPresent !== true && submenuOpened === true
+      && listReady && publicStateReadable,
+    manual_control_present: manualControlPresent === true,
+    submenu_opened: submenuOpened === true,
+    list_ready: listReady,
+    public_state_readable: publicStateReadable,
   };
 }
 
@@ -25101,7 +25177,7 @@ export function coreBetaPreSendCapabilityFailureEvidence({
   const manualSurface = interaction?.manual_surface;
   const interactionValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
     && interaction?.capability_kind === capabilityKind
-    && ['manual_mode', 'manual_skill_selection'].includes(String(interaction?.stage || ''))
+    && ['manual_mode', 'manual_skill_selection', 'manual_connector_selection'].includes(String(interaction?.stage || ''))
     && String(interaction?.expected_identity || '') === String(expectedIdentity || '')
     && interaction?.control_located === true
     && interaction?.click_dispatched === true
@@ -25218,7 +25294,7 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
         state.artifacts.core_beta_capability_interaction = {
           schema_version: 'qbot-core-beta-capability-interaction/v1',
           capability_kind: 'connector',
-          stage: 'manual_mode',
+          stage: 'manual_selection_surface',
           control_testid: 'composer-plus-section-connector',
           control_located: true,
           click_dispatched: true,
@@ -25226,14 +25302,15 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
           direct_list_contract: true,
           manual_surface: manualSurface,
           capabilities_connector_mode: capabilities?.connectorRouting?.mode || '',
+          selected_connectors: capabilities?.selectedConnectors,
           menu_text: menuText,
           screenshot: state.screenshots.connector_mode_manual,
           category: '',
         };
         recordStep(
           state,
-          '确认新版连接器直接列表处于 manual 模式',
-          '真实打开“+ > 连接器”后，必须看到可见连接列表/空态，且公开 connectorRouting.mode=manual。',
+          '确认新版连接器直接列表可选择',
+          '真实打开“+ > 连接器”后必须看到可见列表/空态和可读公开状态；具体手动态由后续连接器点击及 selectedConnectors 读回证明。',
           `readiness=${JSON.stringify(directListReadiness)}；manual-surface=${JSON.stringify(manualSurface)}；菜单=${clip(menuText, 240)}`,
           'passed',
           state.screenshots.connector_mode_manual,
@@ -25648,11 +25725,77 @@ async function selectFirstManualSkill(page, state, caseDir) {
     return false;
   }
   const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');
-  await option.click({ force: true });
-  await page.waitForTimeout(600);
+  const testId = await option.getAttribute('data-testid').catch(() => '') || '';
+  const expectedIdentity = String(testId).replace(/^composer-skill-option-/, '') || firstLine(optionText);
+  const beforeManualSurface = await readManualSkillSurface(menu);
+  let clickDispatched = false;
+  try {
+    await option.click({ force: true }).catch(async () => option.evaluate((element) => element.click()));
+    clickDispatched = true;
+  } catch (error) {
+    state.screenshots.manual_skill_selected = await shot(page, caseDir, 'manual-skill-click-failed');
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_skill_selection',
+      expected_identity: expectedIdentity,
+      control_testid: testId || 'visible-first-skill-option',
+      control_located: true,
+      click_dispatched: false,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: beforeManualSurface,
+      option_text: optionText,
+      screenshot: state.screenshots.manual_skill_selected,
+      error: String(error?.message || error),
+      category: 'automation_error',
+    };
+    recordAssertion(state, '第一个已安装技能点击', '已定位的技能必须成功派发真实点击。', false, String(error?.message || error), 'automation_error');
+    return false;
+  }
+  let selectedSkills = null;
+  let selected = false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    const capabilities = await currentCapabilities(page);
+    selectedSkills = capabilities?.selectedSkills;
+    selected = coreBetaSelectedCapabilityIdentities(selectedSkills).includes(expectedIdentity);
+    if (selected) break;
+  }
   state.screenshots.manual_skill_selected = await shot(page, caseDir, 'manual-skill-selected');
-  recordStep(state, '手动选择第一个已安装技能', '技能应被选中并在菜单或输入区有可见反馈。', clip(optionText, 180), 'passed', state.screenshots.manual_skill_selected);
-  return true;
+  const afterMenu = await activeMenuLocator(page, 'skill');
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched,
+    expectedStateObserved: selected,
+  });
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: 'manual_skill_selection',
+    expected_identity: expectedIdentity,
+    control_testid: testId || 'visible-first-skill-option',
+    control_located: true,
+    click_dispatched: clickDispatched,
+    expected_state_observed: selected,
+    aria_checked: selected ? 'true' : 'false',
+    manual_surface: await readManualSkillSurface(afterMenu) || beforeManualSurface,
+    option_text: optionText,
+    selected_skills: selectedSkills,
+    screenshot: state.screenshots.manual_skill_selected,
+    category: interactionCategory,
+  };
+  recordStep(
+    state,
+    '手动选择第一个已安装技能',
+    '点击后 selectedSkills 必须包含从可见选项稳定 testid 解析出的同一技能 identity。',
+    `skill=${expectedIdentity}；selectedSkills=${JSON.stringify(selectedSkills)}；option=${clip(optionText, 160)}`,
+    selected ? 'passed' : 'failed',
+    state.screenshots.manual_skill_selected,
+    interactionCategory,
+  );
+  return selected;
 }
 
 async function selectManualSkillByName(page, state, caseDir, skillName, { ensureMode = true } = {}) {
@@ -25977,12 +26120,91 @@ async function selectFirstManualConnector(page, state, caseDir) {
   const connectorKey = String(testId || '')
     .replace(/^composer-connector-option-/, '')
     .replace(/-(?:tag|checkbox|row)$/, '') || firstLine(optionText);
-  await option.click({ force: true });
-  await page.waitForTimeout(800);
+  const manualSurface = await menu.evaluate((surface) => {
+    const isVisible = (element) => {
+      if (!element || !element.getClientRects().length) return false;
+      const style = globalThis.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    return {
+      list_visible: isVisible(surface.querySelector('.composer-plus-list, .ctool-list')),
+      option_count: [...surface.querySelectorAll('[data-testid^="composer-connector-option-"], .composer-plus-connector')].filter(isVisible).length,
+      empty_visible: isVisible(surface.querySelector('.composer-plus-empty')),
+    };
+  }).catch(() => null);
+  let clickDispatched = false;
+  try {
+    await option.click({ force: true }).catch(async () => option.evaluate((element) => element.click()));
+    clickDispatched = true;
+  } catch (error) {
+    state.screenshots.manual_connector_selected = await shot(page, caseDir, 'manual-connector-click-failed');
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'connector',
+      stage: 'manual_connector_selection',
+      expected_identity: connectorKey,
+      control_testid: testId || 'visible-first-connector-option',
+      control_located: true,
+      click_dispatched: false,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: manualSurface,
+      option_text: optionText,
+      screenshot: state.screenshots.manual_connector_selected,
+      error: String(error?.message || error),
+      category: 'automation_error',
+    };
+    recordAssertion(state, '第一个健康连接器点击', '已定位的连接器必须成功派发真实点击。', false, String(error?.message || error), 'automation_error');
+    return false;
+  }
+  let selectedConnectors = null;
+  let selected = false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    const capabilities = await currentCapabilities(page);
+    selectedConnectors = capabilities?.selectedConnectors;
+    selected = coreBetaSelectedCapabilityIdentities(selectedConnectors).includes(connectorKey);
+    if (selected) break;
+  }
   state.screenshots.manual_connector_selected = await shot(page, caseDir, 'manual-connector-selected');
-  state.artifacts.selected_connector = { key: connectorKey, label: firstLine(optionText), testid: testId || '' };
-  recordStep(state, '手动选择第一个健康连接器', '连接器应被选中并在菜单或输入区有可见反馈。', clip(optionText, 180), 'passed', state.screenshots.manual_connector_selected);
-  return true;
+  state.artifacts.selected_connector = {
+    key: connectorKey,
+    label: firstLine(optionText),
+    testid: testId || '',
+    selected_connectors: selectedConnectors,
+  };
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched,
+    expectedStateObserved: selected,
+  });
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'connector',
+    stage: 'manual_connector_selection',
+    expected_identity: connectorKey,
+    control_testid: testId || 'visible-first-connector-option',
+    control_located: true,
+    click_dispatched: clickDispatched,
+    expected_state_observed: selected,
+    aria_checked: selected ? 'true' : 'false',
+    manual_surface: manualSurface,
+    selected_connectors: selectedConnectors,
+    option_text: optionText,
+    screenshot: state.screenshots.manual_connector_selected,
+    category: interactionCategory,
+  };
+  recordStep(
+    state,
+    '手动选择第一个健康连接器',
+    '点击后 selectedConnectors 必须包含从可见选项稳定 testid 解析出的同一连接器 key。',
+    `connector=${connectorKey}；selectedConnectors=${JSON.stringify(selectedConnectors)}；option=${clip(optionText, 160)}`,
+    selected ? 'passed' : 'failed',
+    state.screenshots.manual_connector_selected,
+    interactionCategory,
+  );
+  return selected;
 }
 
 async function selectManualConnectorByKey(page, state, caseDir, connectorKey) {
