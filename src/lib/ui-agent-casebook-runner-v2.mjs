@@ -24276,7 +24276,11 @@ async function resetComposerControls(page, state, caseDir, {
 
   if (clearSkills) {
     recordCapabilityOperation(await clearManualSkillSelections(page, state, caseDir));
-    if (skillMode) recordCapabilityOperation(await setSkillMode(page, state, caseDir, skillMode));
+    if (skillMode) {
+      recordCapabilityOperation(await setSkillMode(page, state, caseDir, skillMode, {
+        allowAutoEmptyIsolation: true,
+      }));
+    }
   }
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(150);
@@ -24286,10 +24290,16 @@ async function resetComposerControls(page, state, caseDir, {
     // 先切 manual 再切目标模式会与菜单打开时的异步 refresh 竞争，既浪费一次
     // 控制面写入，也可能让自动化读取到点击前的旧选中态。
     if (connectorMode === 'disabled' || connectorMode === 'auto') {
-      recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode));
+      recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode, {
+        allowAutoEmptyIsolation: true,
+      }));
     } else {
       recordCapabilityOperation(await clearManualConnectorSelections(page, state, caseDir));
-      if (connectorMode) recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode));
+      if (connectorMode) {
+        recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode, {
+          allowAutoEmptyIsolation: true,
+        }));
+      }
     }
   }
   await page.keyboard.press('Escape').catch(() => {});
@@ -24298,6 +24308,13 @@ async function resetComposerControls(page, state, caseDir, {
   const skillChipText = await visibleSkillChipText(page);
   const sceneTagText = await visibleSceneTagText(page);
   const attachmentText = await visibleComposerAttachmentText(page);
+  const capabilityReadback = await currentCapabilities(page);
+  const isolationReadback = coreBetaComposerIsolationReadback({
+    capabilities: capabilityReadback,
+    requireSkills: clearSkills,
+    requireConnectors: clearConnectors,
+  });
+  results.push(isolationReadback.ok);
   state.screenshots.composer_controls_reset = await shot(page, caseDir, 'composer-controls-reset');
   const residueObserved = Boolean(skillChipText.trim() || sceneTagText.trim() || attachmentText.trim());
   const newFailures = [
@@ -24324,6 +24341,7 @@ async function resetComposerControls(page, state, caseDir, {
       actual: item.actual || '',
       screenshot: item.screenshot || '',
     })),
+    isolation_readback: isolationReadback,
   };
   recordAssertion(
     state,
@@ -24336,6 +24354,7 @@ async function resetComposerControls(page, state, caseDir, {
       sceneTagText.trim() ? `残留场景 tag：${clip(sceneTagText, 180)}` : '未发现残留场景 tag',
       attachmentText.trim() ? `残留附件：${clip(attachmentText, 180)}` : '未发现残留附件',
       skillChipText.trim() ? `残留技能 chip：${clip(skillChipText, 180)}` : '未发现残留技能 chip',
+      `公开能力隔离=${JSON.stringify(isolationReadback)}`,
     ].join('；'),
     failureCategory,
   );
@@ -24343,6 +24362,37 @@ async function resetComposerControls(page, state, caseDir, {
     markFailed(state, '自动化框架未能清理输入区场景/附件/技能/连接器状态，当前用例结果不可信，已中止本用例。', 'automation_error');
   }
   return ok;
+}
+
+export function coreBetaComposerIsolationReadback({
+  capabilities = null,
+  requireSkills = true,
+  requireConnectors = true,
+} = {}) {
+  const readable = capabilities !== null && typeof capabilities === 'object';
+  const has = (field) => readable && Object.prototype.hasOwnProperty.call(capabilities, field);
+  const emptySelection = (value) => value === null || (Array.isArray(value) && value.length === 0);
+  const skillsReadable = !requireSkills || has('selectedSkills');
+  const connectorsReadable = !requireConnectors || has('selectedConnectors');
+  const expertReadable = has('currentExpert');
+  const skillsEmpty = !requireSkills || (skillsReadable && emptySelection(capabilities.selectedSkills));
+  const connectorsEmpty = !requireConnectors
+    || (connectorsReadable && emptySelection(capabilities.selectedConnectors));
+  const expertEmpty = expertReadable && capabilities.currentExpert === null;
+  return {
+    ok: readable && skillsReadable && connectorsReadable && expertReadable
+      && skillsEmpty && connectorsEmpty && expertEmpty,
+    readable,
+    skills_readable: skillsReadable,
+    connectors_readable: connectorsReadable,
+    expert_readable: expertReadable,
+    skills_empty: skillsEmpty,
+    connectors_empty: connectorsEmpty,
+    expert_empty: expertEmpty,
+    selected_skills: skillsReadable ? capabilities.selectedSkills : undefined,
+    selected_connectors: connectorsReadable ? capabilities.selectedConnectors : undefined,
+    current_expert: expertReadable ? capabilities.currentExpert : undefined,
+  };
 }
 
 export function preserveCoreBetaFailedCapabilityInteraction(
@@ -24888,7 +24938,9 @@ async function openUnifiedComposerSubmenu(page, state, menuKind, action = '') {
   return '';
 }
 
-async function setUnifiedSkillMode(page, state, caseDir, mode) {
+async function setUnifiedSkillMode(page, state, caseDir, mode, {
+  allowAutoEmptyIsolation = false,
+} = {}) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'skill', '打开输入区【技能】子菜单');
@@ -25087,13 +25139,18 @@ async function setUnifiedSkillMode(page, state, caseDir, mode) {
     if (unifiedSkillModeApplied(capabilities, mode, invoked.selection)) break;
   }
   const selected = capabilities?.selectedSkills;
-  const ok = unifiedSkillModeApplied(capabilities, mode, invoked.selection);
+  const exactModeApplied = unifiedSkillModeApplied(capabilities, mode, invoked.selection);
+  const isolationApplied = allowAutoEmptyIsolation
+    && mode === 'disabled'
+    && capabilities?.selectedSkills === null
+    && capabilities?.currentExpert === null;
+  const ok = exactModeApplied || isolationApplied;
   state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
   recordStep(
     state,
     `设置统一菜单技能模式：${mode}`,
     '该调用只用于隔离用例前置状态；技能选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
     ok ? '' : 'automation_error',
@@ -25510,7 +25567,9 @@ export function coreBetaConnectorOptionTestId(connectorKey = '') {
   return `composer-connector-option-${String(connectorKey || '').trim()}`;
 }
 
-async function setUnifiedConnectorMode(page, state, caseDir, mode) {
+async function setUnifiedConnectorMode(page, state, caseDir, mode, {
+  allowAutoEmptyIsolation = false,
+} = {}) {
   if (!(await unifiedComposerPlusAvailable(page))) return null;
   if (mode === 'manual') {
     const menuText = await openUnifiedComposerSubmenu(page, state, 'connector', '打开输入区【连接器】子菜单');
@@ -25754,13 +25813,18 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode) {
   }
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
   const selectedConnectors = capabilities?.selectedConnectors;
-  const ok = unifiedConnectorModeApplied(capabilities, mode, invoked.selection);
+  const exactModeApplied = unifiedConnectorModeApplied(capabilities, mode, invoked.selection);
+  const isolationApplied = allowAutoEmptyIsolation
+    && mode === 'disabled'
+    && capabilities?.selectedConnectors === null
+    && capabilities?.currentExpert === null;
+  const ok = exactModeApplied || isolationApplied;
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
   recordStep(
     state,
     `设置统一菜单连接器模式：${mode}`,
     '该调用只用于隔离用例前置状态；连接器选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`connector_mode_${mode}`],
     ok ? '' : 'automation_error',
@@ -25913,8 +25977,8 @@ async function visibleComposerAttachmentText(page) {
   return texts.map((item) => item.trim()).filter(Boolean).join(' / ');
 }
 
-async function setSkillMode(page, state, caseDir, mode) {
-  const unifiedResult = await setUnifiedSkillMode(page, state, caseDir, mode);
+async function setSkillMode(page, state, caseDir, mode, options = {}) {
+  const unifiedResult = await setUnifiedSkillMode(page, state, caseDir, mode, options);
   if (unifiedResult !== null) return unifiedResult;
   const label = SKILL_MODE_LABELS[mode] || mode;
   const initialToolStateText = await visibleComposerToolStateText(page, 'skill');
@@ -26259,8 +26323,8 @@ function skillModeSelectedByText(mode, text) {
   return expected ? expected.test(String(text || '')) : false;
 }
 
-async function setConnectorMode(page, state, caseDir, mode) {
-  const unifiedResult = await setUnifiedConnectorMode(page, state, caseDir, mode);
+async function setConnectorMode(page, state, caseDir, mode, options = {}) {
+  const unifiedResult = await setUnifiedConnectorMode(page, state, caseDir, mode, options);
   if (unifiedResult !== null) return unifiedResult;
   const label = CONNECTOR_MODE_LABELS[mode] || mode;
   const initialCapabilities = await currentCapabilities(page);

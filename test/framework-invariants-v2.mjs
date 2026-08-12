@@ -41,6 +41,7 @@ import {
   coreBetaDirectConnectorListModeReady,
   coreBetaDirectSkillListReady,
   coreBetaComposerHistoryVerdict,
+  coreBetaComposerIsolationReadback,
   coreBetaComposerResetFailureCategory,
   coreBetaCompletionBlockReason,
   coreBetaConnectorCatalogEvidenceValid,
@@ -1387,6 +1388,34 @@ assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', undefined),
   false,
   'Core Beta v2 不能只因 capabilities 缺少连接器字段就误判连接器已禁用',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: { selectedSkills: null, selectedConnectors: null, currentExpert: null },
+  }).ok,
+  true,
+  'rc.100 的 Auto 空选择必须满足用例前无能力残留隔离，但不改变 disabled 的精确模式语义',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: { selectedSkills: [{ slug: 'leftover' }], selectedConnectors: null, currentExpert: null },
+  }).ok,
+  false,
+  '任一真实能力残留不得被 Auto 空选择兼容逻辑放行',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: { selectedSkills: null, selectedConnectors: null, currentExpert: { id: 'expert-1' } },
+  }).ok,
+  false,
+  '专家残留不得被 Auto 空选择兼容逻辑放行',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: { selectedSkills: null, currentExpert: null },
+  }).ok,
+  false,
+  '公开能力字段缺失时仍必须 fail-closed',
 );
 assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined),
@@ -5261,7 +5290,7 @@ const required = [
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
   ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],
   ['重启场景异常证据使用最新 runtime page', /catch \(error\) \{[\s\S]*page = runtime\?\.page \|\| page;[\s\S]*99-error/],
-  ['连接器 reset 对禁用/自动模式直达且不先切手动', /if \(connectorMode === 'disabled' \|\| connectorMode === 'auto'\)[\s\S]*setConnectorMode\(page, state, caseDir, connectorMode\)[\s\S]*else \{[\s\S]*clearManualConnectorSelections/],
+  ['连接器 reset 对禁用/自动模式直达且只在隔离路径接受 Auto 空态', /if \(connectorMode === 'disabled' \|\| connectorMode === 'auto'\)[\s\S]*setConnectorMode\(page, state, caseDir, connectorMode, \{[\s\S]*allowAutoEmptyIsolation: true[\s\S]*else \{[\s\S]*clearManualConnectorSelections/],
   ['连接器模式切换使用新 DOM 和能力状态轮询', /async function setConnectorMode[\s\S]*const freshLocator = await connectorModeLocator[\s\S]*capabilities\?\.connectorRouting\?\.mode[\s\S]*'automation_error'/],
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],

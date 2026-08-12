@@ -198,6 +198,12 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   `desktop-local context mutation was superseded`，且上述公开读回完整成立时，才允许把
   这组幂等 superseded 记录为诊断后继续；任一真实能力残留、其他桥错误、字段缺失、
   公开状态不可读或弹窗未关闭仍必须 fail-closed。
+- 普通 Case 的输入区隔离目标是“没有显式能力残留”，不是强制把新版产品的 Auto
+  空态改写为旧版 disabled。准备阶段调用清理桥后，若公开读回精确为
+  `selectedSkills=null`、`selectedConnectors=null`、`currentExpert=null`，且可见
+  Skill chip、附件和场景 tag 均为空，必须接受为干净 Auto 空态并继续发送；`null`
+  兼容只适用于 reset/隔离路径，不得放宽专门验证 disabled 模式的产品 Oracle。
+  任一选择非空、专家残留、字段缺失、桥调用失败或 UI 残留仍须 fail-closed。
 - 统一“+”菜单兼容两种受支持合同：旧版存在 Skill/Connector manual 控件时必须
   真实点击控件并读回列表/radio；新版在“+ > 技能/连接器”后直接展示列表时，打开
   section 只是建立可选择表面，不代表已经进入 manual。只有 section 已真实打开、搜索/
