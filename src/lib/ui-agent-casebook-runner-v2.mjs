@@ -11124,7 +11124,10 @@ async function executeCoreBetaSidebarPersistenceCase(context) {
   );
 }
 
-export function activateCoreBetaNativeImeHost(rendererControlAdapter = '', { run = spawnSync } = {}) {
+export function activateCoreBetaNativeImeHost(
+  rendererControlAdapter = '',
+  { run = spawnSync, maxAttempts = 4 } = {},
+) {
   const teamsLane = String(rendererControlAdapter || '').trim() === 'teams360';
   if (!teamsLane) {
     return {
@@ -11135,36 +11138,63 @@ export function activateCoreBetaNativeImeHost(rendererControlAdapter = '', { run
       frontmost_process: '',
     };
   }
+  const boundedAttempts = Math.min(8, Math.max(1, Number(maxAttempts) || 4));
   const script = [
     'tell application "360Teams" to activate',
     'delay 0.4',
-    'tell application "System Events" to get name of first application process whose frontmost is true',
+    'tell application "System Events"',
+    '  set frontmostProcesses to name of every application process whose frontmost is true',
+    '  if (count of frontmostProcesses) is 0 then return ""',
+    '  return item 1 of frontmostProcesses',
+    'end tell',
   ].join('\n');
-  const result = run('osascript', ['-e', script], {
-    encoding: 'utf8',
-    timeout: 5_000,
-  });
-  const frontmostProcess = String(result?.stdout || '')
-    .split(/\r?\n/)
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .at(-1) || '';
-  const ready = result?.status === 0 && frontmostProcess === '360Teams';
+  const observations = [];
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    const result = run('osascript', ['-e', script], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    const frontmostProcess = String(result?.stdout || '')
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .at(-1) || '';
+    const ready = result?.status === 0 && frontmostProcess === '360Teams';
+    observations.push({
+      attempt,
+      ready,
+      frontmost_process: frontmostProcess,
+      command_status: result?.status ?? null,
+      error: clip(result?.stderr || result?.error?.message || '', 300),
+    });
+    if (ready) {
+      return {
+        schema_version: 'qbot-core-beta-native-ime-host-activation/v1',
+        required: true,
+        ready: true,
+        application: '360Teams',
+        frontmost_process: frontmostProcess,
+        command_status: result?.status ?? null,
+        attempt_count: attempt,
+        attempts: observations,
+      };
+    }
+  }
+  const last = observations.at(-1) || {};
   const activation = {
     schema_version: 'qbot-core-beta-native-ime-host-activation/v1',
     required: true,
-    ready,
+    ready: false,
     application: '360Teams',
-    frontmost_process: frontmostProcess,
-    command_status: result?.status ?? null,
+    frontmost_process: last.frontmost_process || '',
+    command_status: last.command_status ?? null,
+    attempt_count: observations.length,
+    attempts: observations,
   };
-  if (!ready) {
-    throw new Error(
-      'Native IME host activation failed before Composer focus: '
-      + `${JSON.stringify(activation)}; ${clip(result?.stderr || result?.error?.message || '', 300)}`,
-    );
-  }
-  return activation;
+  throw new Error(
+    'Native IME host activation failed before Composer focus after bounded retries: '
+    + JSON.stringify(activation),
+  );
 }
 
 async function executeCoreBetaImeCase({ page, state, testCase, caseDir, timeoutMs, options = {} }) {

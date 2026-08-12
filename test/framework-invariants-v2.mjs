@@ -1535,9 +1535,32 @@ assert.equal(
   assert.equal(activated.required, true);
   assert.equal(activated.ready, true);
   assert.equal(activated.frontmost_process, '360Teams');
+  assert.equal(activated.attempt_count, 1);
+  assert.equal(activated.attempts.length, 1);
   assert.equal(nativeCalls.length, 1);
   assert.equal(nativeCalls[0].command, 'osascript');
-  assert.match(nativeCalls[0].args[1], /360Teams[\s\S]*frontmost is true/);
+  assert.match(nativeCalls[0].args[1], /360Teams[\s\S]*frontmost is true[\s\S]*count of frontmostProcesses/);
+  const transientCalls = [];
+  const transientResults = [
+    {
+      status: 1,
+      stdout: '',
+      stderr: 'System Events: no frontmost application process (-1719)',
+    },
+    { status: 0, stdout: '360Teams\n', stderr: '' },
+  ];
+  const recovered = activateCoreBetaNativeImeHost('teams360', {
+    run(command, args) {
+      transientCalls.push({ command, args });
+      return transientResults.shift();
+    },
+  });
+  assert.equal(recovered.ready, true);
+  assert.equal(recovered.attempt_count, 2);
+  assert.equal(recovered.attempts[0].command_status, 1);
+  assert.match(recovered.attempts[0].error, /-1719/);
+  assert.equal(recovered.attempts[1].frontmost_process, '360Teams');
+  assert.equal(transientCalls.length, 2);
   assert.deepEqual(
     activateCoreBetaNativeImeHost('local', {
       run() { throw new Error('non-Teams lane must not activate a native host'); },
@@ -1553,8 +1576,9 @@ assert.equal(
   assert.throws(
     () => activateCoreBetaNativeImeHost('teams360', {
       run() { return { status: 0, stdout: 'Codex\n', stderr: '' }; },
+      maxAttempts: 2,
     }),
-    /activation failed before Composer focus/,
+    /activation failed before Composer focus after bounded retries/,
     'Teams IME 必须在点击 Composer 前读回 360Teams 为 frontmost',
   );
 

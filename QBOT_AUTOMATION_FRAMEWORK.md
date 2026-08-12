@@ -162,6 +162,10 @@ Teams lane 的 runner 在调用该命令前必须先激活受管 `360Teams`，�
 System Events 读回 `frontmost=360Teams`；只有物理宿主激活成功后，才能对当前
 replacement WebView 依次执行 `bringToFront`、真实 Composer 点击和 DOM focus，
 并读回 `document.hasFocus()`、`document.activeElement` 与 Composer 可见性全部成立。
+macOS 在应用切换瞬间可能短暂无任何 `frontmost` application process；宿主激活
+必须在有界次数内重新执行 activate 并逐次保存 command status、前台进程与错误读回。
+瞬时空读回或 `-1719` 不得在首次采样就终止 Case；有界重试后仍不能精确读回
+`360Teams` 才属于 framework issue 并 fail-closed。
 宿主激活、WebView 聚焦和 Composer 点击的顺序不得颠倒；仅调用 DOM `focus()` 不能
 证明 macOS 键盘 first responder 仍属于受管宿主。原生命令返回 0 但 Composer 零文本且没有任何
 composition 事件时，必须立即记为 framework issue，禁止继续等待或点击发送，也
