@@ -84,8 +84,10 @@ import {
   coreBetaSkillUsePrerequisiteDecision,
   coreBetaV2NeedsRendererReconnect,
   coreBetaV2MaintenanceActionObservation,
+  coreBetaV2MaintenanceActiveSessionRejection,
   coreBetaV2MaintenanceConfirmationContract,
   coreBetaV2MaintenanceProductStateConflict,
+  coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
   coreBetaV2SettingsLoadTimeoutMs,
@@ -4530,6 +4532,69 @@ assert.equal(
   }).observed,
   false,
   '通用导航不得替代没有刷新成功契约的维护动作状态转换',
+);
+assert.equal(
+  coreBetaV2MaintenanceActiveSessionRejection('有会话正在运行,请先停止或等它结束再操作。'),
+  true,
+  '会话清空必须精确识别产品的中文 active-session 拒绝',
+);
+assert.equal(
+  coreBetaV2MaintenanceActiveSessionRejection('active-session'),
+  true,
+  '会话清空必须兼容结构化 active-session 拒绝',
+);
+assert.equal(
+  coreBetaV2MaintenanceActiveSessionRejection('正在清空各环境本地会话…'),
+  false,
+  '正常清空中状态不能误判为 active-session 拒绝',
+);
+assert.deepEqual(
+  coreBetaV2RunningSessionQuiescenceVerdict({
+    inventoryReadable: true,
+    cancelFailures: [],
+    runningAfter: [],
+    stableIdleObservations: 3,
+    minimumIdleObservations: 3,
+  }),
+  {
+    ok: true,
+    inventory_readable: true,
+    cancel_failures: [],
+    running_after: [],
+    stable_idle_observations: 3,
+    minimum_idle_observations: 3,
+    reason: '全部公开会话已连续 3 次读回 idle。',
+  },
+  '清空前只有可读且连续稳定 idle 的会话清单可以通过',
+);
+assert.equal(coreBetaV2RunningSessionQuiescenceVerdict({
+  inventoryReadable: false,
+  stableIdleObservations: 3,
+}).ok, false, '会话清单不可读时必须 fail-closed');
+assert.equal(coreBetaV2RunningSessionQuiescenceVerdict({
+  inventoryReadable: true,
+  cancelFailures: [{ session_id: 'running-1', error: 'cancel failed' }],
+  stableIdleObservations: 3,
+}).ok, false, '任一 running 会话取消失败时必须 fail-closed');
+assert.equal(coreBetaV2RunningSessionQuiescenceVerdict({
+  inventoryReadable: true,
+  runningAfter: [{ id: 'running-1', running: true }],
+  stableIdleObservations: 0,
+}).ok, false, '仍有 running 会话时禁止点击会话清空');
+assert.match(
+  runner,
+  /async function quiesceCoreBetaV2RunningSessions[\s\S]*listSessions[\s\S]*getRunning[\s\S]*window\.agent\.cancel\(sessionId\)[\s\S]*minimumIdleObservations = 3[\s\S]*sessions-purge-quiescence/,
+  'BETA-INIT-004 必须枚举、停止并连续读回全部公开会话 idle，同时保存独立账本与截图',
+);
+assert.match(
+  runner,
+  /maintenance\.terminal === 'sessions-empty'[\s\S]*quiesceCoreBetaV2RunningSessions\([\s\S]*clickCoreBetaV2MaintenanceAction\([\s\S]*coreBetaV2MaintenanceActiveSessionRejection\(clicked\.action_text\)[\s\S]*attempt: 2/,
+  '首次 UI 清空被 active-session 拒绝时，只能在再次确认全部 idle 后执行一次 UI 重试',
+);
+assert.match(
+  runner,
+  /clickCoreBetaV2MaintenanceAction[\s\S]*attempt = 1[\s\S]*acceptCoreBetaV2MaintenanceConfirmation[\s\S]*attemptSuffix/,
+  '会话清空重试必须再次通过确认弹窗并生成不覆盖首次证据的截图',
 );
 const completeEvidence = {
   complete: true,

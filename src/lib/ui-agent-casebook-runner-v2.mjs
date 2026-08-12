@@ -5363,6 +5363,7 @@ async function clickCoreBetaV2MaintenanceAction({
   caseDir,
   testId,
   destructive,
+  attempt = 1,
 }) {
   const button = page.locator(`[data-testid="${testId}"]`).first();
   if (!(await visible(button, 3000))) return { ok: false, reason: `未找到维护按钮 ${testId}。` };
@@ -5425,8 +5426,11 @@ async function clickCoreBetaV2MaintenanceAction({
     beforeText,
     actionText,
   });
-  const busyScreenshot = await shot(page, caseDir, `${slugify(testId)}-busy`).catch(() => '');
-  if (busyScreenshot) state.screenshots[`${testId.replaceAll('-', '_')}_busy`] = busyScreenshot;
+  const attemptSuffix = Number(attempt) > 1 ? `-retry-${String(attempt).padStart(2, '0')}` : '';
+  const busyScreenshot = await shot(page, caseDir, `${slugify(testId)}${attemptSuffix}-busy`).catch(() => '');
+  if (busyScreenshot) {
+    state.screenshots[`${testId.replaceAll('-', '_')}${attemptSuffix.replaceAll('-', '_')}_busy`] = busyScreenshot;
+  }
   return {
     ok: true,
     testid: testId,
@@ -5487,6 +5491,225 @@ export function coreBetaV2MaintenanceActionObservation({
     source: changed ? 'explicit-completion-transition' : 'none',
     completion_transition: changed ? match : '',
   };
+}
+
+export function coreBetaV2MaintenanceActiveSessionRejection(text = '') {
+  return /有会话正在运行[，,]?请先停止或等它结束再操作|active-session/i.test(String(text || ''));
+}
+
+export function coreBetaV2RunningSessionQuiescenceVerdict({
+  inventoryReadable = false,
+  cancelFailures = [],
+  runningAfter = [],
+  stableIdleObservations = 0,
+  minimumIdleObservations = 3,
+} = {}) {
+  const failures = Array.isArray(cancelFailures) ? cancelFailures.filter(Boolean) : [];
+  const remaining = Array.isArray(runningAfter) ? runningAfter.filter(Boolean) : [];
+  const minimum = Math.max(1, Number(minimumIdleObservations) || 3);
+  const stable = Math.max(0, Number(stableIdleObservations) || 0);
+  const ok = inventoryReadable === true
+    && failures.length === 0
+    && remaining.length === 0
+    && stable >= minimum;
+  return {
+    ok,
+    inventory_readable: inventoryReadable === true,
+    cancel_failures: failures,
+    running_after: remaining,
+    stable_idle_observations: stable,
+    minimum_idle_observations: minimum,
+    reason: ok
+      ? `全部公开会话已连续 ${stable} 次读回 idle。`
+      : inventoryReadable !== true
+        ? '无法读取公开会话与运行态，禁止执行会话清空。'
+        : failures.length > 0
+          ? `停止运行会话失败：${failures.map((item) => item.session_id || item.error || 'unknown').join(',')}`
+          : remaining.length > 0
+            ? `仍有 ${remaining.length} 个会话处于运行态。`
+            : `idle 稳定读回不足：${stable}/${minimum}。`,
+  };
+}
+
+async function quiesceCoreBetaV2RunningSessions({
+  page,
+  state,
+  caseDir,
+  reason,
+  attempt = 1,
+  timeoutMs = 60_000,
+}) {
+  const startedAt = Date.now();
+  const suffix = Number(attempt) > 1 ? `-retry-${String(attempt).padStart(2, '0')}` : '';
+  const beforeScreenshot = await shot(page, caseDir, `sessions-purge-quiescence${suffix}-before`).catch(() => '');
+  const initial = await page.evaluate(async () => {
+    const withTimeout = async (promise, label) => await Promise.race([
+      promise,
+      new Promise((_, reject) => window.setTimeout(
+        () => reject(new Error(`${label} timed out`)),
+        5000,
+      )),
+    ]);
+    try {
+      const sessions = await withTimeout(window.agent?.listSessions?.(), 'listSessions');
+      if (!Array.isArray(sessions)) return { readable: false, error: 'listSessions did not return an array', sessions: [] };
+      const inspected = [];
+      for (const session of sessions) {
+        try {
+          const running = await withTimeout(window.agent?.getRunning?.(session.id), `getRunning:${session.id}`);
+          inspected.push({
+            id: String(session.id || ''),
+            title: String(session.title || ''),
+            running: running?.running === true,
+          });
+        } catch (error) {
+          inspected.push({
+            id: String(session.id || ''),
+            title: String(session.title || ''),
+            running: null,
+            error: String(error?.message || error),
+          });
+        }
+      }
+      return {
+        readable: inspected.every((item) => typeof item.running === 'boolean'),
+        error: '',
+        sessions: inspected,
+      };
+    } catch (error) {
+      return { readable: false, error: String(error?.message || error), sessions: [] };
+    }
+  }).catch((error) => ({ readable: false, error: String(error?.message || error), sessions: [] }));
+
+  const runningBefore = initial.sessions.filter((item) => item.running === true);
+  const cancellationAttempts = [];
+  if (initial.readable) {
+    for (const session of runningBefore) {
+      const attempt = await page.evaluate(async (sessionId) => {
+        try {
+          await Promise.race([
+            window.agent.cancel(sessionId),
+            new Promise((_, reject) => window.setTimeout(
+              () => reject(new Error('cancel timed out')),
+              5000,
+            )),
+          ]);
+          return { ok: true, error: '' };
+        } catch (error) {
+          return { ok: false, error: String(error?.message || error) };
+        }
+      }, session.id).catch((error) => ({ ok: false, error: String(error?.message || error) }));
+      cancellationAttempts.push({
+        session_id: session.id,
+        title: session.title,
+        ...attempt,
+      });
+    }
+  }
+
+  const observations = [];
+  const minimumIdleObservations = 3;
+  let stableIdleObservations = 0;
+  let runningAfter = runningBefore;
+  let inventoryReadable = initial.readable;
+  const deadline = startedAt + Math.max(10_000, Number(timeoutMs) || 60_000);
+  while (initial.readable && Date.now() < deadline && stableIdleObservations < minimumIdleObservations) {
+    const observation = await page.evaluate(async () => {
+      const withTimeout = async (promise, label) => await Promise.race([
+        promise,
+        new Promise((_, reject) => window.setTimeout(
+          () => reject(new Error(`${label} timed out`)),
+          5000,
+        )),
+      ]);
+      try {
+        const sessions = await withTimeout(window.agent?.listSessions?.(), 'listSessions');
+        if (!Array.isArray(sessions)) return { readable: false, error: 'listSessions did not return an array', running: [] };
+        const inspected = [];
+        for (const session of sessions) {
+          try {
+            const result = await withTimeout(window.agent?.getRunning?.(session.id), `getRunning:${session.id}`);
+            inspected.push({
+              id: String(session.id || ''),
+              title: String(session.title || ''),
+              running: result?.running === true,
+            });
+          } catch (error) {
+            inspected.push({
+              id: String(session.id || ''),
+              title: String(session.title || ''),
+              running: null,
+              error: String(error?.message || error),
+            });
+          }
+        }
+        const readable = inspected.every((item) => typeof item.running === 'boolean');
+        return { readable, error: '', running: inspected.filter((item) => item.running === true) };
+      } catch (error) {
+        return { readable: false, error: String(error?.message || error), running: [] };
+      }
+    }).catch((error) => ({ readable: false, error: String(error?.message || error), running: [] }));
+    inventoryReadable = observation.readable === true;
+    runningAfter = observation.running;
+    stableIdleObservations = inventoryReadable && runningAfter.length === 0
+      ? stableIdleObservations + 1
+      : 0;
+    observations.push({
+      captured_at: new Date().toISOString(),
+      readable: inventoryReadable,
+      error: observation.error || '',
+      running: runningAfter,
+      stable_idle_observations: stableIdleObservations,
+    });
+    if (!inventoryReadable) break;
+    if (stableIdleObservations < minimumIdleObservations) await page.waitForTimeout(500);
+  }
+
+  const cancelFailures = cancellationAttempts.filter((item) => item.ok !== true);
+  const verdict = coreBetaV2RunningSessionQuiescenceVerdict({
+    inventoryReadable,
+    cancelFailures,
+    runningAfter,
+    stableIdleObservations,
+    minimumIdleObservations,
+  });
+  const afterScreenshot = await shot(page, caseDir, `sessions-purge-quiescence${suffix}-after`).catch(() => '');
+  const evidenceValid = Boolean(beforeScreenshot && afterScreenshot);
+  const valid = verdict.ok && evidenceValid;
+  const file = path.join(caseDir, `sessions-purge-quiescence${suffix}.json`);
+  writeJsonFile(file, {
+    schema_version: 'qbot-core-beta-session-quiescence/v1',
+    captured_at: new Date().toISOString(),
+    valid,
+    reason: String(reason || ''),
+    elapsed_ms: Date.now() - startedAt,
+    initial,
+    running_before: runningBefore,
+    cancellation_attempts: cancellationAttempts,
+    observations,
+    verdict,
+    before_screenshot: beforeScreenshot,
+    after_screenshot: afterScreenshot,
+    evidence_valid: evidenceValid,
+  });
+  if (!Array.isArray(state.artifacts.sessions_purge_quiescence)) {
+    state.artifacts.sessions_purge_quiescence = [];
+  }
+  state.artifacts.sessions_purge_quiescence.push(file);
+  if (beforeScreenshot) state.screenshots[`sessions_purge_quiescence${suffix.replaceAll('-', '_')}_before`] = beforeScreenshot;
+  if (afterScreenshot) state.screenshots[`sessions_purge_quiescence${suffix.replaceAll('-', '_')}_after`] = afterScreenshot;
+  recordStep(
+    state,
+    '清空会话前停止并读回全部活动会话',
+    '必须枚举公开会话，仅停止真实 running 会话，并连续 3 次读回全部 idle 后才能点击清空。',
+    valid
+      ? `${verdict.reason} runningBefore=${runningBefore.length}；cancelled=${cancellationAttempts.filter((item) => item.ok).length}`
+      : `${verdict.reason}${evidenceValid ? '' : '；前后截图证据不完整'}`,
+    valid ? 'passed' : 'failed',
+    afterScreenshot || beforeScreenshot,
+    valid ? '' : 'automation_error',
+  );
+  return { valid, file, verdict, running_before: runningBefore, cancellation_attempts: cancellationAttempts };
 }
 
 export function coreBetaV2RuntimeMaintenanceState({
@@ -5777,6 +6000,8 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         stableReadyObservations: 1,
         minimumReadyObservations: 1,
       });
+      const activeSessionRejected = maintenance.terminal === 'sessions-empty'
+        && coreBetaV2MaintenanceActiveSessionRejection(text);
       authoritativeReadyObservations = baseState.authoritative_ready
         ? authoritativeReadyObservations + 1
         : 0;
@@ -5785,7 +6010,16 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         stableObservations: authoritativeReadyObservations,
         elapsedMs,
       });
-      const terminalState = visibleStateConflict.confirmed
+      const terminalState = activeSessionRejected
+        ? {
+          ...baseState,
+          ready: false,
+          pending: false,
+          failed: true,
+          active_session_rejected: true,
+          reason: '全部公开会话已确认 idle 后，产品仍以 active-session 拒绝清空会话。',
+        }
+        : visibleStateConflict.confirmed
         ? {
           ...baseState,
           ready: false,
@@ -5989,14 +6223,57 @@ async function executeCoreBetaInitializationCase(context) {
     if (!opened.ok) {
       throw new Error(`${maintenance.method} 无法进入系统设置：${opened.reason}`);
     }
-    const clicked = await clickCoreBetaV2MaintenanceAction({
+    const actionAttempts = [];
+    if (maintenance.terminal === 'sessions-empty') {
+      const quiescence = await quiesceCoreBetaV2RunningSessions({
+        page,
+        state,
+        caseDir,
+        reason: '清空全部会话前置',
+        attempt: 1,
+        timeoutMs: 60_000,
+      });
+      if (!quiescence.valid) {
+        throw new Error(`sessionsPurgeAllEnvs 无法建立全部会话 idle 前置：${quiescence.verdict?.reason || 'unknown'}`);
+      }
+    }
+    let clicked = await clickCoreBetaV2MaintenanceAction({
       page,
       state,
       caseDir,
       ...maintenance,
+      attempt: 1,
     });
     if (!clicked.ok) {
       throw new Error(`${maintenance.method} 真实 UI 动作失败：${clicked.reason}`);
+    }
+    actionAttempts.push(clicked);
+    if (
+      maintenance.terminal === 'sessions-empty'
+      && coreBetaV2MaintenanceActiveSessionRejection(clicked.action_text)
+    ) {
+      const retryQuiescence = await quiesceCoreBetaV2RunningSessions({
+        page,
+        state,
+        caseDir,
+        reason: '首次清空被 active-session 拒绝后的唯一重试前置',
+        attempt: 2,
+        timeoutMs: 60_000,
+      });
+      if (!retryQuiescence.valid) {
+        throw new Error(`sessionsPurgeAllEnvs 首次被 active-session 拒绝，且重试前无法建立全部会话 idle：${retryQuiescence.verdict?.reason || 'unknown'}`);
+      }
+      clicked = await clickCoreBetaV2MaintenanceAction({
+        page,
+        state,
+        caseDir,
+        ...maintenance,
+        attempt: 2,
+      });
+      if (!clicked.ok) {
+        throw new Error(`${maintenance.method} 唯一 UI 重试失败：${clicked.reason}`);
+      }
+      actionAttempts.push(clicked);
     }
     const terminal = await waitForCoreBetaV2MaintenanceTerminal({
       page,
@@ -6024,6 +6301,7 @@ async function executeCoreBetaInitializationCase(context) {
       elapsed_ms: Date.now() - startedAt,
       before,
       action: clicked,
+      action_attempts: actionAttempts,
       terminal: terminal.readback,
       after,
     };
@@ -6047,6 +6325,7 @@ async function executeCoreBetaInitializationCase(context) {
       `${maintenance.method} 真实 UI 操作与终态采样`,
       '必须从系统设置点击真实维护按钮；破坏性操作须捕获并确认弹窗，随后等待公开状态连续稳定。',
       `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；`
+        + `attempts=${actionAttempts.length}；`
         + `action_observed=${clicked.action_observed}(${clicked.action_observation_source || 'none'})；`
         + `busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
       terminal.ok ? 'passed' : 'failed',

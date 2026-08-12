@@ -292,6 +292,10 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
 - Core Beta v2 Case 间永久串行；`BETA-CHAT-008` 的 20 任务是单 Case 内部合同。
 - Agent 澄清/推荐选项由框架点击精确“跳过/跳过（用默认）”并留证，不使用
   Computer Use。
+- `BETA-INIT-004` 清空会话前，框架必须枚举所有公开会话、仅停止真实 running
+  会话并连续 3 次读回全部 idle。首次真实 UI 清空若明确返回 `active-session`，只允许
+  再次完成 idle 对账后重试一次真实 UI 清空；两次点击都必须保留独立确认弹窗、截图和
+  动作账本。禁止直接调用 preload 清空、盲等 10 分钟或无限重试。
 - 产品 Bug 在证据完整且后续 Case 独立时继续；不得修改 deepbankV2。
 - 普通 prerequisite `blocked` 记录后继续独立 Case，不得覆盖更高优先级的
   `automation_error`。
