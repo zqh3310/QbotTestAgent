@@ -4641,16 +4641,27 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     return Boolean(snapshot.bridge_results?.[name]?.__error);
   });
   const capabilities = snapshot.capabilities_after;
+  const noExplicitSelection = (value) => value == null
+    || (Array.isArray(value) && value.length === 0);
   const directCapabilitiesCleared = Boolean(
     capabilities
     && !capabilities.__error
-    && Array.isArray(capabilities.selectedSkills)
-    && capabilities.selectedSkills.length === 0
-    && Array.isArray(capabilities.selectedConnectors)
-    && capabilities.selectedConnectors.length === 0
+    && Object.hasOwn(capabilities, 'selectedSkills')
+    && noExplicitSelection(capabilities.selectedSkills)
+    && Object.hasOwn(capabilities, 'selectedConnectors')
+    && noExplicitSelection(capabilities.selectedConnectors)
     && (Object.hasOwn(capabilities, 'currentExpert') || Object.hasOwn(capabilities, 'expertIdentity'))
     && (capabilities.currentExpert ?? capabilities.expertIdentity) == null
   );
+  const supersededBridgeFailures = bridgeFailures.filter((name) => (
+    /desktop-local context mutation was superseded/i.test(
+      String(snapshot.bridge_results?.[name]?.__error || ''),
+    )
+  ));
+  const fatalBridgeFailures = directCapabilitiesCleared
+    && supersededBridgeFailures.length === bridgeFailures.length
+    ? []
+    : bridgeFailures;
   const fallbackSource = Object.entries(snapshot.selection_readbacks || {})
     .find(([, source]) => cleanupSelectionSourceVerdict(source))?.[0] || '';
   const selectionSource = directCapabilitiesCleared
@@ -4658,7 +4669,7 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     : fallbackSource;
   const errors = [];
   if (Number(snapshot.dialogs_open || 0) !== 0) errors.push('dialogs_still_open');
-  if (bridgeFailures.length) errors.push(`bridge_failed:${bridgeFailures.join(',')}`);
+  if (fatalBridgeFailures.length) errors.push(`bridge_failed:${fatalBridgeFailures.join(',')}`);
   if (snapshot.capability_cleanup_required && !selectionSource) {
     errors.push('capability_selection_not_confirmed_empty');
   }
@@ -4672,7 +4683,8 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     valid: errors.length === 0,
     selection_source: selectionSource,
     direct_capabilities_error: String(capabilities?.__error || ''),
-    bridge_failures: bridgeFailures,
+    bridge_failures: fatalBridgeFailures,
+    superseded_bridge_failures: supersededBridgeFailures,
     errors,
   };
 }
@@ -5469,7 +5481,7 @@ export function coreBetaV2MaintenanceActionObservation({
     };
   }
   const completionPatterns = {
-    'assistant-prepare-python-runtimes': /(?:完成|就绪|无需更新|已是最新|同版本)[^。\n]*(?:运行时|runtime)/i,
+    'assistant-prepare-python-runtimes': /(?:完成[：:][^。\n]*(?:Python\s*\d+\s*个就绪[^。\n]*Node\s*\d+\s*个就绪|运行时|runtime)|(?:就绪|无需更新|已是最新|同版本)[^。\n]*(?:运行时|runtime))/i,
     'assistant-runtime-reset-all': /完成[：:][^。\n]*(?:运行时|环境|重初始化)/i,
     'assistant-skills-reinstall': /完成[：:][^。\n]*技能运行环境已清理/i,
     'assistant-sessions-purge': /完成[：:][^。\n]*(?:会话|任务)[^。\n]*(?:清空|清理|删除)/i,

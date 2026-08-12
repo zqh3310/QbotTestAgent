@@ -2029,6 +2029,7 @@ assert.deepEqual(
     selection_source: 'agent.capabilities',
     direct_capabilities_error: '',
     bridge_failures: [],
+    superseded_bridge_failures: [],
     errors: [],
   },
   '清理读回应优先接受 capabilities 中明确为空的技能、连接器和专家状态',
@@ -2146,6 +2147,54 @@ assert.equal(
   }).valid,
   false,
   '任一清理桥动作失败时，即使最终 capabilities 看似为空也必须 fail-closed',
+);
+const supersededCleanupVerdict = coreBetaCleanupReadbackVerdict({
+  ...cleanupBase,
+  capabilities_after: { selectedSkills: null, selectedConnectors: null, currentExpert: null },
+  bridge_invocations: {
+    setSkillsDisabled: { attempted: true, ok: false },
+    setConnectorsDisabled: { attempted: true, ok: false },
+    setExpert: { attempted: true, ok: false },
+  },
+  bridge_results: {
+    setSkillsDisabled: { __error: 'desktop-local context mutation was superseded' },
+    setConnectorsDisabled: { __error: 'desktop-local context mutation was superseded' },
+    setExpert: { __error: 'desktop-local context mutation was superseded' },
+  },
+});
+assert.equal(
+  supersededCleanupVerdict.valid,
+  true,
+  '幂等清理被新版 desktop-local 上下文替代时，只有公开 capabilities 独立证明 Auto 无显式能力残留才可通过',
+);
+assert.deepEqual(supersededCleanupVerdict.bridge_failures, []);
+assert.deepEqual(supersededCleanupVerdict.superseded_bridge_failures, [
+  'setSkillsDisabled',
+  'setConnectorsDisabled',
+  'setExpert',
+]);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupBase,
+    capabilities_after: {
+      selectedSkills: [{ slug: 'leftover-skill' }],
+      selectedConnectors: null,
+      currentExpert: null,
+    },
+    bridge_invocations: supersededCleanupVerdict.superseded_bridge_failures.reduce(
+      (accumulator, name) => ({ ...accumulator, [name]: { attempted: true, ok: false } }),
+      {},
+    ),
+    bridge_results: supersededCleanupVerdict.superseded_bridge_failures.reduce(
+      (accumulator, name) => ({
+        ...accumulator,
+        [name]: { __error: 'desktop-local context mutation was superseded' },
+      }),
+      {},
+    ),
+  }).valid,
+  false,
+  'superseded 不能掩盖公开 capabilities 中仍存在的显式能力残留',
 );
 const skillInstallReceipts = Array.from({ length: 5 }, (_, index) => ({
   qualified_identity: `global/qa-skill-${index + 1}/1.0.0`,
@@ -4498,6 +4547,20 @@ assert.deepEqual(
     completion_transition: '完成：技能运行环境已清理',
   },
   '过快完成的维护动作必须用相对动作前新增的精确完成回执证明，不得因漏采 transient busy 误判',
+);
+assert.deepEqual(
+  coreBetaV2MaintenanceActionObservation({
+    testId: 'assistant-prepare-python-runtimes',
+    busyObserved: false,
+    beforeText: '立即检查运行时',
+    actionText: '立即检查运行时\n完成：Python 0 个就绪；Node 0 个就绪',
+  }),
+  {
+    observed: true,
+    source: 'explicit-completion-transition',
+    completion_transition: '完成：Python 0 个就绪；Node 0 个就绪',
+  },
+  '当前发布包的 Python/Node 数量完成回执必须被识别为本次运行时检查的精确状态转换',
 );
 assert.equal(
   coreBetaV2MaintenanceActionObservation({

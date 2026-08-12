@@ -187,6 +187,18 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
    原生 IME 必须由 pretest 实测对应命令可用。不得运行中临时排除这些 Case，也
    不得降级成 scoped 发布门禁。
 
+运行时初始化与 Case 清理还有两项证据判定不变量：
+
+- “立即检查运行时”允许以按钮 busy/disabled、处理中状态，或相对动作前新增的精确
+  完成回执证明动作发生；当前发布包的 `完成：Python N 个就绪；Node N 个就绪`
+  属于有效完成回执，动作前已存在的同文案仍不得复用。
+- 能力清理以独立公开状态的最终读回为准。`selectedSkills/selectedConnectors` 的空数组
+  表示显式禁用，`null` 表示 Auto 且无显式选择，两者在 `currentExpert=null` 时都满足
+  “无当前任务能力残留”。只有三个清理桥均精确返回
+  `desktop-local context mutation was superseded`，且上述公开读回完整成立时，才允许把
+  这组幂等 superseded 记录为诊断后继续；任一真实能力残留、其他桥错误、字段缺失、
+  公开状态不可读或弹窗未关闭仍必须 fail-closed。
+
 ## 4. Fixture 合同
 
 当前 70 条生产灰度门禁的静态审计必须证明 `strict_controller_required=0`，
