@@ -18303,6 +18303,21 @@ async function executeSitHomeDeleteOneAttachment({ page, state, testCase, caseDi
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const files = ['qbot-text-brief.txt', 'qbot-requirement.md', 'qbot-data.json'].map((name) => path.join(fixturesDir, name));
+  state.artifacts.attachment_sources = files.map((file) => attachmentSourceRecord(file, 'picker'));
+  const sourceLedgerValid = state.artifacts.attachment_sources.every((item) => (
+    item.name
+    && item.size_bytes > 0
+    && /^[a-f0-9]{64}$/i.test(item.sha256)
+  ));
+  recordAssertion(
+    state,
+    '附件源文件非空且可追溯',
+    '三个附件上传前必须逐一记录名称、非零大小和 SHA-256，manifest 不得在事后补写或凭文件名推断。',
+    sourceLedgerValid,
+    state.artifacts.attachment_sources.map((item) => `${item.name}=${item.size_bytes}B sha256=${item.sha256}`).join('；'),
+    'automation_error',
+  );
+  if (!sourceLedgerValid) return;
   const upload = await uploadAttachmentsInComposer(page, files);
   state.artifacts.upload = upload;
   state.screenshots.home_056_uploaded = await shot(page, caseDir, 'home-056-three-attachments');
