@@ -24,14 +24,25 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 ```text
 /Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx
 Sheet: 日常回归
-SHA-256: c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183
+SHA-256: 49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a
 ```
 
 - 顶层 83：70 个 `compound` 父 Case + 13 个独立 `SIT-*` Case。
 - 叶子 144：全部必须有独立目录、结果、manifest、截图、日志和 SHA。
 - 静态能力审计必须为顶层 `83/83`、叶子 `144/144`、
   `strict_controller_required=0`、`unsupported_runtime=0`。
+- 静态协议预检必须展开复合父 Case 并验证 Skill、Expert、MCP 上游均在使用前
+  由本轮更早叶子建立；缺失或逆序依赖必须在 Case 0 前失败。
+- `QW-ENTRY-002` 固定为 `BETA-INIT-004 + QWD-ENTRY-002`。后者是独立原生
+  新任务 Auto/能力/附件/草稿隔离 driver，不依赖 Skill 安装账本。
 - 全程只有一个 runner、一个受管 360Teams 宿主；外层 Case 和复合叶子都串行。
+
+首轮历史框架问题保留在不可变目录
+`teams360-automation/output/20260812165500_uat-qwork-daily83_teams360-5.3.0-2119080776_qwork-0.1.1-rc.4_M3_serial_framework-93b0958_casebook-c0119f4`：
+旧映射把 `QW-ENTRY-002` 绑定到依赖 `deep_use[0]` 的 `BETA-SKILL-011`，而本轮
+Skill 样本在第 40 个父 Case 后才建立，导致运行中抛异常并留下不完整 manifest。
+该目录只用于历史取证；修复后必须以新 SHA、新 commit、新 pretest 和新目录从
+1/83 全量重跑。
 
 最新冻结的旧 55 条 scoped 批次：
 
@@ -220,7 +231,7 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 日常回归是不同测试合同，不能用 70/160 的 pretest 替代本轮 83 条 pretest。
 
 本轮日常回归使用 `日常回归` Sheet、`--expected-count 83` 和 SHA
-`c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183`；其余
+`49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a`；其余
 Teams/QWork/UAT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。

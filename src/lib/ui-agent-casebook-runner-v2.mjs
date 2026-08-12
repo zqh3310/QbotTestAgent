@@ -588,6 +588,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     const protocolAudit = validateCoreBetaCasePlan(coreBetaCases, {
       fixtureRoot: fixturesDir,
       allowPartialInitialization: scopedExecution && scopeAudit?.ok === true,
+      allowDependencyGaps: scopedExecution && scopeAudit?.ok === true,
     });
     writeJsonFile(path.join(outDir, 'core-beta-protocol-preflight.json'), protocolAudit);
     if (!protocolAudit.ok || coreBetaCases.length !== selectedCases.length) {
@@ -3906,6 +3907,7 @@ export const CORE_BETA_CONTROLLER_SCENARIO_DRIVERS = new Set([
 export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
   'composer_history_navigation',
   'model_menu_sdk_filter',
+  'qwork_daily_new_task_auto_isolation',
   'qwork_daily_artifact_exact_directory',
   'qwork_daily_artifact_keep_both_atomic',
   'qwork_daily_expert_catalog_identity',
@@ -12090,12 +12092,174 @@ export function qworkDailyPersonalTaskContext() {
   return { cwd: null };
 }
 
+export function qworkDailyNewTaskAutoIsolationVerdict(readback = {}) {
+  const taskA = readback.task_a || {};
+  const taskB = readback.task_b || {};
+  const reopenedA = readback.reopened_task_a || {};
+  const aSkillIds = Array.isArray(taskA.selected_skill_ids) ? taskA.selected_skill_ids.map(String) : [];
+  const aConnectorIds = Array.isArray(taskA.selected_connector_ids) ? taskA.selected_connector_ids.map(String) : [];
+  const reopenedSkillIds = Array.isArray(reopenedA.selected_skill_ids) ? reopenedA.selected_skill_ids.map(String) : [];
+  const reopenedConnectorIds = Array.isArray(reopenedA.selected_connector_ids) ? reopenedA.selected_connector_ids.map(String) : [];
+  return Boolean(
+    String(taskA.task_id || '')
+    && aSkillIds.length > 0
+    && aConnectorIds.length > 0
+    && String(reopenedA.task_id || '') === String(taskA.task_id || '')
+    && JSON.stringify(reopenedSkillIds) === JSON.stringify(aSkillIds)
+    && JSON.stringify(reopenedConnectorIds) === JSON.stringify(aConnectorIds)
+    && String(reopenedA.draft_text || '') === ''
+    && taskB.task_id == null
+    && taskB.is_draft === true
+    && Number(taskB.message_count || 0) === 0
+    && taskB.current_expert == null
+    && taskB.skill_mode === 'auto'
+    && taskB.connector_mode === 'auto'
+    && Array.isArray(taskB.selected_skill_ids)
+    && taskB.selected_skill_ids.length === 0
+    && Array.isArray(taskB.selected_connector_ids)
+    && taskB.selected_connector_ids.length === 0
+    && Number(taskB.attachment_count || 0) === 0
+    && String(taskB.draft_text || '') === String(readback.expected_draft || '')
+    && readback.draft_was_sent !== true
+  );
+}
+
 function writeQworkDailyEvidence(state, caseDir, role, data, oracleValid = true, evidenceValid = true) {
   const file = path.join(caseDir, `${role.replaceAll('_', '-')}.json`);
   writeJsonFile(file, qworkDailyEvidenceEnvelope(state.id, data, oracleValid, evidenceValid));
   state.artifacts[role] = file;
   state.artifacts[`core_beta_${role}`] = data;
   return file;
+}
+
+async function qworkDailyNewTaskAutoIsolationCase({ page, state, testCase, caseDir, timeoutMs }) {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'manual' })) return;
+  if (!await selectFirstManualSkill(page, state, caseDir)) return;
+  if (!await selectFirstManualConnector(page, state, caseDir)) return;
+  const taskABefore = await captureCoreBetaPublicState(page, testCase);
+  await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt: '请用一句话确认当前任务上下文已建立。',
+    label: '任务A建立持久化会话',
+  });
+  const taskAAfter = await captureCoreBetaPublicState(page, testCase);
+  const taskAId = String(taskAAfter.task?.id || '');
+  const taskASkillIds = (taskAAfter.capabilities?.selectedSkills || taskAAfter.skills?.selected || []).map((item) => (
+    typeof item === 'string' ? item : String(item?.qualified_identity || item?.id || item?.name || item?.slug || '')
+  )).filter(Boolean);
+  const taskAConnectorIds = (taskAAfter.capabilities?.selectedConnectors || taskAAfter.connectors?.selected || []).map((item) => (
+    typeof item === 'string' ? item : String(item?.key || item?.id || item?.name || '')
+  )).filter(Boolean);
+
+  await openNewTask(page, state);
+  const taskBInitial = await captureCoreBetaPublicState(page, testCase);
+  const taskBE2e = await qbotE2EState(page);
+  const attachmentText = await visibleComposerAttachmentText(page);
+  const skillChipText = await visibleSkillChipText(page);
+  const sceneTagText = await visibleSceneTagText(page);
+  const draft = 'QWork 日常回归任务B未发送草稿';
+  await fillComposer(page, draft, state, '在任务B输入未发送草稿');
+  const draftText = await page.locator('[data-testid="composer-input"], .aui-composer-input').first()
+    .evaluate((element) => String(element.innerText || element.textContent || element.value || '').replaceAll('\uFEFF', ''))
+    .catch(() => '');
+  state.screenshots.qwork_daily_entry_task_b = await shot(page, caseDir, 'qwork-daily-entry-task-b-auto-draft');
+
+  const reopened = await reopenSessionAndReadback(page, taskAId);
+  const taskAReopened = await captureCoreBetaPublicState(page, testCase);
+  const reopenedDraftText = await page.locator('[data-testid="composer-input"], .aui-composer-input').first()
+    .evaluate((element) => String(element.innerText || element.textContent || element.value || '').replaceAll('\uFEFF', ''))
+    .catch(() => '');
+  const reopenedSkillIds = (taskAReopened.capabilities?.selectedSkills || taskAReopened.skills?.selected || []).map((item) => (
+    typeof item === 'string' ? item : String(item?.qualified_identity || item?.id || item?.name || item?.slug || '')
+  )).filter(Boolean);
+  const reopenedConnectorIds = (taskAReopened.capabilities?.selectedConnectors || taskAReopened.connectors?.selected || []).map((item) => (
+    typeof item === 'string' ? item : String(item?.key || item?.id || item?.name || '')
+  )).filter(Boolean);
+  const toolTrace = await captureCoreBetaToolTrace(page, '');
+  const taskBSkillMode = taskBInitial.capabilities?.selectedSkills == null ? 'auto' : 'manual';
+  const taskBConnectorMode = String(taskBInitial.capabilities?.connectorRouting?.mode || '')
+    || (taskBInitial.capabilities?.selectedConnectors == null ? 'auto' : 'manual');
+  const readback = {
+    valid: true,
+    oracle_valid: false,
+    expected_draft: draft,
+    draft_was_sent: false,
+    task_a_before: taskABefore,
+    task_a: {
+      task_id: taskAId,
+      selected_skill_ids: taskASkillIds,
+      selected_connector_ids: taskAConnectorIds,
+      public_state: taskAAfter,
+    },
+    task_b: {
+      task_id: taskBInitial.task?.id ?? null,
+      is_draft: taskBE2e.isDraft === true,
+      draft_instance_id: String(taskBE2e.draftInstanceId || ''),
+      message_count: Number(taskBInitial.task?.message_count || 0),
+      current_expert: taskBInitial.expert ?? null,
+      skill_mode: taskBSkillMode,
+      connector_mode: taskBConnectorMode,
+      selected_skill_ids: Array.isArray(taskBInitial.skills?.selected) ? taskBInitial.skills.selected : [],
+      selected_connector_ids: Array.isArray(taskBInitial.connectors?.selected) ? taskBInitial.connectors.selected : [],
+      attachment_count: attachmentText.trim() ? 1 : 0,
+      attachment_text: attachmentText,
+      skill_chip_text: skillChipText,
+      scene_tag_text: sceneTagText,
+      draft_text: draftText,
+      public_state: taskBInitial,
+    },
+    reopened_task_a: {
+      reopen_ok: reopened.ok === true,
+      task_id: taskAReopened.task?.id || null,
+      selected_skill_ids: reopenedSkillIds,
+      selected_connector_ids: reopenedConnectorIds,
+      draft_text: reopenedDraftText,
+      public_state: taskAReopened,
+    },
+    tool_trace: toolTrace,
+  };
+  readback.oracle_valid = reopened.ok === true
+    && !skillChipText.trim()
+    && !sceneTagText.trim()
+    && qworkDailyNewTaskAutoIsolationVerdict(readback);
+  writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', readback, readback.oracle_valid);
+  writeQworkDailyEvidence(state, caseDir, 'capability_selection', {
+    task_a: readback.task_a,
+    task_b: readback.task_b,
+    reopened_task_a: readback.reopened_task_a,
+  }, readback.oracle_valid);
+  writeQworkDailyEvidence(state, caseDir, 'capability_execution_event', {
+    task_a_id: taskAId,
+    task_b_is_unsent_draft: taskBInitial.task?.id == null && taskBE2e.isDraft === true,
+    task_a_reopened: reopened,
+    tool_trace: toolTrace,
+  }, readback.oracle_valid);
+  writeQworkDailyEvidence(state, caseDir, 'composer_attachment_state', {
+    valid: true,
+    task_b_attachment_count: readback.task_b.attachment_count,
+    task_b_attachment_text: attachmentText,
+  }, readback.task_b.attachment_count === 0);
+  writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', {
+    task_a_id: taskAId,
+    task_a_reopened_id: readback.reopened_task_a.task_id,
+    task_a_skill_identity_stable: JSON.stringify(taskASkillIds) === JSON.stringify(reopenedSkillIds),
+    task_a_connector_identity_stable: JSON.stringify(taskAConnectorIds) === JSON.stringify(reopenedConnectorIds),
+    task_a_reopened_draft_text: reopenedDraftText,
+    task_b_draft_text: draftText,
+    task_b_draft_unsent: true,
+  }, readback.oracle_valid);
+  recordAssertion(
+    state,
+    '新任务默认Auto与任务级能力/草稿隔离',
+    '任务A的显式Skill/Connector只保留在任务A；新任务B必须是无专家、无能力chip、无附件的Auto草稿，未发送草稿不得改变任务A。',
+    readback.oracle_valid,
+    JSON.stringify(readback),
+  );
 }
 
 async function qworkDailyArtifactCase({ page, state, testCase, caseDir, timeoutMs }, scenario) {
@@ -12693,6 +12857,8 @@ async function qworkDailyRedactionCase({ page, state, testCase, caseDir, options
 
 async function executeQworkDailyNativeCase(context, scenario) {
   switch (scenario.driver) {
+    case 'qwork_daily_new_task_auto_isolation':
+      return await qworkDailyNewTaskAutoIsolationCase(context);
     case 'qwork_daily_artifact_exact_directory':
     case 'qwork_daily_artifact_keep_both_atomic':
       return await qworkDailyArtifactCase(context, scenario);

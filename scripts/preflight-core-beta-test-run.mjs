@@ -478,6 +478,7 @@ async function main() {
       protocol = validateCoreBetaCasePlan(cases, {
         fixtureRoot: path.join(ROOT, 'testflies'),
         allowPartialInitialization: scopedExecution && scope?.ok === true,
+        allowDependencyGaps: scopedExecution && scope?.ok === true,
       });
       addCheck('core_beta_protocol', protocol.ok && protocol.executable_count === cases.length,
         protocol.ok ? `executable=${protocol.executable_count}/${cases.length}` : protocol.errors.slice(0, 20).join('; '));

@@ -243,6 +243,7 @@ export const CORE_BETA_SCENARIO_IDS = new Set([
   ...CORE_BETA_BASE_SCENARIO_IDS,
   ...FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
   ...[
+    'QWD-ENTRY-002',
     'QWD-ART-007',
     'QWD-ART-008',
     'QWD-EXPERT-002',
@@ -389,6 +390,7 @@ const registerScenario = (id, driver, {
   ['BETA-DEPLOY-006', 'ingress_service_port_baseline_preservation', { fixture_control: 'protected_release_deployment' }],
   ['BETA-DEPLOY-007', 'bounded_redacted_deployment_diagnostics', { fixture_control: 'protected_release_deployment' }],
   ['BETA-DEPLOY-008', 'retire_remote_qbot_ui_service', { fixture_control: 'protected_release_deployment' }],
+  ['QWD-ENTRY-002', 'qwork_daily_new_task_auto_isolation', { conversation_required: false }],
   ['QWD-ART-007', 'qwork_daily_artifact_exact_directory'],
   ['QWD-ART-008', 'qwork_daily_artifact_keep_both_atomic'],
   ['QWD-EXPERT-002', 'qwork_daily_expert_catalog_identity', { capability_execution_required: false }],
@@ -485,6 +487,17 @@ if (CORE_BETA_SCENARIO_REGISTRY.size !== CORE_BETA_SCENARIO_IDS.size
 }
 
 export const CORE_BETA_CASE_DEPENDENCIES = new Map([
+  ['BETA-SKILL-003', ['BETA-SKILL-002']],
+  ['BETA-SKILL-004', ['BETA-SKILL-002']],
+  ['BETA-SKILL-005', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-006', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-007', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-008', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-009', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-010', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-011', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-012', ['BETA-SKILL-003', 'BETA-SKILL-004']],
+  ['BETA-SKILL-015', ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']],
   ['BETA-EXPERT-007', ['BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004']],
   ['BETA-EXPERT-008', ['BETA-EXPERT-002', 'BETA-EXPERT-007']],
   ['BETA-EXPERT-009', ['BETA-EXPERT-003', 'BETA-EXPERT-007']],
@@ -493,8 +506,15 @@ export const CORE_BETA_CASE_DEPENDENCIES = new Map([
   ['BETA-EXPERT-012', ['BETA-EXPERT-007']],
   ['BETA-EXPERT-013', ['BETA-EXPERT-012']],
   ['BETA-EXPERT-014', ['BETA-EXPERT-012']],
-  ['BETA-EXPERT-015', ['BETA-EXPERT-007']],
-  ['BETA-EXPERT-016', ['BETA-EXPERT-007']],
+  ['BETA-EXPERT-015', ['BETA-EXPERT-012']],
+  ['BETA-EXPERT-016', ['BETA-EXPERT-012']],
+  ['BETA-MCP-002', ['BETA-MCP-001']],
+  ['BETA-MCP-003', ['BETA-MCP-001']],
+  ['BETA-MCP-004', ['BETA-MCP-001']],
+  ['BETA-MCP-005', ['BETA-MCP-001']],
+  ['BETA-MCP-006', ['BETA-MCP-001']],
+  ['BETA-MCP-007', ['BETA-MCP-001']],
+  ['BETA-MCP-008', ['BETA-MCP-001']],
 ]);
 
 export const CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS = new Map([
@@ -1011,6 +1031,26 @@ export function validateCoreBetaCasePlan(cases, options = {}) {
     const lateInitialization = ids.slice(requiredPrefix.length).filter((id) => id.startsWith('BETA-INIT-'));
     if (lateInitialization.length) {
       errors.push(`初始化 Case 不得在业务 Case 之后执行：${lateInitialization.join(',')}`);
+    }
+  }
+  if (options.allowDependencyGaps !== true) {
+    const leaves = coreBetaLeafCases(cases || []);
+    const firstPositions = new Map();
+    leaves.forEach((item, index) => {
+      const id = String(item?.id || '').trim();
+      if (id && !firstPositions.has(id)) firstPositions.set(id, index);
+    });
+    for (const [index, item] of leaves.entries()) {
+      const id = String(item?.id || '').trim();
+      for (const dependencyId of CORE_BETA_CASE_DEPENDENCIES.get(id) || []) {
+        const dependencyIndex = firstPositions.get(dependencyId);
+        if (dependencyIndex == null || dependencyIndex >= index) {
+          errors.push(
+            `${id} 的上游 ${dependencyId} 必须在同一批次更早建立；`
+            + `leaf_index=${index + 1}；upstream_index=${dependencyIndex == null ? 'missing' : dependencyIndex + 1}`,
+          );
+        }
+      }
     }
   }
   return {

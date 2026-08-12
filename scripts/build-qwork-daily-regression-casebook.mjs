@@ -16,6 +16,7 @@ const DEFAULT_OUTPUT = path.join(ROOT, 'PRD', 'QWork日常回归自动化Caseboo
 const SHEET = '日常回归';
 const SOURCE_COLS = 16;
 const CUSTOM_LEAF = new Map([
+  ['QW-ENTRY-002', 'QWD-ENTRY-002'],
   ['QW-ART-007', 'QWD-ART-007'],
   ['QW-ART-008', 'QWD-ART-008'],
   ['QW-EXPERT-002', 'QWD-EXPERT-002'],
@@ -65,13 +66,16 @@ function parseSourceRows(values) {
 }
 
 function extractMappedIds(row, baselineById) {
+  if (row.id === 'QW-ENTRY-002') return ['BETA-INIT-004', CUSTOM_LEAF.get(row.id)];
   if (CUSTOM_LEAF.has(row.id)) return [CUSTOM_LEAF.get(row.id)];
   const ids = unique([...row.source.matchAll(/(?:BETA|SIT)-[A-Z0-9-]+/g)].map((match) => match[0]));
   const mapped = ids.filter((id) => baselineById.has(id));
   if (row.id === 'QW-EXPERT-005') {
-    for (const dependency of ['BETA-EXPERT-003', 'BETA-EXPERT-007']) {
-      if (baselineById.has(dependency) && !mapped.includes(dependency)) mapped.unshift(dependency);
-    }
+    return unique([
+      'BETA-EXPERT-003',
+      'BETA-EXPERT-007',
+      ...mapped.filter((id) => !['BETA-EXPERT-003', 'BETA-EXPERT-007'].includes(id)),
+    ]).filter((id) => baselineById.has(id));
   }
   return unique(mapped);
 }
@@ -81,6 +85,7 @@ function conversationRoles() {
 }
 
 function customType(id) {
+  if (id === 'QWD-ENTRY-002') return 'task_lifecycle';
   if (id.startsWith('QWD-ART-')) return 'artifact';
   if (id.startsWith('QWD-EXPERT-')) return 'expert_lifecycle';
   if (id === 'QWD-AUTO-003') return 'capability_activation';
@@ -92,6 +97,7 @@ function customType(id) {
 
 function customEvidenceRoles(id) {
   const base = ['before_screenshot', 'action_receipt', 'after_screenshot', 'public_state_readback', 'cleanup_readback', 'qwork_daily_readback'];
+  if (id === 'QWD-ENTRY-002') return [...base, ...conversationRoles(), 'capability_selection', 'capability_execution_event', 'composer_attachment_state', 'data_integrity_readback'];
   if (id === 'QWD-ART-007') return [...base, ...conversationRoles(), 'artifact_path_sha256', 'content_readback'];
   if (id === 'QWD-ART-008') return [...base, ...conversationRoles(), 'artifact_path_sha256', 'data_integrity_readback'];
   if (id === 'QWD-EXPERT-002') return [...base, 'capability_inventory', 'expert_identity_snapshot'];
@@ -107,6 +113,7 @@ function customEvidenceRoles(id) {
 
 function customTurns(id) {
   const prompts = {
+    'QWD-ENTRY-002': '请用一句话确认当前任务上下文已建立。',
     'QWD-ART-007': '把 Markdown 成果保存到指定相对目录，并在回复与成果区显示同一路径。',
     'QWD-ART-008': '已有同名文件时两个都留，原文件不可在任何时刻被改写。',
     'QWD-EXPERT-009': '组织可见专家发布后，由owner完成首轮真实任务。',
@@ -158,7 +165,7 @@ function customLeafContract(row, id) {
     pipeline_policy: 'serial',
     batch_size: 1,
     initialization_policy: 'case_clean',
-    cleanup_policy: '恢复设置与选择；清理本Case创建的专家和临时工作区；保留任务与不可变证据。',
+    cleanup_policy: '恢复设置与能力选择；清理本Case创建的专家和临时工作区；保留任务与不可变证据。',
     risk_domain: 'functional,reliability_recovery,security_privacy,data_integrity_isolation',
     oracle_type: 'public_ui+structured_bridge+immutable_sha256',
     deterministic: '是',
@@ -282,7 +289,7 @@ async function main() {
       }
       const ids = extractMappedIds(row, baselineById);
       if (!ids.length) throw new Error(`${row.id} 没有可执行叶子合同`);
-      const children = ids.map((id) => CUSTOM_LEAF.has(row.id) ? customLeafContract(row, id) : structuredClone(baselineById.get(id)));
+      const children = ids.map((id) => id.startsWith('QWD-') ? customLeafContract(row, id) : structuredClone(baselineById.get(id)));
       return parentContract(row, children);
     });
     const maxChildren = Math.max(...contracts.map((item) => item.children?.length || 0));

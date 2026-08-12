@@ -147,6 +147,7 @@ const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restar
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
 const capabilityFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-capability-fixture-control-plane.sh'), 'utf8');
+const qworkDailyCasebookBuilder = fs.readFileSync(path.join(root, 'scripts', 'build-qwork-daily-regression-casebook.mjs'), 'utf8');
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 const coreGateCasebook = JSON.parse(fs.readFileSync(
   path.join(root, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json'),
@@ -164,6 +165,16 @@ assert.doesNotMatch(
   coreBetaOperatingGuide,
   /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
   'Core Beta 操作指南不得重新引入 macOS 不兼容的 mktemp 后缀',
+);
+assert.match(
+  qworkDailyCasebookBuilder,
+  /\['QW-ENTRY-002', 'QWD-ENTRY-002'\][\s\S]*row\.id === 'QW-ENTRY-002'[\s\S]*\['BETA-INIT-004', CUSTOM_LEAF\.get\(row\.id\)\]/,
+  'QW-ENTRY-002 必须使用独立QWD入口driver，禁止重新映射到依赖deep_use账本的BETA-SKILL-011',
+);
+assert.match(
+  qworkDailyCasebookBuilder,
+  /row\.id === 'QW-EXPERT-005'[\s\S]{0,600}'BETA-EXPERT-003'[\s\S]{0,200}'BETA-EXPERT-007'/,
+  'QW-EXPERT-005 必须先建立Codex草稿再发布三类专家，禁止生成逆序账本依赖',
 );
 
 assert.deepEqual(

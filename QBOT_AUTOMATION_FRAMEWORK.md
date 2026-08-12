@@ -37,7 +37,7 @@
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
 | 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
 | 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
-| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183` |
+| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `49a6c949c969fae48cd9d2cd2ca73b663e364a01b6e93ffd0c2d64d6f51e6e9a` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -61,6 +61,11 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
 `compound` 父合同，严格按声明顺序串行执行叶子；13 个 `SIT-*` 是独立合同。
 静态审计必须同时满足顶层 `83/83`、叶子 `144/144`、
 `strict_controller_required=0` 和 `unsupported_runtime=0`。
+静态协议预检还必须把复合父 Case 展开为真实叶子顺序，验证 Skill、Expert 和 MCP
+账本依赖均在使用前由同一批次更早的叶子建立。缺少或逆序的上游不得拖到运行中
+才抛异常；非 scoped 完整批次必须在 Case 0 前 fail-closed。`QW-ENTRY-002`
+使用独立原生叶子 `QWD-ENTRY-002` 验证新任务默认 Auto、能力/附件/草稿隔离，
+不得复用依赖 `BETA-SKILL-002~004` 账本的 `BETA-SKILL-011`。
 
 ## 3. 启动前硬门禁
 
@@ -127,7 +132,8 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
 
    该报告除顶层 `83/83` 外，还必须证明
    `leaf_runtime_dispatch.dispatchable_count=144`、
-   `leaf_runtime_dispatch.unsupported_count=0`。
+   `leaf_runtime_dispatch.unsupported_count=0`，且协议错误中不存在缺失或逆序的
+   叶子上游依赖。
 
 5. 执行统一真实运行前自检。以下以 360Teams 为例；所有字段必须替换为本轮冻结发布值：
 

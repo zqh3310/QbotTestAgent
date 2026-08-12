@@ -34,6 +34,7 @@ import {
   coreBetaSuiteRoot,
   qworkDailyEvidenceEnvelope,
   qworkDailyExpertCatalogVerdict,
+  qworkDailyNewTaskAutoIsolationVerdict,
   qworkDailyPersonalTaskContext,
   qworkDailyRedactionVerdict,
   qworkDailySecretFindings,
@@ -164,14 +165,15 @@ import {
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
 assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 291);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 291);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 292);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 292);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  291,
+  292,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 for (const [id, caseType, driver] of [
+  ['QWD-ENTRY-002', 'task_lifecycle', 'qwork_daily_new_task_auto_isolation'],
   ['QWD-ART-007', 'artifact', 'qwork_daily_artifact_exact_directory'],
   ['QWD-ART-008', 'artifact', 'qwork_daily_artifact_keep_both_atomic'],
   ['QWD-EXPERT-002', 'expert_lifecycle', 'qwork_daily_expert_catalog_identity'],
@@ -192,6 +194,75 @@ for (const [id, caseType, driver] of [
   assert.equal(binding.dispatchable, true, `${id} 必须在静态审计阶段可分发`);
   assert.equal(binding.mode, 'native', `${id} 必须由runner原生执行`);
 }
+
+assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
+  expected_draft: '任务B草稿',
+  draft_was_sent: false,
+  task_a: {
+    task_id: 'task-a',
+    selected_skill_ids: ['skill-a'],
+    selected_connector_ids: ['connector-a'],
+  },
+  task_b: {
+    task_id: null,
+    is_draft: true,
+    message_count: 0,
+    current_expert: null,
+    skill_mode: 'auto',
+    connector_mode: 'auto',
+    selected_skill_ids: [],
+    selected_connector_ids: [],
+    attachment_count: 0,
+    draft_text: '任务B草稿',
+  },
+  reopened_task_a: {
+    task_id: 'task-a',
+    selected_skill_ids: ['skill-a'],
+    selected_connector_ids: ['connector-a'],
+    draft_text: '',
+  },
+}), true, 'QWD-ENTRY-002 必须要求任务B为Auto空草稿且任务A能力identity保持');
+assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
+  expected_draft: '任务B草稿',
+  draft_was_sent: false,
+  task_a: { task_id: 'task-a', selected_skill_ids: ['skill-a'], selected_connector_ids: ['connector-a'] },
+  task_b: {
+    task_id: null,
+    is_draft: true,
+    message_count: 0,
+    current_expert: null,
+    skill_mode: 'manual',
+    connector_mode: 'auto',
+    selected_skill_ids: [],
+    selected_connector_ids: [],
+    attachment_count: 0,
+    draft_text: '任务B草稿',
+  },
+  reopened_task_a: { task_id: 'task-a', selected_skill_ids: ['skill-a'], selected_connector_ids: ['connector-a'], draft_text: '' },
+}), false, 'manual-empty 不得被误判为新任务默认 Auto');
+assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
+  expected_draft: '任务B草稿',
+  draft_was_sent: false,
+  task_a: { task_id: 'task-a', selected_skill_ids: ['skill-a'], selected_connector_ids: ['connector-a'] },
+  task_b: {
+    task_id: null,
+    is_draft: true,
+    message_count: 0,
+    current_expert: null,
+    skill_mode: 'auto',
+    connector_mode: 'auto',
+    selected_skill_ids: [],
+    selected_connector_ids: [],
+    attachment_count: 0,
+    draft_text: '任务B草稿',
+  },
+  reopened_task_a: {
+    task_id: 'task-a',
+    selected_skill_ids: ['skill-a'],
+    selected_connector_ids: ['connector-a'],
+    draft_text: '任务B草稿',
+  },
+}), false, '任务B未发送草稿出现在重开的任务A时必须失败');
 
 {
   const readable = {
@@ -577,6 +648,34 @@ const scopedSelection = validateCoreBetaScopedSelection({
 assert.equal(scopedSelection.ok, true, scopedSelection.errors.join('\n'));
 assert.equal(scopedSelection.release_gate_eligible, false);
 assert.equal(validateCoreBetaCasePlan(scopedPlan, { allowPartialInitialization: true }).ok, true);
+const missingSkillUpstreamPlan = [planCase('BETA-SKILL-011', 'skill_use')];
+assert.match(
+  validateCoreBetaCasePlan(missingSkillUpstreamPlan).errors.join('\n'),
+  /BETA-SKILL-011 的上游 BETA-SKILL-002 必须在同一批次更早建立/,
+  '复合父Case中的Skill下游缺少本轮上游账本时必须在Case 0前失败，不能运行中留下incomplete manifest',
+);
+const orderedSkillPlan = [
+  planCase('BETA-SKILL-002', 'skill_lifecycle'),
+  planCase('BETA-SKILL-003', 'skill_lifecycle'),
+  planCase('BETA-SKILL-004', 'skill_lifecycle'),
+  planCase('BETA-SKILL-011', 'skill_use'),
+];
+assert.doesNotMatch(
+  validateCoreBetaCasePlan(orderedSkillPlan).errors.join('\n'),
+  /必须在同一批次更早建立/,
+  'Skill上游按序建立后不应再产生顺序依赖错误',
+);
+const misorderedExpertPlan = [
+  planCase('BETA-EXPERT-007', 'expert_lifecycle'),
+  planCase('BETA-EXPERT-003', 'expert_lifecycle'),
+  planCase('BETA-EXPERT-002', 'expert_lifecycle'),
+  planCase('BETA-EXPERT-004', 'expert_lifecycle'),
+];
+assert.match(
+  validateCoreBetaCasePlan(misorderedExpertPlan).errors.join('\n'),
+  /BETA-EXPERT-007 的上游 BETA-EXPERT-002 必须在同一批次更早建立/,
+  '专家发布依赖逆序必须由顺序感知协议预检拒绝',
+);
 assert.deepEqual(
   classifyCoreBetaScopedFixtureExclusions({
     unavailableCaseIds: ['BETA-INIT-005'],
