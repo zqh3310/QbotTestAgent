@@ -2,12 +2,14 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
+  assistantClarificationEvidence,
   assistantConfirmationSurfaceVerdict,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
@@ -82,6 +84,87 @@ const coreGateCasebook = JSON.parse(fs.readFileSync(
 ));
 
 const coreGateIds = coreGateCasebook.cases.map((item) => item.id);
+const clarificationPrompt = '帮我做一份下周汇报。';
+const clarificationLabel = '第1轮';
+const clarificationPromptSha256 = createHash('sha256').update(clarificationPrompt).digest('hex');
+const validClarificationInteraction = (dimension, promptText, overrides = {}) => ({
+  label: clarificationLabel,
+  prompt_text: promptText,
+  clarification_dimensions: [dimension],
+  prompt_sha256: clarificationPromptSha256,
+  task_id: 'qa-task-clarification',
+  send_confirmed: true,
+  clicked: true,
+  closed_or_advanced: true,
+  before_screenshot_sha256: 'a'.repeat(64),
+  after_screenshot_sha256: 'b'.repeat(64),
+  evidence_valid: true,
+  ...overrides,
+});
+const completeClarificationInteractions = [
+  validClarificationInteraction('objective', '这份下周汇报的主题是什么？'),
+  validClarificationInteraction('audience', '汇报对象和场合是？'),
+  validClarificationInteraction('data_source', '你有没有现成的数据和材料？'),
+];
+assert.deepEqual(
+  assistantClarificationEvidence(completeClarificationInteractions, {
+    label: clarificationLabel,
+    prompt: clarificationPrompt,
+  }),
+  {
+    candidate_count: 3,
+    valid_interaction_count: 3,
+    dimensions: ['objective', 'audience', 'data_source'],
+    dimension_count: 3,
+    evidence_valid: true,
+  },
+  'SIT-HOME-057 必须把与当前轮发送和截图绑定的结构化澄清面板计入业务 Oracle',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    { id: 'SIT-HOME-057' },
+    { label: clarificationLabel, prompt: clarificationPrompt },
+    '下周汇报的信息还不够，我先跟你确认几件事，避免做偏。',
+    { assistantConfirmationInteractions: completeClarificationInteractions },
+  ).ok,
+  true,
+  '三组真实结构化澄清不能因最终正文不重复面板文案而误判为产品 Bug',
+);
+const incompleteClarificationInteractions = [
+  validClarificationInteraction('objective', '这份下周汇报的主题是什么？'),
+  validClarificationInteraction('audience', '汇报对象和场合是？', {
+    after_screenshot_sha256: '',
+    evidence_valid: false,
+  }),
+];
+assert.equal(
+  assistantClarificationEvidence(incompleteClarificationInteractions, {
+    label: clarificationLabel,
+    prompt: clarificationPrompt,
+  }).valid_interaction_count,
+  1,
+  '缺少截图 SHA 的澄清交互不得计入有效证据',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    { id: 'SIT-HOME-057' },
+    { label: clarificationLabel, prompt: clarificationPrompt },
+    '下周汇报的信息还不够。',
+    { assistantConfirmationInteractions: incompleteClarificationInteractions },
+  ).ok,
+  false,
+  '只剩一个有效澄清维度时必须继续失败',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    { id: 'SIT-HOME-057' },
+    { label: clarificationLabel, prompt: clarificationPrompt },
+    '预算20万元，直接按这个数字生成完整汇报。',
+    { assistantConfirmationInteractions: completeClarificationInteractions },
+  ).ok,
+  false,
+  '即使结构化澄清完整，回复编造业务数字仍必须失败',
+);
 assert.deepEqual(
   assistantConfirmationSurfaceVerdict({
     actionLabel: '跳过',

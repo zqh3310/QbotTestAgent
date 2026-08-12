@@ -15347,7 +15347,9 @@ async function executeConversationCase({ page, state, testCase, caseDir, timeout
       reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
     );
     recordAssertion(state, `Agent 有效回复（${turn.label || `第 ${turnNo} 轮`}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
-    const caseAware = caseAwareReplyAssertion(testCase, turn, reply.deltaText);
+    const caseAware = caseAwareReplyAssertion(testCase, turn, reply.deltaText, {
+      assistantConfirmationInteractions: state.artifacts.assistant_confirmation_interactions,
+    });
     if (caseAware.applicable) {
       recordAssertion(
         state,
@@ -27230,7 +27232,9 @@ function recordReplyAssertions(state, testCase, prompt, reply, label) {
     reply.incomplete_reason || 'Agent 已停止执行，回复已稳定。',
   );
   recordAssertion(state, `Agent 有效回复（${label}）`, '应产生可读、与当前轮问题相关的回复。', reply.deltaText.trim().length > 0, `回复增量长度：${reply.deltaText.trim().length}`);
-  const caseAware = caseAwareReplyAssertion(testCase, { prompt, label }, reply.deltaText);
+  const caseAware = caseAwareReplyAssertion(testCase, { prompt, label }, reply.deltaText, {
+    assistantConfirmationInteractions: state.artifacts.assistant_confirmation_interactions,
+  });
   if (caseAware.applicable) {
     recordAssertion(state, `${caseAware.name}（${label}）`, caseAware.expected, caseAware.ok, caseAware.actual);
   } else {
@@ -30997,6 +31001,68 @@ export function assistantConfirmationSurfaceVerdict({
   };
 }
 
+const ASSISTANT_CLARIFICATION_DIMENSION_PATTERNS = {
+  audience: /汇报对象|向谁汇报|谁会看|受众|领导|老板|汇报场合|部门.*例会|跨部门/,
+  objective: /汇报主题|主题是什么|活动复盘|业务进展|专项方案|汇报目标|目的|希望.*(?:达成|推动)|重点关注|核心目标/,
+  data_source: /数据来源|有哪些数据|数据口径|现有数据|现成的?数据|材料|事实依据|上一期.*数据/,
+  deadline: /截止时间|什么时候要|何时提交|具体日期|下周几|deadline/i,
+};
+
+function assistantClarificationDimensions(text) {
+  const value = String(text || '');
+  return Object.entries(ASSISTANT_CLARIFICATION_DIMENSION_PATTERNS)
+    .filter(([, pattern]) => pattern.test(value))
+    .map(([dimension]) => dimension);
+}
+
+export function assistantClarificationEvidence(interactions = [], { label = '', prompt = '' } = {}) {
+  const expectedLabel = String(label || '');
+  const expectedPromptSha256 = prompt ? sha256Text(prompt) : '';
+  const candidates = (Array.isArray(interactions) ? interactions : []).filter((interaction) => (
+    String(interaction?.label || '') === expectedLabel
+    && (!expectedPromptSha256 || interaction?.prompt_sha256 === expectedPromptSha256)
+  ));
+  const validInteractions = candidates.filter((interaction) => (
+    interaction?.evidence_valid === true
+    && interaction?.clicked === true
+    && interaction?.closed_or_advanced === true
+    && interaction?.send_confirmed === true
+    && Boolean(interaction?.task_id)
+    && /^[a-f0-9]{64}$/i.test(String(interaction?.before_screenshot_sha256 || ''))
+    && /^[a-f0-9]{64}$/i.test(String(interaction?.after_screenshot_sha256 || ''))
+  ));
+  const dimensions = [...new Set(validInteractions.flatMap((interaction) => (
+    Array.isArray(interaction?.clarification_dimensions)
+      ? interaction.clarification_dimensions
+      : assistantClarificationDimensions(interaction?.prompt_text)
+  )))];
+  return {
+    candidate_count: candidates.length,
+    valid_interaction_count: validInteractions.length,
+    dimensions,
+    dimension_count: dimensions.length,
+    evidence_valid: candidates.length > 0 && validInteractions.length === candidates.length,
+  };
+}
+
+function assistantConfirmationScreenshotEvidence(file, caseDir) {
+  try {
+    const resolvedFile = fs.realpathSync(String(file || ''));
+    const resolvedCaseDir = fs.realpathSync(String(caseDir || ''));
+    const stat = fs.statSync(resolvedFile);
+    if (!stat.isFile() || stat.size < 128) return { valid: false, sha256: '' };
+    if (!(resolvedFile === resolvedCaseDir || resolvedFile.startsWith(`${resolvedCaseDir}${path.sep}`))) {
+      return { valid: false, sha256: '' };
+    }
+    return {
+      valid: true,
+      sha256: createHash('sha256').update(fs.readFileSync(resolvedFile)).digest('hex'),
+    };
+  } catch {
+    return { valid: false, sha256: '' };
+  }
+}
+
 async function assistantConfirmationSurfaceFromAction(action) {
   return action.evaluate((element) => {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -31109,6 +31175,28 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
   if (state && caseDir) {
     afterShot = await shot(page, caseDir, `${base}-after`);
     state.screenshots[`${base}_after`] = afterShot;
+    const promptEntry = [...(state.artifacts.sent_prompts || [])].reverse().find((item) => (
+      String(item?.label || '') === String(label || '')
+    ));
+    const promptText = String(promptEntry?.prompt || '');
+    const sendReceipt = [...(state.artifacts.send_receipts || [])].reverse().find((item) => (
+      Boolean(item?.confirmed_at) && String(item?.prompt || '') === promptText
+    ));
+    const taskId = String(
+      sendReceipt?.attempts?.findLast?.((attempt) => attempt?.receipt?.ok === true)?.receipt?.snapshot?.activeId
+      || '',
+    );
+    const beforeEvidence = assistantConfirmationScreenshotEvidence(beforeShot, caseDir);
+    const afterEvidence = assistantConfirmationScreenshotEvidence(afterShot, caseDir);
+    const evidenceValid = Boolean(
+      clicked
+      && !stillVisible
+      && promptText
+      && sendReceipt?.confirmed_at
+      && taskId
+      && beforeEvidence.valid
+      && afterEvidence.valid
+    );
     const interactions = Array.isArray(state.artifacts.assistant_confirmation_interactions)
       ? state.artifacts.assistant_confirmation_interactions
       : [];
@@ -31120,11 +31208,18 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
       prompt_text: clip(text, 800),
       option_count: surface.option_count,
       option_labels: surface.option_labels.slice(0, 12).map((item) => clip(item, 240)),
+      clarification_dimensions: assistantClarificationDimensions(text),
+      prompt_sha256: promptText ? sha256Text(promptText) : '',
+      task_id: taskId,
+      send_confirmed: Boolean(sendReceipt?.confirmed_at),
       before_screenshot: beforeShot,
+      before_screenshot_sha256: beforeEvidence.sha256,
       after_screenshot: afterShot,
+      after_screenshot_sha256: afterEvidence.sha256,
       clicked,
       closed_or_advanced: !stillVisible,
       advanced_to_next_question: changedSurface,
+      evidence_valid: evidenceValid,
     });
     state.artifacts.assistant_confirmation_interactions = interactions;
     recordStep(
@@ -31136,6 +31231,9 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
       afterShot || beforeShot,
       stillVisible ? 'automation_error' : '',
     );
+    if (String(state.id || '') === 'SIT-HOME-057' && promptEntry && !evidenceValid) {
+      throw new Error('SIT-HOME-057 结构化澄清面板缺少 prompt/task/send/screenshot 绑定证据');
+    }
   }
   if (!clicked || stillVisible) {
     throw new Error(`Agent 推荐选项默认跳过失败：action=${action || 'missing'} clicked=${clicked} stillVisible=${stillVisible}`);
@@ -31713,7 +31811,7 @@ function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTot
   return false;
 }
 
-export function caseAwareReplyAssertion(testCase, turn, replyText) {
+export function caseAwareReplyAssertion(testCase, turn, replyText, context = {}) {
   const id = String(testCase?.id || '');
   const reply = semanticReplyText(replyText);
   const prompt = String(turn?.prompt || '');
@@ -31881,19 +31979,18 @@ export function caseAwareReplyAssertion(testCase, turn, replyText) {
   }
 
   if (id === 'SIT-HOME-057') {
-    const questionGroups = [
-      /汇报对象|向谁汇报|谁会看|受众|领导|老板/,
-      /汇报目标|目的|希望.*(?:达成|推动)|重点关注|核心目标/,
-      /数据来源|有哪些数据|数据口径|现有数据|材料|事实依据/,
-      /截止时间|什么时候要|何时提交|具体日期|下周几|deadline/i,
-    ];
-    const asked = questionGroups.filter((pattern) => pattern.test(reply)).length;
+    const textDimensions = assistantClarificationDimensions(reply);
+    const structured = assistantClarificationEvidence(
+      context?.assistantConfirmationInteractions,
+      { label, prompt },
+    );
+    const askedDimensions = [...new Set([...textDimensions, ...structured.dimensions])];
     const fabricated = /(?:业绩|收入|成本|预算|增长|下降|完成率|转化率)\D{0,8}\d+(?:\.\d+)?\s*(?:%|％|万|元|人|单)/.test(reply);
     return result(
       '信息不足时的最少澄清',
       '应至少澄清汇报对象、目标、数据来源、截止时间中的两项，且不得编造业务数字或结论。',
-      asked >= 2 && !fabricated,
-      `clarification_groups=${asked}/4；fabricated_business_fact=${fabricated}；reply=${clip(reply, 360)}`,
+      askedDimensions.length >= 2 && !fabricated,
+      `clarification_groups=${askedDimensions.length}/4；dimensions=${askedDimensions.join(',') || 'none'}；text_dimensions=${textDimensions.join(',') || 'none'}；structured_valid=${structured.evidence_valid}；structured_interactions=${structured.valid_interaction_count}/${structured.candidate_count}；fabricated_business_fact=${fabricated}；reply=${clip(reply, 360)}`,
     );
   }
   if (id === 'SIT-HOME-058') {
