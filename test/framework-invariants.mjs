@@ -1640,6 +1640,29 @@ for (const sample of coreConversationRelevanceSamples) {
     throw new Error(`${sample.testCase.id} 不得把无关天气回复判为相关`);
   }
 }
+const duplicateAttachmentIdentityCase = {
+  id: 'BETA-FILE-009',
+  module: '附件',
+  submodule: '同名附件',
+  scenario: '多个附件含重复文件名时可按identity删除一个，发送只处理剩余项且顺序/内容不串',
+  test_data: '同名不同SHA附件与第三个附件。',
+};
+const duplicateAttachmentIdentityPrompt = '按输入区顺序列出剩余附件并分别引用唯一标记。';
+const duplicateAttachmentIdentityReply = [
+  '两个附件均已成功读取，按输入区顺序列出如下：',
+  'duplicate.txt -> QBOT_DUPLICATE_KEEP_A=ALPHA-317',
+  'third.txt -> QBOT_THIRD_KEEP_C=CHARLIE-463',
+].join('\n');
+assert.equal(
+  replyLooksRelevant(duplicateAttachmentIdentityReply, duplicateAttachmentIdentityCase, duplicateAttachmentIdentityPrompt),
+  true,
+  '剩余同名附件的文件名与唯一标记回复不得被通用相关性误判',
+);
+assert.equal(
+  replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', duplicateAttachmentIdentityCase, duplicateAttachmentIdentityPrompt),
+  false,
+  '剩余附件 identity 场景不得接受无关天气回复',
+);
 if (!replyLooksRelevant('已生成文件，文件名：teams_local_execution.txt', {
   id: 'SIT-TEAMS-NEW-003',
   scenario: 'Teams 内发起普通个人任务时仍应在本机执行',

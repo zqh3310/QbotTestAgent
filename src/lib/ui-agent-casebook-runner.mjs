@@ -26537,6 +26537,12 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   const replyNamesFile = /(?:文件名|名称|名字)\s*[:：]?\s*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}\b/i.test(text);
   const replyStatesFileSize = /(?:大小|尺寸)\s*[:：]?\s*\d+(?:\.\d+)?\s*(?:字节|bytes?|KiB|KB|MiB|MB|GiB|GB)/i.test(text);
   if (requestsAttachmentIdentityAndSize) return replyNamesFile && replyStatesFileSize;
+  const requestsRemainingAttachmentIdentity = /(?:(?:剩余|保留|当前).{0,12}(?:附件|文件)|(?:附件|文件).{0,12}(?:剩余|保留|当前)).{0,32}(?:唯一标记|标记|identity|顺序)|(?:按.{0,8}顺序).{0,12}(?:剩余|保留).{0,8}(?:附件|文件)/i.test(relevanceInput);
+  if (requestsRemainingAttachmentIdentity) {
+    const namesAttachment = /(?:附件|文件|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}\b)/i.test(text);
+    const statesIdentity = /(?:唯一标记|标记|identity|QBOT_[A-Z0-9_]+|ALPHA-\d+|BRAVO-\d+|CHARLIE-\d+)/i.test(text);
+    return namesAttachment && statesIdentity;
+  }
   if (isNumericMemoryScenario(testCase)) {
     const hasNumber = (number) => new RegExp(`(^|[^0-9])${escapeRegExp(number)}([^0-9]|$)`).test(text);
     const currentPrompt = String(prompt || '');
