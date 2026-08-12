@@ -6586,6 +6586,30 @@ assert.equal(
   true,
   '表格 Case 应接受文件名先绑定唯一表别名、再以该别名标注双方总计的真实回复',
 );
+const observedNarrativeAliasedCoreTableReply = [
+  'CSV 已读取（86 字节）。再读取对比用的另一个表格（xlsx）。',
+  '两个表格都已读取完毕。',
+  '指标\t表格 A（qbot-table.csv）\t表格 B（qbot-data-table-diff.xlsx）\t差异',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '表格 A 总计：182（100 + 70 + 12）',
+  '表格 B 总计：215（120 + 80 + 15）',
+  '差异总计：+33',
+  '表格 B（xlsx）在每个指标上都高于表格 A（csv）。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedNarrativeAliasedCoreTableReply).ok,
+  true,
+  '表格 Case 应允许结论段用短文件身份重述双方别名，不得污染先前的总计归属',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedNarrativeAliasedCoreTableReply
+    .replace('表格 A 总计：182', '表格 A 总计：215')
+    .replace('表格 B 总计：215', '表格 B 总计：182'),
+).ok, false, '结论段重述双方别名时仍不得接受交换的总计');
 const observedNumericAliasedCoreTableReply = [
   '指标\t表1 (qbot-table.csv)\t表2 (qbot-data-table-diff.xlsx)\t差异\t变化幅度',
   '报名人数\t100\t120\t+20\t+20%',

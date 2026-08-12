@@ -25884,6 +25884,7 @@ function tableFileTotalMatches(replyText, identityPattern, expectedTotal) {
 const TABLE_ALIAS_TOKEN = '[A-Z]|[1-9]\\d?|(?:十[一二三四五六七八九]?|[一二三四五六七八九])';
 const TABLE_ALIAS_PREFIX = '(?:^|[\\s([{（【,:：，;；])表(?:格)?\\s*';
 const TABLE_ALIAS_SUFFIX = '(?=$|[\\s([{（【)\\]}）】,:：，;；+\\-−—=]|(?:总计|合计))';
+const TABLE_ALIAS_MENTION = `表(?:格)?\\s*(?:${TABLE_ALIAS_TOKEN})${TABLE_ALIAS_SUFFIX}`;
 
 function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTotal, calculatedTotal) {
   const bindings = new Map();
@@ -25892,7 +25893,10 @@ function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTot
     for (const [index, match] of aliasMatches.entries()) {
       const alias = String(match[1] || '').toUpperCase();
       const segmentStart = Number(match.index || 0) + match[0].length;
-      const segmentEnd = Number(aliasMatches[index + 1]?.index ?? line.length);
+      const trailingAlias = line.slice(segmentStart).match(new RegExp(TABLE_ALIAS_MENTION, 'i'));
+      const segmentEnd = trailingAlias
+        ? segmentStart + Number(trailingAlias.index || 0)
+        : Number(aliasMatches[index + 1]?.index ?? line.length);
       const identitySegment = line.slice(segmentStart, segmentEnd);
       const families = new Set();
       if (/qbot-table\.csv|\bCSV\b/i.test(identitySegment)) families.add('csv');
@@ -25913,7 +25917,7 @@ function tableAliasTotalMatches(lines, identityPattern, expectedTotal, directTot
       if (!aliasMatch) return false;
       const aliasEnd = Number(aliasMatch.index || 0) + aliasMatch[0].length;
       const afterAlias = line.slice(aliasEnd);
-      const nextAlias = afterAlias.match(new RegExp(`${TABLE_ALIAS_PREFIX}(?:${TABLE_ALIAS_TOKEN})${TABLE_ALIAS_SUFFIX}`, 'i'));
+      const nextAlias = afterAlias.match(new RegExp(TABLE_ALIAS_MENTION, 'i'));
       const aliasSegment = nextAlias ? afterAlias.slice(0, Number(nextAlias.index || 0)) : afterAlias;
       if (directTotal.test(aliasSegment) || calculatedTotal.test(aliasSegment)) return true;
       const values = aliasSegment.match(/\d+(?:\.\d+)?/g) || [];

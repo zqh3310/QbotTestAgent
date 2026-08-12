@@ -1801,6 +1801,30 @@ assert.equal(caseAwareReplyAssertion(
     .replace('表格一总计：100 + 70 + 12 = 182', '表格一总计：100 + 70 + 12 = 215')
     .replace('表格二总计：120 + 80 + 15 = 215', '表格二总计：120 + 80 + 15 = 182'),
 ).ok, false, '通用 runner 不得接受中文表别名绑定下交换的双方总计');
+const observedNarrativeAliasedCoreTableReply = [
+  'CSV 已读取（86 字节）。再读取对比用的另一个表格（xlsx）。',
+  '两个表格都已读取完毕。',
+  '指标\t表格 A（qbot-table.csv）\t表格 B（qbot-data-table-diff.xlsx）\t差异',
+  '报名人数\t100\t120\t+20',
+  '到场人数\t70\t80\t+10',
+  '成交单数\t12\t15\t+3',
+  '表格 A 总计：182（100 + 70 + 12）',
+  '表格 B 总计：215（120 + 80 + 15）',
+  '差异总计：+33',
+  '表格 B（xlsx）在每个指标上都高于表格 A（csv）。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreTableCase, { prompt: coreTablePrompt }, observedNarrativeAliasedCoreTableReply).ok,
+  true,
+  '通用 runner 应允许结论段用短文件身份重述双方别名，不得污染先前的总计归属',
+);
+assert.equal(caseAwareReplyAssertion(
+  coreTableCase,
+  { prompt: coreTablePrompt },
+  observedNarrativeAliasedCoreTableReply
+    .replace('表格 A 总计：182', '表格 A 总计：215')
+    .replace('表格 B 总计：215', '表格 B 总计：182'),
+).ok, false, '通用 runner 在结论段重述别名时仍不得接受交换的总计');
 if (containsActiveLegacyConstraints('预算30万元，目标240人，渠道仅企业微信；若企微触达受限，将无短信/App补位。')) {
   throw new Error('明确排除短信/App 的风险说明不应误判为沿用旧约束');
 }
