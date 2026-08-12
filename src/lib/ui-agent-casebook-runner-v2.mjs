@@ -8316,6 +8316,7 @@ async function materializeCoreBetaPreSendCapabilityFailure({
   capabilityKind,
   expectedIdentity,
   before,
+  interactionSnapshot = null,
 }) {
   const after = await captureCoreBetaPublicState(page, testCase);
   const declaredRoles = Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [];
@@ -8326,7 +8327,7 @@ async function materializeCoreBetaPreSendCapabilityFailure({
   const noSendReceiptRecorded = !state.artifacts.send_receipt
     && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0);
   const interaction = {
-    ...(state.artifacts.core_beta_capability_interaction || {}),
+    ...(interactionSnapshot || state.artifacts.core_beta_capability_interaction || {}),
     expected_identity: String(expectedIdentity || ''),
   };
   state.artifacts.core_beta_capability_interaction = interaction;
@@ -12132,9 +12133,86 @@ function writeQworkDailyEvidence(state, caseDir, role, data, oracleValid = true,
   return file;
 }
 
+async function materializeQworkDailyPreSendResetFailure({
+  page,
+  state,
+  testCase,
+  caseDir,
+  before,
+}) {
+  const reset = state.artifacts.core_beta_composer_control_reset || {};
+  const interaction = (Array.isArray(reset.failed_interactions) ? reset.failed_interactions : [])
+    .find((item) => item?.category === 'bug' && item?.expected_state_observed === false);
+  if (!interaction) {
+    recordAssertion(
+      state,
+      '日常回归发送前能力失败交互快照',
+      '输入区 reset 判定产品失败时必须保留被后续能力操作覆盖前的原始失败交互。',
+      false,
+      'core_beta_composer_control_reset.failed_interactions 中没有可验证的产品失败交互。',
+      'automation_error',
+    );
+    return false;
+  }
+  const capabilityKind = interaction.capability_kind === 'connector' ? 'connector' : 'skill';
+  const expectedIdentity = `${capabilityKind}:manual-mode`;
+  const materialized = await materializeCoreBetaPreSendCapabilityFailure({
+    page,
+    state,
+    testCase,
+    caseDir,
+    capabilityKind,
+    expectedIdentity,
+    before,
+    interactionSnapshot: interaction,
+  });
+  if (!materialized) return false;
+
+  const blockerFile = state.artifacts.core_beta_pre_send_capability_failure;
+  const blocker = JSON.parse(fs.readFileSync(blockerFile, 'utf8'));
+  const negativeReadback = {
+    phase: 'pre_send_composer_reset',
+    outcome: 'bug',
+    failure_category: reset.failure_category,
+    failed_interaction: blocker.interaction,
+    mutation_guard: blocker.mutation_guard,
+    blocker_path: blockerFile,
+  };
+  writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', negativeReadback, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'composer_attachment_state', {
+    phase: negativeReadback.phase,
+    no_send_observed: blocker.mutation_guard?.valid === true,
+    before_attachment_count: Number(before?.task?.attachment_count || 0),
+    after_attachment_count: Number(blocker.mutation_guard?.after_task?.attachment_count || 0),
+  }, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', {
+    phase: negativeReadback.phase,
+    task_absent_before: blocker.mutation_guard?.task_absent_before === true,
+    task_absent_after: blocker.mutation_guard?.task_absent_after === true,
+    message_count_zero_before: blocker.mutation_guard?.message_count_zero_before === true,
+    message_count_zero_after: blocker.mutation_guard?.message_count_zero_after === true,
+    send_count_unchanged: blocker.mutation_guard?.send_count_unchanged === true,
+    capability_selection_empty_before: blocker.mutation_guard?.capability_selection_empty_before === true,
+    capability_selection_empty_after: blocker.mutation_guard?.capability_selection_empty_after === true,
+  }, false, true);
+  return true;
+}
+
 async function qworkDailyNewTaskAutoIsolationCase({ page, state, testCase, caseDir, timeoutMs }) {
   await openNewTask(page, state);
-  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'manual' })) return;
+  const beforeReset = await captureCoreBetaPublicState(page, testCase);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'manual', connectorMode: 'manual' })) {
+    if (state.artifacts.core_beta_composer_control_reset?.failure_category === 'bug') {
+      await materializeQworkDailyPreSendResetFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        before: beforeReset,
+      });
+    }
+    return;
+  }
   if (!await selectFirstManualSkill(page, state, caseDir)) return;
   if (!await selectFirstManualConnector(page, state, caseDir)) return;
   const taskABefore = await captureCoreBetaPublicState(page, testCase);
@@ -23739,13 +23817,22 @@ async function resetComposerControls(page, state, caseDir, {
   await page.waitForTimeout(150);
   await closeWorkspacePicker(page);
   const results = [];
+  let failedInteractions = [];
+  const recordCapabilityOperation = (operationOk) => {
+    results.push(operationOk);
+    failedInteractions = preserveCoreBetaFailedCapabilityInteraction(
+      failedInteractions,
+      state.artifacts.core_beta_capability_interaction,
+      operationOk,
+    );
+  };
 
   if (clearScene) results.push(await clearSceneTag(page, state, caseDir));
   if (clearAttachments) results.push(await clearComposerAttachments(page, state, caseDir));
 
   if (clearSkills) {
-    results.push(await clearManualSkillSelections(page, state, caseDir));
-    if (skillMode) results.push(await setSkillMode(page, state, caseDir, skillMode));
+    recordCapabilityOperation(await clearManualSkillSelections(page, state, caseDir));
+    if (skillMode) recordCapabilityOperation(await setSkillMode(page, state, caseDir, skillMode));
   }
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(150);
@@ -23755,10 +23842,10 @@ async function resetComposerControls(page, state, caseDir, {
     // 先切 manual 再切目标模式会与菜单打开时的异步 refresh 竞争，既浪费一次
     // 控制面写入，也可能让自动化读取到点击前的旧选中态。
     if (connectorMode === 'disabled' || connectorMode === 'auto') {
-      results.push(await setConnectorMode(page, state, caseDir, connectorMode));
+      recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode));
     } else {
-      results.push(await clearManualConnectorSelections(page, state, caseDir));
-      if (connectorMode) results.push(await setConnectorMode(page, state, caseDir, connectorMode));
+      recordCapabilityOperation(await clearManualConnectorSelections(page, state, caseDir));
+      if (connectorMode) recordCapabilityOperation(await setConnectorMode(page, state, caseDir, connectorMode));
     }
   }
   await page.keyboard.press('Escape').catch(() => {});
@@ -23786,6 +23873,7 @@ async function resetComposerControls(page, state, caseDir, {
     failure_category: failureCategory,
     operation_results: results.map(Boolean),
     residue_observed: residueObserved,
+    failed_interactions: failedInteractions,
     failed_operations: newFailures.map((item) => ({
       name: item.name || item.action || '',
       category: item.category || '',
@@ -23811,6 +23899,23 @@ async function resetComposerControls(page, state, caseDir, {
     markFailed(state, '自动化框架未能清理输入区场景/附件/技能/连接器状态，当前用例结果不可信，已中止本用例。', 'automation_error');
   }
   return ok;
+}
+
+export function preserveCoreBetaFailedCapabilityInteraction(
+  existing = [],
+  interaction = null,
+  operationOk = true,
+) {
+  const preserved = Array.isArray(existing) ? existing.map((item) => structuredClone(item)) : [];
+  if (operationOk
+    || interaction?.schema_version !== 'qbot-core-beta-capability-interaction/v1'
+    || !['skill', 'connector'].includes(String(interaction?.capability_kind || ''))
+    || interaction?.expected_state_observed !== false
+    || !['bug', 'automation_error'].includes(String(interaction?.category || ''))) return preserved;
+  const snapshot = structuredClone(interaction);
+  const identity = JSON.stringify(snapshot);
+  if (!preserved.some((item) => JSON.stringify(item) === identity)) preserved.push(snapshot);
+  return preserved;
 }
 
 export function coreBetaComposerResetFailureCategory({

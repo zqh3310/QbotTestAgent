@@ -108,6 +108,7 @@ import {
   parseSingleHostPipelineSize,
   partitionCasebookResults,
   prepareCoreBetaNativeImeFocus,
+  preserveCoreBetaFailedCapabilityInteraction,
   rawArtifactEventLeakEvidence,
   replyLooksRelevant,
   resultHasAutomationError,
@@ -130,6 +131,7 @@ import {
   webSearchQualityVerdict,
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
+  qworkDailyEvidenceEnvelope,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
   buildCoreEvidenceManifest,
@@ -1530,6 +1532,114 @@ assert.equal(
       }).valid,
       false,
       '精确 Skill 选择失败证据必须绑定当前 Case 期望的同一稳定 identity',
+    );
+
+    const failedManualMode = {
+      ...interaction,
+      stage: 'manual_mode',
+      expected_identity: undefined,
+      control_testid: 'composer-skill-mode-manual',
+      manual_surface: {
+        search_visible: false,
+        list_visible: false,
+        option_count: 0,
+        empty_visible: false,
+      },
+    };
+    const successfulConnectorMode = {
+      ...interaction,
+      capability_kind: 'connector',
+      stage: 'manual_mode',
+      control_testid: 'composer-connector-mode-manual',
+      expected_state_observed: true,
+      aria_checked: 'true',
+      manual_surface: { list_visible: true, option_count: 28, empty_visible: false },
+      category: '',
+    };
+    let preservedInteractions = preserveCoreBetaFailedCapabilityInteraction(
+      [],
+      failedManualMode,
+      false,
+    );
+    preservedInteractions = preserveCoreBetaFailedCapabilityInteraction(
+      preservedInteractions,
+      successfulConnectorMode,
+      true,
+    );
+    assert.equal(preservedInteractions.length, 1);
+    assert.equal(preservedInteractions[0].capability_kind, 'skill');
+    assert.equal(preservedInteractions[0].expected_state_observed, false);
+    assert.equal(preservedInteractions[0].screenshot, screenshot);
+
+    const dailyFailure = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'QWD-ENTRY-002',
+      capabilityKind: 'skill',
+      expectedIdentity: 'skill:manual-mode',
+      before,
+      after,
+      interaction: {
+        ...preservedInteractions[0],
+        expected_identity: 'skill:manual-mode',
+      },
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(dailyFailure.evidence_valid, true);
+    assert.equal(dailyFailure.oracle_valid, false);
+    const blockerFile = path.join(evidenceDir, 'daily-pre-send-capability-failure.json');
+    writeJsonFile(blockerFile, dailyFailure);
+    const dailyArtifacts = { capability_selection: blockerFile };
+    for (const role of ['qwork_daily_readback', 'composer_attachment_state', 'data_integrity_readback']) {
+      const file = path.join(evidenceDir, `${role}.json`);
+      writeJsonFile(file, qworkDailyEvidenceEnvelope(
+        'QWD-ENTRY-002',
+        { phase: 'pre_send_composer_reset', blocker_path: blockerFile },
+        false,
+        true,
+      ));
+      dailyArtifacts[role] = file;
+      assert.deepEqual(
+        validateEvidenceFile(role, file),
+        { valid: true },
+        `${role} 的产品负向读回必须保持 evidence_valid=true`,
+      );
+    }
+    dailyArtifacts.core_beta_not_applicable_roles = dailyFailure.not_applicable_roles.map((role) => ({
+      role,
+      blocker_path: blockerFile,
+    }));
+    const dailyManifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'QWD-ENTRY-002',
+        evidence_roles: [
+          'qwork_daily_readback',
+          'task_id',
+          'prompt',
+          'send_receipt',
+          'transcript',
+          'reply_delta',
+          'reply_completion',
+          'capability_selection',
+          'capability_execution_event',
+          'composer_attachment_state',
+          'data_integrity_readback',
+        ],
+      },
+      caseDir: evidenceDir,
+      artifacts: dailyArtifacts,
+    });
+    assert.equal(dailyManifest.complete, true, 'QWD-ENTRY-002 发送前产品失败必须形成完整 manifest');
+    assert.deepEqual(dailyManifest.missing_roles, []);
+    assert.deepEqual(dailyManifest.invalid_roles, []);
+    assert.equal(
+      resultHasAutomationError({
+        status: 'failed',
+        result_category: 'bug',
+        steps: [{ status: 'failed', category: 'bug', actual: '技能手动模式点击后未生效' }],
+        assertions: [],
+      }),
+      false,
+      '证据完整的 QWD-ENTRY-002 产品失败必须保持 bug 并允许后续独立 Case 继续',
     );
   } finally {
     fs.rmSync(evidenceDir, { recursive: true, force: true });
@@ -4844,6 +4954,8 @@ const required = [
   ['Core Beta v2 精确选择 Skill 前会重新打开被同级控件关闭的最新技能菜单', /selectManualSkillByName[\s\S]*let menu = await activeMenuLocator\(page, 'skill'\)[\s\S]*if \(!menu\) \{[\s\S]*ensureComposerToolMenu\(page, state,[\s\S]*重新打开【技能】菜单以选择：[\s\S]*menuKind: 'skill'[\s\S]*menu = await activeMenuLocator\(page, 'skill'\)/],
   ['精确 Skill 点击失败记录受校验的产品交互读回', /selectManualSkillByName[\s\S]*stage: 'manual_skill_selection'[\s\S]*control_testid: controlTestId[\s\S]*click_dispatched: clickDispatched[\s\S]*expected_state_observed: selectedOk[\s\S]*manual_surface: afterManualSurface \|\| beforeManualSurface[\s\S]*category: interactionCategory/],
   ['输入区 reset 保留能力产品失败分类', /resetComposerControls[\s\S]*coreBetaComposerResetFailureCategory[\s\S]*failure_category/],
+  ['输入区 reset 保留后续能力操作覆盖前的失败交互', /resetComposerControls[\s\S]*preserveCoreBetaFailedCapabilityInteraction[\s\S]*failed_interactions/],
+  ['QWD-ENTRY-002 发送前产品失败物化完整负向证据', /qworkDailyNewTaskAutoIsolationCase[\s\S]*materializeQworkDailyPreSendResetFailure[\s\S]*qwork_daily_readback[\s\S]*composer_attachment_state[\s\S]*data_integrity_readback/],
   ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],

@@ -297,6 +297,11 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；只有取证、清理、
   合同、宿主或框架失败才进入自愈硬停止。结果优先级始终为
   `automation_error > bug > blocked > pass`，后置 blocker 不得覆盖框架错误。
+- `QWD-ENTRY-002` 的 Skill/Connector 手动模式准备若出现真实点击后未生效，必须
+  保留被后续同级操作覆盖前的失败交互，并以截图、空任务、零消息、发送计数不变、
+  空能力选择生成完整发送前负向证据。此时发送链角色使用受校验 N/A，日常回归
+  专项角色必须为 `evidence_valid=true/oracle_valid=false`；结果保持产品 `bug` 并
+  继续独立 Case。只有负向证据本身不完整时才允许升级为 `automation_error` 硬停。
 - 只有凭据/授权/受保护资源缺失、指定发布身份无法恢复或 pretest 明确阻塞时，
   才能保持暂停并报告唯一具体 blocker。
 
