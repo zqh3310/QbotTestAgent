@@ -47,6 +47,7 @@ import {
   coreBetaExpertPublishPrerequisiteBlocker,
   coreBetaExpertSummonTaskVerdict,
   coreBetaExecutionConcurrencyPolicy,
+  coreBetaEvidenceCaseId,
   coreBetaInitializationContinuation,
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
@@ -6542,6 +6543,32 @@ try {
     artifacts: { performance_metrics: metricsFile },
   });
   assert.equal(manifest.complete, true, '#793 performance_metrics 映射后 manifest 必须完整');
+  const legacyDriverMetrics = streamingScrollPerformanceMetrics({
+    testCaseId: coreBetaEvidenceCaseId({
+      id: 'SIT-ISSUE-793',
+      core_beta_case_id: 'BETA-PERF-003',
+    }),
+    samplesFile,
+    samples,
+    verdict: scrollFollowPass,
+    everGenerating: true,
+  });
+  assert.equal(
+    legacyDriverMetrics.case_id,
+    'BETA-PERF-003',
+    '#793 legacy driver 复用时性能证据必须绑定 Core Beta 叶子合同身份',
+  );
+  writeJsonFile(metricsFile, legacyDriverMetrics);
+  const legacyDriverManifest = buildCoreEvidenceManifest({
+    testCase: { id: 'BETA-PERF-003', evidence_roles: ['performance_metrics'] },
+    caseDir: performanceMetricsDir,
+    artifacts: { performance_metrics: metricsFile },
+  });
+  assert.equal(
+    legacyDriverManifest.complete,
+    true,
+    '#793 legacy driver 生成的 performance_metrics 必须通过叶子合同 manifest',
+  );
   const wrongCaseManifest = buildCoreEvidenceManifest({
     testCase: { id: 'SIT-ISSUE-793', evidence_roles: ['performance_metrics'] },
     caseDir: performanceMetricsDir,

@@ -15581,6 +15581,10 @@ export function streamingScrollFollowVerdict(samples, { distanceThreshold = 180,
   };
 }
 
+export function coreBetaEvidenceCaseId(testCase) {
+  return String(testCase?.core_beta_case_id || testCase?.id || '');
+}
+
 export function streamingScrollPerformanceMetrics({ testCaseId, samplesFile, samples, verdict, everGenerating }) {
   const observations = Array.isArray(samples) ? samples : [];
   const resolvedSamplesFile = path.resolve(String(samplesFile || ''));
@@ -15691,7 +15695,7 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   writeJsonFile(state.artifacts.thread_scroll_samples, { issue: 793, prompt, verdict, samples });
   state.artifacts.performance_metrics = path.join(caseDir, 'performance-metrics.json');
   const performanceMetrics = streamingScrollPerformanceMetrics({
-    testCaseId: testCase.id,
+    testCaseId: coreBetaEvidenceCaseId(testCase),
     samplesFile: state.artifacts.thread_scroll_samples,
     samples,
     verdict,
