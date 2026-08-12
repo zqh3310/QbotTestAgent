@@ -32053,9 +32053,9 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
     const titles = /QBot Release Flow/i.test(reply) && /Release Risk Matrix/i.test(reply);
     const flowAnchors = ['INPUT', 'ANALYZE', 'DELIVER'].every((value) => new RegExp(`\\b${value}\\b`, 'i').test(reply))
       && /evidence must be reviewable before release/i.test(reply);
-    const riskAnchors = /P0\s*data loss/i.test(reply)
-      && /P1\s*timeout/i.test(reply)
-      && /P2\s*copy/i.test(reply)
+    const riskAnchors = /P0(?:[\s*_`·•:：/|—–-]){0,8}data\s+loss/i.test(reply)
+      && /P1(?:[\s*_`·•:：/|—–-]){0,8}timeout/i.test(reply)
+      && /P2(?:[\s*_`·•:：/|—–-]){0,8}copy/i.test(reply)
       && /IMPACT|影响/i.test(reply)
       && /PROBABILITY|概率/i.test(reply);
     return result(

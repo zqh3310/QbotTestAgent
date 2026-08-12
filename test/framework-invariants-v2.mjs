@@ -1392,6 +1392,26 @@ assert.equal(
   true,
   '两图回复必须命中流程图和风险矩阵的确定性锚点',
 );
+const coreImageReplyWithBulletSeparators = [
+  '第一张标题是 QBot Release Flow，主要图形由 INPUT、ANALYZE、DELIVER 三个节点和箭头组成。',
+  '门禁文字是 Gate: evidence must be reviewable before release。',
+  '第二张标题是 Release Risk Matrix，横轴 PROBABILITY，纵轴 IMPACT。',
+  '风险点包括 P0 · data loss、P1: timeout、P2 - copy。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, coreImageReplyWithBulletSeparators).ok,
+  true,
+  'P0/P1/P2 与风险标签之间的项目符号、冒号或短横线不得造成视觉锚点假阴性',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    coreImageCase,
+    { prompt: '请分别说明两张图片。' },
+    coreImageReplyWithBulletSeparators.replace('P2 - copy', 'P2 - unknown'),
+  ).ok,
+  false,
+  '允许常见分隔符后仍必须精确命中 P0/P1/P2 的全部风险标签',
+);
 assert.equal(
   caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, '只看到 QBot Release Flow。').ok,
   false,
