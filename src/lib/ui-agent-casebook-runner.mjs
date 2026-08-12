@@ -4764,6 +4764,10 @@ export function coreBetaStoppedTurnTerminalEvidence(readback = {}) {
     && partialChars > 0,
   );
   return {
+    complete: false,
+    evidence_complete: available,
+    completion_observed: false,
+    terminal_failure: false,
     available,
     source: 'confirmed product stop terminal readback',
     task_id: taskId,
@@ -4841,6 +4845,7 @@ async function coreBetaStopGeneration(ctx) {
     fullText: snapshot.latestAssistantText,
     deltaText: retained.delta,
     incomplete: true,
+    terminal_outcome: 'user_stopped',
     incomplete_reason: '用户通过产品停止入口终止生成。',
     stable_observations: 0,
     waited_ms: Date.now() - ctx.pending.startedAtMs,

@@ -160,6 +160,68 @@ import {
     false,
     '终态复核已存在 prompt 绑定回复时不得生成 no_reply 产品失败证据',
   );
+  const beforeStop = path.join(root, 'before-stop.png');
+  const afterStop = path.join(root, 'after-stop.png');
+  fs.writeFileSync(beforeStop, Buffer.alloc(256, 8));
+  fs.writeFileSync(afterStop, Buffer.alloc(256, 9));
+  const stoppedPayload = {
+    complete: false,
+    evidence_complete: true,
+    completion_observed: false,
+    terminal_failure: false,
+    terminal_outcome: 'user_stopped',
+    assistant_reply_present: true,
+    confirmed_send_receipt: true,
+    stop_click_performed: true,
+    task_id: 'task-stop-1',
+    task_id_before: 'task-stop-1',
+    task_id_after: 'task-stop-1',
+    prompt_sha256: 'a'.repeat(64),
+    confirmed_send_prompt_sha256: 'a'.repeat(64),
+    running_before: true,
+    running_after: false,
+    partial_reply_ready_before_click: true,
+    partial_chars_before_click: 12,
+    partial_sha256_before_click: 'b'.repeat(64),
+    retained_chars: 12,
+    retained_sha256: 'b'.repeat(64),
+    partial_preserved: true,
+    before_screenshot: beforeStop,
+    before_screenshot_sha256: createHash('sha256').update(fs.readFileSync(beforeStop)).digest('hex'),
+    after_screenshot: afterStop,
+    after_screenshot_sha256: createHash('sha256').update(fs.readFileSync(afterStop)).digest('hex'),
+  };
+  fs.writeFileSync(completion, JSON.stringify(stoppedPayload));
+  assert.deepEqual(
+    validateEvidenceFile('reply_completion', completion),
+    { valid: true },
+    '用户停止必须作为 complete=false、terminal_failure=false 的可信终态通过证据校验',
+  );
+  for (const invalidStopped of [
+    { ...stoppedPayload, complete: true },
+    { ...stoppedPayload, terminal_failure: true },
+    { ...stoppedPayload, task_id_after: 'drifted-task' },
+    { ...stoppedPayload, confirmed_send_prompt_sha256: 'c'.repeat(64) },
+  ]) {
+    fs.writeFileSync(completion, JSON.stringify(invalidStopped));
+    assert.equal(
+      validateEvidenceFile('reply_completion', completion).valid,
+      false,
+      `用户停止终态合同漂移必须 fail-closed：${JSON.stringify(invalidStopped)}`,
+    );
+  }
+  fs.writeFileSync(completion, JSON.stringify({
+    ...stoppedPayload,
+    assistant_reply_present: false,
+    retained_chars: 0,
+    retained_sha256: createHash('sha256').update('').digest('hex'),
+    partial_preserved: false,
+  }));
+  assert.deepEqual(
+    validateEvidenceFile('reply_completion', completion),
+    { valid: true },
+    '停止后正文丢失是证据完整的产品 Bug，不得升级成 manifest 缺失的框架错误',
+  );
   fs.rmSync(root, { recursive: true, force: true });
 }
 

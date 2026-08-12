@@ -68,6 +68,7 @@ import {
   coreBetaPreSendImeFailureEvidence,
   coreBetaNativeImeTraceVerdict,
   coreBetaStopGenerationTimeoutVerdict,
+  coreBetaStoppedTurnTerminalEvidence,
   coreBetaRuntimeExecutorBinding,
   coreBetaRuntimeFamilyPrerequisiteBlocker,
   coreBetaUnifiedSubmenuSurfaceReady,
@@ -5262,6 +5263,46 @@ try {
       `停止生成超时证据缺少硬前置时必须 fail-closed：${JSON.stringify(invalid)}`,
     );
   }
+  const beforeStopScreenshot = path.join(stopTimeoutEvidenceDir, 'before-stop.png');
+  const afterStopScreenshot = path.join(stopTimeoutEvidenceDir, 'after-stop.png');
+  fs.writeFileSync(beforeStopScreenshot, Buffer.alloc(256, 2));
+  fs.writeFileSync(afterStopScreenshot, Buffer.alloc(256, 3));
+  const stoppedReadback = {
+    task_id: 'task-user-stopped-1',
+    task_id_before: 'task-user-stopped-1',
+    task_id_after: 'task-user-stopped-1',
+    confirmed_send_receipt: true,
+    click_performed: true,
+    running_before: true,
+    running_after: false,
+    partial_reply_ready_before_click: true,
+    before_screenshot: beforeStopScreenshot,
+    after_screenshot: afterStopScreenshot,
+  };
+  const stoppedTerminal = coreBetaStoppedTurnTerminalEvidence({
+    readback: stoppedReadback,
+    prompt: '请生成长方案',
+    confirmedPrompt: '请生成长方案',
+    partialText: '第一章：测试目标',
+    retainedText: '第一章：测试目标',
+  });
+  assert.equal(stoppedTerminal.evidence_complete, true, '同 task、同 prompt 且 partial 保留时 user_stopped 证据必须完整');
+  assert.equal(stoppedTerminal.complete, false, '用户停止不能伪装成普通 completed');
+  assert.equal(stoppedTerminal.terminal_failure, false, '用户主动停止不是模型失败终态');
+  assert.equal(coreBetaStoppedTurnTerminalEvidence({
+    readback: { ...stoppedReadback, task_id_after: 'drifted-task' },
+    prompt: '请生成长方案',
+    confirmedPrompt: '请生成长方案',
+    partialText: '第一章：测试目标',
+    retainedText: '第一章：测试目标',
+  }).evidence_complete, false, '停止前后 task 漂移必须 fail-closed');
+  assert.equal(coreBetaStoppedTurnTerminalEvidence({
+    readback: stoppedReadback,
+    prompt: '请生成长方案',
+    confirmedPrompt: '另一条消息',
+    partialText: '第一章：测试目标',
+    retainedText: '第一章：测试目标',
+  }).evidence_complete, false, '确认发送 prompt 不匹配时必须 fail-closed');
 } finally {
   fs.rmSync(stopTimeoutEvidenceDir, { recursive: true, force: true });
 }
@@ -5286,6 +5327,8 @@ const required = [
   ['Core Beta v2 助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
   ['Core Beta v2 停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
+  ['SIT-HOME-023 用户停止生成写齐标准会话证据且不伪装 completed', /executeSitHomeStopGeneration[\s\S]*coreBetaStoppedTurnTerminalEvidence[\s\S]*terminal_outcome: 'user_stopped'[\s\S]*writeReplyArtifacts\(state, caseDir/],
+  ['user_stopped 标准回复证据校验 prompt task partial 与截图闭环', /function writeReplyArtifacts[\s\S]*userStoppedCandidate[\s\S]*validateReplyCompletionPayload\(userStoppedCandidate\)[\s\S]*replyCompletion\.evidence_complete = evidenceComplete/],
   ['Core Beta v2 停止生成无正文完整超时后写齐失败证据再隔离清理', /(?=[\s\S]*if \(!partial\.ready\))(?=[\s\S]*terminal_outcome: 'timed_out')(?=[\s\S]*writeReplyArtifacts\(state, caseDir)(?=[\s\S]*cancelRunningReplyAfterTimeout)(?=[\s\S]*cleanup_click_is_case_action: false)(?=[\s\S]*超时失败证据完整，隔离清理成功。`?, 'bug'\))/],
   ['runner 控制面代理安装与恢复完整', /createControlPlaneFaultProxy[\s\S]*restart-qbot-electron-control-plane\.sh[\s\S]*installControlPlaneHttpControl[\s\S]*restoreControlPlaneHttpControl/],
   ['控制面代理重启显式传递原 DEEPBANK_HOME', /inferQbotHomeForElectronRestart[\s\S]*\[helper, qbotRoot, controlPlaneUrl, cdpPort, qbotHome\]/],

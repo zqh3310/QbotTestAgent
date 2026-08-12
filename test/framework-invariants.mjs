@@ -13,6 +13,7 @@ import {
   brokenAttachmentFabricationEvidence,
   coreBetaActionStopsPlan,
   coreBetaPartialReplyReady,
+  coreBetaStoppedTurnTerminalEvidence,
   coreBetaSelectedCapabilityIdentities,
   coreBetaSkillSelectionReadbackMatches,
   buildTerminalConversationEvidence,
@@ -890,6 +891,7 @@ const required = [
   ['助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
   ['停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['停止生成观察非空正文 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
+  ['停止生成终态显式标记 user_stopped 而非 completed', /coreBetaStopGeneration[\s\S]*terminal_outcome: 'user_stopped'[\s\S]*coreBetaStoppedTurnTerminalEvidence/],
   ['统一能力子菜单使用最新可见 Portal 并保留 click 与键盘回退', /openUnifiedComposerSubmenu[\s\S]*lastVisibleLocator[\s\S]*row\.click[\s\S]*ArrowRight[\s\S]*row\.press\('Enter'\)/],
   ['统一能力子菜单把可见空态识别为合法 Portal', /visibleUnifiedComposerSubmenu[\s\S]*emptySelector[\s\S]*optionCount[\s\S]*emptyVisible/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
@@ -1018,6 +1020,17 @@ assert.equal(coreBetaPartialReplyReady({
   cancelVisible: true,
   latestAssistantBodyText: '已有内容',
 }).ready, false, '任务已结束后不得补点停止');
+const legacyStoppedTerminal = coreBetaStoppedTurnTerminalEvidence({
+  task_id: 'task-stop-legacy',
+  running_before: true,
+  running_after: false,
+  partial_reply_ready_before_click: true,
+  partial_chars_before_click: 8,
+  retained_chars: 8,
+});
+assert.equal(legacyStoppedTerminal.evidence_complete, true, 'legacy 停止生成终态必须保留明确 evidence_complete 语义');
+assert.equal(legacyStoppedTerminal.complete, false, 'legacy 用户停止不能伪装成普通 completed');
+assert.equal(legacyStoppedTerminal.terminal_failure, false, 'legacy 用户停止不是模型失败');
 assert.deepEqual(
   coreBetaSelectedCapabilityIdentities([{ slug: 'skill-a' }, { key: 'connector-b' }, 'plain-c']),
   ['skill-a', 'connector-b', 'plain-c'],

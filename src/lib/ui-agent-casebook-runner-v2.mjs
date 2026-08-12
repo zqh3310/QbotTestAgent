@@ -16375,6 +16375,81 @@ export function coreBetaStopGenerationTimeoutVerdict({
   };
 }
 
+export function coreBetaStoppedTurnTerminalEvidence({
+  readback = {},
+  prompt = '',
+  confirmedPrompt = '',
+  partialText = '',
+  retainedText = '',
+} = {}) {
+  const taskId = String(readback?.task_id || '').trim();
+  const taskIdBefore = String(readback?.task_id_before || '').trim();
+  const taskIdAfter = String(readback?.task_id_after || '').trim();
+  const userPrompt = String(prompt || '');
+  const receiptPrompt = String(confirmedPrompt || '');
+  const partial = String(partialText || '');
+  const retained = String(retainedText || '');
+  const beforeScreenshot = String(readback?.before_screenshot || '');
+  const afterScreenshot = String(readback?.after_screenshot || '');
+  const fileSha256 = (file) => {
+    try {
+      return path.isAbsolute(file)
+        && fs.existsSync(file)
+        && fs.statSync(file).isFile()
+        && fs.statSync(file).size >= 128
+        ? createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+        : '';
+    } catch {
+      return '';
+    }
+  };
+  const partialPreserved = Boolean(partial && retained.startsWith(partial));
+  const promptBound = Boolean(userPrompt && receiptPrompt === userPrompt);
+  const taskBound = Boolean(taskId && taskIdBefore === taskId && taskIdAfter === taskId);
+  const available = Boolean(
+    taskBound
+    && promptBound
+    && readback?.confirmed_send_receipt === true
+    && readback?.click_performed === true
+    && readback?.running_before === true
+    && readback?.running_after === false
+    && readback?.partial_reply_ready_before_click === true
+    && partial.length > 0
+    && fileSha256(beforeScreenshot)
+    && fileSha256(afterScreenshot)
+  );
+  return {
+    complete: false,
+    evidence_complete: available,
+    completion_observed: false,
+    terminal_failure: false,
+    terminal_outcome: 'user_stopped',
+    assistant_reply_present: retained.trim().length > 0,
+    confirmed_send_receipt: readback?.confirmed_send_receipt === true,
+    stop_click_performed: readback?.click_performed === true,
+    task_id: taskId,
+    task_id_before: taskIdBefore,
+    task_id_after: taskIdAfter,
+    prompt_sha256: createHash('sha256').update(userPrompt).digest('hex'),
+    confirmed_send_prompt_sha256: createHash('sha256').update(receiptPrompt).digest('hex'),
+    running_before: readback?.running_before === true,
+    running_after: readback?.running_after === true,
+    partial_reply_ready_before_click: readback?.partial_reply_ready_before_click === true,
+    partial_chars_before_click: partial.length,
+    partial_sha256_before_click: createHash('sha256').update(partial).digest('hex'),
+    retained_chars: retained.length,
+    retained_sha256: createHash('sha256').update(retained).digest('hex'),
+    partial_preserved: partialPreserved,
+    before_screenshot: beforeScreenshot,
+    before_screenshot_sha256: fileSha256(beforeScreenshot),
+    after_screenshot: afterScreenshot,
+    after_screenshot_sha256: fileSha256(afterScreenshot),
+    terminal_reason: partialPreserved
+      ? '用户通过产品停止入口终止生成，停止前正文已在同一 task 的停止后读回中保留。'
+      : '用户通过产品停止入口终止生成，但停止前正文未在同一 task 的停止后读回中完整保留。',
+  };
+}
+
 async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
@@ -16550,6 +16625,9 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     click_performed: true,
     assistant_body_source: 'rendered assistant body excluding reasoning, chain-of-thought, thinking status, and tool regions',
     task_id: String(lastBridge?.activeId || bridgeBeforeStop?.activeId || ''),
+    task_id_before: String(bridgeBeforeStop?.activeId || ''),
+    task_id_after: String(lastBridge?.activeId || ''),
+    confirmed_send_receipt: confirmedSendReceipt,
     running_before: running,
     running_after: Boolean(lastBridge?.running),
     stopped,
@@ -16570,6 +16648,27 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   state.artifacts.stop_generation = stopReadback;
   state.artifacts.stop_generation_readback = stopReadbackFile;
   state.artifacts.stopped_partial_reply = stoppedPartialFile;
+  const confirmedReceipt = [...(state.artifacts.send_receipts || [])].reverse().find((receipt) => (
+    receipt?.prompt === prompt
+    && Array.isArray(receipt?.attempts)
+    && receipt.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
+  ));
+  const stoppedTerminal = coreBetaStoppedTurnTerminalEvidence({
+    readback: stopReadback,
+    prompt,
+    confirmedPrompt: confirmedReceipt?.prompt || '',
+    partialText: partial.delta,
+    retainedText: retained.delta,
+  });
+  writeReplyArtifacts(state, caseDir, [{
+    label: '用户停止后的保留回复',
+    fullText: retainedSnapshot.latestAssistantText,
+    deltaText: retained.delta,
+    incomplete: true,
+    terminal_outcome: 'user_stopped',
+    incomplete_reason: stoppedTerminal.terminal_reason,
+    completion_evidence: stoppedTerminal,
+  }]);
   recordAssertion(
     state,
     '停止后部分回复保留',
@@ -26986,6 +27085,9 @@ function writeReplyArtifacts(state, caseDir, replies) {
       terminal_reconciliation_prompt_bound: Boolean(reply?.terminal_reconciliation_prompt_bound),
       terminal_reconciliation_reply_present: Boolean(reply?.terminal_reconciliation_reply_present),
       terminal_reason: incomplete ? String(reply?.incomplete_reason || 'Agent reply timed out.') : '',
+      completion_evidence: reply?.completion_evidence && typeof reply.completion_evidence === 'object'
+        ? reply.completion_evidence
+        : null,
       recorded_at: new Date().toISOString(),
     };
     const existing = state.artifacts.reply_records.findIndex((item) => item.label === label);
@@ -27016,6 +27118,9 @@ function writeReplyArtifacts(state, caseDir, replies) {
   const terminalReply = [...state.artifacts.reply_records]
     .reverse()
     .find((reply) => ['timed_out', 'no_reply'].includes(reply.terminal_outcome));
+  const userStoppedReply = [...state.artifacts.reply_records]
+    .reverse()
+    .find((reply) => reply.terminal_outcome === 'user_stopped');
   const terminalScreenshotSha256 = terminalScreenshot
     ? createHash('sha256').update(fs.readFileSync(terminalScreenshot)).digest('hex')
     : '';
@@ -27050,6 +27155,17 @@ function writeReplyArtifacts(state, caseDir, replies) {
     terminalReply
     && validateReplyCompletionPayload(terminalFailureCandidate).valid
   );
+  const userStoppedCandidate = userStoppedReply
+    ? {
+      ...userStoppedReply.completion_evidence,
+      reply_count: state.artifacts.reply_records.length,
+      labels: state.artifacts.reply_records.map((reply) => reply.label),
+    }
+    : null;
+  const userStoppedVerified = Boolean(
+    userStoppedCandidate
+    && validateReplyCompletionPayload(userStoppedCandidate).valid
+  );
   const replyComplete = state.artifacts.reply_records.length > 0
     && state.artifacts.reply_records.every((reply) => (
       reply.terminal_outcome === 'completed'
@@ -27057,10 +27173,13 @@ function writeReplyArtifacts(state, caseDir, replies) {
     ));
   const evidenceComplete = state.artifacts.reply_records.length > 0
     && state.artifacts.reply_records.every((reply) => (
-      reply.assistant_reply_present === true
+      (reply.terminal_outcome === 'completed' && reply.assistant_reply_present === true)
       || (['timed_out', 'no_reply'].includes(reply.terminal_outcome) && terminalFailureVerified)
+      || (reply.terminal_outcome === 'user_stopped' && userStoppedVerified)
     ));
-  writeJsonFile(state.artifacts.reply_completion, {
+  const replyCompletion = userStoppedVerified
+    ? userStoppedCandidate
+    : {
     complete: replyComplete,
     evidence_complete: evidenceComplete,
     reply_count: state.artifacts.reply_records.length,
@@ -27090,7 +27209,9 @@ function writeReplyArtifacts(state, caseDir, replies) {
     terminal_screenshot_sha256: terminalScreenshotSha256,
     timeout_screenshot: terminalScreenshot,
     timeout_screenshot_sha256: terminalScreenshotSha256,
-  });
+  };
+  replyCompletion.evidence_complete = evidenceComplete;
+  writeJsonFile(state.artifacts.reply_completion, replyCompletion);
   writeJsonFile(state.artifacts.send_receipt, {
     valid: Array.isArray(state.artifacts.send_receipts)
       && state.artifacts.send_receipts.length > 0

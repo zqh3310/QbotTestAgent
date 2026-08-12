@@ -1873,8 +1873,59 @@ export function validateEvidenceFile(role, file, { expectedCaseId = '' } = {}) {
 }
 
 export function validateReplyCompletionPayload(parsed) {
-  if (parsed?.complete === true) return { valid: true };
   const terminalOutcome = String(parsed?.terminal_outcome || '');
+  if (parsed?.complete === true) {
+    return terminalOutcome === 'user_stopped'
+      ? { valid: false, error: 'reply_user_stopped_cannot_be_complete' }
+      : { valid: true };
+  }
+  if (terminalOutcome === 'user_stopped') {
+    if (
+      parsed?.evidence_complete !== true
+      || parsed?.terminal_failure !== false
+      || parsed?.completion_observed !== false
+      || parsed?.confirmed_send_receipt !== true
+      || parsed?.stop_click_performed !== true
+      || parsed?.running_before !== true
+      || parsed?.running_after !== false
+      || parsed?.partial_reply_ready_before_click !== true
+      || typeof parsed?.partial_preserved !== 'boolean'
+      || typeof parsed?.assistant_reply_present !== 'boolean'
+      || !String(parsed?.task_id || '').trim()
+      || String(parsed?.task_id_before || '') !== String(parsed?.task_id || '')
+      || String(parsed?.task_id_after || '') !== String(parsed?.task_id || '')
+      || Number(parsed?.partial_chars_before_click || 0) <= 0
+      || !Number.isInteger(Number(parsed?.retained_chars))
+      || Number(parsed?.retained_chars) < 0
+      || parsed?.assistant_reply_present !== (Number(parsed?.retained_chars) > 0)
+      || !/^[a-f0-9]{64}$/i.test(String(parsed?.prompt_sha256 || ''))
+      || String(parsed?.confirmed_send_prompt_sha256 || '') !== String(parsed?.prompt_sha256 || '')
+      || !/^[a-f0-9]{64}$/i.test(String(parsed?.partial_sha256_before_click || ''))
+      || !/^[a-f0-9]{64}$/i.test(String(parsed?.retained_sha256 || ''))
+    ) {
+      return { valid: false, error: 'reply_user_stopped_terminal_unverified' };
+    }
+    for (const prefix of ['before', 'after']) {
+      const screenshot = String(parsed?.[`${prefix}_screenshot`] || '').trim();
+      const screenshotSha256 = String(parsed?.[`${prefix}_screenshot_sha256`] || '').trim();
+      if (
+        !screenshot
+        || !path.isAbsolute(screenshot)
+        || !fs.existsSync(screenshot)
+        || !fs.statSync(screenshot).isFile()
+        || fs.statSync(screenshot).size < 128
+      ) {
+        return { valid: false, error: `reply_user_stopped_${prefix}_screenshot_missing` };
+      }
+      if (
+        !/^[a-f0-9]{64}$/i.test(screenshotSha256)
+        || sha256File(screenshot) !== screenshotSha256
+      ) {
+        return { valid: false, error: `reply_user_stopped_${prefix}_screenshot_sha256_mismatch` };
+      }
+    }
+    return { valid: true };
+  }
   if (
     parsed?.evidence_complete !== true
     || parsed?.terminal_failure !== true
