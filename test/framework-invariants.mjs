@@ -1561,6 +1561,24 @@ if (!replyLooksRelevant('已成功读取附件 qbot-text-brief.txt（共 228 字
 }, '请读取我上传的附件，概括主要内容，并说明这些材料能支持什么结论。')) {
   throw new Error('TXT 附件真实读取和概括不应被相关性启发式误判');
 }
+const attachmentIdentityAndSizeCase = {
+  id: 'BETA-FILE-007',
+  scenario: '四类附件拒绝后合法附件可恢复发送',
+  test_data: '合法附件恢复发送',
+};
+const attachmentIdentityAndSizePrompt = '请识别合法附件的文件名和大小。';
+if (!replyLooksRelevant('已读取该附件，识别结果如下：\n\n文件名：qbot-text-brief.txt\n大小：228 字节', attachmentIdentityAndSizeCase, attachmentIdentityAndSizePrompt)) {
+  throw new Error('BETA-FILE-007 的真实文件名和大小回复不应被通用相关性误判');
+}
+for (const unrelatedReply of [
+  '文件名：qbot-text-brief.txt，但没有大小信息。',
+  '大小：228 字节，但没有文件名。',
+  '今天北京天气晴朗，建议携带雨具。',
+]) {
+  if (replyLooksRelevant(unrelatedReply, attachmentIdentityAndSizeCase, attachmentIdentityAndSizePrompt)) {
+    throw new Error(`BETA-FILE-007 不得接受缺失文件身份/大小或无关的回复：${unrelatedReply}`);
+  }
+}
 if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负责 Node.js 生成数据，QA Python Runtime 负责 Python 分析数据，下面执行一次联合处理。', {
   id: 'SIT-SKILL-026',
   scenario: '手动多 Skill 以内联 chip 共存，删除/恢复任一 chip 后选择状态同步且强走列表准确',

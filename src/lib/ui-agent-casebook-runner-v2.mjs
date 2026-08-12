@@ -32720,6 +32720,10 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
   if (requestedFiles.length
     && requestedFiles.some((filename) => text.includes(filename))
     && /已生成|生成完成|已创建|写入|保存|落地|文件名/.test(text)) return true;
+  const requestsAttachmentIdentityAndSize = /(?:附件|文件).*(?:文件名|名称|名字).*(?:大小|尺寸)|(?:文件名|名称|名字).*(?:大小|尺寸)/.test(relevanceInput);
+  const replyNamesFile = /(?:文件名|名称|名字)\s*[:：]?\s*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}\b/i.test(text);
+  const replyStatesFileSize = /(?:大小|尺寸)\s*[:：]?\s*\d+(?:\.\d+)?\s*(?:字节|bytes?|KiB|KB|MiB|MB|GiB|GB)/i.test(text);
+  if (requestsAttachmentIdentityAndSize) return replyNamesFile && replyStatesFileSize;
   if (testCase.id === 'BETA-ART-004') {
     return /\bPPTX\b/i.test(text)
       && /\bPDF\b/i.test(text)
