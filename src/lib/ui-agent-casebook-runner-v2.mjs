@@ -18047,6 +18047,34 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
   }
   state.screenshots.attachment_limit = rejectionScreenshot
     || await shot(page, caseDir, `${id.toLowerCase()}-attachment-limit`);
+  if (['SIT-HOME-043', 'SIT-HOME-044'].includes(id)) {
+    const rejectionType = id === 'SIT-HOME-043' ? 'single_file_oversize' : 'aggregate_oversize';
+    const noPromptRecorded = !state.artifacts.prompt;
+    const noSendReceiptRecorded = !state.artifacts.send_receipt
+      && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0);
+    const preSendEvidence = coreBetaPreSendAttachmentRejectionEvidence({
+      testCaseId: id,
+      rejectionType,
+      before,
+      after,
+      probe,
+      composerState,
+      rejectionScreenshot: result.dialogEvidenceScreenshot || result.evidenceScreenshot,
+      postDismissalScreenshot: result.postDismissalScreenshot,
+      dialogEvidenceArtifact: result.dialogEvidenceArtifact,
+      noPromptRecorded,
+      noSendReceiptRecorded,
+    });
+    const preSendFile = path.join(caseDir, 'pre-send-attachment-rejection.json');
+    writeJsonFile(preSendFile, preSendEvidence);
+    state.artifacts.pre_send_attachment_rejection = preSendFile;
+    if (preSendEvidence.valid) {
+      state.artifacts.core_beta_not_applicable_roles = preSendEvidence.not_applicable_roles.map((role) => ({
+        role,
+        blocker_path: preSendFile,
+      }));
+    }
+  }
   recordStep(
     state,
     `通过产品统一附件入口选择测试文件（${id}）`,
@@ -25374,6 +25402,161 @@ const CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES = Object.freeze([
   'reply_delta',
   'reply_completion',
 ]);
+
+const CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_NA_ROLES = Object.freeze([
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+const CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_CASES = Object.freeze({
+  'SIT-HOME-043': 'single_file_oversize',
+  'SIT-HOME-044': 'aggregate_oversize',
+});
+
+function coreBetaEvidenceFileRecord(file, minimumBytes = 1) {
+  const resolved = String(file || '').trim() ? path.resolve(file) : '';
+  const valid = Boolean(
+    resolved
+    && fs.existsSync(resolved)
+    && fs.statSync(resolved).isFile()
+    && fs.statSync(resolved).size >= minimumBytes
+  );
+  return {
+    path: valid ? resolved : '',
+    sha256: valid
+      ? createHash('sha256').update(fs.readFileSync(resolved)).digest('hex')
+      : '',
+  };
+}
+
+function coreBetaObservedNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+export function coreBetaPreSendAttachmentRejectionEvidence({
+  testCaseId = '',
+  rejectionType = '',
+  before = {},
+  after = {},
+  probe = {},
+  composerState = {},
+  rejectionScreenshot = '',
+  postDismissalScreenshot = '',
+  dialogEvidenceArtifact = '',
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+  notApplicableRoles = CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_NA_ROLES,
+} = {}) {
+  const caseId = String(testCaseId || '').trim();
+  const expectedType = CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_CASES[caseId] || '';
+  const expectedMessage = caseId === 'SIT-HOME-043'
+    ? /单个文档不能超过\s*30\s*MiB|单个.*30\s*(?:MiB|MB)|文件过大/
+    : /文档附件总大小不能超过\s*80\s*MiB|总大小.*80\s*(?:MiB|MB)|总量过大/;
+  const roles = (Array.isArray(notApplicableRoles) ? notApplicableRoles : [])
+    .map(String)
+    .filter((role, index, items) => (
+      CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_NA_ROLES.includes(role)
+      && items.indexOf(role) === index
+    ));
+  const beforeState = {
+    available: before?.available === true,
+    active_id: before?.activeId ?? null,
+    running: before?.running,
+    message_count: before?.messageCount,
+    send_count: before?.sendCount,
+  };
+  const afterState = {
+    available: after?.available === true,
+    active_id: after?.activeId ?? null,
+    running: after?.running,
+    message_count: after?.messageCount,
+    send_count: after?.sendCount,
+  };
+  const mutationGuard = {
+    public_state_available_before: beforeState.available,
+    public_state_available_after: afterState.available,
+    task_absent_before: !String(beforeState.active_id || ''),
+    task_absent_after: !String(afterState.active_id || ''),
+    not_running_before: beforeState.running === false,
+    not_running_after: afterState.running === false,
+    message_count_observed: coreBetaObservedNumber(beforeState.message_count)
+      && coreBetaObservedNumber(afterState.message_count),
+    message_count_unchanged: beforeState.message_count === afterState.message_count,
+    send_count_observed: coreBetaObservedNumber(beforeState.send_count)
+      && coreBetaObservedNumber(afterState.send_count),
+    send_count_unchanged: beforeState.send_count === afterState.send_count,
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const composer = {
+    count: composerState?.count,
+    names: Array.isArray(composerState?.names) ? composerState.names.map(String) : null,
+  };
+  const rejection = {
+    type: String(rejectionType || ''),
+    expected_pattern_matched: probe?.expected_pattern_matched === true,
+    visible_rejection_evidence: probe?.visible_rejection_evidence === true,
+    dialog_observed: Boolean(String(probe?.dialog_message || '').trim()),
+    dialog_message: String(probe?.dialog_message || ''),
+    dialog_settled: probe?.dialog_settled === true,
+    managed_teams_ax_required: probe?.managed_teams_ax_required === true,
+    managed_dialog_evidence: probe?.managed_dialog_evidence === true,
+    rejected_before_send: probe?.rejected_before_send === true,
+  };
+  const screenshots = {
+    rejection: coreBetaEvidenceFileRecord(rejectionScreenshot, 128),
+    after_dismissal: coreBetaEvidenceFileRecord(postDismissalScreenshot, 128),
+  };
+  const dialogEvidence = coreBetaEvidenceFileRecord(dialogEvidenceArtifact, 1);
+  const evidenceValid = Boolean(
+    expectedType
+    && rejection.type === expectedType
+    && rejection.expected_pattern_matched
+    && rejection.visible_rejection_evidence
+    && rejection.dialog_observed
+    && expectedMessage.test(rejection.dialog_message)
+    && rejection.dialog_settled
+    && (!rejection.managed_teams_ax_required || rejection.managed_dialog_evidence)
+    && rejection.rejected_before_send
+    && Number(composer.count) === 0
+    && Array.isArray(composer.names)
+    && composer.names.length === 0
+    && mutationGuard.valid
+    && screenshots.rejection.path
+    && screenshots.after_dismissal.path
+    && dialogEvidence.path
+    && JSON.stringify(roles) === JSON.stringify(CORE_BETA_PRE_SEND_ATTACHMENT_REJECTION_NA_ROLES)
+  );
+  return {
+    schema_version: 'qbot-core-beta-pre-send-attachment-rejection/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: evidenceValid,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'pass' : 'automation_error',
+    kind: 'verified_attachment_rejection_before_send',
+    source: 'visible_attachment_rejection_and_public_zero_send_readback',
+    dependent_case_id: caseId,
+    rejection,
+    composer_state: composer,
+    mutation_guard: {
+      ...mutationGuard,
+      before_state: beforeState,
+      after_state: afterState,
+    },
+    screenshots,
+    dialog_evidence: dialogEvidence,
+    not_applicable_roles: roles,
+    reason: evidenceValid
+      ? '产品在发送前明确拒绝附件；弹窗已安全关闭，Composer 为空，且任务、消息与发送计数均未变化。'
+      : '发送前附件拒绝的文案、弹窗收尾、Composer、公开状态、截图或零发送证据不完整。',
+  };
+}
 
 export function coreBetaPreSendImeFailureEvidence({
   testCaseId = '',

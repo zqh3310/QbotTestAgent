@@ -594,6 +594,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'attachment_name_size_sha256',
   'composer_attachment_state',
   'attachment_readback',
+  'pre_send_attachment_rejection',
   'artifact_path_sha256',
   'artifact_content_readback',
   'artifact_preview',
@@ -1268,6 +1269,14 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'reply_delta',
     'reply_completion',
   ]);
+  const preSendAttachmentRejectionNotApplicableRoles = new Set([
+    'task_id',
+    'prompt',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
@@ -1291,7 +1300,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && !expertPrerequisiteNotApplicableRoles.has(role)
         && !mcpPrerequisiteNotApplicableRoles.has(role)
         && !preSendCapabilityFailureNotApplicableRoles.has(role)
-        && !preSendImeFailureNotApplicableRoles.has(role))
+        && !preSendImeFailureNotApplicableRoles.has(role)
+        && !preSendAttachmentRejectionNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1715,6 +1725,143 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => preSendImeFailureNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const attachmentRejection = blocker?.rejection || {};
+    const attachmentComposer = blocker?.composer_state || {};
+    const attachmentMutationGuard = blocker?.mutation_guard || {};
+    const attachmentCaseType = testCase?.id === 'SIT-HOME-043'
+      ? 'single_file_oversize'
+      : testCase?.id === 'SIT-HOME-044' ? 'aggregate_oversize' : '';
+    const attachmentMessagePattern = testCase?.id === 'SIT-HOME-043'
+      ? /单个文档不能超过\s*30\s*MiB|单个.*30\s*(?:MiB|MB)|文件过大/
+      : /文档附件总大小不能超过\s*80\s*MiB|总大小.*80\s*(?:MiB|MB)|总量过大/;
+    const caseBoundEvidenceFileValid = (record, minimumBytes = 1) => {
+      const recordPath = String(record?.path || '');
+      const resolvedRecordPath = recordPath ? path.resolve(recordPath) : '';
+      const recordRelative = resolvedRecordPath
+        ? path.relative(path.resolve(caseDir), resolvedRecordPath)
+        : '';
+      return Boolean(
+        resolvedRecordPath
+        && recordRelative
+        && !recordRelative.startsWith('..')
+        && !path.isAbsolute(recordRelative)
+        && fs.existsSync(resolvedRecordPath)
+        && fs.statSync(resolvedRecordPath).isFile()
+        && fs.statSync(resolvedRecordPath).size >= minimumBytes
+        && /^[a-f0-9]{64}$/i.test(String(record?.sha256 || ''))
+        && sha256File(resolvedRecordPath) === record.sha256
+      );
+    };
+    const beforeAttachmentState = attachmentMutationGuard?.before_state || {};
+    const afterAttachmentState = attachmentMutationGuard?.after_state || {};
+    let attachmentDialogEvidence = null;
+    if (caseBoundEvidenceFileValid(blocker?.dialog_evidence, 1)) {
+      try {
+        attachmentDialogEvidence = JSON.parse(fs.readFileSync(blocker.dialog_evidence.path, 'utf8'));
+      } catch {
+        attachmentDialogEvidence = null;
+      }
+    }
+    const attachmentDialogMessage = String(attachmentRejection?.dialog_message || '');
+    const attachmentPlaywrightDialog = attachmentDialogEvidence?.playwright_dialog || {};
+    const attachmentAccessibility = attachmentDialogEvidence?.accessibility || {};
+    const attachmentConfirmation = attachmentDialogEvidence?.confirmation || {};
+    const attachmentAccessibilityEvidenceVerified = Boolean(
+      attachmentDialogEvidence?.safe_information_dialog === true
+      && attachmentDialogEvidence?.message_matched === true
+      && attachmentDialogEvidence?.evidence_observed_before_confirmation === true
+      && attachmentDialogEvidence?.confirmation_clicked === true
+      && attachmentDialogEvidence?.sheet_closed_after_confirmation === true
+      && attachmentAccessibility?.ok === true
+      && attachmentAccessibility?.observed === true
+      && attachmentAccessibility?.role === 'AXSheet'
+      && attachmentAccessibility?.message === attachmentDialogMessage
+      && attachmentAccessibility?.message_matched === true
+      && Array.isArray(attachmentAccessibility?.buttons)
+      && attachmentAccessibility.buttons.length === 1
+      && /^(?:OK|确定|知道了)$/.test(String(attachmentAccessibility.buttons[0] || ''))
+      && attachmentConfirmation?.ok === true
+      && attachmentConfirmation?.observed === true
+      && attachmentConfirmation?.role === 'AXSheet'
+      && attachmentConfirmation?.message === attachmentDialogMessage
+      && attachmentConfirmation?.message_matched === true
+      && attachmentConfirmation?.clicked === true
+      && /^(?:OK|确定|知道了)$/.test(String(attachmentConfirmation?.confirmation_label || ''))
+    );
+    const attachmentPlaywrightFallbackEvidenceVerified = Boolean(
+      attachmentPlaywrightDialog?.observed_before_confirmation === true
+      && attachmentPlaywrightDialog?.type === 'alert'
+      && attachmentPlaywrightDialog?.message === attachmentDialogMessage
+      && attachmentPlaywrightDialog?.allowlisted_attachment_info === true
+      && attachmentPlaywrightDialog?.action === 'playwright_accept_fallback'
+      && attachmentPlaywrightDialog?.accepted === true
+      && attachmentPlaywrightDialog?.evidence_captured_before_accept === true
+      && attachmentPlaywrightDialog?.page_responsive_after === true
+      && !String(attachmentPlaywrightDialog?.close_error || '')
+    );
+    const attachmentDialogEvidenceVerified = Boolean(
+      attachmentDialogEvidence
+      && attachmentDialogEvidence?.expected_dialog_message === attachmentDialogMessage
+      && attachmentDialogEvidence?.playwright_dialog_message === attachmentDialogMessage
+      && (attachmentAccessibilityEvidenceVerified || attachmentPlaywrightFallbackEvidenceVerified)
+    );
+    const preSendAttachmentRejectionVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-attachment-rejection/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === true
+      && blocker?.applicable === true
+      && blocker?.outcome === 'pass'
+      && blocker?.kind === 'verified_attachment_rejection_before_send'
+      && blocker?.source === 'visible_attachment_rejection_and_public_zero_send_readback'
+      && blocker?.dependent_case_id === testCase?.id
+      && attachmentCaseType
+      && attachmentRejection?.type === attachmentCaseType
+      && attachmentRejection?.expected_pattern_matched === true
+      && attachmentRejection?.visible_rejection_evidence === true
+      && attachmentRejection?.dialog_observed === true
+      && attachmentMessagePattern.test(String(attachmentRejection?.dialog_message || ''))
+      && attachmentRejection?.dialog_settled === true
+      && (attachmentRejection?.managed_teams_ax_required !== true
+        || attachmentRejection?.managed_dialog_evidence === true)
+      && attachmentRejection?.rejected_before_send === true
+      && Number(attachmentComposer?.count) === 0
+      && Array.isArray(attachmentComposer?.names)
+      && attachmentComposer.names.length === 0
+      && attachmentMutationGuard?.valid === true
+      && attachmentMutationGuard?.public_state_available_before === true
+      && attachmentMutationGuard?.public_state_available_after === true
+      && attachmentMutationGuard?.task_absent_before === true
+      && attachmentMutationGuard?.task_absent_after === true
+      && attachmentMutationGuard?.not_running_before === true
+      && attachmentMutationGuard?.not_running_after === true
+      && attachmentMutationGuard?.message_count_observed === true
+      && attachmentMutationGuard?.message_count_unchanged === true
+      && attachmentMutationGuard?.send_count_observed === true
+      && attachmentMutationGuard?.send_count_unchanged === true
+      && attachmentMutationGuard?.no_prompt_recorded === true
+      && attachmentMutationGuard?.no_send_receipt_recorded === true
+      && beforeAttachmentState?.available === true
+      && afterAttachmentState?.available === true
+      && !String(beforeAttachmentState?.active_id || '')
+      && !String(afterAttachmentState?.active_id || '')
+      && beforeAttachmentState?.running === false
+      && afterAttachmentState?.running === false
+      && typeof beforeAttachmentState?.message_count === 'number'
+      && Number.isFinite(beforeAttachmentState.message_count)
+      && typeof afterAttachmentState?.message_count === 'number'
+      && Number.isFinite(afterAttachmentState.message_count)
+      && beforeAttachmentState.message_count === afterAttachmentState.message_count
+      && typeof beforeAttachmentState?.send_count === 'number'
+      && Number.isFinite(beforeAttachmentState.send_count)
+      && typeof afterAttachmentState?.send_count === 'number'
+      && Number.isFinite(afterAttachmentState.send_count)
+      && beforeAttachmentState.send_count === afterAttachmentState.send_count
+      && caseBoundEvidenceFileValid(blocker?.screenshots?.rejection, 128)
+      && caseBoundEvidenceFileValid(blocker?.screenshots?.after_dismissal, 128)
+      && attachmentDialogEvidenceVerified
+      && allowedRoles.includes(role)
+      && JSON.stringify(allowedRoles) === JSON.stringify([...preSendAttachmentRejectionNotApplicableRoles])
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
@@ -1723,7 +1870,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || mcpPrerequisiteVerified
       || preSendCapabilityFailureVerified
       || capabilityInventoryPrerequisiteVerified
-      || preSendImeFailureVerified;
+      || preSendImeFailureVerified
+      || preSendAttachmentRejectionVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

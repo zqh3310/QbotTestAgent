@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,8 +57,10 @@ import {
   coreBetaAttachmentIngressVerdict,
   coreBetaBatchReplyCompletionPayload,
   coreBetaClipboardPasteObserved,
+  coreBetaPreSendAttachmentRejectionEvidence,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
+  buildCoreEvidenceManifest,
   validateEvidenceFile,
   validateReplyCompletionPayload,
 } from '../src/lib/core-beta-case-protocol.mjs';
@@ -470,6 +473,126 @@ test('MCP manual mode uses public routing plus visible options; optional copy is
 test('QA attachment allowlist follows the product release contract for log files', () => {
   assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.log'), true);
   assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.exe'), false);
+});
+
+test('verified attachment rejection before send makes only the impossible send chain N/A', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-pre-send-attachment-rejection-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roles = ['task_id', 'prompt', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion'];
+  const variants = [
+    ['SIT-HOME-043', 'single_file_oversize', '单个文档不能超过 30 MiB'],
+    ['SIT-HOME-044', 'aggregate_oversize', '文档附件总大小不能超过 80 MiB'],
+  ];
+
+  for (const [caseId, rejectionType, dialogMessage] of variants) {
+    const caseDir = path.join(root, caseId);
+    fs.mkdirSync(caseDir, { recursive: true });
+    const rejectionScreenshot = path.join(caseDir, 'rejection.png');
+    const afterScreenshot = path.join(caseDir, 'after-dismissal.png');
+    const dialogArtifact = path.join(caseDir, 'dialog.json');
+    fs.writeFileSync(rejectionScreenshot, Buffer.alloc(256, 1));
+    fs.writeFileSync(afterScreenshot, Buffer.alloc(256, 2));
+    const dialogEvidence = {
+      expected_dialog_message: dialogMessage,
+      playwright_dialog_message: dialogMessage,
+      playwright_dialog: {
+        observed_before_confirmation: true,
+        type: 'alert',
+        message: dialogMessage,
+        allowlisted_attachment_info: true,
+        action: 'playwright_accept_fallback',
+        accepted: true,
+        evidence_captured_before_accept: true,
+        page_responsive_after: true,
+        close_error: '',
+      },
+    };
+    fs.writeFileSync(dialogArtifact, JSON.stringify(dialogEvidence));
+    const before = { available: true, activeId: null, running: false, messageCount: 0, sendCount: 7 };
+    const after = { available: true, activeId: null, running: false, messageCount: 0, sendCount: 7 };
+    const evidence = coreBetaPreSendAttachmentRejectionEvidence({
+      testCaseId: caseId,
+      rejectionType,
+      before,
+      after,
+      probe: {
+        expected_pattern_matched: true,
+        visible_rejection_evidence: true,
+        dialog_message: dialogMessage,
+        dialog_settled: true,
+        managed_teams_ax_required: true,
+        managed_dialog_evidence: true,
+        rejected_before_send: true,
+      },
+      composerState: { count: 0, names: [] },
+      rejectionScreenshot,
+      postDismissalScreenshot: afterScreenshot,
+      dialogEvidenceArtifact: dialogArtifact,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(evidence.valid, true, caseId);
+    assert.deepEqual(evidence.not_applicable_roles, roles, caseId);
+    const blockerFile = path.join(caseDir, 'pre-send-attachment-rejection.json');
+    fs.writeFileSync(blockerFile, JSON.stringify(evidence, null, 2));
+    const artifacts = {
+      core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
+    };
+    const manifest = buildCoreEvidenceManifest({
+      testCase: { id: caseId, evidence_roles: roles },
+      caseDir,
+      artifacts,
+    });
+    assert.equal(manifest.complete, true, caseId);
+    assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), roles, caseId);
+
+    const tamperedVariants = [
+      { ...evidence, dependent_case_id: 'SIT-HOME-042' },
+      { ...evidence, rejection: { ...evidence.rejection, dialog_message: '上传成功' } },
+      { ...evidence, composer_state: { ...evidence.composer_state, count: 1, names: ['oversized.pdf'] } },
+      { ...evidence, mutation_guard: { ...evidence.mutation_guard, send_count_unchanged: false } },
+      {
+        ...evidence,
+        mutation_guard: {
+          ...evidence.mutation_guard,
+          before_state: { ...evidence.mutation_guard.before_state, send_count: null },
+        },
+      },
+      { ...evidence, screenshots: { ...evidence.screenshots, rejection: { ...evidence.screenshots.rejection, sha256: '0'.repeat(64) } } },
+      { ...evidence, not_applicable_roles: roles.slice(1) },
+    ];
+    for (const tampered of tamperedVariants) {
+      fs.writeFileSync(blockerFile, JSON.stringify(tampered, null, 2));
+      const failClosed = buildCoreEvidenceManifest({
+        testCase: { id: caseId, evidence_roles: roles },
+        caseDir,
+        artifacts,
+      });
+      assert.equal(failClosed.complete, false, `${caseId}: ${JSON.stringify(tampered)}`);
+      assert.deepEqual(failClosed.missing_roles, roles, caseId);
+    }
+    for (const tamperedDialog of [
+      {
+        ...dialogEvidence,
+        playwright_dialog: { ...dialogEvidence.playwright_dialog, accepted: false },
+      },
+      {
+        ...dialogEvidence,
+        expected_dialog_message: '上传成功',
+      },
+    ]) {
+      fs.writeFileSync(dialogArtifact, JSON.stringify(tamperedDialog));
+      evidence.dialog_evidence.sha256 = createHash('sha256').update(fs.readFileSync(dialogArtifact)).digest('hex');
+      fs.writeFileSync(blockerFile, JSON.stringify(evidence, null, 2));
+      const tamperedDialogManifest = buildCoreEvidenceManifest({
+        testCase: { id: caseId, evidence_roles: roles },
+        caseDir,
+        artifacts,
+      });
+      assert.equal(tamperedDialogManifest.complete, false, `${caseId}: dialog receipt tampered`);
+      assert.deepEqual(tamperedDialogManifest.missing_roles, roles, caseId);
+    }
+  }
 });
 
 test('click evidence requires before/action/after plus a relevant state transition', () => {

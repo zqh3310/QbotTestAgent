@@ -5227,6 +5227,11 @@ assert.match(
   /coreBetaAttachmentRejectionMatrixVerdict\(results\)[\s\S]*composer-attachment-state\.json/,
   'BETA-FILE-006 必须聚合逐 probe verdict 并单独落盘 Composer 空态证据',
 );
+assert.match(
+  runner,
+  /executeSitHomeAttachmentLimit[\s\S]*coreBetaPreSendAttachmentRejectionEvidence[\s\S]*pre-send-attachment-rejection\.json[\s\S]*core_beta_not_applicable_roles/,
+  'SIT-HOME-043/044 必须物化 Case 绑定的发送前附件拒绝 N/A 证据',
+);
 assert.doesNotMatch(
   attachmentMatrixSource,
   /message_count_before|message_count_after|send_count_before|send_count_after/,
