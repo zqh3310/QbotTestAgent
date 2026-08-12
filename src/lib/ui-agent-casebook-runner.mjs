@@ -18937,12 +18937,14 @@ const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
     section: 'skill',
     selector: '.composer-plus-sub-skill',
     optionSelector: '[data-testid^="composer-skill-mode-"], [data-testid^="composer-skill-option-"]',
+    emptySelector: '.composer-plus-empty',
   },
   connector: {
     label: '连接器',
     section: 'connector',
     selector: '.composer-plus-sub-connector',
     optionSelector: '[data-testid^="composer-connector-mode-"], [data-testid^="composer-connector-option-"]',
+    emptySelector: '.composer-plus-empty',
   },
 });
 
@@ -18958,7 +18960,13 @@ async function lastVisibleLocator(locator, timeout = 250) {
 async function visibleUnifiedComposerSubmenu(page, config, timeout = 250) {
   const submenu = await lastVisibleLocator(page.locator(config.selector), timeout);
   if (!submenu) return null;
-  if (config.optionSelector && !(await submenu.locator(config.optionSelector).count().catch(() => 0))) return null;
+  const optionCount = config.optionSelector
+    ? await submenu.locator(config.optionSelector).count().catch(() => 0)
+    : 0;
+  const emptyVisible = config.emptySelector
+    ? Boolean(await lastVisibleLocator(submenu.locator(config.emptySelector), timeout))
+    : false;
+  if (config.optionSelector && optionCount === 0 && !emptyVisible) return null;
   return submenu;
 }
 

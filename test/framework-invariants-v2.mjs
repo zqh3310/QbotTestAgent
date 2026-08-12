@@ -37,6 +37,7 @@ import {
   coreBetaCleanupReadbackVerdict,
   coreBetaCleanupReleaseMigrationVerdict,
   coreBetaCapabilityInteractionCategory,
+  coreBetaCapabilityInventoryPrerequisite,
   coreBetaDirectConnectorListModeReady,
   coreBetaDirectSkillListReady,
   coreBetaComposerHistoryVerdict,
@@ -68,6 +69,7 @@ import {
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaRuntimeExecutorBinding,
   coreBetaRuntimeFamilyPrerequisiteBlocker,
+  coreBetaUnifiedSubmenuSurfaceReady,
   coreBetaQbotHomeFromUiUrl,
   coreBetaProductHomeForUi,
   coreBetaSkillInstallBatchAssessment,
@@ -1511,6 +1513,98 @@ assert.equal(
   false,
   '新版技能列表缺少 selectedSkills 公开字段时不得判为可安全执行',
 );
+assert.equal(
+  coreBetaUnifiedSubmenuSurfaceReady({
+    optionSelectorRequired: true,
+    optionCount: 0,
+    emptyVisible: true,
+  }),
+  true,
+  'rc.100 可见技能空态 Portal 应被识别为已打开，不能因没有 mode/option 节点误报框架失败',
+);
+assert.equal(
+  coreBetaUnifiedSubmenuSurfaceReady({
+    optionSelectorRequired: true,
+    optionCount: 0,
+    emptyVisible: false,
+  }),
+  false,
+  '既无能力选项也无明确空态的 Portal 不得被判为完整可见表面',
+);
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-capability-inventory-prerequisite-'));
+  try {
+    const screenshot = path.join(evidenceDir, 'skill-empty.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 11));
+    const state = {
+      task: { id: null, running: false, send_count: 0, message_count: 0 },
+      skills: { selected: [] },
+    };
+    const blocker = coreBetaCapabilityInventoryPrerequisite({
+      testCaseId: 'QWD-ENTRY-002',
+      capabilityKind: 'skill',
+      before: state,
+      after: structuredClone(state),
+      manualSurface: {
+        search_visible: true,
+        list_visible: true,
+        option_count: 0,
+        empty_visible: true,
+      },
+      inventoryText: '还没安装技能\n管理技能',
+      screenshot,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(blocker.valid, true);
+    assert.equal(blocker.outcome, 'blocked');
+    assert.equal(blocker.mutation_guard.valid, true);
+    const blockerFile = path.join(evidenceDir, 'capability-inventory-prerequisite.json');
+    writeJsonFile(blockerFile, blocker);
+    const artifacts = {
+      capability_selection: blockerFile,
+      core_beta_not_applicable_roles: blocker.not_applicable_roles.map((role) => ({
+        role,
+        blocker_path: blockerFile,
+      })),
+    };
+    for (const role of ['qwork_daily_readback', 'composer_attachment_state', 'data_integrity_readback']) {
+      const file = path.join(evidenceDir, `${role}.json`);
+      writeJsonFile(file, qworkDailyEvidenceEnvelope(
+        'QWD-ENTRY-002',
+        { phase: 'pre_send_capability_inventory', blocker_path: blockerFile },
+        false,
+        true,
+      ));
+      artifacts[role] = file;
+    }
+    const manifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'QWD-ENTRY-002',
+        evidence_roles: [
+          'qwork_daily_readback',
+          'task_id',
+          'prompt',
+          'send_receipt',
+          'transcript',
+          'reply_delta',
+          'reply_completion',
+          'capability_selection',
+          'capability_execution_event',
+          'composer_attachment_state',
+          'data_integrity_readback',
+        ],
+      },
+      caseDir: evidenceDir,
+      artifacts,
+    });
+    assert.equal(manifest.complete, true, '技能空库存 prerequisite 必须形成完整 QWD-ENTRY-002 manifest');
+    assert.deepEqual(manifest.missing_roles, []);
+    assert.deepEqual(manifest.invalid_roles, []);
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+}
 assert.equal(
   coreBetaCapabilityInteractionCategory({ controlLocated: false, clickDispatched: false }),
   'automation_error',
@@ -5196,6 +5290,7 @@ const required = [
   ['#669 四条 Fixture 内自动化路由完整', /executeSkillRegressionFixtureCase[\s\S]*SIT-SKILL-030'[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*SIT-SKILL-031'[\s\S]*executeSitSkillDependencyAlreadyInstalled[\s\S]*SIT-SKILL-032'[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*SIT-SKILL-033'[\s\S]*executeSitSkillDependencyCycle/],
   ['输入区菜单按类型锚点隔离', /COMPOSER_MENU_ANCHORS[\s\S]*composer-skill-mode-[\s\S]*composer-connector-mode-[\s\S]*composer-safety-level-option-[\s\S]*activeMenuLocator\(page, menuKind[\s\S]*menuKind === 'workMode'[\s\S]*WORK_MODE_LABELS/],
   ['统一加号菜单使用稳定 section testid 与最新可见 Portal', /UNIFIED_COMPOSER_SUBMENUS[\s\S]*section: 'mode'[\s\S]*section: 'skill'[\s\S]*section: 'connector'[\s\S]*lastVisibleLocator[\s\S]*visibleUnifiedComposerSubmenu[\s\S]*composer-plus-section-\$\{config\.section\}/],
+  ['统一加号子菜单把可见空态识别为合法 Portal', /visibleUnifiedComposerSubmenu[\s\S]*emptySelector[\s\S]*coreBetaUnifiedSubmenuSurfaceReady[\s\S]*emptyVisible/],
   ['统一加号子菜单支持 hover click ArrowRight Enter 四路打开', /openUnifiedComposerSubmenu[\s\S]*\.hover\(\{ force: true \}\)[\s\S]*pointermove[\s\S]*\.click\(\{ force: true \}\)[\s\S]*ArrowRight[\s\S]*Enter/],
   ['统一加号子菜单对完整开启流程执行三次有界重试', /openUnifiedComposerSubmenuOnce[\s\S]*async function openUnifiedComposerSubmenu[\s\S]*attempt = 1; attempt <= 3[\s\S]*openUnifiedComposerSubmenuOnce[\s\S]*closeWorkspacePicker[\s\S]*250 \* attempt/],
   ['统一技能和连接器子菜单持续不可见时显式记录框架失败', /setUnifiedSkillMode[\s\S]*submenu_attempts: 3[\s\S]*统一菜单技能子菜单可打开[\s\S]*automation_error[\s\S]*setUnifiedConnectorMode[\s\S]*submenu_attempts: 3[\s\S]*统一菜单连接器子菜单可打开[\s\S]*automation_error/],
@@ -5212,6 +5307,7 @@ const required = [
   ['输入区 reset 保留能力产品失败分类', /resetComposerControls[\s\S]*coreBetaComposerResetFailureCategory[\s\S]*failure_category/],
   ['输入区 reset 保留后续能力操作覆盖前的失败交互', /resetComposerControls[\s\S]*preserveCoreBetaFailedCapabilityInteraction[\s\S]*failed_interactions/],
   ['QWD-ENTRY-002 发送前产品失败物化完整负向证据', /qworkDailyNewTaskAutoIsolationCase[\s\S]*materializeQworkDailyPreSendResetFailure[\s\S]*qwork_daily_readback[\s\S]*composer_attachment_state[\s\S]*data_integrity_readback/],
+  ['QWD-ENTRY-002 能力空库存形成完整前置证据后继续', /materializeQworkDailyCapabilityInventoryPrerequisite[\s\S]*capability-inventory-prerequisite\.json[\s\S]*core_beta_not_applicable_roles[\s\S]*qwork_daily_readback[\s\S]*qworkDailyNewTaskAutoIsolationCase[\s\S]*materializeQworkDailyCapabilityInventoryPrerequisite/],
   ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],

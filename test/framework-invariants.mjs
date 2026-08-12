@@ -891,6 +891,7 @@ const required = [
   ['停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['停止生成观察非空正文 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
   ['统一能力子菜单使用最新可见 Portal 并保留 click 与键盘回退', /openUnifiedComposerSubmenu[\s\S]*lastVisibleLocator[\s\S]*row\.click[\s\S]*ArrowRight[\s\S]*row\.press\('Enter'\)/],
+  ['统一能力子菜单把可见空态识别为合法 Portal', /visibleUnifiedComposerSubmenu[\s\S]*emptySelector[\s\S]*optionCount[\s\S]*emptyVisible/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
   ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-prepare-python-runtimes[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],

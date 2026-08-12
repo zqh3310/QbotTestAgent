@@ -12493,6 +12493,82 @@ async function materializeQworkDailyPreSendResetFailure({
   return true;
 }
 
+async function materializeQworkDailyCapabilityInventoryPrerequisite({
+  page,
+  state,
+  testCase,
+  caseDir,
+  before,
+}) {
+  const interaction = state.artifacts.core_beta_capability_interaction || {};
+  const capabilityKind = interaction.capability_kind === 'connector' ? 'connector' : 'skill';
+  const after = await captureCoreBetaPublicState(page, testCase);
+  const blocker = coreBetaCapabilityInventoryPrerequisite({
+    testCaseId: testCase.id,
+    capabilityKind,
+    before,
+    after,
+    manualSurface: interaction.manual_surface,
+    inventoryText: interaction.menu_text,
+    screenshot: interaction.screenshot,
+    noPromptRecorded: !state.artifacts.prompt,
+    noSendReceiptRecorded: !state.artifacts.send_receipt,
+  });
+  const blockerFile = path.join(caseDir, 'capability-inventory-prerequisite.json');
+  writeJsonFile(blockerFile, blocker);
+  if (!blocker.valid || !blocker.applicable || blocker.outcome !== 'blocked') {
+    recordAssertion(
+      state,
+      '日常回归能力空库存前置证据',
+      '可见空态、公开空任务/空选择、截图与零发送读回应形成完整 prerequisite 证据。',
+      false,
+      blocker.reason,
+      'automation_error',
+    );
+    return false;
+  }
+  state.artifacts.capability_selection = blockerFile;
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: blockerFile,
+  }));
+  const negativeReadback = {
+    phase: 'pre_send_capability_inventory',
+    outcome: 'blocked',
+    capability_kind: capabilityKind,
+    required_count: blocker.required_count,
+    available_count: blocker.available_count,
+    manual_surface: blocker.manual_surface,
+    mutation_guard: blocker.mutation_guard,
+    blocker_path: blockerFile,
+  };
+  writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', negativeReadback, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'composer_attachment_state', {
+    phase: negativeReadback.phase,
+    no_send_observed: blocker.mutation_guard.valid === true,
+    before_attachment_count: Number(before?.task?.attachment_count || 0),
+    after_attachment_count: Number(after?.task?.attachment_count || 0),
+  }, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', {
+    phase: negativeReadback.phase,
+    task_absent_before: blocker.mutation_guard.task_absent_before,
+    task_absent_after: blocker.mutation_guard.task_absent_after,
+    message_count_zero_before: blocker.mutation_guard.message_count_zero_before,
+    message_count_zero_after: blocker.mutation_guard.message_count_zero_after,
+    send_count_unchanged: blocker.mutation_guard.send_count_unchanged,
+    capability_selection_empty_before: blocker.mutation_guard.capability_selection_empty_before,
+    capability_selection_empty_after: blocker.mutation_guard.capability_selection_empty_after,
+  }, false, true);
+  recordAssertion(
+    state,
+    '日常回归能力空库存前置证据',
+    '需要具体能力但当前可见库存为空时，应保留完整 prerequisite 证据并禁止发送。',
+    true,
+    blocker.reason,
+  );
+  return true;
+}
+
 async function qworkDailyNewTaskAutoIsolationCase({ page, state, testCase, caseDir, timeoutMs }) {
   await openNewTask(page, state);
   const beforeReset = await captureCoreBetaPublicState(page, testCase);
@@ -12509,7 +12585,18 @@ async function qworkDailyNewTaskAutoIsolationCase({ page, state, testCase, caseD
     return;
   }
   if (!await selectFirstManualSkill(page, state, caseDir)) {
-    if (state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+    if (
+      state.status === 'blocked'
+      && state.artifacts.core_beta_capability_interaction?.manual_surface?.empty_visible === true
+    ) {
+      await materializeQworkDailyCapabilityInventoryPrerequisite({
+        page,
+        state,
+        testCase,
+        caseDir,
+        before: beforeReset,
+      });
+    } else if (state.artifacts.core_beta_capability_interaction?.category === 'bug') {
       await materializeQworkDailyPreSendResetFailure({ page, state, testCase, caseDir, before: beforeReset });
     }
     return;
@@ -24646,12 +24733,14 @@ const UNIFIED_COMPOSER_SUBMENUS = Object.freeze({
     section: 'skill',
     selector: '.composer-plus-sub-skill',
     optionSelector: '[data-testid^="composer-skill-mode-"], [data-testid^="composer-skill-option-"]',
+    emptySelector: '.composer-plus-empty',
   },
   connector: {
     label: '连接器',
     section: 'connector',
     selector: '.composer-plus-sub-connector',
     optionSelector: '[data-testid^="composer-connector-mode-"], [data-testid^="composer-connector-option-"]',
+    emptySelector: '.composer-plus-empty',
   },
 });
 
@@ -24664,10 +24753,28 @@ async function lastVisibleLocator(locator, timeout = 250) {
   return null;
 }
 
+export function coreBetaUnifiedSubmenuSurfaceReady({
+  optionSelectorRequired = false,
+  optionCount = 0,
+  emptyVisible = false,
+} = {}) {
+  return optionSelectorRequired !== true || Number(optionCount) > 0 || emptyVisible === true;
+}
+
 async function visibleUnifiedComposerSubmenu(page, config, timeout = 250) {
   const submenu = await lastVisibleLocator(page.locator(config.selector), timeout);
   if (!submenu) return null;
-  if (config.optionSelector && !(await submenu.locator(config.optionSelector).count().catch(() => 0))) return null;
+  const optionCount = config.optionSelector
+    ? await submenu.locator(config.optionSelector).count().catch(() => 0)
+    : 0;
+  const emptyVisible = config.emptySelector
+    ? Boolean(await lastVisibleLocator(submenu.locator(config.emptySelector), timeout))
+    : false;
+  if (!coreBetaUnifiedSubmenuSurfaceReady({
+    optionSelectorRequired: Boolean(config.optionSelector),
+    optionCount,
+    emptyVisible,
+  })) return null;
   return submenu;
 }
 
@@ -25091,6 +25198,16 @@ const CORE_BETA_PRE_SEND_CAPABILITY_FAILURE_NA_ROLES = Object.freeze([
   'reply_completion',
 ]);
 
+const CORE_BETA_CAPABILITY_INVENTORY_PREREQUISITE_NA_ROLES = Object.freeze([
+  'capability_execution_event',
+  'prompt',
+  'task_id',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
 const CORE_BETA_PRE_SEND_IME_FAILURE_NA_ROLES = Object.freeze([
   'prompt',
   'task_id',
@@ -25291,6 +25408,101 @@ export function coreBetaPreSendCapabilityFailureEvidence({
     reason: evidenceValid
       ? `已真实点击 ${capabilityKind} 能力控件，但产品未进入期望状态；已证明当前任务为空、消息数为0且发送计数未变化。`
       : '发送前能力产品失败的点击、状态读回、截图或零发送变更证据不完整。',
+  };
+}
+
+export function coreBetaCapabilityInventoryPrerequisite({
+  testCaseId = '',
+  capabilityKind = 'skill',
+  before = {},
+  after = {},
+  manualSurface = null,
+  inventoryText = '',
+  screenshot = '',
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+  notApplicableRoles = CORE_BETA_CAPABILITY_INVENTORY_PREREQUISITE_NA_ROLES,
+} = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const beforeSelection = capabilityKind === 'connector'
+    ? before?.connectors?.selected
+    : before?.skills?.selected;
+  const afterSelection = capabilityKind === 'connector'
+    ? after?.connectors?.selected
+    : after?.skills?.selected;
+  const emptySurfaceValid = Boolean(
+    manualSurface
+    && typeof manualSurface === 'object'
+    && manualSurface.list_visible === true
+    && Number(manualSurface.option_count) === 0
+    && manualSurface.empty_visible === true
+    && (capabilityKind !== 'skill' || manualSurface.search_visible === true)
+  );
+  const mutationGuard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+    capability_selection_empty_before: Array.isArray(beforeSelection) && beforeSelection.length === 0,
+    capability_selection_empty_after: Array.isArray(afterSelection) && afterSelection.length === 0,
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const roles = (Array.isArray(notApplicableRoles) ? notApplicableRoles : [])
+    .map(String)
+    .filter((role, index, items) => (
+      CORE_BETA_CAPABILITY_INVENTORY_PREREQUISITE_NA_ROLES.includes(role)
+      && items.indexOf(role) === index
+    ));
+  const screenshotValid = coreBetaBatchScreenshotPresent(screenshot);
+  const evidenceValid = Boolean(
+    String(testCaseId || '').trim()
+    && ['skill', 'connector'].includes(capabilityKind)
+    && emptySurfaceValid
+    && /还没安装技能|暂无可选技能|未接入|暂无连接器|无匹配/.test(String(inventoryText || ''))
+    && mutationGuard.valid
+    && screenshotValid
+    && roles.length > 0
+  );
+  return {
+    schema_version: 'qbot-core-beta-capability-prerequisite/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: false,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'blocked' : 'automation_error',
+    kind: 'capability_inventory_empty',
+    source: 'visible_unified_composer_capability_inventory',
+    dependent_case_id: String(testCaseId || ''),
+    capability_kind: capabilityKind,
+    required_count: 1,
+    available_count: 0,
+    inventory_text: String(inventoryText || ''),
+    manual_surface: manualSurface,
+    mutation_guard: {
+      ...mutationGuard,
+      before_task: beforeTask,
+      after_task: afterTask,
+      before_selection: Array.isArray(beforeSelection) ? beforeSelection : null,
+      after_selection: Array.isArray(afterSelection) ? afterSelection : null,
+    },
+    screenshot: {
+      path: screenshotValid ? path.resolve(screenshot) : '',
+      sha256: screenshotValid
+        ? createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex')
+        : '',
+    },
+    not_applicable_roles: roles,
+    reason: evidenceValid
+      ? `当前账号的可见${capabilityKind === 'skill' ? '技能' : '连接器'}列表为空，无法选择用例要求的真实能力；已证明任务、消息和发送计数均未变化。`
+      : '能力空库存前置的可见空态、截图、公开状态或零发送证据不完整。',
   };
 }
 
@@ -33016,6 +33228,33 @@ function verifiedCoreBetaUpstreamPrerequisite(result) {
   return valid ? evidence : null;
 }
 
+function verifiedCoreBetaCapabilityInventoryPrerequisite(result) {
+  const evidence = readCaseBoundJsonEvidence(result, [
+    result?.artifacts?.capability_selection,
+    result?.artifacts?.capability_inventory,
+  ], 'qbot-core-beta-capability-prerequisite/v1');
+  if (!evidence) return null;
+  const blocker = evidence.data;
+  const valid = blocker?.valid === true
+    && blocker?.evidence_valid === true
+    && blocker?.oracle_valid === false
+    && blocker?.applicable === true
+    && blocker?.outcome === 'blocked'
+    && blocker?.kind === 'capability_inventory_empty'
+    && blocker?.source === 'visible_unified_composer_capability_inventory'
+    && blocker?.dependent_case_id === result.id
+    && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
+    && Number(blocker?.required_count) === 1
+    && Number(blocker?.available_count) === 0
+    && blocker?.manual_surface?.list_visible === true
+    && Number(blocker?.manual_surface?.option_count) === 0
+    && blocker?.manual_surface?.empty_visible === true
+    && blocker?.mutation_guard?.valid === true
+    && /^[a-f0-9]{64}$/i.test(String(blocker?.screenshot?.sha256 || ''))
+    && String(blocker?.reason || '').trim().length > 0;
+  return valid ? evidence : null;
+}
+
 function verifiedCoreBetaPreSendCapabilityFailure(result) {
   const evidence = readCaseBoundJsonEvidence(result, [
     result?.artifacts?.capability_selection,
@@ -33083,9 +33322,14 @@ export function reviewCaseCredibility(result) {
     .filter((item) => item.category === 'automation_error' || item.status === 'failed' && /selector|无法定位|步骤未执行|无法点击|runner|泛化断言/i.test(`${item.actual || ''} ${item.expected || ''} ${item.name || ''} ${item.action || ''}`));
   const blockedText = `${result.actual_result || ''}\n${result.conclusion || ''}`;
   const structuredUpstreamPrerequisite = verifiedCoreBetaUpstreamPrerequisite(result);
+  const structuredInventoryPrerequisite = verifiedCoreBetaCapabilityInventoryPrerequisite(result);
   const frameworkBlocked = /当前 runner|批量 runner|自动化框架|E2E 注入|filePaths|附件桥|只能稳定验证|尚不能自动|无法按步骤|dry-run|bridge.*(?:不可替换|unavailable|undefined)|无法安装.*捕获器|无法注入.*(?:快照|目录|网络|失败)|CDP|Playwright|handler|selector/.test(blockedText);
   const hardEnvironmentBlocked = /没有健康连接器|无可选技能|无已安装技能|当前没有已安装技能|已安装技能列表没有可删除技能|技能市场没有可安装技能|技能市场没有可见技能卡片|技能市场\/已安装列表未找到|要求已安装至少\s*2\s*个技能|当前手动模式只成功选择\s*\d+\s*个技能|未找到可识别.*runtime|runtime 技能卡片存在，但没有可点击安装入口|账号无权限|测试数据|未配置|登录|权限|DEEPBANK_E2E|启动方式|release-package|本地 E2E|辅助功能|原生文件框|filechooser|文件选择|文件名|期望文件|附件入口|图片识别.*暂不可用|视觉运行时|控制平面.*(?:未提供|不兼容)|没有可稳定用于产品\/业务类任务的专家卡片|产品\/业务类任务的专家|自动化测试残留专家|不能随机选择错误专家|专家页没有可稳定|技能市场未找到.*技能卡片|已安装技能列表未找到|当前已安装\/技能市场未找到|当前账号存在可选技能|该用例要求没有已安装技能|找到疑似(可更新|历史版本)技能，但未找到可点击(更新|回退)入口|故障注入|失败注入|网络环境|断开并恢复网络|阻断连接器目录接口|不修改网络或服务状态|不能擅自修改用户网络|当前账号存在可见连接器|无 platform\/custom 连接器账号|未找到 unreachable 连接器|未找到 needs_auth 连接器|手动菜单未展示 needs_auth\/unreachable|无法到达连接器空状态判断点|无专家市场数据|专家市场存在专家卡片|项目上下文|项目文件断言入口|成果文件删除注入|无读取权限成果路径/.test(blockedText);
-  const environmentBlocked = (hardEnvironmentBlocked || Boolean(structuredUpstreamPrerequisite)) && !frameworkBlocked;
+  const environmentBlocked = (
+    hardEnvironmentBlocked
+    || Boolean(structuredUpstreamPrerequisite)
+    || Boolean(structuredInventoryPrerequisite)
+  ) && !frameworkBlocked;
   const sentCaseInstruction = requiresConversationEvidence && hasReplyDelta && replyDeltaLooksLikeCaseInstruction(result);
   const missingConversationEvidence = status !== 'blocked' && requiresConversationEvidence && (!hasTranscript || !hasReplyDelta || !sentUserMessage);
   const modelTierArtifact = result.artifacts?.model_tier || null;
@@ -33208,7 +33452,9 @@ export function reviewCaseCredibility(result) {
       trusted = true;
       reasons.push(structuredUpstreamPrerequisite
         ? `结构化上游前置证据已验证：${structuredUpstreamPrerequisite.data.reason}`
-        : '阻塞原因可归因于测试数据、权限或当前环境状态缺失。');
+        : structuredInventoryPrerequisite
+          ? `结构化能力库存前置证据已验证：${structuredInventoryPrerequisite.data.reason}`
+          : '阻塞原因可归因于测试数据、权限或当前环境状态缺失。');
       userViewConclusion = '真实用户路径被环境、数据或权限前置条件阻断，未进入产品体验判断点。';
     } else {
       reasons.push('阻塞原因不够具体，无法判断是环境问题还是框架问题。');

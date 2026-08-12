@@ -1256,6 +1256,10 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'capability_execution_event',
     ...skillPrerequisiteNotApplicableRoles,
   ]);
+  const capabilityInventoryPrerequisiteNotApplicableRoles = new Set([
+    'capability_execution_event',
+    ...skillPrerequisiteNotApplicableRoles,
+  ]);
   const preSendImeFailureNotApplicableRoles = new Set([
     'prompt',
     'task_id',
@@ -1608,6 +1612,69 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.length > 0
       && allowedRoles.every((itemRole) => preSendCapabilityFailureNotApplicableRoles.has(itemRole))
       && String(blocker?.reason || '').trim();
+    const inventorySurface = blocker?.manual_surface || {};
+    const inventoryMutationGuard = blocker?.mutation_guard || {};
+    const inventoryScreenshot = String(blocker?.screenshot?.path || '');
+    const resolvedInventoryScreenshot = inventoryScreenshot ? path.resolve(inventoryScreenshot) : '';
+    const inventoryScreenshotRelative = resolvedInventoryScreenshot
+      ? path.relative(path.resolve(caseDir), resolvedInventoryScreenshot)
+      : '';
+    const inventoryScreenshotValid = Boolean(
+      resolvedInventoryScreenshot
+      && inventoryScreenshotRelative
+      && !inventoryScreenshotRelative.startsWith('..')
+      && !path.isAbsolute(inventoryScreenshotRelative)
+      && fs.existsSync(resolvedInventoryScreenshot)
+      && fs.statSync(resolvedInventoryScreenshot).isFile()
+      && fs.statSync(resolvedInventoryScreenshot).size >= 128
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.screenshot?.sha256 || ''))
+      && sha256File(resolvedInventoryScreenshot) === blocker.screenshot.sha256
+    );
+    const capabilityInventoryPrerequisiteVerified = blocker?.schema_version === 'qbot-core-beta-capability-prerequisite/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'blocked'
+      && blocker?.kind === 'capability_inventory_empty'
+      && blocker?.source === 'visible_unified_composer_capability_inventory'
+      && blocker?.dependent_case_id === testCase?.id
+      && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
+      && Number(blocker?.required_count) === 1
+      && Number(blocker?.available_count) === 0
+      && /还没安装技能|暂无可选技能|未接入|暂无连接器|无匹配/.test(String(blocker?.inventory_text || ''))
+      && inventorySurface?.list_visible === true
+      && Number(inventorySurface?.option_count) === 0
+      && inventorySurface?.empty_visible === true
+      && (blocker?.capability_kind !== 'skill' || inventorySurface?.search_visible === true)
+      && inventoryMutationGuard?.valid === true
+      && inventoryMutationGuard?.task_absent_before === true
+      && inventoryMutationGuard?.task_absent_after === true
+      && inventoryMutationGuard?.not_running_before === true
+      && inventoryMutationGuard?.not_running_after === true
+      && inventoryMutationGuard?.message_count_zero_before === true
+      && inventoryMutationGuard?.message_count_zero_after === true
+      && inventoryMutationGuard?.send_count_observed === true
+      && inventoryMutationGuard?.send_count_unchanged === true
+      && inventoryMutationGuard?.capability_selection_empty_before === true
+      && inventoryMutationGuard?.capability_selection_empty_after === true
+      && inventoryMutationGuard?.no_prompt_recorded === true
+      && inventoryMutationGuard?.no_send_receipt_recorded === true
+      && inventoryMutationGuard?.before_task?.id == null
+      && inventoryMutationGuard?.after_task?.id == null
+      && Number(inventoryMutationGuard?.before_task?.message_count) === 0
+      && Number(inventoryMutationGuard?.after_task?.message_count) === 0
+      && Number(inventoryMutationGuard?.before_task?.send_count)
+        === Number(inventoryMutationGuard?.after_task?.send_count)
+      && Array.isArray(inventoryMutationGuard?.before_selection)
+      && inventoryMutationGuard.before_selection.length === 0
+      && Array.isArray(inventoryMutationGuard?.after_selection)
+      && inventoryMutationGuard.after_selection.length === 0
+      && inventoryScreenshotValid
+      && allowedRoles.includes(role)
+      && allowedRoles.length > 0
+      && allowedRoles.every((itemRole) => capabilityInventoryPrerequisiteNotApplicableRoles.has(itemRole))
+      && String(blocker?.reason || '').trim();
     const imeTrace = interaction?.trace || {};
     const preSendImeFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-ime-failure/v1'
       && blocker?.valid === true
@@ -1655,6 +1722,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || expertPublishPrerequisiteVerified
       || mcpPrerequisiteVerified
       || preSendCapabilityFailureVerified
+      || capabilityInventoryPrerequisiteVerified
       || preSendImeFailureVerified;
     if (!verified) continue;
     notApplicable.set(role, {
