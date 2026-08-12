@@ -145,7 +145,7 @@ def find_header_row(ws) -> int:
     for row in range(1, min(ws.max_row or 1, 10) + 1):
         values = [clean(ws.cell(row, col).value) for col in range(1, (ws.max_column or 1) + 1)]
         has_case_id = "用例ID" in values or "原用例ID" in values
-        if has_case_id and ("测试场景" in values or "测试目标" in values):
+        if has_case_id and any(name in values for name in ["测试场景", "测试目标", "用户场景"]):
             return row
     return 0
 
@@ -168,6 +168,20 @@ def row_value_any(ws, row: int, headers: dict[str, int], names: list[str]) -> st
         if value:
             return value
     return ""
+
+
+def numbered_json_values(ws, row: int, headers: dict[str, int], prefix: str) -> list[str]:
+    values = []
+    matches = []
+    for name, col in headers.items():
+        match = re.fullmatch(rf"{re.escape(prefix)}\s*(\d+)", name)
+        if match:
+            matches.append((int(match.group(1)), col))
+    for _, col in sorted(matches):
+        value = clean(ws.cell(row, col).value)
+        if value:
+            values.append(value)
+    return values
 
 
 def parse_json_cell(value: str, *, field: str, case_id: str):
@@ -271,23 +285,27 @@ def export_cases(args: argparse.Namespace) -> None:
             row = {
                 "id": case_id,
                 "priority": row_value(ws, row_idx, headers, "优先级") or "P1",
-                "module": row_value(ws, row_idx, headers, "产品模块") or ws.title,
+                "module": row_value_any(ws, row_idx, headers, ["产品模块", "模块"]) or ws.title,
                 "submodule": row_value(ws, row_idx, headers, "子功能"),
-                "scenario": row_value(ws, row_idx, headers, "测试场景") or row_value(ws, row_idx, headers, "测试目标"),
+                "scenario": row_value_any(ws, row_idx, headers, ["测试场景", "测试目标", "用户场景"]),
                 "precondition": row_value(ws, row_idx, headers, "前置条件"),
                 "test_data": row_value(ws, row_idx, headers, "测试数据"),
                 "selectors": row_value(ws, row_idx, headers, "执行入口/Selector") or row_value(ws, row_idx, headers, "入口/Selector"),
-                "steps": row_value(ws, row_idx, headers, "执行步骤") or row_value(ws, row_idx, headers, "自动化执行步骤"),
+                "steps": row_value_any(ws, row_idx, headers, ["执行步骤", "自动化执行步骤", "实际步骤"]),
                 "expected_result": row_value(ws, row_idx, headers, "预期结果") or row_value(ws, row_idx, headers, "断言标准"),
-                "success_criteria": row_value(ws, row_idx, headers, "成功判定"),
+                "success_criteria": row_value_any(ws, row_idx, headers, ["成功判定", "严格通过标准"]),
                 "failure_criteria": row_value(ws, row_idx, headers, "失败判定") or row_value(ws, row_idx, headers, "失败/阻塞判定"),
-                "evidence_required": row_value(ws, row_idx, headers, "证据要求"),
-                "runner": row_value(ws, row_idx, headers, "自动化Runner") or row_value(ws, row_idx, headers, "推荐命令/Runner"),
-                "execution_level": row_value(ws, row_idx, headers, "执行层级") or row_value(ws, row_idx, headers, "执行方式"),
-                "mandatory": row_value(ws, row_idx, headers, "每轮必跑"),
-                "source_id": row_value(ws, row_idx, headers, "来源ID"),
+                "evidence_required": row_value_any(ws, row_idx, headers, ["证据要求", "交叉验证/证据"]),
+                "runner": row_value_any(ws, row_idx, headers, ["自动化Runner", "推荐命令/Runner", "自动化方式"]),
+                "execution_level": row_value_any(ws, row_idx, headers, ["执行层级", "执行方式", "层级"]),
+                "mandatory": row_value(ws, row_idx, headers, "每轮必跑") or ("是" if "执行频率" in headers else ""),
+                "source_id": row_value_any(ws, row_idx, headers, ["来源ID", "来源/优化说明"]),
                 "source_type": row_value(ws, row_idx, headers, "来源类型"),
-                "note": row_value(ws, row_idx, headers, "备注") or row_value(ws, row_idx, headers, "维护备注"),
+                "note": row_value_any(ws, row_idx, headers, ["备注", "维护备注", "来源/优化说明"]),
+                "execution_frequency": row_value(ws, row_idx, headers, "执行频率"),
+                "user_impact": row_value(ws, row_idx, headers, "用户影响"),
+                "source_execution_status": row_value(ws, row_idx, headers, "执行状态"),
+                "source_actual_result": row_value(ws, row_idx, headers, "实际结果/证据路径"),
                 "user_journey": row_value(ws, row_idx, headers, "用户旅程"),
                 "blocking_level": row_value(ws, row_idx, headers, "阻断等级"),
                 "pipeline_policy": row_value(ws, row_idx, headers, "流水线策略"),
@@ -338,29 +356,47 @@ def export_cases(args: argparse.Namespace) -> None:
                 "accessibility_contract": row_value_any(ws, row_idx, headers, ["无障碍契约"]),
                 "branch_coverage": row_value_any(ws, row_idx, headers, ["分支覆盖"]),
                 "traceability_tags": row_value_any(ws, row_idx, headers, ["可追溯标签"]),
+                "compound_subcases_json": row_value_any(
+                    ws,
+                    row_idx,
+                    headers,
+                    ["复合子用例JSON", "复合子Case JSON", "Compound Subcases JSON"],
+                ),
                 "sheet": ws.title,
                 "row_number": row_idx,
             }
             row["action_plan"] = parse_json_cell(
-                row_value(ws, row_idx, headers, "动作计划JSON"),
+                row_value_any(ws, row_idx, headers, ["动作计划JSON", "Action Plan JSON"]),
                 field="动作计划JSON",
                 case_id=case_id,
             )
             row["conversation_turns"] = parse_json_cell(
-                row_value(ws, row_idx, headers, "会话轮次JSON"),
+                row_value_any(ws, row_idx, headers, ["会话轮次JSON", "Turns JSON"]),
                 field="会话轮次JSON",
                 case_id=case_id,
             )
             row["capability_sampling"] = parse_json_cell(
-                row_value(ws, row_idx, headers, "能力抽样策略JSON"),
+                row_value_any(ws, row_idx, headers, ["能力抽样策略JSON", "Capability Policy JSON"]),
                 field="能力抽样策略JSON",
                 case_id=case_id,
             )
             row["precise_assertions"] = parse_json_cell(
-                row_value(ws, row_idx, headers, "精准断言JSON"),
+                row_value_any(ws, row_idx, headers, ["精准断言JSON", "Assertion Contract JSON"]),
                 field="精准断言JSON",
                 case_id=case_id,
             )
+            numbered_compound = numbered_json_values(ws, row_idx, headers, "复合子用例JSON")
+            if numbered_compound:
+                row["compound_subcases"] = [
+                    parse_json_cell(value, field=f"复合子用例JSON {index + 1}", case_id=case_id)
+                    for index, value in enumerate(numbered_compound)
+                ]
+            else:
+                row["compound_subcases"] = parse_json_cell(
+                    row["compound_subcases_json"],
+                    field="复合子用例JSON",
+                    case_id=case_id,
+                )
             row["evidence_roles"] = [
                 item.strip()
                 for item in re.split(
@@ -403,6 +439,7 @@ def export_cases(args: argparse.Namespace) -> None:
                 "host_integration": "ui+conversation",
                 "security_privacy": "ui+conversation",
                 "performance_capacity": "ui+conversation",
+                "compound": "ui+conversation",
             }.get(row["case_type"])
             row["kind"] = explicit_kind or infer_case_kind(row)
             if is_selected(row, args.profile, wanted):

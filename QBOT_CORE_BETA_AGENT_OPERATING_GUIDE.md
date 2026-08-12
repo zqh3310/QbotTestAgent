@@ -4,12 +4,13 @@
 
 规范性执行合同以
 `/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准。
-本指南记录当前 70 条生产灰度发布门禁与 160 条全量正常功能回归的接手状态、
-启动顺序和禁止事项。
+本指南记录当前 70 条生产灰度发布门禁、160 条全量正常功能回归，以及本轮
+QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺序和禁止事项。
 
 ## 1. 当前状态
 
-- 测试已按用户要求暂停。当前不得启动 pretest、runner 或 monitor。
+- 用户已明确要求启动 QWork 日常回归。本轮必须先完成框架基线提交推送和精确
+  `READY` pretest，再启动唯一串行 runner；不得沿用先前暂停状态。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
@@ -17,6 +18,20 @@
   prompt policy、feature flags 和模型身份必须在用户恢复测试后重新读取并冻结，
   不得沿用历史值。
 - 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID、旧 CDP 或旧监控。
+
+本轮目标 Casebook：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx
+Sheet: 日常回归
+SHA-256: c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183
+```
+
+- 顶层 83：70 个 `compound` 父 Case + 13 个独立 `SIT-*` Case。
+- 叶子 144：全部必须有独立目录、结果、manifest、截图、日志和 SHA。
+- 静态能力审计必须为顶层 `83/83`、叶子 `144/144`、
+  `strict_controller_required=0`、`unsupported_runtime=0`。
+- 全程只有一个 runner、一个受管 360Teams 宿主；外层 Case 和复合叶子都串行。
 
 最新冻结的旧 55 条 scoped 批次：
 
@@ -201,8 +216,14 @@ npm run core-beta:pretest -- \
 tracked dirty 或 runner 已存在都不得启动正式批次。
 pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。
 全量 160 条必须另行以同一 Casebook、`--sheet 全量功能回归Case`、
-`--expected-count 160` 和同一 SHA 执行 pretest；同样只接受 `READY`。测试当前暂停，
-本次更新不得实际运行这两个 pretest。
+`--expected-count 160` 和同一 SHA 执行 pretest；同样只接受 `READY`。它们与本轮
+日常回归是不同测试合同，不能用 70/160 的 pretest 替代本轮 83 条 pretest。
+
+本轮日常回归使用 `日常回归` Sheet、`--expected-count 83` 和 SHA
+`c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183`；其余
+Teams/QWork/UAT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
+授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
+在 Case 0 前失败。
 
 ## 7. 启动唯一 runner
 
@@ -244,6 +265,11 @@ npm --prefix teams360-automation run casebook -- \
 `全量功能回归Case`，输出目录改为新的 `full160` 不可变目录；不得与 70 条 runner
 并发，也不得在两个 Sheet 之间继承结果。
 
+日常回归启动时必须从 `日常回归` 导出全部 83 个顶层 Case ID，runner 使用同一
+Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 144 个叶子展开为外层
+并发任务；复合父 Case 由 v2 runner 内部按声明顺序执行叶子。有效
+`--single-host-pipeline` 和 `--parallel` 均为 1。
+
 ## 8. 执行与自愈
 
 - Core Beta v2 Case 间永久串行；`BETA-CHAT-008` 的 20 任务是单 Case 内部合同。
@@ -254,8 +280,12 @@ npm --prefix teams360-automation run casebook -- \
   `automation_error`。
 - 确认 `framework_issue` 或 `testcase_issue` 时，冻结旧目录、停止唯一 runner、
   修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
-  从 1/70 或 1/160 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
+  从 1/70、1/160 或本轮 1/83 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
   放弃后续 Case。
+- 日常回归专项证据的 `evidence_valid` 与产品 `oracle_valid` 必须分离。产品
+  Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；只有取证、清理、
+  合同、宿主或框架失败才进入自愈硬停止。结果优先级始终为
+  `automation_error > bug > blocked > pass`，后置 blocker 不得覆盖框架错误。
 - 只有凭据/授权/受保护资源缺失、指定发布身份无法恢复或 pretest 明确阻塞时，
   才能保持暂停并报告唯一具体 blocker。
 
@@ -285,7 +315,8 @@ raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历
 
 ## 10. 当前交付边界
 
-本次任务只更新 Casebook、执行器、动态能力门禁、文档和回归基线；测试保持暂停。
-完成代码提交和推送不等于 70/160 条已经执行，也不等于允许生产灰度。下一轮必须
-由用户明确恢复测试后，从新的 UAT release identity、对应 Sheet 的 `READY`
-pretest 和 1/70 或 1/160 开始。
+本次任务要求实际执行日常回归 83 个顶层 Case。完成 Casebook、执行器、文档、
+提交和推送只是启动前置，不等于 Case 已执行；必须继续读取新的 UAT release
+identity，得到 `日常回归` Sheet 的精确 `READY`，再从 1/83 启动唯一 runner。
+最终结论必须同时报告 83 个顶层和 144 个叶子的真实执行/证据完整性，禁止只报
+raw `passed/failed`。

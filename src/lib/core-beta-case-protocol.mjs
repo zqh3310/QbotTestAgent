@@ -8,6 +8,7 @@ export const CORE_BETA_EVIDENCE_SCHEMA = 'qbot-core-evidence/v2';
 export const CORE_BETA_MAX_BATCH_SIZE = 20;
 
 export const CORE_BETA_CASE_TYPES = new Set([
+  'compound',
   'run_initialization',
   'conversation',
   'attachment',
@@ -241,6 +242,20 @@ export const PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS = new Set([
 export const CORE_BETA_SCENARIO_IDS = new Set([
   ...CORE_BETA_BASE_SCENARIO_IDS,
   ...FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
+  ...[
+    'QWD-ART-007',
+    'QWD-ART-008',
+    'QWD-EXPERT-002',
+    'QWD-EXPERT-009',
+    'QWD-EXPERT-011',
+    'QWD-AUTO-002',
+    'QWD-AUTO-003',
+    'QWD-AUTO-004',
+    'QWD-SYS-003',
+    'QWD-MEM-002',
+    'QWD-SEC-002',
+    'QWD-SEC-005',
+  ],
 ]);
 
 const scenarioSpecs = [];
@@ -249,6 +264,8 @@ const registerScenario = (id, driver, {
   execution_mode = 'serial',
   legacy_case_id = '',
   runtime_fixture = '',
+  conversation_required,
+  capability_execution_required,
 } = {}) => {
   scenarioSpecs.push([id, Object.freeze({
     id,
@@ -257,6 +274,8 @@ const registerScenario = (id, driver, {
     execution_mode,
     legacy_case_id,
     runtime_fixture,
+    conversation_required,
+    capability_execution_required,
     executor_route: `core-beta/scenario/${id.toLowerCase()}/v1`,
   })]);
 };
@@ -370,6 +389,18 @@ const registerScenario = (id, driver, {
   ['BETA-DEPLOY-006', 'ingress_service_port_baseline_preservation', { fixture_control: 'protected_release_deployment' }],
   ['BETA-DEPLOY-007', 'bounded_redacted_deployment_diagnostics', { fixture_control: 'protected_release_deployment' }],
   ['BETA-DEPLOY-008', 'retire_remote_qbot_ui_service', { fixture_control: 'protected_release_deployment' }],
+  ['QWD-ART-007', 'qwork_daily_artifact_exact_directory'],
+  ['QWD-ART-008', 'qwork_daily_artifact_keep_both_atomic'],
+  ['QWD-EXPERT-002', 'qwork_daily_expert_catalog_identity', { capability_execution_required: false }],
+  ['QWD-EXPERT-009', 'qwork_daily_expert_owner_org_publish'],
+  ['QWD-EXPERT-011', 'qwork_daily_expert_owner_lifecycle'],
+  ['QWD-AUTO-002', 'qwork_daily_route_task_stability'],
+  ['QWD-AUTO-003', 'qwork_daily_capability_turn_snapshot'],
+  ['QWD-AUTO-004', 'qwork_daily_capability_fallback_copy'],
+  ['QWD-SYS-003', 'qwork_daily_settings_persona_profile'],
+  ['QWD-MEM-002', 'qwork_daily_memory_precedence'],
+  ['QWD-SEC-002', 'qwork_daily_prompt_injection_boundary'],
+  ['QWD-SEC-005', 'qwork_daily_credential_redaction_copy', { conversation_required: false }],
 ].forEach(([id, driver, options]) => registerScenario(id, driver, options));
 
 const productionExtensionLegacyDrivers = Object.freeze({
@@ -512,7 +543,20 @@ export function coreBetaScenarioSpec(testCaseOrId) {
   return CORE_BETA_SCENARIO_REGISTRY.get(id) || null;
 }
 
+export function coreBetaLeafCases(cases = []) {
+  const leaves = [];
+  for (const testCase of Array.isArray(cases) ? cases : []) {
+    if (String(testCase?.case_type || '') === 'compound') {
+      leaves.push(...coreBetaLeafCases(testCase?.compound_subcases || []));
+    } else {
+      leaves.push(testCase);
+    }
+  }
+  return leaves;
+}
+
 export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
+  'compound_evidence_manifest',
   'before_screenshot',
   'action_receipt',
   'after_screenshot',
@@ -586,6 +630,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'deployment_receipt',
   'migration_receipt',
   'helm_lifecycle_trace',
+  'qwork_daily_readback',
 ]);
 
 const REQUIRED_CASE_FIELDS = [
@@ -665,6 +710,7 @@ export function isCoreBetaCase(testCase) {
 }
 
 export function coreBetaExecutorRoute(testCase) {
+  if (String(testCase?.case_type || '') === 'compound') return 'core-beta/compound-v2';
   return coreBetaScenarioSpec(testCase)?.executor_route || '';
 }
 
@@ -688,7 +734,15 @@ export function coreBetaCaseContractSha256(testCase) {
     executor_route: scenario?.executor_route || '',
     scenario_driver: scenario?.driver || '',
     fixture_control: scenario?.fixture_control || '',
+    conversation_required: scenario?.conversation_required,
+    capability_execution_required: scenario?.capability_execution_required,
     executor_attachment_fixtures: coreBetaAttachmentFixtureNames(testCase),
+    compound_subcases: Array.isArray(testCase?.compound_subcases)
+      ? testCase.compound_subcases.map((subcase) => ({
+        id: String(subcase?.id || ''),
+        contract_sha256: coreBetaCaseContractSha256(subcase),
+      }))
+      : [],
   };
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
 }
@@ -703,13 +757,10 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
   if (!CORE_BETA_CASE_TYPES.has(String(testCase?.case_type || ''))) {
     errors.push(`${id} 不支持的 case_type=${testCase?.case_type || '空'}`);
   }
-  if (!CORE_BETA_SCENARIO_IDS.has(id)) {
-    errors.push(`${id} 没有注册独立场景执行器`);
-  }
   const scenarioSpec = coreBetaScenarioSpec(id);
-  if (!scenarioSpec?.driver) {
-    errors.push(`${id} 场景注册表缺少 driver`);
-  }
+  const isCompound = String(testCase?.case_type || '') === 'compound';
+  if (!isCompound && !CORE_BETA_SCENARIO_IDS.has(id)) errors.push(`${id} 没有注册独立场景执行器`);
+  if (!isCompound && !scenarioSpec?.driver) errors.push(`${id} 场景注册表缺少 driver`);
   if (String(testCase?.contract_version || '') !== CORE_BETA_CONTRACT_VERSION) {
     errors.push(`${id} contract_version 必须为 ${CORE_BETA_CONTRACT_VERSION}`);
   }
@@ -732,6 +783,47 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
   if (String(testCase?.pipeline_policy || '') !== 'serial'
     && !CONVERSATION_TYPES.has(String(testCase?.case_type || ''))) {
     errors.push(`${id} ${testCase?.case_type || 'unknown'} 不允许 dispatch/collect`);
+  }
+
+  if (isCompound) {
+    const subcases = Array.isArray(testCase?.compound_subcases) ? testCase.compound_subcases : [];
+    if (!/^QW-/i.test(id)) errors.push(`${id} compound 父 Case 必须使用 QW-* 用户合同 ID`);
+    if (String(testCase?.pipeline_policy || '') !== 'serial' || batchSize !== 1) {
+      errors.push(`${id} compound 父 Case 必须 serial/1`);
+    }
+    if (!subcases.length) errors.push(`${id} compound_subcases 必须是非空数组`);
+    const subcaseIds = subcases.map((subcase) => String(subcase?.id || '').trim());
+    if (new Set(subcaseIds).size !== subcaseIds.length) errors.push(`${id} compound 子 Case ID 重复`);
+    for (const [index, subcase] of subcases.entries()) {
+      if (String(subcase?.case_type || '') === 'compound') {
+        errors.push(`${id} compound_subcases[${index + 1}] 禁止嵌套 compound`);
+        continue;
+      }
+      const child = validateCoreBetaCase(subcase, { fixtureRoot });
+      errors.push(...child.errors.map((error) => `${id} -> ${error}`));
+      warnings.push(...child.warnings.map((warning) => `${id} -> ${warning}`));
+    }
+    const roles = new Set(Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : []);
+    if (!roles.has('compound_evidence_manifest')) {
+      errors.push(`${id} compound evidence_roles 缺少 compound_evidence_manifest`);
+    }
+    for (const role of roles) {
+      if (!CORE_BETA_EVIDENCE_ADAPTERS.has(role)) errors.push(`${id} 证据角色没有框架适配器：${role}`);
+    }
+    return {
+      id,
+      ok: errors.length === 0,
+      executor_route: coreBetaExecutorRoute(testCase),
+      scenario_driver: 'compound_serial_subcases',
+      fixture_control_adapter: 'compound_children',
+      action_count: Array.isArray(testCase?.action_plan) ? testCase.action_plan.length : 0,
+      evidence_role_count: roles.size,
+      fixture_spec: [],
+      subcase_count: subcases.length,
+      subcase_ids: subcaseIds,
+      errors,
+      warnings,
+    };
   }
 
   const actions = testCase?.action_plan;
@@ -799,12 +891,12 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
   }
   const isPreSendAttachmentRejection = scenarioSpec?.driver === 'attachment_pre_send_rejection_matrix';
   const isReadOnlyModelMenu = scenarioSpec?.driver === 'model_menu_sdk_filter';
-  const requiresConversation = (!isPreSendAttachmentRejection
+  const requiresConversation = scenarioSpec?.conversation_required ?? ((!isPreSendAttachmentRejection
       && !isReadOnlyModelMenu
       && CONVERSATION_TYPES.has(String(testCase?.case_type || '')))
     || evidenceRoles.has('prompt')
     || evidenceRoles.has('transcript')
-    || (Array.isArray(testCase?.conversation_turns) && testCase.conversation_turns.length > 0);
+    || (Array.isArray(testCase?.conversation_turns) && testCase.conversation_turns.length > 0));
   if (requiresConversation) {
     for (const role of ['task_id', 'prompt', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion']) {
       if (!evidenceRoles.has(role)) errors.push(`${id} 会话执行缺少证据角色 ${role}`);
@@ -841,7 +933,9 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
       errors.push('BETA-EXPERT-008 必须冻结明确的 as-of 日期，禁止把主题选择留给运行时澄清。');
     }
   }
-  if (CAPABILITY_TYPES.has(String(testCase?.case_type || ''))) {
+  const requiresCapabilityExecution = scenarioSpec?.capability_execution_required
+    ?? CAPABILITY_TYPES.has(String(testCase?.case_type || ''));
+  if (requiresCapabilityExecution) {
     for (const role of ['capability_selection', 'capability_execution_event']) {
       if (!evidenceRoles.has(role)) errors.push(`${id} 能力 Case 缺少证据角色 ${role}`);
     }

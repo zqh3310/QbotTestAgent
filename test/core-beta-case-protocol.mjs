@@ -16,6 +16,7 @@ import {
   classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
   coreBetaExecutorRoute,
+  coreBetaLeafCases,
   evaluateMachineAssertions,
   validateEvidenceFile,
   validateCoreBetaCase,
@@ -23,8 +24,19 @@ import {
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import {
+  aggregateCompoundOutcome,
+  buildCompoundEvidenceManifest,
+  coreBetaCompletionBlockReason,
   coreBetaPreSendCapabilityFailureEvidence,
+  coreBetaRuntimeExecutorBinding,
   coreBetaRunOwnedExpertPrerequisiteBlocker,
+  coreBetaSuiteLedgerPath,
+  coreBetaSuiteRoot,
+  qworkDailyEvidenceEnvelope,
+  qworkDailyExpertCatalogVerdict,
+  qworkDailyPersonalTaskContext,
+  qworkDailyRedactionVerdict,
+  qworkDailySecretFindings,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 {
@@ -152,13 +164,103 @@ import {
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
 assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 279);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 279);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 291);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 291);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  279,
+  291,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
+for (const [id, caseType, driver] of [
+  ['QWD-ART-007', 'artifact', 'qwork_daily_artifact_exact_directory'],
+  ['QWD-ART-008', 'artifact', 'qwork_daily_artifact_keep_both_atomic'],
+  ['QWD-EXPERT-002', 'expert_lifecycle', 'qwork_daily_expert_catalog_identity'],
+  ['QWD-EXPERT-009', 'expert_lifecycle', 'qwork_daily_expert_owner_org_publish'],
+  ['QWD-EXPERT-011', 'expert_lifecycle', 'qwork_daily_expert_owner_lifecycle'],
+  ['QWD-AUTO-002', 'model_routing', 'qwork_daily_route_task_stability'],
+  ['QWD-AUTO-003', 'model_routing', 'qwork_daily_capability_turn_snapshot'],
+  ['QWD-AUTO-004', 'model_routing', 'qwork_daily_capability_fallback_copy'],
+  ['QWD-SYS-003', 'settings_lifecycle', 'qwork_daily_settings_persona_profile'],
+  ['QWD-MEM-002', 'memory_lifecycle', 'qwork_daily_memory_precedence'],
+  ['QWD-SEC-002', 'security_privacy', 'qwork_daily_prompt_injection_boundary'],
+  ['QWD-SEC-005', 'security_privacy', 'qwork_daily_credential_redaction_copy'],
+]) {
+  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id);
+  assert.equal(scenario?.driver, driver, `${id} 必须绑定唯一日常回归原生driver`);
+  assert.equal(scenario?.fixture_control, 'public_product_state', `${id} 不得降级到严格控制器`);
+  const binding = coreBetaRuntimeExecutorBinding({ id, case_type: caseType }, scenario);
+  assert.equal(binding.dispatchable, true, `${id} 必须在静态审计阶段可分发`);
+  assert.equal(binding.mode, 'native', `${id} 必须由runner原生执行`);
+}
+
+{
+  const readable = {
+    catalog: {
+      recommended: [{ id: 'expert-a', label: '发布顾问', summary: '负责发布检查', author: '甲', version: '1' }],
+      recent: [{ id: 'expert-a', label: '发布顾问', summary: '负责发布检查', author: '甲', version: '1' }],
+      all: [
+        { id: 'expert-a', label: '发布顾问', summary: '负责发布检查', author: '甲', version: '1' },
+        { id: 'expert-b', label: '发布顾问', summary: '负责发布检查', author: '乙', version: '2' },
+      ],
+      mine: [],
+    },
+  };
+  assert.equal(
+    qworkDailyExpertCatalogVerdict(readable).oracle_valid,
+    true,
+    '同一专家出现在推荐、最近和市场是不同分区投影，不得误判为重复卡片',
+  );
+  const invalid = structuredClone(readable);
+  invalid.catalog.all.push({
+    id: 'expert-uuid',
+    label: '123e4567-e89b-12d3-a456-426614174000',
+    summary: '裸 UUID 卡片',
+  });
+  invalid.catalog.all.push({ id: 'expert-b', label: '发布顾问', summary: '负责发布检查', author: '乙', version: '2' });
+  const catalogFailure = qworkDailyExpertCatalogVerdict(invalid);
+  assert.equal(catalogFailure.oracle_valid, false);
+  assert.equal(catalogFailure.invalid.length, 1, '标准 8-4-4-4-12 UUID 必须被识别');
+  assert.equal(catalogFailure.duplicates.length, 1, '同一分区完全重复 identity 必须失败');
+}
+
+{
+  const token = 'qwork_secret_123456789_DO_NOT_ECHO';
+  const secretPath = '/Users/qwork-secret/private/token.txt';
+  const pass = qworkDailyRedactionVerdict({
+    visibleUiText: '模型连接失败，无法解析服务地址。请检查地址或网络后重试。',
+    logText: '/Applications/360Teams.app/Contents/MacOS/360Teams launched',
+    structuredText: JSON.stringify({ apiKeySet: true, apiKey: null, reason: 'DNS_PROBE_FINISHED_NXDOMAIN' }),
+    exactSecrets: [token, secretPath],
+  });
+  assert.equal(pass.oracle_valid, true, JSON.stringify(pass));
+  const leak = qworkDailyRedactionVerdict({
+    visibleUiText: `模型连接失败，请重试。access_token=${token}`,
+    logText: '',
+    structuredText: '{}',
+    exactSecrets: [token],
+  });
+  assert.equal(leak.oracle_valid, false);
+  assert.ok(leak.exact_leaks.length > 0);
+  assert.ok(qworkDailySecretFindings('QBOT_LINGXI_ACCESS_TOKEN 与 DEEPBANK_SERVER 是变量名').length === 0);
+  assert.ok(qworkDailySecretFindings('access_token=[REDACTED]').length === 0);
+  assert.ok(qworkDailySecretFindings(`access_token=${token}`).length > 0);
+}
+
+{
+  assert.deepEqual(qworkDailyPersonalTaskContext(), { cwd: null }, '空间外任务必须显式清空 cwd，禁止继承工作空间');
+  const productFailure = qworkDailyEvidenceEnvelope('QWD-SEC-005', { observed: 'secret leak' }, false, true, '2026-08-12T00:00:00.000Z');
+  assert.equal(productFailure.valid, true, '产品 Oracle 失败时证据文件本身仍必须有效');
+  assert.equal(productFailure.evidence_valid, true);
+  assert.equal(productFailure.oracle_valid, false);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-qwork-evidence-envelope-'));
+  try {
+    const file = path.join(temp, 'credential-redaction-scan.json');
+    fs.writeFileSync(file, JSON.stringify(productFailure));
+    assert.equal(validateEvidenceFile('credential_redaction_scan', file).valid, true);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
 assert.equal(
   [...CORE_BETA_SCENARIO_REGISTRY.values()].every((item) => item.driver && item.fixture_control),
   true,
@@ -382,6 +484,43 @@ const planCase = (id, caseType) => {
   }));
   return item;
 };
+{
+  const catalogCase = planCase('QWD-EXPERT-002', 'expert_lifecycle');
+  catalogCase.conversation_turns = [];
+  catalogCase.evidence_roles = [
+    'before_screenshot',
+    'action_receipt',
+    'after_screenshot',
+    'public_state_readback',
+    'cleanup_readback',
+    'capability_inventory',
+    'expert_identity_snapshot',
+  ];
+  assert.equal(
+    validateCoreBetaCase(catalogCase).ok,
+    true,
+    '只读专家目录审计不得被强制要求 capability_selection/capability_execution_event',
+  );
+
+  const redactionCase = planCase('QWD-SEC-005', 'security_privacy');
+  redactionCase.conversation_turns = [];
+  redactionCase.evidence_roles = [
+    'before_screenshot',
+    'action_receipt',
+    'after_screenshot',
+    'public_state_readback',
+    'cleanup_readback',
+    'credential_redaction_scan',
+    'security_boundary_trace',
+    'negative_ui_trace',
+    'log_excerpt',
+  ];
+  assert.equal(
+    validateCoreBetaCase(redactionCase).ok,
+    true,
+    '凭据设置与失败探针不得被强制要求虚假的会话轮次证据',
+  );
+}
 {
   const attachmentCase = planCase('BETA-FILE-002', 'attachment');
   attachmentCase.evidence_roles.push(
@@ -824,6 +963,158 @@ try {
     const tampered = buildCoreEvidenceManifest({ testCase, caseDir: temp, artifacts });
     assert.equal(tampered.complete, false, '发送计数守卫被篡改后 N/A manifest 必须 fail-closed');
     assert.ok(tampered.missing_roles.includes('capability_execution_event'));
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+{
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-compound-contract-'));
+  try {
+    const action = (id, number, operation) => ({
+      number,
+      action_id: `${id}-${operation}`,
+      declared_step: `${operation} ${id}`,
+      command: `${operation}_${id.toLowerCase().replaceAll('-', '_')}`,
+      operation,
+      target: `${id}:${operation}`,
+      executor: coreBetaExecutorRoute({ id }),
+      expected_state: `${operation} complete`,
+      evidence_roles: ['before_screenshot', 'action_receipt', 'after_screenshot'],
+      assertions: [{ id: `${id}-${operation}-assertion`, path: 'result.status', operator: 'in', expected: ['passed', 'failed', 'blocked'] }],
+    });
+    const leaf = (id, caseType) => ({
+      id,
+      case_type: caseType,
+      contract_version: 'qbot-core-beta/v2',
+      automation_protocol: 'core-beta-action-plan/v2',
+      evidence_schema_version: 'qbot-core-evidence/v2',
+      pipeline_policy: 'serial',
+      batch_size: 1,
+      initialization_policy: 'case_clean',
+      cleanup_policy: 'restore_case_state',
+      risk_domain: 'functional',
+      oracle_type: 'hard',
+      deterministic: '是',
+      repeat_policy: '每轮1次',
+      required_fixture: 'public_product_state',
+      hard_gate: '是',
+      version_scope: 'uat',
+      production_signal: 'none',
+      action_plan: ['prepare', 'execute', 'verify'].map((operation, index) => action(id, index + 1, operation)),
+      precise_assertions: {
+        hard_oracles: [`${id} hard oracle`],
+        machine_assertions: [{ id: 'status', path: 'result.status', operator: 'in', expected: ['passed', 'failed', 'blocked'] }],
+        pass_rule: 'all hard oracles pass',
+        fail_rule: 'product oracle fails',
+        block_rule: 'prerequisite unavailable',
+      },
+      evidence_roles: ['before_screenshot', 'action_receipt', 'after_screenshot', 'public_state_readback', 'cleanup_readback'],
+    });
+    const children = [leaf('BETA-INIT-001', 'run_initialization'), leaf('SIT-HOME-027', 'settings_lifecycle')];
+    const compound = {
+      ...leaf('QW-ENTRY-001', 'compound'),
+      id: 'QW-ENTRY-001',
+      case_type: 'compound',
+      action_plan: [{
+        number: 1,
+        action_id: 'QW-ENTRY-001-compound',
+        declared_step: '严格串行执行全部子合同',
+        command: 'execute_compound_subcases_serially',
+        operation: 'execute',
+        target: 'QW-ENTRY-001:execute',
+        executor: 'core-beta/compound-v2',
+        expected_state: '全部子合同生成完整证据',
+        evidence_roles: ['before_screenshot', 'action_receipt', 'after_screenshot'],
+        assertions: [{ id: 'compound-complete', path: 'evidence.complete', operator: 'equals', expected: true }],
+      }],
+      required_fixture: 'compound_children',
+      evidence_roles: ['compound_evidence_manifest'],
+      compound_subcases: children,
+    };
+    const validation = validateCoreBetaCase(compound);
+    assert.equal(validation.ok, true, validation.errors.join('\n'));
+    assert.equal(validation.subcase_count, 2);
+    assert.deepEqual(coreBetaLeafCases([compound]).map((item) => item.id), ['BETA-INIT-001', 'SIT-HOME-027']);
+    assert.equal(coreBetaExecutorRoute(compound), 'core-beta/compound-v2');
+
+    const casesRoot = path.join(temp, 'cases');
+    const parentDir = path.join(casesRoot, '001-QW-ENTRY-001');
+    const subRoot = path.join(parentDir, 'subcases');
+    fs.mkdirSync(subRoot, { recursive: true });
+    fs.writeFileSync(path.join(temp, 'casebook-cases.json'), '{}');
+    const results = children.map((child, index) => {
+      const childDir = path.join(subRoot, `${String(index + 1).padStart(3, '0')}-${child.id}`);
+      fs.mkdirSync(childDir, { recursive: true });
+      const result = { id: child.id, status: 'passed', result_category: 'pass', case_dir: childDir };
+      fs.writeFileSync(path.join(childDir, 'case-result.json'), JSON.stringify(result));
+      fs.writeFileSync(path.join(childDir, 'evidence-manifest.json'), JSON.stringify({
+        complete: true,
+        missing_roles: [],
+        invalid_roles: [],
+      }));
+      return result;
+    });
+    const manifest = buildCompoundEvidenceManifest({ testCase: compound, caseDir: parentDir, subcaseResults: results });
+    assert.equal(manifest.complete, true, JSON.stringify(manifest));
+    assert.equal(manifest.subcases.every((item) => /^[a-f0-9]{64}$/.test(item.case_result.sha256)), true);
+    assert.equal(coreBetaSuiteRoot(results[0].case_dir), temp);
+    assert.equal(coreBetaSuiteLedgerPath(results[0].case_dir), path.join(temp, 'core-beta-suite-ledger.json'));
+    assert.deepEqual(aggregateCompoundOutcome(results), { status: 'passed', result_category: 'pass' });
+    assert.deepEqual(aggregateCompoundOutcome([{ status: 'blocked', result_category: 'blocked' }]), { status: 'blocked', result_category: 'blocked' });
+    assert.deepEqual(aggregateCompoundOutcome([{ status: 'failed', result_category: 'bug' }, { status: 'blocked', result_category: 'blocked' }]), { status: 'failed', result_category: 'bug' });
+    assert.deepEqual(aggregateCompoundOutcome([
+      { status: 'failed', result_category: 'bug' },
+      { status: 'blocked', result_category: 'blocked', steps: [{ status: 'failed', category: 'automation_error' }] },
+    ]), { status: 'failed', result_category: 'automation_error' });
+    const compoundManifestFile = path.join(parentDir, 'compound-evidence-manifest.json');
+    fs.writeFileSync(compoundManifestFile, JSON.stringify(manifest));
+    const completeParentEvidence = {
+      complete: true,
+      missing_roles: [],
+      invalid_roles: [],
+      evidence: [{
+        role: 'compound_evidence_manifest',
+        missing: false,
+        valid: true,
+        sha256: 'a'.repeat(64),
+      }],
+    };
+    const parentResult = {
+      id: compound.id,
+      case_dir: parentDir,
+      artifacts: { compound_evidence_manifest: compoundManifestFile },
+      evidence_manifest: completeParentEvidence,
+    };
+    assert.equal(
+      coreBetaCompletionBlockReason(compound, parentResult),
+      '',
+      '复合父 Case 只有在复合清单和全部子证据同时完整时才能进入 completed',
+    );
+    fs.writeFileSync(compoundManifestFile, JSON.stringify({ ...manifest, complete: false }));
+    assert.match(
+      coreBetaCompletionBlockReason(compound, parentResult),
+      /incomplete 的 compound evidence manifest/,
+      '父级普通 manifest 完整不能掩盖 compound manifest complete=false',
+    );
+    const tamperedManifest = structuredClone(manifest);
+    tamperedManifest.subcases[0].case_result.sha256 = 'b'.repeat(64);
+    fs.writeFileSync(compoundManifestFile, JSON.stringify(tamperedManifest));
+    assert.match(
+      coreBetaCompletionBlockReason(compound, parentResult),
+      /SHA 不一致的 case-result 证据/,
+      '复合清单内子结果 SHA 漂移必须 fail-closed',
+    );
+    fs.writeFileSync(path.join(results[1].case_dir, 'evidence-manifest.json'), JSON.stringify({
+      complete: false,
+      missing_roles: ['after_screenshot'],
+      invalid_roles: [],
+    }));
+    assert.equal(
+      buildCompoundEvidenceManifest({ testCase: compound, caseDir: parentDir, subcaseResults: results }).complete,
+      false,
+      '任一子 manifest 不完整时父 Case 必须 fail-closed',
+    );
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

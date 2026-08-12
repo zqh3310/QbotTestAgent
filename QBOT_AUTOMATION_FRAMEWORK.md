@@ -37,6 +37,7 @@
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
 | 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
 | 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `8bddf2ab346ad2b77a586d64ab59c740b2ea447975bc35d47515373b8b84b732` |
+| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c0119f41f484f5aefe66af3c72f5b6f4c19ea54ce74874060c1a9c235a293183` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -54,6 +55,12 @@
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
 当前设计基线是 `origin/release/0.1@686b862ea9553215c2563d87db8339096acecb9d`，
 产品版本 `0.1.1`；`/Users/qifu/Documents/deepbankV2` 始终只读。
+
+QWork 日常回归 Casebook 的 `A1:P84` 必须与用户提供的源工作簿 `日常回归`
+Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用户 Case 是
+`compound` 父合同，严格按声明顺序串行执行叶子；13 个 `SIT-*` 是独立合同。
+静态审计必须同时满足顶层 `83/83`、叶子 `144/144`、
+`strict_controller_required=0` 和 `unsupported_runtime=0`。
 
 ## 3. 启动前硬门禁
 
@@ -108,6 +115,19 @@ Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同
    runtime 分发路径的 Case 必须在静态审计阶段失败，禁止拖到正式批次中途
    才报“缺少 executor”。全量 Sheet 还必须满足对应计数为 160，并确认前 70 个
    Case ID 与门禁 Sheet 完全同序。
+
+   QWork 日常回归还必须单独运行：
+
+   ```bash
+   npm run core-beta:capability-audit -- \
+     --casebook PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx \
+     --sheet 日常回归 \
+     --out outputs/<new-daily83-capability-audit-dir>
+   ```
+
+   该报告除顶层 `83/83` 外，还必须证明
+   `leaf_runtime_dispatch.dispatchable_count=144`、
+   `leaf_runtime_dispatch.unsupported_count=0`。
 
 5. 执行统一真实运行前自检。以下以 360Teams 为例；所有字段必须替换为本轮冻结发布值：
 
@@ -413,6 +433,11 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 ## 7. 批量、串行屏障与初始化
 
 - Core Beta v2 的 Case 间执行永久强制串行：`--parallel` 和 `--single-host-pipeline` 的有效值都固定为 `1`。调用者即使传入大于 `1` 的历史参数，precheck 也必须同时记录 requested/effective 值和 `core-beta-v2-forced-serial` policy，runner 不得进入多 CDP 调度或外层 pipeline。
+- `compound` 父 Case 不是批处理别名。父 Case 的叶子必须在同一外层串行位置按
+  Casebook 顺序逐条执行，每个叶子使用独立不可变目录、独立 `case-result.json`、
+  `evidence-manifest.json`、截图、日志和 SHA。父级
+  `compound-evidence-manifest.json` 必须校验叶子数量、顺序、合同 SHA、结果 SHA
+  和证据完整性；任一叶子缺失、乱序、漂移或证据无效都不得完成父 Case。
 - 非 Core Beta 旧协议仍可使用 `--single-host-pipeline N`（`1–20`），但不改变 Core Beta v2 的强制串行合同。
 - Core Beta Casebook 中保留的 `pipeline_policy` 和 `batch_size` 只描述 Case 自身的动作/证据合同，不能授权 Case 间并发。
 - `BETA-CHAT-008` 的 `conversation_dispatch_collect_20` 是单个 Case 内部自带的 20 任务调度器，不属于 Case 间并发。该 Case 必须独占外层串行位置；运行时为 20 个唯一 marker 逐条新建任务、确认发送并固化唯一 taskId。
@@ -425,6 +450,13 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - 多 CDP 并行执行的实时 `automation-progress.json` 与最终 summary 使用同一结果分区规则：`synthetic=true` 只能写入 `non_executed_diagnostics`，不得计入 `completed`、`results` 或状态计数。
 - 历史 pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 manifest 完整性门禁；Core Beta v2 不得进入该路径。
 - 结果分类优先级必须是 `automation_error` 高于 `blocked` 和 `bug`。顶层 `result_category` 之外还必须扫描失败的 step/assertion；只要其中存在 `category=automation_error`，后续前置阻塞、清理阻塞或产品断言都不得覆盖它。普通 prerequisite `blocked` 和 manifest 完整的产品 Bug 只记录结果并继续后续独立 Case；只有确认的 framework/testcase issue、manifest/取证不完整、身份漂移或运行宿主失效才停止当前批次进入自主修复闭环。
+- 日常回归专项 JSON 证据必须使用 `evidence_valid` 表示取证结构、来源、Case
+  绑定和文件完整性，使用 `oracle_valid` 表示产品行为是否符合预期。产品 Oracle
+  失败时证据仍可为 `valid=true/evidence_valid=true/oracle_valid=false`，形成可信
+  产品 Bug 并继续后续独立父 Case；不得把产品失败误升级为 framework stop。
+  `QWD-EXPERT-002` 是只读专家目录/identity 审计，不要求虚假的能力选择或执行
+  事件；`QWD-SEC-005` 是真实个人 LLM 连接、失败探针和脱敏审计，不要求虚假的
+  会话轮次。通用类型校验不得覆盖具体 driver 的真实动作语义。
 - Core Beta v2 打开系统设置时，若设置壳已经显示“正在加载个人设置”，必须先在 30–180 秒有界窗口内等待运行时维护区出现；只有明确加载错误或窗口耗尽才能失败，禁止继续点击背景设置菜单并误报“个人设置入口缺失”。
 - Core Beta v2 进入系统设置前必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 点击遮挡层下方。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。
 - QWork 的 `[data-testid="runtime-update-ready-toast"]` 版本更新提示可能遮挡左下设置入口。每条 Case 开始和进入系统设置前都必须检查该提示；只允许在提示文案明确为“新版本已就绪/发现新版本”时真实点击精确的“稍后/跳过更新/暂不更新/以后再说”动作，保存前后截图和结构化账本并确认提示消失。禁止点击“立即更新”、使用 `force` 穿透遮挡或在运行中改变冻结发布身份；专用 toast 的按钮不匹配、点击失败、提示未消失或证据缺失时按 framework issue fail-closed。系统设置维护区中仅用通用 `[role="status"]` 展示“发现新版本，可点击立即更新”的内联版本状态不属于遮挡弹窗；只有同一 status 内真实存在精确安全的跳过按钮时才按弹窗处理，禁止因内联状态没有跳过按钮而追加 `automation_error`。
@@ -560,6 +592,10 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
   `executed=total=70`，全量回归为 `executed=total=160`，两者都必须
   `inherited=0`、`synthetic=0`。因此当前 70/160 正式批次都不使用跨批次继承；
   中断后在新不可变目录重新执行同一完整 Sheet。
+- QWork 日常回归同样要求 `executed=total=83`、顶层 Case 唯一数为 83、
+  全部 144 个叶子有独立完整证据，并且 `inherited=0`、`synthetic=0`。
+  任一 framework/testcase 修复后必须新 pretest、新不可变目录，并从 1/83
+  全量重跑；旧目录永久保留，不允许续写或只续跑剩余父 Case。
 - 旧协议的 360Teams lineage 只有在显式 `--resume-from` 加 `--impact-case` 或 `--impact-all true` 时允许使用，且源批次必须冻结、证据完整、发布身份兼容。
 - 发布身份变化时必须执行全量新批次，不能继承旧发布结果。
 - 明确 identity drift、重复 runner、manifest 不完整仍 completed 或 synthetic completed 时，立即停止并冻结当前批次；随后按第 9.1 节自主修复、校验并在新不可变目录重新执行，除非命中其中明确列出的不可自动恢复条件。

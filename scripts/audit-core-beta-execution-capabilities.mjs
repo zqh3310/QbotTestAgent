@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   CORE_BETA_SCENARIO_REGISTRY,
   coreBetaCaseContractSha256,
+  coreBetaLeafCases,
   validateCoreBetaCasePlan,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import {
@@ -92,12 +93,15 @@ const localOptionAdapters = new Set([
 const rows = cases.map((testCase) => {
   const scenario = CORE_BETA_SCENARIO_REGISTRY.get(testCase.id);
   const runtimeBinding = coreBetaRuntimeExecutorBinding(testCase, scenario);
+  const isCompound = String(testCase?.case_type || '') === 'compound';
   const nativePublic = scenario?.fixture_control === 'public_product_state';
   const localOption = runtimeBinding.mode === 'native'
     && !nativePublic
     && localOptionAdapters.has(scenario?.fixture_control)
   const capabilityClass = !runtimeBinding.dispatchable
     ? 'unsupported_runtime'
+    : isCompound
+      ? 'runner_compound_serial'
     : runtimeBinding.mode === 'verified_legacy'
       ? 'runner_legacy_verified'
       : runtimeBinding.mode === 'strict_controller'
@@ -111,16 +115,18 @@ const rows = cases.map((testCase) => {
     case_type: testCase.case_type,
     pipeline_policy: testCase.pipeline_policy,
     batch_size: Number(testCase.batch_size || 1),
-    executor_route: scenario?.executor_route || '',
-    driver: scenario?.driver || '',
-    fixture_control: scenario?.fixture_control || '',
+    executor_route: isCompound ? 'core-beta/compound-v2' : scenario?.executor_route || '',
+    driver: isCompound ? 'compound_serial_subcases' : scenario?.driver || '',
+    fixture_control: isCompound ? 'compound_children' : scenario?.fixture_control || '',
     legacy_case_id: scenario?.legacy_case_id || '',
     runtime_fixture: scenario?.runtime_fixture || '',
     runtime_executor_mode: runtimeBinding.mode,
     runtime_dispatchable: runtimeBinding.dispatchable,
     runtime_executor_reason: runtimeBinding.reason,
     capability_class: capabilityClass,
-    directly_runnable_without_controller: runtimeBinding.mode === 'verified_legacy'
+    directly_runnable_without_controller: isCompound
+      ? runtimeBinding.dispatchable
+      : runtimeBinding.mode === 'verified_legacy'
       || nativePublic
       || localOption,
     local_option_required: localOption ? scenario.fixture_control : '',
@@ -134,6 +140,24 @@ const rows = cases.map((testCase) => {
       ? testCase.precise_assertions.hard_oracles.length
       : 0,
     protocol_ok: protocol.cases.find((item) => item.id === testCase.id)?.ok === true,
+    subcase_count: Array.isArray(testCase?.compound_subcases) ? testCase.compound_subcases.length : 0,
+  };
+});
+
+const leafCases = coreBetaLeafCases(cases);
+const leafRows = leafCases.map((testCase) => {
+  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(testCase.id);
+  const binding = coreBetaRuntimeExecutorBinding(testCase, scenario);
+  return {
+    case_id: testCase.id,
+    case_type: testCase.case_type,
+    runtime_executor_mode: binding.mode,
+    runtime_dispatchable: binding.dispatchable,
+    executor_route: scenario?.executor_route || '',
+    driver: scenario?.driver || '',
+    fixture_control: scenario?.fixture_control || '',
+    legacy_case_id: scenario?.legacy_case_id || '',
+    contract_sha256: coreBetaCaseContractSha256(testCase),
   };
 });
 
@@ -170,10 +194,19 @@ const report = {
     runner_native: counts.runner_native || 0,
     runner_native_with_fixture_option: counts.runner_native_with_fixture_option || 0,
     runner_legacy_verified: counts.runner_legacy_verified || 0,
+    runner_compound_serial: counts.runner_compound_serial || 0,
     strict_controller_required: counts.strict_controller_required || 0,
     unsupported_runtime: counts.unsupported_runtime || 0,
     directly_runnable_without_controller: rows.filter((row) => row.directly_runnable_without_controller).length,
     fail_closed_without_required_controller: true,
+  },
+  leaf_runtime_dispatch: {
+    total: leafRows.length,
+    ok: leafRows.every((row) => row.runtime_dispatchable),
+    dispatchable_count: leafRows.filter((row) => row.runtime_dispatchable).length,
+    unsupported_count: leafRows.filter((row) => !row.runtime_dispatchable).length,
+    unsupported_case_ids: leafRows.filter((row) => !row.runtime_dispatchable).map((row) => row.case_id),
+    cases: leafRows,
   },
   cases: rows,
 };
@@ -191,6 +224,8 @@ const lines = [
   `- Runner 原生专项执行器：${report.capability_summary.runner_native}`,
   `- Runner 原生执行器（需明确 fixture 选项/凭证）：${report.capability_summary.runner_native_with_fixture_option}`,
   `- 经语义复核的旧执行器：${report.capability_summary.runner_legacy_verified}`,
+  `- 串行复合父 Case：${report.capability_summary.runner_compound_serial}`,
+  `- 叶子执行器分发闭环：${report.leaf_runtime_dispatch.ok ? '通过' : '失败'}（${report.leaf_runtime_dispatch.dispatchable_count}/${report.leaf_runtime_dispatch.total}）`,
   `- 需要严格逐 Case 控制器：${report.capability_summary.strict_controller_required}`,
   `- 未配置所需控制器时：Case 0 前 fail-closed`,
   '',
@@ -209,4 +244,4 @@ const lines = [
 ];
 fs.writeFileSync(path.join(outDir, 'capability-audit.md'), `${lines.join('\n')}\n`);
 process.stdout.write(`${JSON.stringify(report.capability_summary)}\n`);
-if (!protocol.ok || !report.runtime_dispatch.ok) process.exitCode = 2;
+if (!protocol.ok || !report.runtime_dispatch.ok || !report.leaf_runtime_dispatch.ok) process.exitCode = 2;
