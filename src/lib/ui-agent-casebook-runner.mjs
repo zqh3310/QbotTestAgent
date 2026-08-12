@@ -26348,12 +26348,17 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     && requestedFiles.some((filename) => text.includes(filename))
     && /已生成|生成完成|已创建|写入|保存|落地|文件名/.test(text)) return true;
   if (isNumericMemoryScenario(testCase)) {
-    if (/成交率|到场率|成交单数/.test(String(prompt || ''))) {
-      return /(^|[^0-9])12([^0-9]|$)/.test(text)
-        && /70\s*%|70％|百分之七十/.test(text)
+    const hasNumber = (number) => new RegExp(`(^|[^0-9])${escapeRegExp(number)}([^0-9]|$)`).test(text);
+    const currentPrompt = String(prompt || '');
+    if (/成交单数|成交率/.test(currentPrompt)) {
+      return hasNumber('12')
         && /17(?:\.\d+)?\s*%|17(?:\.\d+)?％|约\s*17|17\.14|17\.1|百分之十七/.test(text);
     }
-    return ['100', '70', '12'].every((number) => new RegExp(`(^|[^0-9])${escapeRegExp(number)}([^0-9]|$)`).test(text));
+    if (/到场人数|到场率/.test(currentPrompt)) {
+      return hasNumber('70') && /70\s*%|70％|百分之七十/.test(text);
+    }
+    if (/报名人数/.test(currentPrompt)) return hasNumber('100') && /人|名/.test(text);
+    return ['100', '70', '12'].every(hasNumber);
   }
   const targetedRules = [
     [/你是谁|说明你是谁|介绍一下你自己|身份/, /我是|QBot|Q宝|助手|工作台|帮助/],

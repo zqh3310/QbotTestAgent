@@ -39,6 +39,9 @@ SHA-256: 979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c
 - legacy 多轮合同已从运行时 `buildConversationTurns()` 同源生成，并要求每轮都有
   非空 Oracle：`SIT-HOME-016=4`、`SIT-HOME-053=11`、
   `SIT-HOME-058=2`、`SIT-HOME-060=2`、`SIT-EXPERT-022=2`。
+- `SIT-HOME-016` 的相关性按轮次匹配对应数字 Oracle：首轮 `100/70/12`，
+  报名追问 `100 人`，到场追问 `70 人 + 70%`，成交追问 `12 单 + 约 17.1%`。
+  禁止后续轮继续要求首轮全部数字或其他轮比例；数字或比例错配仍必须失败。
 
 首轮历史框架问题保留在不可变目录
 `teams360-automation/output/20260812165500_uat-qwork-daily83_teams360-5.3.0-2119080776_qwork-0.1.1-rc.4_M3_serial_framework-93b0958_casebook-c0119f4`：

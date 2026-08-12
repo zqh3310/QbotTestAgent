@@ -1351,6 +1351,36 @@ const numericTurns = buildConversationTurns({
 if (numericTurns.length !== 4 || !numericTurns[3]?.prompt.includes('成交率')) {
   throw new Error(`HOME-016 必须优先进入四轮数字记忆脚本：${JSON.stringify(numericTurns)}`);
 }
+const numericMemoryCase = {
+  id: 'SIT-HOME-016',
+  scenario: '同一会话多轮业务数字追问应保持上下文并答对数字',
+  test_data: '活动报名100人，到场70人，成交12单',
+};
+const numericMemoryReplies = [
+  '报名100人，到场70人，成交12单。',
+  '报名人数是 100 人（单位：人）。',
+  '到场人数是 70 人。到场率为 70%。',
+  '成交单数是 12 单，成交率约 17.1%。',
+];
+numericMemoryReplies.forEach((reply, index) => {
+  assert.equal(
+    replyLooksRelevant(reply, numericMemoryCase, numericTurns[index].prompt),
+    true,
+    `HOME-016 第 ${index + 1} 轮正确数字回复不得被通用相关性误判`,
+  );
+});
+for (const [index, reply] of [
+  [0, '报名100人，到场70人，没有成交数据。'],
+  [1, '报名人数是 70 人。'],
+  [2, '到场人数是 70 人，到场率为 17.1%。'],
+  [3, '成交单数是 12 单，成交率为 70%。'],
+]) {
+  assert.equal(
+    replyLooksRelevant(reply, numericMemoryCase, numericTurns[index].prompt),
+    false,
+    `HOME-016 第 ${index + 1} 轮数字或比例错配必须失败`,
+  );
+}
 const v4StructuredTurns = buildConversationTurns({
   id: 'USR-START-001',
   contract_version: 'qbot-current-casebook/v4',
