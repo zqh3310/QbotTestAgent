@@ -32057,7 +32057,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
       && /P1(?:[\s*_`·•:：/|—–-]){0,8}timeout/i.test(reply)
       && /P2(?:[\s*_`·•:：/|—–-]){0,8}copy/i.test(reply)
       && /IMPACT|影响/i.test(reply)
-      && /PROBABILITY|概率/i.test(reply);
+      && /PROBABILITY|概率|可能性/i.test(reply);
     return result(
       '两张图片逐图视觉锚点',
       '必须分别识别 QBot Release Flow 与 Release Risk Matrix，命中流程节点/发布证据门禁，以及 P0/P1/P2 风险矩阵锚点。',

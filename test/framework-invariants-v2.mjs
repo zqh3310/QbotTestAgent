@@ -1412,6 +1412,26 @@ assert.equal(
   false,
   '允许常见分隔符后仍必须精确命中 P0/P1/P2 的全部风险标签',
 );
+const coreImageReplyWithChineseAxes = [
+  '第一张标题是 QBot Release Flow，主要图形由 INPUT、ANALYZE、DELIVER 三个节点和箭头组成。',
+  '门禁文字是 Gate: evidence must be reviewable before release。',
+  '第二张标题是 Release Risk Matrix，横轴/纵轴代表可能性与影响程度。',
+  '风险点包括 P0 data loss、P1 timeout、P2 copy。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, coreImageReplyWithChineseAxes).ok,
+  true,
+  '风险矩阵使用标准中文轴名“可能性/影响程度”时不得造成视觉锚点假阴性',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    coreImageCase,
+    { prompt: '请分别说明两张图片。' },
+    coreImageReplyWithChineseAxes.replace('可能性与影响程度', '严重程度'),
+  ).ok,
+  false,
+  '接受中文等价轴名后仍必须同时证明概率轴和影响轴',
+);
 assert.equal(
   caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, '只看到 QBot Release Flow。').ok,
   false,
