@@ -4586,6 +4586,18 @@ function cleanupSelectionSourceVerdict(source) {
     && source.current_expert == null;
 }
 
+function cleanupInitContextSourceVerdict(source) {
+  if (!source || source.available !== true || source.error || source.binding_matches !== true) return false;
+  const noExplicitSelection = (value) => value == null
+    || (Array.isArray(value) && value.length === 0);
+  return source.selected_skills_observed === true
+    && noExplicitSelection(source.selected_skills)
+    && source.selected_connectors_observed === true
+    && noExplicitSelection(source.selected_connectors)
+    && source.current_expert_observed === true
+    && source.current_expert == null;
+}
+
 export function coreBetaCleanupCapabilitiesNeedsRetry(value) {
   return !value || typeof value !== 'object' || Boolean(value.__error);
 }
@@ -4748,6 +4760,7 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     ? []
     : bridgeFailures;
   const fallbackSource = Object.entries(snapshot.selection_readbacks || {})
+    .filter(([name]) => name !== 'init_context')
     .find(([, source]) => cleanupSelectionSourceVerdict(source))?.[0] || '';
   const preCleanup = snapshot.pre_cleanup_selection_readback;
   const visibleUi = snapshot.selection_readbacks?.visible_ui;
@@ -4783,9 +4796,17 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     && boundedCapabilitiesExhausted
     && bridgeFailures.length === 0
   );
+  const initContextAndVisibleUiCleared = Boolean(
+    snapshot.capability_cleanup_required === true
+    && cleanupInitContextSourceVerdict(snapshot.selection_readbacks?.init_context)
+    && currentUnifiedComposerVisiblyEmpty
+    && bridgeFailures.length === 0
+  );
   const selectionSource = directCapabilitiesCleared
     ? 'agent.capabilities'
-    : fallbackSource || (preCleanupAndVisibleUiCleared ? 'pre_cleanup_and_visible_ui' : '');
+    : fallbackSource
+      || (initContextAndVisibleUiCleared ? 'agent.init_context_and_visible_ui' : '')
+      || (preCleanupAndVisibleUiCleared ? 'pre_cleanup_and_visible_ui' : '');
   const errors = [];
   if (Number(snapshot.dialogs_open || 0) !== 0) errors.push('dialogs_still_open');
   if (fatalBridgeFailures.length) errors.push(`bridge_failed:${fatalBridgeFailures.join(',')}`);
@@ -4854,13 +4875,47 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
         current_expert: expertKey ? object?.[expertKey] ?? null : null,
       };
     };
-    const [e2eState, session, capabilities] = await Promise.all([
+    const [e2eState, session, init, capabilities] = await Promise.all([
       call(e2e?.state?.bind(e2e)),
       call(e2e?.currentSession?.bind(e2e)),
+      callBounded(window.agent?.init?.bind(window.agent)),
       shouldReadCapabilities
         ? callBounded(window.agent?.capabilities?.bind(window.agent))
         : null,
     ]);
+    const compactInitContext = (payload, e2ePayload) => {
+      const initObject = payload && typeof payload === 'object' && !payload.__error ? payload : null;
+      const activeId = String(e2ePayload?.activeId || '');
+      const isDraft = e2ePayload?.isDraft === true || !activeId;
+      const active = initObject?.active && typeof initObject.active === 'object'
+        ? initObject.active
+        : null;
+      const draft = initObject?.draftCtx && typeof initObject.draftCtx === 'object'
+        ? initObject.draftCtx
+        : null;
+      const source = isDraft ? draft : active;
+      const sourceId = String(active?.id || '');
+      const bindingMatches = isDraft
+        ? Boolean(draft && !active)
+        : Boolean(activeId && sourceId === activeId);
+      const expertKey = source
+        ? ['expertIdentity', 'expert'].find((key) => Object.hasOwn(source, key))
+        : '';
+      return {
+        available: Boolean(initObject && source && bindingMatches),
+        error: String(payload?.__error || (!bindingMatches ? 'agent.init context does not match the current task' : '')),
+        context: isDraft ? 'draft' : 'active',
+        active_id: activeId || null,
+        source_id: sourceId || null,
+        binding_matches: bindingMatches,
+        selected_skills_observed: Boolean(source && Object.hasOwn(source, 'skills')),
+        selected_skills: source?.skills ?? null,
+        selected_connectors_observed: Boolean(source && Object.hasOwn(source, 'connectors')),
+        selected_connectors: source?.connectors ?? null,
+        current_expert_observed: Boolean(expertKey),
+        current_expert: expertKey ? source?.[expertKey] ?? null : null,
+      };
+    };
     const visibleNodes = (selector) => Array.from(document.querySelectorAll(selector)).filter((node) => {
       const rect = node.getBoundingClientRect();
       const style = globalThis.getComputedStyle(node);
@@ -4910,6 +4965,7 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
           connectorsKey: 'connectors',
           expertKeys: ['expertIdentity', 'expert'],
         }),
+        init_context: compactInitContext(init, e2eState),
         visible_ui: {
           available: Boolean(
             skillSurfaceReady

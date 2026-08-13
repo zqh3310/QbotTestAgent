@@ -2668,6 +2668,75 @@ const cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer = {
     },
   },
 };
+const cleanupCapabilitiesTimedOutWithBoundInitContext = {
+  ...cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer,
+  pre_cleanup_selection_readback: null,
+  selection_readbacks: {
+    init_context: {
+      available: true,
+      error: '',
+      context: 'active',
+      active_id: 'task-cleanup',
+      source_id: 'task-cleanup',
+      binding_matches: true,
+      selected_skills_observed: true,
+      selected_skills: null,
+      selected_connectors_observed: true,
+      selected_connectors: null,
+      current_expert_observed: true,
+      current_expert: null,
+    },
+    visible_ui: cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer.selection_readbacks.visible_ui,
+  },
+};
+assert.equal(
+  coreBetaCleanupReadbackVerdict(cleanupCapabilitiesTimedOutWithBoundInitContext).selection_source,
+  'agent.init_context_and_visible_ui',
+  'capabilities 超时时，精确绑定当前 taskId 的 init context 空态与可见统一 Composer 空态应形成独立交叉读回',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupCapabilitiesTimedOutWithBoundInitContext,
+    selection_readbacks: {
+      ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks,
+      init_context: {
+        ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks.init_context,
+        source_id: 'other-task',
+        binding_matches: false,
+      },
+    },
+  }).valid,
+  false,
+  'init context 与当前 taskId 不匹配时不得用其他会话的空态放行清理',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupCapabilitiesTimedOutWithBoundInitContext,
+    selection_readbacks: {
+      ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks,
+      init_context: {
+        ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks.init_context,
+        selected_skills_observed: false,
+      },
+    },
+  }).valid,
+  false,
+  'init context 省略任一能力字段时仍必须 fail-closed',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupCapabilitiesTimedOutWithBoundInitContext,
+    selection_readbacks: {
+      ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks,
+      visible_ui: {
+        ...cleanupCapabilitiesTimedOutWithBoundInitContext.selection_readbacks.visible_ui,
+        visible_connector_chips: ['leftover-connector'],
+      },
+    },
+  }).valid,
+  false,
+  'init context 空态不得掩盖当前 Composer 中可见的 Connector 残留',
+);
 assert.equal(
   coreBetaCleanupReadbackVerdict(cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer).selection_source,
   'pre_cleanup_and_visible_ui',
@@ -4051,6 +4120,16 @@ assert.match(
   runner,
   /pre_cleanup_selection_readback[\s\S]*core_beta_composer_control_reset\?\.isolation_readback/,
   '清理读回必须把发送前权威空态与清理终态统一 Composer 可见空态绑定，不能只依赖超时的 capabilities IPC',
+);
+assert.match(
+  runner,
+  /callBounded\(window\.agent\?\.init[\s\S]*init_context: compactInitContext\(init, e2eState\)/,
+  '清理读回必须有界采集并压缩 agent.init 当前 context',
+);
+assert.match(
+  runner,
+  /cleanupInitContextSourceVerdict[\s\S]*binding_matches[\s\S]*agent\.init_context_and_visible_ui/,
+  'agent.init context 必须按 taskId 绑定后再与可见空态交叉验证',
 );
 assert.match(runner, /pre_cleanup_and_visible_ui/, '清理交叉读回必须记录稳定的证据来源名称');
 const cleanupImplementation = runner.slice(
