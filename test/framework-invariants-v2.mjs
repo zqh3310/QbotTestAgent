@@ -99,6 +99,7 @@ import {
   coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
+  coreBetaV2WorkspaceCreationDismissAction,
   qworkPartialAttachmentLogExcerpt,
   coreBetaV2SettingsLoadTimeoutMs,
   coreBetaV2SettingsSurfaceState,
@@ -5023,6 +5024,53 @@ assert.equal(
   false,
   '非更新提示不得复用版本更新跳过规则',
 );
+assert.equal(
+  coreBetaV2WorkspaceCreationDismissAction('新建工作空间\n请输入工作空间名称', '取消'),
+  true,
+  '新建工作空间弹窗必须允许精确点击取消',
+);
+assert.equal(
+  coreBetaV2WorkspaceCreationDismissAction('新建工作空间\n请输入工作空间名称', '关闭'),
+  true,
+  '新建工作空间弹窗必须允许精确点击关闭',
+);
+assert.equal(
+  coreBetaV2WorkspaceCreationDismissAction('新建工作空间\n请输入工作空间名称', 'close-icon', 'close_icon'),
+  true,
+  '新建工作空间弹窗必须允许明确关闭图标',
+);
+assert.equal(
+  coreBetaV2WorkspaceCreationDismissAction('新建工作空间\n请输入工作空间名称', '确认'),
+  false,
+  '自动化清理禁止点击确认创建工作空间',
+);
+assert.equal(
+  coreBetaV2WorkspaceCreationDismissAction('普通业务提示', '取消'),
+  false,
+  '普通弹窗不得复用新建工作空间清理规则',
+);
+const workspaceDismissStart = runner.indexOf('async function dismissCoreBetaV2WorkspaceCreationObstruction');
+const runtimeUpdateDismissStart = runner.indexOf('async function dismissCoreBetaV2RuntimeUpdateObstruction');
+assert.ok(
+  workspaceDismissStart >= 0 && runtimeUpdateDismissStart > workspaceDismissStart,
+  '新建工作空间专用清理器必须存在并定义在版本提示清理器之前',
+);
+const workspaceDismissSource = runner.slice(workspaceDismissStart, runtimeUpdateDismissStart);
+assert.match(
+  workspaceDismissSource,
+  /getByRole\('button', \{ name: \/\^\(\?:取消\|关闭\)\$\/ \}\)[\s\S]*action\.click\(\{ timeout: 5000 \}\)[\s\S]*waitFor\(\{ state: 'hidden', timeout: 5000 \}\)/,
+  '新建工作空间清理必须只点击同一弹窗内精确安全动作并等待弹窗隐藏',
+);
+assert.doesNotMatch(
+  workspaceDismissSource,
+  /force:\s*true|name:\s*\/\^确认\$\/|hasText:\s*\/\^确认\$\/|立即重启/,
+  '新建工作空间清理不得 force 穿透，也不得包含确认或立即重启动作',
+);
+assert.match(
+  workspaceDismissSource,
+  /workspace-creation-dialog-dismiss-[\s\S]*-before[\s\S]*-after[\s\S]*qbot-core-beta-workspace-creation-dialog-dismiss\/v1[\s\S]*hidden_after_click[\s\S]*before_screenshot[\s\S]*after_screenshot[\s\S]*workspace_creation_dialog_dismissals/,
+  '新建工作空间清理必须保存前后截图、隐藏读回和结构化 ledger',
+);
 assert.match(
   runner,
   /async function openCoreBetaV2SystemSettings[\s\S]*initialSettings = await waitForOpenSettingsMaintenance\(\)[\s\S]*ensureSidebarExpanded/,
@@ -5045,13 +5093,13 @@ assert.match(
 );
 assert.match(
   runner,
-  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*async function openCoreBetaV2SystemSettings/,
-  '进入系统设置前必须再次检查异步晚到的 QWork 更新提示',
+  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*async function openCoreBetaV2SystemSettings/,
+  '进入系统设置前必须先清理新建工作空间模态框，再检查异步晚到的 QWork 更新提示',
 );
 assert.match(
   runner,
-  /async function dismissBlockingOverlays[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*无法安全跳过 QWork 版本更新提示/,
-  '每条 Case 开始时必须处理版本更新提示，未知或无法关闭时 fail-closed',
+  /async function dismissBlockingOverlays[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*无法安全关闭新建工作空间弹窗[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*无法安全跳过 QWork 版本更新提示/,
+  '每条 Case 开始时必须先关闭前景新建工作空间模态框，再处理版本提示；任一无法安全关闭都 fail-closed',
 );
 assert.match(
   runner,
@@ -5728,7 +5776,7 @@ const required = [
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-030 在 Teams 全量 Fixture 中强制使用渲染层代理', /executeSitHomeQuickFeedback[\s\S]*forceRendererAdapter: true[\s\S]*installControlPlaneHttpControl[\s\S]*forceRendererAdapter \|\| options\['renderer-control-adapter'\] === 'teams360'/],
   ['HOME-052 精确点击打开本地工作空间并取消原生选择器', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button', \{ name: \/\^\\s\*打开本地工作\(\?:空间\|文件夹\)\\s\*\$\/[\s\S]*osascript/],
-  ['HOME-052 禁止按 pick class 第一项误点新建工作空间', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button'[\s\S]*打开本地工作[\s\S]*residualDialog[\s\S]*取消/],
+  ['HOME-052 禁止按 pick class 第一项误点新建工作空间', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button'[\s\S]*打开本地工作[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*residual_dialog_closed/],
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
