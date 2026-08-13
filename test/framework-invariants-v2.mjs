@@ -5627,6 +5627,16 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062CannotCalculateReply,
 ).ok, true, 'ROI 判定应把“算不出 ROI”识别为明确的数据不足边界');
+const sitHome062BareInvestmentReply = [
+  'ROI 需要「收入」和「投入」两个金额，仅凭报名 240 人、到场 170 人暂时算不出 ROI。',
+  '活动总投入（成本）和活动带来的收入是两个必要输入。',
+  '补齐后，ROI =（收入 − 投入）÷ 投入。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062BareInvestmentReply,
+).ok, true, 'ROI 判定应接受真实回复使用裸词“投入”的等价公式');
 const sitHome062RepeatedPrefixAndExampleReply = [
   '这个数据目前算不出 ROI。',
   'ROI 公式是 ROI =（活动收入 − 活动成本）÷ 活动成本。',
@@ -5684,6 +5694,11 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   '当前无法计算。请补充总投入和成交金额。ROI =（总投入 - 总回报）/ 总投入。',
 ).ok, false, 'ROI 判定不得接受回报与投入顺序颠倒的公式');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '当前无法计算。请补充投入和收入。ROI =（投入 − 收入）÷ 投入。',
+).ok, false, '裸词投入兼容不得放行操作数顺序颠倒的公式');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-064'),
   { prompt: '输出固定四列三行 Markdown 表格。', label: '第一轮' },
