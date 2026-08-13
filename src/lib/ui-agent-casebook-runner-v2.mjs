@@ -33807,6 +33807,9 @@ export function replyLooksRelevant(reply, testCase, prompt = '') {
     const statesIdentity = /(?:唯一标记|标记|identity|QBOT_[A-Z0-9_]+|ALPHA-\d+|BRAVO-\d+|CHARLIE-\d+)/i.test(text);
     return namesAttachment && statesIdentity;
   }
+  if (/(?:登录测试点|登录.*测试)/.test(relevanceInput)) {
+    return /(?=[\s\S]*(?:登录|账号|密码|验证码|凭证|会话|token|session|cookie))(?=[\s\S]*(?:测试|验证|流程|链路|异常|安全|状态))/i.test(text);
+  }
   if (testCase.id === 'BETA-ART-004') {
     return /\bPPTX\b/i.test(text)
       && /\bPDF\b/i.test(text)

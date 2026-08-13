@@ -6769,6 +6769,25 @@ if (!replyLooksRelevant('我是 QBot，你的智能办公助手，可以帮助�
 }, '你好，请用一句话说明你是谁。')) {
   throw new Error('身份问答不应被相关性启发式误判');
 }
+const loginTestRelevanceCase = {
+  id: 'SIT-TASK-EDIT-001',
+  scenario: '编辑历史用户问题并重新发送后，新回复应基于修改后的内容且会话状态一致',
+  test_data: '原问题：请给出 3 条登录测试点。修改后：请给出 5 条附件上传测试点。',
+};
+assert.equal(
+  replyLooksRelevant(
+    '正常登录链路验证正确账号和密码；异常凭证覆盖验证码错误；退出后验证 token、session 和 cookie 失效。',
+    loginTestRelevanceCase,
+    '请给出 3 条登录测试点。',
+  ),
+  true,
+  '登录测试点回复命中凭证、会话和验证语义时不得被通用相关性误判',
+);
+assert.equal(
+  replyLooksRelevant('今天北京天气晴朗，建议携带雨具。', loginTestRelevanceCase, '请给出 3 条登录测试点。'),
+  false,
+  '登录测试点不得把无关天气回复判为相关',
+);
 if (!replyLooksRelevant('已成功读取附件 qbot-text-brief.txt（共 228 字节）。主要内容是 QBot 核心对话能力测试，并给出三条验收点。', {
   id: 'SIT-HOME-031',
   scenario: '上传 TXT 后 Agent 应读取并概括内容',
