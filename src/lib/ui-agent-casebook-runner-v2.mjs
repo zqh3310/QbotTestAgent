@@ -3355,6 +3355,20 @@ export function buildCompoundEvidenceManifest({ testCase, caseDir, subcaseResult
   const declared = Array.isArray(testCase?.compound_subcases) ? testCase.compound_subcases : [];
   const rows = declared.map((subcase, index) => {
     const result = subcaseResults[index];
+    if (!result) {
+      return {
+        order: index + 1,
+        case_id: String(subcase?.id || ''),
+        status: 'not_executed',
+        result_category: 'not_executed',
+        case_contract_sha256: coreBetaCaseContractSha256(subcase),
+        case_result: { valid: false, path: '', error: 'subcase_not_executed' },
+        evidence_manifest: { valid: false, path: '', error: 'subcase_not_executed' },
+        evidence_complete: false,
+        valid: false,
+        validation_error: 'subcase_not_executed',
+      };
+    }
     const resultFile = compoundFileRecord(path.join(String(result?.case_dir || ''), 'case-result.json'), caseDir);
     const manifestFile = compoundFileRecord(path.join(String(result?.case_dir || ''), 'evidence-manifest.json'), caseDir);
     let manifest = null;
@@ -3454,9 +3468,15 @@ async function executeCompoundCasebookCase(context) {
   writeJsonFile(compoundManifestFile, compoundManifest);
   state.artifacts.compound_evidence_manifest = compoundManifestFile;
   if (!compoundManifest.complete) {
+    const invalidExecuted = compoundManifest.subcases
+      .filter((item) => !item.valid && item.validation_error !== 'subcase_not_executed')
+      .map((item) => item.case_id);
+    const notExecuted = compoundManifest.subcases
+      .filter((item) => item.validation_error === 'subcase_not_executed')
+      .map((item) => item.case_id);
     markFailed(
       state,
-      `复合 Case 证据不完整：observed=${subcaseResults.length}/${subcases.length}；invalid=${compoundManifest.subcases.filter((item) => !item.valid).map((item) => item.case_id).join(',') || 'none'}`,
+      `复合 Case 证据不完整：observed=${subcaseResults.length}/${subcases.length}；invalid_executed=${invalidExecuted.join(',') || 'none'}；not_executed=${notExecuted.join(',') || 'none'}`,
       'automation_error',
     );
   } else {
@@ -4729,9 +4749,43 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     : bridgeFailures;
   const fallbackSource = Object.entries(snapshot.selection_readbacks || {})
     .find(([, source]) => cleanupSelectionSourceVerdict(source))?.[0] || '';
+  const preCleanup = snapshot.pre_cleanup_selection_readback;
+  const visibleUi = snapshot.selection_readbacks?.visible_ui;
+  const preCleanupAuthoritativelyEmpty = Boolean(
+    preCleanup?.ok === true
+    && preCleanup?.readable === true
+    && preCleanup?.skills_readable === true
+    && preCleanup?.connectors_readable === true
+    && preCleanup?.expert_readable === true
+    && preCleanup?.skills_empty === true
+    && preCleanup?.connectors_empty === true
+    && preCleanup?.expert_empty === true
+  );
+  const currentUnifiedComposerVisiblyEmpty = Boolean(
+    snapshot.composer_surface_available === true
+    && visibleUi?.surface === 'unified-plus'
+    && Array.isArray(visibleUi?.visible_skill_chips)
+    && visibleUi.visible_skill_chips.length === 0
+    && Array.isArray(visibleUi?.visible_connector_chips)
+    && visibleUi.visible_connector_chips.length === 0
+    && Number(visibleUi?.visible_expert_avatar_count) === 0
+  );
+  const boundedCapabilitiesExhausted = Boolean(
+    Array.isArray(snapshot.capabilities_readback_attempts)
+    && snapshot.capabilities_readback_attempts.length === 3
+    && snapshot.capabilities_readback_attempts.every((attempt) => attempt?.ok === false)
+    && coreBetaCleanupCapabilitiesNeedsRetry(capabilities)
+  );
+  const preCleanupAndVisibleUiCleared = Boolean(
+    snapshot.capability_cleanup_required === true
+    && preCleanupAuthoritativelyEmpty
+    && currentUnifiedComposerVisiblyEmpty
+    && boundedCapabilitiesExhausted
+    && bridgeFailures.length === 0
+  );
   const selectionSource = directCapabilitiesCleared
     ? 'agent.capabilities'
-    : fallbackSource;
+    : fallbackSource || (preCleanupAndVisibleUiCleared ? 'pre_cleanup_and_visible_ui' : '');
   const errors = [];
   if (Number(snapshot.dialogs_open || 0) !== 0) errors.push('dialogs_still_open');
   if (fatalBridgeFailures.length) errors.push(`bridge_failed:${fatalBridgeFailures.join(',')}`);
@@ -4968,6 +5022,9 @@ async function writeCleanupReadback({ page, state, testCase, caseDir }) {
     };
   }, { cleanupPolicy: testCase.cleanup_policy || '' });
   Object.assign(snapshot, await captureCleanupSelectionReadbacks(page, snapshot.bridge_results));
+  snapshot.pre_cleanup_selection_readback = structuredClone(
+    state.artifacts.core_beta_composer_control_reset?.isolation_readback || null,
+  );
   const capabilitiesReadbackAttempts = [{
     attempt: 1,
     ok: !coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after),

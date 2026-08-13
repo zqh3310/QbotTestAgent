@@ -2629,6 +2629,63 @@ assert.equal(
   'visible_ui',
   'capabilities IPC 超时时，必须允许可见禁用控件与 E2E 专家状态对空选择做独立交叉读回',
 );
+const cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer = {
+  ...cleanupBase,
+  capabilities_after: { __error: 'Core Beta cleanup capabilities timed out after 6500ms' },
+  capabilities_readback_attempts: [1, 2, 3].map((attempt) => ({
+    attempt,
+    ok: false,
+    error: 'Core Beta cleanup capabilities timed out after 6500ms',
+  })),
+  composer_surface_available: true,
+  pre_cleanup_selection_readback: {
+    ok: true,
+    readable: true,
+    skills_readable: true,
+    connectors_readable: true,
+    expert_readable: true,
+    skills_empty: true,
+    connectors_empty: true,
+    expert_empty: true,
+    selected_skills: null,
+    selected_connectors: null,
+    current_expert: null,
+  },
+  selection_readbacks: {
+    visible_ui: {
+      available: false,
+      error: '',
+      selected_skills_observed: true,
+      selected_skills: ['cleanup-not-confirmed:unified-skill'],
+      selected_connectors_observed: true,
+      selected_connectors: ['cleanup-not-confirmed:unified-connector'],
+      current_expert_observed: true,
+      current_expert: null,
+      surface: 'unified-plus',
+      visible_skill_chips: [],
+      visible_connector_chips: [],
+      visible_expert_avatar_count: 0,
+    },
+  },
+};
+assert.equal(
+  coreBetaCleanupReadbackVerdict(cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer).selection_source,
+  'pre_cleanup_and_visible_ui',
+  '三次 capabilities 超时后，发送前权威空态、成功清理桥和当前统一 Composer 可见空态应形成交叉读回',
+);
+assert.equal(
+  coreBetaCleanupReadbackVerdict({
+    ...cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer,
+    selection_readbacks: {
+      visible_ui: {
+        ...cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer.selection_readbacks.visible_ui,
+        visible_skill_chips: ['leftover-skill'],
+      },
+    },
+  }).valid,
+  false,
+  '发送前空态不得掩盖清理终态可见的 Skill 残留',
+);
 assert.equal(
   coreBetaCleanupReadbackVerdict({
     ...cleanupBase,
@@ -3990,6 +4047,12 @@ assert.match(
   /capabilitiesReadbackAttempts[\s\S]*attempt <= 3[\s\S]*coreBetaCleanupCapabilitiesNeedsRetry\(snapshot\.capabilities_after\)[\s\S]*window\.agent\.capabilities\(\)[\s\S]*capabilities_readback_attempts/,
   '清理读回在 capabilities 传输超时后必须执行最多三次有界只读尝试并保存尝试账本',
 );
+assert.match(
+  runner,
+  /pre_cleanup_selection_readback[\s\S]*core_beta_composer_control_reset\?\.isolation_readback/,
+  '清理读回必须把发送前权威空态与清理终态统一 Composer 可见空态绑定，不能只依赖超时的 capabilities IPC',
+);
+assert.match(runner, /pre_cleanup_and_visible_ui/, '清理交叉读回必须记录稳定的证据来源名称');
 const cleanupImplementation = runner.slice(
   runner.indexOf('async function writeCleanupReadback'),
   runner.indexOf('export function coreBetaV2MaintenanceConfirmationContract'),

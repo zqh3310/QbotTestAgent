@@ -1332,6 +1332,16 @@ try {
       false,
       '任一子 manifest 不完整时父 Case 必须 fail-closed',
     );
+    const interruptedManifest = buildCompoundEvidenceManifest({
+      testCase: compound,
+      caseDir: parentDir,
+      subcaseResults: results.slice(0, 1),
+    });
+    assert.equal(interruptedManifest.complete, false);
+    assert.equal(interruptedManifest.subcases[1].status, 'not_executed');
+    assert.equal(interruptedManifest.subcases[1].case_result.path, '');
+    assert.equal(interruptedManifest.subcases[1].case_result.error, 'subcase_not_executed');
+    assert.equal(interruptedManifest.subcases[1].validation_error, 'subcase_not_executed');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
