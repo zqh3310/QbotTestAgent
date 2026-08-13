@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -144,6 +145,7 @@ import {
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
   qworkDailyEvidenceEnvelope,
+  isQworkDailyRegressionCasePlan,
   qworkDailyWorkspaceSelectionFailureEvidence,
   qworkDailyWorkspaceTaskBindingVerdict,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
@@ -6239,6 +6241,44 @@ const productionCasePlanNoGo = validateProductionCasePlan([{ ...productionCaseMe
 });
 if (productionCasePlanNoGo.ok || !productionCasePlanNoGo.errors.some((item) => item.includes('oracle_type'))) {
   throw new Error('生产 Case 缺少 Oracle 或发布输入时必须前置 NO-GO');
+}
+
+const qworkDailyPlanFile = path.join(os.tmpdir(), `qwork-daily-plan-${process.pid}.json`);
+const qworkDailyPlanExport = spawnSync('python3', [
+  path.join(root, 'skills', 'qbot-execute-automation-tests', 'scripts', 'casebook_io.py'),
+  'export-cases',
+  '--casebook', path.join(root, 'PRD', 'QWork日常回归自动化Casebook_83条_2026-08-12.xlsx'),
+  '--sheet', '日常回归',
+  '--profile', 'mandatory',
+  '--output', qworkDailyPlanFile,
+], { cwd: root, encoding: 'utf8' });
+if (qworkDailyPlanExport.status !== 0) {
+  throw new Error(`日常回归 Casebook 导出失败：${qworkDailyPlanExport.stderr || qworkDailyPlanExport.stdout}`);
+}
+const qworkDailyCases = JSON.parse(fs.readFileSync(qworkDailyPlanFile, 'utf8')).cases || [];
+fs.rmSync(qworkDailyPlanFile, { force: true });
+if (!isQworkDailyRegressionCasePlan(qworkDailyCases)) {
+  throw new Error('83 条日常回归必须匹配完整有序 ID、70 个 compound 父 Case 和 13 个独立 Case。');
+}
+const qworkDailyReleaseAudit = validateProductionCasePlan(qworkDailyCases, {
+  backendVersion: 'sit-backend-1',
+  promptPolicyVersion: 'sit-prompt-1',
+  featureFlagsHash: 'b'.repeat(64),
+});
+if (!qworkDailyReleaseAudit.ok
+  || qworkDailyReleaseAudit.gate_contract !== 'qwork-daily-regression/v1'
+  || qworkDailyReleaseAudit.production_risk_domain_coverage_required !== false) {
+  throw new Error(`日常回归应冻结 release inputs，但不应被 70/160 专属风险域覆盖误阻断：${JSON.stringify(qworkDailyReleaseAudit)}`);
+}
+const incompleteQworkDailyReleaseAudit = validateProductionCasePlan(qworkDailyCases.slice(0, -1), {
+  backendVersion: 'sit-backend-1',
+  promptPolicyVersion: 'sit-prompt-1',
+  featureFlagsHash: 'b'.repeat(64),
+});
+if (incompleteQworkDailyReleaseAudit.ok
+  || incompleteQworkDailyReleaseAudit.production_risk_domain_coverage_required !== true
+  || !incompleteQworkDailyReleaseAudit.errors.some((item) => item.includes('缺少生产风险域'))) {
+  throw new Error('日常回归豁免必须只适用于完整精确的 83 条计划；缺一条仍须 fail-closed。');
 }
 
 const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({

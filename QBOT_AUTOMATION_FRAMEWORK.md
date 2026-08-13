@@ -178,6 +178,13 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
    `--expected-count` 改为 `160`，SHA 保持不变。70 与 160 必须分别得到精确
    `READY`，不能用一个 Sheet 的 pretest 替代另一个。
 
+   QWork 日常回归同样传 `--production-gate true`，用于冻结 Teams/QWork/control
+   plane/backend/prompt policy/feature flags 并启用严格证据门禁；但它不是 70/160
+   生产灰度风险域 Casebook，不得套用八大生产风险域完整覆盖检查。该分类只允许
+   精确有序的 83 个顶层 ID、前 70 个 `compound` 和后 13 个独立 Case；任何缺失、
+   重排或结构漂移均恢复完整生产风险域检查并在 Case 0 前 fail-closed。日常回归
+   `READY` 只授权本轮 83 条执行，不等于 70/160 生产灰度放行。
+
    `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。Teams lane 的 control plane 必须同时核对受管 session 与 QWork renderer 实际读取的 `DEEPBANK_SERVER/QBOT_SERVER_URL`；只看启动参数或 session 声明不能通过。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
 
 6. 冻结并记录发布身份：

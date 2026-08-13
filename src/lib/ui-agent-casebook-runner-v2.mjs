@@ -394,6 +394,36 @@ const PRODUCTION_REQUIRED_RISK_DOMAINS = [
   'release_rollback',
 ];
 
+export const QWORK_DAILY_REGRESSION_TOP_LEVEL_CASE_IDS = Object.freeze([
+  'QW-ENTRY-001', 'QW-ENTRY-002', 'QW-ENTRY-004',
+  'QW-CHAT-001', 'QW-CHAT-002', 'QW-CHAT-003', 'QW-CHAT-004', 'QW-CHAT-005', 'QW-CHAT-006', 'QW-CHAT-007',
+  'QW-FILE-001', 'QW-FILE-002', 'QW-FILE-003', 'QW-FILE-004', 'QW-FILE-005', 'QW-FILE-006', 'QW-FILE-008', 'QW-FILE-009',
+  'QW-ART-001', 'QW-ART-002', 'QW-ART-003', 'QW-ART-004', 'QW-ART-005', 'QW-ART-006', 'QW-ART-007', 'QW-ART-008',
+  'QW-WS-001', 'QW-WS-003',
+  'QW-EXPERT-001', 'QW-EXPERT-002', 'QW-EXPERT-003', 'QW-EXPERT-004', 'QW-EXPERT-005', 'QW-EXPERT-006',
+  'QW-EXPERT-007', 'QW-EXPERT-008', 'QW-EXPERT-009', 'QW-EXPERT-010', 'QW-EXPERT-011',
+  'QW-SKILL-001', 'QW-SKILL-002', 'QW-SKILL-003', 'QW-SKILL-004', 'QW-SKILL-005', 'QW-SKILL-006', 'QW-SKILL-008',
+  'QW-MCP-001', 'QW-MCP-002', 'QW-MCP-003', 'QW-MCP-004', 'QW-MCP-005', 'QW-MCP-006', 'QW-MCP-007',
+  'QW-AUTO-001', 'QW-AUTO-002', 'QW-AUTO-003', 'QW-AUTO-004',
+  'QW-SYS-003', 'QW-SYS-005', 'QW-SYS-006', 'QW-SYS-007',
+  'QW-MEM-001', 'QW-MEM-002',
+  'QW-SEC-001', 'QW-SEC-002', 'QW-SEC-003', 'QW-SEC-004', 'QW-SEC-005',
+  'QW-PERF-001', 'QW-PERF-002',
+  'SIT-HOME-012', 'SIT-INIT-002', 'SIT-TEAMS-NEW-003', 'SIT-HOME-006', 'SIT-CONN-004', 'SIT-AUTH-001',
+  'SIT-HOME-038', 'SIT-HOME-058', 'SIT-HOME-054', 'SIT-HOME-055', 'SIT-HOME-065', 'SIT-HOME-027', 'SIT-HOME-028',
+]);
+
+export function isQworkDailyRegressionCasePlan(cases = []) {
+  if (cases.length !== QWORK_DAILY_REGRESSION_TOP_LEVEL_CASE_IDS.length) return false;
+  return cases.every((testCase, index) => (
+    String(testCase?.id || '').trim() === QWORK_DAILY_REGRESSION_TOP_LEVEL_CASE_IDS[index]
+    && String(testCase?.contract_version || '').trim() === 'qbot-core-beta/v2'
+    && (index < 70
+      ? String(testCase?.case_type || '').trim() === 'compound'
+      : String(testCase?.case_type || '').trim() !== 'compound')
+  ));
+}
+
 export async function runUiAgentCasebookCommand({ options = {}, root = process.cwd() } = {}) {
   const startedAt = new Date();
   const casebook = resolveCasebook(root, options.casebook);
@@ -1533,6 +1563,7 @@ export function validateProductionCasePlan(cases = [], {
   if (!cases.length) errors.push('生产门禁 Case 集为空。');
   const ids = cases.map((item) => String(item.id || '').trim()).filter(Boolean);
   if (ids.length !== cases.length || new Set(ids).size !== ids.length) errors.push('Case ID 为空或重复。');
+  const qworkDailyRegression = isQworkDailyRegressionCasePlan(cases);
   const coveredDomains = new Set();
   const hardGateDomains = new Set();
   for (const testCase of cases) {
@@ -1553,10 +1584,12 @@ export function validateProductionCasePlan(cases = [], {
       errors.push(`${testCase.id || 'unknown'} repeat_policy 必须包含明确执行次数。`);
     }
   }
-  const missingDomains = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !coveredDomains.has(domain));
-  if (missingDomains.length) errors.push(`缺少生产风险域 ${missingDomains.join(',')}`);
-  const domainsWithoutHardGate = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !hardGateDomains.has(domain));
-  if (domainsWithoutHardGate.length) errors.push(`以下生产风险域没有一票否决 Case：${domainsWithoutHardGate.join(',')}`);
+  if (!qworkDailyRegression) {
+    const missingDomains = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !coveredDomains.has(domain));
+    if (missingDomains.length) errors.push(`缺少生产风险域 ${missingDomains.join(',')}`);
+    const domainsWithoutHardGate = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !hardGateDomains.has(domain));
+    if (domainsWithoutHardGate.length) errors.push(`以下生产风险域没有一票否决 Case：${domainsWithoutHardGate.join(',')}`);
+  }
   if (!String(backendVersion || '').trim()) errors.push('缺少 backend version。');
   if (!String(promptPolicyVersion || '').trim()) errors.push('缺少 prompt/policy version。');
   if (!/^[a-f0-9]{64}$/i.test(String(featureFlagsHash || ''))) errors.push('feature flags hash 必须是 64 位 SHA-256。');
@@ -1569,6 +1602,8 @@ export function validateProductionCasePlan(cases = [], {
     covered_risk_domains: [...coveredDomains].sort(),
     hard_gate_risk_domains: [...hardGateDomains].sort(),
     required_risk_domains: PRODUCTION_REQUIRED_RISK_DOMAINS,
+    gate_contract: qworkDailyRegression ? 'qwork-daily-regression/v1' : 'production-risk-gate/v1',
+    production_risk_domain_coverage_required: !qworkDailyRegression,
     release_inputs: {
       backend_version: String(backendVersion || ''),
       prompt_policy_version: String(promptPolicyVersion || ''),

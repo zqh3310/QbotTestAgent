@@ -259,6 +259,12 @@ Teams/QWork/SIT 发布身份参数必须从当前受管宿主重新读取。只�
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。
 
+日常回归仍传 `--production-gate true` 来冻结全部 release inputs 并启用严格证据
+门禁，但不承担 70/160 专属的八大生产风险域完整覆盖。框架只能对完整有序的 83 个
+顶层 ID、前 70 个 `compound` 和后 13 个独立 Case 识别该合同；任何缺失、重排或
+结构漂移必须恢复生产风险域检查并 fail-closed。83 条 `READY` 仅授权日常回归，
+不能作为 70/160 生产灰度放行证据。
+
 ## 7. 启动唯一 runner
 
 只有第 6 节精确 pretest 为 `READY` 后才允许：
