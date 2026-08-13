@@ -5343,6 +5343,16 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062ActualReply,
 ).ok, true, 'ROI 判定应接受真实回复中的总回报/总投入/成交金额等价表达');
+const sitHome062CannotCalculateReply = [
+  '仅凭「报名 240 人、到场 170 人」这两个数，算不出 ROI。',
+  'ROI =（活动带来的收入 − 活动总成本）÷ 活动总成本 × 100%',
+  '目前缺少活动总成本和活动带来的成交金额（收入），请补充这两个输入。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062CannotCalculateReply,
+).ok, true, 'ROI 判定应把“算不出 ROI”识别为明确的数据不足边界');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-062'),
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },

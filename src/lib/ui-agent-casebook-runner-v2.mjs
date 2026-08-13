@@ -32220,7 +32220,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
     return result('领导简报数字与长度', '简报应在120字的合理容差内，包含报名到场率约70.8%、投诉占触达约0.23%和可执行下一步。', compact <= 145 && hasArrivalRate && hasComplaintRate && hasAction, `chars=${compact}；arrival_rate=${hasArrivalRate}；complaint_rate=${hasComplaintRate}；action=${hasAction}；reply=${clip(reply, 360)}`);
   }
   if (id === 'SIT-HOME-062') {
-    const saysInsufficient = /无法|不能|不足|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
+    const saysInsufficient = /无法|不能|不足|算不出|算不了|得不出|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
     const returnOperand = '(?:活动(?:带来|产生)的?)?(?:总?收益|总?收入|总回报|成交(?:金额|总额))';
     const costOperand = '(?:活动)?(?:总投入|投入金额|总?成本)';
     const formulaPattern = new RegExp(
