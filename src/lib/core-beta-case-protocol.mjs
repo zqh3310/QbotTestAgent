@@ -244,6 +244,7 @@ export const CORE_BETA_SCENARIO_IDS = new Set([
   ...FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
   ...[
     'QWD-ENTRY-002',
+    'QWD-WS-001',
     'QWD-ART-007',
     'QWD-ART-008',
     'QWD-EXPERT-002',
@@ -391,6 +392,7 @@ const registerScenario = (id, driver, {
   ['BETA-DEPLOY-007', 'bounded_redacted_deployment_diagnostics', { fixture_control: 'protected_release_deployment' }],
   ['BETA-DEPLOY-008', 'retire_remote_qbot_ui_service', { fixture_control: 'protected_release_deployment' }],
   ['QWD-ENTRY-002', 'qwork_daily_new_task_auto_isolation', { conversation_required: false }],
+  ['QWD-WS-001', 'qwork_daily_workspace_task_binding'],
   ['QWD-ART-007', 'qwork_daily_artifact_exact_directory'],
   ['QWD-ART-008', 'qwork_daily_artifact_keep_both_atomic'],
   ['QWD-EXPERT-002', 'qwork_daily_expert_catalog_identity', { capability_execution_required: false }],
@@ -1277,6 +1279,14 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'reply_delta',
     'reply_completion',
   ]);
+  const qworkWorkspaceSelectionFailureNotApplicableRoles = new Set([
+    'task_id',
+    'prompt',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
@@ -1301,7 +1311,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && !mcpPrerequisiteNotApplicableRoles.has(role)
         && !preSendCapabilityFailureNotApplicableRoles.has(role)
         && !preSendImeFailureNotApplicableRoles.has(role)
-        && !preSendAttachmentRejectionNotApplicableRoles.has(role))
+        && !preSendAttachmentRejectionNotApplicableRoles.has(role)
+        && !qworkWorkspaceSelectionFailureNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1862,6 +1873,93 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.includes(role)
       && JSON.stringify(allowedRoles) === JSON.stringify([...preSendAttachmentRejectionNotApplicableRoles])
       && String(blocker?.reason || '').trim();
+    const workspaceInteraction = blocker?.interaction || {};
+    const workspaceMutationGuard = blocker?.mutation_guard || {};
+    const workspaceCleanup = blocker?.cleanup || {};
+    const workspaceSavedPaths = [blocker?.registration?.saved_a?.path, blocker?.registration?.saved_b?.path]
+      .map((value) => String(value || ''))
+      .filter(Boolean);
+    const workspaceCleanupTargets = Array.isArray(workspaceCleanup?.attempts)
+      ? workspaceCleanup.attempts.map((item) => String(item?.target || ''))
+      : [];
+    const workspaceCleanupFile = String(workspaceCleanup?.evidence_file || '');
+    const resolvedWorkspaceCleanupFile = workspaceCleanupFile ? path.resolve(workspaceCleanupFile) : '';
+    const workspaceCleanupRelative = resolvedWorkspaceCleanupFile
+      ? path.relative(path.resolve(caseDir), resolvedWorkspaceCleanupFile)
+      : '';
+    const workspaceCleanupFileValid = Boolean(
+      resolvedWorkspaceCleanupFile
+      && workspaceCleanupRelative
+      && !workspaceCleanupRelative.startsWith('..')
+      && !path.isAbsolute(workspaceCleanupRelative)
+      && fs.existsSync(resolvedWorkspaceCleanupFile)
+      && fs.statSync(resolvedWorkspaceCleanupFile).isFile()
+      && fs.statSync(resolvedWorkspaceCleanupFile).size > 0
+      && /^[a-f0-9]{64}$/i.test(String(workspaceCleanup?.evidence_sha256 || ''))
+      && sha256File(resolvedWorkspaceCleanupFile) === workspaceCleanup.evidence_sha256
+    );
+    const workspaceScreenshot = String(blocker?.screenshot?.path || '');
+    const resolvedWorkspaceScreenshot = workspaceScreenshot ? path.resolve(workspaceScreenshot) : '';
+    const workspaceScreenshotRelative = resolvedWorkspaceScreenshot
+      ? path.relative(path.resolve(caseDir), resolvedWorkspaceScreenshot)
+      : '';
+    const workspaceScreenshotValid = Boolean(
+      resolvedWorkspaceScreenshot
+      && workspaceScreenshotRelative
+      && !workspaceScreenshotRelative.startsWith('..')
+      && !path.isAbsolute(workspaceScreenshotRelative)
+      && fs.existsSync(resolvedWorkspaceScreenshot)
+      && fs.statSync(resolvedWorkspaceScreenshot).isFile()
+      && fs.statSync(resolvedWorkspaceScreenshot).size >= 128
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.screenshot?.sha256 || ''))
+      && sha256File(resolvedWorkspaceScreenshot) === blocker.screenshot.sha256
+      && workspaceInteraction?.screenshot === resolvedWorkspaceScreenshot
+    );
+    const qworkWorkspaceSelectionFailureVerified = blocker?.schema_version === 'qbot-qwork-daily-workspace-selection-failure/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'bug'
+      && blocker?.kind === 'visible_workspace_selection_product_failure'
+      && blocker?.source === 'registered_workspace_visible_menu_and_zero_send_readback'
+      && blocker?.dependent_case_id === 'QWD-WS-001'
+      && testCase?.id === 'QWD-WS-001'
+      && path.isAbsolute(String(blocker?.workspace || ''))
+      && blocker?.registration?.valid === true
+      && workspaceSavedPaths.length === 2
+      && new Set(workspaceSavedPaths).size === 2
+      && workspaceSavedPaths.every((value) => path.isAbsolute(value))
+      && workspaceSavedPaths.includes(String(blocker.workspace))
+      && workspaceInteraction?.schema_version === 'qbot-qwork-daily-workspace-selection/v1'
+      && workspaceInteraction?.trigger_located === true
+      && workspaceInteraction?.menu_opened === true
+      && typeof workspaceInteraction?.target_located === 'boolean'
+      && workspaceInteraction?.expected_state_observed === false
+      && workspaceInteraction?.failure_category === 'bug'
+      && (workspaceInteraction.target_located === false || workspaceInteraction.click_dispatched === true)
+      && workspaceMutationGuard?.valid === true
+      && workspaceMutationGuard?.task_absent_before === true
+      && workspaceMutationGuard?.task_absent_after === true
+      && workspaceMutationGuard?.not_running_before === true
+      && workspaceMutationGuard?.not_running_after === true
+      && workspaceMutationGuard?.message_count_zero_before === true
+      && workspaceMutationGuard?.message_count_zero_after === true
+      && workspaceMutationGuard?.send_count_observed === true
+      && workspaceMutationGuard?.send_count_unchanged === true
+      && workspaceMutationGuard?.no_prompt_recorded === true
+      && workspaceMutationGuard?.no_send_receipt_recorded === true
+      && workspaceCleanup?.valid === true
+      && workspaceCleanupFileValid
+      && workspaceCleanupTargets.length === 2
+      && workspaceCleanupTargets.every((value) => workspaceSavedPaths.includes(value))
+      && new Set(workspaceCleanupTargets).size === 2
+      && Array.isArray(workspaceCleanup?.remaining_fixture_paths)
+      && workspaceCleanup.remaining_fixture_paths.length === 0
+      && workspaceScreenshotValid
+      && allowedRoles.includes(role)
+      && JSON.stringify(allowedRoles) === JSON.stringify([...qworkWorkspaceSelectionFailureNotApplicableRoles])
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
@@ -1871,7 +1969,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || preSendCapabilityFailureVerified
       || capabilityInventoryPrerequisiteVerified
       || preSendImeFailureVerified
-      || preSendAttachmentRejectionVerified;
+      || preSendAttachmentRejectionVerified
+      || qworkWorkspaceSelectionFailureVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

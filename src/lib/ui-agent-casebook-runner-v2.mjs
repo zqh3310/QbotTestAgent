@@ -3923,6 +3923,7 @@ export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
   'composer_history_navigation',
   'model_menu_sdk_filter',
   'qwork_daily_new_task_auto_isolation',
+  'qwork_daily_workspace_task_binding',
   'qwork_daily_artifact_exact_directory',
   'qwork_daily_artifact_keep_both_atomic',
   'qwork_daily_expert_catalog_identity',
@@ -4837,7 +4838,11 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
         },
       },
       composer_surface_available: Boolean(composer),
-      dialogs_open: document.querySelectorAll('[role="dialog"],.modal-mask').length,
+      dialogs_open: Array.from(document.querySelectorAll('[role="dialog"],.modal-mask')).filter((node) => {
+        const rect = node.getBoundingClientRect();
+        const style = globalThis.getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      }).length,
       url: location.href,
     };
   }, {
@@ -4851,10 +4856,27 @@ async function writeCleanupReadback({ page, state, testCase, caseDir }) {
   const file = path.join(caseDir, 'cleanup-readback.json');
   const snapshot = await page.evaluate(async ({ cleanupPolicy }) => {
     const clicked = [];
-    for (const node of Array.from(document.querySelectorAll(
-      '[role="dialog"] button[aria-label="关闭"],[role="dialog"] button[title="关闭"],.modal .modal-close',
-    ))) {
-      try { node.click(); clicked.push(node.getAttribute('data-testid') || node.getAttribute('aria-label') || 'close'); } catch {}
+    const visible = (node) => {
+      const rect = node?.getBoundingClientRect?.();
+      const style = node ? globalThis.getComputedStyle(node) : null;
+      return Boolean(rect && rect.width > 0 && rect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden');
+    };
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"],.modal')).filter(visible);
+    for (const dialog of dialogs) {
+      const controls = Array.from(dialog.querySelectorAll(
+        'button,[role="button"],.modal-x,.modal-close,[aria-label="关闭"],[title="关闭"]',
+      )).filter(visible);
+      const control = controls.find((node) => /^(?:取消|关闭|跳过|稍后|以后再说)$/.test(
+        String(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || '').replace(/\s+/g, '').trim(),
+      )) || controls.find((node) => node.matches('.modal-x,.modal-close,[aria-label="关闭"],[title="关闭"]'));
+      if (!control) continue;
+      try {
+        control.click();
+        clicked.push(control.getAttribute('data-testid') || control.getAttribute('aria-label') || control.textContent?.trim() || 'close');
+      } catch {}
+    }
+    if (clicked.length) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
     }
     const bridgeResults = {};
     const bridgeInvocations = {};
@@ -12431,12 +12453,641 @@ export function qworkDailyNewTaskAutoIsolationVerdict(readback = {}) {
   );
 }
 
+export function qworkDailyWorkspaceTaskBindingVerdict(readback = {}) {
+  const normalized = (value) => String(value || '').trim() ? path.resolve(String(value)) : '';
+  const workspaceA = normalized(readback.workspace_a);
+  const workspaceB = normalized(readback.workspace_b);
+  const taskA = readback.task_a || {};
+  const taskB = readback.task_b || {};
+  const reopenedA = readback.reopened_task_a || {};
+  const sessionA = readback.session_readback?.task_a || {};
+  const sessionB = readback.session_readback?.task_b || {};
+  return Boolean(
+    readback.registration?.valid === true
+    && readback.selection_a?.ok === true
+    && normalized(readback.selection_a.cwd) === workspaceA
+    && String(taskA.task_id || '')
+    && normalized(taskA.cwd) === workspaceA
+    && String(taskA.reply_text || '').includes('QWORK_WORKSPACE_A_MARKER')
+    && readback.locked_task_a?.workspace_picker_visible === false
+    && Number(readback.locked_task_a?.editable_workspace_select_count || 0) === 0
+    && normalized(readback.locked_task_a?.cwd) === workspaceA
+    && readback.selection_b?.ok === true
+    && normalized(readback.selection_b.cwd) === workspaceB
+    && String(taskB.task_id || '')
+    && String(taskB.task_id) !== String(taskA.task_id)
+    && normalized(taskB.cwd) === workspaceB
+    && String(taskB.reply_text || '').includes('QWORK_WORKSPACE_B_MARKER')
+    && readback.reopen_a?.ok === true
+    && String(reopenedA.task_id || '') === String(taskA.task_id)
+    && normalized(reopenedA.cwd) === workspaceA
+    && String(sessionA.id || '') === String(taskA.task_id)
+    && normalized(sessionA.cwd) === workspaceA
+    && String(sessionB.id || '') === String(taskB.task_id)
+    && normalized(sessionB.cwd) === workspaceB
+    && readback.cleanup?.valid === true
+  );
+}
+
+const QWORK_DAILY_WORKSPACE_SELECTION_FAILURE_NA_ROLES = Object.freeze([
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+export function qworkDailyWorkspaceSelectionFailureEvidence({
+  testCaseId = '',
+  workspace = '',
+  registration = {},
+  selection = {},
+  before = {},
+  after = {},
+  cleanup = {},
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+} = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const screenshot = String(selection?.screenshot || '');
+  const screenshotValid = Boolean(
+    screenshot
+    && fs.existsSync(screenshot)
+    && fs.statSync(screenshot).isFile()
+    && fs.statSync(screenshot).size >= 128
+  );
+  const interactionValid = Boolean(
+    selection?.schema_version === 'qbot-qwork-daily-workspace-selection/v1'
+    && selection?.trigger_located === true
+    && selection?.menu_opened === true
+    && typeof selection?.target_located === 'boolean'
+    && selection?.expected_state_observed === false
+    && selection?.failure_category === 'bug'
+    && (selection.target_located === false || selection.click_dispatched === true)
+    && screenshotValid
+  );
+  const savedWorkspacePaths = [registration?.saved_a?.path, registration?.saved_b?.path]
+    .map((value) => String(value || ''))
+    .filter(Boolean);
+  const cleanupFile = String(cleanup?.evidence_file || '');
+  const cleanupFileValid = Boolean(
+    cleanupFile
+    && fs.existsSync(cleanupFile)
+    && fs.statSync(cleanupFile).isFile()
+    && fs.statSync(cleanupFile).size > 0
+    && /^[a-f0-9]{64}$/i.test(String(cleanup?.evidence_sha256 || ''))
+    && createHash('sha256').update(fs.readFileSync(cleanupFile)).digest('hex') === cleanup.evidence_sha256
+  );
+  const cleanupTargets = Array.isArray(cleanup?.attempts)
+    ? cleanup.attempts.map((item) => String(item?.target || ''))
+    : [];
+  const mutationGuard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const evidenceValid = Boolean(
+    testCaseId === 'QWD-WS-001'
+    && path.isAbsolute(String(workspace || ''))
+    && registration?.valid === true
+    && savedWorkspacePaths.length === 2
+    && new Set(savedWorkspacePaths).size === 2
+    && savedWorkspacePaths.every((value) => path.isAbsolute(value))
+    && savedWorkspacePaths.includes(String(workspace))
+    && interactionValid
+    && mutationGuard.valid
+    && cleanup?.valid === true
+    && cleanupFileValid
+    && cleanupTargets.length === 2
+    && cleanupTargets.every((value) => savedWorkspacePaths.includes(value))
+    && new Set(cleanupTargets).size === 2
+    && Array.isArray(cleanup?.remaining_fixture_paths)
+    && cleanup.remaining_fixture_paths.length === 0
+  );
+  return {
+    schema_version: 'qbot-qwork-daily-workspace-selection-failure/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: false,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'bug' : 'automation_error',
+    kind: 'visible_workspace_selection_product_failure',
+    source: 'registered_workspace_visible_menu_and_zero_send_readback',
+    dependent_case_id: String(testCaseId || ''),
+    workspace: String(workspace || ''),
+    registration,
+    interaction: selection,
+    mutation_guard: {
+      ...mutationGuard,
+      before_task: beforeTask,
+      after_task: afterTask,
+    },
+    cleanup,
+    screenshot: {
+      path: screenshotValid ? path.resolve(screenshot) : '',
+      sha256: screenshotValid
+        ? createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex')
+        : '',
+    },
+    not_applicable_roles: [...QWORK_DAILY_WORKSPACE_SELECTION_FAILURE_NA_ROLES],
+    reason: evidenceValid
+      ? '已注册工作空间未在可见菜单中出现，或真实点击后公开 cwd 未生效；已证明未发送且 A/B 注册项完成定向清理。'
+      : '工作空间发送前产品失败的可见交互、零发送读回、截图或定向清理证据不完整。',
+  };
+}
+
 function writeQworkDailyEvidence(state, caseDir, role, data, oracleValid = true, evidenceValid = true) {
   const file = path.join(caseDir, `${role.replaceAll('_', '-')}.json`);
   writeJsonFile(file, qworkDailyEvidenceEnvelope(state.id, data, oracleValid, evidenceValid));
   state.artifacts[role] = file;
   state.artifacts[`core_beta_${role}`] = data;
   return file;
+}
+
+async function selectQworkDailyWorkspace(page, state, caseDir, workspace, label) {
+  const trigger = page.locator('.wspick-trigger').first();
+  if (!(await visible(trigger, 2_000))) {
+    const screenshot = await shot(page, caseDir, `qwork-workspace-${slugify(label)}-trigger-missing`);
+    return {
+      schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+      ok: false,
+      trigger_located: false,
+      menu_opened: false,
+      target_located: false,
+      click_dispatched: false,
+      expected_state_observed: false,
+      failure_category: 'automation_error',
+      reason: '新任务工作空间入口不可见。',
+      screenshot,
+    };
+  }
+  await trigger.click({ force: true }).catch(async () => trigger.evaluate((node) => node.click()));
+  const menu = page.locator('.wspick-menu').first();
+  if (!(await visible(menu, 2_000))) {
+    const screenshot = await shot(page, caseDir, `qwork-workspace-${slugify(label)}-menu-missing`);
+    return {
+      schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+      ok: false,
+      trigger_located: true,
+      menu_opened: false,
+      target_located: false,
+      click_dispatched: false,
+      expected_state_observed: false,
+      failure_category: 'automation_error',
+      reason: '工作空间菜单未打开。',
+      screenshot,
+    };
+  }
+  const rows = menu.locator('.wspick-item.ws');
+  const count = await rows.count().catch(() => 0);
+  let target = null;
+  let targetText = '';
+  for (let index = 0; index < count; index += 1) {
+    const row = rows.nth(index);
+    if (!(await visible(row, 300))) continue;
+    const text = await row.innerText({ timeout: 500 }).catch(() => '');
+    const rowPath = await row.locator('.wspick-path').first().innerText({ timeout: 500 }).catch(() => '');
+    if (rowPath.trim() && path.resolve(rowPath.trim()) === path.resolve(workspace)) {
+      target = row;
+      targetText = text;
+      break;
+    }
+  }
+  if (!target) {
+    const menuText = await menu.innerText({ timeout: 500 }).catch(() => '');
+    const screenshot = await shot(page, caseDir, `qwork-workspace-${slugify(label)}-registered-path-missing`);
+    await closeWorkspacePicker(page);
+    recordStep(
+      state,
+      `选择工作空间${label}`,
+      '已通过公开 API 注册的精确工作空间路径必须出现在新任务可见菜单中。',
+      `registered=${workspace}；menu=${clip(menuText, 500)}`,
+      'failed',
+      screenshot,
+      'bug',
+    );
+    return {
+      schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+      ok: false,
+      trigger_located: true,
+      menu_opened: true,
+      target_located: false,
+      click_dispatched: false,
+      expected_state_observed: false,
+      failure_category: 'bug',
+      reason: `工作空间菜单未展示精确路径 ${workspace}。`,
+      menu_text: clip(menuText, 500),
+      workspace,
+      screenshot,
+    };
+  }
+  await target.click({ force: true }).catch(async () => target.evaluate((node) => node.click()));
+  const deadline = Date.now() + 10_000;
+  let observed = await qbotE2EState(page);
+  while (Date.now() < deadline) {
+    observed = await qbotE2EState(page);
+    if (observed?.available && path.resolve(String(observed.cwd || '')) === path.resolve(workspace)) break;
+    await page.waitForTimeout(250);
+  }
+  const triggerText = await trigger.innerText({ timeout: 500 }).catch(() => '');
+  const screenshot = await shot(page, caseDir, `qwork-workspace-${slugify(label)}-selected`);
+  const ok = Boolean(
+    observed?.available
+    && path.resolve(String(observed.cwd || '')) === path.resolve(workspace)
+    && !(await visible(menu, 300))
+  );
+  recordStep(
+    state,
+    `选择工作空间${label}`,
+    '必须从新任务可见工作空间菜单点击精确路径，并从公开任务状态读回同一 cwd。',
+    `target=${clip(targetText, 260)}；cwd=${observed?.cwd || 'null'}；trigger=${clip(triggerText, 160)}`,
+    ok ? 'passed' : 'failed',
+    screenshot,
+    ok ? '' : 'bug',
+  );
+  return {
+    schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+    ok,
+    trigger_located: true,
+    menu_opened: true,
+    target_located: true,
+    click_dispatched: true,
+    expected_state_observed: ok,
+    failure_category: ok ? '' : 'bug',
+    workspace,
+    target_text: targetText,
+    trigger_text: triggerText,
+    cwd: observed?.cwd || null,
+    active_id: observed?.activeId || null,
+    screenshot,
+  };
+}
+
+async function cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB) {
+  const cleanup = await page.evaluate(async ({ a, b }) => {
+    const before = await window.agent.listWorkspaces();
+    const attempts = [];
+    for (const target of [a, b]) {
+      const present = before.some((item) => item.path === target);
+      if (!present) {
+        attempts.push({ target, present_before: false, result: 'already_absent' });
+        continue;
+      }
+      try {
+        attempts.push({ target, present_before: true, result: await window.agent.deleteWorkspace(target) });
+      } catch (error) {
+        attempts.push({ target, present_before: true, error: String(error?.message || error) });
+      }
+    }
+    const remaining = await window.agent.listWorkspaces();
+    const remainingFixturePaths = remaining.filter((item) => item.path === a || item.path === b);
+    return {
+      valid: remainingFixturePaths.length === 0
+        && attempts.every((item) => item.result === true || item.result === 'already_absent'),
+      attempts,
+      remaining_fixture_paths: remainingFixturePaths,
+    };
+  }, { a: workspaceA, b: workspaceB }).catch((error) => ({
+    valid: false,
+    error: String(error?.message || error),
+    remaining_fixture_paths: [workspaceA, workspaceB],
+  }));
+  const file = path.join(caseDir, 'qwork-workspace-fixture-cleanup.json');
+  writeJsonFile(file, cleanup);
+  return {
+    ...cleanup,
+    evidence_file: file,
+    evidence_sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+  };
+}
+
+async function materializeQworkDailyWorkspaceSelectionFailure({
+  page,
+  state,
+  testCase,
+  caseDir,
+  workspace,
+  registration,
+  selection,
+  before,
+  cleanup,
+}) {
+  const after = await captureCoreBetaPublicState(page, testCase);
+  const blocker = qworkDailyWorkspaceSelectionFailureEvidence({
+    testCaseId: testCase.id,
+    workspace,
+    registration,
+    selection,
+    before,
+    after,
+    cleanup,
+    noPromptRecorded: !state.artifacts.prompt,
+    noSendReceiptRecorded: !state.artifacts.send_receipt,
+  });
+  const blockerFile = path.join(caseDir, 'workspace-selection-product-failure.json');
+  writeJsonFile(blockerFile, blocker);
+  if (!blocker.valid) {
+    recordAssertion(
+      state,
+      '工作空间发送前失败证据完整性',
+      '只有可见菜单交互、公开零发送读回、截图和 A/B 定向清理都完整时，才能把失败保持为产品 Bug。',
+      false,
+      blocker.reason,
+      'automation_error',
+    );
+    return false;
+  }
+  state.artifacts.core_beta_not_applicable_roles = blocker.not_applicable_roles.map((role) => ({
+    role,
+    blocker_path: blockerFile,
+  }));
+  writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', {
+    phase: 'pre_send_workspace_selection',
+    outcome: 'bug',
+    workspace,
+    registration,
+    interaction: selection,
+    mutation_guard: blocker.mutation_guard,
+    cleanup,
+    blocker_path: blockerFile,
+  }, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', {
+    phase: 'pre_send_workspace_selection',
+    mutation_guard: blocker.mutation_guard,
+    cleanup,
+  }, false, true);
+  recordAssertion(
+    state,
+    '工作空间选择公开读回',
+    '已注册路径应出现在可见菜单，真实点击后新任务 cwd 必须切换到该路径；失败时禁止发送到未知 cwd。',
+    false,
+    blocker.reason,
+    'bug',
+  );
+  return true;
+}
+
+async function materializeQworkDailySecondWorkspaceSelectionFailure({
+  page,
+  state,
+  testCase,
+  caseDir,
+  workspaceA,
+  workspaceB,
+  registration,
+  selectionA,
+  selectionB,
+  taskAState,
+  taskAId,
+  replyA,
+  lockedTaskA,
+  cleanup,
+}) {
+  const reopenA = await reopenSessionAndReadback(page, taskAId);
+  const reopenedAState = await captureCoreBetaPublicState(page, testCase);
+  const sessions = await page.evaluate(async () => window.agent.listSessions());
+  const readback = {
+    valid: true,
+    oracle_valid: false,
+    phase: 'workspace_b_pre_send_selection',
+    outcome: 'bug',
+    workspace_a: workspaceA,
+    workspace_b: workspaceB,
+    registration,
+    selection_a: selectionA,
+    task_a: { task_id: taskAId, cwd: taskAState.task?.cwd || null, reply_text: replyA.deltaText },
+    locked_task_a: lockedTaskA,
+    selection_b: selectionB,
+    task_b: null,
+    reopen_a: reopenA,
+    reopened_task_a: { task_id: reopenedAState.task?.id || null, cwd: reopenedAState.task?.cwd || null },
+    session_readback: {
+      task_a: sessions.find((item) => String(item.id || '') === taskAId) || null,
+    },
+    cleanup,
+  };
+  writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', readback, false, true);
+  writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', readback, false, true);
+  recordAssertion(
+    state,
+    '工作空间 B 选择公开读回',
+    'A 任务完成后，新任务必须能从可见菜单选择已注册 B 并公开读回同一 cwd；失败时保留 A 的完整会话证据且禁止向未知 cwd 发送。',
+    false,
+    JSON.stringify(readback),
+    'bug',
+  );
+  recordAssertion(
+    state,
+    '工作空间 B 失败后恢复 A 证据上下文',
+    'B 发送前产品失败后必须重开同一 A taskId/cwd，使 task/prompt/reply 证据仍可归属。',
+    reopenA.ok === true
+      && String(reopenedAState.task?.id || '') === taskAId
+      && path.resolve(String(reopenedAState.task?.cwd || '')) === path.resolve(workspaceA),
+    JSON.stringify({ reopenA, reopened_task_a: readback.reopened_task_a }),
+    reopenA.ok === true ? 'bug' : 'automation_error',
+  );
+}
+
+async function qworkDailyWorkspaceTaskBindingCase({ page, state, testCase, caseDir, timeoutMs }) {
+  const fixtureRoot = path.join(caseDir, 'qwork-workspace-binding-fixture');
+  const workspaceA = path.join(fixtureRoot, 'A');
+  const workspaceB = path.join(fixtureRoot, 'B');
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  ensureDir(workspaceA);
+  ensureDir(workspaceB);
+  writeTextFile(path.join(workspaceA, 'workspace-marker.txt'), 'QWORK_WORKSPACE_A_MARKER\n');
+  writeTextFile(path.join(workspaceB, 'workspace-marker.txt'), 'QWORK_WORKSPACE_B_MARKER\n');
+
+  let registration = null;
+  let readback = null;
+  let cleanup = null;
+  try {
+    registration = await page.evaluate(async ({ a, b }) => {
+      const before = await window.agent.listWorkspaces();
+      const savedA = await window.agent.saveWorkspace({ path: a, name: 'QWork QA Space A' });
+      const savedB = await window.agent.saveWorkspace({ path: b, name: 'QWork QA Space B' });
+      const after = await window.agent.listWorkspaces();
+      return {
+        valid: Boolean(savedA && savedB && after.some((item) => item.path === a) && after.some((item) => item.path === b)),
+        before,
+        saved_a: savedA,
+        saved_b: savedB,
+        after,
+      };
+    }, { a: workspaceA, b: workspaceB });
+    if (!registration.valid) {
+      recordAssertion(
+        state,
+        '工作空间 A/B fixture 注册',
+        'runner 必须通过公开工作空间 API 注册本轮唯一 A/B 路径并立即读回两者。',
+        false,
+        JSON.stringify(registration),
+        'automation_error',
+      );
+      return;
+    }
+    await openNewTask(page, state);
+    const beforeSelectionA = await captureCoreBetaPublicState(page, testCase);
+    const selectionA = await selectQworkDailyWorkspace(page, state, caseDir, workspaceA, 'A');
+    if (!selectionA.ok) {
+      cleanup = await cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB);
+      if (selectionA.failure_category === 'bug') {
+        await materializeQworkDailyWorkspaceSelectionFailure({
+          page, state, testCase, caseDir, workspace: workspaceA, registration, selection: selectionA,
+          before: beforeSelectionA, cleanup,
+        });
+      } else {
+        recordAssertion(state, '工作空间 A 选择执行链路', 'runner 必须定位并打开新任务工作空间菜单。', false, JSON.stringify(selectionA), 'automation_error');
+      }
+      return;
+    }
+    if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) {
+      if (state.artifacts.core_beta_composer_control_reset?.failure_category === 'bug') {
+        await materializeQworkDailyPreSendResetFailure({ page, state, testCase, caseDir, before: beforeSelectionA });
+      }
+      return;
+    }
+    const replyA = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt: '请读取当前工作空间的 workspace-marker.txt，并只回复文件中的完整标记。',
+      label: '工作空间A读取标记',
+    });
+    const taskAState = await captureCoreBetaPublicState(page, testCase);
+    const taskAId = String(taskAState.task?.id || '');
+    const lockedTaskA = await page.evaluate(() => ({
+      workspace_picker_visible: Array.from(document.querySelectorAll('.wspick-trigger')).some((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }),
+      editable_workspace_select_count: document.querySelectorAll('.taskbar:not(.ro) select').length,
+      readonly_context: String(document.querySelector('.taskbar.ro')?.textContent || '').replace(/\s+/g, ' ').trim(),
+    }));
+    lockedTaskA.cwd = taskAState.task?.cwd || null;
+    state.screenshots.qwork_workspace_a_locked = await shot(page, caseDir, 'qwork-workspace-a-locked-readonly');
+
+    await openNewTask(page, state);
+    const beforeSelectionB = await captureCoreBetaPublicState(page, testCase);
+    const selectionB = await selectQworkDailyWorkspace(page, state, caseDir, workspaceB, 'B');
+    if (!selectionB.ok) {
+      cleanup = await cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB);
+      if (selectionB.failure_category === 'bug') {
+        await materializeQworkDailySecondWorkspaceSelectionFailure({
+          page, state, testCase, caseDir, workspaceA, workspaceB, registration,
+          selectionA, selectionB, taskAState, taskAId, replyA, lockedTaskA, cleanup,
+        });
+      } else {
+        recordAssertion(state, '工作空间 B 选择执行链路', 'runner 必须定位并打开新任务工作空间菜单。', false, JSON.stringify(selectionB), 'automation_error');
+      }
+      return;
+    }
+    if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) {
+      if (state.artifacts.core_beta_composer_control_reset?.failure_category === 'bug') {
+        cleanup = await cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB);
+        const selectionFailure = {
+          schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+          ok: false,
+          trigger_located: true,
+          menu_opened: true,
+          target_located: true,
+          click_dispatched: true,
+          expected_state_observed: true,
+          failure_category: 'bug',
+          workspace: workspaceB,
+          cwd: selectionB.cwd,
+          reason: 'B 工作空间选择成功，但发送前输入区能力 reset 产品状态未生效。',
+          screenshot: selectionB.screenshot,
+          composer_reset: state.artifacts.core_beta_composer_control_reset,
+        };
+        await materializeQworkDailySecondWorkspaceSelectionFailure({
+          page, state, testCase, caseDir, workspaceA, workspaceB, registration,
+          selectionA, selectionB: selectionFailure, taskAState, taskAId, replyA, lockedTaskA, cleanup,
+        });
+      }
+      return;
+    }
+    const replyB = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt: '请读取当前工作空间的 workspace-marker.txt，并只回复文件中的完整标记。',
+      label: '工作空间B读取标记',
+    });
+    const taskBState = await captureCoreBetaPublicState(page, testCase);
+    const taskBId = String(taskBState.task?.id || '');
+    const reopenA = await reopenSessionAndReadback(page, taskAId);
+    const reopenedAState = await captureCoreBetaPublicState(page, testCase);
+    const sessions = await page.evaluate(async () => window.agent.listSessions());
+    cleanup = await cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB);
+    readback = {
+      valid: true,
+      oracle_valid: false,
+      workspace_a: workspaceA,
+      workspace_b: workspaceB,
+      registration,
+      selection_a: selectionA,
+      task_a: { task_id: taskAId, cwd: taskAState.task?.cwd || null, reply_text: replyA.deltaText },
+      locked_task_a: lockedTaskA,
+      selection_b: selectionB,
+      task_b: { task_id: taskBId, cwd: taskBState.task?.cwd || null, reply_text: replyB.deltaText },
+      reopen_a: reopenA,
+      reopened_task_a: { task_id: reopenedAState.task?.id || null, cwd: reopenedAState.task?.cwd || null },
+      session_readback: {
+        task_a: sessions.find((item) => String(item.id || '') === taskAId) || null,
+        task_b: sessions.find((item) => String(item.id || '') === taskBId) || null,
+      },
+      cleanup,
+    };
+    readback.oracle_valid = qworkDailyWorkspaceTaskBindingVerdict(readback);
+    writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', readback, readback.oracle_valid);
+    writeQworkDailyEvidence(state, caseDir, 'data_integrity_readback', readback, readback.oracle_valid);
+    recordAssertion(
+      state,
+      '工作空间 A/B 与任务 identity 固定',
+      '任务A必须始终绑定A且已建任务没有可编辑工作空间入口；新任务可选B并形成不同taskId；重开A和session持久化cwd均一致。',
+      readback.oracle_valid,
+      JSON.stringify(readback),
+    );
+    recordAssertion(
+      state,
+      '工作空间 fixture 定向清理',
+      '只删除本 Case 注册的 A/B 工作空间记录，并证明两条精确路径均不再出现在工作空间清单。',
+      cleanup.valid,
+      JSON.stringify(cleanup),
+      cleanup.valid ? '' : 'automation_error',
+    );
+  } finally {
+    if (!cleanup?.valid) {
+      cleanup = await cleanupQworkDailyWorkspaceFixture(page, caseDir, workspaceA, workspaceB);
+    }
+    state.artifacts.qwork_workspace_fixture_cleanup = cleanup?.evidence_file || null;
+    if (!cleanup?.valid) {
+      recordAssertion(
+        state,
+        '工作空间 fixture 最终定向清理',
+        '无论 Case 成败，都必须只删除本 Case 注册的 A/B 路径，并证明两者均已从工作空间清单消失。',
+        false,
+        JSON.stringify(cleanup),
+        'automation_error',
+      );
+    }
+  }
 }
 
 async function materializeQworkDailyPreSendResetFailure({
@@ -13344,6 +13995,8 @@ async function executeQworkDailyNativeCase(context, scenario) {
   switch (scenario.driver) {
     case 'qwork_daily_new_task_auto_isolation':
       return await qworkDailyNewTaskAutoIsolationCase(context);
+    case 'qwork_daily_workspace_task_binding':
+      return await qworkDailyWorkspaceTaskBindingCase(context);
     case 'qwork_daily_artifact_exact_directory':
     case 'qwork_daily_artifact_keep_both_atomic':
       return await qworkDailyArtifactCase(context, scenario);
@@ -16957,10 +17610,10 @@ async function executeSitHomeWorkspacePicker({ page, state, caseDir }) {
     clip(`${before}\n${menuText}`, 360),
   );
   if (!menuOpened) return;
-  const pick = menu.locator('.wspick-item.pick').first();
+  const pick = menu.getByRole('button', { name: /^\s*打开本地工作(?:空间|文件夹)\s*$/ }).first();
   const taskBefore = await qbotE2EState(page);
   if (!(await visible(pick, 1000))) {
-    recordAssertion(state, '打开本地工作空间入口', '菜单中应有可点击的打开本地工作空间入口。', false, '未找到 .wspick-item.pick。', 'automation_error');
+    recordAssertion(state, '打开本地工作空间入口', '菜单中应有文案精确匹配的打开本地工作空间入口。', false, '未找到按钮文案“打开本地工作空间/打开本地文件夹”。', 'automation_error');
     return;
   }
   await pick.click({ force: true }).catch(async () => pick.evaluate((el) => el.click()));
@@ -16984,6 +17637,27 @@ async function executeSitHomeWorkspacePicker({ page, state, caseDir }) {
       && Number(taskAfter?.messageCount || 0) === Number(taskBefore?.messageCount || 0),
     `before=${JSON.stringify({ activeId: taskBefore?.activeId, messageCount: taskBefore?.messageCount })}；after=${JSON.stringify({ activeId: taskAfter?.activeId, messageCount: taskAfter?.messageCount })}；label=${afterLabel}`,
     cancelled ? '' : 'automation_error',
+  );
+  const residualDialog = page.locator('[role="dialog"],.modal').filter({ hasText: /新建工作空间/ }).first();
+  if (await visible(residualDialog, 500)) {
+    const cancelButton = residualDialog.getByRole('button', { name: /^取消$/ }).first();
+    const closeButton = residualDialog.locator('.modal-x,[aria-label="关闭"],[title="关闭"]').first();
+    if (await visible(cancelButton, 500)) {
+      await cancelButton.click({ force: true }).catch(async () => cancelButton.evaluate((node) => node.click()));
+    } else if (await visible(closeButton, 500)) {
+      await closeButton.click({ force: true }).catch(async () => closeButton.evaluate((node) => node.click()));
+    }
+    await residualDialog.waitFor({ state: 'hidden', timeout: 3_000 }).catch(() => {});
+  }
+  const residualClosed = !(await visible(residualDialog, 300));
+  state.screenshots.home_052_after_residual_cleanup = await shot(page, caseDir, 'home-052-after-residual-dialog-cleanup');
+  recordAssertion(
+    state,
+    '工作空间选择残留弹窗关闭',
+    '原生目录选择取消后若产品仍显示新建工作空间弹窗，必须通过可见取消或关闭入口收尾，不能污染 manifest 清理。',
+    residualClosed,
+    `residual_dialog_closed=${residualClosed}`,
+    residualClosed ? '' : 'automation_error',
   );
   if (!cancelled) markBlocked(state, `无法控制 macOS 原生目录选择器：${clip(cancel.stderr || 'osascript 执行失败', 240)}`);
 }

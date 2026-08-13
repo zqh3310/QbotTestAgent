@@ -39,6 +39,7 @@ import {
   qworkDailyPersonalTaskContext,
   qworkDailyRedactionVerdict,
   qworkDailySecretFindings,
+  qworkDailyWorkspaceTaskBindingVerdict,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 {
@@ -228,15 +229,16 @@ import {
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
 assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 292);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 292);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 293);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 293);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  292,
+  293,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 for (const [id, caseType, driver] of [
   ['QWD-ENTRY-002', 'task_lifecycle', 'qwork_daily_new_task_auto_isolation'],
+  ['QWD-WS-001', 'task_lifecycle', 'qwork_daily_workspace_task_binding'],
   ['QWD-ART-007', 'artifact', 'qwork_daily_artifact_exact_directory'],
   ['QWD-ART-008', 'artifact', 'qwork_daily_artifact_keep_both_atomic'],
   ['QWD-EXPERT-002', 'expert_lifecycle', 'qwork_daily_expert_catalog_identity'],
@@ -285,6 +287,49 @@ assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
     draft_text: '',
   },
 }), true, 'QWD-ENTRY-002 必须要求任务B为Auto空草稿且任务A能力identity保持');
+
+const workspaceBindingReadback = {
+  workspace_a: '/tmp/qwork-binding/A',
+  workspace_b: '/tmp/qwork-binding/B',
+  registration: { valid: true },
+  selection_a: { ok: true, cwd: '/tmp/qwork-binding/A' },
+  task_a: { task_id: 'task-a', cwd: '/tmp/qwork-binding/A', reply_text: 'QWORK_WORKSPACE_A_MARKER' },
+  locked_task_a: {
+    workspace_picker_visible: false,
+    editable_workspace_select_count: 0,
+    cwd: '/tmp/qwork-binding/A',
+  },
+  selection_b: { ok: true, cwd: '/tmp/qwork-binding/B' },
+  task_b: { task_id: 'task-b', cwd: '/tmp/qwork-binding/B', reply_text: 'QWORK_WORKSPACE_B_MARKER' },
+  reopen_a: { ok: true },
+  reopened_task_a: { task_id: 'task-a', cwd: '/tmp/qwork-binding/A' },
+  session_readback: {
+    task_a: { id: 'task-a', cwd: '/tmp/qwork-binding/A' },
+    task_b: { id: 'task-b', cwd: '/tmp/qwork-binding/B' },
+  },
+  cleanup: { valid: true },
+};
+assert.equal(
+  qworkDailyWorkspaceTaskBindingVerdict(workspaceBindingReadback),
+  true,
+  'QWD-WS-001 必须同时证明 A/B 精确路径、不同 taskId、已建任务只读、重开和 session cwd 持久化',
+);
+assert.equal(
+  qworkDailyWorkspaceTaskBindingVerdict({
+    ...workspaceBindingReadback,
+    locked_task_a: { ...workspaceBindingReadback.locked_task_a, workspace_picker_visible: true },
+  }),
+  false,
+  '已建 A 任务仍暴露工作空间选择器时不得通过',
+);
+assert.equal(
+  qworkDailyWorkspaceTaskBindingVerdict({
+    ...workspaceBindingReadback,
+    task_b: { ...workspaceBindingReadback.task_b, task_id: 'task-a' },
+  }),
+  false,
+  '新建 B 任务没有形成独立 taskId 时不得通过',
+);
 assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
   expected_draft: '任务B草稿',
   draft_was_sent: false,

@@ -14,17 +14,21 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
-- 下一轮目标 lane：UAT。实际 360Teams、QWork、control plane、backend、
-  prompt policy、feature flags 和模型身份必须在用户恢复测试后重新读取并冻结，
-  不得沿用历史值。
-- 当前没有有效 runner，也没有有效 monitor；不要继承旧 PID、旧 CDP 或旧监控。
+- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.3.1` build `2119081159`、
+  QWork `0.1.2-rc.100`、UI commit `9f09ca01`、backend
+  `sit-health-ae3b6cafbc5ed123`、control plane
+  `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、模型 M3；pretest
+  仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
+- 当前没有有效 runner，也没有有效 monitor；受管 360Teams PID `68193`、CDP
+  `http://127.0.0.1:57730` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
+  旧输出目录或旧监控。
 
 本轮目标 Casebook：
 
 ```text
 /Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx
 Sheet: 日常回归
-SHA-256: 979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c
+SHA-256: 8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111
 ```
 
 - 顶层 83：70 个 `compound` 父 Case + 13 个独立 `SIT-*` Case。
@@ -35,6 +39,11 @@ SHA-256: 979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c
   由本轮更早叶子建立；缺失或逆序依赖必须在 Case 0 前失败。
 - `QW-ENTRY-002` 固定为 `BETA-INIT-004 + QWD-ENTRY-002`。后者是独立原生
   新任务 Auto/能力/附件/草稿隔离 driver，不依赖 Skill 安装账本。
+- `QW-WS-001` 固定为独立原生 `QWD-WS-001`。driver 必须注册本 Case 唯一 A/B
+  工作空间，从可见菜单按 `.wspick-path` 精确点击，分别读取标记并证明不同 taskId
+  与固定 cwd；已建 A 任务只读，重开与 `listSessions` 读回一致，最后只定向删除
+  A/B。不得再使用语义不足且曾按 `.first()` 误点“新建工作空间”的旧
+  `SIT-HOME-052` 叶子替代。
 - 全程只有一个 runner、一个受管 360Teams 宿主；外层 Case 和复合叶子都串行。
 - legacy 多轮合同已从运行时 `buildConversationTurns()` 同源生成，并要求每轮都有
   非空 Oracle：`SIT-HOME-016=4`、`SIT-HOME-053=11`、
@@ -49,6 +58,14 @@ SHA-256: 979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c
 Skill 样本在第 40 个父 Case 后才建立，导致运行中抛异常并留下不完整 manifest。
 该目录只用于历史取证；修复后必须以新 SHA、新 commit、新 pretest 和新目录从
 1/83 全量重跑。
+
+本轮 SIT 冻结批次保留在不可变目录
+`teams360-automation/output/20260813133654_sit-qwork-daily83_teams360-5.3.1-2119081159_qwork-0.1.2-rc.100_M3_serial_framework-7934570_casebook-979e95b`：
+已可信完成 `26/83`，raw 为 `passed=18/failed=7/blocked=1`。第 27 条
+`QW-WS-001` 同时暴露 testcase 覆盖不足和 runner 误点/弹窗清理问题，旧 runner
+PID `19835` 已退出；后续 56 条没有执行。该目录永久冻结，不得续写。修复提交推送、
+新 SHA 和 SIT `READY` 后，必须在新不可变目录从 `1/83` 串行全量重跑，
+`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 
@@ -237,8 +254,8 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 日常回归是不同测试合同，不能用 70/160 的 pretest 替代本轮 83 条 pretest。
 
 本轮日常回归使用 `日常回归` Sheet、`--expected-count 83` 和 SHA
-`979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c`；其余
-Teams/QWork/UAT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
+`8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111`；其余
+Teams/QWork/SIT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。
 
@@ -312,6 +329,16 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   空能力选择生成完整发送前负向证据。此时发送链角色使用受校验 N/A，日常回归
   专项角色必须为 `evidence_valid=true/oracle_valid=false`；结果保持产品 `bug` 并
   继续独立 Case。只有负向证据本身不完整时才允许升级为 `automation_error` 硬停。
+- `QWD-WS-001` 的 A 发送前选择若出现注册路径不可见或真实点击后 cwd 未生效，
+  必须禁止发送，以空任务/零消息/send count 不变、无发送证据、Case 内截图和
+  A/B 定向清理文件及 SHA 形成受校验 N/A；证据完整时保持产品 `bug` 并继续，
+  禁止抛异常覆盖。B 阶段失败时 A 会话已经发生，必须保留其完整会话证据并重开
+  同一 A taskId/cwd，不能将 A 标 N/A。任何注册、控件定位、公开读回、重开、
+  定向清理或 SHA 缺口仍是 `automation_error`，触发新目录全量重跑。
+- 弹窗清理仅允许在同一可见弹窗内点击精确“取消/关闭/跳过/稍后/以后再说”或
+  明确关闭图标。`SIT-HOME-052` 只可按按钮文案精确点击“打开本地工作空间/文件夹”；
+  原生选择取消后若残留“新建工作空间”，点击可见“取消/关闭”并留证，不得按
+  `.wspick-item.pick.first()` 误点，也不得让残留弹窗覆盖产品结论。
 - `SIT-HOME-057` 若通过结构化推荐/澄清面板询问主题、对象、数据来源或截止时间，
   必须把每个面板绑定当前轮 prompt SHA、确认发送、taskId、前后截图及 SHA 后计入
   最少澄清 Oracle；不得因最终正文未重复面板文案而误报产品 Bug。面板证据缺失时
@@ -346,7 +373,7 @@ raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历
 ## 10. 当前交付边界
 
 本次任务要求实际执行日常回归 83 个顶层 Case。完成 Casebook、执行器、文档、
-提交和推送只是启动前置，不等于 Case 已执行；必须继续读取新的 UAT release
+提交和推送只是启动前置，不等于 Case 已执行；必须继续读取当前 SIT release
 identity，得到 `日常回归` Sheet 的精确 `READY`，再从 1/83 启动唯一 runner。
 最终结论必须同时报告 83 个顶层和 144 个叶子的真实执行/证据完整性，禁止只报
 raw `passed/failed`。

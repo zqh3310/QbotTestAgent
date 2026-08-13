@@ -17,6 +17,7 @@ const SHEET = '日常回归';
 const SOURCE_COLS = 16;
 const CUSTOM_LEAF = new Map([
   ['QW-ENTRY-002', 'QWD-ENTRY-002'],
+  ['QW-WS-001', 'QWD-WS-001'],
   ['QW-ART-007', 'QWD-ART-007'],
   ['QW-ART-008', 'QWD-ART-008'],
   ['QW-EXPERT-002', 'QWD-EXPERT-002'],
@@ -86,6 +87,7 @@ function conversationRoles() {
 
 function customType(id) {
   if (id === 'QWD-ENTRY-002') return 'task_lifecycle';
+  if (id === 'QWD-WS-001') return 'task_lifecycle';
   if (id.startsWith('QWD-ART-')) return 'artifact';
   if (id.startsWith('QWD-EXPERT-')) return 'expert_lifecycle';
   if (id === 'QWD-AUTO-003') return 'capability_activation';
@@ -98,6 +100,7 @@ function customType(id) {
 function customEvidenceRoles(id) {
   const base = ['before_screenshot', 'action_receipt', 'after_screenshot', 'public_state_readback', 'cleanup_readback', 'qwork_daily_readback'];
   if (id === 'QWD-ENTRY-002') return [...base, ...conversationRoles(), 'capability_selection', 'capability_execution_event', 'composer_attachment_state', 'data_integrity_readback'];
+  if (id === 'QWD-WS-001') return [...base, ...conversationRoles(), 'data_integrity_readback'];
   if (id === 'QWD-ART-007') return [...base, ...conversationRoles(), 'artifact_path_sha256', 'content_readback'];
   if (id === 'QWD-ART-008') return [...base, ...conversationRoles(), 'artifact_path_sha256', 'data_integrity_readback'];
   if (id === 'QWD-EXPERT-002') return [...base, 'capability_inventory', 'expert_identity_snapshot'];
@@ -114,6 +117,7 @@ function customEvidenceRoles(id) {
 function customTurns(id) {
   const prompts = {
     'QWD-ENTRY-002': '请用一句话确认当前任务上下文已建立。',
+    'QWD-WS-001': '在工作空间A建立任务并读取标记，随后验证已建任务不能静默切换到B，而新任务可以选择B。',
     'QWD-ART-007': '把 Markdown 成果保存到指定相对目录，并在回复与成果区显示同一路径。',
     'QWD-ART-008': '已有同名文件时两个都留，原文件不可在任何时刻被改写。',
     'QWD-EXPERT-009': '组织可见专家发布后，由owner完成首轮真实任务。',
@@ -172,7 +176,7 @@ function customLeafContract(row, id) {
     repeat_policy: '每轮1次；框架修复后同一冻结发布身份从父Case 1/83全量重跑',
     required_fixture: 'public_product_state,account:authenticated,release_identity:frozen',
     hard_gate: '是',
-    version_scope: '当前UAT冻结Teams/QWork发布身份；由pretest精确绑定',
+    version_scope: '当前冻结Teams/QWork发布身份与环境；由pretest精确绑定',
     production_signal: `${row.module}:专项原生readback、task identity、证据manifest完整率`,
     action_plan: [
       action(1, 'prepare', `建立干净上下文并准备：${row.steps.split(/\n|\s*\/\s*/)[0] || row.scenario}`),
@@ -212,7 +216,7 @@ function parentContract(row, children) {
     repeat_policy: '每轮严格串行执行全部子合同；框架修复后83条从头全量重跑',
     required_fixture: 'compound_children',
     hard_gate: '是',
-    version_scope: '当前UAT冻结Teams/QWork发布身份；由pretest精确绑定',
+    version_scope: '当前冻结Teams/QWork发布身份与环境；由pretest精确绑定',
     production_signal: `${row.module}:父Case与全部叶子证据manifest完整率`,
     action_plan: [{
       number: 1,

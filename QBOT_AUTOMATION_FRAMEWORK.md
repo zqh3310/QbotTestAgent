@@ -37,7 +37,7 @@
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
 | 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
 | 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
-| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `979e95bd7d610fe1ef79ddcdd79e57aec54f64974734274167cd5daad85c250c` |
+| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -76,6 +76,13 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
 才抛异常；非 scoped 完整批次必须在 Case 0 前 fail-closed。`QW-ENTRY-002`
 使用独立原生叶子 `QWD-ENTRY-002` 验证新任务默认 Auto、能力/附件/草稿隔离，
 不得复用依赖 `BETA-SKILL-002~004` 账本的 `BETA-SKILL-011`。
+`QW-WS-001` 固定使用独立原生叶子 `QWD-WS-001`，不得再映射到只覆盖默认工作区
+和原生目录选择取消的 `SIT-HOME-052`。专项 driver 必须创建 Case 内唯一 A/B
+目录与标记文件，通过公开工作空间 API 注册后，从新任务可见菜单按
+`.wspick-path` 规范化全等匹配并真实点击 A/B；任务 A/B 必须形成不同 taskId，
+各自公开 cwd 与标记回复必须匹配，已建 A 任务不得再显示可编辑工作空间入口，
+重开 A 与 `listSessions` 中的两条 cwd 必须保持一致。无论成功或失败都只能定向
+删除本 Case 注册的 A/B 路径，并保存 Case 内清理文件和 SHA。
 
 ## 3. 启动前硬门禁
 
@@ -497,9 +504,25 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   `QWD-EXPERT-002` 是只读专家目录/identity 审计，不要求虚假的能力选择或执行
   事件；`QWD-SEC-005` 是真实个人 LLM 连接、失败探针和脱敏审计，不要求虚假的
   会话轮次。通用类型校验不得覆盖具体 driver 的真实动作语义。
+- `QWD-WS-001` 在 A 发送前若已注册路径没有出现在可见菜单，或精确路径控件已
+  真实点击但公开 cwd 未生效，必须停止向未知 cwd 发送。只有空 task、零消息、
+  send count 不变、无 prompt/send receipt、失败截图及 SHA、A/B 注册 identity、
+  两条定向删除回执与清理文件 SHA 全部 Case 绑定时，发送链角色才可受校验地标为
+  N/A，结果保持证据完整的产品 Bug 并继续后续父 Case；不得抛异常覆盖为
+  `automation_error`。若 B 选择在 A 会话完成后失败，必须保留 A 的真实
+  task/prompt/reply，重开同一 A taskId/cwd 后固化负向读回，不得把已发生的 A
+  会话标为 N/A。控件/菜单未定位、公开状态不可读、重开失败、清理目标漂移、文件
+  越界或 SHA/manifest 不完整才是 framework issue。
 - Core Beta v2 打开系统设置时，若设置壳已经显示“正在加载个人设置”，必须先在 30–180 秒有界窗口内等待运行时维护区出现；只有明确加载错误或窗口耗尽才能失败，禁止继续点击背景设置菜单并误报“个人设置入口缺失”。
 - Core Beta v2 进入系统设置前必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 点击遮挡层下方。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。
 - QWork 的 `[data-testid="runtime-update-ready-toast"]` 版本更新提示可能遮挡左下设置入口。每条 Case 开始和进入系统设置前都必须检查该提示；只允许在提示文案明确为“新版本已就绪/发现新版本”时真实点击精确的“稍后/跳过更新/暂不更新/以后再说”动作，保存前后截图和结构化账本并确认提示消失。禁止点击“立即更新”、使用 `force` 穿透遮挡或在运行中改变冻结发布身份；专用 toast 的按钮不匹配、点击失败、提示未消失或证据缺失时按 framework issue fail-closed。系统设置维护区中仅用通用 `[role="status"]` 展示“发现新版本，可点击立即更新”的内联版本状态不属于遮挡弹窗；只有同一 status 内真实存在精确安全的跳过按钮时才按弹窗处理，禁止因内联状态没有跳过按钮而追加 `automation_error`。
+- 通用 Case 收尾只统计真实可见的 `[role="dialog"]/.modal`。对阻塞清理的可见
+  弹窗，只允许在同一弹窗内点击文案精确为“取消/关闭/跳过/稍后/以后再说”的
+  安全动作，或明确的关闭图标，再等待弹窗消失；不得点击“确认/立即更新”等会改变
+  产品数据或冻结发布身份的动作。`SIT-HOME-052` 必须按按钮文案精确匹配
+  “打开本地工作空间/打开本地文件夹”，禁止使用 `.wspick-item.pick.first()`；若
+  原生目录取消后残留“新建工作空间”弹窗，应点击其可见“取消/关闭”并留截图，
+  不能让残留弹窗把已有产品结论覆盖成清理 `automation_error`。
 - Core Beta v2 根 runner 和 360Teams 截图保护器的 Playwright 截图、fallback CDP session 创建、`Page.captureScreenshot` 和 session `detach` 清理必须分别受硬超时约束。截图已经成功固化时，清理期 `detach` 超时只能写入 runner 日志并继续返回截图，禁止让无界清理等待卡在 Case 0；截图本身超时或缺少有效图像数据仍按证据失败 fail-closed。
 - `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。360Teams 包装器对 stopped、非 passed 或计划未完成的 summary 必须返回非零退出码，不能只看已完成结果中的 `failed/blocked` 计数。
 - Core Beta 清理证据必须证明清理桥动作全部成功且技能、连接器、专家选择明确为空。优先使用 `agent.capabilities` 读回；Teams 中该 IPC 被超时保护器中止时，必须在不重复执行清理动作的前提下最多执行三次有界只读尝试，并把每次成功/错误写入 `capabilities_readback_attempts`。任一次读回得到权威空态即可继续；全部尝试失败且当前页面没有可见输入区时，框架必须通过受管 `openNewTask` 导航到干净 composer 表面，只重新采集可见状态和 E2E 状态，不得再次调用任一清理桥或把导航算作第四次 capabilities 尝试。此时允许组合使用首次精确为空的禁用桥回执、输入区无能力 chip、`__qbotE2E.state/currentSession` 的空专家身份和无专家头像作为独立交叉读回，并在 `cleanup_surface_recovery`、`pre_navigation_selection_readbacks` 和导航后截图中保存证据；旧版分离控件还必须明确显示“禁用”，新版统一“+”菜单必须有可见输入区。全部读回超时、恢复导航失败、只有动作返回值、缺少可见状态或任一来源仍有残留时必须保持 `cleanup_readback.valid=false`，不得把未知状态当作清理完成。

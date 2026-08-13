@@ -144,6 +144,8 @@ import {
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
   qworkDailyEvidenceEnvelope,
+  qworkDailyWorkspaceSelectionFailureEvidence,
+  qworkDailyWorkspaceTaskBindingVerdict,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
   buildCoreEvidenceManifest,
@@ -277,6 +279,11 @@ assert.match(
   qworkDailyCasebookBuilder,
   /\['QW-ENTRY-002', 'QWD-ENTRY-002'\][\s\S]*row\.id === 'QW-ENTRY-002'[\s\S]*\['BETA-INIT-004', CUSTOM_LEAF\.get\(row\.id\)\]/,
   'QW-ENTRY-002 必须使用独立QWD入口driver，禁止重新映射到依赖deep_use账本的BETA-SKILL-011',
+);
+assert.match(
+  qworkDailyCasebookBuilder,
+  /\['QW-WS-001', 'QWD-WS-001'\][\s\S]*id === 'QWD-WS-001'[\s\S]*task_lifecycle/,
+  'QW-WS-001 必须使用专项 QWD 工作空间任务绑定 driver，禁止继续映射到旧 HOME-052',
 );
 assert.match(
   qworkDailyCasebookBuilder,
@@ -2062,6 +2069,134 @@ assert.equal(
     fs.rmSync(evidenceDir, { recursive: true, force: true });
   }
 }
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-qwork-workspace-selection-failure-'));
+  try {
+    const screenshot = path.join(evidenceDir, 'workspace-a-selection-failed.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 17));
+    const workspaceA = path.join(evidenceDir, 'fixture', 'A');
+    const workspaceB = path.join(evidenceDir, 'fixture', 'B');
+    const cleanupFile = path.join(evidenceDir, 'qwork-workspace-fixture-cleanup.json');
+    const cleanupPayload = {
+      valid: true,
+      attempts: [
+        { target: workspaceA, present_before: true, result: true },
+        { target: workspaceB, present_before: true, result: true },
+      ],
+      remaining_fixture_paths: [],
+    };
+    writeJsonFile(cleanupFile, cleanupPayload);
+    const cleanup = {
+      ...cleanupPayload,
+      evidence_file: cleanupFile,
+      evidence_sha256: createHash('sha256').update(fs.readFileSync(cleanupFile)).digest('hex'),
+    };
+    const emptyTask = {
+      task: { id: null, running: false, send_count: 41, message_count: 0 },
+    };
+    const blocker = qworkDailyWorkspaceSelectionFailureEvidence({
+      testCaseId: 'QWD-WS-001',
+      workspace: workspaceA,
+      registration: {
+        valid: true,
+        saved_a: { path: workspaceA },
+        saved_b: { path: workspaceB },
+      },
+      selection: {
+        schema_version: 'qbot-qwork-daily-workspace-selection/v1',
+        ok: false,
+        trigger_located: true,
+        menu_opened: true,
+        target_located: true,
+        click_dispatched: true,
+        expected_state_observed: false,
+        failure_category: 'bug',
+        screenshot,
+      },
+      before: emptyTask,
+      after: structuredClone(emptyTask),
+      cleanup,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(blocker.valid, true, '真实工作空间点击未生效且零发送/清理完整时应保持产品 Bug');
+    assert.equal(blocker.outcome, 'bug');
+    assert.equal(blocker.mutation_guard.valid, true);
+    const blockerFile = path.join(evidenceDir, 'workspace-selection-product-failure.json');
+    writeJsonFile(blockerFile, blocker);
+    const artifacts = {
+      core_beta_not_applicable_roles: blocker.not_applicable_roles.map((role) => ({
+        role,
+        blocker_path: blockerFile,
+      })),
+    };
+    for (const role of ['qwork_daily_readback', 'data_integrity_readback']) {
+      const file = path.join(evidenceDir, `${role}.json`);
+      writeJsonFile(file, qworkDailyEvidenceEnvelope(
+        'QWD-WS-001',
+        { phase: 'pre_send_workspace_selection', blocker_path: blockerFile },
+        false,
+        true,
+      ));
+      artifacts[role] = file;
+    }
+    const manifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'QWD-WS-001',
+        evidence_roles: [
+          'qwork_daily_readback',
+          'data_integrity_readback',
+          'task_id',
+          'prompt',
+          'send_receipt',
+          'transcript',
+          'reply_delta',
+          'reply_completion',
+        ],
+      },
+      caseDir: evidenceDir,
+      artifacts,
+    });
+    assert.equal(manifest.complete, true, 'QWD-WS-001 发送前产品失败必须形成完整 manifest');
+    assert.deepEqual(manifest.missing_roles, []);
+    assert.deepEqual(manifest.invalid_roles, []);
+    assert.deepEqual(
+      manifest.not_applicable_roles.map((item) => item.role),
+      blocker.not_applicable_roles,
+    );
+    assert.equal(
+      qworkDailyWorkspaceSelectionFailureEvidence({
+        testCaseId: 'QWD-WS-001',
+        workspace: workspaceA,
+        registration: blocker.registration,
+        selection: blocker.interaction,
+        before: emptyTask,
+        after: structuredClone(emptyTask),
+        cleanup: { ...cleanup, valid: false, remaining_fixture_paths: [workspaceA] },
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+      }).valid,
+      false,
+      'A/B 注册项仍残留时不得把会话证据标为 N/A',
+    );
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+}
+assert.equal(qworkDailyWorkspaceTaskBindingVerdict({
+  workspace_a: '/tmp/qwork/A',
+  workspace_b: '/tmp/qwork/B',
+  registration: { valid: true },
+  selection_a: { ok: true, cwd: '/tmp/qwork/A' },
+  task_a: { task_id: 'a', cwd: '/tmp/qwork/A', reply_text: 'QWORK_WORKSPACE_A_MARKER' },
+  locked_task_a: { workspace_picker_visible: false, editable_workspace_select_count: 0, cwd: '/tmp/qwork/A' },
+  selection_b: { ok: true, cwd: '/tmp/qwork/B' },
+  task_b: { task_id: 'b', cwd: '/tmp/qwork/B', reply_text: 'QWORK_WORKSPACE_B_MARKER' },
+  reopen_a: { ok: true },
+  reopened_task_a: { task_id: 'a', cwd: '/tmp/qwork/A' },
+  session_readback: { task_a: { id: 'a', cwd: '/tmp/qwork/A' }, task_b: { id: 'b', cwd: '/tmp/qwork/B' } },
+  cleanup: { valid: true },
+}), true, 'QWD-WS-001 正常路径必须闭合 A/B taskId 和 cwd 持久化');
 {
   const nativeCalls = [];
   const activated = activateCoreBetaNativeImeHost('teams360', {
@@ -5590,7 +5725,8 @@ const required = [
   ['HOME-025 使用控制面代理可控失败注入', /executeSitHomeFailureRecovery[\s\S]*pathExact: '\/api\/desktop-agent\/turn-context'[\s\S]*mode: 'network-error'[\s\S]*restoreControlPlaneHttpControl/],
   ['HOME-030 真实打开并使用控制面代理 dry-run 快速反馈', /executeSitHomeQuickFeedback[\s\S]*pathExact: '\/api\/feedback-issues\/intake'[\s\S]*composer-feedback[\s\S]*quick-feedback-panel[\s\S]*quick_feedback_dry_run/],
   ['HOME-030 在 Teams 全量 Fixture 中强制使用渲染层代理', /executeSitHomeQuickFeedback[\s\S]*forceRendererAdapter: true[\s\S]*installControlPlaneHttpControl[\s\S]*forceRendererAdapter \|\| options\['renderer-control-adapter'\] === 'teams360'/],
-  ['HOME-052 打开并取消原生工作区选择器', /executeSitHomeWorkspacePicker[\s\S]*wspick-trigger[\s\S]*wspick-menu[\s\S]*osascript/],
+  ['HOME-052 精确点击打开本地工作空间并取消原生选择器', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button', \{ name: \/\^\\s\*打开本地工作\(\?:空间\|文件夹\)\\s\*\$\/[\s\S]*osascript/],
+  ['HOME-052 禁止按 pick class 第一项误点新建工作空间', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button'[\s\S]*打开本地工作[\s\S]*residualDialog[\s\S]*取消/],
   ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
@@ -5632,6 +5768,10 @@ const required = [
   ['输入区 reset 保留后续能力操作覆盖前的失败交互', /resetComposerControls[\s\S]*preserveCoreBetaFailedCapabilityInteraction[\s\S]*failed_interactions/],
   ['QWD-ENTRY-002 发送前产品失败物化完整负向证据', /qworkDailyNewTaskAutoIsolationCase[\s\S]*materializeQworkDailyPreSendResetFailure[\s\S]*qwork_daily_readback[\s\S]*composer_attachment_state[\s\S]*data_integrity_readback/],
   ['QWD-ENTRY-002 能力空库存形成完整前置证据后继续', /materializeQworkDailyCapabilityInventoryPrerequisite[\s\S]*capability-inventory-prerequisite\.json[\s\S]*core_beta_not_applicable_roles[\s\S]*qwork_daily_readback[\s\S]*qworkDailyNewTaskAutoIsolationCase[\s\S]*materializeQworkDailyCapabilityInventoryPrerequisite/],
+  ['QWD-WS-001 精确路径 A/B 与任务 identity 原生闭环', /selectQworkDailyWorkspace[\s\S]*\.wspick-path[\s\S]*path\.resolve[\s\S]*qworkDailyWorkspaceTaskBindingCase[\s\S]*QWORK_WORKSPACE_A_MARKER[\s\S]*QWORK_WORKSPACE_B_MARKER[\s\S]*saveWorkspace[\s\S]*listSessions[\s\S]*cleanupQworkDailyWorkspaceFixture/],
+  ['QWD-WS-001 发送前产品失败完整物化且不抛异常覆盖', /qworkDailyWorkspaceSelectionFailureEvidence[\s\S]*workspace-selection-product-failure\.json[\s\S]*core_beta_not_applicable_roles[\s\S]*materializeQworkDailyWorkspaceSelectionFailure[\s\S]*return;/],
+  ['QWD-WS-001 B 阶段失败保留 A 会话证据并重开同一任务', /materializeQworkDailySecondWorkspaceSelectionFailure[\s\S]*task_a:[\s\S]*reopenSessionAndReadback[\s\S]*reopened_task_a/],
+  ['QWD-WS-001 无论路径如何都在 finally 定向清理 A/B', /qworkDailyWorkspaceTaskBindingCase[\s\S]*finally \{[\s\S]*cleanupQworkDailyWorkspaceFixture[\s\S]*qwork_workspace_fixture_cleanup/],
   ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],

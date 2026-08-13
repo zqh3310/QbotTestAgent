@@ -10481,10 +10481,10 @@ async function executeSitHomeWorkspacePicker({ page, state, caseDir }) {
     clip(`${before}\n${menuText}`, 360),
   );
   if (!menuOpened) return;
-  const pick = menu.locator('.wspick-item.pick').first();
+  const pick = menu.getByRole('button', { name: /^\s*打开本地工作(?:空间|文件夹)\s*$/ }).first();
   const taskBefore = await qbotE2EState(page);
   if (!(await visible(pick, 1000))) {
-    recordAssertion(state, '打开本地工作空间入口', '菜单中应有可点击的打开本地工作空间入口。', false, '未找到 .wspick-item.pick。', 'automation_error');
+    recordAssertion(state, '打开本地工作空间入口', '菜单中应有文案精确匹配的打开本地工作空间入口。', false, '未找到按钮文案“打开本地工作空间/打开本地文件夹”。', 'automation_error');
     return;
   }
   await pick.click({ force: true }).catch(async () => pick.evaluate((el) => el.click()));
