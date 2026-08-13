@@ -1403,6 +1403,30 @@ assert.equal(
   true,
   'P0/P1/P2 与风险标签之间的项目符号、冒号或短横线不得造成视觉锚点假阴性',
 );
+const coreImageReplyWithBilingualRiskLabels = [
+  '图一：QBot Release Flow（QBot 发布流程）',
+  '流程为 INPUT、ANALYZE、DELIVER；Gate: evidence must be reviewable before release。',
+  '图二：Release Risk Matrix（发布风险矩阵），横轴 PROBABILITY，纵轴 IMPACT。',
+  'P0 数据丢失（data loss）',
+  'P1 超时（timeout）',
+  'P2 数据复制（copy）',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, coreImageReplyWithBilingualRiskLabels).ok,
+  true,
+  '准确输出中文风险名并在括号补充英文原文时不得造成风险矩阵锚点假阴性',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    coreImageCase,
+    { prompt: '请分别说明两张图片。' },
+    coreImageReplyWithBilingualRiskLabels
+      .replace('P0 数据丢失（data loss）', 'P0 超时（timeout）')
+      .replace('P1 超时（timeout）', 'P1 数据丢失（data loss）'),
+  ).ok,
+  false,
+  '接受中英文等价风险名后仍必须保持 P0/P1/P2 与对应风险一一绑定',
+);
 assert.equal(
   caseAwareReplyAssertion(
     coreImageCase,

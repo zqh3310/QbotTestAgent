@@ -32055,9 +32055,9 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
     const titles = flowTitle && riskTitle;
     const flowAnchors = ['INPUT', 'ANALYZE', 'DELIVER'].every((value) => new RegExp(`\\b${value}\\b`, 'i').test(reply))
       && /evidence must be reviewable before release/i.test(reply);
-    const riskAnchors = /P0(?:[\s*_`·•:：/|—–-]){0,8}data\s+loss/i.test(reply)
-      && /P1(?:[\s*_`·•:：/|—–-]){0,8}timeout/i.test(reply)
-      && /P2(?:[\s*_`·•:：/|—–-]){0,8}copy/i.test(reply)
+    const riskAnchors = /P0(?:[\s*_`·•:：/|—–-]){0,8}(?:data\s+loss|数据丢失)/i.test(reply)
+      && /P1(?:[\s*_`·•:：/|—–-]){0,8}(?:timeout|超时)/i.test(reply)
+      && /P2(?:[\s*_`·•:：/|—–-]){0,8}(?:copy|数据复制)/i.test(reply)
       && /IMPACT|影响/i.test(reply)
       && /PROBABILITY|概率|可能性/i.test(reply);
     return result(
