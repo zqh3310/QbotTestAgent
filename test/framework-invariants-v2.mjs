@@ -128,6 +128,7 @@ import {
   replySendObservedRunning,
   reviewCaseCredibility,
   safeNativeAttachmentInfoDialog,
+  safeNativeRecoverableInfoDialog,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
   seedLocalSkillReadiness,
@@ -858,12 +859,36 @@ assert.equal(
   'Core Beta v2 应识别只有唯一 OK 的 .bin 附件信息 AXSheet',
 );
 assert.equal(
+  safeNativeRecoverableInfoDialog({
+    message: '无法在 QWork 内预览该 HTML 文件 /tmp/qbot-artifacts/release-summary/index.html',
+    buttons: ['OK'],
+  }),
+  true,
+  'Core Beta v2 应安全关闭上一叶子留下的 QWork HTML 预览失败 AXSheet',
+);
+assert.equal(
   safeNativeAttachmentInfoDialog({
+    message: '无法在 QWork 内预览该 HTML 文件 /tmp/qbot-artifacts/release-summary/index.html',
+    buttons: ['OK'],
+  }),
+  false,
+  'HTML 预览失败提示不得放宽附件拒绝专项 Oracle',
+);
+assert.equal(
+  safeNativeRecoverableInfoDialog({
+    message: '无法在 QWork 内预览该 HTML 文件 /tmp/qbot-artifacts/release-summary/index.html',
+    buttons: ['取消', 'OK'],
+  }),
+  false,
+  'QWork HTML 预览失败提示存在多个按钮时不得自动点击',
+);
+assert.equal(
+  safeNativeRecoverableInfoDialog({
     message: '确定删除全部会话吗？',
     buttons: ['确定'],
   }),
   false,
-  'Core Beta v2 不得把破坏性单按钮弹窗当作附件信息弹窗',
+  'Core Beta v2 不得把破坏性单按钮弹窗当作可恢复信息弹窗',
 );
 assert.equal(
   safeNativeAttachmentInfoDialog({
@@ -5466,8 +5491,8 @@ await new Promise((resolve) => coreBetaFixtureServer.close(resolve));
 assert.equal(readyFixtureAudit.ok, true, 'fixture controller 必须通过显式 adapter 握手才能放行');
 assert.match(
   runner,
-  /暂不支持\|附件类型\|上传失败[\s\S]{0,1200}\^\(\?:OK\|确定\|知道了/,
-  '全局弹窗清理必须覆盖不支持附件提示，并明确确认 OK/确定/知道了按钮',
+  /SAFE_NATIVE_ARTIFACT_PREVIEW_INFO_MESSAGE[\s\S]*safeNativeRecoverableInfoDialog[\s\S]*SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE[\s\S]*SAFE_NATIVE_ARTIFACT_PREVIEW_INFO_MESSAGE[\s\S]*SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL/,
+  '全局弹窗清理必须精确覆盖附件拒绝与 HTML 预览失败，并只确认 OK/确定/知道了按钮',
 );
 assert.match(
   runner,

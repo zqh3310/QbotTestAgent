@@ -80,6 +80,7 @@ const TECHNICAL_FAILURE_PATTERNS = [
 
 const SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL = /^(?:OK|确定|知道了)$/;
 const SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE = /(?:暂不支持的附件类型|附件类型.*不支持|上传失败|单个(?:文档|文件).*超过|(?:文档)?附件总大小.*超过|每轮最多添加\s*\d+\s*个附件|一次最多选择\s*\d+\s*个附件)/i;
+const SAFE_NATIVE_ARTIFACT_PREVIEW_INFO_MESSAGE = /^无法在 QWork 内预览该 HTML 文件\s+.+\.html$/i;
 
 function coreBetaCapabilityItemIdentity(item) {
   if (item == null) return '';
@@ -230,6 +231,19 @@ export function safeNativeAttachmentInfoDialog({ message = '', buttons = [] } = 
     ? buttons.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
   return SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(String(message || '').replace(/\s+/g, ' ').trim())
+    && labels.length === 1
+    && SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL.test(labels[0]);
+}
+
+export function safeNativeRecoverableInfoDialog({ message = '', buttons = [] } = {}) {
+  const normalizedMessage = String(message || '').replace(/\s+/g, ' ').trim();
+  const labels = Array.isArray(buttons)
+    ? buttons.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  return Boolean(
+    SAFE_NATIVE_ATTACHMENT_INFO_MESSAGE.test(normalizedMessage)
+    || SAFE_NATIVE_ARTIFACT_PREVIEW_INFO_MESSAGE.test(normalizedMessage)
+  )
     && labels.length === 1
     && SAFE_NATIVE_ACKNOWLEDGEMENT_LABEL.test(labels[0]);
 }
@@ -29858,7 +29872,7 @@ async function dismissBlockingOverlays(page, state = null) {
 
   const accessibilitySheet = teamsAccessibilitySheet({ dismiss: false });
   if (accessibilitySheet.observed) {
-    const safeInformationDialog = safeNativeAttachmentInfoDialog({
+    const safeInformationDialog = safeNativeRecoverableInfoDialog({
       message: accessibilitySheet.message,
       buttons: accessibilitySheet.buttons,
     });
@@ -29878,7 +29892,7 @@ async function dismissBlockingOverlays(page, state = null) {
           ...accessibilitySheet,
           clicked: false,
           clicked_at: '',
-          error: '残留 AXSheet 不符合附件信息弹窗白名单或不是唯一安全确认按钮，拒绝自动点击。',
+          error: '残留 AXSheet 不符合受支持信息提示白名单或不是唯一安全确认按钮，拒绝自动点击。',
         };
     let after = teamsAccessibilitySheet({ dismiss: false });
     const deadline = Date.now() + 3_000;
@@ -29905,7 +29919,7 @@ async function dismissBlockingOverlays(page, state = null) {
       ledgerFile = path.join(state.case_dir, `${base}.json`);
       writeJsonFile(ledgerFile, {
         schema_version: 1,
-        kind: 'stale_attachment_information_dialog',
+        kind: 'stale_supported_information_dialog',
         valid: recovered,
         observed: accessibilitySheet,
         safe_information_dialog: safeInformationDialog,
@@ -29931,8 +29945,8 @@ async function dismissBlockingOverlays(page, state = null) {
       });
       recordStep(
         state,
-        '清理上一轮 360Teams 附件信息 AXSheet',
-        '仅允许自动点击受支持附件提示中唯一的 OK/确定/知道了；多按钮、破坏性或文案不匹配弹窗必须 fail-closed。',
+        '清理上一轮 360Teams 受支持信息 AXSheet',
+        '仅允许自动点击附件拒绝或 QWork HTML 预览失败提示中唯一的 OK/确定/知道了；多按钮、破坏性或未知文案必须 fail-closed。',
         `message=${accessibilitySheet.message || '无'}；buttons=${(accessibilitySheet.buttons || []).join(',') || '无'}；clicked=${confirmation.clicked === true}；closed=${originalSheetClosed}；next=${after.observed ? after.message || '未知' : '无'}`,
         recovered ? 'passed' : 'failed',
         afterFile || beforeFile,
