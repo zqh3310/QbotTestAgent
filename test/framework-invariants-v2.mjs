@@ -5354,6 +5354,22 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062CannotCalculateReply,
 ).ok, true, 'ROI 判定应把“算不出 ROI”识别为明确的数据不足边界');
+const sitHome062RepeatedPrefixAndExampleReply = [
+  '这个数据目前算不出 ROI。',
+  'ROI 公式是 ROI =（活动收入 − 活动成本）÷ 活动成本。',
+  '还缺收入和成本两类输入。',
+  '比如「成交 25 单 × 客单价 2000 元，总成本 3 万」，可用于演示，不能当作本次活动事实。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062RepeatedPrefixAndExampleReply,
+).ok, true, 'ROI 判定应接受“公式是 ROI =”重复前缀，并区分明确示例金额与真实金额');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  `${sitHome062RepeatedPrefixAndExampleReply}\n对比上一组活动：报名100人、到场70人，三个渠道是短信 / 企业微信 / App 弹窗。`,
+).ok, false, 'ROI 判定必须拒绝从旧任务借用活动数字或渠道事实');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-062'),
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },

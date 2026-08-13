@@ -32332,10 +32332,10 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
   }
   if (id === 'SIT-HOME-062') {
     const saysInsufficient = /无法|不能|不足|算不出|算不了|得不出|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
-    const returnOperand = '(?:活动(?:带来|产生)的?)?(?:总?收益|总?收入|总回报|成交(?:金额|总额))';
+    const returnOperand = '(?:活动(?:(?:带来|产生)的?)?)?(?:总?收益|总?收入|总回报|成交(?:金额|总额))';
     const costOperand = '(?:活动)?(?:总投入|投入金额|总?成本)';
     const formulaPattern = new RegExp(
-      `ROI\\s*(?:公式)?\\s*(?:是|为|[:：])?\\s*[=：]?\\s*[（(]?\\s*${returnOperand}\\s*[-－−]\\s*${costOperand}\\s*[）)]?\\s*(?:/|÷)\\s*${costOperand}`,
+      `ROI\\s*(?:公式)?\\s*(?:是|为|[:：])?\\s*(?:ROI\\s*)?[=：]?\\s*[（(]?\\s*${returnOperand}\\s*[-－−]\\s*${costOperand}\\s*[）)]?\\s*(?:/|÷)\\s*${costOperand}`,
       'i',
     );
     const hasFormula = formulaPattern.test(reply);
@@ -32344,8 +32344,22 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
     const costInput = /总投入|投入金额|(?:总|活动)?成本/.test(inputNarrative);
     const returnInput = /总回报|(?:总|活动)?收益|(?:总|预计)?收入|成交(?:金额|总额|单数)|客单价/.test(inputNarrative);
     const hasInputs = describesMissingInputs && costInput && returnInput;
-    const fabricatedMoney = /\d+(?:\.\d+)?\s*(?:万元|元)/.test(reply);
-    return result('ROI 边界与公式', '缺少成本和收益时应明确无法得到唯一ROI，说明成本/总投入与收益/总回报两个必要输入，并给出(收益-成本)/成本等价公式，不得编造金额。', saysInsufficient && hasInputs && hasFormula && !fabricatedMoney, `insufficient=${saysInsufficient}；cost_input=${costInput}；return_input=${returnInput}；inputs=${hasInputs}；formula=${hasFormula}；fabricated_money=${fabricatedMoney}；reply=${clip(reply, 360)}`);
+    const moneyMatches = [...reply.matchAll(/\d+(?:\.\d+)?\s*(?:万元|元|万(?!人))/g)];
+    const fabricatedMoney = moneyMatches.some((match) => {
+      const preceding = reply.slice(Math.max(0, match.index - 120), match.index);
+      const boundary = Math.max(
+        preceding.lastIndexOf('\n'),
+        preceding.lastIndexOf('。'),
+        preceding.lastIndexOf('；'),
+        preceding.lastIndexOf(';'),
+        preceding.lastIndexOf('！'),
+        preceding.lastIndexOf('？'),
+      );
+      const clause = preceding.slice(boundary + 1);
+      return !/(?:比如|例如|示例|如果|若|可按)/.test(clause);
+    });
+    const borrowedPriorFacts = /上一组活动|上次(?:活动)?|报名\s*100|到场\s*70(?!\.\d)|三个渠道|短信\s*(?:\/|、).*企业微信|App\s*弹窗/i.test(reply);
+    return result('ROI 边界与公式', '缺少成本和收益时应明确无法得到唯一ROI，说明成本/总投入与收益/总回报两个必要输入，并给出(收益-成本)/成本等价公式；不得把金额示例当成真实结果，也不得借用旧任务事实。', saysInsufficient && hasInputs && hasFormula && !fabricatedMoney && !borrowedPriorFacts, `insufficient=${saysInsufficient}；cost_input=${costInput}；return_input=${returnInput}；inputs=${hasInputs}；formula=${hasFormula}；fabricated_money=${fabricatedMoney}；borrowed_prior_facts=${borrowedPriorFacts}；reply=${clip(reply, 360)}`);
   }
   if (id === 'SIT-HOME-061') {
     const planSteps = [...reply.matchAll(/(?:^|\n)\s*(?:第\s*([一二三四五六七八九十\d]+)\s*步|(\d+)\s*[.、)]|[-*]\s*步骤\s*([一二三四五六七八九十\d]+))/g)]
