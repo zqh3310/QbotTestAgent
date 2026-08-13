@@ -32221,18 +32221,20 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
   }
   if (id === 'SIT-HOME-062') {
     const saysInsufficient = /无法|不能|不足|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
-    const hasInputs = /成本/.test(reply) && /收益|收入/.test(reply);
-    // Accept the same formula after harmless business qualifiers such as
-    // “活动带来的收益/活动成本”. Rendered rich text may also split the formula
-    // across lines, so validate its semantic operators and operands instead of
-    // requiring one exact display string.
-    const hasFormula = /ROI\s*=/i.test(reply)
-      && /收益|收入/.test(reply)
-      && (reply.match(/成本/g) || []).length >= 2
-      && /[-－−]/.test(reply)
-      && /[\/÷]/.test(reply);
+    const returnOperand = '(?:活动(?:带来|产生)的?)?(?:总?收益|总?收入|总回报|成交(?:金额|总额))';
+    const costOperand = '(?:活动)?(?:总投入|投入金额|总?成本)';
+    const formulaPattern = new RegExp(
+      `ROI\\s*(?:公式)?\\s*(?:是|为|[:：])?\\s*[=：]?\\s*[（(]?\\s*${returnOperand}\\s*[-－−]\\s*${costOperand}\\s*[）)]?\\s*(?:/|÷)\\s*${costOperand}`,
+      'i',
+    );
+    const hasFormula = formulaPattern.test(reply);
+    const inputNarrative = reply.replace(formulaPattern, ' ');
+    const describesMissingInputs = /缺|需要|补充|未提供|没有|输入|数据|空白/.test(inputNarrative);
+    const costInput = /总投入|投入金额|(?:总|活动)?成本/.test(inputNarrative);
+    const returnInput = /总回报|(?:总|活动)?收益|(?:总|预计)?收入|成交(?:金额|总额|单数)|客单价/.test(inputNarrative);
+    const hasInputs = describesMissingInputs && costInput && returnInput;
     const fabricatedMoney = /\d+(?:\.\d+)?\s*(?:万元|元)/.test(reply);
-    return result('ROI 边界与公式', '缺少成本和收益时应明确无法得到唯一ROI，说明必要输入并给出(收益-成本)/成本公式，不得编造金额。', saysInsufficient && hasInputs && hasFormula && !fabricatedMoney, `insufficient=${saysInsufficient}；inputs=${hasInputs}；formula=${hasFormula}；fabricated_money=${fabricatedMoney}；reply=${clip(reply, 360)}`);
+    return result('ROI 边界与公式', '缺少成本和收益时应明确无法得到唯一ROI，说明成本/总投入与收益/总回报两个必要输入，并给出(收益-成本)/成本等价公式，不得编造金额。', saysInsufficient && hasInputs && hasFormula && !fabricatedMoney, `insufficient=${saysInsufficient}；cost_input=${costInput}；return_input=${returnInput}；inputs=${hasInputs}；formula=${hasFormula}；fabricated_money=${fabricatedMoney}；reply=${clip(reply, 360)}`);
   }
   if (id === 'SIT-HOME-061') {
     const planSteps = [...reply.matchAll(/(?:^|\n)\s*(?:第\s*([一二三四五六七八九十\d]+)\s*步|(\d+)\s*[.、)]|[-*]\s*步骤\s*([一二三四五六七八九十\d]+))/g)]

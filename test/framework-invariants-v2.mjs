@@ -5331,6 +5331,48 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '缺少收入和成本时怎么算 ROI？', label: '第一轮' },
   '当前无法计算。ROI = （活动带来的收益 − 活动成本） / 活动成本 × 100%，请补充收入与成本。',
 ).ok, true, 'ROI 判定应接受带业务修饰词和全角括号的等价公式');
+const sitHome062ActualReply = [
+  '这个 ROI 我目前算不出来——不是缺算法，而是缺两个关键输入。',
+  '仅凭「240 报名 / 170 到场」无法得出 ROI。',
+  'ROI 公式是：（总回报 − 总投入）÷ 总投入。',
+  '缺的数据：总投入（成本）；成交金额（或 成交单数 × 客单价）。',
+  '请补充总投入金额，以及成交总额或成交单数和客单价。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062ActualReply,
+).ok, true, 'ROI 判定应接受真实回复中的总回报/总投入/成交金额等价表达');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '仅凭报名和到场无法计算 ROI，请补充总投入和成交金额。',
+).ok, false, 'ROI 判定不得接受缺少计算公式的回复');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '目前无法计算 ROI，只缺总投入。ROI =（总回报 - 总投入）/ 总投入。',
+).ok, false, 'ROI 公式中的回报操作数不得替代对回报侧缺失输入的明确说明');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '目前无法计算 ROI，请补充总投入。计算方法稍后提供。',
+).ok, false, 'ROI 判定不得接受只识别成本输入的回复');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '目前无法计算 ROI，请补充成交金额。计算方法稍后提供。',
+).ok, false, 'ROI 判定不得接受只识别回报输入的回复');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '当前无法计算。ROI =（总回报 - 总投入）/ 总投入，请补充总投入和成交金额；先假设总投入为2万元。',
+).ok, false, 'ROI 判定不得接受编造金额的回复');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '当前无法计算。请补充总投入和成交金额。ROI =（总投入 - 总回报）/ 总投入。',
+).ok, false, 'ROI 判定不得接受回报与投入顺序颠倒的公式');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-064'),
   { prompt: '输出固定四列三行 Markdown 表格。', label: '第一轮' },
