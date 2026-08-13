@@ -1423,6 +1423,26 @@ assert.equal(
   true,
   '风险矩阵使用标准中文轴名“可能性/影响程度”时不得造成视觉锚点假阴性',
 );
+const coreImageReplyWithChineseTitles = [
+  '第一张是 QBot 发布流程，主要图形由 INPUT、ANALYZE、DELIVER 三个节点和箭头组成。',
+  '门禁文字是 Gate: evidence must be reviewable before release。',
+  '第二张是发布风险矩阵，横轴/纵轴代表可能性与影响程度。',
+  '风险点包括 P0 data loss、P1 timeout、P2 copy。',
+].join('\n');
+assert.equal(
+  caseAwareReplyAssertion(coreImageCase, { prompt: '请分别说明两张图片。' }, coreImageReplyWithChineseTitles).ok,
+  true,
+  '准确复述为“QBot 发布流程/发布风险矩阵”时不得因标题采用标准中文等价词产生假阴性',
+);
+assert.equal(
+  caseAwareReplyAssertion(
+    coreImageCase,
+    { prompt: '请分别说明两张图片。' },
+    coreImageReplyWithChineseTitles.replace('发布风险矩阵', '发布风险清单'),
+  ).ok,
+  false,
+  '接受中文等价标题后仍必须精确识别第二张为发布风险矩阵',
+);
 assert.equal(
   caseAwareReplyAssertion(
     coreImageCase,

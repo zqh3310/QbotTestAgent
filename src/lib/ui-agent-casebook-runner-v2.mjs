@@ -32050,7 +32050,9 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
   }
 
   if (id === 'BETA-FILE-002') {
-    const titles = /QBot Release Flow/i.test(reply) && /Release Risk Matrix/i.test(reply);
+    const flowTitle = /QBot(?:\s+Release\s+Flow|[\s_-]*发布流程)/i.test(reply);
+    const riskTitle = /Release\s+Risk\s+Matrix|发布风险矩阵/i.test(reply);
+    const titles = flowTitle && riskTitle;
     const flowAnchors = ['INPUT', 'ANALYZE', 'DELIVER'].every((value) => new RegExp(`\\b${value}\\b`, 'i').test(reply))
       && /evidence must be reviewable before release/i.test(reply);
     const riskAnchors = /P0(?:[\s*_`·•:：/|—–-]){0,8}data\s+loss/i.test(reply)
