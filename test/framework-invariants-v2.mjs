@@ -98,6 +98,7 @@ import {
   coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
+  qworkPartialAttachmentLogExcerpt,
   coreBetaV2SettingsLoadTimeoutMs,
   coreBetaV2SettingsSurfaceState,
   forbiddenMatchesForCase,
@@ -5630,6 +5631,8 @@ const required = [
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],
   ['附件源文件在上传前记录非零字节证据', /attachment_sources[\s\S]*附件源文件非空[\s\S]*size_bytes/],
   ['SIT-HOME-056 在上传前记录三附件源文件 SHA 账本', /executeSitHomeDeleteOneAttachment[\s\S]*attachment_sources = files\.map\(\(file\) => attachmentSourceRecord\(file, 'picker'\)\)[\s\S]*sourceLedgerValid[\s\S]*uploadAttachmentsInComposer\(page, files\)/],
+  ['BETA-FILE-010 在上传前记录附件 SHA 并采集受管日志窗口', /executeSitFilePartialFailure[\s\S]*attachment_sources = files\.map\(\(file\) => attachmentSourceRecord\(file, 'partial_failure'\)\)[\s\S]*sourceLedgerValid[\s\S]*uploadAttachmentsInComposer\(page, files\)[\s\S]*qworkPartialAttachmentLogExcerpt/],
+  ['compound 父 Case 传播具体叶子阻塞原因', /executeCompoundCasebookCase[\s\S]*compoundBlockedReason\(subcaseResults\)[\s\S]*state\.blocked_reason = blockedReason/],
   ['附件 Case 使用 Excel 真实任务而非通用提示', /attachmentTaskPromptFromCase[\s\S]*实际输入与 Case 测试数据一致/],
   ['BETA-FILE-004 使用专用三差异 XLSX fixture', /testCase\.id === 'BETA-FILE-004'[\s\S]*qbot-table\.csv[\s\S]*qbot-data-table-diff\.xlsx/],
   ['新增 UX Case 使用成功标准驱动的确定性断言', /caseAwareReplyAssertion[\s\S]*三句结构与事实落地[\s\S]*跨格式事实与决策摘要/],
@@ -5782,6 +5785,28 @@ const safeBrokenAttachment = brokenAttachmentFabricationEvidence('broken-report.
 const fabricatedBrokenAttachment = brokenAttachmentFabricationEvidence('broken-report.pdf —— 摘要：本季度收入增长 35%，客户满意度提升。');
 if (safeBrokenAttachment.fabricated || !fabricatedBrokenAttachment.fabricated) {
   throw new Error(`损坏附件断言必须允许真实原始字节说明并拦截编造摘要：${JSON.stringify({ safeBrokenAttachment, fabricatedBrokenAttachment })}`);
+}
+const partialAttachmentLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-partial-attachment-log-'));
+try {
+  const logFile = path.join(partialAttachmentLogDir, 'managed-360teams.log');
+  fs.writeFileSync(logFile, 'before\ncase-window\n');
+  const logEvidence = qworkPartialAttachmentLogExcerpt({
+    logFile,
+    startOffset: Buffer.byteLength('before\n'),
+    endOffset: fs.statSync(logFile).size,
+  });
+  assert.equal(logEvidence.evidence_valid, true);
+  assert.equal(logEvidence.bytes_scanned, Buffer.byteLength('case-window\n'));
+  assert.equal(logEvidence.sha256, createHash('sha256').update('case-window\n').digest('hex'));
+  assert.equal(logEvidence.raw_log_omitted, true);
+  assert.equal(Object.hasOwn(logEvidence, 'raw_log'), false, '日志证据不得复制原始受管日志正文');
+  assert.equal(
+    qworkPartialAttachmentLogExcerpt({ logFile: path.join(partialAttachmentLogDir, 'missing.log') }).evidence_valid,
+    false,
+    '缺少受管日志时不得伪造有效 log_excerpt',
+  );
+} finally {
+  fs.rmSync(partialAttachmentLogDir, { recursive: true, force: true });
 }
 const workspaceRefusal = caseAwareReplyAssertion(
   { id: 'SIT-WORKSPACE-001' },

@@ -1411,6 +1411,18 @@ export function aggregateCompoundOutcome(subcaseResults = []) {
   return { status: 'passed', result_category: 'pass' };
 }
 
+export function compoundBlockedReason(subcaseResults = []) {
+  const blocked = (Array.isArray(subcaseResults) ? subcaseResults : []).find((item) => (
+    item?.status === 'blocked' || item?.result_category === 'blocked'
+  ));
+  return String(
+    blocked?.blocked_reason
+    || blocked?.actual_result
+    || blocked?.conclusion
+    || '',
+  ).trim();
+}
+
 export function coreBetaDispatchCollect20CompletionBlockReason(testCase, result) {
   const id = String(testCase?.id || result?.id || '');
   if (id !== 'BETA-CHAT-008') return '';
@@ -3400,10 +3412,13 @@ async function executeCompoundCasebookCase(context) {
     );
   } else {
     const outcome = aggregateCompoundOutcome(subcaseResults);
+    const blockedReason = outcome.status === 'blocked' ? compoundBlockedReason(subcaseResults) : '';
     state.status = outcome.status;
     state.result_category = outcome.result_category;
     state.actual_result = `已按固定顺序执行 ${subcaseResults.length}/${subcases.length} 个子 Case：`
-      + subcaseResults.map((item) => `${item.id}=${item.status}/${item.result_category}`).join('；');
+      + subcaseResults.map((item) => `${item.id}=${item.status}/${item.result_category}`).join('；')
+      + (blockedReason ? `；具体阻塞：${blockedReason}` : '');
+    if (blockedReason) state.blocked_reason = blockedReason;
     state.conclusion = outcome.status === 'passed' ? '通过' : `${outcome.status}：${state.actual_result}`;
     if (outcome.result_category === 'bug') state.problem_description = buildProblemDescription(state);
   }
@@ -15644,7 +15659,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-TEAMS-NEW-003') return executeSitTeamsLocalExecution({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-HITL-002') return executeHitlFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   if (id === 'SIT-WORKSPACE-001') return executeSitWorkspaceBoundary({ page, state, testCase, caseDir, timeoutMs });
-  if (id === 'SIT-FILE-NEW-001') return executeSitFilePartialFailure({ page, state, testCase, caseDir, timeoutMs, fixturesDir });
+  if (id === 'SIT-FILE-NEW-001') return executeSitFilePartialFailure({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options });
   if (id === 'SIT-TASK-EDIT-001') return executeSitTaskEdit({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-TASK-REGEN-001') return executeSitTaskRegenerate({ page, state, testCase, caseDir, timeoutMs });
   if (id === 'SIT-TASK-RECOVER-001') return executeSitTaskNetworkRecovery({ page, state, testCase, caseDir, timeoutMs, options, runtime });
@@ -17263,9 +17278,70 @@ async function prepareTaskContextAndConfirm(page, cwd) {
   return { ok: false, reason: `bridge cwd 未收敛到 ${cwd}`, observed: state };
 }
 
-async function executeSitFilePartialFailure({ page, state, testCase, caseDir, timeoutMs, fixturesDir }) {
+export function qworkPartialAttachmentLogExcerpt({ logFile = '', startOffset = 0, endOffset = null } = {}) {
+  const source = String(logFile || '').trim();
+  const start = Math.max(0, Number(startOffset) || 0);
+  const observedEnd = endOffset !== null && endOffset !== undefined && Number.isFinite(Number(endOffset))
+    ? Math.max(start, Number(endOffset))
+    : currentFileSize(source);
+  if (!source || !fs.existsSync(source) || !fs.statSync(source).isFile()) {
+    return {
+      valid: false,
+      evidence_valid: false,
+      oracle_valid: false,
+      source: source || null,
+      start_offset: start,
+      end_offset: observedEnd,
+      bytes_scanned: 0,
+      reason: 'managed_qbot_log_unavailable',
+      raw_log_omitted: true,
+    };
+  }
+  const size = fs.statSync(source).size;
+  if (size < start) {
+    return {
+      valid: false,
+      evidence_valid: false,
+      oracle_valid: false,
+      source,
+      start_offset: start,
+      end_offset: size,
+      bytes_scanned: 0,
+      reason: 'managed_qbot_log_rotated_or_truncated',
+      raw_log_omitted: true,
+    };
+  }
+  const end = Math.min(size, observedEnd);
+  const requestedBytes = Math.max(0, end - start);
+  const maxBytes = 1024 * 1024;
+  const capturedStart = Math.max(start, end - maxBytes);
+  const bytes = Math.max(0, end - capturedStart);
+  const buffer = Buffer.alloc(bytes);
+  if (bytes > 0) {
+    const fd = fs.openSync(source, 'r');
+    try { fs.readSync(fd, buffer, 0, bytes, capturedStart); } finally { fs.closeSync(fd); }
+  }
+  return {
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: true,
+    source,
+    start_offset: capturedStart,
+    requested_start_offset: start,
+    end_offset: end,
+    bytes_scanned: buffer.length,
+    sha256: createHash('sha256').update(buffer).digest('hex'),
+    empty_window: buffer.length === 0,
+    truncated_prefix: requestedBytes > buffer.length,
+    raw_log_omitted: true,
+  };
+}
+
+async function executeSitFilePartialFailure({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  const logFile = String(options['qbot-stderr-log'] || '').trim();
+  const logStart = currentFileSize(logFile);
   const fixtureDir = path.join(caseDir, 'partial-attachment-fixtures');
   const fixtures = createPartialAttachmentFixtures({ fixtureDir, template: path.join(fixturesDir, 'qbot-word-report.docx') });
   state.artifacts.partial_attachment_fixtures = fixtures;
@@ -17274,6 +17350,21 @@ async function executeSitFilePartialFailure({ page, state, testCase, caseDir, ti
     return;
   }
   const files = [fixtures.valid, fixtures.broken];
+  state.artifacts.attachment_sources = files.map((file) => attachmentSourceRecord(file, 'partial_failure'));
+  const sourceLedgerValid = state.artifacts.attachment_sources.every((item) => (
+    item.name
+    && item.size_bytes > 0
+    && /^[a-f0-9]{64}$/i.test(item.sha256)
+  ));
+  recordAssertion(
+    state,
+    '部分失败附件源文件账本',
+    '正常 DOCX 与损坏 PDF 必须在上传前逐项记录文件名、非零大小和 SHA-256。',
+    sourceLedgerValid,
+    JSON.stringify(state.artifacts.attachment_sources),
+    'automation_error',
+  );
+  if (!sourceLedgerValid) return;
   const upload = await uploadAttachmentsInComposer(page, files);
   state.artifacts.upload = upload;
   state.screenshots.file_new_001_after_upload = await shot(page, caseDir, 'file-new-001-after-upload');
@@ -17283,6 +17374,20 @@ async function executeSitFilePartialFailure({ page, state, testCase, caseDir, ti
   const brokenStaged = attachmentText.includes('broken-report.pdf');
   const brokenRejected = /broken-report\.pdf/.test(pageTextAfterStage) && /损坏|失败|无法|不支持|解析/.test(pageTextAfterStage);
   recordStep(state, '一次选择正常 DOCX 与损坏 PDF', '两个文件应进入附件区；如损坏 PDF 在 staging 阶段被拒绝，必须展示具体文件名和原因。', `upload=${JSON.stringify(upload)}；attachmentText=${clip(attachmentText, 300)}；brokenRejected=${brokenRejected}`, validStaged && (brokenStaged || brokenRejected) ? 'passed' : 'failed', state.screenshots.file_new_001_after_upload, validStaged && (brokenStaged || brokenRejected) ? '' : 'automation_error');
+  const uploadLogExcerpt = qworkPartialAttachmentLogExcerpt({
+    logFile,
+    startOffset: logStart,
+    endOffset: currentFileSize(logFile),
+  });
+  recordAssertion(
+    state,
+    '部分失败附件受管日志窗口',
+    '必须保存本 Case 时间窗内的受管日志偏移、字节数和 SHA-256，原始日志不得复制进证据。',
+    uploadLogExcerpt.evidence_valid === true,
+    JSON.stringify(uploadLogExcerpt),
+    'automation_error',
+  );
+  if (uploadLogExcerpt.evidence_valid === true) state.artifacts.core_beta_log_excerpt = uploadLogExcerpt;
   if (!validStaged) return;
   const prompt = '请分别说明 valid-report.docx 与 broken-report.pdf 的处理结果，并总结能成功读取的有效内容；不要猜测或编造损坏文件正文。';
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '附件部分失败处理' });
@@ -17291,6 +17396,12 @@ async function executeSitFilePartialFailure({ page, state, testCase, caseDir, ti
   recordAssertion(state, '失败附件精确归因', '应明确点名 broken-report.pdf 并说明损坏、解析失败或无法读取。', /broken-report\.pdf/i.test(text) && /损坏|解析失败|无法读取|读取失败|无效|不完整/.test(text), clip(text, 460));
   const fabrication = brokenAttachmentFabricationEvidence(text, 'broken-report.pdf');
   recordAssertion(state, '不伪造损坏附件内容', '回复不得为 broken-report.pdf 编造可读摘要或正文；可以展示文件真实原始字节来解释损坏原因。', !fabrication.fabricated, `${fabrication.reason}；reply=${clip(text, 460)}`);
+  const logExcerpt = qworkPartialAttachmentLogExcerpt({
+    logFile,
+    startOffset: logStart,
+    endOffset: currentFileSize(logFile),
+  });
+  if (logExcerpt.evidence_valid === true) state.artifacts.core_beta_log_excerpt = logExcerpt;
 }
 
 export function brokenAttachmentFabricationEvidence(text, filename = 'broken-report.pdf') {

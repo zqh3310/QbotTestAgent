@@ -26,6 +26,7 @@ import {
 import {
   aggregateCompoundOutcome,
   buildCompoundEvidenceManifest,
+  compoundBlockedReason,
   coreBetaCompletionBlockReason,
   coreBetaPreSendCapabilityFailureEvidence,
   coreBetaRuntimeExecutorBinding,
@@ -1223,6 +1224,16 @@ try {
     assert.equal(coreBetaSuiteLedgerPath(results[0].case_dir), path.join(temp, 'core-beta-suite-ledger.json'));
     assert.deepEqual(aggregateCompoundOutcome(results), { status: 'passed', result_category: 'pass' });
     assert.deepEqual(aggregateCompoundOutcome([{ status: 'blocked', result_category: 'blocked' }]), { status: 'blocked', result_category: 'blocked' });
+    assert.equal(
+      compoundBlockedReason([{
+        status: 'blocked',
+        result_category: 'blocked',
+        blocked_reason: '当前账号的可见技能列表为空，无法选择用例要求的真实能力。',
+        actual_result: '父级状态摘要',
+      }]),
+      '当前账号的可见技能列表为空，无法选择用例要求的真实能力。',
+      'compound 父 Case 必须传播叶子的具体 blocked reason，不能只保留状态摘要',
+    );
     assert.deepEqual(aggregateCompoundOutcome([{ status: 'failed', result_category: 'bug' }, { status: 'blocked', result_category: 'blocked' }]), { status: 'failed', result_category: 'bug' });
     assert.deepEqual(aggregateCompoundOutcome([
       { status: 'failed', result_category: 'bug' },
