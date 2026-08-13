@@ -2510,6 +2510,16 @@ assert.match(
   /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*coreBetaCapabilitiesReadbackWithRetry[\s\S]*capabilities_readback_attempts/,
   'BETA-EXPERT-001 必须把一次性 setExpert 与可重试 capabilities 读回分离并保存账本',
 );
+assert.match(
+  runner,
+  /const \[capabilities, experts, drafts\] = await Promise\.all\(\[\s*window\.agent\.capabilities\(\),\s*lifecycle\.list\(\),\s*lifecycle\.listDrafts\(\)/,
+  'Expert lifecycle 初始化必须读取公开 window.agent.capabilities，不得假设 lifecycle.capabilities 存在',
+);
+assert.doesNotMatch(
+  runner,
+  /lifecycle\.capabilities\(\)/,
+  'Expert 场景不得调用不存在的 expertLifecycle.capabilities API',
+);
 const expertSummonSelected = {
   id: 'expert-qa-001',
   activeReleaseId: 'release-qa-001',

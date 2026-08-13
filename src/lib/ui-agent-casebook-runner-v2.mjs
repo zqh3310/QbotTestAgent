@@ -9819,8 +9819,11 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   const bridge = await page.evaluate(async () => {
     const lifecycle = window.agent?.expertLifecycle;
     if (!lifecycle) return { available: false };
+    if (typeof window.agent?.capabilities !== 'function') {
+      return { available: false, error: 'missing window.agent.capabilities' };
+    }
     const [capabilities, experts, drafts] = await Promise.all([
-      lifecycle.capabilities(),
+      window.agent.capabilities(),
       lifecycle.list(),
       lifecycle.listDrafts(),
     ]);
@@ -10101,7 +10104,10 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const validation = await lifecycle.validateDraft(id);
       const debug = await lifecycle.debug(id);
       const after = await lifecycle.getDraft(id);
-      return { validation, debug, after, mcp_authoring: (await lifecycle.capabilities()).mcpAuthoring };
+      const capabilities = typeof window.agent?.capabilities === 'function'
+        ? await window.agent.capabilities()
+        : { __error: 'missing window.agent.capabilities' };
+      return { validation, debug, after, mcp_authoring: capabilities.mcpAuthoring };
     }, draftId);
     const policyValid = Boolean(
       policy.ok
