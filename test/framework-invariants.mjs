@@ -779,6 +779,17 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062RepeatedPrefixAndExampleReply,
 ).ok, true, 'ROI 判定应接受“公式是 ROI =”重复前缀，并区分明确示例金额与真实金额');
+const sitHome062RejectsPriorFactsReply = [
+  '先算能算的：到场转化率为 170 / 240 = 70.8%，但这不是 ROI。',
+  'ROI =（活动带来的成交额 − 总投入）÷ 总投入 × 100%。',
+  '目前缺少总投入，以及成交单数、客单价或成交额。',
+  '我不会拿历史活动的数据（比如上次成交 12 单）来推算这次。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062RejectsPriorFactsReply,
+).ok, true, 'ROI 判定应接受成交额操作数，并区分拒绝借用旧事实与实际借用');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-062'),
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
