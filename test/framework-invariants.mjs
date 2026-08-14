@@ -10,6 +10,8 @@ import {
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
   assistantClarificationEvidence,
+  assistantConfirmationClickProgressVerdict,
+  assistantConfirmationProgressFingerprintEvidence,
   assistantConfirmationSurfaceVerdict,
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
@@ -203,6 +205,93 @@ assert.equal(
   false,
   '普通向导的“跳过”不得被误当成 Agent 推荐选项',
 );
+assert.deepEqual(
+  assistantConfirmationClickProgressVerdict({
+    clicked: true,
+    originalActionConnected: false,
+    originalActionVisible: false,
+    originalSurfaceConnected: false,
+    originalSurfaceVisible: false,
+    originalSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentAssistantSurfaceVisible: true,
+    progressFingerprintBefore: 'a'.repeat(64),
+    progressFingerprintAfter: 'b'.repeat(64),
+  }),
+  {
+    consumed: true,
+    closed: false,
+    advanced: true,
+    original_action_gone: true,
+    original_surface_gone: true,
+    original_consumed: true,
+    replacement_surface: true,
+    surface_signature_changed: false,
+    progress_fingerprint_changed: true,
+    reason: 'original_instance_replaced',
+  },
+  '同文案新面板替换原 DOM 实例时必须判定原点击已消费并继续处理下一问',
+);
+assert.equal(
+  assistantConfirmationClickProgressVerdict({
+    clicked: true,
+    originalActionConnected: true,
+    originalActionVisible: true,
+    originalSurfaceConnected: true,
+    originalSurfaceVisible: true,
+    originalSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentAssistantSurfaceVisible: true,
+    progressFingerprintBefore: 'a'.repeat(64),
+    progressFingerprintAfter: 'a'.repeat(64),
+  }).consumed,
+  false,
+  '同一原面板、同一文案且线程无进展时必须 fail-closed，不能伪造点击成功',
+);
+assert.deepEqual(
+  assistantConfirmationClickProgressVerdict({
+    clicked: true,
+    originalActionConnected: true,
+    originalActionVisible: true,
+    originalSurfaceConnected: true,
+    originalSurfaceVisible: true,
+    originalSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentSignature: '跳过\n需要你确认成果生成请求？ 跳过',
+    currentAssistantSurfaceVisible: true,
+    progressFingerprintBefore: 'a'.repeat(64),
+    progressFingerprintAfter: 'b'.repeat(64),
+  }),
+  {
+    consumed: true,
+    closed: false,
+    advanced: true,
+    original_action_gone: false,
+    original_surface_gone: false,
+    original_consumed: false,
+    replacement_surface: false,
+    surface_signature_changed: false,
+    progress_fingerprint_changed: true,
+    reason: 'thread_progress_changed',
+  },
+  '产品复用同一面板 DOM 和文案时，去除计时噪声后的工具进展变化必须证明已进入下一问',
+);
+const confirmationProgressAt39s = assistantConfirmationProgressFingerprintEvidence({
+  valid: true,
+  assistant_count: 1,
+  tool_rows: [{ tag: 'DIV', testid: 'tool-status', text: '执行中 · 39s\n运行命令 Find git repo root and status' }],
+});
+const confirmationProgressAt44s = assistantConfirmationProgressFingerprintEvidence({
+  valid: true,
+  assistant_count: 1,
+  tool_rows: [{ tag: 'DIV', testid: 'tool-status', text: '执行中 · 44s\n运行命令 Find git repo root and status' }],
+});
+const confirmationProgressNextCommand = assistantConfirmationProgressFingerprintEvidence({
+  valid: true,
+  assistant_count: 1,
+  tool_rows: [{ tag: 'DIV', testid: 'tool-status', text: '执行中 · 44s\n运行命令 List PRD directory contents' }],
+});
+assert.equal(confirmationProgressAt39s.sha256, confirmationProgressAt44s.sha256, '单纯计时变化不得伪造线程推进');
+assert.notEqual(confirmationProgressAt44s.sha256, confirmationProgressNextCommand.sha256, '工具命令推进必须改变线程进展指纹');
 assert.equal(coreGateIds.length, 92, '核心门禁用例簿必须保持 92 条');
 assert.equal(new Set(coreGateIds).size, 92, '核心门禁用例簿 Case ID 必须唯一');
 assert.equal(coreGateIds[0], 'SIT-INIT-002', '核心门禁用例簿首条必须是安装初始化入口');
@@ -982,6 +1071,7 @@ const required = [
   ['确定性相关性先于通用短文本拒绝', /for \(const \[scenarioPattern, replyPattern\] of targetedRules\)[\s\S]*if \(text\.length < 15\) return false/],
   ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
   ['新版推荐选项按精确跳过入口处理并保留结构化证据', /assistantConfirmationSurfaceVerdict[\s\S]*具体指[\s\S]*option_count[\s\S]*assistant_confirmation_interactions[\s\S]*处理 Agent 推荐选项/],
+  ['推荐选项点击绑定原 DOM 实例并识别同文案 replacement', /assistantConfirmationOriginalInstances[\s\S]*elementHandle[\s\S]*assistantConfirmationOriginalInstanceState[\s\S]*assistantConfirmationClickProgressVerdict[\s\S]*replacement_surface_detected/],
   ['新 Case 开始前先显式处理残留推荐选项再执行通用 Escape 清理', /executeCasebookCase[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)[\s\S]*openNewTask[\s\S]*dismissBlockingOverlays\(page, state\);[\s\S]*clearUi\(page\)/],
   ['稳定 QA 专家不存在时自动创建且不回退通用助手', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*let card = await findExpertCardByName\(page, expertName\);[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],

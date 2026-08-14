@@ -25222,6 +25222,93 @@ export function assistantConfirmationSurfaceVerdict({
   };
 }
 
+export function assistantConfirmationClickProgressVerdict({
+  clicked = false,
+  originalActionConnected = true,
+  originalActionVisible = true,
+  originalSurfaceConnected = true,
+  originalSurfaceVisible = true,
+  originalSignature = '',
+  currentSignature = '',
+  currentAssistantSurfaceVisible = false,
+  progressFingerprintBefore = '',
+  progressFingerprintAfter = '',
+} = {}) {
+  const originalActionGone = !originalActionConnected || !originalActionVisible;
+  const originalSurfaceGone = !originalSurfaceConnected || !originalSurfaceVisible;
+  const originalConsumed = originalActionGone || originalSurfaceGone;
+  const signatureChanged = Boolean(
+    originalSignature
+    && currentSignature
+    && currentSignature !== originalSignature
+  );
+  const progressChanged = Boolean(
+    progressFingerprintBefore
+    && progressFingerprintAfter
+    && progressFingerprintAfter !== progressFingerprintBefore
+  );
+  const replacementSurface = Boolean(originalConsumed && currentAssistantSurfaceVisible);
+  const closed = Boolean(originalSurfaceGone && !currentAssistantSurfaceVisible);
+  const reusedSurfaceAdvanced = Boolean(
+    !originalConsumed
+    && currentAssistantSurfaceVisible
+    && (signatureChanged || progressChanged)
+  );
+  const consumed = Boolean(clicked && (replacementSurface || closed || reusedSurfaceAdvanced));
+  const advanced = Boolean(consumed && currentAssistantSurfaceVisible);
+  const reason = !clicked
+    ? 'click_not_dispatched'
+    : replacementSurface
+      ? 'original_instance_replaced'
+      : closed
+        ? 'original_surface_closed'
+        : signatureChanged
+          ? 'surface_signature_changed'
+          : progressChanged
+            ? 'thread_progress_changed'
+            : 'original_instance_unchanged';
+  return {
+    consumed,
+    closed,
+    advanced,
+    original_action_gone: originalActionGone,
+    original_surface_gone: originalSurfaceGone,
+    original_consumed: originalConsumed,
+    replacement_surface: replacementSurface,
+    surface_signature_changed: signatureChanged,
+    progress_fingerprint_changed: progressChanged,
+    reason,
+  };
+}
+
+export function assistantConfirmationProgressFingerprintEvidence(snapshot = {}) {
+  const normalize = (value) => String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/(?:已用时|耗时|用时|运行|执行)\s*[:：]?\s*\d+(?:[.,]\d+)?\s*(?:ms|毫秒|s|秒|min|分钟|分)/gi, '<elapsed>')
+    .replace(/(^|[^\w.])\d+(?:[.,]\d+)?\s*(?:ms|毫秒|s|秒|min|分钟|分)(?=$|[^A-Za-z0-9])/gi, '$1<elapsed>')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, '<elapsed>')
+    .trim();
+  const rows = Array.isArray(snapshot?.tool_rows) ? snapshot.tool_rows : [];
+  const valid = snapshot?.valid === true && Array.isArray(snapshot?.tool_rows);
+  if (!valid) return { valid: false, sha256: '' };
+  const normalized = {
+    valid: true,
+    assistant_count: Number(snapshot?.assistant_count || 0),
+    tool_rows: rows.map((row) => ({
+      tag: String(row?.tag || ''),
+      testid: String(row?.testid || ''),
+      slot: String(row?.slot || ''),
+      state: String(row?.state || ''),
+      busy: String(row?.busy || ''),
+      text: normalize(row?.text).slice(0, 1_000),
+    })),
+  };
+  return {
+    valid: true,
+    sha256: sha256Text(JSON.stringify(normalized)),
+  };
+}
+
 const ASSISTANT_CLARIFICATION_DIMENSION_PATTERNS = {
   audience: /汇报对象|向谁汇报|谁会看|受众|领导|老板|汇报场合|部门.*例会|跨部门/,
   objective: /汇报主题|主题是什么|活动复盘|业务进展|专项方案|汇报目标|目的|希望.*(?:达成|推动)|重点关注|核心目标/,
@@ -25334,6 +25421,104 @@ async function assistantConfirmationSurfaceFromAction(action) {
   }));
 }
 
+async function assistantConfirmationOriginalInstances(actionButton) {
+  const actionHandle = await actionButton.elementHandle({ timeout: 1_000 }).catch(() => null);
+  if (!actionHandle) return null;
+  const surfaceJsHandle = await actionHandle.evaluateHandle((element) => {
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    let selected = null;
+    let node = element.parentElement;
+    while (node && node !== document.body) {
+      const text = clean(node.innerText || node.textContent);
+      const controls = Array.from(node.querySelectorAll(
+        'button, [role="button"], [role="radio"], [role="option"], [data-uiux-primitive="choice-button"]',
+      ));
+      if (
+        controls.length >= 2
+        && text.length >= 12
+        && text.length <= 8_000
+        && /(?:[?？]|具体指(?:哪|哪个|哪一)|选择一项|请选择|请确认|需要你确认|其他补充|其他（自己说）|用默认答案)/.test(text)
+      ) {
+        selected = node;
+        break;
+      }
+      node = node.parentElement;
+    }
+    return selected || element.closest('[role="dialog"], .ask-modal, [data-testid*="ask"]') || element;
+  }).catch(() => null);
+  const surfaceHandle = surfaceJsHandle?.asElement?.() || null;
+  if (!surfaceHandle) {
+    await surfaceJsHandle?.dispose?.().catch(() => {});
+    await actionHandle.dispose().catch(() => {});
+    return null;
+  }
+  return { actionHandle, surfaceHandle };
+}
+
+async function assistantConfirmationOriginalInstanceState(instances) {
+  const observe = async (handle) => handle.evaluate((element) => {
+    const connected = Boolean(element?.isConnected);
+    if (!connected) return { connected: false, visible: false };
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const visible = Boolean(
+      style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && Number(style.opacity || 1) !== 0
+      && rect.width > 0
+      && rect.height > 0
+    );
+    return { connected, visible };
+  }).catch(() => ({ connected: false, visible: false }));
+  const [action, surface] = await Promise.all([
+    observe(instances.actionHandle),
+    observe(instances.surfaceHandle),
+  ]);
+  return {
+    action_connected: action.connected,
+    action_visible: action.visible,
+    surface_connected: surface.connected,
+    surface_visible: surface.visible,
+  };
+}
+
+async function assistantConfirmationProgressFingerprint(page) {
+  const snapshot = await page.locator('[data-testid="assistant-thread"]').first().evaluate((root) => {
+    const selectors = [
+      '[data-slot^="aui_tool"]',
+      '[data-slot*="reasoning"]',
+      '.aui-tool-flat',
+      '.aui-cli-line',
+      '[data-testid*="tool"]',
+      '[data-testid*="progress"]',
+      '[data-testid*="status"]',
+      '[aria-busy="true"]',
+    ].join(', ');
+    const rows = Array.from(root.querySelectorAll(selectors)).slice(-60).map((element) => ({
+      tag: element.tagName,
+      testid: element.getAttribute('data-testid') || '',
+      slot: element.getAttribute('data-slot') || '',
+      state: element.getAttribute('data-state') || '',
+      busy: element.getAttribute('aria-busy') || '',
+      text: String(element.innerText || element.textContent || '').slice(0, 1_000),
+    }));
+    return {
+      valid: true,
+      assistant_count: root.querySelectorAll('[data-role="assistant"]').length,
+      tool_rows: rows,
+    };
+  }).catch(() => ({ valid: false, assistant_count: 0, tool_rows: [] }));
+  return assistantConfirmationProgressFingerprintEvidence(snapshot);
+}
+
+async function disposeAssistantConfirmationOriginalInstances(instances) {
+  if (!instances) return;
+  await Promise.allSettled([
+    instances.surfaceHandle?.dispose?.(),
+    instances.actionHandle?.dispose?.(),
+  ]);
+}
+
 async function resolveAssistantConfirmationModal(page, { state = null, caseDir = '', label = '' } = {}) {
   const actionCandidates = [
     page.getByRole('button', { name: /^跳过(?:（用默认）)?$/ }).first(),
@@ -25353,6 +25538,11 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
   }
   if (!actionButton || !surface) return false;
 
+  const originalInstances = await assistantConfirmationOriginalInstances(actionButton);
+  if (!originalInstances) {
+    throw new Error('Agent 推荐选项默认跳过失败：无法固定点击前按钮和面板 DOM 实例');
+  }
+
   const text = surface.surfaceText;
   const count = state ? (state._assistantConfirmationCount = Number(state._assistantConfirmationCount || 0) + 1) : 1;
   const base = `assistant-confirm-${String(count).padStart(2, '0')}${label ? `-${slugify(label)}` : ''}`;
@@ -25364,33 +25554,58 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
 
   const action = surface.action_label || '跳过';
   const clickedAt = new Date().toISOString();
+  const oldSignature = `${surface.action_label}\n${surface.surfaceText}`;
+  const progressBefore = await assistantConfirmationProgressFingerprint(page);
   let clicked = false;
   try {
-    await actionButton.click({ force: true });
+    await originalInstances.actionHandle.click({ force: true });
     clicked = true;
   } catch {
-    clicked = await actionButton.evaluate((element) => {
+    clicked = await originalInstances.actionHandle.evaluate((element) => {
+      if (!element.isConnected) return false;
       element.click();
       return true;
     }).catch(() => false);
   }
-  const oldSignature = `${surface.action_label}\n${surface.surfaceText}`;
   let stillVisible = true;
   let changedSurface = false;
+  let progressAfter = progressBefore;
+  let progressVerdict = assistantConfirmationClickProgressVerdict({ clicked });
   const closeDeadline = Date.now() + 5_000;
-  while (Date.now() < closeDeadline) {
-    await page.waitForTimeout(250);
-    if (!(await visible(actionButton, 300))) {
-      stillVisible = false;
-      break;
+  try {
+    while (Date.now() < closeDeadline) {
+      await page.waitForTimeout(250);
+      const originalState = await assistantConfirmationOriginalInstanceState(originalInstances);
+      const currentActionVisible = await visible(actionButton, 300);
+      const afterFacts = currentActionVisible
+        ? await assistantConfirmationSurfaceFromAction(actionButton)
+        : { actionLabel: '', surfaceText: '', optionLabels: [], hasDialogAncestor: false };
+      const currentSurfaceVerdict = assistantConfirmationSurfaceVerdict(afterFacts);
+      const currentAssistantSurfaceVisible = Boolean(currentActionVisible && currentSurfaceVerdict.handle);
+      const afterSignature = currentAssistantSurfaceVisible
+        ? `${afterFacts.actionLabel}\n${afterFacts.surfaceText}`
+        : '';
+      progressAfter = await assistantConfirmationProgressFingerprint(page);
+      progressVerdict = assistantConfirmationClickProgressVerdict({
+        clicked,
+        originalActionConnected: originalState.action_connected,
+        originalActionVisible: originalState.action_visible,
+        originalSurfaceConnected: originalState.surface_connected,
+        originalSurfaceVisible: originalState.surface_visible,
+        originalSignature: oldSignature,
+        currentSignature: afterSignature,
+        currentAssistantSurfaceVisible,
+        progressFingerprintBefore: progressBefore.sha256,
+        progressFingerprintAfter: progressAfter.sha256,
+      });
+      if (progressVerdict.consumed) {
+        stillVisible = false;
+        changedSurface = progressVerdict.advanced;
+        break;
+      }
     }
-    const afterFacts = await assistantConfirmationSurfaceFromAction(actionButton);
-    const afterSignature = `${afterFacts.actionLabel}\n${afterFacts.surfaceText}`;
-    if (afterSignature !== oldSignature) {
-      changedSurface = true;
-      stillVisible = false;
-      break;
-    }
+  } finally {
+    await disposeAssistantConfirmationOriginalInstances(originalInstances);
   }
   let afterShot = '';
   if (state && caseDir) {
@@ -25440,6 +25655,14 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
       clicked,
       closed_or_advanced: !stillVisible,
       advanced_to_next_question: changedSurface,
+      advance_reason: progressVerdict.reason,
+      original_action_gone: progressVerdict.original_action_gone,
+      original_surface_gone: progressVerdict.original_surface_gone,
+      replacement_surface_detected: progressVerdict.replacement_surface,
+      surface_signature_changed: progressVerdict.surface_signature_changed,
+      thread_progress_changed: progressVerdict.progress_fingerprint_changed,
+      progress_before_sha256: progressBefore.sha256,
+      progress_after_sha256: progressAfter.sha256,
       evidence_valid: evidenceValid,
     });
     state.artifacts.assistant_confirmation_interactions = interactions;
@@ -25447,7 +25670,7 @@ async function resolveAssistantConfirmationModal(page, { state = null, caseDir =
       state,
       `处理 Agent 推荐选项（${label || `第 ${count} 次`}）`,
       '会话中出现推荐选项/澄清问题时，自动化默认点击“跳过”使用默认答案，保留前后截图后继续等待 Agent。',
-      `${action}；选项数=${surface.option_count}；面板=${clip(text, 180)}${stillVisible ? '；处理后仍可见' : changedSurface ? '；已进入下一问题' : '；处理后已关闭'}`,
+      `${action}；选项数=${surface.option_count}；面板=${clip(text, 180)}${stillVisible ? '；处理后原实例仍未消费' : changedSurface ? `；已进入下一问题（${progressVerdict.reason}）` : `；处理后已关闭（${progressVerdict.reason}）`}`,
       stillVisible ? 'failed' : 'passed',
       afterShot || beforeShot,
       stillVisible ? 'automation_error' : '',

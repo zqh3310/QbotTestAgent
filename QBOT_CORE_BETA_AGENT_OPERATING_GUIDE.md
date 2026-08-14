@@ -175,6 +175,21 @@ manifest 均完整。第 6 条 `QW-CHAT-003` 的叶子 `SIT-HOME-062` 收到完�
 完整真实回复强化 invariant，并保留缺公式、操作数颠倒、伪造金额和借用旧事实负例。
 完成双框架全检、提交推送和新 `READY` 后，必须在新目录从 `1/83` 全量串行重跑。
 
+修复 ROI 自然公式语义后启动的最新冻结批次保留在不可变目录
+`teams360-automation/output/20260815045500_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-b7dc666_casebook-8a62aac`：
+已完成 `18/83`，raw 为 `passed=12/failed=6/blocked=0`；第 19 条
+`QW-ART-001` 未计入 completed。其第二个叶子 `SIT-ART-001` 连续处理第五张权限
+确认面板时，真实点击已经让后台命令从 `Find git repo root and status` 推进到
+`List PRD directory contents`，但下一张面板的问题和“跳过”文案完全相同。旧框架用
+动态 locator 重新绑定到新按钮，再以同文案误判原面板仍可见，抛出
+`Agent 推荐选项默认跳过失败：clicked=true stillVisible=true`，导致该叶子 manifest
+不完整并触发框架硬停止；后续 64 条未执行。该目录永久冻结。修复必须同时覆盖 v2
+和 legacy：点击前固定按钮/surface DOM 实例，识别同文案 replacement；产品复用同一
+DOM 时以去除计时噪声后的工具进展作为后备；原实例和进展均未变化时继续 fail-closed，
+普通“跳过向导”不得被误处理。完成 invariant、双框架全检、提交推送和新 `READY` 后，
+必须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。旧批次已确认
+的产品 Bug 和 `BETA-ART-001` 产品负向证据继续保留，后续通过不得抹去。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
