@@ -67,6 +67,14 @@ PID `19835` 已退出；后续 56 条没有执行。该目录永久冻结，不�
 新 SHA 和 SIT `READY` 后，必须在新不可变目录从 `1/83` 串行全量重跑，
 `inherited=0`、`synthetic=0`。
 
+更新 Teams/QWork 后的最新冻结批次保留在不可变目录
+`teams360-automation/output/20260814171810_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-2de27bf_casebook-8a62aac`：
+已可信完成 `31/83`，raw 为 `passed=15/failed=15/blocked=1`。第 32 条
+`QW-EXPERT-004` 的叶子 `SIT-EXPERT-006` 因框架仅匹配旧文案“手动填表创建”，
+未使用产品已经提供的 `data-testid="expert-create-manual"`，在新版“高级手动创建”
+入口处形成 framework issue；第 32 条未计入 completed，后续 51 条未执行。该目录
+永久冻结；修复、提交推送和新 `READY` 后必须在新目录从 `1/83` 全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

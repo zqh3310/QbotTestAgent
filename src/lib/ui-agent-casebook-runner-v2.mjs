@@ -29052,7 +29052,9 @@ async function executeExpertSmoke006({ page, state, caseDir }) {
   await page.waitForTimeout(700);
   state.screenshots.create_hint = await shot(page, caseDir, 'expert-006-create-hint');
   const text = await page.locator('.modal').first().innerText({ timeout: 2000 }).catch(() => '');
-  recordAssertion(state, '创建专家路径选择', '创建弹窗应展示“开始创建（用对话）”和“手动填表创建”两条路径。', /开始创建（用对话）/.test(text) && /手动填表创建/.test(text), clip(text, 260));
+  const manualEntryVisible = await visible(page.locator('[data-testid="expert-create-manual"]').first(), 500)
+    || /手动填表创建|高级手动创建/.test(text);
+  recordAssertion(state, '创建专家路径选择', '创建弹窗应展示“开始创建（用对话）”和手动创建路径。', /开始创建（用对话）/.test(text) && manualEntryVisible, clip(text, 260));
   await closeModal(page);
 }
 
@@ -29735,8 +29737,10 @@ async function openManualCreateExpertModal(page, state) {
   await openExpertsPage(page, state, path.dirname(state.case_report));
   await clickSelector(page, '[data-testid="create-expert-top"]', '点击专家页【创建】', state);
   await page.waitForTimeout(600);
-  const manual = page.locator('.create-hint-opt').filter({ hasText: /手动填表创建/ }).first();
-  if (!(await visible(manual, 1500))) throw new Error('创建专家弹窗未展示【手动填表创建】入口。');
+  const manualByTestId = page.locator('[data-testid="expert-create-manual"]').first();
+  const manualByText = page.locator('.create-hint-opt').filter({ hasText: /手动填表创建|高级手动创建/ }).first();
+  const manual = await visible(manualByTestId, 1000) ? manualByTestId : manualByText;
+  if (!(await visible(manual, 1500))) throw new Error('创建专家弹窗未展示【手动创建】入口（兼容“手动填表创建/高级手动创建”）。');
   await manual.click({ force: true });
   await page.waitForTimeout(700);
   const formText = await page.locator('.modal').first().innerText({ timeout: 2000 }).catch(() => '');

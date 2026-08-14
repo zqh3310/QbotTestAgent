@@ -229,6 +229,10 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   新版 `{expertId, view, draft}` 投影必须归一化为 expert、display、version 和 release
   稳定身份后再执行空名称、裸 UUID、重复 identity 与同名可区分性 Oracle；接口缺失
   或结构无法归一化属于 framework issue，不得因直接调用不存在的方法中途硬停止。
+- 专家创建路径必须优先使用稳定的 `[data-testid="expert-create-manual"]` 定位手动创建
+  入口，并兼容旧文案“手动填表创建”和新版文案“高级手动创建”。`SIT-EXPERT-006`
+  的路径断言与所有调用 `openManualCreateExpertModal()` 的场景必须遵守同一合同；稳定
+  testid 可见时不得因展示文案演进误报 framework issue，进入后仍须独立读回完整表单。
 
 ## 4. Fixture 合同
 
