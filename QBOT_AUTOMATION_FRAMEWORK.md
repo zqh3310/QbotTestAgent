@@ -233,6 +233,12 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   入口，并兼容旧文案“手动填表创建”和新版文案“高级手动创建”。`SIT-EXPERT-006`
   的路径断言与所有调用 `openManualCreateExpertModal()` 的场景必须遵守同一合同；稳定
   testid 可见时不得因展示文案演进误报 framework issue，进入后仍须独立读回完整表单。
+- 前一叶子留在“专家构建/专家工作台”时，重复点击已激活的侧栏“专家·技能”不能
+  证明已返回专家中心。后续专家或技能 Case 必须先检测稳定
+  `[data-testid="expert-builder-back"]`；可见时必须真实点击并等待其 hidden，再读取
+  `[data-testid="create-expert-top"]` 或技能页签。旧版回退只允许可见
+  `button.expert-center-back` 且文案精确为“返回专家中心”。返回入口点击失败、未消失或
+  返回后中心控件不可读仍属于 framework issue，不得继续查找下一个页面的控件。
 - 手动创建表单提交必须优先使用稳定的 `[data-testid="expert-create-submit"]`；旧版
   fallback 只允许精确“创建”或“保存草稿”。表单证据必须读回提交按钮是否存在、
   精确文案和 disabled 状态。不得因新版把“创建”演进为“保存草稿”误报 framework

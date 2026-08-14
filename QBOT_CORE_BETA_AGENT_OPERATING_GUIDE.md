@@ -136,6 +136,18 @@ stage 集合，以本次真实结构强化 invariant，完成全检、提交推�
 硬停止。完成 invariant、双框架全检、提交推送和新 `READY` 后，必须在新目录从
 `1/83` 全量重跑。
 
+修复 #793 超时证据顺序后启动的批次保留在不可变目录
+`teams360-automation/output/20260815001100_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-dda57b3_casebook-8a62aac`：
+已完成 `31/83`，raw 为 `passed=17/failed=14/blocked=0`。第 32 条
+`QW-EXPERT-004` 的前两个叶子已完成；第三个叶子 `SIT-EXPERT-009` 开始时，
+前一叶子留在当前发布包的“专家构建/专家工作台”。框架只重复点击已激活的
+侧栏“专家·技能”，未点击产品已提供的稳定
+`[data-testid="expert-builder-back"]`，随后误报缺少 `[data-testid="create-expert-top"]`，
+异常路径的 manifest 缺失 `action_receipt/public_state_readback/cleanup_readback/product_action_trace`
+并硬停止。该目录永久冻结；修复必须让后续专家/技能入口先通过稳定返回控件退出
+构建页，完成 invariant、双框架全检、提交推送和新 `READY` 后，在新目录从
+`1/83` 全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

@@ -29468,6 +29468,7 @@ async function openSkillsPage(page, state, caseDir, { skillTab = '已安装' } =
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   await clickSelector(page, '[data-testid="nav-experts"]', '进入【专家/技能】模块', state);
+  await returnFromExpertBuilderIfNeeded(page, state);
   const skillsTab = page.locator('[data-testid="skills-tab"]').first();
   const fallbackTab = page.getByRole('button', { name: /^技能$/ }).first();
   let target = null;
@@ -29501,10 +29502,37 @@ async function openConnectorsPage(page, state, caseDir) {
   );
 }
 
+export function coreBetaExpertBuilderReturnSelectorCandidates() {
+  return [
+    '[data-testid="expert-builder-back"]',
+    'button.expert-center-back',
+  ];
+}
+
+async function returnFromExpertBuilderIfNeeded(page, state) {
+  const [stableSelector, fallbackSelector] = coreBetaExpertBuilderReturnSelectorCandidates();
+  const stable = page.locator(stableSelector).first();
+  const fallback = page.locator(fallbackSelector).filter({ hasText: /^\s*返回专家中心\s*$/ }).first();
+  const back = await visible(stable, 400) ? stable : (await visible(fallback, 400) ? fallback : null);
+  if (!back) return false;
+
+  await back.click({ force: true }).catch(async () => back.evaluate((el) => el.click()));
+  await back.waitFor({ state: 'hidden', timeout: 5000 });
+  recordStep(
+    state,
+    '从专家构建页返回专家中心',
+    '已在专家构建页时，必须通过稳定返回入口恢复专家中心，不得仅重复点击已激活的侧栏导航。',
+    `已点击 ${stableSelector} 或精确“返回专家中心”入口，构建页已关闭。`,
+    'passed',
+  );
+  return true;
+}
+
 async function openExpertsPage(page, state, caseDir) {
   await clearUi(page);
   await ensureSidebarExpanded(page, state);
   await clickSelector(page, '[data-testid="nav-experts"]', '进入【专家/技能】模块', state);
+  await returnFromExpertBuilderIfNeeded(page, state);
   await page.waitForTimeout(350);
   const expertsView = page.locator('[data-testid="experts-view"]').first();
   if (!(await visible(expertsView, 900))) {
