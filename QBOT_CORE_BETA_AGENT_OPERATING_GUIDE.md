@@ -161,6 +161,20 @@ stage 集合，以本次真实结构强化 invariant，完成全检、提交推�
 构建页返回逻辑，以 invariant 禁止旁路。全检、提交推送和新 `READY` 后，仍须在新
 目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复全部专家构建页返回路径后启动的批次保留在不可变目录
+`teams360-automation/output/20260815041400_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-80404d8_casebook-8a62aac`：
+已完成 `6/83`，raw 为 `passed=2/failed=4/blocked=0`，全部已完成父 Case 和叶子
+manifest 均完整。第 6 条 `QW-CHAT-003` 的叶子 `SIT-HOME-062` 收到完整真实回复，
+明确说明缺少投入和收益、无法计算唯一 ROI，并给出
+`ROI 的公式是：ROI =（带来收入 − 总投入）÷ 总投入`；其余 ROI 边界读回均为
+`true`，但两套 runner 的公式正则既只兼容“ROI 公式是”、漏掉助词“的”，又不接受
+“带来收入”这一自然回报操作数，因此把 `formula=false` 误报为产品 Bug。runner 在
+第 7 条长回复 Case 执行中受管停止，PID
+`50795` 及 npm 父进程均已退出，360Teams 宿主 PID `20115` 保留。该目录永久冻结，
+包括第 7 条未完成材料在内均不得续写；修复必须同时覆盖 v2 与 legacy Oracle，以本轮
+完整真实回复强化 invariant，并保留缺公式、操作数颠倒、伪造金额和借用旧事实负例。
+完成双框架全检、提交推送和新 `READY` 后，必须在新目录从 `1/83` 全量串行重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

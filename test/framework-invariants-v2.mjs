@@ -5829,6 +5829,25 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062RepeatedPrefixAndExampleReply,
 ).ok, true, 'ROI 判定应接受“公式是 ROI =”重复前缀，并区分明确示例金额与真实金额');
+const sitHome062PossessiveFormulaActualReply = [
+  '计算 ROI 需要有投入成本和带来收益两个数字，仅凭报名 240 人、到场 170 人算不出来。先把能算的给出：',
+  '到场率 = 170 ÷ 240 ≈ 70.8%（到场转化不错）',
+  '但 ROI 的公式是：ROI =（带来收入 − 总投入）÷ 总投入，比如投入 5 万、带来收入 8 万，ROI = (8−5)/5 = 60%',
+  '请补两个数，我就能直接算：',
+  '总投入成本是多少？（场地、物料、人力、投放等合计）',
+  '带来的收益是多少？（成交额/带来的销售收入，有毛利润口径也可以按利润算）',
+  '另外，如果你手头有这次活动的成交单数或成交金额，一起给我，我可以用 ROI 之外再补一个投入回报的单产视角（如每到场人带来的收入）。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062PossessiveFormulaActualReply,
+).ok, true, 'ROI 判定应接受本轮真实回复中的“ROI 的公式是”自然表达');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '当前无法计算。请补充总投入和带来收入。ROI 的公式是：ROI =（总投入 − 带来收入）÷ 总投入。',
+).ok, false, '扩展“带来收入”操作数后仍必须拒绝回报与投入顺序颠倒的公式');
 const sitHome062RejectsPriorFactsReply = [
   '先算能算的：到场转化率为 170 / 240 = 70.8%，但这不是 ROI。',
   'ROI =（活动带来的成交额 − 总投入）÷ 总投入 × 100%。',
