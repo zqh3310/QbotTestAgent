@@ -29311,7 +29311,7 @@ async function executeExpertSmoke008({ page, state, caseDir }) {
     state,
     '填写手动创建专家表单',
     '提交前应能证明专家名、一句话能力介绍和人设/职责均已填写。',
-    `专家名=${beforeSubmitTop.name || '未读取'}；能力介绍=${beforeSubmitTop.summary || '未读取'}；人设长度=${beforeSubmitTop.body?.length || 0}；创建按钮 disabled=${beforeSubmitTop.submitDisabled}`,
+    `专家名=${beforeSubmitTop.name || '未读取'}；能力介绍=${beforeSubmitTop.summary || '未读取'}；人设长度=${beforeSubmitTop.body?.length || 0}；提交按钮=${beforeSubmitTop.submitText || '未读取'}；disabled=${beforeSubmitTop.submitDisabled}`,
     requiredFieldsFilled ? 'passed' : 'failed',
     state.screenshots.before_submit_top,
     requiredFieldsFilled ? '' : 'automation_error',
@@ -29326,9 +29326,9 @@ async function executeExpertSmoke008({ page, state, caseDir }) {
   );
   if (!requiredFieldsFilled) return;
 
-  const submit = page.locator('.modal .cfg-save').filter({ hasText: /^创建$/ }).first();
+  const submit = await expertCreateSubmitButton(page);
   if (!(await visible(submit, 1500))) {
-    recordAssertion(state, '手动创建专家提交按钮', '手动创建表单底部应有可点击的“创建”按钮。', false, '未找到创建按钮。', 'automation_error');
+    recordAssertion(state, '手动创建专家提交按钮', '手动创建表单底部应有稳定提交按钮，兼容“创建/保存草稿”。', false, '未找到 expert-create-submit 或精确“创建/保存草稿”按钮。', 'automation_error');
     return;
   }
   const dialog = await captureDialogDuring(page, async () => {
@@ -29937,6 +29937,18 @@ async function scrollExpertCreateModal(page, direction = 'top') {
   await page.waitForTimeout(250);
 }
 
+export function coreBetaExpertCreateSubmitLabel(label) {
+  return /^(?:创建|保存草稿)$/.test(String(label || '').trim());
+}
+
+async function expertCreateSubmitButton(page) {
+  const stable = page.locator('.modal [data-testid="expert-create-submit"]').first();
+  if (await visible(stable, 800)) return stable;
+  return page.locator('.modal .cfg-save, .modal button, .modal [role="button"]')
+    .filter({ hasText: /^(?:创建|保存草稿)$/ })
+    .first();
+}
+
 async function captureExpertCreateFormEvidence(page) {
   const evidence = await page.locator('.modal').first().evaluate((modal) => {
     const valueOf = (selectors) => {
@@ -29946,14 +29958,16 @@ async function captureExpertCreateFormEvidence(page) {
       }
       return '';
     };
-    const submit = Array.from(modal.querySelectorAll('button, .cfg-save, [role="button"]'))
-      .find((el) => /创建/.test(el.textContent || ''));
+    const submit = modal.querySelector('[data-testid="expert-create-submit"]')
+      || Array.from(modal.querySelectorAll('button, .cfg-save, [role="button"]'))
+        .find((el) => /^(?:创建|保存草稿)$/.test(String(el.textContent || '').trim()));
     const error = modal.querySelector('[data-testid="expert-create-form-error"], .form-error, .cfg-error, .error');
     return {
       name: valueOf(['[data-testid="expert-create-label-input"]', 'input[placeholder*="专家名"]']),
       summary: valueOf(['[data-testid="expert-create-summary-input"]', 'input[placeholder*="精通"]', 'input[placeholder*="一句话"]']),
       body: valueOf(['[data-testid="expert-create-body-input"]', 'textarea[placeholder*="你是一位"]']),
       formError: String(error?.textContent || '').trim(),
+      submitFound: Boolean(submit),
       submitDisabled: Boolean(submit && ('disabled' in submit ? submit.disabled : submit.getAttribute('aria-disabled') === 'true')),
       submitText: String(submit?.textContent || '').trim(),
       modalText: String(modal.innerText || '').trim().slice(0, 500),
@@ -29991,9 +30005,9 @@ async function submitExpertCreateAndAssertVisible(page, state, caseDir, name, {
   expected,
   screenshotPrefix,
 } = {}) {
-  const submit = page.locator('.modal .cfg-save, .modal button, .modal [role="button"]').filter({ hasText: /^创建$/ }).first();
+  const submit = await expertCreateSubmitButton(page);
   if (!(await visible(submit, 1500))) {
-    recordAssertion(state, '手动创建专家提交按钮', '手动创建表单底部应有可点击的“创建”按钮。', false, '未找到创建按钮。', 'automation_error');
+    recordAssertion(state, '手动创建专家提交按钮', '手动创建表单底部应有稳定提交按钮，兼容“创建/保存草稿”。', false, '未找到 expert-create-submit 或精确“创建/保存草稿”按钮。', 'automation_error');
     return false;
   }
   const dialog = await captureDialogDuring(page, async () => submit.click({ force: true }), 8000);

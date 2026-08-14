@@ -100,6 +100,16 @@ runner 已在第二叶子执行中停止，PID `76558` 已退出；该目录永�
 本次四段原始回复与泄露/无关拒绝负例强化 invariant，完成全检、提交推送和新
 `READY` 后再从 `1/83` 新目录全量重跑。
 
+修复目录边界安全 Oracle 后启动的批次保留在不可变目录
+`teams360-automation/output/20260814211300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-69a86c7_casebook-8a62aac`：
+已完成 `31/83`，raw 为 `passed=15/failed=16/blocked=0`。第 32 条
+`QW-EXPERT-004` 的叶子 `SIT-EXPERT-006` 已打开新版手动创建表单、填满必填字段，
+并读回稳定 `[data-testid="expert-create-submit"]`，但 runner 仍只按旧文案“创建”
+查找提交按钮，未接受当前“保存草稿”，误报 `automation_error` 并停止；第三叶子
+`SIT-EXPERT-009` 及后续 51 条未执行。该目录永久冻结。修复必须优先稳定 testid，
+fallback 仅精确接受“创建/保存草稿”，同时拒绝发布、取消等其他动作；全检、提交
+推送和新 `READY` 后必须在新目录从 `1/83` 全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

@@ -14,6 +14,7 @@ import {
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
   coreBetaActionStopsPlan,
+  coreBetaExpertCreateSubmitLabel,
   coreBetaPartialReplyReady,
   coreBetaStoppedTurnTerminalEvidence,
   coreBetaSelectedCapabilityIdentities,
@@ -845,6 +846,12 @@ assert.equal(caseAwareReplyAssertion(
   '当前没有关于默认测试报告格式的固定偏好记录。',
 ).ok, true, 'MEM-001 删除后的直接回答应通过确定性用例断言');
 
+assert.equal(coreBetaExpertCreateSubmitLabel('创建'), true, '旧版专家表单“创建”必须是受支持的精确提交动作');
+assert.equal(coreBetaExpertCreateSubmitLabel('保存草稿'), true, '新版专家表单“保存草稿”必须是受支持的精确提交动作');
+for (const unsafeLabel of ['保存', '保存并发布', '立即发布', '取消', '保存草稿并发布']) {
+  assert.equal(coreBetaExpertCreateSubmitLabel(unsafeLabel), false, `专家表单不得把“${unsafeLabel}”当作创建草稿动作`);
+}
+
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
@@ -879,6 +886,7 @@ const required = [
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathPrefix: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
   ['手动连接器选择不按“手动使用/默认自动”描述误过滤', /selectFirstManualConnector[\s\S]*\.ctool-list \.ctool-opt:not\(\[disabled\]\)[\s\S]*hasNotText: \/不生效\|不可用\|未接入\|无匹配\|暂无连接器\//],
   ['专家手动创建优先稳定 testid 并兼容两代文案', /executeExpertSmoke006[\s\S]*\[data-testid="expert-create-manual"\][\s\S]*手动填表创建\|高级手动创建[\s\S]*async function openManualCreateExpertModal[\s\S]*\[data-testid="expert-create-manual"\][\s\S]*手动填表创建\|高级手动创建/],
+  ['专家手动创建提交优先稳定 testid 并兼容创建或保存草稿', /executeExpertSmoke008[\s\S]*expertCreateSubmitButton[\s\S]*async function expertCreateSubmitButton[\s\S]*expert-create-submit[\s\S]*创建\|保存草稿[\s\S]*captureExpertCreateFormEvidence[\s\S]*expert-create-submit[\s\S]*创建\|保存草稿[\s\S]*submitExpertCreateAndAssertVisible[\s\S]*expertCreateSubmitButton/],
   ['稳定 QA 专家固定名不可见时使用本轮唯一名', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家-\$\{new Date\(\)\.toISOString\(\)[\s\S]*findExpertCardByName\(page, expertName\)/],
   ['专家创建成功只认真实专家卡片', /waitForExpertCreateOutcome[\s\S]*Boolean\(await findExpertCardByName\(page, name\)\)/],
   ['纯 UI 用例不强制会话证据', /REPLY_EVIDENCE_OPTIONAL_CASE_IDS[\s\S]*SIT-HOME-050[\s\S]*requiresConversationEvidence = !replyEvidenceOptional/],

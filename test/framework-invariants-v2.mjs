@@ -99,6 +99,7 @@ import {
   coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
+  coreBetaExpertCreateSubmitLabel,
   coreBetaV2ExpertCreationDismissAction,
   coreBetaV2ExpertCreationDismissLabel,
   coreBetaV2WorkspaceCreationDismissAction,
@@ -5263,6 +5264,11 @@ assert.equal(
   '关闭',
   '只有 title 的创建专家关闭按钮必须保留精确安全动作名称',
 );
+assert.equal(coreBetaExpertCreateSubmitLabel('创建'), true, '旧版专家表单“创建”必须是受支持的精确提交动作');
+assert.equal(coreBetaExpertCreateSubmitLabel('保存草稿'), true, '新版专家表单“保存草稿”必须是受支持的精确提交动作');
+for (const unsafeLabel of ['保存', '保存并发布', '立即发布', '取消', '保存草稿并发布']) {
+  assert.equal(coreBetaExpertCreateSubmitLabel(unsafeLabel), false, `专家表单不得把“${unsafeLabel}”当作创建草稿动作`);
+}
 const expertCreationActionStart = runner.indexOf('export function coreBetaV2ExpertCreationDismissAction');
 const expertCreationDismissStart = runner.indexOf('async function dismissCoreBetaV2ExpertCreationObstruction');
 const workspaceDismissStart = runner.indexOf('async function dismissCoreBetaV2WorkspaceCreationObstruction');
@@ -6047,6 +6053,7 @@ const required = [
   ['已选连接器不健康快照注入', /executeSitConnectorUnhealthySelectedState[\s\S]*pathPrefix: '\/api\/capabilities'[\s\S]*connector-needs-auth[\s\S]*connector_unhealthy_snapshot/],
   ['手动连接器选择不按“手动使用/默认自动”描述误过滤', /selectFirstManualConnector[\s\S]*\.ctool-list \.ctool-opt:not\(\[disabled\]\)[\s\S]*hasNotText: \/不生效\|不可用\|未接入\|无匹配\|暂无连接器\//],
   ['专家手动创建优先稳定 testid 并兼容两代文案', /executeExpertSmoke006[\s\S]*\[data-testid="expert-create-manual"\][\s\S]*手动填表创建\|高级手动创建[\s\S]*async function openManualCreateExpertModal[\s\S]*\[data-testid="expert-create-manual"\][\s\S]*手动填表创建\|高级手动创建/],
+  ['专家手动创建提交优先稳定 testid 并兼容创建或保存草稿', /executeExpertSmoke008[\s\S]*expertCreateSubmitButton[\s\S]*async function expertCreateSubmitButton[\s\S]*expert-create-submit[\s\S]*创建\|保存草稿[\s\S]*captureExpertCreateFormEvidence[\s\S]*expert-create-submit[\s\S]*创建\|保存草稿[\s\S]*submitExpertCreateAndAssertVisible[\s\S]*expertCreateSubmitButton/],
   ['稳定 QA 专家固定名不可见时使用本轮唯一名', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家-\$\{new Date\(\)\.toISOString\(\)[\s\S]*findExpertCardByName\(page, expertName\)/],
   ['专家创建成功只认真实专家卡片', /waitForExpertCreateOutcome[\s\S]*Boolean\(await findExpertCardByName\(page, name\)\)/],
   ['纯 UI 用例不强制会话证据', /REPLY_EVIDENCE_OPTIONAL_CASE_IDS[\s\S]*SIT-HOME-050[\s\S]*requiresConversationEvidence = !replyEvidenceOptional/],

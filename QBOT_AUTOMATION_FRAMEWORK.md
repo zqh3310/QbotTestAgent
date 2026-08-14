@@ -233,6 +233,10 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   入口，并兼容旧文案“手动填表创建”和新版文案“高级手动创建”。`SIT-EXPERT-006`
   的路径断言与所有调用 `openManualCreateExpertModal()` 的场景必须遵守同一合同；稳定
   testid 可见时不得因展示文案演进误报 framework issue，进入后仍须独立读回完整表单。
+- 手动创建表单提交必须优先使用稳定的 `[data-testid="expert-create-submit"]`；旧版
+  fallback 只允许精确“创建”或“保存草稿”。表单证据必须读回提交按钮是否存在、
+  精确文案和 disabled 状态。不得因新版把“创建”演进为“保存草稿”误报 framework
+  issue，也不得把“保存并发布/立即发布/取消”等其他动作当作创建草稿提交。
 
 ## 4. Fixture 合同
 
