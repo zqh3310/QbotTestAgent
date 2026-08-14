@@ -224,6 +224,11 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   列表（或明确空态）已渲染、公开 `selectedSkills/selectedConnectors` 可读，才允许继续
   点击具体能力；点击后还必须从公开选择数组读回同一稳定 identity。单凭菜单文字、
   单凭 routing、打开列表，或旧控件仍存在但未点击都不得判定选择完成。
+- 日常回归专家目录审计必须兼容两代公开 preload 合同：旧版读取
+  `window.agent.getExpertsCatalog()`，新版读取 `window.agent.expertLifecycle.catalog()`。
+  新版 `{expertId, view, draft}` 投影必须归一化为 expert、display、version 和 release
+  稳定身份后再执行空名称、裸 UUID、重复 identity 与同名可区分性 Oracle；接口缺失
+  或结构无法归一化属于 framework issue，不得因直接调用不存在的方法中途硬停止。
 
 ## 4. Fixture 合同
 

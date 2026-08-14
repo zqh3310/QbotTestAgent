@@ -12637,8 +12637,43 @@ export function qworkDailySecretFindings(value, { includePrivatePaths = true } =
   })));
 }
 
+export function qworkDailyExpertCatalogBridgeRoute(surface = {}) {
+  if (surface.get_experts_catalog === true) return 'getExpertsCatalog';
+  if (surface.expert_lifecycle_catalog === true) return 'expertLifecycle.catalog';
+  return '';
+}
+
+export function normalizeQworkDailyExpertCatalog(rawCatalog = {}) {
+  const source = rawCatalog && typeof rawCatalog === 'object' ? rawCatalog : {};
+  const normalized = { ...source };
+  for (const bucket of ['recommended', 'recent', 'all', 'mine', 'shared']) {
+    if (!Array.isArray(source[bucket])) continue;
+    normalized[bucket] = source[bucket].map((item = {}) => {
+      const view = item?.view && typeof item.view === 'object' ? item.view : item;
+      const display = view?.display && typeof view.display === 'object'
+        ? view.display
+        : view?.manifest?.display && typeof view.manifest.display === 'object'
+          ? view.manifest.display
+          : {};
+      const version = view?.version && typeof view.version === 'object' ? view.version : {};
+      const release = view?.release && typeof view.release === 'object' ? view.release : {};
+      return {
+        ...item,
+        id: String(view?.id || item?.expertId || item?.id || '').trim(),
+        expertId: String(item?.expertId || view?.id || item?.id || '').trim(),
+        label: String(display.label || view?.label || item?.label || item?.name || '').trim(),
+        summary: String(display.summary || view?.summary || item?.summary || item?.desc || '').trim(),
+        owner: String(view?.owner?.name || view?.ownerName || view?.ownerId || item?.owner || '').trim(),
+        versionId: String(version.id || view?.versionId || item?.versionId || '').trim(),
+        releaseId: String(release.id || view?.activeReleaseId || item?.releaseId || '').trim(),
+      };
+    });
+  }
+  return normalized;
+}
+
 export function qworkDailyExpertCatalogVerdict(snapshot = {}) {
-  const catalog = snapshot?.catalog && typeof snapshot.catalog === 'object' ? snapshot.catalog : {};
+  const catalog = normalizeQworkDailyExpertCatalog(snapshot?.catalog);
   const buckets = ['recommended', 'recent', 'all', 'mine', 'shared']
     .filter((bucket) => Array.isArray(catalog[bucket]));
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -13799,10 +13834,21 @@ async function qworkDailyArtifactCase({ page, state, testCase, caseDir, timeoutM
 async function qworkDailyExpertCatalogCase({ page, state, testCase, caseDir }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', '专家中心');
-  const snapshot = await page.evaluate(async () => {
-    const catalog = await window.agent.getExpertsCatalog();
+  const apiSurface = await page.evaluate(() => ({
+    get_experts_catalog: typeof window.agent?.getExpertsCatalog === 'function',
+    expert_lifecycle_catalog: typeof window.agent?.expertLifecycle?.catalog === 'function',
+    expert_lifecycle_list: typeof window.agent?.expertLifecycle?.list === 'function',
+  }));
+  const catalogRoute = qworkDailyExpertCatalogBridgeRoute(apiSurface);
+  if (!catalogRoute) {
+    throw new Error(`QWork 专家目录没有受支持的公开读取接口：${JSON.stringify(apiSurface)}`);
+  }
+  const rawSnapshot = await page.evaluate(async (route) => {
     const lifecycle = window.agent.expertLifecycle;
-    const managed = lifecycle ? await lifecycle.list() : [];
+    const catalog = route === 'getExpertsCatalog'
+      ? await window.agent.getExpertsCatalog()
+      : await lifecycle.catalog();
+    const managed = typeof lifecycle?.list === 'function' ? await lifecycle.list() : [];
     const buckets = ['recommended', 'recent', 'all', 'mine', 'shared'];
     const cards = buckets.flatMap((bucket) => (Array.isArray(catalog?.[bucket]) ? catalog[bucket] : []).map((item) => ({ ...item, bucket })));
     return {
@@ -13812,9 +13858,20 @@ async function qworkDailyExpertCatalogCase({ page, state, testCase, caseDir }) {
       visible_cards: Array.from(document.querySelectorAll('.feat-card, .exp-card, .exp-card-mine')).filter((el) => {
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
-      }).map((el) => ({ text: String(el.textContent || '').replace(/\s+/g, ' ').trim(), testid: el.getAttribute('data-testid') || '' })),
+      }).map((el) => ({
+        text: String(el.textContent || '').replace(/\s+/g, ' ').trim(),
+        testid: el.getAttribute('data-testid') || '',
+        label: String(el.querySelector('.exp-name-text, .feat-title, [data-testid*="name"]')?.textContent || '').trim(),
+        summary: String(el.querySelector('.exp-desc, .feat-desc, [data-testid*="summary"]')?.textContent || '').trim(),
+      })),
     };
-  });
+  }, catalogRoute);
+  const snapshot = {
+    ...rawSnapshot,
+    catalog: normalizeQworkDailyExpertCatalog(rawSnapshot.catalog),
+    catalog_source: catalogRoute,
+    catalog_api_surface: apiSurface,
+  };
   const verdict = qworkDailyExpertCatalogVerdict(snapshot);
   const readback = { ...verdict, ...snapshot };
   writeQworkDailyEvidence(state, caseDir, 'qwork_daily_readback', readback, readback.oracle_valid);

@@ -34,12 +34,14 @@ import {
   coreBetaSuiteLedgerPath,
   coreBetaSuiteRoot,
   qworkDailyEvidenceEnvelope,
+  qworkDailyExpertCatalogBridgeRoute,
   qworkDailyExpertCatalogVerdict,
   qworkDailyNewTaskAutoIsolationVerdict,
   qworkDailyPersonalTaskContext,
   qworkDailyRedactionVerdict,
   qworkDailySecretFindings,
   qworkDailyWorkspaceTaskBindingVerdict,
+  normalizeQworkDailyExpertCatalog,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 {
@@ -373,6 +375,14 @@ assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
 }), false, '任务B未发送草稿出现在重开的任务A时必须失败');
 
 {
+  assert.equal(qworkDailyExpertCatalogBridgeRoute({ get_experts_catalog: true }), 'getExpertsCatalog');
+  assert.equal(
+    qworkDailyExpertCatalogBridgeRoute({ expert_lifecycle_catalog: true }),
+    'expertLifecycle.catalog',
+    '新版 SIT preload 只暴露 expertLifecycle.catalog 时必须走公开生命周期目录接口',
+  );
+  assert.equal(qworkDailyExpertCatalogBridgeRoute({}), '', '没有公开目录接口时必须 fail-closed');
+
   const readable = {
     catalog: {
       recommended: [{ id: 'expert-a', label: '发布顾问', summary: '负责发布检查', author: '甲', version: '1' }],
@@ -400,6 +410,48 @@ assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
   assert.equal(catalogFailure.oracle_valid, false);
   assert.equal(catalogFailure.invalid.length, 1, '标准 8-4-4-4-12 UUID 必须被识别');
   assert.equal(catalogFailure.duplicates.length, 1, '同一分区完全重复 identity 必须失败');
+
+  const lifecycleCatalog = {
+    schemaVersion: 'qwork.expert-catalog/v1',
+    recommended: [{
+      expertId: 'expert-v2',
+      view: {
+        id: 'expert-v2',
+        activeReleaseId: 'release-v2',
+        display: { label: '专家构建师', summary: '通过对话创建、修改并校验专家草稿。' },
+        version: { id: 'version-v2' },
+        release: { id: 'release-v2' },
+      },
+      draft: null,
+    }],
+    recent: [],
+    all: [],
+    mine: [],
+    shared: [],
+  };
+  const normalizedLifecycleCatalog = normalizeQworkDailyExpertCatalog(lifecycleCatalog);
+  assert.deepEqual(
+    {
+      id: normalizedLifecycleCatalog.recommended[0].id,
+      label: normalizedLifecycleCatalog.recommended[0].label,
+      summary: normalizedLifecycleCatalog.recommended[0].summary,
+      versionId: normalizedLifecycleCatalog.recommended[0].versionId,
+      releaseId: normalizedLifecycleCatalog.recommended[0].releaseId,
+    },
+    {
+      id: 'expert-v2',
+      label: '专家构建师',
+      summary: '通过对话创建、修改并校验专家草稿。',
+      versionId: 'version-v2',
+      releaseId: 'release-v2',
+    },
+    'expertLifecycle.catalog 的 {expertId, view, draft} 投影必须归一为稳定专家身份',
+  );
+  assert.equal(
+    qworkDailyExpertCatalogVerdict({ catalog: lifecycleCatalog }).oracle_valid,
+    true,
+    '新版生命周期目录不能因 preload 移除 getExpertsCatalog 而触发 automation_error',
+  );
 }
 
 {
