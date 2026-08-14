@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { normalizeCdpUrl, validatePinnedQworkUiUrl } from './config.mjs';
 
-const QWORK_TARGET_PATTERN = /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//;
+const QWORK_TARGET_PATTERN = /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

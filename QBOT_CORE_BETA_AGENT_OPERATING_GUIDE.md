@@ -14,13 +14,13 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
-- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.3.1` build `2119081159`、
-  QWork `0.1.2-rc.100`、UI commit `9f09ca01`、backend
+- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.10` build `2119081439`、
+  QWork `0.1.2-sit.7`、UI commit `4ddfa218`、backend
   `sit-health-ae3b6cafbc5ed123`、control plane
   `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner，也没有有效 monitor；受管 360Teams PID `68193`、CDP
-  `http://127.0.0.1:57730` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
+- 当前没有有效 runner，也没有有效 monitor；受管 360Teams PID `20115`、CDP
+  `http://127.0.0.1:53155` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
   旧输出目录或旧监控。
 
 本轮目标 Casebook：

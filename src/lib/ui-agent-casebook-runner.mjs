@@ -1721,6 +1721,7 @@ export function executionReleaseEnvironment({ controlPlaneUrl = '', qworkUiUrl =
   if (/\/\.deepbank\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'PROD' });
   else if (/\/\.deepbank-dev\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'DEV' });
   else if (/\/\.deepbank-uat\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'UAT' });
+  else if (/\/\.deepbank-sit\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'SIT' });
   else if (/\/\.deepbank-local\/ui\//.test(ui)) observations.push({ source: 'qwork_ui', environment: 'LOCAL' });
 
   const controlPlane = String(controlPlaneUrl || '').trim();
@@ -1729,6 +1730,7 @@ export function executionReleaseEnvironment({ controlPlaneUrl = '', qworkUiUrl =
     try { hostname = new URL(controlPlane).hostname.toLowerCase(); } catch {}
     if (hostname === 'qbot-api.360shuke.com') observations.push({ source: 'control_plane', environment: 'PROD' });
     else if (/uat/.test(hostname)) observations.push({ source: 'control_plane', environment: 'UAT' });
+    else if (/sit/.test(hostname)) observations.push({ source: 'control_plane', environment: 'SIT' });
     else if (['127.0.0.1', 'localhost', '::1'].includes(hostname)) observations.push({ source: 'control_plane', environment: 'LOCAL' });
     else if (hostname) observations.push({ source: 'control_plane', environment: 'DEV' });
   }
@@ -1749,6 +1751,7 @@ function requiredFixtureEnvironment(testCase = {}) {
   if (/(?:外部\s*DEV|\bDEV\b)/i.test(text)) return 'DEV';
   if (/(?:正式|生产|\bPROD\b)/i.test(text)) return 'PROD';
   if (/\bUAT\b/i.test(text)) return 'UAT';
+  if (/\bSIT\b/i.test(text)) return 'SIT';
   if (/(?:本地|\bLOCAL\b)/i.test(text)) return 'LOCAL';
   return '';
 }
@@ -28336,7 +28339,7 @@ async function rankQbotPageCandidates(candidates) {
     let score = 0;
     if (/\bQWork\b/i.test(title)) score += 120;
     if (/QBot|deepbank/i.test(title)) score += 80;
-    if (/\.deepbank(?:-dev)?\/ui\/|deepbank/i.test(url)) score += 100;
+    if (/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\/|deepbank/i.test(url)) score += 100;
     if (/\/apps\/qbot\b|[/?#]qbot\b/i.test(url)) score += 30;
     if (/localhost|127\.0\.0\.1/i.test(url)) score += 5;
     ranked.push({ page, score, title, url });

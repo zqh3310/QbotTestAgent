@@ -236,6 +236,11 @@ Teams lane 的 runner 在调用该命令前必须先激活受管 `360Teams`，�
 System Events 读回 `frontmost=360Teams`；只有物理宿主激活成功后，才能对当前
 replacement WebView 依次执行 `bringToFront`、真实 Composer 点击和 DOM focus，
 并读回 `document.hasFocus()`、`document.activeElement` 与 Composer 可见性全部成立。
+受管 QWork 的版本化 UI 允许位于 `~/.deepbank/ui`、`~/.deepbank-dev/ui`、
+`~/.deepbank-local/ui`、`~/.deepbank-uat/ui` 或 `~/.deepbank-sit/ui`。目标发现、
+CDP 代理、重连、宿主重挂载、固定 UI 校验和发布环境判定必须使用同一组 release
+home；SIT 控制面与 `~/.deepbank-sit/ui` 必须同时判定为 `SIT`，不得误报为
+QWork 未挂载或降级成 DEV。
 macOS 在应用切换瞬间可能短暂无任何 `frontmost` application process；宿主激活
 必须在有界次数内重新执行 activate 并逐次保存 command status、前台进程与错误读回。
 瞬时空读回或 `-1719` 不得在首次采样就终止 Case；有界重试后仍不能精确读回

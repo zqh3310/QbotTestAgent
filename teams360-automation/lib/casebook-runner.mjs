@@ -318,7 +318,7 @@ export async function connectTeamsCasebookBrowser(cdpUrl, {
     try {
       browser = await chromium.connectOverCDP(cdpUrl, { timeout: timeoutMs });
       const qworkPages = browser.contexts().flatMap((context) => context.pages())
-        .filter((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+        .filter((candidate) => /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(candidate.url()));
       const page = (expectedQworkUi
         ? qworkPages.find((candidate) => {
           try { return new URL(candidate.url()).href === expectedQworkUi.url; } catch { return false; }
@@ -511,7 +511,7 @@ export async function recoverTeamsQworkWorkbench(cdpUrl, {
   const qworkTarget = Array.isArray(targets) ? targets.find((target) => (
     target?.type === 'webview'
     && (/^QWork$/i.test(String(target.title || ''))
-      || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(target.url || '')))
+      || /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(String(target.url || '')))
   )) : null;
   if (!qworkTarget?.url && !expectedUiUrl) {
     return { recovered: false, reason: 'QWork WebView is unavailable; pinned UI cannot be preserved.' };
@@ -629,7 +629,7 @@ export async function waitForManagedQworkUi(cdpUrl, expectedUiUrl, timeoutMs = 3
         const qwork = (Array.isArray(targets) ? targets : []).find((target) => (
           target?.type === 'webview'
           && (/^QWork$/i.test(String(target.title || ''))
-            || /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(String(target.url || '')))
+            || /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(String(target.url || '')))
         ));
         lastObserved = String(qwork?.url || '');
         if (lastObserved && new URL(lastObserved).href === expected.url) return expected;
@@ -867,7 +867,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             expectedQworkUiUrl: runtimeIdentity.qworkUiUrl,
           });
           const nextPage = nextBrowser.contexts().flatMap((context) => context.pages())
-            .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+            .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(candidate.url()));
           if (!nextPage) {
             await nextBrowser.close().catch(() => {});
             throw new Error('Fresh Teams CDP proxy connected without a QWork page.');
@@ -966,7 +966,7 @@ export function teamsCasebookExitCode(summary = {}) {
 
 export async function configureTeamsFixtureRuntime(options, browser) {
   const page = browser.contexts().flatMap((context) => context.pages())
-    .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\//.test(candidate.url()));
+    .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(candidate.url()));
   if (!page) throw new Error('Cannot configure Teams fixture runtime without the QWork QBot page.');
   const qworkUiUrl = page.url();
   const requestedControlPlane = String(options['control-plane-url'] || '').trim();
@@ -1025,7 +1025,7 @@ export function pinManagedSessionControlPlane(sessionFile, controlPlane) {
 function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
   const normalized = String(controlPlane || '').trim();
   if (!normalized) throw new Error('QWork did not expose DEEPBANK_SERVER; fault fixtures cannot be restored safely.');
-  if (!/\/\.deepbank(?:-(?:dev|local|uat))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(String(qworkUiUrl || ''))) {
+  if (!/\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(String(qworkUiUrl || ''))) {
     throw new Error('QWork did not expose a versioned UI URL; managed host relaunch is unsafe.');
   }
   const restartCapability = inspectManagedTeamsRestartCapability();

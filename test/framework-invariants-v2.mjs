@@ -659,6 +659,11 @@ assert.doesNotMatch(
     'Teams file UI URL 必须精确推断 QWork home，不能退回用户全局 HOME',
   );
   assert.equal(
+    coreBetaQbotHomeFromUiUrl('file:///Users/qa/.deepbank-sit/ui/0.1.2-sit.7/index.html'),
+    '/Users/qa/.deepbank-sit',
+    'SIT versioned QWork UI 必须精确推断隔离 release home',
+  );
+  assert.equal(
     coreBetaProductHomeForUi({
       uiUrl: 'file:///Users/qa/.deepbank-uat/ui/0.0.30/index.html',
       options: { 'qbot-home': '/tmp/teams-control-plane-home' },

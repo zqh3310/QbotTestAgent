@@ -188,15 +188,15 @@ test('managed QWork relaunch accepts only a ready versioned UI inside the runtim
   }
 });
 
-test('managed QWork recognizes release-isolated dev runtime homes across target discovery and relaunch', () => {
+test('managed QWork recognizes release-isolated SIT runtime homes across target discovery and relaunch', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-qwork-release-home-'));
-  const versionDir = path.join(home, '.deepbank-dev', 'ui', '0.0.11');
+  const versionDir = path.join(home, '.deepbank-sit', 'ui', '0.1.2-sit.7');
   fs.mkdirSync(versionDir, { recursive: true });
   fs.writeFileSync(path.join(versionDir, 'index.html'), '<!doctype html>');
-  fs.writeFileSync(path.join(versionDir, '.installed.json'), JSON.stringify({ status: 'ready', version: '0.0.11' }));
+  fs.writeFileSync(path.join(versionDir, '.installed.json'), JSON.stringify({ status: 'ready', version: '0.1.2-sit.7' }));
   try {
     const pinned = validatePinnedQworkUiUrl(`file://${path.join(versionDir, 'index.html')}`, { homeDir: home });
-    assert.equal(pinned.version, '0.0.11');
+    assert.equal(pinned.version, '0.1.2-sit.7');
     for (const file of [
       '../lib/cdp-webview.mjs',
       '../lib/cdp-webview-proxy.mjs',
@@ -204,10 +204,10 @@ test('managed QWork recognizes release-isolated dev runtime homes across target 
       '../lib/relaunch-managed-host.mjs',
     ]) {
       const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
-      assert.match(source, /deepbank.*dev.*local.*uat/s);
+      assert.match(source, /deepbank.*dev.*local.*uat.*sit/s);
     }
     const restart = fs.readFileSync(new URL('../runtime/scripts/restart-qbot-electron-control-plane.sh', import.meta.url), 'utf8');
-    assert.match(restart, /deepbank\(-dev\|-local\|-uat\)\?/);
+    assert.match(restart, /deepbank\(-dev\|-local\|-uat\|-sit\)\?/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -1281,7 +1281,7 @@ test('Teams Electron restart shim ignores fixture URLs and auto-discovers the pi
   const source = fs.readFileSync(new URL('../runtime/scripts/restart-qbot-electron-control-plane.sh', import.meta.url), 'utf8');
   assert.match(source, /EXPECTED_QWORK_UI_URL="\$\{5-\}"/);
   assert.match(source, /AGENT_MOCK="\$\{6:-0\}"/);
-  assert.match(source, /\.deepbank\(-dev\|-local\|-uat\)\?\/ui/);
+  assert.match(source, /\.deepbank\(-dev\|-local\|-uat\|-sit\)\?\/ui/);
   assert.match(source, /relaunch-managed-host\.mjs" "\$CONTROL_PLANE_URL" "" "\$AGENT_MOCK"$/m);
 });
 
@@ -1571,6 +1571,7 @@ test('managed Teams profile derives the release environment from the pinned QWor
   assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank/ui/0.0.14/index.html'), 'PROD');
   assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-dev/ui/0.0.14/index.html'), 'DEV');
   assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-uat/ui/0.0.14/index.html'), 'UAT');
+  assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-sit/ui/0.1.2-sit.7/index.html'), 'SIT');
   assert.equal(managedQworkReleaseEnv('file:///Users/test/.deepbank-local/ui/0.0.14/index.html'), 'LOCAL');
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-profile-prod-repin-'));

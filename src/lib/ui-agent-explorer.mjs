@@ -713,7 +713,7 @@ async function rankQbotPageCandidates(candidates) {
     let score = 0;
     if (/\bQWork\b/i.test(title)) score += 120;
     if (/QBot|deepbank/i.test(title)) score += 80;
-    if (/\.deepbank(?:-dev)?\/ui\/|deepbank/i.test(url)) score += 100;
+    if (/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\/|deepbank/i.test(url)) score += 100;
     if (/\/apps\/qbot\b|[/?#]qbot\b/i.test(url)) score += 30;
     if (/localhost|127\.0\.0\.1/i.test(url)) score += 5;
     ranked.push({ page, score, title, url });

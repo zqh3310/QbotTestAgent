@@ -37,6 +37,7 @@ export function managedQworkReleaseEnv(uiUrl) {
   const pathname = new URL(String(uiUrl || '').trim()).pathname;
   if (/\/\.deepbank-dev\/ui\//.test(pathname)) return 'DEV';
   if (/\/\.deepbank-uat\/ui\//.test(pathname)) return 'UAT';
+  if (/\/\.deepbank-sit\/ui\//.test(pathname)) return 'SIT';
   if (/\/\.deepbank-local\/ui\//.test(pathname)) return 'LOCAL';
   if (/\/\.deepbank\/ui\//.test(pathname)) return 'PROD';
   throw new Error(`Managed Teams QBot profile UI does not identify a supported release home: ${uiUrl}`);

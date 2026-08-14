@@ -661,6 +661,21 @@ test('production executor readiness fails closed on release drift, fixture misma
     },
   );
 
+  assert.deepEqual(
+    executionReleaseEnvironment({
+      controlPlaneUrl: 'https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net',
+      qworkUiUrl: 'file:///Users/test/.deepbank-sit/ui/0.1.2-sit.7/index.html',
+    }),
+    {
+      environment: 'SIT',
+      consistent: true,
+      observations: [
+        { source: 'qwork_ui', environment: 'SIT' },
+        { source: 'control_plane', environment: 'SIT' },
+      ],
+    },
+  );
+
   const readiness = validateCasebookExecutorReadiness([{
     id: 'USR-START-001',
     contract_version: 'qbot-current-casebook/v4',

@@ -23,7 +23,7 @@ export async function discoverWebviewProbes(cdpUrl, { timeoutMs = 10_000 } = {})
         };
         const bodyText = document.body?.innerText || '';
         const qbotLocalUi = /qbot/i.test(document.title)
-          || /\\/\\.deepbank(?:-(?:dev|local|uat))?\\/ui\\//.test(location.pathname);
+          || /\\/\\.deepbank(?:-(?:dev|local|uat|sit))?\\/ui\\//.test(location.pathname);
         const qbotBridgeReady = typeof globalThis.qbotRuntime === 'object' && typeof globalThis.agent === 'object';
         const qbotWorkbench = qbotLocalUi
           && qbotBridgeReady

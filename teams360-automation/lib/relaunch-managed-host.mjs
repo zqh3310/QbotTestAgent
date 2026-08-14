@@ -169,7 +169,7 @@ export async function resolvePinnedQworkUi(session, explicitUrl = '') {
   const targets = await response.json();
   const candidate = (Array.isArray(targets) ? targets : [])
     .map((target) => String(target?.url || ''))
-    .find((url) => /\/\.deepbank(?:-(?:dev|local|uat))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(url));
+    .find((url) => /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\/[^/]+\/index\.html(?:$|[?#])/.test(url));
   if (!candidate) throw new Error('Managed 360Teams CDP has no pinned QWork WebView URL; refusing restart.');
   return validatePinnedQworkUiUrl(candidate);
 }

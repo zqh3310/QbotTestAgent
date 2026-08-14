@@ -116,7 +116,7 @@ export function validatePinnedQworkUiUrl(value, {
   const resolved = path.resolve(file);
   const runtimeHomes = runtimeHome
     ? [path.resolve(runtimeHome)]
-    : ['', 'dev', 'local', 'uat'].map((suffix) => path.join(
+    : ['', 'dev', 'local', 'uat', 'sit'].map((suffix) => path.join(
       homeDir,
       suffix ? `.deepbank-${suffix}` : '.deepbank',
     ));
