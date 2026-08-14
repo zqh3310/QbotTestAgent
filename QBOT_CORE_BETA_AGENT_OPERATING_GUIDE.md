@@ -110,6 +110,18 @@ runner 已在第二叶子执行中停止，PID `76558` 已退出；该目录永�
 fallback 仅精确接受“创建/保存草稿”，同时拒绝发布、取消等其他动作；全检、提交
 推送和新 `READY` 后必须在新目录从 `1/83` 全量重跑。
 
+修复专家草稿提交定位后启动的批次保留在不可变目录
+`teams360-automation/output/20260814231034_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-fefdef8_casebook-8a62aac`：
+第 1 条 `QW-ENTRY-001` 完成；第 2 条 `QW-ENTRY-002` 的叶子
+`QWD-ENTRY-002` 已真实选择 Skill `source-verification`，随后精确点击 Connector
+`mcphub:risk`，但产品公开 `selectedConnectors` 仍为空。框架已保存点击回执、失败
+截图、空 task、零消息、send count 不变、`pre-send-capability-failure.json` 和三份
+`evidence_valid=true/oracle_valid=false` 专项读回；manifest 校验器却漏识别
+`manual_connector_selection` stage，拒绝 7 个受校验 N/A 角色并误升级为
+`automation_error`。该目录永久冻结；修复必须统一证据生成、manifest 和可信复核的
+stage 集合，以本次真实结构强化 invariant，完成全检、提交推送和新 `READY` 后，
+从 `1/83` 在新目录全量重跑并将该产品失败保持为可继续的 `bug`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

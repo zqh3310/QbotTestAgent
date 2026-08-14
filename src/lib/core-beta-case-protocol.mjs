@@ -1588,7 +1588,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && String(blocker?.expected_identity || '').trim()
       && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
       && interaction?.capability_kind === blocker?.capability_kind
-      && ['manual_mode', 'manual_skill_selection'].includes(String(interaction?.stage || ''))
+      && ['manual_mode', 'manual_skill_selection', 'manual_connector_selection']
+        .includes(String(interaction?.stage || ''))
       && interaction?.expected_identity === blocker?.expected_identity
       && interaction?.control_located === true
       && interaction?.click_dispatched === true

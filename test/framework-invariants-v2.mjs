@@ -2024,7 +2024,7 @@ assert.equal(
     const dailyConnectorFailure = coreBetaPreSendCapabilityFailureEvidence({
       testCaseId: 'QWD-ENTRY-002',
       capabilityKind: 'connector',
-      expectedIdentity: 'mcphub:daily-first',
+      expectedIdentity: 'mcphub:risk',
       before: {
         task: { id: null, running: false, send_count: 31, message_count: 0 },
         connectors: { selected: [] },
@@ -2037,17 +2037,23 @@ assert.equal(
         ...interaction,
         capability_kind: 'connector',
         stage: 'manual_connector_selection',
-        expected_identity: 'mcphub:daily-first',
-        control_testid: 'composer-connector-option-mcphub:daily-first',
-        manual_surface: { list_visible: true, option_count: 28, empty_visible: false },
+        expected_identity: 'mcphub:risk',
+        control_testid: 'composer-connector-option-mcphub:risk',
+        manual_surface: { list_visible: true, option_count: 27, empty_visible: false },
       },
       noPromptRecorded: true,
       noSendReceiptRecorded: true,
     });
     assert.equal(dailyConnectorFailure.evidence_valid, true);
+    assert.equal(dailyConnectorFailure.oracle_valid, false);
     assert.equal(dailyConnectorFailure.interaction.stage, 'manual_connector_selection');
+    assert.equal(dailyConnectorFailure.mutation_guard.before_task.id, null);
+    assert.equal(dailyConnectorFailure.mutation_guard.after_task.id, null);
+    assert.equal(dailyConnectorFailure.mutation_guard.send_count_unchanged, true);
+    assert.deepEqual(dailyConnectorFailure.mutation_guard.before_selection, []);
+    assert.deepEqual(dailyConnectorFailure.mutation_guard.after_selection, []);
     const blockerFile = path.join(evidenceDir, 'daily-pre-send-capability-failure.json');
-    writeJsonFile(blockerFile, dailyFailure);
+    writeJsonFile(blockerFile, dailyConnectorFailure);
     const dailyArtifacts = { capability_selection: blockerFile };
     for (const role of ['qwork_daily_readback', 'composer_attachment_state', 'data_integrity_readback']) {
       const file = path.join(evidenceDir, `${role}.json`);
@@ -2064,7 +2070,7 @@ assert.equal(
         `${role} 的产品负向读回必须保持 evidence_valid=true`,
       );
     }
-    dailyArtifacts.core_beta_not_applicable_roles = dailyFailure.not_applicable_roles.map((role) => ({
+    dailyArtifacts.core_beta_not_applicable_roles = dailyConnectorFailure.not_applicable_roles.map((role) => ({
       role,
       blocker_path: blockerFile,
     }));
@@ -2091,6 +2097,11 @@ assert.equal(
     assert.equal(dailyManifest.complete, true, 'QWD-ENTRY-002 发送前产品失败必须形成完整 manifest');
     assert.deepEqual(dailyManifest.missing_roles, []);
     assert.deepEqual(dailyManifest.invalid_roles, []);
+    assert.deepEqual(
+      dailyManifest.not_applicable_roles.map((item) => item.role).sort(),
+      [...dailyConnectorFailure.not_applicable_roles].sort(),
+      'Connector 点击已派发但未选中时，完整发送链和 capability execution 必须受校验地标为 N/A',
+    );
     assert.equal(
       resultHasAutomationError({
         status: 'failed',
