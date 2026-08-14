@@ -7287,8 +7287,9 @@ export function coreBetaSkillUninstallRequestName(skill = {}) {
   return name;
 }
 
-async function openCoreBetaSkillSurface(page) {
+async function openCoreBetaSkillSurface(page, state) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
+  await returnFromExpertBuilderIfNeeded(page, state);
   await page.locator('[data-testid="skills-tab"]').click({ timeout: 15_000 });
   await expectVisibleCoreLocator(page, '[data-testid="skills-view"]', '技能页');
 }
@@ -8326,7 +8327,7 @@ function writeCoreBetaSkillCreatorCleanupEvidence({ state, caseDir }) {
 
 async function executeCoreBetaSkillCase({ page, state, testCase, caseDir, timeoutMs, options = {} }) {
   if (testCase.case_type === 'skill_lifecycle') {
-    await openCoreBetaSkillSurface(page);
+    await openCoreBetaSkillSurface(page, state);
     const ledger = readCoreBetaSuiteLedger(caseDir);
     ledger.skills ||= {};
     if (testCase.id === 'BETA-SKILL-001') {
@@ -9979,6 +9980,7 @@ export function coreBetaExpertBuilderOutcomeEvidence({
 
 async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
+  await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
   const bridge = await page.evaluate(async () => {
     const lifecycle = window.agent?.expertLifecycle;
@@ -13997,6 +13999,7 @@ async function qworkDailyArtifactCase({ page, state, testCase, caseDir, timeoutM
 
 async function qworkDailyExpertCatalogCase({ page, state, testCase, caseDir }) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
+  await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', '专家中心');
   const apiSurface = await page.evaluate(() => ({
     get_experts_catalog: typeof window.agent?.getExpertsCatalog === 'function',
@@ -14046,6 +14049,7 @@ async function qworkDailyExpertCatalogCase({ page, state, testCase, caseDir }) {
 
 async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, timeoutMs }, scenario) {
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
+  await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', '专家中心');
   const name = `QWork日常专家-${testCase.id}-${Date.now()}`;
   const audience = scenario.driver === 'qwork_daily_expert_owner_org_publish' ? 'org' : 'owner';

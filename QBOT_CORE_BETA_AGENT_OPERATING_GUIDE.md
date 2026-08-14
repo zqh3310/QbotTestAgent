@@ -148,6 +148,19 @@ stage 集合，以本次真实结构强化 invariant，完成全检、提交推�
 构建页，完成 invariant、双框架全检、提交推送和新 `READY` 后，在新目录从
 `1/83` 全量重跑。
 
+首次接入专家构建页返回逻辑后的批次保留在不可变目录
+`teams360-automation/output/20260815020900_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-7fcd0d7_casebook-8a62aac`：
+已完成 `32/83`，raw 为 `passed=16/failed=16/blocked=0`。第 32 条
+`QW-EXPERT-004` 三个叶子均完整落盘，证明 legacy 专家入口已经能从构建页返回；
+第 33 条 `QW-EXPERT-005` 的首叶子 `BETA-EXPERT-003` 仍停在专家构建页。
+根因是 Core Beta v2 `executeCoreBetaExpertCase()` 直接点击侧栏并立即断言
+`[data-testid="experts-view"]`，绕过了只接入 legacy `openExpertsPage/openSkillsPage`
+的恢复逻辑，因此在进入 Codex runtime 切换前抛出 `automation_error`，manifest
+缺少 15 个执行角色，后续 4 个叶子和 50 个父 Case 未执行。该目录永久冻结；修复必须
+让 Core Beta Expert、Core Beta Skill 和日常回归原生 Expert 的所有直接入口共享
+构建页返回逻辑，以 invariant 禁止旁路。全检、提交推送和新 `READY` 后，仍须在新
+目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

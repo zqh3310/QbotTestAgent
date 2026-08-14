@@ -239,6 +239,10 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   `[data-testid="create-expert-top"]` 或技能页签。旧版回退只允许可见
   `button.expert-center-back` 且文案精确为“返回专家中心”。返回入口点击失败、未消失或
   返回后中心控件不可读仍属于 framework issue，不得继续查找下一个页面的控件。
+  该恢复合同覆盖全部入口，不只覆盖 legacy `openExpertsPage/openSkillsPage`：Core Beta
+  Expert 生命周期、Core Beta Skill 生命周期和 QWork 日常回归原生 Expert driver
+  在断言 `experts-view/skills-view` 前都必须调用同一返回逻辑；任何直接点击侧栏后立刻
+  断言中心页面的旁路都必须由 invariant 拒绝。
 - 手动创建表单提交必须优先使用稳定的 `[data-testid="expert-create-submit"]`；旧版
   fallback 只允许精确“创建”或“保存草稿”。表单证据必须读回提交按钮是否存在、
   精确文案和 disabled 状态。不得因新版把“创建”演进为“保存草稿”误报 framework
