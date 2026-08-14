@@ -99,6 +99,7 @@ import {
   coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
+  coreBetaV2ExpertCreationDismissAction,
   coreBetaV2WorkspaceCreationDismissAction,
   qworkPartialAttachmentLogExcerpt,
   coreBetaV2SettingsLoadTimeoutMs,
@@ -5231,11 +5232,58 @@ assert.equal(
   false,
   '普通弹窗不得复用新建工作空间清理规则',
 );
+assert.equal(
+  coreBetaV2ExpertCreationDismissAction('创建专家\n开始创建（用对话）\n高级手动创建', 'close-icon', 'close_icon'),
+  true,
+  '新版创建专家选择弹窗必须允许明确关闭图标',
+);
+assert.equal(
+  coreBetaV2ExpertCreationDismissAction('创建专家\n开始创建（用对话）\n手动填表创建', '关闭'),
+  true,
+  '旧版创建专家选择弹窗必须允许精确关闭动作',
+);
+assert.equal(
+  coreBetaV2ExpertCreationDismissAction('创建专家\n开始创建（用对话）\n高级手动创建', '开始创建'),
+  false,
+  '自动化前置清理禁止进入任一专家创建路径',
+);
+assert.equal(
+  coreBetaV2ExpertCreationDismissAction('普通专家详情', 'close-icon', 'close_icon'),
+  false,
+  '普通专家页面不得复用创建专家选择弹窗清理规则',
+);
+const expertCreationActionStart = runner.indexOf('export function coreBetaV2ExpertCreationDismissAction');
+const expertCreationDismissStart = runner.indexOf('async function dismissCoreBetaV2ExpertCreationObstruction');
 const workspaceDismissStart = runner.indexOf('async function dismissCoreBetaV2WorkspaceCreationObstruction');
 const runtimeUpdateDismissStart = runner.indexOf('async function dismissCoreBetaV2RuntimeUpdateObstruction');
 assert.ok(
-  workspaceDismissStart >= 0 && runtimeUpdateDismissStart > workspaceDismissStart,
-  '新建工作空间专用清理器必须存在并定义在版本提示清理器之前',
+  expertCreationActionStart >= 0
+    && expertCreationDismissStart > expertCreationActionStart
+    && workspaceDismissStart > expertCreationDismissStart
+    && runtimeUpdateDismissStart > workspaceDismissStart,
+  '创建专家与新建工作空间专用清理器必须存在并定义在版本提示清理器之前',
+);
+const expertCreationActionSource = runner.slice(expertCreationActionStart, expertCreationDismissStart);
+assert.match(
+  expertCreationActionSource,
+  /创建专家[\s\S]*开始创建[\s\S]*手动填表创建\|高级手动创建[\s\S]*\^\(\?:取消\|关闭\)\$/,
+  '创建专家残留弹窗判定必须同时验证选择弹窗文案，并仅允许精确取消或关闭动作',
+);
+const expertCreationDismissSource = runner.slice(expertCreationDismissStart, workspaceDismissStart);
+assert.match(
+  expertCreationDismissSource,
+  /coreBetaV2ExpertCreationDismissAction[\s\S]*action\.click\(\{ timeout: 5000 \}\)[\s\S]*waitFor\(\{ state: 'hidden', timeout: 5000 \}\)/,
+  '创建专家残留弹窗清理必须复用精确安全判定、点击关闭入口并等待 hidden',
+);
+assert.doesNotMatch(
+  expertCreationDismissSource,
+  /force:\s*true|name:\s*\/\^开始创建|expert-create-manual.*click/,
+  '创建专家残留弹窗清理不得 force 穿透或进入任一创建路径',
+);
+assert.match(
+  expertCreationDismissSource,
+  /expert-creation-dialog-dismiss-[\s\S]*-before[\s\S]*-after[\s\S]*qbot-core-beta-expert-creation-dialog-dismiss\/v1[\s\S]*hidden_after_click[\s\S]*expert_creation_dialog_dismissals/,
+  '创建专家残留弹窗清理必须保存前后截图、隐藏读回和结构化 ledger',
 );
 const workspaceDismissSource = runner.slice(workspaceDismissStart, runtimeUpdateDismissStart);
 assert.match(
@@ -5275,13 +5323,13 @@ assert.match(
 );
 assert.match(
   runner,
-  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*async function openCoreBetaV2SystemSettings/,
-  '进入系统设置前必须先清理新建工作空间模态框，再检查异步晚到的 QWork 更新提示',
+  /async function dismissCoreBetaV2SettingsObstruction[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*dismissCoreBetaV2ExpertCreationObstruction[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*async function openCoreBetaV2SystemSettings/,
+  '进入系统设置前必须先清理新建工作空间与创建专家模态框，再检查异步晚到的 QWork 更新提示',
 );
 assert.match(
   runner,
-  /async function dismissBlockingOverlays[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*无法安全关闭新建工作空间弹窗[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*无法安全跳过 QWork 版本更新提示/,
-  '每条 Case 开始时必须先关闭前景新建工作空间模态框，再处理版本提示；任一无法安全关闭都 fail-closed',
+  /async function dismissBlockingOverlays[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*无法安全关闭新建工作空间弹窗[\s\S]*dismissCoreBetaV2ExpertCreationObstruction[\s\S]*无法安全关闭创建专家弹窗[\s\S]*dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*无法安全跳过 QWork 版本更新提示/,
+  '每条 Case 开始时必须先关闭前景工作空间或创建专家模态框，再处理版本提示；任一无法安全关闭都 fail-closed',
 );
 assert.match(
   runner,

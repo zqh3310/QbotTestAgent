@@ -5226,6 +5226,155 @@ export function coreBetaV2WorkspaceCreationDismissAction(promptText, actionText,
   return /^(?:取消|关闭)$/.test(action);
 }
 
+export function coreBetaV2ExpertCreationDismissAction(promptText, actionText, actionKind = 'button') {
+  const prompt = String(promptText || '').replace(/\s+/g, ' ').trim();
+  const action = String(actionText || '').replace(/\s+/g, ' ').trim();
+  const expertCreationDialog = /^创建专家(?:\s|$)/.test(prompt)
+    && /开始创建/.test(prompt)
+    && /手动填表创建|高级手动创建/.test(prompt);
+  if (!expertCreationDialog) return false;
+  if (actionKind === 'close_icon') return true;
+  return /^(?:取消|关闭)$/.test(action);
+}
+
+async function dismissCoreBetaV2ExpertCreationObstruction(page, state = null) {
+  const dialogs = page.locator('[role="dialog"], .modal, .ant-modal, .el-dialog').filter({
+    hasText: /创建专家/,
+  });
+  const dialogCount = Math.min(await dialogs.count().catch(() => 0), 20);
+  let dialog = null;
+  let text = '';
+  for (let index = 0; index < dialogCount; index += 1) {
+    const candidate = dialogs.nth(index);
+    if (!(await visible(candidate, 100))) continue;
+    const candidateText = await candidate.innerText({ timeout: 1000 }).catch(() => '');
+    if (!coreBetaV2ExpertCreationDismissAction(candidateText, '关闭')) continue;
+    dialog = candidate;
+    text = candidateText;
+    break;
+  }
+  if (!dialog) {
+    return { observed: false, ok: true, dismissed: false, text: '', action_text: '', action_kind: '' };
+  }
+
+  const cancel = dialog.getByRole('button', { name: /^(?:取消|关闭)$/ }).first();
+  const closeIcon = dialog.locator(
+    '.modal-x, button[aria-label="关闭"], [role="button"][aria-label="关闭"], button[title="关闭"], [role="button"][title="关闭"]',
+  ).first();
+  let action = null;
+  let actionText = '';
+  let actionKind = '';
+  if (await visible(cancel, 500)) {
+    action = cancel;
+    actionText = await cancel.innerText({ timeout: 1000 }).catch(() => '');
+    actionKind = 'button';
+  } else if (await visible(closeIcon, 500)) {
+    action = closeIcon;
+    actionText = await closeIcon.getAttribute('aria-label').catch(() => '')
+      || await closeIcon.getAttribute('title').catch(() => '')
+      || 'close-icon';
+    actionKind = 'close_icon';
+  }
+
+  const safeAction = coreBetaV2ExpertCreationDismissAction(text, actionText, actionKind);
+  const count = state
+    ? (state._expertCreationDismissCount = Number(state._expertCreationDismissCount || 0) + 1)
+    : 1;
+  const base = `expert-creation-dialog-dismiss-${String(count).padStart(2, '0')}`;
+  const beforeScreenshot = state?.case_dir
+    ? await shot(page, state.case_dir, `${base}-before`).catch(() => '')
+    : '';
+  let clickError = '';
+  let clicked = false;
+  if (action && safeAction && (!state?.case_dir || beforeScreenshot)) {
+    try {
+      await action.click({ timeout: 5000 });
+      clicked = true;
+    } catch (error) {
+      clickError = clip(error?.message || error, 320);
+    }
+  }
+  const hidden = clicked
+    ? await dialog.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false)
+    : false;
+  const afterScreenshot = hidden && state?.case_dir
+    ? await shot(page, state.case_dir, `${base}-after`).catch(() => '')
+    : '';
+  const evidenceComplete = !state?.case_dir || Boolean(beforeScreenshot && afterScreenshot);
+  const valid = safeAction && clicked && hidden && evidenceComplete;
+  const reason = !action
+    ? `创建专家弹窗没有精确安全的“取消/关闭”入口：${clip(text, 220)}`
+    : !safeAction
+      ? `拒绝执行创建专家弹窗中的非安全动作：kind=${actionKind}；text=${clip(actionText, 80)}`
+      : !beforeScreenshot && state?.case_dir
+        ? '关闭创建专家弹窗前无法保存截图，拒绝无证据操作。'
+        : clickError
+          ? `创建专家弹窗安全关闭动作点击失败：${clickError}`
+          : !hidden
+            ? '点击安全关闭动作后创建专家弹窗仍可见。'
+            : !afterScreenshot && state?.case_dir
+              ? '创建专家弹窗消失后无法保存页面截图。'
+              : '';
+  let ledger = '';
+  if (state?.case_dir) {
+    ledger = path.join(state.case_dir, `${base}.json`);
+    writeJsonFile(ledger, {
+      schema_version: 'qbot-core-beta-expert-creation-dialog-dismiss/v1',
+      captured_at: new Date().toISOString(),
+      valid,
+      prompt_text: text,
+      safe_action: safeAction,
+      action_text: actionText,
+      action_kind: actionKind,
+      clicked,
+      hidden_after_click: hidden,
+      before_screenshot: beforeScreenshot,
+      after_screenshot: afterScreenshot,
+      error: reason,
+    });
+    state.screenshots[`${base}_before`] = beforeScreenshot;
+    if (afterScreenshot) state.screenshots[`${base}_after`] = afterScreenshot;
+    if (!Array.isArray(state.artifacts.expert_creation_dialog_dismissals)) {
+      state.artifacts.expert_creation_dialog_dismissals = [];
+    }
+    state.artifacts.expert_creation_dialog_dismissals.push({
+      valid,
+      prompt_text: text,
+      action_text: actionText,
+      action_kind: actionKind,
+      clicked,
+      hidden_after_click: hidden,
+      before_screenshot: beforeScreenshot,
+      after_screenshot: afterScreenshot,
+      ledger,
+      error: reason,
+    });
+    recordStep(
+      state,
+      '关闭遮挡操作区的创建专家弹窗',
+      '只允许点击同一创建专家选择弹窗内精确“取消/关闭”或明确关闭图标，并确认弹窗消失；禁止进入任一创建路径。',
+      valid
+        ? `已执行 ${actionKind}:${actionText} 并确认弹窗消失。`
+        : reason,
+      valid ? 'passed' : 'failed',
+      afterScreenshot || beforeScreenshot,
+      valid ? '' : 'automation_error',
+    );
+  }
+  return {
+    observed: true,
+    ok: valid,
+    dismissed: valid,
+    text,
+    action_text: actionText,
+    action_kind: actionKind,
+    before_screenshot: beforeScreenshot,
+    after_screenshot: afterScreenshot,
+    ledger,
+    reason,
+  };
+}
+
 async function dismissCoreBetaV2WorkspaceCreationObstruction(page, state = null) {
   const dialogs = page.locator('[role="dialog"], .modal, .ant-modal, .el-dialog').filter({
     hasText: /新建工作空间/,
@@ -5501,15 +5650,18 @@ async function dismissCoreBetaV2RuntimeUpdateObstruction(page, state = null) {
 async function dismissCoreBetaV2SettingsObstruction(page, state) {
   const workspaceCreation = await dismissCoreBetaV2WorkspaceCreationObstruction(page, state);
   if (!workspaceCreation.ok) return workspaceCreation;
+  const expertCreation = await dismissCoreBetaV2ExpertCreationObstruction(page, state);
+  if (!expertCreation.ok) return expertCreation;
   const runtimeUpdate = await dismissCoreBetaV2RuntimeUpdateObstruction(page, state);
   if (!runtimeUpdate.ok) return runtimeUpdate;
   const feedback = page.locator('[data-testid="skill-operation-feedback"]').first();
   if (!(await visible(feedback, 500))) {
     return {
       ok: true,
-      dismissed: workspaceCreation.dismissed || runtimeUpdate.dismissed,
-      text: runtimeUpdate.text || workspaceCreation.text,
+      dismissed: workspaceCreation.dismissed || expertCreation.dismissed || runtimeUpdate.dismissed,
+      text: runtimeUpdate.text || expertCreation.text || workspaceCreation.text,
       workspace_creation: workspaceCreation,
+      expert_creation: expertCreation,
       runtime_update: runtimeUpdate,
     };
   }
@@ -5552,9 +5704,10 @@ async function dismissCoreBetaV2SettingsObstruction(page, state) {
   }
   return {
     ok: closed,
-    dismissed: closed || workspaceCreation.dismissed || runtimeUpdate.dismissed,
+    dismissed: closed || workspaceCreation.dismissed || expertCreation.dismissed || runtimeUpdate.dismissed,
     text,
     workspace_creation: workspaceCreation,
+    expert_creation: expertCreation,
     runtime_update: runtimeUpdate,
     reason: closed ? '' : '关闭技能操作提示后仍检测到遮挡。',
   };
@@ -30038,6 +30191,14 @@ async function dismissBlockingOverlays(page, state = null) {
   if (workspaceCreation.observed) {
     if (!workspaceCreation.ok) {
       throw new Error(`无法安全关闭新建工作空间弹窗：${workspaceCreation.reason}`);
+    }
+    return true;
+  }
+
+  const expertCreation = await dismissCoreBetaV2ExpertCreationObstruction(page, state);
+  if (expertCreation.observed) {
+    if (!expertCreation.ok) {
+      throw new Error(`无法安全关闭创建专家弹窗：${expertCreation.reason}`);
     }
     return true;
   }

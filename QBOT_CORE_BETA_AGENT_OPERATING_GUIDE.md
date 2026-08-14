@@ -75,6 +75,13 @@ PID `19835` 已退出；后续 56 条没有执行。该目录永久冻结，不�
 入口处形成 framework issue；第 32 条未计入 completed，后续 51 条未执行。该目录
 永久冻结；修复、提交推送和新 `READY` 后必须在新目录从 `1/83` 全量重跑。
 
+修复专家入口定位后的首次新批次保留在不可变目录
+`teams360-automation/output/20260814192300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-bb6d6af_casebook-8a62aac`：
+第 1 条 `QW-ENTRY-001/BETA-INIT-001` 在 `completed=0` 时触发 framework issue。
+上一冻结批次留下“创建专家”路径选择弹窗，初始化进入系统设置前未关闭该安全弹窗，
+导致真实设置入口被遮挡并在 5 秒点击窗口内超时。该目录永久冻结；框架必须为这一
+精确弹窗保存安全关闭前后证据并确认 hidden，之后再次从 `1/83` 新目录全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
