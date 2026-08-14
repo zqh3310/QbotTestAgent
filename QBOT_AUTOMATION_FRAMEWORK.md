@@ -636,6 +636,13 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   manifest 再因漏识别该 stage 拒绝已验证 N/A 角色并把产品 Bug 升级成
   `automation_error` 的分叉口径。
 - `BETA-PERF-003`、`SIT-ISSUE-793` 等 #793 长文本滚动场景除原始 `thread-scroll-samples.json` 外，必须生成并注册 `performance_metrics` 角色。正式性能证据使用 `qbot-core-beta-performance-metrics/v1`，绑定 Case ID、有效样本数、生成态样本数、观察时长、滚动距离/高度、漂移判定、同 Case 目录内的原始样本绝对路径与 SHA-256。缺文件、空壳 JSON、样本越界、SHA 不一致或样本数不一致均属于 framework issue，必须硬停止并按新不可变目录全量重跑；产品滚动 Oracle 失败但上述证据完整时仍归类产品 Bug，并继续后续独立父 Case。
+- #793 长文本在完整观察窗口结束时若已有可归属助手正文但仍处于生成态，必须先保存
+  `issue-793-after-timeout` 终态截图及 SHA，再材料化 `terminal_outcome=timed_out`、
+  `assistant_reply_present=true`、完整等待时长、确认发送回执和明确失败原因；随后通过受管
+  停止入口清理残留运行态。该终态属于证据完整的产品超时，Case 记产品 Bug 并继续后续
+  独立父 Case；禁止先写 `reply-completion.json`、后补截图而被 manifest 误判为
+  `reply_incomplete`。超时截图、等待窗口、发送回执或受管停止清理任一缺失/失败时仍按
+  framework issue fail-closed。
 - Core Beta 叶子复用 legacy driver 时，driver 分流身份只用于选择执行逻辑；所有专项证据、manifest 和 SHA 归属必须使用原始 Core Beta 叶子合同 ID。禁止把 `SIT-*` legacy 身份写入 `BETA-*` 叶子的 Case 绑定字段，或反向跨 Case 复用证据。
 - 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。

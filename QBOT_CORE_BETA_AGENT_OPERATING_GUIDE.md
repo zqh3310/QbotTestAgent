@@ -122,6 +122,20 @@ fallback 仅精确接受“创建/保存草稿”，同时拒绝发布、取消�
 stage 集合，以本次真实结构强化 invariant，完成全检、提交推送和新 `READY` 后，
 从 `1/83` 在新目录全量重跑并将该产品失败保持为可继续的 `bug`。
 
+修复 Connector 发送前负向证据校验后启动的批次保留在不可变目录
+`teams360-automation/output/20260814233300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-fdfd2be_casebook-8a62aac`：
+已完成 `6/83`，raw 为 `passed=4/failed=2/blocked=0`。第 7 条
+`QW-CHAT-004` 的首叶子 `BETA-CHAT-005` 已完整通过；第二叶子
+`BETA-PERF-003` 已确认发送长文本请求并连续采样 `240973ms/299` 次，产品全程仍在
+生成，已出现 `4131` 字可归属正文，`performance-metrics.json` 完整且未复现自动跟随
+漂移。框架在保存 #793 超时截图之前先写入 `reply-completion.json`，导致
+`terminal_screenshot_sha256` 为空，manifest 将证据完整的产品超时误判为
+`reply_incomplete/automation_error`；第三叶子 `SIT-ISSUE-793` 和后续 76 个父 Case
+未执行。该目录永久冻结。修复必须在材料化回复前保存 `issue-793-after-timeout`，把
+部分正文超时写为可信产品 Bug，再受管停止残留任务；只有超时证据或停止清理失败才
+硬停止。完成 invariant、双框架全检、提交推送和新 `READY` 后，必须在新目录从
+`1/83` 全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

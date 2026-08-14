@@ -17027,26 +17027,39 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   writeJsonFile(state.artifacts.performance_metrics, performanceMetrics);
   state.artifacts.core_beta_performance_metrics = performanceMetrics;
   const after = await conversationSnapshot(page);
+  const stillGenerating = Boolean(everGenerating && (await isAgentGenerating(page)));
+  const waitedMs = Date.now() - startedAt;
+  const completionScreenshot = stillGenerating
+    ? await shot(page, caseDir, 'issue-793-after-timeout')
+    : await shot(page, caseDir, 'issue-793-after-reply');
+  if (stillGenerating) state.screenshots.issue_793_after_timeout = completionScreenshot;
+  else state.screenshots.issue_793_after_reply = completionScreenshot;
   const replyEvidence = {
     label: '长文本流式回复',
     fullText: after.latestAssistantText || '',
     deltaText: latestAssistantReplySince(after, before) || after.latestAssistantText || '',
-    waited_ms: Date.now() - startedAt,
+    waited_ms: waitedMs,
     min_wait_ms: MIN_REPLY_WAIT_MS,
     timeout_ms: monitorBudgetMs,
     wait_kind: 'streaming-observation',
-    incomplete: Boolean(everGenerating && (await isAgentGenerating(page))),
+    incomplete: stillGenerating,
+    terminal_outcome: stillGenerating ? 'timed_out' : 'completed',
+    observed_running_after_send: everGenerating,
+    running_after: stillGenerating,
+    incomplete_reason: stillGenerating
+      ? `长文本回复在 ${monitorBudgetMs}ms 观察窗口内仍未完成；已读取 ${String(after.latestAssistantText || '').length} 字正文。`
+      : '',
   };
   writeReplyArtifacts(state, caseDir, [replyEvidence]);
   recordReplyWaitAssertion(state, replyEvidence, '长文本流式回复');
-  state.screenshots.issue_793_after_reply = await shot(page, caseDir, 'issue-793-after-reply');
+  recordReplyAssertions(state, testCase, prompt, replyEvidence, '长文本流式回复');
   recordStep(
     state,
     '生成中连续采样会话滚动位置',
     '用户没有手动上滚时，长文本持续生成过程中视口应自动跟随最新内容。',
     `samples=${samples.length}；everGenerating=${everGenerating}；overflow=${verdict.overflowObserved}；maxDistanceBottom=${Math.round(verdict.maxDistanceBottom)}px；maxScrollHeight=${Math.round(verdict.maxScrollHeight)}px`,
     'passed',
-    driftScreenshot || state.screenshots.issue_793_after_reply,
+    driftScreenshot || completionScreenshot,
   );
   if (!everGenerating || !verdict.overflowObserved || String(after.latestAssistantText || '').length < 30) {
     markBlocked(state, `未形成可判定的长文本流式场景：everGenerating=${everGenerating}，overflow=${verdict.overflowObserved}，replyChars=${String(after.latestAssistantText || '').length}。本轮不能据此认定 #793 已修复。`);
@@ -17061,6 +17074,11 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
       ? `Bug 已复现：首次连续漂移发生在 ${verdict.firstFailure?.elapsedMs}ms，距底部 ${Math.round(verdict.firstFailure?.distanceBottom || 0)}px；关键截图=${driftScreenshot}`
       : `未观察到滚动漂移；最大距底部 ${Math.round(verdict.maxDistanceBottom)}px。`,
   );
+
+  if (stillGenerating) {
+    await cancelRunningReplyAfterTimeout(page, state, caseDir, '长文本流式回复');
+    return;
+  }
 
   if (!verdict.reproduced) {
     const viewport = page.locator('[data-testid="thread-viewport"]').first();

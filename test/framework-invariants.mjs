@@ -861,6 +861,7 @@ const required = [
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
   ['今日 #793/#800 使用独立本地产品断言', /SIT-ISSUE-793'[\s\S]*executeIssue793StreamingScrollFollow[\s\S]*SIT-ISSUE-800'[\s\S]*executeIssue800ModelServiceStateConsistency/],
   ['#793 生成中采样滚动位置并保存正式性能证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*performance-metrics\.json)(?=[\s\S]*artifacts\.performance_metrics)(?=[\s\S]*streamingScrollPerformanceMetrics)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
+  ['#793 部分正文超时先固化终态再受管停止', /executeIssue793StreamingScrollFollow[\s\S]*stillGenerating[\s\S]*issue-793-after-timeout[\s\S]*incomplete_reason[\s\S]*writeReplyArtifacts\(state, caseDir, \[replyEvidence\]\)[\s\S]*recordReplyAssertions\(state, testCase, prompt, replyEvidence[\s\S]*if \(stillGenerating\)[\s\S]*cancelRunningReplyAfterTimeout\(page, state, caseDir, '长文本流式回复'\)/],
   ['#800 多轮采样不可达状态与回复增长', /(?=[\s\S]*executeIssue800ModelServiceStateConsistency)(?=[\s\S]*model-service-state-samples\.json)(?=[\s\S]*growthAfterUnavailable)/],
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],

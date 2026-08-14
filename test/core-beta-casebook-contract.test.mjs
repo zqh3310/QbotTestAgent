@@ -1849,6 +1849,38 @@ test('a fully evidenced partial batch deadline is complete failure evidence and 
   assert.equal(missingSendReceipt.dispatch_receipts_complete, false);
 });
 
+test('a partial streaming reply at the timeout boundary is valid product failure evidence', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-partial-timeout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const terminalScreenshot = path.join(root, 'issue-793-after-timeout.png');
+  fs.writeFileSync(terminalScreenshot, 'partial streaming timeout'.padEnd(256, 'x'));
+  const terminalScreenshotSha256 = createHash('sha256')
+    .update(fs.readFileSync(terminalScreenshot))
+    .digest('hex');
+  const payload = {
+    complete: false,
+    evidence_complete: true,
+    terminal_failure: true,
+    terminal_outcome: 'timed_out',
+    assistant_reply_present: true,
+    confirmed_send_receipt: true,
+    waited_ms: 240_001,
+    min_wait_ms: 60_000,
+    timeout_ms: 240_000,
+    observed_running_after_send: true,
+    running_after: true,
+    terminal_reason: '长文本回复在 240000ms 观察窗口内仍未完成；已读取 4131 字正文。',
+    terminal_screenshot: terminalScreenshot,
+    terminal_screenshot_sha256: terminalScreenshotSha256,
+    timeout_screenshot: terminalScreenshot,
+    timeout_screenshot_sha256: terminalScreenshotSha256,
+  };
+
+  assert.deepEqual(validateReplyCompletionPayload(payload), { valid: true });
+  fs.rmSync(terminalScreenshot);
+  assert.equal(validateReplyCompletionPayload(payload).valid, false);
+});
+
 test('skill, expert, and MCP use require task-bound execution events', () => {
   assert.equal(validateSkillExecutionEvidence({
     task_id: 'task-1',
