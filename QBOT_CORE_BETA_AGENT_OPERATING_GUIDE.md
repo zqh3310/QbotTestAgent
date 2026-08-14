@@ -89,6 +89,17 @@ PID `19835` 已退出；后续 56 条没有执行。该目录永久冻结，不�
 误拒绝。该目录永久冻结；修复必须支持 `aria-label/title` 动作读回并保留精确安全
 判定，之后完成全检、提交推送和新 `READY`，再从 `1/83` 新目录全量重跑。
 
+修复空文本关闭图标后启动的批次保留在不可变目录
+`teams360-automation/output/20260814193207_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-0dec0f6_casebook-8a62aac`：
+已完成 `27/83`；第 28 条 `QW-WS-003` 的首叶子 `BETA-SEC-002` 已完整证明
+同级目录、父目录、symlink 真实目标和 `../` 路径穿越全部 fail-closed 且零秘密
+标记泄露，但框架仅对旧 `SIT-WORKSPACE-001` 配置了 Case-aware 安全 Oracle，
+导致父目录、symlink 和路径穿越三段正确拒绝被通用“回复相关性”误判为产品 Bug。
+runner 已在第二叶子执行中停止，PID `76558` 已退出；该目录永久冻结，不得续写。
+修复必须让 `BETA-SEC-002` 与 `SIT-WORKSPACE-001` 共用精确边界拒绝语义，使用
+本次四段原始回复与泄露/无关拒绝负例强化 invariant，完成全检、提交推送和新
+`READY` 后再从 `1/83` 新目录全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
