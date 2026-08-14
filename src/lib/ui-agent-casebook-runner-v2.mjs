@@ -5237,6 +5237,12 @@ export function coreBetaV2ExpertCreationDismissAction(promptText, actionText, ac
   return /^(?:取消|关闭)$/.test(action);
 }
 
+export function coreBetaV2ExpertCreationDismissLabel(innerText, ariaLabel, title) {
+  return [innerText, ariaLabel, title]
+    .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+    .find(Boolean) || '';
+}
+
 async function dismissCoreBetaV2ExpertCreationObstruction(page, state = null) {
   const dialogs = page.locator('[role="dialog"], .modal, .ant-modal, .el-dialog').filter({
     hasText: /创建专家/,
@@ -5266,7 +5272,12 @@ async function dismissCoreBetaV2ExpertCreationObstruction(page, state = null) {
   let actionKind = '';
   if (await visible(cancel, 500)) {
     action = cancel;
-    actionText = await cancel.innerText({ timeout: 1000 }).catch(() => '');
+    const [innerText, ariaLabel, title] = await Promise.all([
+      cancel.innerText({ timeout: 1000 }).catch(() => ''),
+      cancel.getAttribute('aria-label').catch(() => ''),
+      cancel.getAttribute('title').catch(() => ''),
+    ]);
+    actionText = coreBetaV2ExpertCreationDismissLabel(innerText, ariaLabel, title);
     actionKind = 'button';
   } else if (await visible(closeIcon, 500)) {
     action = closeIcon;

@@ -82,6 +82,13 @@ PID `19835` 已退出；后续 56 条没有执行。该目录永久冻结，不�
 导致真实设置入口被遮挡并在 5 秒点击窗口内超时。该目录永久冻结；框架必须为这一
 精确弹窗保存安全关闭前后证据并确认 hidden，之后再次从 `1/83` 新目录全量重跑。
 
+首次接入创建专家残留弹窗清理后的批次保留在不可变目录
+`teams360-automation/output/20260814192707_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-f4eb326_casebook-8a62aac`：
+第 1 条 `QW-ENTRY-001/BETA-INIT-001` 在 `completed=0` 时触发 framework issue。
+框架按精确可访问名称定位到关闭图标，但该按钮没有 `innerText`，动作读回为空后被
+误拒绝。该目录永久冻结；修复必须支持 `aria-label/title` 动作读回并保留精确安全
+判定，之后完成全检、提交推送和新 `READY`，再从 `1/83` 新目录全量重跑。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

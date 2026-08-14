@@ -100,6 +100,7 @@ import {
   coreBetaV2RuntimeMaintenanceState,
   coreBetaV2RuntimeUpdateSkipAction,
   coreBetaV2ExpertCreationDismissAction,
+  coreBetaV2ExpertCreationDismissLabel,
   coreBetaV2WorkspaceCreationDismissAction,
   qworkPartialAttachmentLogExcerpt,
   coreBetaV2SettingsLoadTimeoutMs,
@@ -5252,6 +5253,16 @@ assert.equal(
   false,
   '普通专家页面不得复用创建专家选择弹窗清理规则',
 );
+assert.equal(
+  coreBetaV2ExpertCreationDismissLabel('', '关闭', ''),
+  '关闭',
+  '只有 aria-label 的创建专家关闭按钮必须保留精确安全动作名称',
+);
+assert.equal(
+  coreBetaV2ExpertCreationDismissLabel('', '', '关闭'),
+  '关闭',
+  '只有 title 的创建专家关闭按钮必须保留精确安全动作名称',
+);
 const expertCreationActionStart = runner.indexOf('export function coreBetaV2ExpertCreationDismissAction');
 const expertCreationDismissStart = runner.indexOf('async function dismissCoreBetaV2ExpertCreationObstruction');
 const workspaceDismissStart = runner.indexOf('async function dismissCoreBetaV2WorkspaceCreationObstruction');
@@ -5274,6 +5285,11 @@ assert.match(
   expertCreationDismissSource,
   /coreBetaV2ExpertCreationDismissAction[\s\S]*action\.click\(\{ timeout: 5000 \}\)[\s\S]*waitFor\(\{ state: 'hidden', timeout: 5000 \}\)/,
   '创建专家残留弹窗清理必须复用精确安全判定、点击关闭入口并等待 hidden',
+);
+assert.match(
+  expertCreationDismissSource,
+  /getAttribute\('aria-label'\)[\s\S]*getAttribute\('title'\)[\s\S]*coreBetaV2ExpertCreationDismissLabel/,
+  '创建专家残留弹窗清理必须支持无 innerText 的可访问名称关闭按钮',
 );
 assert.doesNotMatch(
   expertCreationDismissSource,
