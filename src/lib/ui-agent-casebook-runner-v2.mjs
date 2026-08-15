@@ -33939,7 +33939,7 @@ export function caseAwareReplyAssertion(testCase, turn, replyText, context = {})
   if (id === 'SIT-HOME-062') {
     const saysInsufficient = /无法|不能|不足|算不出|算不了|得不出|缺少|未提供|需要.*(?:成本|收益|收入)/.test(reply);
     const returnOperand = '(?:活动)?(?:(?:带来|产生)的?)?(?:总?收益|总?收入|总回报|成交(?:金额|总额|额))';
-    const costOperand = '(?:活动)?(?:总投入|投入金额|投入|总?成本)';
+    const costOperand = '(?:活动)?(?:总投入(?:成本)?|投入(?:金额|成本)?|总?成本)';
     const formulaPattern = new RegExp(
       `ROI\\s*(?:(?:的\\s*)?公式)?\\s*(?:是|为|[:：])?\\s*(?:ROI\\s*)?[=：]?\\s*[（(]?\\s*${returnOperand}\\s*[-－−]\\s*${costOperand}\\s*[）)]?\\s*(?:/|÷)\\s*${costOperand}`,
       'i',
