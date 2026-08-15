@@ -202,6 +202,19 @@ runner 的成本操作数只接受“投入/投入金额/总投入/成本”，�
 事实等负例。完成全检、提交推送、新能力审计和精确 `READY` 后，必须在新目录从
 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复 ROI 与重复推荐面板后启动的最新冻结批次保留在
+`teams360-automation/output/20260815090600_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-3bd4de1_casebook-8a62aac`：
+已完成 `21/83`，raw 为 `passed=14/failed=6/blocked=1`；第 22 条已有未完成材料，
+但未计入 completed。`QW-ART-003` 的叶子 `SIT-ART-022` 已生成完整真实活动复盘，
+包含 `触达 12,000`、`打开 860`、`报名 240`、`到场 170`、`投诉 28`、两组比例、
+两个公式和风险，但 Core Beta v2 runner 直接以 `content.includes('12000')` 核对原始数，
+漏掉 legacy runner 已有的数字分组符归一化，因而得到 `data=false` 并误报产品 Bug。
+这是确认的 framework issue；旧 runner PID `943` 已停止，360Teams 宿主 PID `20115`
+保留。该目录永久冻结，不得续写或继承。修复必须让两套 runner 共享同一事实归一化
+合同，并以千分位完整正例及逐项缺失负例强化 invariant；全检、提交推送、新能力审计
+和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、
+`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

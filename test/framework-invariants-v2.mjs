@@ -14,6 +14,7 @@ import {
   assistantConfirmationProgressFingerprintEvidence,
   assistantConfirmationSurfaceVerdict,
   applyBlockedOutcome,
+  artifactTextHasFacts,
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
   assessUserCenteredOutcome,
@@ -6195,6 +6196,23 @@ try {
   fs.rmSync(stopTimeoutEvidenceDir, { recursive: true, force: true });
 }
 
+const activityReviewFacts = ['12000', '860', '240', '170', '28'];
+const activityReviewFactLines = ['触达 12,000', '打开 860', '报名 240', '到场 170', '投诉 28'];
+assert.equal(
+  artifactTextHasFacts(activityReviewFactLines.join('\n'), activityReviewFacts),
+  true,
+  'SIT-ART-022 必须接受真实成果中的千分位原始数据',
+);
+assert.equal(artifactTextHasFacts('触达 12_000\n打开 860\n报名 240\n到场 170\n投诉 28', activityReviewFacts), true, '成果原始数据必须兼容下划线分组符');
+assert.equal(artifactTextHasFacts('触达 12，000\n打开 860\n报名 240\n到场 170\n投诉 28', activityReviewFacts), true, '成果原始数据必须兼容中文逗号分组符');
+for (let index = 0; index < activityReviewFactLines.length; index += 1) {
+  assert.equal(
+    artifactTextHasFacts(activityReviewFactLines.filter((_, lineIndex) => lineIndex !== index).join('\n'), activityReviewFacts),
+    false,
+    `SIT-ART-022 缺少第 ${index + 1} 项原始数据时必须失败`,
+  );
+}
+
 const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
@@ -6297,7 +6315,7 @@ const required = [
   ['项目 Fixture 创建后通过真实导航刷新而非 reload WebView', /createProject bridge[\s\S]*nav-new-task[\s\S]*refreshedProjectsNav/],
   ['旧版项目占位页改走可见空间入口并回读项目成果', /executeLegacyProjectArtifactTask[\s\S]*sidebar-space-project-[\s\S]*runPromptInCurrentTask[\s\S]*getSessionArtifacts[\s\S]*项目成果持久化关联项目任务/],
   ['知识入口兼容 nav-more 且占位页归为产品缺口', /(?=[\s\S]*knowledgeNavigationLocator[\s\S]*nav-knowledge[\s\S]*nav-more)(?=[\s\S]*知识页按任务汇总正式成果)(?=[\s\S]*后续开放)/],
-  ['周报数字事实比较兼容千分位', /normalizedFacts = content\.replace[\s\S]*周报成果结构与事实回读/],
+  ['成果数字事实统一兼容分组符', /(?=[\s\S]*export function artifactTextHasFacts)(?=[\s\S]*SIT-ART-022[\s\S]*artifactTextHasFacts\(content, \['12000', '860', '240', '170', '28'\]\))/],
   ['对话创建专家覆盖召唤和首页真实问答', /executeSitExpertConversationCreateClosedLoop[\s\S]*summonCreatedExpertByName[\s\S]*首页选择新专家后的需求评审[\s\S]*对话创建专家可从首页选择并使用/],
   ['破坏性操作精确点击新版确认按钮且缺失时不判通过', /(?=[\s\S]*confirmDestructiveAction[\s\S]*data-testid\$="-confirm"[\s\S]*custom-dialog-missing-confirm)(?=[\s\S]*\['native-confirm', 'custom-dialog'\]\.includes\(dialog\.source\))/],
   ['破坏性确认文案兼容“确定删除”与“确定要删除”', /confirmationCopy = \/确认\|确定\(\?:要\)\?\(\?:删除\|卸载\|移除\)/],

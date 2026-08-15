@@ -25444,15 +25444,14 @@ function assertUxArtifactReadback(state, testCase, panelText) {
 
     if (id === 'SIT-ART-021') {
       const sections = ['背景', '结论', '风险', '下一步', '负责人', '截止日期'].every((term) => content.includes(term));
-      const normalizedFacts = content.replace(/(?<=\d)[,_，](?=\d)/g, '');
-      const facts = ['12000', '240', '170', '张三', '2026-07-18'].every((term) => normalizedFacts.includes(term));
+      const facts = artifactTextHasFacts(content, ['12000', '240', '170', '张三', '2026-07-18']);
       recordAssertion(state, '周报成果结构与事实回读', 'weekly_decision_brief.md 应包含六个必需部分及全部用户事实。', sections && facts, `sections=${sections}；facts=${facts}；content=${clip(content, 520)}`);
     }
     if (id === 'SIT-ART-022') {
       const reply = state.artifacts.reply_delta && fs.existsSync(state.artifacts.reply_delta)
         ? fs.readFileSync(state.artifacts.reply_delta, 'utf8')
         : '';
-      const data = ['12000', '860', '240', '170', '28'].every((term) => content.includes(term));
+      const data = artifactTextHasFacts(content, ['12000', '860', '240', '170', '28']);
       const contentRates = /70\.(?:8|83)\s*[%％]/.test(content) && /27\.(?:9|91)\s*[%％]/.test(content);
       const replyRates = /70\.(?:8|83)\s*[%％]/.test(reply) && /27\.(?:9|91)\s*[%％]/.test(reply);
       const formulas = /170\s*[\/÷]\s*240/.test(content) && /240\s*[\/÷]\s*860/.test(content);
@@ -25467,6 +25466,11 @@ function assertUxArtifactReadback(state, testCase, panelText) {
       recordAssertion(state, '领导更新成果可直接使用', 'leader_update.md 的一级标题应恰为结论/风险/下一步，事实齐全且不含技术噪音。', exactHeadings && facts && !technicalNoise, `headings=${JSON.stringify(headings)}；facts=${facts}；technical_noise=${technicalNoise}；content=${clip(content, 520)}`);
     }
   }
+}
+
+export function artifactTextHasFacts(text, expectedFacts) {
+  const normalized = String(text || '').replace(/(?<=\d)[,_，](?=\d)/g, '');
+  return expectedFacts.every((term) => normalized.includes(String(term)));
 }
 
 function artifactTextHasAll(text, patterns) {
