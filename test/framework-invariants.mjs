@@ -1113,6 +1113,7 @@ const required = [
   ['稳定 QA 专家不存在时自动创建且不回退通用助手', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*let card = await findExpertCardByName\(page, expertName\);[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*专家页通用助手入口/],
+  ['EXPERT-002 通用助手缺失或点击失败形成产品负向证据', /executeExpertSmoke010[\s\S]*expert_010_general_missing[\s\S]*通用助手入口可见性[\s\S]*'bug'[\s\S]*expert_010_general_click_failed[\s\S]*通用助手入口可操作[\s\S]*return;/],
   ['HOME-016 真实发送四轮业务数字', /numericMemoryConversationTurns[\s\S]*报名100人，到场70人，成交12单[\s\S]*第二轮：追问报名人数[\s\S]*第三轮：追问到场人数和到场率[\s\S]*第四轮：追问成交和成交率/],
   ['HOME-009 不选专家不执行专家回复断言', /expertScenarioText[\s\S]*不选专家\|未选专家\|不挂专家\|通用助手[\s\S]*expectsSelectedExpert/],
   ['HOME-004 到 HOME-009 统一使用稳定能力测试数据', /SIT-HOME-004'[\s\S]*SIT-HOME-009'[\s\S]*executeHomeCapabilityFixtureCase[\s\S]*qa-python-runtime[\s\S]*dev_healthy/],

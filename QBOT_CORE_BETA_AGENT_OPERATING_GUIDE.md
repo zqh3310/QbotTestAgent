@@ -242,6 +242,19 @@ revision blocker 正例及 CAS 类型/值矛盾负例强化 invariant；完成�
 新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
 
+修复专家草稿 `revision` CAS manifest 合同后启动的最新冻结批次保留在
+`teams360-automation/output/20260815140553_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-050f19c_casebook-8a62aac`：
+已完成 `34/83`，raw 为 `passed=15/failed=17/blocked=2`；第 35 条
+`QW-EXPERT-007` 未计入 completed。其前两个叶子已分别形成完整可信 blocked 与产品
+Bug；第三叶子 `SIT-EXPERT-002` 已打开专家页并证明当前发布包没有稳定“通用助手”
+入口，但旧 `executeExpertSmoke010()` 直接调用通用 `clickSelector()`，抛出
+`未找到入口：[data-testid="expert-general-assistant"]`，漏掉
+`action_receipt/public_state_readback/cleanup_readback/product_action_trace` 后硬停止。
+runner PID `52074` 及 npm 父进程均已退出，360Teams 宿主 PID `20115` 保留；该目录
+永久冻结。修复必须让 legacy 与 v2 runner 把入口缺失或点击失败材料化为证据完整的
+产品 Bug，只有导航、取证或收尾失败才硬停止；完成全检、提交推送、新能力审计和精确
+`READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

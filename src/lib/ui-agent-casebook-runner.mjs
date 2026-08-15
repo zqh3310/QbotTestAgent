@@ -21196,7 +21196,54 @@ async function executeExpertSmoke009({ page, state, caseDir }) {
 
 async function executeExpertSmoke010({ page, state, caseDir, timeoutMs }) {
   await openExpertsPage(page, state, caseDir);
-  await clickSelector(page, '[data-testid="expert-general-assistant"]', '点击【通用助手】', state);
+  const general = page.locator('[data-testid="expert-general-assistant"]').first();
+  if (!(await visible(general, 2500))) {
+    const surfaceText = await mainSurfaceText(page);
+    state.screenshots.expert_010_general_missing = await shot(page, caseDir, 'expert-010-general-missing');
+    recordStep(
+      state,
+      '定位【通用助手】入口',
+      '专家页应展示通用助手入口，以便清除当前专家身份并回到首页输入区。',
+      `入口不可见；页面：${clip(surfaceText, 360)}`,
+      'failed',
+      state.screenshots.expert_010_general_missing,
+      'bug',
+    );
+    recordAssertion(
+      state,
+      '通用助手入口可见性',
+      '专家页应展示通用助手入口，以便用户安全清除当前专家身份。',
+      false,
+      clip(surfaceText, 360),
+      'bug',
+    );
+    return;
+  }
+  let clickError = '';
+  try {
+    await general.click({ force: true });
+  } catch (error) {
+    try {
+      await general.evaluate((el) => el.click());
+    } catch (fallbackError) {
+      clickError = fallbackError?.message || error?.message || String(fallbackError || error);
+    }
+  }
+  if (clickError) {
+    state.screenshots.expert_010_general_click_failed = await shot(page, caseDir, 'expert-010-general-click-failed');
+    recordStep(
+      state,
+      '点击【通用助手】',
+      '可见入口应可点击并切回首页输入区。',
+      `点击未生效：${clip(clickError, 320)}`,
+      'failed',
+      state.screenshots.expert_010_general_click_failed,
+      'bug',
+    );
+    recordAssertion(state, '通用助手入口可操作', '可见通用助手入口应接受真实点击。', false, clip(clickError, 320), 'bug');
+    return;
+  }
+  recordStep(state, '点击【通用助手】', '可见入口应可点击并切回首页输入区。', '已点击。', 'passed');
   await page.waitForTimeout(1000);
   state.screenshots.after_general = await shot(page, caseDir, 'expert-010-after-general');
   const composerVisible = await visible(page.locator('[data-testid="composer-input"]').first(), 3000);
