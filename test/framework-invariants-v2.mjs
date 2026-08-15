@@ -31,6 +31,7 @@ import {
   createSkillHubRegressionServer,
   countEnumeratedItems,
   coreBetaArtifactReadback,
+  coreBetaPptxFunnelGeometryVerdict,
   coreBetaBatchTaskMarker,
   coreBetaBatchStopReason,
   coreBetaAttachmentFixtureContractVerdict,
@@ -1215,6 +1216,35 @@ try {
   assert.equal(pdfFixtureReadback.pdf_text_readback_valid, true, 'PDF 读回必须通过 pdftotext 或 PyMuPDF 获得逐页文本');
   assert.equal(pdfFixtureReadback.pdf_page_texts.length, pdfFixtureReadback.pdf_page_count, 'PDF 文本页数必须与结构页数一致');
   assert.match(pdfFixtureReadback.pdf_page_texts.join('\n'), /QBot PDF Summary/, 'PDF 读回必须保留可核对的 fixture 标题');
+  const pptxRect = ({ x, y, width, height, preset = 'roundRect' }) => `<p:sp><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="${preset}"><a:avLst/></a:prstGeom></p:spPr></p:sp>`;
+  const roundRectFunnelXml = [
+    pptxRect({ x: 1_371_600, y: 1_600_000, width: 8_595_360, height: 914_400 }),
+    pptxRect({ x: 2_743_200, y: 2_770_000, width: 5_852_160, height: 914_400 }),
+    pptxRect({ x: 4_023_360, y: 3_940_000, width: 3_291_840, height: 914_400 }),
+  ].join('');
+  assert.equal(
+    coreBetaPptxFunnelGeometryVerdict(roundRectFunnelXml),
+    true,
+    'BETA-ART-004 必须接受同中心、纵向排列且宽度递减的三层 roundRect 真实漏斗',
+  );
+  assert.equal(
+    coreBetaPptxFunnelGeometryVerdict([
+      pptxRect({ x: 1_371_600, y: 1_600_000, width: 8_595_360, height: 914_400 }),
+      pptxRect({ x: 1_371_600, y: 2_770_000, width: 8_595_360, height: 914_400 }),
+      pptxRect({ x: 1_371_600, y: 3_940_000, width: 8_595_360, height: 914_400 }),
+    ].join('')),
+    false,
+    '等宽纵向卡片不得冒充漏斗几何',
+  );
+  assert.equal(
+    coreBetaPptxFunnelGeometryVerdict([
+      pptxRect({ x: 500_000, y: 1_600_000, width: 8_595_360, height: 914_400 }),
+      pptxRect({ x: 4_000_000, y: 2_770_000, width: 5_852_160, height: 914_400 }),
+      pptxRect({ x: 8_000_000, y: 3_940_000, width: 3_291_840, height: 914_400 }),
+    ].join('')),
+    false,
+    '中心错位的散落矩形不得冒充漏斗几何',
+  );
   assert.equal(
     validateCoreBetaArtifactOracle('artifact_markdown_html_validation', [markdownReadback, interactiveHtmlReadback]),
     true,

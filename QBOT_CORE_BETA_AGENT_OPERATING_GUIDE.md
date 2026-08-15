@@ -215,6 +215,19 @@ runner 的成本操作数只接受“投入/投入金额/总投入/成本”，�
 和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、
 `synthetic=0`。
 
+修复成果事实数字分组后启动的最新冻结批次保留在
+`teams360-automation/output/20260815103800_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-917927a_casebook-8a62aac`：
+已完成 `23/83`，raw 为 `passed=13/failed=9/blocked=1`；第 24 条已有未完成材料，
+但未计入 completed。第 22 条 `QW-ART-004/BETA-ART-004` 已真实生成五页 PPTX/PDF，
+页数、空白页、五个标题及曝光 1000、点击 100、转化 20 全部满足；PPTX 第 2 页还以
+三层同中心、纵向排列、等高且宽度递减的 `roundRect` 真实绘制漏斗。框架却把
+`rect/roundRect` 全部排除在图表几何之外，得到 `pptx_chart_candidate_slides=[]`，
+把正确产物误报为产品 Bug。这是确认的 framework issue；runner PID `44851` 及 npm
+父进程已经停止，360Teams 宿主 PID `20115` 保留。该目录永久冻结，不得续写或继承。
+修复必须接受上述严格矩形漏斗结构，同时以等宽卡片和中心错位矩形作为负例；完成全检、
+提交推送、新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

@@ -15288,8 +15288,14 @@ export function coreBetaArtifactReadback(file) {
       const mediaShapeCounts = slideXmlEntries.map((xml) => (
         (xml.match(/<p:(?:pic|graphicFrame)(?:\s|>)/g) || []).length
       ));
+      const funnelGeometrySlides = slideXmlEntries.reduce((indexes, xml, index) => {
+        if (coreBetaPptxFunnelGeometryVerdict(xml)) indexes.push(index + 1);
+        return indexes;
+      }, []);
       const chartCandidateSlides = slideTexts.reduce((indexes, text, index) => {
-        const hasChartGeometry = nonRectShapeCounts[index] >= 3 || mediaShapeCounts[index] >= 1;
+        const hasChartGeometry = nonRectShapeCounts[index] >= 3
+          || mediaShapeCounts[index] >= 1
+          || funnelGeometrySlides.includes(index + 1);
         if (shapeCounts[index] >= 6
           && hasChartGeometry
           && coreBetaFunnelMetricCoverage(text).length === 3) indexes.push(index + 1);
@@ -15302,6 +15308,7 @@ export function coreBetaArtifactReadback(file) {
       result.pptx_slide_shape_counts = shapeCounts;
       result.pptx_non_rect_shape_counts = nonRectShapeCounts;
       result.pptx_media_shape_counts = mediaShapeCounts;
+      result.pptx_funnel_geometry_slides = funnelGeometrySlides;
       result.pptx_blank_slide_count = slideTexts.filter((text) => !text.trim()).length;
       result.pptx_metric_anchors = coreBetaFunnelMetricCoverage(slideTexts.join('\n'));
       result.pptx_chart_candidate_slides = chartCandidateSlides;
@@ -15405,6 +15412,45 @@ function coreBetaFunnelMetricCoverage(value) {
     ['点击100', /点击.{0,40}100(?![\d%％])/],
     ['转化20', /转化.{0,40}20(?![\d%％])/],
   ].filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+}
+
+export function coreBetaPptxFunnelGeometryVerdict(xml) {
+  const rects = Array.from(String(xml || '').matchAll(/<p:sp(?:\s[^>]*)?>([\s\S]*?)<\/p:sp>/g))
+    .map((match) => {
+      const shapeXml = String(match[1] || '');
+      const preset = shapeXml.match(/<a:prstGeom\s+prst="([^"]+)"/)?.[1] || '';
+      if (!['rect', 'roundRect'].includes(preset)) return null;
+      const offset = shapeXml.match(/<a:off\b[^>]*>/)?.[0] || '';
+      const extent = shapeXml.match(/<a:ext\b[^>]*>/)?.[0] || '';
+      const x = Number(offset.match(/\bx="(\d+)"/)?.[1]);
+      const y = Number(offset.match(/\by="(\d+)"/)?.[1]);
+      const width = Number(extent.match(/\bcx="(\d+)"/)?.[1]);
+      const height = Number(extent.match(/\bcy="(\d+)"/)?.[1]);
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+      return { x, y, width, height, centerX: x + (width / 2) };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.y - right.y || right.width - left.width);
+
+  for (let first = 0; first < rects.length - 2; first += 1) {
+    for (let second = first + 1; second < rects.length - 1; second += 1) {
+      for (let third = second + 1; third < rects.length; third += 1) {
+        const layers = [rects[first], rects[second], rects[third]];
+        const maxWidth = Math.max(...layers.map((item) => item.width));
+        const heights = layers.map((item) => item.height);
+        const centerTolerance = Math.max(50_000, maxWidth * 0.03);
+        const aligned = Math.max(...layers.map((item) => item.centerX))
+          - Math.min(...layers.map((item) => item.centerX)) <= centerTolerance;
+        const descending = layers[1].width <= layers[0].width * 0.85
+          && layers[2].width <= layers[1].width * 0.85;
+        const comparableHeights = Math.max(...heights) <= Math.min(...heights) * 1.6;
+        const verticallyLayered = layers[1].y - layers[0].y >= Math.min(layers[0].height, layers[1].height) * 0.5
+          && layers[2].y - layers[1].y >= Math.min(layers[1].height, layers[2].height) * 0.5;
+        if (aligned && descending && comparableHeights && verticallyLayered) return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function validateCoreBetaArtifactOracle(driver, files) {
