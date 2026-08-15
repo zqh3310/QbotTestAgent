@@ -241,6 +241,9 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 - `BETA-TASK-008`：空闲态第一次物理 Arrow 只建立边界握手，第二次才进入历史；同时覆盖未发送草稿恢复、任务隔离和重开持久化。
 - `BETA-ROUTE-001`：模型菜单按当前 SDK family/protocol 过滤。
 - `BETA-EXPERT-007`：单账号串行发布研究、数据、交付三类本轮专家。
+- 专家草稿发布 CAS 必须按当前公开 bridge 读回：旧版为非空 `etag`，新版为正整数
+  `revision`。三个上游只在 draftId 与真实 CAS 同时完整时写 suite ledger；不得用
+  展示读回覆盖 mutation identity，也不得伪造 etag。
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 

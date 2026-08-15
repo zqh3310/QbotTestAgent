@@ -52,6 +52,7 @@ import {
   coreBetaConnectorOptionTestId,
   coreBetaConversationTurnLabel,
   coreBetaExpertBuilderOutcomeEvidence,
+  coreBetaExpertDraftConcurrencyIdentity,
   coreBetaExpertPublishPrerequisiteBlocker,
   coreBetaExpertSummonTaskVerdict,
   coreBetaExecutionConcurrencyPolicy,
@@ -573,6 +574,23 @@ const expertPublishPrerequisiteRoles = [
   'capability_selection',
   'capability_execution_event',
 ];
+assert.deepEqual(
+  coreBetaExpertDraftConcurrencyIdentity({ id: 'revision-draft', revision: 7 }),
+  {
+    id: 'revision-draft',
+    etag: '',
+    revision: 7,
+    cas_kind: 'revision',
+    cas_value: 7,
+    complete: true,
+  },
+  '新版专家 bridge 的正整数 revision 必须作为真实发布 CAS，禁止硬要求 etag',
+);
+assert.equal(
+  coreBetaExpertDraftConcurrencyIdentity({ id: 'missing-cas' }).complete,
+  false,
+  'draftId 存在但 etag/revision 均缺失时仍必须 fail-closed',
+);
 const expertPublishPrerequisiteCase = {
   id: 'BETA-EXPERT-007',
   evidence_roles: expertPublishPrerequisiteRoles,
@@ -602,6 +620,18 @@ assert.equal(
   coreBetaExpertPublishPrerequisiteBlocker({
     testCase: expertPublishPrerequisiteCase,
     ledgerExperts: {
+      'claude-code_draft': { id: 'research-draft', revision: 2 },
+      codex_draft: { id: 'data-draft', revision: 3 },
+      manual_draft: { id: 'delivery-draft', revision: 4 },
+    },
+  }).ready,
+  true,
+  '当前 revision CAS 的三类草稿身份完整时必须允许进入真实发布',
+);
+assert.equal(
+  coreBetaExpertPublishPrerequisiteBlocker({
+    testCase: expertPublishPrerequisiteCase,
+    ledgerExperts: {
       'claude-code_draft': { id: 'research-draft', etag: 'research-etag' },
       codex_draft: { id: 'data-draft' },
       manual_draft: { id: 'delivery-draft', etag: 'delivery-etag' },
@@ -609,7 +639,17 @@ assert.equal(
     publicState: emptyExpertPublishState,
   }).outcome,
   'automation_error',
-  '本轮草稿账本条目存在但 draftId/etag 残缺时必须 fail-closed',
+  '本轮草稿账本条目存在但 draftId/CAS 残缺时必须 fail-closed',
+);
+assert.match(
+  runner,
+  /manualDraftIdentity\.complete\) ledger\.experts\.manual_draft = manualDraft;[\s\S]*else delete ledger\.experts\.manual_draft/,
+  'BETA-EXPERT-004 只有取得真实 draftId/CAS 后才可写成功账本，产品失败不得污染下游',
+);
+assert.match(
+  runner,
+  /lifecycle\.publish\([\s\S]*draftCas,[\s\S]*keyPrefix/,
+  'BETA-EXPERT-007 发布必须传回草稿公开 etag 或 revision CAS',
 );
 const expertPublishEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-expert-publish-prerequisite-'));
 try {

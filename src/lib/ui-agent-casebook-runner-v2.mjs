@@ -9517,6 +9517,21 @@ const CORE_BETA_EXPERT_PUBLISH_DRAFT_REQUIREMENTS = Object.freeze([
   { ledger_key: 'manual_draft', source_case_id: 'BETA-EXPERT-004', kind: 'delivery' },
 ]);
 
+export function coreBetaExpertDraftConcurrencyIdentity(value = {}) {
+  const id = String(value?.id || value?.draftId || '').trim();
+  const etag = String(value?.etag || '').trim();
+  const revision = Number(value?.revision);
+  const hasRevision = Number.isInteger(revision) && revision > 0;
+  return {
+    id,
+    etag,
+    revision: hasRevision ? revision : null,
+    cas_kind: etag ? 'etag' : hasRevision ? 'revision' : '',
+    cas_value: etag || (hasRevision ? revision : null),
+    complete: Boolean(id && (etag || hasRevision)),
+  };
+}
+
 export function coreBetaExpertPublishPrerequisiteBlocker({
   testCase = {},
   ledgerExperts = {},
@@ -9534,12 +9549,11 @@ export function coreBetaExpertPublishPrerequisiteBlocker({
   }
   const requirements = CORE_BETA_EXPERT_PUBLISH_DRAFT_REQUIREMENTS.map((item) => {
     const entry = ledgerExperts?.[item.ledger_key] || null;
+    const identity = coreBetaExpertDraftConcurrencyIdentity(entry);
     return {
       ...item,
       present: Boolean(entry),
-      id: String(entry?.id || ''),
-      etag: String(entry?.etag || ''),
-      complete: Boolean(entry?.id && entry?.etag),
+      ...identity,
     };
   });
   const missingDraftKeys = requirements
@@ -9551,9 +9565,7 @@ export function coreBetaExpertPublishPrerequisiteBlocker({
   const ready = requirements.every((item) => item.complete);
   const availableDraftIdentities = (Array.isArray(availableDrafts) ? availableDrafts : [])
     .map((item) => ({
-      id: String(item?.id || ''),
-      etag: String(item?.etag || ''),
-      revision: Number(item?.revision || 0),
+      ...coreBetaExpertDraftConcurrencyIdentity(item),
       status: String(item?.status || ''),
     }))
     .filter((item) => item.id)
@@ -9591,7 +9603,7 @@ export function coreBetaExpertPublishPrerequisiteBlocker({
     .filter((role) => CORE_BETA_EXPERT_PREREQUISITE_NA_ROLES.has(role));
   const reason = outcome === 'blocked'
     ? `BETA-EXPERT-007 的本轮草稿前置缺失：${missingDraftKeys.join(',')}；已忽略账号中 ${availableDraftIdentities.length} 个非本轮草稿，未发布且未随机替换。`
-    : `BETA-EXPERT-007 的本轮草稿账本身份不完整：${incompleteDraftKeys.join(',')} 缺少 draftId/etag。`;
+    : `BETA-EXPERT-007 的本轮草稿账本身份不完整：${incompleteDraftKeys.join(',')} 缺少 draftId/CAS（etag 或 revision）。`;
   return {
     schema_version: 'qbot-core-beta-expert-prerequisite/v1',
     applies: true,
@@ -10164,7 +10176,21 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       'bug',
     );
     if (!builderOutcome.oracle_valid) return;
-    ledger.experts[`${runtimeFamily}_draft`] = created[0];
+    const ledgerDraft = {
+      ...(created[0] || {}),
+      ...(createdDetail?.draft || {}),
+    };
+    const ledgerDraftIdentity = coreBetaExpertDraftConcurrencyIdentity(ledgerDraft);
+    recordAssertion(
+      state,
+      `${runtimeFamily} Expert Builder草稿并发身份`,
+      '写入本轮成功账本的草稿必须同时具有 draftId 和公开 CAS（旧版 etag 或新版正整数 revision）。',
+      ledgerDraftIdentity.complete,
+      JSON.stringify(ledgerDraftIdentity),
+      'bug',
+    );
+    if (!ledgerDraftIdentity.complete) return;
+    ledger.experts[`${runtimeFamily}_draft`] = ledgerDraft;
     writeCoreBetaSuiteLedger(caseDir, ledger);
     state.artifacts.capability_selection = identityFile;
     state.artifacts.capability_execution_event = state.artifacts.reply_completion;
@@ -10193,25 +10219,57 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const skill = skills.find((item) => item.exact || item.source === 'builtin') || skills[0];
       if (skill) {
         const resolved = await lifecycle.resolveSkillDependencyCandidate(skill);
-        current = await lifecycle.addDraftDependency(current.id, resolved, current.etag);
+        current = await lifecycle.addDraftDependency(
+          current.id,
+          resolved,
+          current.etag || current.revision,
+        );
         added.push(resolved);
       }
       const mcp = mcps[0];
       if (mcp) {
         const resolved = await lifecycle.resolveMcpDependencyCandidate(mcp);
-        current = await lifecycle.addDraftDependency(current.id, resolved, current.etag);
+        current = await lifecycle.addDraftDependency(
+          current.id,
+          resolved,
+          current.etag || current.revision,
+        );
         added.push(resolved);
       }
       return {
         draft: await lifecycle.getDraft(current.id),
+        mutationDraft: current,
         dependencies: await lifecycle.listDraftDependencies(current.id),
         candidates: { skills: skills.length, mcps: mcps.length },
         added,
       };
     }, `${Date.now()}`);
-    ledger.experts.manual_draft = result.draft;
+    const manualDraft = {
+      ...(result.draft || {}),
+      ...(result.mutationDraft?.etag ? { etag: result.mutationDraft.etag } : {}),
+      ...(Number(result.mutationDraft?.revision) > 0
+        ? { revision: Number(result.mutationDraft.revision) }
+        : {}),
+    };
+    const manualDraftIdentity = coreBetaExpertDraftConcurrencyIdentity(manualDraft);
+    recordAssertion(
+      state,
+      '手动专家草稿并发身份',
+      '写入本轮成功账本的手动草稿必须同时具有 draftId 和公开 CAS（旧版 etag 或新版正整数 revision）。',
+      manualDraftIdentity.complete,
+      JSON.stringify(manualDraftIdentity),
+      'bug',
+    );
+    if (manualDraftIdentity.complete) ledger.experts.manual_draft = manualDraft;
+    else delete ledger.experts.manual_draft;
     writeCoreBetaSuiteLedger(caseDir, ledger);
-    writeExpertArtifact('expert_draft_lifecycle', result.draft);
+    writeExpertArtifact('expert_draft_lifecycle', {
+      draft: result.draft,
+      mutation_draft: result.mutationDraft,
+      concurrency_identity: manualDraftIdentity,
+      evidence_valid: true,
+      oracle_valid: manualDraftIdentity.complete,
+    });
     writeExpertArtifact('expert_dependency_graph', result.dependencies);
     writeExpertArtifact('credential_redaction_scan', {
       serialized_length: JSON.stringify(result).length,
@@ -10228,17 +10286,29 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     const conflict = await page.evaluate(async (id) => {
       const lifecycle = window.agent.expertLifecycle;
       const original = await lifecycle.getDraft(id);
-      const a = await lifecycle.patchDraft(id, { summary: `${original.content.summary} A` }, original.etag);
+      const a = await lifecycle.patchDraft(
+        id,
+        { summary: `${original.content.summary} A` },
+        original.etag || original.revision,
+      );
       let staleRejected = false;
       let staleError = '';
       try {
-        await lifecycle.patchDraft(id, { personaBody: `${original.content.personaBody} B` }, original.etag);
+        await lifecycle.patchDraft(
+          id,
+          { personaBody: `${original.content.personaBody} B` },
+          original.etag || original.revision,
+        );
       } catch (error) {
         staleRejected = true;
         staleError = String(error?.message || error);
       }
       const latest = await lifecycle.getDraft(id);
-      const merged = await lifecycle.patchDraft(id, { personaBody: `${latest.content.personaBody} B` }, latest.etag);
+      const merged = await lifecycle.patchDraft(
+        id,
+        { personaBody: `${latest.content.personaBody} B` },
+        latest.etag || latest.revision,
+      );
       return { original, writer_a: a, stale_rejected: staleRejected, stale_error: staleError, merged };
     }, draftId);
     writeExpertArtifact('expert_conflict_trace', conflict, conflict.stale_rejected && conflict.merged.revision > conflict.original.revision);
@@ -10344,9 +10414,13 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const results = [];
       for (const [index, entry] of entries.entries()) {
         const draft = await lifecycle.getDraft(entry.draft_id);
+        const draftCas = String(draft?.etag || '').trim() || Number(draft?.revision);
+        if (!(String(draft?.id || '').trim() && draftCas)) {
+          throw new Error(`expert draft ${entry.ledger_key} missing public concurrency identity`);
+        }
         const started = await lifecycle.publish(
           draft.id,
-          draft.etag,
+          draftCas,
           `${keyPrefix}-${entry.ledger_key}-${index + 1}`,
         );
         const states = [started];
@@ -10360,6 +10434,8 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         results.push({
           ledger_key: entry.ledger_key,
           draft_id: draft.id,
+          draft_cas_kind: String(draft?.etag || '').trim() ? 'etag' : 'revision',
+          draft_cas_value: draftCas,
           operation_id: started.id || started.operationId,
           states,
           expert: expertId ? await lifecycle.get(expertId) : null,
@@ -10647,8 +10723,16 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const base = before.versions.at(-1)?.version || before.versions.at(-1);
       if (!base?.id) throw new Error('published expert has no immutable version');
       let draft = await lifecycle.createDraftFromVersion(expertId, base.id);
-      draft = await lifecycle.patchDraft(draft.id, { personaBody: `${draft.content.personaBody}\n\nQA v2 revision.` }, draft.etag);
-      const op = await lifecycle.publish(draft.id, draft.etag, `qbot-beta-v2-${Date.now()}`);
+      draft = await lifecycle.patchDraft(
+        draft.id,
+        { personaBody: `${draft.content.personaBody}\n\nQA v2 revision.` },
+        draft.etag || draft.revision,
+      );
+      const op = await lifecycle.publish(
+        draft.id,
+        draft.etag || draft.revision,
+        `qbot-beta-v2-${Date.now()}`,
+      );
       const operationId = op.id || op.operationId;
       let terminal = op;
       for (let index = 0; index < 30 && !['completed', 'failed'].includes(terminal.state); index += 1) {
@@ -14072,9 +14156,17 @@ async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, t
       });
       const created = await api.getDraft(draft.id);
       const listed = (await api.listDrafts()).find((item) => item.id === draft.id) || null;
-      draft = await api.patchDraft(draft.id, { personaBody: `${created.content.personaBody}\n最终交付必须列出SHA证据。` }, created.etag);
+      draft = await api.patchDraft(
+        draft.id,
+        { personaBody: `${created.content.personaBody}\n最终交付必须列出SHA证据。` },
+        created.etag || created.revision,
+      );
       const restored = await api.getDraft(draft.id);
-      const op = await api.publish(draft.id, draft.etag, `qwork-daily-${Date.now()}`);
+      const op = await api.publish(
+        draft.id,
+        draft.etag || draft.revision,
+        `qwork-daily-${Date.now()}`,
+      );
       let terminal = op;
       const operationId = op.id || op.operationId;
       for (let index = 0; operationId && index < 60 && !['completed', 'failed'].includes(String(terminal.state || '')); index += 1) {
