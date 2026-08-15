@@ -1287,6 +1287,14 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'reply_delta',
     'reply_completion',
   ]);
+  const qworkExpertAudienceRejectionNotApplicableRoles = new Set([
+    'task_id',
+    'prompt',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
@@ -1312,7 +1320,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && !preSendCapabilityFailureNotApplicableRoles.has(role)
         && !preSendImeFailureNotApplicableRoles.has(role)
         && !preSendAttachmentRejectionNotApplicableRoles.has(role)
-        && !qworkWorkspaceSelectionFailureNotApplicableRoles.has(role))
+        && !qworkWorkspaceSelectionFailureNotApplicableRoles.has(role)
+        && !qworkExpertAudienceRejectionNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -1977,6 +1986,59 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.includes(role)
       && JSON.stringify(allowedRoles) === JSON.stringify([...qworkWorkspaceSelectionFailureNotApplicableRoles])
       && String(blocker?.reason || '').trim();
+    const expertAudienceMutationGuard = blocker?.mutation_guard || {};
+    const expertAudienceScreenshot = String(blocker?.screenshot?.path || '');
+    const resolvedExpertAudienceScreenshot = expertAudienceScreenshot ? path.resolve(expertAudienceScreenshot) : '';
+    const expertAudienceScreenshotRelative = resolvedExpertAudienceScreenshot
+      ? path.relative(path.resolve(caseDir), resolvedExpertAudienceScreenshot)
+      : '';
+    const expertAudienceScreenshotValid = Boolean(
+      resolvedExpertAudienceScreenshot
+      && expertAudienceScreenshotRelative
+      && !expertAudienceScreenshotRelative.startsWith('..')
+      && !path.isAbsolute(expertAudienceScreenshotRelative)
+      && fs.existsSync(resolvedExpertAudienceScreenshot)
+      && fs.statSync(resolvedExpertAudienceScreenshot).isFile()
+      && fs.statSync(resolvedExpertAudienceScreenshot).size >= 128
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.screenshot?.sha256 || ''))
+      && sha256File(resolvedExpertAudienceScreenshot) === blocker.screenshot.sha256
+    );
+    const qworkExpertAudienceRejectionVerified = blocker?.schema_version === 'qbot-qwork-daily-expert-audience-rejection/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'bug'
+      && blocker?.kind === 'expert_audience_product_rejection_before_send'
+      && blocker?.source === 'expert_lifecycle_create_draft_and_zero_send_readback'
+      && blocker?.dependent_case_id === 'QWD-EXPERT-009'
+      && testCase?.id === 'QWD-EXPERT-009'
+      && blocker?.expected_audience === 'org'
+      && String(blocker?.expert_label || '').trim()
+      && blocker?.product_rejection?.stage === 'create_draft'
+      && /expert audience is not supported/i.test(String(blocker?.product_rejection?.message || ''))
+      && blocker?.lifecycle_inventory?.target_absent_after === true
+      && Array.isArray(blocker?.lifecycle_inventory?.before)
+      && Array.isArray(blocker?.lifecycle_inventory?.after)
+      && Array.isArray(blocker?.lifecycle_inventory?.drafts_before)
+      && Array.isArray(blocker?.lifecycle_inventory?.drafts_after)
+      && expertAudienceMutationGuard?.valid === true
+      && expertAudienceMutationGuard?.task_absent_before === true
+      && expertAudienceMutationGuard?.task_absent_after === true
+      && expertAudienceMutationGuard?.not_running_before === true
+      && expertAudienceMutationGuard?.not_running_after === true
+      && expertAudienceMutationGuard?.message_count_zero_before === true
+      && expertAudienceMutationGuard?.message_count_zero_after === true
+      && expertAudienceMutationGuard?.send_count_observed === true
+      && expertAudienceMutationGuard?.send_count_unchanged === true
+      && expertAudienceMutationGuard?.capability_selection_empty_before === true
+      && expertAudienceMutationGuard?.capability_selection_empty_after === true
+      && expertAudienceMutationGuard?.no_prompt_recorded === true
+      && expertAudienceMutationGuard?.no_send_receipt_recorded === true
+      && expertAudienceScreenshotValid
+      && allowedRoles.includes(role)
+      && JSON.stringify(allowedRoles) === JSON.stringify([...qworkExpertAudienceRejectionNotApplicableRoles])
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
@@ -1987,7 +2049,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || capabilityInventoryPrerequisiteVerified
       || preSendImeFailureVerified
       || preSendAttachmentRejectionVerified
-      || qworkWorkspaceSelectionFailureVerified;
+      || qworkWorkspaceSelectionFailureVerified
+      || qworkExpertAudienceRejectionVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

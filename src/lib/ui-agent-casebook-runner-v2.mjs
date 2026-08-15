@@ -13102,6 +13102,118 @@ const QWORK_DAILY_WORKSPACE_SELECTION_FAILURE_NA_ROLES = Object.freeze([
   'reply_completion',
 ]);
 
+const QWORK_DAILY_EXPERT_AUDIENCE_REJECTION_NA_ROLES = Object.freeze([
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+]);
+
+function qworkDailySelectionEmpty(snapshot = {}) {
+  const noSelection = (value) => value == null || (Array.isArray(value) && value.length === 0);
+  return noSelection(snapshot?.capabilities?.selectedSkills)
+    && noSelection(snapshot?.capabilities?.selectedConnectors)
+    && noSelection(snapshot?.skills?.selected)
+    && noSelection(snapshot?.connectors?.selected)
+    && (snapshot?.capabilities?.currentExpert ?? snapshot?.capabilities?.expertIdentity ?? snapshot?.expert) == null;
+}
+
+export function qworkDailyExpertAudienceRejectionEvidence({
+  testCaseId = '',
+  expectedAudience = '',
+  expertLabel = '',
+  lifecycle = {},
+  before = {},
+  after = {},
+  screenshot = '',
+  noPromptRecorded = false,
+  noSendReceiptRecorded = false,
+} = {}) {
+  const beforeTask = before?.task || {};
+  const afterTask = after?.task || {};
+  const rejection = lifecycle?.product_rejection || {};
+  const resolvedScreenshot = screenshot ? path.resolve(screenshot) : '';
+  const screenshotValid = Boolean(
+    resolvedScreenshot
+    && fs.existsSync(resolvedScreenshot)
+    && fs.statSync(resolvedScreenshot).isFile()
+    && fs.statSync(resolvedScreenshot).size >= 128
+  );
+  const targetAbsentAfter = ![
+    ...(Array.isArray(lifecycle?.after) ? lifecycle.after : []),
+    ...(Array.isArray(lifecycle?.drafts_after) ? lifecycle.drafts_after : []),
+  ].some((item) => String(item?.label || item?.name || '').trim() === String(expertLabel || '').trim());
+  const mutationGuard = {
+    task_absent_before: beforeTask?.id == null,
+    task_absent_after: afterTask?.id == null,
+    not_running_before: beforeTask?.running === false,
+    not_running_after: afterTask?.running === false,
+    message_count_zero_before: Number(beforeTask?.message_count) === 0,
+    message_count_zero_after: Number(afterTask?.message_count) === 0,
+    send_count_observed: Number.isFinite(Number(beforeTask?.send_count))
+      && Number.isFinite(Number(afterTask?.send_count)),
+    send_count_unchanged: Number(beforeTask?.send_count) === Number(afterTask?.send_count),
+    capability_selection_empty_before: qworkDailySelectionEmpty(before),
+    capability_selection_empty_after: qworkDailySelectionEmpty(after),
+    no_prompt_recorded: noPromptRecorded === true,
+    no_send_receipt_recorded: noSendReceiptRecorded === true,
+  };
+  mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  const evidenceValid = Boolean(
+    testCaseId === 'QWD-EXPERT-009'
+    && expectedAudience === 'org'
+    && String(expertLabel || '').trim()
+    && lifecycle?.available === true
+    && rejection?.stage === 'create_draft'
+    && /expert audience is not supported/i.test(String(rejection?.message || ''))
+    && Array.isArray(lifecycle?.before)
+    && Array.isArray(lifecycle?.after)
+    && Array.isArray(lifecycle?.drafts_before)
+    && Array.isArray(lifecycle?.drafts_after)
+    && targetAbsentAfter
+    && mutationGuard.valid
+    && screenshotValid
+  );
+  return {
+    schema_version: 'qbot-qwork-daily-expert-audience-rejection/v1',
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: false,
+    applicable: evidenceValid,
+    outcome: evidenceValid ? 'bug' : 'automation_error',
+    kind: 'expert_audience_product_rejection_before_send',
+    source: 'expert_lifecycle_create_draft_and_zero_send_readback',
+    dependent_case_id: String(testCaseId || ''),
+    expected_audience: String(expectedAudience || ''),
+    expert_label: String(expertLabel || ''),
+    product_rejection: rejection,
+    lifecycle_inventory: {
+      before: lifecycle?.before || [],
+      after: lifecycle?.after || [],
+      drafts_before: lifecycle?.drafts_before || [],
+      drafts_after: lifecycle?.drafts_after || [],
+      target_absent_after: targetAbsentAfter,
+    },
+    mutation_guard: {
+      ...mutationGuard,
+      before_task: beforeTask,
+      after_task: afterTask,
+    },
+    screenshot: {
+      path: screenshotValid ? resolvedScreenshot : '',
+      sha256: screenshotValid
+        ? createHash('sha256').update(fs.readFileSync(resolvedScreenshot)).digest('hex')
+        : '',
+    },
+    not_applicable_roles: [...QWORK_DAILY_EXPERT_AUDIENCE_REJECTION_NA_ROLES],
+    reason: evidenceValid
+      ? '产品明确拒绝组织可见专家范围；已证明未创建目标专家、未选择能力且未创建任务或发送消息。'
+      : '组织可见专家产品拒绝的生命周期、零发送状态或截图证据不完整。',
+  };
+}
+
 export function qworkDailyWorkspaceSelectionFailureEvidence({
   testCaseId = '',
   workspace = '',
@@ -14132,6 +14244,9 @@ async function qworkDailyExpertCatalogCase({ page, state, testCase, caseDir }) {
 }
 
 async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, timeoutMs }, scenario) {
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'auto', connectorMode: 'auto' })) return;
+  const beforeLifecycle = await captureCoreBetaPublicState(page, testCase);
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', '专家中心');
@@ -14144,16 +14259,37 @@ async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, t
       if (!api) return { available: false, reason: 'expertLifecycle unavailable' };
       const methods = Object.keys(api);
       const before = await api.list();
-      let draft = await api.createDraft({
-        label,
-        summary: '日常回归创建的可逆专家，用于验证同一identity生命周期。',
-        personaBody: '你是日常回归质量专家。输出计划、修订和最终交付物，并明确可验证事实。',
-        audience: expectedAudience,
-        category: '质量保障',
-        domains: ['回归测试'],
-        examples: ['请制定发布验证计划。'],
-        dependencies: [],
-      });
+      const draftsBefore = await api.listDrafts();
+      let draft;
+      try {
+        draft = await api.createDraft({
+          label,
+          summary: '日常回归创建的可逆专家，用于验证同一identity生命周期。',
+          personaBody: '你是日常回归质量专家。输出计划、修订和最终交付物，并明确可验证事实。',
+          audience: expectedAudience,
+          category: '质量保障',
+          domains: ['回归测试'],
+          examples: ['请制定发布验证计划。'],
+          dependencies: [],
+        });
+      } catch (error) {
+        const after = await api.list().catch(() => []);
+        const draftsAfter = await api.listDrafts().catch(() => []);
+        return {
+          available: true,
+          methods,
+          before,
+          after,
+          drafts_before: draftsBefore,
+          drafts_after: draftsAfter,
+          product_rejection: {
+            stage: 'create_draft',
+            name: String(error?.name || 'Error'),
+            message: String(error?.message || error),
+            code: String(error?.code || ''),
+          },
+        };
+      }
       const created = await api.getDraft(draft.id);
       const listed = (await api.listDrafts()).find((item) => item.id === draft.id) || null;
       draft = await api.patchDraft(
@@ -14180,6 +14316,79 @@ async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, t
       return { available: true, methods, before, created, listed, patched: draft, restored, publish_operation: terminal, owned, versions, releases };
     }, { label: name, audience });
     if (!lifecycle.available) throw new Error(lifecycle.reason);
+    if (lifecycle.product_rejection) {
+      if (audience !== 'org' || !/expert audience is not supported/i.test(String(lifecycle.product_rejection.message || ''))) {
+        throw new Error(`Unexpected expert lifecycle rejection: ${lifecycle.product_rejection.message || 'unknown'}`);
+      }
+      const afterLifecycle = await captureCoreBetaPublicState(page, testCase);
+      const screenshot = await shot(page, caseDir, 'qwork-expert-audience-rejected');
+      const rejection = qworkDailyExpertAudienceRejectionEvidence({
+        testCaseId: testCase.id,
+        expectedAudience: audience,
+        expertLabel: name,
+        lifecycle,
+        before: beforeLifecycle,
+        after: afterLifecycle,
+        screenshot,
+        noPromptRecorded: !state.artifacts.prompt
+          && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0),
+        noSendReceiptRecorded: !state.artifacts.send_receipt
+          && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0),
+      });
+      const blockerFile = path.join(caseDir, 'expert-audience-product-rejection.json');
+      writeJsonFile(blockerFile, rejection);
+      state.artifacts.qwork_daily_expert_audience_rejection = blockerFile;
+      if (!rejection.valid) {
+        recordAssertion(
+          state,
+          '组织可见专家拒绝证据完整性',
+          '产品拒绝必须与目标范围、生命周期库存、干净草稿、零发送状态和 Case 内截图完整绑定。',
+          false,
+          rejection.reason,
+          'automation_error',
+        );
+        return;
+      }
+      state.artifacts.core_beta_not_applicable_roles = rejection.not_applicable_roles.map((role) => ({
+        role,
+        blocker_path: blockerFile,
+      }));
+      for (const role of [
+        'qwork_daily_readback',
+        'capability_selection',
+        'capability_execution_event',
+        'expert_identity_snapshot',
+        'expert_draft_lifecycle',
+        'expert_publish_operation',
+        'expert_runtime_trace',
+        'expert_history_readback',
+      ]) {
+        writeQworkDailyEvidence(state, caseDir, role, {
+          phase: 'expert_audience_create_draft',
+          outcome: 'bug',
+          blocker_path: blockerFile,
+          rejection,
+        }, false, true);
+      }
+      recordStep(
+        state,
+        '创建组织可见专家',
+        '选择组织可见范围后应成功创建草稿并进入可发布生命周期。',
+        rejection.reason,
+        'failed',
+        screenshot,
+        'bug',
+      );
+      recordAssertion(
+        state,
+        '组织可见专家创建与发布路径',
+        '产品应支持组织可见范围，owner 可继续发布、管理和召唤；拒绝时应形成产品 Bug 而不是框架中断。',
+        false,
+        rejection.reason,
+        'bug',
+      );
+      return;
+    }
     const publishedId = String(lifecycle.owned?.id || lifecycle.publish_operation?.expertId || lifecycle.publish_operation?.result?.expertId || '');
     const actualAudience = String(lifecycle.owned?.audience || lifecycle.restored?.content?.audience || lifecycle.restored?.audience || '');
     const preConversationValid = Boolean(
@@ -35625,6 +35834,30 @@ function verifiedCoreBetaPreSendCapabilityFailure(result) {
   return valid ? evidence : null;
 }
 
+function verifiedQworkDailyExpertAudienceRejection(result) {
+  const evidence = readCaseBoundJsonEvidence(result, [
+    result?.artifacts?.qwork_daily_expert_audience_rejection,
+  ], 'qbot-qwork-daily-expert-audience-rejection/v1');
+  if (!evidence) return null;
+  const blocker = evidence.data;
+  const valid = blocker?.valid === true
+    && blocker?.evidence_valid === true
+    && blocker?.oracle_valid === false
+    && blocker?.applicable === true
+    && blocker?.outcome === 'bug'
+    && blocker?.kind === 'expert_audience_product_rejection_before_send'
+    && blocker?.source === 'expert_lifecycle_create_draft_and_zero_send_readback'
+    && blocker?.dependent_case_id === result.id
+    && blocker?.expected_audience === 'org'
+    && blocker?.product_rejection?.stage === 'create_draft'
+    && /expert audience is not supported/i.test(String(blocker?.product_rejection?.message || ''))
+    && blocker?.lifecycle_inventory?.target_absent_after === true
+    && blocker?.mutation_guard?.valid === true
+    && blocker?.screenshot?.path
+    && blocker?.screenshot?.sha256;
+  return valid ? evidence : null;
+}
+
 export function reviewCaseCredibility(result) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
@@ -36113,6 +36346,29 @@ export function assessUserCenteredOutcome(result, {
 function assessUserExperience(result, { status, category, assertions }) {
   const text = userReviewText(result, assertions);
   if (status === 'failed' && category !== 'automation_error') {
+    const expertAudienceRejection = verifiedQworkDailyExpertAudienceRejection(result);
+    if (expertAudienceRejection) {
+      const evidence = expertAudienceRejection.data;
+      const assessment = assessUserCenteredOutcome(result, {
+        explicitEvidence: [evidence.screenshot.path],
+        intendedClassification: 'bug',
+        reviewReason: '结构化组织可见专家产品拒绝证据已验证，生命周期调用、库存读回、零发送守卫和截图完整。',
+        productObservation: evidence.reason,
+        userOperationOverride: '创建专家并选择“组织可见”范围。',
+        expectedOutcomeOverride: '组织可见专家应成功创建，owner 可继续发布、管理和召唤。',
+        userImpactOverride: '用户无法创建或发布组织可见专家，团队共享专家路径被阻断。',
+      });
+      if (assessment.classification === 'bug') {
+        return {
+          review_category: '可信失败-产品Bug候选',
+          trusted: true,
+          reason: assessment.description,
+          user_view_conclusion: assessment.impact,
+          action: '允许继续下一条；进入产品 Bug 候选清单，暂不自动提 issue。',
+          assessment,
+        };
+      }
+    }
     const preSendCapabilityFailure = verifiedCoreBetaPreSendCapabilityFailure(result);
     if (preSendCapabilityFailure) {
       const evidence = preSendCapabilityFailure.data;

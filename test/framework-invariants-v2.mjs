@@ -6351,6 +6351,7 @@ const required = [
   ['QWD-WS-001 发送前产品失败完整物化且不抛异常覆盖', /qworkDailyWorkspaceSelectionFailureEvidence[\s\S]*workspace-selection-product-failure\.json[\s\S]*core_beta_not_applicable_roles[\s\S]*materializeQworkDailyWorkspaceSelectionFailure[\s\S]*return;/],
   ['QWD-WS-001 B 阶段失败保留 A 会话证据并重开同一任务', /materializeQworkDailySecondWorkspaceSelectionFailure[\s\S]*task_a:[\s\S]*reopenSessionAndReadback[\s\S]*reopened_task_a/],
   ['QWD-WS-001 无论路径如何都在 finally 定向清理 A/B', /qworkDailyWorkspaceTaskBindingCase[\s\S]*finally \{[\s\S]*cleanupQworkDailyWorkspaceFixture[\s\S]*qwork_workspace_fixture_cleanup/],
+  ['QWD-EXPERT-009 组织可见范围产品拒绝形成零发送 Bug 证据', /qworkDailyExpertLifecycleCase[\s\S]*product_rejection[\s\S]*qworkDailyExpertAudienceRejectionEvidence[\s\S]*expert-audience-product-rejection\.json[\s\S]*core_beta_not_applicable_roles/],
   ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],

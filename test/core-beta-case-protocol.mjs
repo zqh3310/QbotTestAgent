@@ -34,6 +34,7 @@ import {
   coreBetaSuiteLedgerPath,
   coreBetaSuiteRoot,
   qworkDailyEvidenceEnvelope,
+  qworkDailyExpertAudienceRejectionEvidence,
   qworkDailyExpertCatalogBridgeRoute,
   qworkDailyExpertCatalogVerdict,
   qworkDailyNewTaskAutoIsolationVerdict,
@@ -43,6 +44,106 @@ import {
   qworkDailyWorkspaceTaskBindingVerdict,
   normalizeQworkDailyExpertCatalog,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-qwork-expert-audience-rejection-'));
+  const screenshot = path.join(root, 'qwork-expert-audience-rejected.png');
+  fs.writeFileSync(screenshot, Buffer.alloc(256, 9));
+  const cleanState = {
+    task: { id: null, running: false, message_count: 0, send_count: 71 },
+    expert: null,
+    capabilities: { selectedSkills: null, selectedConnectors: null, currentExpert: null },
+    skills: { selected: [] },
+    connectors: { selected: [] },
+  };
+  const label = 'QWork日常专家-QWD-EXPERT-009-fixture';
+  const lifecycle = {
+    available: true,
+    before: [],
+    after: [],
+    drafts_before: [],
+    drafts_after: [],
+    product_rejection: {
+      stage: 'create_draft',
+      name: 'ExpertContractError',
+      message: 'expert audience is not supported',
+      code: '',
+    },
+  };
+  const blocker = qworkDailyExpertAudienceRejectionEvidence({
+    testCaseId: 'QWD-EXPERT-009',
+    expectedAudience: 'org',
+    expertLabel: label,
+    lifecycle,
+    before: cleanState,
+    after: cleanState,
+    screenshot,
+    noPromptRecorded: true,
+    noSendReceiptRecorded: true,
+  });
+  assert.equal(blocker.evidence_valid, true, '组织可见范围产品拒绝必须形成完整零发送证据');
+  assert.equal(blocker.oracle_valid, false);
+  assert.equal(blocker.outcome, 'bug');
+
+  const evidenceRoles = [
+    'before_screenshot', 'action_receipt', 'after_screenshot', 'public_state_readback',
+    'cleanup_readback', 'qwork_daily_readback', 'task_id', 'prompt', 'send_receipt',
+    'transcript', 'reply_delta', 'reply_completion', 'capability_selection',
+    'capability_execution_event', 'expert_identity_snapshot', 'expert_draft_lifecycle',
+    'expert_publish_operation', 'expert_runtime_trace', 'expert_history_readback',
+  ];
+  const blockerFile = path.join(root, 'expert-audience-product-rejection.json');
+  fs.writeFileSync(blockerFile, JSON.stringify(blocker));
+  fs.writeFileSync(path.join(root, 'action-receipts.json'), JSON.stringify([{
+    action_id: 'qwd-expert-009-execute',
+    status: 'failed',
+    category: 'bug',
+    before_screenshot: screenshot,
+    after_screenshot: screenshot,
+  }]));
+  const artifacts = {
+    core_beta_not_applicable_roles: blocker.not_applicable_roles.map((role) => ({ role, blocker_path: blockerFile })),
+  };
+  for (const role of evidenceRoles.filter((role) => ![
+    'before_screenshot', 'after_screenshot', 'action_receipt', ...blocker.not_applicable_roles,
+  ].includes(role))) {
+    const file = path.join(root, `${role}.json`);
+    fs.writeFileSync(file, JSON.stringify(qworkDailyEvidenceEnvelope(
+      'QWD-EXPERT-009',
+      { blocker_path: blockerFile, rejection: blocker },
+      false,
+      true,
+      '2026-08-15T00:00:00.000Z',
+    )));
+    artifacts[role] = file;
+  }
+  const manifest = buildCoreEvidenceManifest({
+    testCase: { id: 'QWD-EXPERT-009', evidence_roles: evidenceRoles },
+    caseDir: root,
+    artifacts,
+    screenshots: { before: screenshot, after: screenshot },
+    actions: [{ action_id: 'qwd-expert-009-execute' }],
+  });
+  assert.equal(
+    manifest.complete,
+    true,
+    `组织可见范围产品拒绝必须补齐完整 manifest 并允许继续后续 Case：${JSON.stringify(manifest)}`,
+  );
+  assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), blocker.not_applicable_roles);
+
+  const tampered = qworkDailyExpertAudienceRejectionEvidence({
+    testCaseId: 'QWD-EXPERT-009',
+    expectedAudience: 'org',
+    expertLabel: label,
+    lifecycle,
+    before: cleanState,
+    after: { ...cleanState, task: { ...cleanState.task, send_count: 72 } },
+    screenshot,
+    noPromptRecorded: true,
+    noSendReceiptRecorded: true,
+  });
+  assert.equal(tampered.evidence_valid, false, '发送计数变化时不得把未发生的会话角色标成 N/A');
+}
 
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-timeout-evidence-'));

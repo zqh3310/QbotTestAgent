@@ -247,6 +247,14 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
   fallback 只允许精确“创建”或“保存草稿”。表单证据必须读回提交按钮是否存在、
   精确文案和 disabled 状态。不得因新版把“创建”演进为“保存草稿”误报 framework
   issue，也不得把“保存并发布/立即发布/取消”等其他动作当作创建草稿提交。
+- `QWD-EXPERT-009` 请求组织可见范围时，公开专家生命周期接口若精确返回
+  `ExpertContractError: expert audience is not supported`，这是已到达产品判断点的
+  产品拒绝，不得让异常逃逸并生成 incomplete manifest。runner 必须保存创建前后专家/
+  草稿库存、Case 内失败截图、干净草稿与零消息/零发送/空能力读回，把未发生的会话链
+  角色以受校验 N/A 标记，同时为专家生命周期、发布、identity、runtime 和 history
+  角色写入 `evidence_valid=true/oracle_valid=false` 的负向证据；证据完整时记产品 Bug
+  并继续后续独立父 Case，任何错误文案漂移、状态变化或证据缺口仍按 framework issue
+  fail-closed。
 
 ## 4. Fixture 合同
 
