@@ -607,7 +607,7 @@ const emptyExpertPublishState = {
 const expertPublishBlocker = coreBetaExpertPublishPrerequisiteBlocker({
   testCase: expertPublishPrerequisiteCase,
   ledgerExperts: {
-    manual_draft: { id: 'delivery-draft', etag: 'delivery-etag' },
+    manual_draft: { id: 'delivery-draft', revision: 2 },
   },
   availableDrafts: [{ id: 'historical-draft', etag: 'historical-etag', revision: 4 }],
   publicState: emptyExpertPublishState,
@@ -670,6 +670,28 @@ try {
   });
   assert.equal(manifest.complete, true, 'BETA-EXPERT-007 上游草稿缺失必须生成完整 N/A manifest');
   assert.deepEqual(manifest.missing_roles, []);
+
+  const inconsistentRequirements = expertPublishBlocker.requirements.map((item) => (
+    item.ledger_key === 'manual_draft'
+      ? { ...item, cas_kind: 'etag', cas_value: 'invented-etag' }
+      : item
+  ));
+  writeJsonFile(blockerFile, {
+    ...expertPublishBlocker,
+    requirements: inconsistentRequirements,
+    ledger_snapshot_sha256: createHash('sha256')
+      .update(JSON.stringify(inconsistentRequirements)).digest('hex'),
+  });
+  const inconsistentCas = buildCoreEvidenceManifest({
+    testCase: expertPublishPrerequisiteCase,
+    caseDir: expertPublishEvidenceDir,
+    artifacts,
+  });
+  assert.deepEqual(
+    inconsistentCas.missing_roles,
+    expertPublishPrerequisiteRoles,
+    'revision 草稿伪装成 etag CAS 时必须重新 fail-closed',
+  );
 
   writeJsonFile(blockerFile, {
     ...expertPublishBlocker,

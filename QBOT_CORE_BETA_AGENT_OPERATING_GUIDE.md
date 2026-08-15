@@ -228,6 +228,20 @@ runner 的成本操作数只接受“投入/投入金额/总投入/成本”，�
 提交推送、新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
 
+修复矩形漏斗识别后启动的最新冻结批次保留在
+`teams360-automation/output/20260815120147_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-d05bc71_casebook-8a62aac`：
+已完成 `32/83`，raw 为 `passed=17/failed=14/blocked=1`；第 33 条
+`QW-EXPERT-005` 未计入 completed。其叶子 `BETA-EXPERT-007` 正确识别
+`claude-code_draft/codex_draft` 缺失，建立空任务零能力状态并生成完整可信
+`run-owned-expert-publish-prerequisite.json`；唯一存在的 `manual_draft` 使用当前公开
+bridge 的合法 `revision=2` CAS。runner 生成端已接受 revision，但 manifest 校验器
+仍硬要求非空 `etag`，错误拒绝五个声明的 N/A 角色并触发 framework stop。runner
+PID `89573` 及 npm 父进程已退出，360Teams 宿主 PID `20115` 保留；该目录永久冻结。
+修复必须让 blocker、manifest 和发布执行共享 `etag|revision` CAS 合同，并以本次
+revision blocker 正例及 CAS 类型/值矛盾负例强化 invariant；完成全检、提交推送、
+新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

@@ -1491,9 +1491,25 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && (item?.present === true || item?.present === false)
         && (item?.complete === true || item?.complete === false)
         && (missingDraftKeys.includes(item.ledger_key)
-          ? item.present === false && item.complete === false && item.id === '' && item.etag === ''
+          ? item.present === false
+            && item.complete === false
+            && item.id === ''
+            && item.etag === ''
+            && item.revision == null
+            && item.cas_kind === ''
+            && item.cas_value == null
           : item.present === true && item.complete === true
-            && String(item.id || '').trim() && String(item.etag || '').trim())
+            && String(item.id || '').trim()
+            && (
+              (String(item.etag || '').trim()
+                && item.cas_kind === 'etag'
+                && item.cas_value === String(item.etag).trim())
+              || (!String(item.etag || '').trim()
+                && Number.isInteger(Number(item.revision))
+                && Number(item.revision) > 0
+                && item.cas_kind === 'revision'
+                && Number(item.cas_value) === Number(item.revision))
+            ))
       ))
       && blocker?.ledger_snapshot_sha256 === createHash('sha256')
         .update(JSON.stringify(publishRequirements)).digest('hex')
