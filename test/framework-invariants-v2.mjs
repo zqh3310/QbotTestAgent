@@ -6039,6 +6039,23 @@ assert.equal(caseAwareReplyAssertion(
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
   sitHome062InvestmentCostActualReply,
 ).ok, true, 'ROI 判定应接受最新真实回复使用“投入成本”的等价公式');
+const sitHome062RevenueActualReply = [
+  '本次报名 240 人、到场 170 人，可以算出到场率，但这只是转化漏斗指标，不是 ROI。',
+  '计算 ROI 需要「收益」和「投入」两个数，目前这两项都缺失，所以没法直接给出 ROI 数字。',
+  'ROI = (活动带来的总营收 − 活动总投入) ÷ 活动总投入 × 100%',
+  '举个例子：如果总投入 3 万、总营收 6 万，则 ROI = (6万−3万) ÷ 3万 = 100%。',
+  '请补充活动总营收（或成交金额）与活动总投入。',
+].join('\n');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  sitHome062RevenueActualReply,
+).ok, true, 'ROI 判定应接受本轮真实回复使用“活动带来的总营收”的等价公式');
+assert.equal(caseAwareReplyAssertion(
+  pipelineCase('SIT-HOME-062'),
+  { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },
+  '当前无法计算。请补充活动总投入和活动总营收。ROI =（活动总投入 − 活动带来的总营收）÷ 活动总投入。',
+).ok, false, '扩展“总营收”操作数后仍必须拒绝回报与投入顺序颠倒的公式');
 assert.equal(caseAwareReplyAssertion(
   pipelineCase('SIT-HOME-062'),
   { prompt: '这次活动有240人报名、170人到场，请告诉我ROI是多少。', label: '第一轮' },

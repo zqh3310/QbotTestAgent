@@ -255,6 +255,26 @@ runner PID `52074` 及 npm 父进程均已退出，360Teams 宿主 PID `20115` �
 产品 Bug，只有导航、取证或收尾失败才硬停止；完成全检、提交推送、新能力审计和精确
 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复组织可见专家产品拒绝取证后启动的批次保留在
+`teams360-automation/output/20260815162044_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-9030f79_casebook-8a62aac`：
+已完成 `36/83`，raw 为 `passed=17/failed=17/blocked=2`。第 37 条
+`QW-EXPERT-009/QWD-EXPERT-009` 请求组织可见专家时，产品公开接口明确拒绝
+`ExpertContractError: expert audience is not supported`，但旧框架让异常逃逸并遗漏
+17 个证据角色，误升级为 `automation_error` 后硬停止。该目录永久冻结；修复提交
+`afd48ec453501d1fb34ade0273215dc833cdfb6d` 已让这一精确产品拒绝生成完整负向证据、
+保持产品 Bug 并继续后续独立父 Case。
+
+基于上述修复启动的批次保留在
+`teams360-automation/output/20260815184445_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-afd48ec_casebook-8a62aac`：
+已完成 `6/83`，raw 为 `passed=1/failed=4/blocked=1`；第 7 条只有未完成现场，不计入
+completed。第 6 条 `QW-CHAT-003` 的 `SIT-HOME-062` 回复明确说明收益与投入均缺失、
+无法直接计算 ROI，并给出正确公式
+`(活动带来的总营收 - 活动总投入) / 活动总投入`，金额只用于明确示例，也未借用旧任务
+事实。两套 runner 的回报操作数遗漏“营收”，得到 `formula=false` 并误报产品 Bug。
+该目录永久冻结；修复必须让 legacy 与 v2 同时接受“活动带来的总营收”，并保留投入在前、
+缺回报输入、编造金额和借用旧事实等负例。完成全检、提交推送、新能力审计和精确
+`READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
