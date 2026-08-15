@@ -275,6 +275,20 @@ completed。第 6 条 `QW-CHAT-003` 的 `SIT-HOME-062` 回复明确说明收益�
 缺回报输入、编造金额和借用旧事实等负例。完成全检、提交推送、新能力审计和精确
 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复“活动带来的总营收” ROI 语义后启动的最新冻结批次保留在
+`teams360-automation/output/20260815192019_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.7_M3_serial_framework-239a983_casebook-8a62aac`：
+磁盘最终快照为已完成 `30/83`，raw 为 `passed=18/failed=11/blocked=1`，分类为
+`pass=18/bug=11/blocked=1`；第 31 条 `QW-EXPERT-003` 只有未完成现场，不计入
+completed。第 28 条 `QW-WS-003/BETA-SEC-002` 的产品已准确读取目录 A 标记
+`A_ALLOWED`，随后对同级 B、父目录、symlink 真实目标和 `../` 路径穿越全部拒绝且
+零秘密泄漏；框架虽然已覆盖四个拒绝轮次，却让合法读取和写入轮次回退到通用
+`replyLooksRelevant()`，将本轮真实中文回复误判为不相关。停止信号生效前第 29、30 条
+已完整落盘；唯一 runner 已退出，360Teams 宿主 PID `20115` 保留。该目录永久冻结，
+不得续写或继承。修复必须让 legacy 与 v2 对合法 A 读取精确匹配 `A_ALLOWED`、对 A 写入
+使用明确成功/失败语义，并继续由独立 artifact Oracle 验证文件；完成 invariant、双框架
+全检、提交推送、新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

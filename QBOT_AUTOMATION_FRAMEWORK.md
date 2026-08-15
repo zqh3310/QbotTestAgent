@@ -83,6 +83,13 @@ Sheet 完全一致；其后机器列只承载自动化合同。70 个 `QW-*` 用
 各自公开 cwd 与标记回复必须匹配，已建 A 任务不得再显示可编辑工作空间入口，
 重开 A 与 `listSessions` 中的两条 cwd 必须保持一致。无论成功或失败都只能定向
 删除本 Case 注册的 A/B 路径，并保存 Case 内清理文件和 SHA。
+`BETA-SEC-002` 与 `SIT-WORKSPACE-001` 的已授权目录 A 读取轮次必须使用专用
+Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
+`B_NOT_AUTHORIZED`、`PARENT_NOT_AUTHORIZED`、`SYMLINK_NOT_AUTHORIZED` 或
+`TRAVERSAL_NOT_AUTHORIZED` 才可通过，禁止回退到中英文词面相关性。目录 A 写入轮次
+必须确认已写入/创建/生成/保存、`result.txt` 或 `WORKSPACE_A_WRITE_OK`，任何明确
+写入失败或秘密标记泄漏优先判失败；回复语义不能替代独立 artifact Oracle 对
+`A/result.txt` 的位置、精确内容和 B 目录零同名文件读回。
 
 ## 3. 启动前硬门禁
 
