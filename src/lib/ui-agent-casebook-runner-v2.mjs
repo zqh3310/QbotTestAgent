@@ -10427,7 +10427,11 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         let current = started;
         for (let attempt = 0; attempt < 30 && !['completed', 'failed'].includes(current.state); attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
-          current = await lifecycle.getOperation(started.id || started.operationId);
+          current = await lifecycle.getOperation(
+            started.id || started.operationId,
+            draft.id,
+            draftCas,
+          );
           states.push(current);
         }
         const expertId = current.expertId || started.expertId || null;
@@ -10728,16 +10732,17 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         { personaBody: `${draft.content.personaBody}\n\nQA v2 revision.` },
         draft.etag || draft.revision,
       );
+      const draftCas = String(draft?.etag || '').trim() || Number(draft?.revision);
       const op = await lifecycle.publish(
         draft.id,
-        draft.etag || draft.revision,
+        draftCas,
         `qbot-beta-v2-${Date.now()}`,
       );
       const operationId = op.id || op.operationId;
       let terminal = op;
       for (let index = 0; index < 30 && !['completed', 'failed'].includes(terminal.state); index += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        terminal = await lifecycle.getOperation(operationId);
+        terminal = await lifecycle.getOperation(operationId, draft.id, draftCas);
       }
       return {
         before,
@@ -14298,16 +14303,17 @@ async function qworkDailyExpertLifecycleCase({ page, state, testCase, caseDir, t
         created.etag || created.revision,
       );
       const restored = await api.getDraft(draft.id);
+      const draftCas = String(draft?.etag || '').trim() || Number(draft?.revision);
       const op = await api.publish(
         draft.id,
-        draft.etag || draft.revision,
+        draftCas,
         `qwork-daily-${Date.now()}`,
       );
       let terminal = op;
       const operationId = op.id || op.operationId;
       for (let index = 0; operationId && index < 60 && !['completed', 'failed'].includes(String(terminal.state || '')); index += 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
-        terminal = await api.getOperation(operationId);
+        terminal = await api.getOperation(operationId, draft.id, draftCas);
       }
       const after = await api.list();
       const owned = after.find((item) => item.id === terminal.expertId || item.id === terminal.result?.expertId || item.label === label) || null;

@@ -547,6 +547,9 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
 - 产品 Bug 在证据完整且后续 Case 独立时继续；不得修改 deepbankV2。
 - 普通 prerequisite `blocked` 记录后继续独立 Case，不得覆盖更高优先级的
   `automation_error`。
+- Expert 发布轮询必须把发起发布时的同一 `operationId`、`draftId` 和 CAS 一并传给
+  `expertLifecycle.getOperation`。缺少 draft/CAS 导致的 `expert draft was not found`
+  是框架合同错误，必须自愈后从新目录全量重跑，不能当产品 Bug 或普通 blocked。
 - 确认 `framework_issue` 或 `testcase_issue` 时，冻结旧目录、停止唯一 runner、
   修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
   从 1/70、1/160 或本轮 1/83 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许

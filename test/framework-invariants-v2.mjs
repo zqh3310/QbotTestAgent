@@ -2722,6 +2722,26 @@ assert.doesNotMatch(
   /lifecycle\.capabilities\(\)/,
   'Expert 场景不得调用不存在的 expertLifecycle.capabilities API',
 );
+assert.doesNotMatch(
+  runner,
+  /\.getOperation\([^,\n)]+\)/,
+  'Expert 发布轮询不得只传 operationId；当前公开 bridge 还要求 draftId 和发布时 CAS',
+);
+assert.match(
+  runner,
+  /current = await lifecycle\.getOperation\(\s*started\.id \|\| started\.operationId,\s*draft\.id,\s*draftCas,\s*\)/,
+  'BETA-EXPERT-007 必须用 operationId、draftId 和发布时 CAS 轮询三个专家发布操作',
+);
+assert.match(
+  runner,
+  /BETA-EXPERT-012[\s\S]*const draftCas = String\(draft\?\.etag \|\| ''\)\.trim\(\) \|\| Number\(draft\?\.revision\)[\s\S]*getOperation\(operationId, draft\.id, draftCas\)/,
+  'BETA-EXPERT-012 新版本发布轮询必须绑定同一 draft 和 CAS',
+);
+assert.match(
+  runner,
+  /qworkDailyExpertLifecycleCase[\s\S]*const draftCas = String\(draft\?\.etag \|\| ''\)\.trim\(\) \|\| Number\(draft\?\.revision\)[\s\S]*api\.getOperation\(operationId, draft\.id, draftCas\)/,
+  'QWD-EXPERT-011 owner 生命周期发布轮询必须绑定同一 draft 和 CAS',
+);
 const expertSummonSelected = {
   id: 'expert-qa-001',
   activeReleaseId: 'release-qa-001',

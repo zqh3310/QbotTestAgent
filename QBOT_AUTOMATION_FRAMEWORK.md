@@ -254,6 +254,12 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
   fallback 只允许精确“创建”或“保存草稿”。表单证据必须读回提交按钮是否存在、
   精确文案和 disabled 状态。不得因新版把“创建”演进为“保存草稿”误报 framework
   issue，也不得把“保存并发布/立即发布/取消”等其他动作当作创建草稿提交。
+- 专家发布异步轮询必须遵守当前公开 preload 合同
+  `getOperation(operationId, draftId, expectedRevision)`。`draftId` 和
+  `expectedRevision` 必须与发起 `publish` 时的同一草稿和 CAS 完全一致；禁止只传
+  `operationId`。只传一个参数会被主进程按缺失草稿 fail-closed 为
+  `ExpertContractError: expert draft was not found`，属于框架调用错误，不能误记产品
+  Bug 或留下 incomplete manifest。
 - `QWD-EXPERT-009` 请求组织可见范围时，公开专家生命周期接口若精确返回
   `ExpertContractError: expert audience is not supported`，这是已到达产品判断点的
   产品拒绝，不得让异常逃逸并生成 incomplete manifest。runner 必须保存创建前后专家/
