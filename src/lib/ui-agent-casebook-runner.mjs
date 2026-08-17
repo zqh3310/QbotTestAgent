@@ -18262,7 +18262,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     terminal: observedTerminal,
     success: observedSuccess,
     installed_view_readback: sameInstalled,
-    terminal_source: terminal.terminal ? 'market-card' : installedViewSuccess ? 'exact-installed-tab-card' : '',
+    terminal_source: terminal.source || (installedViewSuccess ? 'exact-installed-tab-card' : ''),
   };
   recordStep(
     state,
@@ -18289,6 +18289,34 @@ async function skillCardName(card, fallbackText = '') {
   return firstLine(named || fallbackText).trim();
 }
 
+export function skillInstallIdentityTerminalVerdict({
+  skillName = '',
+  cardText = '',
+  pageText = '',
+} = {}) {
+  const identity = String(skillName || '').trim();
+  if (!identity) return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+
+  const currentCardText = String(cardText || '');
+  const pageLines = String(pageText || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|安装错误|发生错误|错误[:：]/;
+  const successPattern = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/;
+  const pendingPattern = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|正在同步|同步中|reconcil|materializing/i;
+  const pageSignal = (signalPattern) => {
+    const namedSignal = new RegExp(`(?:技能\\s*)?[「“"']?${escapeRegExp(identity)}[」”"']?\\s*(?:[:：,，-]\\s*)?(?:${signalPattern.source})`, signalPattern.flags);
+    const line = pageLines.find((entry) => namedSignal.test(entry));
+    return line ? { source: 'current-skill-receipt', text: line } : null;
+  };
+  const cardEntry = currentCardText.includes(identity) ? { source: 'current-skill-card', text: currentCardText } : null;
+  const failure = (cardEntry && failurePattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(failurePattern);
+  if (failure) return { matched: true, terminal: true, success: false, failure: true, pending: false, ...failure };
+  const success = (cardEntry && successPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(successPattern);
+  if (success) return { matched: true, terminal: true, success: true, failure: false, pending: false, ...success };
+  const pending = (cardEntry && pendingPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(pendingPattern);
+  if (pending) return { matched: true, terminal: false, success: false, failure: false, pending: true, ...pending };
+  return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+}
+
 async function waitForSkillInstallTerminal(page, {
   skillName,
   skillSlug = '',
@@ -18297,11 +18325,12 @@ async function waitForSkillInstallTerminal(page, {
 }) {
   const deadline = Date.now() + timeoutMs;
   let text = '';
+  let combined = '';
   const installedSelectors = coreBetaInstalledSkillTerminalSelectorCandidates();
   while (Date.now() < deadline) {
     text = marketCard ? await marketCard.innerText({ timeout: 800 }).catch(() => '') : '';
     const pageText = await mainSurfaceText(page);
-    const combined = `${text}\n${pageText}`;
+    combined = `${text}\n${pageText}`;
     if (marketCard) {
       const installedAction = marketCard.locator(installedSelectors.join(', ')).first();
       if (await visible(installedAction, 250)) {
@@ -18333,17 +18362,17 @@ async function waitForSkillInstallTerminal(page, {
         text: text || combined,
       };
     }
-    const pending = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|reconcil|materializing/i.test(combined);
-    const failure = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|错误/.test(combined);
-    const success = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/.test(text);
-    if (!pending && (failure || success)) return { terminal: true, success: success && !failure, failure, pending: false, text: combined };
     if (skillName) {
       const installed = page.locator('.skill-card').filter({ hasText: skillName }).filter({ hasText: /已安装|已就绪|安装成功/ }).first();
-      if (await visible(installed, 250)) return { terminal: true, success: true, failure: false, pending: false, text: await installed.innerText({ timeout: 500 }).catch(() => combined) };
+      if (await visible(installed, 250)) return { terminal: true, success: true, failure: false, pending: false, source: 'exact installed-card readback', text: await installed.innerText({ timeout: 500 }).catch(() => combined) };
+    }
+    const identityTerminal = skillInstallIdentityTerminalVerdict({ skillName, cardText: text, pageText });
+    if (identityTerminal.terminal) {
+      return { ...identityTerminal, text: identityTerminal.text || combined };
     }
     await page.waitForTimeout(1000);
   }
-  return { terminal: false, success: false, failure: false, pending: true, text };
+  return { terminal: false, success: false, failure: false, pending: true, source: '', text: combined || text };
 }
 
 function literalOccurrenceCount(text, literal) {

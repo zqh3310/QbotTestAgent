@@ -144,6 +144,7 @@ import {
   seedCoreBetaRunOwnedSkillCleanupLedger,
   sendReceiptEvidence,
   sentPromptFidelity,
+  skillInstallIdentityTerminalVerdict,
   streamingScrollFollowVerdict,
   streamingScrollPerformanceMetrics,
   stopRemainderWithoutSynthetic,
@@ -169,6 +170,31 @@ import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
+
+const identityBoundSkillInstallSuccess = skillInstallIdentityTerminalVerdict({
+  skillName: '毓数报表分析',
+  cardText: '毓数报表分析',
+  pageText: '技能「毓数报表分析」安装成功，本机对账已完成\n后台目录正在同步',
+});
+assert.equal(identityBoundSkillInstallSuccess.terminal, true, '目标技能明确成功回执必须优先于其他区域的同步中状态');
+assert.equal(identityBoundSkillInstallSuccess.success, true, '目标技能明确成功回执必须判定为成功');
+const identityBoundSkillInstallPending = skillInstallIdentityTerminalVerdict({
+  skillName: '毓数报表分析',
+  cardText: '毓数报表分析\n正在同步',
+  pageText: '技能「其他技能」安装成功，本机对账已完成',
+});
+assert.equal(identityBoundSkillInstallPending.terminal, false, '其他技能成功回执不得覆盖目标技能自身 pending');
+assert.equal(identityBoundSkillInstallPending.pending, true, '目标技能自身 pending 必须保持非终态');
+const mismatchedSkillInstallReceipt = skillInstallIdentityTerminalVerdict({
+  skillName: '毓数报表分析',
+  pageText: '毓数报表分析位于市场列表；技能「其他技能」安装成功，本机对账已完成',
+});
+assert.equal(mismatchedSkillInstallReceipt.matched, false, '同一页面中其他技能的成功回执不得绑定到目标技能');
+const identityBoundSkillInstallFailure = skillInstallIdentityTerminalVerdict({
+  skillName: '毓数报表分析',
+  pageText: '技能「毓数报表分析」安装失败：产品返回错误',
+});
+assert.equal(identityBoundSkillInstallFailure.failure, true, '目标技能自身失败不得误判成功');
 const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
@@ -6336,7 +6362,7 @@ const required = [
   ['HOME-030 在 Teams 全量 Fixture 中强制使用渲染层代理', /executeSitHomeQuickFeedback[\s\S]*forceRendererAdapter: true[\s\S]*installControlPlaneHttpControl[\s\S]*forceRendererAdapter \|\| options\['renderer-control-adapter'\] === 'teams360'/],
   ['HOME-052 精确点击打开本地工作空间并取消原生选择器', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button', \{ name: \/\^\\s\*打开本地工作\(\?:空间\|文件夹\)\\s\*\$\/[\s\S]*osascript/],
   ['HOME-052 禁止按 pick class 第一项误点新建工作空间', /executeSitHomeWorkspacePicker[\s\S]*getByRole\('button'[\s\S]*打开本地工作[\s\S]*dismissCoreBetaV2WorkspaceCreationObstruction[\s\S]*residual_dialog_closed/],
-  ['技能安装等待终态', /waitForSkillInstallTerminal[\s\S]*安装中\|准备中\|物化中\|待物化/],
+  ['技能安装终态绑定当前 Skill identity', /skillInstallIdentityTerminalVerdict[\s\S]*安装中\|准备中\|物化中\|待物化[\s\S]*waitForSkillInstallTerminal[\s\S]*identityTerminal/],
   ['成果任务使用本轮独立可见工作区', /prepareVisibleQaWorkspace[\s\S]*runDirName[\s\S]*fs\.rmSync\(workspace, \{ recursive: true, force: true \}\)/],
   ['成果预览拒绝受保护路径误判', /artifactPreviewReadable[\s\S]*受保护路径[\s\S]*expectedContent\.test/],
   ['显式 Case timeout 可为全部真实 Agent/工具调用提供十分钟上限', /MAX_REPLY_WAIT_MS = 600000[\s\S]*ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000[\s\S]*LONG_CONTEXT_REPLY_WAIT_MS = 600000[\s\S]*MULTI_TURN_REPLY_WAIT_MS = 600000[\s\S]*SIT-HOME-016[\s\S]*requestedBudget = Number\.isFinite\(requested\)[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
@@ -6398,7 +6424,7 @@ const required = [
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
   ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
   ['#736 多 Skill 删除按钮限定在输入区 chip 内', /const firstChip = composer\.locator\([\s\S]*aria-label\^="移除"/],
-  ['技能安装以真实删除或卸载按钮优先判定成功', /waitForSkillInstallTerminal[\s\S]*installedAction[\s\S]*return \{ terminal: true, success: true[\s\S]*const pending/],
+  ['技能安装以真实删除或卸载按钮优先判定成功', /waitForSkillInstallTerminal[\s\S]*installedAction[\s\S]*return \{ terminal: true, success: true[\s\S]*catalogInstalled[\s\S]*identityTerminal/],
   ['回复等待尊重显式 Case timeout', /const requestedBudget = Number\.isFinite\(requested\)[\s\S]*\? requested : budget[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
   ['同 Case 多次受控重启保留不可覆盖的逐次日志', /restartEvidenceName[\s\S]*restart-command-\$\{restartEvidenceName\}\.stdout\.log[\s\S]*state\.artifacts\.restart_commands\.push/],
   ['Teams 渲染层控制适配器保留请求体证据', /installRendererControlAdapter[\s\S]*requestArgs[\s\S]*requestBody/],

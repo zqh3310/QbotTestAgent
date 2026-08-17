@@ -25889,16 +25889,41 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const skillName = await skillCardName(card, cardText);
   await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
   const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
-  state.artifacts.installed_skill = { name: skillName, ...terminal };
   state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
-  recordStep(state, '点击技能市场第一张可安装技能的【安装】', '安装必须收敛到成功或明确失败终态；安装中/准备中不能判通过。', `技能=${skillName}；terminal=${terminal.terminal}；success=${terminal.success}；${clip(terminal.text, 220)}`, terminal.terminal ? 'passed' : 'failed', state.screenshots.after_skill_install);
   await clickSkillSubtab(page, '已安装', state);
   await page.waitForTimeout(1000);
   state.screenshots.installed_after_install = await shot(page, caseDir, 'skill-installed-after-install');
   const text = await mainSurfaceText(page);
   const sameInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 1500);
-  recordAssertion(state, '安装后进入已安装列表', '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。', terminal.terminal && (terminal.success ? sameInstalled : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)), `技能=${skillName}；sameInstalled=${sameInstalled}；${clip(text, 320)}`);
-  return terminal.terminal && terminal.success && sameInstalled;
+  const installedViewSuccess = sameInstalled && !terminal.failure;
+  const observedTerminal = terminal.terminal || installedViewSuccess;
+  const observedSuccess = (terminal.terminal && terminal.success) || installedViewSuccess;
+  state.artifacts.installed_skill = {
+    name: skillName,
+    ...terminal,
+    terminal: observedTerminal,
+    success: observedSuccess,
+    installed_view_readback: sameInstalled,
+    terminal_source: terminal.source || (installedViewSuccess ? 'exact-installed-tab-card' : ''),
+  };
+  recordStep(
+    state,
+    '点击技能市场第一张可安装技能的【安装】',
+    '安装必须收敛到成功或明确失败终态；安装中/准备中不能判通过。',
+    `技能=${skillName}；terminal=${observedTerminal}；success=${observedSuccess}；source=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(terminal.text, 220)}`,
+    observedTerminal ? 'passed' : 'failed',
+    state.screenshots.after_skill_install,
+  );
+  recordAssertion(
+    state,
+    '安装后进入已安装列表',
+    '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。',
+    observedTerminal && (observedSuccess
+      ? sameInstalled
+      : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)),
+    `技能=${skillName}；sameInstalled=${sameInstalled}；terminalSource=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(text, 320)}`,
+  );
+  return observedTerminal && observedSuccess && sameInstalled;
 }
 
 async function skillCardName(card, fallbackText = '') {
@@ -25906,30 +25931,75 @@ async function skillCardName(card, fallbackText = '') {
   return firstLine(named || fallbackText).trim();
 }
 
-async function waitForSkillInstallTerminal(page, { skillName, marketCard = null, timeoutMs = 90000 }) {
+export function skillInstallIdentityTerminalVerdict({
+  skillName = '',
+  cardText = '',
+  pageText = '',
+} = {}) {
+  const identity = String(skillName || '').trim();
+  if (!identity) return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+
+  const currentCardText = String(cardText || '');
+  const pageLines = String(pageText || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|安装错误|发生错误|错误[:：]/;
+  const successPattern = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/;
+  const pendingPattern = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|正在同步|同步中|reconcil|materializing/i;
+  const pageSignal = (signalPattern) => {
+    const namedSignal = new RegExp(`(?:技能\\s*)?[「“"']?${escapeRegExp(identity)}[」”"']?\\s*(?:[:：,，-]\\s*)?(?:${signalPattern.source})`, signalPattern.flags);
+    const line = pageLines.find((entry) => namedSignal.test(entry));
+    return line ? { source: 'current-skill-receipt', text: line } : null;
+  };
+  const cardEntry = currentCardText.includes(identity) ? { source: 'current-skill-card', text: currentCardText } : null;
+  const failure = (cardEntry && failurePattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(failurePattern);
+  if (failure) return { matched: true, terminal: true, success: false, failure: true, pending: false, ...failure };
+  const success = (cardEntry && successPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(successPattern);
+  if (success) return { matched: true, terminal: true, success: true, failure: false, pending: false, ...success };
+  const pending = (cardEntry && pendingPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(pendingPattern);
+  if (pending) return { matched: true, terminal: false, success: false, failure: false, pending: true, ...pending };
+  return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+}
+
+async function waitForSkillInstallTerminal(page, {
+  skillName,
+  skillSlug = '',
+  marketCard = null,
+  timeoutMs = 90000,
+}) {
   const deadline = Date.now() + timeoutMs;
   let text = '';
+  let combined = '';
   while (Date.now() < deadline) {
     text = marketCard ? await marketCard.innerText({ timeout: 800 }).catch(() => '') : '';
     const pageText = await mainSurfaceText(page);
-    const combined = `${text}\n${pageText}`;
+    combined = `${text}\n${pageText}`;
     if (marketCard) {
       const installedAction = marketCard.locator('button, .skill-install, .skill-delete').filter({ hasText: /删除|卸载/ }).first();
       if (await visible(installedAction, 250)) {
-        return { terminal: true, success: true, failure: false, pending: false, text: text || combined };
+        return { terminal: true, success: true, failure: false, pending: false, source: 'visible installed-card action', text: text || combined };
       }
     }
-    const pending = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|reconcil|materializing/i.test(combined);
-    const failure = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|错误/.test(combined);
-    const success = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/.test(text);
-    if (!pending && (failure || success)) return { terminal: true, success: success && !failure, failure, pending: false, text: combined };
+    const catalogInstalled = await page.evaluate(async ({ slug, name }) => {
+      if (typeof window.agent?.getSkillsCatalog !== 'function') return false;
+      const catalog = await window.agent.getSkillsCatalog('');
+      return (catalog?.installed || []).some((item) => (
+        (slug && String(item?.slug || '') === slug)
+        || (name && String(item?.name || '') === name)
+      ));
+    }, { slug: String(skillSlug || ''), name: String(skillName || '') }).catch(() => false);
+    if (catalogInstalled) {
+      return { terminal: true, success: true, failure: false, pending: false, source: 'window.agent.getSkillsCatalog().installed', text: text || combined };
+    }
     if (skillName) {
       const installed = page.locator('.skill-card').filter({ hasText: skillName }).filter({ hasText: /已安装|已就绪|安装成功/ }).first();
-      if (await visible(installed, 250)) return { terminal: true, success: true, failure: false, pending: false, text: await installed.innerText({ timeout: 500 }).catch(() => combined) };
+      if (await visible(installed, 250)) return { terminal: true, success: true, failure: false, pending: false, source: 'exact installed-card readback', text: await installed.innerText({ timeout: 500 }).catch(() => combined) };
+    }
+    const identityTerminal = skillInstallIdentityTerminalVerdict({ skillName, cardText: text, pageText });
+    if (identityTerminal.terminal) {
+      return { ...identityTerminal, text: identityTerminal.text || combined };
     }
     await page.waitForTimeout(1000);
   }
-  return { terminal: false, success: false, failure: false, pending: true, text };
+  return { terminal: false, success: false, failure: false, pending: true, source: '', text: combined || text };
 }
 
 function literalOccurrenceCount(text, literal) {
