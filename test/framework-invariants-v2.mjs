@@ -4428,11 +4428,23 @@ const runOwnedSkillCleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-cor
 try {
   const sourceOut = path.join(runOwnedSkillCleanupRoot, 'frozen-source');
   const currentOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-run');
+  const compoundSourceOut = path.join(runOwnedSkillCleanupRoot, 'frozen-compound-source');
+  const compoundCurrentOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-compound-run');
+  const syntheticCompoundCurrentOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-synthetic-compound-run');
   const driftOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-drift');
   const migrationOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-release-migration');
   const wrongCaseOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-wrong-case');
   const casebook = path.join(runOwnedSkillCleanupRoot, 'casebook.xlsx');
-  for (const directory of [sourceOut, currentOut, driftOut, migrationOut, wrongCaseOut]) {
+  for (const directory of [
+    sourceOut,
+    currentOut,
+    compoundSourceOut,
+    compoundCurrentOut,
+    syntheticCompoundCurrentOut,
+    driftOut,
+    migrationOut,
+    wrongCaseOut,
+  ]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   fs.writeFileSync(casebook, 'immutable-casebook');
@@ -4484,6 +4496,9 @@ try {
   };
   writeJsonFile(path.join(sourceOut, 'run-metadata.json'), releaseMetadata);
   writeJsonFile(path.join(currentOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(compoundSourceOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(compoundCurrentOut, 'run-metadata.json'), releaseMetadata);
+  writeJsonFile(path.join(syntheticCompoundCurrentOut, 'run-metadata.json'), releaseMetadata);
   writeJsonFile(path.join(driftOut, 'run-metadata.json'), {
     ...releaseMetadata,
     qwork: { ...releaseMetadata.qwork, version: '0.0.30' },
@@ -4499,6 +4514,10 @@ try {
     experts: {},
     mcps: {},
   });
+  fs.copyFileSync(
+    path.join(sourceOut, 'core-beta-suite-ledger.json'),
+    path.join(compoundSourceOut, 'core-beta-suite-ledger.json'),
+  );
   const sourceResults = [];
   for (const caseId of ['BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004']) {
     const caseDir = path.join(sourceOut, 'cases', caseId);
@@ -4536,10 +4555,81 @@ try {
   assert.equal(seeded.selected_identities.length, 10);
   assert.deepEqual(seeded.baseline_overlap, []);
   assert.equal(seeded.source_results.length, 3);
+  assert.deepEqual(seeded.source_results[0].result_path_ids, ['BETA-SKILL-002']);
   assert.equal(
     fs.readFileSync(path.join(currentOut, 'core-beta-suite-ledger.json'), 'utf8'),
     fs.readFileSync(path.join(sourceOut, 'core-beta-suite-ledger.json'), 'utf8'),
     '清理批次必须原样导入冻结 suite ledger，不能改写目标 identity',
+  );
+  const compoundSourceResults = sourceResults.map((result) => {
+    const sourceCaseDir = result.case_dir;
+    const compoundCaseDir = path.join(
+      compoundSourceOut,
+      'cases',
+      'QW-SKILL-001',
+      'subcases',
+      result.id,
+    );
+    fs.mkdirSync(compoundCaseDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(sourceCaseDir, 'case-result.json'),
+      path.join(compoundCaseDir, 'case-result.json'),
+    );
+    fs.copyFileSync(
+      path.join(sourceCaseDir, 'evidence-manifest.json'),
+      path.join(compoundCaseDir, 'evidence-manifest.json'),
+    );
+    return { ...result, case_dir: compoundCaseDir };
+  });
+  writeJsonFile(path.join(compoundSourceOut, 'automation-progress.json'), {
+    completed: 1,
+    total: 83,
+    results: [{
+      id: 'QW-SKILL-001',
+      status: 'failed',
+      result_category: 'bug',
+      execution_provenance: 'executed',
+      synthetic: false,
+      subcase_results: compoundSourceResults,
+    }],
+  });
+  const compoundSeeded = seedCoreBetaRunOwnedSkillCleanupLedger({
+    sourceOut: compoundSourceOut,
+    currentOut: compoundCurrentOut,
+    casebook,
+    selectedCases: cleanupCase,
+  });
+  assert.equal(compoundSeeded.valid, true);
+  assert.deepEqual(
+    compoundSeeded.source_results.map((item) => item.result_path_ids),
+    [
+      ['QW-SKILL-001', 'BETA-SKILL-002'],
+      ['QW-SKILL-001', 'BETA-SKILL-003'],
+      ['QW-SKILL-001', 'BETA-SKILL-004'],
+    ],
+    'Daily83 compound 父结果中的真实叶子必须可作为 run-owned Skill 清理源',
+  );
+  writeJsonFile(path.join(compoundSourceOut, 'automation-progress.json'), {
+    completed: 0,
+    total: 83,
+    results: [{
+      id: 'QW-SKILL-001',
+      status: 'blocked',
+      result_category: 'automation_error',
+      execution_provenance: 'executed',
+      synthetic: true,
+      subcase_results: compoundSourceResults,
+    }],
+  });
+  assert.throws(
+    () => seedCoreBetaRunOwnedSkillCleanupLedger({
+      sourceOut: compoundSourceOut,
+      currentOut: syntheticCompoundCurrentOut,
+      casebook,
+      selectedCases: cleanupCase,
+    }),
+    /缺少真实 executed 源结果/,
+    'synthetic compound 父结果不得授权其嵌套叶子的真实产品清理',
   );
   assert.throws(
     () => seedCoreBetaRunOwnedSkillCleanupLedger({

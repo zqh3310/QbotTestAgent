@@ -7101,10 +7101,28 @@ export function coreBetaCleanupReleaseMigrationVerdict(sourceMetadata = {}, curr
   };
 }
 
+function coreBetaCleanupSourceResultPaths(results, ancestors = []) {
+  const paths = [];
+  for (const result of Array.isArray(results) ? results : []) {
+    if (!result || typeof result !== 'object') continue;
+    const pathItems = [...ancestors, result];
+    paths.push(pathItems);
+    paths.push(...coreBetaCleanupSourceResultPaths(result.subcase_results, pathItems));
+  }
+  return paths;
+}
+
 function coreBetaCleanupSourceResult(sourceOut, progress, caseId) {
-  const result = (Array.isArray(progress?.results) ? progress.results : [])
-    .find((item) => String(item?.id || '') === caseId);
-  if (!result || result.synthetic === true || result.execution_provenance !== 'executed') {
+  const matches = coreBetaCleanupSourceResultPaths(progress?.results)
+    .filter((items) => String(items.at(-1)?.id || '') === caseId);
+  if (matches.length !== 1) {
+    throw new Error(`${caseId} 源结果缺失或不唯一。`);
+  }
+  const resultPath = matches[0];
+  const result = resultPath.at(-1);
+  if (resultPath.some((item) => (
+    item.synthetic === true || item.execution_provenance !== 'executed'
+  ))) {
     throw new Error(`${caseId} 缺少真实 executed 源结果。`);
   }
   const declaredCaseDir = path.resolve(String(result.case_dir || ''));
@@ -7131,6 +7149,7 @@ function coreBetaCleanupSourceResult(sourceOut, progress, caseId) {
   }
   return {
     case_id: caseId,
+    result_path_ids: resultPath.map((item) => String(item.id || '')).filter(Boolean),
     status: String(result.status || ''),
     result_category: String(result.result_category || ''),
     case_result_sha256: createHash('sha256').update(fs.readFileSync(resultFile)).digest('hex'),

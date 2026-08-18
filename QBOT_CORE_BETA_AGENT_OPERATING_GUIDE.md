@@ -379,6 +379,10 @@ taskId 缺失仍须 fail-closed。完成双框架 invariant、全检、提交推
 与 legacy 的动作分类口径，并用 invariant 禁止 v2 再退化到旧三态 smoke；完成本轮
 run-owned Skill 定向清理、全检、提交推送、新能力审计和精确 `.2 READY` 后，必须在
 新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+该定向清理的冻结源叶子位于 `QW-SKILL-001.subcase_results`；清理源解析必须记录
+`QW-SKILL-001 -> BETA-SKILL-002/003/004` 唯一路径，并验证路径上全部结果均为
+真实 executed、非 synthetic 且叶子 manifest 完整，禁止因只扫描顶层 progress 而
+跳过清理或改用临时产品脚本。
 
 最新冻结的旧 55 条 scoped 批次：
 
