@@ -15,11 +15,15 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
 - 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.10` build `2119081439`、
-  QWork `0.1.2-sit.7`、UI commit `4ddfa218`、backend
+  QWork `0.1.2-sit.12`、UI commit `2d39a949`、backend
   `sit-health-ae3b6cafbc5ed123`、control plane
-  `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、模型 M3；pretest
+  `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、prompt policy
+  `qwork-runtime-0.1.2-sit.12-sha256-4ba98446ffa2e4cb383ef68e4e479b4b8260097edc223925718099fc9cc4dd78`、
+  feature flags SHA `e16fd695695946fc78ca03a1408671bd82ac2121938b600338a4a0a7a765030b`、
+  release manifest SHA `0b749d741f2ad13519786eb2c8d88af21cafc2236160303eca3e951e7d488b43`、
+  模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner，也没有有效 monitor；受管 360Teams PID `20115`、CDP
+- 当前没有有效 runner；受管 360Teams PID `50464`、CDP
   `http://127.0.0.1:53155` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
   旧输出目录或旧监控。
 
@@ -288,6 +292,17 @@ completed。第 28 条 `QW-WS-003/BETA-SEC-002` 的产品已准确读取目录 A
 使用明确成功/失败语义，并继续由独立 artifact Oracle 验证文件；完成 invariant、双框架
 全检、提交推送、新能力审计和精确 `READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
+
+升级到 QWork `0.1.2-sit.12` 并促进最新 Casebook 后启动的冻结批次保留在
+`teams360-automation/output/20260818115000_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.12_M3_serial_framework-2796007_casebook-c412ee6`：
+已完成 `34/83`，raw 为 `passed=17/failed=16/blocked=1`。第 35 条
+`QW-EXPERT-007` 未计入 completed；其第二个叶子 `SIT-EXPERT-022` 已真实完成
+专家选择、专家首轮回复、切回通用助手与第二轮身份隔离，但 legacy 路径没有把
+两个专项文件注册为 `capability_selection/capability_execution_event`，manifest 因此不完整，
+第三个叶子 `SIT-EXPERT-002` 未执行。旧 runner PID `90362` 已退出，该目录永久
+冻结。修复必须让 legacy/v2 共享专家选择、公开 `currentExpert` 清空、同 taskId 双轮
+回复和负向点击路径证据合同；全检、提交推送、新能力审计和精确 `.12 READY` 后，
+必须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 

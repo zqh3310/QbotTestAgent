@@ -13126,7 +13126,68 @@ async function executeSitExpertEmptyMarket({ page, state, caseDir, options, runt
 }
 
 async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase, caseDir, timeoutMs }) {
+  const selectionFile = path.join(caseDir, 'capability_selection.json');
+  const executionFile = path.join(caseDir, 'capability_execution_event.json');
+  const capabilityProjection = (capabilities) => {
+    const observed = Boolean(
+      capabilities
+      && typeof capabilities === 'object'
+      && Object.prototype.hasOwnProperty.call(capabilities, 'currentExpert')
+    );
+    return {
+      observed,
+      current_expert: observed ? capabilities.currentExpert : null,
+      selected_skills: Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : null,
+      selected_connectors: Array.isArray(capabilities?.selectedConnectors) ? capabilities.selectedConnectors : null,
+    };
+  };
+  const expertIdentityPresent = (value) => Boolean(
+    value != null
+    && (typeof value === 'object' ? Object.keys(value).length : String(value).trim().length)
+  );
+  let selectionEvidence = null;
+  let executionEvidence = null;
+  const persistCapabilityEvidence = () => {
+    writeJsonFile(selectionFile, selectionEvidence);
+    writeJsonFile(executionFile, executionEvidence);
+    state.artifacts.capability_selection = selectionFile;
+    state.artifacts.capability_execution_event = executionFile;
+    state.artifacts.core_beta_capability_selection = selectionEvidence;
+    state.artifacts.core_beta_capability_execution = executionEvidence;
+  };
+
   const summoned = await summonProductLikeExpert(page, state, caseDir);
+  const expertSelection = capabilityProjection(await currentCapabilities(page));
+  const expertSelected = expertSelection.observed
+    && expertIdentityPresent(expertSelection.current_expert);
+  selectionEvidence = {
+    schema_version: 'qbot-core-beta-expert-general-assistant-selection/v1',
+    case_id: testCase.id,
+    captured_at: new Date().toISOString(),
+    valid: expertSelection.observed,
+    evidence_valid: expertSelection.observed,
+    oracle_valid: Boolean(summoned && expertSelected),
+    expert_selection: {
+      attempted: true,
+      summoned: Boolean(summoned),
+      ...expertSelection,
+      screenshot: state.screenshots.product_expert_summoned || '',
+    },
+    general_assistant_switch: null,
+  };
+  executionEvidence = {
+    schema_version: 'qbot-core-beta-expert-general-assistant-execution/v1',
+    case_id: testCase.id,
+    captured_at: new Date().toISOString(),
+    valid: expertSelection.observed,
+    evidence_valid: expertSelection.observed,
+    oracle_valid: false,
+    stage: summoned ? 'expert_selected' : 'expert_selection_failed',
+    first_turn: null,
+    switch_to_general_assistant: null,
+    second_turn: null,
+  };
+  persistCapabilityEvidence();
   if (!summoned || state.status === 'blocked') return;
   const firstPrompt = '请以产品经理专家身份，评审“运营活动报名页”这个需求，并用三点说明你最关注的产品风险。';
   const firstReply = await runPromptInCurrentTask({
@@ -13142,11 +13203,37 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
     prompt: firstPrompt,
     label: '第一轮专家问题',
   });
+  const firstSnapshot = await conversationSnapshot(page);
+  const firstReplyEvidenceValid = Boolean(
+    firstSnapshot.activeTaskId
+    && firstReply.deltaText.trim()
+    && firstReply.incomplete !== true
+  );
+  const firstReplyOracle = firstReply.deltaText.trim().length > 20
+    && /产品|需求|风险|用户|流程|运营|评审/.test(firstReply.deltaText);
+  executionEvidence = {
+    ...executionEvidence,
+    captured_at: new Date().toISOString(),
+    valid: expertSelection.observed && firstReplyEvidenceValid,
+    evidence_valid: expertSelection.observed && firstReplyEvidenceValid,
+    oracle_valid: firstReplyOracle,
+    stage: 'expert_turn_complete',
+    first_turn: {
+      prompt: firstPrompt,
+      task_id: firstSnapshot.activeTaskId,
+      assistant_reply_present: Boolean(firstReply.deltaText.trim()),
+      terminal_outcome: String(firstReply.terminal_outcome || (firstReply.incomplete ? 'incomplete' : 'completed')),
+      incomplete: firstReply.incomplete === true,
+      reply_excerpt: clip(firstReply.deltaText, 1_000),
+      reply_completion_path: state.artifacts.reply_completion || '',
+    },
+  };
+  persistCapabilityEvidence();
   recordAssertion(
     state,
     '第一轮专家回复可用',
     '选择非通用专家后，第一轮应能产生围绕产品经理/业务评审的回复。',
-    firstReply.deltaText.trim().length > 20 && /产品|需求|风险|用户|流程|运营|评审/.test(firstReply.deltaText),
+    firstReplyOracle,
     clip(firstReply.deltaText, 320),
   );
 
@@ -13154,14 +13241,139 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
   const general = page.locator('[data-testid="expert-general-assistant"]').first();
   if (!(await visible(general, 2500))) {
     state.screenshots.expert_022_general_missing = await shot(page, caseDir, 'expert-022-general-missing');
+    selectionEvidence = {
+      ...selectionEvidence,
+      captured_at: new Date().toISOString(),
+      valid: expertSelection.observed,
+      oracle_valid: false,
+      general_assistant_switch: {
+        entry_visible: false,
+        clicked: false,
+        screenshot: state.screenshots.expert_022_general_missing,
+      },
+    };
+    executionEvidence = {
+      ...executionEvidence,
+      captured_at: new Date().toISOString(),
+      valid: executionEvidence.evidence_valid,
+      oracle_valid: false,
+      stage: 'general_assistant_entry_missing',
+      switch_to_general_assistant: {
+        entry_visible: false,
+        clicked: false,
+      },
+      second_turn: {
+        not_executed: true,
+        reason: 'general_assistant_entry_missing',
+      },
+    };
+    persistCapabilityEvidence();
     recordAssertion(state, '专家页通用助手入口', '专家会话后返回专家页，应始终能看到通用助手入口。', false, clip(await mainSurfaceText(page), 360));
     return;
   }
-  await general.click({ force: true }).catch(async () => general.evaluate((el) => el.click()));
+  let generalClickError = '';
+  try {
+    await general.click({ force: true });
+  } catch (primaryError) {
+    try {
+      await general.evaluate((el) => el.click());
+    } catch (fallbackError) {
+      generalClickError = `${String(primaryError?.message || primaryError)}; fallback=${String(fallbackError?.message || fallbackError)}`;
+    }
+  }
+  if (generalClickError) {
+    const failedSelection = capabilityProjection(await currentCapabilities(page));
+    state.screenshots.expert_022_general_click_failed = await shot(page, caseDir, 'expert-022-general-click-failed');
+    const failedEvidenceValid = expertSelection.observed && failedSelection.observed;
+    selectionEvidence = {
+      ...selectionEvidence,
+      captured_at: new Date().toISOString(),
+      valid: failedEvidenceValid,
+      evidence_valid: failedEvidenceValid,
+      oracle_valid: false,
+      general_assistant_switch: {
+        entry_visible: true,
+        clicked: false,
+        click_error: clip(generalClickError, 1_000),
+        ...failedSelection,
+        screenshot: state.screenshots.expert_022_general_click_failed,
+      },
+    };
+    executionEvidence = {
+      ...executionEvidence,
+      captured_at: new Date().toISOString(),
+      valid: executionEvidence.evidence_valid && failedSelection.observed,
+      evidence_valid: executionEvidence.evidence_valid && failedSelection.observed,
+      oracle_valid: false,
+      stage: 'general_assistant_click_failed',
+      switch_to_general_assistant: {
+        entry_visible: true,
+        clicked: false,
+        click_error: clip(generalClickError, 1_000),
+      },
+      second_turn: {
+        not_executed: true,
+        reason: 'general_assistant_click_failed',
+      },
+    };
+    persistCapabilityEvidence();
+    recordStep(
+      state,
+      '点击【通用助手】切回普通助手',
+      '同一任务中应能从专家上下文切回通用助手。',
+      `入口可见但点击失败：${clip(generalClickError, 360)}`,
+      'failed',
+      state.screenshots.expert_022_general_click_failed,
+      'bug',
+    );
+    recordAssertion(
+      state,
+      '通用助手入口可操作',
+      '可见的通用助手入口应能真实点击并进入通用助手。',
+      false,
+      clip(generalClickError, 500),
+      failedSelection.observed ? 'bug' : 'automation_error',
+    );
+    return;
+  }
   await page.waitForTimeout(1200);
   state.screenshots.expert_022_after_general = await shot(page, caseDir, 'expert-022-after-general-assistant');
   const composerVisible = await visible(page.locator('[data-testid="composer-input"]').first(), 4000);
   const sceneTagText = await visibleSceneTagText(page);
+  const generalSelection = capabilityProjection(await currentCapabilities(page));
+  const expertIdentityCleared = generalSelection.observed
+    && !expertIdentityPresent(generalSelection.current_expert);
+  selectionEvidence = {
+    ...selectionEvidence,
+    captured_at: new Date().toISOString(),
+    valid: expertSelection.observed && generalSelection.observed,
+    evidence_valid: expertSelection.observed && generalSelection.observed,
+    oracle_valid: Boolean(summoned && expertSelected && composerVisible && expertIdentityCleared),
+    general_assistant_switch: {
+      entry_visible: true,
+      clicked: true,
+      composer_visible: composerVisible,
+      scene_tag_text: clip(sceneTagText, 500),
+      ...generalSelection,
+      screenshot: state.screenshots.expert_022_after_general,
+    },
+  };
+  executionEvidence = {
+    ...executionEvidence,
+    captured_at: new Date().toISOString(),
+    valid: executionEvidence.evidence_valid && generalSelection.observed,
+    evidence_valid: executionEvidence.evidence_valid && generalSelection.observed,
+    oracle_valid: false,
+    stage: composerVisible ? 'general_assistant_selected' : 'general_assistant_composer_missing',
+    switch_to_general_assistant: {
+      entry_visible: true,
+      clicked: true,
+      composer_visible: composerVisible,
+      current_expert_cleared: expertIdentityCleared,
+      scene_tag_text: clip(sceneTagText, 500),
+    },
+  };
+  persistCapabilityEvidence();
   recordStep(
     state,
     '点击【通用助手】切回普通助手',
@@ -13170,6 +13382,14 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
     composerVisible ? 'passed' : 'failed',
     state.screenshots.expert_022_after_general,
     composerVisible ? '' : 'bug',
+  );
+  recordAssertion(
+    state,
+    '切回通用助手后公开专家身份清空',
+    '点击通用助手后，capabilities.currentExpert 应精确清空。',
+    expertIdentityCleared,
+    `observed=${generalSelection.observed}；currentExpert=${JSON.stringify(generalSelection.current_expert)}`,
+    generalSelection.observed ? 'bug' : 'automation_error',
   );
   if (!composerVisible) return;
 
@@ -13187,8 +13407,44 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
     prompt: secondPrompt,
     label: '第二轮通用助手问题',
   });
+  const secondSnapshot = await conversationSnapshot(page);
   const leakedExpertIdentity = /作为产品经理|作为.*专家|我是产品经理|产品经理专家|需求评审专家/.test(secondReply.deltaText);
   const generalIdentity = /QBot|助手|AI|通用|帮助|可以帮/.test(secondReply.deltaText);
+  const sameTask = Boolean(
+    firstSnapshot.activeTaskId
+    && secondSnapshot.activeTaskId === firstSnapshot.activeTaskId
+  );
+  const secondReplyEvidenceValid = Boolean(
+    sameTask
+    && secondReply.deltaText.trim()
+    && secondReply.incomplete !== true
+  );
+  executionEvidence = {
+    ...executionEvidence,
+    captured_at: new Date().toISOString(),
+    valid: selectionEvidence.evidence_valid
+      && firstReplyEvidenceValid
+      && secondReplyEvidenceValid,
+    evidence_valid: selectionEvidence.evidence_valid
+      && firstReplyEvidenceValid
+      && secondReplyEvidenceValid,
+    oracle_valid: firstReplyOracle
+      && expertIdentityCleared
+      && !leakedExpertIdentity
+      && generalIdentity,
+    stage: 'general_assistant_turn_complete',
+    second_turn: {
+      prompt: secondPrompt,
+      task_id: secondSnapshot.activeTaskId,
+      same_task_as_expert_turn: sameTask,
+      assistant_reply_present: Boolean(secondReply.deltaText.trim()),
+      terminal_outcome: String(secondReply.terminal_outcome || (secondReply.incomplete ? 'incomplete' : 'completed')),
+      incomplete: secondReply.incomplete === true,
+      reply_excerpt: clip(secondReply.deltaText, 1_000),
+      reply_completion_path: state.artifacts.reply_completion || '',
+    },
+  };
+  persistCapabilityEvidence();
   recordAssertion(
     state,
     '切回通用助手后身份隔离',
