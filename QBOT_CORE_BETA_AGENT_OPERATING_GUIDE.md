@@ -25,7 +25,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；上一 runner PID `23719` 及 npm 父进程 `23697` 已退出，受管
+- 当前没有有效 runner；上一 runner PID `21137` 及 npm 父进程 `21115` 已退出，受管
   360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
@@ -386,6 +386,24 @@ run-owned Skill 定向清理、全检、提交推送、新能力审计和精确 
 Daily83 清理命令仍使用 `--case BETA-SKILL-001`；该专用参数组合必须绕过共享入口的
 顶层预导出，并由 v2 从完整 Sheet 的唯一 `QW-SKILL-001.compound_subcases` 路径只选择
 该叶子。`casebook-cases.json.cleanup_selection.result_path_ids` 必须精确记录这条路径。
+
+基于 `f48448f3df981ac3f3cbd4b1dcf12544a3cda100` 启动的最新冻结批次保留在
+`teams360-automation/output/20260819052600_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-f48448f_casebook-c412ee6`：
+已完成 `7/83`，raw 为 `passed=2/failed=5`，可信运行时分类为 `pass=2/product bug=5`，
+全部为真实执行且 `inherited=0/synthetic=0`；18 个叶子结果文件已落盘，第 8 个顶层
+`QW-CHAT-005` 未计入 completed。其叶子 `BETA-CHAT-006` 已确认发送并绑定 task
+`6461543e-8614-4c57-b157-382ebfe67ea3`，等待 `55821ms` 后同时观察到
+`running=true`、停止入口可见和 `45` 字正文 partial，并保存停止前截图。旧 runner
+随后复用该截图前取得的 locator；产品在点击前替换或移除了停止控件，Playwright
+`click` 失败后又对 stale locator 执行最长 12 秒的 `evaluate()` fallback，异常逃逸并
+遗漏标准会话与收尾证据角色，触发 framework stop。runner PID `21137` 与 npm 父进程
+`21115` 已退出，受管 360Teams PID `89152` 保留，旧监控已暂停；该目录永久冻结。
+修复提交 `84c5d77e5ebe6982d38eb9af52c066d9c175e8dc` 已让 v2 与 legacy 每次点击前重新定位
+当前停止控件，只对同一仍运行 task 进行一次短重试；同一 task 在点击前自然完成时写齐
+确认发送、task、截图、完整会话和公开状态，以 `completed_before_stop`、
+`stop_action_performed=false` 形成完整 blocked 证据并禁止继续追问。后续必须基于包含
+该修复与本指南更新的干净 pushed main，重新执行能力审计和精确 `.2 READY`，再在新
+不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 
