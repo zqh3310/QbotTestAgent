@@ -27,6 +27,7 @@ import {
   validateCoreBetaCase,
 } from './core-beta-casebook-contract.mjs';
 import { buildCrossRunLineage } from './casebook-lineage.mjs';
+import { expertGeneralAssistantExecutionVerdict } from './expert-general-assistant-evidence.mjs';
 import { runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand } from './ui-agent-casebook-runner-v2.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
@@ -13410,28 +13411,25 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
   const secondSnapshot = await conversationSnapshot(page);
   const leakedExpertIdentity = /作为产品经理|作为.*专家|我是产品经理|产品经理专家|需求评审专家/.test(secondReply.deltaText);
   const generalIdentity = /QBot|助手|AI|通用|帮助|可以帮/.test(secondReply.deltaText);
-  const sameTask = Boolean(
-    firstSnapshot.activeTaskId
-    && secondSnapshot.activeTaskId === firstSnapshot.activeTaskId
-  );
-  const secondReplyEvidenceValid = Boolean(
-    sameTask
-    && secondReply.deltaText.trim()
-    && secondReply.incomplete !== true
-  );
+  const executionVerdict = expertGeneralAssistantExecutionVerdict({
+    selectionEvidenceValid: selectionEvidence.evidence_valid,
+    firstReplyEvidenceValid,
+    firstTaskId: firstSnapshot.activeTaskId,
+    secondTaskId: secondSnapshot.activeTaskId,
+    secondReplyText: secondReply.deltaText,
+    secondReplyIncomplete: secondReply.incomplete,
+    firstReplyOracle,
+    expertIdentityCleared,
+    leakedExpertIdentity,
+    generalIdentity,
+  });
+  const sameTask = executionVerdict.same_task;
   executionEvidence = {
     ...executionEvidence,
     captured_at: new Date().toISOString(),
-    valid: selectionEvidence.evidence_valid
-      && firstReplyEvidenceValid
-      && secondReplyEvidenceValid,
-    evidence_valid: selectionEvidence.evidence_valid
-      && firstReplyEvidenceValid
-      && secondReplyEvidenceValid,
-    oracle_valid: firstReplyOracle
-      && expertIdentityCleared
-      && !leakedExpertIdentity
-      && generalIdentity,
+    valid: executionVerdict.evidence_valid,
+    evidence_valid: executionVerdict.evidence_valid,
+    oracle_valid: executionVerdict.oracle_valid,
     stage: 'general_assistant_turn_complete',
     second_turn: {
       prompt: secondPrompt,
@@ -13448,9 +13446,9 @@ async function executeSitExpertGeneralAssistantIsolation({ page, state, testCase
   recordAssertion(
     state,
     '切回通用助手后身份隔离',
-    '切回通用助手后，新回复不应继续声明上一专家身份；工具条和回复身份应一致。',
-    !leakedExpertIdentity && generalIdentity,
-    `sceneTag=${clip(sceneTagText, 160) || '空'}；reply=${clip(secondReply.deltaText, 360)}`,
+    '切回通用助手后，应在同一任务中继续回复，不再声明上一专家身份；工具条和回复身份应一致。',
+    sameTask && !leakedExpertIdentity && generalIdentity,
+    `firstTask=${firstSnapshot.activeTaskId || 'missing'}；secondTask=${secondSnapshot.activeTaskId || 'missing'}；sameTask=${sameTask}；sceneTag=${clip(sceneTagText, 160) || '空'}；reply=${clip(secondReply.deltaText, 360)}`,
   );
 }
 

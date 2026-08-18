@@ -304,6 +304,21 @@ completed。第 28 条 `QW-WS-003/BETA-SEC-002` 的产品已准确读取目录 A
 回复和负向点击路径证据合同；全检、提交推送、新能力审计和精确 `.12 READY` 后，
 必须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复专家切换证据角色后启动的最新冻结批次保留在
+`teams360-automation/output/20260818144000_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.2-sit.12_M3_serial_framework-ed6adb1_casebook-c412ee6`：
+已完成 `34/83`；第 35 条 `QW-EXPERT-007` 未计入 completed。其叶子
+`SIT-EXPERT-022` 已真实完成专家首轮回复、点击通用助手、公开
+`currentExpert=null` 和通用助手第二轮回复；两轮分别绑定非空 taskId
+`3f03cc5d-4555-4358-b2ba-d5cd9b077b8e` 与
+`de8a05d5-ee72-47f4-9f2b-8878bcbdb64e`。旧框架把 `sameTask=false` 错误纳入
+`secondReplyEvidenceValid`，导致完整负向产品证据被标为 manifest 无效并触发
+framework stop。runner PID `76409` 已退出，360Teams PID `50464` 保留；该目录永久
+冻结。修复必须把“两轮 taskId 均非空、回复终态与切换读回完整”判为
+`evidence_valid=true`，只把 taskId 不一致写入 `oracle_valid=false` 和产品 Bug；任一
+taskId 缺失仍须 fail-closed。完成双框架 invariant、全检、提交推送、新能力审计和
+精确 `.12 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

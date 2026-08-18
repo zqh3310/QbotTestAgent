@@ -72,9 +72,45 @@ import {
   validateProductionCasePlan,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
+import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-general-assistant-evidence.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
+
+const expertSwitchTaskMismatch = expertGeneralAssistantExecutionVerdict({
+  selectionEvidenceValid: true,
+  firstReplyEvidenceValid: true,
+  firstTaskId: 'expert-task',
+  secondTaskId: 'general-task',
+  secondReplyText: '我是通用 AI 助手，可以帮你处理任务。',
+  firstReplyOracle: true,
+  expertIdentityCleared: true,
+  generalIdentity: true,
+});
+assert.equal(expertSwitchTaskMismatch.evidence_valid, true, '两轮非空 taskId 和完整回复应形成有效专家切换证据');
+assert.equal(expertSwitchTaskMismatch.oracle_valid, false, '专家切换后新建 taskId 必须只失败产品 Oracle');
+const expertSwitchMissingSecondTask = expertGeneralAssistantExecutionVerdict({
+  selectionEvidenceValid: true,
+  firstReplyEvidenceValid: true,
+  firstTaskId: 'expert-task',
+  secondReplyText: '我是通用 AI 助手，可以帮你处理任务。',
+  firstReplyOracle: true,
+  expertIdentityCleared: true,
+  generalIdentity: true,
+});
+assert.equal(expertSwitchMissingSecondTask.evidence_valid, false, '第二轮 taskId 缺失必须保持证据无效并触发框架门禁');
+const expertSwitchSameTask = expertGeneralAssistantExecutionVerdict({
+  selectionEvidenceValid: true,
+  firstReplyEvidenceValid: true,
+  firstTaskId: 'shared-task',
+  secondTaskId: 'shared-task',
+  secondReplyText: '我是通用 AI 助手，可以帮你处理任务。',
+  firstReplyOracle: true,
+  expertIdentityCleared: true,
+  generalIdentity: true,
+});
+assert.equal(expertSwitchSameTask.evidence_valid, true, '同 taskId 双轮完整回复必须形成有效证据');
+assert.equal(expertSwitchSameTask.oracle_valid, true, '同 taskId 且身份隔离正确时产品 Oracle 必须通过');
 
 const identityBoundSkillInstallSuccess = skillInstallIdentityTerminalVerdict({
   skillName: '毓数报表分析',
@@ -1157,7 +1193,7 @@ const required = [
   ['产品类专家召唤后校验 currentExpert', /summonProductLikeExpert[\s\S]*currentCapabilities\(page\)[\s\S]*currentExpert[\s\S]*产品类专家召唤生效/],
   ['EXPERT-022 通用助手缺失进入产品断言', /executeSitExpertGeneralAssistantIsolation[\s\S]*general_assistant_entry_missing[\s\S]*second_turn:[\s\S]*not_executed: true[\s\S]*专家页通用助手入口/],
   ['EXPERT-022 材料化专家切换能力证据', /executeSitExpertGeneralAssistantIsolation[\s\S]*capability_selection\.json[\s\S]*capability_execution_event\.json[\s\S]*state\.artifacts\.capability_execution_event/],
-  ['EXPERT-022 双轮任务绑定与专家清空读回', /executeSitExpertGeneralAssistantIsolation[\s\S]*current_expert_cleared[\s\S]*same_task_as_expert_turn/],
+  ['EXPERT-022 双轮任务绑定与专家清空读回', /executeSitExpertGeneralAssistantIsolation[\s\S]*current_expert_cleared[\s\S]*expertGeneralAssistantExecutionVerdict\(\{[\s\S]*firstTaskId: firstSnapshot\.activeTaskId[\s\S]*secondTaskId: secondSnapshot\.activeTaskId[\s\S]*executionVerdict\.evidence_valid[\s\S]*executionVerdict\.oracle_valid[\s\S]*same_task_as_expert_turn[\s\S]*sameTask && !leakedExpertIdentity/],
   ['EXPERT-022 通用助手点击失败形成产品负向证据', /executeSitExpertGeneralAssistantIsolation[\s\S]*expert_022_general_click_failed[\s\S]*general_assistant_click_failed[\s\S]*'通用助手入口可操作'[\s\S]*'bug'/],
   ['EXPERT-002 通用助手缺失或点击失败形成产品负向证据', /executeExpertSmoke010[\s\S]*expert_010_general_missing[\s\S]*通用助手入口可见性[\s\S]*'bug'[\s\S]*expert_010_general_click_failed[\s\S]*通用助手入口可操作[\s\S]*return;/],
   ['HOME-016 真实发送四轮业务数字', /numericMemoryConversationTurns[\s\S]*报名100人，到场70人，成交12单[\s\S]*第二轮：追问报名人数[\s\S]*第三轮：追问到场人数和到场率[\s\S]*第四轮：追问成交和成交率/],
