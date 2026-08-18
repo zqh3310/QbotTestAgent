@@ -19543,7 +19543,31 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     && capabilities?.selectedSkills === null
     && capabilities?.currentExpert === null;
   const ok = exactModeApplied || isolationApplied;
+  const publicStateReadable = invoked.selection === null
+    || Array.isArray(invoked.selection)
+    || capabilities?.selectedSkills === null
+    || Array.isArray(capabilities?.selectedSkills);
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    publicStateReadable,
+    expectedStateObserved: ok,
+  });
   state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: `${mode}_mode`,
+    control_testid: method,
+    control_located: true,
+    click_dispatched: true,
+    public_state_readable: publicStateReadable,
+    expected_state_observed: ok,
+    bridge_selection: invoked.selection,
+    selected_skills: selected,
+    screenshot: state.screenshots[`skill_mode_${mode}`],
+    category: interactionCategory,
+  };
   recordStep(
     state,
     `设置统一菜单技能模式：${mode}`,
@@ -19551,7 +19575,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
-    ok ? '' : 'automation_error',
+    interactionCategory,
   );
   return ok;
 }
@@ -19589,9 +19613,10 @@ export function coreBetaManualConnectorModeReady({
 export function coreBetaCapabilityInteractionCategory({
   controlLocated = false,
   clickDispatched = false,
+  publicStateReadable = true,
   expectedStateObserved = false,
 } = {}) {
-  if (!controlLocated || !clickDispatched) return 'automation_error';
+  if (!controlLocated || !clickDispatched || !publicStateReadable) return 'automation_error';
   return expectedStateObserved ? '' : 'bug';
 }
 

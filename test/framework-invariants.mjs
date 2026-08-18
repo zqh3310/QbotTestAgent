@@ -17,6 +17,7 @@ import {
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
   coreBetaActionStopsPlan,
+  coreBetaCapabilityInteractionCategory,
   coreBetaExpertBuilderReturnSelectorCandidates,
   coreBetaExpertCreateSubmitLabel,
   coreBetaPartialReplyReady,
@@ -617,6 +618,26 @@ assert.equal(
   unifiedSkillModeApplied({ selectedSkills: undefined }, 'disabled', null),
   false,
   '自动态 null 不能被误判为技能禁用态',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    publicStateReadable: false,
+    expectedStateObserved: false,
+  }),
+  'automation_error',
+  'legacy 动作已派发但公开状态不可读时仍属于框架错误',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    publicStateReadable: true,
+    expectedStateObserved: false,
+  }),
+  'bug',
+  'legacy 动作已派发且负向状态读回完整时应保留产品 Bug',
 );
 assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', []),

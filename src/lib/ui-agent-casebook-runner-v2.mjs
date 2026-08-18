@@ -27077,6 +27077,7 @@ function cleanSkillChipLabel(value) {
   return String(value || '')
     .replace(/(?:移除|删除|remove)/gi, '')
     .replace(/^\s*[✦★☆◆◇•·]+\s*/u, '')
+    .replace(/^\s*[×xX]\s*/g, '')
     .replace(/[×xX]\s*$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -27085,9 +27086,10 @@ function cleanSkillChipLabel(value) {
 async function composerSkillSelectionSnapshot(page) {
   return page.evaluate(async () => {
     const composer = document.querySelector('[data-testid="composer-input"]');
-    const allChips = composer
-      ? Array.from(composer.querySelectorAll('[data-testid^="composer-skill-chip-"], .skill-chip'))
-      : [];
+    const shell = document.querySelector('[data-testid="composer-shell"]')
+      || composer?.parentElement
+      || document.body;
+    const allChips = Array.from(shell.querySelectorAll('[data-testid^="composer-skill-chip-"], .skill-chip'));
     const chips = allChips.filter((chip) => {
       const rect = chip.getBoundingClientRect();
       const style = globalThis.getComputedStyle(chip);
@@ -27110,6 +27112,7 @@ async function composerSkillSelectionSnapshot(page) {
       chipTexts: chips.map((chip) => String(chip.textContent || '').replace(/\s+/g, ' ').trim()),
       chipTestIds: chips.map((chip) => String(chip.getAttribute('data-testid') || '')),
       chipsInsideComposer: Boolean(composer) && chips.every((chip) => composer.contains(chip)),
+      chipsInsideComposerShell: chips.every((chip) => shell.contains(chip)),
       selectedSkillCount: selectedSkills.length,
       selectedSkills,
       composerText,
@@ -27121,6 +27124,7 @@ async function composerSkillSelectionSnapshot(page) {
     chipTexts: [],
     chipTestIds: [],
     chipsInsideComposer: false,
+    chipsInsideComposerShell: false,
     selectedSkillCount: 0,
     selectedSkills: [],
     composerText: '',
@@ -27592,7 +27596,31 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     && capabilities?.selectedSkills === null
     && capabilities?.currentExpert === null;
   const ok = exactModeApplied || isolationApplied;
+  const publicStateReadable = invoked.selection === null
+    || Array.isArray(invoked.selection)
+    || capabilities?.selectedSkills === null
+    || Array.isArray(capabilities?.selectedSkills);
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    publicStateReadable,
+    expectedStateObserved: ok,
+  });
   state.screenshots[`skill_mode_${mode}`] = await shot(page, caseDir, `skill-mode-${mode}`);
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: `${mode}_mode`,
+    control_testid: method,
+    control_located: true,
+    click_dispatched: true,
+    public_state_readable: publicStateReadable,
+    expected_state_observed: ok,
+    bridge_selection: invoked.selection,
+    selected_skills: selected,
+    screenshot: state.screenshots[`skill_mode_${mode}`],
+    category: interactionCategory,
+  };
   recordStep(
     state,
     `设置统一菜单技能模式：${mode}`,
@@ -27600,7 +27628,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
-    ok ? '' : 'automation_error',
+    interactionCategory,
   );
   return ok;
 }
@@ -27686,9 +27714,10 @@ export function coreBetaDirectSkillListReady({
 export function coreBetaCapabilityInteractionCategory({
   controlLocated = false,
   clickDispatched = false,
+  publicStateReadable = true,
   expectedStateObserved = false,
 } = {}) {
-  if (!controlLocated || !clickDispatched) return 'automation_error';
+  if (!controlLocated || !clickDispatched || !publicStateReadable) return 'automation_error';
   return expectedStateObserved ? '' : 'bug';
 }
 
@@ -28743,21 +28772,26 @@ async function selectFirstManualSkill(page, state, caseDir) {
     recordAssertion(state, '第一个已安装技能点击', '已定位的技能必须成功派发真实点击。', false, String(error?.message || error), 'automation_error');
     return false;
   }
+  let capabilities = null;
   let selectedSkills = null;
   let selected = false;
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await page.waitForTimeout(250);
-    const capabilities = await currentCapabilities(page);
+    capabilities = await currentCapabilities(page);
     selectedSkills = capabilities?.selectedSkills;
     selected = coreBetaSelectedCapabilityIdentities(selectedSkills).includes(expectedIdentity);
     if (selected) break;
   }
   state.screenshots.manual_skill_selected = await shot(page, caseDir, 'manual-skill-selected');
   const afterMenu = await activeMenuLocator(page, 'skill');
+  const publicStateReadable = capabilities !== null
+    && typeof capabilities === 'object'
+    && (capabilities?.selectedSkills === null || Array.isArray(capabilities?.selectedSkills));
   const interactionCategory = coreBetaCapabilityInteractionCategory({
     controlLocated: true,
     clickDispatched,
+    publicStateReadable,
     expectedStateObserved: selected,
   });
   state.artifacts.core_beta_capability_interaction = {
@@ -28768,6 +28802,7 @@ async function selectFirstManualSkill(page, state, caseDir) {
     control_testid: testId || 'visible-first-skill-option',
     control_located: true,
     click_dispatched: clickDispatched,
+    public_state_readable: publicStateReadable,
     expected_state_observed: selected,
     aria_checked: selected ? 'true' : 'false',
     manual_surface: await readManualSkillSurface(afterMenu) || beforeManualSurface,
@@ -30038,15 +30073,79 @@ async function executeSkillSmoke006({ page, state, caseDir }) {
 
 async function executeSkillSmoke007({ page, state, caseDir }) {
   await openNewTask(page, state);
-  for (const mode of ['disabled', 'auto', 'manual']) {
-    const selected = await setSkillMode(page, state, caseDir, mode);
-    const toolText = await visibleComposerToolStateText(page, 'skill');
-    const label = SKILL_MODE_LABELS[mode] || mode;
-    const reflected = toolText.includes(label) || (mode === 'manual' && /^技能\s*$/.test(toolText));
-    state.screenshots[`mode_${mode}`] = await shot(page, caseDir, `skill-007-mode-${mode}`);
-    recordStep(state, `切换技能模式：${mode}`, '每次重新打开菜单并点击后，工具条应显示当前模式。', `selected=${selected}；工具条=${toolText}`, selected && reflected ? 'passed' : 'failed', state.screenshots[`mode_${mode}`]);
-    recordAssertion(state, `技能模式 ${mode} 选中`, `${mode} 点击后工具条应显示“${label}”。`, selected && reflected, `selected=${selected}；工具条=${toolText}`, selected ? '' : 'automation_error');
+  const before = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_before = before;
+  state.screenshots.skill_007_before = await shot(page, caseDir, 'skill-007-before-visible-selection');
+  recordStep(
+    state,
+    '记录新任务默认技能状态',
+    '只读记录默认 selectedSkills，不得通过 bridge 改写状态代替用户操作。',
+    clip(JSON.stringify(before), 520),
+    'passed',
+    state.screenshots.skill_007_before,
+  );
+  if (!await selectFirstManualSkill(page, state, caseDir)) return;
+  await page.keyboard.press('Escape').catch(() => {});
+
+  const selected = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_selected = selected;
+  state.screenshots.skill_007_selected = await shot(page, caseDir, 'skill-007-visible-selected-chip');
+  const labels = selected.chipTexts.map(cleanSkillChipLabel).filter(Boolean);
+  recordStep(
+    state,
+    '通过“+ > 技能”可见 UI 选择已安装技能',
+    '选择后必须出现句内 Skill chip，并由公开 capabilities.selectedSkills 读回。',
+    clip(JSON.stringify(selected), 650),
+    'passed',
+    state.screenshots.skill_007_selected,
+  );
+  recordAssertion(
+    state,
+    'Skill chip 与公开状态一致',
+    '句内 chip、稳定 testid、可见技能名和 selectedSkills 必须一一对应。',
+    selected.chipCount === 1
+      && selected.selectedSkillCount === 1
+      && selected.chipsInsideComposer
+      && selected.chipTestIds.every((item) => item.startsWith('composer-skill-chip-'))
+      && labels.length === 1
+      && !selected.hasRawMarker,
+    clip(JSON.stringify({ labels, selected }), 760),
+  );
+
+  const composer = page.locator('[data-testid="composer-input"]').first();
+  const chip = composer.locator('[data-testid^="composer-skill-chip-"], .skill-chip').first();
+  await chip.hover().catch(() => {});
+  const remove = chip.locator('.skill-chip-x, button[aria-label^="移除"], button[aria-label*="remove" i]').first();
+  if (!(await visible(remove, 1200))) {
+    recordAssertion(
+      state,
+      'Skill chip 移除入口',
+      '每个手动 Skill chip 应在悬停后提供可点击移除按钮。',
+      false,
+      `chip=${clip(labels[0] || selected.chipTexts[0] || '', 160)}`,
+    );
+    return;
   }
+  await remove.click({ force: true }).catch(async () => remove.evaluate((element) => element.click()));
+  await page.waitForTimeout(450);
+  const removed = await composerSkillSelectionSnapshot(page);
+  state.artifacts.skill_007_removed = removed;
+  state.screenshots.skill_007_removed = await shot(page, caseDir, 'skill-007-visible-selection-removed');
+  recordStep(
+    state,
+    '点击 Skill chip 的可见移除按钮',
+    '移除后 chip 应消失，selectedSkills 应清空，内部 marker 不得泄露。',
+    clip(JSON.stringify(removed), 620),
+    'passed',
+    state.screenshots.skill_007_removed,
+  );
+  recordAssertion(
+    state,
+    'Skill 移除后 UI 与状态同步清空',
+    'Skill chip 数量和 selectedSkills 数量都必须为 0，且正文无内部 marker。',
+    removed.chipCount === 0 && removed.selectedSkillCount === 0 && !removed.hasRawMarker,
+    clip(JSON.stringify(removed), 700),
+  );
 }
 
 async function executeSkillSmoke008({ page, state, caseDir }) {

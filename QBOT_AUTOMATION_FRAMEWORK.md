@@ -581,6 +581,12 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   `QWD-EXPERT-002` 是只读专家目录/identity 审计，不要求虚假的能力选择或执行
   事件；`QWD-SEC-005` 是真实个人 LLM 连接、失败探针和脱敏审计，不要求虚假的
   会话轮次。通用类型校验不得覆盖具体 driver 的真实动作语义。
+- `SIT-SKILL-007` 在 legacy 与 Core Beta v2 中必须执行同一用户合同：从新任务只读
+  默认技能状态，通过可见“+ > 技能”列表选择稳定 identity，独立读回句内 Skill chip
+  与 `selectedSkills` 一致，再点击 chip 的可见移除入口并证明两者同步清空。不得退化为
+  仅调用 `setSkillsDisabled/setSkillsAuto` 的旧三态 smoke。任何能力动作只有在控件或
+  公共 bridge 已定位、动作已派发且公开状态可读时，业务终态未生效才归为产品 Bug；
+  locator、派发、公开读回或证据缺失仍为 `automation_error`。
 - `QWD-WS-001` 在 A 发送前若已注册路径没有出现在可见菜单，或精确路径控件已
   真实点击但公开 cwd 未生效，必须停止向未知 cwd 发送。只有空 task、零消息、
   send count 不变、无 prompt/send receipt、失败截图及 SHA、A/B 注册 identity、

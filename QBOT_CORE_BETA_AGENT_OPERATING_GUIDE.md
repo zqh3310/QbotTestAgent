@@ -25,7 +25,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；上一 runner PID `40701` 及 npm 父进程 `40684` 已退出，受管
+- 当前没有有效 runner；上一 runner PID `23719` 及 npm 父进程 `23697` 已退出，受管
   360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
@@ -365,6 +365,20 @@ taskId 缺失仍须 fail-closed。完成双框架 invariant、全检、提交推
 `action_bound=true/baseline_absent=true` 材料化产品 Bug；陈旧同文案、目标已安装、
 库存或截图缺失仍须 fail-closed。完成全检、提交推送、新能力审计和精确 `.2 READY`
 后，必须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
+基于 `7c104b391b2ebc57e603877b5b7be66ef8a2b0cc` 启动的冻结批次保留在
+`teams360-automation/output/20260819021800_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-7c104b3_casebook-c412ee6`：
+已完成 `40/83`，raw 为 `passed=13/failed=25/blocked=2`，全部为真实执行且
+`inherited=0/synthetic=0`；第 41 条 `QW-SKILL-002` 未计入 completed。其叶子
+`SIT-SKILL-007` 的 manifest 与动作、公开状态、截图和清理证据均完整，但 Core Beta v2
+仍执行了旧 disabled/auto/manual 三态 smoke，而不是当前 Casebook 要求的可见技能选择、
+句内 chip、公开读回与移除闭环；同时 `setSkillsDisabled` 已派发且 bridge/capabilities
+均精确读回 `selectedSkills=null` 的产品负向终态被误标为 `automation_error`，导致其余
+两个叶子未执行并触发 compound framework stop。runner PID `23719` 与 npm 父进程
+`23697` 已退出，受管 360Teams PID `89152` 保留；该目录永久冻结。修复必须同步 v2
+与 legacy 的动作分类口径，并用 invariant 禁止 v2 再退化到旧三态 smoke；完成本轮
+run-owned Skill 定向清理、全检、提交推送、新能力审计和精确 `.2 READY` 后，必须在
+新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 

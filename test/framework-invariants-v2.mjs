@@ -2154,6 +2154,17 @@ assert.equal(
   coreBetaCapabilityInteractionCategory({
     controlLocated: true,
     clickDispatched: true,
+    publicStateReadable: false,
+    expectedStateObserved: false,
+  }),
+  'automation_error',
+  '动作已派发但公开状态不可读时仍属于框架错误',
+);
+assert.equal(
+  coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched: true,
+    publicStateReadable: true,
     expectedStateObserved: false,
   }),
   'bug',
@@ -6773,6 +6784,7 @@ const required = [
   ['新版连接器直接列表以 section、列表与公开选择状态三重读回', /setUnifiedConnectorMode[\s\S]*coreBetaDirectConnectorListModeReady[\s\S]*composer-plus-section-connector[\s\S]*direct_list_contract[\s\S]*selected_connectors/],
   ['新版技能直接列表以 section、搜索列表与公开选择状态三重读回', /setUnifiedSkillMode[\s\S]*coreBetaDirectSkillListReady[\s\S]*composer-plus-section-skill[\s\S]*direct_list_contract[\s\S]*selected_skills/],
   ['日常回归首个技能和连接器点击后必须按稳定 identity 读回公开选择', /selectFirstManualSkill[\s\S]*composer-skill-option-[\s\S]*selectedSkills[\s\S]*expectedIdentity[\s\S]*selectFirstManualConnector[\s\S]*composer-connector-option-[\s\S]*selectedConnectors[\s\S]*connectorKey/],
+  ['SIT-SKILL-007 v2 使用可见选择、句内 chip、公开读回与移除闭环', /executeSkillSmoke007[\s\S]*记录新任务默认技能状态[\s\S]*selectFirstManualSkill[\s\S]*composerSkillSelectionSnapshot[\s\S]*Skill chip 与公开状态一致[\s\S]*skill-chip-x[\s\S]*Skill 移除后 UI 与状态同步清空/],
   ['BETA-MCP-002 手动选择后必须分离证据有效性与产品Oracle并注册选择/执行证据', /mcp_cross_surface_identity_reconcile[\s\S]*connectorMode: 'manual'[\s\S]*selectManualConnectorByKey[\s\S]*public_readback: \{ before, after \}[\s\S]*coreBetaMcpCrossSurfaceOutcome[\s\S]*capability-selection\.json[\s\S]*state\.artifacts\.capability_selection = selectionFile[\s\S]*state\.artifacts\.capability_execution_event = selectionFile[\s\S]*MCP跨表面负向取证完整/],
   ['连接器唯一选择优先 renderer 稳定 testid 并读回 selectedConnectors', /coreBetaConnectorOptionTestId[\s\S]*selectManualConnectorByKey[\s\S]*exactByTestId[\s\S]*coreBetaSelectedCapabilityIdentities[\s\S]*selectedConnectors/],
   ['统一菜单隐藏三态时仅以公共能力桥隔离用例前置状态', /setUnifiedSkillMode[\s\S]*setSkillsAuto[\s\S]*setSkillsDisabled[\s\S]*capabilities\.selectedSkills[\s\S]*setUnifiedConnectorMode[\s\S]*setConnectorsAuto[\s\S]*setConnectorsDisabled[\s\S]*connectorRouting\.mode/],
