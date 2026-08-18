@@ -608,7 +608,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   原生目录取消后残留“新建工作空间”弹窗，应点击其可见“取消/关闭”并留截图，
   不能让残留弹窗把已有产品结论覆盖成清理 `automation_error`。
 - Core Beta v2 根 runner 和 360Teams 截图保护器的 Playwright 截图、fallback CDP session 创建、`Page.captureScreenshot` 和 session `detach` 清理必须分别受硬超时约束。截图已经成功固化时，清理期 `detach` 超时只能写入 runner 日志并继续返回截图，禁止让无界清理等待卡在 Case 0；截图本身超时或缺少有效图像数据仍按证据失败 fail-closed。
-- `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。360Teams 包装器对 stopped、非 passed 或计划未完成的 summary 必须返回非零退出码，不能只看已完成结果中的 `failed/blocked` 计数。
+- `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。停止 Case 不得计入 completed，但必须以 `non_executed_diagnostic` 进入二次复核结构化结果、`framework_issue` 统计和 `框架修复清单.md`；不得因可信复核只遍历 completed 结果而错误报告“框架问题数为 0”。360Teams 包装器对 stopped、非 passed 或计划未完成的 summary 必须返回非零退出码，不能只看已完成结果中的 `failed/blocked` 计数。
 - Core Beta 清理证据必须证明清理桥动作全部成功且技能、连接器、专家选择明确为空。优先使用 `agent.capabilities` 读回；Teams 中该 IPC 被超时保护器中止时，必须在不重复执行清理动作的前提下最多执行三次有界只读尝试，并把每次成功/错误写入 `capabilities_readback_attempts`。任一次读回得到权威空态即可继续；全部尝试失败且当前页面没有可见输入区时，框架必须通过受管 `openNewTask` 导航到干净 composer 表面，只重新采集可见状态和 E2E 状态，不得再次调用任一清理桥或把导航算作第四次 capabilities 尝试。此时允许组合使用首次精确为空的禁用桥回执、输入区无能力 chip、`__qbotE2E.state/currentSession` 的空专家身份和无专家头像作为独立交叉读回，并在 `cleanup_surface_recovery`、`pre_navigation_selection_readbacks` 和导航后截图中保存证据；旧版分离控件还必须明确显示“禁用”，新版统一“+”菜单必须有可见输入区。全部读回超时、恢复导航失败、只有动作返回值、缺少可见状态或任一来源仍有残留时必须保持 `cleanup_readback.valid=false`，不得把未知状态当作清理完成。
 - 当前页面已经是可见统一“+”菜单 Composer 时，三次 `agent.capabilities` 只读均超时不触发导航。只有同一 Case 的发送前 `core_beta_composer_control_reset.isolation_readback` 已权威证明 Skill、Connector、Expert 全部为空，三个清理桥均成功，当前 Composer 可见且 Skill/Connector chip 与专家头像仍全部为空时，才允许以 `pre_cleanup_and_visible_ui` 作为清理交叉读回继续；任一发送前字段不可读、桥失败、可见残留或少于三次受管只读尝试仍须 fail-closed。
 - 清理终态还必须有界读取公开 `agent.init()`，只保留当前 active/draft context 的最小能力字段并与 `__qbotE2E.state.activeId/isDraft` 精确绑定。当 `agent.capabilities` 超时且没有可用的发送前权威空态时，只有 `agent.init()` 对同一当前 context 明确返回 `skills/connectors/expert` 三者均为 `null` 或空数组、三个清理桥均成功、当前统一 Composer 可见且无 Skill/Connector chip 与专家头像，才允许以 `agent.init_context_and_visible_ui` 继续。`agent.init()` 超时、active/draft 绑定不一致、任一字段省略、任一可见残留或清理桥失败仍须 fail-closed；不得读取其他会话空态替代当前任务。
@@ -703,6 +703,14 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   独立父 Case；禁止先写 `reply-completion.json`、后补截图而被 manifest 误判为
   `reply_incomplete`。超时截图、等待窗口、发送回执或受管停止清理任一缺失/失败时仍按
   framework issue fail-closed。
+- #793 专项长文本观察若确认发送后真实进入运行态，随后停止且至少等待 60 秒、连续
+  至少 3 次采样仍为零正文，必须从确认发送回执冻结 taskId，并对当前
+  `assistant-thread` 结构化时间线执行同 taskId、同 prompt 终态复核。复核仍无正文时，
+  先保存 `issue-793-after-terminal-no-reply` 终态截图及 SHA，再材料化完整
+  `terminal_outcome=no_reply`；该结果是证据完整的产品 Bug，必须继续后续独立父 Case。
+  若终态出现任意 prompt 绑定正文则恢复真实回复；taskId/prompt 无法绑定、截图缺失或
+  复核字段不完整仍按 framework issue fail-closed。专项观察不得绕过通用 no-reply
+  证据合同，也不得把稳定停止后的零回复误写成 `completed` 或 `blocked`。
 - Core Beta 叶子复用 legacy driver 时，driver 分流身份只用于选择执行逻辑；所有专项证据、manifest 和 SHA 归属必须使用原始 Core Beta 叶子合同 ID。禁止把 `SIT-*` legacy 身份写入 `BETA-*` 叶子的 Case 绑定字段，或反向跨 Case 复用证据。
 - 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。

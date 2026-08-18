@@ -20,6 +20,7 @@ import {
   assessUserCenteredOutcome,
   brokenAttachmentFabricationEvidence,
   buildCredibilityReview,
+  buildFrameworkStopCredibilityDiagnostic,
   buildSingleHostPipelineBatch,
   buildSummary,
   buildConversationTurns,
@@ -49,6 +50,7 @@ import {
   coreBetaComposerHistoryVerdict,
   coreBetaComposerIsolationReadback,
   coreBetaComposerResetFailureCategory,
+  confirmedSendReceiptTaskId,
   coreBetaCompletionBlockReason,
   coreBetaConnectorCatalogEvidenceValid,
   coreBetaConnectorOptionTestId,
@@ -147,6 +149,7 @@ import {
   skillInstallIdentityTerminalVerdict,
   streamingScrollFollowVerdict,
   streamingScrollPerformanceMetrics,
+  streamingTerminalReplyEvidence,
   stopRemainderWithoutSynthetic,
   terminalPromptBoundReplyEvidence,
   uninstallCoreBetaRunOwnedSkillTargets,
@@ -4722,6 +4725,74 @@ assert.equal(
   false,
   '仍在运行的任务不得被终止无回复规则截断',
 );
+const streamingPrompt = '请输出 80 条上线检查清单。';
+const streamingTaskId = confirmedSendReceiptTaskId([{
+  prompt: streamingPrompt,
+  confirmed_at: '2026-08-18T15:00:00.000Z',
+  attempts: [{
+    clicked: true,
+    receipt: { ok: true, snapshot: { activeId: 'task-streaming-no-reply', running: true } },
+  }],
+}], streamingPrompt);
+assert.equal(streamingTaskId, 'task-streaming-no-reply', '长文本终态必须从确认发送回执冻结 taskId');
+const streamingNoReply = streamingTerminalReplyEvidence({
+  snapshot: {
+    activeTaskId: streamingTaskId,
+    userTexts: [streamingPrompt],
+    messages: [{ role: 'user', text: streamingPrompt }],
+    latestAssistantText: '',
+  },
+  prompt: streamingPrompt,
+  boundTaskId: streamingTaskId,
+  everGenerating: true,
+  stoppedObservations: 3,
+  waitedMs: 62_000,
+  minWaitMs: 60_000,
+  timeoutMs: 240_000,
+  stillGenerating: false,
+});
+assert.equal(streamingNoReply.terminal_outcome, 'no_reply');
+assert.equal(streamingNoReply.incomplete, true);
+assert.equal(streamingNoReply.observed_running_after_send, true);
+assert.equal(streamingNoReply.running_after, false);
+assert.equal(streamingNoReply.no_reply_stable_observations, 3);
+assert.equal(streamingNoReply.terminal_reconciliation_performed, true);
+assert.equal(streamingNoReply.terminal_reconciliation_task_bound, true);
+assert.equal(streamingNoReply.terminal_reconciliation_prompt_bound, true);
+assert.equal(streamingNoReply.terminal_reconciliation_reply_present, false);
+assert.equal(streamingNoReply.screenshot_file_suffix, 'after-terminal-no-reply');
+const streamingRecoveredReply = streamingTerminalReplyEvidence({
+  snapshot: {
+    activeTaskId: streamingTaskId,
+    userTexts: [streamingPrompt],
+    messages: [
+      { role: 'user', text: streamingPrompt },
+      { role: 'assistant', text: '第 1 条：检查身份。第 2 条：检查环境。' },
+    ],
+  },
+  prompt: streamingPrompt,
+  boundTaskId: streamingTaskId,
+  everGenerating: true,
+  stoppedObservations: 3,
+  waitedMs: 62_000,
+  stillGenerating: false,
+});
+assert.equal(streamingRecoveredReply.terminal_outcome, 'completed', '终态结构化时间线已有正文时不得误写 no_reply');
+assert.match(streamingRecoveredReply.deltaText, /第 1 条/);
+const streamingUnverifiedNoReply = streamingTerminalReplyEvidence({
+  snapshot: {
+    activeTaskId: 'different-task',
+    userTexts: [streamingPrompt],
+    messages: [{ role: 'user', text: streamingPrompt }],
+  },
+  prompt: streamingPrompt,
+  boundTaskId: streamingTaskId,
+  everGenerating: true,
+  stoppedObservations: 3,
+  waitedMs: 62_000,
+  stillGenerating: false,
+});
+assert.equal(streamingUnverifiedNoReply.terminal_outcome, 'unverified_no_reply', 'taskId 漂移必须继续 fail-closed');
 assert.match(
   runner,
   /terminal_outcome:\s*'no_reply'[\s\S]*no_reply_stable_observations[\s\S]*after-terminal-no-reply/,
@@ -4731,6 +4802,11 @@ assert.match(
   runner,
   /terminal no-reply reconciliation snapshot[\s\S]*terminalPromptBoundReplyEvidence[\s\S]*reconciled_before_no_reply[\s\S]*terminal_outcome:\s*'no_reply'/,
   'v2 runner 写 no_reply 前必须用新快照按 taskId 和 prompt 复核可见助手回复',
+);
+assert.match(
+  runner,
+  /executeIssue793StreamingScrollFollow[\s\S]*confirmedSendReceiptTaskId[\s\S]*streamingTerminalReplyEvidence[\s\S]*issue-793-\$\{replyEvidence\.screenshot_file_suffix[\s\S]*writeReplyArtifacts/,
+  '#793 专项长文本路径必须先完成 task/prompt 终态复核和截图，再材料化 reply completion',
 );
 assert.match(
   runner,
@@ -5531,6 +5607,18 @@ const stoppedSummary = buildSummary({
     reason: 'BETA-INIT-002 manifest incomplete',
     stopped_case_id: 'BETA-INIT-002',
     stopped_at_index: 1,
+    failed_result: {
+      id: 'BETA-INIT-002',
+      module: '初始化',
+      scenario: '初始化检查',
+      status: 'failed',
+      result_category: 'automation_error',
+      actual_result: 'manifest incomplete',
+      steps: [{ action: '生成 manifest', status: 'failed', category: 'automation_error' }],
+      assertions: [],
+      screenshots: {},
+      artifacts: {},
+    },
   },
 });
 assert.equal(stoppedSummary.status, 'stopped', 'framework stop 不能被已完成 Case 的 passed 覆盖');
@@ -5539,6 +5627,30 @@ assert.equal(stoppedSummary.counts.total, 1, '停止 Case 不得伪造为 comple
 assert.equal(stoppedSummary.result_accounting.planned, 55, 'summary 必须保留完整计划总数');
 assert.equal(stoppedSummary.result_accounting.unexecuted, 54, 'summary 必须明确未完成 Case 数');
 assert.equal(stoppedSummary.stopped_case_id, 'BETA-INIT-002');
+assert.equal(stoppedSummary.credibility_review.counts.total, 1, '停止诊断不得伪装成 completed 复核项');
+assert.equal(stoppedSummary.credibility_review.counts.framework_issue_diagnostics, 1);
+assert.equal(
+  stoppedSummary.credibility_review.counts.framework_issue,
+  stoppedSummary.credibility_review.counts.framework_issue_completed + 1,
+  'framework stop 必须在 completed 复核结果之外传播到框架问题总数',
+);
+assert.equal(stoppedSummary.credibility_review.diagnostics.length, 1);
+assert.equal(stoppedSummary.framework_stop_review.id, 'BETA-INIT-002');
+assert.equal(stoppedSummary.framework_stop_review.review_category, '不可信-框架问题');
+assert.match(
+  runner,
+  /function credibilityFrameworkItems[\s\S]*review\?\.diagnostics[\s\S]*function renderFrameworkFixList[\s\S]*credibilityFrameworkItems\(review\)/,
+  '框架修复清单必须包含非 completed 的 framework stop 诊断',
+);
+assert.equal(
+  buildFrameworkStopCredibilityDiagnostic({
+    status: 'stopped',
+    reason: 'manifest incomplete',
+    stopped_case_id: 'BETA-INIT-002',
+  }).execution_provenance,
+  'non_executed_diagnostic',
+  '缺少 failed_result 时也必须保留非 completed framework stop 诊断',
+);
 {
   const stopDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-framework-stop-case-id-'));
   try {
@@ -6497,7 +6609,7 @@ const required = [
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
   ['今日 #793/#800 使用独立本地产品断言', /SIT-ISSUE-793'[\s\S]*executeIssue793StreamingScrollFollow[\s\S]*SIT-ISSUE-800'[\s\S]*executeIssue800ModelServiceStateConsistency/],
   ['#793 生成中采样滚动位置并保存正式性能证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*performance-metrics\.json)(?=[\s\S]*artifacts\.performance_metrics)(?=[\s\S]*streamingScrollPerformanceMetrics)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
-  ['#793 部分正文超时先固化终态再受管停止', /executeIssue793StreamingScrollFollow[\s\S]*stillGenerating[\s\S]*issue-793-after-timeout[\s\S]*incomplete_reason[\s\S]*writeReplyArtifacts\(state, caseDir, \[replyEvidence\]\)[\s\S]*recordReplyAssertions\(state, testCase, prompt, replyEvidence[\s\S]*if \(stillGenerating\)[\s\S]*cancelRunningReplyAfterTimeout\(page, state, caseDir, '长文本流式回复'\)/],
+  ['#793 部分正文超时先固化终态再受管停止', /executeIssue793StreamingScrollFollow[\s\S]*streamingTerminalReplyEvidence[\s\S]*issue-793-\$\{replyEvidence\.screenshot_file_suffix[\s\S]*writeReplyArtifacts\(state, caseDir, \[replyRecord\]\)[\s\S]*recordReplyAssertions\(state, testCase, prompt, replyRecord[\s\S]*replyRecord\.terminal_outcome === 'timed_out'[\s\S]*cancelRunningReplyAfterTimeout\(page, state, caseDir, '长文本流式回复'\)/],
   ['#800 多轮采样不可达状态与回复增长', /(?=[\s\S]*executeIssue800ModelServiceStateConsistency)(?=[\s\S]*model-service-state-samples\.json)(?=[\s\S]*growthAfterUnavailable)/],
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
   ['HOME-020 不走附件泛化路由', /SIT-HOME-020'[\s\S]*executeSitHomePrdBoundary/],

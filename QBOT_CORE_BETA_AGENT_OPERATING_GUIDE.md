@@ -9,24 +9,26 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 
 ## 1. 当前状态
 
-- 用户已明确要求启动 QWork 日常回归。本轮必须先完成框架基线提交推送和精确
-  `READY` pretest，再启动唯一串行 runner；不得沿用先前暂停状态。
+- 用户已明确要求持续监控并自主修复 QWork 日常回归。本轮确认 framework issue 后，
+  必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再以新不可变目录
+  从 `1/83` 启动唯一串行 runner；不得恢复旧目录或继承旧结果。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
 - 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.10` build `2119081439`、
-  QWork `0.1.2-sit.12`、UI commit `2d39a949`、backend
+  QWork `0.1.4-sit.2`、UI commit `e1deb868`、backend
   `sit-health-ae3b6cafbc5ed123`、control plane
   `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、prompt policy
-  `qwork-runtime-0.1.2-sit.12-sha256-4ba98446ffa2e4cb383ef68e4e479b4b8260097edc223925718099fc9cc4dd78`、
-  feature flags SHA `e16fd695695946fc78ca03a1408671bd82ac2121938b600338a4a0a7a765030b`、
-  release manifest SHA `0b749d741f2ad13519786eb2c8d88af21cafc2236160303eca3e951e7d488b43`、
+  `qwork-runtime-0.1.4-sit.2-sha256-f465773a53b498c28877967148ab6429507ffba077e6520baabc1470564476a7`、
+  feature/UI SHA `bf3c3dcc76e6aa1f9aa18ccc915cfb0ccff2c4353f49ccc35f1b7749f637ef40`、
+  release manifest SHA `650d8ef31ed153bc8d0870b712639771aaa1e6630079ba2754258f598f4d2b10`、
+  release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；受管 360Teams PID `50464`、CDP
-  `http://127.0.0.1:53155` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
-  旧输出目录或旧监控。
-- 最新 `framework-0e8ecdc_casebook-c412ee6` 批次已在第 8 个顶层
+- 当前没有有效 runner；上一 runner PID `7938` 及 npm 父进程 `7923` 已退出，受管
+  360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
+  不得继承旧 runner PID、旧输出目录或旧监控。
+- 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
   `QW-CHAT-005/BETA-CHAT-006` 发送前停止：SIT control plane 令公开
   `window.agent.capabilities()` 返回 HTTP 500 `invalid_launch_mode`，Skill、Connector
   和 Expert 隔离状态无法读取，框架正确禁止发送。该批次只完成 7/83 个顶层、
@@ -324,6 +326,28 @@ framework stop。runner PID `76409` 已退出，360Teams PID `50464` 保留；�
 `evidence_valid=true`，只把 taskId 不一致写入 `oracle_valid=false` 和产品 Bug；任一
 taskId 缺失仍须 fail-closed。完成双框架 invariant、全检、提交推送、新能力审计和
 精确 `.12 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
+
+升级到 QWork `0.1.4-sit.2` 后启动的冻结批次保留在
+`teams360-automation/output/20260818194100_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-a2bc4c0_casebook-c412ee6`：
+已完成 `40/83`；第 41 条未计入 completed。`SIT-SKILL-025` 的目标 Skill 安装控件
+已真实点击并得到明确产品拒绝，但旧框架未按发送前安装失败合同形成完整负向证据，
+触发 framework stop。该目录永久冻结；修复提交 `959e67a4cc869dbc3a58a4e6efd23d89ed360037`
+已统一安装拒绝生成器、manifest N/A 和可信复核口径。后续通过不得抹去该框架问题。
+
+基于 `959e67a` 启动的最新冻结批次保留在
+`teams360-automation/output/20260818222900_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-959e67a_casebook-c412ee6`：
+已完成 `6/83`，raw 为 `passed=2/failed=4/blocked=0`；第 7 条 `QW-CHAT-004`
+未计入 completed。首叶子 `BETA-CHAT-005` 已确认发送并绑定 taskId，真实进入生成态，
+在约 `243s` 的 `258` 次采样后稳定停止且零可归属助手正文；专项滚动 executor 却把
+终态写成 `completed`，遗漏 `no_reply` 的等待、稳定采样、task/prompt 复核和终态截图
+字段，导致 `reply_completion=reply_incomplete` 并触发 framework stop。runner PID
+`7938` 与 npm 父进程 `7923` 已退出，360Teams PID `89152` 保留；该目录永久冻结。
+修复必须让专项长文本路径先从确认发送回执冻结 taskId，对结构化时间线执行 prompt
+绑定终态复核，保存 `issue-793-after-terminal-no-reply` 后材料化 manifest-valid
+`terminal_outcome=no_reply` 产品 Bug 并继续独立父 Case；同时把未完成停止 Case 作为
+`non_executed_diagnostic` 传播到二次复核和框架修复清单。完成全检、提交推送、新
+能力审计和精确 `.2 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：

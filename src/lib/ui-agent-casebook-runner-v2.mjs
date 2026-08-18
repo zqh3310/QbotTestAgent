@@ -17304,6 +17304,122 @@ export function streamingScrollPerformanceMetrics({ testCaseId, samplesFile, sam
   };
 }
 
+export function confirmedSendReceiptTaskId(sendReceipts = [], expectedPrompt = '') {
+  const receipts = Array.isArray(sendReceipts) ? sendReceipts : [];
+  const normalizedExpectedPrompt = normalizePromptForComparison(expectedPrompt);
+  for (let receiptIndex = receipts.length - 1; receiptIndex >= 0; receiptIndex -= 1) {
+    const receipt = receipts[receiptIndex];
+    if (
+      normalizedExpectedPrompt
+      && normalizePromptForComparison(receipt?.prompt) !== normalizedExpectedPrompt
+    ) continue;
+    const attempts = Array.isArray(receipt?.attempts) ? receipt.attempts : [];
+    for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex -= 1) {
+      const attempt = attempts[attemptIndex];
+      const taskId = String(attempt?.receipt?.snapshot?.activeId || '').trim();
+      if (attempt?.clicked === true && attempt?.receipt?.ok === true && taskId) return taskId;
+    }
+  }
+  return '';
+}
+
+export function streamingTerminalReplyEvidence({
+  snapshot = {},
+  prompt = '',
+  boundTaskId = '',
+  ignoredText = [],
+  everGenerating = false,
+  stoppedObservations = 0,
+  waitedMs = 0,
+  minWaitMs = MIN_REPLY_WAIT_MS,
+  timeoutMs = MAX_REPLY_WAIT_MS,
+  stillGenerating = false,
+} = {}) {
+  const reconciliation = terminalPromptBoundReplyEvidence(snapshot, prompt, {
+    boundTaskId,
+    ignoredText,
+  });
+  const common = {
+    waited_ms: Number(waitedMs || 0),
+    min_wait_ms: Number(minWaitMs || MIN_REPLY_WAIT_MS),
+    timeout_ms: Number(timeoutMs || MAX_REPLY_WAIT_MS),
+    wait_kind: 'streaming-observation',
+    observed_running_after_send: Boolean(everGenerating),
+    running_after: Boolean(stillGenerating),
+  };
+  if (!stillGenerating && reconciliation.reply_present) {
+    return {
+      ...common,
+      fullText: reconciliation.full_text,
+      deltaText: reconciliation.delta_text,
+      incomplete: false,
+      terminal_outcome: 'completed',
+      terminal_reconciliation_performed: true,
+      terminal_reconciliation_task_bound: reconciliation.task_bound,
+      terminal_reconciliation_prompt_bound: reconciliation.prompt_bound,
+      terminal_reconciliation_reply_present: true,
+      screenshot_phase: 'after_reply',
+      screenshot_file_suffix: 'after-reply',
+    };
+  }
+  if (stillGenerating) {
+    const partialText = String(reconciliation.delta_text || snapshot?.latestAssistantText || '');
+    return {
+      ...common,
+      fullText: partialText,
+      deltaText: partialText,
+      incomplete: true,
+      terminal_outcome: 'timed_out',
+      incomplete_reason: `长文本回复在 ${Number(timeoutMs || 0)}ms 观察窗口内仍未完成；已读取 ${partialText.length} 字正文。`,
+      terminal_reconciliation_performed: true,
+      terminal_reconciliation_task_bound: reconciliation.task_bound,
+      terminal_reconciliation_prompt_bound: reconciliation.prompt_bound,
+      terminal_reconciliation_reply_present: reconciliation.reply_present,
+      screenshot_phase: 'after_timeout',
+      screenshot_file_suffix: 'after-timeout',
+    };
+  }
+  const stableNoReply = Boolean(
+    everGenerating
+    && Number(waitedMs || 0) >= Number(minWaitMs || MIN_REPLY_WAIT_MS)
+    && Number(stoppedObservations || 0) >= NO_REPLY_TERMINAL_STABLE_OBSERVATIONS
+  );
+  if (stableNoReply) {
+    const verified = reconciliation.task_bound && reconciliation.prompt_bound;
+    return {
+      ...common,
+      fullText: '',
+      deltaText: '',
+      incomplete: true,
+      terminal_outcome: verified ? 'no_reply' : 'unverified_no_reply',
+      incomplete_reason: verified
+        ? `Agent 已确认接收并进入运行态，但随后停止，连续 ${Number(stoppedObservations || 0)} 次稳定采样均未观察到可归属本轮的助手正文；实际等待 ${Number(waitedMs || 0)}ms。`
+        : `长文本终态无法同时绑定当前 taskId 与本轮 prompt，禁止生成产品 no_reply：${reconciliation.reason}。`,
+      no_reply_stable_observations: Number(stoppedObservations || 0),
+      terminal_reconciliation_performed: true,
+      terminal_reconciliation_task_bound: reconciliation.task_bound,
+      terminal_reconciliation_prompt_bound: reconciliation.prompt_bound,
+      terminal_reconciliation_reply_present: false,
+      screenshot_phase: verified ? 'after_terminal_no_reply' : 'after_terminal_unverified_no_reply',
+      screenshot_file_suffix: verified ? 'after-terminal-no-reply' : 'after-terminal-unverified-no-reply',
+    };
+  }
+  const fallbackText = String(reconciliation.delta_text || snapshot?.latestAssistantText || '');
+  return {
+    ...common,
+    fullText: fallbackText,
+    deltaText: fallbackText,
+    incomplete: false,
+    terminal_outcome: 'completed',
+    terminal_reconciliation_performed: true,
+    terminal_reconciliation_task_bound: reconciliation.task_bound,
+    terminal_reconciliation_prompt_bound: reconciliation.prompt_bound,
+    terminal_reconciliation_reply_present: reconciliation.reply_present,
+    screenshot_phase: 'after_reply',
+    screenshot_file_suffix: 'after-reply',
+  };
+}
+
 export function modelServiceStateEvidence(text) {
   const value = String(text || '');
   const unavailablePattern = /模型服务(?:暂时)?不可达|当前无法连接模型服务|模型服务.*(?:连接失败|连接超时)|请连接公司\s*VPN\s*后重试/i;
@@ -17342,7 +17458,6 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     '每条必须独占一段，格式为“第 N 条：检查项名称——至少两句具体说明”，不要省略、不要合并、不要先给摘要。',
     '请在当前会话正文持续输出全部内容，不要创建成果，不要调用技能或连接器。',
   ].join('\n');
-  const before = await conversationSnapshot(page);
   const startedAt = Date.now();
   const samples = [];
   let driftScreenshot = '';
@@ -17367,7 +17482,10 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     }
     if (everGenerating && !sample.generating) stoppedObservations += 1;
     else if (sample.generating) stoppedObservations = 0;
-    if (stoppedObservations >= 3 && sample.assistantChars > 30 && Date.now() - startedAt >= MIN_REPLY_WAIT_MS) break;
+    if (
+      stoppedObservations >= NO_REPLY_TERMINAL_STABLE_OBSERVATIONS
+      && Date.now() - startedAt >= MIN_REPLY_WAIT_MS
+    ) break;
     await page.waitForTimeout(750);
   }
 
@@ -17387,30 +17505,32 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   const after = await conversationSnapshot(page);
   const stillGenerating = Boolean(everGenerating && (await isAgentGenerating(page)));
   const waitedMs = Date.now() - startedAt;
-  const completionScreenshot = stillGenerating
-    ? await shot(page, caseDir, 'issue-793-after-timeout')
-    : await shot(page, caseDir, 'issue-793-after-reply');
-  if (stillGenerating) state.screenshots.issue_793_after_timeout = completionScreenshot;
-  else state.screenshots.issue_793_after_reply = completionScreenshot;
-  const replyEvidence = {
+  const boundTaskId = confirmedSendReceiptTaskId(state.artifacts.send_receipts, prompt);
+  const replyEvidence = streamingTerminalReplyEvidence({
+    snapshot: after,
+    prompt,
+    boundTaskId,
+    ignoredText: [prompt, testCase.scenario, testCase.test_data],
+    everGenerating,
+    stoppedObservations,
+    waitedMs,
+    minWaitMs: MIN_REPLY_WAIT_MS,
+    timeoutMs: monitorBudgetMs,
+    stillGenerating,
+  });
+  const completionScreenshot = await shot(
+    page,
+    caseDir,
+    `issue-793-${replyEvidence.screenshot_file_suffix || 'after-reply'}`,
+  );
+  state.screenshots[`issue_793_${String(replyEvidence.screenshot_phase || 'after_reply')}`] = completionScreenshot;
+  const replyRecord = {
     label: '长文本流式回复',
-    fullText: after.latestAssistantText || '',
-    deltaText: latestAssistantReplySince(after, before) || after.latestAssistantText || '',
-    waited_ms: waitedMs,
-    min_wait_ms: MIN_REPLY_WAIT_MS,
-    timeout_ms: monitorBudgetMs,
-    wait_kind: 'streaming-observation',
-    incomplete: stillGenerating,
-    terminal_outcome: stillGenerating ? 'timed_out' : 'completed',
-    observed_running_after_send: everGenerating,
-    running_after: stillGenerating,
-    incomplete_reason: stillGenerating
-      ? `长文本回复在 ${monitorBudgetMs}ms 观察窗口内仍未完成；已读取 ${String(after.latestAssistantText || '').length} 字正文。`
-      : '',
+    ...replyEvidence,
   };
-  writeReplyArtifacts(state, caseDir, [replyEvidence]);
-  recordReplyWaitAssertion(state, replyEvidence, '长文本流式回复');
-  recordReplyAssertions(state, testCase, prompt, replyEvidence, '长文本流式回复');
+  writeReplyArtifacts(state, caseDir, [replyRecord]);
+  recordReplyWaitAssertion(state, replyRecord, '长文本流式回复');
+  recordReplyAssertions(state, testCase, prompt, replyRecord, '长文本流式回复');
   recordStep(
     state,
     '生成中连续采样会话滚动位置',
@@ -17419,7 +17539,24 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     'passed',
     driftScreenshot || completionScreenshot,
   );
-  if (!everGenerating || !verdict.overflowObserved || String(after.latestAssistantText || '').length < 30) {
+  if (replyRecord.terminal_outcome === 'timed_out') {
+    await cancelRunningReplyAfterTimeout(page, state, caseDir, '长文本流式回复');
+    return;
+  }
+  if (replyRecord.terminal_outcome === 'no_reply') return;
+  if (replyRecord.terminal_outcome === 'unverified_no_reply') {
+    recordStep(
+      state,
+      '复核长文本终止无回复任务归属',
+      '终止无回复必须同时绑定确认发送的 taskId 和本轮 prompt。',
+      replyRecord.incomplete_reason,
+      'failed',
+      completionScreenshot,
+      'automation_error',
+    );
+    return;
+  }
+  if (!everGenerating || !verdict.overflowObserved || String(replyRecord.deltaText || '').length < 30) {
     markBlocked(state, `未形成可判定的长文本流式场景：everGenerating=${everGenerating}，overflow=${verdict.overflowObserved}，replyChars=${String(after.latestAssistantText || '').length}。本轮不能据此认定 #793 已修复。`);
     return;
   }
@@ -17432,11 +17569,6 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
       ? `Bug 已复现：首次连续漂移发生在 ${verdict.firstFailure?.elapsedMs}ms，距底部 ${Math.round(verdict.firstFailure?.distanceBottom || 0)}px；关键截图=${driftScreenshot}`
       : `未观察到滚动漂移；最大距底部 ${Math.round(verdict.maxDistanceBottom)}px。`,
   );
-
-  if (stillGenerating) {
-    await cancelRunningReplyAfterTimeout(page, state, caseDir, '长文本流式回复');
-    return;
-  }
 
   if (!verdict.reproduced) {
     const viewport = page.locator('[data-testid="thread-viewport"]').first();
@@ -36010,6 +36142,43 @@ function statusFromResults(results) {
   return 'passed';
 }
 
+export function buildFrameworkStopCredibilityDiagnostic(frameworkStop) {
+  if (!frameworkStop || typeof frameworkStop !== 'object') return null;
+  const failedResult = frameworkStop.failed_result && typeof frameworkStop.failed_result === 'object'
+    ? frameworkStop.failed_result
+    : {
+      id: String(frameworkStop.stopped_case_id || 'FRAMEWORK-STOP'),
+      title: 'Framework stop diagnostic',
+      scenario: 'Runner stopped before the selected scope completed.',
+      module: '自动化框架',
+      status: 'failed',
+      result_category: 'automation_error',
+      actual_result: String(frameworkStop.reason || '框架门禁停止。'),
+      conclusion: String(frameworkStop.reason || '框架门禁停止。'),
+      execution_provenance: 'non_executed_diagnostic',
+      steps: [],
+      assertions: [],
+      screenshots: {},
+      artifacts: {},
+    };
+  const reviewed = reviewCaseCredibility(failedResult);
+  return {
+    ...reviewed,
+    id: String(failedResult.id || frameworkStop.stopped_case_id || 'FRAMEWORK-STOP'),
+    raw_status: String(failedResult.status || 'failed'),
+    raw_category: String(failedResult.result_category || 'automation_error'),
+    review_category: '不可信-框架问题',
+    trusted: false,
+    reason: String(reviewed.reason || frameworkStop.reason || '框架门禁停止。'),
+    action: String(reviewed.action || '修复框架并完成强制校验后，在新不可变目录全量重跑。'),
+    diagnostic_kind: 'framework_stop',
+    execution_provenance: 'non_executed_diagnostic',
+    stop_reason: String(frameworkStop.reason || ''),
+    stopped_case_id: String(frameworkStop.stopped_case_id || failedResult.id || ''),
+    stopped_at_index: Number(frameworkStop.stopped_at_index ?? -1),
+  };
+}
+
 export function buildSummary({
   status,
   startedAt,
@@ -36082,6 +36251,15 @@ export function buildSummary({
     })),
   };
   summary.credibility_review = buildCredibilityReview(summary.results);
+  const frameworkStopReview = buildFrameworkStopCredibilityDiagnostic(frameworkStop);
+  summary.framework_stop_review = frameworkStopReview;
+  summary.credibility_review.diagnostics = frameworkStopReview ? [frameworkStopReview] : [];
+  summary.credibility_review.counts.framework_issue_completed = summary.credibility_review.counts.framework_issue;
+  summary.credibility_review.counts.framework_issue_diagnostics = frameworkStopReview ? 1 : 0;
+  summary.credibility_review.counts.framework_issue += frameworkStopReview ? 1 : 0;
+  if (frameworkStopReview) {
+    summary.credibility_review.production_release_gate.blocker_count += 1;
+  }
   return summary;
 }
 
@@ -37104,6 +37282,13 @@ function renderRunReport(summary) {
   return `${lines.join('\n')}\n`;
 }
 
+function credibilityFrameworkItems(review = {}) {
+  return [
+    ...(Array.isArray(review?.items) ? review.items : []),
+    ...(Array.isArray(review?.diagnostics) ? review.diagnostics : []),
+  ].filter((item) => item?.review_category === '不可信-框架问题');
+}
+
 function renderCredibilityReviewReport(summary) {
   const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
   const lines = [
@@ -37120,6 +37305,7 @@ function renderCredibilityReviewReport(summary) {
     `- 是否达到证据诊断目标：${review.pass_target ? '是' : '否'}`,
     `- 单轮生产门禁：${review.production_release_gate?.decision || 'NO-GO'}`,
     `- 生产规则：${review.production_release_gate?.rule || '单轮结果不得直接授权生产。'}`,
+    `- 非 completed 停止诊断：${review.counts.framework_issue_diagnostics || 0}`,
     '',
     '## 分类统计',
     '',
@@ -37140,7 +37326,7 @@ function renderCredibilityReviewReport(summary) {
     lines.push(`| ${item.id} | ${esc(item.module)} | ${item.raw_status}/${item.raw_category || ''} | ${item.review_category} | ${item.trusted ? '是' : '否'} | ${esc(clip(item.step_match, 220))} | ${esc(clip(item.evidence_completeness, 220))} | ${esc(clip(item.user_view_conclusion || item.reason, 260))} | ${esc(clip(item.action, 220))} | ${item.case_report || item.key_screenshot || ''} |`);
   }
 
-  const frameworkItems = review.items.filter((item) => item.review_category === '不可信-框架问题');
+  const frameworkItems = credibilityFrameworkItems(review);
   if (frameworkItems.length) {
     lines.push('', '## 框架问题清单', '');
     for (const item of frameworkItems) {
@@ -37188,7 +37374,7 @@ function renderCredibilityReviewReport(summary) {
 
 function renderFrameworkFixList(summary) {
   const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
-  const items = review.items.filter((item) => item.review_category === '不可信-框架问题');
+  const items = credibilityFrameworkItems(review);
   const lines = [
     '# QBot 自动化框架修复清单',
     '',
