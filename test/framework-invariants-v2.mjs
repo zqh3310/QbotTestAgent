@@ -140,6 +140,7 @@ import {
   reviewCaseCredibility,
   safeNativeAttachmentInfoDialog,
   safeNativeRecoverableInfoDialog,
+  selectCoreBetaRunOwnedSkillCleanupCases,
   selectManagedRuntimeProcess,
   singleHostPipelineEligibility,
   seedLocalSkillReadiness,
@@ -175,6 +176,7 @@ import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-genera
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
+const legacyRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
 
 const expertSwitchTaskMismatch = expertGeneralAssistantExecutionVerdict({
   selectionEvidenceValid: true,
@@ -4545,6 +4547,21 @@ try {
     results: sourceResults,
   });
   const cleanupCase = [{ id: 'BETA-SKILL-001', case_type: 'skill_lifecycle' }];
+  const cleanupSelection = selectCoreBetaRunOwnedSkillCleanupCases([{
+    id: 'QW-SKILL-001',
+    case_type: 'compound',
+    compound_subcases: [{
+      ...cleanupCase[0],
+      contract_version: 'qbot-core-beta/v2',
+    }],
+  }], 'BETA-SKILL-001');
+  assert.deepEqual(cleanupSelection.cases.map((item) => item.id), ['BETA-SKILL-001']);
+  assert.deepEqual(cleanupSelection.result_path_ids, ['QW-SKILL-001', 'BETA-SKILL-001']);
+  assert.throws(
+    () => selectCoreBetaRunOwnedSkillCleanupCases([], 'QW-SKILL-001'),
+    /只允许请求 BETA-SKILL-001/,
+    'cleanup selector 不得扩大为整个 Daily83 compound 父 Case',
+  );
   const seeded = seedCoreBetaRunOwnedSkillCleanupLedger({
     sourceOut,
     currentOut,
@@ -4713,6 +4730,16 @@ assert.match(
   runner,
   /options\['core-beta-cleanup-from'\][\s\S]*seedCoreBetaRunOwnedSkillCleanupLedger/,
   'Core Beta v2 必须在连接产品前验证并导入冻结的 run-owned Skill 清理账本',
+);
+assert.match(
+  legacyRunner,
+  /options\['core-beta-cleanup-from'\][\s\S]*return runCoreBetaV2CasebookCommand/,
+  '共享 runner 入口必须把 compound 叶子清理直接路由到 Core Beta v2',
+);
+assert.match(
+  runner,
+  /casebook-cleanup-full-cases\.json[\s\S]*selectCoreBetaRunOwnedSkillCleanupCases[\s\S]*cleanup_selection/,
+  'cleanup-only 选择必须从完整 Casebook 唯一解析叶子并记录父子路径',
 );
 assert.match(
   automationFramework,

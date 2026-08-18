@@ -383,6 +383,9 @@ run-owned Skill 定向清理、全检、提交推送、新能力审计和精确 
 `QW-SKILL-001 -> BETA-SKILL-002/003/004` 唯一路径，并验证路径上全部结果均为
 真实 executed、非 synthetic 且叶子 manifest 完整，禁止因只扫描顶层 progress 而
 跳过清理或改用临时产品脚本。
+Daily83 清理命令仍使用 `--case BETA-SKILL-001`；该专用参数组合必须绕过共享入口的
+顶层预导出，并由 v2 从完整 Sheet 的唯一 `QW-SKILL-001.compound_subcases` 路径只选择
+该叶子。`casebook-cases.json.cleanup_selection.result_path_ids` 必须精确记录这条路径。
 
 最新冻结的旧 55 条 scoped 批次：
 

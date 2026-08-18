@@ -124,6 +124,9 @@ const PRODUCTION_REQUIRED_RISK_DOMAINS = [
 ];
 
 export async function runUiAgentCasebookCommand({ options = {}, root = process.cwd() } = {}) {
+  if (options['core-beta-cleanup-from']) {
+    return runCoreBetaV2CasebookCommand({ options, root });
+  }
   const startedAt = new Date();
   const casebook = resolveCasebook(root, options.casebook);
   const runStamp = timestampMinute();

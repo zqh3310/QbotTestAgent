@@ -439,6 +439,40 @@ export function isQworkDailyRegressionCasePlan(cases = []) {
   ));
 }
 
+function coreBetaCleanupCasePaths(cases, ancestors = []) {
+  const paths = [];
+  for (const testCase of Array.isArray(cases) ? cases : []) {
+    if (!testCase || typeof testCase !== 'object') continue;
+    const currentPath = [...ancestors, testCase];
+    paths.push(currentPath);
+    paths.push(...coreBetaCleanupCasePaths(testCase.compound_subcases, currentPath));
+  }
+  return paths;
+}
+
+export function selectCoreBetaRunOwnedSkillCleanupCases(cases = [], requested = '') {
+  const requestedIds = String(requested || '').split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean);
+  if (requestedIds.length !== 1 || requestedIds[0] !== 'BETA-SKILL-001') {
+    throw new Error('--core-beta-cleanup-from 只允许请求 BETA-SKILL-001。');
+  }
+  const matches = coreBetaCleanupCasePaths(cases)
+    .filter((items) => String(items.at(-1)?.id || '') === requestedIds[0]);
+  if (matches.length !== 1) {
+    throw new Error(`清理 Case 在完整 Casebook 中缺失或不唯一：${requestedIds[0]}`);
+  }
+  const selected = matches[0].at(-1);
+  if (
+    String(selected?.contract_version || '') !== 'qbot-core-beta/v2'
+    || String(selected?.case_type || '') !== 'skill_lifecycle'
+  ) {
+    throw new Error('清理 Case 必须是 Core Beta v2 skill_lifecycle 合同。');
+  }
+  return {
+    cases: [selected],
+    result_path_ids: matches[0].map((item) => String(item.id || '')).filter(Boolean),
+  };
+}
+
 export async function runUiAgentCasebookCommand({ options = {}, root = process.cwd() } = {}) {
   const startedAt = new Date();
   const casebook = resolveCasebook(root, options.casebook);
@@ -454,6 +488,10 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
   const python = String(options.python || process.env.PYTHON || 'python3');
   const resultExcel = path.join(outDir, `${runStamp}_自动化测试结果.xlsx`);
   const scopedExecution = /^(?:1|true|yes)$/i.test(String(options['scoped-execution'] || ''));
+  const runOwnedSkillCleanup = Boolean(options['core-beta-cleanup-from']);
+  const exportedCasesFile = runOwnedSkillCleanup
+    ? path.join(outDir, 'casebook-cleanup-full-cases.json')
+    : casesFile;
 
   ensureDir(outDir);
   ensureDir(path.join(outDir, 'logs'));
@@ -471,13 +509,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       '--casebook',
       casebook,
       '--output',
-      casesFile,
+      exportedCasesFile,
       '--profile',
       profile,
       ...(options.sheet ? ['--sheet', String(options.sheet)] : []),
-      ...(options.case ? ['--case', String(options.case)] : []),
-      ...(options.offset ? ['--offset', String(options.offset)] : []),
-      ...(options.limit ? ['--limit', String(options.limit)] : []),
+      ...(!runOwnedSkillCleanup && options.case ? ['--case', String(options.case)] : []),
+      ...(!runOwnedSkillCleanup && options.offset ? ['--offset', String(options.offset)] : []),
+      ...(!runOwnedSkillCleanup && options.limit ? ['--limit', String(options.limit)] : []),
     ],
     cwd: root,
   });
@@ -500,8 +538,22 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
     return summary;
   }
 
-  const casePlan = JSON.parse(fs.readFileSync(casesFile, 'utf8'));
-  const selectedCases = casePlan.cases || [];
+  const casePlan = JSON.parse(fs.readFileSync(exportedCasesFile, 'utf8'));
+  let selectedCases = casePlan.cases || [];
+  if (runOwnedSkillCleanup) {
+    const cleanupSelection = selectCoreBetaRunOwnedSkillCleanupCases(selectedCases, options.case);
+    selectedCases = cleanupSelection.cases;
+    writeJsonFile(casesFile, {
+      ...casePlan,
+      cases: selectedCases,
+      cleanup_selection: {
+        schema_version: 'qbot-core-beta-run-owned-skill-cleanup-selection/v1',
+        valid: true,
+        requested_case_id: 'BETA-SKILL-001',
+        result_path_ids: cleanupSelection.result_path_ids,
+      },
+    });
+  }
   writeTextFile(path.join(outDir, 'casebook-source.txt'), casebook);
   copyIfExists(casebook, path.join(outDir, `source-${path.basename(casebook)}`));
   if (!selectedCases.length) {
