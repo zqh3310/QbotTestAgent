@@ -59,6 +59,7 @@ import {
   seedLocalSkillReadiness,
   sendReceiptEvidence,
   sentPromptFidelity,
+  skillInstallActionBoundFailureVerdict,
   skillInstallIdentityTerminalVerdict,
   streamingScrollFollowVerdict,
   streamingScrollPerformanceMetrics,
@@ -136,6 +137,28 @@ const identityBoundSkillInstallFailure = skillInstallIdentityTerminalVerdict({
   pageText: '技能「毓数报表分析」安装失败：产品返回错误',
 });
 assert.equal(identityBoundSkillInstallFailure.failure, true, '目标技能自身失败不得误判成功');
+const actionBoundGenericSkillInstallFailure = skillInstallActionBoundFailureVerdict({
+  beforeText: '技能市场\n自动解析web接口并同步yapi接口文档\n安装',
+  afterText: '已安装技能\n安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: false,
+});
+assert.equal(actionBoundGenericSkillInstallFailure.failure, true, 'legacy runner 必须识别动作后新增且目标未安装的通用 forbidden 终态');
+assert.equal(skillInstallActionBoundFailureVerdict({
+  beforeText: actionBoundGenericSkillInstallFailure.text,
+  afterText: actionBoundGenericSkillInstallFailure.text,
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: false,
+}).terminal, false, 'legacy runner 不得复用动作前已存在的通用失败行');
+assert.equal(skillInstallActionBoundFailureVerdict({
+  beforeText: '技能市场',
+  afterText: actionBoundGenericSkillInstallFailure.text,
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: true,
+}).terminal, false, 'legacy runner 发现目标已安装时不得归因通用失败行');
 const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-electron-control-plane.sh'), 'utf8');
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');

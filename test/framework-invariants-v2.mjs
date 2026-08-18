@@ -146,6 +146,7 @@ import {
   seedCoreBetaRunOwnedSkillCleanupLedger,
   sendReceiptEvidence,
   sentPromptFidelity,
+  skillInstallActionBoundFailureVerdict,
   skillInstallIdentityTerminalVerdict,
   streamingScrollFollowVerdict,
   streamingScrollPerformanceMetrics,
@@ -239,9 +240,54 @@ const identityBoundForbiddenSkillInstallFailure = skillInstallIdentityTerminalVe
   cardText: '自动解析web接口并同步yapi接口文档\nSkill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
 });
 assert.equal(identityBoundForbiddenSkillInstallFailure.failure, true, '目标技能的英文 forbidden 终态必须识别为明确安装失败');
+const newGenericSkillInstallFailure = skillInstallActionBoundFailureVerdict({
+  beforeText: '技能市场\n自动解析web接口并同步yapi接口文档\n安装',
+  afterText: '已安装技能\n安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: false,
+});
+assert.equal(newGenericSkillInstallFailure.failure, true, '目标安装点击后新增的通用 forbidden 行必须归因到当前产品动作');
+assert.equal(newGenericSkillInstallFailure.source, 'installed-tab-new-explicit-failure-after-targeted-install');
+assert.deepEqual(newGenericSkillInstallFailure.before_failure_lines, []);
+assert.deepEqual(newGenericSkillInstallFailure.after_failure_lines, [newGenericSkillInstallFailure.text]);
+const staleGenericSkillInstallFailure = skillInstallActionBoundFailureVerdict({
+  beforeText: '安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  afterText: '已安装技能\n安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: false,
+});
+assert.equal(staleGenericSkillInstallFailure.terminal, false, '动作前已存在的同一通用失败行不得归因到当前安装点击');
+const installedTargetOverridesGenericFailure = skillInstallActionBoundFailureVerdict({
+  beforeText: '技能市场',
+  afterText: '安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  clickDispatched: true,
+  installedListReadSucceeded: true,
+  targetPresent: true,
+});
+assert.equal(installedTargetOverridesGenericFailure.terminal, false, '目标已进入已安装库存时不得把通用失败行判为当前安装失败');
+const unreadableInstalledInventoryFailure = skillInstallActionBoundFailureVerdict({
+  beforeText: '技能市场',
+  afterText: '安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+  clickDispatched: true,
+  installedListReadSucceeded: false,
+  targetPresent: false,
+});
+assert.equal(unreadableInstalledInventoryFailure.terminal, false, '已安装库存读回缺失时必须保持非终态并由框架 fail-closed');
 const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
+assert.match(
+  automationFramework,
+  /installed-tab-new-explicit-failure-after-targeted-install[\s\S]*action_bound=true[\s\S]*baseline_absent=true/,
+  '框架合同必须记录通用 Skill 安装失败的动作前后因果绑定与 fail-closed 规则',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /framework-50c9a31_casebook-c412ee6[\s\S]*已完成 `40\/83`[\s\S]*SIT-SKILL-002[\s\S]*installed-tab-new-explicit-failure-after-targeted-install/,
+  '操作指南必须保留本轮 40/83 Skill 安装归因框架问题及新目录全量重跑要求',
+);
 const electronRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-electron-control-plane.sh'), 'utf8');
 const skillHubRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-skillhub-control-plane.sh'), 'utf8');
 const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-connector-fixture-control-plane.sh'), 'utf8');
@@ -2323,8 +2369,12 @@ assert.equal(
         success: false,
         failure: true,
         pending: false,
-        source: 'current-skill-card',
+        source: 'installed-tab-new-explicit-failure-after-targeted-install',
         text: '安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+        action_bound: true,
+        baseline_absent: true,
+        before_failure_lines: [],
+        after_failure_lines: ['安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py'],
       },
       installed_list_readback: {
         read_succeeded: true,
@@ -2361,6 +2411,57 @@ assert.equal(
     assert.equal(installFailure.source, 'visible_skill_install_click_failure_feedback_and_zero_send_readback');
     assert.deepEqual(installFailure.not_applicable_roles, installFailureRoles);
     assert.match(installFailure.installed_list_screenshot.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'SIT-SKILL-025',
+        capabilityKind: 'skill',
+        expectedIdentity: installInteraction.expected_identity,
+        before,
+        after,
+        interaction: {
+          ...installInteraction,
+          failure_feedback: { ...installInteraction.failure_feedback, action_bound: false },
+        },
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+        notApplicableRoles: installFailureRoles,
+      }).evidence_valid,
+      false,
+      'action-bound 来源缺少因果绑定字段时必须保持 automation_error',
+    );
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'SIT-SKILL-025',
+        capabilityKind: 'skill',
+        expectedIdentity: installInteraction.expected_identity,
+        before,
+        after,
+        interaction: { ...installInteraction, installed_list_screenshot: '' },
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+        notApplicableRoles: installFailureRoles,
+      }).evidence_valid,
+      false,
+      '已安装页截图缺失时必须保持 automation_error',
+    );
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'SIT-SKILL-025',
+        capabilityKind: 'skill',
+        expectedIdentity: installInteraction.expected_identity,
+        before,
+        after,
+        interaction: {
+          ...installInteraction,
+          installed_list_readback: { ...installInteraction.installed_list_readback, read_succeeded: false },
+        },
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+        notApplicableRoles: installFailureRoles,
+      }).evidence_valid,
+      false,
+      '已安装库存读回失败时必须保持 automation_error',
+    );
     assert.equal(
       coreBetaPreSendCapabilityFailureEvidence({
         testCaseId: 'SIT-SKILL-025',

@@ -25,7 +25,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；上一 runner PID `7938` 及 npm 父进程 `7923` 已退出，受管
+- 当前没有有效 runner；上一 runner PID `40701` 及 npm 父进程 `40684` 已退出，受管
   360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
@@ -349,6 +349,22 @@ taskId 缺失仍须 fail-closed。完成双框架 invariant、全检、提交推
 `non_executed_diagnostic` 传播到二次复核和框架修复清单。完成全检、提交推送、新
 能力审计和精确 `.2 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
+
+基于 `50c9a31d18ad4ff518ce7eb11dca89f2cd9e6fac` 启动的最新冻结批次保留在
+`teams360-automation/output/20260818233400_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-50c9a31_casebook-c412ee6`：
+已完成 `40/83`，raw 为 `passed=17/failed=21/blocked=2`，全部 40 个顶层结果均为
+真实执行且 `inherited=0/synthetic=0`；第 41 条 `QW-SKILL-001` 未计入 completed。
+其叶子 `SIT-SKILL-002` 已真实点击精确 Skill 安装控件，产品随后显示
+`安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py`，
+且目标未进入已安装列表。React 回收市场卡后，旧框架既无法从漂移 locator 绑定目标，
+又拒绝把新出现但不重复 Skill 名称的通用失败绑定到本次点击，因而把完整产品拒绝误升
+为 `automation_error` 并停止。runner PID `40701` 与 npm 父进程 `40684` 已退出，受管
+360Teams PID `89152` 保留；该目录永久冻结。修复必须同时覆盖 legacy 与 v2：在点击前
+冻结页面/反馈基线，只有通用明确失败在点击后新增、已安装库存可读且目标精确不存在时，
+才以 `installed-tab-new-explicit-failure-after-targeted-install` 和
+`action_bound=true/baseline_absent=true` 材料化产品 Bug；陈旧同文案、目标已安装、
+库存或截图缺失仍须 fail-closed。完成全检、提交推送、新能力审计和精确 `.2 READY`
+后，必须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 

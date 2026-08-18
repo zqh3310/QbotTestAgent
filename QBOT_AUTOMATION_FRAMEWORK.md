@@ -223,7 +223,11 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
   `技能「<当前名称>」安装成功，本机对账已完成` 明确回执，均属于成功终态并优先于
   页面其他区域无关的“同步中/正在同步”文案；目标技能自身仍 pending、明确失败，或
   成功回执属于其他技能时不得误判成功。市场卡因 React 回收而漂移时，必须以同名已
-  安装目录读回兜底，legacy 与 Core Beta v2 执行器遵守同一合同。
+  安装目录读回兜底，legacy 与 Core Beta v2 执行器遵守同一合同。若市场卡回收后只
+  出现不含 Skill 名称的通用安装失败行，只有该行在精确目标安装点击前不存在、点击后
+  新增、已安装库存读回成功且精确目标仍不存在时，才可绑定本次动作并以稳定来源
+  `installed-tab-new-explicit-failure-after-targeted-install` 判为产品失败；动作前已存在
+  的同文案、目标已安装、库存不可读或前后截图缺失均不得归因，必须 fail-closed。
 - “立即检查运行时”允许以按钮 busy/disabled、处理中状态，或相对动作前新增的精确
   完成回执证明动作发生；当前发布包的 `完成：Python N 个就绪；Node N 个就绪`
   属于有效完成回执，动作前已存在的同文案仍不得复用。
@@ -689,7 +693,9 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   `manual_connector_selection`。`skill_installation` 只接受已定位并真实点击当前
   目标 Skill 安装控件、出现明确安装失败/拒绝/禁止/不可用/授权失败终态、已安装列表
   精确读回目标不存在、失败页与已安装页截图均完整的产品负向证据；仅 pending、终态
-  文案不明确、目标已出现在已安装列表或任一读回/截图缺失时仍须 fail-closed。安装前
+  文案不明确、目标已出现在已安装列表或任一读回/截图缺失时仍须 fail-closed。无目标
+  名称的通用失败还必须通过动作前/后文本差异证明本次点击新增，并把
+  `action_bound=true`、`baseline_absent=true` 写入失败反馈；陈旧同文案不得复用。安装前
   和失败后还必须满足同一空 task、零消息、send count 不变、空选择及无 prompt/send
   receipt 守卫，才能将未发生的会话链与 capability execution 角色标为 N/A。不得出现
   生成器接受 Connector 具体选择失败、而

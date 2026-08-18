@@ -26310,6 +26310,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const cardText = await card.innerText({ timeout: 2000 }).catch(() => '');
   const skillName = await skillCardName(card, cardText);
   const controlTestId = await install.getAttribute('data-testid').catch(() => '') || 'visible-skill-market-install';
+  const installActionBaselineText = await mainSurfaceText(page);
   let clickDispatched = false;
   try {
     await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
@@ -26339,13 +26340,23 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     );
     return false;
   }
-  const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
+  let terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
+  const marketAfterInstallText = await mainSurfaceText(page);
   state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
   await clickSkillSubtab(page, '已安装', state);
   await page.waitForTimeout(1000);
   state.screenshots.installed_after_install = await shot(page, caseDir, 'skill-installed-after-install');
   const text = await mainSurfaceText(page);
+  const installedListReadSucceeded = await skillSubtabSelected(page, '已安装');
   const sameInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 1500);
+  const actionBoundFailure = skillInstallActionBoundFailureVerdict({
+    beforeText: installActionBaselineText,
+    afterText: `${marketAfterInstallText}\n${text}`,
+    clickDispatched,
+    installedListReadSucceeded,
+    targetPresent: sameInstalled,
+  });
+  if (!terminal.terminal && actionBoundFailure.terminal) terminal = actionBoundFailure;
   const installedViewSuccess = sameInstalled && !terminal.failure;
   const observedTerminal = terminal.terminal || installedViewSuccess;
   const observedSuccess = (terminal.terminal && terminal.success) || installedViewSuccess;
@@ -26378,9 +26389,13 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
       pending: terminal.pending === true,
       source: String(terminal.source || ''),
       text: String(terminal.text || ''),
+      action_bound: terminal.action_bound === true,
+      baseline_absent: terminal.baseline_absent === true,
+      before_failure_lines: Array.isArray(terminal.before_failure_lines) ? terminal.before_failure_lines : [],
+      after_failure_lines: Array.isArray(terminal.after_failure_lines) ? terminal.after_failure_lines : [],
     },
     installed_list_readback: {
-      read_succeeded: true,
+      read_succeeded: installedListReadSucceeded,
       expected_identity: skillName,
       target_present: sameInstalled,
       page_text: clip(text, 2_000),
@@ -26404,7 +26419,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。',
     observedTerminal && (observedSuccess
       ? sameInstalled
-      : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)),
+      : terminal.failure === true),
     `技能=${skillName}；sameInstalled=${sameInstalled}；terminalSource=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(text, 320)}`,
     observedSuccess ? '' : (terminal.failure === true ? 'bug' : 'automation_error'),
   );
@@ -26442,6 +26457,45 @@ export function skillInstallIdentityTerminalVerdict({
   const pending = (cardEntry && pendingPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(pendingPattern);
   if (pending) return { matched: true, terminal: false, success: false, failure: false, pending: true, ...pending };
   return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+}
+
+export function skillInstallActionBoundFailureVerdict({
+  beforeText = '',
+  afterText = '',
+  clickDispatched = false,
+  installedListReadSucceeded = false,
+  targetPresent = false,
+} = {}) {
+  const explicitFailurePattern = /安装失败|准备失败|物化失败|失败原因|无权安装|安装(?:被)?拒绝|安装(?:被)?禁止|安装不可用|安装错误|skill\s+package\s+path\s+is\s+forbidden|install(?:ation)?\s+(?:failed|rejected|forbidden|unavailable)|permission\s+denied/i;
+  const normalizeLine = (line) => String(line || '').replace(/\s+/g, ' ').trim();
+  const beforeFailureLines = String(beforeText || '')
+    .split(/\n+/)
+    .map(normalizeLine)
+    .filter((line) => line && explicitFailurePattern.test(line));
+  const beforeFailureLineSet = new Set(beforeFailureLines);
+  const afterFailureLines = String(afterText || '')
+    .split(/\n+/)
+    .map(normalizeLine)
+    .filter((line) => line && explicitFailurePattern.test(line));
+  const newlyAppearedFailure = afterFailureLines
+    .find((line) => !beforeFailureLineSet.has(line)) || '';
+  const actionBound = clickDispatched === true
+    && installedListReadSucceeded === true
+    && targetPresent === false
+    && Boolean(newlyAppearedFailure);
+  return {
+    matched: actionBound,
+    action_bound: actionBound,
+    baseline_absent: Boolean(newlyAppearedFailure),
+    terminal: actionBound,
+    success: false,
+    failure: actionBound,
+    pending: false,
+    source: actionBound ? 'installed-tab-new-explicit-failure-after-targeted-install' : '',
+    text: actionBound ? newlyAppearedFailure : '',
+    before_failure_lines: beforeFailureLines,
+    after_failure_lines: afterFailureLines,
+  };
 }
 
 async function waitForSkillInstallTerminal(page, {
@@ -27957,6 +28011,21 @@ export function coreBetaPreSendCapabilityFailureEvidence({
       || (manualSurface.list_visible === true && Number(manualSurface.option_count) > 0));
   const failureFeedback = interaction?.failure_feedback;
   const installedListReadback = interaction?.installed_list_readback;
+  const actionBoundInstallFailureSource = String(failureFeedback?.source || '')
+    === 'installed-tab-new-explicit-failure-after-targeted-install';
+  const actionBoundFailureText = String(failureFeedback?.text || '').replace(/\s+/g, ' ').trim();
+  const actionBoundBeforeFailureLines = Array.isArray(failureFeedback?.before_failure_lines)
+    ? failureFeedback.before_failure_lines.map((line) => String(line || '').replace(/\s+/g, ' ').trim())
+    : [];
+  const actionBoundAfterFailureLines = Array.isArray(failureFeedback?.after_failure_lines)
+    ? failureFeedback.after_failure_lines.map((line) => String(line || '').replace(/\s+/g, ' ').trim())
+    : [];
+  const actionBoundInstallFailureValid = !actionBoundInstallFailureSource
+    || (failureFeedback?.action_bound === true
+      && failureFeedback?.baseline_absent === true
+      && actionBoundFailureText.length > 0
+      && !actionBoundBeforeFailureLines.includes(actionBoundFailureText)
+      && actionBoundAfterFailureLines.includes(actionBoundFailureText));
   const explicitInstallFailure = /安装失败|准备失败|物化失败|失败原因|无权|暂不可用|不可用|拒绝|禁止|未授权|授权失败|鉴权失败|install(?:ation)?\s+(?:failed|rejected)|forbidden|unavailable|unauthori[sz]ed|authorization\s+failed|permission\s+denied/i
     .test(String(failureFeedback?.text || ''));
   const installationInteractionValid = stage === 'skill_installation'
@@ -27967,6 +28036,7 @@ export function coreBetaPreSendCapabilityFailureEvidence({
     && failureFeedback.failure === true
     && failureFeedback.pending === false
     && String(failureFeedback.source || '').trim().length > 0
+    && actionBoundInstallFailureValid
     && explicitInstallFailure
     && installedListReadback && typeof installedListReadback === 'object'
     && installedListReadback.read_succeeded === true

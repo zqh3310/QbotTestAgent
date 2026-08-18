@@ -18495,14 +18495,25 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
   const cardText = await card.innerText({ timeout: 2000 }).catch(() => '');
   const skillName = await skillCardName(card, cardText);
+  const installActionBaselineText = await mainSurfaceText(page);
   await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
-  const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
+  let terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
+  const marketAfterInstallText = await mainSurfaceText(page);
   state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
   await clickSkillSubtab(page, '已安装', state);
   await page.waitForTimeout(1000);
   state.screenshots.installed_after_install = await shot(page, caseDir, 'skill-installed-after-install');
   const text = await mainSurfaceText(page);
+  const installedListReadSucceeded = await skillSubtabSelected(page, '已安装');
   const sameInstalled = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 1500);
+  const actionBoundFailure = skillInstallActionBoundFailureVerdict({
+    beforeText: installActionBaselineText,
+    afterText: `${marketAfterInstallText}\n${text}`,
+    clickDispatched: true,
+    installedListReadSucceeded,
+    targetPresent: sameInstalled,
+  });
+  if (!terminal.terminal && actionBoundFailure.terminal) terminal = actionBoundFailure;
   // React may recycle the market card locator immediately after a successful
   // install, so the polling locator can start reading the next card and miss
   // the terminal label.  The exact skill appearing in the installed tab is a
@@ -18532,7 +18543,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     '安装成功后已安装列表必须展示刚安装的同一技能；失败时必须有明确终态原因。',
     observedTerminal && (observedSuccess
       ? sameInstalled
-      : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)),
+      : terminal.failure === true),
     `技能=${skillName}；sameInstalled=${sameInstalled}；terminalSource=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(text, 320)}`,
   );
   return observedTerminal && observedSuccess && sameInstalled;
@@ -18553,7 +18564,7 @@ export function skillInstallIdentityTerminalVerdict({
 
   const currentCardText = String(cardText || '');
   const pageLines = String(pageText || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
-  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|安装错误|发生错误|错误[:：]/;
+  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|禁止|未授权|授权失败|鉴权失败|安装错误|发生错误|错误[:：]|install(?:ation)?\s+(?:failed|rejected)|forbidden|unavailable|unauthori[sz]ed|authorization\s+failed|permission\s+denied/i;
   const successPattern = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/;
   const pendingPattern = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|正在同步|同步中|reconcil|materializing/i;
   const pageSignal = (signalPattern) => {
@@ -18569,6 +18580,45 @@ export function skillInstallIdentityTerminalVerdict({
   const pending = (cardEntry && pendingPattern.test(cardEntry.text) ? cardEntry : null) || pageSignal(pendingPattern);
   if (pending) return { matched: true, terminal: false, success: false, failure: false, pending: true, ...pending };
   return { matched: false, terminal: false, success: false, failure: false, pending: false, source: '' };
+}
+
+export function skillInstallActionBoundFailureVerdict({
+  beforeText = '',
+  afterText = '',
+  clickDispatched = false,
+  installedListReadSucceeded = false,
+  targetPresent = false,
+} = {}) {
+  const explicitFailurePattern = /安装失败|准备失败|物化失败|失败原因|无权安装|安装(?:被)?拒绝|安装(?:被)?禁止|安装不可用|安装错误|skill\s+package\s+path\s+is\s+forbidden|install(?:ation)?\s+(?:failed|rejected|forbidden|unavailable)|permission\s+denied/i;
+  const normalizeLine = (line) => String(line || '').replace(/\s+/g, ' ').trim();
+  const beforeFailureLines = String(beforeText || '')
+    .split(/\n+/)
+    .map(normalizeLine)
+    .filter((line) => line && explicitFailurePattern.test(line));
+  const beforeFailureLineSet = new Set(beforeFailureLines);
+  const afterFailureLines = String(afterText || '')
+    .split(/\n+/)
+    .map(normalizeLine)
+    .filter((line) => line && explicitFailurePattern.test(line));
+  const newlyAppearedFailure = afterFailureLines
+    .find((line) => !beforeFailureLineSet.has(line)) || '';
+  const actionBound = clickDispatched === true
+    && installedListReadSucceeded === true
+    && targetPresent === false
+    && Boolean(newlyAppearedFailure);
+  return {
+    matched: actionBound,
+    action_bound: actionBound,
+    baseline_absent: Boolean(newlyAppearedFailure),
+    terminal: actionBound,
+    success: false,
+    failure: actionBound,
+    pending: false,
+    source: actionBound ? 'installed-tab-new-explicit-failure-after-targeted-install' : '',
+    text: actionBound ? newlyAppearedFailure : '',
+    before_failure_lines: beforeFailureLines,
+    after_failure_lines: afterFailureLines,
+  };
 }
 
 async function waitForSkillInstallTerminal(page, {
