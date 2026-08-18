@@ -21,6 +21,7 @@ import {
   coreBetaExpertBuilderReturnSelectorCandidates,
   coreBetaExpertCreateSubmitLabel,
   coreBetaPartialReplyReady,
+  coreBetaStopControlRaceVerdict,
   coreBetaStoppedTurnTerminalEvidence,
   coreBetaSelectedCapabilityIdentities,
   coreBetaSkillSelectionReadbackMatches,
@@ -1308,6 +1309,8 @@ const required = [
   ['停止生成只消费助手正文字段', /latestAssistantBodyText/],
   ['停止生成观察非空正文 partial delta', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback[\s\S]*partial_reply_ready_before_click/],
   ['停止生成终态显式标记 user_stopped 而非 completed', /coreBetaStopGeneration[\s\S]*terminal_outcome: 'user_stopped'[\s\S]*coreBetaStoppedTurnTerminalEvidence/],
+  ['停止控件每次点击前重新定位且点击有短超时', /(?=[\s\S]*clickCurrentStopGenerationControl)(?=[\s\S]*lastVisibleLocator)(?=[\s\S]*currentCancel\.click\(\{ force: true, timeout: clickTimeoutMs \}\))(?=[\s\S]*maxClickAttempts = 2)/],
+  ['停止点击前自然完成写齐会话证据且不伪造点击', /(?=[\s\S]*if \(stopClick\.outcome === 'completed_before_stop'\))(?=[\s\S]*stop_action_performed: false)(?=[\s\S]*stop-generation-readback\.json)(?=[\s\S]*writeReplyArtifacts\(state, caseDir)/],
   ['统一能力子菜单使用最新可见 Portal 并保留 click 与键盘回退', /openUnifiedComposerSubmenu[\s\S]*lastVisibleLocator[\s\S]*row\.click[\s\S]*ArrowRight[\s\S]*row\.press\('Enter'\)/],
   ['统一能力子菜单把可见空态识别为合法 Portal', /visibleUnifiedComposerSubmenu[\s\S]*emptySelector[\s\S]*optionCount[\s\S]*emptyVisible/],
   ['ART-016 精确点击并回读空格中文成果', /executeSitArtifactCase[\s\S]*SIT-ART-016'[\s\S]*上线 检查-中文\.md[\s\S]*artifact_016_readback[\s\S]*中文特殊文件名预览与磁盘一致/],
@@ -1327,6 +1330,16 @@ const required = [
 for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
 }
+
+const stopClickHelperStart = runner.indexOf('async function clickCurrentStopGenerationControl');
+const stopClickHelperEnd = runner.indexOf('export function coreBetaStop', stopClickHelperStart);
+const stopClickHelperSource = stopClickHelperStart >= 0 && stopClickHelperEnd > stopClickHelperStart
+  ? runner.slice(stopClickHelperStart, stopClickHelperEnd)
+  : '';
+assert.ok(stopClickHelperSource, 'legacy 必须实现停止控件重定位 helper');
+assert.equal(/\.evaluate\s*\(/.test(stopClickHelperSource), false, 'legacy 停止点击 helper 禁止 stale locator evaluate fallback');
+assert.match(stopClickHelperSource, /maxClickAttempts = 2/);
+assert.match(stopClickHelperSource, /clickTimeoutMs = 1_500/);
 
 const hitlStart = runner.indexOf('async function executeHitlFixtureCase');
 const hitlEnd = runner.indexOf('async function executeSitWorkspaceBoundary', hitlStart);
@@ -1514,6 +1527,49 @@ assert.equal(coreBetaPartialReplyReady({
   cancelVisible: true,
   latestAssistantBodyText: '已有内容',
 }).ready, false, '任务已结束后不得补点停止');
+const legacyDetachedStopRetry = coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-legacy',
+  observedTaskId: 'task-stop-race-legacy',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: true,
+  clickPerformed: false,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+});
+assert.equal(legacyDetachedStopRetry.retry, true, 'legacy 旧 locator detached 后必须重新定位同 task 当前停止控件');
+assert.equal(legacyDetachedStopRetry.outcome, 'retry_current_control');
+const legacyNaturalCompletionBeforeStop = coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-legacy',
+  observedTaskId: 'task-stop-race-legacy',
+  publicStateAvailable: true,
+  running: false,
+  cancelVisible: false,
+  clickPerformed: false,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+});
+assert.equal(legacyNaturalCompletionBeforeStop.valid, true, 'legacy 点击前自然完成必须是受支持终态');
+assert.equal(legacyNaturalCompletionBeforeStop.outcome, 'completed_before_stop');
+assert.equal(legacyNaturalCompletionBeforeStop.stop_action_performed, false, 'legacy 自然完成不得伪造停止点击');
+assert.equal(coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-legacy',
+  observedTaskId: 'different-task',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: true,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+}).valid, false, 'legacy 重定位前 task 漂移必须 fail-closed');
+assert.equal(coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-legacy',
+  observedTaskId: 'task-stop-race-legacy',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: false,
+  clickAttempts: 2,
+  maxClickAttempts: 2,
+}).valid, false, 'legacy 同 task 仍运行但当前停止控件缺失时必须 fail-closed');
 const legacyStoppedTerminal = coreBetaStoppedTurnTerminalEvidence({
   task_id: 'task-stop-legacy',
   running_before: true,

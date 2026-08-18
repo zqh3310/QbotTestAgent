@@ -4759,6 +4759,151 @@ export function coreBetaPartialReplyReady({
   };
 }
 
+const STOP_GENERATION_CONTROL_SELECTOR = '[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label*="停止生成"], button[aria-label*="停止回复"], button:has-text("停止生成"), button:has-text("停止回复")';
+
+export function coreBetaStopControlRaceVerdict({
+  expectedTaskId = '',
+  observedTaskId = '',
+  publicStateAvailable = false,
+  running = false,
+  cancelVisible = false,
+  clickPerformed = false,
+  clickAttempts = 0,
+  maxClickAttempts = 2,
+} = {}) {
+  const expected = String(expectedTaskId || '').trim();
+  const observed = String(observedTaskId || '').trim();
+  const taskBound = Boolean(expected && observed && expected === observed);
+  const base = {
+    valid: false,
+    outcome: 'framework_error',
+    retry: false,
+    stop_action_performed: clickPerformed === true,
+    task_bound: taskBound,
+    expected_task_id: expected,
+    observed_task_id: observed,
+    public_state_available: publicStateAvailable === true,
+    running: running === true,
+    cancel_visible: cancelVisible === true,
+    click_attempts: Number(clickAttempts || 0),
+    max_click_attempts: Number(maxClickAttempts || 0),
+  };
+  if (publicStateAvailable !== true) return { ...base, reason: 'public_state_unavailable_before_stop_click' };
+  if (!taskBound) return { ...base, reason: expected ? 'stop_task_binding_mismatch' : 'expected_stop_task_id_missing' };
+  if (clickPerformed === true) {
+    return { ...base, valid: true, outcome: 'clicked', reason: '' };
+  }
+  if (running !== true && cancelVisible !== true) {
+    return {
+      ...base,
+      valid: true,
+      outcome: 'completed_before_stop',
+      reason: 'same_task_completed_and_stop_control_disappeared_before_click',
+    };
+  }
+  if (
+    running === true
+    && cancelVisible === true
+    && Number(clickAttempts || 0) < Number(maxClickAttempts || 0)
+  ) {
+    return {
+      ...base,
+      valid: true,
+      outcome: 'retry_current_control',
+      retry: true,
+      reason: 'same_task_still_running_with_current_visible_stop_control',
+    };
+  }
+  return {
+    ...base,
+    reason: running === true
+      ? 'same_task_running_without_clickable_stop_control'
+      : 'stop_control_visible_after_task_stopped',
+  };
+}
+
+async function clickCurrentStopGenerationControl({
+  page,
+  expectedTaskId,
+  maxClickAttempts = 2,
+  clickTimeoutMs = 1_500,
+} = {}) {
+  const attempts = [];
+  let finalVerdict = null;
+  let latestBridge = null;
+  for (let attempt = 1; attempt <= maxClickAttempts; attempt += 1) {
+    latestBridge = await qbotE2EState(page);
+    const currentCancel = await lastVisibleLocator(
+      page.locator(STOP_GENERATION_CONTROL_SELECTOR),
+      200,
+    );
+    const cancelVisible = Boolean(currentCancel);
+    const verdict = coreBetaStopControlRaceVerdict({
+      expectedTaskId,
+      observedTaskId: latestBridge?.activeId,
+      publicStateAvailable: latestBridge?.available === true,
+      running: latestBridge?.running === true,
+      cancelVisible,
+      clickPerformed: false,
+      clickAttempts: attempt - 1,
+      maxClickAttempts,
+    });
+    finalVerdict = verdict;
+    const receipt = {
+      attempt,
+      task_id: String(latestBridge?.activeId || ''),
+      running: latestBridge?.running === true,
+      cancel_visible: cancelVisible,
+      verdict,
+      clicked: false,
+      error: '',
+    };
+    attempts.push(receipt);
+    if (verdict.outcome === 'completed_before_stop' || !verdict.retry) break;
+    try {
+      await currentCancel.click({ force: true, timeout: clickTimeoutMs });
+      receipt.clicked = true;
+      finalVerdict = coreBetaStopControlRaceVerdict({
+        expectedTaskId,
+        observedTaskId: latestBridge?.activeId,
+        publicStateAvailable: latestBridge?.available === true,
+        running: latestBridge?.running === true,
+        cancelVisible: true,
+        clickPerformed: true,
+        clickAttempts: attempt,
+        maxClickAttempts,
+      });
+      break;
+    } catch (error) {
+      receipt.error = String(error?.message || error);
+      if (attempt < maxClickAttempts) await page.waitForTimeout(100);
+    }
+  }
+  if (!attempts.some((item) => item.clicked === true)) {
+    latestBridge = await qbotE2EState(page);
+    const currentCancel = await lastVisibleLocator(
+      page.locator(STOP_GENERATION_CONTROL_SELECTOR),
+      200,
+    );
+    finalVerdict = coreBetaStopControlRaceVerdict({
+      expectedTaskId,
+      observedTaskId: latestBridge?.activeId,
+      publicStateAvailable: latestBridge?.available === true,
+      running: latestBridge?.running === true,
+      cancelVisible: Boolean(currentCancel),
+      clickPerformed: false,
+      clickAttempts: attempts.length,
+      maxClickAttempts,
+    });
+  }
+  return {
+    ...finalVerdict,
+    click_performed: attempts.some((item) => item.clicked === true),
+    attempts,
+    bridge_before_click: latestBridge,
+  };
+}
+
 export function coreBetaStoppedTurnTerminalEvidence(readback = {}) {
   const taskId = String(readback?.task_id || '').trim();
   const partialChars = Number(readback?.partial_chars_before_click || 0);
@@ -4791,7 +4936,6 @@ export function coreBetaStoppedTurnTerminalEvidence(readback = {}) {
 async function coreBetaStopGeneration(ctx) {
   if (!ctx.pending) throw new Error('停止生成前没有运行中的派发任务。');
   const { page, state, caseDir } = ctx;
-  const cancel = page.locator('[data-testid="composer-cancel"], [aria-label*="停止"], button:has-text("停止生成")').first();
   const baselineAssistantBodyText = String(ctx.pending.before?.latestAssistantBodyText || '');
   const partialDeadline = Math.min(
     Date.now() + 90_000,
@@ -4799,7 +4943,7 @@ async function coreBetaStopGeneration(ctx) {
   );
   let snapshot = await conversationSnapshot(page);
   let runningBefore = await isAgentGenerating(page);
-  let cancelVisible = await visible(cancel, 1000);
+  let cancelVisible = Boolean(await lastVisibleLocator(page.locator(STOP_GENERATION_CONTROL_SELECTOR), 1000));
   let partial = coreBetaPartialReplyReady({
     running: runningBefore,
     cancelVisible,
@@ -4810,7 +4954,7 @@ async function coreBetaStopGeneration(ctx) {
     await page.waitForTimeout(250);
     snapshot = await conversationSnapshot(page);
     runningBefore = await isAgentGenerating(page);
-    cancelVisible = await visible(cancel, 250);
+    cancelVisible = Boolean(await lastVisibleLocator(page.locator(STOP_GENERATION_CONTROL_SELECTOR), 250));
     partial = coreBetaPartialReplyReady({
       running: runningBefore,
       cancelVisible,
@@ -4837,7 +4981,85 @@ async function coreBetaStopGeneration(ctx) {
     };
   }
   state.screenshots.core_beta_partial_before_stop = await shot(page, caseDir, 'core-beta-partial-before-stop');
-  await cancel.click({ force: true }).catch(async () => cancel.evaluate((element) => element.click()));
+  const partialPreconditionFile = path.join(caseDir, 'partial-reply-precondition-readback.json');
+  writeJsonFile(partialPreconditionFile, {
+    valid: true,
+    task_id: ctx.pending.taskId,
+    running_before: runningBefore,
+    cancel_visible: cancelVisible,
+    partial_reply_ready_before_click: partial.ready,
+    partial_chars_before_click: partial.delta_chars,
+    before_screenshot: state.screenshots.core_beta_partial_before_stop,
+    case_stop_click_performed: false,
+  });
+  state.artifacts.core_beta_partial_reply_precondition = partialPreconditionFile;
+  const stopClick = await clickCurrentStopGenerationControl({
+    page,
+    expectedTaskId: ctx.pending.taskId,
+  });
+  const stopClickReceiptFile = path.join(caseDir, 'stop-control-click-receipt.json');
+  writeJsonFile(stopClickReceiptFile, stopClick);
+  state.artifacts.stop_control_click_receipt = stopClickReceiptFile;
+  if (stopClick.outcome === 'completed_before_stop') {
+    state.screenshots.core_beta_completed_before_stop = await shot(page, caseDir, 'core-beta-completed-before-stop');
+    snapshot = await conversationSnapshot(page);
+    const retained = coreBetaPartialReplyReady({
+      running: true,
+      cancelVisible: true,
+      baselineAssistantBodyText,
+      latestAssistantBodyText: snapshot.latestAssistantBodyText,
+    });
+    const reply = {
+      fullText: snapshot.latestAssistantText,
+      deltaText: retained.delta,
+      incomplete: false,
+      stable_observations: 1,
+      waited_ms: Date.now() - ctx.pending.startedAtMs,
+    };
+    ctx.replies[ctx.pending.turnIndex] = reply;
+    writeReplyArtifacts(state, caseDir, [{ ...reply, label: `${ctx.pending.label}（停止前已自然完成）` }]);
+    state.artifacts.core_beta_stopped_task = {
+      task_id: ctx.pending.taskId,
+      task_id_before: ctx.pending.taskId,
+      task_id_after: String(stopClick.bridge_before_click?.activeId || ''),
+      click_performed: false,
+      stop_action_performed: false,
+      natural_completion_before_stop: true,
+      running_before: runningBefore,
+      running_at_click_reacquire: false,
+      running_after: false,
+      partial_reply_ready_before_click: partial.ready,
+      partial_chars_before_click: partial.delta_chars,
+      retained_chars: retained.delta_chars,
+      before_screenshot: state.screenshots.core_beta_partial_before_stop,
+      after_screenshot: state.screenshots.core_beta_completed_before_stop,
+      click_receipt: stopClick,
+    };
+    const stopReadbackFile = path.join(caseDir, 'stop-generation-readback.json');
+    writeJsonFile(stopReadbackFile, state.artifacts.core_beta_stopped_task);
+    state.artifacts.stop_generation_readback = stopReadbackFile;
+    ctx.pending = null;
+    return {
+      ok: false,
+      status: 'blocked',
+      category: 'blocked',
+      selector_or_testid: 'composer-cancel',
+      event: 'completed-before-stop',
+      state_readback: state.artifacts.core_beta_stopped_task,
+      actual: '同一 task 在重新定位停止入口前已自然完成；未执行停止点击，完整会话与状态证据已保存。',
+    };
+  }
+  if (stopClick.click_performed !== true) {
+    return {
+      ok: false,
+      status: 'failed',
+      category: 'automation_error',
+      selector_or_testid: 'composer-cancel',
+      event: 'stop-control-reacquire',
+      state_readback: stopClick,
+      actual: `停止前置成立后无法对同一运行 task 重新定位并点击当前停止入口：${stopClick.reason || stopClick.outcome}`,
+    };
+  }
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline && await isAgentGenerating(page)) await page.waitForTimeout(500);
   const runningAfter = await isAgentGenerating(page);
@@ -4862,11 +5084,14 @@ async function coreBetaStopGeneration(ctx) {
   state.artifacts.core_beta_stopped_task = {
     assistant_body_source: 'rendered assistant body excluding reasoning, chain-of-thought, thinking status, and tool regions',
     task_id: ctx.pending.taskId,
+    click_performed: stopClick.click_performed === true,
+    stop_action_performed: stopClick.click_performed === true,
     running_before: runningBefore,
     running_after: runningAfter,
     partial_reply_ready_before_click: partial.ready,
     partial_chars_before_click: partial.delta_chars,
     retained_chars: retained.delta_chars,
+    click_receipt: stopClick,
   };
   setCoreBetaEvidence(
     state,
@@ -10159,6 +10384,7 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
   const prompt = '请生成一份非常详细的 QBot 全量测试方案，至少包含 20 个章节，每章都说明目标、步骤、风险、证据和退出条件。';
+  const conversationBefore = await conversationSnapshot(page);
   const before = await qbotE2EState(page);
   await fillComposer(page, prompt, state, '输入长任务以验证停止生成');
   if (state.requested_model_tier) {
@@ -10168,30 +10394,90 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   await send(page, state, '发送长任务');
   const deadline = Date.now() + 20000;
   let running = false;
+  let bridgeBeforeStop = null;
   while (Date.now() < deadline) {
-    const bridge = await qbotE2EState(page);
-    const cancel = page.locator('[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label="停止生成"]').first();
-    if (bridge?.running || await visible(cancel, 300)) { running = true; break; }
+    bridgeBeforeStop = await qbotE2EState(page);
+    const cancelVisible = Boolean(await lastVisibleLocator(page.locator(STOP_GENERATION_CONTROL_SELECTOR), 300));
+    if (bridgeBeforeStop?.running || cancelVisible) { running = true; break; }
     await page.waitForTimeout(300);
   }
   state.screenshots.home_023_running = await shot(page, caseDir, 'home-023-running-before-stop');
   recordAssertion(state, '停止生成前运行态可见', '发送长任务后应进入运行态，并出现停止入口。', running, `beforeSendCount=${before?.sendCount || 0}；running=${running}`, running ? '' : 'automation_error');
   if (!running) return;
-  const cancel = page.locator('[data-testid="composer-cancel"], .aui-composer-cancel, button[aria-label="停止生成"]').first();
-  const cancelVisible = await visible(cancel, 1500);
+  const cancelVisible = Boolean(await lastVisibleLocator(page.locator(STOP_GENERATION_CONTROL_SELECTOR), 1500));
   if (!cancelVisible) {
     recordStep(state, '点击停止生成', '运行态中必须出现可点击停止入口。', '已进入运行态，但停止入口不可见。', 'failed', state.screenshots.home_023_running, 'automation_error');
     return;
   }
-  await cancel.click({ force: true }).catch(async () => cancel.evaluate((el) => el.click()));
-  recordStep(state, '点击停止生成', '点击停止按钮后应结束当前 Agent 运行态。', '已真实点击 composer-cancel。', 'passed', state.screenshots.home_023_running);
+  const stopClick = await clickCurrentStopGenerationControl({
+    page,
+    expectedTaskId: bridgeBeforeStop?.activeId,
+  });
+  const stopClickReceiptFile = path.join(caseDir, 'stop-control-click-receipt.json');
+  writeJsonFile(stopClickReceiptFile, stopClick);
+  state.artifacts.stop_control_click_receipt = stopClickReceiptFile;
+  if (stopClick.outcome === 'completed_before_stop') {
+    state.screenshots.home_023_stopped = await shot(page, caseDir, 'home-023-completed-before-stop');
+    const completedSnapshot = await conversationSnapshot(page);
+    const completedReply = coreBetaPartialReplyReady({
+      running: true,
+      cancelVisible: true,
+      baselineAssistantBodyText: conversationBefore.latestAssistantBodyText,
+      latestAssistantBodyText: completedSnapshot.latestAssistantBodyText,
+    });
+    writeReplyArtifacts(state, caseDir, [{
+      label: '停止点击前已自然完成的回复',
+      fullText: completedSnapshot.latestAssistantText,
+      deltaText: completedReply.delta,
+      incomplete: false,
+    }]);
+    const stopReadbackFile = path.join(caseDir, 'stop-generation-readback.json');
+    writeJsonFile(stopReadbackFile, {
+      click_performed: false,
+      stop_action_performed: false,
+      natural_completion_before_stop: true,
+      task_id: String(stopClick.bridge_before_click?.activeId || bridgeBeforeStop?.activeId || ''),
+      task_id_before: String(bridgeBeforeStop?.activeId || ''),
+      task_id_after: String(stopClick.bridge_before_click?.activeId || ''),
+      running_before: running,
+      running_at_click_reacquire: false,
+      running_after: false,
+      retained_chars: completedReply.delta_chars,
+      before_screenshot: state.screenshots.home_023_running,
+      after_screenshot: state.screenshots.home_023_stopped,
+      click_receipt: stopClick,
+    });
+    state.artifacts.stop_generation_readback = stopReadbackFile;
+    recordStep(
+      state,
+      '点击停止生成',
+      '前置成立后应重新定位当前停止按钮并完成一次真实点击。',
+      '重新定位前同一 task 已结束且停止入口已消失；未执行停止点击，已保存完整自然完成会话和状态证据。',
+      'blocked',
+      state.screenshots.home_023_stopped,
+    );
+    return stopClick;
+  }
+  if (stopClick.click_performed !== true) {
+    recordStep(
+      state,
+      '点击停止生成',
+      '前置成立后应重新定位当前停止按钮并完成一次真实点击。',
+      `无法对同一运行 task 重新定位并点击当前停止入口：${stopClick.reason || stopClick.outcome}`,
+      'failed',
+      state.screenshots.home_023_running,
+      'automation_error',
+    );
+    return stopClick;
+  }
+  recordStep(state, '点击停止生成', '点击停止按钮后应结束当前 Agent 运行态。', '已重新定位并真实点击当前 composer-cancel。', 'passed', state.screenshots.home_023_running);
   const stopDeadline = Date.now() + 60000;
   let stopped = false;
   let cancelAccepted = false;
   let lastBridge = null;
   while (Date.now() < stopDeadline) {
     lastBridge = await qbotE2EState(page);
-    const cancelStillVisible = await visible(cancel, 300);
+    const cancelStillVisible = Boolean(await lastVisibleLocator(page.locator(STOP_GENERATION_CONTROL_SELECTOR), 300));
     cancelAccepted = Boolean(lastBridge?.cancelPending) || !cancelStillVisible;
     if (lastBridge?.available && !lastBridge.running && !cancelStillVisible) { stopped = true; break; }
     if (!lastBridge?.available && !cancelStillVisible) { stopped = true; break; }
@@ -10201,12 +10487,14 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
   const users = await userMessageTexts(page);
   const composerVisible = await visible(page.locator('[data-testid="composer-input"]').first(), 1000);
   state.artifacts.stop_generation = {
-    click_performed: true,
+    click_performed: stopClick.click_performed === true,
+    stop_action_performed: stopClick.click_performed === true,
     stopped,
     cancel_accepted: cancelAccepted,
     bridge: lastBridge,
     user_message_count: users.length,
     composer_visible: composerVisible,
+    click_receipt: stopClick,
   };
   const terminalEvidence = buildTerminalConversationEvidence({
     prompt,
@@ -10226,6 +10514,7 @@ async function executeSitHomeStopGeneration({ page, state, caseDir }) {
     `stopped=${stopped}；cancelAccepted=${cancelAccepted}；bridgeRunning=${lastBridge?.running ?? 'unknown'}；cancelPending=${lastBridge?.cancelPending ?? 'unknown'}；userMessages=${users.length}；composer=${composerVisible}`,
     stopped || cancelAccepted ? '' : 'automation_error',
   );
+  return stopClick;
 }
 
 async function executeSitHomeSkillOnly({ page, state, testCase, caseDir, timeoutMs }) {

@@ -76,6 +76,7 @@ import {
   coreBetaPreSendCapabilityFailureEvidence,
   coreBetaPreSendImeFailureEvidence,
   coreBetaNativeImeTraceVerdict,
+  coreBetaStopControlRaceVerdict,
   coreBetaStopGenerationTimeoutVerdict,
   coreBetaStoppedTurnTerminalEvidence,
   coreBetaRuntimeExecutorBinding,
@@ -6738,6 +6739,51 @@ assert.equal(coreBetaPartialReplyReady({
   latestAssistantBodyText: '第一章：测试目标',
 }).ready, false, '非运行态不能执行停止点击');
 
+const detachedStopRetry = coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-1',
+  observedTaskId: 'task-stop-race-1',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: true,
+  clickPerformed: false,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+});
+assert.equal(detachedStopRetry.valid, true, '旧停止控件 detached 后，同 task 当前停止控件仍可见时应允许重新定位');
+assert.equal(detachedStopRetry.retry, true, '旧 locator 失败后只允许对同 task 的最新可见停止控件重试');
+assert.equal(detachedStopRetry.outcome, 'retry_current_control');
+const naturalCompletionBeforeStop = coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-1',
+  observedTaskId: 'task-stop-race-1',
+  publicStateAvailable: true,
+  running: false,
+  cancelVisible: false,
+  clickPerformed: false,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+});
+assert.equal(naturalCompletionBeforeStop.valid, true, '点击前同 task 自然完成必须形成受支持终态');
+assert.equal(naturalCompletionBeforeStop.outcome, 'completed_before_stop');
+assert.equal(naturalCompletionBeforeStop.stop_action_performed, false, '自然完成不得伪造停止点击');
+assert.equal(coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-1',
+  observedTaskId: 'task-stop-race-2',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: true,
+  clickAttempts: 1,
+  maxClickAttempts: 2,
+}).valid, false, '停止控件重定位前 task 漂移必须 fail-closed');
+assert.equal(coreBetaStopControlRaceVerdict({
+  expectedTaskId: 'task-stop-race-1',
+  observedTaskId: 'task-stop-race-1',
+  publicStateAvailable: true,
+  running: true,
+  cancelVisible: false,
+  clickAttempts: 2,
+  maxClickAttempts: 2,
+}).valid, false, '同 task 仍运行但最新停止控件不可见时不得继续等待 stale locator');
+
 const stopTimeoutEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-stop-timeout-'));
 try {
   const timeoutScreenshot = path.join(stopTimeoutEvidenceDir, 'partial-reply-timeout.png');
@@ -6849,7 +6895,9 @@ const required = [
   ['Core Beta v2 确定性相关性先于通用短文本拒绝', /for \(const \[scenarioPattern, replyPattern\] of targetedRules\)[\s\S]*if \(text\.length < 15\) return false/],
   ['Core Beta v2 助手正文提取明确排除 reasoning', /const excluded = '[^']*aui_reasoning[^']*'/],
   ['Core Beta v2 停止生成只消费助手正文字段', /latestAssistantBodyText/],
-  ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*await cancel\.click[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
+  ['Core Beta v2 停止生成观察正文 partial 并读回保留内容', /coreBetaPartialReplyReady[\s\S]*partial-reply-precondition-readback\.json[\s\S]*partial_reply_ready_before_click[\s\S]*clickCurrentStopGenerationControl[\s\S]*retained_chars[\s\S]*stop-generation-readback\.json/],
+  ['Core Beta v2 停止控件每次点击前重新定位且点击有短超时', /(?=[\s\S]*clickCurrentStopGenerationControl)(?=[\s\S]*lastVisibleLocator)(?=[\s\S]*currentCancel\.click\(\{ force: true, timeout: clickTimeoutMs \}\))(?=[\s\S]*maxClickAttempts = 2)/],
+  ['Core Beta v2 停止点击前自然完成写齐标准会话证据且不伪造点击', /(?=[\s\S]*if \(stopClick\.outcome === 'completed_before_stop'\))(?=[\s\S]*stop_action_performed: false)(?=[\s\S]*stop-generation-readback\.json)(?=[\s\S]*writeReplyArtifacts\(state, caseDir)/],
   ['SIT-HOME-023 用户停止生成写齐标准会话证据且不伪装 completed', /executeSitHomeStopGeneration[\s\S]*coreBetaStoppedTurnTerminalEvidence[\s\S]*terminal_outcome: 'user_stopped'[\s\S]*writeReplyArtifacts\(state, caseDir/],
   ['user_stopped 标准回复证据校验 prompt task partial 与截图闭环', /function writeReplyArtifacts[\s\S]*userStoppedCandidate[\s\S]*validateReplyCompletionPayload\(userStoppedCandidate\)[\s\S]*replyCompletion\.evidence_complete = evidenceComplete/],
   ['Core Beta v2 停止生成无正文完整超时后写齐失败证据再隔离清理', /(?=[\s\S]*if \(!partial\.ready\))(?=[\s\S]*terminal_outcome: 'timed_out')(?=[\s\S]*writeReplyArtifacts\(state, caseDir)(?=[\s\S]*cancelRunningReplyAfterTimeout)(?=[\s\S]*cleanup_click_is_case_action: false)(?=[\s\S]*超时失败证据完整，隔离清理成功。`?, 'bug'\))/],
@@ -7046,6 +7094,21 @@ const required = [
 
 for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
+}
+
+for (const [label, source] of [
+  ['Core Beta v2', runner],
+  ['legacy', legacyRunner],
+]) {
+  const helperStart = source.indexOf('async function clickCurrentStopGenerationControl');
+  const helperEnd = source.indexOf('export function coreBetaStop', helperStart);
+  const helperSource = helperStart >= 0 && helperEnd > helperStart
+    ? source.slice(helperStart, helperEnd)
+    : '';
+  assert.ok(helperSource, `${label} 必须实现停止控件重定位 helper`);
+  assert.equal(/\.evaluate\s*\(/.test(helperSource), false, `${label} 停止点击 helper 禁止 stale locator evaluate fallback`);
+  assert.match(helperSource, /maxClickAttempts = 2/);
+  assert.match(helperSource, /clickTimeoutMs = 1_500/);
 }
 
 {
