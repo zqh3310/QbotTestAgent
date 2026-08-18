@@ -6965,10 +6965,19 @@ if (productionCasePlanNoGo.ok || !productionCasePlanNoGo.errors.some((item) => i
 }
 
 const qworkDailyPlanFile = path.join(os.tmpdir(), `qwork-daily-plan-${process.pid}.json`);
+const qworkDailyCasebook = path.join(root, 'PRD', 'QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx');
+const qworkDailyCasebookSha256 = createHash('sha256')
+  .update(fs.readFileSync(qworkDailyCasebook))
+  .digest('hex');
+assert.equal(
+  qworkDailyCasebookSha256,
+  'c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6',
+  '正式日常回归 Casebook 必须保持 2026-08-18 变更扫描后的精确文件身份',
+);
 const qworkDailyPlanExport = spawnSync('python3', [
   path.join(root, 'skills', 'qbot-execute-automation-tests', 'scripts', 'casebook_io.py'),
   'export-cases',
-  '--casebook', path.join(root, 'PRD', 'QWork日常回归自动化Casebook_83条_2026-08-12.xlsx'),
+  '--casebook', qworkDailyCasebook,
   '--sheet', '日常回归',
   '--profile', 'mandatory',
   '--output', qworkDailyPlanFile,

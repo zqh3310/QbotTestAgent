@@ -26,9 +26,9 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 本轮目标 Casebook：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx
 Sheet: 日常回归
-SHA-256: 8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111
+SHA-256: c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6
 ```
 
 - 顶层 83：70 个 `compound` 父 Case + 13 个独立 `SIT-*` Case。
@@ -479,7 +479,7 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 日常回归是不同测试合同，不能用 70/160 的 pretest 替代本轮 83 条 pretest。
 
 本轮日常回归使用 `日常回归` Sheet、`--expected-count 83` 和 SHA
-`8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111`；其余
+`c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6`；其余
 Teams/QWork/SIT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。

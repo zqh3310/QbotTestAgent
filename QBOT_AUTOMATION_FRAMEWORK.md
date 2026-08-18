@@ -37,7 +37,7 @@
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
 | 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
 | 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
-| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `8a62aac20e5abad4dd09bed3717e9f0665cf7285d436f22da8a1bc03f8856111` |
+| QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
@@ -149,7 +149,7 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QWork日常回归自动化Casebook_83条_2026-08-12.xlsx \
+     --casebook PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx \
      --sheet 日常回归 \
      --out outputs/<new-daily83-capability-audit-dir>
    ```
