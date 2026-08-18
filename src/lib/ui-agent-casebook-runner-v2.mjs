@@ -22123,7 +22123,26 @@ async function executeSitSkillRuntimeInstall({ page, state, caseDir, runtime }) 
 }
 
 async function executeSitSkillInstallThenManual({ page, state, testCase, caseDir, timeoutMs }) {
-  if (!await installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyInstalled: true })) return;
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
+  const beforeInstall = await captureCoreBetaPublicState(page, testCase);
+  if (!await installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyInstalled: true })) {
+    const interaction = state.artifacts.core_beta_capability_interaction;
+    if (interaction?.stage === 'skill_installation' && interaction?.category === 'bug') {
+      await openNewTask(page, state);
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: interaction.expected_identity,
+        before: beforeInstall,
+        interactionSnapshot: interaction,
+      });
+    }
+    return;
+  }
   const installedName = String(state.artifacts.installed_skill?.name || '').trim();
   if (!installedName || state.artifacts.installed_skill?.terminal !== true || state.artifacts.installed_skill?.success !== true) {
     markBlocked(state, `没有得到一个安装成功且名称可追踪的技能，不能继续验证“安装后手动选择同一技能”：${JSON.stringify(state.artifacts.installed_skill || {})}`);
@@ -22131,7 +22150,24 @@ async function executeSitSkillInstallThenManual({ page, state, testCase, caseDir
   }
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  if (!await selectManualSkillByName(page, state, caseDir, installedName)) return;
+  const beforeManualSelection = await captureCoreBetaPublicState(page, testCase);
+  if (!await selectManualSkillByName(page, state, caseDir, installedName)) {
+    const interaction = state.artifacts.core_beta_capability_interaction;
+    if (['manual_mode', 'manual_skill_selection'].includes(interaction?.stage)
+      && interaction?.category === 'bug') {
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: installedName,
+        before: beforeManualSelection,
+        interactionSnapshot: interaction,
+      });
+    }
+    return;
+  }
   await page.keyboard.press('Escape').catch(() => {});
   const prompt = '请使用我刚选择的技能，帮我用一句话说明这个技能适合解决什么问题。';
   await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '手动技能会话' });
@@ -26141,7 +26177,36 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const card = install.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " skill-card ")][1]').first();
   const cardText = await card.innerText({ timeout: 2000 }).catch(() => '');
   const skillName = await skillCardName(card, cardText);
-  await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+  const controlTestId = await install.getAttribute('data-testid').catch(() => '') || 'visible-skill-market-install';
+  let clickDispatched = false;
+  try {
+    await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
+    clickDispatched = true;
+  } catch (error) {
+    state.screenshots.skill_install_click_failed = await shot(page, caseDir, 'skill-install-click-failed');
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'skill_installation',
+      expected_identity: skillName,
+      control_testid: controlTestId,
+      control_located: true,
+      click_dispatched: false,
+      expected_state_observed: false,
+      screenshot: state.screenshots.skill_install_click_failed,
+      error: String(error?.message || error),
+      category: 'automation_error',
+    };
+    recordAssertion(
+      state,
+      `安装技能：${skillName}`,
+      '已定位的技能安装控件必须成功派发真实点击。',
+      false,
+      String(error?.message || error),
+      'automation_error',
+    );
+    return false;
+  }
   const terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
   state.screenshots.after_skill_install = await shot(page, caseDir, 'skill-after-install');
   await clickSkillSubtab(page, '已安装', state);
@@ -26152,6 +26217,11 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
   const installedViewSuccess = sameInstalled && !terminal.failure;
   const observedTerminal = terminal.terminal || installedViewSuccess;
   const observedSuccess = (terminal.terminal && terminal.success) || installedViewSuccess;
+  const interactionCategory = coreBetaCapabilityInteractionCategory({
+    controlLocated: true,
+    clickDispatched,
+    expectedStateObserved: observedSuccess && sameInstalled,
+  });
   state.artifacts.installed_skill = {
     name: skillName,
     ...terminal,
@@ -26160,6 +26230,33 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     installed_view_readback: sameInstalled,
     terminal_source: terminal.source || (installedViewSuccess ? 'exact-installed-tab-card' : ''),
   };
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: 'skill_installation',
+    expected_identity: skillName,
+    control_testid: controlTestId,
+    control_located: true,
+    click_dispatched: clickDispatched,
+    expected_state_observed: observedSuccess && sameInstalled,
+    failure_feedback: {
+      terminal: observedTerminal,
+      success: observedSuccess,
+      failure: terminal.failure === true,
+      pending: terminal.pending === true,
+      source: String(terminal.source || ''),
+      text: String(terminal.text || ''),
+    },
+    installed_list_readback: {
+      read_succeeded: true,
+      expected_identity: skillName,
+      target_present: sameInstalled,
+      page_text: clip(text, 2_000),
+    },
+    screenshot: state.screenshots.after_skill_install,
+    installed_list_screenshot: state.screenshots.installed_after_install,
+    category: interactionCategory,
+  };
   recordStep(
     state,
     '点击技能市场第一张可安装技能的【安装】',
@@ -26167,6 +26264,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
     `技能=${skillName}；terminal=${observedTerminal}；success=${observedSuccess}；source=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(terminal.text, 220)}`,
     observedTerminal ? 'passed' : 'failed',
     state.screenshots.after_skill_install,
+    interactionCategory,
   );
   recordAssertion(
     state,
@@ -26176,6 +26274,7 @@ async function installFirstSkillFromMarket(page, state, caseDir, { allowAlreadyI
       ? sameInstalled
       : /失败|无权|未配置|暂不可用|超时|拒绝/.test(`${terminal.text}\n${text}`)),
     `技能=${skillName}；sameInstalled=${sameInstalled}；terminalSource=${state.artifacts.installed_skill.terminal_source || 'none'}；${clip(text, 320)}`,
+    observedSuccess ? '' : (terminal.failure === true ? 'bug' : 'automation_error'),
   );
   return observedTerminal && observedSuccess && sameInstalled;
 }
@@ -26195,7 +26294,7 @@ export function skillInstallIdentityTerminalVerdict({
 
   const currentCardText = String(cardText || '');
   const pageLines = String(pageText || '').split(/\n+/).map((item) => item.trim()).filter(Boolean);
-  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|安装错误|发生错误|错误[:：]/;
+  const failurePattern = /安装失败|准备失败|物化失败|失败原因|无权|未配置|暂不可用|超时|拒绝|禁止|未授权|授权失败|鉴权失败|安装错误|发生错误|错误[:：]|install(?:ation)?\s+(?:failed|rejected)|forbidden|unavailable|unauthori[sz]ed|authorization\s+failed|permission\s+denied/i;
   const successPattern = /已安装|已就绪|运行时就绪|安装成功|准备完成|物化完成/;
   const pendingPattern = /安装中|准备中|物化中|待物化|处理中|正在安装|正在准备|正在同步|同步中|reconcil|materializing/i;
   const pageSignal = (signalPattern) => {
@@ -27704,24 +27803,46 @@ export function coreBetaPreSendCapabilityFailureEvidence({
     ? after?.connectors?.selected
     : after?.skills?.selected;
   const screenshot = String(interaction?.screenshot || '');
+  const installedListScreenshot = String(interaction?.installed_list_screenshot || '');
   const manualSurface = interaction?.manual_surface;
-  const interactionValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
+  const stage = String(interaction?.stage || '');
+  const interactionBaseValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
     && interaction?.capability_kind === capabilityKind
-    && ['manual_mode', 'manual_skill_selection', 'manual_connector_selection'].includes(String(interaction?.stage || ''))
     && String(interaction?.expected_identity || '') === String(expectedIdentity || '')
     && interaction?.control_located === true
     && interaction?.click_dispatched === true
     && interaction?.expected_state_observed === false
     && interaction?.category === 'bug'
+    && coreBetaBatchScreenshotPresent(screenshot);
+  const manualInteractionValid = ['manual_mode', 'manual_skill_selection', 'manual_connector_selection'].includes(stage)
     && interaction?.aria_checked === 'false'
     && manualSurface && typeof manualSurface === 'object'
     && typeof manualSurface.list_visible === 'boolean'
     && Number.isFinite(Number(manualSurface.option_count))
     && typeof manualSurface.empty_visible === 'boolean'
     && (capabilityKind !== 'skill' || typeof manualSurface.search_visible === 'boolean')
-    && (interaction?.stage !== 'manual_skill_selection'
-      || (manualSurface.list_visible === true && Number(manualSurface.option_count) > 0))
-    && coreBetaBatchScreenshotPresent(screenshot);
+    && (stage !== 'manual_skill_selection'
+      || (manualSurface.list_visible === true && Number(manualSurface.option_count) > 0));
+  const failureFeedback = interaction?.failure_feedback;
+  const installedListReadback = interaction?.installed_list_readback;
+  const explicitInstallFailure = /安装失败|准备失败|物化失败|失败原因|无权|暂不可用|不可用|拒绝|禁止|未授权|授权失败|鉴权失败|install(?:ation)?\s+(?:failed|rejected)|forbidden|unavailable|unauthori[sz]ed|authorization\s+failed|permission\s+denied/i
+    .test(String(failureFeedback?.text || ''));
+  const installationInteractionValid = stage === 'skill_installation'
+    && capabilityKind === 'skill'
+    && failureFeedback && typeof failureFeedback === 'object'
+    && failureFeedback.terminal === true
+    && failureFeedback.success === false
+    && failureFeedback.failure === true
+    && failureFeedback.pending === false
+    && String(failureFeedback.source || '').trim().length > 0
+    && explicitInstallFailure
+    && installedListReadback && typeof installedListReadback === 'object'
+    && installedListReadback.read_succeeded === true
+    && String(installedListReadback.expected_identity || '') === String(expectedIdentity || '')
+    && installedListReadback.target_present === false
+    && coreBetaBatchScreenshotPresent(installedListScreenshot);
+  const interactionValid = interactionBaseValid
+    && (manualInteractionValid || installationInteractionValid);
   const mutationGuard = {
     task_absent_before: beforeTask?.id == null,
     task_absent_after: afterTask?.id == null,
@@ -27759,8 +27880,12 @@ export function coreBetaPreSendCapabilityFailureEvidence({
     oracle_valid: false,
     applicable: evidenceValid,
     outcome: evidenceValid ? 'bug' : 'automation_error',
-    kind: 'visible_capability_control_product_failure',
-    source: 'visible_capability_control_click_and_zero_send_readback',
+    kind: stage === 'skill_installation'
+      ? 'skill_installation_product_failure_before_send'
+      : 'visible_capability_control_product_failure',
+    source: stage === 'skill_installation'
+      ? 'visible_skill_install_click_failure_feedback_and_zero_send_readback'
+      : 'visible_capability_control_click_and_zero_send_readback',
     dependent_case_id: String(testCaseId || ''),
     capability_kind: capabilityKind,
     expected_identity: String(expectedIdentity || ''),
@@ -27778,9 +27903,17 @@ export function coreBetaPreSendCapabilityFailureEvidence({
         ? createHash('sha256').update(fs.readFileSync(screenshot)).digest('hex')
         : '',
     },
+    installed_list_screenshot: {
+      path: installedListScreenshot,
+      sha256: coreBetaBatchScreenshotPresent(installedListScreenshot)
+        ? createHash('sha256').update(fs.readFileSync(installedListScreenshot)).digest('hex')
+        : '',
+    },
     not_applicable_roles: roles,
     reason: evidenceValid
-      ? `已真实点击 ${capabilityKind} 能力控件，但产品未进入期望状态；已证明当前任务为空、消息数为0且发送计数未变化。`
+      ? (stage === 'skill_installation'
+        ? '已真实点击 Skill 安装控件并观察到明确拒绝终态，目标未进入已安装列表；已证明当前任务为空、消息数为0且发送计数未变化。'
+        : `已真实点击 ${capabilityKind} 能力控件，但产品未进入期望状态；已证明当前任务为空、消息数为0且发送计数未变化。`)
       : '发送前能力产品失败的点击、状态读回、截图或零发送变更证据不完整。',
   };
 }
@@ -36183,7 +36316,9 @@ function verifiedCoreBetaPreSendCapabilityFailure(result) {
     && blocker.applicable === true
     && blocker.outcome === 'bug'
     && rebuilt.evidence_valid === true
-    && rebuilt.screenshot.sha256 === blocker.screenshot?.sha256;
+    && rebuilt.screenshot.sha256 === blocker.screenshot?.sha256
+    && (blocker.interaction?.stage !== 'skill_installation'
+      || rebuilt.installed_list_screenshot?.sha256 === blocker.installed_list_screenshot?.sha256);
   return valid ? evidence : null;
 }
 

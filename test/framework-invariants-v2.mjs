@@ -231,6 +231,11 @@ const identityBoundSkillInstallFailure = skillInstallIdentityTerminalVerdict({
   pageText: '技能「毓数报表分析」安装失败：产品返回错误',
 });
 assert.equal(identityBoundSkillInstallFailure.failure, true, '目标技能自身失败不得误判成功');
+const identityBoundForbiddenSkillInstallFailure = skillInstallIdentityTerminalVerdict({
+  skillName: '自动解析web接口并同步yapi接口文档',
+  cardText: '自动解析web接口并同步yapi接口文档\nSkill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+});
+assert.equal(identityBoundForbiddenSkillInstallFailure.failure, true, '目标技能的英文 forbidden 终态必须识别为明确安装失败');
 const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
@@ -2297,6 +2302,120 @@ assert.equal(
     assert.equal(dailyConnectorFailure.mutation_guard.send_count_unchanged, true);
     assert.deepEqual(dailyConnectorFailure.mutation_guard.before_selection, []);
     assert.deepEqual(dailyConnectorFailure.mutation_guard.after_selection, []);
+    const installFailureScreenshot = path.join(evidenceDir, 'skill-install-failure.png');
+    const installedListScreenshot = path.join(evidenceDir, 'skill-installed-list-readback.png');
+    fs.writeFileSync(installFailureScreenshot, Buffer.alloc(256, 11));
+    fs.writeFileSync(installedListScreenshot, Buffer.alloc(256, 13));
+    const installInteraction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'skill_installation',
+      expected_identity: '自动解析web接口并同步yapi接口文档',
+      control_testid: 'visible-skill-market-install',
+      control_located: true,
+      click_dispatched: true,
+      expected_state_observed: false,
+      failure_feedback: {
+        terminal: true,
+        success: false,
+        failure: true,
+        pending: false,
+        source: 'current-skill-card',
+        text: '安装失败：Skill package path is forbidden: scripts/yapi_sync_lib/credentials.py',
+      },
+      installed_list_readback: {
+        read_succeeded: true,
+        expected_identity: '自动解析web接口并同步yapi接口文档',
+        target_present: false,
+        page_text: '已安装技能',
+      },
+      screenshot: installFailureScreenshot,
+      installed_list_screenshot: installedListScreenshot,
+      category: 'bug',
+    };
+    const installFailureRoles = [
+      'capability_execution_event',
+      'prompt',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+    ];
+    const installFailure = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'SIT-SKILL-025',
+      capabilityKind: 'skill',
+      expectedIdentity: installInteraction.expected_identity,
+      before,
+      after,
+      interaction: installInteraction,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+      notApplicableRoles: installFailureRoles,
+    });
+    assert.equal(installFailure.evidence_valid, true, '明确安装拒绝必须形成结构完整的发送前产品负向证据');
+    assert.equal(installFailure.oracle_valid, false);
+    assert.equal(installFailure.kind, 'skill_installation_product_failure_before_send');
+    assert.equal(installFailure.source, 'visible_skill_install_click_failure_feedback_and_zero_send_readback');
+    assert.deepEqual(installFailure.not_applicable_roles, installFailureRoles);
+    assert.match(installFailure.installed_list_screenshot.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'SIT-SKILL-025',
+        capabilityKind: 'skill',
+        expectedIdentity: installInteraction.expected_identity,
+        before,
+        after,
+        interaction: {
+          ...installInteraction,
+          failure_feedback: {
+            ...installInteraction.failure_feedback,
+            terminal: false,
+            failure: false,
+            pending: true,
+            text: '正在安装，请稍候',
+          },
+        },
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+        notApplicableRoles: installFailureRoles,
+      }).evidence_valid,
+      false,
+      '仅有 pending 安装反馈时不得物化产品失败 N/A 证据',
+    );
+    assert.equal(
+      coreBetaPreSendCapabilityFailureEvidence({
+        testCaseId: 'SIT-SKILL-025',
+        capabilityKind: 'skill',
+        expectedIdentity: installInteraction.expected_identity,
+        before,
+        after: { ...after, task: { ...after.task, id: 'unexpected-task' } },
+        interaction: installInteraction,
+        noPromptRecorded: true,
+        noSendReceiptRecorded: true,
+        notApplicableRoles: installFailureRoles,
+      }).evidence_valid,
+      false,
+      '安装失败后出现 taskId 时不得把会话证据标为 N/A',
+    );
+    const installBlockerFile = path.join(evidenceDir, 'skill-install-pre-send-failure.json');
+    writeJsonFile(installBlockerFile, installFailure);
+    const installManifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'SIT-SKILL-025',
+        evidence_roles: ['capability_selection', ...installFailureRoles],
+      },
+      caseDir: evidenceDir,
+      artifacts: {
+        capability_selection: installBlockerFile,
+        core_beta_not_applicable_roles: installFailureRoles.map((role) => ({
+          role,
+          blocker_path: installBlockerFile,
+        })),
+      },
+    });
+    assert.equal(installManifest.complete, true, 'SIT-SKILL-025 明确安装拒绝必须形成完整 manifest');
+    assert.deepEqual(installManifest.missing_roles, []);
+    assert.deepEqual(installManifest.invalid_roles, []);
     const blockerFile = path.join(evidenceDir, 'daily-pre-send-capability-failure.json');
     writeJsonFile(blockerFile, dailyConnectorFailure);
     const dailyArtifacts = { capability_selection: blockerFile };
@@ -4472,6 +4591,11 @@ assert.match(
 );
 assert.match(
   automationFramework,
+  /stage 集合：`skill_installation`[\s\S]*明确安装失败\/拒绝\/禁止\/不可用\/授权失败终态[\s\S]*仅 pending[\s\S]*send count 不变[\s\S]*capability execution 角色标为 N\/A/,
+  '框架手册必须固定 Skill 安装拒绝与零发送 N/A 的证据边界',
+);
+assert.match(
+  automationFramework,
   /停止旧 runner[\s\S]*不是任务终态[\s\S]*提交推送[\s\S]*新 pretest[\s\S]*完整重跑[\s\S]*禁止以“批次已停止”或“后续 Case 未执行”作为最终交付/,
   '框架手册必须禁止修复流程停在中断状态而不启动新完整批次',
 );
@@ -6453,6 +6577,8 @@ const required = [
   ['QWD-EXPERT-009 组织可见范围产品拒绝形成零发送 Bug 证据', /qworkDailyExpertLifecycleCase[\s\S]*product_rejection[\s\S]*qworkDailyExpertAudienceRejectionEvidence[\s\S]*expert-audience-product-rejection\.json[\s\S]*core_beta_not_applicable_roles/],
   ['普通 Skill 使用的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['Skill 隔离用例的精确选择产品失败会物化零发送证据', /executeCoreBetaSkillIsolationCase[\s\S]*selectManualSkillByName[\s\S]*stage === 'manual_skill_selection'[\s\S]*category === 'bug'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
+  ['Skill 安装拒绝记录目标身份、明确失败和已安装列表读回', /installFirstSkillFromMarket[\s\S]*stage: 'skill_installation'[\s\S]*failure_feedback:[\s\S]*installed_list_readback:[\s\S]*installed_list_screenshot:[\s\S]*category: interactionCategory/],
+  ['SIT-SKILL-025 安装与手动选择产品失败均物化零发送证据', /executeSitSkillInstallThenManual[\s\S]*beforeInstall[\s\S]*stage === 'skill_installation'[\s\S]*materializeCoreBetaPreSendCapabilityFailure[\s\S]*beforeManualSelection[\s\S]*'manual_mode', 'manual_skill_selection'[\s\S]*materializeCoreBetaPreSendCapabilityFailure/],
   ['发送前能力产品失败以零发送合同补齐 N/A', /materializeCoreBetaPreSendCapabilityFailure[\s\S]*core_beta_not_applicable_roles/],
   ['发送前能力产品失败使用受校验证据协议', /qbot-core-beta-pre-send-capability-failure\/v1/],
   ['输入区工具操作主动关闭残留工作空间菜单', /resetComposerControls[\s\S]*closeWorkspacePicker\(page\)[\s\S]*ensureComposerToolMenu[\s\S]*await closeWorkspacePicker\(page\)[\s\S]*async function closeWorkspacePicker/],

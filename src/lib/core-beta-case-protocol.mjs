@@ -1600,26 +1600,9 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && sha256File(resolvedFailureScreenshot) === blocker.screenshot.sha256
       && interaction?.screenshot === resolvedFailureScreenshot
     );
-    const preSendCapabilityFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-capability-failure/v1'
-      && blocker?.valid === true
-      && blocker?.evidence_valid === true
-      && blocker?.oracle_valid === false
-      && blocker?.applicable === true
-      && blocker?.outcome === 'bug'
-      && blocker?.kind === 'visible_capability_control_product_failure'
-      && blocker?.source === 'visible_capability_control_click_and_zero_send_readback'
-      && blocker?.dependent_case_id === testCase?.id
-      && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
-      && String(blocker?.expected_identity || '').trim()
-      && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
-      && interaction?.capability_kind === blocker?.capability_kind
-      && ['manual_mode', 'manual_skill_selection', 'manual_connector_selection']
-        .includes(String(interaction?.stage || ''))
-      && interaction?.expected_identity === blocker?.expected_identity
-      && interaction?.control_located === true
-      && interaction?.click_dispatched === true
-      && interaction?.expected_state_observed === false
-      && interaction?.category === 'bug'
+    const interactionStage = String(interaction?.stage || '');
+    const manualCapabilityFailureVerified = ['manual_mode', 'manual_skill_selection', 'manual_connector_selection']
+      .includes(interactionStage)
       && interaction?.aria_checked === 'false'
       && interaction?.manual_surface
       && typeof interaction.manual_surface === 'object'
@@ -1628,9 +1611,66 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && typeof interaction.manual_surface.empty_visible === 'boolean'
       && (blocker?.capability_kind !== 'skill'
         || typeof interaction.manual_surface.search_visible === 'boolean')
-      && (interaction?.stage !== 'manual_skill_selection'
+      && (interactionStage !== 'manual_skill_selection'
         || (interaction.manual_surface.list_visible === true
-          && Number(interaction.manual_surface.option_count) > 0))
+          && Number(interaction.manual_surface.option_count) > 0));
+    const installedListScreenshot = String(blocker?.installed_list_screenshot?.path || '');
+    const resolvedInstalledListScreenshot = installedListScreenshot ? path.resolve(installedListScreenshot) : '';
+    const installedListScreenshotRelative = resolvedInstalledListScreenshot
+      ? path.relative(path.resolve(caseDir), resolvedInstalledListScreenshot)
+      : '';
+    const installedListScreenshotValid = Boolean(
+      resolvedInstalledListScreenshot
+      && installedListScreenshotRelative
+      && !installedListScreenshotRelative.startsWith('..')
+      && !path.isAbsolute(installedListScreenshotRelative)
+      && fs.existsSync(resolvedInstalledListScreenshot)
+      && fs.statSync(resolvedInstalledListScreenshot).isFile()
+      && fs.statSync(resolvedInstalledListScreenshot).size >= 128
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.installed_list_screenshot?.sha256 || ''))
+      && sha256File(resolvedInstalledListScreenshot) === blocker.installed_list_screenshot.sha256
+      && interaction?.installed_list_screenshot === resolvedInstalledListScreenshot
+    );
+    const installFailureFeedback = interaction?.failure_feedback || {};
+    const installListReadback = interaction?.installed_list_readback || {};
+    const installationCapabilityFailureVerified = interactionStage === 'skill_installation'
+      && blocker?.capability_kind === 'skill'
+      && installFailureFeedback?.terminal === true
+      && installFailureFeedback?.success === false
+      && installFailureFeedback?.failure === true
+      && installFailureFeedback?.pending === false
+      && String(installFailureFeedback?.source || '').trim()
+      && /安装失败|准备失败|物化失败|失败原因|无权|暂不可用|不可用|拒绝|禁止|未授权|授权失败|鉴权失败|install(?:ation)?\s+(?:failed|rejected)|forbidden|unavailable|unauthori[sz]ed|authorization\s+failed|permission\s+denied/i
+        .test(String(installFailureFeedback?.text || ''))
+      && installListReadback?.read_succeeded === true
+      && installListReadback?.expected_identity === blocker?.expected_identity
+      && installListReadback?.target_present === false
+      && installedListScreenshotValid;
+    const preSendFailureKindSourceVerified = interactionStage === 'skill_installation'
+      ? blocker?.kind === 'skill_installation_product_failure_before_send'
+        && blocker?.source === 'visible_skill_install_click_failure_feedback_and_zero_send_readback'
+      : blocker?.kind === 'visible_capability_control_product_failure'
+        && blocker?.source === 'visible_capability_control_click_and_zero_send_readback';
+    const preSendCapabilityFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-capability-failure/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.applicable === true
+      && blocker?.outcome === 'bug'
+      && preSendFailureKindSourceVerified
+      && blocker?.dependent_case_id === testCase?.id
+      && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
+      && String(blocker?.expected_identity || '').trim()
+      && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
+      && interaction?.capability_kind === blocker?.capability_kind
+      && ['skill_installation', 'manual_mode', 'manual_skill_selection', 'manual_connector_selection']
+        .includes(interactionStage)
+      && interaction?.expected_identity === blocker?.expected_identity
+      && interaction?.control_located === true
+      && interaction?.click_dispatched === true
+      && interaction?.expected_state_observed === false
+      && interaction?.category === 'bug'
+      && (manualCapabilityFailureVerified || installationCapabilityFailureVerified)
       && preSendMutationGuard?.valid === true
       && preSendMutationGuard?.task_absent_before === true
       && preSendMutationGuard?.task_absent_after === true

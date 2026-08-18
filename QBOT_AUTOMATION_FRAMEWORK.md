@@ -685,8 +685,14 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - `BETA-FILE-008` 的剪贴板入口必须区分“事件派发成功”和 DOM `dispatchEvent()` 的返回值：产品 paste handler 调用 `preventDefault()` 时返回 `false`，只要派发调用本身成功且 Composer 附件数与精确文件名发生预期变化，就属于已派发并被产品接收。`BETA-FILE-008/009` 的入口、预览、删除或去重 Oracle 失败属于产品负向结果；只要动作回执和 Composer 快照结构完整且后续操作安全，场景必须继续发送并固化 prompt、taskId、send receipt、transcript、reply delta/completion 及附件读回，不得在产品断言后提前返回。附件专项 artifact 的 `valid/evidence_valid` 只表示证据结构有效，产品是否符合 Oracle 必须单独写入 `oracle_valid`；不得用 `valid=false` 把证据完整的产品 Bug 升级成 framework stop。
 - `QWD-ENTRY-002` 在建立任务 A 前准备 Skill/Connector 显式选择表面并各点击一个稳定 identity；任一旧版 manual 控件或新版具体能力控件已定位且点击已派发、但产品状态未生效时，`resetComposerControls` 必须保留失败交互，具体能力选择阶段则直接保留当前交互，不得被后续动作覆盖。若截图、空任务、零消息、发送计数不变和对应能力空选择均完整，runner 必须物化发送前产品失败 blocker，把未发生的 task/prompt/send/transcript/reply/capability execution 角色标为受校验 N/A，并为 `qwork_daily_readback`、`composer_attachment_state`、`data_integrity_readback` 写入 `evidence_valid=true/oracle_valid=false` 的负向证据。manifest 必须完整、结果保持 `bug` 并继续后续独立父 Case；失败交互、零发送读回或截图任一缺失仍是 `automation_error`。
 - 发送前能力失败的证据生成器、manifest N/A 校验器与可信复核必须共享同一交互
-  stage 集合：`manual_mode`、`manual_skill_selection`、
-  `manual_connector_selection`。不得出现生成器接受 Connector 具体选择失败、而
+  stage 集合：`skill_installation`、`manual_mode`、`manual_skill_selection`、
+  `manual_connector_selection`。`skill_installation` 只接受已定位并真实点击当前
+  目标 Skill 安装控件、出现明确安装失败/拒绝/禁止/不可用/授权失败终态、已安装列表
+  精确读回目标不存在、失败页与已安装页截图均完整的产品负向证据；仅 pending、终态
+  文案不明确、目标已出现在已安装列表或任一读回/截图缺失时仍须 fail-closed。安装前
+  和失败后还必须满足同一空 task、零消息、send count 不变、空选择及无 prompt/send
+  receipt 守卫，才能将未发生的会话链与 capability execution 角色标为 N/A。不得出现
+  生成器接受 Connector 具体选择失败、而
   manifest 再因漏识别该 stage 拒绝已验证 N/A 角色并把产品 Bug 升级成
   `automation_error` 的分叉口径。
 - `BETA-PERF-003`、`SIT-ISSUE-793` 等 #793 长文本滚动场景除原始 `thread-scroll-samples.json` 外，必须生成并注册 `performance_metrics` 角色。正式性能证据使用 `qbot-core-beta-performance-metrics/v1`，绑定 Case ID、有效样本数、生成态样本数、观察时长、滚动距离/高度、漂移判定、同 Case 目录内的原始样本绝对路径与 SHA-256。缺文件、空壳 JSON、样本越界、SHA 不一致或样本数不一致均属于 framework issue，必须硬停止并按新不可变目录全量重跑；产品滚动 Oracle 失败但上述证据完整时仍归类产品 Bug，并继续后续独立父 Case。
