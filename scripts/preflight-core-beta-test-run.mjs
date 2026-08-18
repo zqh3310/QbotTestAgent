@@ -617,6 +617,7 @@ async function main() {
             captureHost: false,
             smoke: false,
             timeoutMs: 30_000,
+            probePublicCapabilities: true,
           });
           runtime.teams_inspection = inspection;
           addCheck('qwork_target_logged_in',
@@ -624,6 +625,11 @@ async function main() {
             inspection.qbot_target
               ? `target=${inspection.qbot_target.url || inspection.qbot_target.title || 'identified'}`
               : inspection.host_precondition?.reason || 'No ready QWork/QBot target');
+          const publicCapabilities = inspection.public_capabilities;
+          addCheck('qwork_public_capabilities', publicCapabilities?.ok === true,
+            publicCapabilities?.ok
+              ? `source=${publicCapabilities.source}; keys=${publicCapabilities.keys.join(',')}`
+              : publicCapabilities?.error || 'window.agent.capabilities was not probed');
           const actualQworkOrigin = normalizeOrigin(
             inspection.qbot_target?.control_plane_origin || '',
           );

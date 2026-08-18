@@ -4,6 +4,7 @@ import { redactText, safeUrl } from './config.mjs';
 import {
   captureWebviewScreenshot,
   discoverWebviewProbes,
+  probeWebviewPublicCapabilities,
   runWebviewSmoke,
 } from './cdp-webview.mjs';
 
@@ -36,7 +37,7 @@ export function selectBestTarget(probes = []) {
     .sort((a, b) => b.score - a.score)[0] || null;
 }
 
-export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, captureHost = false, smoke = false, allowWrite = false, prompt = '', expected = '', timeoutMs = 120_000 }) {
+export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, captureHost = false, smoke = false, allowWrite = false, prompt = '', expected = '', timeoutMs = 120_000, probePublicCapabilities = false }) {
   const loaded = await import('playwright').catch((error) => ({ error }));
   if (loaded.error) throw new Error(`Playwright is unavailable: ${loaded.error.message}`);
   fs.mkdirSync(path.join(outputDir, 'screenshots'), { recursive: true });
@@ -73,6 +74,9 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
       ? { status: 'blocked', reason: '360Teams is waiting for QR-code login.' }
       : { status: 'ready', reason: '' },
     screenshots: {},
+    public_capabilities: probePublicCapabilities
+      ? await probeWebviewPublicCapabilities(best?.targetRef)
+      : null,
     smoke: { status: 'skipped', reason: 'Smoke was not requested.' },
   };
 

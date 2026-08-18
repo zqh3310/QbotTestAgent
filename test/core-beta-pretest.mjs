@@ -179,6 +179,11 @@ if (!/scoped_upstream_dependency_visibility/.test(pretestSource)
   || !/可信 prerequisite blocked 并继续/.test(pretestSource)) {
   throw new Error('Scoped pretest must expose excluded upstream dependency gaps as non-blocking visibility.');
 }
+if (!/probePublicCapabilities:\s*true/.test(pretestSource)
+  || !/qwork_public_capabilities/.test(pretestSource)
+  || !/publicCapabilities\?\.ok === true/.test(pretestSource)) {
+  throw new Error('Teams pretest must fail closed when public window.agent.capabilities is unreadable.');
+}
 
 const pretestOut = path.join(temp, 'pretest');
 const pretest = spawnSync(process.execPath, [

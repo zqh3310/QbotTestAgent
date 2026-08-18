@@ -79,6 +79,71 @@ export async function discoverWebviewProbes(cdpUrl, { timeoutMs = 10_000 } = {})
   return probes;
 }
 
+export function summarizePublicCapabilities(value) {
+  const validObject = value != null && typeof value === 'object' && !Array.isArray(value);
+  return {
+    ok: validObject,
+    value_type: value == null ? String(value) : Array.isArray(value) ? 'array' : typeof value,
+    keys: validObject ? Object.keys(value).sort() : [],
+    selection_fields: validObject ? {
+      selectedSkills: Object.hasOwn(value, 'selectedSkills'),
+      selectedConnectors: Object.hasOwn(value, 'selectedConnectors'),
+      currentExpert: Object.hasOwn(value, 'currentExpert'),
+    } : {
+      selectedSkills: false,
+      selectedConnectors: false,
+      currentExpert: false,
+    },
+  };
+}
+
+export async function probeWebviewPublicCapabilities(targetRef) {
+  const checkedAt = new Date().toISOString();
+  if (!targetRef?.webSocketDebuggerUrl) {
+    return {
+      ok: false,
+      checked_at: checkedAt,
+      source: 'window.agent.capabilities',
+      error: 'The full QWork QBot WebView target is unavailable.',
+    };
+  }
+  try {
+    const result = await withTargetClient(targetRef.webSocketDebuggerUrl, async (client) => client.evaluate(`(async () => {
+      try {
+        if (typeof globalThis.window?.agent?.capabilities !== 'function') {
+          throw new Error('missing window.agent.capabilities');
+        }
+        return { ok: true, value: await globalThis.window.agent.capabilities() };
+      } catch (error) {
+        return { ok: false, error: String(error?.stack || error) };
+      }
+    })()`));
+    if (result?.ok !== true) {
+      return {
+        ok: false,
+        checked_at: checkedAt,
+        source: 'window.agent.capabilities',
+        error: redactText(result?.error || 'window.agent.capabilities probe failed').slice(0, 1200),
+      };
+    }
+    const value = result.value;
+    const summary = summarizePublicCapabilities(value);
+    return {
+      ...summary,
+      checked_at: checkedAt,
+      source: 'window.agent.capabilities',
+      error: summary.ok ? '' : 'window.agent.capabilities returned a non-object value',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      checked_at: checkedAt,
+      source: 'window.agent.capabilities',
+      error: redactText(error?.message || String(error)).slice(0, 1200),
+    };
+  }
+}
+
 export async function captureWebviewScreenshot(targetRef, file) {
   if (!targetRef?.webSocketDebuggerUrl) return false;
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -28,6 +28,7 @@ import {
   parseRunningTeamsMainProcesses,
 } from '../lib/launcher.mjs';
 import { isFullQbotProbe, scoreTargetProbe, selectBestTarget } from '../lib/targets.mjs';
+import { summarizePublicCapabilities } from '../lib/cdp-webview.mjs';
 import { sanitize } from '../lib/report.mjs';
 import { qworkRuntimeBridgeSource, rewriteCdpPayload } from '../lib/cdp-webview-proxy.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
@@ -325,6 +326,23 @@ test('only a bridged QWork QBot workbench is a full target', () => {
   };
   assert.equal(isFullQbotProbe(workbench), true);
   assert.ok(scoreTargetProbe(workbench) >= 300);
+});
+
+test('public capabilities pretest projection accepts only a structured bridge result', () => {
+  const valid = summarizePublicCapabilities({
+    selectedSkills: null,
+    selectedConnectors: [],
+    currentExpert: null,
+  });
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.selection_fields, {
+    selectedSkills: true,
+    selectedConnectors: true,
+    currentExpert: true,
+  });
+  assert.equal(summarizePublicCapabilities(null).ok, false);
+  assert.equal(summarizePublicCapabilities([]).ok, false);
+  assert.equal(summarizePublicCapabilities('HTTP 500').ok, false);
 });
 
 test('reports and URLs redact credentials', () => {

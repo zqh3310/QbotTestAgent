@@ -194,6 +194,14 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。Teams lane 的 control plane 必须同时核对受管 session 与 QWork renderer 实际读取的 `DEEPBANK_SERVER/QBOT_SERVER_URL`；只看启动参数或 session 声明不能通过。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
 
+   Teams lane 的 pretest 还必须对已识别的精确 QWork WebView 执行一次只读
+   `window.agent.capabilities()`，并把结构化投影和错误写入
+   `runtime.teams_inspection.public_capabilities`。只有调用成功且返回非数组对象时
+   `qwork_public_capabilities` 才可通过；接口缺失、超时、非对象、control-plane
+   HTTP 4xx/5xx（包括 `invalid_launch_mode`）均必须在 Case 0 前令 pretest
+   `BLOCKED`。可见 Composer、登录态和正确 release URL 不能替代该公开状态门禁，
+   禁止在 capabilities 不可读时仍返回 `READY`。
+
 6. 冻结并记录发布身份：
 
    - 360Teams 版本和 build。

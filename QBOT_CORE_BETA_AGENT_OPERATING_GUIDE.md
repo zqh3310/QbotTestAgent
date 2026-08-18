@@ -26,6 +26,13 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 - 当前没有有效 runner；受管 360Teams PID `50464`、CDP
   `http://127.0.0.1:53155` 仅是待 pretest 的当前宿主候选，不得继承旧 runner PID、
   旧输出目录或旧监控。
+- 最新 `framework-0e8ecdc_casebook-c412ee6` 批次已在第 8 个顶层
+  `QW-CHAT-005/BETA-CHAT-006` 发送前停止：SIT control plane 令公开
+  `window.agent.capabilities()` 返回 HTTP 500 `invalid_launch_mode`，Skill、Connector
+  和 Expert 隔离状态无法读取，框架正确禁止发送。该批次只完成 7/83 个顶层、
+  17 个叶子，runner 已退出且输出永久冻结。旧 pretest 仅验证 WebView/Composer/
+  release identity，未调用公开 capabilities，因此曾错误返回 `READY`；修复后的
+  Teams pretest 必须以 `qwork_public_capabilities` 在 Case 0 前 fail-closed。
 
 本轮目标 Casebook：
 
@@ -513,6 +520,12 @@ pretest 不启动/重启 Teams、不打开 QWork、不发送消息，也不生�
 Teams/QWork/SIT 发布身份参数必须从当前受管宿主重新读取。只有精确 `READY`
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。
+
+Teams pretest 必须在精确 QWork WebView 上只读调用一次
+`window.agent.capabilities()`。报告中的 `qwork_public_capabilities` 只有在调用成功且
+返回结构化对象时才能通过；接口缺失、超时、非对象或 control-plane HTTP 4xx/5xx
+均必须得到 `BLOCKED`。页面已登录、Composer 可见、版本与 control plane identity
+匹配都不能替代该检查。
 
 日常回归仍传 `--production-gate true` 来冻结全部 release inputs 并启用严格证据
 门禁，但不承担 70/160 专属的八大生产风险域完整覆盖。框架只能对完整有序的 83 个
