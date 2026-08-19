@@ -24355,7 +24355,24 @@ async function executeSitSkillScopeIsolation({ page, state, testCase, caseDir, t
 
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-  if (!await selectManualSkillByName(page, state, caseDir, skillMatcher)) return;
+  const beforeSelection = await captureCoreBetaPublicState(page, testCase);
+  if (!await selectManualSkillByName(page, state, caseDir, skillMatcher)) {
+    const interaction = state.artifacts.core_beta_capability_interaction;
+    if (interaction?.stage === 'manual_skill_selection'
+      && interaction?.category === 'bug') {
+      await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: skillMatcher,
+        before: beforeSelection,
+        interactionSnapshot: interaction,
+      });
+    }
+    return;
+  }
   const selectedA = await composerSkillSelectionSnapshot(page);
   state.screenshots.skill_scope_task_a_selected = await shot(page, caseDir, 'skill-scope-task-a-selected');
   recordAssertion(

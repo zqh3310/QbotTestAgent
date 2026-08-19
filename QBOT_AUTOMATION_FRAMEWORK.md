@@ -761,7 +761,10 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   `control_located=false/click_dispatched=false`，但只有列表、公开状态、截图和零发送
   守卫完整时才归类 `bug` 并由 `qbot-core-beta-pre-send-capability-failure/v1` 补齐
   N/A manifest。列表为空、公开状态不可读、目标身份不稳定或截图/目录边界缺失仍须
-  `automation_error`，legacy 与 Core Beta v2 必须使用同一口径。
+  `automation_error`，legacy 与 Core Beta v2 必须使用同一口径。尤其
+  `SIT-SKILL-SCOPE-001` 的 verified-legacy driver 在发送前遇到这一库存不一致时，
+  必须调用同一零发送材料化路径后返回；不得只保留交互诊断文件并让 manifest 把
+  task/prompt/send/transcript/reply/capability 角色误判为缺失。
 - `BETA-PERF-003`、`SIT-ISSUE-793` 等 #793 长文本滚动场景除原始 `thread-scroll-samples.json` 外，必须生成并注册 `performance_metrics` 角色。正式性能证据使用 `qbot-core-beta-performance-metrics/v1`，绑定 Case ID、有效样本数、生成态样本数、观察时长、滚动距离/高度、漂移判定、同 Case 目录内的原始样本绝对路径与 SHA-256。缺文件、空壳 JSON、样本越界、SHA 不一致或样本数不一致均属于 framework issue，必须硬停止并按新不可变目录全量重跑；产品滚动 Oracle 失败但上述证据完整时仍归类产品 Bug，并继续后续独立父 Case。
 - #793 长文本在完整观察窗口结束时若已有可归属助手正文但仍处于生成态，必须先保存
   `issue-793-after-timeout` 终态截图及 SHA，再材料化 `terminal_outcome=timed_out`、
