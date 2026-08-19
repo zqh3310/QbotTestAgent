@@ -5417,6 +5417,21 @@ assert.match(
 );
 assert.match(
   runner,
+  /__qbotAutomationAgentBindingStrategy = replaced \? 'facade' : 'unavailable'[\s\S]*bound_methods[\s\S]*original_agent_frozen[\s\S]*renderer control adapter did not intercept required window\.agent methods/,
+  'Core Beta v2 renderer adapter 必须兼容冻结的 contextBridge API，并在 facade 与方法替换都无效时 fail-closed',
+);
+assert.match(
+  skillHubRestartSource,
+  /lifecycleProbeCalls[\s\S]*getSkillsCatalog[\s\S]*installSkill[\s\S]*uninstallSkill[\s\S]*updateSkill[\s\S]*revertSkill[\s\S]*reconcileSkills[\s\S]*controller\.snapshot\(\)\.events[\s\S]*controller\.clearEvents\(\)/,
+  'Teams stateful Skill adapter 启动前必须让全部 Skill 生命周期探针到达 Node controller，并在真实叶子前清空探针事件',
+);
+assert.match(
+  runner,
+  /prepareSkillRegressionFixtureState[\s\S]*preparationEvents = injected\.fixtureController\.snapshot\(\)\.events[\s\S]*event\.name === 'uninstallSkill'[\s\S]*automation_error/,
+  'Skill 叶子执行前必须观察到独立于探针的真实准备事件，否则按 framework issue 停止',
+);
+assert.match(
+  runner,
   /if \(projectSource !== 'gitlab'\)[\s\S]{0,500}普通项目使用当前选中运行时启动/,
   '普通项目不得被 GitLab workspace.ready 前置条件误阻塞',
 );

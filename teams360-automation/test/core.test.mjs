@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
+import vm from 'node:vm';
 import {
   LIVE_PROFILE_ALIAS,
   PROJECT_ROOT,
@@ -77,6 +78,7 @@ import {
   coreBetaMcpCrossSurfaceOutcome,
   coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaSelectedCapabilityIdentities as coreBetaV2SelectedCapabilityIdentities,
+  installRendererControlAdapter as installCoreBetaV2RendererControlAdapter,
 } from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 function listen(server, port = 0) {
@@ -954,6 +956,125 @@ test('Teams stateful SkillHub fixture handles dependencies and materialization w
     controller.snapshot().installed.find((item) => item.slug === 'qa-materialization-pending')?.localReadiness?.status,
     'ready_on_this_process',
   );
+});
+
+function contextBridgeLikeRendererPage({ replaceableAgent = true } = {}) {
+  const context = vm.createContext({
+    clearTimeout,
+    console,
+    setTimeout,
+    structuredClone,
+  });
+  vm.runInContext(`
+    const originalAgent = Object.freeze({
+      getSkillsCatalog: async () => ({ installed: [], market: [{ slug: 'real-sit-skill' }] }),
+      installSkill: async () => ({ ok: true, source: 'real-sit' }),
+      uninstallSkill: async () => ({ ok: true, source: 'real-sit' }),
+      updateSkill: async () => ({ ok: true, source: 'real-sit' }),
+      revertSkill: async () => ({ ok: true, source: 'real-sit' }),
+      reconcileSkills: async () => ({ ok: true, source: 'real-sit' }),
+    });
+    Object.defineProperty(globalThis, 'agent', {
+      value: originalAgent,
+      configurable: ${replaceableAgent ? 'true' : 'false'},
+      enumerable: true,
+      writable: ${replaceableAgent ? 'true' : 'false'},
+    });
+    globalThis.__testOriginalAgent = originalAgent;
+  `, context);
+  return {
+    __context: context,
+    async exposeFunction(name, callback) {
+      Object.defineProperty(context, name, {
+        value: callback,
+        configurable: true,
+        writable: true,
+      });
+    },
+    async evaluate(callback, argument) {
+      context.__evaluateArgument = argument;
+      try {
+        return await vm.runInContext(`(${callback.toString()})(globalThis.__evaluateArgument)`, context);
+      } finally {
+        delete context.__evaluateArgument;
+      }
+    },
+  };
+}
+
+function skillLifecycleRendererRules() {
+  return [
+    ['GET', '/api/skills/catalog'],
+    ['POST', '/api/skills/install'],
+    ['POST', '/api/skills/uninstall'],
+    ['POST', '/api/skills/update'],
+    ['POST', '/api/skills/revert'],
+    ['POST', '/api/skills/reconcile'],
+  ].map(([method, pathExact]) => ({
+    id: `test-${pathExact.split('/').at(-1)}`,
+    method,
+    pathExact,
+    mode: 'node-handler',
+  }));
+}
+
+test('Core Beta v2 renderer adapter replaces a frozen contextBridge-like agent with a verified facade', async () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../runtime/testfixtures/skillhub-regression/manifest.json', import.meta.url), 'utf8'));
+  const controller = createTeamsSkillFixtureController(fixture.skills);
+  const page = contextBridgeLikeRendererPage();
+  const adapter = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: controller.handle,
+  });
+  assert.equal(adapter.bindingReport.ok, true);
+  assert.equal(adapter.bindingReport.strategy, 'facade');
+  assert.equal(adapter.bindingReport.original_agent_frozen, true);
+  assert.deepEqual(
+    [...adapter.bindingReport.bound_methods],
+    ['getSkillsCatalog', 'installSkill', 'uninstallSkill', 'updateSkill', 'revertSkill', 'reconcileSkills'],
+  );
+
+  const calls = [
+    { name: 'getSkillsCatalog', args: ['__probe__'] },
+    { name: 'installSkill', args: ['__probe_missing__'] },
+    { name: 'uninstallSkill', args: ['__probe_missing__'] },
+    { name: 'updateSkill', args: ['__probe_missing__'] },
+    { name: 'revertSkill', args: ['__probe_missing__', '0.0.0-probe'] },
+    { name: 'reconcileSkills', args: [] },
+  ];
+  const probe = await adapter.probe(calls);
+  assert.equal(probe.ok, true);
+  assert.deepEqual(
+    controller.snapshot().events.map((event) => event.name),
+    calls.map((item) => item.name),
+  );
+  assert.equal(
+    await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent),
+    false,
+  );
+  await adapter.close();
+  assert.equal(
+    await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent),
+    true,
+  );
+});
+
+test('Core Beta v2 renderer adapter fails closed when neither methods nor the global agent can be replaced', async () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../runtime/testfixtures/skillhub-regression/manifest.json', import.meta.url), 'utf8'));
+  const controller = createTeamsSkillFixtureController(fixture.skills);
+  const page = contextBridgeLikeRendererPage({ replaceableAgent: false });
+  await assert.rejects(
+    installCoreBetaV2RendererControlAdapter({
+      page,
+      rules: skillLifecycleRendererRules(),
+      initiallyArmed: true,
+      handler: controller.handle,
+    }),
+    /did not intercept required window\.agent methods/,
+  );
+  assert.deepEqual(controller.snapshot().events, []);
 });
 
 test('Teams stateful connector fixture exposes deterministic healthy, unreachable, and needs-auth states', async () => {

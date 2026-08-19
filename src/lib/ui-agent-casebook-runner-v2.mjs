@@ -22722,24 +22722,61 @@ async function restartWithSkillHubFault({
           return result;
         };
       }
-      const adapter = await installRendererControlAdapter({
-        page,
-        initiallyArmed: true,
-        handler: controller.handle,
-        rules: [
-          ['GET', '/api/skills/catalog'],
-          ['POST', '/api/skills/install'],
-          ['POST', '/api/skills/uninstall'],
-          ['POST', '/api/skills/update'],
-          ['POST', '/api/skills/revert'],
-          ['POST', '/api/skills/reconcile'],
-        ].map(([method, pathExact]) => ({
-          id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
-          method,
-          pathExact,
-          mode: 'node-handler',
-        })),
-      });
+      let adapter;
+      try {
+        adapter = await installRendererControlAdapter({
+          page,
+          initiallyArmed: true,
+          handler: controller.handle,
+          rules: [
+            ['GET', '/api/skills/catalog'],
+            ['POST', '/api/skills/install'],
+            ['POST', '/api/skills/uninstall'],
+            ['POST', '/api/skills/update'],
+            ['POST', '/api/skills/revert'],
+            ['POST', '/api/skills/reconcile'],
+          ].map(([method, pathExact]) => ({
+            id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
+            method,
+            pathExact,
+            mode: 'node-handler',
+          })),
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          reason: `${label} renderer adapter 绑定失败：${error?.message || error}`,
+          cleanup,
+        };
+      }
+      const lifecycleProbeCalls = [
+        { name: 'getSkillsCatalog', args: ['__qbot_renderer_adapter_probe__'] },
+        { name: 'installSkill', args: ['__qbot_renderer_adapter_probe_missing__'] },
+        { name: 'uninstallSkill', args: ['__qbot_renderer_adapter_probe_missing__'] },
+        { name: 'updateSkill', args: ['__qbot_renderer_adapter_probe_missing__'] },
+        { name: 'revertSkill', args: ['__qbot_renderer_adapter_probe_missing__', '0.0.0-probe'] },
+        { name: 'reconcileSkills', args: [] },
+      ];
+      const lifecycleProbe = await adapter.probe(lifecycleProbeCalls).catch((error) => ({
+        ok: false,
+        results: [],
+        error: error?.message || String(error),
+      }));
+      const probeEvents = controller.snapshot().events;
+      const expectedProbeNames = lifecycleProbeCalls.map((item) => item.name);
+      const observedProbeNames = probeEvents.map((item) => item.name);
+      const lifecycleBound = lifecycleProbe.ok === true
+        && expectedProbeNames.length === observedProbeNames.length
+        && expectedProbeNames.every((name, index) => observedProbeNames[index] === name);
+      if (!lifecycleBound) {
+        await adapter.close().catch(() => {});
+        return {
+          ok: false,
+          reason: `${label} renderer adapter 生命周期探针未到达 stateful controller：expected=${expectedProbeNames.join(',')}；observed=${observedProbeNames.join(',') || 'none'}；probe=${JSON.stringify(lifecycleProbe)}`,
+          cleanup,
+        };
+      }
+      controller.clearEvents();
       const combinedCleanup = async () => {
         await adapter.close().catch(() => {});
         if (cleanup) await cleanup().catch(() => {});
@@ -22748,6 +22785,11 @@ async function restartWithSkillHubFault({
         mode: 'stateful-renderer-bridge',
         control_plane_preserved: String(options['control-plane-url'] || ''),
         skills: fixture.skills.map((item) => item.slug),
+        binding_verification: {
+          ...adapter.bindingReport,
+          lifecycle_probe_ok: lifecycleBound,
+          lifecycle_probe_events: observedProbeNames,
+        },
       };
       return {
         ok: true,
@@ -23958,6 +24000,18 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     page = injected.page;
     const prepared = await prepareSkillRegressionFixtureState({ page, state, testCase, caseDir, options, fixture });
     if (!prepared) return;
+    if (injected.fixtureController) {
+      const preparationEvents = injected.fixtureController.snapshot().events;
+      state.artifacts.teams360_skill_fixture_adapter.preparation_events = preparationEvents;
+      if (!preparationEvents.some((event) => event.name === 'uninstallSkill')) {
+        markFailed(
+          state,
+          `Teams stateful Skill fixture adapter 在 ${testCase.id} 叶子执行前未收到真实准备调用：events=${preparationEvents.map((event) => event.name).join(',') || 'none'}`,
+          'automation_error',
+        );
+        return;
+      }
+    }
     const id = testCase.id;
     if (id === 'SIT-SKILL-004') return await executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'python' });
     if (id === 'SIT-SKILL-005') return await executeSitSkillRuntimeInstall({ page, state, caseDir, runtime: 'node' });
@@ -32298,7 +32352,7 @@ async function restoreControlPlaneHttpControl(control, { options, runtime, state
 
 let rendererControlSequence = 0;
 
-async function installRendererControlAdapter({
+export async function installRendererControlAdapter({
   page,
   rules = [],
   initiallyArmed = false,
@@ -32338,7 +32392,7 @@ async function installRendererControlAdapter({
   const serializedRules = rules.map((rule) => ({ ...rule }));
   registry.set(id, { state, rules: serializedRules, handler });
   const liveControlIds = [...registry.keys()];
-  await page.evaluate(({ controlId, bindings, liveIds }) => {
+  const bindingReport = await page.evaluate(({ controlId, bindings, liveIds, configuredRules }) => {
     const root = globalThis;
     const methodRoutes = {
       capabilities: { method: 'GET', path: '/api/capabilities' },
@@ -32437,23 +32491,69 @@ async function installRendererControlAdapter({
       && liveIdSet.has(priorOwner)
       && root.__qbotAutomationAgentOriginals,
     );
-    if (!priorOwnerIsLive) {
-      if (root.agent && root.__qbotAutomationAgentOriginals) {
-        for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals)) {
-          if (typeof original === 'function') root.agent[name] = original;
+    const restoreOriginalAgentSurface = () => {
+      const originalAgent = root.__qbotAutomationAgentOriginalObject;
+      const originalDescriptor = root.__qbotAutomationAgentOriginalDescriptor;
+      const strategy = String(root.__qbotAutomationAgentBindingStrategy || '');
+      if (strategy === 'facade' && originalAgent) {
+        let restored = false;
+        if (originalDescriptor?.configurable) {
+          try {
+            Object.defineProperty(root, 'agent', originalDescriptor);
+            restored = root.agent === originalAgent;
+          } catch {}
+        }
+        if (!restored) {
+          try {
+            root.agent = originalAgent;
+            restored = root.agent === originalAgent;
+          } catch {}
+        }
+        return restored;
+      }
+      if (root.agent && root.__qbotAutomationAgentOriginalValues) {
+        for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginalValues)) {
+          try { root.agent[name] = original; } catch {}
+          if (root.agent[name] !== original) {
+            const descriptor = Object.getOwnPropertyDescriptor(root.agent, name);
+            if (descriptor?.configurable) {
+              try {
+                Object.defineProperty(root.agent, name, {
+                  ...descriptor,
+                  value: original,
+                });
+              } catch {}
+            }
+          }
         }
       }
+      return true;
+    };
+    if (!priorOwnerIsLive) {
+      restoreOriginalAgentSurface();
       delete root.__qbotAutomationAgentOriginals;
+      delete root.__qbotAutomationAgentOriginalValues;
+      delete root.__qbotAutomationAgentOriginalObject;
+      delete root.__qbotAutomationAgentOriginalDescriptor;
+      delete root.__qbotAutomationAgentBindingStrategy;
       delete root.__qbotAutomationAgentOriginalsOwner;
       delete root.__qbotAutomationControlStack;
       delete root.__qbotAutomationControlPrimaryBindings;
+      const originalAgent = root.agent;
+      const originalDescriptor = Object.getOwnPropertyDescriptor(root, 'agent');
       root.__qbotAutomationAgentOriginals = {};
+      root.__qbotAutomationAgentOriginalValues = {};
+      root.__qbotAutomationAgentOriginalObject = originalAgent;
+      root.__qbotAutomationAgentOriginalDescriptor = originalDescriptor;
       root.__qbotAutomationAgentOriginalsOwner = controlId;
       root.__qbotAutomationControlPrimaryBindings = { ...bindings };
+      const wrappers = {};
       for (const [name, route] of Object.entries(methodRoutes)) {
         if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
-        const original = root.agent[name].bind(root.agent);
+        const originalValue = root.agent[name];
+        const original = originalValue.bind(root.agent);
         root.__qbotAutomationAgentOriginals[name] = original;
+        root.__qbotAutomationAgentOriginalValues[name] = originalValue;
         const wrapped = async (...args) => {
           const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
             ? `${route.path}?refresh=force`
@@ -32518,7 +32618,55 @@ async function installRendererControlAdapter({
           return cloned;
         };
         Object.defineProperty(wrapped, '__qbotAutomationRendererControlWrapper', { value: true });
-        root.agent[name] = wrapped;
+        wrappers[name] = wrapped;
+      }
+      for (const [name, wrapped] of Object.entries(wrappers)) {
+        try { root.agent[name] = wrapped; } catch {}
+      }
+      const directBindingOk = Object.entries(wrappers)
+        .every(([name, wrapped]) => root.agent?.[name] === wrapped);
+      if (directBindingOk) {
+        root.__qbotAutomationAgentBindingStrategy = 'direct-method';
+      } else {
+        for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginalValues)) {
+          try { root.agent[name] = original; } catch {}
+        }
+        const facade = {};
+        for (const key of Reflect.ownKeys(originalAgent || {})) {
+          try {
+            Object.defineProperty(facade, key, {
+              value: originalAgent[key],
+              configurable: true,
+              enumerable: Object.prototype.propertyIsEnumerable.call(originalAgent, key),
+              writable: true,
+            });
+          } catch {}
+        }
+        for (const [name, wrapped] of Object.entries(wrappers)) {
+          Object.defineProperty(facade, name, {
+            value: wrapped,
+            configurable: true,
+            enumerable: true,
+            writable: true,
+          });
+        }
+        let replaced = false;
+        try {
+          root.agent = facade;
+          replaced = root.agent === facade;
+        } catch {}
+        if (!replaced && originalDescriptor?.configurable) {
+          try {
+            Object.defineProperty(root, 'agent', {
+              value: facade,
+              configurable: true,
+              enumerable: originalDescriptor.enumerable !== false,
+              writable: true,
+            });
+            replaced = root.agent === facade;
+          } catch {}
+        }
+        root.__qbotAutomationAgentBindingStrategy = replaced ? 'facade' : 'unavailable';
       }
     }
     const stack = Array.isArray(root.__qbotAutomationControlStack)
@@ -32527,46 +32675,129 @@ async function installRendererControlAdapter({
     if (!stack.includes(controlId)) stack.push(controlId);
     root.__qbotAutomationControlStack = stack;
     root.__qbotAutomationControlId = controlId;
-    return true;
-  }, { controlId: id, bindings: bindingNames, liveIds: liveControlIds });
+    const requiredMethods = Object.entries(methodRoutes)
+      .filter(([, route]) => configuredRules.some((rule) => matches(rule, route.method, route.path)))
+      .map(([name]) => name);
+    const boundMethods = requiredMethods.filter((name) => (
+      typeof root.agent?.[name] === 'function'
+      && root.agent[name].__qbotAutomationRendererControlWrapper === true
+    ));
+    const descriptor = Object.getOwnPropertyDescriptor(root, 'agent');
+    return {
+      ok: requiredMethods.length > 0 && boundMethods.length === requiredMethods.length,
+      strategy: String(root.__qbotAutomationAgentBindingStrategy || (priorOwnerIsLive ? 'stacked' : 'unknown')),
+      required_methods: requiredMethods,
+      bound_methods: boundMethods,
+      missing_methods: requiredMethods.filter((name) => !boundMethods.includes(name)),
+      original_agent_frozen: Object.isFrozen(root.__qbotAutomationAgentOriginalObject || root.agent),
+      original_agent_extensible: Object.isExtensible(root.__qbotAutomationAgentOriginalObject || root.agent),
+      global_agent_descriptor: descriptor ? {
+        configurable: descriptor.configurable === true,
+        enumerable: descriptor.enumerable === true,
+        writable: descriptor.writable === true,
+        has_getter: typeof descriptor.get === 'function',
+        has_setter: typeof descriptor.set === 'function',
+      } : null,
+    };
+  }, {
+    controlId: id,
+    bindings: bindingNames,
+    liveIds: liveControlIds,
+    configuredRules: serializedRules,
+  });
 
-  return {
-    state,
-    arm(value = true) { state.armed = Boolean(value); },
-    close: async () => {
-      state.armed = false;
-      registry.delete(id);
-      const remainingControlIds = [...registry.keys()];
-      await page.evaluate(({ controlId, bindings, remainingIds }) => {
-        const root = globalThis;
-        const remaining = (Array.isArray(root.__qbotAutomationControlStack)
-          ? root.__qbotAutomationControlStack
-          : []).filter((item) => item !== controlId && remainingIds.includes(item));
-        root.__qbotAutomationControlStack = remaining;
-        root.__qbotAutomationControlId = remaining.at(-1) || '';
-        if (remaining.length) {
-          root.__qbotAutomationAgentOriginalsOwner = remaining[0];
-        } else if (root.agent) {
-          for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals || {})) {
-            if (typeof original === 'function') root.agent[name] = original;
+  const close = async () => {
+    state.armed = false;
+    registry.delete(id);
+    const remainingControlIds = [...registry.keys()];
+    await page.evaluate(({ controlId, bindings, remainingIds }) => {
+      const root = globalThis;
+      const remaining = (Array.isArray(root.__qbotAutomationControlStack)
+        ? root.__qbotAutomationControlStack
+        : []).filter((item) => item !== controlId && remainingIds.includes(item));
+      root.__qbotAutomationControlStack = remaining;
+      root.__qbotAutomationControlId = remaining.at(-1) || '';
+      if (remaining.length) {
+        root.__qbotAutomationAgentOriginalsOwner = remaining[0];
+      } else if (root.agent) {
+        const originalAgent = root.__qbotAutomationAgentOriginalObject;
+        const originalDescriptor = root.__qbotAutomationAgentOriginalDescriptor;
+        const strategy = String(root.__qbotAutomationAgentBindingStrategy || '');
+        let restoredFacade = false;
+        if (strategy === 'facade' && originalAgent) {
+          if (originalDescriptor?.configurable) {
+            try {
+              Object.defineProperty(root, 'agent', originalDescriptor);
+              restoredFacade = root.agent === originalAgent;
+            } catch {}
           }
-          const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
-          for (const binding of Object.values(primaryBindings)) {
-            try { delete root[binding]; } catch {}
+          if (!restoredFacade) {
+            try {
+              root.agent = originalAgent;
+              restoredFacade = root.agent === originalAgent;
+            } catch {}
           }
-          delete root.__qbotAutomationAgentOriginals;
-          delete root.__qbotAutomationAgentOriginalsOwner;
-          delete root.__qbotAutomationControlStack;
-          delete root.__qbotAutomationControlPrimaryBindings;
+        }
+        if (!restoredFacade) {
+          for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginalValues || {})) {
+            try { root.agent[name] = original; } catch {}
+          }
         }
         const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
-        for (const binding of Object.values(bindings)) {
-          if (remaining.length && Object.values(primaryBindings).includes(binding)) continue;
+        for (const binding of Object.values(primaryBindings)) {
           try { delete root[binding]; } catch {}
         }
-      }, { controlId: id, bindings: bindingNames, remainingIds: remainingControlIds }).catch(() => {});
-    },
+        delete root.__qbotAutomationAgentOriginals;
+        delete root.__qbotAutomationAgentOriginalValues;
+        delete root.__qbotAutomationAgentOriginalObject;
+        delete root.__qbotAutomationAgentOriginalDescriptor;
+        delete root.__qbotAutomationAgentBindingStrategy;
+        delete root.__qbotAutomationAgentOriginalsOwner;
+        delete root.__qbotAutomationControlStack;
+        delete root.__qbotAutomationControlPrimaryBindings;
+      }
+      const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
+      for (const binding of Object.values(bindings)) {
+        if (remaining.length && Object.values(primaryBindings).includes(binding)) continue;
+        try { delete root[binding]; } catch {}
+      }
+    }, { controlId: id, bindings: bindingNames, remainingIds: remainingControlIds }).catch(() => {});
   };
+  const adapter = {
+    state,
+    bindingReport,
+    arm(value = true) { state.armed = Boolean(value); },
+    probe: async (calls = []) => page.evaluate(async (items) => {
+      const results = [];
+      for (const item of items) {
+        const name = String(item?.name || '');
+        const args = Array.isArray(item?.args) ? item.args : [];
+        if (typeof globalThis.agent?.[name] !== 'function') {
+          results.push({ name, ok: false, error: 'method_missing' });
+          continue;
+        }
+        try {
+          const value = await globalThis.agent[name](...args);
+          results.push({
+            name,
+            ok: true,
+            result_type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+          });
+        } catch (error) {
+          results.push({ name, ok: false, error: error?.message || String(error) });
+        }
+      }
+      return { ok: results.length === items.length && results.every((item) => item.ok), results };
+    }, calls),
+    close,
+  };
+  if (!bindingReport.ok) {
+    await close();
+    throw new Error(
+      `renderer control adapter did not intercept required window.agent methods: ${bindingReport.missing_methods.join(',') || 'none'}; strategy=${bindingReport.strategy}`,
+    );
+  }
+  return adapter;
 }
 
 async function captureConfirmDuringWithAction(page, action, { accept = false } = {}) {

@@ -23384,6 +23384,9 @@ export function createTeamsSkillFixtureController(skills = []) {
   };
   return {
     handle,
+    clearEvents() {
+      events.splice(0, events.length);
+    },
     setActiveVersion(slug, version) {
       if (definitions.get(slug)?.versions.includes(String(version))) activeVersions.set(slug, String(version));
     },

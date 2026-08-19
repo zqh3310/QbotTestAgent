@@ -423,6 +423,29 @@ runner PID `55433` 与 npm 父进程 `55415` 已退出，受管 360Teams PID `89
 定向清理、新能力审计和精确 `.2 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
 
+基于 `dea5da1b54b1f7d296fc0aa09d602e14c233d7b3` 启动的后续冻结批次保留在
+`teams360-automation/output/20260819095300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-dea5da1_casebook-c412ee6`：
+已完成 `42/83`，独立 manifest/SHA 复核得到顶层 `trusted_pass=15`、
+`trusted_bug=24`、`trusted_blocked=3`；这些父 Case 下的 89 个叶子为
+`trusted_pass=45`、`trusted_bug=31`、`trusted_blocked=13`，全部 `executed`、
+manifest 完整且无路径、字节数或 SHA 漂移。
+第 43 条 `QW-SKILL-004` 是未完成 stop diagnostic，不计入 completed；其
+`BETA-SKILL-011` 另有一份完整可信 blocked 叶子，`SIT-SKILL-026` 已执行但缺少
+`task_id/prompt/send_receipt/transcript/reply_delta/reply_completion/capability_selection/
+capability_execution_event`，`SIT-SKILL-SCOPE-001` 未执行。runner PID `60683`、npm
+父进程 `60668` 均已退出，受管 360Teams PID `89152` 保留，旧监控已暂停；该目录
+永久冻结。
+
+本次根因是 Teams 包内 Electron `contextBridge` 暴露的 `window.agent` 方法被冻结，
+而 `dea5da1` 的 renderer adapter 只执行逐方法赋值并无绑定验证；赋值未生效后 UI 继续
+读取真实 SIT 市场，Node controller 的事件为空。修复合同要求 adapter 在方法不可写时
+安装并验证可恢复的完整 agent facade；六条 Skill 生命周期必须用无副作用 probe identity
+逐条到达 stateful controller，随后清空探针事件，并在每个真实叶子准备后再次要求非空
+定向 controller 事件。方法与全局 agent 均不可替换、生命周期探针缺项或真实准备事件为空
+时，都必须在叶子产品动作前以 `automation_error/framework_issue` fail-closed。完成双框架
+全检、提交推送、run-owned Skill 定向清理、新能力审计和精确 `.2 READY` 后，只能在新
+不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
