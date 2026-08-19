@@ -757,6 +757,11 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；只有取证、清理、
   合同、宿主或框架失败才进入自愈硬停止。结果优先级始终为
   `automation_error > bug > blocked > pass`，后置 blocker 不得覆盖框架错误。
+- 已安装 Skill 在可见手动列表中缺失、但列表仍有其它选项时，必须按
+  `inventory_mismatch=true` 的发送前产品失败交互材料化：保留稳定目标 identity、
+  列表结构、公开空选择、失败截图和零发送守卫，显式 N/A 后继续独立父 Case。只有
+  列表为空、公开状态/截图/目录边界不完整或 identity 无法绑定时才升级为
+  `automation_error`；legacy 与 v2 runner 必须共享该分类。
 - `QWD-ENTRY-002` 的 Skill/Connector 手动模式准备若出现真实点击后未生效，必须
   保留被后续同级操作覆盖前的失败交互，并以截图、空任务、零消息、发送计数不变、
   空能力选择生成完整发送前负向证据。此时发送链角色使用受校验 N/A，日常回归

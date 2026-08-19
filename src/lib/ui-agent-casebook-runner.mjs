@@ -19990,7 +19990,13 @@ export function coreBetaCapabilityInteractionCategory({
   clickDispatched = false,
   publicStateReadable = true,
   expectedStateObserved = false,
+  inventoryMismatch = false,
+  selectionSurfaceLocated = false,
 } = {}) {
+  if (inventoryMismatch) {
+    if (!selectionSurfaceLocated || !publicStateReadable) return 'automation_error';
+    return expectedStateObserved ? '' : 'bug';
+  }
   if (!controlLocated || !clickDispatched || !publicStateReadable) return 'automation_error';
   return expectedStateObserved ? '' : 'bug';
 }
@@ -20542,14 +20548,62 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     }
   }
   if (!match) {
-    state.screenshots.manual_installed_skill_missing = await shot(page, caseDir, 'manual-installed-skill-missing');
+    const missingScreenshot = await shot(page, caseDir, 'manual-installed-skill-missing');
+    state.screenshots.manual_installed_skill_missing = missingScreenshot;
+    const manualSurface = await readManualSkillSurface(menu);
+    const capabilities = await currentCapabilities(page);
+    const publicStateReadable = capabilities !== null
+      && typeof capabilities === 'object'
+      && (capabilities?.selectedSkills === null || Array.isArray(capabilities?.selectedSkills));
+    const inventoryMismatch = Boolean(
+      manualSurface?.list_visible === true
+      && Number(manualSurface?.option_count) > 0
+      && publicStateReadable,
+    );
+    const interactionCategory = coreBetaCapabilityInteractionCategory({
+      controlLocated: false,
+      clickDispatched: false,
+      publicStateReadable,
+      expectedStateObserved: false,
+      inventoryMismatch,
+      selectionSurfaceLocated: true,
+    });
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_skill_selection',
+      expected_identity: expectedLabel,
+      control_testid: '',
+      control_located: false,
+      click_dispatched: false,
+      selection_surface_located: true,
+      inventory_mismatch: inventoryMismatch,
+      public_state_readable: publicStateReadable,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: manualSurface,
+      option_text: '',
+      selected_skills: Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [],
+      screenshot: missingScreenshot,
+      failure_reason: `已安装技能未出现在可见手动列表：${expectedLabel}`,
+      category: interactionCategory,
+    };
     recordAssertion(
       state,
       '刚安装技能可手动选择',
       '手动技能列表必须通过 catalog slug/名称/可见标签精确定位刚安装的同一技能。',
       false,
       `未找到技能：${expectedLabel}；菜单=${clip(await activeMenuText(page, 'skill'), 360)}`,
-      'automation_error',
+      interactionCategory,
+    );
+    recordStep(
+      state,
+      `手动选择刚安装的技能：${expectedLabel}`,
+      '已安装技能应在可见手动列表中出现；若列表有其他选项但目标缺失，必须保留完整发送前产品失败证据。',
+      `inventory_mismatch=${inventoryMismatch}；manual_surface=${JSON.stringify(manualSurface)}；public_state_readable=${publicStateReadable}`,
+      'failed',
+      missingScreenshot,
+      interactionCategory,
     );
     return false;
   }

@@ -138,6 +138,22 @@ test('a located capability click with unchanged product state is a product failu
     clickDispatched: true,
     expectedStateObserved: true,
   }), '');
+  assert.equal(coreBetaCapabilityInteractionCategory({
+    controlLocated: false,
+    clickDispatched: false,
+    selectionSurfaceLocated: true,
+    inventoryMismatch: true,
+    publicStateReadable: true,
+    expectedStateObserved: false,
+  }), 'bug', '已安装 Skill 缺失但手动列表仍有其他选项时应归类为产品库存不一致');
+  assert.equal(coreBetaCapabilityInteractionCategory({
+    controlLocated: false,
+    clickDispatched: false,
+    selectionSurfaceLocated: true,
+    inventoryMismatch: true,
+    publicStateReadable: false,
+    expectedStateObserved: false,
+  }), 'automation_error', '手动列表公开状态不可读时库存不一致必须保持框架错误');
 });
 
 test('connector option testid preserves exact keys containing a colon', () => {

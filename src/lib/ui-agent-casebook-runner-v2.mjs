@@ -23779,11 +23779,31 @@ async function executeSitSkillMultiSelect({ page, state, testCase, caseDir, time
   });
   const manualOk = await setSkillMode(page, state, caseDir, 'manual');
   if (!manualOk) return;
+  const beforeSelection = await captureCoreBetaPublicState(page, testCase);
+  const selectionFailures = [];
   let selected = 0;
   for (const skillName of ['QA Python Runtime', 'QA Node Runtime']) {
-    if (await selectManualSkillByName(page, state, caseDir, skillName, { ensureMode: false })) selected += 1;
+    const selectedOk = await selectManualSkillByName(page, state, caseDir, skillName, { ensureMode: false });
+    if (selectedOk) selected += 1;
+    else if (state.artifacts.core_beta_capability_interaction?.category === 'bug') {
+      selectionFailures.push(structuredClone(state.artifacts.core_beta_capability_interaction));
+    }
   }
   if (selected < 2) {
+    const inventoryMismatch = selectionFailures.find((item) => item?.inventory_mismatch === true);
+    if (selected === 0 && inventoryMismatch) {
+      const materialized = await materializeCoreBetaPreSendCapabilityFailure({
+        page,
+        state,
+        testCase,
+        caseDir,
+        capabilityKind: 'skill',
+        expectedIdentity: inventoryMismatch.expected_identity,
+        before: beforeSelection,
+        interactionSnapshot: inventoryMismatch,
+      });
+      if (materialized) return;
+    }
     markBlocked(state, `该用例要求已安装至少 2 个技能；当前手动模式只成功选择 ${selected} 个技能，无法验证多技能 badge 和限定使用。`);
     return;
   }
@@ -28375,7 +28395,13 @@ export function coreBetaCapabilityInteractionCategory({
   clickDispatched = false,
   publicStateReadable = true,
   expectedStateObserved = false,
+  inventoryMismatch = false,
+  selectionSurfaceLocated = false,
 } = {}) {
+  if (inventoryMismatch) {
+    if (!selectionSurfaceLocated || !publicStateReadable) return 'automation_error';
+    return expectedStateObserved ? '' : 'bug';
+  }
   if (!controlLocated || !clickDispatched || !publicStateReadable) return 'automation_error';
   return expectedStateObserved ? '' : 'bug';
 }
@@ -28680,11 +28706,16 @@ export function coreBetaPreSendCapabilityFailureEvidence({
   const installedListScreenshot = String(interaction?.installed_list_screenshot || '');
   const manualSurface = interaction?.manual_surface;
   const stage = String(interaction?.stage || '');
+  const normalInteractionValid = interaction?.control_located === true
+    && interaction?.click_dispatched === true;
+  const inventoryMismatchInteractionValid = interaction?.inventory_mismatch === true
+    && interaction?.selection_surface_located === true
+    && interaction?.control_located === false
+    && interaction?.click_dispatched === false;
   const interactionBaseValid = interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'
     && interaction?.capability_kind === capabilityKind
     && String(interaction?.expected_identity || '') === String(expectedIdentity || '')
-    && interaction?.control_located === true
-    && interaction?.click_dispatched === true
+    && (normalInteractionValid || inventoryMismatchInteractionValid)
     && interaction?.expected_state_observed === false
     && interaction?.category === 'bug'
     && coreBetaBatchScreenshotPresent(screenshot);
@@ -29514,8 +29545,63 @@ async function selectManualSkillByName(page, state, caseDir, skillName, { ensure
     .filter({ hasText: matcher })
     .first();
   if (!(await visible(option, 2000))) {
-    state.screenshots.manual_installed_skill_missing = await shot(page, caseDir, 'manual-installed-skill-missing');
-    recordAssertion(state, '刚安装技能可手动选择', '手动技能列表必须出现刚安装的同一技能。', false, `未找到技能：${expectedLabel}`, 'automation_error');
+    const missingScreenshot = await shot(page, caseDir, 'manual-installed-skill-missing');
+    state.screenshots.manual_installed_skill_missing = missingScreenshot;
+    const manualSurface = await readManualSkillSurface(menu);
+    const capabilities = await currentCapabilities(page);
+    const publicStateReadable = capabilities !== null
+      && typeof capabilities === 'object'
+      && (capabilities?.selectedSkills === null || Array.isArray(capabilities?.selectedSkills));
+    const inventoryMismatch = Boolean(
+      manualSurface?.list_visible === true
+      && Number(manualSurface?.option_count) > 0
+      && publicStateReadable,
+    );
+    const interactionCategory = coreBetaCapabilityInteractionCategory({
+      controlLocated: false,
+      clickDispatched: false,
+      publicStateReadable,
+      expectedStateObserved: false,
+      inventoryMismatch,
+      selectionSurfaceLocated: true,
+    });
+    state.artifacts.core_beta_capability_interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_skill_selection',
+      expected_identity: expectedLabel,
+      control_testid: '',
+      control_located: false,
+      click_dispatched: false,
+      selection_surface_located: true,
+      inventory_mismatch: inventoryMismatch,
+      public_state_readable: publicStateReadable,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: manualSurface,
+      option_text: '',
+      selected_skills: Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [],
+      screenshot: missingScreenshot,
+      failure_reason: `已安装技能未出现在可见手动列表：${expectedLabel}`,
+      category: interactionCategory,
+    };
+    recordAssertion(
+      state,
+      '刚安装技能可手动选择',
+      '手动技能列表必须出现刚安装的同一技能。',
+      false,
+      `未找到技能：${expectedLabel}`,
+      interactionCategory,
+    );
+    recordStep(
+      state,
+      `手动选择刚安装的技能：${expectedLabel}`,
+      '已安装技能应在可见手动列表中出现；若列表有其他选项但目标缺失，必须保留完整发送前产品失败证据。',
+      `inventory_mismatch=${inventoryMismatch}；manual_surface=${JSON.stringify(manualSurface)}；public_state_readable=${publicStateReadable}`,
+      'failed',
+      missingScreenshot,
+      interactionCategory,
+    );
     return false;
   }
   const optionText = await option.innerText({ timeout: 1000 }).catch(() => '');

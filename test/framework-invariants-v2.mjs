@@ -2370,6 +2370,41 @@ assert.equal(
     assert.equal(dailyConnectorFailure.mutation_guard.send_count_unchanged, true);
     assert.deepEqual(dailyConnectorFailure.mutation_guard.before_selection, []);
     assert.deepEqual(dailyConnectorFailure.mutation_guard.after_selection, []);
+    const inventoryMismatchFailure = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'SIT-SKILL-026',
+      capabilityKind: 'skill',
+      expectedIdentity: 'QA Node Runtime',
+      before,
+      after,
+      interaction: {
+        schema_version: 'qbot-core-beta-capability-interaction/v1',
+        capability_kind: 'skill',
+        stage: 'manual_skill_selection',
+        expected_identity: 'QA Node Runtime',
+        control_testid: '',
+        control_located: false,
+        click_dispatched: false,
+        selection_surface_located: true,
+        inventory_mismatch: true,
+        public_state_readable: true,
+        expected_state_observed: false,
+        aria_checked: 'false',
+        manual_surface: {
+          search_visible: true,
+          list_visible: true,
+          option_count: 44,
+          empty_visible: false,
+        },
+        screenshot,
+        category: 'bug',
+      },
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+    });
+    assert.equal(inventoryMismatchFailure.evidence_valid, true, '已安装 Skill 缺失但列表仍有其他选项时必须形成完整发送前产品负向证据');
+    assert.equal(inventoryMismatchFailure.oracle_valid, false);
+    assert.equal(inventoryMismatchFailure.interaction.inventory_mismatch, true);
+    assert.equal(inventoryMismatchFailure.mutation_guard.valid, true);
     const installFailureScreenshot = path.join(evidenceDir, 'skill-install-failure.png');
     const installedListScreenshot = path.join(evidenceDir, 'skill-installed-list-readback.png');
     fs.writeFileSync(installFailureScreenshot, Buffer.alloc(256, 11));
@@ -7176,6 +7211,10 @@ for (const [label, source] of [
   assert.match(helperSource, /maxClickAttempts = 2/);
   assert.match(helperSource, /clickTimeoutMs = 1_500/);
 }
+assert.match(legacyRunner, /inventory_mismatch: inventoryMismatch/);
+assert.match(legacyRunner, /selection_surface_located: true/);
+assert.match(runner, /inventory_mismatch: inventoryMismatch/);
+assert.match(runner, /selection_surface_located: true/);
 
 {
   const branchStart = runner.indexOf("if (scenario.driver === 'mcp_cross_surface_identity_reconcile')");

@@ -1662,6 +1662,12 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && blocker?.source === 'visible_skill_install_click_failure_feedback_and_zero_send_readback'
       : blocker?.kind === 'visible_capability_control_product_failure'
         && blocker?.source === 'visible_capability_control_click_and_zero_send_readback';
+    const normalInteractionValid = interaction?.control_located === true
+      && interaction?.click_dispatched === true;
+    const inventoryMismatchInteractionValid = interaction?.inventory_mismatch === true
+      && interaction?.selection_surface_located === true
+      && interaction?.control_located === false
+      && interaction?.click_dispatched === false;
     const preSendCapabilityFailureVerified = blocker?.schema_version === 'qbot-core-beta-pre-send-capability-failure/v1'
       && blocker?.valid === true
       && blocker?.evidence_valid === true
@@ -1677,8 +1683,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && ['skill_installation', 'manual_mode', 'manual_skill_selection', 'manual_connector_selection']
         .includes(interactionStage)
       && interaction?.expected_identity === blocker?.expected_identity
-      && interaction?.control_located === true
-      && interaction?.click_dispatched === true
+      && (normalInteractionValid || inventoryMismatchInteractionValid)
       && interaction?.expected_state_observed === false
       && interaction?.category === 'bug'
       && (manualCapabilityFailureVerified || installationCapabilityFailureVerified)
