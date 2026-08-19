@@ -5391,6 +5391,30 @@ assert.match(coreGateById.get('SIT-HOME-050').evidence_required, /搜索命中�
 assert.match(coreGateById.get('SIT-SKILL-026').precondition, /qa-python-runtime.*qa-node-runtime/, 'SKILL-026 必须使用两项确定性 Fixture');
 assert.match(coreGateById.get('SIT-SKILL-032').evidence_required, /原始请求.*只保存在脱敏证据 JSON/, 'SKILL-032 必须分离用户结论与原始证据');
 assert.match(coreGateById.get('SIT-TEAMS-DOC-001').steps, /按 key 选择 Teams Document QA/, 'Teams 文档必须按 key 显式选择连接器');
+const skillHubRestartSource = runner.slice(
+  runner.indexOf('async function restartWithSkillHubFault'),
+  runner.indexOf('async function restoreNormalQbotAfterFault'),
+);
+assert.match(
+  skillHubRestartSource,
+  /fixture = null[\s\S]*fixture\?\.skills\?\.length[\s\S]*createTeamsSkillFixtureController\(fixture\.skills\)[\s\S]*controller\.setActiveVersion\(slug, version\)[\s\S]*handler: controller\.handle[\s\S]*mode: 'node-handler'/,
+  'Core Beta v2 Teams Skill 回归必须使用声明的 stateful fixture controller，不能退化为空市场故障适配器',
+);
+assert.ok(
+  skillHubRestartSource.indexOf('fixture?.skills?.length')
+    < skillHubRestartSource.indexOf("const status = overrideUrl ? 'forbidden'"),
+  'Core Beta v2 Teams Skill fixture 分支必须先于 forbidden 空市场 fallback',
+);
+assert.match(
+  runner,
+  /executeSkillRegressionFixtureCase[\s\S]*restartWithSkillHubFault\(\{[\s\S]*cleanup: fixture\.close,[\s\S]*fixture,[\s\S]*if \(!injected\.rendererAdapter\)[\s\S]*injected\.fixtureController\.snapshot\(\)\.events[\s\S]*cleanup: injected\.cleanup \|\| fixture\.close/,
+  'Skill 回归调用方必须把 fixture 传给 V2 restart，并在 Teams renderer adapter 下保留正式 control plane',
+);
+assert.match(
+  runner,
+  /installRendererControlAdapter\(\{[\s\S]*handler = null[\s\S]*__qbotAutomationControlInvoke[\s\S]*reconcileSkills:[\s\S]*rule\.mode === 'node-handler'/,
+  'Core Beta v2 renderer adapter 必须支持 stateful Skill fixture 的 Node handler 与完整生命周期路由',
+);
 assert.match(
   runner,
   /if \(projectSource !== 'gitlab'\)[\s\S]{0,500}普通项目使用当前选中运行时启动/,

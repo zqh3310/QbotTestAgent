@@ -25,7 +25,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；上一 runner PID `21137` 及 npm 父进程 `21115` 已退出，受管
+- 当前没有有效 runner；最新 runner PID `55433` 及 npm 父进程 `55415` 已退出，受管
   360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
@@ -404,6 +404,24 @@ Daily83 清理命令仍使用 `--case BETA-SKILL-001`；该专用参数组合必
 `stop_action_performed=false` 形成完整 blocked 证据并禁止继续追问。后续必须基于包含
 该修复与本指南更新的干净 pushed main，重新执行能力审计和精确 `.2 READY`，再在新
 不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
+基于 `39be8a535dc993d571f8fda1590d57805b7cb570` 启动的最新冻结批次保留在
+`teams360-automation/output/20260819063300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-39be8a5_casebook-c412ee6`：
+已完成 `42/83`，可信运行时分类为 `pass=19/product bug=20/blocked=3`，全部为真实执行
+且 `inherited=0/synthetic=0`；第 43 条 `QW-SKILL-004` 未计入 completed。其叶子
+`BETA-SKILL-011` 形成有效上游 blocked；下一叶子 `SIT-SKILL-026` 缺少
+`task_id/prompt/send_receipt/transcript/reply_delta/reply_completion/capability_selection/
+capability_execution_event`，第三叶子 `SIT-SKILL-SCOPE-001` 未执行。根因是 legacy
+`restartWithSkillHubFault()` 已在 Teams lane 使用
+`createTeamsSkillFixtureController(fixture.skills)`，但 Core Beta v2 调用方未传
+`fixture`，V2 restart 又把非空 `overrideUrl` 直接降级成 `forbidden` 空市场 adapter，
+导致 `qa-python-runtime/qa-node-runtime` 从市场消失并在发送前留下不完整 manifest。
+runner PID `55433` 与 npm 父进程 `55415` 已退出，受管 360Teams PID `89152` 保留，
+监控已暂停；该目录永久冻结。修复必须让 V2 传递 fixture、使用 stateful Node handler
+覆盖 Skill catalog/install/uninstall/update/revert/reconcile，并在 renderer adapter 下
+保持冻结 SIT control plane。完成 invariant、双框架全检、提交推送、run-owned Skill
+定向清理、新能力审计和精确 `.2 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 

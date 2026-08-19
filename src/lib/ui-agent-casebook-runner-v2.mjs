@@ -22696,10 +22696,67 @@ async function executeSitSkillAuthError({ page, state, caseDir, options, runtime
   }
 }
 
-async function restartWithSkillHubFault({ state, caseDir, options, runtime, label, overrideUrl, cleanup = null }) {
+async function restartWithSkillHubFault({
+  state,
+  caseDir,
+  options,
+  runtime,
+  label,
+  overrideUrl,
+  cleanup = null,
+  fixture = null,
+}) {
   if (options['renderer-control-adapter'] === 'teams360') {
     const page = runtime?.page;
     if (!page) return { ok: false, reason: `${label}缺少当前 QWork 页面。`, cleanup };
+    if (fixture?.skills?.length) {
+      const { createTeamsSkillFixtureController } = await import('./ui-agent-casebook-runner.mjs');
+      const controller = createTeamsSkillFixtureController(fixture.skills);
+      const setServerActiveVersion = typeof fixture.setActiveVersion === 'function'
+        ? fixture.setActiveVersion.bind(fixture)
+        : null;
+      if (setServerActiveVersion) {
+        fixture.setActiveVersion = (slug, version) => {
+          const result = setServerActiveVersion(slug, version);
+          controller.setActiveVersion(slug, version);
+          return result;
+        };
+      }
+      const adapter = await installRendererControlAdapter({
+        page,
+        initiallyArmed: true,
+        handler: controller.handle,
+        rules: [
+          ['GET', '/api/skills/catalog'],
+          ['POST', '/api/skills/install'],
+          ['POST', '/api/skills/uninstall'],
+          ['POST', '/api/skills/update'],
+          ['POST', '/api/skills/revert'],
+          ['POST', '/api/skills/reconcile'],
+        ].map(([method, pathExact]) => ({
+          id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
+          method,
+          pathExact,
+          mode: 'node-handler',
+        })),
+      });
+      const combinedCleanup = async () => {
+        await adapter.close().catch(() => {});
+        if (cleanup) await cleanup().catch(() => {});
+      };
+      state.artifacts.teams360_skill_fixture_adapter = {
+        mode: 'stateful-renderer-bridge',
+        control_plane_preserved: String(options['control-plane-url'] || ''),
+        skills: fixture.skills.map((item) => item.slug),
+      };
+      return {
+        ok: true,
+        page,
+        cleanup: combinedCleanup,
+        rendererAdapter: true,
+        fixtureController: controller,
+      };
+    }
     const status = overrideUrl ? 'forbidden' : 'unavailable';
     const marketError = overrideUrl
       ? '403 无权限访问技能市场，请重新登录或联系管理员。'
@@ -23885,15 +23942,18 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     label: `${testCase.id} QA SkillHub Fixture`,
     overrideUrl: fixture.url,
     cleanup: fixture.close,
+    fixture,
   });
   if (!injected.ok) {
     await fixture.close().catch(() => {});
     markFailed(state, `QA SkillHub Fixture 启动失败：${injected.reason}`, 'automation_error');
     return;
   }
-  options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
-    ? 'http://127.0.0.1:18900'
-    : 'http://127.0.0.1:8900';
+  if (!injected.rendererAdapter) {
+    options['active-fixture-control-plane-url'] = /^(?:1|true|yes)$/i.test(String(options['teams-fixture-host-relaunch'] || ''))
+      ? 'http://127.0.0.1:18900'
+      : 'http://127.0.0.1:8900';
+  }
   try {
     page = injected.page;
     const prepared = await prepareSkillRegressionFixtureState({ page, state, testCase, caseDir, options, fixture });
@@ -23919,9 +23979,17 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
       return await executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs });
     }
   } finally {
-    state.artifacts.skillhub_regression_fixture.hits = fixture.state.hits;
+    state.artifacts.skillhub_regression_fixture.hits = injected.fixtureController
+      ? injected.fixtureController.snapshot().events
+      : fixture.state.hits;
     state.artifacts.skill_fixture_teardown = await cleanupSkillRegressionFixtureState(runtime?.page || page, testCase);
-    await restoreNormalQbotAfterFault({ state, caseDir, options, runtime, cleanup: fixture.close });
+    await restoreNormalQbotAfterFault({
+      state,
+      caseDir,
+      options,
+      runtime,
+      cleanup: injected.cleanup || fixture.close,
+    });
     if (priorFixtureControlPlane) options['active-fixture-control-plane-url'] = priorFixtureControlPlane;
     else delete options['active-fixture-control-plane-url'];
   }
@@ -32230,26 +32298,47 @@ async function restoreControlPlaneHttpControl(control, { options, runtime, state
 
 let rendererControlSequence = 0;
 
-async function installRendererControlAdapter({ page, rules = [], initiallyArmed = false }) {
+async function installRendererControlAdapter({
+  page,
+  rules = [],
+  initiallyArmed = false,
+  handler = null,
+}) {
+  const id = `teams360-control-${process.pid}-${Date.now()}-${++rendererControlSequence}`;
+  const bindingToken = id.replace(/[^a-zA-Z0-9_]/g, '_');
+  const bindingNames = {
+    get: `__qbotAutomationControlGet_${bindingToken}`,
+    hit: `__qbotAutomationControlHit_${bindingToken}`,
+    invoke: `__qbotAutomationControlInvoke_${bindingToken}`,
+  };
   if (!page.__qbotRendererControlRegistry) {
     const registry = new Map();
     Object.defineProperty(page, '__qbotRendererControlRegistry', { value: registry, configurable: true });
-    await page.exposeFunction('__qbotAutomationControlGet', (id) => {
-      const entry = registry.get(String(id));
-      return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
-    });
-    await page.exposeFunction('__qbotAutomationControlHit', (id, hit) => {
-      const entry = registry.get(String(id));
-      if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
-      return Boolean(entry);
-    });
   }
-
-  const id = `teams360-control-${++rendererControlSequence}`;
+  const registry = page.__qbotRendererControlRegistry;
+  await page.exposeFunction(bindingNames.get, (controlId) => {
+    const entry = registry.get(String(controlId));
+    return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
+  });
+  await page.exposeFunction(bindingNames.hit, (controlId, hit) => {
+    const entry = registry.get(String(controlId));
+    if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
+    return Boolean(entry);
+  });
+  await page.exposeFunction(bindingNames.invoke, async (controlId, call) => {
+    const entry = registry.get(String(controlId));
+    if (!entry?.handler) return { handled: false };
+    try {
+      return await entry.handler(call);
+    } catch (error) {
+      return { handled: true, error: error?.message || String(error) };
+    }
+  });
   const state = { armed: Boolean(initiallyArmed), hits: [], installedAt: Date.now() };
   const serializedRules = rules.map((rule) => ({ ...rule }));
-  page.__qbotRendererControlRegistry.set(id, { state, rules: serializedRules });
-  await page.evaluate(({ controlId }) => {
+  registry.set(id, { state, rules: serializedRules, handler });
+  const liveControlIds = [...registry.keys()];
+  await page.evaluate(({ controlId, bindings, liveIds }) => {
     const root = globalThis;
     const methodRoutes = {
       capabilities: { method: 'GET', path: '/api/capabilities' },
@@ -32258,6 +32347,9 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
       getConnectorCatalog: { method: 'GET', path: '/api/connectors/catalog' },
       installSkill: { method: 'POST', path: '/api/skills/install' },
       uninstallSkill: { method: 'POST', path: '/api/skills/uninstall' },
+      updateSkill: { method: 'POST', path: '/api/skills/update' },
+      revertSkill: { method: 'POST', path: '/api/skills/revert' },
+      reconcileSkills: { method: 'POST', path: '/api/skills/reconcile' },
       submitFeedbackIssueIntake: { method: 'POST', path: '/api/feedback-issues/intake' },
       send: { method: 'POST', path: '/api/desktop-agent/turn-context' },
     };
@@ -32338,61 +32430,141 @@ async function installRendererControlAdapter({ page, rules = [], initiallyArmed 
       }
       return payload;
     };
-    if (!root.__qbotAutomationAgentOriginals) root.__qbotAutomationAgentOriginals = {};
-    for (const [name, route] of Object.entries(methodRoutes)) {
-      if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
-      const original = root.agent[name].bind(root.agent);
-      root.__qbotAutomationAgentOriginals[name] = original;
-      root.agent[name] = async (...args) => {
-        const activeId = root.__qbotAutomationControlId;
-        const config = activeId ? await root.__qbotAutomationControlGet?.(activeId) : null;
-        const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
-          ? `${route.path}?refresh=force`
-          : route.path;
-        const rule = config?.armed ? config.rules.find((item) => matches(item, route.method, path)) : null;
-        if (!rule) return original(...args);
-        let requestArgs = [];
-        try { requestArgs = structuredClone(args); } catch { requestArgs = args.map((value) => String(value)); }
-        let requestBody = '';
-        try { requestBody = JSON.stringify(args.length === 1 ? args[0] : args); } catch { requestBody = ''; }
-        const hit = {
-          id: rule.id || '',
-          method: route.method,
-          path,
-          mode: rule.mode || 'fixed-response',
-          requestArgs,
-          requestBody,
-        };
-        if (!['transform-json', 'observe'].includes(rule.mode)) {
-          await root.__qbotAutomationControlHit?.(activeId, hit);
-          if (Number(rule.delayMs || 0) > 0) {
-            await new Promise((resolve) => setTimeout(resolve, Number(rule.delayMs)));
-          }
-          if (rule.mode === 'network-error' || Number(rule.status || 200) >= 400) {
-            throw new Error(rule.errorMessage || rule.body?.msg || rule.body?.error || 'QBotTestAgent controlled network error');
-          }
-          return structuredClone(rule.body ?? {});
+    const liveIdSet = new Set(Array.isArray(liveIds) ? liveIds : []);
+    const priorOwner = String(root.__qbotAutomationAgentOriginalsOwner || '');
+    const priorOwnerIsLive = Boolean(
+      priorOwner
+      && liveIdSet.has(priorOwner)
+      && root.__qbotAutomationAgentOriginals,
+    );
+    if (!priorOwnerIsLive) {
+      if (root.agent && root.__qbotAutomationAgentOriginals) {
+        for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals)) {
+          if (typeof original === 'function') root.agent[name] = original;
         }
-        const result = await original(...args);
-        const cloned = structuredClone(result);
-        if (rule.mode === 'transform-json') transform(cloned, rule, hit);
-        await root.__qbotAutomationControlHit?.(activeId, hit);
-        return cloned;
-      };
+      }
+      delete root.__qbotAutomationAgentOriginals;
+      delete root.__qbotAutomationAgentOriginalsOwner;
+      delete root.__qbotAutomationControlStack;
+      delete root.__qbotAutomationControlPrimaryBindings;
+      root.__qbotAutomationAgentOriginals = {};
+      root.__qbotAutomationAgentOriginalsOwner = controlId;
+      root.__qbotAutomationControlPrimaryBindings = { ...bindings };
+      for (const [name, route] of Object.entries(methodRoutes)) {
+        if (root.__qbotAutomationAgentOriginals[name] || typeof root.agent?.[name] !== 'function') continue;
+        const original = root.agent[name].bind(root.agent);
+        root.__qbotAutomationAgentOriginals[name] = original;
+        const wrapped = async (...args) => {
+          const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
+            ? `${route.path}?refresh=force`
+            : route.path;
+          const stack = Array.isArray(root.__qbotAutomationControlStack)
+            ? [...root.__qbotAutomationControlStack]
+            : [];
+          let activeId = '';
+          let rule = null;
+          for (let index = stack.length - 1; index >= 0; index -= 1) {
+            const candidateId = stack[index];
+            const config = await root[bindings.get]?.(candidateId);
+            const candidateRule = config?.armed
+              ? config.rules.find((item) => matches(item, route.method, path))
+              : null;
+            if (!candidateRule) continue;
+            activeId = candidateId;
+            rule = candidateRule;
+            break;
+          }
+          if (!rule) return original(...args);
+          let requestArgs = [];
+          try { requestArgs = structuredClone(args); } catch { requestArgs = args.map((value) => String(value)); }
+          let requestBody = '';
+          try { requestBody = JSON.stringify(args.length === 1 ? args[0] : args); } catch { requestBody = ''; }
+          const hit = {
+            id: rule.id || '',
+            method: route.method,
+            path,
+            mode: rule.mode || 'fixed-response',
+            requestArgs,
+            requestBody,
+          };
+          if (rule.mode === 'node-handler') {
+            const response = await root[bindings.invoke]?.(activeId, {
+              name,
+              args: requestArgs,
+              method: route.method,
+              path,
+              ruleId: rule.id || '',
+            });
+            hit.handled = Boolean(response?.handled);
+            await root[bindings.hit]?.(activeId, hit);
+            if (response?.error) throw new Error(response.error);
+            if (response?.handled) return structuredClone(response.result);
+            return original(...args);
+          }
+          if (!['transform-json', 'observe'].includes(rule.mode)) {
+            await root[bindings.hit]?.(activeId, hit);
+            if (Number(rule.delayMs || 0) > 0) {
+              await new Promise((resolve) => setTimeout(resolve, Number(rule.delayMs)));
+            }
+            if (rule.mode === 'network-error' || Number(rule.status || 200) >= 400) {
+              throw new Error(rule.errorMessage || rule.body?.msg || rule.body?.error || 'QBotTestAgent controlled network error');
+            }
+            return structuredClone(rule.body ?? {});
+          }
+          const result = await original(...args);
+          const cloned = structuredClone(result);
+          if (rule.mode === 'transform-json') transform(cloned, rule, hit);
+          await root[bindings.hit]?.(activeId, hit);
+          return cloned;
+        };
+        Object.defineProperty(wrapped, '__qbotAutomationRendererControlWrapper', { value: true });
+        root.agent[name] = wrapped;
+      }
     }
+    const stack = Array.isArray(root.__qbotAutomationControlStack)
+      ? root.__qbotAutomationControlStack.filter((item) => liveIdSet.has(item))
+      : [];
+    if (!stack.includes(controlId)) stack.push(controlId);
+    root.__qbotAutomationControlStack = stack;
     root.__qbotAutomationControlId = controlId;
     return true;
-  }, { controlId: id });
+  }, { controlId: id, bindings: bindingNames, liveIds: liveControlIds });
 
   return {
     state,
     arm(value = true) { state.armed = Boolean(value); },
     close: async () => {
       state.armed = false;
-      page.__qbotRendererControlRegistry?.delete(id);
-      await page.evaluate((controlId) => {
-        if (globalThis.__qbotAutomationControlId === controlId) globalThis.__qbotAutomationControlId = '';
-      }, id).catch(() => {});
+      registry.delete(id);
+      const remainingControlIds = [...registry.keys()];
+      await page.evaluate(({ controlId, bindings, remainingIds }) => {
+        const root = globalThis;
+        const remaining = (Array.isArray(root.__qbotAutomationControlStack)
+          ? root.__qbotAutomationControlStack
+          : []).filter((item) => item !== controlId && remainingIds.includes(item));
+        root.__qbotAutomationControlStack = remaining;
+        root.__qbotAutomationControlId = remaining.at(-1) || '';
+        if (remaining.length) {
+          root.__qbotAutomationAgentOriginalsOwner = remaining[0];
+        } else if (root.agent) {
+          for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginals || {})) {
+            if (typeof original === 'function') root.agent[name] = original;
+          }
+          const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
+          for (const binding of Object.values(primaryBindings)) {
+            try { delete root[binding]; } catch {}
+          }
+          delete root.__qbotAutomationAgentOriginals;
+          delete root.__qbotAutomationAgentOriginalsOwner;
+          delete root.__qbotAutomationControlStack;
+          delete root.__qbotAutomationControlPrimaryBindings;
+        }
+        const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
+        for (const binding of Object.values(bindings)) {
+          if (remaining.length && Object.values(primaryBindings).includes(binding)) continue;
+          try { delete root[binding]; } catch {}
+        }
+      }, { controlId: id, bindings: bindingNames, remainingIds: remainingControlIds }).catch(() => {});
     },
   };
 }
