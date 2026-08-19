@@ -68,6 +68,7 @@ import {
   coreBetaManualConnectorModeReady,
   coreBetaMixedFormatFixtureContents,
   coreBetaMcpCrossSurfaceOutcome,
+  coreBetaMcpNormalizeInteraction,
   coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaMcpReleaseSelectionSeed,
   coreBetaMcpSelectionPrerequisiteBlocker,
@@ -538,6 +539,23 @@ assert.deepEqual(
       'connector瞬时选中但随后公共读回消失，仍是证据完整的产品负向收据',
     );
     assert.equal(coreBetaMcpCrossSurfaceOutcome(receipts.slice(0, 4)).evidence_valid, false, '缺少任一固定connector收据仍须按框架证据缺口失败');
+
+    const transientBridgeRead = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'connector',
+      stage: 'manual_connector_selection',
+      expected_identity: 'mcphub:dis',
+      control_located: true,
+      click_dispatched: true,
+      expected_state_observed: false,
+      selected_connectors: null,
+      category: 'bug',
+    };
+    const fallbackInteraction = coreBetaMcpNormalizeInteraction(transientBridgeRead, {
+      connectors: { selected: [] },
+    });
+    assert.deepEqual(fallbackInteraction.selected_connectors, [], '任务绑定公共状态读回为空选择时，必须补齐瞬时 bridge null 读回');
+    assert.equal(fallbackInteraction.selected_connectors_source, 'public-state-readback-fallback');
 
     const controlMissing = structuredClone(receipts[0]);
     controlMissing.interaction.control_located = false;

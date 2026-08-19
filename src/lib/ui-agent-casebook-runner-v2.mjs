@@ -202,6 +202,20 @@ export function coreBetaMcpCrossSurfaceReceiptEvidenceValid(receipt = {}) {
   );
 }
 
+// A transient capabilities bridge read can return null even when the
+// task-bound public-state readback immediately after the click is complete.
+// Preserve that empty selection in the interaction ledger so a real product
+// rejection remains a valid negative receipt instead of an automation error.
+export function coreBetaMcpNormalizeInteraction(interaction = {}, after = {}) {
+  const normalized = { ...(interaction || {}) };
+  if (!Array.isArray(normalized.selected_connectors)
+    && Array.isArray(after?.connectors?.selected)) {
+    normalized.selected_connectors = after.connectors.selected;
+    normalized.selected_connectors_source = 'public-state-readback-fallback';
+  }
+  return normalized;
+}
+
 export function coreBetaMcpCrossSurfaceOutcome(receipts, expectedCount = 5) {
   const normalized = Array.isArray(receipts) ? receipts : [];
   const keys = normalized.map((item) => String(item?.key || '').trim()).filter(Boolean);
@@ -16132,7 +16146,10 @@ async function executeCoreBetaMcpCase({
       const after = await captureCoreBetaPublicState(page, testCase);
       const visibleText = await activeMenuText(page, 'connector').catch(() => '');
       const interaction = {
-        ...(state.artifacts.core_beta_capability_interaction || {}),
+        ...coreBetaMcpNormalizeInteraction(
+          state.artifacts.core_beta_capability_interaction || {},
+          after,
+        ),
         expected_identity: connector.key,
       };
       const selectedConnectors = Array.isArray(after.connectors?.selected)
