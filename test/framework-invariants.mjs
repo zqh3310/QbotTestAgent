@@ -1211,6 +1211,7 @@ const required = [
   ['SKILL-026 预装两项确定性 Fixture 并进入真实 Fixture 路由', /SIT-SKILL-026'[\s\S]*qa-python-runtime[\s\S]*qa-node-runtime[\s\S]*skill_fixture_multi_select_setup/],
   ['每次确定性 Skill Fixture 查找强制清空旧搜索并刷新市场', /searchAutomationSkillCard[\s\S]*input\.fill\(''\)[\s\S]*skills-catalog-refresh[\s\S]*refresh\.click[\s\S]*refresh_settled[\s\S]*targetDeadline[\s\S]*persistAutomationSkillCatalogLookup/],
   ['Skill Fixture 市场刷新记录目标、可见卡片与失败诊断', /searchAutomationSkillCard[\s\S]*visible_card_texts[\s\S]*errors[\s\S]*persistAutomationSkillCatalogLookup[\s\S]*qbot-automation-skill-catalog-lookups\/v1[\s\S]*evidence_valid[\s\S]*oracle_valid/],
+  ['Teams Skill Fixture 合并原始 capabilities.skills 供统一菜单选择', /createTeamsSkillFixtureController[\s\S]*\['GET', '\/api\/capabilities'\][\s\S]*includeOriginalResult: pathExact === '\/api\/capabilities'[\s\S]*if \(name === 'capabilities'\)[\s\S]*fixtureSkills[\s\S]*skills: \[\.\.\.baseSkills, \.\.\.fixtureSkills\]/],
   ['SKILL-026 只选择刚预装的两项 Fixture 而非创建技能入口', /executeSitSkillMultiSelect[\s\S]*QA Python Runtime[\s\S]*QA Node Runtime[\s\S]*selectManualSkillByName/],
   ['多 Skill 恢复前清理 chip 装饰符号', /cleanSkillChipLabel[\s\S]*✦★☆◆◇•·[\s\S]*trim\(\)/],
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],

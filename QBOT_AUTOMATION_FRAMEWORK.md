@@ -649,6 +649,11 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   plane 不变；只有没有 fixture 的 401/403/未配置专项才允许
   使用 `forbidden/unavailable` 空市场 fallback。禁止因 `overrideUrl` 非空把正常回归
   fixture 降级为空目录，或把 Teams renderer adapter 再指向本地 fixture control plane。
+  统一“+ > 技能”菜单读取的是 `window.agent.capabilities().skills` 时，adapter 还必须
+  通过带原始 capabilities 快照的受控 Node handler 按当前安装状态合并 Fixture 条目，
+  保留原始公开字段；仅拦截 `/api/skills/catalog` 不能证明 Fixture 已进入可选择菜单。
+  未安装 Fixture 不得提前注入，安装/卸载后的 capabilities 读回必须随 controller 状态
+  变化，缺少目标条目仍按 framework issue fail-closed。
   任一回归 fixture 丢失、声明 Skill 未进入 market、Node handler 未派发或生命周期路由
   缺失均属于 framework issue，必须冻结批次并从 1/83 完整自愈重跑。
 - Teams 包内 `window.agent` 可能由 Electron `contextBridge` 暴露为冻结对象；给

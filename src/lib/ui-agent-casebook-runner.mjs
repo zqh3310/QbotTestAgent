@@ -14213,6 +14213,7 @@ async function restartWithSkillHubFault({
         handler: controller.handle,
         rules: [
           ['GET', '/api/skills/catalog'],
+          ['GET', '/api/capabilities'],
           ['POST', '/api/skills/install'],
           ['POST', '/api/skills/uninstall'],
           ['POST', '/api/skills/update'],
@@ -14223,6 +14224,7 @@ async function restartWithSkillHubFault({
           method,
           pathExact,
           mode: 'node-handler',
+          includeOriginalResult: pathExact === '/api/capabilities',
         })),
       });
       const combinedCleanup = async () => {
@@ -23387,8 +23389,25 @@ export function createTeamsSkillFixtureController(skills = []) {
     history.unshift({ skill: slug, label: item.title, version: installed.get(slug).version, action: 'install', createdAt: now, scope: 'fixture' });
     return { ok: true, skill: installedRow(slug), installedDependencies: [...new Set(newlyInstalled)] };
   };
-  const handle = async ({ name, args = [] }) => {
+  const handle = async ({ name, args = [], originalResult = undefined }) => {
     events.push({ name, args, at: Date.now() });
+    if (name === 'capabilities') {
+      const base = originalResult && typeof originalResult === 'object'
+        ? structuredClone(originalResult)
+        : {};
+      const fixtureSlugs = new Set(definitions.keys());
+      const baseSkills = Array.isArray(base.skills)
+        ? base.skills.filter((item) => !fixtureSlugs.has(String(item?.slug || item?.name || '')))
+        : [];
+      const fixtureSkills = [...installed.keys()].map(installedRow).filter(Boolean);
+      return {
+        handled: true,
+        result: {
+          ...base,
+          skills: [...baseSkills, ...fixtureSkills],
+        },
+      };
+    }
     if (name === 'getSkillsCatalog') {
       const query = String(args[0] || '').trim().toLowerCase();
       const market = [...definitions.keys()].map(marketRow).filter((item) => !query
@@ -23833,18 +23852,24 @@ async function installRendererControlAdapter({
           requestBody,
         };
         if (rule.mode === 'node-handler') {
+          // Stateful fixture handlers may merge controlled rows into a live
+          // public snapshot. Opt in so other handlers avoid duplicate calls.
+          const originalResult = rule.includeOriginalResult === true
+            ? await original(...args)
+            : undefined;
           const response = await root[bindings.invoke]?.(activeId, {
             name,
             args: requestArgs,
             method: route.method,
             path,
             ruleId: rule.id || '',
+            originalResult,
           });
           hit.handled = Boolean(response?.handled);
           await root[bindings.hit]?.(activeId, hit);
           if (response?.error) throw new Error(response.error);
           if (response?.handled) return structuredClone(response.result);
-          return original(...args);
+          return rule.includeOriginalResult === true ? originalResult : original(...args);
         }
         if (!['transform-json', 'observe'].includes(rule.mode)) {
           await root[bindings.hit]?.(activeId, hit);

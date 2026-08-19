@@ -22781,6 +22781,7 @@ async function restartWithSkillHubFault({
         handler: controller.handle,
         rules: [
           ['GET', '/api/skills/catalog'],
+          ['GET', '/api/capabilities'],
           ['POST', '/api/skills/install'],
           ['POST', '/api/skills/uninstall'],
           ['POST', '/api/skills/update'],
@@ -22791,6 +22792,7 @@ async function restartWithSkillHubFault({
           method,
           pathExact,
           mode: 'node-handler',
+          includeOriginalResult: pathExact === '/api/capabilities',
         })),
         probeCalls: lifecycleProbeCalls,
         readProbeEvents: () => controller.snapshot().events,
@@ -32805,18 +32807,24 @@ export async function installRendererControlAdapter({
             requestBody,
           };
           if (rule.mode === 'node-handler') {
+            // Stateful fixture handlers may merge controlled rows into a live
+            // public snapshot. Opt in so other handlers avoid duplicate calls.
+            const originalResult = rule.includeOriginalResult === true
+              ? await original(...args)
+              : undefined;
             const response = await root[bindings.invoke]?.(activeId, {
               name,
               args: requestArgs,
               method: route.method,
               path,
               ruleId: rule.id || '',
+              originalResult,
             });
             hit.handled = Boolean(response?.handled);
             await root[bindings.hit]?.(activeId, hit);
             if (response?.error) throw new Error(response.error);
             if (response?.handled) return structuredClone(response.result);
-            return original(...args);
+            return rule.includeOriginalResult === true ? originalResult : original(...args);
           }
           if (!['transform-json', 'observe'].includes(rule.mode)) {
             await root[bindings.hit]?.(activeId, hit);

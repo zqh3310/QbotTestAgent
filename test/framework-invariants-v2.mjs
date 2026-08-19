@@ -5405,6 +5405,11 @@ assert.match(
   /fixture = null[\s\S]*fixture\?\.skills\?\.length[\s\S]*createTeamsSkillFixtureController\(fixture\.skills\)[\s\S]*controller\.setActiveVersion\(slug, version\)[\s\S]*handler: controller\.handle[\s\S]*mode: 'node-handler'/,
   'Core Beta v2 Teams Skill 回归必须使用声明的 stateful fixture controller，不能退化为空市场故障适配器',
 );
+assert.match(
+  skillHubRestartSource,
+  /\['GET', '\/api\/capabilities'\][\s\S]*includeOriginalResult: pathExact === '\/api\/capabilities'/,
+  'Core Beta v2 Skill fixture adapter 必须把已安装 Fixture 合并到原始 capabilities.skills，不能让统一菜单回退真实市场目录',
+);
 assert.ok(
   skillHubRestartSource.indexOf('fixture?.skills?.length')
     < skillHubRestartSource.indexOf("const status = overrideUrl ? 'forbidden'"),
