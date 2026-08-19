@@ -5427,6 +5427,21 @@ assert.match(
 );
 assert.match(
   runner,
+  /installRendererControlAdapterWithRecovery[\s\S]*Math\.min\(2[\s\S]*inspectRendererControlAdapterState[\s\S]*node_registry_count === 0[\s\S]*retry_eligible/,
+  'Teams renderer adapter 首次瞬态失败只能在没有其他活动 adapter 时执行一次 clean rebind',
+);
+assert.match(
+  runner,
+  /qbot-teams-skill-fixture-adapter\/v2[\s\S]*recovered_after_clean_rebind[\s\S]*attempts[\s\S]*exact_failure_reason[\s\S]*qbot-core-beta-renderer-adapter-framework-failure\/v1/,
+  'Teams renderer adapter 必须持久化全部绑定探针尝试，并为持续失败生成产品动作前 framework evidence',
+);
+assert.match(
+  runner,
+  /applyFailureOutcome[\s\S]*primary_failure[\s\S]*failure_history[\s\S]*FAILURE_CATEGORY_PRIORITY[\s\S]*function markFailed[\s\S]*applyFailureOutcome/,
+  '首个精确 automation failure 必须保留为 primary_failure，后续通用汇总只能进入 failure history',
+);
+assert.match(
+  runner,
   /prepareSkillRegressionFixtureState[\s\S]*preparationEvents = injected\.fixtureController\.snapshot\(\)\.events[\s\S]*event\.name === 'uninstallSkill'[\s\S]*automation_error/,
   'Skill 叶子执行前必须观察到独立于探针的真实准备事件，否则按 framework issue 停止',
 );

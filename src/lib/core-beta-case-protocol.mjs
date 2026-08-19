@@ -1295,6 +1295,16 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
     'reply_delta',
     'reply_completion',
   ]);
+  const rendererAdapterFrameworkFailureNotApplicableRoles = new Set([
+    'task_id',
+    'prompt',
+    'send_receipt',
+    'transcript',
+    'reply_delta',
+    'reply_completion',
+    'capability_selection',
+    'capability_execution_event',
+  ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
     const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
@@ -1321,7 +1331,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
         && !preSendImeFailureNotApplicableRoles.has(role)
         && !preSendAttachmentRejectionNotApplicableRoles.has(role)
         && !qworkWorkspaceSelectionFailureNotApplicableRoles.has(role)
-        && !qworkExpertAudienceRejectionNotApplicableRoles.has(role))
+        && !qworkExpertAudienceRejectionNotApplicableRoles.has(role)
+        && !rendererAdapterFrameworkFailureNotApplicableRoles.has(role))
       || !blockerFile
       || !fs.existsSync(blockerFile)
       || !fs.statSync(blockerFile).isFile()
@@ -2079,6 +2090,50 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && allowedRoles.includes(role)
       && JSON.stringify(allowedRoles) === JSON.stringify([...qworkExpertAudienceRejectionNotApplicableRoles])
       && String(blocker?.reason || '').trim();
+    const rendererAdapterDiagnosticPath = String(blocker?.diagnostic_path || '');
+    const resolvedRendererAdapterDiagnosticPath = rendererAdapterDiagnosticPath
+      ? path.resolve(rendererAdapterDiagnosticPath)
+      : '';
+    const rendererAdapterDiagnosticRelative = resolvedRendererAdapterDiagnosticPath
+      ? path.relative(path.resolve(caseDir), resolvedRendererAdapterDiagnosticPath)
+      : '';
+    const rendererAdapterDiagnosticValid = Boolean(
+      resolvedRendererAdapterDiagnosticPath
+      && rendererAdapterDiagnosticRelative
+      && !rendererAdapterDiagnosticRelative.startsWith('..')
+      && !path.isAbsolute(rendererAdapterDiagnosticRelative)
+      && fs.existsSync(resolvedRendererAdapterDiagnosticPath)
+      && fs.statSync(resolvedRendererAdapterDiagnosticPath).isFile()
+      && fs.statSync(resolvedRendererAdapterDiagnosticPath).size > 0
+      && /^[a-f0-9]{64}$/i.test(String(blocker?.diagnostic_sha256 || ''))
+      && sha256File(resolvedRendererAdapterDiagnosticPath) === blocker.diagnostic_sha256
+    );
+    const expectedRendererAdapterNaRoles = declared
+      .filter((item) => rendererAdapterFrameworkFailureNotApplicableRoles.has(item));
+    const rendererAdapterAttempts = Array.isArray(blocker?.attempts) ? blocker.attempts : [];
+    const rendererAdapterFrameworkFailureVerified = blocker?.schema_version === 'qbot-core-beta-renderer-adapter-framework-failure/v1'
+      && blocker?.valid === true
+      && blocker?.evidence_valid === true
+      && blocker?.oracle_valid === false
+      && blocker?.case_id === testCase?.id
+      && blocker?.category === 'automation_error'
+      && blocker?.kind === 'skill_fixture_renderer_adapter_setup_failure'
+      && blocker?.phase === 'renderer_control_adapter_setup'
+      && blocker?.source === 'renderer_control_adapter_diagnostics'
+      && blocker?.product_action_started === false
+      && rendererAdapterAttempts.length >= 1
+      && rendererAdapterAttempts.length <= 2
+      && rendererAdapterAttempts.every((attempt, index) => (
+        Number(attempt?.attempt) === index + 1
+        && attempt?.before
+        && attempt?.after
+        && attempt?.lifecycle_bound === false
+        && String(attempt?.error?.message || '').trim()
+      ))
+      && rendererAdapterDiagnosticValid
+      && allowedRoles.includes(role)
+      && JSON.stringify(allowedRoles) === JSON.stringify(expectedRendererAdapterNaRoles)
+      && String(blocker?.reason || '').trim();
     const verified = skillPrerequisiteVerified
       || skillPromptSourcePrerequisiteVerified
       || runtimePrerequisiteVerified
@@ -2090,7 +2145,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       || preSendImeFailureVerified
       || preSendAttachmentRejectionVerified
       || qworkWorkspaceSelectionFailureVerified
-      || qworkExpertAudienceRejectionVerified;
+      || qworkExpertAudienceRejectionVerified
+      || rendererAdapterFrameworkFailureVerified;
     if (!verified) continue;
     notApplicable.set(role, {
       role,

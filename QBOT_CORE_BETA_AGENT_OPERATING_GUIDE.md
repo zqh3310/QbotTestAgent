@@ -446,6 +446,27 @@ capability_execution_event`，`SIT-SKILL-SCOPE-001` 未执行。runner PID `6068
 全检、提交推送、run-owned Skill 定向清理、新能力审计和精确 `.2 READY` 后，只能在新
 不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+基于 `43a5c33c1ad3dfa9a23a7e88e85fa86eba0482b5` 启动的最新冻结批次保留在
+`teams360-automation/output/20260819130930_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-43a5c33_casebook-c412ee6`：
+已可信完成 `42/83`，顶层为 `pass=16/bug=23/blocked=3`；对应 89 个完成叶子为
+`pass=46/bug=30/blocked=13`。第 43 条 `QW-SKILL-004` 与叶子 `SIT-SKILL-026`
+均不计入 completed；后者只有 M3 选择，execute receipt 为 `step_count=1`、
+`assertion_count=0`、`task_id=null`，缺少 task/prompt/send/reply 与能力选择/执行角色，
+且 exact adapter 失败原因被通用 manifest 错误覆盖。runner PID `60215` 与 npm 父进程
+`60198` 已退出，受管 360Teams PID `89152` 保留；该目录永久冻结。
+
+同一 QWork host 的后续只读诊断确认当前 `window.agent` 与六条生命周期方法可替换，
+`installRendererControlAdapter()` 连续 20 次安装、探针和关闭均成功，因此不能把冻结
+失败继承为永久 `contextBridge` 不支持；最可信分类是长批次中的瞬态/stale renderer
+adapter 或 Playwright binding 状态。修复必须为首次绑定/探针失败保存完整 registry、
+owner、stack、属性描述符、binding report、probe/controller 事件和 error stack；只有
+关闭后没有其他活动 adapter 时允许一次 clean rebind。持久失败必须用
+`qbot-core-beta-renderer-adapter-framework-failure/v1` 完整材料化产品动作前的 N/A
+角色，并保留首个 exact `primary_failure`，禁止再被 action/manifest 汇总覆盖。完成
+invariant、双框架全检、提交推送、run-owned Skill 定向清理、新能力审计和精确 `.2
+READY` 后，仍须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、
+`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

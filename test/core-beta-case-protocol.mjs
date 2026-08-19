@@ -1500,4 +1500,97 @@ try {
   }
 }
 
+{
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-renderer-adapter-framework-failure-'));
+  try {
+    const screenshot = path.join(temp, 'adapter-failure.png');
+    const actionReceipt = path.join(temp, 'action-receipts.json');
+    const productTrace = path.join(temp, 'verified-legacy-product-action-trace.json');
+    const diagnostic = path.join(temp, 'teams360-skill-fixture-adapter.json');
+    const blocker = path.join(temp, 'renderer-adapter-framework-failure.json');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 7));
+    fs.writeFileSync(actionReceipt, JSON.stringify([{
+      status: 'failed',
+      before_screenshot: screenshot,
+      after_screenshot: screenshot,
+    }]));
+    fs.writeFileSync(productTrace, JSON.stringify({
+      schema_version: 'qbot-core-beta-verified-legacy-trace/v1',
+      case_id: 'SIT-SKILL-026',
+      evidence_valid: true,
+      oracle_valid: false,
+    }));
+    fs.writeFileSync(diagnostic, JSON.stringify({
+      schema_version: 'qbot-teams-skill-fixture-adapter/v2',
+      case_id: 'SIT-SKILL-026',
+      status: 'failed',
+      attempts: [{ attempt: 1 }, { attempt: 2 }],
+    }));
+    const notApplicableRoles = [
+      'task_id',
+      'prompt',
+      'send_receipt',
+      'transcript',
+      'reply_delta',
+      'reply_completion',
+      'capability_selection',
+      'capability_execution_event',
+    ];
+    fs.writeFileSync(blocker, JSON.stringify({
+      schema_version: 'qbot-core-beta-renderer-adapter-framework-failure/v1',
+      valid: true,
+      evidence_valid: true,
+      oracle_valid: false,
+      case_id: 'SIT-SKILL-026',
+      category: 'automation_error',
+      kind: 'skill_fixture_renderer_adapter_setup_failure',
+      phase: 'renderer_control_adapter_setup',
+      source: 'renderer_control_adapter_diagnostics',
+      product_action_started: false,
+      reason: 'renderer lifecycle probe failed after one clean rebind',
+      diagnostic_path: diagnostic,
+      diagnostic_sha256: createHash('sha256').update(fs.readFileSync(diagnostic)).digest('hex'),
+      attempts: [1, 2].map((attempt) => ({
+        attempt,
+        before: { node_registry_count: 0 },
+        after: { node_registry_count: 0 },
+        lifecycle_bound: false,
+        error: { message: 'controller events missing' },
+      })),
+      not_applicable_roles: notApplicableRoles,
+    }));
+    const testCase = {
+      id: 'SIT-SKILL-026',
+      evidence_roles: [
+        'before_screenshot',
+        'action_receipt',
+        'after_screenshot',
+        'product_action_trace',
+        ...notApplicableRoles,
+      ],
+    };
+    const manifest = buildCoreEvidenceManifest({
+      testCase,
+      caseDir: temp,
+      screenshots: { before: screenshot, final: screenshot },
+      artifacts: {
+        action_receipt: actionReceipt,
+        product_action_trace: productTrace,
+        core_beta_not_applicable_roles: notApplicableRoles
+          .map((role) => ({ role, blocker_path: blocker })),
+      },
+      actions: [{}],
+    });
+    assert.equal(manifest.complete, true);
+    assert.deepEqual(manifest.missing_roles, []);
+    assert.deepEqual(manifest.invalid_roles, []);
+    assert.deepEqual(
+      manifest.not_applicable_roles.map((item) => item.role),
+      notApplicableRoles,
+    );
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 console.log('core-beta-case-protocol: ok');

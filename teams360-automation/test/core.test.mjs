@@ -75,10 +75,13 @@ import {
   workModeSelectionVerdict,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import {
+  applyFailureOutcome,
   coreBetaMcpCrossSurfaceOutcome,
   coreBetaMcpCrossSurfaceReceiptEvidenceValid,
   coreBetaSelectedCapabilityIdentities as coreBetaV2SelectedCapabilityIdentities,
   installRendererControlAdapter as installCoreBetaV2RendererControlAdapter,
+  installRendererControlAdapterWithRecovery,
+  inspectRendererControlAdapterState,
 } from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 function listen(server, port = 0) {
@@ -1018,6 +1021,17 @@ function skillLifecycleRendererRules() {
   }));
 }
 
+function skillLifecycleProbeCalls() {
+  return [
+    { name: 'getSkillsCatalog', args: ['__probe__'] },
+    { name: 'installSkill', args: ['__probe_missing__'] },
+    { name: 'uninstallSkill', args: ['__probe_missing__'] },
+    { name: 'updateSkill', args: ['__probe_missing__'] },
+    { name: 'revertSkill', args: ['__probe_missing__', '0.0.0-probe'] },
+    { name: 'reconcileSkills', args: [] },
+  ];
+}
+
 test('Core Beta v2 renderer adapter replaces a frozen contextBridge-like agent with a verified facade', async () => {
   const fixture = JSON.parse(fs.readFileSync(new URL('../runtime/testfixtures/skillhub-regression/manifest.json', import.meta.url), 'utf8'));
   const controller = createTeamsSkillFixtureController(fixture.skills);
@@ -1036,14 +1050,7 @@ test('Core Beta v2 renderer adapter replaces a frozen contextBridge-like agent w
     ['getSkillsCatalog', 'installSkill', 'uninstallSkill', 'updateSkill', 'revertSkill', 'reconcileSkills'],
   );
 
-  const calls = [
-    { name: 'getSkillsCatalog', args: ['__probe__'] },
-    { name: 'installSkill', args: ['__probe_missing__'] },
-    { name: 'uninstallSkill', args: ['__probe_missing__'] },
-    { name: 'updateSkill', args: ['__probe_missing__'] },
-    { name: 'revertSkill', args: ['__probe_missing__', '0.0.0-probe'] },
-    { name: 'reconcileSkills', args: [] },
-  ];
+  const calls = skillLifecycleProbeCalls();
   const probe = await adapter.probe(calls);
   assert.equal(probe.ok, true);
   assert.deepEqual(
@@ -1075,6 +1082,119 @@ test('Core Beta v2 renderer adapter fails closed when neither methods nor the gl
     /did not intercept required window\.agent methods/,
   );
   assert.deepEqual(controller.snapshot().events, []);
+});
+
+test('Core Beta v2 renderer adapter performs one clean rebind after a transient lifecycle binding failure', async () => {
+  const fixture = JSON.parse(fs.readFileSync(new URL('../runtime/testfixtures/skillhub-regression/manifest.json', import.meta.url), 'utf8'));
+  const controller = createTeamsSkillFixtureController(fixture.skills);
+  const page = contextBridgeLikeRendererPage();
+  let calls = 0;
+  const handler = async (call) => {
+    calls += 1;
+    if (calls <= skillLifecycleProbeCalls().length) return { handled: false };
+    return controller.handle(call);
+  };
+  const verified = await installRendererControlAdapterWithRecovery({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler,
+    probeCalls: skillLifecycleProbeCalls(),
+    readProbeEvents: () => controller.snapshot().events,
+    clearProbeEvents: () => controller.clearEvents(),
+    maxAttempts: 2,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.recovered, true);
+  assert.equal(verified.attempts.length, 2);
+  assert.equal(verified.attempts[0].lifecycle_bound, false);
+  assert.equal(verified.attempts[0].retry_eligible, true);
+  assert.equal(verified.attempts[1].lifecycle_bound, true);
+  assert.deepEqual(
+    verified.observed_probe_names,
+    skillLifecycleProbeCalls().map((item) => item.name),
+  );
+  assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 1);
+  await verified.adapter.close();
+  assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 0);
+});
+
+test('Core Beta v2 renderer adapter persistent lifecycle failure stays fail-closed with two complete diagnostics', async () => {
+  const page = contextBridgeLikeRendererPage();
+  const verified = await installRendererControlAdapterWithRecovery({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: false }),
+    probeCalls: skillLifecycleProbeCalls(),
+    readProbeEvents: () => [],
+    clearProbeEvents: () => {},
+    maxAttempts: 2,
+  });
+  assert.equal(verified.ok, false);
+  assert.equal(verified.attempts.length, 2);
+  for (const [index, attempt] of verified.attempts.entries()) {
+    assert.equal(attempt.attempt, index + 1);
+    assert.equal(attempt.lifecycle_bound, false);
+    assert.ok(attempt.before);
+    assert.ok(attempt.after);
+    assert.match(attempt.error.message, /lifecycle probe did not reach controller/);
+  }
+  assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 0);
+  assert.equal(
+    await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent),
+    true,
+  );
+});
+
+test('Core Beta v2 renderer adapter does not clean-rebind over another active Case adapter', async () => {
+  const page = contextBridgeLikeRendererPage();
+  const existing = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: false,
+    handler: async () => ({ handled: false }),
+  });
+  const verified = await installRendererControlAdapterWithRecovery({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: false }),
+    probeCalls: skillLifecycleProbeCalls(),
+    readProbeEvents: () => [],
+    clearProbeEvents: () => {},
+    maxAttempts: 2,
+  });
+  assert.equal(verified.ok, false);
+  assert.equal(verified.attempts.length, 1);
+  assert.equal(verified.attempts[0].retry_eligible, false);
+  assert.equal(verified.attempts[0].after.node_registry_count, 1);
+  assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 1);
+  await existing.close();
+  assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 0);
+});
+
+test('Core Beta v2 exact early automation failure is not overwritten by generic manifest reporting', () => {
+  const state = {};
+  applyFailureOutcome(
+    state,
+    'SIT-SKILL-026 renderer adapter lifecycle probe observed no controller events',
+    'automation_error',
+    { source: 'renderer_adapter_setup' },
+  );
+  applyFailureOutcome(
+    state,
+    'Core Beta v2 evidence manifest is incomplete',
+    'automation_error',
+    { source: 'finish_case' },
+  );
+  assert.equal(state.result_category, 'automation_error');
+  assert.equal(
+    state.actual_result,
+    'SIT-SKILL-026 renderer adapter lifecycle probe observed no controller events',
+  );
+  assert.equal(state.primary_failure.source, 'renderer_adapter_setup');
+  assert.equal(state.failure_history.length, 2);
 });
 
 test('Teams stateful connector fixture exposes deterministic healthy, unreachable, and needs-auth states', async () => {

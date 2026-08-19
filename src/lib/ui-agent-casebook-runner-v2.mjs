@@ -1297,6 +1297,48 @@ export function applyBlockedOutcome(state, reason) {
   return { preserved_automation_error: false };
 }
 
+const FAILURE_CATEGORY_PRIORITY = Object.freeze({
+  pass: 0,
+  blocked: 1,
+  bug: 2,
+  automation_error: 3,
+});
+
+export function applyFailureOutcome(state, reason, category = 'bug', { source = 'runtime' } = {}) {
+  const normalizedCategory = category === 'automation_error' ? 'automation_error' : 'bug';
+  const normalizedReason = String(reason || '').trim() || '自动化执行失败。';
+  const currentCategory = String(state?.result_category || '');
+  const currentReason = String(state?.actual_result || '').trim();
+  if (!state.primary_failure && ['bug', 'automation_error'].includes(currentCategory) && currentReason) {
+    state.primary_failure = {
+      category: currentCategory,
+      reason: currentReason,
+      source: 'existing_state',
+      recorded_at: new Date().toISOString(),
+    };
+  }
+  const failure = {
+    category: normalizedCategory,
+    reason: normalizedReason,
+    source: String(source || 'runtime'),
+    recorded_at: new Date().toISOString(),
+  };
+  state.failure_history = Array.isArray(state.failure_history) ? state.failure_history : [];
+  state.failure_history.push(failure);
+  const primary = state.primary_failure;
+  if (!primary
+    || (FAILURE_CATEGORY_PRIORITY[normalizedCategory] || 0)
+      > (FAILURE_CATEGORY_PRIORITY[primary.category] || 0)) {
+    state.primary_failure = failure;
+  }
+  state.status = 'failed';
+  state.result_category = state.primary_failure.category;
+  state.actual_result = state.primary_failure.reason;
+  state.conclusion = `失败：${state.actual_result}`;
+  state.problem_description = state.result_category === 'bug' ? buildProblemDescription(state) : '';
+  return state.primary_failure;
+}
+
 export function coreBetaBatchStopReason(testCase, result) {
   if (!isCoreBetaCase(testCase)) return '';
   const id = String(testCase?.id || '');
@@ -3769,6 +3811,9 @@ function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
     oracle_valid: failedAssertions.length === 0 && state.status !== 'failed',
     result_status: state.status,
     result_category: state.result_category,
+    actual_result: state.actual_result || '',
+    primary_failure: state.primary_failure || null,
+    failure_history: Array.isArray(state.failure_history) ? state.failure_history : [],
     steps: state.steps || [],
     assertions: state.assertions || [],
     failed_assertions: failedAssertions,
@@ -22722,33 +22767,6 @@ async function restartWithSkillHubFault({
           return result;
         };
       }
-      let adapter;
-      try {
-        adapter = await installRendererControlAdapter({
-          page,
-          initiallyArmed: true,
-          handler: controller.handle,
-          rules: [
-            ['GET', '/api/skills/catalog'],
-            ['POST', '/api/skills/install'],
-            ['POST', '/api/skills/uninstall'],
-            ['POST', '/api/skills/update'],
-            ['POST', '/api/skills/revert'],
-            ['POST', '/api/skills/reconcile'],
-          ].map(([method, pathExact]) => ({
-            id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
-            method,
-            pathExact,
-            mode: 'node-handler',
-          })),
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          reason: `${label} renderer adapter 绑定失败：${error?.message || error}`,
-          cleanup,
-        };
-      }
       const lifecycleProbeCalls = [
         { name: 'getSkillsCatalog', args: ['__qbot_renderer_adapter_probe__'] },
         { name: 'installSkill', args: ['__qbot_renderer_adapter_probe_missing__'] },
@@ -22757,39 +22775,57 @@ async function restartWithSkillHubFault({
         { name: 'revertSkill', args: ['__qbot_renderer_adapter_probe_missing__', '0.0.0-probe'] },
         { name: 'reconcileSkills', args: [] },
       ];
-      const lifecycleProbe = await adapter.probe(lifecycleProbeCalls).catch((error) => ({
-        ok: false,
-        results: [],
-        error: error?.message || String(error),
-      }));
-      const probeEvents = controller.snapshot().events;
-      const expectedProbeNames = lifecycleProbeCalls.map((item) => item.name);
-      const observedProbeNames = probeEvents.map((item) => item.name);
-      const lifecycleBound = lifecycleProbe.ok === true
-        && expectedProbeNames.length === observedProbeNames.length
-        && expectedProbeNames.every((name, index) => observedProbeNames[index] === name);
-      if (!lifecycleBound) {
-        await adapter.close().catch(() => {});
+      const verified = await installRendererControlAdapterWithRecovery({
+        page,
+        initiallyArmed: true,
+        handler: controller.handle,
+        rules: [
+          ['GET', '/api/skills/catalog'],
+          ['POST', '/api/skills/install'],
+          ['POST', '/api/skills/uninstall'],
+          ['POST', '/api/skills/update'],
+          ['POST', '/api/skills/revert'],
+          ['POST', '/api/skills/reconcile'],
+        ].map(([method, pathExact]) => ({
+          id: `teams360-skill-fixture-${pathExact.split('/').at(-1)}`,
+          method,
+          pathExact,
+          mode: 'node-handler',
+        })),
+        probeCalls: lifecycleProbeCalls,
+        readProbeEvents: () => controller.snapshot().events,
+        clearProbeEvents: () => controller.clearEvents(),
+        maxAttempts: 2,
+      });
+      const adapterDiagnosticFile = path.join(caseDir, 'teams360-skill-fixture-adapter.json');
+      writeJsonFile(adapterDiagnosticFile, {
+        schema_version: 'qbot-teams-skill-fixture-adapter/v2',
+        case_id: state.id,
+        label,
+        generated_at: new Date().toISOString(),
+        status: verified.ok ? 'verified' : 'failed',
+        recovered_after_clean_rebind: verified.recovered === true,
+        control_plane_preserved: String(options['control-plane-url'] || ''),
+        skills: fixture.skills.map((item) => item.slug),
+        expected_probe_names: verified.expected_probe_names,
+        observed_probe_names: verified.observed_probe_names,
+        attempts: verified.attempts,
+        exact_failure_reason: verified.ok ? '' : verified.reason,
+      });
+      state.artifacts.teams360_skill_fixture_adapter = adapterDiagnosticFile;
+      if (!verified.ok) {
         return {
           ok: false,
-          reason: `${label} renderer adapter 生命周期探针未到达 stateful controller：expected=${expectedProbeNames.join(',')}；observed=${observedProbeNames.join(',') || 'none'}；probe=${JSON.stringify(lifecycleProbe)}`,
+          reason: `${label} renderer adapter 验证失败：${verified.reason}`,
           cleanup,
+          adapterDiagnosticFile,
+          adapterDiagnostics: verified,
         };
       }
-      controller.clearEvents();
+      const adapter = verified.adapter;
       const combinedCleanup = async () => {
         await adapter.close().catch(() => {});
         if (cleanup) await cleanup().catch(() => {});
-      };
-      state.artifacts.teams360_skill_fixture_adapter = {
-        mode: 'stateful-renderer-bridge',
-        control_plane_preserved: String(options['control-plane-url'] || ''),
-        skills: fixture.skills.map((item) => item.slug),
-        binding_verification: {
-          ...adapter.bindingReport,
-          lifecycle_probe_ok: lifecycleBound,
-          lifecycle_probe_events: observedProbeNames,
-        },
       };
       return {
         ok: true,
@@ -22797,6 +22833,7 @@ async function restartWithSkillHubFault({
         cleanup: combinedCleanup,
         rendererAdapter: true,
         fixtureController: controller,
+        adapterDiagnosticFile,
       };
     }
     const status = overrideUrl ? 'forbidden' : 'unavailable';
@@ -23967,6 +24004,86 @@ async function executeHomeCapabilityFixtureCase({ page, state, testCase, caseDir
   }
 }
 
+function updateTeamsSkillFixtureAdapterEvidence(state, updates = {}) {
+  const file = String(state?.artifacts?.teams360_skill_fixture_adapter || '');
+  if (!file || !fs.existsSync(file)) return;
+  let current = {};
+  try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  writeJsonFile(file, {
+    ...current,
+    ...updates,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+const RENDERER_ADAPTER_FRAMEWORK_FAILURE_NA_ROLES = new Set([
+  'task_id',
+  'prompt',
+  'send_receipt',
+  'transcript',
+  'reply_delta',
+  'reply_completion',
+  'capability_selection',
+  'capability_execution_event',
+]);
+
+function materializeRendererAdapterFrameworkFailure({ state, testCase, caseDir, injected }) {
+  const adapterDiagnosticFile = String(injected?.adapterDiagnosticFile || '');
+  const diagnosticSha256 = adapterDiagnosticFile && fs.existsSync(adapterDiagnosticFile)
+    ? createHash('sha256').update(fs.readFileSync(adapterDiagnosticFile)).digest('hex')
+    : '';
+  const notApplicableRoles = (testCase.evidence_roles || [])
+    .filter((role) => RENDERER_ADAPTER_FRAMEWORK_FAILURE_NA_ROLES.has(role));
+  const exactReason = String(injected?.reason || 'Teams renderer adapter verification failed');
+  const blockerFile = path.join(caseDir, 'renderer-adapter-framework-failure.json');
+  writeJsonFile(blockerFile, {
+    schema_version: 'qbot-core-beta-renderer-adapter-framework-failure/v1',
+    valid: true,
+    evidence_valid: true,
+    oracle_valid: false,
+    case_id: testCase.id,
+    category: 'automation_error',
+    kind: 'skill_fixture_renderer_adapter_setup_failure',
+    phase: 'renderer_control_adapter_setup',
+    source: 'renderer_control_adapter_diagnostics',
+    product_action_started: false,
+    generated_at: new Date().toISOString(),
+    reason: exactReason,
+    diagnostic_path: adapterDiagnosticFile,
+    diagnostic_sha256: diagnosticSha256,
+    attempts: Array.isArray(injected?.adapterDiagnostics?.attempts)
+      ? injected.adapterDiagnostics.attempts
+      : [],
+    not_applicable_roles: notApplicableRoles,
+  });
+  state.artifacts.renderer_adapter_framework_failure = blockerFile;
+  state.artifacts.core_beta_not_applicable_roles = [
+    ...(Array.isArray(state.artifacts.core_beta_not_applicable_roles)
+      ? state.artifacts.core_beta_not_applicable_roles
+      : []),
+    ...notApplicableRoles.map((role) => ({ role, blocker_path: blockerFile })),
+  ];
+  recordStep(
+    state,
+    '验证 Teams Skill fixture renderer adapter',
+    '六条 Skill 生命周期必须按序到达 stateful controller；首次瞬态失败只允许在没有其他活动适配器时清理并重绑一次。',
+    exactReason,
+    'failed',
+    state.screenshots.model_tier_m3 || state.screenshots.before || '',
+    'automation_error',
+  );
+  recordAssertion(
+    state,
+    'Teams Skill fixture renderer adapter 完整取证',
+    '绑定报告、生命周期探针、controller 事件、registry/owner/stack 状态和精确失败原因必须持久化。',
+    false,
+    `diagnostic=${adapterDiagnosticFile || 'missing'}；framework_failure=${blockerFile}`,
+    'automation_error',
+  );
+  applyFailureOutcome(state, exactReason, 'automation_error', { source: 'renderer_adapter_setup' });
+  return blockerFile;
+}
+
 async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime }) {
   const fixture = await createSkillHubRegressionServer(caseDir);
   const priorFixtureControlPlane = options['active-fixture-control-plane-url'];
@@ -23987,8 +24104,12 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     fixture,
   });
   if (!injected.ok) {
+    if (injected.adapterDiagnosticFile || injected.adapterDiagnostics) {
+      materializeRendererAdapterFrameworkFailure({ state, testCase, caseDir, injected });
+    } else {
+      markFailed(state, `QA SkillHub Fixture 启动失败：${injected.reason}`, 'automation_error');
+    }
     await fixture.close().catch(() => {});
-    markFailed(state, `QA SkillHub Fixture 启动失败：${injected.reason}`, 'automation_error');
     return;
   }
   if (!injected.rendererAdapter) {
@@ -24002,7 +24123,7 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     if (!prepared) return;
     if (injected.fixtureController) {
       const preparationEvents = injected.fixtureController.snapshot().events;
-      state.artifacts.teams360_skill_fixture_adapter.preparation_events = preparationEvents;
+      updateTeamsSkillFixtureAdapterEvidence(state, { preparation_events: preparationEvents });
       if (!preparationEvents.some((event) => event.name === 'uninstallSkill')) {
         markFailed(
           state,
@@ -24036,6 +24157,11 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     state.artifacts.skillhub_regression_fixture.hits = injected.fixtureController
       ? injected.fixtureController.snapshot().events
       : fixture.state.hits;
+    if (injected.fixtureController) {
+      updateTeamsSkillFixtureAdapterEvidence(state, {
+        case_events: injected.fixtureController.snapshot().events,
+      });
+    }
     state.artifacts.skill_fixture_teardown = await cleanupSkillRegressionFixtureState(runtime?.page || page, testCase);
     await restoreNormalQbotAfterFault({
       state,
@@ -32793,11 +32919,185 @@ export async function installRendererControlAdapter({
   };
   if (!bindingReport.ok) {
     await close();
-    throw new Error(
+    const error = new Error(
       `renderer control adapter did not intercept required window.agent methods: ${bindingReport.missing_methods.join(',') || 'none'}; strategy=${bindingReport.strategy}`,
     );
+    error.bindingReport = bindingReport;
+    error.controlId = id;
+    throw error;
   }
   return adapter;
+}
+
+export async function inspectRendererControlAdapterState(page) {
+  const registry = page?.__qbotRendererControlRegistry;
+  const nodeRegistry = registry instanceof Map
+    ? [...registry.entries()].map(([controlId, entry]) => ({
+      control_id: String(controlId),
+      armed: entry?.state?.armed === true,
+      installed_at: Number(entry?.state?.installedAt || 0),
+      rule_ids: Array.isArray(entry?.rules) ? entry.rules.map((item) => String(item?.id || '')) : [],
+    }))
+    : [];
+  const renderer = await page.evaluate(() => {
+    const root = globalThis;
+    const lifecycleMethods = [
+      'getSkillsCatalog',
+      'installSkill',
+      'uninstallSkill',
+      'updateSkill',
+      'revertSkill',
+      'reconcileSkills',
+    ];
+    const descriptor = Object.getOwnPropertyDescriptor(root, 'agent');
+    const methodDescriptors = Object.fromEntries(lifecycleMethods.map((name) => {
+      const methodDescriptor = root.agent
+        ? Object.getOwnPropertyDescriptor(root.agent, name)
+        : null;
+      return [name, {
+        present: typeof root.agent?.[name] === 'function',
+        wrapped: root.agent?.[name]?.__qbotAutomationRendererControlWrapper === true,
+        configurable: methodDescriptor?.configurable === true,
+        enumerable: methodDescriptor?.enumerable === true,
+        writable: methodDescriptor?.writable === true,
+        has_getter: typeof methodDescriptor?.get === 'function',
+        has_setter: typeof methodDescriptor?.set === 'function',
+      }];
+    }));
+    return {
+      control_id: String(root.__qbotAutomationControlId || ''),
+      control_stack: Array.isArray(root.__qbotAutomationControlStack)
+        ? root.__qbotAutomationControlStack.map(String)
+        : [],
+      originals_owner: String(root.__qbotAutomationAgentOriginalsOwner || ''),
+      binding_strategy: String(root.__qbotAutomationAgentBindingStrategy || ''),
+      primary_bindings: root.__qbotAutomationControlPrimaryBindings
+        ? { ...root.__qbotAutomationControlPrimaryBindings }
+        : null,
+      exposed_binding_names: Object.getOwnPropertyNames(root)
+        .filter((name) => name.startsWith('__qbotAutomationControl'))
+        .sort(),
+      agent_frozen: Object.isFrozen(root.agent),
+      agent_extensible: Object.isExtensible(root.agent),
+      global_agent_descriptor: descriptor ? {
+        configurable: descriptor.configurable === true,
+        enumerable: descriptor.enumerable === true,
+        writable: descriptor.writable === true,
+        has_getter: typeof descriptor.get === 'function',
+        has_setter: typeof descriptor.set === 'function',
+      } : null,
+      lifecycle_method_descriptors: methodDescriptors,
+    };
+  }).catch((error) => ({
+    inspection_error: error?.message || String(error),
+  }));
+  return {
+    captured_at: new Date().toISOString(),
+    node_registry_count: nodeRegistry.length,
+    node_registry: nodeRegistry,
+    renderer,
+  };
+}
+
+function rendererAdapterErrorDiagnostic(error) {
+  return {
+    message: error?.message || String(error),
+    stack: String(error?.stack || ''),
+    control_id: String(error?.controlId || ''),
+    binding_report: error?.bindingReport || null,
+  };
+}
+
+export async function installRendererControlAdapterWithRecovery({
+  page,
+  rules = [],
+  initiallyArmed = false,
+  handler = null,
+  probeCalls = [],
+  readProbeEvents = () => [],
+  clearProbeEvents = () => {},
+  maxAttempts = 2,
+}) {
+  const boundedAttempts = Math.max(1, Math.min(2, Number(maxAttempts) || 1));
+  const expectedProbeNames = probeCalls.map((item) => String(item?.name || ''));
+  const attempts = [];
+  let lastReason = 'renderer control adapter verification did not run';
+  for (let attemptNumber = 1; attemptNumber <= boundedAttempts; attemptNumber += 1) {
+    await Promise.resolve(clearProbeEvents()).catch(() => {});
+    const attempt = {
+      attempt: attemptNumber,
+      started_at: new Date().toISOString(),
+      before: await inspectRendererControlAdapterState(page),
+      binding_report: null,
+      lifecycle_probe: null,
+      controller_events: [],
+      lifecycle_bound: false,
+      error: null,
+      retry_eligible: false,
+    };
+    let adapter = null;
+    try {
+      adapter = await installRendererControlAdapter({
+        page,
+        rules,
+        initiallyArmed,
+        handler,
+      });
+      attempt.binding_report = adapter.bindingReport;
+      attempt.lifecycle_probe = await adapter.probe(probeCalls).catch((error) => ({
+        ok: false,
+        results: [],
+        error: error?.message || String(error),
+      }));
+      const controllerEvents = await Promise.resolve(readProbeEvents()).catch((error) => [{
+        name: '__controller_event_read_failed__',
+        error: error?.message || String(error),
+      }]);
+      attempt.controller_events = Array.isArray(controllerEvents)
+        ? controllerEvents.map((item) => ({ ...item }))
+        : [];
+      const observedProbeNames = attempt.controller_events.map((item) => String(item?.name || ''));
+      attempt.lifecycle_bound = attempt.lifecycle_probe?.ok === true
+        && expectedProbeNames.length === observedProbeNames.length
+        && expectedProbeNames.every((name, index) => observedProbeNames[index] === name);
+      if (attempt.lifecycle_bound) {
+        attempt.ended_at = new Date().toISOString();
+        attempt.after = await inspectRendererControlAdapterState(page);
+        attempts.push(attempt);
+        await Promise.resolve(clearProbeEvents()).catch(() => {});
+        return {
+          ok: true,
+          adapter,
+          attempts,
+          recovered: attemptNumber > 1,
+          expected_probe_names: expectedProbeNames,
+          observed_probe_names: observedProbeNames,
+        };
+      }
+      lastReason = `renderer adapter lifecycle probe did not reach controller in order: expected=${expectedProbeNames.join(',')}; observed=${observedProbeNames.join(',') || 'none'}; probe=${JSON.stringify(attempt.lifecycle_probe)}`;
+      attempt.error = { message: lastReason, stack: '', control_id: '', binding_report: adapter.bindingReport };
+    } catch (error) {
+      attempt.error = rendererAdapterErrorDiagnostic(error);
+      attempt.binding_report ||= error?.bindingReport || null;
+      lastReason = attempt.error.message;
+    }
+    if (adapter) await adapter.close().catch(() => {});
+    await Promise.resolve(clearProbeEvents()).catch(() => {});
+    attempt.after = await inspectRendererControlAdapterState(page);
+    attempt.ended_at = new Date().toISOString();
+    attempt.retry_eligible = attemptNumber < boundedAttempts
+      && attempt.after.node_registry_count === 0;
+    attempts.push(attempt);
+    if (!attempt.retry_eligible) break;
+  }
+  return {
+    ok: false,
+    reason: lastReason,
+    attempts,
+    recovered: false,
+    expected_probe_names: expectedProbeNames,
+    observed_probe_names: attempts.at(-1)?.controller_events?.map((item) => String(item?.name || '')) || [],
+  };
 }
 
 async function captureConfirmDuringWithAction(page, action, { accept = false } = {}) {
@@ -36631,11 +36931,7 @@ function markBlocked(state, reason) {
 }
 
 function markFailed(state, reason, category = 'bug') {
-  state.status = 'failed';
-  state.result_category = category;
-  state.actual_result = reason;
-  state.conclusion = `失败：${reason}`;
-  state.problem_description = category === 'bug' ? buildProblemDescription(state) : '';
+  return applyFailureOutcome(state, reason, category, { source: 'markFailed' });
 }
 
 function recordStep(state, action, expected, actual, status, screenshot = '', category = '') {

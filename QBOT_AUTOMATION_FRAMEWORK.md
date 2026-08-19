@@ -661,6 +661,18 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   精确到达 Node controller 且没有命中正式控制面；探针事件验证后必须清空。每个真实叶子
   的 fixture 准备阶段还必须再次观察到独立的 controller 事件（至少包含定向
   `uninstallSkill`），不得用探针事件冒充 Case 动作或在实际事件为空时继续执行。
+- stateful renderer adapter 的绑定或六条生命周期探针首次失败时，框架必须先保存
+  binding report、每条 probe 结果与 controller 事件、Node registry、renderer
+  control stack/owner、agent 与方法属性描述符、精确错误 message/stack，再关闭本次
+  adapter。只有关闭后 Node registry 为空、确认没有其他 Case adapter 正在活动时，
+  才允许执行一次清理后的全新 binding/reprobe；最多两次，禁止循环重试或在其他活动
+  adapter 上执行破坏性清理。第二次仍失败或关闭后仍有活动 adapter 时必须在产品动作前
+  fail-closed。`qbot-teams-skill-fixture-adapter/v2` 必须保留全部尝试；若最终失败，
+  `qbot-core-beta-renderer-adapter-framework-failure/v1` 必须把未发生的 task/prompt/reply/
+  capability 角色严格标为 N/A，使 framework-failure 取证完整，同时结果仍保持
+  `automation_error`、父 Case 不进入 completed、批次停止并进入自愈。首个精确
+  automation failure 必须写入 `primary_failure` 和 trace；后续通用 action/manifest/
+  machine-assertion 汇总只能进入 failure history，不得覆盖根因。
 - `BETA-SKILL-014` 每个不可变批次必须从 Case 目录派生唯一、合法的 `qa-meeting-minutes-<digest>` fixture slug，并把该精确名称写入每一轮真实 prompt；不得复用固定 `meeting-minutes`、覆盖已有用户 Skill，或把前序冻结批次的残留当成本轮产物。创建入口选择证据必须同时包含发送前 exact `skillhub:global/skill-creator-qwork`、每轮发送后的同一 taskId 快照、实际 prompts 和发送后终态。产品 QWork home 必须优先从当前冻结的 versioned `file://.../ui/<version>/index.html` 推导；Teams 为受管重启/控制面 fixture 注入的 `--qbot-home` 不能覆盖该产品 release home，只有非 file UI 无法推导时才允许回退。产物必须独立读回该产品 QWork home 下 `.claude/skills/<slug>/SKILL.md` 与 `.agents/skills/<slug>/SKILL.md`，校验普通文件、非符号链接、frontmatter name、`agent_created: true`、非空 description、字节数和一致 SHA；同时证明内部 creator 未混入普通市场库存。证据结构完整与业务 Oracle 必须分开：双投影缺失或产品未创建时，专项文件仍应 `valid=true/evidence_valid=true/oracle_valid=false` 并形成可继续批次的产品 Bug；只有路径/读回/task-bound 证据本身缺失才属于 framework issue。证据固化后，清理阶段只能删除基线中不存在且精确匹配本轮唯一 slug 的两个投影目录，以及 QWork home 内 Claude project memory 下文件名、正文均精确绑定该 slug 的新增非符号链接记忆文件，并保存 `skill-creator-fixture-cleanup.json`；任一预存、越界、符号链接、删除失败或残留都必须以 `automation_error` fail-closed。
 - `BETA-EXPERT-001` 必须先通过真实【新建任务】进入 `taskId=null/messageCount=0` 的干净草稿，再按 `display.label` 搜索目标专家，执行一次 `recordRecent` 与 `setExpert`，发送 Casebook 冻结的确定性短提示并生成本 Case 自己的新 taskId。新 taskId 必须非空且不等于进入本 Case 前观察到的上游 taskId；expertId/versionId/releaseId 必须在选择读回、发送后任务、`setExpert` 回执和最近召唤中一致。`recordRecent` 与 `setExpert` 是一次性状态变更，必须与后续只读公开 `window.agent.capabilities()` 分离；`expertLifecycle` 只承载专家目录/草稿生命周期方法，不得假设或调用 `expertLifecycle.capabilities()`。Teams IPC 首次超时时，只允许对 capabilities 最多执行三次有界重试并保存逐次账本；不得重复召唤、重复写最近列表或重复设置专家。首次失败后恢复成功必须继续完成当前 Case；三次读回均失败且没有独立公开状态可验证精确专家 identity 时，才按 framework issue fail-closed。发布记录读回必须始终写 `valid=true/evidence_valid=true` 表示结构化取证完成，并用 `oracle_valid` 表示可见ID/计数是否严格等于 `owned=true` 集合；产品列表为空或计数错误属于证据完整的产品 Bug，不得把 `product_state_diff` 标成 manifest invalid。
 - `SIT-EXPERT-022` 必须在专家首轮发送前、点击通用助手后分别保存公开 `capabilities.currentExpert` 读回，并把专家选择/清空映射为 `capability_selection`。切换成功时，两轮 prompt、各自非空 taskId、完整回复终态和切换回执必须映射为 `capability_execution_event`；产品 Oracle 另外要求两轮 taskId 相同。若两轮 taskId 均非空但不一致，证据仍必须写 `valid=true/evidence_valid=true/oracle_valid=false` 并记产品 Bug；任一 taskId 缺失才属于 task 绑定证据不完整。入口缺失或点击失败时，必须显式记录第二轮未执行及其原因，不得伪造 prompt/回复。入口缺失、入口点击失败、点击后 Composer 不可用、公开专家身份未清空或回复仍泄漏旧专家身份时，证据结构完整则同样记产品 Bug；只有 capabilities 读回、task 绑定、回复终态或证据文件本身缺失时才允许以 framework issue fail-closed。legacy 与 v2 runner 必须共享这一合同，禁止把已完成的专家切换产品路径因缺少证据角色误停在 compound 中。
