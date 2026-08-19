@@ -15,6 +15,7 @@ import {
   assistantConfirmationSurfaceVerdict,
   applyBlockedOutcome,
   artifactTextHasFacts,
+  automationFixtureMarkerPattern,
   attachmentReplyMissingEvidence,
   attachmentTaskPromptFromCase,
   assessUserCenteredOutcome,
@@ -178,6 +179,10 @@ import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-genera
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
 const legacyRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
+const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
+assert.match('QA Node Runtime', normalizedFixtureMarker, 'Fixture slug 应与空格展示名稳定匹配');
+assert.match('qa_node-runtime', normalizedFixtureMarker, 'Fixture marker 应归一化下划线、连字符与空格');
+assert.doesNotMatch('QA Python Runtime', normalizedFixtureMarker, 'Fixture marker 不得跨身份误匹配');
 
 const expertSwitchTaskMismatch = expertGeneralAssistantExecutionVerdict({
   selectionEvidenceValid: true,
@@ -7042,6 +7047,8 @@ const required = [
   ['破坏性操作精确点击新版确认按钮且缺失时不判通过', /(?=[\s\S]*confirmDestructiveAction[\s\S]*data-testid\$="-confirm"[\s\S]*custom-dialog-missing-confirm)(?=[\s\S]*\['native-confirm', 'custom-dialog'\]\.includes\(dialog\.source\))/],
   ['破坏性确认文案兼容“确定删除”与“确定要删除”', /confirmationCopy = \/确认\|确定\(\?:要\)\?\(\?:删除\|卸载\|移除\)/],
   ['SKILL-026 预装两项确定性 Fixture 并进入真实 Fixture 路由', /SIT-SKILL-026'[\s\S]*qa-python-runtime[\s\S]*qa-node-runtime[\s\S]*skill_fixture_multi_select_setup/],
+  ['每次确定性 Skill Fixture 查找强制清空旧搜索并刷新市场', /searchAutomationSkillCard[\s\S]*input\.fill\(''\)[\s\S]*skills-catalog-refresh[\s\S]*refresh\.click[\s\S]*refresh_settled[\s\S]*targetDeadline[\s\S]*persistAutomationSkillCatalogLookup/],
+  ['Skill Fixture 市场刷新记录目标、可见卡片与失败诊断', /searchAutomationSkillCard[\s\S]*visible_card_texts[\s\S]*errors[\s\S]*persistAutomationSkillCatalogLookup[\s\S]*qbot-automation-skill-catalog-lookups\/v1[\s\S]*evidence_valid[\s\S]*oracle_valid/],
   ['SKILL-026 只选择刚预装的两项 Fixture 而非创建技能入口', /executeSitSkillMultiSelect[\s\S]*QA Python Runtime[\s\S]*QA Node Runtime[\s\S]*selectManualSkillByName/],
   ['多 Skill 恢复前清理 chip 装饰符号', /cleanSkillChipLabel[\s\S]*✦★☆◆◇•·[\s\S]*trim\(\)/],
   ['带内联 Skill chip 的会话直接发送已准备 composer', /runPromptInCurrentTask[\s\S]*composerPrepared[\s\S]*不能再次 fill 导致 chip 与 selectedSkills 被清空/],

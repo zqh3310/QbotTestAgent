@@ -16078,23 +16078,104 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
   await openSkillsPage(page, state, caseDir, { skillTab: installed ? '已安装' : '技能市场' });
   const markerPattern = marker ? automationFixtureMarkerPattern(marker) : null;
   if (installed) return markerPattern ? findSkillCardByText(page, markerPattern) : null;
+
+  const diagnostic = {
+    marker: String(marker || ''),
+    started_at: new Date().toISOString(),
+    stale_query: '',
+    search_cleared: false,
+    refresh_control_visible: false,
+    refresh_clicked: false,
+    refresh_settled: false,
+    search_submitted: false,
+    target_found: false,
+    visible_card_texts: [],
+    errors: [],
+  };
   const input = page.locator('.skill-search input, input[placeholder*="搜索技能"]').first();
-  if (marker && await visible(input, 1500)) {
+  const inputVisible = await visible(input, 1500);
+  if (inputVisible) {
+    diagnostic.stale_query = await input.inputValue({ timeout: 800 }).catch(() => '');
+    await input.fill('');
+    diagnostic.search_cleared = true;
+  } else {
+    diagnostic.errors.push('技能市场搜索框不可见。');
+  }
+
+  const refresh = page.locator('[data-testid="skills-catalog-refresh"]').first();
+  diagnostic.refresh_control_visible = await visible(refresh, 1500);
+  if (diagnostic.refresh_control_visible) {
+    try {
+      await refresh.click({ force: true, timeout: 2500 });
+      diagnostic.refresh_clicked = true;
+      await page.waitForTimeout(500);
+      const settleDeadline = Date.now() + 5000;
+      while (Date.now() < settleDeadline) {
+        const busy = await refresh.getAttribute('aria-busy').catch(() => null);
+        const disabled = await refresh.isDisabled().catch(() => false);
+        const loadingVisible = await visible(
+          page.locator('[data-testid="skills-catalog-loading"], .skills-loading, .skill-loading').first(),
+          150,
+        );
+        if (busy !== 'true' && !disabled && !loadingVisible) {
+          diagnostic.refresh_settled = true;
+          break;
+        }
+        await page.waitForTimeout(200);
+      }
+    } catch (error) {
+      diagnostic.errors.push(`技能市场刷新失败：${error?.message || String(error)}`);
+    }
+  } else {
+    diagnostic.errors.push('稳定技能市场刷新控件不可见。');
+  }
+
+  let card = null;
+  if (markerPattern && inputVisible && diagnostic.refresh_clicked && diagnostic.refresh_settled) {
     await input.fill(marker);
     const submit = page.locator('.skill-search button').filter({ hasText: /搜索/ }).first();
     if (await visible(submit, 500)) {
-      await submit.click({ force: true }).catch(async () => submit.evaluate((el) => el.click()));
+      await submit.click({ force: true, timeout: 1500 }).catch(() => input.press('Enter'));
     } else {
       await input.press('Enter').catch(() => {});
     }
-    await page.waitForTimeout(1600);
+    diagnostic.search_submitted = true;
+    const targetDeadline = Date.now() + 5000;
+    while (Date.now() < targetDeadline && !card) {
+      card = await findSkillCardByText(page, markerPattern);
+      if (!card) await page.waitForTimeout(250);
+    }
   }
-  return markerPattern ? findSkillCardByText(page, markerPattern) : null;
+  diagnostic.target_found = Boolean(card);
+  diagnostic.visible_card_texts = (await page.locator('.skill-card').allInnerTexts().catch(() => []))
+    .map((text) => clip(text.trim(), 300))
+    .filter(Boolean)
+    .slice(0, 20);
+  diagnostic.finished_at = new Date().toISOString();
+  persistAutomationSkillCatalogLookup(state, caseDir, diagnostic);
+  return card;
 }
 
 export function automationFixtureMarkerPattern(marker) {
   const parts = String(marker || '').trim().split(/[-_\s]+/).filter(Boolean);
   return new RegExp(parts.map(escapeRegExp).join('(?:[-_\\s]+)'), 'i');
+}
+
+function persistAutomationSkillCatalogLookup(state, caseDir, diagnostic) {
+  const previous = Array.isArray(state.artifacts?.skill_fixture_catalog_lookups)
+    ? state.artifacts.skill_fixture_catalog_lookups
+    : [];
+  const lookups = [...previous, diagnostic];
+  const file = path.join(caseDir, 'skill-fixture-catalog-lookups.json');
+  writeJsonFile(file, {
+    schema_version: 'qbot-automation-skill-catalog-lookups/v1',
+    valid: lookups.every((item) => item.search_cleared && item.refresh_clicked && item.refresh_settled),
+    evidence_valid: lookups.every((item) => item.search_cleared && item.refresh_clicked && item.refresh_settled),
+    oracle_valid: lookups.every((item) => item.target_found),
+    lookups,
+  });
+  state.artifacts.skill_fixture_catalog_lookups = lookups;
+  state.artifacts.skill_fixture_catalog_lookup = file;
 }
 
 async function waitForSkillOperationFeedback(page, timeoutMs = 120000) {

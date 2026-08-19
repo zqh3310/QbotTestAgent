@@ -25,7 +25,7 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；最新 runner PID `55433` 及 npm 父进程 `55415` 已退出，受管
+- 当前没有有效 runner；最新 runner PID `62197` 及 npm 父进程 `62170` 已退出，受管
   360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
@@ -466,6 +466,21 @@ owner、stack、属性描述符、binding report、probe/controller 事件和 er
 invariant、双框架全检、提交推送、run-owned Skill 定向清理、新能力审计和精确 `.2
 READY` 后，仍须在新不可变目录从 `1/83` 全量串行重跑，`inherited=0`、
 `synthetic=0`。
+
+基于 `0dfe6364d0b2f90d6943577c6a04cbad2b70c5e6` 启动的最新冻结批次保留在
+`teams360-automation/output/20260819163030_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-0dfe636_casebook-c412ee6`：
+已完成 `42/83`，顶层为 `pass=16/bug=23/blocked=3`，全部真实执行且
+`inherited=0/synthetic=0`。第 43 条 `QW-SKILL-004` 未进入 completed；其叶子
+`SIT-SKILL-026` 的 renderer fixture adapter 安装、六条生命周期探针与
+`qa-python-runtime` 安装均成功，但接着查找 `qa-node-runtime` 时页面只重复点击
+已激活的【技能市场】，未触发稳定 catalog refresh，React 继续显示旧/真实市场卡片，
+从而将确定性 Fixture 缺卡误升为不完整 `automation_error`。runner 与 npm 父进程
+均已退出，受管宿主 PID `89152` 保留，该目录永久冻结。修复必须使 legacy/v2
+每次确定性 Fixture 查找都清空旧搜索、点击
+`[data-testid="skills-catalog-refresh"]`、等待渲染收敛、按归一化 marker 搜索并保存
+`skill-fixture-catalog-lookups.json`。完成 invariant、双框架全检、提交推送、定向清理、
+新能力审计和精确 `.2 READY` 后，仍只能在新目录从 `1/83` 全量串行重跑，
+`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 
