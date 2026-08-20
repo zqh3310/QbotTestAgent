@@ -15,18 +15,18 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
-- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.10` build `2119081439`、
-  QWork `0.1.4-sit.2`、UI commit `e1deb868`、backend
+- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.13` build `2119081949`、
+  QWork `0.1.4-sit.11`、UI commit `2cdcb9d7`、backend
   `sit-health-ae3b6cafbc5ed123`、control plane
   `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、prompt policy
-  `qwork-runtime-0.1.4-sit.2-sha256-f465773a53b498c28877967148ab6429507ffba077e6520baabc1470564476a7`、
-  feature/UI SHA `bf3c3dcc76e6aa1f9aa18ccc915cfb0ccff2c4353f49ccc35f1b7749f637ef40`、
-  release manifest SHA `650d8ef31ed153bc8d0870b712639771aaa1e6630079ba2754258f598f4d2b10`、
-  release-set digest `2726ef8dd4b10b3243ba43b159f4ee8d9d009e94e222bb145741a6be9a2cde8b`、
+  `qwork-runtime-0.1.4-sit.11-sha256-18be77ef53f3fb2b185de5837386ee9180165a00999b06b72779bebbf894127d`、
+  feature/UI SHA `db8d0d5c2200b0c5854c2ee179a4deb676dc2a934bc47db437f420a01f533817`、
+  release manifest SHA `39f1c5fc19ef2899c7ddb449845d2451c833e5774c4eb5dc209d7ba71796246c`、
+  release-set digest `8beb4c2be5aec05c7164fccee95764cffd5ed746db77a9928f130ea4cad04486`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；最新 runner PID `62197` 及 npm 父进程 `62170` 已退出，受管
-  360Teams PID `89152` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
+- 当前没有有效 runner；最新 runner PID `82519` 及 npm 父进程 `82496` 已退出，受管
+  360Teams PID `73907` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
   不得继承旧 runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
   `QW-CHAT-005/BETA-CHAT-006` 发送前停止：SIT control plane 令公开
@@ -481,6 +481,21 @@ READY` 后，仍须在新不可变目录从 `1/83` 全量串行重跑，`inherit
 `skill-fixture-catalog-lookups.json`。完成 invariant、双框架全检、提交推送、定向清理、
 新能力审计和精确 `.2 READY` 后，仍只能在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
+
+升级到 QWork `0.1.4-sit.11` 后基于
+`304565d2bf8479579c22ef106986953f82565bfb` 启动的最新冻结批次保留在
+`teams360-automation/output/20260820153125_sit-qwork-daily83_teams360-5.5.13-2119081949_qwork-0.1.4-sit.11_M3_serial_framework-304565d_casebook-c412ee6`：
+已完成 `15/83`，全部真实执行且 `inherited=0/synthetic=0`；第 16 条
+`QW-FILE-006` 未进入 completed。叶子 `BETA-FILE-007` 已完成四类发送前拒绝、
+合法附件恢复上传与确认发送，并在完整 `600000ms` 窗口后保留了点名
+`qbot-text-brief.txt/228 字节` 的可归属回复与受验证超时终态。旧矩阵却用
+`valid=false` 同时表示产品 Oracle 失败和证据无效，使 manifest 误拒绝
+`attachment_readback` 并触发 framework stop。runner 和 npm 父进程已正常退出，受管
+宿主 PID `73907` 保留，该目录永久冻结。修复必须使矩阵以
+`valid/evidence_valid` 表示结构与终态证据完整性，以 `oracle_valid` 表示稳定完成且
+文件名/大小正确；受验证超时必须保持产品 Bug 并继续后续独立叶子。完成
+invariant、双框架全检、提交推送、新能力审计和精确 `.11 READY` 后，仍只能在新
+不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：
 

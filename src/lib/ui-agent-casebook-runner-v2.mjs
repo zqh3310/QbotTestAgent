@@ -363,6 +363,75 @@ export function coreBetaAttachmentRejectionMatrixVerdict(probes = []) {
     && requiredLabels.size === 0;
 }
 
+export function coreBetaAttachmentLimitsRecoveryVerdict({
+  caseId = '',
+  rejectionValid = false,
+  legalSource = {},
+  legalUpload = {},
+  taskBinding = {},
+  reply = {},
+  replyCompletion = {},
+} = {}) {
+  const sourceName = String(legalSource?.name || '').trim();
+  const sourceEvidenceValid = Boolean(
+    sourceName
+    && Number(legalSource?.size_bytes || 0) > 0
+    && /^[a-f0-9]{64}$/i.test(String(legalSource?.sha256 || ''))
+  );
+  const expectedNames = Array.isArray(legalUpload?.expected_names)
+    ? legalUpload.expected_names.map(String)
+    : [];
+  const visibleNames = Array.isArray(legalUpload?.visible_names)
+    ? legalUpload.visible_names.map(String)
+    : [];
+  const uploadEvidenceValid = Boolean(
+    legalUpload?.status === 'passed'
+    && expectedNames.includes(sourceName)
+    && visibleNames.includes(sourceName)
+  );
+  const replyText = String(reply?.deltaText || '');
+  const replyPresent = Boolean(replyText.trim());
+  const terminalOutcome = String(replyCompletion?.terminal_outcome || '');
+  const replyBodyEvidenceValid = replyCompletion?.complete === true
+    ? replyPresent
+    : ['timed_out', 'no_reply'].includes(terminalOutcome)
+      && replyCompletion?.assistant_reply_present === replyPresent;
+  const taskEvidenceValid = Boolean(
+    String(taskBinding?.task_id || '').trim()
+    && String(taskBinding?.case_id || '') === String(caseId || '')
+  );
+  const replyEvidenceValid = Boolean(
+    replyCompletion?.confirmed_send_receipt === true
+    && validateReplyCompletionPayload(replyCompletion).valid
+    && replyBodyEvidenceValid
+  );
+  const evidenceValid = Boolean(
+    rejectionValid
+    && sourceEvidenceValid
+    && uploadEvidenceValid
+    && taskEvidenceValid
+    && replyEvidenceValid
+  );
+  const oracleValid = Boolean(
+    evidenceValid
+    && replyCompletion?.complete === true
+    && reply?.incomplete !== true
+    && !attachmentReplyMissingEvidence(replyText, [sourceName])
+    && replyText.includes(sourceName)
+  );
+  return {
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    source_evidence_valid: sourceEvidenceValid,
+    upload_evidence_valid: uploadEvidenceValid,
+    task_evidence_valid: taskEvidenceValid,
+    reply_evidence_valid: replyEvidenceValid,
+    reply_complete: reply?.incomplete !== true,
+    reply_mentions_filename: replyText.includes(sourceName),
+    terminal_outcome: terminalOutcome,
+  };
+}
+
 const CONNECTOR_MODE_LABELS = {
   disabled: '禁用',
   auto: '自动',
@@ -15151,28 +15220,54 @@ async function executeCoreBetaAttachmentLimitsRecovery({
     prompt,
     label: '四类拒绝后的合法附件恢复发送',
   });
-  const legalReplyValid = !reply.incomplete
-    && !attachmentReplyMissingEvidence(reply.deltaText, [legalFile])
-    && reply.deltaText.includes(path.basename(legalFile));
+  const replyCompletion = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(state.artifacts.reply_completion, 'utf8'));
+    } catch {
+      return null;
+    }
+  })();
+  const taskBinding = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(state.artifacts.task_id, 'utf8'));
+    } catch {
+      return null;
+    }
+  })();
+  const recoveryVerdict = coreBetaAttachmentLimitsRecoveryVerdict({
+    caseId: testCase.id,
+    rejectionValid,
+    legalSource,
+    legalUpload,
+    taskBinding,
+    reply,
+    replyCompletion,
+  });
   recordAssertion(
     state,
     '拒绝后合法附件可发送并被处理',
     '合法分支必须产生稳定 taskId、完整 transcript/reply-delta，且回复点名合法附件。',
-    legalReplyValid,
+    recoveryVerdict.oracle_valid,
     clip(reply.deltaText, 500),
   );
 
   const matrix = {
     schema_version: 1,
     case_id: testCase.id,
-    valid: rejectionValid && legalReplyValid,
+    valid: recoveryVerdict.evidence_valid,
+    evidence_valid: recoveryVerdict.evidence_valid,
+    oracle_valid: recoveryVerdict.oracle_valid,
     product_rejected_before_send: rejectionValid,
     probes: results,
     legal_recovery: {
       source: legalSource,
       upload: legalUpload,
-      reply_complete: !reply.incomplete,
-      reply_mentions_filename: reply.deltaText.includes(path.basename(legalFile)),
+      task_evidence_valid: recoveryVerdict.task_evidence_valid,
+      reply_complete: recoveryVerdict.reply_complete,
+      reply_mentions_filename: recoveryVerdict.reply_mentions_filename,
+      reply_evidence_valid: recoveryVerdict.reply_evidence_valid,
+      reply_oracle_valid: recoveryVerdict.oracle_valid,
+      terminal_outcome: recoveryVerdict.terminal_outcome,
     },
   };
   const matrixFile = path.join(caseDir, 'attachment-limit-recovery-matrix.json');

@@ -37,6 +37,7 @@ import {
   coreBetaBatchTaskMarker,
   coreBetaBatchStopReason,
   coreBetaAttachmentFixtureContractVerdict,
+  coreBetaAttachmentLimitsRecoveryVerdict,
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupCapabilitiesNeedsRetry,
@@ -8084,6 +8085,101 @@ for (const unrelatedReply of [
 ]) {
   if (replyLooksRelevant(unrelatedReply, attachmentIdentityAndSizeCase, attachmentIdentityAndSizePrompt)) {
     throw new Error(`BETA-FILE-007 不得接受缺失文件身份/大小或无关的回复：${unrelatedReply}`);
+  }
+}
+{
+  const terminalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-beta-file-007-terminal-'));
+  try {
+    const terminalScreenshot = path.join(terminalDir, 'after-timeout.png');
+    fs.writeFileSync(terminalScreenshot, Buffer.alloc(256, 7));
+    const terminalScreenshotSha256 = createHash('sha256')
+      .update(fs.readFileSync(terminalScreenshot))
+      .digest('hex');
+    const common = {
+      caseId: 'BETA-FILE-007',
+      rejectionValid: true,
+      legalSource: {
+        name: 'qbot-text-brief.txt',
+        size_bytes: 228,
+        sha256: 'eda7b30ac0791eac3e253ff92424017d582fc4f7d5753d2c7276873e910f7713',
+      },
+      legalUpload: {
+        status: 'passed',
+        expected_names: ['qbot-text-brief.txt'],
+        visible_names: ['qbot-text-brief.txt'],
+      },
+      taskBinding: {
+        case_id: 'BETA-FILE-007',
+        task_id: 'fixture-task-beta-file-007',
+      },
+      reply: {
+        incomplete: true,
+        deltaText: '文件名：qbot-text-brief.txt\n大小：228 字节',
+      },
+      replyCompletion: {
+        complete: false,
+        evidence_complete: true,
+        terminal_failure: true,
+        terminal_outcome: 'timed_out',
+        assistant_reply_present: true,
+        confirmed_send_receipt: true,
+        waited_ms: 600001,
+        min_wait_ms: 60000,
+        timeout_ms: 600000,
+        terminal_reason: 'Agent 在完整等待窗口结束时仍在运行。',
+        terminal_screenshot: terminalScreenshot,
+        terminal_screenshot_sha256: terminalScreenshotSha256,
+      },
+    };
+    const timedOut = coreBetaAttachmentLimitsRecoveryVerdict(common);
+    assert.equal(timedOut.evidence_valid, true, 'BETA-FILE-007 受验证超时终态必须保持 attachment_readback 证据有效');
+    assert.equal(timedOut.oracle_valid, false, '合法附件回复未稳定完成时只能失败产品 Oracle');
+    const completed = coreBetaAttachmentLimitsRecoveryVerdict({
+      ...common,
+      reply: { ...common.reply, incomplete: false },
+      replyCompletion: {
+        complete: true,
+        evidence_complete: true,
+        terminal_failure: false,
+        terminal_outcome: 'completed',
+        confirmed_send_receipt: true,
+      },
+    });
+    assert.equal(completed.evidence_valid, true);
+    assert.equal(completed.oracle_valid, true, '稳定完成且点名文件名与大小时应通过产品 Oracle');
+    const noReply = coreBetaAttachmentLimitsRecoveryVerdict({
+      ...common,
+      reply: { incomplete: true, deltaText: '' },
+      replyCompletion: {
+        ...common.replyCompletion,
+        terminal_outcome: 'no_reply',
+        assistant_reply_present: false,
+        waited_ms: 60001,
+        min_wait_ms: 60000,
+        timeout_ms: 600000,
+        observed_running_after_send: true,
+        running_after: false,
+        no_reply_stable_observations: 3,
+        terminal_reconciliation_performed: true,
+        terminal_reconciliation_task_bound: true,
+        terminal_reconciliation_prompt_bound: true,
+        terminal_reconciliation_reply_present: false,
+      },
+    });
+    assert.equal(noReply.evidence_valid, true, 'BETA-FILE-007 受验证 no_reply 终态不得因正文为空而破坏证据');
+    assert.equal(noReply.oracle_valid, false, '受验证 no_reply 只能失败产品 Oracle');
+    const taskDrift = coreBetaAttachmentLimitsRecoveryVerdict({
+      ...common,
+      taskBinding: { ...common.taskBinding, case_id: 'OTHER-CASE' },
+    });
+    assert.equal(taskDrift.evidence_valid, false, '合法恢复任务绑定漂移仍必须 fail-closed');
+    const incompleteTerminalEvidence = coreBetaAttachmentLimitsRecoveryVerdict({
+      ...common,
+      replyCompletion: { ...common.replyCompletion, terminal_screenshot_sha256: '' },
+    });
+    assert.equal(incompleteTerminalEvidence.evidence_valid, false, '终态截图 SHA 缺失仍必须 fail-closed');
+  } finally {
+    fs.rmSync(terminalDir, { recursive: true, force: true });
   }
 }
 if (!replyLooksRelevant('两个 Skill 都已加载完毕。QA Node Runtime 负责 Node.js 生成数据，QA Python Runtime 负责 Python 分析数据，下面执行一次联合处理。', {
