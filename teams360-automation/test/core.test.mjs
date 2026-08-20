@@ -2030,6 +2030,32 @@ test('the Teams wrapper removes synthetic tails and resumes from recoverable ada
   }
 });
 
+test('a frozen-run runtime update activation risk is never resumed in the same output directory', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-runtime-update-stop-'));
+  const progressFile = path.join(outDir, 'automation-progress.json');
+  try {
+    fs.writeFileSync(progressFile, JSON.stringify({
+      completed: 0,
+      total: 83,
+      stopped: true,
+      results: [{
+        id: 'BETA-PERF-003',
+        status: 'failed',
+        result_category: 'automation_error',
+        actual_result: '检测到待激活 QWork 更新 0.1.4-sit.17；冻结版本=0.1.4-sit.11；已保留提示且拒绝继续发送。',
+      }],
+    }));
+    const repair = repairInterruptedTeamsProgress({ outDir, pass: 1 });
+    assert.equal(repair.repaired, false);
+    assert.equal(repair.reason, 'no-recoverable-framework-result');
+    const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+    assert.equal(progress.stopped, true);
+    assert.equal(progress.results.length, 1);
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
 test('the Teams wrapper retries a QWork reply-poll hard timeout from the affected Case', () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-reply-poll-recovery-'));
   const progressFile = path.join(outDir, 'automation-progress.json');

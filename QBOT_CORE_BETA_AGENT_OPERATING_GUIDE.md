@@ -25,9 +25,12 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   release-set digest `8beb4c2be5aec05c7164fccee95764cffd5ed746db77a9928f130ea4cad04486`、
   模型 M3；pretest
   仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；最新 runner PID `82519` 及 npm 父进程 `82496` 已退出，受管
-  360Teams PID `73907` 保留。新 pretest 前必须再次只读确认唯一宿主、session 和 CDP，
-  不得继承旧 runner PID、旧输出目录或旧监控。
+- 当前没有有效 runner；最近一次 runner 与 npm 父进程均已退出。原受管
+  360Teams PID `73907` 已被产品 `app.relaunch` 替换为 PID `78313`，但旧
+  `session.json` 尚未更新，且替换宿主的 WebView/启动参数不满足冻结 `.11` 身份，
+  因此不属于可继续测试的有效宿主。新 pretest 前必须通过受管 launcher 精确恢复
+  `.11`、SIT control plane、session 与 CDP，再次只读确认唯一宿主；不得继承旧
+  runner PID、旧输出目录或旧监控。
 - 历史 `framework-0e8ecdc_casebook-c412ee6` 批次曾在第 8 个顶层
   `QW-CHAT-005/BETA-CHAT-006` 发送前停止：SIT control plane 令公开
   `window.agent.capabilities()` 返回 HTTP 500 `invalid_launch_mode`，Skill、Connector
@@ -497,6 +500,27 @@ READY` 后，仍须在新不可变目录从 `1/83` 全量串行重跑，`inherit
 invariant、双框架全检、提交推送、新能力审计和精确 `.11 READY` 后，仍只能在新
 不可变目录从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+修复附件恢复矩阵后基于 `4c61168a3c4f881e9717248680f6bb7dae429a59` 启动的
+冻结批次保留在
+`teams360-automation/output/20260820202144_sit-qwork-daily83_teams360-5.5.13-2119081949_qwork-0.1.4-sit.11_M3_serial_framework-4c61168_casebook-c412ee6`：
+已完成 `6/83`，全部真实执行且 `inherited=0/synthetic=0`；第 7 条
+`QW-CHAT-004` 未进入 completed。首叶子 `BETA-CHAT-005` 在约 240 秒内生成
+约 6591 字但未稳定完成，证据完整并保留为产品 Bug。第二叶子
+`BETA-PERF-003` 在北京时间 `22:27:21` 读到
+`新版本已就绪 v0.1.4-sit.17 / 稍后 / 立即重启`，runner 精确点击“稍后”且前后
+截图证明提示已消失；宿主仍在 `22:30:42` 记录
+`markQuitIntent reason=app.relaunch source=app.relaunch-wrapper`，关闭已确认发送并
+绑定 taskId 的页面。新宿主 PID `78313` 丢失原 `--qbot-server` 参数，WebView 漂移为
+`~/.deepbank-sit/ui/0.1.1/index.html`，旧 session PID `73907` 失效；该历史行为同时
+保留为“稍后仍延迟重启并丢失发布 pin”的产品生命周期缺陷。框架在
+`page.waitForTimeout(750)` 首先抛出 target closed，导致已有滚动样本、正式性能角色
+与会话终态未落盘，形成 framework issue 并正确冻结目录。修复必须使正式不可变批次
+检测到待激活更新时先保存候选/冻结版本、提示、按钮、截图与 SHA，保持提示原样并在
+发送前硬停止；#793 采样还必须持续落盘 prompt SHA、确认发送、taskId、最后会话快照、
+滚动样本和性能指标，renderer 关闭时保留主因而不伪造可信终态。完成 invariant、双框架
+全检、提交推送、精确恢复 `.11`、新能力审计和新 `READY` 后，只能在新不可变目录
+从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text
@@ -792,10 +816,11 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   明确关闭图标。`SIT-HOME-052` 只可按按钮文案精确点击“打开本地工作空间/文件夹”；
   原生选择取消后若残留“新建工作空间”，点击可见“取消/关闭”并留证，不得按
   `.wspick-item.pick.first()` 误点，也不得让残留弹窗覆盖产品结论。
-- “新建工作空间”模态框与版本更新提示同时出现时，清理顺序固定为：先在前景
+- “新建工作空间”模态框与版本更新提示同时出现时，处理顺序固定为：先在前景
   工作空间弹窗内执行精确“取消/关闭”或明确关闭图标，确认 hidden，保存前后截图
-  和结构化 ledger；再处理底层“稍后/跳过更新”。每条 Case 初始化和进入系统设置
-  前都必须遵守；禁止 `force` 穿透、点击“确认”或点击“立即重启”。
+  和结构化 ledger；再只读取底层待激活更新提示。正式不可变批次必须保留提示、
+  候选/冻结版本和截图后硬停止，禁止点击“稍后/跳过更新”后继续发送，也禁止
+  `force` 穿透、点击“确认”或点击“立即重启”。
 - `SIT-HOME-057` 若通过结构化推荐/澄清面板询问主题、对象、数据来源或截止时间，
   必须把每个面板绑定当前轮 prompt SHA、确认发送、taskId、前后截图及 SHA 后计入
   最少澄清 Oracle；不得因最终正文未重复面板文案而误报产品 Bug。面板证据缺失时

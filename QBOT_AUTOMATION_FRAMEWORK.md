@@ -598,7 +598,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   越界或 SHA/manifest 不完整才是 framework issue。
 - Core Beta v2 打开系统设置时，若设置壳已经显示“正在加载个人设置”，必须先在 30–180 秒有界窗口内等待运行时维护区出现；只有明确加载错误或窗口耗尽才能失败，禁止继续点击背景设置菜单并误报“个人设置入口缺失”。
 - Core Beta v2 进入系统设置前必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 点击遮挡层下方。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。
-- QWork 的 `[data-testid="runtime-update-ready-toast"]` 版本更新提示可能遮挡左下设置入口。每条 Case 开始和进入系统设置前都必须检查该提示；只允许在提示文案明确为“新版本已就绪/发现新版本”时真实点击精确的“稍后/跳过更新/暂不更新/以后再说”动作，保存前后截图和结构化账本并确认提示消失。禁止点击“立即更新”、使用 `force` 穿透遮挡或在运行中改变冻结发布身份；专用 toast 的按钮不匹配、点击失败、提示未消失或证据缺失时按 framework issue fail-closed。系统设置维护区中仅用通用 `[role="status"]` 展示“发现新版本，可点击立即更新”的内联版本状态不属于遮挡弹窗；只有同一 status 内真实存在精确安全的跳过按钮时才按弹窗处理，禁止因内联状态没有跳过按钮而追加 `automation_error`。
+- QWork 的 `[data-testid="runtime-update-ready-toast"]` 版本更新提示可能遮挡左下设置入口。每条 Case 开始和进入系统设置前都必须检查该提示。正式不可变批次一旦读到“新版本已就绪/发现新版本”，必须保存提示、候选版本、冻结版本、按钮文案、截图与 SHA，保持提示原样且以 `runtime-update-activation-risk` framework issue 硬停止；不得再依赖点击“稍后/跳过更新/暂不更新/以后再说”保证宿主生命周期稳定，因为产品可能在提示消失后延迟执行 `app.relaunch`。禁止点击“立即更新”、使用 `force` 穿透遮挡、在原目录恢复或继续发送；修复/恢复精确发布身份后只能新 pretest、新目录全量重跑。无 Case 状态的非正式诊断清理仍只允许精确安全跳过动作。系统设置维护区中仅用通用 `[role="status"]` 展示“发现新版本，可点击立即更新”的内联版本状态不属于待激活弹窗；没有安全跳过按钮时不得误报遮挡框架错误。
 - 若前景“新建工作空间”模态框与底层版本更新提示同时存在，必须先在同一工作空间
   模态框内点击精确“取消/关闭”或明确关闭图标，等待模态框 hidden，并保存 before/after
   截图与结构化 ledger；之后才允许处理版本提示。该顺序适用于每条 Case 初始化和进入
@@ -767,6 +767,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   必须调用同一零发送材料化路径后返回；不得只保留交互诊断文件并让 manifest 把
   task/prompt/send/transcript/reply/capability 角色误判为缺失。
 - `BETA-PERF-003`、`SIT-ISSUE-793` 等 #793 长文本滚动场景除原始 `thread-scroll-samples.json` 外，必须生成并注册 `performance_metrics` 角色。正式性能证据使用 `qbot-core-beta-performance-metrics/v1`，绑定 Case ID、有效样本数、生成态样本数、观察时长、滚动距离/高度、漂移判定、同 Case 目录内的原始样本绝对路径与 SHA-256。缺文件、空壳 JSON、样本越界、SHA 不一致或样本数不一致均属于 framework issue，必须硬停止并按新不可变目录全量重跑；产品滚动 Oracle 失败但上述证据完整时仍归类产品 Bug，并继续后续独立父 Case。
+- #793 观察窗口内必须持续原子覆盖 `thread-scroll-samples.json`、`performance-metrics.json` 和 `issue-793-streaming-checkpoint.json`。checkpoint 至少绑定当前 Case、prompt SHA、确认发送回执、taskId、最后一次结构化会话快照、样本数、性能文件和采样阶段；采样间隔必须使用独立计时器，不能因旧 page 的 `waitForTimeout` 在宿主重启时先抛异常而丢失已有账本。renderer/宿主关闭后仍按 framework issue 硬停止，checkpoint 只保护诊断，不得把不完整会话伪装成可信产品终态。
 - #793 长文本在完整观察窗口结束时若已有可归属助手正文但仍处于生成态，必须先保存
   `issue-793-after-timeout` 终态截图及 SHA，再材料化 `terminal_outcome=timed_out`、
   `assistant_reply_present=true`、完整等待时长、确认发送回执和明确失败原因；随后通过受管

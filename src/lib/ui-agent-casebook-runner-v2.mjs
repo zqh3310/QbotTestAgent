@@ -2384,7 +2384,8 @@ async function ensureModelTier(page, state, caseDir, modelTier, { captureScreens
   return result;
 }
 
-function createCaseState({ testCase, caseDir, order, modelTier }) {
+function createCaseState({ testCase, caseDir, order, modelTier, options = {} }) {
+  const frozenQworkUiUrl = String(options['qwork-ui-url'] || '').trim();
   return {
     order,
     id: testCase.id,
@@ -2432,6 +2433,10 @@ function createCaseState({ testCase, caseDir, order, modelTier }) {
     screenshots_flat: [],
     artifacts: {},
     requested_model_tier: modelTier || '',
+    frozen_qwork_identity: {
+      version: coreBetaCleanupQworkVersionFromUrl(frozenQworkUiUrl),
+      url: frozenQworkUiUrl,
+    },
     llm_review: { status: 'not_needed' },
   };
 }
@@ -2906,7 +2911,7 @@ async function dispatchSingleHostPipelineCase({
   waveId,
   fixturesDir,
 }) {
-  const state = createCaseState({ testCase, caseDir, order, modelTier });
+  const state = createCaseState({ testCase, caseDir, order, modelTier, options });
   try {
     await dismissAllBlockingOverlays(page, state);
     await clearUi(page);
@@ -3390,7 +3395,7 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       runtime,
     });
   }
-  const state = createCaseState({ testCase, caseDir, order, modelTier });
+  const state = createCaseState({ testCase, caseDir, order, modelTier, options });
 
   try {
     await dismissAllBlockingOverlays(page, state);
@@ -3596,7 +3601,7 @@ async function executeCompoundCasebookCase(context) {
     page, testCase, caseDir, order, timeoutMs, fixturesDir,
     precheck, modelTier, options, playwright, runtime,
   } = context;
-  const state = createCaseState({ testCase, caseDir, order, modelTier });
+  const state = createCaseState({ testCase, caseDir, order, modelTier, options });
   const subcases = Array.isArray(testCase?.compound_subcases) ? testCase.compound_subcases : [];
   const subcaseResults = [];
   ensureDir(path.join(caseDir, 'subcases'));
@@ -5398,6 +5403,22 @@ export function coreBetaV2RuntimeUpdateSkipAction(promptText, buttonText) {
     && /^(?:稍后|跳过(?:更新)?|暂不更新|以后再说)$/.test(button);
 }
 
+export function coreBetaV2RuntimeUpdateActivationRisk(promptText, frozenVersion = '') {
+  const prompt = String(promptText || '').replace(/\s+/g, ' ').trim();
+  const frozen = String(frozenVersion || '').trim();
+  const updatePrompt = /新版本(?:已就绪|可用|可以更新)|发现新版本/i.test(prompt);
+  const candidate = prompt.match(/\bv?(\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?)\b/i)?.[1] || '';
+  return {
+    risk: updatePrompt,
+    frozen_version: frozen,
+    candidate_version: candidate,
+    version_drift: Boolean(updatePrompt && frozen && candidate && candidate !== frozen),
+    reason: updatePrompt
+      ? `检测到待激活 QWork 更新${candidate ? ` ${candidate}` : ''}；正式不可变批次不能依赖“稍后”保证宿主不会随后重启。`
+      : '',
+  };
+}
+
 export function coreBetaV2WorkspaceCreationDismissAction(promptText, actionText, actionKind = 'button') {
   const prompt = String(promptText || '').replace(/\s+/g, ' ').trim();
   const action = String(actionText || '').replace(/\s+/g, ' ').trim();
@@ -5743,6 +5764,75 @@ async function dismissCoreBetaV2RuntimeUpdateObstruction(page, state = null) {
   }
   if (!toast) {
     return { observed: false, ok: true, dismissed: false, text: '', button_text: '' };
+  }
+
+  const activationRisk = coreBetaV2RuntimeUpdateActivationRisk(
+    text,
+    state?.frozen_qwork_identity?.version || '',
+  );
+  if (state?.case_dir && activationRisk.risk) {
+    const count = state._runtimeUpdateActivationRiskCount
+      = Number(state._runtimeUpdateActivationRiskCount || 0) + 1;
+    const base = `runtime-update-activation-risk-${String(count).padStart(2, '0')}`;
+    const beforeScreenshot = await shot(page, state.case_dir, `${base}-before`).catch(() => '');
+    const evidenceValid = Boolean(beforeScreenshot);
+    const reason = `${activationRisk.reason}冻结版本=${activationRisk.frozen_version || '未知'}；`
+      + `候选版本=${activationRisk.candidate_version || '未解析'}；已保留提示且拒绝继续发送。`;
+    const ledger = path.join(state.case_dir, `${base}.json`);
+    writeJsonFile(ledger, {
+      schema_version: 'qbot-core-beta-runtime-update-activation-risk/v1',
+      captured_at: new Date().toISOString(),
+      valid: evidenceValid,
+      case_id: state.id,
+      prompt_text: text,
+      button_text: buttonText,
+      clicked: false,
+      dismissed: false,
+      immutable_run_blocked: true,
+      frozen_qwork_identity: state.frozen_qwork_identity,
+      activation_risk: activationRisk,
+      before_screenshot: beforeScreenshot,
+      before_screenshot_sha256: beforeScreenshot
+        ? createHash('sha256').update(fs.readFileSync(beforeScreenshot)).digest('hex')
+        : '',
+      reason,
+    });
+    state.screenshots[`${base}_before`] = beforeScreenshot;
+    if (!Array.isArray(state.artifacts.runtime_update_activation_risks)) {
+      state.artifacts.runtime_update_activation_risks = [];
+    }
+    state.artifacts.runtime_update_activation_risks.push({
+      valid: evidenceValid,
+      prompt_text: text,
+      button_text: buttonText,
+      clicked: false,
+      dismissed: false,
+      before_screenshot: beforeScreenshot,
+      ledger,
+      activation_risk: activationRisk,
+      reason,
+    });
+    recordStep(
+      state,
+      '冻结批次检测到待激活的 QWork 版本更新',
+      '正式不可变批次不得在待重启更新已就绪时继续发送；必须先冻结目录并恢复精确发布身份。',
+      reason,
+      'failed',
+      beforeScreenshot,
+      'automation_error',
+    );
+    return {
+      observed: true,
+      ok: false,
+      dismissed: false,
+      text,
+      button_text: buttonText,
+      before_screenshot: beforeScreenshot,
+      after_screenshot: '',
+      ledger,
+      activation_risk: activationRisk,
+      reason,
+    };
   }
 
   const safeAction = coreBetaV2RuntimeUpdateSkipAction(text, buttonText);
@@ -17674,13 +17764,88 @@ async function issueConversationViewportSample(page, startedAt) {
   const bridge = await qbotE2EState(page);
   const generating = Boolean(bridge?.available && bridge.running) || await isAgentGenerating(page);
   return {
-    elapsedMs: Date.now() - startedAt,
-    recordedAt: new Date().toISOString(),
-    generating,
-    assistantChars: String(snapshot.latestAssistantText || '').length,
-    assistantText: clip(snapshot.latestAssistantText || '', 500),
-    ...metrics,
+    sample: {
+      elapsedMs: Date.now() - startedAt,
+      recordedAt: new Date().toISOString(),
+      generating,
+      assistantChars: String(snapshot.latestAssistantText || '').length,
+      assistantText: clip(snapshot.latestAssistantText || '', 500),
+      ...metrics,
+    },
+    snapshot,
   };
+}
+
+function writeIssue793AtomicJson(file, payload) {
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeJsonFile(temporary, payload);
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function writeIssue793StreamingCheckpoint({
+  state,
+  testCase,
+  caseDir,
+  prompt,
+  samples,
+  verdict,
+  everGenerating,
+  lastSnapshot = null,
+  phase = 'sampling',
+  error = '',
+}) {
+  state.artifacts.thread_scroll_samples ||= path.join(caseDir, 'thread-scroll-samples.json');
+  writeIssue793AtomicJson(state.artifacts.thread_scroll_samples, {
+    issue: 793,
+    prompt,
+    verdict,
+    samples,
+    checkpoint_phase: phase,
+    checkpoint_error: String(error || ''),
+  });
+  let performanceMetrics = null;
+  if (samples.length > 0) {
+    state.artifacts.performance_metrics ||= path.join(caseDir, 'performance-metrics.json');
+    performanceMetrics = streamingScrollPerformanceMetrics({
+      testCaseId: coreBetaEvidenceCaseId(testCase),
+      samplesFile: state.artifacts.thread_scroll_samples,
+      samples,
+      verdict,
+      everGenerating,
+    });
+    writeIssue793AtomicJson(state.artifacts.performance_metrics, performanceMetrics);
+    state.artifacts.core_beta_performance_metrics = performanceMetrics;
+  }
+  const boundTaskId = confirmedSendReceiptTaskId(state.artifacts.send_receipts, prompt);
+  const checkpointFile = path.join(caseDir, 'issue-793-streaming-checkpoint.json');
+  writeIssue793AtomicJson(checkpointFile, {
+    schema_version: 'qbot-core-beta-issue-793-streaming-checkpoint/v1',
+    case_id: coreBetaEvidenceCaseId(testCase),
+    captured_at: new Date().toISOString(),
+    phase,
+    error: String(error || ''),
+    prompt,
+    prompt_sha256: sha256Text(prompt),
+    bound_task_id: boundTaskId,
+    send_receipts: state.artifacts.send_receipts || [],
+    sample_count: samples.length,
+    last_sample: samples.at(-1) || null,
+    last_conversation_snapshot: lastSnapshot ? {
+      active_task_id: lastSnapshot.activeTaskId || '',
+      bridge_message_count: lastSnapshot.bridgeMessageCount,
+      messages: lastSnapshot.messages || [],
+      latest_assistant_text: lastSnapshot.latestAssistantText || '',
+    } : null,
+    thread_scroll_samples: state.artifacts.thread_scroll_samples,
+    performance_metrics: state.artifacts.performance_metrics || '',
+    performance_metrics_valid: Boolean(performanceMetrics?.valid),
+  });
+  state.artifacts.issue_793_streaming_checkpoint = checkpointFile;
+  return { checkpointFile, performanceMetrics, boundTaskId };
 }
 
 async function executeIssue793StreamingScrollFollow({ page, state, testCase, caseDir, timeoutMs }) {
@@ -17696,6 +17861,7 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   let driftScreenshot = '';
   let everGenerating = false;
   let stoppedObservations = 0;
+  let lastSnapshot = null;
   state.artifacts.sent_prompts = [{ label: '长文本流式回复', prompt, recorded_at: new Date().toISOString() }];
   await fillComposer(page, prompt, state, '输入 80 段长文本生成任务');
   state.screenshots.issue_793_before_send = await shot(page, caseDir, 'issue-793-before-send');
@@ -17705,8 +17871,40 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
   const monitorBudgetMs = Math.min(Math.max(Number(timeoutMs || 0), 90_000), 240_000);
   const deadline = Date.now() + monitorBudgetMs;
   while (Date.now() < deadline) {
-    const sample = await issueConversationViewportSample(page, startedAt);
+    if (page.isClosed()) {
+      writeIssue793StreamingCheckpoint({
+        state,
+        testCase,
+        caseDir,
+        prompt,
+        samples,
+        verdict: streamingScrollFollowVerdict(samples),
+        everGenerating,
+        lastSnapshot,
+        phase: 'renderer_closed',
+        error: 'QWork renderer closed during #793 streaming observation.',
+      });
+      throw new Error('Target page, context or browser has been closed: QWork renderer closed during #793 streaming observation.');
+    }
+    const observation = await issueConversationViewportSample(page, startedAt);
+    if (page.isClosed()) {
+      writeIssue793StreamingCheckpoint({
+        state,
+        testCase,
+        caseDir,
+        prompt,
+        samples,
+        verdict: streamingScrollFollowVerdict(samples),
+        everGenerating,
+        lastSnapshot,
+        phase: 'renderer_closed',
+        error: 'QWork renderer closed while collecting a #793 sample.',
+      });
+      throw new Error('Target page, context or browser has been closed: QWork renderer closed while collecting a #793 sample.');
+    }
+    const { sample, snapshot } = observation;
     samples.push(sample);
+    lastSnapshot = snapshot;
     everGenerating = everGenerating || sample.generating;
     const interim = streamingScrollFollowVerdict(samples);
     if (interim.reproduced && !driftScreenshot) {
@@ -17719,22 +17917,31 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
       stoppedObservations >= NO_REPLY_TERMINAL_STABLE_OBSERVATIONS
       && Date.now() - startedAt >= MIN_REPLY_WAIT_MS
     ) break;
-    await page.waitForTimeout(750);
+    writeIssue793StreamingCheckpoint({
+      state,
+      testCase,
+      caseDir,
+      prompt,
+      samples,
+      verdict: interim,
+      everGenerating,
+      lastSnapshot,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 750));
   }
 
   const verdict = streamingScrollFollowVerdict(samples);
-  state.artifacts.thread_scroll_samples = path.join(caseDir, 'thread-scroll-samples.json');
-  writeJsonFile(state.artifacts.thread_scroll_samples, { issue: 793, prompt, verdict, samples });
-  state.artifacts.performance_metrics = path.join(caseDir, 'performance-metrics.json');
-  const performanceMetrics = streamingScrollPerformanceMetrics({
-    testCaseId: coreBetaEvidenceCaseId(testCase),
-    samplesFile: state.artifacts.thread_scroll_samples,
+  const { performanceMetrics } = writeIssue793StreamingCheckpoint({
+    state,
+    testCase,
+    caseDir,
+    prompt,
     samples,
     verdict,
     everGenerating,
+    lastSnapshot,
+    phase: 'observation_complete',
   });
-  writeJsonFile(state.artifacts.performance_metrics, performanceMetrics);
-  state.artifacts.core_beta_performance_metrics = performanceMetrics;
   const after = await conversationSnapshot(page);
   const stillGenerating = Boolean(everGenerating && (await isAgentGenerating(page)));
   const waitedMs = Date.now() - startedAt;
@@ -17816,7 +18023,8 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     if (buttonVisible) {
       await scrollButton.click({ force: true }).catch(async () => scrollButton.evaluate((element) => element.click()));
       await page.waitForTimeout(900);
-      const bottomSample = await issueConversationViewportSample(page, startedAt);
+      const bottomObservation = await issueConversationViewportSample(page, startedAt);
+      const bottomSample = bottomObservation.sample;
       state.screenshots.issue_793_after_scroll_to_bottom = await shot(page, caseDir, 'issue-793-after-scroll-to-bottom');
       recordAssertion(state, '#793 一键回到底部', '点击回到底部入口后应回到最新消息。', bottomSample.distanceBottom <= 8, `distanceBottom=${Math.round(bottomSample.distanceBottom)}px`);
     }

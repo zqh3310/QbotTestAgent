@@ -109,6 +109,7 @@ import {
   coreBetaV2MaintenanceProductStateConflict,
   coreBetaV2RunningSessionQuiescenceVerdict,
   coreBetaV2RuntimeMaintenanceState,
+  coreBetaV2RuntimeUpdateActivationRisk,
   coreBetaV2RuntimeUpdateSkipAction,
   coreBetaExpertBuilderReturnSelectorCandidates,
   coreBetaExpertCreateSubmitLabel,
@@ -6052,7 +6053,7 @@ assert.deepEqual(coreBetaV2SettingsSurfaceState('系统设置\n加载个人设�
 assert.equal(
   coreBetaV2RuntimeUpdateSkipAction('新版本已就绪 v0.0.30-rc.2', '稍后'),
   true,
-  '新版 QWork 更新提示必须允许精确点击“稍后”以保持冻结发布身份',
+  '更新提示识别器必须只把精确“稍后”识别为非安装动作',
 );
 assert.equal(
   coreBetaV2RuntimeUpdateSkipAction('发现新版本 v0.0.31', '跳过更新'),
@@ -6068,6 +6069,22 @@ assert.equal(
   coreBetaV2RuntimeUpdateSkipAction('普通业务提示', '稍后'),
   false,
   '非更新提示不得复用版本更新跳过规则',
+);
+assert.deepEqual(
+  coreBetaV2RuntimeUpdateActivationRisk('新版本已就绪 v0.1.4-sit.17\n稍后\n立即重启', '0.1.4-sit.11'),
+  {
+    risk: true,
+    frozen_version: '0.1.4-sit.11',
+    candidate_version: '0.1.4-sit.17',
+    version_drift: true,
+    reason: '检测到待激活 QWork 更新 0.1.4-sit.17；正式不可变批次不能依赖“稍后”保证宿主不会随后重启。',
+  },
+  '正式不可变批次必须识别待激活版本与冻结版本漂移风险',
+);
+assert.equal(
+  coreBetaV2RuntimeUpdateActivationRisk('普通业务提示', '0.1.4-sit.11').risk,
+  false,
+  '普通状态文案不得触发发布身份硬停止',
 );
 assert.equal(
   coreBetaV2WorkspaceCreationDismissAction('新建工作空间\n请输入工作空间名称', '取消'),
@@ -6200,8 +6217,8 @@ assert.match(
 );
 assert.match(
   runner,
-  /async function dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*runtime-update-ready-toast[\s\S]*statuses = page\.locator\('\[role="status"\]'\)[\s\S]*coreBetaV2RuntimeUpdateSkipAction\(candidateText, candidateButtonText\)[\s\S]*skip\.click\(\{ timeout: 5000 \}\)[\s\S]*state: 'hidden'[\s\S]*runtime-update-prompt-skip/,
-  'Core Beta v2 必须用真实“稍后/跳过更新”按钮关闭版本更新遮挡，并保存前后证据',
+  /async function dismissCoreBetaV2RuntimeUpdateObstruction[\s\S]*runtime-update-ready-toast[\s\S]*statuses = page\.locator\('\[role="status"\]'\)[\s\S]*coreBetaV2RuntimeUpdateActivationRisk[\s\S]*if \(state\?\.case_dir && activationRisk\.risk\)[\s\S]*qbot-core-beta-runtime-update-activation-risk\/v1[\s\S]*immutable_run_blocked: true[\s\S]*clicked: false[\s\S]*ok: false[\s\S]*skip\.click\(\{ timeout: 5000 \}\)/,
+  '正式不可变批次必须先固化待激活更新风险并硬停止；无 Case 状态的非正式清理才可到达安全跳过动作',
 );
 assert.match(
   runner,
@@ -6603,7 +6620,7 @@ assert.match(
 );
 assert.match(
   runner,
-  /executeCasebookCase[\s\S]{0,500}dismissAllBlockingOverlays\(page, state\)[\s\S]{0,120}clearUi\(page\)[\s\S]{0,120}dismissAllBlockingOverlays\(page, state\)/,
+  /executeCasebookCase[\s\S]{0,800}dismissAllBlockingOverlays\(page, state\)[\s\S]{0,120}clearUi\(page\)[\s\S]{0,120}dismissAllBlockingOverlays\(page, state\)/,
   '每条 Case 必须先处理残留原生/Agent 弹窗，再执行通用键盘和 DOM 清理',
 );
 const attachmentMatrixStart = runner.indexOf('async function executeCoreBetaAttachmentCase');
@@ -7002,6 +7019,7 @@ const required = [
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
   ['今日 #793/#800 使用独立本地产品断言', /SIT-ISSUE-793'[\s\S]*executeIssue793StreamingScrollFollow[\s\S]*SIT-ISSUE-800'[\s\S]*executeIssue800ModelServiceStateConsistency/],
   ['#793 生成中采样滚动位置并保存正式性能证据', /(?=[\s\S]*executeIssue793StreamingScrollFollow)(?=[\s\S]*thread-scroll-samples\.json)(?=[\s\S]*performance-metrics\.json)(?=[\s\S]*artifacts\.performance_metrics)(?=[\s\S]*streamingScrollPerformanceMetrics)(?=[\s\S]*issue-793-streaming-scroll-drift)/],
+  ['#793 采样期间持续原子落盘发送绑定和性能 checkpoint', /(?=[\s\S]*function writeIssue793AtomicJson)(?=[\s\S]*fs\.renameSync\(temporary, file\))(?=[\s\S]*function writeIssue793StreamingCheckpoint)(?=[\s\S]*writeIssue793AtomicJson\(state\.artifacts\.thread_scroll_samples)(?=[\s\S]*writeIssue793AtomicJson\(state\.artifacts\.performance_metrics)(?=[\s\S]*writeIssue793AtomicJson\(checkpointFile)(?=[\s\S]*qbot-core-beta-issue-793-streaming-checkpoint\/v1)(?=[\s\S]*confirmedSendReceiptTaskId)(?=[\s\S]*last_conversation_snapshot)(?=[\s\S]*performance_metrics_valid)(?=[\s\S]*page\.isClosed\(\))(?=[\s\S]*phase: 'renderer_closed')(?=[\s\S]*new Promise\(\(resolve\) => setTimeout\(resolve, 750\)\))/],
   ['#793 部分正文超时先固化终态再受管停止', /executeIssue793StreamingScrollFollow[\s\S]*streamingTerminalReplyEvidence[\s\S]*issue-793-\$\{replyEvidence\.screenshot_file_suffix[\s\S]*writeReplyArtifacts\(state, caseDir, \[replyRecord\]\)[\s\S]*recordReplyAssertions\(state, testCase, prompt, replyRecord[\s\S]*replyRecord\.terminal_outcome === 'timed_out'[\s\S]*cancelRunningReplyAfterTimeout\(page, state, caseDir, '长文本流式回复'\)/],
   ['#800 多轮采样不可达状态与回复增长', /(?=[\s\S]*executeIssue800ModelServiceStateConsistency)(?=[\s\S]*model-service-state-samples\.json)(?=[\s\S]*growthAfterUnavailable)/],
   ['HOME-008 专项执行且不被 reset 清空连接器', /SIT-HOME-008'[\s\S]*executeSitHomeConnectorOnly[\s\S]*连接器 only 前置真实生效/],
