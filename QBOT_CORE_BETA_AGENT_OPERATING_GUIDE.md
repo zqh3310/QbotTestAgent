@@ -15,6 +15,11 @@
   输出和逐 Case 可信复核；不得继承或合并原始结果。确认 framework/testcase issue 后，
   必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再从 `1/11` 或
   `1/70` 启动唯一串行 runner。
+- MR 冒烟第 8 条曾因 verified-legacy `SIT-SKILL-SCOPE-001` 把发送前库存不一致
+  blocker 错绑为 legacy ID 而硬停。修复后的合同是：driver ID 只选择实现；所有
+  blocker、evidence、manifest 和 SHA 必须绑定外层 `MRSMOKE-SKILL-001`，并在有需要时
+  额外记录 `legacy_case_id`。重新批次必须验证目标库存不一致保持 `bug`、七个发送链角色
+  受校验 N/A，且错误 legacy ID 仍被拒绝。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - QWork `0.1.4-sit.27` 的首轮 MR 冒烟批次永久冻结在
   `teams360-automation/output/20260824101100_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-85213b9_casebook-8d361a9`。

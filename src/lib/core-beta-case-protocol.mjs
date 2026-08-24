@@ -1232,6 +1232,9 @@ export function sha256File(file) {
 
 export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, screenshots = {}, actions = [] }) {
   const declared = Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [];
+  // A verified-legacy driver may execute with its legacy ID, but every
+  // evidence file is owned by the outer Core Beta contract ID.
+  const evidenceCaseId = String(testCase?.core_beta_case_id || testCase?.id || '');
   const candidates = new Map();
   const notApplicable = new Map();
   const skillPrerequisiteNotApplicableRoles = new Set([
@@ -1329,7 +1332,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
-    const validation = validateEvidenceFile(role, file, { expectedCaseId: testCase?.id || '' });
+    const validation = validateEvidenceFile(role, file, { expectedCaseId: evidenceCaseId });
     candidates.set(role, {
       role,
       path: path.resolve(file),
@@ -1387,7 +1390,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && blocker?.applicable === true
       && blocker?.kind === 'skill_install_terminal_shortage'
       && blocker?.source === 'exact_run_owned_install_attempt_ledger'
-      && blocker?.dependent_case_id === testCase?.id
+      && blocker?.dependent_case_id === evidenceCaseId
+      && String(blocker?.legacy_case_id || '') === String(testCase?.legacy_case_id || '')
       && expectedCount === 10
       && attemptedCount === expectedCount
       && successfulCount >= 0
@@ -1697,7 +1701,8 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && blocker?.applicable === true
       && blocker?.outcome === 'bug'
       && preSendFailureKindSourceVerified
-      && blocker?.dependent_case_id === testCase?.id
+      && blocker?.dependent_case_id === evidenceCaseId
+      && String(blocker?.legacy_case_id || '') === String(testCase?.legacy_case_id || '')
       && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
       && String(blocker?.expected_identity || '').trim()
       && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'

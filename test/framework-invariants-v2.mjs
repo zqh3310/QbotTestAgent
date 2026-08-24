@@ -8167,6 +8167,95 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
   }
 }
 
+// Verified-legacy MR wrappers must keep product-driver IDs separate from the
+// outer Core Beta evidence owner. Inventory mismatch remains a product bug,
+// while a legacy-ID blocker or mapping drift must fail closed.
+{
+  const evidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-mr-legacy-capability-owner-'));
+  try {
+    const screenshot = path.join(evidenceDir, 'manual-installed-skill-missing.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 17));
+    const roles = [
+      'capability_execution_event', 'prompt', 'task_id', 'send_receipt',
+      'transcript', 'reply_delta', 'reply_completion',
+    ];
+    const interaction = {
+      schema_version: 'qbot-core-beta-capability-interaction/v1',
+      capability_kind: 'skill',
+      stage: 'manual_skill_selection',
+      expected_identity: 'qa-scope-isolation',
+      control_testid: '',
+      control_located: false,
+      click_dispatched: false,
+      selection_surface_located: true,
+      inventory_mismatch: true,
+      expected_state_observed: false,
+      aria_checked: 'false',
+      manual_surface: {
+        search_visible: true,
+        list_visible: true,
+        option_count: 34,
+        empty_visible: false,
+      },
+      screenshot,
+      category: 'bug',
+    };
+    const blocker = coreBetaPreSendCapabilityFailureEvidence({
+      testCaseId: 'MRSMOKE-SKILL-001',
+      legacyCaseId: 'SIT-SKILL-SCOPE-001',
+      capabilityKind: 'skill',
+      expectedIdentity: 'qa-scope-isolation',
+      before: { task: { id: null, running: false, send_count: 26, message_count: 0 }, skills: { selected: [] } },
+      after: { task: { id: null, running: false, send_count: 26, message_count: 0 }, skills: { selected: [] } },
+      interaction,
+      noPromptRecorded: true,
+      noSendReceiptRecorded: true,
+      notApplicableRoles: roles,
+    });
+    assert.equal(blocker.evidence_valid, true);
+    assert.equal(blocker.oracle_valid, false);
+    assert.equal(blocker.dependent_case_id, 'MRSMOKE-SKILL-001');
+    assert.equal(blocker.legacy_case_id, 'SIT-SKILL-SCOPE-001');
+    const blockerFile = path.join(evidenceDir, 'pre-send-capability-failure.json');
+    writeJsonFile(blockerFile, blocker);
+    const manifest = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'SIT-SKILL-SCOPE-001',
+        core_beta_case_id: 'MRSMOKE-SKILL-001',
+        legacy_case_id: 'SIT-SKILL-SCOPE-001',
+        evidence_roles: ['capability_selection', ...roles],
+      },
+      caseDir: evidenceDir,
+      artifacts: {
+        capability_selection: blockerFile,
+        core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
+      },
+    });
+    assert.equal(manifest.complete, true, JSON.stringify(manifest));
+    assert.deepEqual(manifest.missing_roles, []);
+
+    const wrongOwner = { ...blocker, dependent_case_id: 'SIT-SKILL-SCOPE-001' };
+    writeJsonFile(blockerFile, wrongOwner);
+    const rejected = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'SIT-SKILL-SCOPE-001',
+        core_beta_case_id: 'MRSMOKE-SKILL-001',
+        legacy_case_id: 'SIT-SKILL-SCOPE-001',
+        evidence_roles: ['capability_selection', ...roles],
+      },
+      caseDir: evidenceDir,
+      artifacts: {
+        capability_selection: blockerFile,
+        core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
+      },
+    });
+    assert.equal(rejected.complete, false, 'legacy ID 不能冒充外层 blocker 归属');
+    assert.ok(rejected.missing_roles.includes('capability_execution_event'));
+  } finally {
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  }
+}
+
 if (obviousDuplicateEvidence('新建文件 first.md\n新建文件 first.md')) throw new Error('正常文件工具进度不应判为重复');
 if (obviousDuplicateEvidence('调用 WaitForMcpServers\n调用 WaitForMcpServers')) throw new Error('MCP 等待工具进度不应判为重复');
 if (obviousDuplicateEvidence('用户看到的提示：\n用户看到的提示：')) throw new Error('短结构标题不应判为重复正文');

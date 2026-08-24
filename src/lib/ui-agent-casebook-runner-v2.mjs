@@ -3868,6 +3868,7 @@ async function executeCoreBetaRoute(context, route) {
         ...context.testCase,
         id: scenario.legacy_case_id,
         core_beta_case_id: context.testCase.id,
+        legacy_case_id: scenario.legacy_case_id,
       },
     });
     writeVerifiedLegacyCoreBetaTrace(context, scenario);
@@ -9629,7 +9630,10 @@ async function materializeCoreBetaPreSendCapabilityFailure({
   };
   state.artifacts.core_beta_capability_interaction = interaction;
   const evidence = coreBetaPreSendCapabilityFailureEvidence({
-    testCaseId: testCase.id,
+    // The legacy driver ID selects the implementation, but the evidence
+    // contract always belongs to the outer Core Beta Case.
+    testCaseId: coreBetaEvidenceCaseId(testCase),
+    legacyCaseId: String(testCase?.core_beta_case_id ? testCase.id : testCase?.legacy_case_id || ''),
     capabilityKind,
     expectedIdentity,
     before,
@@ -29771,6 +29775,7 @@ export function coreBetaPreSendImeFailureEvidence({
 
 export function coreBetaPreSendCapabilityFailureEvidence({
   testCaseId = '',
+  legacyCaseId = '',
   capabilityKind = 'skill',
   expectedIdentity = '',
   before = {},
@@ -29894,6 +29899,7 @@ export function coreBetaPreSendCapabilityFailureEvidence({
       ? 'visible_skill_install_click_failure_feedback_and_zero_send_readback'
       : 'visible_capability_control_click_and_zero_send_readback',
     dependent_case_id: String(testCaseId || ''),
+    legacy_case_id: String(legacyCaseId || ''),
     capability_kind: capabilityKind,
     expected_identity: String(expectedIdentity || ''),
     interaction,
@@ -38929,6 +38935,7 @@ function verifiedCoreBetaPreSendCapabilityFailure(result) {
   const capabilityKey = blocker.capability_kind === 'connector' ? 'connectors' : 'skills';
   const rebuilt = coreBetaPreSendCapabilityFailureEvidence({
     testCaseId: blocker.dependent_case_id,
+    legacyCaseId: blocker.legacy_case_id,
     capabilityKind: blocker.capability_kind,
     expectedIdentity: blocker.expected_identity,
     before: {
@@ -38944,7 +38951,14 @@ function verifiedCoreBetaPreSendCapabilityFailure(result) {
     noSendReceiptRecorded: blocker.mutation_guard?.no_send_receipt_recorded,
     notApplicableRoles: blocker.not_applicable_roles,
   });
+  const expectedLegacyCaseId = String(
+    result?.artifacts?.core_beta_legacy_driver?.legacy_case_id
+      || result?.legacy_case_id
+      || '',
+  );
+  const legacyCaseIdValid = String(blocker.legacy_case_id || '') === expectedLegacyCaseId;
   const valid = blocker.dependent_case_id === result.id
+    && legacyCaseIdValid
     && blocker.valid === true
     && blocker.evidence_valid === true
     && blocker.oracle_valid === false
