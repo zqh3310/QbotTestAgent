@@ -9910,8 +9910,18 @@ export function coreBetaRuntimeFamilyPrerequisiteBlocker({
     drafts_stable: same(beforeSnapshot.draft_fingerprints, afterSnapshot.draft_fingerprints),
   };
   mutationGuard.valid = Object.values(mutationGuard).every(Boolean);
+  // Some QWork releases pin the current session to the selected Claude
+  // connection before checking whether a Codex connection exists. In that
+  // case the public bridge returns model_runtime_family_pinned instead of the
+  // older "没有匹配协议的 LLM connection" message. Treat both as the same
+  // pre-send prerequisite only when the connection view and mutation guards
+  // prove that no Codex path was available or used.
   const recognized = targetFamily === 'codex'
-    && /没有匹配协议的\s*LLM connection/i.test(message);
+    && (
+      /没有匹配协议的\s*LLM connection/i.test(message)
+      || reportedCode === 'model_runtime_family_pinned'
+      || /已固定本会话的模型，不能切换执行方式/i.test(message)
+    );
   const connectionEvidenceValid = options.length > 0
     && afterOptions.length > 0
     && targetMatches.length === 0
@@ -9957,7 +9967,7 @@ export function coreBetaRuntimeFamilyPrerequisiteBlocker({
     },
     not_applicable_roles: notApplicableRoles,
     reason: applicable
-      ? `运行时前置不可用：${targetFamily} 没有匹配协议的 LLM connection；已确认未发送、未选择专家且未创建草稿。`
+      ? `运行时前置不可用：${targetFamily} connection 不可用（${reportedCode || 'protocol_unavailable'}）；已确认未发送、未选择专家且未创建草稿。`
       : `运行时切换失败未满足可信前置阻塞合同：${message || 'missing_error_message'}`,
   };
 }

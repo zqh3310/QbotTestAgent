@@ -4221,6 +4221,27 @@ assert.equal(runtimePrerequisiteBlocker.normalized_error_code, 'runtime_connecti
 assert.deepEqual(runtimePrerequisiteBlocker.not_applicable_roles, runtimePrerequisiteRoles);
 assert.equal(runtimePrerequisiteBlocker.mutation_guard.no_user_action, true, '全局 send count 可非零，但当前空任务前后必须稳定且未发送');
 assert.equal(runtimePrerequisiteBlocker.mutation_guard.expert_absent, true, 'runtime 前置阻塞前后不得残留或选择专家');
+const pinnedRuntimePrerequisiteBlocker = coreBetaRuntimeFamilyPrerequisiteBlocker({
+  testCase: runtimePrerequisiteTestCase,
+  targetRuntimeFamily: 'codex',
+  error: {
+    name: 'Error',
+    code: 'model_runtime_family_pinned',
+    message: '已固定本会话的模型，不能切换执行方式',
+  },
+  before: runtimePrerequisiteState,
+  after: structuredClone(runtimePrerequisiteState),
+});
+assert.equal(
+  pinnedRuntimePrerequisiteBlocker.valid,
+  true,
+  '会话已固定当前模型且公开目录无 Codex connection 时应形成可信 blocker',
+);
+assert.equal(
+  pinnedRuntimePrerequisiteBlocker.normalized_error_code,
+  'runtime_connection_protocol_unavailable',
+  'model_runtime_family_pinned 必须归一化为 runtime connection 前置不可用',
+);
 assert.equal(
   coreBetaRuntimeFamilyPrerequisiteBlocker({
     testCase: runtimePrerequisiteTestCase,
