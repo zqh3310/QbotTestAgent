@@ -19,7 +19,10 @@
   blocker 错绑为 legacy ID 而硬停。修复后的合同是：driver ID 只选择实现；所有
   blocker、evidence、manifest 和 SHA 必须绑定外层 `MRSMOKE-SKILL-001`，并在有需要时
   额外记录 `legacy_case_id`。重新批次必须验证目标库存不一致保持 `bug`、七个发送链角色
-  受校验 N/A，且错误 legacy ID 仍被拒绝。
+  受校验 N/A，且错误 legacy ID 仍被拒绝。manifest 取 legacy 期望值时优先读当前
+  外层状态的 `legacy_case_id`；若 `finishCase()` 只保留外层状态，则必须回读同一
+  Case 的 `artifacts.core_beta_legacy_driver.legacy_case_id`，不得因状态字段缺失把
+  合法的发送前产品 Bug 误判为框架问题。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - QWork `0.1.4-sit.27` 的首轮 MR 冒烟批次永久冻结在
   `teams360-automation/output/20260824101100_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-85213b9_casebook-8d361a9`。

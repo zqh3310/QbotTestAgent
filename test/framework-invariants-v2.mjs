@@ -8222,12 +8222,12 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
       testCase: {
         id: 'SIT-SKILL-SCOPE-001',
         core_beta_case_id: 'MRSMOKE-SKILL-001',
-        legacy_case_id: 'SIT-SKILL-SCOPE-001',
         evidence_roles: ['capability_selection', ...roles],
       },
       caseDir: evidenceDir,
       artifacts: {
         capability_selection: blockerFile,
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
         core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
       },
     });
@@ -8240,17 +8240,35 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
       testCase: {
         id: 'SIT-SKILL-SCOPE-001',
         core_beta_case_id: 'MRSMOKE-SKILL-001',
-        legacy_case_id: 'SIT-SKILL-SCOPE-001',
         evidence_roles: ['capability_selection', ...roles],
       },
       caseDir: evidenceDir,
       artifacts: {
         capability_selection: blockerFile,
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
         core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
       },
     });
     assert.equal(rejected.complete, false, 'legacy ID 不能冒充外层 blocker 归属');
     assert.ok(rejected.missing_roles.includes('capability_execution_event'));
+
+    const wrongLegacy = { ...blocker, legacy_case_id: 'SIT-SKILL-OTHER-001' };
+    writeJsonFile(blockerFile, wrongLegacy);
+    const rejectedLegacy = buildCoreEvidenceManifest({
+      testCase: {
+        id: 'SIT-SKILL-SCOPE-001',
+        core_beta_case_id: 'MRSMOKE-SKILL-001',
+        evidence_roles: ['capability_selection', ...roles],
+      },
+      caseDir: evidenceDir,
+      artifacts: {
+        capability_selection: blockerFile,
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
+        core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
+      },
+    });
+    assert.equal(rejectedLegacy.complete, false, 'artifact legacy ID 不匹配时必须 fail-closed');
+    assert.ok(rejectedLegacy.missing_roles.includes('capability_execution_event'));
   } finally {
     fs.rmSync(evidenceDir, { recursive: true, force: true });
   }

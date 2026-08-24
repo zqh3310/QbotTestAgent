@@ -1235,6 +1235,14 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   // A verified-legacy driver may execute with its legacy ID, but every
   // evidence file is owned by the outer Core Beta contract ID.
   const evidenceCaseId = String(testCase?.core_beta_case_id || testCase?.id || '');
+  // finishCase() keeps the outer contract in the live state and stores the
+  // legacy implementation identity in its driver artifact. Resolve both
+  // shapes so verified-legacy prerequisite evidence remains manifest-valid.
+  const expectedLegacyCaseId = String(
+    testCase?.legacy_case_id
+      || artifacts?.core_beta_legacy_driver?.legacy_case_id
+      || '',
+  );
   const candidates = new Map();
   const notApplicable = new Map();
   const skillPrerequisiteNotApplicableRoles = new Set([
@@ -1391,7 +1399,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && blocker?.kind === 'skill_install_terminal_shortage'
       && blocker?.source === 'exact_run_owned_install_attempt_ledger'
       && blocker?.dependent_case_id === evidenceCaseId
-      && String(blocker?.legacy_case_id || '') === String(testCase?.legacy_case_id || '')
+      && String(blocker?.legacy_case_id || '') === expectedLegacyCaseId
       && expectedCount === 10
       && attemptedCount === expectedCount
       && successfulCount >= 0
@@ -1702,7 +1710,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && blocker?.outcome === 'bug'
       && preSendFailureKindSourceVerified
       && blocker?.dependent_case_id === evidenceCaseId
-      && String(blocker?.legacy_case_id || '') === String(testCase?.legacy_case_id || '')
+      && String(blocker?.legacy_case_id || '') === expectedLegacyCaseId
       && ['skill', 'connector'].includes(String(blocker?.capability_kind || ''))
       && String(blocker?.expected_identity || '').trim()
       && interaction?.schema_version === 'qbot-core-beta-capability-interaction/v1'

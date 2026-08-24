@@ -802,8 +802,10 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   SHA 和 blocker 的唯一归属。执行器可以在内部使用 `SIT-SKILL-SCOPE-001`，但发送前
   负向证据的 `dependent_case_id` 必须为 `MRSMOKE-SKILL-001`，并可额外记录
   `legacy_case_id=SIT-SKILL-SCOPE-001`。manifest 校验必须以 `core_beta_case_id`
-  作为 `expectedCaseId`，同时拒绝缺失、错误或漂移的 legacy 映射；禁止把 legacy driver
-  ID 当作外层合同 ID。
+  作为 `expectedCaseId`；legacy 期望值优先取当前外层状态的 `legacy_case_id`，若
+  `finishCase()` 只保留外层状态，则必须从同一 Case 的
+  `artifacts.core_beta_legacy_driver.legacy_case_id` 回读。两种来源都必须拒绝缺失、
+  错误或漂移的 legacy 映射；禁止把 legacy driver ID 当作外层合同 ID。
 - `BETA-PERF-003`、`SIT-ISSUE-793` 等 #793 长文本滚动场景除原始 `thread-scroll-samples.json` 外，必须生成并注册 `performance_metrics` 角色。正式性能证据使用 `qbot-core-beta-performance-metrics/v1`，绑定 Case ID、有效样本数、生成态样本数、观察时长、滚动距离/高度、漂移判定、同 Case 目录内的原始样本绝对路径与 SHA-256。缺文件、空壳 JSON、样本越界、SHA 不一致或样本数不一致均属于 framework issue，必须硬停止并按新不可变目录全量重跑；产品滚动 Oracle 失败但上述证据完整时仍归类产品 Bug，并继续后续独立父 Case。
 - #793 观察窗口内必须持续原子覆盖 `thread-scroll-samples.json`、`performance-metrics.json` 和 `issue-793-streaming-checkpoint.json`。checkpoint 至少绑定当前 Case、prompt SHA、确认发送回执、taskId、最后一次结构化会话快照、样本数、性能文件和采样阶段；采样间隔必须使用独立计时器，不能因旧 page 的 `waitForTimeout` 在宿主重启时先抛异常而丢失已有账本。renderer/宿主关闭后仍按 framework issue 硬停止，checkpoint 只保护诊断，不得把不完整会话伪装成可信产品终态。
 - #793 长文本在完整观察窗口结束时若已有可归属助手正文但仍处于生成态，必须先保存
