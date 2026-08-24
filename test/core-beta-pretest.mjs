@@ -159,6 +159,63 @@ if (!/第一次物理ArrowUp[^\n]*第二次/.test(String(composerHistory?.steps 
   throw new Error('BETA-TASK-008 must preserve the two-physical-press boundary handshake.');
 }
 
+const mrSmokeCasebook = path.join(root, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
+const mrSmokeExpectedSha = '8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19';
+const mrSmokeActualSha = crypto.createHash('sha256').update(fs.readFileSync(mrSmokeCasebook)).digest('hex');
+if (mrSmokeActualSha !== mrSmokeExpectedSha) {
+  throw new Error(`MR smoke Casebook SHA mismatch: expected=${mrSmokeExpectedSha} actual=${mrSmokeActualSha}`);
+}
+const mrSmokeAuditOut = path.join(temp, 'mr-smoke-audit');
+const mrSmokeAudit = spawnSync(process.execPath, [
+  path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),
+  '--casebook', mrSmokeCasebook,
+  '--sheet', '新增MR核心冒烟',
+  '--out', mrSmokeAuditOut,
+], { cwd: root, encoding: 'utf8' });
+if (mrSmokeAudit.status !== 0) {
+  throw new Error(`MR smoke capability audit failed: ${mrSmokeAudit.stderr || mrSmokeAudit.stdout}`);
+}
+const mrSmokeAuditReport = JSON.parse(fs.readFileSync(path.join(mrSmokeAuditOut, 'capability-audit.json'), 'utf8'));
+if (mrSmokeAuditReport.protocol.case_count !== 11
+  || mrSmokeAuditReport.protocol.executable_count !== 11
+  || !mrSmokeAuditReport.runtime_dispatch?.ok
+  || mrSmokeAuditReport.runtime_dispatch.dispatchable_count !== 11
+  || mrSmokeAuditReport.capability_summary?.runner_native !== 6
+  || mrSmokeAuditReport.capability_summary?.runner_legacy_verified !== 5
+  || mrSmokeAuditReport.capability_summary?.strict_controller_required !== 0
+  || mrSmokeAuditReport.capability_summary?.unsupported_runtime !== 0
+  || mrSmokeAuditReport.capability_summary?.directly_runnable_without_controller !== 11) {
+  throw new Error(`MR smoke runtime dispatch audit mismatch: ${JSON.stringify({
+    protocol: mrSmokeAuditReport.protocol,
+    runtime_dispatch: mrSmokeAuditReport.runtime_dispatch,
+    capability_summary: mrSmokeAuditReport.capability_summary,
+  })}`);
+}
+const mrSmokeCases = JSON.parse(fs.readFileSync(path.join(mrSmokeAuditOut, 'casebook-cases.json'), 'utf8')).cases || [];
+const expectedMrSmokeIds = [
+  'MRSMOKE-ACT-001',
+  'MRSMOKE-WEB-001',
+  'MRSMOKE-WEB-002',
+  'MRSMOKE-AUTH-001',
+  'MRSMOKE-AUTO-001',
+  'MRSMOKE-NAV-001',
+  'MRSMOKE-ROUTE-001',
+  'MRSMOKE-SKILL-001',
+  'MRSMOKE-FAIL-001',
+  'MRSMOKE-ART-001',
+  'MRSMOKE-ENTRY-001',
+];
+if (JSON.stringify(mrSmokeCases.map((item) => item.id)) !== JSON.stringify(expectedMrSmokeIds)) {
+  throw new Error('MR smoke Casebook IDs and order must stay frozen at 11/11.');
+}
+if (!mrSmokeCases.every((item) => (
+  item.contract_version === 'qbot-core-beta/v2'
+  && item.runner === 'core-beta-v2'
+  && item.pipeline_policy === 'serial'
+))) {
+  throw new Error('Every MR smoke Case must use Core Beta v2 with serial execution.');
+}
+
 const pretestHelp = spawnSync(process.execPath, [
   path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
   '--help',

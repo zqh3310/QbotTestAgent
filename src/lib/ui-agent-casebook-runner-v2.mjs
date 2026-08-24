@@ -522,6 +522,43 @@ export function isQworkDailyRegressionCasePlan(cases = []) {
   ));
 }
 
+export const QWORK_MR_CORE_SMOKE_CASE_IDS = Object.freeze([
+  'MRSMOKE-ACT-001',
+  'MRSMOKE-WEB-001',
+  'MRSMOKE-WEB-002',
+  'MRSMOKE-AUTH-001',
+  'MRSMOKE-AUTO-001',
+  'MRSMOKE-NAV-001',
+  'MRSMOKE-ROUTE-001',
+  'MRSMOKE-SKILL-001',
+  'MRSMOKE-FAIL-001',
+  'MRSMOKE-ART-001',
+  'MRSMOKE-ENTRY-001',
+]);
+
+const QWORK_MR_CORE_SMOKE_CASE_TYPES = Object.freeze([
+  'conversation',
+  'mcp_use',
+  'security_privacy',
+  'security_privacy',
+  'project_automation',
+  'host_integration',
+  'model_routing',
+  'skill_lifecycle',
+  'security_privacy',
+  'artifact',
+  'task_lifecycle',
+]);
+
+export function isQworkMrCoreSmokeCasePlan(cases = []) {
+  if (cases.length !== QWORK_MR_CORE_SMOKE_CASE_IDS.length) return false;
+  return cases.every((testCase, index) => (
+    String(testCase?.id || '').trim() === QWORK_MR_CORE_SMOKE_CASE_IDS[index]
+    && String(testCase?.case_type || '').trim() === QWORK_MR_CORE_SMOKE_CASE_TYPES[index]
+    && String(testCase?.contract_version || '').trim() === 'qbot-core-beta/v2'
+  ));
+}
+
 function coreBetaCleanupCasePaths(cases, ancestors = []) {
   const paths = [];
   for (const testCase of Array.isArray(cases) ? cases : []) {
@@ -1756,6 +1793,7 @@ export function validateProductionCasePlan(cases = [], {
   const ids = cases.map((item) => String(item.id || '').trim()).filter(Boolean);
   if (ids.length !== cases.length || new Set(ids).size !== ids.length) errors.push('Case ID 为空或重复。');
   const qworkDailyRegression = isQworkDailyRegressionCasePlan(cases);
+  const qworkMrCoreSmoke = isQworkMrCoreSmokeCasePlan(cases);
   const coveredDomains = new Set();
   const hardGateDomains = new Set();
   for (const testCase of cases) {
@@ -1776,7 +1814,7 @@ export function validateProductionCasePlan(cases = [], {
       errors.push(`${testCase.id || 'unknown'} repeat_policy 必须包含明确执行次数。`);
     }
   }
-  if (!qworkDailyRegression) {
+  if (!qworkDailyRegression && !qworkMrCoreSmoke) {
     const missingDomains = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !coveredDomains.has(domain));
     if (missingDomains.length) errors.push(`缺少生产风险域 ${missingDomains.join(',')}`);
     const domainsWithoutHardGate = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !hardGateDomains.has(domain));
@@ -1794,8 +1832,12 @@ export function validateProductionCasePlan(cases = [], {
     covered_risk_domains: [...coveredDomains].sort(),
     hard_gate_risk_domains: [...hardGateDomains].sort(),
     required_risk_domains: PRODUCTION_REQUIRED_RISK_DOMAINS,
-    gate_contract: qworkDailyRegression ? 'qwork-daily-regression/v1' : 'production-risk-gate/v1',
-    production_risk_domain_coverage_required: !qworkDailyRegression,
+    gate_contract: qworkDailyRegression
+      ? 'qwork-daily-regression/v1'
+      : qworkMrCoreSmoke
+        ? 'qwork-mr-core-smoke/v1'
+        : 'production-risk-gate/v1',
+    production_risk_domain_coverage_required: !qworkDailyRegression && !qworkMrCoreSmoke,
     release_inputs: {
       backend_version: String(backendVersion || ''),
       prompt_policy_version: String(promptPolicyVersion || ''),
@@ -3834,7 +3876,7 @@ async function executeCoreBetaRoute(context, route) {
   if (runtimeBinding.mode === 'strict_controller') {
     return await executeCoreBetaExtendedProductCase(context, scenario);
   }
-  if (scenario.driver.startsWith('qwork_daily_')) {
+  if (scenario.driver.startsWith('qwork_daily_') || scenario.driver.startsWith('qwork_mr_')) {
     return await executeQworkDailyNativeCase(context, scenario);
   }
   if (route === 'conversation') return await executeCoreBetaConversationCase(context, scenario);
@@ -4191,6 +4233,8 @@ export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
   'qwork_daily_memory_precedence',
   'qwork_daily_prompt_injection_boundary',
   'qwork_daily_credential_redaction_copy',
+  'qwork_mr_activity_timeline',
+  'qwork_mr_interval_schedule',
 ]);
 
 export const CORE_BETA_NATIVE_CASE_TYPES = new Set([
@@ -4244,7 +4288,8 @@ export function coreBetaRuntimeExecutorBinding(testCase, providedScenario = null
       reason: '',
     };
   }
-  const nativeScenarioTypeMatches = driver.startsWith('qwork_daily_') || (
+  const nativeScenarioTypeMatches = driver.startsWith('qwork_daily_')
+    || driver.startsWith('qwork_mr_') || (
     driver === 'composer_history_navigation' && caseType === 'task_lifecycle'
   ) || (
     driver === 'model_menu_sdk_filter' && caseType === 'model_routing'
@@ -13309,6 +13354,98 @@ export function qworkDailyRedactionVerdict({
   };
 }
 
+export function mrSmokeActivityTimelineVerdict(readback = {}) {
+  const running = readback.running || {};
+  const completed = readback.completed || {};
+  const evidenceValid = Boolean(
+    running.probe_completed === true
+    && completed.probe_completed === true
+    && Number.isInteger(Number(running.group_count))
+    && Number.isInteger(Number(completed.group_count))
+    && typeof completed.assistant_text === 'string'
+  );
+  const oracleValid = Boolean(
+    evidenceValid
+    && Number(running.group_count) >= 1
+    && Number(running.active_group_count) >= 1
+    && Number(running.current_count) >= 1
+    && Number(completed.group_count) >= 1
+    && Number(completed.completed_toggle_count) >= 1
+    && Number(completed.expanded_before_count) === 0
+    && completed.toggle_clicked === true
+    && Number(completed.expanded_after_count) >= 1
+    && String(completed.assistant_text || '').trim().length > 0
+    && completed.reply_complete === true
+  );
+  return {
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    running_state_visible: Number(running.active_group_count) >= 1 && Number(running.current_count) >= 1,
+    completed_default_collapsed: Number(completed.completed_toggle_count) >= 1
+      && Number(completed.expanded_before_count) === 0,
+    completed_expands_on_click: completed.toggle_clicked === true
+      && Number(completed.expanded_after_count) >= 1,
+    assistant_body_present: String(completed.assistant_text || '').trim().length > 0,
+  };
+}
+
+export function mrSmokeIntervalScheduleVerdict(readback = {}) {
+  const methods = readback.api_methods || {};
+  const definition = readback.definition_readback || {};
+  const postCreateRefresh = readback.post_create_refresh || {};
+  const run = readback.terminal_run || {};
+  const requiredMethods = [
+    'listLocal', 'refresh', 'listTemplates', 'create', 'update', 'runNow', 'listRuns', 'delete', 'deleteRun',
+  ];
+  const scheduledAt = run.scheduledAt ?? run.scheduledFor ?? null;
+  const evidenceValid = Boolean(
+    readback.api_surface_available === true
+    && requiredMethods.every((name) => methods[name] === true)
+    && String(readback.created_definition_id || '')
+    && Array.isArray(readback.run_observations)
+    && readback.run_observations.length > 0
+    && readback.cleanup?.attempted === true
+  );
+  const oracleValid = Boolean(
+    evidenceValid
+    && readback.run_now_called === false
+    && postCreateRefresh.ok === true
+    && postCreateRefresh.definition_found === true
+    && String(definition.id || '') === String(readback.created_definition_id || '')
+    && definition.enabled === true
+    && definition.schedule?.kind === 'interval'
+    && Number(definition.schedule?.intervalMs) === Number(readback.interval_ms)
+    && readback.ui_row?.visible === true
+    && readback.ui_row?.display_name_matched === true
+    && String(run.automationId || '') === String(readback.created_definition_id || '')
+    && run.triggerKind === 'schedule'
+    && String(run.occurrenceKey || '')
+    && Number.isFinite(Number(scheduledAt))
+    && Number(scheduledAt) > 0
+    && String(run.sessionId || '')
+    && run.status === 'succeeded'
+    && readback.cleanup?.run_deleted === true
+    && readback.cleanup?.definition_deleted === true
+    && readback.cleanup?.foreign_resource_touched !== true
+  );
+  return {
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    normalized_scheduled_at: scheduledAt,
+    scheduled_trigger_proven: run.triggerKind === 'schedule'
+      && Boolean(String(run.occurrenceKey || ''))
+      && Number.isFinite(Number(scheduledAt))
+      && Boolean(String(run.sessionId || '')),
+    terminal_succeeded: run.status === 'succeeded',
+    run_now_forbidden_respected: readback.run_now_called === false,
+    targeted_cleanup_complete: readback.cleanup?.run_deleted === true
+      && readback.cleanup?.definition_deleted === true
+      && readback.cleanup?.foreign_resource_touched !== true,
+  };
+}
+
 export function qworkDailyEvidenceEnvelope(caseId, data, oracleValid = true, evidenceValid = true, capturedAt = new Date().toISOString()) {
   return {
     schema_version: 'qbot-qwork-daily-native-evidence/v1',
@@ -15137,6 +15274,418 @@ async function qworkDailyRedactionCase({ page, state, testCase, caseDir, options
   }
 }
 
+async function mrSmokeActivityDomSnapshot(page) {
+  return page.evaluate(() => {
+    const visibleCount = (selector, root = document) => Array.from(root.querySelectorAll(selector))
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      }).length;
+    const groups = Array.from(document.querySelectorAll('.aui-activity-group'));
+    const lastAssistant = Array.from(document.querySelectorAll('.aui-assistant-message-content')).at(-1);
+    return {
+      probe_completed: true,
+      group_count: groups.length,
+      active_group_count: groups.filter((node) => node.getAttribute('data-active') === 'true').length,
+      current_count: visibleCount('[data-testid="assistant-activity-current"]'),
+      completed_toggle_count: visibleCount('[data-testid="assistant-activity-completed-toggle"]'),
+      expanded_count: visibleCount('[data-slot="aui_activity-expanded"]'),
+      assistant_text: String(lastAssistant?.innerText || lastAssistant?.textContent || '').trim(),
+      current_labels: Array.from(document.querySelectorAll('[data-testid="assistant-activity-current"]'))
+        .map((node) => String(node.textContent || '').trim()).filter(Boolean),
+      completed_labels: Array.from(document.querySelectorAll('[data-testid="assistant-activity-completed-toggle"]'))
+        .map((node) => String(node.textContent || '').trim()).filter(Boolean),
+    };
+  }).catch((error) => ({ probe_completed: false, error: error.message }));
+}
+
+async function qworkMrActivityTimelineCase({ page, state, testCase, caseDir, timeoutMs }) {
+  const prompt = String(testCase.conversation_turns?.[0]?.prompt || '').trim()
+    || '请先查看当前工作空间目录，再检查是否存在 README.md，最后用两点总结检查结果。';
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir)) return;
+  const before = await conversationSnapshot(page);
+  state.artifacts.sent_prompts ||= [];
+  state.artifacts.sent_prompts.push({ label: '活动流核心冒烟', prompt, recorded_at: new Date().toISOString() });
+  await fillComposer(page, prompt, state, '输入需要多阶段处理的真实用户任务');
+  state.screenshots.activity_after_fill = await shot(page, caseDir, 'mr-activity-after-fill');
+  await send(page, state, '发送活动流核心冒烟任务');
+  state.screenshots.activity_after_send = await shot(page, caseDir, 'mr-activity-after-send');
+
+  const runningDeadline = Date.now() + 30_000;
+  let running = await mrSmokeActivityDomSnapshot(page);
+  while (Date.now() < runningDeadline
+    && !(Number(running.active_group_count) >= 1 && Number(running.current_count) >= 1)) {
+    await page.waitForTimeout(250);
+    running = await mrSmokeActivityDomSnapshot(page);
+  }
+  state.screenshots.activity_running = await shot(page, caseDir, 'mr-activity-running');
+  recordStep(
+    state,
+    '观察运行中的活动分组',
+    '运行态应出现 .aui-activity-group[data-active="true"] 和 assistant-activity-current。',
+    JSON.stringify(running),
+    Number(running.active_group_count) >= 1 && Number(running.current_count) >= 1 ? 'passed' : 'failed',
+    state.screenshots.activity_running,
+  );
+
+  const waitConfig = replyWaitConfig(testCase, timeoutMs);
+  const reply = await waitForReply(page, before, waitConfig.timeoutMs, {
+    ignoredText: [prompt, testCase.scenario, testCase.test_data],
+    expectedUserText: prompt,
+    state,
+    caseDir,
+    label: '活动流核心冒烟',
+    minWaitMs: waitConfig.minWaitMs,
+    waitKind: waitConfig.kind,
+  });
+  state.screenshots.activity_after_reply = await shot(page, caseDir, 'mr-activity-after-reply');
+  writeReplyArtifacts(state, caseDir, [{ label: '活动流核心冒烟', ...reply }]);
+  recordReplyWaitAssertion(state, reply, '活动流核心冒烟');
+  recordReplyAssertions(state, testCase, prompt, reply, '活动流核心冒烟');
+  if (reply.incomplete) await cancelRunningReplyAfterTimeout(page, state, caseDir, '活动流核心冒烟');
+
+  const completedBefore = await mrSmokeActivityDomSnapshot(page);
+  const toggle = page.locator('[data-testid="assistant-activity-completed-toggle"]').last();
+  const toggleVisible = await visible(toggle, 2_000);
+  let toggleClicked = false;
+  if (toggleVisible) {
+    toggleClicked = await toggle.click({ force: true }).then(() => true, () => false);
+    if (toggleClicked) await page.waitForTimeout(350);
+  }
+  const completedAfter = await mrSmokeActivityDomSnapshot(page);
+  state.screenshots.activity_completed_expanded = await shot(page, caseDir, 'mr-activity-completed-expanded');
+  const completed = {
+    ...completedAfter,
+    expanded_before_count: Number(completedBefore.expanded_count || 0),
+    expanded_after_count: Number(completedAfter.expanded_count || 0),
+    toggle_clicked: toggleClicked,
+    reply_complete: !reply.incomplete && Boolean(String(reply.deltaText || '').trim()),
+  };
+  const readback = {
+    schema_version: 'qbot-qwork-mr-activity-timeline/v1',
+    running,
+    completed,
+    selectors: [
+      '.aui-activity-group',
+      '[data-active="true"]',
+      '[data-testid="assistant-activity-current"]',
+      '[data-testid="assistant-activity-completed-toggle"]',
+      '[data-slot="aui_activity-expanded"]',
+      '.aui-assistant-message-content',
+    ],
+  };
+  const verdict = mrSmokeActivityTimelineVerdict(readback);
+  readback.verdict = verdict;
+  const evidenceFile = writeQworkDailyEvidence(
+    state,
+    caseDir,
+    'qwork_daily_readback',
+    readback,
+    verdict.oracle_valid,
+    verdict.evidence_valid,
+  );
+  state.artifacts.product_action_trace = evidenceFile;
+  recordAssertion(
+    state,
+    '活动流运行态、正文与完成折叠闭环',
+    '发送后出现当前活动；完成后活动默认折叠、可展开，且助手正文完整可见。',
+    verdict.oracle_valid,
+    JSON.stringify(verdict),
+  );
+}
+
+async function openQworkAutomationView(page, state) {
+  await dismissAllBlockingOverlays(page, state);
+  await clearUi(page);
+  await ensureSidebarExpanded(page, state);
+  let nav = page.locator('[data-testid="nav-automation"], [data-testid="nav-automations"]').first();
+  if (!(await visible(nav, 2_000))) nav = page.getByText('自动化', { exact: true }).first();
+  if (!(await visible(nav, 3_000))) throw new Error('未找到【自动化】导航入口。');
+  await nav.click({ force: true }).catch(async () => nav.evaluate((node) => node.click()));
+  const view = page.locator('[data-testid="automation-view"], .automation-view').first();
+  await view.waitFor({ state: 'visible', timeout: 15_000 });
+  return view;
+}
+
+async function qworkMrIntervalScheduleCase({ page, state, testCase, caseDir, timeoutMs }) {
+  const displayName = `${testCase.id}-${Date.now()}`;
+  const intervalMs = 3_600_000;
+  const activeFrom = Date.now() - intervalMs + 15_000;
+  const prompt = '请回复“定时任务已自动执行”，并用一句话说明本次任务由计划调度触发。';
+  let createdDefinitionId = '';
+  let bootstrap = null;
+  let terminalRun = null;
+  let definitionReadback = null;
+  let postCreateRefresh = null;
+  let executionError = null;
+  const runObservations = [];
+  let uiRow = { visible: false, display_name_matched: false, text: '' };
+  let cleanup = {
+    attempted: false,
+    run_deleted: false,
+    definition_deleted: false,
+    foreign_resource_touched: false,
+  };
+
+  try {
+    await openQworkAutomationView(page, state);
+    state.screenshots.automation_before_create = await shot(page, caseDir, 'mr-interval-before-create');
+    bootstrap = await page.evaluate(async ({ name, body, interval, startsAt }) => {
+      const api = window.agent?.personalAutomations;
+      const methodNames = ['listLocal', 'refresh', 'listTemplates', 'create', 'update', 'runNow', 'listRuns', 'delete', 'deleteRun'];
+      const apiMethods = Object.fromEntries(methodNames.map((key) => [key, typeof api?.[key] === 'function']));
+      if (!api || !methodNames.every((key) => apiMethods[key])) {
+        return { ok: false, api_methods: apiMethods, error: 'personalAutomations public API incomplete' };
+      }
+      const before = await api.listLocal();
+      const templates = await api.listTemplates();
+      const refreshed = await api.refresh();
+      const created = await api.create({
+        displayName: name,
+        prompt: body,
+        enabled: true,
+        schedule: {
+          kind: 'interval',
+          intervalMs: interval,
+          weekdays: [0, 1, 2, 3, 4, 5, 6],
+          activeFrom: startsAt,
+          activeUntil: null,
+        },
+        execution: {
+          workspaceMode: 'automation-default',
+          workspaceRef: null,
+          runtimeFamily: 'claude-code',
+          modelPolicy: 'auto',
+          connectionSource: 'platform',
+          connectionId: null,
+          modelId: null,
+          expertId: null,
+          skillIds: [],
+          connectorIds: [],
+          permissionMode: 'full-access',
+        },
+      });
+      return {
+        ok: true,
+        api_methods: apiMethods,
+        before_count: Array.isArray(before) ? before.length : -1,
+        template_count: Array.isArray(templates) ? templates.length : -1,
+        refresh_count: Array.isArray(refreshed) ? refreshed.length : -1,
+        created,
+      };
+    }, { name: displayName, body: prompt, interval: intervalMs, startsAt: activeFrom });
+    createdDefinitionId = String(bootstrap?.created?.id || '');
+    recordStep(
+      state,
+      '通过公开 API 创建 interval 自动化',
+      '必须使用 window.agent.personalAutomations.create，且不得调用 runNow。',
+      JSON.stringify({ ...bootstrap, created: bootstrap?.created ? { ...bootstrap.created, prompt: '[OMITTED]' } : null }),
+      bootstrap?.ok && createdDefinitionId ? 'passed' : 'failed',
+      state.screenshots.automation_before_create,
+      bootstrap?.ok && createdDefinitionId ? '' : 'automation_error',
+    );
+    if (!bootstrap?.ok || !createdDefinitionId) throw new Error('interval 自动化创建失败或未返回定义 ID。');
+
+    const projectionDeadline = Date.now() + 15_000;
+    while (Date.now() < projectionDeadline && !definitionReadback) {
+      definitionReadback = await page.evaluate(async (id) => {
+        const rows = await window.agent.personalAutomations.listLocal();
+        return Array.isArray(rows) ? rows.find((item) => String(item?.id || '') === id) || null : null;
+      }, createdDefinitionId).catch(() => null);
+      if (!definitionReadback) await page.waitForTimeout(300);
+    }
+
+    postCreateRefresh = await page.evaluate(async (id) => {
+      const api = window.agent?.personalAutomations;
+      if (!api || typeof api.refresh !== 'function') {
+        return { ok: false, definition_found: false, error: 'personalAutomations.refresh unavailable' };
+      }
+      const refreshed = await api.refresh();
+      const rows = Array.isArray(refreshed) ? refreshed : await api.listLocal();
+      return {
+        ok: true,
+        definition_found: Array.isArray(rows)
+          && rows.some((item) => String(item?.id || '') === id),
+        definition_count: Array.isArray(rows) ? rows.length : -1,
+      };
+    }, createdDefinitionId);
+    if (!postCreateRefresh?.ok || !postCreateRefresh.definition_found) {
+      throw new Error(`interval 自动化公开刷新后未读回本 Case 定义：${JSON.stringify(postCreateRefresh)}`);
+    }
+    await openNewTask(page, state);
+    await openQworkAutomationView(page, state);
+    const row = page.locator('.automation-row').filter({ hasText: displayName }).first();
+    const rowVisible = await visible(row, 10_000);
+    uiRow = {
+      visible: rowVisible,
+      display_name_matched: rowVisible,
+      text: rowVisible ? await row.innerText({ timeout: 2_000 }).catch(() => '') : '',
+    };
+    state.screenshots.automation_definition_row = await shot(page, caseDir, 'mr-interval-definition-row');
+    recordStep(
+      state,
+      '从自动化列表读回本 Case 定义',
+      '.automation-row 必须展示当前 Case 唯一名称，listLocal 必须读回同一 ID。',
+      JSON.stringify({ definitionReadback, uiRow }),
+      definitionReadback && uiRow.visible ? 'passed' : 'failed',
+      state.screenshots.automation_definition_row,
+    );
+
+    const terminalStatuses = new Set(['blocked', 'succeeded', 'failed', 'cancelled', 'skipped']);
+    const runDeadline = Date.now() + Math.min(Math.max(Number(timeoutMs || 0), 120_000), 360_000);
+    let lastObservationKey = '';
+    while (Date.now() < runDeadline) {
+      const runs = await page.evaluate(async (id) => {
+        const rows = await window.agent.personalAutomations.listRuns({ automationId: id, limit: 100, offset: 0 });
+        return Array.isArray(rows) ? rows : [];
+      }, createdDefinitionId).catch(() => []);
+      const latest = runs.find((item) => String(item?.automationId || '') === createdDefinitionId) || null;
+      const observationKey = JSON.stringify(latest ? {
+        id: latest.id,
+        status: latest.status,
+        updatedAt: latest.updatedAt,
+        sessionId: latest.sessionId,
+      } : null);
+      if (observationKey !== lastObservationKey) {
+        runObservations.push({ captured_at: new Date().toISOString(), run: latest });
+        lastObservationKey = observationKey;
+      }
+      if (latest && terminalStatuses.has(String(latest.status || ''))) {
+        terminalRun = latest;
+        break;
+      }
+      await page.waitForTimeout(1_000);
+    }
+    state.screenshots.automation_terminal_run = await shot(page, caseDir, 'mr-interval-terminal-run');
+    recordStep(
+      state,
+      '等待 interval 到点自动执行并收敛',
+      '运行必须由 schedule 触发，包含 occurrenceKey、scheduledFor/scheduledAt、sessionId，终态为 succeeded。',
+      JSON.stringify(terminalRun || { status: 'not_observed', observations: runObservations.length }),
+      terminalRun?.status === 'succeeded' ? 'passed' : 'failed',
+      state.screenshots.automation_terminal_run,
+    );
+  } catch (error) {
+    executionError = error;
+  } finally {
+    const lastObservedRun = terminalRun || [...runObservations].reverse().find((item) => item?.run)?.run || null;
+    if (!createdDefinitionId) {
+      cleanup = {
+        ...cleanup,
+        skipped_reason: 'definition_identity_unavailable',
+      };
+    } else try {
+      cleanup = await page.evaluate(async ({ definitionId, observedRun }) => {
+        const api = window.agent?.personalAutomations;
+        const result = {
+          attempted: true,
+          target_definition_id: definitionId,
+          target_run_id: observedRun?.id || null,
+          run_deleted: !observedRun?.id,
+          definition_deleted: false,
+          foreign_resource_touched: false,
+          cancel_supported: typeof api?.cancelRun === 'function',
+          cancel_attempted: false,
+        };
+        if (!api) throw new Error('personalAutomations public API unavailable during cleanup');
+        const listedRuns = await api.listRuns({ automationId: definitionId, limit: 100, offset: 0 });
+        const matchingRuns = Array.isArray(listedRuns)
+          ? listedRuns.filter((item) => String(item?.automationId || '') === definitionId)
+          : [];
+        const targetRun = matchingRuns.find((item) => String(item?.id || '') === String(observedRun?.id || ''))
+          || matchingRuns[0]
+          || null;
+        if (!targetRun) result.run_deleted = true;
+        result.target_run_id = targetRun?.id || result.target_run_id;
+        result.target_run_status = targetRun?.status || observedRun?.status || null;
+        if (targetRun && ['queued', 'pending', 'running', 'cancelling'].includes(String(targetRun.status || ''))
+          && result.cancel_supported) {
+          result.cancel_attempted = true;
+          result.cancel_result = await api.cancelRun(targetRun.id);
+        }
+        if (targetRun?.id) {
+          const deletedRun = await api.deleteRun(targetRun.id);
+          result.run_delete_result = deletedRun;
+          const remainingRuns = await api.listRuns({ automationId: definitionId, limit: 100, offset: 0 });
+          result.run_deleted = !Array.isArray(remainingRuns)
+            || !remainingRuns.some((item) => String(item?.id || '') === String(targetRun.id));
+        }
+        const definitions = await api.listLocal();
+        const target = Array.isArray(definitions)
+          ? definitions.find((item) => String(item?.id || '') === definitionId)
+          : null;
+        if (target) result.definition_delete_result = await api.delete(definitionId, target.version);
+        const remainingDefinitions = await api.listLocal();
+        result.definition_deleted = !Array.isArray(remainingDefinitions)
+          || !remainingDefinitions.some((item) => String(item?.id || '') === definitionId);
+        return result;
+      }, { definitionId: createdDefinitionId, observedRun: lastObservedRun });
+    } catch (error) {
+      cleanup = { ...cleanup, attempted: true, error: error.message };
+    }
+  }
+  const cleanupOk = cleanup.run_deleted === true
+    && cleanup.definition_deleted === true
+    && cleanup.foreign_resource_touched !== true;
+  recordAssertion(
+    state,
+    '定向清理 interval 自动化与运行',
+    '只删除本 Case 创建的 definition/run，且两者均不可再读回。',
+    cleanupOk,
+    JSON.stringify(cleanup),
+    cleanupOk ? '' : 'automation_error',
+  );
+
+  const readback = {
+    schema_version: 'qbot-qwork-mr-interval-schedule/v1',
+    api_surface_available: bootstrap?.ok === true,
+    api_methods: bootstrap?.api_methods || {},
+    run_now_called: false,
+    display_name: displayName,
+    interval_ms: intervalMs,
+    active_from: activeFrom,
+    created_definition_id: createdDefinitionId,
+    definition_readback: definitionReadback,
+    post_create_refresh: postCreateRefresh,
+    ui_row: uiRow,
+    run_observations: runObservations,
+    terminal_run: terminalRun,
+    execution_error: executionError ? { message: executionError.message, stack: executionError.stack } : null,
+    cleanup,
+  };
+  const verdict = mrSmokeIntervalScheduleVerdict(readback);
+  readback.verdict = verdict;
+  const evidenceFile = writeQworkDailyEvidence(
+    state,
+    caseDir,
+    'qwork_daily_readback',
+    readback,
+    verdict.oracle_valid,
+    verdict.evidence_valid,
+  );
+  state.artifacts.product_action_trace = evidenceFile;
+  state.artifacts.automation_run_trace = evidenceFile;
+  recordAssertion(
+    state,
+    'interval 定时任务到点自动执行',
+    '不调用 runNow；定义/UI/调度运行身份一致，schedule 触发后 succeeded，并完成定向清理。',
+    verdict.oracle_valid,
+    JSON.stringify(verdict),
+  );
+  if (executionError) {
+    recordAssertion(
+      state,
+      'interval Driver 执行完整性',
+      '创建、读回、页面投影和轮询不得抛出自动化异常；异常后仍必须完成定向清理和证据材料化。',
+      false,
+      JSON.stringify({ message: executionError.message, cleanup }),
+      'automation_error',
+    );
+  }
+}
+
 async function executeQworkDailyNativeCase(context, scenario) {
   switch (scenario.driver) {
     case 'qwork_daily_new_task_auto_isolation':
@@ -15165,6 +15714,10 @@ async function executeQworkDailyNativeCase(context, scenario) {
       return await qworkDailyPromptInjectionCase(context);
     case 'qwork_daily_credential_redaction_copy':
       return await qworkDailyRedactionCase(context);
+    case 'qwork_mr_activity_timeline':
+      return await qworkMrActivityTimelineCase(context);
+    case 'qwork_mr_interval_schedule':
+      return await qworkMrIntervalScheduleCase(context);
     default:
       throw new Error(`日常回归原生driver未实现：${scenario.driver}`);
   }

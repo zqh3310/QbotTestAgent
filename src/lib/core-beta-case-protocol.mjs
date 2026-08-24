@@ -257,6 +257,17 @@ export const CORE_BETA_SCENARIO_IDS = new Set([
     'QWD-MEM-002',
     'QWD-SEC-002',
     'QWD-SEC-005',
+    'MRSMOKE-ACT-001',
+    'MRSMOKE-WEB-001',
+    'MRSMOKE-WEB-002',
+    'MRSMOKE-AUTH-001',
+    'MRSMOKE-AUTO-001',
+    'MRSMOKE-NAV-001',
+    'MRSMOKE-ROUTE-001',
+    'MRSMOKE-SKILL-001',
+    'MRSMOKE-FAIL-001',
+    'MRSMOKE-ART-001',
+    'MRSMOKE-ENTRY-001',
   ],
 ]);
 
@@ -405,6 +416,17 @@ const registerScenario = (id, driver, {
   ['QWD-MEM-002', 'qwork_daily_memory_precedence'],
   ['QWD-SEC-002', 'qwork_daily_prompt_injection_boundary'],
   ['QWD-SEC-005', 'qwork_daily_credential_redaction_copy', { conversation_required: false }],
+  ['MRSMOKE-ACT-001', 'qwork_mr_activity_timeline'],
+  ['MRSMOKE-WEB-001', 'qwork_mr_web_search_success', { legacy_case_id: 'SIT-CONN-019' }],
+  ['MRSMOKE-WEB-002', 'qwork_mr_web_search_ssrf_rejection', { legacy_case_id: 'SIT-CONN-015', conversation_required: false }],
+  ['MRSMOKE-AUTH-001', 'qwork_mr_workspace_authorization_boundary', { legacy_case_id: 'SIT-WORKSPACE-001' }],
+  ['MRSMOKE-AUTO-001', 'qwork_mr_interval_schedule', { conversation_required: false }],
+  ['MRSMOKE-NAV-001', 'qwork_mr_sidebar_collapse_expand', { legacy_case_id: 'SIT-HOME-051', conversation_required: false }],
+  ['MRSMOKE-ROUTE-001', 'qwork_daily_route_task_stability'],
+  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', { legacy_case_id: 'SIT-SKILL-SCOPE-001' }],
+  ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', { conversation_required: false }],
+  ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory'],
+  ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', { conversation_required: false }],
 ].forEach(([id, driver, options]) => registerScenario(id, driver, options));
 
 const productionExtensionLegacyDrivers = Object.freeze({

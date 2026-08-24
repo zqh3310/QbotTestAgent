@@ -4,18 +4,22 @@
 
 规范性执行合同以
 `/Users/qifu/Documents/QbotTestAgent/QBOT_AUTOMATION_FRAMEWORK.md` 为准。
-本指南记录当前 70 条生产灰度发布门禁、160 条全量正常功能回归，以及本轮
-QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺序和禁止事项。
+本指南记录当前新增 MR 核心冒烟 11 条、70 条生产灰度发布门禁、160 条全量正常功能
+回归，以及 QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺序和
+禁止事项。
 
 ## 1. 当前状态
 
-- 用户已明确要求持续监控并自主修复 QWork 日常回归。本轮确认 framework issue 后，
-  必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再以新不可变目录
-  从 `1/83` 启动唯一串行 runner；不得恢复旧目录或继承旧结果。
+- 当前用户要求先执行新增 MR 核心冒烟 11 条，再执行原生产灰度门禁 70 条。两批必须
+  使用同一重新读回的 SIT 发布身份，但分别执行能力审计、精确 `READY`、独立不可变
+  输出和逐 Case 可信复核；不得继承或合并原始结果。确认 framework/testcase issue 后，
+  必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再从 `1/11` 或
+  `1/70` 启动唯一串行 runner。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
-- 当前目标 lane：SIT。冻结发布身份为 360Teams `5.5.13` build `2119081949`、
+- 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 11 -> 70 任务：
+  360Teams `5.5.13` build `2119081949`、
   QWork `0.1.4-sit.11`、UI commit `2cdcb9d7`、backend
   `sit-health-ae3b6cafbc5ed123`、control plane
   `https://deepbank-control-sit.sandbox.deepbank.daikuan.qihoo.net`、prompt policy
@@ -23,9 +27,9 @@ QWork 日常回归 83 个顶层 / 144 个叶子 Case 的接手状态、启动顺
   feature/UI SHA `db8d0d5c2200b0c5854c2ee179a4deb676dc2a934bc47db437f420a01f533817`、
   release manifest SHA `39f1c5fc19ef2899c7ddb449845d2451c833e5774c4eb5dc209d7ba71796246c`、
   release-set digest `8beb4c2be5aec05c7164fccee95764cffd5ed746db77a9928f130ea4cad04486`、
-  模型 M3；pretest
-  仍必须从当前受管宿主重新读回并精确匹配全部 release inputs，不能只信本文。
-- 当前没有有效 runner；最近一次 runner 与 npm 父进程均已退出。原受管
+  模型 M3。当前任务 pretest 必须从当前受管宿主重新读回并精确匹配全部 release
+  inputs，不能只信本文或历史批次。
+- 历史 Daily83 runner 与 npm 父进程均已退出。原受管
   360Teams PID `73907` 已被产品 `app.relaunch` 替换为 PID `78313`，但旧
   `session.json` 尚未更新，且替换宿主的 WebView/启动参数不满足冻结 `.11` 身份，
   因此不属于可继续测试的有效宿主。新 pretest 前必须通过受管 launcher 精确恢复
@@ -534,6 +538,31 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 
 ## 2. 当前正式 Casebook
 
+新增 MR 核心冒烟入口：
+
+```text
+/Users/qifu/Documents/QbotTestAgent/PRD/QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx
+Sheet: 新增MR核心冒烟
+SHA-256: 8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19
+```
+
+- 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
+  `MRSMOKE-AUTH-001`、`MRSMOKE-AUTO-001`、`MRSMOKE-NAV-001`、
+  `MRSMOKE-ROUTE-001`、`MRSMOKE-SKILL-001`、`MRSMOKE-FAIL-001`、
+  `MRSMOKE-ART-001`、`MRSMOKE-ENTRY-001`。
+- 能力构成为 6 条原生 driver、5 条经过语义复核的 legacy driver；必须满足
+  11/11 executable、dispatchable、directly runnable，
+  `strict_controller_required=0`、`unsupported_runtime=0`。
+- 完整固定计划使用 `qwork-mr-core-smoke/v1`，冻结全部 release inputs，但不冒充
+  70/160 八大生产风险域门禁。缺失、乱序、ID 或 Case 类型漂移必须 fail-closed。
+- 自动化覆盖活动流、Web 搜索与 SSRF、目录授权、interval 真实到点、侧栏布局、
+  路由稳定、Skill 隔离、失败脱敏、成果目录和新任务隔离。主观视觉细节、极端参数
+  矩阵、首次系统权限/升级重启、多账号或受保护资源继续按合并版手工 Casebook 执行，
+  不在 11 条通过结论中豁免。
+- 执行顺序固定为：11 条能力审计与精确 `READY` -> 11 条全量串行执行和逐 Case
+  可信复核 -> 70 条能力审计与独立精确 `READY` -> 70 条全量串行执行和逐 Case
+  可信复核。两批各用新不可变目录，均为 `inherited=0`、`synthetic=0`。
+
 生产灰度发布与全量功能回归唯一入口：
 
 ```text
@@ -854,8 +883,9 @@ raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历
 
 ## 10. 当前交付边界
 
-本次任务要求实际执行日常回归 83 个顶层 Case。完成 Casebook、执行器、文档、
-提交和推送只是启动前置，不等于 Case 已执行；必须继续读取当前 SIT release
-identity，得到 `日常回归` Sheet 的精确 `READY`，再从 1/83 启动唯一 runner。
-最终结论必须同时报告 83 个顶层和 144 个叶子的真实执行/证据完整性，禁止只报
-raw `passed/failed`。
+本次任务要求实际执行新增 MR 核心冒烟 11 条和原生产灰度门禁 70 条。完成 Casebook、
+执行器、文档、提交和推送只是启动前置，不等于 Case 已执行；必须继续读取当前 SIT
+release identity，分别得到 `新增MR核心冒烟` 与 `生产灰度门禁Case` 的精确 `READY`。
+先从 1/11 启动唯一 runner 并完成逐 Case 可信复核，再从 1/70 以独立目录启动唯一
+runner。最终结论必须分别报告两批真实执行、raw/可信分类、证据完整性和发布身份，
+禁止只报 raw `passed/failed`，也不得用 11 条冒烟替代 70 条门禁。

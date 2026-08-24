@@ -38,6 +38,31 @@
 | 生产灰度发布 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `生产灰度门禁Case` | 70 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
 | 全量正常功能回归 | `PRD/QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx` | `全量功能回归Case` | 160 | `1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4` |
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
+| QWork 新增 MR 核心冒烟 | `PRD/QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx` | `新增MR核心冒烟` | 11 | `8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19` |
+
+QWork 新增 MR 核心冒烟合同固定为以下 11 条有序 Case：
+`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
+`MRSMOKE-AUTH-001`、`MRSMOKE-AUTO-001`、`MRSMOKE-NAV-001`、
+`MRSMOKE-ROUTE-001`、`MRSMOKE-SKILL-001`、`MRSMOKE-FAIL-001`、
+`MRSMOKE-ART-001`、`MRSMOKE-ENTRY-001`。静态审计必须为
+`11/11 executable`、`11/11 dispatchable`、`11/11 directly runnable`，其中
+6 条使用原生 driver，5 条使用经过语义复核的 legacy driver，且
+`strict_controller_required=0`、`unsupported_runtime=0`。只有完整数量、固定顺序、
+固定 Case 类型和 `qbot-core-beta/v2` 全部精确匹配时，才允许使用
+`qwork-mr-core-smoke/v1` 合同而不套用 70/160 的八大生产风险域完整性检查；任何
+缺失、乱序、ID 或类型漂移都必须恢复生产风险域检查并在 Case 0 前 fail-closed。
+
+该 11 条只承担新增 MR 的端到端核心冒烟：活动流、Web 搜索成功与 SSRF 拒绝、
+工作空间授权边界、interval 到点调度、侧栏布局、同任务路由稳定、Skill 任务隔离、
+失败脱敏、成果精确目录和新任务隔离。原手工 Casebook 仍是主观视觉细节、极端参数
+矩阵、首次系统权限/升级重启、多账号或受保护资源等人工边界的依据；11 条通过不得
+替代这些手工检查，也不得等同于生产灰度门禁通过。
+
+同一候选发布的固定执行顺序为“新增 MR 核心冒烟 11 条 -> 逐 Case 可信复核 -> 原生产
+灰度门禁 70 条 -> 逐 Case 可信复核”。两批必须各自执行能力审计和精确 `READY`，
+使用独立不可变输出目录和同一重新读回的冻结发布身份，Case 间串行，
+`inherited=0`、`synthetic=0`；前一批存在 framework/testcase issue 时按自愈闭环从
+1/11 重跑，存在产品 Bug 或阻塞时保留证据并报告，不得把 11 条结果继承进 70 条。
 
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，

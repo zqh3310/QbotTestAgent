@@ -332,11 +332,11 @@ import {
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
 assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 293);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 293);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 304);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 304);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  293,
+  304,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 for (const [id, caseType, driver] of [
@@ -362,6 +362,30 @@ for (const [id, caseType, driver] of [
   assert.equal(binding.dispatchable, true, `${id} 必须在静态审计阶段可分发`);
   assert.equal(binding.mode, 'native', `${id} 必须由runner原生执行`);
 }
+
+for (const [id, driver, mode, legacyCaseId = ''] of [
+  ['MRSMOKE-ACT-001', 'qwork_mr_activity_timeline', 'native'],
+  ['MRSMOKE-WEB-001', 'qwork_mr_web_search_success', 'verified_legacy', 'SIT-CONN-019'],
+  ['MRSMOKE-WEB-002', 'qwork_mr_web_search_ssrf_rejection', 'verified_legacy', 'SIT-CONN-015'],
+  ['MRSMOKE-AUTH-001', 'qwork_mr_workspace_authorization_boundary', 'verified_legacy', 'SIT-WORKSPACE-001'],
+  ['MRSMOKE-AUTO-001', 'qwork_mr_interval_schedule', 'native'],
+  ['MRSMOKE-NAV-001', 'qwork_mr_sidebar_collapse_expand', 'verified_legacy', 'SIT-HOME-051'],
+  ['MRSMOKE-ROUTE-001', 'qwork_daily_route_task_stability', 'native'],
+  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', 'verified_legacy', 'SIT-SKILL-SCOPE-001'],
+  ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', 'native'],
+  ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory', 'native'],
+  ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', 'native'],
+]) {
+  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id);
+  assert.equal(scenario?.driver, driver, `${id} 必须绑定冻结的 MR 冒烟 driver`);
+  assert.equal(scenario?.fixture_control, 'public_product_state', `${id} 不得依赖严格控制器`);
+  assert.equal(scenario?.legacy_case_id || '', legacyCaseId, `${id} legacy 复用身份漂移`);
+  const binding = coreBetaRuntimeExecutorBinding({ id, case_type: 'conversation' }, scenario);
+  assert.equal(binding.dispatchable, true, `${id} 必须在静态审计阶段可分发`);
+  assert.equal(binding.mode, mode, `${id} runtime 分流模式漂移`);
+}
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.get('MRSMOKE-WEB-002')?.conversation_required, false);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.get('MRSMOKE-NAV-001')?.conversation_required, false);
 
 assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
   expected_draft: '任务B草稿',

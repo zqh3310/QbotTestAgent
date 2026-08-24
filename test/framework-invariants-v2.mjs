@@ -170,6 +170,10 @@ import {
   isQworkDailyRegressionCasePlan,
   qworkDailyWorkspaceSelectionFailureEvidence,
   qworkDailyWorkspaceTaskBindingVerdict,
+  QWORK_MR_CORE_SMOKE_CASE_IDS,
+  isQworkMrCoreSmokeCasePlan,
+  mrSmokeActivityTimelineVerdict,
+  mrSmokeIntervalScheduleVerdict,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
   buildCoreEvidenceManifest,
@@ -7722,6 +7726,164 @@ if (incompleteQworkDailyReleaseAudit.ok
   || incompleteQworkDailyReleaseAudit.production_risk_domain_coverage_required !== true
   || !incompleteQworkDailyReleaseAudit.errors.some((item) => item.includes('缺少生产风险域'))) {
   throw new Error('日常回归豁免必须只适用于完整精确的 83 条计划；缺一条仍须 fail-closed。');
+}
+
+const qworkMrSmokeCaseTypes = [
+  'conversation', 'mcp_use', 'security_privacy', 'security_privacy', 'project_automation',
+  'host_integration', 'model_routing', 'skill_lifecycle', 'security_privacy', 'artifact', 'task_lifecycle',
+];
+const qworkMrSmokeCases = QWORK_MR_CORE_SMOKE_CASE_IDS.map((id, index) => ({
+  ...productionCaseMetadata,
+  id,
+  case_type: qworkMrSmokeCaseTypes[index],
+  contract_version: 'qbot-core-beta/v2',
+  risk_domain: 'functional',
+}));
+if (!isQworkMrCoreSmokeCasePlan(qworkMrSmokeCases)) {
+  throw new Error('11 条 MR 核心冒烟必须匹配完整有序 ID、冻结类型和 qbot-core-beta/v2。');
+}
+const qworkMrSmokeAudit = validateProductionCasePlan(qworkMrSmokeCases, {
+  backendVersion: 'sit-backend-1',
+  promptPolicyVersion: 'sit-prompt-1',
+  featureFlagsHash: 'c'.repeat(64),
+});
+if (!qworkMrSmokeAudit.ok
+  || qworkMrSmokeAudit.gate_contract !== 'qwork-mr-core-smoke/v1'
+  || qworkMrSmokeAudit.production_risk_domain_coverage_required !== false) {
+  throw new Error(`MR 核心冒烟应冻结 release inputs，但不应套用 70/160 八大风险域：${JSON.stringify(qworkMrSmokeAudit)}`);
+}
+for (const drifted of [
+  qworkMrSmokeCases.slice(0, -1),
+  [...qworkMrSmokeCases].reverse(),
+  qworkMrSmokeCases.map((item, index) => index === 3 ? { ...item, id: 'MRSMOKE-AUTH-DRIFT' } : item),
+  qworkMrSmokeCases.map((item, index) => index === 4 ? { ...item, case_type: 'conversation' } : item),
+]) {
+  const audit = validateProductionCasePlan(drifted, {
+    backendVersion: 'sit-backend-1',
+    promptPolicyVersion: 'sit-prompt-1',
+    featureFlagsHash: 'c'.repeat(64),
+  });
+  if (audit.ok
+    || audit.gate_contract !== 'production-risk-gate/v1'
+    || audit.production_risk_domain_coverage_required !== true
+    || !audit.errors.some((item) => item.includes('缺少生产风险域'))) {
+    throw new Error(`MR 核心冒烟的缺失、乱序、ID 或类型漂移必须 fail-closed：${JSON.stringify(audit)}`);
+  }
+}
+
+const activityTimelinePass = mrSmokeActivityTimelineVerdict({
+  running: {
+    probe_completed: true,
+    group_count: 1,
+    active_group_count: 1,
+    current_count: 1,
+  },
+  completed: {
+    probe_completed: true,
+    group_count: 1,
+    completed_toggle_count: 1,
+    expanded_before_count: 0,
+    toggle_clicked: true,
+    expanded_after_count: 1,
+    assistant_text: '已完成目录检查。',
+    reply_complete: true,
+  },
+});
+assert.equal(activityTimelinePass.evidence_valid, true);
+assert.equal(activityTimelinePass.oracle_valid, true, '活动流必须形成运行态、完成折叠、展开与正文闭环');
+for (const invalid of [
+  { running: { active_group_count: 0 } },
+  { completed: { expanded_before_count: 1 } },
+  { completed: { toggle_clicked: false } },
+  { completed: { assistant_text: '' } },
+]) {
+  const candidate = structuredClone({
+    running: { probe_completed: true, group_count: 1, active_group_count: 1, current_count: 1 },
+    completed: {
+      probe_completed: true,
+      group_count: 1,
+      completed_toggle_count: 1,
+      expanded_before_count: 0,
+      toggle_clicked: true,
+      expanded_after_count: 1,
+      assistant_text: '已完成目录检查。',
+      reply_complete: true,
+    },
+  });
+  Object.assign(candidate.running, invalid.running || {});
+  Object.assign(candidate.completed, invalid.completed || {});
+  assert.equal(mrSmokeActivityTimelineVerdict(candidate).oracle_valid, false, '活动流任一关键态缺失必须失败');
+}
+
+const intervalApiMethods = Object.fromEntries(
+  ['listLocal', 'refresh', 'listTemplates', 'create', 'update', 'runNow', 'listRuns', 'delete', 'deleteRun']
+    .map((name) => [name, true]),
+);
+const intervalReadback = {
+  api_surface_available: true,
+  api_methods: intervalApiMethods,
+  run_now_called: false,
+  created_definition_id: 'automation-1',
+  interval_ms: 3_600_000,
+  definition_readback: {
+    id: 'automation-1',
+    enabled: true,
+    schedule: { kind: 'interval', intervalMs: 3_600_000 },
+  },
+  post_create_refresh: { ok: true, definition_found: true, definition_count: 1 },
+  ui_row: { visible: true, display_name_matched: true },
+  run_observations: [{ run: { id: 'run-1', status: 'succeeded' } }],
+  terminal_run: {
+    id: 'run-1',
+    automationId: 'automation-1',
+    triggerKind: 'schedule',
+    occurrenceKey: 'interval:2026-08-23T12:00:00+08:00',
+    scheduledFor: Date.now(),
+    sessionId: 'session-1',
+    status: 'succeeded',
+  },
+  cleanup: {
+    attempted: true,
+    run_deleted: true,
+    definition_deleted: true,
+    foreign_resource_touched: false,
+  },
+};
+assert.equal(mrSmokeIntervalScheduleVerdict(intervalReadback).oracle_valid, true, 'interval 到点 schedule 运行必须通过完整身份读回');
+for (const invalid of [
+  { run_now_called: true },
+  { terminal_run: { ...intervalReadback.terminal_run, triggerKind: 'manual' } },
+  { terminal_run: { ...intervalReadback.terminal_run, sessionId: null } },
+  { terminal_run: { ...intervalReadback.terminal_run, status: 'failed' } },
+  { cleanup: { ...intervalReadback.cleanup, foreign_resource_touched: true } },
+]) {
+  assert.equal(
+    mrSmokeIntervalScheduleVerdict({ ...intervalReadback, ...invalid }).oracle_valid,
+    false,
+    '手动触发、身份缺失、失败终态或越界清理不得通过 interval 冒烟',
+  );
+}
+const intervalDriverStart = runner.indexOf('async function qworkMrIntervalScheduleCase');
+const intervalDriverEnd = runner.indexOf('\nasync function executeQworkDailyNativeCase', intervalDriverStart);
+const intervalDriverSource = runner.slice(intervalDriverStart, intervalDriverEnd);
+assert.ok(intervalDriverStart > 0 && intervalDriverEnd > intervalDriverStart, '必须存在 interval 原生 Driver');
+assert.doesNotMatch(intervalDriverSource, /\.runNow\s*\(/, 'interval Driver 禁止用 runNow 伪造 schedule 到点执行');
+assert.doesNotMatch(intervalDriverSource, /page\.reload\s*\(/, 'interval Driver 禁止整页 reload，避免 Teams WebView renderer replacement');
+assert.match(intervalDriverSource, /Date\.now\(\) - intervalMs \+ 15_000/, 'interval Driver 必须让首次真实 tick 在约 15 秒后到点');
+assert.match(intervalDriverSource, /window\.agent(?:\?|)\.personalAutomations|window\.agent\?\.personalAutomations/, 'interval Driver 必须使用公开 personalAutomations API');
+assert.match(intervalDriverSource, /await api\.refresh\(\)/, 'interval Driver 创建定义后必须调用公开 refresh 刷新投影');
+assert.match(intervalDriverSource, /await openNewTask\(page, state\);\s*await openQworkAutomationView\(page, state\);/, 'interval Driver 必须通过真实导航离开自动化页再返回');
+assert.match(intervalDriverSource, /finally\s*\{/, 'interval Driver 必须在异常路径执行定向清理');
+assert.match(intervalDriverSource, /runObservations.*reverse\(\).*find/, 'interval Driver 必须从最后观察恢复 run 身份');
+assert.match(intervalDriverSource, /typeof api\?\.cancelRun === 'function'/, 'interval Driver 必须在公开能力存在时取消活动 run');
+assert.match(intervalDriverSource, /matchingRuns\.filter|filter\(\(item\).*automationId/, 'interval Driver 清理前必须按 definition 身份过滤运行记录');
+assert.doesNotMatch(intervalDriverSource, /deleteAll|clearAll|purge/i, 'interval Driver 禁止使用全量或越界清理');
+for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
+  assert.match(documentText, /QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23\.xlsx/, '两份规范必须冻结新增 MR 核心冒烟 Casebook 路径');
+  assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
+  assert.match(documentText, /8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19/, '两份规范必须冻结新增 MR 核心冒烟 SHA');
+  assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*5 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 5 legacy 能力构成');
+  assert.match(documentText, /1\/11[\s\S]*1\/70|11 条[\s\S]*70 条/, '两份规范必须明确先完整执行 11 条，再独立执行 70 条');
 }
 
 const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({
