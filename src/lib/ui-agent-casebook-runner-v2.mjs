@@ -3897,6 +3897,120 @@ async function executeCoreBetaRoute(context, route) {
   throw new Error(`Core Beta v2 缺少 executor：${route}`);
 }
 
+export function coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId = '',
+  legacyCaseId = '',
+  quality = {},
+  task = {},
+  sendReceipts = [],
+  sourceEvidence = null,
+} = {}) {
+  const capabilityId = 'builtin:qbot_web';
+  const prompt = String(quality?.prompt || '').trim();
+  const promptSha256 = prompt
+    ? createHash('sha256').update(prompt).digest('hex')
+    : '';
+  const taskId = String(task?.task_id || '').trim();
+  const diagnostics = quality?.runtimeEvidence?.diagnostics || {};
+  const authority = diagnostics?.e2eCurrentTurnAuthority || {};
+  const effectiveConnectorIds = Array.isArray(authority?.connectorRouting?.effectiveConnectorIds)
+    ? authority.connectorRouting.effectiveConnectorIds.map(String)
+    : [];
+  const materializedConnectorIds = Array.isArray(authority?.connectorRuntimeMaterialization?.materializedConnectorIds)
+    ? authority.connectorRuntimeMaterialization.materializedConnectorIds.map(String)
+    : [];
+  const unsupportedConnectorIds = Array.isArray(authority?.connectorRuntimeMaterialization?.unsupportedConnectorIds)
+    ? authority.connectorRuntimeMaterialization.unsupportedConnectorIds.map(String)
+    : [];
+  const receiptItems = Array.isArray(sendReceipts)
+    ? sendReceipts
+    : (Array.isArray(sendReceipts?.receipts) ? sendReceipts.receipts : []);
+  const confirmedReceipt = receiptItems.find((receipt) => (
+    String(receipt?.prompt || '') === prompt
+    && Boolean(String(receipt?.confirmed_at || '').trim())
+    && (receipt?.attempts || []).some((attempt) => (
+      attempt?.receipt?.ok === true
+      && String(attempt?.receipt?.snapshot?.activeId || '') === taskId
+      && (attempt?.receipt?.snapshot?.userTexts || []).some((text) => String(text) === prompt)
+    ))
+  ));
+  const identityChecks = {
+    case_id_matches: Boolean(caseId) && quality?.case_id === caseId && task?.case_id === caseId,
+    legacy_case_id_matches: legacyCaseId === 'SIT-CONN-019' && quality?.legacy_case_id === legacyCaseId,
+    prompt_sha256_matches: Boolean(promptSha256) && quality?.prompt_sha256 === promptSha256,
+    task_id_matches: Boolean(taskId)
+      && quality?.task_id === taskId
+      && String(diagnostics?.sessionId || '') === taskId,
+    confirmed_send_receipt_matches: Boolean(confirmedReceipt),
+  };
+  const selectionChecks = {
+    ...identityChecks,
+    runtime_authority_ready: diagnostics?.e2eCurrentTurnAuthorityReadiness?.ready === true,
+    effective_web_capability_observed: effectiveConnectorIds.includes(capabilityId),
+  };
+  const providerReceiptHash = String(authority?.providerReceiptHash || '');
+  const executionChecks = {
+    ...selectionChecks,
+    materialized_web_capability_observed: materializedConnectorIds.includes(capabilityId),
+    web_capability_not_unsupported: !unsupportedConnectorIds.includes(capabilityId),
+    provider_receipt_hash_valid: /^[a-f0-9]{64}$/i.test(providerReceiptHash),
+  };
+  const failedChecks = (checks) => Object.entries(checks)
+    .filter(([, ok]) => ok !== true)
+    .map(([name]) => name);
+  const selectionFailures = failedChecks(selectionChecks);
+  const executionFailures = failedChecks(executionChecks);
+  const selectionValid = selectionFailures.length === 0;
+  const executionValid = executionFailures.length === 0;
+  const common = {
+    case_id: caseId,
+    legacy_case_id: legacyCaseId,
+    task_id: taskId,
+    prompt_sha256: promptSha256,
+    capability: {
+      kind: 'builtin_connector',
+      id: capabilityId,
+    },
+    source: 'qwork_e2e_current_turn_authority',
+    source_evidence: sourceEvidence,
+  };
+  return {
+    schema_version: 'qbot-core-beta-verified-legacy-web-capability-adapter/v1',
+    ...common,
+    evidence_valid: selectionValid && executionValid,
+    selection_valid: selectionValid,
+    execution_valid: executionValid,
+    selection_failures: selectionFailures,
+    execution_failures: executionFailures,
+    selection: {
+      schema_version: 'qbot-core-beta-capability-selection/v1',
+      ...common,
+      evidence_valid: selectionValid,
+      oracle_valid: selectionValid,
+      runtime_authority: {
+        routing_mode: authority?.connectorRouting?.mode || '',
+        effective_connector_ids: effectiveConnectorIds,
+      },
+      checks: selectionChecks,
+    },
+    execution: {
+      schema_version: 'qbot-core-beta-capability-execution-event/v1',
+      ...common,
+      evidence_valid: executionValid,
+      oracle_valid: executionValid && quality?.verdict?.toolEvidence === true,
+      runtime_authority: {
+        execution_target: authority?.executionTarget || '',
+        route_target: authority?.routeTarget || '',
+        materialized_connector_ids: materializedConnectorIds,
+        unsupported_connector_ids: unsupportedConnectorIds,
+        provider_receipt_hash: providerReceiptHash,
+      },
+      web_result_oracle_valid: quality?.verdict?.ok === true,
+      checks: executionChecks,
+    },
+  };
+}
+
 function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
   const { state, testCase, caseDir } = context;
   const insideCaseFile = (value) => {
@@ -3917,6 +4031,32 @@ function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
       sha256: createHash('sha256').update(fs.readFileSync(resolved)).digest('hex'),
     };
   };
+  let webCapabilityEvidence = null;
+  if (scenario.legacy_case_id === 'SIT-CONN-019') {
+    const qualitySource = insideCaseFile(state.artifacts?.web_search_quality);
+    const taskSource = insideCaseFile(state.artifacts?.task_id);
+    let quality = {};
+    let task = {};
+    try { quality = qualitySource ? JSON.parse(fs.readFileSync(qualitySource.path, 'utf8')) : {}; } catch {}
+    try { task = taskSource ? JSON.parse(fs.readFileSync(taskSource.path, 'utf8')) : {}; } catch {}
+    webCapabilityEvidence = coreBetaVerifiedLegacyWebCapabilityEvidence({
+      caseId: testCase.id,
+      legacyCaseId: scenario.legacy_case_id,
+      quality,
+      task,
+      sendReceipts: state.artifacts?.send_receipts || [],
+      sourceEvidence: qualitySource,
+    });
+    const adapterFile = path.join(caseDir, 'verified-legacy-web-capability-evidence.json');
+    writeJsonFile(adapterFile, webCapabilityEvidence);
+    state.artifacts.verified_legacy_web_capability_evidence = adapterFile;
+    if (webCapabilityEvidence.selection_valid) {
+      state.artifacts.core_beta_capability_selection = webCapabilityEvidence.selection;
+    }
+    if (webCapabilityEvidence.execution_valid) {
+      state.artifacts.core_beta_capability_execution = webCapabilityEvidence.execution;
+    }
+  }
   const artifactFiles = Object.fromEntries(
     Object.entries(state.artifacts || {})
       .map(([role, value]) => [role, insideCaseFile(value)])
@@ -3949,6 +4089,7 @@ function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
     failed_assertions: failedAssertions,
     artifact_files: artifactFiles,
     screenshot_files: screenshotFiles,
+    verified_legacy_web_capability: webCapabilityEvidence,
   };
   const traceFile = path.join(caseDir, 'verified-legacy-product-action-trace.json');
   writeJsonFile(traceFile, trace);
@@ -26239,8 +26380,21 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
   const runtimeToolText = JSON.stringify(runtimeEvidence);
   const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
+  const evidenceCaseId = String(testCase.core_beta_case_id || testCase.id || '');
+  const runtimeTaskId = String(runtimeEvidence?.diagnostics?.sessionId || '');
   state.artifacts.web_search_quality = path.join(caseDir, 'web-search-quality.json');
-  writeJsonFile(state.artifacts.web_search_quality, { prompt, reply: reply.deltaText, toolTexts, runtimeEvidence, verdict });
+  writeJsonFile(state.artifacts.web_search_quality, {
+    schema_version: 'qbot-web-search-quality/v2',
+    case_id: evidenceCaseId,
+    legacy_case_id: testCase.id,
+    task_id: runtimeTaskId,
+    prompt_sha256: createHash('sha256').update(prompt).digest('hex'),
+    prompt,
+    reply: reply.deltaText,
+    toolTexts,
+    runtimeEvidence,
+    verdict,
+  });
   state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
   recordStep(
     state,

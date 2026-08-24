@@ -164,6 +164,7 @@ import {
   unifiedSkillModeApplied,
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
+  coreBetaVerifiedLegacyWebCapabilityEvidence,
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
   qworkDailyEvidenceEnvelope,
@@ -6818,6 +6819,80 @@ assert.equal(webSearchQualityVerdict(
   '最近更新很多，但这里不提供来源。',
   '',
 ).ok, false, 'Web 搜索质量门禁不得接受无来源、无日期、无工具证据的模型自述');
+const webCapabilityPrompt = '请使用内置 Web 搜索查找两条官方更新。';
+const webCapabilityTaskId = 'task-web-001';
+const webCapabilityQuality = {
+  case_id: 'MRSMOKE-WEB-001',
+  legacy_case_id: 'SIT-CONN-019',
+  task_id: webCapabilityTaskId,
+  prompt: webCapabilityPrompt,
+  prompt_sha256: createHash('sha256').update(webCapabilityPrompt).digest('hex'),
+  reply: '正文即使声称调用 qbot_web，也不能单独形成能力证据。',
+  runtimeEvidence: {
+    diagnostics: {
+      sessionId: webCapabilityTaskId,
+      e2eCurrentTurnAuthorityReadiness: { ready: true },
+      e2eCurrentTurnAuthority: {
+        executionTarget: 'desktop-local',
+        routeTarget: 'desktop-local',
+        connectorRouting: {
+          mode: 'auto',
+          effectiveConnectorIds: ['builtin:qbot_web'],
+        },
+        connectorRuntimeMaterialization: {
+          materializedConnectorIds: ['builtin:qbot_web'],
+          unsupportedConnectorIds: [],
+        },
+        providerReceiptHash: 'a'.repeat(64),
+      },
+    },
+  },
+  verdict: { ok: true, toolEvidence: true },
+};
+const webCapabilitySendReceipts = [{
+  prompt: webCapabilityPrompt,
+  confirmed_at: '2026-08-24T00:00:00.000Z',
+  attempts: [{
+    receipt: {
+      ok: true,
+      snapshot: {
+        activeId: webCapabilityTaskId,
+        userTexts: [webCapabilityPrompt],
+      },
+    },
+  }],
+}];
+const verifiedLegacyWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId: 'MRSMOKE-WEB-001',
+  legacyCaseId: 'SIT-CONN-019',
+  quality: webCapabilityQuality,
+  task: { case_id: 'MRSMOKE-WEB-001', task_id: webCapabilityTaskId },
+  sendReceipts: webCapabilitySendReceipts,
+  sourceEvidence: { path: '/case/web-search-quality.json', bytes: 100, sha256: 'b'.repeat(64) },
+});
+assert.equal(verifiedLegacyWebCapability.selection_valid, true, '结构化当前轮 Web 路由权威应注册能力选择证据');
+assert.equal(verifiedLegacyWebCapability.execution_valid, true, 'task-bound provider receipt 应注册能力执行证据');
+assert.equal(verifiedLegacyWebCapability.execution.capability.id, 'builtin:qbot_web');
+const textOnlyWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId: 'MRSMOKE-WEB-001',
+  legacyCaseId: 'SIT-CONN-019',
+  quality: {
+    ...webCapabilityQuality,
+    runtimeEvidence: { diagnostics: { sessionId: webCapabilityTaskId } },
+  },
+  task: { case_id: 'MRSMOKE-WEB-001', task_id: webCapabilityTaskId },
+  sendReceipts: webCapabilitySendReceipts,
+});
+assert.equal(textOnlyWebCapability.selection_valid, false, '回复中的 Web 工具自述不得冒充 runtime 能力选择');
+assert.equal(textOnlyWebCapability.execution_valid, false, '缺少 runtime authority/provider receipt 时不得注册执行事件');
+const driftedWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId: 'MRSMOKE-WEB-001',
+  legacyCaseId: 'SIT-CONN-019',
+  quality: webCapabilityQuality,
+  task: { case_id: 'MRSMOKE-WEB-001', task_id: 'other-task' },
+  sendReceipts: webCapabilitySendReceipts,
+});
+assert.equal(driftedWebCapability.evidence_valid, false, 'Web 能力证据 taskId 漂移必须 fail-closed');
 assert.equal(memoryLifecycleVerdict({
   markdownReply: '默认格式是 Markdown。',
   excelReply: '默认格式已改为 Excel。',
@@ -7223,6 +7298,7 @@ const required = [
   ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-prepare-python-runtimes[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
   ['CONN-019 真实执行 Web 搜索并断言官方来源日期与工具证据', /SIT-CONN-019'[\s\S]*executeSitConnectorWebSearchQuality[\s\S]*webSearchQualityVerdict[\s\S]*Web 搜索新鲜度、相关性与可追溯性/],
   ['CONN-019 日期证据兼容带空格的中文年月日', /dateEvidence = \([\s\S]*20\\d\{2\}\\s\*[\s\S]*年[\s\S]*月[\s\S]*日/],
+  ['verified legacy Web 证据注册只接受 task-bound runtime authority', /coreBetaVerifiedLegacyWebCapabilityEvidence[\s\S]*e2eCurrentTurnAuthority[\s\S]*providerReceiptHash[\s\S]*core_beta_capability_selection[\s\S]*core_beta_capability_execution/],
   ['KNOWLEDGE-001 生成成果后进入知识页并回到来源任务', /SIT-KNOWLEDGE-001'[\s\S]*executeSitKnowledgeClosedLoop[\s\S]*knowledge_gate\.md[\s\S]*知识成果可回到来源任务复核/],
   ['ART-024 在 iframe 或 webview 中点击交互 HTML 且验证宿主隔离', /SIT-ART-024[\s\S]*interactive_preview\.html[\s\S]*interactWithEmbeddedArtifactPreview[\s\S]*__QBOT_PREVIEW_ESCAPE__/],
   ['ART-CONFIRM-001 必须操作显性确认并核验正式成果唯一入库', /SIT-ART-CONFIRM-001'[\s\S]*executeSitArtifactConfirmationGate[\s\S]*正式成果显性确认入口[\s\S]*正式成果唯一入库且临时\/失败产物不污染/],

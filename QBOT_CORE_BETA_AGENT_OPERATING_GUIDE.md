@@ -16,6 +16,16 @@
   必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再从 `1/11` 或
   `1/70` 启动唯一串行 runner。
 - 产品仓库 `/Users/qifu/Documents/deepbankV2` 只读，禁止修改。
+- QWork `0.1.4-sit.27` 的首轮 MR 冒烟批次永久冻结在
+  `teams360-automation/output/20260824101100_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-85213b9_casebook-8d361a9`。
+  `MRSMOKE-ACT-001` 已形成 manifest 完整的活动折叠产品 Bug 候选；
+  `MRSMOKE-WEB-001` 已真实发送、返回官方来源且 `web-search-quality` 业务 Oracle
+  通过，但 verified-legacy 包装层未把同一 task 的公开 Web runtime authority 注册为
+  `capability_selection/capability_execution_event`，导致文件虽存在却为无效诊断并
+  触发 framework stop。修复必须使用 Case/legacy ID、prompt SHA、确认发送、taskId、
+  `builtin:qbot_web` effective/materialized 路由与 `providerReceiptHash` 的结构化闭环，
+  禁止用回复正文冒充工具调用；全检、提交推送、新能力审计和精确 `.27 READY` 后，
+  从 `1/11` 在新不可变目录完整重跑，`inherited=0`、`synthetic=0`。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
 - 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 11 -> 70 任务：
