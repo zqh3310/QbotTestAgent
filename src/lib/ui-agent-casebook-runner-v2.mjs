@@ -15567,8 +15567,8 @@ async function openQworkAutomationView(page, state) {
 
 async function qworkMrIntervalScheduleCase({ page, state, testCase, caseDir, timeoutMs }) {
   const displayName = `${testCase.id}-${Date.now()}`;
-  const intervalMs = 3_600_000;
-  const activeFrom = Date.now() - intervalMs + 15_000;
+  const intervalMs = 60_000;
+  const activeFrom = Date.now();
   const prompt = '请回复“定时任务已自动执行”，并用一句话说明本次任务由计划调度触发。';
   let createdDefinitionId = '';
   let bootstrap = null;
@@ -15772,8 +15772,35 @@ async function qworkMrIntervalScheduleCase({ page, state, testCase, caseDir, tim
         const target = Array.isArray(definitions)
           ? definitions.find((item) => String(item?.id || '') === definitionId)
           : null;
-        if (target) result.definition_delete_result = await api.delete(definitionId, target.version);
-        const remainingDefinitions = await api.listLocal();
+        if (target) {
+          result.definition_delete_result = await api.delete(definitionId, target.version);
+          const refreshedDefinitions = await api.refresh();
+          result.definition_refresh_after_delete = {
+            attempted: true,
+            count: Array.isArray(refreshedDefinitions) ? refreshedDefinitions.length : -1,
+            target_present: Array.isArray(refreshedDefinitions)
+              && refreshedDefinitions.some((item) => String(item?.id || '') === definitionId),
+          };
+        }
+        const definitionCleanupDeadline = Date.now() + 15_000;
+        let remainingDefinitions = await api.listLocal();
+        result.definition_absence_observations = [];
+        while (Array.isArray(remainingDefinitions)
+          && remainingDefinitions.some((item) => String(item?.id || '') === definitionId)
+          && Date.now() < definitionCleanupDeadline) {
+          result.definition_absence_observations.push({
+            captured_at: new Date().toISOString(),
+            target_present: true,
+          });
+          await api.refresh();
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          remainingDefinitions = await api.listLocal();
+        }
+        result.definition_absence_observations.push({
+          captured_at: new Date().toISOString(),
+          target_present: Array.isArray(remainingDefinitions)
+            && remainingDefinitions.some((item) => String(item?.id || '') === definitionId),
+        });
         result.definition_deleted = !Array.isArray(remainingDefinitions)
           || !remainingDefinitions.some((item) => String(item?.id || '') === definitionId);
         return result;

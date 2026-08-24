@@ -26,6 +26,19 @@
   `builtin:qbot_web` effective/materialized 路由与 `providerReceiptHash` 的结构化闭环，
   禁止用回复正文冒充工具调用；全检、提交推送、新能力审计和精确 `.27 READY` 后，
   从 `1/11` 在新不可变目录完整重跑，`inherited=0`、`synthetic=0`。
+- 基于 `e624b97d8213116432798584f5480abf21de5c4a` 启动的第三轮 MR 冒烟批次
+  永久冻结在
+  `teams360-automation/output/20260824104200_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-e624b97_casebook-8d361a9`。
+  已完成 `5/11`，全部真实执行且 `inherited=0/synthetic=0`；前两条保留活动折叠和
+  Web 结果产品 Bug，`MRSMOKE-WEB-001` 的能力选择/执行角色已经按同 taskId 完整进入
+  manifest。第 5 条 `MRSMOKE-AUTO-001` 以 `intervalMs=3600000`、过去一小时加 15 秒的
+  `activeFrom` 期望短期到点，但 `release/0.1` 的服务端创建合同会执行
+  `max(serverNow, requestedActiveFrom)`，真实定义因此回读为创建时刻起算、下一次运行
+  在一小时后；runner 仅等待六分钟便错误停止。删除接口返回 200 后又未等待异步本地
+  投影 refresh，误报 `definition_deleted=false`。修复必须改用合同允许的 60 秒最小
+  interval、当前时刻起算，禁止 `runNow`，并在删除后显式 refresh、有界轮询目标定义
+  消失；完成 invariant、全检、提交推送、新能力审计和精确 `.27 READY` 后，从
+  `1/11` 在新不可变目录完整重跑，`inherited=0`、`synthetic=0`。
 - 基于 `81bb6019db3c652cc9e1c6ee59f25499186f3939` 启动的第二轮 MR 冒烟批次
   永久冻结在
   `teams360-automation/output/20260824102900_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-81bb601_casebook-8d361a9`。

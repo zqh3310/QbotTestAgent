@@ -64,6 +64,13 @@ QWork 新增 MR 核心冒烟合同固定为以下 11 条有序 Case：
 `inherited=0`、`synthetic=0`；前一批存在 framework/testcase issue 时按自愈闭环从
 1/11 重跑，存在产品 Bug 或阻塞时保留证据并报告，不得把 11 条结果继承进 70 条。
 
+`MRSMOKE-AUTO-001` 必须使用服务端合同允许的最小 `intervalMs=60000`，并以当前
+时刻作为 `activeFrom`。服务端创建合同会把过去的 `activeFrom` 钳制到服务端当前
+时刻，禁止再通过“回填一个 interval”伪造短期到点。runner 必须禁止 `runNow`，等待
+真实 schedule occurrence，核对 occurrenceKey、scheduledFor/scheduledAt、sessionId
+与 succeeded 终态。定向删除定义后还必须显式调用公开 `refresh()`，在有界窗口内
+连续读回目标定义消失；DELETE 200 或本地异步 refresh 动作本身不能替代终态对账。
+
 `QBot生产灰度发布门禁Casebook_70条_2026-08-10.xlsx` 和
 `QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx` 只作为历史审计源保留，
 不再是发布入口。其协议层 `executable=184` 不能证明真实执行能力；旧审计确认

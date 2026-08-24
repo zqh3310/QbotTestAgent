@@ -7985,7 +7985,9 @@ const intervalDriverSource = runner.slice(intervalDriverStart, intervalDriverEnd
 assert.ok(intervalDriverStart > 0 && intervalDriverEnd > intervalDriverStart, '必须存在 interval 原生 Driver');
 assert.doesNotMatch(intervalDriverSource, /\.runNow\s*\(/, 'interval Driver 禁止用 runNow 伪造 schedule 到点执行');
 assert.doesNotMatch(intervalDriverSource, /page\.reload\s*\(/, 'interval Driver 禁止整页 reload，避免 Teams WebView renderer replacement');
-assert.match(intervalDriverSource, /Date\.now\(\) - intervalMs \+ 15_000/, 'interval Driver 必须让首次真实 tick 在约 15 秒后到点');
+assert.match(intervalDriverSource, /const intervalMs = 60_000;/, 'interval Driver 必须使用服务端合同允许的最小 60 秒 interval');
+assert.match(intervalDriverSource, /const activeFrom = Date\.now\(\);/, 'interval Driver 必须从当前时刻起算，禁止依赖服务端会钳制的过去 activeFrom');
+assert.doesNotMatch(intervalDriverSource, /Date\.now\(\) - intervalMs/, 'interval Driver 禁止通过回填过去 activeFrom 伪造即将到点');
 assert.match(intervalDriverSource, /window\.agent(?:\?|)\.personalAutomations|window\.agent\?\.personalAutomations/, 'interval Driver 必须使用公开 personalAutomations API');
 assert.match(intervalDriverSource, /await api\.refresh\(\)/, 'interval Driver 创建定义后必须调用公开 refresh 刷新投影');
 assert.match(intervalDriverSource, /await openNewTask\(page, state\);\s*await openQworkAutomationView\(page, state\);/, 'interval Driver 必须通过真实导航离开自动化页再返回');
@@ -7993,6 +7995,8 @@ assert.match(intervalDriverSource, /finally\s*\{/, 'interval Driver 必须在异
 assert.match(intervalDriverSource, /runObservations.*reverse\(\).*find/, 'interval Driver 必须从最后观察恢复 run 身份');
 assert.match(intervalDriverSource, /typeof api\?\.cancelRun === 'function'/, 'interval Driver 必须在公开能力存在时取消活动 run');
 assert.match(intervalDriverSource, /matchingRuns\.filter|filter\(\(item\).*automationId/, 'interval Driver 清理前必须按 definition 身份过滤运行记录');
+assert.match(intervalDriverSource, /definition_delete_result = await api\.delete[\s\S]*await api\.refresh\(\)/, 'interval Driver 删除定义后必须显式刷新公开投影');
+assert.match(intervalDriverSource, /definitionCleanupDeadline[\s\S]*definition_absence_observations/, 'interval Driver 必须有界轮询并保存目标定义消失读回');
 assert.doesNotMatch(intervalDriverSource, /deleteAll|clearAll|purge/i, 'interval Driver 禁止使用全量或越界清理');
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23\.xlsx/, '两份规范必须冻结新增 MR 核心冒烟 Casebook 路径');
