@@ -6014,6 +6014,58 @@ async function dismissCoreBetaV2RuntimeUpdateObstruction(page, state = null) {
       activation_risk: activationRisk,
       reason,
     });
+    // The update-risk branch intentionally stops before any product action. It
+    // still needs a complete evidence envelope so the expected release
+    // blocker is not misclassified as a secondary manifest failure.
+    const actionReceiptFile = path.join(state.case_dir, 'action-receipts.json');
+    const blockedReceipt = {
+      action_id: 'runtime-update-activation-risk',
+      number: 0,
+      operation: 'precondition',
+      command: 'preserve_frozen_release_identity',
+      target: state.id,
+      executor: 'core-beta/runtime-update-activation-risk/v1',
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      before_screenshot: beforeScreenshot,
+      after_screenshot: beforeScreenshot,
+      status: 'blocked',
+      observed_state: {
+        prompt_text: text,
+        frozen_version: activationRisk.frozen_version || '',
+        candidate_version: activationRisk.candidate_version || '',
+        version_drift: activationRisk.version_drift === true,
+        product_action_started: false,
+      },
+      assertions: [],
+    };
+    writeJsonFile(actionReceiptFile, [blockedReceipt]);
+    state.artifacts.action_receipt = actionReceiptFile;
+    const publicStateFile = path.join(state.case_dir, 'public-state-readback.json');
+    writeJsonFile(publicStateFile, {
+      schema_version: 'qbot-core-beta-runtime-update-activation-readback/v1',
+      valid: true,
+      case_id: state.id,
+      captured_at: new Date().toISOString(),
+      prompt_text: text,
+      button_text: buttonText,
+      activation_risk: activationRisk,
+      product_action_started: false,
+      immutable_run_blocked: true,
+    });
+    state.artifacts.public_state_readback = publicStateFile;
+    const cleanupReadbackFile = path.join(state.case_dir, 'cleanup-readback.json');
+    writeJsonFile(cleanupReadbackFile, {
+      schema_version: 'qbot-core-beta-runtime-update-activation-cleanup/v1',
+      valid: true,
+      case_id: state.id,
+      captured_at: new Date().toISOString(),
+      cleanup_performed: false,
+      product_action_started: false,
+      prompt_preserved: true,
+      reason: '版本更新提示必须保持原样；未执行任何点击或清理动作。',
+    });
+    state.artifacts.cleanup_readback = cleanupReadbackFile;
     recordStep(
       state,
       '冻结批次检测到待激活的 QWork 版本更新',

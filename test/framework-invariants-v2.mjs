@@ -6248,6 +6248,13 @@ assert.match(
 );
 assert.match(
   runner,
+  /if \(state\?\.case_dir && activationRisk\.risk\)[\s\S]*action-receipts\.json[\s\S]*status: 'blocked'/,
+  '待激活更新硬停止必须先生成完整停止证据包，避免把发布风险阻塞二次误报为 manifest 框架问题',
+);
+assert.match(runner, /public-state-readback\.json[\s\S]*state\.artifacts\.public_state_readback/);
+assert.match(runner, /cleanup-readback\.json[\s\S]*state\.artifacts\.cleanup_readback/);
+assert.match(
+  runner,
   /if \(await visible\(dedicatedToast, 500\)\)[\s\S]*else \{[\s\S]*statuses = page\.locator\('\[role="status"\]'\)[\s\S]*if \(!coreBetaV2RuntimeUpdateSkipAction\(candidateText, candidateButtonText\)\) continue;[\s\S]*if \(!toast\) \{[\s\S]*observed: false, ok: true/,
   '系统设置中的非阻塞版本状态没有安全跳过按钮时不得冒充遮挡弹窗；专用更新 toast 仍须 fail-closed',
 );
