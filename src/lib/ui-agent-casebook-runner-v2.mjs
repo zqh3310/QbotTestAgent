@@ -3910,7 +3910,7 @@ export function coreBetaVerifiedLegacyWebCapabilityEvidence({
   const promptSha256 = prompt
     ? createHash('sha256').update(prompt).digest('hex')
     : '';
-  const taskId = String(task?.task_id || '').trim();
+  const taskFileTaskId = String(task?.task_id || '').trim();
   const diagnostics = quality?.runtimeEvidence?.diagnostics || {};
   const authority = diagnostics?.e2eCurrentTurnAuthority || {};
   const effectiveConnectorIds = Array.isArray(authority?.connectorRouting?.effectiveConnectorIds)
@@ -3925,23 +3925,38 @@ export function coreBetaVerifiedLegacyWebCapabilityEvidence({
   const receiptItems = Array.isArray(sendReceipts)
     ? sendReceipts
     : (Array.isArray(sendReceipts?.receipts) ? sendReceipts.receipts : []);
-  const confirmedReceipt = receiptItems.find((receipt) => (
-    String(receipt?.prompt || '') === prompt
-    && Boolean(String(receipt?.confirmed_at || '').trim())
-    && (receipt?.attempts || []).some((attempt) => (
-      attempt?.receipt?.ok === true
-      && String(attempt?.receipt?.snapshot?.activeId || '') === taskId
-      && (attempt?.receipt?.snapshot?.userTexts || []).some((text) => String(text) === prompt)
-    ))
-  ));
+  const confirmedTaskIds = [...new Set(receiptItems.flatMap((receipt) => {
+    if (
+      String(receipt?.prompt || '') !== prompt
+      || !String(receipt?.confirmed_at || '').trim()
+    ) return [];
+    return (receipt?.attempts || [])
+      .filter((attempt) => (
+        attempt?.receipt?.ok === true
+        && String(attempt?.receipt?.snapshot?.activeId || '').trim()
+        && (attempt?.receipt?.snapshot?.userTexts || []).some((text) => String(text) === prompt)
+      ))
+      .map((attempt) => String(attempt.receipt.snapshot.activeId).trim());
+  }))];
+  const confirmedTaskId = confirmedTaskIds.length === 1 ? confirmedTaskIds[0] : '';
+  // The verified-legacy trace is written before the outer Core Beta action
+  // materializes task-id.json, so the confirmed send receipt is authoritative
+  // during this lifecycle window.
+  const taskId = taskFileTaskId || confirmedTaskId;
+  const confirmedSendReceiptMatches = Boolean(taskId)
+    && confirmedTaskIds.length === 1
+    && confirmedTaskId === taskId;
   const identityChecks = {
-    case_id_matches: Boolean(caseId) && quality?.case_id === caseId && task?.case_id === caseId,
+    case_id_matches: Boolean(caseId)
+      && quality?.case_id === caseId
+      && (!String(task?.case_id || '').trim() || task?.case_id === caseId),
     legacy_case_id_matches: legacyCaseId === 'SIT-CONN-019' && quality?.legacy_case_id === legacyCaseId,
     prompt_sha256_matches: Boolean(promptSha256) && quality?.prompt_sha256 === promptSha256,
     task_id_matches: Boolean(taskId)
       && quality?.task_id === taskId
-      && String(diagnostics?.sessionId || '') === taskId,
-    confirmed_send_receipt_matches: Boolean(confirmedReceipt),
+      && String(diagnostics?.sessionId || '') === taskId
+      && (!taskFileTaskId || taskFileTaskId === confirmedTaskId),
+    confirmed_send_receipt_matches: confirmedSendReceiptMatches,
   };
   const selectionChecks = {
     ...identityChecks,

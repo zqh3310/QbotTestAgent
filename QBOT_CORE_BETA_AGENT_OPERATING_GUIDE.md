@@ -26,6 +26,17 @@
   `builtin:qbot_web` effective/materialized 路由与 `providerReceiptHash` 的结构化闭环，
   禁止用回复正文冒充工具调用；全检、提交推送、新能力审计和精确 `.27 READY` 后，
   从 `1/11` 在新不可变目录完整重跑，`inherited=0`、`synthetic=0`。
+- 基于 `81bb6019db3c652cc9e1c6ee59f25499186f3939` 启动的第二轮 MR 冒烟批次
+  永久冻结在
+  `teams360-automation/output/20260824102900_sit-qwork-mrsmoke11_teams360-5.5.13-2119081949_qwork-0.1.4-sit.27_M3_serial_framework-81bb601_casebook-8d361a9`。
+  第 1 条 `MRSMOKE-ACT-001` 再次形成 manifest 完整的活动折叠产品 Bug；第 2 条
+  `MRSMOKE-WEB-001` 的 Web 结果、runtime authority、provider receipt、确认发送和
+  taskId 均完整，但适配器在外层 action 物化 `task-id.json` 之前尝试读取该文件，得到
+  空 taskId，并把本应注册的两个能力角色降为无效诊断，触发 framework stop。修复必须
+  从唯一确认发送回执取得该时序窗口的 taskId，再与 Web 质量证据、runtime sessionId
+  和外层 Case ID 全等；同 prompt 多 taskId 必须拒绝。完成 invariant、全检、提交推送、
+  新能力审计和精确 `.27 READY` 后，仍须从 `1/11` 在新不可变目录完整重跑，
+  `inherited=0`、`synthetic=0`。
 - 产品设计基线：`origin/release/0.1`，
   commit `686b862ea9553215c2563d87db8339096acecb9d`，版本 `0.1.1`。
 - 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 11 -> 70 任务：

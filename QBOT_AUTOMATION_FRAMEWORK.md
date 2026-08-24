@@ -819,6 +819,12 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   或 runtime authority/provider receipt 缺失时必须 fail-closed。回复正文、链接、
   工具名称文字和 raw `webSearchQualityVerdict` 均不能单独冒充能力选择或执行事件；
   Web 结果业务 Oracle 与上述证据完整性继续分离。
+  verified-legacy trace 的生成时点早于外层 Core Beta action 物化通用
+  `task-id.json`；该时序窗口不得把尚不存在的 task 文件当作能力缺失。只有与当前
+  prompt 精确一致、带非空 `confirmed_at`、`receipt.ok=true`、用户消息精确匹配且
+  全部成功尝试收敛到唯一 `activeId` 的确认发送回执，才可提供 taskId；随后仍须与
+  `web-search-quality.task_id`、runtime `diagnostics.sessionId` 和外层 Case ID 全等。
+  同 prompt 出现多个确认 taskId、发送回执缺失或任一身份漂移必须 fail-closed。
 - 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - `BETA-INIT-004` 点击清空前必须通过公开 `listSessions/getRunning` 枚举全部会话，只对真实 `running=true` 的会话调用按 ID 取消，并连续至少 3 次读回全部 idle；枚举、取消、稳定读回和前后截图必须写入独立不可变账本。若第一次真实 UI 清空明确返回 `active-session`，只能再次执行相同 idle 对账后重试一次真实 UI 清空，重试仍须重新捕获确认弹窗并使用不覆盖首次证据的截图；不得直接调用 `sessionsPurgeAllEnvs` 绕过 UI，不得盲等完整 Case 超时，也不得无限重试。清单不可读、取消失败或重试后仍被拒绝均为 `automation_error`，触发框架自愈与新目录全量重跑。

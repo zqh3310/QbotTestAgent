@@ -6873,6 +6873,20 @@ const verifiedLegacyWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence(
 assert.equal(verifiedLegacyWebCapability.selection_valid, true, '结构化当前轮 Web 路由权威应注册能力选择证据');
 assert.equal(verifiedLegacyWebCapability.execution_valid, true, 'task-bound provider receipt 应注册能力执行证据');
 assert.equal(verifiedLegacyWebCapability.execution.capability.id, 'builtin:qbot_web');
+const preMaterializationWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId: 'MRSMOKE-WEB-001',
+  legacyCaseId: 'SIT-CONN-019',
+  quality: webCapabilityQuality,
+  task: {},
+  sendReceipts: webCapabilitySendReceipts,
+});
+assert.equal(
+  preMaterializationWebCapability.selection_valid,
+  true,
+  'verified-legacy trace 早于 task-id.json 物化时必须从唯一确认发送回执绑定 taskId',
+);
+assert.equal(preMaterializationWebCapability.execution_valid, true);
+assert.equal(preMaterializationWebCapability.task_id, webCapabilityTaskId);
 const textOnlyWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
   caseId: 'MRSMOKE-WEB-001',
   legacyCaseId: 'SIT-CONN-019',
@@ -6893,6 +6907,32 @@ const driftedWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
   sendReceipts: webCapabilitySendReceipts,
 });
 assert.equal(driftedWebCapability.evidence_valid, false, 'Web 能力证据 taskId 漂移必须 fail-closed');
+const ambiguousReceiptWebCapability = coreBetaVerifiedLegacyWebCapabilityEvidence({
+  caseId: 'MRSMOKE-WEB-001',
+  legacyCaseId: 'SIT-CONN-019',
+  quality: webCapabilityQuality,
+  task: {},
+  sendReceipts: [
+    ...webCapabilitySendReceipts,
+    {
+      ...webCapabilitySendReceipts[0],
+      attempts: [{
+        receipt: {
+          ok: true,
+          snapshot: {
+            activeId: 'other-task',
+            userTexts: [webCapabilityPrompt],
+          },
+        },
+      }],
+    },
+  ],
+});
+assert.equal(
+  ambiguousReceiptWebCapability.evidence_valid,
+  false,
+  '同 prompt 存在多个确认 taskId 时不得猜测 verified-legacy Web 能力归属',
+);
 assert.equal(memoryLifecycleVerdict({
   markdownReply: '默认格式是 Markdown。',
   excelReply: '默认格式已改为 Excel。',
