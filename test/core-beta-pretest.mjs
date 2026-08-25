@@ -241,6 +241,13 @@ if (!/probePublicCapabilities:\s*true/.test(pretestSource)
   || !/publicCapabilities\?\.ok === true/.test(pretestSource)) {
   throw new Error('Teams pretest must fail closed when public window.agent.capabilities is unreadable.');
 }
+if (!/probeRuntimeReleaseStatus:\s*true/.test(pretestSource)
+  || !/qwork_runtime_release_status/.test(pretestSource)
+  || !/qwork_runtime_release_identity/.test(pretestSource)
+  || !/qwork_host_runtime_compatibility/.test(pretestSource)
+  || !/assessRuntimeReleaseStatus/.test(pretestSource)) {
+  throw new Error('Teams pretest must fail closed when runtime and host-core release identities differ.');
+}
 
 const pretestOut = path.join(temp, 'pretest');
 const pretest = spawnSync(process.execPath, [

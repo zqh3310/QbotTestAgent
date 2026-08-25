@@ -22,6 +22,7 @@ import {
   inspectManagedTeamsRestartCapability,
   validateLiveCasebookSession,
 } from '../teams360-automation/lib/casebook-runner.mjs';
+import { assessRuntimeReleaseStatus } from '../teams360-automation/lib/cdp-webview.mjs';
 import { inspectTeamsCdp } from '../teams360-automation/lib/targets.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -618,6 +619,7 @@ async function main() {
             smoke: false,
             timeoutMs: 30_000,
             probePublicCapabilities: true,
+            probeRuntimeReleaseStatus: true,
           });
           runtime.teams_inspection = inspection;
           addCheck('qwork_target_logged_in',
@@ -640,10 +642,28 @@ async function main() {
           const versionMatch = qworkUrl.match(/\/ui\/([^/]+)\/index\.html/);
           const qworkVersion = versionMatch?.[1] || '';
           const expectedQworkVersion = String(options['expected-qwork-version'] || '');
-          runtime.qwork = { url: qworkUrl, version: qworkVersion };
+          const runtimeReleaseStatus = inspection.runtime_release_status;
+          const runtimeReleaseAssessment = assessRuntimeReleaseStatus(
+            runtimeReleaseStatus,
+            expectedQworkVersion,
+          );
+          runtime.qwork = {
+            url: qworkUrl,
+            version: qworkVersion,
+            runtime_release_status: runtimeReleaseStatus,
+            runtime_release_assessment: runtimeReleaseAssessment,
+          };
           addCheck('qwork_release_identity',
             Boolean(expectedQworkVersion) && qworkVersion === expectedQworkVersion,
             `actual=${qworkVersion || '(unavailable)'}; expected=${expectedQworkVersion || '(missing --expected-qwork-version)'}`);
+          addCheck('qwork_runtime_release_status', runtimeReleaseStatus?.ok === true,
+            runtimeReleaseStatus?.ok
+              ? `source=${runtimeReleaseStatus.source}; release=${runtimeReleaseStatus.release_id}; version=${runtimeReleaseStatus.version}`
+              : runtimeReleaseStatus?.error || 'window.agent.runtimeReleaseStatus was not probed');
+          addCheck('qwork_runtime_release_identity', runtimeReleaseAssessment.release_identity_matches,
+            `top_level=${runtimeReleaseStatus?.release_id || '(missing)'}/${runtimeReleaseStatus?.version || '(missing)'}; compatibility=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_release_id || '(missing)'}/${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; expected=${expectedQworkVersion || '(missing --expected-qwork-version)'}`);
+          addCheck('qwork_host_runtime_compatibility', runtimeReleaseAssessment.host_runtime_compatible,
+            `host_core=${runtimeReleaseStatus?.host_runtime_compatibility?.host_core_version || '(missing)'}; runtime=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; versions_match=${runtimeReleaseStatus?.host_runtime_compatibility?.versions_match === true}`);
         }
       }
     }

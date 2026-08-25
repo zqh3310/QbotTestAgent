@@ -5,6 +5,7 @@ import {
   captureWebviewScreenshot,
   discoverWebviewProbes,
   probeWebviewPublicCapabilities,
+  probeWebviewRuntimeReleaseStatus,
   runWebviewSmoke,
 } from './cdp-webview.mjs';
 
@@ -37,7 +38,7 @@ export function selectBestTarget(probes = []) {
     .sort((a, b) => b.score - a.score)[0] || null;
 }
 
-export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, captureHost = false, smoke = false, allowWrite = false, prompt = '', expected = '', timeoutMs = 120_000, probePublicCapabilities = false }) {
+export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, captureHost = false, smoke = false, allowWrite = false, prompt = '', expected = '', timeoutMs = 120_000, probePublicCapabilities = false, probeRuntimeReleaseStatus = false }) {
   const loaded = await import('playwright').catch((error) => ({ error }));
   if (loaded.error) throw new Error(`Playwright is unavailable: ${loaded.error.message}`);
   fs.mkdirSync(path.join(outputDir, 'screenshots'), { recursive: true });
@@ -76,6 +77,9 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
     screenshots: {},
     public_capabilities: probePublicCapabilities
       ? await probeWebviewPublicCapabilities(best?.targetRef)
+      : null,
+    runtime_release_status: probeRuntimeReleaseStatus
+      ? await probeWebviewRuntimeReleaseStatus(best?.targetRef)
       : null,
     smoke: { status: 'skipped', reason: 'Smoke was not requested.' },
   };

@@ -29,7 +29,11 @@ import {
   parseRunningTeamsMainProcesses,
 } from '../lib/launcher.mjs';
 import { isFullQbotProbe, scoreTargetProbe, selectBestTarget } from '../lib/targets.mjs';
-import { summarizePublicCapabilities } from '../lib/cdp-webview.mjs';
+import {
+  assessRuntimeReleaseStatus,
+  summarizePublicCapabilities,
+  summarizeRuntimeReleaseStatus,
+} from '../lib/cdp-webview.mjs';
 import { sanitize } from '../lib/report.mjs';
 import { qworkRuntimeBridgeSource, rewriteCdpPayload } from '../lib/cdp-webview-proxy.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
@@ -348,6 +352,46 @@ test('public capabilities pretest projection accepts only a structured bridge re
   assert.equal(summarizePublicCapabilities(null).ok, false);
   assert.equal(summarizePublicCapabilities([]).ok, false);
   assert.equal(summarizePublicCapabilities('HTTP 500').ok, false);
+});
+
+test('runtime release pretest rejects a mismatched Teams host-core', () => {
+  const matched = summarizeRuntimeReleaseStatus({
+    releaseId: '0.1.4-sit.33',
+    version: '0.1.4-sit.33',
+    source: 'remote',
+    hostCore: { version: '0.1.4-sit.33', source: 'remote', path: '/tmp/embed-host.cjs' },
+    hostRuntimeCompatibility: {
+      hostSource: 'remote',
+      hostCoreVersion: '0.1.4-sit.33',
+      runtimeReleaseId: '0.1.4-sit.33',
+      runtimeVersion: '0.1.4-sit.33',
+      versionsMatch: true,
+    },
+  });
+  assert.equal(matched.ok, true);
+  assert.deepEqual(assessRuntimeReleaseStatus(matched, '0.1.4-sit.33'), {
+    ok: true,
+    expected_version: '0.1.4-sit.33',
+    release_identity_matches: true,
+    host_runtime_compatible: true,
+  });
+
+  const mismatched = summarizeRuntimeReleaseStatus({
+    releaseId: '0.1.4-sit.33',
+    version: '0.1.4-sit.33',
+    hostRuntimeCompatibility: {
+      hostSource: 'remote',
+      hostCoreVersion: '0.1.4-sit.32',
+      runtimeReleaseId: '0.1.4-sit.33',
+      runtimeVersion: '0.1.4-sit.33',
+      versionsMatch: false,
+    },
+  });
+  const verdict = assessRuntimeReleaseStatus(mismatched, '0.1.4-sit.33');
+  assert.equal(verdict.release_identity_matches, true);
+  assert.equal(verdict.host_runtime_compatible, false);
+  assert.equal(verdict.ok, false);
+  assert.equal(summarizeRuntimeReleaseStatus([]).ok, false);
 });
 
 test('reports and URLs redact credentials', () => {

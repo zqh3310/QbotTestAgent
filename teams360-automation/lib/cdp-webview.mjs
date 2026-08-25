@@ -97,6 +97,91 @@ export function summarizePublicCapabilities(value) {
   };
 }
 
+export function summarizeRuntimeReleaseStatus(value) {
+  const validObject = value != null && typeof value === 'object' && !Array.isArray(value);
+  const compatibility = validObject
+    && value.hostRuntimeCompatibility != null
+    && typeof value.hostRuntimeCompatibility === 'object'
+    && !Array.isArray(value.hostRuntimeCompatibility)
+    ? value.hostRuntimeCompatibility
+    : null;
+  const hostCore = validObject
+    && value.hostCore != null
+    && typeof value.hostCore === 'object'
+    && !Array.isArray(value.hostCore)
+    ? value.hostCore
+    : null;
+  const loadedRuntime = validObject
+    && value.loadedRuntime != null
+    && typeof value.loadedRuntime === 'object'
+    && !Array.isArray(value.loadedRuntime)
+    ? value.loadedRuntime
+    : null;
+  const text = (input) => String(input || '').trim();
+  return {
+    ok: validObject,
+    value_type: value == null ? String(value) : Array.isArray(value) ? 'array' : typeof value,
+    keys: validObject ? Object.keys(value).sort() : [],
+    release_id: validObject ? text(value.releaseId) : '',
+    version: validObject ? text(value.version) : '',
+    release_source: validObject ? text(value.source) : '',
+    channel: validObject ? text(value.channel) : '',
+    update_phase: validObject ? text(value.updatePhase) : '',
+    host_core: hostCore ? {
+      version: text(hostCore.version),
+      source: text(hostCore.source),
+      path: redactText(text(hostCore.path)).slice(0, 1200),
+    } : null,
+    loaded_runtime: loadedRuntime ? {
+      release_id: text(loadedRuntime.releaseId),
+      version: text(loadedRuntime.version),
+      source: text(loadedRuntime.source),
+      verified: loadedRuntime.verified === true,
+    } : null,
+    host_runtime_compatibility: compatibility ? {
+      present: true,
+      host_source: text(compatibility.hostSource),
+      host_core_version: text(compatibility.hostCoreVersion),
+      runtime_release_id: text(compatibility.runtimeReleaseId),
+      runtime_version: text(compatibility.runtimeVersion),
+      versions_match: compatibility.versionsMatch === true,
+    } : {
+      present: false,
+      host_source: '',
+      host_core_version: '',
+      runtime_release_id: '',
+      runtime_version: '',
+      versions_match: false,
+    },
+  };
+}
+
+export function assessRuntimeReleaseStatus(summary, expectedVersion) {
+  const expected = String(expectedVersion || '').trim();
+  const compatibility = summary?.host_runtime_compatibility || {};
+  const releaseIdentityMatches = Boolean(
+    summary?.ok === true
+    && expected
+    && summary.release_id === expected
+    && summary.version === expected
+    && compatibility.runtime_release_id === expected
+    && compatibility.runtime_version === expected
+  );
+  const hostRuntimeCompatible = Boolean(
+    compatibility.present === true
+    && compatibility.versions_match === true
+    && compatibility.host_core_version
+    && compatibility.runtime_version
+    && compatibility.host_core_version === compatibility.runtime_version
+  );
+  return {
+    ok: releaseIdentityMatches && hostRuntimeCompatible,
+    expected_version: expected,
+    release_identity_matches: releaseIdentityMatches,
+    host_runtime_compatible: hostRuntimeCompatible,
+  };
+}
+
 export async function probeWebviewPublicCapabilities(targetRef) {
   const checkedAt = new Date().toISOString();
   if (!targetRef?.webSocketDebuggerUrl) {
@@ -139,6 +224,52 @@ export async function probeWebviewPublicCapabilities(targetRef) {
       ok: false,
       checked_at: checkedAt,
       source: 'window.agent.capabilities',
+      error: redactText(error?.message || String(error)).slice(0, 1200),
+    };
+  }
+}
+
+export async function probeWebviewRuntimeReleaseStatus(targetRef) {
+  const checkedAt = new Date().toISOString();
+  if (!targetRef?.webSocketDebuggerUrl) {
+    return {
+      ok: false,
+      checked_at: checkedAt,
+      source: 'window.agent.runtimeReleaseStatus',
+      error: 'The full QWork QBot WebView target is unavailable.',
+    };
+  }
+  try {
+    const result = await withTargetClient(targetRef.webSocketDebuggerUrl, async (client) => client.evaluate(`(async () => {
+      try {
+        if (typeof globalThis.window?.agent?.runtimeReleaseStatus !== 'function') {
+          throw new Error('missing window.agent.runtimeReleaseStatus');
+        }
+        return { ok: true, value: await globalThis.window.agent.runtimeReleaseStatus() };
+      } catch (error) {
+        return { ok: false, error: String(error?.stack || error) };
+      }
+    })()`));
+    if (result?.ok !== true) {
+      return {
+        ok: false,
+        checked_at: checkedAt,
+        source: 'window.agent.runtimeReleaseStatus',
+        error: redactText(result?.error || 'window.agent.runtimeReleaseStatus probe failed').slice(0, 1200),
+      };
+    }
+    const summary = summarizeRuntimeReleaseStatus(result.value);
+    return {
+      ...summary,
+      checked_at: checkedAt,
+      source: 'window.agent.runtimeReleaseStatus',
+      error: summary.ok ? '' : 'window.agent.runtimeReleaseStatus returned a non-object value',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      checked_at: checkedAt,
+      source: 'window.agent.runtimeReleaseStatus',
       error: redactText(error?.message || String(error)).slice(0, 1200),
     };
   }

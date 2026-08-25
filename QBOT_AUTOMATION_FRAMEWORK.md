@@ -234,6 +234,15 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    `BLOCKED`。可见 Composer、登录态和正确 release URL 不能替代该公开状态门禁，
    禁止在 capabilities 不可读时仍返回 `READY`。
 
+   同一 Teams pretest 还必须只读调用公开 `window.agent.runtimeReleaseStatus()`，并将
+   安全结构化投影写入 `runtime.teams_inspection.runtime_release_status`。顶层
+   `releaseId/version`、`hostRuntimeCompatibility.runtimeReleaseId/runtimeVersion` 必须
+   与 WebView URL 和 `--expected-qwork-version` 全部一致；同时必须满足
+   `hostRuntimeCompatibility.versionsMatch=true` 且 `hostCoreVersion=runtimeVersion`。
+   API 缺失、超时、返回非对象、字段缺失或 `.33 runtime + .32 host-core` 一类组件
+   混装必须在 Case 0 前得到 `BLOCKED`，不得仅凭 UI URL 与 capabilities 可读返回
+   `READY`。
+
 6. 冻结并记录发布身份：
 
    - 360Teams 版本和 build。
