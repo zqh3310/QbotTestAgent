@@ -4297,6 +4297,20 @@ try {
   assert.deepEqual(manifest.missing_roles, []);
   assert.deepEqual(manifest.not_applicable_roles.map((item) => item.role), runtimePrerequisiteRoles);
 
+  writeJsonFile(blockerFile, pinnedRuntimePrerequisiteBlocker);
+  const pinnedManifest = buildCoreEvidenceManifest({
+    testCase: runtimePrerequisiteTestCase,
+    caseDir: runtimePrerequisiteEvidenceDir,
+    artifacts,
+  });
+  assert.equal(
+    pinnedManifest.complete,
+    true,
+    'model_runtime_family_pinned 前置阻塞也必须生成完整 manifest',
+  );
+  assert.deepEqual(pinnedManifest.missing_roles, []);
+  assert.deepEqual(pinnedManifest.not_applicable_roles.map((item) => item.role), runtimePrerequisiteRoles);
+
   writeJsonFile(blockerFile, {
     ...runtimePrerequisiteBlocker,
     mutation_guard: { ...runtimePrerequisiteBlocker.mutation_guard, valid: false },

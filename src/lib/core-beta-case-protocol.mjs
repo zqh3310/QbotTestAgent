@@ -1449,7 +1449,11 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && blocker?.dependent_case_id === testCase?.id
       && blocker?.target_runtime_family === 'codex'
       && blocker?.normalized_error_code === 'runtime_connection_protocol_unavailable'
-      && /没有匹配协议的\s*LLM connection/i.test(String(blocker?.error?.message || ''))
+      && (
+        /没有匹配协议的\s*LLM connection/i.test(String(blocker?.error?.message || ''))
+        || String(blocker?.error?.reported_code || '') === 'model_runtime_family_pinned'
+        || /已固定本会话的模型，不能切换执行方式/i.test(String(blocker?.error?.message || ''))
+      )
       && Number(blocker?.connection_view?.before_options_count) > 0
       && Number(blocker?.connection_view?.after_options_count) > 0
       && Number(blocker?.connection_view?.target_match_count) === 0
