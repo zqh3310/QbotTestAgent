@@ -793,11 +793,13 @@ Teams pretest 必须在精确 QWork WebView 上只读调用一次
 均必须得到 `BLOCKED`。页面已登录、Composer 可见、版本与 control plane identity
 匹配都不能替代该检查。
 
-Teams pretest 还必须只读调用 `window.agent.runtimeReleaseStatus()`。报告只有在
-顶层 release、兼容性内 runtime、WebView URL 与 `--expected-qwork-version` 全等，且
-`hostRuntimeCompatibility.versionsMatch=true`、`hostCoreVersion=runtimeVersion` 时
-才能通过。runtime 与 host-core 任一版本不一致、API/字段不可读或返回非对象都必须
-在 Case 0 前 `BLOCKED`；不能把已登录、capabilities 可读或 UI 版本正确当作替代证据。
+Teams pretest 还必须只读调用 `window.agent.runtimeReleaseStatus()`。报告仍要求
+顶层 release、兼容性内 runtime、WebView URL 与 `--expected-qwork-version` 全等；
+runtime API/字段不可读、返回非对象或 runtime 身份漂移仍必须在 Case 0 前 `BLOCKED`。
+经开发确认的 host-core 兼容性例外只将 `hostRuntimeCompatibility.versionsMatch`、
+`hostCoreVersion` 与 `runtimeVersion` 的不一致记为结构化 warning，不再单独阻止
+`READY`。报告必须保留实际 host-core/runtime 版本、来源和路径，warning 不得被解释为
+版本兼容通过。
 
 日常回归仍传 `--production-gate true` 来冻结全部 release inputs 并启用严格证据
 门禁，但不承担 70/160 专属的八大生产风险域完整覆盖。框架只能对完整有序的 83 个

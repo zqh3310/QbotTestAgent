@@ -245,8 +245,9 @@ if (!/probeRuntimeReleaseStatus:\s*true/.test(pretestSource)
   || !/qwork_runtime_release_status/.test(pretestSource)
   || !/qwork_runtime_release_identity/.test(pretestSource)
   || !/qwork_host_runtime_compatibility/.test(pretestSource)
+  || !/qwork_host_runtime_compatibility'[\s\S]{0,500}warning:\s*true/.test(pretestSource)
   || !/assessRuntimeReleaseStatus/.test(pretestSource)) {
-  throw new Error('Teams pretest must fail closed when runtime and host-core release identities differ.');
+  throw new Error('Teams pretest must retain host-core compatibility readback as a non-blocking warning.');
 }
 
 const pretestOut = path.join(temp, 'pretest');

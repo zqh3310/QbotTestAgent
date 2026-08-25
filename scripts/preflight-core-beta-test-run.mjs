@@ -663,7 +663,8 @@ async function main() {
           addCheck('qwork_runtime_release_identity', runtimeReleaseAssessment.release_identity_matches,
             `top_level=${runtimeReleaseStatus?.release_id || '(missing)'}/${runtimeReleaseStatus?.version || '(missing)'}; compatibility=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_release_id || '(missing)'}/${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; expected=${expectedQworkVersion || '(missing --expected-qwork-version)'}`);
           addCheck('qwork_host_runtime_compatibility', runtimeReleaseAssessment.host_runtime_compatible,
-            `host_core=${runtimeReleaseStatus?.host_runtime_compatibility?.host_core_version || '(missing)'}; runtime=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; versions_match=${runtimeReleaseStatus?.host_runtime_compatibility?.versions_match === true}`);
+            `host_core=${runtimeReleaseStatus?.host_runtime_compatibility?.host_core_version || '(missing)'}; runtime=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; versions_match=${runtimeReleaseStatus?.host_runtime_compatibility?.versions_match === true}`,
+            { warning: true });
         }
       }
     }

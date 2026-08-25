@@ -354,7 +354,7 @@ test('public capabilities pretest projection accepts only a structured bridge re
   assert.equal(summarizePublicCapabilities('HTTP 500').ok, false);
 });
 
-test('runtime release pretest rejects a mismatched Teams host-core', () => {
+test('runtime release pretest reports mismatched Teams host-core separately from release identity', () => {
   const matched = summarizeRuntimeReleaseStatus({
     releaseId: '0.1.4-sit.33',
     version: '0.1.4-sit.33',

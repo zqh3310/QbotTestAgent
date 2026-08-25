@@ -236,12 +236,13 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    同一 Teams pretest 还必须只读调用公开 `window.agent.runtimeReleaseStatus()`，并将
    安全结构化投影写入 `runtime.teams_inspection.runtime_release_status`。顶层
-   `releaseId/version`、`hostRuntimeCompatibility.runtimeReleaseId/runtimeVersion` 必须
-   与 WebView URL 和 `--expected-qwork-version` 全部一致；同时必须满足
-   `hostRuntimeCompatibility.versionsMatch=true` 且 `hostCoreVersion=runtimeVersion`。
-   API 缺失、超时、返回非对象、字段缺失或 `.33 runtime + .32 host-core` 一类组件
-   混装必须在 Case 0 前得到 `BLOCKED`，不得仅凭 UI URL 与 capabilities 可读返回
-   `READY`。
+   `releaseId/version`、`hostRuntimeCompatibility.runtimeReleaseId/runtimeVersion` 仍必须
+   与 WebView URL 和 `--expected-qwork-version` 全部一致；API 缺失、超时、返回非对象、
+   字段缺失或 runtime 身份漂移仍必须在 Case 0 前得到 `BLOCKED`。当前受开发确认的
+   host-core 兼容性例外只把 `hostRuntimeCompatibility.versionsMatch`、
+   `hostCoreVersion` 与 `runtimeVersion` 的不一致保留为结构化 `warning`，不再单独阻止
+   `READY`；实际 host-core/runtime 版本、来源和路径必须完整写入报告，不能静默丢弃或
+   把 warning 解释为兼容通过。
 
 6. 冻结并记录发布身份：
 
