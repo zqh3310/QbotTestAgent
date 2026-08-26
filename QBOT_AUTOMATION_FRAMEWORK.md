@@ -35,10 +35,10 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 生产灰度发布 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `生产灰度门禁Case` | 70 | `6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d` |
-| 全量正常功能回归 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `全量功能回归Case` | 160 | `6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d` |
+| 生产灰度发布 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `生产灰度门禁Case` | 70 | `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` |
+| 全量正常功能回归 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `全量功能回归Case` | 160 | `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` |
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
-| QWork 新增 MR 核心冒烟 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `新增MR核心冒烟` | 12 | `6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d` |
+| QWork 新增 MR 核心冒烟 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx` | `新增MR核心冒烟` | 12 | `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` |
 
 QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 `MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -72,7 +72,9 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 连续读回目标定义消失；DELETE 200 或本地异步 refresh 动作本身不能替代终态对账。
 
 本版按北京时间 2026-08-24 00:00:00 至 2026-08-26 23:59:59 扫描
-`origin/release/0.1` first-parent，共审计 34 个直接合入 MR。新增合同还必须满足：
+`origin/release/0.1` first-parent，共审计 35 个直接合入 MR。其中 MR !1329 仅更新
+`.gitlab-ci.yml` 的单元测试物料镜像 digest，明确归入 CI-only 静态合同审计，不新增
+桌面 QWork E2E Case，也不计入 12/70/160 桌面通过。新增合同还必须满足：
 
 - `SIT-HOME-044` 的 picker/paste/drag 三入口统一进入 FileInput 合同；81 MiB
   必须发送前拒绝且保持零 task/消息/send，拒绝第三份不能抹去前两份附件。
@@ -107,7 +109,7 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 正常功能增量保持总数不变。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
-当前设计基线是 `origin/release/0.1@877eea463eeea684394a3451596e9bb7e2f0cf5e`，
+当前设计基线是 `origin/release/0.1@94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3`，
 产品版本 `0.1.4`；`/Users/qifu/Documents/deepbankV2` 始终只读。
 Casebook 生成器只需用 `git cat-file -e <commit>^{commit}` 证明该冻结设计提交仍可读取；
 不得要求持续演进的 `origin/release/0.1` 永远指向旧设计提交，也不得因此改写冻结合同。
@@ -223,7 +225,7 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 70 \
-     --expected-sha256 6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d \
+     --expected-sha256 d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \

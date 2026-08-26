@@ -8197,9 +8197,10 @@ assert.doesNotMatch(productionGrayCasebookBuilder, /activeFrom=now-interval\+15s
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
-  assert.match(documentText, /6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d/, '两份规范必须冻结新合并 Casebook SHA');
-  assert.match(documentText, /877eea463eeea684394a3451596e9bb7e2f0cf5e[\s\S]*0\.1\.4/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
-  assert.match(documentText, /34 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录近 2 天 34 个直接合入 MR');
+  assert.match(documentText, /d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d/, '两份规范必须冻结新合并 Casebook SHA');
+  assert.match(documentText, /94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3[\s\S]*0\.1\.4/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
+  assert.match(documentText, /35 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录近 2 天 35 个直接合入 MR');
+  assert.match(documentText, /MR !1329[\s\S]*\.gitlab-ci\.yml[\s\S]*CI-only[\s\S]*不新增[\s\S]*桌面/, '两份规范必须明确MR !1329只做CI-only静态合同审计且不新增桌面Case');
   assert.match(documentText, /MRSMOKE-SKILL-001[\s\S]*SIT-SKILL-MR-001/, '两份规范必须冻结 MR Skill 组合 driver 路由');
   for (const evidenceRole of ['workspace_missing_error_readback', 'skill_install_attempt_ledger', 'external_navigation_trace', 'interactive_chart_readback']) {
     assert.match(documentText, new RegExp(evidenceRole), `两份规范必须冻结新增 MR 专项证据角色 ${evidenceRole}`);
@@ -8207,6 +8208,9 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*6 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 6 legacy 能力构成');
   assert.match(documentText, /1\/12[\s\S]*1\/70|12 条[\s\S]*70 条/, '两份规范必须明确先完整执行 12 条，再独立执行 70 条');
 }
+assert.match(productionGrayCasebookBuilder, /const PRODUCT_COMMIT = '94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3';/, 'Casebook生成器必须冻结最新release/0.1提交');
+assert.match(productionGrayCasebookBuilder, /\['1329',[\s\S]*expectedFiles: \['\.gitlab-ci\.yml'\][\s\S]*CI-only[\s\S]*sha256:3410bb/, 'Casebook生成器必须把MR !1329绑定到显式CI-only静态合同审计');
+assert.match(productionGrayCasebookBuilder, /mrRows\.length !== 35/, 'Casebook生成器必须强制近2天35个直接合入MR');
 
 const chartDriverStart = runner.indexOf('async function executeSitConnectorChartConversation');
 const chartDriverEnd = runner.indexOf('\nasync function executeSitConnectorAddEntryScope', chartDriverStart);

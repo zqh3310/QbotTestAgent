@@ -23,7 +23,7 @@ const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184�
 const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
-const PRODUCT_COMMIT = '877eea463eeea684394a3451596e9bb7e2f0cf5e';
+const PRODUCT_COMMIT = '94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3';
 const PREVIOUS_PRODUCT_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
 const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.4';
@@ -70,6 +70,13 @@ const RECENT_MR_CASE_MAPPING = new Map([
   ['1294', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
   ['1292', ['MRSMOKE-SKILL-001', 'MRSMOKE-FAIL-001']],
   ['1280', ['MRSMOKE-ROUTE-001', 'MRSMOKE-ENTRY-001']],
+]);
+const RECENT_MR_STATIC_AUDITS = new Map([
+  ['1329', {
+    expectedFiles: ['.gitlab-ci.yml'],
+    disposition: 'CI-only：固定单元测试物料镜像digest；不新增桌面QWork E2E',
+    reason: '静态核对QBOT_CI_UNIT_IMAGE由sha256:ec7c3f更新为sha256:3410bb，保留merge commit与文件清单；由CI物料溯源/单元测试负责，不计12/70/160桌面通过',
+  }],
 ]);
 const LOCAL_FIXTURE_ADAPTERS = new Set([
   'native_ime_input',
@@ -216,7 +223,7 @@ function patchSmokeCase(testCase) {
   }
   next['来源类型'] = '2026-08-24~2026-08-26 release/0.1 直接合入 MR 核心路径自动化';
   next['版本范围'] = `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`;
-  next['备注'] = `${asString(next['备注'])}；最新34个直接合入MR已在“近2天MR覆盖”逐条映射，未映射的Dashboard/CI/设计变更只做静态合同审计。`;
+  next['备注'] = `${asString(next['备注'])}；最新35个直接合入MR已在“近2天MR覆盖”逐条映射，未映射的Dashboard/CI/设计变更只做静态合同审计。`;
   if (id === 'MRSMOKE-WEB-001') {
     next = withEvidenceRole(next, 'external_navigation_trace');
     next['测试数据'] = '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新；若不足两条请明确说明并列出最近两条。每条给出标题、发布日期、原始链接和一句摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
@@ -978,9 +985,14 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
   const renderDir = path.join(verificationDir, 'renders');
   await fs.mkdir(renderDir, { recursive: true });
   const inspections = [];
-  for (const sheetName of ['新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case']) {
-    const rowCount = sheetName === '新增MR核心冒烟' ? 14 : sheetName === '生产灰度门禁Case' ? 74 : 164;
-    const lastColumn = sheetName === '新增MR核心冒烟' ? 'AM' : 'AO';
+  const inspectionScopes = [
+    { sheetName: '新增MR核心冒烟', rowCount: 14, lastColumn: 'AM' },
+    { sheetName: '生产灰度门禁Case', rowCount: 74, lastColumn: 'AO' },
+    { sheetName: '全量功能回归Case', rowCount: 164, lastColumn: 'AO' },
+    { sheetName: '近2天MR覆盖', rowCount: 40, lastColumn: 'J' },
+    { sheetName: '源码依据', rowCount: 20, lastColumn: 'D' },
+  ];
+  for (const { sheetName, rowCount, lastColumn } of inspectionScopes) {
     const result = await workbook.inspect({
       kind: 'table',
       range: `${sheetName}!A1:${lastColumn}${rowCount}`,
@@ -1100,6 +1112,10 @@ async function main() {
     const smokeMappings = mappings.filter((id) => smokeIdSet.has(id));
     const gateMappings = mappings.filter((id) => gateIdSet.has(id));
     const fullMappings = mappings.filter((id) => fullIdSet.has(id) && !gateIdSet.has(id));
+    const staticAudit = RECENT_MR_STATIC_AUDITS.get(String(mr.mr || ''));
+    if (staticAudit && JSON.stringify(mr.files) !== JSON.stringify(staticAudit.expectedFiles)) {
+      throw new Error(`MR !${mr.mr}静态审计文件漂移：expected=${staticAudit.expectedFiles.join(',')} actual=${mr.files.join(',')}`);
+    }
     const layers = unique([
       smokeMappings.length ? '12条冒烟' : '',
       gateMappings.length ? '70条门禁' : '',
@@ -1114,13 +1130,22 @@ async function main() {
       mr.files.slice(0, 8).join('\n'),
       mappings.join(','),
       layers.join('+') || '静态合同审计',
-      desktopRelevant ? '纳入当前框架可执行Case' : 'Dashboard/CI/设计/发布工程变更不冒充桌面QWork E2E',
+      desktopRelevant ? '纳入当前框架可执行Case' : (staticAudit?.disposition || 'Dashboard/CI/设计/发布工程变更不冒充桌面QWork E2E'),
       desktopRelevant
         ? '由映射Case的真实UI动作与公开状态Oracle覆盖'
-        : '保留merge commit与文件清单；由源码单测/发布工程检查负责，不计12/70/160桌面通过',
+        : (staticAudit?.reason || '保留merge commit与文件清单；由源码单测/发布工程检查负责，不计12/70/160桌面通过'),
     ];
   });
-  if (mrRows.length !== 34) throw new Error(`近2天直接合入MR必须恰好34个，actual=${mrRows.length}`);
+  if (mrRows.length !== 35) throw new Error(`近2天直接合入MR必须恰好35个，actual=${mrRows.length}`);
+  const mr1329 = mrRows.find((row) => row[1] === '!1329');
+  if (!mr1329
+    || mr1329[5] !== '.gitlab-ci.yml'
+    || mr1329[6] !== ''
+    || mr1329[7] !== '静态合同审计'
+    || !/CI-only/.test(mr1329[8])
+    || !/sha256:3410bb/.test(mr1329[9])) {
+    throw new Error(`MR !1329必须明确映射为CI-only静态合同审计且不新增桌面Case：${JSON.stringify(mr1329)}`);
+  }
   const omitted = allCases.filter((testCase) => !gateIdSet.has(asString(testCase['用例ID'])));
   const replacementAudit = allCases.filter((testCase) => REPLACED_CASES.has(asString(testCase['用例ID'])));
   const deletionRows = [...omitted, ...replacementAudit].map((testCase) => {
