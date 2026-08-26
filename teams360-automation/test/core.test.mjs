@@ -36,6 +36,7 @@ import {
 } from '../lib/cdp-webview.mjs';
 import { sanitize } from '../lib/report.mjs';
 import { qworkRuntimeBridgeSource, rewriteCdpPayload } from '../lib/cdp-webview-proxy.mjs';
+import { managedQworkRuntimeActivationDecision } from '../lib/managed-qwork-ui.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
 import {
   assertRunMetadataHost,
@@ -1544,7 +1545,74 @@ test('managed Teams fixture relaunch keeps the packaged production home', () => 
   assert.match(source, /Automatically rolled back to/);
   assert.match(source, /remountPinnedManagedQworkUi\(launched\.cdp_url, pinnedQworkUi\.url/);
   assert.match(source, /qwork_workbench_ready: remountedQwork\.workbenchReady/);
+  assert.match(source, /activatePreparedManagedQworkRelease\(launched\.cdp_url, pinnedQworkUi\.url/);
+  assert.match(source, /activatePreparedRelease: false/);
+  assert.match(source, /qwork_runtime_activation_dispatched: activatedQwork\.activationDispatched/);
   assert.match(source, /process\.exit\(0\)/);
+});
+
+test('managed Teams activation only accepts the exact prepared runtime after host-core restart', () => {
+  const prepared = managedQworkRuntimeActivationDecision({
+    releaseId: '0.1.1',
+    version: '0.1.1',
+    updatePhase: 'ready-to-activate',
+    preparedRelease: { releaseId: '0.1.6-sit.6', version: '0.1.6-sit.6' },
+    loadedRuntime: { releaseId: '0.1.1', version: '0.1.1' },
+    hostRuntimeCompatibility: {
+      hostCoreVersion: '0.1.6-sit.6',
+      runtimeReleaseId: '0.1.1',
+      runtimeVersion: '0.1.1',
+    },
+  }, '0.1.6-sit.6');
+  assert.equal(prepared.ready, false);
+  assert.equal(prepared.activatable, true);
+  assert.equal(prepared.reason, 'prepared-release-ready');
+
+  const active = managedQworkRuntimeActivationDecision({
+    releaseId: '0.1.6-sit.6',
+    version: '0.1.6-sit.6',
+    updatePhase: 'idle',
+    preparedRelease: null,
+    loadedRuntime: { releaseId: '0.1.6-sit.6', version: '0.1.6-sit.6' },
+    hostRuntimeCompatibility: {
+      hostCoreVersion: '0.1.6-sit.6',
+      runtimeReleaseId: '0.1.6-sit.6',
+      runtimeVersion: '0.1.6-sit.6',
+    },
+  }, '0.1.6-sit.6');
+  assert.equal(active.ready, true);
+  assert.equal(active.activatable, false);
+  assert.equal(active.reason, 'already-active');
+
+  const stillNeedsRestart = managedQworkRuntimeActivationDecision({
+    releaseId: '0.1.6-sit.5',
+    version: '0.1.6-sit.5',
+    updatePhase: 'restart-required',
+    preparedRelease: { releaseId: '0.1.6-sit.6', version: '0.1.6-sit.6' },
+    loadedRuntime: { releaseId: '0.1.6-sit.5', version: '0.1.6-sit.5' },
+    hostRuntimeCompatibility: {
+      hostCoreVersion: '0.1.6-sit.5',
+      runtimeReleaseId: '0.1.6-sit.5',
+      runtimeVersion: '0.1.6-sit.5',
+    },
+  }, '0.1.6-sit.6');
+  assert.equal(stillNeedsRestart.activatable, false);
+  assert.equal(stillNeedsRestart.reason, 'managed-host-restart-still-required');
+
+  const wrongCandidate = managedQworkRuntimeActivationDecision({
+    releaseId: '0.1.1',
+    version: '0.1.1',
+    updatePhase: 'ready-to-activate',
+    preparedRelease: { releaseId: '0.1.6-sit.5', version: '0.1.6-sit.5' },
+    loadedRuntime: { releaseId: '0.1.1', version: '0.1.1' },
+    hostRuntimeCompatibility: {
+      hostCoreVersion: '0.1.6-sit.6',
+      runtimeReleaseId: '0.1.1',
+      runtimeVersion: '0.1.1',
+    },
+  }, '0.1.6-sit.6');
+  assert.equal(wrongCandidate.activatable, false);
+  assert.equal(wrongCandidate.reason, 'prepared-release-does-not-match-target');
 });
 
 test('managed Teams restart rebuilds stale proxy before shared runner touches the new QWork page', () => {
@@ -1632,6 +1700,10 @@ test('pinned Teams QWork remount is host-owned and verifies signed-in workbench 
   assert.match(source, /360Teams webview\.executeJavaScript workbench probe/);
   assert.match(source, /Promise\.all\(\[\s*probe\(\(\) => window\.agent\?\.getAuthStatus/);
   assert.match(source, /browser\._connection\?\.close\?/);
+  assert.match(source, /runtimeActivatePreparedRelease/);
+  assert.match(source, /stableReady >= 2/);
+  assert.match(source, /phase === 'restart-required'/);
+  assert.match(source, /status\.preparedRelease === null/);
 });
 
 test('managed live Teams can expose the real OAuth browser during login recovery', () => {

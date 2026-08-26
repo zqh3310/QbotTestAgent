@@ -12,7 +12,10 @@ import {
   applyManagedQbotProfileConfig,
   waitForStagedQbotServer,
 } from './teams-profile-qbot-config.mjs';
-import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
+import {
+  activatePreparedManagedQworkRelease,
+  remountPinnedManagedQworkUi,
+} from './managed-qwork-ui.mjs';
 
 const controlPlane = String(process.argv[2] || '').trim();
 const expectedQworkUi = String(process.argv[3] || '').trim();
@@ -56,8 +59,9 @@ const profileConfig = applyManagedQbotProfileConfig({
 let session;
 let stagedServer;
 let remountedQwork;
+let activatedQwork;
 try {
-  ({ session, stagedServer, remountedQwork } = await launchWithProfile(controlPlane, agentMock));
+  ({ session, stagedServer, remountedQwork, activatedQwork } = await launchWithProfile(controlPlane, agentMock));
 } catch (error) {
   stopIsolatedTeams(DEFAULT_SESSION);
   let rollbackError = null;
@@ -68,7 +72,7 @@ try {
       uiUrl: pinnedQworkUi.url,
       backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
     });
-    await launchWithProfile(snapshot.controlPlane, '0');
+    await launchWithProfile(snapshot.controlPlane, '0', { activatePreparedRelease: false });
   } catch (candidate) {
     rollbackError = candidate;
   }
@@ -87,6 +91,9 @@ console.log(JSON.stringify({
   qwork_ui_version: pinnedQworkUi.version,
   qwork_ui_remounted: remountedQwork.remounted,
   qwork_workbench_ready: remountedQwork.workbenchReady,
+  qwork_runtime_activation_dispatched: activatedQwork.activationDispatched,
+  qwork_runtime_activated: activatedQwork.activated,
+  qwork_runtime_identity: activatedQwork.runtime,
   profile_config_mode: profileConfig.mode,
   staged_control_plane_origin: new URL(stagedServer.actual).origin,
 }));
@@ -123,7 +130,10 @@ function managedEnvironment(serverUrl, mockFlag) {
   };
 }
 
-async function launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry = true } = {}) {
+async function launchWithProfile(serverUrl, mockFlag, {
+  allowProfileDriftRetry = true,
+  activatePreparedRelease = true,
+} = {}) {
   await launchLiveTeams({
     appPath: snapshot.appPath,
     profileDir: snapshot.profileDir,
@@ -147,7 +157,10 @@ async function launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry =
         uiUrl: pinnedQworkUi.url,
         backupFile: `${DEFAULT_SESSION}.qbot-profile-backup.json`,
       });
-      return launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry: false });
+      return launchWithProfile(serverUrl, mockFlag, {
+        allowProfileDriftRetry: false,
+        activatePreparedRelease,
+      });
     }
     throw new Error(
       `Managed 360Teams staged QWork preload did not adopt the requested control plane: `
@@ -158,7 +171,22 @@ async function launchWithProfile(serverUrl, mockFlag, { allowProfileDriftRetry =
     timeoutMs: 120_000,
     settleMs: 3_000,
   });
-  return { session: launched, stagedServer: staged, remountedQwork: remounted };
+  const activated = activatePreparedRelease
+    ? await activatePreparedManagedQworkRelease(launched.cdp_url, pinnedQworkUi.url, {
+      timeoutMs: 120_000,
+      settleMs: 1_000,
+    })
+    : {
+      activated: false,
+      activationDispatched: false,
+      runtime: null,
+    };
+  return {
+    session: launched,
+    stagedServer: staged,
+    remountedQwork: remounted,
+    activatedQwork: activated,
+  };
 }
 
 export async function resolvePinnedQworkUi(session, explicitUrl = '') {

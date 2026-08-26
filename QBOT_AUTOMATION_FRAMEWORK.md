@@ -637,6 +637,18 @@ run metadata 三者同源；任一缺失或漂移都必须在第 1 条 Case 前 
 
 Teams 预连接在一次连接周期内最多接受一次已完成的受管宿主恢复。恢复完成后若 QWork WebView 已连接、但模型入口或 capabilities 尚未就绪，必须在同一宿主上继续有界读回；不得再次重启宿主、重复延长截止时间，或形成永不收敛的恢复循环。超过恢复后的验证窗口仍未就绪时必须明确失败，由自愈闭环判定环境阻塞或框架问题。干净草稿的可见模型入口允许处于 `Auto`，这只证明工作台已加载，不能记为 M3 证据；初始化后首个模型 Case 及其每次发送前仍必须真实选择并精确读回本轮要求的 M3。
 
+受管宿主恢复还必须完成整套 release 的第二阶段激活。host-core 重启并把目标版本化
+WebView 重挂载成功后，helper 必须先只读 `runtimeReleaseStatus()`：只有
+`updatePhase=ready-to-activate`、`preparedRelease.releaseId/version` 与冻结版本全等，
+且 `hostRuntimeCompatibility.hostCoreVersion` 已为冻结版本时，才允许通过公开
+`runtimeActivatePreparedRelease()` 派发一次激活。`restart-required` 表示宿主重启尚未
+收敛，禁止调用或模拟激活；候选、host-core 或版本任一漂移同样 fail-closed。激活会
+替换 renderer，helper 必须跟随同一宿主 `<webview>`，连续读回 WebView URL、登录、
+capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结版本，
+`updatePhase=idle` 且 `preparedRelease=null` 后才能返回 ready。激活失败、replacement
+未收敛或任一终态不完整时，保留精确公开状态并走现有事务回滚；回滚重启不得自动再次
+激活，以免把一次失败动作变成无界重试。
+
 ## 7. 批量、串行屏障与初始化
 
 - Core Beta v2 的 Case 间执行永久强制串行：`--parallel` 和 `--single-host-pipeline` 的有效值都固定为 `1`。调用者即使传入大于 `1` 的历史参数，precheck 也必须同时记录 requested/effective 值和 `core-beta-v2-forced-serial` policy，runner 不得进入多 CDP 调度或外层 pipeline。

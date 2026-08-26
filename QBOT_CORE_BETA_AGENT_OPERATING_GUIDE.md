@@ -10,6 +10,15 @@
 
 ## 1. 当前状态
 
+- QWork `0.1.6-sit.6` 的 SIT host-core、UI 和 qbot-core 制品已经完整下载；受管宿主
+  恢复后不能只重挂载版本化 WebView。标准 helper 必须先确认 host-core 已为 `.6`，
+  仅在公开状态为目标 `.6` 的 `ready-to-activate` 时调用一次
+  `runtimeActivatePreparedRelease()`，并跨 replacement renderer 连续验证顶层、loaded、
+  compatibility runtime 全部为 `.6`、`updatePhase=idle`、`preparedRelease=null`，同时
+  保持同一 SIT control plane、登录、capabilities 和 workbench。`restart-required`、
+  候选漂移或 host-core 未匹配时禁止调用；失败后的事务回滚不得自动重试激活。只有这一
+  闭环完成且框架已全检、提交推送后，新的 12 条精确 `READY` 才能授权 runner。
+
 - QWork `0.1.6-sit.3` 基于框架 `84ca05523a53403cbc8704162b41a8b6cbab119f`
   启动的第三轮生产灰度门禁批次永久冻结在
   `teams360-automation/output/20260826144400_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-84ca055_casebook-1621632`。
