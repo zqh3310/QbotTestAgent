@@ -99,6 +99,8 @@ export function summarizePublicCapabilities(value) {
 
 export function summarizeRuntimeReleaseStatus(value) {
   const validObject = value != null && typeof value === 'object' && !Array.isArray(value);
+  const preparedReleasePresent = validObject
+    && Object.prototype.hasOwnProperty.call(value, 'preparedRelease');
   const compatibility = validObject
     && value.hostRuntimeCompatibility != null
     && typeof value.hostRuntimeCompatibility === 'object'
@@ -117,6 +119,12 @@ export function summarizeRuntimeReleaseStatus(value) {
     && !Array.isArray(value.loadedRuntime)
     ? value.loadedRuntime
     : null;
+  const preparedRelease = validObject
+    && value.preparedRelease != null
+    && typeof value.preparedRelease === 'object'
+    && !Array.isArray(value.preparedRelease)
+    ? value.preparedRelease
+    : null;
   const text = (input) => String(input || '').trim();
   return {
     ok: validObject,
@@ -127,6 +135,15 @@ export function summarizeRuntimeReleaseStatus(value) {
     release_source: validObject ? text(value.source) : '',
     channel: validObject ? text(value.channel) : '',
     update_phase: validObject ? text(value.updatePhase) : '',
+    prepared_release_present: preparedReleasePresent,
+    prepared_release_valid: preparedReleasePresent
+      && (value.preparedRelease === null || preparedRelease != null),
+    prepared_release: preparedRelease ? {
+      release_id: text(preparedRelease.releaseId),
+      version: text(preparedRelease.version),
+      commit_id: text(preparedRelease.commitId),
+      channel: text(preparedRelease.channel),
+    } : null,
     host_core: hostCore ? {
       version: text(hostCore.version),
       source: text(hostCore.source),
@@ -174,11 +191,19 @@ export function assessRuntimeReleaseStatus(summary, expectedVersion) {
     && compatibility.runtime_version
     && compatibility.host_core_version === compatibility.runtime_version
   );
+  const updateActivationSafe = Boolean(
+    summary?.ok === true
+    && summary.update_phase === 'idle'
+    && summary.prepared_release_present === true
+    && summary.prepared_release_valid === true
+    && summary.prepared_release == null
+  );
   return {
-    ok: releaseIdentityMatches && hostRuntimeCompatible,
+    ok: releaseIdentityMatches && hostRuntimeCompatible && updateActivationSafe,
     expected_version: expected,
     release_identity_matches: releaseIdentityMatches,
     host_runtime_compatible: hostRuntimeCompatible,
+    update_activation_safe: updateActivationSafe,
   };
 }
 

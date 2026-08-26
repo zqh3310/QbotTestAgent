@@ -662,6 +662,8 @@ async function main() {
               : runtimeReleaseStatus?.error || 'window.agent.runtimeReleaseStatus was not probed');
           addCheck('qwork_runtime_release_identity', runtimeReleaseAssessment.release_identity_matches,
             `top_level=${runtimeReleaseStatus?.release_id || '(missing)'}/${runtimeReleaseStatus?.version || '(missing)'}; compatibility=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_release_id || '(missing)'}/${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; expected=${expectedQworkVersion || '(missing --expected-qwork-version)'}`);
+          addCheck('qwork_runtime_update_activation_safe', runtimeReleaseAssessment.update_activation_safe,
+            `update_phase=${runtimeReleaseStatus?.update_phase || '(missing)'}; prepared_release=${runtimeReleaseStatus?.prepared_release_present !== true ? '(missing)' : runtimeReleaseStatus?.prepared_release_valid !== true ? '(invalid)' : runtimeReleaseStatus?.prepared_release?.release_id || runtimeReleaseStatus?.prepared_release?.version || '(none)'}`);
           addCheck('qwork_host_runtime_compatibility', runtimeReleaseAssessment.host_runtime_compatible,
             `host_core=${runtimeReleaseStatus?.host_runtime_compatibility?.host_core_version || '(missing)'}; runtime=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; versions_match=${runtimeReleaseStatus?.host_runtime_compatibility?.versions_match === true}`,
             { warning: true });

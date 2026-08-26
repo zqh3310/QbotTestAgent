@@ -244,6 +244,8 @@ if (!/probePublicCapabilities:\s*true/.test(pretestSource)
 if (!/probeRuntimeReleaseStatus:\s*true/.test(pretestSource)
   || !/qwork_runtime_release_status/.test(pretestSource)
   || !/qwork_runtime_release_identity/.test(pretestSource)
+  || !/qwork_runtime_update_activation_safe/.test(pretestSource)
+  || !/runtimeReleaseAssessment\.update_activation_safe/.test(pretestSource)
   || !/qwork_host_runtime_compatibility/.test(pretestSource)
   || !/qwork_host_runtime_compatibility'[\s\S]{0,500}warning:\s*true/.test(pretestSource)
   || !/assessRuntimeReleaseStatus/.test(pretestSource)) {

@@ -360,6 +360,8 @@ test('runtime release pretest reports mismatched Teams host-core separately from
     releaseId: '0.1.4-sit.33',
     version: '0.1.4-sit.33',
     source: 'remote',
+    updatePhase: 'idle',
+    preparedRelease: null,
     hostCore: { version: '0.1.4-sit.33', source: 'remote', path: '/tmp/embed-host.cjs' },
     hostRuntimeCompatibility: {
       hostSource: 'remote',
@@ -375,11 +377,14 @@ test('runtime release pretest reports mismatched Teams host-core separately from
     expected_version: '0.1.4-sit.33',
     release_identity_matches: true,
     host_runtime_compatible: true,
+    update_activation_safe: true,
   });
 
   const mismatched = summarizeRuntimeReleaseStatus({
     releaseId: '0.1.4-sit.33',
     version: '0.1.4-sit.33',
+    updatePhase: 'idle',
+    preparedRelease: null,
     hostRuntimeCompatibility: {
       hostSource: 'remote',
       hostCoreVersion: '0.1.4-sit.32',
@@ -391,7 +396,77 @@ test('runtime release pretest reports mismatched Teams host-core separately from
   const verdict = assessRuntimeReleaseStatus(mismatched, '0.1.4-sit.33');
   assert.equal(verdict.release_identity_matches, true);
   assert.equal(verdict.host_runtime_compatible, false);
+  assert.equal(verdict.update_activation_safe, true);
   assert.equal(verdict.ok, false);
+
+  const pendingUpdate = summarizeRuntimeReleaseStatus({
+    releaseId: '0.1.6-sit.3',
+    version: '0.1.6-sit.3',
+    updatePhase: 'restart-required',
+    preparedRelease: {
+      releaseId: '0.1.6-sit.4',
+      version: '0.1.6-sit.4',
+      commitId: '1695e76a',
+      channel: 'stable',
+    },
+    hostRuntimeCompatibility: {
+      hostSource: 'remote',
+      hostCoreVersion: '0.1.6-sit.3',
+      runtimeReleaseId: '0.1.6-sit.3',
+      runtimeVersion: '0.1.6-sit.3',
+      versionsMatch: true,
+    },
+  });
+  assert.deepEqual(pendingUpdate.prepared_release, {
+    release_id: '0.1.6-sit.4',
+    version: '0.1.6-sit.4',
+    commit_id: '1695e76a',
+    channel: 'stable',
+  });
+  const pendingVerdict = assessRuntimeReleaseStatus(pendingUpdate, '0.1.6-sit.3');
+  assert.equal(pendingVerdict.release_identity_matches, true);
+  assert.equal(pendingVerdict.host_runtime_compatible, true);
+  assert.equal(pendingVerdict.update_activation_safe, false);
+  assert.equal(pendingVerdict.ok, false);
+
+  const missingPreparedRelease = summarizeRuntimeReleaseStatus({
+    releaseId: '0.1.6-sit.3',
+    version: '0.1.6-sit.3',
+    updatePhase: 'idle',
+    hostRuntimeCompatibility: {
+      hostSource: 'remote',
+      hostCoreVersion: '0.1.6-sit.3',
+      runtimeReleaseId: '0.1.6-sit.3',
+      runtimeVersion: '0.1.6-sit.3',
+      versionsMatch: true,
+    },
+  });
+  assert.equal(missingPreparedRelease.prepared_release_present, false);
+  assert.equal(missingPreparedRelease.prepared_release_valid, false);
+  assert.equal(
+    assessRuntimeReleaseStatus(missingPreparedRelease, '0.1.6-sit.3').update_activation_safe,
+    false,
+  );
+
+  const malformedPreparedRelease = summarizeRuntimeReleaseStatus({
+    releaseId: '0.1.6-sit.3',
+    version: '0.1.6-sit.3',
+    updatePhase: 'idle',
+    preparedRelease: '0.1.6-sit.4',
+    hostRuntimeCompatibility: {
+      hostSource: 'remote',
+      hostCoreVersion: '0.1.6-sit.3',
+      runtimeReleaseId: '0.1.6-sit.3',
+      runtimeVersion: '0.1.6-sit.3',
+      versionsMatch: true,
+    },
+  });
+  assert.equal(malformedPreparedRelease.prepared_release_present, true);
+  assert.equal(malformedPreparedRelease.prepared_release_valid, false);
+  assert.equal(
+    assessRuntimeReleaseStatus(malformedPreparedRelease, '0.1.6-sit.3').update_activation_safe,
+    false,
+  );
   assert.equal(summarizeRuntimeReleaseStatus([]).ok, false);
 });
 

@@ -632,7 +632,13 @@ runner，继续把第 12~52 条写成 `automation_error`，第 53 条仅留下�
 所有 Skill 产品动作前已阻断，因此本轮无需 Skill 清理专跑。修复必须让独立 Case 和
 `compound` 叶子在停止证据落盘后传播同一 `batch_stop_reason`，立即停止后续叶子/
 Case，生成 `framework-stop-diagnostic.json`，并将停止 Case 排除在 `completed` 外；
-完成 invariant、双框架全检、提交推送并精确恢复 `.3` 后，只能新能力审计、新
+修复提交 `7abeca58b02292d6d7cd5cf13feefbe42bcf3b01` 后执行的只读 pretest
+`outputs/20260826164835_qwork-sit3-gray70-pretest_framework-7abeca5_casebook-1621632`
+又暴露同源 pretest 缺口：公开状态已为 `update_phase=restart-required`，但投影遗漏
+`preparedRelease=0.1.6-sit.4`，报告仍错误给出 `READY/0 blockers`；该报告无效，绝不
+授权 runner。pretest 必须新增非 warning 的 `qwork_runtime_update_activation_safe`，
+只接受 `updatePhase=idle` 且 `preparedRelease=null`。完成 invariant、双框架全检、
+再次提交推送并精确恢复 `.3` 后，只能新能力审计、新
 `READY`、新不可变目录从 `1/70` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
 最新冻结的旧 55 条 scoped 批次：

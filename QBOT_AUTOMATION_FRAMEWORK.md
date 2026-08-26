@@ -242,7 +242,11 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    host-core 兼容性例外只把 `hostRuntimeCompatibility.versionsMatch`、
    `hostCoreVersion` 与 `runtimeVersion` 的不一致保留为结构化 `warning`，不再单独阻止
    `READY`；实际 host-core/runtime 版本、来源和路径必须完整写入报告，不能静默丢弃或
-   把 warning 解释为兼容通过。
+   把 warning 解释为兼容通过。`runtimeReleaseStatus.updatePhase` 还必须精确为 `idle`，
+   且 `preparedRelease` 必须为空；`ready-to-activate`、`restart-required`、`activating`、
+   其它非 idle 阶段、字段缺失或任一待激活候选均表示冻结身份可能在宿主生命周期内
+   漂移，必须由独立 `qwork_runtime_update_activation_safe` 检查阻断 `READY`，不得被
+   host-core warning 例外吞掉。
 
 6. 冻结并记录发布身份：
 
