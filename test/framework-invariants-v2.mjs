@@ -5986,6 +5986,39 @@ assert.equal(
   '',
   '普通 Case automation_error 也必须记录失败结果并继续后续 Case',
 );
+const runtimeUpdateBatchStop = coreBetaBatchStopReason(
+  { id: 'BETA-SKILL-002', case_type: 'skill_lifecycle', contract_version: 'qbot-core-beta/v2' },
+  {
+    status: 'failed',
+    result_category: 'automation_error',
+    artifacts: {
+      runtime_update_activation_risks: [{
+        clicked: false,
+        dismissed: false,
+        reason: '冻结版本=0.1.6-sit.3；候选版本=0.1.6-sit.4。',
+        activation_risk: {
+          risk: true,
+          frozen_version: '0.1.6-sit.3',
+          candidate_version: '0.1.6-sit.4',
+          version_drift: true,
+        },
+      }],
+    },
+  },
+);
+assert.match(
+  runtimeUpdateBatchStop,
+  /批次冻结身份存在待激活更新风险.*0\.1\.6-sit\.3.*0\.1\.6-sit\.4/,
+  '待激活版本可能延迟重启并破坏冻结身份时，必须在首个诊断 Case 后硬停止批次',
+);
+assert.equal(
+  coreBetaBatchStopReason(
+    { id: 'QW-SKILL-001', case_type: 'compound', contract_version: 'qbot-core-beta/v2' },
+    { batch_stop_reason: runtimeUpdateBatchStop },
+  ),
+  runtimeUpdateBatchStop,
+  'compound 父 Case 必须传播叶子的批次级更新风险，禁止继续执行后续叶子或父 Case',
+);
 const maskedAutomationError = {
   status: 'blocked',
   result_category: 'blocked',
@@ -6678,6 +6711,11 @@ assert.match(
   /annotateCoreBetaExecutionResult\([\s\S]*results\.push\(result\)[\s\S]*persistCasebookProgress\([\s\S]*persistCaseResult\(result\)[\s\S]*coreBetaBatchStopReason/,
   '串行路径必须先落盘当前 Case 的明确结果，再检查仅限批次级的停止条件',
 );
+assert.match(
+  serialResultSource,
+  /if \(hardStopReason\) \{[\s\S]*results\.at\(-1\) === result[\s\S]*results\.pop\(\)[\s\S]*stopRemainderWithoutSynthetic/,
+  '批次级硬停止 Case 必须保留独立诊断文件，但不能继续计入 completed 结果',
+);
 assert.doesNotMatch(
   serialResultSource,
   /if \(completionBlock\) \{[\s\S]*stopRemainderWithoutSynthetic/,
@@ -6687,6 +6725,11 @@ assert.match(
   runner,
   /function stopRemainderWithoutSynthetic(?=[\s\S]*framework-stop-diagnostic\.json)(?=[\s\S]*synthetic: false)/,
   'Core Beta 硬停止必须保留诊断且不得批量生成 synthetic completed',
+);
+assert.match(
+  runner,
+  /async function executeCompoundCasebookCase[\s\S]*if \(hardStop\) \{[\s\S]*compoundBatchStopReason = hardStop[\s\S]*break;[\s\S]*state\.batch_stop_reason = compoundBatchStopReason/,
+  'compound 叶子检测到批次级更新风险后必须立即停止后续叶子并传播到根 runner',
 );
 assert.doesNotMatch(
   runner,

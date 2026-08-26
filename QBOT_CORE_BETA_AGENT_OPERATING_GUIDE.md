@@ -618,6 +618,23 @@ invariant、双框架全检、提交推送、新能力审计和精确 `.11 READY
 全检、提交推送、精确恢复 `.11`、新能力审计和新 `READY` 后，只能在新不可变目录
 从 `1/83` 全量串行重跑，`inherited=0`、`synthetic=0`。
 
+QWork `0.1.6-sit.3` 生产灰度 70 条批次
+`teams360-automation/output/20260826160839_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-47f0294_casebook-1621632`
+永久冻结。第 1~11 条真实落盘，raw 为 `passed=9/failed=2`；其中
+`BETA-CHAT-006` 停止后正文从 8 字变为 0 字、`BETA-CHAT-007` 刷新重开后侧栏
+`selected_count=0`，两者 manifest 完整，作为历史产品 Bug 候选保留。第 12 条
+`BETA-CHAT-008` 首次读到待激活更新 `0.1.6-sit.4`，冻结版本仍为
+`0.1.6-sit.3`；框架虽保持提示原样并保存截图与三类停止证据，却因
+`coreBetaBatchStopReason()` 退化为空返回，没有将该批次级发布身份风险传播到根
+runner，继续把第 12~52 条写成 `automation_error`，第 53 条仅留下未完成停止材料。
+这些后续记录均不得视为独立 Case 结论，也不得续写、继承或用于放行。该批次没有
+`core-beta-suite-ledger`、Skill 安装尝试账本或 run-owned Skill identity，更新提示在
+所有 Skill 产品动作前已阻断，因此本轮无需 Skill 清理专跑。修复必须让独立 Case 和
+`compound` 叶子在停止证据落盘后传播同一 `batch_stop_reason`，立即停止后续叶子/
+Case，生成 `framework-stop-diagnostic.json`，并将停止 Case 排除在 `completed` 外；
+完成 invariant、双框架全检、提交推送并精确恢复 `.3` 后，只能新能力审计、新
+`READY`、新不可变目录从 `1/70` 全量串行重跑，`inherited=0`、`synthetic=0`。
+
 最新冻结的旧 55 条 scoped 批次：
 
 ```text

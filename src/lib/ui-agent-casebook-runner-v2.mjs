@@ -1217,6 +1217,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           persistCaseResult(result);
           const hardStopReason = coreBetaBatchStopReason(batchCase, result);
           if (hardStopReason) {
+            if (results.at(-1) === result) results.pop();
             frameworkStop = stopRemainderWithoutSynthetic({
               outDir,
               selectedCases,
@@ -1282,6 +1283,7 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       persistCaseResult(result);
       const hardStopReason = coreBetaBatchStopReason(testCase, result);
       if (hardStopReason) {
+        if (results.at(-1) === result) results.pop();
         frameworkStop = stopRemainderWithoutSynthetic({
           outDir,
           selectedCases,
@@ -1445,9 +1447,28 @@ export function coreBetaBatchStopReason(testCase, result) {
   // Case-level failures are recorded and the next independent Case is always
   // attempted.  Release eligibility is evaluated later from the complete
   // evidence/credibility review; it must not be confused with execution
-  // continuity.  Only renderer/host loss is allowed to stop the batch, and
-  // that is handled by the caller after the result has been persisted.
+  // continuity. Batch-level release identity risks are the exception: once a
+  // pending update can relaunch away from the frozen runtime, later Cases no
+  // longer have a stable execution identity and must not be attempted.
   if (!isCoreBetaCase(testCase) || !result) return '';
+  const inheritedStopReason = String(result?.batch_stop_reason || '').trim();
+  if (inheritedStopReason) return inheritedStopReason;
+  const activationRisks = Array.isArray(result?.artifacts?.runtime_update_activation_risks)
+    ? result.artifacts.runtime_update_activation_risks
+    : [];
+  const activationRisk = activationRisks.find((item) => (
+    item?.activation_risk?.risk === true
+    && item?.clicked !== true
+    && item?.dismissed !== true
+  ));
+  if (activationRisk) {
+    const reason = String(
+      activationRisk.reason
+      || activationRisk.activation_risk?.reason
+      || '',
+    ).trim();
+    return `批次冻结身份存在待激活更新风险，停止后续 Case。${reason}`;
+  }
   return '';
 }
 
@@ -3682,6 +3703,8 @@ async function executeCompoundCasebookCase(context) {
   const state = createCaseState({ testCase, caseDir, order, modelTier, options });
   const subcases = Array.isArray(testCase?.compound_subcases) ? testCase.compound_subcases : [];
   const subcaseResults = [];
+  let compoundBatchStopReason = '';
+  let compoundBatchStopSubcaseId = '';
   ensureDir(path.join(caseDir, 'subcases'));
   for (const [index, subcase] of subcases.entries()) {
     const subcaseDir = path.join(
@@ -3721,7 +3744,14 @@ async function executeCompoundCasebookCase(context) {
       result.screenshots_flat?.at?.(-1) || '',
       completionBlock || hardStop ? 'automation_error' : result.result_category || '',
     );
+    if (hardStop) {
+      compoundBatchStopReason = hardStop;
+      compoundBatchStopSubcaseId = String(subcase?.id || '');
+      break;
+    }
   }
+  state.batch_stop_reason = compoundBatchStopReason;
+  state.batch_stop_subcase_id = compoundBatchStopSubcaseId;
   state.subcase_results = subcaseResults;
   state.screenshots = Object.fromEntries(subcaseResults.flatMap((result, index) => (
     (result.screenshots_flat || []).map((file, shotIndex) => [
