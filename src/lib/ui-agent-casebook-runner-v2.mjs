@@ -9,7 +9,16 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { ensureDir, slugify, writeJsonFile, writeTextFile } from './fs.mjs';
 import { expertGeneralAssistantExecutionVerdict } from './expert-general-assistant-evidence.mjs';
-import { uploadAttachmentsInComposer } from './qbot-ui-attachments.mjs';
+import { workspaceMissingErrorVerdict } from './qbot-workspace-error-evidence.mjs';
+import {
+  captureExternalWebLinkOutcome,
+  webRuntimeAuthorityVerdict,
+  webSearchBusinessVerdict,
+} from './qbot-web-runtime-evidence.mjs';
+import {
+  uploadAttachmentsInComposer,
+  uploadAttachmentsViaVisiblePicker,
+} from './qbot-ui-attachments.mjs';
 import {
   DEFAULT_CASE_PARALLELISM,
   buildCaseExecutionPlan,
@@ -340,12 +349,20 @@ export function coreBetaAttachmentRejectionProbeVerdict(probe = {}) {
   const composer = probe.composer_state || {};
   const noTaskNoSend = probe.no_task_no_send_state || {};
   const dialogObserved = Boolean(String(probe.dialog_message || '').trim());
+  const expectedRetainedNames = Array.isArray(probe.expected_retained_names)
+    ? probe.expected_retained_names.map(String)
+    : [];
+  const composerMatchesExpected = expectedRetainedNames.length > 0
+    ? Number(composer.count) === expectedRetainedNames.length
+      && Array.isArray(composer.names)
+      && JSON.stringify(composer.names) === JSON.stringify(expectedRetainedNames)
+    : Number(composer.count) === 0
+      && Array.isArray(composer.names)
+      && composer.names.length === 0;
   return Boolean(
     probe.expected_pattern_matched === true
     && probe.visible_rejection_evidence === true
-    && Number(composer.count) === 0
-    && Array.isArray(composer.names)
-    && composer.names.length === 0
+    && composerMatchesExpected
     && noTaskNoSend.valid === true
     && (!dialogObserved || (
       probe.dialog_settled === true
@@ -4954,6 +4971,7 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
         runtimeReadiness: item.runtimeReadiness || null,
       }))
       : null,
+    skill_install_attempt_ledger: artifacts.skill_install_attempt_ledger || null,
     expert_identity_snapshot: snapshot.expert || artifacts.core_beta_expert_identity || null,
     expert_draft_lifecycle: artifacts.core_beta_expert_draft_lifecycle || snapshot.expert_drafts || null,
     expert_dependency_graph: artifacts.core_beta_expert_dependency_graph || null,
@@ -4996,6 +5014,7 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
     settings_readback: artifacts.core_beta_settings_readback || null,
     host_lifecycle_trace: artifacts.core_beta_host_lifecycle_trace || null,
     security_boundary_trace: artifacts.core_beta_security_boundary_trace || null,
+    workspace_missing_error_readback: artifacts.workspace_missing_error_readback || null,
     performance_metrics: artifacts.core_beta_performance_metrics || null,
     accessibility_scan: artifacts.core_beta_accessibility_scan || null,
     external_navigation_trace: artifacts.core_beta_external_navigation_trace || null,
@@ -16101,6 +16120,24 @@ async function executeCoreBetaAttachmentCase(context, scenario) {
     results.push({ label: probe.label, ...result });
   }
   const currentComposer = await composerAttachmentSnapshot(page);
+  const aggregateProbe = results.find((item) => item.label === 'aggregate_oversize') || null;
+  const ordinaryProbesEmpty = results
+    .filter((item) => item.label !== 'aggregate_oversize')
+    .every((item) => Number(item.composer_state?.count) === 0 && item.composer_state?.names?.length === 0);
+  const aggregateRetainedNames = Array.isArray(aggregateProbe?.expected_retained_names)
+    ? aggregateProbe.expected_retained_names.map(String)
+    : [];
+  const aggregateRetained = aggregateRetainedNames.length === 2
+    && Number(aggregateProbe?.composer_state?.count) === 2
+    && JSON.stringify(aggregateProbe?.composer_state?.names) === JSON.stringify(aggregateRetainedNames);
+  const aggregateRecoveredNames = Array.isArray(aggregateProbe?.aggregate_recovery?.expected_after_restage)
+    ? aggregateProbe.aggregate_recovery.expected_after_restage.map(String)
+    : [];
+  const aggregateRecovered = aggregateProbe?.aggregate_recovery?.evidence_valid === true
+    && aggregateProbe?.aggregate_recovery?.oracle_valid === true
+    && aggregateRecoveredNames.length === 2
+    && Number(currentComposer.count) === 2
+    && JSON.stringify(currentComposer.names) === JSON.stringify(aggregateRecoveredNames);
   const rejection = {
     schema_version: 2,
     case_id: testCase.id,
@@ -16112,17 +16149,26 @@ async function executeCoreBetaAttachmentCase(context, scenario) {
   writeJsonFile(file, rejection);
   state.artifacts.attachment_readback = file;
   const composerEvidence = {
-    schema_version: 1,
+    schema_version: 2,
     case_id: testCase.id,
     valid: rejection.valid
-      && results.every((item) => Number(item.composer_state?.count) === 0)
-      && Number(currentComposer.count) === 0,
-    composer_empty: Number(currentComposer.count) === 0,
+      && ordinaryProbesEmpty
+      && aggregateRetained
+      && aggregateRecovered,
+    evidence_valid: true,
+    oracle_valid: rejection.valid
+      && ordinaryProbesEmpty
+      && aggregateRetained
+      && aggregateRecovered,
+    composer_empty: false,
     current: currentComposer,
+    expected_current_names: aggregateRecoveredNames,
+    aggregate_recovery_evidence: aggregateProbe?.aggregate_recovery?.evidence_file || '',
     probe_states: results.map((item) => ({
       label: item.label,
       valid: item.valid,
       composer_state: item.composer_state,
+      expected_retained_names: item.expected_retained_names || [],
     })),
   };
   const composerFile = path.join(caseDir, 'composer-attachment-state.json');
@@ -16130,8 +16176,8 @@ async function executeCoreBetaAttachmentCase(context, scenario) {
   state.artifacts.composer_attachment_state = composerFile;
   recordAssertion(
     state,
-    '三类附件发送前拒绝且无任务消息',
-    '不支持类型、单文件超限、总大小超限必须各自显示准确拒绝；每个独立干净草稿内均不得创建任务、发送消息或残留附件。',
+    '三类附件发送前拒绝、累计保留与额度恢复',
+    '不支持类型和单文件超限必须空 Composer；累计超限必须拒绝第三份并同序保留前两份，删除第一份后通过公开 stageFiles 成功重加第三份；全程不得创建任务或发送消息。',
     rejection.valid && composerEvidence.valid,
     JSON.stringify(rejection),
     rejection.valid && composerEvidence.valid ? '' : 'automation_error',
@@ -16290,7 +16336,7 @@ async function executeCoreBetaAttachmentIngressEquivalence({
   ));
 
   const ingress = [];
-  const picker = await uploadAttachmentsInComposer(page, [pickerFile]);
+  const picker = await uploadAttachmentsViaVisiblePicker(page, [pickerFile]);
   ingress.push({ method: 'picker', file: pickerFile, result: picker, snapshot: await composerAttachmentSnapshot(page) });
   state.screenshots.attachment_ingress_picker = await shot(page, caseDir, 'attachment-ingress-picker');
   const drag = await dropAttachmentThroughComposer(page, dragFile);
@@ -18388,7 +18434,7 @@ async function executeSitCase({ page, state, testCase, caseDir, timeoutMs, fixtu
   if (id === 'SIT-SKILL-001') return executeSkillSmoke001({ page, state, caseDir });
   if (id === 'SIT-SKILL-002') return executeSitSkillInstall({ page, state, caseDir });
   if (id === 'SIT-SKILL-003') return executeSkillSmoke005({ page, state, caseDir });
-  if (['SIT-SKILL-004', 'SIT-SKILL-005', 'SIT-SKILL-011', 'SIT-SKILL-012', 'SIT-SKILL-013', 'SIT-SKILL-015', 'SIT-SKILL-020', 'SIT-SKILL-022', 'SIT-SKILL-026', 'SIT-SKILL-SCOPE-001'].includes(id)) {
+  if (['SIT-SKILL-004', 'SIT-SKILL-005', 'SIT-SKILL-011', 'SIT-SKILL-012', 'SIT-SKILL-013', 'SIT-SKILL-015', 'SIT-SKILL-020', 'SIT-SKILL-022', 'SIT-SKILL-026', 'SIT-SKILL-SCOPE-001', 'SIT-SKILL-MR-001'].includes(id)) {
     return executeSkillRegressionFixtureCase({ page, state, testCase, caseDir, timeoutMs, options, runtime });
   }
   if (id === 'SIT-SKILL-006') return executeSkillSmoke009({ page, state, caseDir, timeoutMs });
@@ -20548,6 +20594,14 @@ async function executeSitWorkspaceBoundary({ page, state, testCase, caseDir, tim
     JSON.stringify({ before: integrityBefore, after: integrityAfter }),
   );
   recordAssertion(state, '结果只写入目录 A', 'result.txt 必须实际位于 A 且包含唯一标识，B 中不得出现同名文件。', fs.existsSync(resultFile) && /WORKSPACE_A_WRITE_OK/.test(resultContent) && !fs.existsSync(path.join(workspaceB, 'result.txt')), `A=${resultFile}:${clip(resultContent, 120)}；B_exists=${fs.existsSync(path.join(workspaceB, 'result.txt'))}`);
+  await executeWorkspaceMissingCwdReadback({
+    page,
+    state,
+    caseDir,
+    workspaceA,
+    securityTraceFile,
+    integrityReadbackFile,
+  });
   writeReplyArtifacts(state, caseDir, replies.map((item, index) => ({
     label: ['读取A', '写入A', ...boundaryProbes.map((probe) => probe.label)][index],
     ...item,
@@ -20572,6 +20626,101 @@ async function prepareTaskContextAndConfirm(page, cwd) {
     await page.waitForTimeout(250);
   }
   return { ok: false, reason: `bridge cwd 未收敛到 ${cwd}`, observed: state };
+}
+
+async function executeWorkspaceMissingCwdReadback({
+  page,
+  state,
+  caseDir,
+  workspaceA,
+  securityTraceFile,
+  integrityReadbackFile,
+}) {
+  const taskBefore = await qbotE2EState(page);
+  const taskId = String(taskBefore?.activeId || '');
+  const prompt = `当前任务的工作目录仍应是 ${workspaceA}。请再次读取 a-marker.txt；如果目录不存在，请直接告诉我。`;
+  fs.rmSync(workspaceA, { recursive: true, force: true });
+  const workspaceDeleted = !fs.existsSync(workspaceA);
+  if (!Array.isArray(state.artifacts.sent_prompts)) state.artifacts.sent_prompts = [];
+  state.artifacts.sent_prompts.push({
+    label: '工作空间目录删除后再次发送',
+    prompt,
+    recorded_at: new Date().toISOString(),
+  });
+  await fillComposer(page, prompt, state, '输入工作空间目录删除后的真实请求');
+  let sendError = '';
+  try {
+    await send(page, state, '发送工作空间目录删除后的真实请求');
+  } catch (error) {
+    sendError = String(error?.message || error);
+  }
+  const deadline = Date.now() + 30_000;
+  let session = null;
+  let visibleText = '';
+  let bridge = await qbotE2EState(page);
+  while (Date.now() < deadline) {
+    session = taskId
+      ? await page.evaluate(async (id) => window.agent.readSession(id, 'desktop-local'), taskId).catch(() => null)
+      : null;
+    visibleText = await page.locator('[data-testid="message-list"] [data-role="assistant"], [data-testid="assistant-thread"] [data-role="assistant"]')
+      .last()
+      .innerText({ timeout: 800 })
+      .catch(() => '');
+    bridge = await qbotE2EState(page);
+    const lastAssistant = [...(session?.messages || [])].reverse().find((message) => message?.role === 'assistant');
+    if (!bridge?.running && (lastAssistant?.errorCode || lastAssistant?.userErrorNotice)) break;
+    await page.waitForTimeout(300);
+  }
+  const verdict = workspaceMissingErrorVerdict({ cwd: workspaceA, session, visibleText });
+  const taskIdStable = Boolean(taskId) && String(session?.id || '') === taskId;
+  const oracleValid = verdict.oracle_valid
+    && workspaceDeleted
+    && taskIdStable
+    && !sendError
+    && bridge?.running === false;
+  const readbackFile = path.join(caseDir, 'workspace-missing-error-readback.json');
+  writeJsonFile(readbackFile, {
+    ...verdict,
+    oracle_valid: oracleValid,
+    case_id: state.id,
+    prompt,
+    workspace_deleted_before_send: workspaceDeleted,
+    task_id_before_send: taskId,
+    task_id_stable: taskIdStable,
+    send_error: sendError,
+    running_after: Boolean(bridge?.running),
+    captured_at: new Date().toISOString(),
+  });
+  state.artifacts.workspace_missing_error_readback = readbackFile;
+  const reference = {
+    path: readbackFile,
+    bytes: fs.statSync(readbackFile).size,
+    sha256: createHash('sha256').update(fs.readFileSync(readbackFile)).digest('hex'),
+    oracle_valid: oracleValid,
+  };
+  for (const evidenceFile of [securityTraceFile, integrityReadbackFile]) {
+    const existing = JSON.parse(fs.readFileSync(evidenceFile, 'utf8'));
+    writeJsonFile(evidenceFile, { ...existing, workspace_missing_error: reference });
+  }
+  state.screenshots.workspace_missing_error = await shot(page, caseDir, 'workspace-missing-structured-user-error');
+  recordStep(
+    state,
+    '删除 Case 自有工作空间后在同一任务再次发送',
+    '必须保留原 taskId，由真实发送链路形成结构化 cwd_missing 助手错误并从公开 readSession 读回。',
+    JSON.stringify({ taskId, workspaceDeleted, sendError, checks: verdict.checks }),
+    oracleValid ? 'passed' : 'failed',
+    state.screenshots.workspace_missing_error,
+    oracleValid ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    '工作空间不存在错误结构化且不泄露内部字段',
+    '末条助手错误必须是 desktop_local_workspace_unavailable/chat.workspace.cwd_missing，cwd 精确匹配且 retryable=false；可见中文包含路径和“不存在”，但不显示 causeCode、内部错误码或 stack。',
+    oracleValid,
+    JSON.stringify({ checks: verdict.checks, visible_text: visibleText, task_id_stable: taskIdStable }),
+    oracleValid ? '' : 'automation_error',
+  );
+  return oracleValid;
 }
 
 export function qworkPartialAttachmentLogExcerpt({ logFile = '', startOffset = 0, endOffset = null } = {}) {
@@ -21346,9 +21495,13 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     expectedPattern = /单个文档不能超过\s*30\s*MiB|单个.*30\s*(?:MiB|MB)|文件过大/;
     expectedDescription = '单个文档超过 30 MiB 时应明确拒绝。';
   } else if (id === 'SIT-HOME-044') {
-    files = [1, 2, 3].map((index) => ensureSizedFixture(runtimeDir, `qbot-total-27mb-${index}.pdf`, 27 * 1024 * 1024));
+    files = [
+      ensureSizedFixture(runtimeDir, 'qbot-total-picker-27mb.pdf', 27 * 1024 * 1024),
+      ensureSizedFixture(runtimeDir, 'qbot-total-paste-27mb.png', 27 * 1024 * 1024),
+      ensureSizedFixture(runtimeDir, 'qbot-total-drag-27mb.pdf', 27 * 1024 * 1024),
+    ];
     expectedPattern = /文档附件总大小不能超过\s*80\s*MiB|总大小.*80\s*(?:MiB|MB)|总量过大/;
-    expectedDescription = '3 个各 27 MiB 的文档总量为 81 MiB，应触发 80 MiB 总量限制而非单文件限制。';
+    expectedDescription = 'picker PDF 与 paste PNG 各 27 MiB 成功后，drag 第三个 27 MiB PDF 使累计达到 81 MiB，应在发送前拒绝第三份并保留前两份。';
   } else {
     const file = path.join(runtimeDir, 'qbot-unsupported.bin');
     if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from([0, 1, 2, 3, 4, 5]));
@@ -21357,16 +21510,37 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     expectedDescription = '选择不支持的 .bin 文件时应给出可理解的格式提示。';
   }
   const managedTeamsAxRequired = options['renderer-control-adapter'] === 'teams360';
-  const result = await stageAttachmentPathsThroughComposer(
-    page,
-    files,
-    caseDir,
-    id.toLowerCase(),
-    {
-      upstreamCdpUrl: options['teams-upstream-cdp-url'] || '',
-      managedTeamsAxRequired,
-    },
-  );
+  let aggregateSequence = null;
+  let result;
+  if (id === 'SIT-HOME-044') {
+    const picker = await uploadAttachmentsViaVisiblePicker(page, [files[0]]);
+    const afterPicker = await composerAttachmentSnapshot(page);
+    const paste = await pasteImageAttachmentThroughComposer(page, files[1]);
+    await page.waitForTimeout(800);
+    const afterPaste = await composerAttachmentSnapshot(page);
+    result = await stageAttachmentPathsThroughComposer(
+      page,
+      [files[2]],
+      caseDir,
+      `${id.toLowerCase()}-third-drag`,
+      {
+        upstreamCdpUrl: options['teams-upstream-cdp-url'] || '',
+        managedTeamsAxRequired,
+      },
+    );
+    aggregateSequence = { picker, after_picker: afterPicker, paste, after_paste: afterPaste };
+  } else {
+    result = await stageAttachmentPathsThroughComposer(
+      page,
+      files,
+      caseDir,
+      id.toLowerCase(),
+      {
+        upstreamCdpUrl: options['teams-upstream-cdp-url'] || '',
+        managedTeamsAxRequired,
+      },
+    );
+  }
   const after = await qbotE2EState(page);
   const observedText = result.dialogMessage || result.feedbackText || result.pageText || '';
   const composerState = await composerAttachmentSnapshot(page);
@@ -21424,6 +21598,10 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
     no_task_no_send_state: noTaskNoSendState,
     product_result: result,
     sources: evidenceFiles,
+    expected_retained_names: id === 'SIT-HOME-044'
+      ? files.slice(0, 2).map((file) => path.basename(file))
+      : [],
+    aggregate_sequence: aggregateSequence,
   };
   probe.valid = coreBetaAttachmentRejectionProbeVerdict(probe);
   probe.rejected_before_send = probe.valid;
@@ -21512,11 +21690,70 @@ async function executeSitHomeAttachmentLimit({ page, state, testCase, caseDir, f
   recordAssertion(
     state,
     '附件拒绝未创建任务或发送',
-    '每个独立干净草稿内，拒绝动作前后 activeId 必须为空、sendCount/messageCount 不变、running=false，Composer 附件数必须为 0。',
-    noTaskNoSendState.valid && Number(composerState.count) === 0,
+    id === 'SIT-HOME-044'
+      ? '累计超限拒绝前后 activeId 必须为空、sendCount/messageCount 不变、running=false；Composer 必须按顺序精确保留前两份附件。'
+      : '每个独立干净草稿内，拒绝动作前后 activeId 必须为空、sendCount/messageCount 不变、running=false，Composer 附件数必须为 0。',
+    noTaskNoSendState.valid && (id === 'SIT-HOME-044'
+      ? JSON.stringify(composerState.names) === JSON.stringify(files.slice(0, 2).map((file) => path.basename(file)))
+      : Number(composerState.count) === 0),
     JSON.stringify({ no_task_no_send_state: noTaskNoSendState, composer_state: composerState }),
     'automation_error',
   );
+  if (id === 'SIT-HOME-044') {
+    const removed = await removeComposerAttachmentByPosition(page, 0);
+    await page.waitForTimeout(500);
+    const afterDelete = await composerAttachmentSnapshot(page);
+    const restaged = await uploadAttachmentsInComposer(page, [files[2]]);
+    const afterRestage = await composerAttachmentSnapshot(page);
+    const expectedAfterDelete = [path.basename(files[1])];
+    const expectedAfterRestage = [path.basename(files[1]), path.basename(files[2])];
+    const recoveryValid = Boolean(
+      aggregateSequence?.picker?.status === 'passed'
+      && JSON.stringify(aggregateSequence?.after_picker?.names) === JSON.stringify([path.basename(files[0])])
+      && coreBetaClipboardPasteObserved(aggregateSequence?.paste)
+      && JSON.stringify(aggregateSequence?.after_paste?.names) === JSON.stringify(files.slice(0, 2).map((file) => path.basename(file)))
+      && removed
+      && JSON.stringify(afterDelete.names) === JSON.stringify(expectedAfterDelete)
+      && restaged.status === 'passed'
+      && /electron-attachment-bridge:stageFiles\(filePaths\)\+composer\.addAttachment/.test(String(restaged.method || ''))
+      && JSON.stringify(afterRestage.names) === JSON.stringify(expectedAfterRestage)
+    );
+    const recoveryFile = path.join(caseDir, 'attachment-aggregate-limit-recovery.json');
+    writeJsonFile(recoveryFile, {
+      schema_version: 'qbot-attachment-aggregate-limit-recovery/v1',
+      case_id: id,
+      valid: true,
+      evidence_valid: true,
+      oracle_valid: recoveryValid,
+      sequence: aggregateSequence,
+      rejected_third: result,
+      retained_after_rejection: composerState,
+      removed_first: removed,
+      after_delete: afterDelete,
+      restaged_third: restaged,
+      after_restage: afterRestage,
+    });
+    state.artifacts.attachment_aggregate_limit_recovery = recoveryFile;
+    probe.aggregate_recovery = {
+      evidence_file: recoveryFile,
+      valid: true,
+      evidence_valid: true,
+      oracle_valid: recoveryValid,
+      expected_after_delete: expectedAfterDelete,
+      expected_after_restage: expectedAfterRestage,
+      after_delete: afterDelete,
+      after_restage: afterRestage,
+      restage_method: String(restaged.method || ''),
+    };
+    state.screenshots.attachment_aggregate_recovery = await shot(page, caseDir, 'sit-home-044-after-delete-and-stagefiles-readd');
+    recordAssertion(
+      state,
+      '删除附件后累计额度立即释放',
+      '删除第一份 27 MiB 后必须只剩 paste PNG；随后公开 stageFiles 重加第三份 PDF 成功，Composer 顺序为 PNG、PDF。',
+      recoveryValid,
+      JSON.stringify({ removed, afterDelete, restaged, afterRestage }),
+    );
+  }
   return probe;
 }
 
@@ -25389,10 +25626,20 @@ async function executeSkillRegressionFixtureCase({ page, state, testCase, caseDi
     if (id === 'SIT-SKILL-027') return await executeSitSkillRejectedExplicitRetry({ page, state, testCase, caseDir, options, runtime });
     if (id === 'SIT-SKILL-028') return await executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, caseDir, options, runtime });
     if (id === 'SIT-SKILL-029') return await executeSitSkillRejectedUninstallCleanup({ page, state, testCase, caseDir });
-    if (id === 'SIT-SKILL-030') return await executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-030') return await executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir, fixtureController: injected.fixtureController });
     if (id === 'SIT-SKILL-031') return await executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir });
-    if (id === 'SIT-SKILL-032') return await executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-032') return await executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir, fixtureController: injected.fixtureController });
     if (id === 'SIT-SKILL-033') return await executeSitSkillDependencyCycle({ page, state, testCase, caseDir });
+    if (id === 'SIT-SKILL-MR-001') {
+      return await executeSitSkillMrTransactionalIsolation({
+        page,
+        state,
+        testCase,
+        caseDir,
+        timeoutMs,
+        fixtureController: injected.fixtureController,
+      });
+    }
     if (id === 'SIT-SKILL-SCOPE-001') {
       return await executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs });
     }
@@ -25451,6 +25698,14 @@ function skillRegressionFixtureSlugsByCase() {
     'SIT-SKILL-032': ['qa-dep-root-failure', 'qa-dep-leaf-failure'],
     'SIT-SKILL-033': ['qa-dep-root-cycle', 'qa-dep-cycle-b'],
     'SIT-SKILL-SCOPE-001': ['qa-scope-isolation'],
+    'SIT-SKILL-MR-001': [
+      'qa-dep-root-success',
+      'qa-dep-leaf-a',
+      'qa-dep-leaf-b',
+      'qa-dep-root-failure',
+      'qa-dep-leaf-failure',
+      'qa-scope-isolation',
+    ],
   };
 }
 
@@ -25545,7 +25800,7 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
     }
   }
 
-  if (testCase.id === 'SIT-SKILL-SCOPE-001') {
+  if (['SIT-SKILL-SCOPE-001', 'SIT-SKILL-MR-001'].includes(testCase.id)) {
     const slug = 'qa-scope-isolation';
     const installed = await installSkillFixtureForSetup(page, state, caseDir, slug);
     state.artifacts.skill_scope_fixture_setup = installed;
@@ -26001,7 +26256,124 @@ async function installedSkillMarkersVisible(page, state, caseDir, markers) {
   return visibility;
 }
 
-async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir }) {
+function skillInstallAttemptLedgerEvidence({ state, testCase, caseDir, fixtureController, marker, dependencies, expectedStatus }) {
+  if (!fixtureController) return null;
+  const snapshot = fixtureController.snapshot();
+  const attempt = [...(snapshot.attempts || [])].reverse().find((item) => item.root?.slug === marker) || null;
+  const expectedSkills = [marker, ...dependencies];
+  const entrySkills = attempt?.entries?.map((item) => item.skill) || [];
+  const installedSkills = snapshot.installed.map((item) => item.slug || item.name).filter(Boolean);
+  const attemptHistory = snapshot.history.filter((item) => item.attemptId === attempt?.attemptId);
+  const operationIdsValid = Boolean(attempt?.attemptId) && (attempt?.entries || []).every((entry) => (
+    entry.operationId === `${attempt.attemptId}:${entry.namespace || 'global'}/${entry.skill}`
+  ));
+  const callComplete = Boolean(
+    attempt?.installCall?.startedAt
+    && attempt?.installCall?.finishedAt
+    && Number(attempt?.installCall?.durationMs) >= 0
+    && Array.isArray(attempt?.installCall?.args)
+    && attempt?.installCall?.result
+  );
+  const success = expectedStatus === 'succeeded';
+  const stateValid = success
+    ? expectedSkills.every((slug) => installedSkills.includes(slug))
+      && expectedSkills.every((slug) => attemptHistory.some((item) => item.skill === slug && item.scope === 'personal'))
+    : expectedSkills.every((slug) => !installedSkills.includes(slug))
+      && attemptHistory.length === 0;
+  const checks = {
+    attempt_present: Boolean(attempt),
+    schema_version_1: attempt?.schemaVersion === 1,
+    scope_personal: attempt?.scope === 'personal',
+    status_matches: attempt?.status === expectedStatus,
+    expected_entries_present: expectedSkills.every((slug) => entrySkills.includes(slug)),
+    operation_ids_valid: operationIdsValid,
+    install_call_complete: callComplete,
+    terminal_state_valid: stateValid,
+  };
+  const evidence = {
+    schema_version: 'qbot-skill-install-attempt-ledger/v1',
+    case_id: String(testCase.core_beta_case_id || testCase.id || ''),
+    legacy_case_id: testCase.id,
+    root_skill: marker,
+    dependency_skills: dependencies,
+    expected_status: expectedStatus,
+    evidence_valid: Object.values(checks).every(Boolean),
+    oracle_valid: stateValid && attempt?.status === expectedStatus,
+    checks,
+    attempt,
+    installed: snapshot.installed,
+    history: snapshot.history,
+  };
+  const evidencePath = path.join(caseDir, 'skill-install-attempt-ledger.json');
+  let persistedEvidence = evidence;
+  if (testCase.id === 'SIT-SKILL-MR-001') {
+    let priorAttempts = [];
+    try {
+      const prior = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+      if (prior?.schema_version === 'qbot-skill-install-attempt-ledger/v2' && Array.isArray(prior.attempts)) {
+        priorAttempts = prior.attempts;
+      }
+    } catch {}
+    const attempts = [
+      ...priorAttempts.filter((item) => item?.root_skill !== marker),
+      evidence,
+    ].sort((left, right) => (
+      ['qa-dep-root-success', 'qa-dep-root-failure'].indexOf(left.root_skill)
+      - ['qa-dep-root-success', 'qa-dep-root-failure'].indexOf(right.root_skill)
+    ));
+    const succeeded = attempts.find((item) => item.root_skill === 'qa-dep-root-success') || null;
+    const failed = attempts.find((item) => item.root_skill === 'qa-dep-root-failure') || null;
+    const succeededSkills = succeeded ? [succeeded.root_skill, ...succeeded.dependency_skills] : [];
+    const failedSkills = failed ? [failed.root_skill, ...failed.dependency_skills] : [];
+    const installedSet = new Set(installedSkills);
+    const successAttemptId = String(succeeded?.attempt?.attemptId || '');
+    const failedAttemptId = String(failed?.attempt?.attemptId || '');
+    const combinedChecks = {
+      succeeded_attempt_present: Boolean(succeeded),
+      failed_rolled_back_attempt_present: Boolean(failed),
+      distinct_attempt_ids: Boolean(successAttemptId && failedAttemptId && successAttemptId !== failedAttemptId),
+      succeeded_commit_preserved: succeededSkills.length > 0
+        && succeededSkills.every((slug) => installedSet.has(slug))
+        && succeededSkills.every((slug) => snapshot.history.some((item) => (
+          item.attemptId === successAttemptId && item.skill === slug && item.scope === 'personal'
+        ))),
+      failed_attempt_inventory_clean: failedSkills.length > 0
+        && failedSkills.every((slug) => !installedSet.has(slug)),
+      failed_attempt_history_clean: Boolean(failedAttemptId)
+        && !snapshot.history.some((item) => item.attemptId === failedAttemptId),
+    };
+    persistedEvidence = {
+      schema_version: 'qbot-skill-install-attempt-ledger/v2',
+      case_id: String(testCase.core_beta_case_id || testCase.id || ''),
+      legacy_case_id: testCase.id,
+      expected_attempt_count: 2,
+      complete: attempts.length === 2,
+      evidence_valid: attempts.length === 2
+        && attempts.every((item) => item.evidence_valid === true)
+        && Object.values(combinedChecks).every(Boolean),
+      oracle_valid: attempts.length === 2
+        && attempts.every((item) => item.oracle_valid === true)
+        && Object.values(combinedChecks).every(Boolean),
+      checks: combinedChecks,
+      attempts,
+      installed: snapshot.installed,
+      history: snapshot.history,
+    };
+  }
+  writeJsonFile(evidencePath, persistedEvidence);
+  state.artifacts.skill_install_attempt_ledger = evidencePath;
+  recordAssertion(
+    state,
+    'Skill 安装事务 receipt 与终态对账',
+    '每次依赖安装必须生成 personal scope 的 installAttempt、精确 operationId、完整调用起止账本，并按 attempt 提交或回滚库存与个人历史。',
+    evidence.evidence_valid && evidence.oracle_valid,
+    `status=${attempt?.status || 'missing'}；entries=${entrySkills.join(',') || '无'}；installed=${installedSkills.join(',') || '无'}；history=${attemptHistory.length}；checks=${JSON.stringify(checks)}`,
+    evidence.evidence_valid ? '' : 'automation_error',
+  );
+  return evidence;
+}
+
+async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, caseDir, fixtureController = null }) {
   const marker = automationSkillMarker(testCase, 'qa-dep-root-success');
   const dependencies = automationDependencyMarkers(testCase);
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
@@ -26011,6 +26383,7 @@ async function executeSitSkillDependencyCascadeSuccess({ page, state, testCase, 
   state.screenshots.skill_030_cascade_success = await shot(page, caseDir, 'skill-030-cascade-success');
   const allVisible = Object.values(visibleMap).every(Boolean);
   recordAssertion(state, '必填依赖先装且主技能安装成功', '安装主技能后反馈应列出级联安装的依赖，已安装列表应同时出现主技能和全部必填依赖。', result.feedback.terminal && !result.feedback.error && /并级联安装/.test(result.feedback.text) && dependencies.length > 0 && allVisible, `feedback=${clip(result.feedback.text, 300)}；visible=${JSON.stringify(visibleMap)}`);
+  skillInstallAttemptLedgerEvidence({ state, testCase, caseDir, fixtureController, marker, dependencies, expectedStatus: 'succeeded' });
 }
 
 async function executeSitSkillDependencyAlreadyInstalled({ page, state, testCase, caseDir }) {
@@ -26027,7 +26400,7 @@ async function executeSitSkillDependencyAlreadyInstalled({ page, state, testCase
   recordAssertion(state, '已安装必填依赖跳过不重复安装', '依赖已安装时主技能应成功，反馈不得把该依赖再次列为本次级联安装，已安装列表仍各保留一张卡片。', result.feedback.terminal && !result.feedback.error && !/并级联安装/.test(result.feedback.text) && Object.values(after).every(Boolean), `feedback=${clip(result.feedback.text, 300)}；before=${JSON.stringify(before)}；after=${JSON.stringify(after)}`);
 }
 
-async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir }) {
+async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCase, caseDir, fixtureController = null }) {
   const marker = automationSkillMarker(testCase, 'qa-dep-root-failure');
   const dependencies = automationDependencyMarkers(testCase);
   const result = await installAutomationDependencyRoot({ page, state, testCase, caseDir, marker });
@@ -26053,6 +26426,57 @@ async function executeSitSkillDependencyFailureBlocksRoot({ page, state, testCas
     state.screenshots.skill_032_dependency_failure,
   );
   recordAssertion(state, '依赖失败阻断主技能安装', '任一必填依赖失败时应点名失败依赖，主技能不得进入已安装列表。', result.feedback.terminal && result.feedback.error && /依赖技能/.test(result.feedback.text) && /失败/.test(result.feedback.text) && dependencyNamed && !visibility[marker], userOutcome);
+  skillInstallAttemptLedgerEvidence({ state, testCase, caseDir, fixtureController, marker, dependencies, expectedStatus: 'failed_rolled_back' });
+}
+
+async function executeSitSkillMrTransactionalIsolation({
+  page,
+  state,
+  testCase,
+  caseDir,
+  timeoutMs,
+  fixtureController = null,
+}) {
+  const successCase = {
+    ...testCase,
+    test_data: '自动化技能标识=qa-dep-root-success\ndependencies=qa-dep-leaf-a,qa-dep-leaf-b',
+  };
+  await executeSitSkillDependencyCascadeSuccess({
+    page,
+    state,
+    testCase: successCase,
+    caseDir,
+    fixtureController,
+  });
+
+  const failureCase = {
+    ...testCase,
+    test_data: '自动化技能标识=qa-dep-root-failure\ndependencies=qa-dep-leaf-failure',
+  };
+  await executeSitSkillDependencyFailureBlocksRoot({
+    page,
+    state,
+    testCase: failureCase,
+    caseDir,
+    fixtureController,
+  });
+
+  let combinedLedger = null;
+  const ledgerPath = state.artifacts.skill_install_attempt_ledger;
+  try { combinedLedger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')); } catch {}
+  recordAssertion(
+    state,
+    'MR Skill 成功提交与失败回滚属于独立原子事务',
+    '同一 Case 必须保留成功与失败两个 personal installAttempt，operationId 不同；失败回滚不得移除成功事务或污染个人历史。',
+    combinedLedger?.schema_version === 'qbot-skill-install-attempt-ledger/v2'
+      && combinedLedger?.complete === true
+      && combinedLedger?.evidence_valid === true
+      && combinedLedger?.oracle_valid === true,
+    clip(JSON.stringify(combinedLedger), 1000),
+    combinedLedger?.evidence_valid === true ? '' : 'automation_error',
+  );
+
+  await executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs });
 }
 
 async function executeSitSkillDependencyCycle({ page, state, testCase, caseDir }) {
@@ -26548,33 +26972,14 @@ async function executeSitConnectorAutoConversation({ page, state, testCase, case
 }
 
 export function webSearchQualityVerdict(replyText, toolText = '') {
-  const reply = String(replyText || '');
-  const tools = String(toolText || '');
-  const urls = [...reply.matchAll(/https:\/\/[^\s)\]}>，。；;"']+/gi)].map((match) => match[0]);
-  const uniqueUrls = [...new Set(urls)];
-  const officialUrls = uniqueUrls.filter((url) => /(^|\.)openai\.com\//i.test(new URL(url).hostname + new URL(url).pathname));
-  // Accept both compact ISO-style dates and the spaced Chinese date format
-  // commonly emitted in user-facing replies (for example “2026 年 7 月 11 日”).
-  const dateEvidence = (
-    reply.match(/\b20\d{2}\s*(?:[-/.年]\s*)\d{1,2}(?:\s*(?:[-/.月]\s*)\d{1,2}\s*日?)?/g) || []
-  ).length;
-  const explicitShortage = /不足两条|不足\s*2\s*条|未找到足够|最近两条|暂无足够|只有一条/.test(reply);
-  const toolEvidence = /qbot[_-]?web|web[_-]?(?:search|crawl)|网页搜索|搜索网页|搜索/.test(tools);
-  return {
-    ok: uniqueUrls.length >= 2 && officialUrls.length >= 1 && (dateEvidence >= 2 || explicitShortage) && toolEvidence,
-    uniqueUrls,
-    officialUrls,
-    dateEvidence,
-    explicitShortage,
-    toolEvidence,
-  };
+  return webSearchBusinessVerdict(replyText, toolText);
 }
 
 async function executeSitConnectorWebSearchQuality({ page, state, testCase, caseDir, timeoutMs }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
   await page.keyboard.press('Escape').catch(() => {});
-  const prompt = String(testCase.test_data || '').trim() || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要。';
+  const prompt = String(testCase.test_data || '').trim() || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
   const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '内置 Web 搜索质量任务' });
   const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
   const runtimeEvidence = await page.evaluate(async () => {
@@ -26588,21 +26993,50 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   const runtimeToolText = JSON.stringify(runtimeEvidence);
   const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
   const evidenceCaseId = String(testCase.core_beta_case_id || testCase.id || '');
-  const runtimeTaskId = String(runtimeEvidence?.diagnostics?.sessionId || '');
+  const runtimeVerdict = webRuntimeAuthorityVerdict({
+    runtimeEvidence,
+    prompt,
+    sendReceipts: state.artifacts.send_receipts || [],
+  });
+  state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
+  const externalTarget = verdict.uniqueUrls.find((url) => {
+    try { return new URL(url).hostname === 'www.iana.org'; } catch { return false; }
+  }) || verdict.uniqueUrls.find((url) => !verdict.officialUrls.includes(url)) || verdict.officialUrls[0] || '';
+  const externalLink = externalTarget
+    ? await captureExternalWebLinkOutcome({ page, targetUrl: externalTarget })
+    : { ok: false, reason: 'search_reply_has_no_https_link', requestedUrl: '' };
+  state.screenshots.connector_019_external_link = await shot(page, caseDir, 'connector-019-external-link-outcome');
+  state.artifacts.core_beta_external_navigation_trace = path.join(caseDir, 'external-navigation-trace.json');
+  state.artifacts.external_navigation_trace = state.artifacts.core_beta_external_navigation_trace;
+  writeJsonFile(state.artifacts.core_beta_external_navigation_trace, {
+    schema_version: 'qbot-external-navigation-trace/v1',
+    case_id: evidenceCaseId,
+    legacy_case_id: testCase.id,
+    task_id: runtimeVerdict.taskId,
+    prompt_sha256: runtimeVerdict.promptSha256,
+    evidence_valid: externalLink.ok === true && externalLink.resultEnumValid === true,
+    oracle_valid: externalLink.publicResult === 'external'
+      && externalLink.calls?.at(-1)?.result?.code === 'external_opened'
+      && (externalLink.dialogs || []).length === 0
+      && (externalLink.falseFailureFeedback || []).length === 0,
+    ...externalLink,
+  });
   state.artifacts.web_search_quality = path.join(caseDir, 'web-search-quality.json');
   writeJsonFile(state.artifacts.web_search_quality, {
     schema_version: 'qbot-web-search-quality/v2',
     case_id: evidenceCaseId,
     legacy_case_id: testCase.id,
-    task_id: runtimeTaskId,
-    prompt_sha256: createHash('sha256').update(prompt).digest('hex'),
+    task_id: runtimeVerdict.taskId,
+    prompt_sha256: runtimeVerdict.promptSha256,
     prompt,
     reply: reply.deltaText,
     toolTexts,
     runtimeEvidence,
     verdict,
+    business_oracle: verdict,
+    runtime_authority_oracle: runtimeVerdict,
+    external_link_oracle: externalLink,
   });
-  state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
   recordStep(
     state,
     '执行内置 Web 搜索并收集来源',
@@ -26617,6 +27051,38 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
     '回复至少包含两个可追溯 https 来源、至少一个 OpenAI 官方来源，并为每条给出日期；若近 30 天不足两条应明确说明。',
     verdict.ok,
     JSON.stringify(verdict),
+  );
+  const runtimeEvidenceReadable = !runtimeEvidence?.error
+    && runtimeEvidence?.diagnostics
+    && typeof runtimeEvidence.diagnostics === 'object';
+  recordAssertion(
+    state,
+    'Web runtime authority 与 provider receipt',
+    '同一确认发送任务必须由 builtin:qbot_web 生效并物化，unsupported 列表不得包含它，provider receipt 必须为 64 位 SHA-256。',
+    runtimeVerdict.ok,
+    JSON.stringify(runtimeVerdict),
+    runtimeEvidenceReadable ? '' : 'automation_error',
+  );
+  recordStep(
+    state,
+    '点击真实搜索结果链接并读取 openPreview 原始终态',
+    '必须点击回复中的真实 HTTPS markdown link，以只读 wrapper 调用原 openPreview；公开结果只允许 preview/external/blocked。',
+    `target=${externalTarget || '无'}；result=${externalLink.publicResult || '无'}；code=${externalLink.calls?.at(-1)?.result?.code || '无'}；dialogs=${externalLink.dialogs?.length || 0}`,
+    externalLink.ok && externalLink.resultEnumValid ? 'passed' : 'failed',
+    state.screenshots.connector_019_external_link,
+    externalLink.ok ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    '公共域外链 external fallback 无假失败',
+    '不在内嵌策略中的公共 HTTPS 链接应返回 external，且页面不得弹出或显示“无法预览/无法打开”的假失败提示。',
+    externalLink.ok
+      && externalLink.publicResult === 'external'
+      && externalLink.calls?.at(-1)?.result?.code === 'external_opened'
+      && (externalLink.dialogs || []).length === 0
+      && (externalLink.falseFailureFeedback || []).length === 0,
+    JSON.stringify(externalLink),
+    externalLink.ok ? '' : 'automation_error',
   );
 }
 
@@ -29780,6 +30246,17 @@ export function coreBetaPreSendAttachmentRejectionEvidence({
     count: composerState?.count,
     names: Array.isArray(composerState?.names) ? composerState.names.map(String) : null,
   };
+  const expectedComposerNames = caseId === 'SIT-HOME-044'
+    ? (Array.isArray(probe?.expected_retained_names) ? probe.expected_retained_names.map(String) : [])
+    : [];
+  const composerValid = caseId === 'SIT-HOME-044'
+    ? expectedComposerNames.length === 2
+      && Number(composer.count) === 2
+      && Array.isArray(composer.names)
+      && JSON.stringify(composer.names) === JSON.stringify(expectedComposerNames)
+    : Number(composer.count) === 0
+      && Array.isArray(composer.names)
+      && composer.names.length === 0;
   const rejection = {
     type: String(rejectionType || ''),
     expected_pattern_matched: probe?.expected_pattern_matched === true,
@@ -29806,9 +30283,7 @@ export function coreBetaPreSendAttachmentRejectionEvidence({
     && rejection.dialog_settled
     && (!rejection.managed_teams_ax_required || rejection.managed_dialog_evidence)
     && rejection.rejected_before_send
-    && Number(composer.count) === 0
-    && Array.isArray(composer.names)
-    && composer.names.length === 0
+    && composerValid
     && mutationGuard.valid
     && screenshots.rejection.path
     && screenshots.after_dismissal.path
@@ -29827,6 +30302,7 @@ export function coreBetaPreSendAttachmentRejectionEvidence({
     dependent_case_id: caseId,
     rejection,
     composer_state: composer,
+    expected_composer_names: expectedComposerNames,
     mutation_guard: {
       ...mutationGuard,
       before_state: beforeState,
@@ -29836,7 +30312,9 @@ export function coreBetaPreSendAttachmentRejectionEvidence({
     dialog_evidence: dialogEvidence,
     not_applicable_roles: roles,
     reason: evidenceValid
-      ? '产品在发送前明确拒绝附件；弹窗已安全关闭，Composer 为空，且任务、消息与发送计数均未变化。'
+      ? caseId === 'SIT-HOME-044'
+        ? '产品在累计 81 MiB 时发送前拒绝第三份附件；弹窗已安全关闭，Composer 精确保留前两份，且任务、消息与发送计数均未变化。'
+        : '产品在发送前明确拒绝附件；弹窗已安全关闭，Composer 为空，且任务、消息与发送计数均未变化。'
       : '发送前附件拒绝的文案、弹窗收尾、Composer、公开状态、截图或零发送证据不完整。',
   };
 }

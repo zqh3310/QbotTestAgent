@@ -186,7 +186,10 @@ import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-general-assistant-evidence.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
+const runner = [
+  fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8'),
+  fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
+].join('\n');
 const legacyRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
 const attachmentAdapter = fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-ui-attachments.mjs'), 'utf8');
 assert.match(
@@ -5020,7 +5023,7 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot生产灰度与全量功能回归Casebook_160条_2026-08-11\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
+  /QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
   '当前操作指南必须把同一正式Casebook的70条门禁和160条全量回归分别绑定READY预检',
 );
 assert.match(
@@ -7484,6 +7487,10 @@ const required = [
   ['Teams 文档使用权限感知 MCP 且核验两次真实调用', /SIT-TEAMS-DOC-001'[\s\S]*executeSitTeamsDocumentPermission[\s\S]*allowed-doc-a[\s\S]*denied-doc-b[\s\S]*tools\/call[\s\S]*无权限文档明确拒绝且不伪造/],
   ['Teams 文档按 key 显式选择受控连接器', /executeSitTeamsDocumentPermission[\s\S]*selectManualConnectorByKey\(page, state, caseDir, documentConnector\.key\)[\s\S]*Teams Document QA/],
   ['技能作用域使用真实技能并跨任务回读移除', /SIT-SKILL-SCOPE-001'[\s\S]*executeSitSkillScopeIsolation[\s\S]*SKILL_SCOPE_ACTIVE[\s\S]*任务 B 未继承任务 A 技能[\s\S]*reopenSessionAndReadback[\s\S]*任务 A 移除后不再投递技能/],
+  ['MR Skill 组合 Driver 顺序覆盖成功事务、失败回滚与任务隔离', /SIT-SKILL-MR-001'[\s\S]*executeSitSkillMrTransactionalIsolation[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*qbot-skill-install-attempt-ledger\/v2[\s\S]*executeSitSkillScopeIsolation/],
+  ['MR Skill 组合 Driver 冻结六个确定性 Fixture', /SIT-SKILL-MR-001'[\s\S]*qa-dep-root-success[\s\S]*qa-dep-leaf-a[\s\S]*qa-dep-leaf-b[\s\S]*qa-dep-root-failure[\s\S]*qa-dep-leaf-failure[\s\S]*qa-scope-isolation/],
+  ['MR Skill v2 ledger 双 attempt 完整后才允许证据与 Oracle 有效', /(?=[\s\S]*qbot-skill-install-attempt-ledger\/v2)(?=[\s\S]*expected_attempt_count: 2)(?=[\s\S]*complete: attempts\.length === 2)(?=[\s\S]*distinct_attempt_ids)(?=[\s\S]*succeeded_commit_preserved)(?=[\s\S]*failed_attempt_inventory_clean)(?=[\s\S]*failed_attempt_history_clean)/],
+  ['cwd 删除后的结构化错误证据进入 Core Beta materializer', /workspace_missing_error_readback: artifacts\.workspace_missing_error_readback \|\| null/],
   ['连接器三态前置使用产品结构化状态并兼容无 health API 的直连探测', /healthyConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.healthy[\s\S]*unreachableConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.unreachable[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
   ['嵌套控制面代理优先使用外层显式 Fixture 控制面', /active-fixture-control-plane-url[\s\S]*127\.0\.0\.1:18900[\s\S]*fixtureUpstream \|\| activeUpstream \|\| configuredUpstream/],
   ['ART-011 使用本 Case 唯一成果名并通过 E2E bridge 精确发现', /artifact_011_filename[\s\S]*deleted_preview_check_\$\{slugify\(path\.basename\(caseDir\)\)\}[\s\S]*bridge\.discoverArtifact\(file\)[\s\S]*escapeRegExp\(filename\)/],
@@ -8183,10 +8190,19 @@ assert.match(intervalDriverSource, /matchingRuns\.filter|filter\(\(item\).*autom
 assert.match(intervalDriverSource, /definition_delete_result = await api\.delete[\s\S]*await api\.refresh\(\)/, 'interval Driver 删除定义后必须显式刷新公开投影');
 assert.match(intervalDriverSource, /definitionCleanupDeadline[\s\S]*definition_absence_observations/, 'interval Driver 必须有界轮询并保存目标定义消失读回');
 assert.doesNotMatch(intervalDriverSource, /deleteAll|clearAll|purge/i, 'interval Driver 禁止使用全量或越界清理');
+assert.match(productionGrayCasebookBuilder, /next\['测试数据'\] = 'intervalMs=60000；activeFrom=当前时刻；唯一显示名；禁止调用 runNow。';/, 'Casebook 生成器必须声明 60 秒 interval 与当前时刻 activeFrom');
+assert.match(productionGrayCasebookBuilder, /等待首次真实 interval tick 自动触发/, 'Casebook 生成器必须等待真实 interval tick');
+assert.doesNotMatch(productionGrayCasebookBuilder, /activeFrom=now-interval\+15s|约 15 秒后产生 schedule run/, 'Casebook 生成器禁止保留服务端会钳制的旧 interval 回填合同');
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
-  assert.match(documentText, /QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23\.xlsx/, '两份规范必须冻结新增 MR 核心冒烟 Casebook 路径');
+  assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
-  assert.match(documentText, /8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19/, '两份规范必须冻结新增 MR 核心冒烟 SHA');
+  assert.match(documentText, /77ed6011448446929480c2a27617af7338039af78125bd6a729693f5eb129399/, '两份规范必须冻结新合并 Casebook SHA');
+  assert.match(documentText, /486e05b5d35233865bab3d4b32dc89a0bebc5549[\s\S]*0\.1\.4/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
+  assert.match(documentText, /31 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录近 2 天 31 个直接合入 MR');
+  assert.match(documentText, /MRSMOKE-SKILL-001[\s\S]*SIT-SKILL-MR-001/, '两份规范必须冻结 MR Skill 组合 driver 路由');
+  for (const evidenceRole of ['workspace_missing_error_readback', 'skill_install_attempt_ledger', 'external_navigation_trace']) {
+    assert.match(documentText, new RegExp(evidenceRole), `两份规范必须冻结新增 MR 专项证据角色 ${evidenceRole}`);
+  }
   assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*5 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 5 legacy 能力构成');
   assert.match(documentText, /1\/11[\s\S]*1\/70|11 条[\s\S]*70 条/, '两份规范必须明确先完整执行 11 条，再独立执行 70 条');
 }
@@ -8387,7 +8403,7 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
     };
     const blocker = coreBetaPreSendCapabilityFailureEvidence({
       testCaseId: 'MRSMOKE-SKILL-001',
-      legacyCaseId: 'SIT-SKILL-SCOPE-001',
+      legacyCaseId: 'SIT-SKILL-MR-001',
       capabilityKind: 'skill',
       expectedIdentity: 'qa-scope-isolation',
       before: { task: { id: null, running: false, send_count: 26, message_count: 0 }, skills: { selected: [] } },
@@ -8400,37 +8416,37 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
     assert.equal(blocker.evidence_valid, true);
     assert.equal(blocker.oracle_valid, false);
     assert.equal(blocker.dependent_case_id, 'MRSMOKE-SKILL-001');
-    assert.equal(blocker.legacy_case_id, 'SIT-SKILL-SCOPE-001');
+    assert.equal(blocker.legacy_case_id, 'SIT-SKILL-MR-001');
     const blockerFile = path.join(evidenceDir, 'pre-send-capability-failure.json');
     writeJsonFile(blockerFile, blocker);
     const manifest = buildCoreEvidenceManifest({
       testCase: {
-        id: 'SIT-SKILL-SCOPE-001',
+        id: 'SIT-SKILL-MR-001',
         core_beta_case_id: 'MRSMOKE-SKILL-001',
         evidence_roles: ['capability_selection', ...roles],
       },
       caseDir: evidenceDir,
       artifacts: {
         capability_selection: blockerFile,
-        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-MR-001' },
         core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
       },
     });
     assert.equal(manifest.complete, true, JSON.stringify(manifest));
     assert.deepEqual(manifest.missing_roles, []);
 
-    const wrongOwner = { ...blocker, dependent_case_id: 'SIT-SKILL-SCOPE-001' };
+    const wrongOwner = { ...blocker, dependent_case_id: 'SIT-SKILL-MR-001' };
     writeJsonFile(blockerFile, wrongOwner);
     const rejected = buildCoreEvidenceManifest({
       testCase: {
-        id: 'SIT-SKILL-SCOPE-001',
+        id: 'SIT-SKILL-MR-001',
         core_beta_case_id: 'MRSMOKE-SKILL-001',
         evidence_roles: ['capability_selection', ...roles],
       },
       caseDir: evidenceDir,
       artifacts: {
         capability_selection: blockerFile,
-        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-MR-001' },
         core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
       },
     });
@@ -8441,14 +8457,14 @@ if (visionRuntimeBlocked.review_category !== '可信阻塞-环境或数据' || !
     writeJsonFile(blockerFile, wrongLegacy);
     const rejectedLegacy = buildCoreEvidenceManifest({
       testCase: {
-        id: 'SIT-SKILL-SCOPE-001',
+        id: 'SIT-SKILL-MR-001',
         core_beta_case_id: 'MRSMOKE-SKILL-001',
         evidence_roles: ['capability_selection', ...roles],
       },
       caseDir: evidenceDir,
       artifacts: {
         capability_selection: blockerFile,
-        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-SCOPE-001' },
+        core_beta_legacy_driver: { legacy_case_id: 'SIT-SKILL-MR-001' },
         core_beta_not_applicable_roles: roles.map((role) => ({ role, blocker_path: blockerFile })),
       },
     });

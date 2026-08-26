@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
   CORE_BETA_BASE_SCENARIO_IDS,
+  CORE_BETA_EVIDENCE_ADAPTERS,
   CORE_BETA_SCENARIO_IDS,
   CORE_BETA_SCENARIO_REGISTRY,
   FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
@@ -44,6 +45,12 @@ import {
   qworkDailyWorkspaceTaskBindingVerdict,
   normalizeQworkDailyExpertCatalog,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+
+assert.equal(
+  CORE_BETA_EVIDENCE_ADAPTERS.has('workspace_missing_error_readback'),
+  true,
+  'cwd 删除后的结构化工作空间错误必须有正式证据适配器',
+);
 
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-qwork-expert-audience-rejection-'));
@@ -371,7 +378,7 @@ for (const [id, driver, mode, legacyCaseId = ''] of [
   ['MRSMOKE-AUTO-001', 'qwork_mr_interval_schedule', 'native'],
   ['MRSMOKE-NAV-001', 'qwork_mr_sidebar_collapse_expand', 'verified_legacy', 'SIT-HOME-051'],
   ['MRSMOKE-ROUTE-001', 'qwork_daily_route_task_stability', 'native'],
-  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', 'verified_legacy', 'SIT-SKILL-SCOPE-001'],
+  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', 'verified_legacy', 'SIT-SKILL-MR-001'],
   ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', 'native'],
   ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory', 'native'],
   ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', 'native'],

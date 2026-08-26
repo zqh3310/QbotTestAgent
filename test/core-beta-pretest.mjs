@@ -50,8 +50,8 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx');
-const grayExpectedSha = '1621632773aa4d8c958bc97fea35311ef69cc5574704009616a223c058b0a3e4';
+const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26.xlsx');
+const grayExpectedSha = '77ed6011448446929480c2a27617af7338039af78125bd6a729693f5eb129399';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -137,8 +137,19 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('686b862ea9553215c2563d87db8339096acecb9d'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('486e05b5d35233865bab3d4b32dc89a0bebc5549'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
+}
+const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');
+if (!/81 MiB/.test(String(gateAttachmentRejection?.scenario || ''))
+  || !/只拒绝第3份/.test(String(gateAttachmentRejection?.expected_result || ''))
+  || !/MR!1305,MR!1314/.test(String(gateAttachmentRejection?.source_id || ''))) {
+  throw new Error('BETA-FILE-006 must freeze the recent MR 81 MiB rejection, retained attachments and quota recovery contract.');
+}
+const gateAttachmentIngress = grayCases.find((item) => item.id === 'BETA-FILE-008');
+if (!/picker、drag、clipboard/.test(String(gateAttachmentIngress?.scenario || ''))
+  || !/删除后恢复无重复/.test(String(gateAttachmentIngress?.expected_result || ''))) {
+  throw new Error('BETA-FILE-008 must freeze unified picker/drag/clipboard ingress and delete/re-add recovery.');
 }
 for (const [id, expectedTurns] of [
   ['SIT-HOME-016', 4],
@@ -159,8 +170,8 @@ if (!/第一次物理ArrowUp[^\n]*第二次/.test(String(composerHistory?.steps 
   throw new Error('BETA-TASK-008 must preserve the two-physical-press boundary handshake.');
 }
 
-const mrSmokeCasebook = path.join(root, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
-const mrSmokeExpectedSha = '8d361a9fa180b88dd91b5de2e7a4869297f1595d28dc9ae98a686dc215c82b19';
+const mrSmokeCasebook = grayCasebook;
+const mrSmokeExpectedSha = grayExpectedSha;
 const mrSmokeActualSha = crypto.createHash('sha256').update(fs.readFileSync(mrSmokeCasebook)).digest('hex');
 if (mrSmokeActualSha !== mrSmokeExpectedSha) {
   throw new Error(`MR smoke Casebook SHA mismatch: expected=${mrSmokeExpectedSha} actual=${mrSmokeActualSha}`);
@@ -214,6 +225,12 @@ if (!mrSmokeCases.every((item) => (
   && item.pipeline_policy === 'serial'
 ))) {
   throw new Error('Every MR smoke Case must use Core Beta v2 with serial execution.');
+}
+const mrSmokeAuto = mrSmokeCases.find((item) => item.id === 'MRSMOKE-AUTO-001');
+if (!/intervalMs=60000/.test(String(mrSmokeAuto?.test_data || ''))
+  || !/activeFrom=当前时刻/.test(String(mrSmokeAuto?.test_data || ''))
+  || /now-interval|约 15 秒/.test(`${mrSmokeAuto?.test_data || ''}\n${mrSmokeAuto?.expected_result || ''}`)) {
+  throw new Error('MRSMOKE-AUTO-001 must use the server-supported 60-second interval without backdated activeFrom.');
 }
 
 const pretestHelp = spawnSync(process.execPath, [

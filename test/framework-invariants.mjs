@@ -79,7 +79,10 @@ import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-general-assistant-evidence.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
+const runner = [
+  fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8'),
+  fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
+].join('\n');
 const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
 assert.match('QA Node Runtime', normalizedFixtureMarker, 'legacy Fixture slug 应与空格展示名稳定匹配');
 assert.match('qa_node-runtime', normalizedFixtureMarker, 'legacy Fixture marker 应归一化下划线、连字符与空格');
@@ -1276,6 +1279,8 @@ const required = [
   ['Teams 文档使用权限感知 MCP 且核验两次真实调用', /SIT-TEAMS-DOC-001'[\s\S]*executeSitTeamsDocumentPermission[\s\S]*allowed-doc-a[\s\S]*denied-doc-b[\s\S]*tools\/call[\s\S]*无权限文档明确拒绝且不伪造/],
   ['Teams 文档按 key 显式选择受控连接器', /executeSitTeamsDocumentPermission[\s\S]*selectManualConnectorByKey\(page, state, caseDir, documentConnector\.key\)[\s\S]*Teams Document QA/],
   ['技能作用域使用真实技能并跨任务回读移除', /SIT-SKILL-SCOPE-001'[\s\S]*executeSitSkillScopeIsolation[\s\S]*SKILL_SCOPE_ACTIVE[\s\S]*任务 B 未继承任务 A 技能[\s\S]*reopenSessionAndReadback[\s\S]*任务 A 移除后不再投递技能/],
+  ['MR Skill 组合 Driver 顺序覆盖成功事务、失败回滚与任务隔离', /SIT-SKILL-MR-001'[\s\S]*executeSitSkillMrTransactionalIsolation[\s\S]*executeSitSkillDependencyCascadeSuccess[\s\S]*executeSitSkillDependencyFailureBlocksRoot[\s\S]*qbot-skill-install-attempt-ledger\/v2[\s\S]*executeSitSkillScopeIsolation/],
+  ['MR Skill 组合 Driver 冻结六个确定性 Fixture', /SIT-SKILL-MR-001'[\s\S]*qa-dep-root-success[\s\S]*qa-dep-leaf-a[\s\S]*qa-dep-leaf-b[\s\S]*qa-dep-root-failure[\s\S]*qa-dep-leaf-failure[\s\S]*qa-scope-isolation/],
   ['连接器三态前置使用产品结构化状态并兼容无 health API 的直连探测', /healthyConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.healthy[\s\S]*unreachableConnector\?\.statusKind === 'ready'[\s\S]*fixtureProbe\.unreachable[\s\S]*needsAuthConnector\?\.statusKind === 'needs_auth'/],
   ['嵌套控制面代理优先使用外层显式 Fixture 控制面', /active-fixture-control-plane-url[\s\S]*127\.0\.0\.1:18900[\s\S]*fixtureUpstream \|\| activeUpstream \|\| configuredUpstream/],
   ['ART-011 使用本 Case 唯一成果名并通过 E2E bridge 精确发现', /artifact_011_filename[\s\S]*deleted_preview_check_\$\{slugify\(path\.basename\(caseDir\)\)\}[\s\S]*bridge\.discoverArtifact\(file\)[\s\S]*escapeRegExp\(filename\)/],
@@ -1296,7 +1301,7 @@ const required = [
   ['工具进度与安全错误码不误判重复', /新建文件\|编辑文件\|写入文件[\s\S]*错误码\|状态码\|error code/],
   ['ART-003 仅识别结构化内部事件泄漏', /rawArtifactEventLeakEvidence[\s\S]*artifact_delta[\s\S]*artifactPath\|artifactId\|artifactType/],
   ['HOME-029 使用真实提示词增强且禁止自动发送', /SIT-HOME-029'[\s\S]*executeSitHomePromptEnhance[\s\S]*aui-composer-enhance[\s\S]*美化不自动发送/],
-  ['WORKSPACE-001 创建 A/B 边界并验证越界秘密不泄漏', /executeSitWorkspaceBoundary[\s\S]*workspace-boundary-fixture[\s\S]*B_NOT_AUTHORIZED[\s\S]*prepareTaskContextAndConfirm[\s\S]*未授权目录 B 不泄露/],
+  ['WORKSPACE-001 创建 A/B 边界并验证四类越界秘密不泄漏', /(?=[\s\S]*executeSitWorkspaceBoundary)(?=[\s\S]*workspace-boundary-fixture)(?=[\s\S]*B_NOT_AUTHORIZED)(?=[\s\S]*PARENT_NOT_AUTHORIZED)(?=[\s\S]*SYMLINK_NOT_AUTHORIZED)(?=[\s\S]*TRAVERSAL_NOT_AUTHORIZED)(?=[\s\S]*prepareTaskContextAndConfirm)(?=[\s\S]*boundaryProbes)(?=[\s\S]*\$\{probe\.label\}不泄露)/],
   ['FILE-NEW-001 上传真实有效 DOCX 与截断 PDF', /executeSitFilePartialFailure[\s\S]*createPartialAttachmentFixtures[\s\S]*valid-report\.docx[\s\S]*broken-report\.pdf[\s\S]*有效附件结论：通过/],
   ['TASK-EDIT-001 使用真实编辑入口、结构化条目计数、精确旧回答识别并回读会话', /executeSitTaskEdit[\s\S]*aui-user-action-edit[\s\S]*aui-edit-composer-input[\s\S]*Update[\s\S]*countEnumeratedItems[\s\S]*continuedOldLoginAnswer[\s\S]*reopenSessionAndReadback/],
   ['TASK-REGEN-001 使用真实重新生成且校验消息唯一', /executeSitTaskRegenerate[\s\S]*重新生成[\s\S]*waitForRunStartAndIdle[\s\S]*userTexts\.filter[\s\S]*第二版回复完整且任务稳定/],

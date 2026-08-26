@@ -20,17 +20,53 @@ import { migrateProductionCase } from '../src/lib/production-casebook-contract.m
 const ROOT = path.resolve(process.env.QBOT_CASEBOOK_ROOT || path.resolve(import.meta.dirname, '..'));
 const DEEPBANK = '/Users/qifu/Documents/deepbankV2';
 const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
+const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
-const PRODUCT_COMMIT = '686b862ea9553215c2563d87db8339096acecb9d';
-const PREVIOUS_PRODUCT_COMMIT = '5f3f99b1dd24e04f36715ea236a3f70b132d25c7';
+const PRODUCT_COMMIT = '486e05b5d35233865bab3d4b32dc89a0bebc5549';
+const PREVIOUS_PRODUCT_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
 const PRODUCT_REF = 'origin/release/0.1';
-const PRODUCT_VERSION = '0.1.1';
-const MR_WINDOW_START = '2026-08-03T00:00:00+08:00';
-const MR_WINDOW_END = '2026-08-12T00:00:00+08:00';
-const OUTPUT_NAME = 'QBot生产灰度与全量功能回归Casebook_160条_2026-08-11.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260811_release01_combined160_casebook');
+const PRODUCT_VERSION = '0.1.4';
+const MR_WINDOW_START = '2026-08-24T00:00:00+08:00';
+const MR_WINDOW_END = '2026-08-26T23:59:59+08:00';
+const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260826_release01_recent2d_casebook');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
+const SMOKE_CASE_IDS = Object.freeze([
+  'MRSMOKE-ACT-001',
+  'MRSMOKE-WEB-001',
+  'MRSMOKE-WEB-002',
+  'MRSMOKE-AUTH-001',
+  'MRSMOKE-AUTO-001',
+  'MRSMOKE-NAV-001',
+  'MRSMOKE-ROUTE-001',
+  'MRSMOKE-SKILL-001',
+  'MRSMOKE-FAIL-001',
+  'MRSMOKE-ART-001',
+  'MRSMOKE-ENTRY-001',
+]);
+const RECENT_MR_CASE_MAPPING = new Map([
+  ['1323', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1311', ['MRSMOKE-SKILL-001', 'SIT-SKILL-030', 'SIT-SKILL-032']],
+  ['1319', ['MRSMOKE-AUTH-001', 'SIT-WORKSPACE-001']],
+  ['1306', ['BETA-HOST-003', 'BETA-INIT-001']],
+  ['1315', ['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001']],
+  ['1303', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1314', ['BETA-FILE-006', 'BETA-FILE-008', 'BETA-FILE-009', 'SIT-HOME-044']],
+  ['1305', ['BETA-FILE-006', 'BETA-FILE-008', 'BETA-FILE-009', 'SIT-HOME-044']],
+  ['1302', ['MRSMOKE-SKILL-001', 'SIT-SKILL-030', 'SIT-SKILL-032']],
+  ['1277', ['MRSMOKE-SKILL-001']],
+  ['1293', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1287', ['BETA-HOST-003', 'BETA-INIT-001']],
+  ['1304', ['MRSMOKE-ACT-001']],
+  ['1300', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1296', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1297', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1295', ['MRSMOKE-SKILL-001']],
+  ['1294', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1292', ['MRSMOKE-SKILL-001', 'MRSMOKE-FAIL-001']],
+  ['1280', ['MRSMOKE-ROUTE-001', 'MRSMOKE-ENTRY-001']],
+]);
 const LOCAL_FIXTURE_ADAPTERS = new Set([
   'native_ime_input',
   'managed_teams_restart',
@@ -100,9 +136,11 @@ function parseJson(value, fallback) {
 }
 
 function sourceCases(values) {
-  const headers = values[3].map(asString);
+  const headerIndex = values.findIndex((row) => row.map(asString).includes('用例ID'));
+  if (headerIndex < 0) throw new Error('Casebook Sheet 缺少“用例ID”表头');
+  const headers = values[headerIndex].map(asString).filter(Boolean);
   const index = new Map(headers.map((header, column) => [header, column]));
-  const rows = values.slice(4).filter((row) => asString(row[index.get('用例ID')]).trim());
+  const rows = values.slice(headerIndex + 1).filter((row) => asString(row[index.get('用例ID')]).trim());
   return {
     headers,
     cases: rows.map((row) => Object.fromEntries(headers.map((header, column) => [header, row[column] ?? '']))),
@@ -140,12 +178,125 @@ function patchBaseline(testCase) {
     if (typeof value !== 'string') continue;
     next[key] = value
       .replace(/origin\/release\/0\.1@[0-9a-f]{7,40}/g, `${PRODUCT_REF}@${PRODUCT_COMMIT}`)
-      .replace(/QWork>=0\.0\.28/g, 'QWork>=0.1.1')
-      .replace(/QWork>=0\.1\.1-rc\.2/g, 'QWork>=0.1.1')
+      .replace(/QWork>=0\.0\.28/g, `QWork>=${PRODUCT_VERSION}`)
+      .replace(/QWork>=0\.1\.1(?:-rc\.2)?/g, `QWork>=${PRODUCT_VERSION}`)
       .replace(/Teams>=5\.2\.29/g, 'Teams>=5.3.0');
   }
   next['备注'] = `${asString(next['备注']).replace(/；?origin\/release\/0\.1@[0-9a-f]{7,40}。?/g, '').trim()}；基线${PRODUCT_REF}@${PRODUCT_COMMIT}，版本${PRODUCT_VERSION}。`
     .replace(/^；/, '');
+  return next;
+}
+
+function withEvidenceRole(testCase, role) {
+  const next = { ...testCase };
+  const roles = unique(`${asString(next['证据角色'])},${asString(next['证据要求'])},${role}`
+    .split(',').map((item) => item.trim()));
+  next['证据角色'] = roles.join(',');
+  next['证据要求'] = roles.join(',');
+  return next;
+}
+
+function appendHardOracles(testCase, values) {
+  const next = { ...testCase };
+  const precise = parseJson(next['精准断言JSON'], {});
+  precise.hard_oracles = unique([...(Array.isArray(precise.hard_oracles) ? precise.hard_oracles : []), ...values]);
+  next['精准断言JSON'] = json(precise);
+  return next;
+}
+
+function patchSmokeCase(testCase) {
+  const id = asString(testCase['用例ID']);
+  let next = patchBaseline(testCase);
+  next['来源类型'] = '2026-08-24~2026-08-26 release/0.1 直接合入 MR 核心路径自动化';
+  next['版本范围'] = `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`;
+  next['备注'] = `${asString(next['备注'])}；最新31个直接合入MR已在“近2天MR覆盖”逐条映射，未映射的Dashboard/CI/设计变更只做静态合同审计。`;
+  if (id === 'MRSMOKE-WEB-001') {
+    next = withEvidenceRole(next, 'external_navigation_trace');
+    next['测试数据'] = '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新；若不足两条请明确说明并列出最近两条。每条给出标题、发布日期、原始链接和一句摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
+    next['执行步骤'] = '1. 新建任务，技能禁用，连接器自动。\n2. 发送测试数据中的搜索请求并等待回复。\n3. 用确认发送、taskId、runtime authority 与 provider receipt 对账 builtin:qbot_web。\n4. 真实点击回复中的 IANA 公共 HTTPS 链接。\n5. 断言 openPreview 公开终态为 external/external_opened，且无“无法预览/无法打开”假失败。';
+    next['预期结果'] = '真实调用 builtin:qbot_web；官方来源业务 Oracle 通过；runtime authority/provider receipt 与同一 task 绑定；公共域外链走 external fallback 且不显示假失败。';
+    next['来源ID'] = `${asString(next['来源ID'])}; MR!1293; MR!1294; MR!1296; MR!1297; MR!1300; MR!1303; MR!1323`;
+    next = appendHardOracles(next, [
+      'Web 业务结果 Oracle 与 runtime authority/provider receipt 分离且均通过',
+      '真实点击公共 HTTPS 链接后公开结果为 external/external_opened，页面无假失败提示',
+    ]);
+  }
+  if (id === 'MRSMOKE-AUTH-001') {
+    next = withEvidenceRole(next, 'workspace_missing_error_readback');
+    next['执行步骤'] = `${asString(next['执行步骤'])}\n5. 保留原 taskId，删除本 Case 创建的授权 cwd。\n6. 在同一 task 重发确定性请求，读取结构化 chat.workspace.cwd_missing、原 cwd、retryable=false 与用户可见提示。\n7. 断言没有自动重试、新 taskId 或 causeCode/内部错误字段泄漏。`;
+    next['预期结果'] = `${asString(next['预期结果'])}；cwd 删除后同一 task 明确返回 chat.workspace.cwd_missing，精确指向原 cwd、不可重试且不泄漏内部字段。`;
+    next['来源ID'] = `${asString(next['来源ID'])}; MR!1319`;
+    next = appendHardOracles(next, [
+      'cwd 删除后同 taskId 返回结构化 chat.workspace.cwd_missing，params.cwd 精确且 retryable=false',
+      '用户提示解释目录不存在且隐藏 desktop_local_workspace_unavailable/causeCode/stack',
+    ]);
+  }
+  if (id === 'MRSMOKE-AUTO-001') {
+    next['测试数据'] = 'intervalMs=60000；activeFrom=当前时刻；唯一显示名；禁止调用 runNow。';
+    next['执行步骤'] = '1. 从自动化页用公开 API 创建 intervalMs=60000、activeFrom=当前时刻的定义\n2. listLocal 与可见列表读回同一 ID/名称\n3. 禁止 runNow，等待首次真实 interval tick 自动触发\n4. 核对 triggerKind、occurrenceKey、scheduledFor/scheduledAt、sessionId 和 succeeded\n5. 只删除本 Case run 与 definition，refresh 后有界连续读回 definition 消失';
+    next['预期结果'] = '不调用 runNow；约 60 秒后产生真实 schedule run；运行身份完整且 succeeded；definition 与 run 定向清理并经 refresh 终态对账。';
+    next = appendHardOracles(next, [
+      'intervalMs 精确为 60000，activeFrom 使用创建时当前时刻，禁止回填过去时间',
+      '删除 definition 后显式 refresh，并在有界窗口内读回目标 definition 消失',
+    ]);
+  }
+  if (id === 'MRSMOKE-SKILL-001') {
+    next = withEvidenceRole(next, 'skill_install_attempt_ledger');
+    next['测试场景'] = 'Skill 依赖安装以 personal installAttempt 事务提交/回滚，并保持任务级选择隔离';
+    next['执行步骤'] = '1. 通过可见技能市场安装含必填依赖的确定性 Skill，读取 personal installAttempt、operationId 与成功库存/历史。\n2. 安装含失败必填依赖的确定性 Skill，读取失败 attempt 并证明只回滚本 attempt、库存/个人历史无残留。\n3. 选择隔离 Skill 完成任务 A/B 选择、移除和回复标记闭环。\n4. 定向卸载本 Case Fixture。';
+    next['预期结果'] = '成功 attempt 原子提交根技能与依赖；失败 attempt 原子回滚且不污染个人历史；每项 operationId 稳定；任务 A/B 技能选择不串扰。';
+    next['来源ID'] = `${asString(next['来源ID'])}; MR!1277; MR!1292; MR!1295; MR!1302; MR!1311`;
+    next = appendHardOracles(next, [
+      '成功安装产生 schemaVersion=1、scope=personal 的 installAttempt，并按 operationId 提交根技能与依赖',
+      '依赖失败产生 failed_rolled_back attempt，installed/history 对该 attempt 均无残留',
+      '任务 A/B 技能选择与移除仍保持 task-bound 隔离',
+    ]);
+  }
+  if (id === 'MRSMOKE-ACT-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1304; MR!1315`;
+  if (id === 'MRSMOKE-ROUTE-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1280; MR!1315`;
+  if (id === 'MRSMOKE-FAIL-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1292; MR!1315; MR!1319`;
+  if (id === 'MRSMOKE-ENTRY-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1280`;
+  return next;
+}
+
+function patchFullFunctionRecentCase(testCase) {
+  const id = asString(testCase['用例ID']);
+  let next = { ...testCase };
+  if (id === 'SIT-HOME-044') {
+    next['测试场景'] = 'picker、paste、drag 三入口统一 FileInput ingress；81 MiB 发送前拒绝；删除后恢复前两份附件且顺序/identity 不漂移';
+    next['测试数据'] = '三份不同内容/同名或可区分标记的确定性附件；分别经 picker、paste、drag 进入；另准备总量 81 MiB 拒绝组合。';
+    next['自动化执行步骤'] = '1. 分别通过 picker、paste、drag 上传三份确定性文件并核对统一 descriptor。\n2. 删除指定附件并验证剩余前两份的顺序与 identity。\n3. 恢复被删附件并核对三份顺序。\n4. 尝试 81 MiB 总量并证明发送前拒绝、零 task/消息/send。';
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1305,MR!1314`;
+    next = appendHardOracles(next, [
+      'picker/paste/drag 三入口进入同一 Composer FileInput 合同',
+      '81 MiB 总量发送前拒绝且不创建 task/消息/send receipt',
+      '删除后前两份附件 identity 与顺序保持，恢复后完整三份可读',
+    ]);
+  }
+  if (id === 'SIT-WORKSPACE-001') {
+    next = withEvidenceRole(next, 'workspace_missing_error_readback');
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1319`;
+    next = appendHardOracles(next, [
+      '授权 cwd 删除后在原 task 重发，结构化 chat.workspace.cwd_missing 精确绑定原 cwd 且 retryable=false',
+      '用户可见提示隐藏 causeCode、内部 errorCode 与 stack',
+    ]);
+  }
+  if (['SIT-SKILL-030', 'SIT-SKILL-032'].includes(id)) {
+    next = withEvidenceRole(next, 'skill_install_attempt_ledger');
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1302,MR!1311`;
+    next = appendHardOracles(next, [
+      id === 'SIT-SKILL-030'
+        ? 'personal installAttempt 以稳定 operationId 原子提交根技能和全部必填依赖'
+        : '失败 personal installAttempt 只回滚本 attempt，installed 与个人 history 均无残留',
+    ]);
+  }
+  if (id === 'SIT-CONN-019') {
+    next = withEvidenceRole(next, 'external_navigation_trace');
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1293,MR!1294,MR!1296,MR!1297,MR!1300,MR!1303,MR!1323`;
+    next = appendHardOracles(next, [
+      'Web 业务 Oracle、同 task runtime authority/provider receipt 与外链 openPreview 终态分别成立',
+    ]);
+  }
   return next;
 }
 
@@ -354,7 +505,7 @@ function fullFunctionLegacyCase(source) {
     '重复策略': '每个候选release identity至少完成1轮160/160可信全绿；本轮中的70条硬门禁同时计入连续5轮要求。',
     '必需Fixture': 'runtime:ready,account:authenticated,public_product_state',
     '硬门禁': '是',
-    '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=0.1.1`,
+    '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`,
     '生产观测指标': asString(migrated.production_signal || `${migrated.module}/${migrated.submodule}成功率`),
     'Executor路由': route,
   };
@@ -422,7 +573,34 @@ async function loadFullFunctionLegacyCases() {
 
 function patchRecentCases(testCase) {
   const id = asString(testCase['用例ID']);
-  const next = patchBaseline(testCase);
+  let next = patchBaseline(testCase);
+  if (id === 'BETA-FILE-006') {
+    next['测试场景'] = '不支持类型、单文件超限与81 MiB总量均发送前拒绝；总量拒绝只拒第3份并保留前2份，删除后可恢复额度';
+    next['测试数据'] = '不支持扩展名fixture；>30 MiB单文件；picker与paste各27 MiB后，以drag加入第3份27 MiB使累计达到81 MiB。';
+    next['自动化执行步骤'] = '1. 分别验证不支持类型和单文件超限发送前拒绝且Composer为空\n2. 通过picker、paste加入前两份27 MiB附件\n3. 通过drag加入第3份27 MiB并断言只拒绝第3份、前两份同序保留\n4. 删除第一份后通过公开stageFiles重新加入第3份并核对额度恢复\n5. 全程核对零task/消息/send并定向清理';
+    next['预期结果'] = '三类原因准确提示；累计81 MiB只拒绝第3份且保留前两份；删除后可重新加入第3份；全程无半成品任务或消息。';
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1305,MR!1314`;
+    next = appendHardOracles(next, [
+      '累计达到81 MiB时只拒绝第3份，前两份附件identity与顺序保持不变',
+      '删除第一份后公开stageFiles可重新加入原第3份并保持零task/消息/send',
+    ]);
+  }
+  if (id === 'BETA-FILE-008') {
+    next['测试场景'] = 'picker、drag、clipboard三入口进入统一FileInput合同；预览可读，删除并重新加入后identity与顺序不漂移';
+    next['自动化执行步骤'] = '1. 通过picker、drag和clipboard分别加入三个确定性附件并逐步读回Composer\n2. 打开clipboard图片预览并核对非空像素\n3. 删除clipboard附件，再次粘贴并核对恢复为3份且无重复\n4. 发送并核对Agent逐项引用三个附件';
+    next['预期结果'] = '三入口各只增加一份附件并进入统一descriptor；预览非空；删除后恢复无重复；回复逐项引用。';
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1305,MR!1314`;
+    next = appendHardOracles(next, [
+      'picker、drag、clipboard三入口各增加且仅增加一个统一附件descriptor',
+      'clipboard附件删除后重新粘贴恢复为3份且同名只出现一次',
+    ]);
+  }
+  if (id === 'BETA-FILE-009') {
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1305,MR!1314`;
+    next = appendHardOracles(next, [
+      '同名不同SHA附件按卡片identity精确删除，保留项顺序稳定且回复不引用已删内容',
+    ]);
+  }
   if (id === 'BETA-EXPERT-008') {
     const turns = parseJson(next['会话轮次JSON'], []);
     next['测试数据'] = '固定研究主题：截至2026-08-10，比较 OpenAI Responses API 与 Chat Completions API；至少两个可打开的 OpenAI 官方来源。';
@@ -440,7 +618,7 @@ function patchRecentCases(testCase) {
     next['失败/阻塞判定'] = '任一发布失败、半状态、重复或账本缺失记trusted_bug/framework_issue；不得因缺少非必要外部命令阻塞。';
     next['必需Fixture'] = 'runtime:ready,account:authenticated,run_owned_expert_drafts:3';
     next['来源ID'] = 'MR!972,MR!943,MR!1065';
-    next['来源类型'] = '近7天MR回归+自包含门禁重构';
+    next['来源类型'] = '近2天MR回归+自包含门禁重构';
     next['证据要求'] = 'before_screenshot,action_receipt,after_screenshot,public_state_readback,expert_identity_snapshot,expert_publish_operation,restart_trace,credential_redaction_scan,capability_selection,capability_execution_event,cleanup_readback';
     next['证据角色'] = next['证据要求'];
     next['动作计划JSON'] = json(actionPlan(id, 'expert_lifecycle', next['自动化执行步骤']));
@@ -524,7 +702,7 @@ function patchRecentCases(testCase) {
       '自动化Runner': 'core-beta-v2',
       '每轮必跑': '是',
       '来源ID': 'MR!1063,MR!1087',
-      '来源类型': '近7天MR新增原生回归',
+      '来源类型': '近2天MR新增原生回归',
       '备注': `Composer history navigation；${PRODUCT_REF}@${PRODUCT_COMMIT}。`,
       '风险域': 'functional,data_integrity_isolation,reliability_recovery',
       '判定Oracle': 'task_bound_history_readback+draft_restore',
@@ -532,7 +710,7 @@ function patchRecentCases(testCase) {
       '重复策略': '同一冻结发布身份连续5个全量轮次；任一非pass、阻塞、波动、继承/synthetic或证据缺失都会把连续全绿计数归零',
       '必需Fixture': 'runtime:ready,account:authenticated,composer:clean',
       '硬门禁': '是',
-      '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=0.1.1`,
+      '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`,
       '生产观测指标': '历史回放顺序、草稿恢复率、跨任务泄漏数、重开持久化率',
       'Executor路由': CORE_BETA_SCENARIO_REGISTRY.get(id).executor_route,
     });
@@ -573,7 +751,7 @@ function patchRecentCases(testCase) {
       '自动化Runner': 'core-beta-v2',
       '每轮必跑': '是',
       '来源ID': 'MR!1028',
-      '来源类型': '近7天MR新增原生回归',
+      '来源类型': '近2天MR新增原生回归',
       '备注': `Composer model menu SDK filter；${PRODUCT_REF}@${PRODUCT_COMMIT}。`,
       '风险域': 'functional,compatibility_upgrade,data_integrity_isolation',
       '判定Oracle': 'connection_view+visible_model_multiset',
@@ -581,7 +759,7 @@ function patchRecentCases(testCase) {
       '重复策略': '同一冻结发布身份连续5个全量轮次；任一非pass、阻塞、波动、继承/synthetic或证据缺失都会把连续全绿计数归零',
       '必需Fixture': 'runtime:ready,account:authenticated,model_options:min1',
       '硬门禁': '是',
-      '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=0.1.1`,
+      '版本范围': `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`,
       '生产观测指标': '候选集合一致率、跨SDK泄漏数、同步错误数',
       'Executor路由': CORE_BETA_SCENARIO_REGISTRY.get(id).executor_route,
     });
@@ -635,6 +813,7 @@ function mrMapping(mr) {
   if (/attachment|file|enametoolong/.test(text)) add('BETA-FILE-005', 'BETA-FILE-006', 'BETA-FILE-007');
   if (/teams|desktop|runtime|bootstrap|host-core|ota|recovery-readiness/.test(text)) add('BETA-INIT-001', 'BETA-REC-001', 'BETA-REC-002', 'BETA-HOST-003');
   if (/secret|security|auth-shell|terminal-arbitration/.test(text)) add('BETA-CHAT-009', 'BETA-SEC-002');
+  add(...(RECENT_MR_CASE_MAPPING.get(String(mr.mr || '')) || []));
   return unique(mappings);
 }
 
@@ -668,7 +847,7 @@ function deletionReason(testCase, cap) {
     return ['非桌面灰度批次', '需要受保护K8s/Postgres/Helm控制器，不能混入桌面串行门禁；保留为独立发布工程检查。'];
   }
   if (REPLACED_CASES.has(id)) {
-    return ['近7天语义替换', '旧场景移出；同一Case ID已重写为近7天高风险原生场景。'];
+    return ['近2天语义替换', '旧场景移出；同一Case ID已重写为近2天高风险原生场景。'];
   }
   return ['框架能力收敛', '当前只有严格外部控制器契约，没有QbotTestAgent原生真实执行器；为避免伪可执行，从发布门禁移入自动化待办。'];
 }
@@ -737,11 +916,12 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
   const renderDir = path.join(verificationDir, 'renders');
   await fs.mkdir(renderDir, { recursive: true });
   const inspections = [];
-  for (const sheetName of ['生产灰度门禁Case', '全量功能回归Case']) {
-    const rowCount = sheetName === '生产灰度门禁Case' ? 74 : 164;
+  for (const sheetName of ['新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case']) {
+    const rowCount = sheetName === '新增MR核心冒烟' ? 14 : sheetName === '生产灰度门禁Case' ? 74 : 164;
+    const lastColumn = sheetName === '新增MR核心冒烟' ? 'AM' : 'AO';
     const result = await workbook.inspect({
       kind: 'table',
-      range: `${sheetName}!A1:AO${rowCount}`,
+      range: `${sheetName}!A1:${lastColumn}${rowCount}`,
       include: 'values,formulas',
       tableMaxRows: 10,
       tableMaxCols: 12,
@@ -760,7 +940,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 
   const rendered = [];
   for (const sheetName of sheetNames) {
-    const largeCaseSheet = ['生产灰度门禁Case', '全量功能回归Case'].includes(sheetName);
+    const largeCaseSheet = ['新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case'].includes(sheetName);
     const preview = await workbook.render({
       sheetName,
       ...(largeCaseSheet ? { range: 'A1:AO12' } : { autoCrop: 'all' }),
@@ -788,12 +968,24 @@ async function main() {
   const sourceWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(SOURCE));
   const sourceValues = sourceWorkbook.worksheets.getItem('核心内测Case').getRange('A1:AO188').values;
   const { headers, cases: allCases } = sourceCases(sourceValues);
+  const smokeSourceWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(SMOKE_SOURCE));
+  const smokeSourceValues = smokeSourceWorkbook.worksheets.getItem('新增MR核心冒烟').getUsedRange().values;
+  const { headers: smokeHeaders, cases: rawSmokeCases } = sourceCases(smokeSourceValues);
+  const smokeById = new Map(rawSmokeCases.map((testCase) => [asString(testCase['用例ID']), testCase]));
+  const smokeCases = SMOKE_CASE_IDS.map((id) => {
+    const testCase = smokeById.get(id);
+    if (!testCase) throw new Error(`新增MR核心冒烟源数据缺失：${id}`);
+    return patchSmokeCase(testCase);
+  });
+  if (rawSmokeCases.length !== SMOKE_CASE_IDS.length || smokeById.size !== SMOKE_CASE_IDS.length) {
+    throw new Error(`新增MR核心冒烟必须恰好11条且ID唯一，actual=${rawSmokeCases.length}/${smokeById.size}`);
+  }
   const gateCoreCases = orderCases(allCases
     .filter((testCase) => capability(testCase).directlyRunnable)
     .filter((testCase) => !EXCLUDED_ACCOUNT_CASES.has(asString(testCase['用例ID'])))
     .filter((testCase) => !PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.has(asString(testCase['用例ID'])))
     .map(patchRecentCases));
-  const fullFunctionPool = await loadFullFunctionLegacyCases();
+  const fullFunctionPool = (await loadFullFunctionLegacyCases()).map(patchFullFunctionRecentCase);
   const fullFunctionById = new Map(fullFunctionPool.map((testCase) => [asString(testCase['用例ID']), testCase]));
   const gatePromotions = [...PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS].map((id) => {
     const testCase = fullFunctionById.get(id);
@@ -823,10 +1015,13 @@ async function main() {
     }
   }
   const gateIdSet = new Set(gateIds);
+  const fullIdSet = new Set(fullIds);
+  const smokeIdSet = new Set(SMOKE_CASE_IDS);
+  const smokeCapability = capabilitySet(smokeCases);
   const gateCapability = capabilitySet(gateCases);
   const addonCapability = capabilitySet(regressionAddons);
   const fullCapability = capabilitySet(fullCases);
-  for (const [scope, summary] of [['70条门禁', gateCapability], ['160条全量', fullCapability]]) {
+  for (const [scope, summary] of [['11条冒烟', smokeCapability], ['70条门禁', gateCapability], ['160条全量', fullCapability]]) {
     if (summary.strict.length) {
       throw new Error(`${scope}仍含strict controller：${summary.strict.map((item) => item.testCase['用例ID']).join(',')}`);
     }
@@ -835,9 +1030,17 @@ async function main() {
     }
   }
   const mrRows = mergedMrs().map((mr) => {
-    const mappings = mrMapping(mr).filter((id) => gateIdSet.has(id));
+    const mappings = mrMapping(mr).filter((id) => smokeIdSet.has(id) || gateIdSet.has(id) || fullIdSet.has(id));
     const area = mrArea(mr);
     const desktopRelevant = mappings.length > 0;
+    const smokeMappings = mappings.filter((id) => smokeIdSet.has(id));
+    const gateMappings = mappings.filter((id) => gateIdSet.has(id));
+    const fullMappings = mappings.filter((id) => fullIdSet.has(id) && !gateIdSet.has(id));
+    const layers = unique([
+      smokeMappings.length ? '11条冒烟' : '',
+      gateMappings.length ? '70条门禁' : '',
+      fullMappings.length ? '160条增量' : '',
+    ]);
     return [
       mr.mergedAt.replace('T', ' ').slice(0, 19),
       mr.mr ? `!${mr.mr}` : '',
@@ -846,12 +1049,14 @@ async function main() {
       area,
       mr.files.slice(0, 8).join('\n'),
       mappings.join(','),
-      desktopRelevant ? '纳入70条门禁，亦属于160条全量前缀' : '静态/CI/服务端审计，不纳入桌面Case',
+      layers.join('+') || '静态合同审计',
+      desktopRelevant ? '纳入当前框架可执行Case' : 'Dashboard/CI/设计/发布工程变更不冒充桌面QWork E2E',
       desktopRelevant
         ? '由映射Case的真实UI动作与公开状态Oracle覆盖'
-        : '不构成当前桌面用户主路径，保留提交与文件证据供发布工程检查',
+        : '保留merge commit与文件清单；由源码单测/发布工程检查负责，不计11/70/160桌面通过',
     ];
   });
+  if (mrRows.length !== 31) throw new Error(`近2天直接合入MR必须恰好31个，actual=${mrRows.length}`);
   const omitted = allCases.filter((testCase) => !gateIdSet.has(asString(testCase['用例ID'])));
   const replacementAudit = allCases.filter((testCase) => REPLACED_CASES.has(asString(testCase['用例ID'])));
   const deletionRows = [...omitted, ...replacementAudit].map((testCase) => {
@@ -886,6 +1091,16 @@ async function main() {
     }
   }
   const workbook = Workbook.create();
+  const smokeSheet = addSheet(
+    workbook,
+    '新增MR核心冒烟',
+    'QWork 近2天新增 MR 核心冒烟自动化 Casebook（11条）',
+    `基线 ${PRODUCT_REF}@${PRODUCT_COMMIT}（v${PRODUCT_VERSION}）；固定顺序11/11可执行、可分发、可直接运行；只承担新增MR核心冒烟，不替代70/160发布门禁。`,
+    smokeHeaders,
+    matrix(smokeHeaders, smokeCases),
+    [135, 70, 130, 130, 360, 360, 360, 460, 380, 380, 380, 360, 170, 80, 300, 230, 300, 420, 350, 100, 80, 160, 380, 150, 180, 220, 190, 240, 260, 90, 360, 300, 90, 360, 300, 480, 480, 520, 420],
+  );
+  smokeSheet.getRangeByIndexes(4, 1, smokeCases.length, 1).format.fill = '#E8F4F1';
   const gateSheet = addSheet(
     workbook,
     '生产灰度门禁Case',
@@ -920,7 +1135,8 @@ async function main() {
       ['全量原生公开状态执行器', fullCapability.counts.runner_native || 0, 'QWork UI/bridge/CDP真实动作与读回', 'runner_native'],
       ['全量原生本机fixture选项', fullCapability.counts.runner_native_with_fixture_option || 0, '原生IME；pretest必须就绪', 'runner_native_with_fixture_option'],
       ['全量经语义复核旧执行器', fullCapability.counts.runner_legacy_verified || 0, '9条门禁映射 + 90条常规功能映射', 'runner_legacy_verified'],
-      ['近7天直接合并MR', mrRows.length, '全部记录纳入/排除结论', '近7天MR覆盖'],
+      ['新增MR核心冒烟', 11, '固定顺序独立READY后先执行并逐Case可信复核', '新增MR核心冒烟'],
+      ['近2天直接合并MR', mrRows.length, '全部记录自动化映射或静态审计结论', '近2天MR覆盖'],
       ['全量回归排除', FULL_REGRESSION_EXCLUDED_LEGACY_IDS.size, '网络异常、账号/权限低频、纯故障注入不进入本套', '删除场景清单'],
       ['门禁低频恢复剔除', PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.size, '从70条门禁及160条前缀同步删除', '删除场景清单'],
       ['全量准入', '至少1轮160/160', '候选release identity完整可信全绿', '生产灰度准入'],
@@ -942,6 +1158,7 @@ async function main() {
   addSheet(workbook, '执行配置', '执行配置与串行规则', '正式轮的精确版本、Casebook SHA、框架commit和fixture选项必须在pretest冻结；READY才允许启动唯一runner。',
     ['参数', '固定值/要求', '阶段', '硬约束', '说明'], [
       ['gate_case_count', 70, 'pretest/runner/gray-gate', '固定70', '不得用scoped、inherited或synthetic补齐'],
+      ['mr_smoke_case_count', 11, 'pretest/runner/trusted-review', '固定11且顺序不可漂移', '先于70条执行；不能替代生产灰度门禁'],
       ['full_case_count', 160, 'pretest/runner/full-regression', '固定160', '前70条必须与门禁逐条同序一致'],
       ['execution_policy', 'core-beta-v2-forced-serial', 'runner', '唯一runner；Case间并发=0', 'BETA-CHAT-008内部20任务仍属于单Case'],
       ['casebook', OUTPUT_NAME, 'pretest', '精确路径+Sheet+SHA-256', 'Casebook变化即新测试合同'],
@@ -977,9 +1194,9 @@ async function main() {
     ['范围', '序号', 'Case ID', '模块', '场景', '执行模式', '能力类别', 'Fixture', '来源/MR', '结论'], fullCapability.items.map(({ testCase, scenario, binding, class: capabilityClass }, index) => [
       index < 70 ? '门禁70+全量160' : '全量160增量', index + 1, testCase['用例ID'], testCase['产品模块'], testCase['测试场景'], binding.mode, capabilityClass, scenario.fixture_control, testCase['来源ID'], '必跑；框架支持',
     ]), [140, 70, 125, 120, 420, 140, 220, 220, 260, 180]);
-  addSheet(workbook, '近7天MR覆盖', '近7天release/0.1直接合并MR审计', `增量 ${PREVIOUS_PRODUCT_COMMIT.slice(0, 12)}..${PRODUCT_COMMIT.slice(0, 12)}；窗口 ${MR_WINDOW_START} 至 ${MR_WINDOW_END}；以first-parent直接合入${PRODUCT_REF}为准，共${mrRows.length}个merge commit。`,
-    ['合并时间', 'MR', 'Merge commit', '分支/主题', '领域', '主要变更文件', '映射Case', '处置', '理由'], mrRows,
-    [165, 70, 110, 300, 130, 360, 260, 230, 420]);
+  addSheet(workbook, '近2天MR覆盖', '近2天release/0.1直接合并MR审计', `窗口 ${MR_WINDOW_START} 至 ${MR_WINDOW_END}；以first-parent直接合入${PRODUCT_REF}为准，共${mrRows.length}个merge commit。Dashboard/CI/设计变更保留静态合同审计，不冒充桌面E2E。`,
+    ['合并时间', 'MR', 'Merge commit', '分支/主题', '领域', '主要变更文件', '映射Case', '覆盖层', '处置', '理由'], mrRows,
+    [165, 70, 110, 300, 130, 360, 320, 160, 260, 420]);
   addSheet(workbook, '生产灰度准入', '全量功能与生产灰度准入规则', '至少一轮完整160条可信全绿，并满足70条连续多轮与soak门禁后，才允许1%-5%受控生产灰度。',
     ['门禁项', '必须满足', '失败后动作', '可否豁免'], [
       ['Pretest', 'READY；70/70协议、分发、fixture、身份、唯一runner全部通过', '不启动runner，修复具体前置', '否'],
@@ -1004,11 +1221,12 @@ async function main() {
     ], [170, 360, 500, 240]);
   addSheet(workbook, '源码依据', 'Casebook源码与审计依据', '所有依据均绑定固定commit；deepbankV2仓库只读，QbotTestAgent负责Case、执行器、证据和放行规则。',
     ['类型', '位置/版本', '用途', '校验'], [
-      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '近7天MR与产品行为设计依据', `git cat-file -e ${PRODUCT_COMMIT}^{commit}`],
+      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '近2天MR与产品行为设计依据', `git cat-file -e ${PRODUCT_COMMIT}^{commit}`],
       ['上一Casebook产品基线', PREVIOUS_PRODUCT_COMMIT, '限定本次MR增量审计起点', `git log ${PREVIOUS_PRODUCT_COMMIT}..${PRODUCT_COMMIT} --first-parent --merges`],
       ['产品版本', PRODUCT_VERSION, 'release/0.1 package.json', `git show ${PRODUCT_COMMIT}:package.json`],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],
-      ['新Casebook', FORMAL_OUTPUT, '70条生产门禁+160条全量功能回归合同', 'SHA写入QBOT_AUTOMATION_FRAMEWORK.md'],
+      ['MR冒烟源Casebook', SMOKE_SOURCE, '11条固定顺序合同来源', '只读导入并按近2天MR补强'],
+      ['新Casebook', FORMAL_OUTPUT, '11条MR冒烟+70条生产门禁+160条全量功能回归合同', 'SHA写入两份框架规范'],
       ['框架协议', 'src/lib/core-beta-case-protocol.mjs', '独立scenario/fixture/证据契约', 'test/core-beta-case-protocol.mjs'],
       ['原生Runner', 'src/lib/ui-agent-casebook-runner-v2.mjs', '真实UI/bridge/CDP执行与Oracle', 'test/framework-invariants-v2.mjs'],
       ['能力审计', 'npm run core-beta:capability-audit', 'dispatchable/native/controller统计', 'strict_controller_required=0'],
@@ -1019,8 +1237,8 @@ async function main() {
   const outputDir = path.resolve(option('out', DEFAULT_OUTPUT_DIR));
   await fs.mkdir(outputDir, { recursive: true });
   const sheetNames = [
-    '生产灰度门禁Case', '全量功能回归Case', '设计总览', '覆盖矩阵', '执行配置',
-    '证据与断言', '删除场景清单', '执行器映射', '近7天MR覆盖', '生产灰度准入',
+    '新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case', '设计总览', '覆盖矩阵', '执行配置',
+    '证据与断言', '删除场景清单', '执行器映射', '近2天MR覆盖', '生产灰度准入',
     '发布判定', '源码依据',
   ];
   const verification = await verifyWorkbook(workbook, outputDir, sheetNames);
@@ -1029,9 +1247,12 @@ async function main() {
   await xlsx.save(outputFile);
   await fs.copyFile(outputFile, FORMAL_OUTPUT);
   const audit = {
-    schema_version: 'qbot-release01-combined-casebook-build/v2',
+    schema_version: 'qbot-release01-combined-casebook-build/v3',
     generated_at: new Date().toISOString(),
     product: { ref: PRODUCT_REF, commit: PRODUCT_COMMIT, version: PRODUCT_VERSION },
+    smoke_case_count: smokeCases.length,
+    smoke_case_ids: smokeCases.map((item) => item['用例ID']),
+    smoke_capability_summary: smokeCapability.counts,
     source_case_count: allCases.length,
     gate_case_count: gateCases.length,
     gate_case_ids: gateIds,

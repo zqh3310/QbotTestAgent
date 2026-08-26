@@ -265,6 +265,43 @@ export async function uploadAttachmentsInComposer(page, files, {
   return uploadViaGenericAttachmentEntry(page, existing, missing, { buttonSelector, timeoutMs });
 }
 
+export async function uploadAttachmentsViaVisiblePicker(page, files, {
+  buttonSelector = DEFAULT_BUTTON_SELECTOR,
+  timeoutMs = 4000,
+} = {}) {
+  const resolved = files.map((file) => path.resolve(file));
+  const existing = resolved.filter((file) => fs.existsSync(file));
+  const missing = resolved.filter((file) => !fs.existsSync(file));
+  if (!existing.length) {
+    return {
+      status: 'blocked',
+      attached: [],
+      missing,
+      expected_names: [],
+      visible_names: [],
+      method: 'visible-picker-precheck',
+      reason: `测试附件文件不存在：${missing.join(', ') || files.join(', ')}`,
+    };
+  }
+  const unsupported = existing.filter((file) => !isSupportedQbotAttachmentPath(file));
+  if (unsupported.length) {
+    return {
+      status: 'blocked',
+      attached: [],
+      missing,
+      expected_names: existing.map((file) => path.basename(file)),
+      visible_names: [],
+      method: 'visible-picker-type-precheck',
+      reason: `可见选择器测试不支持这些附件类型：${unsupported.map((file) => path.extname(file).toLowerCase() || path.basename(file)).join(', ')}`,
+    };
+  }
+  return uploadViaGenericAttachmentEntry(page, existing, missing, {
+    buttonSelector,
+    timeoutMs,
+    allowNativeDialog: false,
+  });
+}
+
 async function uploadViaDirectFileInput(page, existing, missing) {
   const directInput = page.locator('input[type="file"]').first();
   if (await directInput.count().catch(() => 0)) {

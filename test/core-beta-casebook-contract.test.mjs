@@ -613,11 +613,11 @@ test('verified attachment rejection before send makes only the impossible send c
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roles = ['task_id', 'prompt', 'send_receipt', 'transcript', 'reply_delta', 'reply_completion'];
   const variants = [
-    ['SIT-HOME-043', 'single_file_oversize', '单个文档不能超过 30 MiB'],
-    ['SIT-HOME-044', 'aggregate_oversize', '文档附件总大小不能超过 80 MiB'],
+    ['SIT-HOME-043', 'single_file_oversize', '单个文档不能超过 30 MiB', []],
+    ['SIT-HOME-044', 'aggregate_oversize', '文档附件总大小不能超过 80 MiB', ['picker.pdf', 'paste.md']],
   ];
 
-  for (const [caseId, rejectionType, dialogMessage] of variants) {
+  for (const [caseId, rejectionType, dialogMessage, retainedNames] of variants) {
     const caseDir = path.join(root, caseId);
     fs.mkdirSync(caseDir, { recursive: true });
     const rejectionScreenshot = path.join(caseDir, 'rejection.png');
@@ -656,8 +656,9 @@ test('verified attachment rejection before send makes only the impossible send c
         managed_teams_ax_required: true,
         managed_dialog_evidence: true,
         rejected_before_send: true,
+        expected_retained_names: retainedNames,
       },
-      composerState: { count: 0, names: [] },
+      composerState: { count: retainedNames.length, names: retainedNames },
       rejectionScreenshot,
       postDismissalScreenshot: afterScreenshot,
       dialogEvidenceArtifact: dialogArtifact,

@@ -423,7 +423,7 @@ const registerScenario = (id, driver, {
   ['MRSMOKE-AUTO-001', 'qwork_mr_interval_schedule', { conversation_required: false }],
   ['MRSMOKE-NAV-001', 'qwork_mr_sidebar_collapse_expand', { legacy_case_id: 'SIT-HOME-051', conversation_required: false }],
   ['MRSMOKE-ROUTE-001', 'qwork_daily_route_task_stability'],
-  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', { legacy_case_id: 'SIT-SKILL-SCOPE-001' }],
+  ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', { legacy_case_id: 'SIT-SKILL-MR-001' }],
   ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', { conversation_required: false }],
   ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory'],
   ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', { conversation_required: false }],
@@ -630,6 +630,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'capability_execution_event',
   'skill_execution_trace',
   'skill_runtime_readiness',
+  'skill_install_attempt_ledger',
   'negative_tool_trace',
   'connector_prompt_layers',
   'expert_identity_snapshot',
@@ -663,6 +664,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'settings_readback',
   'host_lifecycle_trace',
   'security_boundary_trace',
+  'workspace_missing_error_readback',
   'performance_metrics',
   'accessibility_scan',
   'external_navigation_trace',
@@ -1859,6 +1861,17 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && String(blocker?.reason || '').trim();
     const attachmentRejection = blocker?.rejection || {};
     const attachmentComposer = blocker?.composer_state || {};
+    const expectedAttachmentComposerNames = testCase?.id === 'SIT-HOME-044'
+      ? (Array.isArray(blocker?.expected_composer_names) ? blocker.expected_composer_names.map(String) : [])
+      : [];
+    const attachmentComposerVerified = testCase?.id === 'SIT-HOME-044'
+      ? expectedAttachmentComposerNames.length === 2
+        && Number(attachmentComposer?.count) === 2
+        && Array.isArray(attachmentComposer?.names)
+        && JSON.stringify(attachmentComposer.names) === JSON.stringify(expectedAttachmentComposerNames)
+      : Number(attachmentComposer?.count) === 0
+        && Array.isArray(attachmentComposer?.names)
+        && attachmentComposer.names.length === 0;
     const attachmentMutationGuard = blocker?.mutation_guard || {};
     const attachmentCaseType = testCase?.id === 'SIT-HOME-043'
       ? 'single_file_oversize'
@@ -1956,9 +1969,7 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
       && (attachmentRejection?.managed_teams_ax_required !== true
         || attachmentRejection?.managed_dialog_evidence === true)
       && attachmentRejection?.rejected_before_send === true
-      && Number(attachmentComposer?.count) === 0
-      && Array.isArray(attachmentComposer?.names)
-      && attachmentComposer.names.length === 0
+      && attachmentComposerVerified
       && attachmentMutationGuard?.valid === true
       && attachmentMutationGuard?.public_state_available_before === true
       && attachmentMutationGuard?.public_state_available_after === true
