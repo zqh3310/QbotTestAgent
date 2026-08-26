@@ -339,11 +339,11 @@ assert.equal(
 
 assert.equal(CORE_BETA_BASE_SCENARIO_IDS.size, 184);
 assert.equal(FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS.size, 95);
-assert.equal(CORE_BETA_SCENARIO_IDS.size, 304);
-assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 304);
+assert.equal(CORE_BETA_SCENARIO_IDS.size, 305);
+assert.equal(CORE_BETA_SCENARIO_REGISTRY.size, 305);
 assert.equal(
   new Set([...CORE_BETA_SCENARIO_REGISTRY.values()].map((item) => item.executor_route)).size,
-  304,
+  305,
   '每个Core Beta Case必须绑定唯一执行器路由',
 );
 for (const [id, caseType, driver] of [
@@ -370,7 +370,7 @@ for (const [id, caseType, driver] of [
   assert.equal(binding.mode, 'native', `${id} 必须由runner原生执行`);
 }
 
-for (const [id, driver, mode, legacyCaseId = ''] of [
+for (const [id, driver, mode, legacyCaseId = '', caseType = 'conversation'] of [
   ['MRSMOKE-ACT-001', 'qwork_mr_activity_timeline', 'native'],
   ['MRSMOKE-WEB-001', 'qwork_mr_web_search_success', 'verified_legacy', 'SIT-CONN-019'],
   ['MRSMOKE-WEB-002', 'qwork_mr_web_search_ssrf_rejection', 'verified_legacy', 'SIT-CONN-015'],
@@ -382,12 +382,13 @@ for (const [id, driver, mode, legacyCaseId = ''] of [
   ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', 'native'],
   ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory', 'native'],
   ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', 'native'],
+  ['MRSMOKE-CHART-001', 'qwork_mr_interactive_chart', 'verified_legacy', 'SIT-CONN-016', 'mcp_use'],
 ]) {
   const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id);
   assert.equal(scenario?.driver, driver, `${id} 必须绑定冻结的 MR 冒烟 driver`);
   assert.equal(scenario?.fixture_control, 'public_product_state', `${id} 不得依赖严格控制器`);
   assert.equal(scenario?.legacy_case_id || '', legacyCaseId, `${id} legacy 复用身份漂移`);
-  const binding = coreBetaRuntimeExecutorBinding({ id, case_type: 'conversation' }, scenario);
+  const binding = coreBetaRuntimeExecutorBinding({ id, case_type: caseType }, scenario);
   assert.equal(binding.dispatchable, true, `${id} 必须在静态审计阶段可分发`);
   assert.equal(binding.mode, mode, `${id} runtime 分流模式漂移`);
 }
@@ -729,7 +730,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   [...PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS],
-  ['SIT-SKILL-007', 'SIT-HOME-002', 'SIT-HOME-012', 'SIT-HOME-013', 'SIT-HOME-014'],
+  ['SIT-SKILL-007', 'SIT-HOME-002', 'SIT-HOME-012', 'SIT-HOME-013', 'SIT-CONN-016'],
   '门禁必须使用五条高频正常功能Case补齐固定70条规模',
 );
 for (const id of ['SIT-HOME-028', 'SIT-HOME-046', 'SIT-HOME-051', 'SIT-CONN-005', 'SIT-HOME-048']) {

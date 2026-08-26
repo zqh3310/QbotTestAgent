@@ -551,6 +551,7 @@ export const QWORK_MR_CORE_SMOKE_CASE_IDS = Object.freeze([
   'MRSMOKE-FAIL-001',
   'MRSMOKE-ART-001',
   'MRSMOKE-ENTRY-001',
+  'MRSMOKE-CHART-001',
 ]);
 
 const QWORK_MR_CORE_SMOKE_CASE_TYPES = Object.freeze([
@@ -565,6 +566,7 @@ const QWORK_MR_CORE_SMOKE_CASE_TYPES = Object.freeze([
   'security_privacy',
   'artifact',
   'task_lifecycle',
+  'mcp_use',
 ]);
 
 export function isQworkMrCoreSmokeCasePlan(cases = []) {
@@ -5018,6 +5020,7 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
     performance_metrics: artifacts.core_beta_performance_metrics || null,
     accessibility_scan: artifacts.core_beta_accessibility_scan || null,
     external_navigation_trace: artifacts.core_beta_external_navigation_trace || null,
+    interactive_chart_readback: artifacts.core_beta_interactive_chart_readback || null,
     rollback_trace: artifacts.core_beta_rollback_trace || null,
     model_route_trace: artifacts.core_beta_model_route_trace || null,
     activation_snapshot: artifacts.core_beta_activation_snapshot || null,
@@ -27251,15 +27254,385 @@ async function executeSitConnectorPrivateNetworkGuard({ page, state, testCase, c
   recordAssertion(state, '内置 web 私网访问防护', '请求 localhost/private IP 时应拒绝或说明不可访问，不能泄露内网接口返回。', /不能|无法|不应|拒绝|私有网络|localhost|127\.0\.0\.1|安全|不可访问/.test(reply.deltaText) && !/"ready"\s*:\s*true|webSocketDebuggerUrl|Protocol-Version/i.test(reply.deltaText), clip(reply.deltaText, 420));
 }
 
+const INTERACTIVE_CHART_TOOL_NAMES = new Set([
+  'mcp__qbot_chart__render_chart',
+  'qbot_chart:render_chart',
+]);
+
+const INTERACTIVE_CHART_EXPECTED_POINTS = Object.freeze([
+  Object.freeze({ label: '曝光', value: 12000 }),
+  Object.freeze({ label: '点击', value: 860 }),
+  Object.freeze({ label: '报名', value: 240 }),
+  Object.freeze({ label: '成交', value: 28 }),
+]);
+
+export function extractInteractiveChartEnvelope(value, depth = 0) {
+  if (depth > 5 || value == null) return null;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    try { return extractInteractiveChartEnvelope(JSON.parse(text), depth + 1); }
+    catch { return null; }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractInteractiveChartEnvelope(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  if (value.ok === true && value.mimeType === 'image/svg+xml' && typeof value.svg === 'string') return value;
+  const meta = value._meta && typeof value._meta === 'object' && !Array.isArray(value._meta)
+    ? value._meta
+    : {};
+  for (const child of [
+    meta['qbot/chart-result'],
+    meta.qbotChartResult,
+    value.structuredContent,
+    value.structured_content,
+    value.result,
+    value.output,
+  ]) {
+    const found = extractInteractiveChartEnvelope(child, depth + 1);
+    if (found) return found;
+  }
+  if (Array.isArray(value.content)) {
+    for (const item of value.content) {
+      const found = extractInteractiveChartEnvelope(item, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function interactiveChartVisibleValue(svgTextNodes, expected) {
+  return svgTextNodes.some((value) => {
+    const normalized = String(value || '').replace(/[\s,_，]/g, '');
+    return new RegExp(`(?:^|\\D)${expected}(?:\\D|$)`).test(normalized);
+  });
+}
+
+export function interactiveChartReadbackVerdict({
+  caseId = '',
+  legacyCaseId = '',
+  prompt = '',
+  sendReceipts = [],
+  session = null,
+  runtimeEvidence = null,
+  dom = null,
+  screenshot = null,
+  replyComplete = true,
+} = {}) {
+  const promptText = String(prompt || '');
+  const promptSha256 = promptText ? sha256Text(promptText) : '';
+  const taskId = confirmedSendReceiptTaskId(sendReceipts, promptText);
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = (message?.parts || [])
+      .filter((part) => part?.t === 'text')
+      .map((part) => String(part.text || ''))
+      .join('\n');
+    if (message?.role === 'user' && text.includes(promptText)) {
+      userIndex = index;
+      break;
+    }
+  }
+  let assistantIndex = -1;
+  let toolPart = null;
+  let turnEndIndex = messages.length;
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    if (messages[index]?.role === 'user') {
+      turnEndIndex = index;
+      break;
+    }
+  }
+  const assistantIndexes = [];
+  for (let index = userIndex + 1; index < turnEndIndex; index += 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant') continue;
+    assistantIndexes.push(index);
+    const candidate = (message?.parts || []).find((part) => (
+      part?.t === 'tool' && INTERACTIVE_CHART_TOOL_NAMES.has(String(part.name || ''))
+    ));
+    if (!candidate || toolPart) continue;
+    assistantIndex = index;
+    toolPart = candidate;
+  }
+  const finalAssistantIndex = assistantIndexes.at(-1) ?? -1;
+  const rawToolResult = typeof toolPart?.result === 'string'
+    ? toolPart.result
+    : (toolPart?.result == null ? '' : JSON.stringify(toolPart.result));
+  const envelope = extractInteractiveChartEnvelope(toolPart?.result);
+  const envelopeData = Array.isArray(envelope?.data) ? envelope.data : [];
+  const exactEnvelopeData = envelopeData.length === INTERACTIVE_CHART_EXPECTED_POINTS.length
+    && INTERACTIVE_CHART_EXPECTED_POINTS.every((expected) => envelopeData.some((point) => (
+      String(point?.label || '').trim() === expected.label
+      && Number(point?.value) === expected.value
+    )));
+  const toolStatus = typeof toolPart?.status === 'string'
+    ? toolPart.status
+    : String(toolPart?.status?.type || '');
+  const assistantText = assistantIndexes
+    .flatMap((index) => (messages[index]?.parts || [])
+      .filter((part) => part?.t === 'text')
+      .map((part) => String(part.text || '')))
+    .join('\n');
+  const assistantTextLeaksEncoding = /data:image\/svg\+xml|base64,|PHN2Zy|[A-Za-z0-9+/]{256,}={0,2}/u.test(assistantText);
+  const diagnostics = runtimeEvidence?.diagnostics || {};
+  const authority = diagnostics?.e2eCurrentTurnAuthority || {};
+  const effectiveConnectorIds = Array.isArray(authority?.connectorRouting?.effectiveConnectorIds)
+    ? authority.connectorRouting.effectiveConnectorIds.map(String)
+    : [];
+  const materializedConnectorIds = Array.isArray(authority?.connectorRuntimeMaterialization?.materializedConnectorIds)
+    ? authority.connectorRuntimeMaterialization.materializedConnectorIds.map(String)
+    : [];
+  const unsupportedConnectorIds = Array.isArray(authority?.connectorRuntimeMaterialization?.unsupportedConnectorIds)
+    ? authority.connectorRuntimeMaterialization.unsupportedConnectorIds.map(String)
+    : [];
+  const providerReceiptHash = String(authority?.providerReceiptHash || '');
+  const runtimeAuthorityCaptured = Boolean(
+    diagnostics
+    && typeof diagnostics === 'object'
+    && Object.prototype.hasOwnProperty.call(diagnostics, 'e2eCurrentTurnAuthority')
+    && diagnostics.e2eCurrentTurnAuthority
+    && typeof diagnostics.e2eCurrentTurnAuthority === 'object'
+  );
+  const runtimeReadiness = diagnostics?.e2eCurrentTurnAuthorityReadiness?.ready;
+  const evidenceChecks = {
+    case_id_present: Boolean(String(caseId || '').trim()),
+    prompt_present: Boolean(promptText),
+    prompt_sha256_present: /^[a-f0-9]{64}$/i.test(promptSha256),
+    confirmed_send_task_id_present: Boolean(taskId),
+    session_id_matches_task: Boolean(taskId) && String(session?.id || '') === taskId,
+    prompt_bound_user_turn_present: userIndex >= 0,
+    prompt_bound_assistant_turn_present: finalAssistantIndex > userIndex,
+    runtime_evidence_readable: Boolean(runtimeEvidence && typeof runtimeEvidence === 'object' && !runtimeEvidence.error),
+    runtime_session_matches_task: Boolean(taskId) && String(diagnostics?.sessionId || '') === taskId,
+    runtime_authority_captured: runtimeAuthorityCaptured,
+    runtime_readiness_captured: typeof runtimeReadiness === 'boolean',
+    dom_readback_captured: dom?.captured === true,
+    screenshot_captured: Boolean(screenshot?.path)
+      && Number(screenshot?.bytes || 0) > 0
+      && /^[a-f0-9]{64}$/i.test(String(screenshot?.sha256 || '')),
+  };
+  const evidenceValid = Object.values(evidenceChecks).every(Boolean);
+  const svgTextNodes = Array.isArray(dom?.svg_text_nodes) ? dom.svg_text_nodes.map(String) : [];
+  const oracleChecks = {
+    chart_tool_bound_to_prompt_turn: assistantIndex > userIndex && assistantIndex < turnEndIndex,
+    chart_tool_result_present: Boolean(rawToolResult),
+    tool_completed: toolStatus === 'complete',
+    runtime_authority_ready: runtimeReadiness === true,
+    effective_chart_capability_observed: effectiveConnectorIds.includes('builtin:qbot_chart'),
+    materialized_chart_capability_observed: materializedConnectorIds.includes('builtin:qbot_chart'),
+    chart_capability_not_unsupported: !unsupportedConnectorIds.includes('builtin:qbot_chart'),
+    provider_receipt_hash_valid: /^[a-f0-9]{64}$/i.test(providerReceiptHash),
+    envelope_kind_valid: envelope?.kind === 'qbot-chart-result',
+    envelope_mime_valid: envelope?.mimeType === 'image/svg+xml',
+    envelope_type_nonempty: Boolean(String(envelope?.type || '').trim()),
+    envelope_exact_four_points: exactEnvelopeData,
+    assistant_dom_present: dom?.assistant_present === true,
+    interactive_container_unique: Number(dom?.interactive_container_count || 0) === 1,
+    interactive_svg_unique: Number(dom?.interactive_svg_count || 0) === 1,
+    static_result_absent: Number(dom?.static_result_count || 0) === 0,
+    fallback_result_absent: Number(dom?.fallback_result_count || 0) === 0,
+    chart_image_absent: Number(dom?.chart_image_count || 0) === 0,
+    svg_visible_and_nonzero: dom?.svg_visible === true
+      && Number(dom?.rendered_width || 0) > 100
+      && Number(dom?.rendered_height || 0) > 60,
+    inside_assistant_bounds: dom?.inside_assistant_bounds === true,
+    inside_chart_container_bounds: dom?.inside_chart_container_bounds === true,
+    no_container_overflow: Number(dom?.chart_container_overflow_x || 0) <= 1,
+    no_assistant_overflow: Number(dom?.assistant_overflow_x || 0) <= 1,
+    no_message_list_overflow: Number(dom?.message_list_overflow_x || 0) <= 1,
+    no_document_overflow: Number(dom?.document_overflow_x || 0) <= 1,
+    all_labels_visible: INTERACTIVE_CHART_EXPECTED_POINTS.every((point) => (
+      svgTextNodes.some((value) => value.includes(point.label))
+    )),
+    all_values_visible: INTERACTIVE_CHART_EXPECTED_POINTS.every((point) => (
+      interactiveChartVisibleValue(svgTextNodes, point.value)
+    )),
+    assistant_text_has_no_svg_or_base64: !assistantTextLeaksEncoding,
+    reply_complete: replyComplete === true,
+  };
+  const oracleValid = evidenceValid && Object.values(oracleChecks).every(Boolean);
+  return {
+    schema_version: 'qbot-interactive-chart-readback/v1',
+    case_id: String(caseId || ''),
+    legacy_case_id: String(legacyCaseId || ''),
+    captured_at: new Date().toISOString(),
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    prompt: promptText,
+    prompt_sha256: promptSha256,
+    task_id: taskId,
+    evidence_checks: evidenceChecks,
+    oracle_checks: oracleChecks,
+    runtime_authority: {
+      routing_mode: authority?.connectorRouting?.mode || '',
+      effective_connector_ids: effectiveConnectorIds,
+      materialized_connector_ids: materializedConnectorIds,
+      unsupported_connector_ids: unsupportedConnectorIds,
+      provider_receipt_hash: providerReceiptHash,
+    },
+    tool_result: {
+      name: String(toolPart?.name || ''),
+      status: toolStatus,
+      bytes: Buffer.byteLength(rawToolResult),
+      sha256: rawToolResult ? sha256Text(rawToolResult) : '',
+      envelope: envelope ? {
+        kind: String(envelope.kind || ''),
+        mime_type: String(envelope.mimeType || ''),
+        type: String(envelope.type || ''),
+        data: envelopeData.map((point) => ({
+          label: String(point?.label || ''),
+          value: Number(point?.value),
+          ...(String(point?.series || '').trim() ? { series: String(point.series) } : {}),
+        })),
+        svg_bytes: Buffer.byteLength(String(envelope.svg || '')),
+        spec_sha256: String(envelope.specSha256 || ''),
+      } : null,
+    },
+    assistant_text: {
+      bytes: Buffer.byteLength(assistantText),
+      sha256: sha256Text(assistantText),
+      encoding_leak_detected: assistantTextLeaksEncoding,
+    },
+    dom,
+    screenshot,
+  };
+}
+
 async function executeSitConnectorChartConversation({ page, state, testCase, caseDir, timeoutMs }) {
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
   await page.keyboard.press('Escape').catch(() => {});
-  const prompt = '请用柱状图展示这组数据：曝光 12000、点击 860、报名 240、成交 28。请给出图表或说明无法生成图表的原因。';
-  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '内置图表工具会话' });
-  await openArtifactSurface(page, state, caseDir).catch(() => false);
-  const artifactText = await page.locator('[data-testid="artifact-panel"]').first().innerText({ timeout: 1000 }).catch(() => '');
-  recordAssertion(state, '内置 chart 工具结果', '应生成图表类成果/回复；失败时应说明能力不可用。', /图表|柱状图|chart|可视化|成果|无法|不可用/.test(`${reply.deltaText}\n${artifactText}`), clip(`${reply.deltaText}\n${artifactText}`, 420));
+  const prompt = String(testCase.test_data || '').trim() || [
+    '必须且只能调用内置 qbot_chart 的 render_chart 生成柱状图。',
+    '数据固定为：曝光 12000、点击 860、报名 240、成交 28。',
+    '图中必须显示四个类别名称和四个固定数值标签，不要输出 SVG data URI、base64 或编码正文。',
+  ].join('');
+  const reply = await runPromptInCurrentTask({
+    page,
+    state,
+    testCase,
+    caseDir,
+    timeoutMs,
+    prompt,
+    label: '内置交互图表工具会话',
+  });
+  const taskId = confirmedSendReceiptTaskId(state.artifacts.send_receipts || [], prompt);
+  const runtimeReadback = await page.evaluate(async (id) => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    const sessionPromise = id && typeof window.agent?.readSession === 'function'
+      ? window.agent.readSession(id, 'desktop-local').catch(() => null)
+      : (typeof e2e?.currentSession === 'function'
+        ? Promise.resolve(e2e.currentSession()).catch(() => null)
+        : Promise.resolve(null));
+    const contextPromise = typeof e2e?.getLastTurnContextEvidence === 'function'
+      ? Promise.resolve(e2e.getLastTurnContextEvidence()).catch(() => null)
+      : Promise.resolve(null);
+    const diagnosticsPromise = typeof e2e?.diagnostics === 'function'
+      ? Promise.resolve(e2e.diagnostics()).catch(() => null)
+      : Promise.resolve(null);
+    const [session, context, diagnostics] = await Promise.all([
+      sessionPromise,
+      contextPromise,
+      diagnosticsPromise,
+    ]);
+    return { session, runtimeEvidence: { context, diagnostics } };
+  }, taskId).catch((error) => ({ error: error.message, session: null, runtimeEvidence: { error: error.message } }));
+  await page.waitForFunction(() => {
+    const assistants = [...document.querySelectorAll('[data-testid="message-list"] [data-role="assistant"]')];
+    return assistants.some((root) => Boolean(root.querySelector(
+      '[data-testid="qcharts-react-container"] svg, [data-testid="qbot-chart-result"], [data-testid="qbot-chart-result-fallback"]',
+    )));
+  }, null, { timeout: Math.min(60_000, Math.max(10_000, Math.floor(timeoutMs / 4))) }).catch(() => false);
+  const dom = await page.locator('body').evaluate((body) => {
+    const assistants = [...body.querySelectorAll('[data-testid="message-list"] [data-role="assistant"]')];
+    const root = [...assistants].reverse().find((candidate) => (
+      candidate.querySelector('[data-testid="qbot-chart-result-container"]')
+    )) || assistants.at(-1) || null;
+    const chartContainer = root?.querySelector('[data-testid="qbot-chart-result-container"]');
+    const interactiveContainer = root?.querySelector('[data-testid="qcharts-react-container"]');
+    const svg = interactiveContainer?.querySelector('svg');
+    const messageList = root?.closest('[data-testid="message-list"]');
+    const svgBox = svg?.getBoundingClientRect();
+    const assistantBox = root?.getBoundingClientRect();
+    const containerBox = chartContainer?.getBoundingClientRect();
+    const svgStyle = svg ? getComputedStyle(svg) : null;
+    const textNodes = svg
+      ? [...svg.querySelectorAll('text')].map((node) => String(node.textContent || '').trim()).filter(Boolean)
+      : [];
+    return {
+      captured: true,
+      assistant_present: Boolean(root),
+      chart_container_count: root?.querySelectorAll('[data-testid="qbot-chart-result-container"]').length || 0,
+      interactive_container_count: root?.querySelectorAll('[data-testid="qcharts-react-container"]').length || 0,
+      interactive_svg_count: root?.querySelectorAll('[data-testid="qcharts-react-container"] svg').length || 0,
+      static_result_count: root?.querySelectorAll('[data-testid="qbot-chart-result"]').length || 0,
+      fallback_result_count: root?.querySelectorAll('[data-testid="qbot-chart-result-fallback"]').length || 0,
+      chart_image_count: chartContainer?.querySelectorAll('img').length || 0,
+      svg_visible: Boolean(svg && svgBox && svgBox.width > 0 && svgBox.height > 0
+        && svgStyle?.display !== 'none' && svgStyle?.visibility !== 'hidden'),
+      rendered_width: svgBox?.width || 0,
+      rendered_height: svgBox?.height || 0,
+      assistant_width: assistantBox?.width || 0,
+      chart_container_width: containerBox?.width || 0,
+      inside_assistant_bounds: Boolean(svgBox && assistantBox
+        && svgBox.left >= assistantBox.left - 1
+        && svgBox.right <= assistantBox.right + 1),
+      inside_chart_container_bounds: Boolean(svgBox && containerBox
+        && svgBox.left >= containerBox.left - 1
+        && svgBox.right <= containerBox.right + 1),
+      chart_container_overflow_x: chartContainer
+        ? chartContainer.scrollWidth - chartContainer.clientWidth
+        : 0,
+      assistant_overflow_x: root ? root.scrollWidth - root.clientWidth : 0,
+      message_list_overflow_x: messageList ? messageList.scrollWidth - messageList.clientWidth : 0,
+      document_overflow_x: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      svg_text_nodes: textNodes,
+    };
+  }).catch((error) => ({ captured: false, error: error.message }));
+  state.screenshots.connector_016_interactive_chart = await shot(page, caseDir, 'connector-016-interactive-chart');
+  const screenshotPath = state.screenshots.connector_016_interactive_chart;
+  const screenshot = screenshotPath && fs.existsSync(screenshotPath) ? {
+    path: screenshotPath,
+    bytes: fs.statSync(screenshotPath).size,
+    sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+  } : null;
+  const verdict = interactiveChartReadbackVerdict({
+    caseId: coreBetaEvidenceCaseId(testCase),
+    legacyCaseId: String(testCase.id || ''),
+    prompt,
+    sendReceipts: state.artifacts.send_receipts || [],
+    session: runtimeReadback.session,
+    runtimeEvidence: runtimeReadback.runtimeEvidence,
+    dom,
+    screenshot,
+    replyComplete: !reply.incomplete,
+  });
+  state.artifacts.interactive_chart_readback = path.join(caseDir, 'interactive-chart-readback.json');
+  state.artifacts.core_beta_interactive_chart_readback = state.artifacts.interactive_chart_readback;
+  writeJsonFile(state.artifacts.interactive_chart_readback, verdict);
+  recordStep(
+    state,
+    '绑定同轮 qbot_chart/render_chart 工具结果、任务与运行时权威',
+    '确认发送、taskId、session、runtime authority、provider receipt 和 chart tool part 必须属于同一轮。',
+    JSON.stringify({ task_id: verdict.task_id, checks: verdict.evidence_checks }),
+    verdict.evidence_valid ? 'passed' : 'failed',
+    screenshotPath,
+    verdict.evidence_valid ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    'qcharts-react 交互图表、内容与布局硬 Oracle',
+    '合法四点输入必须以唯一 qcharts-react SVG 交互渲染；不得退化为静态/失败图片，四个标签和数值可读，边界无横向溢出，正文不泄漏 SVG data URI/base64。',
+    verdict.oracle_valid,
+    JSON.stringify(verdict.oracle_checks),
+  );
 }
 
 async function executeSitConnectorAddEntryScope({ page, state, caseDir }) {

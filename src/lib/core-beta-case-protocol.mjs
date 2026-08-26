@@ -236,7 +236,7 @@ export const PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS = new Set([
   'SIT-HOME-002',
   'SIT-HOME-012',
   'SIT-HOME-013',
-  'SIT-HOME-014',
+  'SIT-CONN-016',
 ]);
 
 export const CORE_BETA_SCENARIO_IDS = new Set([
@@ -268,6 +268,7 @@ export const CORE_BETA_SCENARIO_IDS = new Set([
     'MRSMOKE-FAIL-001',
     'MRSMOKE-ART-001',
     'MRSMOKE-ENTRY-001',
+    'MRSMOKE-CHART-001',
   ],
 ]);
 
@@ -427,6 +428,7 @@ const registerScenario = (id, driver, {
   ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', { conversation_required: false }],
   ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory'],
   ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', { conversation_required: false }],
+  ['MRSMOKE-CHART-001', 'qwork_mr_interactive_chart', { legacy_case_id: 'SIT-CONN-016' }],
 ].forEach(([id, driver, options]) => registerScenario(id, driver, options));
 
 const productionExtensionLegacyDrivers = Object.freeze({
@@ -668,6 +670,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'performance_metrics',
   'accessibility_scan',
   'external_navigation_trace',
+  'interactive_chart_readback',
   'rollback_trace',
   'model_route_trace',
   'activation_snapshot',

@@ -5023,7 +5023,7 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
+  /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
   '当前操作指南必须把同一正式Casebook的70条门禁和160条全量回归分别绑定READY预检',
 );
 assert.match(
@@ -8039,6 +8039,7 @@ if (incompleteQworkDailyReleaseAudit.ok
 const qworkMrSmokeCaseTypes = [
   'conversation', 'mcp_use', 'security_privacy', 'security_privacy', 'project_automation',
   'host_integration', 'model_routing', 'skill_lifecycle', 'security_privacy', 'artifact', 'task_lifecycle',
+  'mcp_use',
 ];
 const qworkMrSmokeCases = QWORK_MR_CORE_SMOKE_CASE_IDS.map((id, index) => ({
   ...productionCaseMetadata,
@@ -8048,7 +8049,7 @@ const qworkMrSmokeCases = QWORK_MR_CORE_SMOKE_CASE_IDS.map((id, index) => ({
   risk_domain: 'functional',
 }));
 if (!isQworkMrCoreSmokeCasePlan(qworkMrSmokeCases)) {
-  throw new Error('11 条 MR 核心冒烟必须匹配完整有序 ID、冻结类型和 qbot-core-beta/v2。');
+  throw new Error('12 条 MR 核心冒烟必须匹配完整有序 ID、冻结类型和 qbot-core-beta/v2。');
 }
 const qworkMrSmokeAudit = validateProductionCasePlan(qworkMrSmokeCases, {
   backendVersion: 'sit-backend-1',
@@ -8194,18 +8195,28 @@ assert.match(productionGrayCasebookBuilder, /next\['测试数据'\] = 'intervalM
 assert.match(productionGrayCasebookBuilder, /等待首次真实 interval tick 自动触发/, 'Casebook 生成器必须等待真实 interval tick');
 assert.doesNotMatch(productionGrayCasebookBuilder, /activeFrom=now-interval\+15s|约 15 秒后产生 schedule run/, 'Casebook 生成器禁止保留服务端会钳制的旧 interval 回填合同');
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
-  assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
+  assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
-  assert.match(documentText, /77ed6011448446929480c2a27617af7338039af78125bd6a729693f5eb129399/, '两份规范必须冻结新合并 Casebook SHA');
-  assert.match(documentText, /486e05b5d35233865bab3d4b32dc89a0bebc5549[\s\S]*0\.1\.4/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
-  assert.match(documentText, /31 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录近 2 天 31 个直接合入 MR');
+  assert.match(documentText, /6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d/, '两份规范必须冻结新合并 Casebook SHA');
+  assert.match(documentText, /877eea463eeea684394a3451596e9bb7e2f0cf5e[\s\S]*0\.1\.4/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
+  assert.match(documentText, /34 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录近 2 天 34 个直接合入 MR');
   assert.match(documentText, /MRSMOKE-SKILL-001[\s\S]*SIT-SKILL-MR-001/, '两份规范必须冻结 MR Skill 组合 driver 路由');
-  for (const evidenceRole of ['workspace_missing_error_readback', 'skill_install_attempt_ledger', 'external_navigation_trace']) {
+  for (const evidenceRole of ['workspace_missing_error_readback', 'skill_install_attempt_ledger', 'external_navigation_trace', 'interactive_chart_readback']) {
     assert.match(documentText, new RegExp(evidenceRole), `两份规范必须冻结新增 MR 专项证据角色 ${evidenceRole}`);
   }
-  assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*5 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 5 legacy 能力构成');
-  assert.match(documentText, /1\/11[\s\S]*1\/70|11 条[\s\S]*70 条/, '两份规范必须明确先完整执行 11 条，再独立执行 70 条');
+  assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*6 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 6 legacy 能力构成');
+  assert.match(documentText, /1\/12[\s\S]*1\/70|12 条[\s\S]*70 条/, '两份规范必须明确先完整执行 12 条，再独立执行 70 条');
 }
+
+const chartDriverStart = runner.indexOf('async function executeSitConnectorChartConversation');
+const chartDriverEnd = runner.indexOf('\nasync function executeSitConnectorAddEntryScope', chartDriverStart);
+const chartDriverSource = runner.slice(chartDriverStart, chartDriverEnd);
+assert.ok(chartDriverStart > 0 && chartDriverEnd > chartDriverStart, '必须存在交互图表 MR/门禁 Driver');
+assert.match(chartDriverSource, /interactiveChartReadbackVerdict/, '交互图表 Driver 必须生成独立 evidence_valid\/oracle_valid 专项证据');
+assert.match(chartDriverSource, /qcharts-react-container/, '交互图表 Driver 必须读取 qcharts-react SVG');
+assert.match(chartDriverSource, /qbot-chart-result-fallback/, '交互图表 Driver 必须显式拒绝静态失败 fallback');
+assert.match(chartDriverSource, /svg_text_nodes/, '交互图表 Driver 必须读取可见 SVG 标签与数值');
+assert.match(chartDriverSource, /document_overflow_x/, '交互图表 Driver 必须核对 document 横向边界');
 
 const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({
   id: 'SIT-HOME-056',

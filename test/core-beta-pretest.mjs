@@ -50,8 +50,8 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_11-70-160条_2026-08-26.xlsx');
-const grayExpectedSha = '77ed6011448446929480c2a27617af7338039af78125bd6a729693f5eb129399';
+const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx');
+const grayExpectedSha = '6048487f08087c6a910499769ca44bb5ec4e9ebc558738ae48b0c1ee97c19d9d';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -137,7 +137,7 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('486e05b5d35233865bab3d4b32dc89a0bebc5549'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('877eea463eeea684394a3451596e9bb7e2f0cf5e'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
 }
 const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');
@@ -187,15 +187,15 @@ if (mrSmokeAudit.status !== 0) {
   throw new Error(`MR smoke capability audit failed: ${mrSmokeAudit.stderr || mrSmokeAudit.stdout}`);
 }
 const mrSmokeAuditReport = JSON.parse(fs.readFileSync(path.join(mrSmokeAuditOut, 'capability-audit.json'), 'utf8'));
-if (mrSmokeAuditReport.protocol.case_count !== 11
-  || mrSmokeAuditReport.protocol.executable_count !== 11
+if (mrSmokeAuditReport.protocol.case_count !== 12
+  || mrSmokeAuditReport.protocol.executable_count !== 12
   || !mrSmokeAuditReport.runtime_dispatch?.ok
-  || mrSmokeAuditReport.runtime_dispatch.dispatchable_count !== 11
+  || mrSmokeAuditReport.runtime_dispatch.dispatchable_count !== 12
   || mrSmokeAuditReport.capability_summary?.runner_native !== 6
-  || mrSmokeAuditReport.capability_summary?.runner_legacy_verified !== 5
+  || mrSmokeAuditReport.capability_summary?.runner_legacy_verified !== 6
   || mrSmokeAuditReport.capability_summary?.strict_controller_required !== 0
   || mrSmokeAuditReport.capability_summary?.unsupported_runtime !== 0
-  || mrSmokeAuditReport.capability_summary?.directly_runnable_without_controller !== 11) {
+  || mrSmokeAuditReport.capability_summary?.directly_runnable_without_controller !== 12) {
   throw new Error(`MR smoke runtime dispatch audit mismatch: ${JSON.stringify({
     protocol: mrSmokeAuditReport.protocol,
     runtime_dispatch: mrSmokeAuditReport.runtime_dispatch,
@@ -215,9 +215,10 @@ const expectedMrSmokeIds = [
   'MRSMOKE-FAIL-001',
   'MRSMOKE-ART-001',
   'MRSMOKE-ENTRY-001',
+  'MRSMOKE-CHART-001',
 ];
 if (JSON.stringify(mrSmokeCases.map((item) => item.id)) !== JSON.stringify(expectedMrSmokeIds)) {
-  throw new Error('MR smoke Casebook IDs and order must stay frozen at 11/11.');
+  throw new Error('MR smoke Casebook IDs and order must stay frozen at 12/12.');
 }
 if (!mrSmokeCases.every((item) => (
   item.contract_version === 'qbot-core-beta/v2'
@@ -231,6 +232,24 @@ if (!/intervalMs=60000/.test(String(mrSmokeAuto?.test_data || ''))
   || !/activeFrom=当前时刻/.test(String(mrSmokeAuto?.test_data || ''))
   || /now-interval|约 15 秒/.test(`${mrSmokeAuto?.test_data || ''}\n${mrSmokeAuto?.expected_result || ''}`)) {
   throw new Error('MRSMOKE-AUTO-001 must use the server-supported 60-second interval without backdated activeFrom.');
+}
+const mrSmokeChart = mrSmokeCases.find((item) => item.id === 'MRSMOKE-CHART-001');
+if (mrSmokeChart?.case_type !== 'mcp_use'
+  || !/qcharts-react/.test(String(mrSmokeChart?.scenario || ''))
+  || !/曝光 12000.*点击 860.*报名 240.*成交 28/.test(String(mrSmokeChart?.test_data || ''))
+  || !mrSmokeChart?.evidence_roles?.includes('interactive_chart_readback')
+  || !/qbot_chart\/render_chart/.test(JSON.stringify(mrSmokeChart?.precise_assertions || {}))
+  || !/qbot-chart-result-fallback/.test(JSON.stringify(mrSmokeChart?.precise_assertions || {}))) {
+  throw new Error('MRSMOKE-CHART-001 must freeze the task-bound qcharts interactive SVG, exact data, fallback and evidence contract.');
+}
+const gateChart = grayCases.find((item) => item.id === 'SIT-CONN-016');
+if (gateChart?.case_type !== 'mcp_use'
+  || !gateChart?.evidence_roles?.includes('interactive_chart_readback')
+  || !/唯一 qcharts-react SVG/.test(JSON.stringify(gateChart?.precise_assertions || {}))) {
+  throw new Error('SIT-CONN-016 must be promoted into the 70 gate with the same interactive chart hard Oracle.');
+}
+if (!grayIds.includes('SIT-CONN-016') || grayIds.includes('SIT-HOME-014') || !fullIds.includes('SIT-HOME-014')) {
+  throw new Error('The 70 gate must promote SIT-CONN-016 and move SIT-HOME-014 into the 160-only normal-function increment.');
 }
 
 const pretestHelp = spawnSync(process.execPath, [
