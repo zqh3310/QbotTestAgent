@@ -2217,10 +2217,50 @@ test('Core Beta v2 screenshot fallback remains bounded when capture never settle
       sessionCreateTimeoutMs: 10,
       captureTimeoutMs: 10,
       detachTimeoutMs: 10,
+      retryDelayMs: 0,
     }),
-    /Page\.captureScreenshot fallback after 10ms/,
+    /两次有界截图均失败.*Page\.captureScreenshot fallback after 10ms/,
   );
   assert.ok(Date.now() - startedAt < 500, 'fallback capture must not wait forever');
+});
+
+test('Core Beta v2 screenshot retries one transient full-page failure with isolated viewport evidence', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-v2-shot-viewport-retry-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const screenshotCalls = [];
+  let cdpSessions = 0;
+  const page = {
+    async screenshot(options) {
+      screenshotCalls.push({ path: options.path, fullPage: options.fullPage });
+      if (screenshotCalls.length === 1) return new Promise(() => {});
+      fs.writeFileSync(options.path, 'viewport-retry-evidence');
+      return Buffer.from('viewport-retry-evidence');
+    },
+    context() {
+      return {
+        async newCDPSession() {
+          cdpSessions += 1;
+          return {
+            async send() { return new Promise(() => {}); },
+            async detach() {},
+          };
+        },
+      };
+    },
+  };
+  const screenshot = await captureCoreBetaV2Screenshot(page, root, 'viewport-retry', {
+    playwrightTimeoutMs: 10,
+    primaryHardTimeoutMs: 10,
+    sessionCreateTimeoutMs: 10,
+    captureTimeoutMs: 10,
+    detachTimeoutMs: 10,
+    retryDelayMs: 0,
+  });
+  assert.equal(fs.readFileSync(screenshot, 'utf8'), 'viewport-retry-evidence');
+  assert.deepEqual(screenshotCalls.map((item) => item.fullPage), [true, false]);
+  assert.equal(cdpSessions, 1);
+  assert.ok(screenshotCalls.every((item) => path.dirname(item.path) !== root));
+  assert.deepEqual(fs.readdirSync(root), ['viewport-retry.png']);
 });
 
 test('Core Beta v2 screenshot returns saved evidence when detach never settles', async (t) => {

@@ -38412,17 +38412,33 @@ export async function captureCoreBetaV2Screenshot(page, dir, name, {
   sessionCreateTimeoutMs = CORE_BETA_SCREENSHOT_SESSION_TIMEOUT_MS,
   captureTimeoutMs = CORE_BETA_SCREENSHOT_CAPTURE_TIMEOUT_MS,
   detachTimeoutMs = CORE_BETA_SCREENSHOT_DETACH_TIMEOUT_MS,
+  retryDelayMs = 250,
 } = {}) {
   const file = path.join(dir, `${name}.png`);
   ensureDir(path.dirname(file));
-  try {
-    await withCoreBetaScreenshotHardTimeout(
-      () => page.screenshot({ path: file, fullPage: true, timeout: playwrightTimeoutMs }),
-      primaryHardTimeoutMs,
-      'page.screenshot',
-    );
-    return file;
-  } catch (screenshotError) {
+  const attemptErrors = [];
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const fullPage = attempt === 1;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-screenshot-'));
+    const tempFile = path.join(tempDir, `${name}.png`);
+    let screenshotError = null;
+    try {
+      try {
+        await withCoreBetaScreenshotHardTimeout(
+          () => page.screenshot({ path: tempFile, fullPage, timeout: playwrightTimeoutMs }),
+          primaryHardTimeoutMs,
+          attempt === 1 ? 'page.screenshot' : 'page.screenshot viewport retry',
+        );
+        const buffer = fs.existsSync(tempFile) ? fs.readFileSync(tempFile) : Buffer.alloc(0);
+        if (buffer.length === 0) throw new Error('page.screenshot returned no image data');
+        fs.writeFileSync(file, buffer);
+        return file;
+      } catch (error) {
+        screenshotError = error;
+      }
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
     const message = String(screenshotError?.message || screenshotError);
     if (/Target page|Target closed|browser has been closed|page has been closed|Session closed/i.test(message)) {
       throw screenshotError;
@@ -38432,16 +38448,16 @@ export async function captureCoreBetaV2Screenshot(page, dir, name, {
       session = await withCoreBetaScreenshotHardTimeout(
         () => page.context().newCDPSession(page),
         sessionCreateTimeoutMs,
-        'newCDPSession fallback',
+        attempt === 1 ? 'newCDPSession fallback' : 'newCDPSession viewport retry fallback',
       );
       const captured = await withCoreBetaScreenshotHardTimeout(
         () => session.send('Page.captureScreenshot', {
           format: 'png',
           fromSurface: true,
-          captureBeyondViewport: true,
+          captureBeyondViewport: fullPage,
         }),
         captureTimeoutMs,
-        'Page.captureScreenshot fallback',
+        attempt === 1 ? 'Page.captureScreenshot fallback' : 'Page.captureScreenshot viewport retry fallback',
       );
       const buffer = typeof captured?.data === 'string'
         ? Buffer.from(captured.data, 'base64')
@@ -38450,7 +38466,7 @@ export async function captureCoreBetaV2Screenshot(page, dir, name, {
       fs.writeFileSync(file, buffer);
       return file;
     } catch (fallbackError) {
-      throw new Error(`截图失败：${message}；CDP fallback：${fallbackError.message}`, { cause: fallbackError });
+      attemptErrors.push(`attempt=${attempt} fullPage=${fullPage} primary=${message} fallback=${String(fallbackError?.message || fallbackError)}`);
     } finally {
       if (session?.detach) {
         await withCoreBetaScreenshotHardTimeout(
@@ -38462,7 +38478,12 @@ export async function captureCoreBetaV2Screenshot(page, dir, name, {
         });
       }
     }
+    if (attempt === 1) {
+      process.stderr.write(`[core-beta-screenshot] transient full-page capture failure; retrying viewport capture: ${attemptErrors.at(-1)}\n`);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(retryDelayMs) || 0)));
+    }
   }
+  throw new Error(`截图失败：两次有界截图均失败；${attemptErrors.join('；')}`);
 }
 
 async function shot(page, dir, name) {

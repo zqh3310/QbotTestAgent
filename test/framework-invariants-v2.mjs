@@ -7393,6 +7393,7 @@ const required = [
   ['回复证据绑定任务和本轮用户消息', /async function waitForReply[\s\S]*expectedUserText[\s\S]*boundTaskId[\s\S]*taskDrift[\s\S]*userMessageMatchesPrompt/],
   ['回复轮询中的 WebView 操作有独立硬超时', /withReplyPollHardTimeout[\s\S]*confirmation modal inspection[\s\S]*conversation snapshot[\s\S]*generation status inspection/],
   ['Core Beta v2 截图主路径与 CDP fallback 全链路使用独立硬超时', /captureCoreBetaV2Screenshot[\s\S]*withCoreBetaScreenshotHardTimeout[\s\S]*page\.screenshot[\s\S]*newCDPSession fallback[\s\S]*Page\.captureScreenshot fallback[\s\S]*CDP screenshot session detach/],
+  ['Core Beta v2 截图瞬态失败使用隔离临时文件和一次 viewport 重试', /captureCoreBetaV2Screenshot[\s\S]*attempt <= 2[\s\S]*fullPage = attempt === 1[\s\S]*mkdtempSync[\s\S]*qbot-core-beta-screenshot-[\s\S]*page\.screenshot viewport retry[\s\S]*Page\.captureScreenshot viewport retry fallback/],
   ['Core Beta v2 推荐选项按精确跳过入口处理并保留结构化证据', /assistantConfirmationSurfaceVerdict[\s\S]*option_count[\s\S]*assistant_confirmation_interactions[\s\S]*处理 Agent 推荐选项/],
   ['Core Beta v2 推荐选项点击绑定原 DOM 实例并识别同文案 replacement', /assistantConfirmationOriginalInstances[\s\S]*elementHandle[\s\S]*assistantConfirmationOriginalInstanceState[\s\S]*assistantConfirmationClickProgressVerdict[\s\S]*replacement_surface_detected/],
   ['稳定 QA 专家不存在时自动创建', /summonFirstExpertForCase[\s\S]*QBot QA 产品运营专家[\s\S]*createBasicExpert[\s\S]*稳定 QA 专家可定位/],

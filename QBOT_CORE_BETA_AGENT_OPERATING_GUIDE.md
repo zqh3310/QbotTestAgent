@@ -10,6 +10,22 @@
 
 ## 1. 当前状态
 
+- QWork `0.1.6-sit.3` 的第二轮生产灰度门禁批次永久冻结在
+  `teams360-automation/output/20260826133303_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-001fa96_casebook-1621632`。
+  已完成 `14/70`，全部真实执行且 `inherited=0/synthetic=0`。其中
+  `BETA-CHAT-006` 停止后正文丢失、`BETA-CHAT-007` 刷新重开后侧栏零选中态、
+  `BETA-CHAT-008` 20 任务派发后的 pending 池显示为零均保留为 manifest 完整的产品
+  Bug 候选；`BETA-CHAT-009` 两轮敏感信息最小复述/拒绝泄露链路完成。
+  `BETA-CHAT-010` 在原生 IME 产品动作前发生一次全页 Playwright 截图与 CDP fallback
+  同时超时，manifest 因缺少 10 个角色而不完整；但随后同一 renderer 的
+  `99-error.png`、断言截图和下一 Case 截图均立即成功，证明宿主/CDP 未失效，属于
+  可恢复瞬态截图的 framework issue。旧截图函数把超时 promise 直接指向最终证据路径，
+  且一次完整失败后没有新的 viewport 尝试。修复必须把每次 Playwright 尝试隔离到临时
+  文件，只有完整非空图像才写入最终路径，并在非 target-closed 的首次全页主路径/fallback
+  双失败后，以新的 CDP session 执行一次有界 viewport 重试；两次均失败仍须保留完整
+  错误并 fail-closed。完成 invariant、双框架全检、提交推送、新能力审计和精确 `.3
+  READY` 后，必须在新不可变目录从 `1/70` 完整串行重跑，`inherited=0`、
+  `synthetic=0`。
 - 当前用户要求先执行新增 MR 核心冒烟 11 条，再执行原生产灰度门禁 70 条。两批必须
   使用同一重新读回的 SIT 发布身份，但分别执行能力审计、精确 `READY`、独立不可变
   输出和逐 Case 可信复核；不得继承或合并原始结果。确认 framework/testcase issue 后，
