@@ -919,6 +919,17 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   时必须比较相同用户消息的出现次数，不能因旧末条消息仍等于 prompt 而复用旧回执。
   单独 sendCount、messageCount、activeId、running 或 composer 清空都不得确认发送，
   也不得据此提供 taskId、启动回复等待或把发送后证据角色标为适用。
+- `MRSMOKE-AUTH-001` 与 `SIT-WORKSPACE-001` 删除当前 task 的 cwd 后允许一种严格的
+  产品负向发送终态：发送控件已真实点击且仅点击一次，本轮用户消息没有新增，但至少
+  一项辅助状态发生变化，因此框架明确禁止重试；发送前后非空 taskId 必须稳定、终态
+  `running=false`，并连续至少 3 次读回同一 session/消息/可见回复签名。该终态必须写成
+  `qbot-workspace-rejected-send-receipt/v1`，保持 `confirmed_at` 为空，使用
+  `evidence_valid=true/oracle_valid=false`、`accepted_by_product=false` 和
+  `retry_safe=false` 表示“真实动作证据完整，但产品未接收本轮消息”。它可以满足
+  `send_receipt` 证据角色并把当前 Case 归为产品 Bug，但绝不能冒充确认发送、提供新的
+  taskId 或进入回复等待。点击缺失、重复点击、task 漂移、仍在运行、没有辅助变化、仍可
+  安全重试、前后快照/稳定读回不完整或本轮用户消息其实已新增时，继续按
+  `automation_error` fail-closed。legacy 与 Core Beta v2 必须共享同一生成和校验口径。
 - 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时，当前 Case 必须记录为 `failed/automation_error` 或 `blocked`，保留根因和诊断，并继续后续 Case；只有同时失去 CDP/renderer/宿主执行能力时才停止。`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须把当前 Case 记为明确失败，不得只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - `BETA-INIT-004` 点击清空前必须通过公开 `listSessions/getRunning` 枚举全部会话，只对真实 `running=true` 的会话调用按 ID 取消，并连续至少 3 次读回全部 idle；枚举、取消、稳定读回和前后截图必须写入独立不可变账本。若第一次真实 UI 清空明确返回 `active-session`，只能再次执行相同 idle 对账后重试一次真实 UI 清空，重试仍须重新捕获确认弹窗并使用不覆盖首次证据的截图；不得直接调用 `sessionsPurgeAllEnvs` 绕过 UI，不得盲等完整 Case 超时，也不得无限重试。清单不可读、取消失败或重试后仍被拒绝均为 `automation_error`，触发框架自愈与新目录全量重跑。

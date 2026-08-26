@@ -77,6 +77,10 @@ import {
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
 import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-general-assistant-evidence.mjs';
+import {
+  sendReceiptRecordEvidenceValid,
+  workspaceRejectedSendReceiptEvidence,
+} from '../src/lib/qbot-workspace-error-evidence.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = [
@@ -1140,6 +1144,7 @@ const required = [
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
   ['发送必须确认产品回执且第三次仅在安全条件下回退键盘 Enter', /(?=[\s\S]*async function send)(?=[\s\S]*attempt <= 3)(?=[\s\S]*composer-keyboard-enter)(?=[\s\S]*waitForSendReceipt)(?=[\s\S]*sendRetryIsSafe)(?=[\s\S]*未被产品接收)/],
   ['发送重试必须证明既无新增用户消息也无辅助变化', /function sendRetryIsSafe[\s\S]*!evidence\.has_new_expected_user[\s\S]*!evidence\.auxiliary_evidence[\s\S]*noObservedSendMutation && composerStillExact/],
+  ['cwd 删除专项必须把动作绑定的产品未接收终态材料化为有效负向发送证据', /(?=[\s\S]*executeWorkspaceMissingCwdReadback[\s\S]*allowWorkspaceProductRejection: true[\s\S]*expectedTaskId: taskId)(?=[\s\S]*workspaceRejectedSendReceiptEvidence[\s\S]*sendReceiptRecordEvidenceValid)(?=[\s\S]*evidenceValid \? 'bug' : 'automation_error')/],
   ['contenteditable 使用 fill 同步受控草稿状态', /async function fillComposer[\s\S]*editable[\s\S]*await input\.fill\(text\)[\s\S]*输入区文本与期望不一致/],
   ['可信度审计使用逐次发送前证据', /preSendTierChecks[\s\S]*successfulSendCount[\s\S]*preSendTierChecks\.length < successfulSendCount/],
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
@@ -1599,6 +1604,96 @@ if (
   || Object.values(singleSignalSendReceipts).some((receipt) => receipt.ok)
 ) {
   throw new Error(`发送回执必须要求本轮用户消息新增及至少一个辅助信号，不能接受孤立状态变化：${JSON.stringify({ unchangedSend, acceptedSend, duplicatePromptAccepted, singleSignalSendReceipts })}`);
+}
+
+const rejectedWorkspacePrompt = '目录删除后再次读取 a-marker.txt';
+const rejectedWorkspaceBefore = {
+  sendCount: 24,
+  messageCount: 12,
+  activeId: 'task-auth',
+  userCount: 6,
+  userTexts: ['旧问题'],
+  running: false,
+  composer: rejectedWorkspacePrompt,
+};
+const rejectedWorkspaceAfter = {
+  ...rejectedWorkspaceBefore,
+  sendCount: 25,
+  composer: '',
+};
+const rejectedWorkspaceSend = sendReceiptEvidence(
+  rejectedWorkspaceBefore,
+  rejectedWorkspaceAfter,
+  rejectedWorkspacePrompt,
+);
+const rejectedWorkspaceAttempts = [{
+  attempt: 1,
+  selector: '[data-testid="composer-send"]',
+  clicked: true,
+  receipt: { ...rejectedWorkspaceSend, snapshot: rejectedWorkspaceAfter },
+}];
+const rejectedWorkspaceStableObservations = [1, 2, 3].map((stableObservations) => ({
+  signature_sha256: 'a'.repeat(64),
+  task_id: 'task-auth',
+  running: false,
+  has_new_expected_user: false,
+  stable_observations: stableObservations,
+}));
+const rejectedWorkspaceTerminal = workspaceRejectedSendReceiptEvidence({
+  caseId: 'SIT-WORKSPACE-001',
+  action: '发送工作空间目录删除后的真实请求',
+  expectedPrompt: rejectedWorkspacePrompt,
+  expectedTaskId: 'task-auth',
+  before: rejectedWorkspaceBefore,
+  after: rejectedWorkspaceAfter,
+  attempts: rejectedWorkspaceAttempts,
+  sendEvidence: rejectedWorkspaceSend,
+  retrySafe: false,
+  terminalObservations: rejectedWorkspaceStableObservations,
+});
+assert.equal(rejectedWorkspaceSend.ok, false, '只有 sendCount 增长和 Composer 清空不能冒充确认发送');
+assert.equal(rejectedWorkspaceTerminal.evidence_valid, true, '动作绑定且禁止重试的产品未接收终态应形成有效负向发送证据');
+assert.equal(rejectedWorkspaceTerminal.oracle_valid, false, '产品未接收本轮用户消息必须保持业务 Oracle 失败');
+assert.equal(sendReceiptRecordEvidenceValid({
+  confirmed_at: '',
+  terminal_at: new Date().toISOString(),
+  attempts: rejectedWorkspaceAttempts,
+  negative_terminal: rejectedWorkspaceTerminal,
+}), true, '受验证的 cwd 产品拒绝终态应满足 send_receipt 证据角色');
+assert.equal(sendReceiptRecordEvidenceValid({
+  confirmed_at: new Date().toISOString(),
+  attempts: [{ clicked: true, receipt: { ok: true } }],
+}), true, '标准确认发送回执必须继续有效');
+for (const [name, overrides] of Object.entries({
+  task_drift: { after: { ...rejectedWorkspaceAfter, activeId: 'task-other' } },
+  still_running: { after: { ...rejectedWorkspaceAfter, running: true } },
+  retry_safe: { retrySafe: true },
+  no_click: { attempts: [{ ...rejectedWorkspaceAttempts[0], clicked: false }] },
+  duplicate_click: { attempts: [...rejectedWorkspaceAttempts, { ...rejectedWorkspaceAttempts[0], attempt: 2 }] },
+  user_message_accepted: {
+    after: { ...rejectedWorkspaceAfter, userCount: 7, userTexts: ['旧问题', rejectedWorkspacePrompt] },
+    sendEvidence: sendReceiptEvidence(
+      rejectedWorkspaceBefore,
+      { ...rejectedWorkspaceAfter, userCount: 7, userTexts: ['旧问题', rejectedWorkspacePrompt] },
+      rejectedWorkspacePrompt,
+    ),
+  },
+  unstable_terminal: { terminalObservations: rejectedWorkspaceStableObservations.slice(0, 2) },
+})) {
+  const invalid = workspaceRejectedSendReceiptEvidence({
+    caseId: 'SIT-WORKSPACE-001',
+    action: '发送工作空间目录删除后的真实请求',
+    expectedPrompt: rejectedWorkspacePrompt,
+    expectedTaskId: 'task-auth',
+    before: rejectedWorkspaceBefore,
+    after: rejectedWorkspaceAfter,
+    attempts: rejectedWorkspaceAttempts,
+    sendEvidence: rejectedWorkspaceSend,
+    retrySafe: false,
+    terminalObservations: rejectedWorkspaceStableObservations,
+    ...overrides,
+  });
+  assert.equal(invalid.evidence_valid, false, `${name} 不得被材料化为有效负向发送证据`);
 }
 
 const hardTimeoutStartedAt = Date.now();

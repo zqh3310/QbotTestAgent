@@ -10,6 +10,27 @@
 
 ## 1. 当前状态
 
+- 基于框架 `f6fa9cd1acc59a3639695495989b926b480aba95`、Casebook SHA
+  `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
+  QWork `0.1.6-sit.6` 启动的 12 条批次永久冻结在
+  `teams360-automation/output/20260827014455_sit-qwork-mrsmoke12_teams360-5.5.13-2119081949_qwork-0.1.6-sit.6_M3_serial_framework-f6fa9cd_casebook-d09e029`。
+  批次完成 `7/12`：`MRSMOKE-ACT-001` 为 raw bug，`MRSMOKE-WEB-001/002`、
+  `MRSMOKE-AUTO-001`、`MRSMOKE-NAV-001`、`MRSMOKE-ROUTE-001` 为 raw pass，以上
+  manifest 完整；`MRSMOKE-AUTH-001` 为 raw automation_error 且 `send_receipt` 无效。
+  AUTH 删除 cwd 后的真实点击使 `sendCount 24->25` 并清空 Composer，但当前 session
+  没有新增本轮用户消息、`running=false`，也没有新的结构化 cwd_missing 提示。严格发送
+  确认正确拒绝了成功判定且辅助变化正确禁止重试，但旧框架又把该产品未接收终态写成
+  无效 receipt，属于 framework issue。npm/Node runner 已退出，受管宿主 PID `42146`
+  保留；旧目录没有完整 summary，不得续写、继承或补 synthetic。修复必须保留严格确认，
+  只在一次真实点击、无新增本轮用户消息、有辅助变化、同一非空 taskId、`running=false`
+  和连续稳定读回全部成立时，生成
+  `qbot-workspace-rejected-send-receipt/v1`：`confirmed_at` 仍为空，
+  `evidence_valid=true/oracle_valid=false`，满足 `send_receipt` 证据角色并把产品未接收
+  或未形成结构化 cwd_missing 归为 Bug。点击/任务/稳定性或证据任一不完整仍为
+  automation_error。legacy、v2、manifest 和可信复核必须共享口径；完成双 invariant、
+  全检、提交推送、新能力审计与精确 `.6 READY` 后，只能在新不可变目录从 `1/12`
+  完整重跑，`inherited=0`、`synthetic=0`。后续通过不得抹去本批次 framework issue。
+
 - QWork `0.1.6-sit.6` 的 SIT host-core、UI 和 qbot-core 制品已经完整下载；受管宿主
   恢复后不能只重挂载版本化 WebView。标准 helper 必须先确认 host-core 已为 `.6`，
   仅在公开状态为目标 `.6` 的 `ready-to-activate` 时调用一次

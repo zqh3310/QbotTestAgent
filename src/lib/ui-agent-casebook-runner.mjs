@@ -31,7 +31,11 @@ import {
 } from './core-beta-casebook-contract.mjs';
 import { buildCrossRunLineage } from './casebook-lineage.mjs';
 import { expertGeneralAssistantExecutionVerdict } from './expert-general-assistant-evidence.mjs';
-import { workspaceMissingErrorVerdict } from './qbot-workspace-error-evidence.mjs';
+import {
+  sendReceiptRecordEvidenceValid,
+  workspaceMissingErrorVerdict,
+  workspaceRejectedSendReceiptEvidence,
+} from './qbot-workspace-error-evidence.mjs';
 import {
   captureExternalWebLinkOutcome,
   webRuntimeAuthorityVerdict,
@@ -11205,6 +11209,13 @@ async function executeWorkspaceMissingCwdReadback({
 }) {
   const taskBefore = await qbotE2EState(page);
   const taskId = String(taskBefore?.activeId || '');
+  const sessionBefore = taskId
+    ? await page.evaluate(async (id) => window.agent.readSession(id, 'desktop-local'), taskId).catch(() => null)
+    : null;
+  const visibleTextBefore = await page.locator('[data-testid="message-list"] [data-role="assistant"], [data-testid="assistant-thread"] [data-role="assistant"]')
+    .last()
+    .innerText({ timeout: 800 })
+    .catch(() => '');
   const prompt = `当前任务的工作目录仍应是 ${workspaceA}。请再次读取 a-marker.txt；如果目录不存在，请直接告诉我。`;
   fs.rmSync(workspaceA, { recursive: true, force: true });
   const workspaceDeleted = !fs.existsSync(workspaceA);
@@ -11216,15 +11227,23 @@ async function executeWorkspaceMissingCwdReadback({
   });
   await fillComposer(page, prompt, state, '输入工作空间目录删除后的真实请求');
   let sendError = '';
+  let sendOutcome = null;
   try {
-    await send(page, state, '发送工作空间目录删除后的真实请求');
+    sendOutcome = await send(page, state, '发送工作空间目录删除后的真实请求', {
+      allowWorkspaceProductRejection: true,
+      expectedTaskId: taskId,
+    });
   } catch (error) {
     sendError = String(error?.message || error);
   }
   const deadline = Date.now() + 30_000;
+  const observationStartedAt = Date.now();
   let session = null;
   let visibleText = '';
   let bridge = await qbotE2EState(page);
+  let stableTerminalObservations = 0;
+  let previousTerminalSignature = '';
+  const terminalObservations = [];
   while (Date.now() < deadline) {
     session = taskId
       ? await page.evaluate(async (id) => window.agent.readSession(id, 'desktop-local'), taskId).catch(() => null)
@@ -11235,19 +11254,63 @@ async function executeWorkspaceMissingCwdReadback({
       .catch(() => '');
     bridge = await qbotE2EState(page);
     const lastAssistant = [...(session?.messages || [])].reverse().find((message) => message?.role === 'assistant');
+    const signature = JSON.stringify({
+      task_id: String(session?.id || ''),
+      message_ids: (session?.messages || []).map((message) => String(message?.id || '')),
+      last_assistant_id: String(lastAssistant?.id || ''),
+      last_assistant_error_code: String(lastAssistant?.errorCode || ''),
+      visible_text: visibleText,
+      running: Boolean(bridge?.running),
+    });
+    stableTerminalObservations = signature === previousTerminalSignature
+      ? stableTerminalObservations + 1
+      : 1;
+    previousTerminalSignature = signature;
+    terminalObservations.push({
+      observed_at: new Date().toISOString(),
+      signature_sha256: createHash('sha256').update(signature).digest('hex'),
+      task_id: String(session?.id || ''),
+      message_count: Array.isArray(session?.messages) ? session.messages.length : null,
+      user_count: Array.isArray(session?.messages)
+        ? session.messages.filter((message) => message?.role === 'user').length
+        : null,
+      last_assistant_id: String(lastAssistant?.id || ''),
+      last_assistant_error_code: String(lastAssistant?.errorCode || ''),
+      running: Boolean(bridge?.running),
+      stable_observations: stableTerminalObservations,
+    });
     if (!bridge?.running && (lastAssistant?.errorCode || lastAssistant?.userErrorNotice)) break;
+    if (
+      sendOutcome?.product_rejection_terminal === true
+      && !bridge?.running
+      && stableTerminalObservations >= 3
+    ) break;
     await page.waitForTimeout(300);
   }
   const verdict = workspaceMissingErrorVerdict({ cwd: workspaceA, session, visibleText });
   const taskIdStable = Boolean(taskId) && String(session?.id || '') === taskId;
-  const oracleValid = verdict.oracle_valid
-    && workspaceDeleted
+  const negativeSendEvidenceValid = sendOutcome?.negative_terminal?.evidence_valid === true;
+  const confirmedSend = sendOutcome?.ok === true;
+  const evidenceValid = Boolean(
+    workspaceDeleted
     && taskIdStable
     && !sendError
+    && (confirmedSend || negativeSendEvidenceValid)
+    && session && typeof session === 'object'
+    && bridge?.running === false
+    && (!negativeSendEvidenceValid || stableTerminalObservations >= 3)
+  );
+  const oracleValid = evidenceValid
+    && confirmedSend
+    && verdict.oracle_valid
+    && workspaceDeleted
+    && taskIdStable
     && bridge?.running === false;
   const readbackFile = path.join(caseDir, 'workspace-missing-error-readback.json');
   writeJsonFile(readbackFile, {
     ...verdict,
+    valid: evidenceValid,
+    evidence_valid: evidenceValid,
     oracle_valid: oracleValid,
     case_id: state.id,
     prompt,
@@ -11255,6 +11318,20 @@ async function executeWorkspaceMissingCwdReadback({
     task_id_before_send: taskId,
     task_id_stable: taskIdStable,
     send_error: sendError,
+    send_outcome: {
+      confirmed: confirmedSend,
+      product_rejection_terminal: sendOutcome?.product_rejection_terminal === true,
+      negative_terminal: sendOutcome?.negative_terminal || null,
+    },
+    before_snapshot: {
+      task_id: String(sessionBefore?.id || taskId),
+      message_ids: (sessionBefore?.messages || []).map((message) => String(message?.id || '')),
+      visible_text: visibleTextBefore,
+    },
+    terminal_observation_count: terminalObservations.length,
+    stable_terminal_observations: stableTerminalObservations,
+    terminal_observations: terminalObservations,
+    observed_ms: Date.now() - observationStartedAt,
     running_after: Boolean(bridge?.running),
     captured_at: new Date().toISOString(),
   });
@@ -11263,6 +11340,7 @@ async function executeWorkspaceMissingCwdReadback({
     path: readbackFile,
     bytes: fs.statSync(readbackFile).size,
     sha256: createHash('sha256').update(fs.readFileSync(readbackFile)).digest('hex'),
+    evidence_valid: evidenceValid,
     oracle_valid: oracleValid,
   };
   for (const evidenceFile of [securityTraceFile, integrityReadbackFile]) {
@@ -11273,19 +11351,19 @@ async function executeWorkspaceMissingCwdReadback({
   recordStep(
     state,
     '删除 Case 自有工作空间后在同一任务再次发送',
-    '必须保留原 taskId，由真实发送链路形成结构化 cwd_missing 助手错误并从公开 readSession 读回。',
-    JSON.stringify({ taskId, workspaceDeleted, sendError, checks: verdict.checks }),
+    '必须保留原 taskId，由真实点击形成结构化 cwd_missing 助手错误；若产品在新增用户消息前拒绝动作，必须保存同任务稳定、禁止重试的负向发送终态。',
+    JSON.stringify({ taskId, workspaceDeleted, sendError, evidenceValid, send_outcome: sendOutcome, checks: verdict.checks }),
     oracleValid ? 'passed' : 'failed',
     state.screenshots.workspace_missing_error,
-    oracleValid ? '' : 'automation_error',
+    oracleValid ? '' : evidenceValid ? 'bug' : 'automation_error',
   );
   recordAssertion(
     state,
     '工作空间不存在错误结构化且不泄露内部字段',
     '末条助手错误必须是 desktop_local_workspace_unavailable/chat.workspace.cwd_missing，cwd 精确匹配且 retryable=false；可见中文包含路径和“不存在”，但不显示 causeCode、内部错误码或 stack。',
     oracleValid,
-    JSON.stringify({ checks: verdict.checks, visible_text: visibleText, task_id_stable: taskIdStable }),
-    oracleValid ? '' : 'automation_error',
+    JSON.stringify({ evidence_valid: evidenceValid, checks: verdict.checks, visible_text: visibleText, task_id_stable: taskIdStable }),
+    oracleValid ? '' : evidenceValid ? 'bug' : 'automation_error',
   );
   return oracleValid;
 }
@@ -26524,7 +26602,10 @@ async function fillComposer(page, text, state, action = '输入测试问题') {
   if (!exact) throw new Error(`${action}后输入区文本与期望不一致，已阻止发送旧草稿。`);
 }
 
-async function send(page, state, action = '点击发送') {
+async function send(page, state, action = '点击发送', {
+  allowWorkspaceProductRejection = false,
+  expectedTaskId = '',
+} = {}) {
   const selectors = [
     '[data-testid="composer-send"]',
     '[aria-label="发送消息"]',
@@ -26634,9 +26715,89 @@ async function send(page, state, action = '点击发送') {
     }
     break;
   }
-  if (!Array.isArray(state.artifacts.send_receipts)) state.artifacts.send_receipts = [];
-  state.artifacts.send_receipts.push({ action, prompt: promptAtClick, confirmed_at: '', attempts });
   const finalSnapshot = attempts.at(-1)?.receipt?.snapshot || beforeReceipt;
+  const finalSendEvidence = attempts.at(-1)?.receipt || sendReceiptEvidence(beforeReceipt, finalSnapshot, promptAtClick);
+  const retrySafe = sendRetryIsSafe(beforeReceipt, finalSnapshot, promptAtClick);
+  let negativeTerminal = workspaceRejectedSendReceiptEvidence({
+    caseId: state?.id,
+    action,
+    expectedPrompt: promptAtClick,
+    expectedTaskId,
+    before: beforeReceipt,
+    after: finalSnapshot,
+    attempts,
+    sendEvidence: finalSendEvidence,
+    retrySafe,
+  });
+  if (allowWorkspaceProductRejection && negativeTerminal.candidate_valid) {
+    const stableReadback = await observeWorkspaceRejectedSendTerminal(page, {
+      before: beforeReceipt,
+      initialSnapshot: finalSnapshot,
+      expectedPrompt: promptAtClick,
+      expectedTaskId,
+    });
+    const stableSendEvidence = sendReceiptEvidence(beforeReceipt, stableReadback.snapshot, promptAtClick);
+    if (stableSendEvidence.ok) {
+      const clickedAttempt = [...attempts].reverse().find((attempt) => attempt?.clicked === true);
+      if (clickedAttempt) clickedAttempt.receipt = { ...stableSendEvidence, snapshot: stableReadback.snapshot };
+      if (!Array.isArray(state.artifacts.send_receipts)) state.artifacts.send_receipts = [];
+      state.artifacts.send_receipts.push({
+        action,
+        prompt: promptAtClick,
+        confirmed_at: new Date().toISOString(),
+        attempts,
+      });
+      recordStep(
+        state,
+        action,
+        '发送点击后的延迟读回若出现本轮新增用户消息及辅助变化，必须恢复为标准确认发送，不得误记为产品拒绝。',
+        `已取得延迟确认发送回执：${stableSendEvidence.reasons.join('；')}`,
+        'passed',
+      );
+      return { ...stableSendEvidence, snapshot: stableReadback.snapshot };
+    }
+    negativeTerminal = workspaceRejectedSendReceiptEvidence({
+      caseId: state?.id,
+      action,
+      expectedPrompt: promptAtClick,
+      expectedTaskId,
+      before: beforeReceipt,
+      after: stableReadback.snapshot,
+      attempts,
+      sendEvidence: stableSendEvidence,
+      retrySafe: sendRetryIsSafe(beforeReceipt, stableReadback.snapshot, promptAtClick),
+      terminalObservations: stableReadback.observations,
+    });
+  }
+  if (!Array.isArray(state.artifacts.send_receipts)) state.artifacts.send_receipts = [];
+  const receiptRecord = {
+    action,
+    prompt: promptAtClick,
+    confirmed_at: '',
+    terminal_at: allowWorkspaceProductRejection && negativeTerminal.evidence_valid
+      ? new Date().toISOString()
+      : '',
+    negative_terminal: allowWorkspaceProductRejection ? negativeTerminal : null,
+    attempts,
+  };
+  state.artifacts.send_receipts.push(receiptRecord);
+  if (allowWorkspaceProductRejection && sendReceiptRecordEvidenceValid(receiptRecord)) {
+    recordStep(
+      state,
+      `${action}产品拒绝终态`,
+      '真实发送点击后若产品产生辅助状态变化、未新增本轮用户消息且同一任务已稳定停止，必须禁止重试并保存证据有效、业务失败的负向发送收据。',
+      JSON.stringify({ negative_terminal: negativeTerminal, finalSnapshot }),
+      'failed',
+      '',
+      'bug',
+    );
+    return {
+      ...finalSendEvidence,
+      product_rejection_terminal: true,
+      negative_terminal: negativeTerminal,
+      snapshot: finalSnapshot,
+    };
+  }
   recordStep(state, `${action}回执校验`, '点击发送后必须观察到 sendCount/activeId/messageCount/当前用户消息/运行态中的至少一种可信变化；仅“点击成功”不能算发送成功。', JSON.stringify({ attempts, finalSnapshot }), 'failed', '', 'automation_error');
   throw new Error(`${action}未被产品接收；安全重试后仍没有可信发送回执。`);
 }
@@ -26678,8 +26839,55 @@ async function sendReceiptSnapshot(page) {
     running: Boolean(bridge?.running || generating),
     userCount: Number(conversation?.userCount || 0),
     userTexts: Array.isArray(conversation?.userTexts) ? conversation.userTexts : [],
+    assistantTexts: Array.isArray(conversation?.assistantTexts) ? conversation.assistantTexts : [],
     composer: String(composer || ''),
   };
+}
+
+async function observeWorkspaceRejectedSendTerminal(page, {
+  before = {},
+  initialSnapshot = {},
+  expectedPrompt = '',
+  expectedTaskId = '',
+  timeoutMs = 5000,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const observations = [];
+  let snapshot = initialSnapshot;
+  let previousSignature = '';
+  let stableObservations = 0;
+  while (Date.now() < deadline) {
+    const sendEvidence = sendReceiptEvidence(before, snapshot, expectedPrompt);
+    const signature = JSON.stringify({
+      task_id: String(snapshot?.activeId || ''),
+      send_count: Number(snapshot?.sendCount || 0),
+      message_count: Number(snapshot?.messageCount || 0),
+      user_texts: Array.isArray(snapshot?.userTexts) ? snapshot.userTexts : [],
+      assistant_texts: Array.isArray(snapshot?.assistantTexts) ? snapshot.assistantTexts : [],
+      composer: String(snapshot?.composer || ''),
+      running: Boolean(snapshot?.running),
+    });
+    const signatureSha256 = createHash('sha256').update(signature).digest('hex');
+    const terminal = String(snapshot?.activeId || '') === String(expectedTaskId || '')
+      && snapshot?.running === false
+      && sendEvidence.has_new_expected_user === false;
+    stableObservations = terminal
+      ? signatureSha256 === previousSignature ? stableObservations + 1 : 1
+      : 0;
+    previousSignature = terminal ? signatureSha256 : '';
+    observations.push({
+      observed_at: new Date().toISOString(),
+      signature_sha256: signatureSha256,
+      task_id: String(snapshot?.activeId || ''),
+      running: Boolean(snapshot?.running),
+      has_new_expected_user: sendEvidence.has_new_expected_user === true,
+      stable_observations: stableObservations,
+    });
+    if (stableObservations >= 3) break;
+    await page.waitForTimeout(300);
+    snapshot = await sendReceiptSnapshot(page);
+  }
+  return { snapshot, observations };
 }
 
 export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = '') {
@@ -29840,11 +30048,15 @@ export function buildCaseEvidenceManifest(state, caseDir) {
     send_receipt: coreBetaEvidence.send_receipt?.available === true
       ? coreBetaEvidence.send_receipt
       : Array.isArray(state.artifacts?.send_receipts)
-        && state.artifacts.send_receipts.some((item) => (
-          Array.isArray(item?.attempts)
-          && item.attempts.some((attempt) => attempt?.clicked === true && attempt?.receipt?.ok === true)
-        ))
-        ? { available: true, receipt_count: state.artifacts.send_receipts.length, source: 'confirmed product send receipt' }
+        && state.artifacts.send_receipts.some((item) => sendReceiptRecordEvidenceValid(item))
+        ? {
+          available: true,
+          receipt_count: state.artifacts.send_receipts.length,
+          confirmed_count: state.artifacts.send_receipts.filter((item) => Boolean(item?.confirmed_at)).length,
+          negative_terminal_count: state.artifacts.send_receipts
+            .filter((item) => item?.negative_terminal?.evidence_valid === true).length,
+          source: 'confirmed product send receipt or validated workspace product rejection terminal',
+        }
         : { available: false, reason: '缺少产品确认的发送收据。' },
     task_id: taskId
       ? {
