@@ -24,9 +24,168 @@ const DOCUMENT_EXTENSIONS = new Set([
 const IMAGE_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([...DOCUMENT_EXTENSIONS, ...IMAGE_EXTENSIONS]);
 const INLINE_TEXT_EXTENSIONS = new Set(['.csv', '.htm', '.html', '.js', '.json', '.log', '.md', '.markdown', '.ts', '.txt']);
+const FILE_INPUT_ATTACHMENT_PREFIX = 'qwork-file-input:';
+const LEGACY_DOCUMENT_ATTACHMENT_PREFIX = 'qbot-document-attachment:';
+const FILE_INPUT_SOURCE_KINDS = new Set(['native-path', 'workspace-path', 'materialized-bytes', 'teams-stream', 'generated']);
+const FILE_INPUT_STORAGE_KINDS = new Set(['external-reference', 'qwork-session-local']);
 
 export function isSupportedQbotAttachmentPath(file) {
   return SUPPORTED_ATTACHMENT_EXTENSIONS.has(path.extname(String(file || '')).toLowerCase());
+}
+
+export function normalizeElectronStagedAttachmentResult(result) {
+  if (!result || result.ok !== true) {
+    return {
+      ok: false,
+      contract: 'invalid',
+      descriptors: [],
+      names: [],
+      kinds: [],
+      reason: String(result?.error || '附件暂存桥返回失败。'),
+    };
+  }
+
+  const usesFileIngress = Array.isArray(result.files);
+  const records = usesFileIngress
+    ? result.files
+    : Array.isArray(result.attachments) ? result.attachments : [];
+  const descriptors = [];
+  const invalidRecords = [];
+
+  records.forEach((record, index) => {
+    if (!record || typeof record !== 'object') {
+      invalidRecords.push(`record_${index + 1}_not_object`);
+      return;
+    }
+    if (usesFileIngress) {
+      const fileId = String(record.fileId || '').trim();
+      const absolutePath = String(record.absolutePath || '').trim();
+      const displayName = String(record.displayName || '').trim();
+      const byteSize = Number(record.byteSize);
+      const sourceKind = String(record.sourceKind || '').trim();
+      const storageKind = String(record.storageKind || '').trim();
+      const storageSourceValid = storageKind === 'external-reference'
+        ? ['native-path', 'workspace-path', 'generated'].includes(sourceKind)
+        : storageKind === 'qwork-session-local'
+          ? ['materialized-bytes', 'teams-stream'].includes(sourceKind)
+          : false;
+      if (
+        record.schemaVersion !== 1
+        || !fileId
+        || !absolutePath
+        || !displayName
+        || !Number.isSafeInteger(byteSize)
+        || byteSize < 0
+        || !FILE_INPUT_SOURCE_KINDS.has(sourceKind)
+        || !FILE_INPUT_STORAGE_KINDS.has(storageKind)
+        || !storageSourceValid
+      ) {
+        invalidRecords.push(`record_${index + 1}_invalid_file_ingress_descriptor`);
+        return;
+      }
+      const mimeType = String(record.mimeHint || '').trim() || 'application/octet-stream';
+      const kind = String(record.kind || '').trim() || 'file';
+      const payload = {
+        schemaVersion: 1,
+        fileId,
+        absolutePath,
+        displayName,
+        mimeHint: String(record.mimeHint || '').trim() || null,
+        byteSize,
+        kind,
+        sourceKind,
+        storageKind,
+      };
+      descriptors.push({
+        id: fileId,
+        type: kind === 'image' ? 'image' : 'document',
+        name: displayName,
+        contentType: mimeType,
+        content: [{
+          type: 'file',
+          filename: displayName,
+          mimeType,
+          data: `${FILE_INPUT_ATTACHMENT_PREFIX}${JSON.stringify(payload)}`,
+        }],
+      });
+      return;
+    }
+
+    const id = String(record.id || '').trim();
+    const name = String(record.name || record.originalName || record.displayName || '').trim();
+    if (!id || !name) {
+      invalidRecords.push(`record_${index + 1}_invalid_legacy_attachment_descriptor`);
+      return;
+    }
+    const mimeType = String(record.contentType || '').trim() || 'application/octet-stream';
+    const kind = String(record.kind || record.type || '').trim() || 'document';
+    const payload = {
+      id,
+      name,
+      originalName: record.originalName || null,
+      displayName: record.displayName || record.originalName || name,
+      kind,
+      type: String(record.type || '').trim() || kind,
+      contentType: String(record.contentType || '').trim() || null,
+      size: record.size ?? null,
+      ext: record.ext || null,
+      stagedPath: record.stagedPath || null,
+      stageId: record.stageId || null,
+      path: record.path || null,
+      extractedPath: record.extractedPath || null,
+      extractionStatus: record.extractionStatus || null,
+      truncated: Boolean(record.truncated),
+    };
+    descriptors.push({
+      id,
+      type: kind === 'image' ? 'image' : 'document',
+      name,
+      contentType: mimeType,
+      content: [{
+        type: 'file',
+        filename: name,
+        mimeType,
+        data: `${LEGACY_DOCUMENT_ATTACHMENT_PREFIX}${JSON.stringify(payload)}`,
+      }],
+    });
+  });
+
+  const rejected = Array.isArray(result.rejected) ? result.rejected : [];
+  if (invalidRecords.length) {
+    return {
+      ok: false,
+      contract: usesFileIngress ? 'qwork-file-input/v1' : 'qbot-document-attachment/legacy',
+      descriptors: [],
+      names: [],
+      kinds: [],
+      rejected,
+      reason: `附件暂存桥返回了无效 descriptor：${invalidRecords.join(', ')}`,
+    };
+  }
+  if (!descriptors.length) {
+    const rejectionReason = rejected
+      .map((item) => String(item?.message || item?.error || item?.code || '').trim())
+      .filter(Boolean)
+      .join('；');
+    return {
+      ok: false,
+      contract: usesFileIngress ? 'qwork-file-input/v1' : 'qbot-document-attachment/legacy',
+      descriptors: [],
+      names: [],
+      kinds: [],
+      rejected,
+      reason: rejectionReason || '附件暂存桥未返回任何文件。',
+    };
+  }
+  return {
+    ok: true,
+    contract: usesFileIngress ? 'qwork-file-input/v1' : 'qbot-document-attachment/legacy',
+    descriptors,
+    names: descriptors.map((item) => item.name),
+    kinds: records.map((item) => String(item?.kind || item?.type || '').trim() || 'attachment'),
+    rejected,
+    reason: '',
+  };
 }
 
 export async function uploadAttachmentsInComposer(page, files, {
@@ -271,6 +430,7 @@ async function electronAttachmentDiagnostics(page) {
   return page.evaluate(async () => {
     const shell = globalThis.window?.agent?.shell;
     const out = {
+      hasStageFiles: typeof shell?.stageFiles === 'function',
       hasStageAttachments: typeof shell?.stageAttachments === 'function',
       hasStageDocumentAttachments: typeof shell?.stageDocumentAttachments === 'function',
       hasFeedbackDiagnostics: typeof shell?.getFeedbackDiagnostics === 'function',
@@ -290,6 +450,7 @@ async function electronAttachmentDiagnostics(page) {
     }
     return out;
   }).catch((error) => ({
+    hasStageFiles: false,
     hasStageAttachments: false,
     hasStageDocumentAttachments: false,
     hasFeedbackDiagnostics: false,
@@ -365,7 +526,7 @@ async function uploadViaInlineTextComposer(page, existing, missing) {
 
 async function uploadViaElectronUnifiedAttachmentBridge(page, existing, missing) {
   const diagnostics = await electronAttachmentDiagnostics(page);
-  if (!diagnostics.hasStageAttachments) {
+  if (!diagnostics.hasStageFiles && !diagnostics.hasStageAttachments) {
     return {
       status: 'not_available',
       attached: [],
@@ -373,7 +534,7 @@ async function uploadViaElectronUnifiedAttachmentBridge(page, existing, missing)
       expected_names: existing.map((file) => path.basename(file)),
       visible_names: [],
       method: 'electron-attachment-bridge',
-      reason: '当前页面未暴露 window.agent.shell.stageAttachments。',
+      reason: '当前页面未暴露 window.agent.shell.stageFiles/stageAttachments。',
       diagnostics,
     };
   }
@@ -397,10 +558,11 @@ async function uploadViaElectronUnifiedAttachmentBridge(page, existing, missing)
       status: 'passed',
       attached: existing,
       missing,
-      method: 'electron-attachment-bridge:stageAttachments(filePaths)+composer.addAttachment',
+      method: `electron-attachment-bridge:${direct.bridge_method}(filePaths)+composer.addAttachment`,
       diagnostics,
       staged_names: direct.names,
       staged_kinds: direct.kinds,
+      staged_contract: direct.contract,
     });
   }
   if (direct.status === 'not_available') {
@@ -628,75 +790,58 @@ async function stageDocumentsDirectlyInComposer(page, existing) {
 }
 
 async function stageAttachmentsDirectlyInComposer(page, existing) {
-  return page.evaluate(async (filePaths) => {
+  const staged = await page.evaluate(async (filePaths) => {
     const shell = globalThis.window?.agent?.shell;
     const composer = globalThis.window?.__aui?.threads?.main?.composer
       || globalThis.window?.__aui?._thread?.composer;
-    if (!shell || typeof shell.stageAttachments !== 'function') {
-      return { status: 'not_available', reason: 'window.agent.shell.stageAttachments 不可用。' };
+    const bridgeMethod = typeof shell?.stageFiles === 'function'
+      ? 'stageFiles'
+      : typeof shell?.stageAttachments === 'function' ? 'stageAttachments' : '';
+    if (!bridgeMethod) {
+      return { status: 'not_available', reason: 'window.agent.shell.stageFiles/stageAttachments 不可用。' };
     }
     if (!composer || typeof composer.addAttachment !== 'function') {
       return { status: 'not_available', reason: 'window.__aui composer.addAttachment 不可用。' };
     }
-    const result = await shell.stageAttachments({ filePaths });
-    if (!result || result.ok !== true) {
-      return { status: 'failed', reason: result?.error || 'stageAttachments 返回失败。' };
-    }
-    const attachments = Array.isArray(result.attachments) ? result.attachments : [];
-    if (!attachments.length) {
-      return { status: 'failed', reason: 'stageAttachments 未返回任何附件。' };
-    }
-    const documentPrefix = 'qbot-document-attachment:';
-    const descriptorFor = (attachment) => {
-      // Keep this mapping identical to the product's
-      // stagedAttachmentToDescriptor(). Current desktop attachments are
-      // reference-first: images and text files do not carry renderer-visible
-      // bytes/data URLs. Converting them to inline image/text parts here would
-      // therefore manufacture an empty attachment and invalidate the E2E.
-      const mimeType = attachment.contentType || 'application/octet-stream';
-      const kind = attachment.kind || attachment.type || 'document';
-      const payload = {
-        id: attachment.id || null,
-        name: attachment.name || kind,
-        originalName: attachment.originalName || null,
-        displayName: attachment.displayName || attachment.originalName || attachment.name || null,
-        kind,
-        type: attachment.type || kind,
-        contentType: attachment.contentType || null,
-        size: attachment.size ?? null,
-        ext: attachment.ext || null,
-        stagedPath: attachment.stagedPath || null,
-        stageId: attachment.stageId || null,
-        path: attachment.path || null,
-        extractedPath: attachment.extractedPath || null,
-        extractionStatus: attachment.extractionStatus || null,
-        truncated: !!attachment.truncated,
-      };
-      return {
-        id: attachment.id,
-        type: kind === 'image' ? 'image' : 'document',
-        name: attachment.name || kind,
-        contentType: mimeType,
-        content: [{
-          type: 'file',
-          filename: attachment.name || kind,
-          mimeType,
-          data: `${documentPrefix}${JSON.stringify(payload)}`,
-        }],
-      };
-    };
-    for (const attachment of attachments) {
-      await composer.addAttachment(descriptorFor(attachment));
-    }
-    return {
-      status: 'passed',
-      names: attachments.map((item) => item.name || 'attachment'),
-      kinds: attachments.map((item) => item.kind || item.type || 'attachment'),
-    };
+    const result = await shell[bridgeMethod]({ filePaths });
+    return { status: 'staged', bridge_method: bridgeMethod, result };
   }, existing).catch((error) => ({
     status: 'failed',
     reason: `直接加入 composer 失败：${error.message}`,
   }));
+  if (staged.status !== 'staged') return staged;
+
+  const normalized = normalizeElectronStagedAttachmentResult(staged.result);
+  if (!normalized.ok) {
+    return {
+      status: 'failed',
+      reason: normalized.reason,
+      bridge_method: staged.bridge_method,
+      contract: normalized.contract,
+      rejected: normalized.rejected || [],
+    };
+  }
+  const added = await page.evaluate(async (descriptors) => {
+    const composer = globalThis.window?.__aui?.threads?.main?.composer
+      || globalThis.window?.__aui?._thread?.composer;
+    if (!composer || typeof composer.addAttachment !== 'function') {
+      return { status: 'not_available', reason: 'window.__aui composer.addAttachment 不可用。' };
+    }
+    for (const descriptor of descriptors) await composer.addAttachment(descriptor);
+    return { status: 'passed' };
+  }, normalized.descriptors).catch((error) => ({
+    status: 'failed',
+    reason: `直接加入 composer 失败：${error.message}`,
+  }));
+  if (added.status !== 'passed') return added;
+  return {
+    status: 'passed',
+    names: normalized.names,
+    kinds: normalized.kinds,
+    bridge_method: staged.bridge_method,
+    contract: normalized.contract,
+    rejected: normalized.rejected,
+  };
 }
 
 async function uploadViaElectronNativeDialog(page, existing, missing, { buttonSelector, assumeDialogOpen = false }) {

@@ -64,7 +64,10 @@ import {
   validateEvidenceFile,
   validateReplyCompletionPayload,
 } from '../src/lib/core-beta-case-protocol.mjs';
-import { isSupportedQbotAttachmentPath } from '../src/lib/qbot-ui-attachments.mjs';
+import {
+  isSupportedQbotAttachmentPath,
+  normalizeElectronStagedAttachmentResult,
+} from '../src/lib/qbot-ui-attachments.mjs';
 
 function conversationCase() {
   const steps = [
@@ -489,6 +492,120 @@ test('MCP manual mode uses public routing plus visible options; optional copy is
 test('QA attachment allowlist follows the product release contract for log files', () => {
   assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.log'), true);
   assert.equal(isSupportedQbotAttachmentPath('/tmp/qbot-runtime.exe'), false);
+});
+
+test('QWork file ingress records become the exact qwork-file-input composer descriptor', () => {
+  const normalized = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    files: [{
+      schemaVersion: 1,
+      fileId: 'file-pdf-001',
+      absolutePath: '/tmp/qbot-pdf-summary.pdf',
+      displayName: 'qbot-pdf-summary.pdf',
+      mimeHint: 'application/pdf',
+      byteSize: 732,
+      kind: 'document',
+      sourceKind: 'native-path',
+      storageKind: 'external-reference',
+    }],
+    attachments: [{ id: 'legacy-must-not-win', name: 'legacy.pdf' }],
+    rejected: [],
+  });
+  assert.equal(normalized.ok, true);
+  assert.equal(normalized.contract, 'qwork-file-input/v1');
+  assert.deepEqual(normalized.names, ['qbot-pdf-summary.pdf']);
+  assert.deepEqual(normalized.kinds, ['document']);
+  assert.equal(normalized.descriptors[0].id, 'file-pdf-001');
+  assert.equal(normalized.descriptors[0].name, 'qbot-pdf-summary.pdf');
+  assert.equal(normalized.descriptors[0].content[0].data.startsWith('qwork-file-input:'), true);
+  const payload = JSON.parse(normalized.descriptors[0].content[0].data.slice('qwork-file-input:'.length));
+  assert.deepEqual(payload, {
+    schemaVersion: 1,
+    fileId: 'file-pdf-001',
+    absolutePath: '/tmp/qbot-pdf-summary.pdf',
+    displayName: 'qbot-pdf-summary.pdf',
+    mimeHint: 'application/pdf',
+    byteSize: 732,
+    kind: 'document',
+    sourceKind: 'native-path',
+    storageKind: 'external-reference',
+  });
+});
+
+test('legacy staged attachments retain the legacy descriptor contract', () => {
+  const normalized = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    attachments: [{
+      id: 'legacy-image-001',
+      name: 'qbot-image.png',
+      contentType: 'image/png',
+      kind: 'image',
+      size: 256,
+      stagedPath: '/tmp/staged/qbot-image.png',
+    }],
+  });
+  assert.equal(normalized.ok, true);
+  assert.equal(normalized.contract, 'qbot-document-attachment/legacy');
+  assert.equal(normalized.descriptors[0].type, 'image');
+  assert.equal(normalized.descriptors[0].content[0].data.startsWith('qbot-document-attachment:'), true);
+});
+
+test('malformed or rejected file ingress records fail closed before composer mutation', () => {
+  const malformed = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    files: [{
+      schemaVersion: 1,
+      fileId: 'file-missing-path',
+      displayName: 'qbot.pdf',
+      byteSize: 10,
+      kind: 'document',
+      sourceKind: 'native-path',
+      storageKind: 'external-reference',
+    }],
+  });
+  assert.equal(malformed.ok, false);
+  assert.deepEqual(malformed.descriptors, []);
+  assert.match(malformed.reason, /invalid_file_ingress_descriptor/);
+
+  const stringSchemaVersion = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    files: [{
+      schemaVersion: '1',
+      fileId: 'file-string-schema',
+      absolutePath: '/tmp/qbot.pdf',
+      displayName: 'qbot.pdf',
+      byteSize: 10,
+      kind: 'document',
+      sourceKind: 'native-path',
+      storageKind: 'external-reference',
+    }],
+  });
+  assert.equal(stringSchemaVersion.ok, false);
+  assert.deepEqual(stringSchemaVersion.descriptors, []);
+
+  const invalidStorageSource = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    files: [{
+      schemaVersion: 1,
+      fileId: 'file-invalid-storage-source',
+      absolutePath: '/tmp/qbot.pdf',
+      displayName: 'qbot.pdf',
+      byteSize: 10,
+      kind: 'document',
+      sourceKind: 'teams-stream',
+      storageKind: 'external-reference',
+    }],
+  });
+  assert.equal(invalidStorageSource.ok, false);
+  assert.deepEqual(invalidStorageSource.descriptors, []);
+
+  const rejected = normalizeElectronStagedAttachmentResult({
+    ok: true,
+    files: [],
+    rejected: [{ code: 'file_too_large', message: '文件过大' }],
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, '文件过大');
 });
 
 test('verified attachment rejection before send makes only the impossible send chain N/A', (t) => {

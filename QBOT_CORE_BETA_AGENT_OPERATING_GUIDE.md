@@ -10,6 +10,24 @@
 
 ## 1. 当前状态
 
+- QWork `0.1.6-sit.3` 基于框架 `84ca05523a53403cbc8704162b41a8b6cbab119f`
+  启动的第三轮生产灰度门禁批次永久冻结在
+  `teams360-automation/output/20260826144400_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-84ca055_casebook-1621632`。
+  已完成 `19/70`，全部真实执行且 `inherited=0/synthetic=0`；raw 为
+  `passed=10/failed=9`，运行时分类为 `pass=10/bug=4/automation_error=5`。
+  `BETA-CHAT-006` 停止后正文从 8 字变为 0 字、`BETA-CHAT-007` 同宿主 pinned
+  remount 后侧栏零选中态、`BETA-CHAT-008` 20 任务派发后 pending 池为零，以及
+  `BETA-CHAT-010` 已产生真实 composition 事件但输入文本不一致，均保留为 manifest
+  完整的产品 Bug 候选；后续通过不得抹去。`BETA-FILE-001~005` 连续生成真实 fixture
+  文件与 SHA，但共享附件适配器只读取旧宿主返回的 `attachments[]`，没有识别当前
+  QWork `shell.stageFiles()` 返回的 `files[]`，因而把成功暂存误写为“未返回任何附件”，
+  五条均缺少 prompt/task/send/reply/attachment_readback 角色并记录为
+  `automation_error`。当前 UI 的产品合同要求将 `files[]` 精确映射为
+  `qwork-file-input:` descriptor；框架仍须兼容旧 `stageAttachments/attachments[]`，
+  但不得把两种 payload 混用或伪造内联附件。唯一 npm/Node runner 已停止，旧监控已
+  暂停，受管 360Teams PID `9554` 保持不变。修复必须补双合同归一化与畸形 descriptor
+  fail-closed invariant，完成全检、提交推送、新能力审计和精确 `.3 READY` 后，必须在
+  新不可变目录从 `1/70` 完整串行重跑，`inherited=0`、`synthetic=0`。
 - QWork `0.1.6-sit.3` 的第二轮生产灰度门禁批次永久冻结在
   `teams360-automation/output/20260826133303_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-001fa96_casebook-1621632`。
   已完成 `14/70`，全部真实执行且 `inherited=0/synthetic=0`。其中

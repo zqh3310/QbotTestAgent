@@ -349,6 +349,22 @@ macOS 在应用切换瞬间可能短暂无任何 `frontmost` application process
 必须在有界次数内重新执行 activate 并逐次保存 command status、前台进程与错误读回。
 瞬时空读回或 `-1719` 不得在首次采样就终止 Case；有界重试后仍不能精确读回
 `360Teams` 才属于 framework issue 并 fail-closed。
+
+附件暂存必须兼容两代受支持的 Electron 宿主合同，但不得混淆 descriptor：
+
+- 当前 QWork 优先调用公开 `window.agent.shell.stageFiles({filePaths})`。成功结果使用
+  `files[]`，每项必须完整包含 `schemaVersion=1`、非空 `fileId/absolutePath/displayName`、
+  非负安全整数 `byteSize`、非空 `sourceKind/storageKind`。runner 必须按当前 UI 的
+  `qwork-file-input:` 编码精确构造 Composer descriptor，保留路径引用语义；禁止改写成
+  内联文本、data URL 或旧附件 payload。
+- 旧发布仅在 `stageFiles` 不存在时回退 `stageAttachments({filePaths})`，并只接受其
+  `attachments[]` 与 `qbot-document-attachment:` 旧 descriptor。若返回同时包含
+  `files[]` 与 `attachments[]`，以 `files[]` 为权威，禁止用旧数组覆盖当前合同。
+- 任一 descriptor 字段缺失、类型不合法、桥返回不可解析结构或暂存成功却没有可用
+  文件时必须在 Composer 变更前 fail-closed，并保留桥方法、合同类型和 rejection
+  诊断。产品明确拒绝可形成负向产品证据；框架不得因读取错字段而留下缺少
+  prompt/task/send/reply 的不完整 manifest。
+
 宿主激活、WebView 聚焦和 Composer 点击的顺序不得颠倒；仅调用 DOM `focus()` 不能
 证明 macOS 键盘 first responder 仍属于受管宿主。原生命令返回 0 但 Composer 零文本且没有任何
 composition 事件时，必须立即记为 framework issue，禁止继续等待或点击发送，也

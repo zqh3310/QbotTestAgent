@@ -188,6 +188,17 @@ import { expertGeneralAssistantExecutionVerdict } from '../src/lib/expert-genera
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8');
 const legacyRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
+const attachmentAdapter = fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-ui-attachments.mjs'), 'utf8');
+assert.match(
+  attachmentAdapter,
+  /typeof shell\?\.stageFiles === 'function'[\s\S]*bridgeMethod[\s\S]*shell\[bridgeMethod\]\(\{ filePaths \}\)/,
+  '统一附件适配器必须优先使用当前 QWork stageFiles，并只在接口缺失时回退 stageAttachments',
+);
+assert.match(
+  attachmentAdapter,
+  /(?=[\s\S]*FILE_INPUT_ATTACHMENT_PREFIX = 'qwork-file-input:')(?=[\s\S]*Array\.isArray\(result\.files\))(?=[\s\S]*invalid_file_ingress_descriptor)/,
+  '统一附件适配器必须把 files[] 映射为 qwork-file-input/v1，并对畸形 descriptor fail-closed',
+);
 const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
 assert.match('QA Node Runtime', normalizedFixtureMarker, 'Fixture slug 应与空格展示名稳定匹配');
 assert.match('qa_node-runtime', normalizedFixtureMarker, 'Fixture marker 应归一化下划线、连字符与空格');
