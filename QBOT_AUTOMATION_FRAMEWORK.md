@@ -609,13 +609,13 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - `BETA-CHAT-008` 的 `conversation_dispatch_collect_20` 是单个 Case 内部自带的 20 任务调度器，不属于 Case 间并发。该 Case 必须独占外层串行位置；运行时为 20 个唯一 marker 逐条新建任务、确认发送并固化唯一 taskId。
 - `BETA-CHAT-008` 每个确认发送后必须立即持久化 `batch-dispatch-ledger.json` 和发送后截图；末条派发后、统一回收前必须保存覆盖全部 20 个 taskId 的 `batch-pending-pool.json`，并验证至少 5 条显示正在执行。回收必须在同一共享截止时间内逐 taskId 轮询，保存 `batch-collect-observations.ndjson`、逐任务终态截图、`batch-collect-ledger.json` 和 `batch-collection-summary.json`，不得按当前页面或单条通用回复猜测归属。
 - `BETA-CHAT-008` 逐 taskId 回收时必须与普通回复轮询使用同一 Agent 澄清面板策略：识别精确“跳过/跳过（用默认）/关闭并使用默认答案”入口，保存问题、选项和前后截图后继续该 task。共享截止时间仍有任务运行时，只要 20 条确认发送、taskId、观察和终态截图完整，必须生成 manifest 有效的产品超时/失败证据；固化终态后再受管停止残留运行任务，并明确 `cleanup_click_is_case_action=false`。不得把证据完整的批量产品超时写成 `reply_incomplete`，也不得让残留澄清面板把清理读回误升级为框架问题。
-- `BETA-CHAT-008` 进入 completed 前必须通过专用强证据门禁：20 个 taskId 唯一，20 份确认发送回执与发送后截图完整，待回复池读回结构完整，20 条终态观察与截图完整，共享截止时间终态证据可用。产品 Oracle 失败可在上述证据完整时进入 completed 供 `trusted_bug` 复核；缺少任一批量证据时必须 `framework_issue` 并停止批次，即使通用 manifest 或 raw status 显示 passed 也不得继续。
+- `BETA-CHAT-008` 进入可信放行前必须通过专用强证据门禁：20 个 taskId 唯一，20 份确认发送回执与发送后截图完整，待回复池读回结构完整，20 条终态观察与截图完整，共享截止时间终态证据可用。产品 Oracle 失败可在上述证据完整时进入可信 Bug 复核；缺少任一批量证据时，当前 Case 必须记录为 `failed/automation_error` 并保存缺口诊断，然后继续后续 Case。该证据缺口会令整轮发布 `NO-GO`，但不再把 Case 级质量判定误当成执行中断。
 - Skill/MCP/专家的创建、安装、授权、删除等生命周期变更，以及 HITL、重启、共享状态、故障注入、跨 Case 依赖和不满足精确 task ID 归属条件的多轮会话都是串行屏障。
 - 非 Core Beta 旧协议不得同时启用单宿主 pipeline 和多 CDP `--parallel`；Core Beta v2 两者都会被强制降为有效值 `1`。
 - pipeline 必须保存唯一 wave、task ID、能力绑定和 dispatch/collect 证据；重复 task ID 或跨 Case 取证立即视为框架异常。
 - 多 CDP 并行执行的实时 `automation-progress.json` 与最终 summary 使用同一结果分区规则：`synthetic=true` 只能写入 `non_executed_diagnostics`，不得计入 `completed`、`results` 或状态计数。
 - 历史 pipeline 回收结果进入 `completed` 前必须从调度包装项中解出原始 Case，并执行与串行路径完全相同的 manifest 完整性门禁；Core Beta v2 不得进入该路径。
-- 结果分类优先级必须是 `automation_error` 高于 `blocked` 和 `bug`。顶层 `result_category` 之外还必须扫描失败的 step/assertion；只要其中存在 `category=automation_error`，后续前置阻塞、清理阻塞或产品断言都不得覆盖它。普通 prerequisite `blocked` 和 manifest 完整的产品 Bug 只记录结果并继续后续独立 Case；只有确认的 framework/testcase issue、manifest/取证不完整、身份漂移或运行宿主失效才停止当前批次进入自主修复闭环。
+- 结果分类优先级必须是 `automation_error` 高于 `blocked` 和 `bug`。顶层 `result_category` 之外还必须扫描失败的 step/assertion；只要其中存在 `category=automation_error`，后续前置阻塞、清理阻塞或产品断言都不得覆盖它。任何已经开始执行的 Case（包括 `passed`、`failed`、`blocked` 和 `automation_error`）都必须先写入明确的 `case-result.json`、进度和证据诊断，再继续下一个独立 Case；单 Case 的 manifest/取证不完整只影响可信复核和发布放行，不得中断后续执行。只有 CDP、renderer、受管宿主确实失效，或批次级身份/控制面已经无法继续执行时，才允许停止批次并进入自主修复闭环。
 - 日常回归专项 JSON 证据必须使用 `evidence_valid` 表示取证结构、来源、Case
   绑定和文件完整性，使用 `oracle_valid` 表示产品行为是否符合预期。产品 Oracle
   失败时证据仍可为 `valid=true/evidence_valid=true/oracle_valid=false`，形成可信
@@ -716,8 +716,9 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   adapter 上执行破坏性清理。第二次仍失败或关闭后仍有活动 adapter 时必须在产品动作前
   fail-closed。`qbot-teams-skill-fixture-adapter/v2` 必须保留全部尝试；若最终失败，
   `qbot-core-beta-renderer-adapter-framework-failure/v1` 必须把未发生的 task/prompt/reply/
-  capability 角色严格标为 N/A，使 framework-failure 取证完整，同时结果仍保持
-  `automation_error`、父 Case 不进入 completed、批次停止并进入自愈。首个精确
+  capability 角色严格标为 N/A，使 framework-failure 取证完整，同时当前 Case 记录为
+  `failed/automation_error` 并继续后续 Case；若 renderer/宿主因此不可用，再按批次级
+  执行能力规则停止并进入自愈。首个精确
   automation failure 必须写入 `primary_failure` 和 trace；后续通用 action/manifest/
   machine-assertion 汇总只能进入 failure history，不得覆盖根因。
 - 确定性 Skill Fixture 的每次市场查找都必须重新进入【技能市场】，清空上一次
@@ -850,7 +851,7 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
   全部成功尝试收敛到唯一 `activeId` 的确认发送回执，才可提供 taskId；随后仍须与
   `web-search-quality.task_id`、runtime `diagnostics.sessionId` 和外层 Case ID 全等。
   同 prompt 出现多个确认 taskId、发送回执缺失或任一身份漂移必须 fail-closed。
-- 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时必须停止；`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须停止，禁止只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
+- 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时，当前 Case 必须记录为 `failed/automation_error` 或 `blocked`，保留根因和诊断，并继续后续 Case；只有同时失去 CDP/renderer/宿主执行能力时才停止。`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须把当前 Case 记为明确失败，不得只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - `BETA-INIT-004` 点击清空前必须通过公开 `listSessions/getRunning` 枚举全部会话，只对真实 `running=true` 的会话调用按 ID 取消，并连续至少 3 次读回全部 idle；枚举、取消、稳定读回和前后截图必须写入独立不可变账本。若第一次真实 UI 清空明确返回 `active-session`，只能再次执行相同 idle 对账后重试一次真实 UI 清空，重试仍须重新捕获确认弹窗并使用不覆盖首次证据的截图；不得直接调用 `sessionsPurgeAllEnvs` 绕过 UI，不得盲等完整 Case 超时，也不得无限重试。清单不可读、取消失败或重试后仍被拒绝均为 `automation_error`，触发框架自愈与新目录全量重跑。
 - 初始化动作必须证明本次点击引起了状态转换。优先取证按钮 busy/disabled 或维护区处理中状态；若动作短于轮询采样窗口，只有“动作前不存在、动作后新增、且与当前按钮精确匹配”的完成回执，加上确认弹窗和连续稳定终态，才可替代 transient busy。产品成功契约明确会刷新 renderer 的维护动作（当前仅清空全部会话），允许把确认动作后发生的主框架刷新作为因果动作信号，但仍必须同时满足匹配确认弹窗和刷新后的连续稳定终态；其他导航不得复用。陈旧完成文案不得复用。
@@ -889,10 +890,10 @@ Teams 预连接在一次连接周期内最多接受一次已完成的受管宿�
 - 附件、成果、Skill、专家、MCP、工具调用或清理专项证据
 - 证据文件存在、非空、SHA-256 与 manifest 一致且路径位于当前 Case 目录
 
-manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Case 目录越界或 synthetic 结果进入 completed，全部属于框架异常。
-产品动作失败本身不等于证据不完整：结构完整、包含 before/after 或明确 terminal 终态截图的 failed/blocked action receipt 仍是有效证据，最终业务结论可以是 `trusted_bug` 或 `trusted_blocked`。可信复核必须把 `category=bug` 且已保存用户可见失败终态的动作视为已执行，不得仅因步骤 `status=failed` 或失败证据正文包含普通“自动化”文字而改判为框架问题。runner 只能把 manifest 完整的真实执行结果计入 `completed`；发现 synthetic、manifest 缺失/结构异常/不完整、角色无效或 SHA 缺失时，必须写 `framework-stop-diagnostic.json` 并停止，后续 Case 保持未执行，禁止批量补 synthetic blocked。
+manifest 缺失、`complete=false`、`missing_roles` 非空、SHA 不一致、Case 目录越界或 synthetic 结果进入可信 completed，全部属于框架异常；已开始执行的真实 Case 仍必须以 `failed/automation_error` 或 `blocked` 落盘并继续后续 Case。
+产品动作失败本身不等于证据不完整：结构完整、包含 before/after 或明确 terminal 终态截图的 failed/blocked action receipt 仍是有效证据，最终业务结论可以是 `trusted_bug` 或 `trusted_blocked`。可信复核必须把 `category=bug` 且已保存用户可见失败终态的动作视为已执行，不得仅因步骤 `status=failed` 或失败证据正文包含普通“自动化”文字而改判为框架问题。runner 只能把 manifest 完整的真实执行结果计入可信放行；发现 synthetic、manifest 缺失/结构异常/不完整、角色无效或 SHA 缺失时，必须把当前真实 Case 记为 `failed/automation_error`，写入 `execution_completion.evidence_complete=false` 和根因诊断，然后继续。只有同时导致 CDP/renderer/宿主不可用时，才写 `framework-stop-diagnostic.json` 停止剩余 Case，禁止批量补 synthetic blocked。
 Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只能写入 `non_executed_diagnostics`；`automation-run-summary.json` 的 `counts`、`results`、可信复核和结果表均必须排除它们。不得再出现“Case 0 未执行但 summary total 等于完整选择集”的伪完成。
-对已确认发送但无可归属助手回复的 Case，manifest 的“完整”只表示失败证据链完整，不表示产品回复完成。`reply-completion.json` 必须同时保存 `complete=false`、`terminal_failure=true`、`terminal_outcome=timed_out|no_reply`、发送回执、等待时长、失败原因和终态截图 SHA。`no_reply` 还必须保存 `observed_running_after_send=true`、`running_after=false`、`min_wait_ms>=60000`、`no_reply_stable_observations>=3`、`terminal_reconciliation_performed=true`、`terminal_reconciliation_task_bound=true`、`terminal_reconciliation_prompt_bound=true` 和 `terminal_reconciliation_reply_present=false`；缺少任一字段仍按框架异常停止。pipeline 不得在任务已停止且稳定无回复后继续把完整 `600000ms` 当作假进度，也不得逐条叠加无效等待。
+对已确认发送但无可归属助手回复的 Case，manifest 的“完整”只表示失败证据链完整，不表示产品回复完成。`reply-completion.json` 必须同时保存 `complete=false`、`terminal_failure=true`、`terminal_outcome=timed_out|no_reply`、发送回执、等待时长、失败原因和终态截图 SHA。`no_reply` 还必须保存 `observed_running_after_send=true`、`running_after=false`、`min_wait_ms>=60000`、`no_reply_stable_observations>=3`、`terminal_reconciliation_performed=true`、`terminal_reconciliation_task_bound=true`、`terminal_reconciliation_prompt_bound=true` 和 `terminal_reconciliation_reply_present=false`；缺少任一字段时当前 Case 记 `failed/automation_error` 并继续后续 Case；仅在同时失去 CDP/renderer/宿主能力时停止批次。pipeline 不得在任务已停止且稳定无回复后继续把完整 `600000ms` 当作假进度，也不得逐条叠加无效等待。
 
 ## 9. 长批次只读监控
 
@@ -943,7 +944,7 @@ Case 0、预检或顶层异常为了保留诊断而生成的 synthetic 条目只
   全量重跑；旧目录永久保留，不允许续写或只续跑剩余父 Case。
 - 旧协议的 360Teams lineage 只有在显式 `--resume-from` 加 `--impact-case` 或 `--impact-all true` 时允许使用，且源批次必须冻结、证据完整、发布身份兼容。
 - 发布身份变化时必须执行全量新批次，不能继承旧发布结果。
-- 明确 identity drift、重复 runner、manifest 不完整仍 completed 或 synthetic completed 时，立即停止并冻结当前批次；随后按第 9.1 节自主修复、校验并在新不可变目录重新执行，除非命中其中明确列出的不可自动恢复条件。
+- 明确 identity drift、重复 runner、manifest 不完整仍被标记为可信 completed 或 synthetic completed 时，先把已开始的当前 Case 落盘为 `failed/automation_error` 并保留诊断；仅当 identity/宿主/控制面已经无法继续执行时才停止并冻结批次。其余情况继续记录后续 Case，批次完成后按第 9.1 节自主修复、校验并在新不可变目录重新执行，除非命中其中明确列出的不可自动恢复条件。
 
 ## 11. 可信复核规则
 

@@ -1200,31 +1200,21 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           const batchEntry = executedPipelineBatch[batchOffset];
           const batchCase = batchEntry?.testCase;
           const completionBlock = coreBetaCompletionBlockReason(batchCase, result);
-          if (completionBlock) {
-            frameworkStop = stopRemainderWithoutSynthetic({
-              outDir,
-              selectedCases,
-              startIndex: batchEntry?.index ?? (index + batchOffset),
-              results,
-              progressFile,
-              status: 'stopped',
-              resultCategory: 'automation_error',
-              reason: completionBlock,
-              failedResult: result,
-            });
-            pipelineStopped = true;
-            break;
-          }
-          results.push(result);
-          writeJsonFile(progressFile, {
-            updated_at: new Date().toISOString(),
-            completed: results.length,
-            total: selectedCases.length,
-            current_case: result.id,
-            execution_mode: 'single-host-pipeline',
-            pipeline_size: executedPipelineBatch.length,
-            results,
+          annotateCoreBetaExecutionResult({
+            testCase: batchCase,
+            result,
+            completionIssue: completionBlock,
           });
+          results.push(result);
+          persistCasebookProgress({
+            progressFile,
+            results,
+            selectedCases,
+            currentCase: result.id,
+            executionMode: 'single-host-pipeline',
+            pipelineSize: executedPipelineBatch.length,
+          });
+          persistCaseResult(result);
           const hardStopReason = coreBetaBatchStopReason(batchCase, result);
           if (hardStopReason) {
             frameworkStop = stopRemainderWithoutSynthetic({
@@ -1277,27 +1267,19 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       browser = runtime.browser;
       page = runtime.page;
       const completionBlock = coreBetaCompletionBlockReason(testCase, result);
-      if (completionBlock) {
-        frameworkStop = stopRemainderWithoutSynthetic({
-          outDir,
-          selectedCases,
-          startIndex: index,
-          results,
-          progressFile,
-          status: 'stopped',
-          resultCategory: 'automation_error',
-          reason: completionBlock,
-          failedResult: result,
-        });
-        break;
-      }
-      results.push(result);
-      writeJsonFile(progressFile, {
-        updated_at: new Date().toISOString(),
-        completed: results.length,
-        total: selectedCases.length,
-        results,
+      annotateCoreBetaExecutionResult({
+        testCase,
+        result,
+        completionIssue: completionBlock,
       });
+      results.push(result);
+      persistCasebookProgress({
+        progressFile,
+        results,
+        selectedCases,
+        currentCase: result.id,
+      });
+      persistCaseResult(result);
       const hardStopReason = coreBetaBatchStopReason(testCase, result);
       if (hardStopReason) {
         frameworkStop = stopRemainderWithoutSynthetic({
@@ -1460,24 +1442,12 @@ export function applyFailureOutcome(state, reason, category = 'bug', { source = 
 }
 
 export function coreBetaBatchStopReason(testCase, result) {
-  if (!isCoreBetaCase(testCase)) return '';
-  const id = String(testCase?.id || '');
-  if (resultHasAutomationError(result)) {
-    return `框架硬门禁 ${id} 发生 automation_error，停止后续 Case；`
-      + '必须修复执行、取证、manifest、断言或清理能力后新建不可变批次。';
-  }
-  if (String(testCase?.case_type || '') === 'run_initialization' && result?.status !== 'passed') {
-    const continuation = result?.initialization_continuation;
-    if (
-      result?.result_category === 'bug'
-      && continuation?.eligible === true
-      && continuation?.safe === true
-    ) {
-      return '';
-    }
-    return `初始化执行门禁 ${id} 未通过（${result?.status || 'unknown'}/${result?.result_category || 'unknown'}），`
-      + '且未证明产品失败后的公开工作台可安全继续；停止后续 Case。';
-  }
+  // Case-level failures are recorded and the next independent Case is always
+  // attempted.  Release eligibility is evaluated later from the complete
+  // evidence/credibility review; it must not be confused with execution
+  // continuity.  Only renderer/host loss is allowed to stop the batch, and
+  // that is handled by the caller after the result has been persisted.
+  if (!isCoreBetaCase(testCase) || !result) return '';
   return '';
 }
 
@@ -1545,21 +1515,21 @@ export function coreBetaCompletionBlockReason(testCase, result) {
   if (!isCoreBetaCase(testCase)) return '';
   const id = String(testCase?.id || result?.id || 'unknown');
   if (result?.synthetic === true) {
-    return `框架发布门禁 ${id} 拒绝 synthetic 结果进入 completed。`;
+    return `框架发布门禁 ${id} 拒绝 synthetic 结果进入可信放行集合。`;
   }
   const manifest = result?.evidence_manifest;
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return `框架发布门禁 ${id} 拒绝缺失的内嵌 evidence manifest 进入 completed。`;
+    return `框架发布门禁 ${id} 拒绝缺失的内嵌 evidence manifest 进入可信放行集合。`;
   }
   if (!Array.isArray(manifest.missing_roles) || !Array.isArray(manifest.invalid_roles)) {
-    return `框架发布门禁 ${id} 拒绝结构异常的 manifest 进入 completed：missing_roles/invalid_roles 必须为数组。`;
+    return `框架发布门禁 ${id} 拒绝结构异常的 manifest 进入可信放行集合：missing_roles/invalid_roles 必须为数组。`;
   }
   if (
     manifest.complete !== true
     || manifest.missing_roles.length > 0
     || manifest.invalid_roles.length > 0
   ) {
-    return `框架发布门禁 ${id} 拒绝不完整 manifest 进入 completed：`
+    return `框架发布门禁 ${id} 拒绝不完整 manifest 进入可信放行集合：`
       + `complete=${String(manifest.complete)}；missing=${manifest.missing_roles.join(',')}；invalid=${manifest.invalid_roles.join(',')}。`;
   }
   if (!Array.isArray(manifest.evidence) || manifest.evidence.some((item) => (
@@ -1567,7 +1537,7 @@ export function coreBetaCompletionBlockReason(testCase, result) {
     || item?.valid !== true
     || !/^[a-f0-9]{64}$/i.test(String(item?.sha256 || ''))
   ))) {
-    return `框架发布门禁 ${id} 拒绝缺失、无效或 SHA 不完整的 evidence 进入 completed。`;
+    return `框架发布门禁 ${id} 拒绝缺失、无效或 SHA 不完整的 evidence 进入可信放行集合。`;
   }
   const compoundEvidenceBlock = coreBetaCompoundCompletionBlockReason(testCase, result);
   if (compoundEvidenceBlock) return compoundEvidenceBlock;
@@ -1596,13 +1566,13 @@ function coreBetaCompoundCompletionBlockReason(testCase, result) {
     || !fs.statSync(manifestFile).isFile()
     || fs.statSync(manifestFile).size <= 0
   ) {
-    return `框架发布门禁 ${id} 拒绝缺失、为空或越界的 compound evidence manifest 进入 completed。`;
+    return `框架发布门禁 ${id} 拒绝缺失、为空或越界的 compound evidence manifest 进入可信放行集合。`;
   }
   let compoundManifest;
   try {
     compoundManifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   } catch (error) {
-    return `框架发布门禁 ${id} 拒绝无法解析的 compound evidence manifest 进入 completed：${String(error?.message || error)}。`;
+    return `框架发布门禁 ${id} 拒绝无法解析的 compound evidence manifest 进入可信放行集合：${String(error?.message || error)}。`;
   }
   const rows = Array.isArray(compoundManifest?.subcases) ? compoundManifest.subcases : [];
   if (
@@ -1615,7 +1585,7 @@ function coreBetaCompoundCompletionBlockReason(testCase, result) {
     || compoundManifest?.complete !== true
     || rows.length !== declared.length
   ) {
-    return `框架发布门禁 ${id} 拒绝结构异常或 incomplete 的 compound evidence manifest 进入 completed。`;
+    return `框架发布门禁 ${id} 拒绝结构异常或 incomplete 的 compound evidence manifest 进入可信放行集合。`;
   }
   for (const [index, subcase] of declared.entries()) {
     const row = rows[index];
@@ -2102,6 +2072,72 @@ export function stopRemainderWithoutSynthetic({
     results,
   });
   return diagnostic;
+}
+
+function persistCaseResult(result) {
+  const rawCaseDir = String(result?.case_dir || '').trim();
+  if (!rawCaseDir) return;
+  const caseDir = path.resolve(rawCaseDir);
+  if (!fs.existsSync(caseDir) || !fs.statSync(caseDir).isDirectory()) return;
+  writeJsonFile(path.join(caseDir, 'case-result.json'), result);
+  writeTextFile(path.join(caseDir, 'case-report.md'), renderCaseReport(result));
+}
+
+function persistCasebookProgress({
+  progressFile,
+  results,
+  selectedCases,
+  currentCase = '',
+  executionMode = '',
+  pipelineSize = null,
+}) {
+  const payload = {
+    updated_at: new Date().toISOString(),
+    completed: results.length,
+    total: selectedCases.length,
+    current_case: currentCase,
+    results,
+  };
+  if (executionMode) payload.execution_mode = executionMode;
+  if (Number.isInteger(pipelineSize) && pipelineSize > 0) payload.pipeline_size = pipelineSize;
+  writeJsonFile(progressFile, payload);
+}
+
+export function annotateCoreBetaExecutionResult({ testCase, result, completionIssue = '' }) {
+  if (!result || result.synthetic === true) return result;
+  const validStatuses = new Set(['passed', 'failed', 'blocked']);
+  if (!validStatuses.has(String(result.status || ''))) {
+    result.status = 'failed';
+    result.result_category = 'automation_error';
+    result.actual_result = result.actual_result || 'Case 执行结束但未生成明确的 passed/failed/blocked 状态。';
+    result.conclusion = `失败：${result.actual_result}`;
+  }
+  if (completionIssue) {
+    result.execution_completion = {
+      status: 'recorded',
+      evidence_complete: false,
+      reason: completionIssue,
+      release_gate_eligible: false,
+    };
+    // A result with an evidence gap is still a real execution result.  Keep
+    // the concrete status, but never let it look like a trusted pass.
+    if (result.status === 'passed') {
+      result.status = 'failed';
+      result.result_category = 'automation_error';
+      result.actual_result = `${result.actual_result || 'Case 已执行完成。'}；${completionIssue}`;
+      result.conclusion = `失败：${result.actual_result}`;
+    }
+  } else {
+    result.execution_completion = {
+      status: 'recorded',
+      evidence_complete: result.evidence_manifest?.complete === true,
+      reason: result.evidence_manifest?.complete === true ? '' : '未生成可供可信放行的 evidence manifest。',
+      release_gate_eligible: result.evidence_manifest?.complete === true,
+    };
+  }
+  result.execution_provenance = result.execution_provenance || 'executed';
+  result.case_execution_recorded = true;
+  return result;
 }
 
 function isCdpDisconnectedResult(result) {
@@ -3670,16 +3706,21 @@ async function executeCompoundCasebookCase(context) {
     subcaseResults.push(result);
     const completionBlock = coreBetaCompletionBlockReason(subcase, result);
     const hardStop = coreBetaBatchStopReason(subcase, result);
+    annotateCoreBetaExecutionResult({
+      testCase: subcase,
+      result,
+      completionIssue: completionBlock,
+    });
+    persistCaseResult(result);
     recordStep(
       state,
       `串行子 Case ${index + 1}/${subcases.length}: ${subcase.id}`,
       '真实执行完整子合同，并生成独立 case-result、evidence-manifest、截图、日志和 SHA。',
       `${result.status}/${result.result_category}${completionBlock || hardStop ? `；${completionBlock || hardStop}` : ''}`,
-      completionBlock || hardStop ? 'failed' : result.status === 'passed' ? 'passed' : result.status,
+      result.status === 'passed' ? 'passed' : result.status,
       result.screenshots_flat?.at?.(-1) || '',
       completionBlock || hardStop ? 'automation_error' : result.result_category || '',
     );
-    if (completionBlock || hardStop) break;
   }
   state.subcase_results = subcaseResults;
   state.screenshots = Object.fromEntries(subcaseResults.flatMap((result, index) => (
@@ -10615,10 +10656,21 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       return;
     }
   }
-  const writeExpertArtifact = (role, data, valid = nonEmptyObject(data)) => {
+  const writeExpertArtifact = (role, data, evidenceValid = nonEmptyObject(data), oracleValid = null) => {
     const file = path.join(caseDir, `${role.replace(/_/g, '-')}.json`);
-    writeJsonFile(file, { valid, case_id: testCase.id, captured_at: new Date().toISOString(), data });
-    if (valid) state.artifacts[role] = file;
+    const normalizedEvidenceValid = evidenceValid === true;
+    const normalizedOracleValid = typeof oracleValid === 'boolean'
+      ? oracleValid
+      : typeof data?.oracle_valid === 'boolean' ? data.oracle_valid : normalizedEvidenceValid;
+    writeJsonFile(file, {
+      valid: normalizedEvidenceValid,
+      evidence_valid: normalizedEvidenceValid,
+      oracle_valid: normalizedOracleValid,
+      case_id: testCase.id,
+      captured_at: new Date().toISOString(),
+      data,
+    });
+    if (normalizedEvidenceValid) state.artifacts[role] = file;
     state.artifacts[`core_beta_${role}`] = data;
     return file;
   };
@@ -10868,8 +10920,24 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       );
       return { original, writer_a: a, stale_rejected: staleRejected, stale_error: staleError, merged };
     }, draftId);
-    writeExpertArtifact('expert_conflict_trace', conflict, conflict.stale_rejected && conflict.merged.revision > conflict.original.revision);
-    writeExpertArtifact('expert_draft_lifecycle', conflict);
+    const conflictEvidenceValid = Boolean(
+      conflict
+      && conflict.original?.id === draftId
+      && conflict.writer_a?.id === draftId
+      && conflict.merged?.id === draftId
+      && Number.isFinite(Number(conflict.original?.revision))
+      && Number.isFinite(Number(conflict.writer_a?.revision))
+      && Number.isFinite(Number(conflict.merged?.revision))
+      && Number(conflict.writer_a.revision) > Number(conflict.original.revision)
+      && Number(conflict.merged.revision) > Number(conflict.writer_a.revision),
+    );
+    const conflictOracleValid = Boolean(
+      conflictEvidenceValid
+      && conflict.stale_rejected === true
+      && Number(conflict.merged.revision) > Number(conflict.original.revision),
+    );
+    writeExpertArtifact('expert_conflict_trace', conflict, conflictEvidenceValid, conflictOracleValid);
+    writeExpertArtifact('expert_draft_lifecycle', conflict, conflictEvidenceValid, conflictOracleValid);
     recordAssertion(state, 'Expert草稿CAS冲突fail-closed', '旧ETag写入必须拒绝；用最新ETag重试后revision单调增加。', conflict.stale_rejected && conflict.merged.revision > conflict.original.revision, JSON.stringify({ stale: conflict.stale_rejected, revisions: [conflict.original.revision, conflict.writer_a.revision, conflict.merged.revision] }));
     state.artifacts.capability_selection = identityFile;
     state.artifacts.capability_execution_event = state.artifacts.expert_conflict_trace;

@@ -14,6 +14,7 @@ import {
   assistantConfirmationProgressFingerprintEvidence,
   assistantConfirmationSurfaceVerdict,
   applyBlockedOutcome,
+  annotateCoreBetaExecutionResult,
   artifactTextHasFacts,
   automationFixtureMarkerPattern,
   attachmentReplyMissingEvidence,
@@ -691,6 +692,75 @@ assert.deepEqual(
   assert.equal(positive.evidence_valid, true);
   assert.equal(positive.oracle_valid, true, '本轮新 draft、staged Skill 与 task-bound tool trace 完整时 Oracle 应通过');
   assert.equal(positive.expert_dependency_graph.staged_skill_valid, true);
+}
+
+{
+  const failed = {
+    id: 'BETA-CHAT-001',
+    status: 'failed',
+    result_category: 'automation_error',
+    synthetic: false,
+    evidence_manifest: { complete: false, missing_roles: ['reply_delta'], invalid_roles: [] },
+    actual_result: '截图或回复证据未生成',
+  };
+  annotateCoreBetaExecutionResult({
+    testCase: { id: failed.id, contract_version: 'qbot-core-beta/v2' },
+    result: failed,
+    completionIssue: '框架发布门禁 BETA-CHAT-001 拒绝不完整 manifest',
+  });
+  assert.equal(failed.status, 'failed', '已执行 Case 的 automation_error 必须落为 failed');
+  assert.equal(failed.result_category, 'automation_error');
+  assert.equal(failed.case_execution_recorded, true);
+  assert.equal(failed.execution_completion.evidence_complete, false);
+  assert.equal(failed.execution_provenance, 'executed');
+
+  const productFailure = {
+    id: 'BETA-EXPERT-005',
+    status: 'failed',
+    result_category: 'bug',
+    synthetic: false,
+    evidence_manifest: { complete: true, missing_roles: [], invalid_roles: [] },
+    actual_result: '产品 CAS Oracle 未通过',
+  };
+  annotateCoreBetaExecutionResult({
+    testCase: { id: productFailure.id, contract_version: 'qbot-core-beta/v2' },
+    result: productFailure,
+  });
+  assert.equal(productFailure.status, 'failed', '产品 Oracle 失败必须保留 failed 结果');
+  assert.equal(productFailure.result_category, 'bug');
+  assert.equal(productFailure.execution_completion.evidence_complete, true);
+  assert.equal(productFailure.case_execution_recorded, true);
+
+  const conflictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-conflict-negative-'));
+  try {
+    const conflictFile = path.join(conflictDir, 'expert-conflict-trace.json');
+    writeJsonFile(conflictFile, {
+      valid: true,
+      evidence_valid: true,
+      oracle_valid: false,
+      case_id: 'BETA-EXPERT-005',
+      data: {
+        original: { id: 'draft-1', revision: 2 },
+        writer_a: { id: 'draft-1', revision: 3 },
+        stale_rejected: false,
+        merged: { id: 'draft-1', revision: 4 },
+      },
+    });
+    assert.deepEqual(
+      validateEvidenceFile('expert_conflict_trace', conflictFile),
+      { valid: true },
+      'CAS Oracle 失败但 revision 读回完整时，conflict trace 必须作为有效负向证据保留',
+    );
+    const manifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-005', evidence_roles: ['expert_conflict_trace'] },
+      caseDir: conflictDir,
+      artifacts: { expert_conflict_trace: conflictFile },
+    });
+    assert.equal(manifest.complete, true, 'CAS 产品失败不得因 valid=false 造成 manifest 缺口');
+    assert.deepEqual(manifest.invalid_roles, []);
+  } finally {
+    fs.rmSync(conflictDir, { recursive: true, force: true });
+  }
 }
 
 assert.doesNotMatch(
@@ -5427,8 +5497,8 @@ assert.match(
       initialization_continuation: unsafeRuntimeCheckContinuation,
     },
   ),
-  /未证明产品失败后的公开工作台可安全继续/,
-  'BETA-INIT-001 缺少任一公开可用性信号时仍必须停止',
+  /^$/,
+  '初始化 Case 即使连续性信号不足，也必须先记录结果再继续后续 Case',
 );
 assert.match(
   runner,
@@ -5831,8 +5901,8 @@ assert.match(
     { id: 'BETA-INIT-001', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
     { status: 'failed', result_category: 'bug' },
   ),
-  /初始化执行门禁/,
-  '发布身份与运行时基础初始化失败必须停止后续 Core Beta Case',
+  /^$/,
+  '初始化失败必须记录为当前 Case 结果，不能中断后续 Core Beta Case',
 );
 const safeInitializationContinuation = coreBetaInitializationContinuation({
   testCase: { id: 'BETA-INIT-003' },
@@ -5865,7 +5935,7 @@ assert.equal(
   '',
   '初始化产品 Bug 在安全连续性已证明时不应浪费后续独立 Case',
 );
-assert.match(
+assert.equal(
   coreBetaBatchStopReason(
     { id: 'BETA-INIT-003', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
     {
@@ -5877,10 +5947,10 @@ assert.match(
       },
     },
   ),
-  /初始化执行门禁/,
-  '初始化失败后公开工作台不可用或证据不足时必须停止',
+  '',
+  '初始化失败后公开工作台不可用时也必须记录 blocked/failed 并继续后续 Case',
 );
-assert.match(
+assert.equal(
   coreBetaBatchStopReason(
     { id: 'BETA-INIT-003', case_type: 'run_initialization', contract_version: 'qbot-core-beta/v2' },
     {
@@ -5889,16 +5959,16 @@ assert.match(
       initialization_continuation: safeInitializationContinuation,
     },
   ),
-  /框架硬门禁/,
-  '初始化 automation_error 即使页面看似可用也必须停止',
+  '',
+  '初始化 automation_error 也必须记录失败结果并继续后续 Case',
 );
-assert.match(
+assert.equal(
   coreBetaBatchStopReason(
     { id: 'BETA-CHAT-001', case_type: 'conversation', contract_version: 'qbot-core-beta/v2' },
     { status: 'failed', result_category: 'automation_error' },
   ),
-  /框架硬门禁/,
-  'manifest/取证/执行 automation_error 必须冻结批次',
+  '',
+  '普通 Case automation_error 也必须记录失败结果并继续后续 Case',
 );
 const maskedAutomationError = {
   status: 'blocked',
@@ -5914,13 +5984,13 @@ const maskedAutomationError = {
   steps: [],
 };
 assert.equal(resultHasAutomationError(maskedAutomationError), true, '嵌套失败断言中的 automation_error 不得被顶层 blocked 隐藏');
-assert.match(
+assert.equal(
   coreBetaBatchStopReason(
     { id: 'BETA-SKILL-012', case_type: 'skill_lifecycle', contract_version: 'qbot-core-beta/v2' },
     maskedAutomationError,
   ),
-  /框架硬门禁/,
-  '顶层被错误写成 blocked 时，停批判断仍必须扫描断言并识别框架错误',
+  '',
+  '嵌套 automation_error 不得中断后续 Case，可信复核仍会识别框架问题',
 );
 const preservedAutomationError = structuredClone(maskedAutomationError);
 applyBlockedOutcome(preservedAutomationError, '固定10个 Skill 的安装成功数不足10个');
@@ -6446,7 +6516,7 @@ assert.equal(
     { id: 'BETA-CHAT-001', status: 'failed', result_category: 'bug', evidence_manifest: completeEvidence },
   ),
   '',
-  '证据完整的真实产品失败可以进入 completed，供 trusted_bug 复核',
+  '证据完整的真实产品失败可以进入可信放行复核，供 trusted_bug 分类',
 );
 assert.match(
   coreBetaCompletionBlockReason(
@@ -6545,7 +6615,7 @@ try {
       },
     ),
     '',
-    '20 条 taskId、发送回执、待回复池和逐任务终态证据完整时，产品 Oracle 失败仍可进入 completed 供 trusted_bug 复核',
+    '20 条 taskId、发送回执、待回复池和逐任务终态证据完整时，产品 Oracle 失败仍可进入可信放行复核',
   );
 } finally {
   fs.rmSync(batchCompletionRoot, { recursive: true, force: true });
@@ -6556,7 +6626,7 @@ assert.match(
     { id: 'BETA-CHAT-001', status: 'blocked', synthetic: true },
   ),
   /拒绝 synthetic/,
-  'Core Beta synthetic 结果不得进入 completed',
+  'Core Beta synthetic 结果不得进入可信放行集合',
 );
 assert.match(
   coreBetaCompletionBlockReason(
@@ -6569,7 +6639,7 @@ assert.match(
     },
   ),
   /拒绝不完整 manifest/,
-  'manifest complete=false 或 invalid_roles 非空不得进入 completed',
+  'manifest complete=false 或 invalid_roles 非空不得进入可信放行集合',
 );
 const pipelineCompletionGateSource = runner.match(
   /for \(let batchOffset = 0; batchOffset < batchResults\.length; batchOffset \+= 1\) \{[\s\S]*?if \(pipelineStopped\) break;/,
@@ -6581,8 +6651,21 @@ assert.match(
 );
 assert.match(
   pipelineCompletionGateSource,
-  /coreBetaBatchStopReason\(batchCase, result\)[\s\S]*stopRemainderWithoutSynthetic/,
-  'pipeline 路径必须与串行路径一致，在完整 automation_error 进入 completed 后立即硬停止',
+  /annotateCoreBetaExecutionResult\([\s\S]*persistCasebookProgress\([\s\S]*persistCaseResult\(result\)/,
+  'pipeline 路径必须先记录每个 Case 的明确结果和执行进度，再评估批次级故障',
+);
+const serialResultSource = runner.match(
+  /const result = await executeCasebookCase\([\s\S]*?if \(isCdpDisconnectedResult\(result\)/,
+)?.[0] || '';
+assert.match(
+  serialResultSource,
+  /annotateCoreBetaExecutionResult\([\s\S]*results\.push\(result\)[\s\S]*persistCasebookProgress\([\s\S]*persistCaseResult\(result\)[\s\S]*coreBetaBatchStopReason/,
+  '串行路径必须先落盘当前 Case 的明确结果，再检查仅限批次级的停止条件',
+);
+assert.doesNotMatch(
+  serialResultSource,
+  /if \(completionBlock\) \{[\s\S]*stopRemainderWithoutSynthetic/,
+  'Case 级 completion/evidence 缺口不得直接截断串行后续 Case',
 );
 assert.match(
   runner,

@@ -872,8 +872,10 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   从 1/70、1/160 或本轮 1/83 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
   放弃后续 Case。
 - 日常回归专项证据的 `evidence_valid` 与产品 `oracle_valid` 必须分离。产品
-  Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；只有取证、清理、
-  合同、宿主或框架失败才进入自愈硬停止。结果优先级始终为
+  Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；取证或框架失败时，
+  当前已开始执行的 Case 必须先落盘 `failed/automation_error` 或 `blocked`、进度和
+  根因诊断，再继续后续独立 Case。只有 CDP、renderer、受管宿主或批次级发布身份
+  已经失去执行能力时才进入自愈硬停止。结果优先级始终为
   `automation_error > bug > blocked > pass`，后置 blocker 不得覆盖框架错误。
 - 已安装 Skill 在可见手动列表中缺失、但列表仍有其它选项时，必须按
   `inventory_mismatch=true` 的发送前产品失败交互材料化：保留稳定目标 identity、
