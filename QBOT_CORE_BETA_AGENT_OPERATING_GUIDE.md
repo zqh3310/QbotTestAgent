@@ -15,6 +15,23 @@
   输出和逐 Case 可信复核；不得继承或合并原始结果。确认 framework/testcase issue 后，
   必须冻结旧目录、完成框架修复与提交推送、重新得到精确 `READY`，再从 `1/11` 或
   `1/70` 启动唯一串行 runner。
+- QWork `0.1.6-sit.3` 的生产灰度门禁批次永久冻结在
+  `teams360-automation/output/202608261253_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-9d14243_casebook-1621632`。
+  已完成 `11/70`，全部真实执行且 `inherited=0/synthetic=0`，raw 为
+  `passed=8/failed=3`，运行时分类为 `pass=8/bug=2/automation_error=1`。
+  `BETA-CHAT-003` 的连续重复回复和 `BETA-CHAT-006` 停止后正文丢失均保留为产品
+  Bug 候选，后续通过不得抹去。第 11 条 `BETA-CHAT-007` 刷新销毁旧 renderer 后，
+  同一 360Teams PID `9554` 从宿主持久配置重新暴露
+  `file:///Users/qifu/.deepbank-sit/ui/0.1.6-sit.2/index.html` 并得到
+  `ERR_FILE_NOT_FOUND`；旧 hook 只等待冻结 `.3` 自行重挂载，未调用已有的同宿主
+  host-owned pinned remount，最终缺少 `action_receipt`、`task_id`、
+  `public_state_readback`、`cleanup_readback` 并停止剩余 59 条。这是确认的
+  framework issue。修复必须在同一
+  session、宿主 PID 和上游 CDP 内把 WebView 定向恢复到冻结 `.3`，重放 Teams 登录
+  握手，重新校验 QWork/control plane/capabilities/workbench，重建代理并更新共享
+  page；任何宿主重启或 PID/CDP 变化必须拒绝。全检、提交推送、新能力审计和精确
+  `.3 READY` 后，必须在新不可变目录从 `1/70` 完整串行重跑，
+  `inherited=0`、`synthetic=0`。
 - MR 冒烟第 8 条曾因 verified-legacy `SIT-SKILL-SCOPE-001` 把发送前库存不一致
   blocker 错绑为 legacy ID 而硬停。修复后的合同是：driver ID 只选择实现；所有
   blocker、evidence、manifest 和 SHA 必须绑定外层 `MRSMOKE-SKILL-001`，并在有需要时

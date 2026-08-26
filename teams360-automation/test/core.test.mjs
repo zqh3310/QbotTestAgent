@@ -57,6 +57,7 @@ import {
   parseCasebookRunnerOptions,
   pinManagedSessionControlPlane,
   repairInterruptedTeamsProgress,
+  remountPinnedTeamsRendererInPlace,
   resolveTeamsPreconnectModelMode,
   resolveTeamsRecoveryQworkUi,
   teamsPreconnectRecoveryAllowed,
@@ -1951,13 +1952,14 @@ test('managed Teams replacement reconnect waits for QWork without relaunching th
     source.indexOf("options['restart-reconnect-hook'] = async () =>"),
     source.indexOf('let handedToRunner = false'),
   );
-  assert.match(hook, /await waitForManagedQworkUi\(/);
+  assert.match(hook, /await remountPinnedTeamsRendererInPlace\(\{/);
   assert.match(hook, /recoveryCdpUrl: ''/);
   assert.match(hook, /persistRunMetadata\(nextRuntimeIdentity\)/);
+  assert.match(hook, /rendererRemount/);
   assert.doesNotMatch(hook, /recoverTeamsQworkWorkbench|stopIsolatedTeams|launchLiveTeams/);
   assert.ok(
-    hook.indexOf('await waitForManagedQworkUi(') < hook.indexOf('await connection.close()'),
-    'the upstream QWork target must remount before the current proxy is replaced',
+    hook.indexOf('await remountPinnedTeamsRendererInPlace({') < hook.indexOf('await connection.close()'),
+    'the pinned upstream QWork renderer must be restored before the current proxy is replaced',
   );
   assert.match(source, /recoverTeamsQworkWorkbench/);
   assert.match(source, /Teams QWork connection view timed out after 1500ms/);
@@ -1980,6 +1982,81 @@ test('managed Teams replacement reconnect waits for QWork without relaunching th
   assert.match(source, /QWork capabilities IPC is unavailable/);
   assert.match(source, /capabilities_ipc: 'ready'/);
   assert.match(source, /process\.chdir\(ROOT\);[\s\S]*connectTeamsCasebookBrowser[\s\S]*process\.chdir\(TEAMS_RUNTIME_ROOT\);/);
+});
+
+test('managed Teams replacement reconnect repins a stale renderer without restarting the host', async () => {
+  const pinned = 'file:///Users/test/.deepbank-sit/ui/0.1.6-sit.3/index.html';
+  let observedUi = 'file:///Users/test/.deepbank-sit/ui/0.1.6-sit.2/index.html';
+  const session = {
+    profile_mode: 'live',
+    pid: 9554,
+    cdp_url: 'http://127.0.0.1:63170',
+  };
+  const validatePinnedUi = (value) => ({
+    url: new URL(value).href,
+    version: new URL(value).pathname.split('/').at(-2),
+  });
+  const result = await remountPinnedTeamsRendererInPlace({
+    cdpUrl: session.cdp_url,
+    expectedUiUrl: pinned,
+    sessionFile: '/tmp/managed-session.json',
+    timeoutMs: 20_000,
+  }, {
+    readManagedSession: () => ({ ...session }),
+    matchesManagedSession: (candidate) => candidate.pid === session.pid,
+    validatePinnedUi,
+    remount: async (cdpUrl, expectedUiUrl, options) => {
+      assert.equal(observedUi, 'file:///Users/test/.deepbank-sit/ui/0.1.6-sit.2/index.html');
+      assert.equal(cdpUrl, session.cdp_url);
+      assert.equal(expectedUiUrl, pinned);
+      assert.equal(options.timeoutMs, 20_000);
+      observedUi = expectedUiUrl;
+      return {
+        remounted: true,
+        qworkUiUrl: observedUi,
+        qworkUiVersion: '0.1.6-sit.3',
+        authenticated: true,
+        capabilitiesReady: true,
+        workbenchReady: true,
+      };
+    },
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.remounted, true);
+  assert.equal(result.host_pid_before, 9554);
+  assert.equal(result.host_pid_after, 9554);
+  assert.equal(result.host_restarted, false);
+  assert.equal(result.qwork_ui_url, pinned);
+});
+
+test('managed Teams replacement reconnect rejects any host PID change', async () => {
+  const sessions = [
+    { profile_mode: 'live', pid: 9554, cdp_url: 'http://127.0.0.1:63170' },
+    { profile_mode: 'live', pid: 9555, cdp_url: 'http://127.0.0.1:63170' },
+  ];
+  let readCount = 0;
+  const validatePinnedUi = (value) => ({
+    url: new URL(value).href,
+    version: new URL(value).pathname.split('/').at(-2),
+  });
+  await assert.rejects(
+    remountPinnedTeamsRendererInPlace({
+      cdpUrl: sessions[0].cdp_url,
+      expectedUiUrl: 'file:///Users/test/.deepbank-sit/ui/0.1.6-sit.3/index.html',
+    }, {
+      readManagedSession: () => ({ ...sessions[Math.min(readCount++, sessions.length - 1)] }),
+      matchesManagedSession: () => true,
+      validatePinnedUi,
+      remount: async (_cdpUrl, expectedUiUrl) => ({
+        remounted: true,
+        qworkUiUrl: expectedUiUrl,
+        authenticated: true,
+        capabilitiesReady: true,
+        workbenchReady: true,
+      }),
+    }),
+    /host PID changed during renderer-only remount/,
+  );
 });
 
 test('the Teams Casebook wrapper can resolve the managed live session without a manual CDP proxy', () => {

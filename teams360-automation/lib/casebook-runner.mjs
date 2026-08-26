@@ -643,6 +643,80 @@ export async function waitForManagedQworkUi(cdpUrl, expectedUiUrl, timeoutMs = 3
   );
 }
 
+export async function remountPinnedTeamsRendererInPlace({
+  cdpUrl,
+  expectedUiUrl,
+  sessionFile = DEFAULT_SESSION,
+  timeoutMs = 90_000,
+} = {}, {
+  remount = remountPinnedManagedQworkUi,
+  readManagedSession = readSession,
+  matchesManagedSession = processMatchesSession,
+  validatePinnedUi = validatePinnedQworkUiUrl,
+} = {}) {
+  const upstreamCdpUrl = normalizeCdpUrl(cdpUrl);
+  const expected = validatePinnedUi(expectedUiUrl);
+  const before = readManagedSession(sessionFile);
+  if (!before || before.profile_mode !== 'live' || !matchesManagedSession(before)) {
+    throw new Error('Managed live 360Teams session is unavailable before in-place QWork remount.');
+  }
+  const beforePid = Number(before.pid);
+  if (!Number.isInteger(beforePid) || beforePid <= 0) {
+    throw new Error('Managed live 360Teams session has no valid host PID before in-place QWork remount.');
+  }
+  if (normalizeCdpUrl(before.cdp_url) !== upstreamCdpUrl) {
+    throw new Error(
+      `Managed 360Teams CDP changed before in-place QWork remount: `
+      + `expected=${upstreamCdpUrl} actual=${before.cdp_url || 'missing'}`,
+    );
+  }
+
+  const remounted = await remount(upstreamCdpUrl, expected.url, {
+    timeoutMs: Math.max(10_000, Number(timeoutMs) || 90_000),
+    settleMs: 3_000,
+  });
+  const after = readManagedSession(sessionFile);
+  if (!after || after.profile_mode !== 'live' || !matchesManagedSession(after)) {
+    throw new Error('Managed live 360Teams session became unavailable during in-place QWork remount.');
+  }
+  const afterPid = Number(after.pid);
+  if (afterPid !== beforePid) {
+    throw new Error(
+      `Managed 360Teams host PID changed during renderer-only remount: before=${beforePid} after=${afterPid || 'missing'}`,
+    );
+  }
+  if (normalizeCdpUrl(after.cdp_url) !== upstreamCdpUrl) {
+    throw new Error(
+      `Managed 360Teams CDP changed during renderer-only remount: `
+      + `expected=${upstreamCdpUrl} actual=${after.cdp_url || 'missing'}`,
+    );
+  }
+  const observed = validatePinnedUi(remounted?.qworkUiUrl || '');
+  if (observed.url !== expected.url
+    || remounted?.authenticated !== true
+    || remounted?.capabilitiesReady !== true
+    || remounted?.workbenchReady !== true) {
+    throw new Error(
+      `Pinned QWork renderer remount did not restore the frozen signed-in workbench: `
+      + `expected=${expected.url} actual=${observed.url}`,
+    );
+  }
+  return {
+    schema_version: 'qbot-teams-in-place-pinned-renderer-remount/v1',
+    valid: true,
+    host_pid_before: beforePid,
+    host_pid_after: afterPid,
+    host_restarted: false,
+    cdp_url: upstreamCdpUrl,
+    qwork_ui_url: expected.url,
+    qwork_ui_version: expected.version,
+    remounted: remounted?.remounted === true,
+    authenticated: true,
+    capabilities_ready: true,
+    workbench_ready: true,
+  };
+}
+
 export function installTeamsPageGuards(page, { screenshotTimeoutMs = 15_000 } = {}) {
   if (!page || page.__teams360ScreenshotGuard) return page;
   const originalScreenshot = page.screenshot.bind(page);
@@ -848,15 +922,15 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
       persistRunMetadata();
       if (!callerManagedCdp) {
         options['restart-reconnect-hook'] = async () => {
-          // A QWork reload temporarily removes the WebView target. Wait for
-          // the pinned renderer to remount before replacing the proxy; this
-          // reconnect path must never turn a renderer refresh into a Teams
-          // host relaunch.
-          await waitForManagedQworkUi(
-            connection.upstreamCdpUrl || connection.cdpUrl,
-            runtimeIdentity.qworkUiUrl,
-            Number(options['restart-reconnect-timeout-ms'] || 90_000),
-          );
+          // A QWork reload may expose the host's stale persisted URL. Restore
+          // the frozen renderer through the existing host WebView and reject
+          // any host PID/CDP change before replacing the proxy.
+          const rendererRemount = await remountPinnedTeamsRendererInPlace({
+            cdpUrl: connection.upstreamCdpUrl || connection.cdpUrl,
+            expectedUiUrl: runtimeIdentity.qworkUiUrl,
+            sessionFile: options.session,
+            timeoutMs: Number(options['restart-reconnect-timeout-ms'] || 90_000),
+          });
           await connection.close().catch(() => {});
           connection = await resolveTeamsCasebookConnection({ ...options, cdp: undefined });
           options.cdp = connection.cdpUrl;
@@ -880,6 +954,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             page: nextPage,
             cdpUrl: connection.cdpUrl,
             upstreamCdpUrl: connection.upstreamCdpUrl || '',
+            rendererRemount,
           };
         };
       }

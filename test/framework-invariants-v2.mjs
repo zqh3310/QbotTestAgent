@@ -5083,6 +5083,11 @@ assert.match(
   /executeCoreBetaSidebarPersistenceCase[\s\S]*page\.reload[\s\S]*coreBetaV2NeedsRendererReconnect[\s\S]*reconnectCoreBetaV2Runtime[\s\S]*context\.page = page/,
   'BETA-CHAT-007 刷新销毁 Teams WebView target 后必须重连并更新共享 page',
 );
+assert.match(
+  runner,
+  /runtime_reconnects\.push\(\{[\s\S]*renderer_remount: reconnected\?\.rendererRemount \|\| null/,
+  'replacement renderer 重连账本必须保存同宿主 pinned remount 结果',
+);
 assert.equal(
   replySendObservedRunning([{
     attempts: [{ receipt: { ok: true, snapshot: { running: true } } }],

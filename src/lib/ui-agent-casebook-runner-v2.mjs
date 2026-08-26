@@ -6954,6 +6954,7 @@ async function reconnectCoreBetaV2Runtime({
         label,
         elapsed_ms: Date.now() - startedAt,
         cdp_url: runtime.cdpUrl,
+        renderer_remount: reconnected?.rendererRemount || null,
       });
       return { ok: true, browser: nextBrowser, page: nextPage };
     } catch (error) {
