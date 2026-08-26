@@ -87,7 +87,12 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 - `MRSMOKE-SKILL-001` 固定路由到组合 driver `SIT-SKILL-MR-001`；成功依赖安装、
   失败依赖回滚与任务 A/B 隔离必须使用 6 个确定性 Fixture，并以
   `qbot-skill-install-attempt-ledger/v2` / `skill_install_attempt_ledger` 绑定
-  personal scope、installAttempt、operationId、提交和回滚终态。
+  personal scope、installAttempt、operationId、提交和回滚终态。通用 Fixture 准备
+  只能定向清理作用域 Skill，不得在两笔事务前预装；必须先固化成功提交与失败回滚的
+  双 attempt ledger，再从零 task、零消息、零发送、空能力草稿真实安装
+  `qa-scope-isolation`，安装成功后才能进入任务 A/B 隔离。若安装被产品明确拒绝，必须
+  以 `stage=skill_installation` 保存动作绑定失败、已安装库存目标不存在、前后截图、
+  零发送守卫和受校验 N/A 角色；安装前后双 attempt ledger 的 SHA-256 必须字节级不变。
 - `MRSMOKE-CHART-001` 与门禁 `SIT-CONN-016` 必须绑定同一确认发送、taskId、session、
   runtime authority、provider receipt 和 `qbot_chart/render_chart` tool part；专项角色
   `interactive_chart_readback` 分离 `evidence_valid` 与 `oracle_valid`。合法 type/data
@@ -695,7 +700,7 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   会话标为 N/A。控件/菜单未定位、公开状态不可读、重开失败、清理目标漂移、文件
   越界或 SHA/manifest 不完整才是 framework issue。
 - Core Beta v2 打开系统设置时，若设置壳已经显示“正在加载个人设置”，必须先在 30–180 秒有界窗口内等待运行时维护区出现；只有明确加载错误或窗口耗尽才能失败，禁止继续点击背景设置菜单并误报“个人设置入口缺失”。
-- Core Beta v2 进入系统设置前必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 点击遮挡层下方。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。
+- Core Beta v2 与 legacy runner 进入系统设置或左下用户菜单前，都必须识别并关闭遮挡左下设置入口的终态 `skill-operation-feedback`，并确认提示已经消失；pending 提示没有安全关闭入口时必须有界等待或 fail-closed，禁止 `force` 或 DOM `evaluate().click()` 穿透遮挡层。设置导航必须同时兼容 QWork 0.0.29 的 `nav-settings-menu` 直达设置页和旧版 `nav-settings` 子菜单，且把 `assistant-config-view` 的加载态纳入同一有界等待合同。日常设置/脱敏、`SIT-INIT-009`、`SIT-AUTH-005`、Skill 物化与 Skill 审计拒装必须复用各自 runner 的同一安全入口，不得保留旁路点击。
 - QWork 的 `[data-testid="runtime-update-ready-toast"]` 版本更新提示可能遮挡左下设置入口。每条 Case 开始和进入系统设置前都必须检查该提示。正式不可变批次一旦读到“新版本已就绪/发现新版本”，必须保存提示、候选版本、冻结版本、按钮文案、截图与 SHA，保持提示原样且以 `runtime-update-activation-risk` framework issue 硬停止；不得再依赖点击“稍后/跳过更新/暂不更新/以后再说”保证宿主生命周期稳定，因为产品可能在提示消失后延迟执行 `app.relaunch`。禁止点击“立即更新”、使用 `force` 穿透遮挡、在原目录恢复或继续发送；修复/恢复精确发布身份后只能新 pretest、新目录全量重跑。该硬停止在抛出前还必须固化 `action_receipt`、`public_state_readback`、`cleanup_readback` 三类完整停止证据，避免把预期的发布风险阻塞二次误报为 manifest 缺失；这些证据只记录“未执行任何产品动作”，不得伪造通过。无 Case 状态的非正式诊断清理仍只允许精确安全跳过动作。系统设置维护区中仅用通用 `[role="status"]` 展示“发现新版本，可点击立即更新”的内联版本状态不属于待激活弹窗；没有安全跳过按钮时不得误报遮挡框架错误。
 - 若前景“新建工作空间”模态框与底层版本更新提示同时存在，必须先在同一工作空间
   模态框内点击精确“取消/关闭”或明确关闭图标，等待模态框 hidden，并保存 before/after
@@ -908,6 +913,12 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   全部成功尝试收敛到唯一 `activeId` 的确认发送回执，才可提供 taskId；随后仍须与
   `web-search-quality.task_id`、runtime `diagnostics.sessionId` 和外层 Case ID 全等。
   同 prompt 出现多个确认 taskId、发送回执缺失或任一身份漂移必须 fail-closed。
+- 所有确认发送回执必须同时满足两类独立信号：当前会话相对发送前新增了一条与本轮
+  prompt 规范化全等的用户消息，并且 `sendCount`、`messageCount`、非空 taskId 变化、
+  `running` 启动或输入区从精确 prompt 清空中至少一项辅助变化成立。重复发送相同 prompt
+  时必须比较相同用户消息的出现次数，不能因旧末条消息仍等于 prompt 而复用旧回执。
+  单独 sendCount、messageCount、activeId、running 或 composer 清空都不得确认发送，
+  也不得据此提供 taskId、启动回复等待或把发送后证据角色标为适用。
 - 当前 70 条全量执行必须先按固定顺序执行 `BETA-INIT-001` 至 `BETA-INIT-004`。`BETA-INIT-005` 是已删除的历史 connection-cache/network-fault 注入场景，不得拼回当前发布门禁。初始化失败始终使本轮发布门禁为 NO-GO，但“发布阻断”与“执行停止”必须分离：任一初始化 `automation_error`、仍处于 pending、或运行时/SDK/工作台/输入区/按钮/capabilities/页面读回任一不可用时，当前 Case 必须记录为 `failed/automation_error` 或 `blocked`，保留根因和诊断，并继续后续 Case；只有同时失去 CDP/renderer/宿主执行能力时才停止。`BETA-INIT-001` 至 `BETA-INIT-004` 若留下 manifest 完整的可信产品 Bug，且上述公开可用性信号全部明确恢复，可以继续收集后续独立 Case 证据。系统设置页可能完整遮住 composer，维护终态采样中的 `composer_ready=false` 不能单独证明输入区失效；仅在明确产品失败后，框架必须通过真实【新建任务】入口返回干净草稿，保存前后截图、空任务隔离和公开状态读回，并以该恢复表面的可见 composer 作为独立信号。入口、干净草稿、截图或公开读回任一失败仍须把当前 Case 记为明确失败，不得只凭 capabilities 推断输入区可用。降级继续必须在 Case 结果中保存 `initialization_continuation` 和 `initialization-continuation-surface.json`，并明确 `release_gate_eligible=false`；后续通过不得覆盖或稀释初始化 Bug。
 - Core Beta v2 的 `BETA-INIT-001` 至 `BETA-INIT-004` 必须从系统设置点击真实维护按钮；全量重初始化、Skill 重装和清空会话必须捕获与动作匹配的确认弹窗，禁止以直接调用 preload bridge 代替用户操作。
 - `BETA-INIT-004` 点击清空前必须通过公开 `listSessions/getRunning` 枚举全部会话，只对真实 `running=true` 的会话调用按 ID 取消，并连续至少 3 次读回全部 idle；枚举、取消、稳定读回和前后截图必须写入独立不可变账本。若第一次真实 UI 清空明确返回 `active-session`，只能再次执行相同 idle 对账后重试一次真实 UI 清空，重试仍须重新捕获确认弹窗并使用不覆盖首次证据的截图；不得直接调用 `sessionsPurgeAllEnvs` 绕过 UI，不得盲等完整 Case 超时，也不得无限重试。清单不可读、取消失败或重试后仍被拒绝均为 `automation_error`，触发框架自愈与新目录全量重跑。

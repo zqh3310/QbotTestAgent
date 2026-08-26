@@ -1139,6 +1139,7 @@ const required = [
   ['逐次发送前模型校验', /async function send[\s\S]*ensureModelTier\(page, state, state\.case_dir[\s\S]*model_tier_before_send[\s\S]*const selectors/],
   ['模型复核后恢复并精确校验真实发送文本', /async function send[\s\S]*prompt_fidelity_before_send[\s\S]*restored[\s\S]*检测到输入区仍是旧草稿/],
   ['发送必须确认产品回执且第三次仅在安全条件下回退键盘 Enter', /(?=[\s\S]*async function send)(?=[\s\S]*attempt <= 3)(?=[\s\S]*composer-keyboard-enter)(?=[\s\S]*waitForSendReceipt)(?=[\s\S]*sendRetryIsSafe)(?=[\s\S]*未被产品接收)/],
+  ['发送重试必须证明既无新增用户消息也无辅助变化', /function sendRetryIsSafe[\s\S]*!evidence\.has_new_expected_user[\s\S]*!evidence\.auxiliary_evidence[\s\S]*noObservedSendMutation && composerStillExact/],
   ['contenteditable 使用 fill 同步受控草稿状态', /async function fillComposer[\s\S]*editable[\s\S]*await input\.fill\(text\)[\s\S]*输入区文本与期望不一致/],
   ['可信度审计使用逐次发送前证据', /preSendTierChecks[\s\S]*successfulSendCount[\s\S]*preSendTierChecks\.length < successfulSendCount/],
   ['HOME-007 专项执行', /SIT-HOME-007'[\s\S]*executeSitHomeSkillOnly/],
@@ -1180,7 +1181,7 @@ const required = [
   ['HOME-050 搜索前设置唯一标题', /SIT-HOME-050'[\s\S]*自动化搜索-[\s\S]*session-rename-input/],
   ['HOME-056 hover 后点击真实附件移除按钮', /executeSitHomeDeleteOneAttachment[\s\S]*root\.hover[\s\S]*aui-attachment-tile-remove[\s\S]*不点击泛化 button/],
   ['EXPERT-012 hover 后识别最近召唤移除按钮', /executeSitExpertRecentSummon[\s\S]*recentItem\.hover[\s\S]*exp-recent-del/],
-  ['SKILL-013 卡片无入口时走个人设置立即对账', /executeSitSkillMaterialization[\s\S]*nav-settings-menu[\s\S]*assistant-reconcile-skills[\s\S]*assistant-reconcile-result/],
+  ['SKILL-013 卡片无入口时走安全系统设置入口立即对账', /executeSitSkillMaterialization[\s\S]*openCoreBetaSystemSettings[\s\S]*assistant-reconcile-skills[\s\S]*assistant-reconcile-result/],
   ['SKILL-013 只按唯一 Fixture 标识定位', /executeSitSkillMaterialization[\s\S]*QA Materialization Pending\|qa-materialization-pending[\s\S]*受控 QA SkillHub/],
   ['三张图片用例使用互异真实 PNG', /SIT-HOME-038'[\s\S]*qbot-image-test\.png[\s\S]*qbot-image-flow\.png[\s\S]*qbot-image-risk\.png/],
   ['#668/#669 七条统一进入受控 Fixture 路由', /\^SIT-SKILL-0\(\?:27\|28\|29\|30\|31\|32\|33\)\$[\s\S]*executeSkillRegressionFixtureCase/],
@@ -1344,6 +1345,71 @@ for (const [label, pattern] of required) {
   if (!pattern.test(runner)) throw new Error(`Framework invariant missing: ${label}`);
 }
 
+const settingsMenuStart = runner.indexOf('async function dismissCoreBetaSettingsSkillFeedback');
+const settingsMenuEnd = runner.indexOf('async function openCoreBetaSystemSettings', settingsMenuStart);
+const settingsMenuSource = settingsMenuStart >= 0 && settingsMenuEnd > settingsMenuStart
+  ? runner.slice(settingsMenuStart, settingsMenuEnd)
+  : '';
+assert.match(
+  settingsMenuSource,
+  /skill-operation-feedback[\s\S]*关闭操作提示[\s\S]*state: 'hidden'[\s\S]*openCoreBetaSettingsMenu[\s\S]*dismissCoreBetaSettingsSkillFeedback[\s\S]*ensureSidebarExpanded[\s\S]*menu\.scrollIntoViewIfNeeded[\s\S]*menu\.click\(\{ timeout: 5000 \}\)/,
+  'legacy 必须先关闭遮挡设置入口的终态 Skill 提示，再展开侧栏并真实点击设置入口',
+);
+assert.doesNotMatch(
+  settingsMenuSource,
+  /force:\s*true|\.evaluate\s*\(/,
+  'legacy 设置入口不得 force 穿透或通过 evaluate 绕过命中测试',
+);
+assert.match(
+  runner,
+  /async function openCoreBetaSystemSettings[\s\S]*initialSettings = await waitForOpenSettingsMaintenance\(\)[\s\S]*openCoreBetaSettingsMenu[\s\S]*nav-settings/,
+  'legacy 必须先等待已打开设置完成加载，并兼容直接设置页与旧版个人设置子菜单',
+);
+for (const [name, pattern] of [
+  ['INIT-009', /async function executeSitInit009[\s\S]*openCoreBetaSystemSettings/],
+  ['AUTH-005', /async function executeSitAuth005[\s\S]*openCoreBetaSettingsMenu/],
+  ['Skill 物化', /async function executeSitSkillMaterialization[\s\S]*openCoreBetaSystemSettings/],
+  ['Skill 审计拒装', /async function executeSitSkillAuditRejectNoAutoRetry[\s\S]*openCoreBetaSystemSettings/],
+]) {
+  assert.match(runner, pattern, `${name} 必须复用 legacy 安全设置入口`);
+}
+
+const skillPreparationSource = runner.slice(
+  runner.indexOf('async function prepareSkillRegressionFixtureState'),
+  runner.indexOf('async function executeSitSkillScopeIsolation'),
+);
+assert.doesNotMatch(
+  skillPreparationSource,
+  /SIT-SKILL-MR-001[\s\S]*installSkillFixtureForSetup[\s\S]*qa-scope-isolation/,
+  'legacy MR Skill 通用准备阶段不得在事务账本前安装作用域 Fixture',
+);
+const mrSkillSource = runner.slice(
+  runner.indexOf('async function executeSitSkillMrTransactionalIsolation'),
+  runner.indexOf('async function executeSitSkillDependencyCycle'),
+);
+const mrSkillOrder = [
+  'executeSitSkillDependencyCascadeSuccess',
+  'executeSitSkillDependencyFailureBlocksRoot',
+  'combinedLedger',
+  'installScopeIsolationSkillForMr',
+  'executeSitSkillScopeIsolation',
+].map((needle) => mrSkillSource.indexOf(needle));
+assert.ok(
+  mrSkillOrder.every((position) => position >= 0)
+    && mrSkillOrder.every((position, index) => index === 0 || position > mrSkillOrder[index - 1]),
+  `legacy MR Skill 执行顺序必须是成功事务、失败回滚、完整账本、作用域安装、任务隔离：${mrSkillOrder.join(',')}`,
+);
+assert.match(
+  runner,
+  /async function installScopeIsolationSkillForMr[\s\S]*stage: 'skill_installation'[\s\S]*installed_list_readback[\s\S]*materializeCoreBetaPreSendCapabilityFailure[\s\S]*product_failure: true/,
+  'legacy MR Skill 作用域安装被产品拒绝时必须物化发送前负向证据',
+);
+assert.match(
+  mrSkillSource,
+  /ledgerShaBeforeScope[\s\S]*installScopeIsolationSkillForMr[\s\S]*ledgerShaAfterScope[\s\S]*ledgerPreserved[\s\S]*作用域 Skill 安装不得覆盖事务账本/,
+  'legacy MR Skill 作用域安装前后必须保持两笔事务账本 SHA 不变',
+);
+
 const stopClickHelperStart = runner.indexOf('async function clickCurrentStopGenerationControl');
 const stopClickHelperEnd = runner.indexOf('export function coreBetaStop', stopClickHelperStart);
 const stopClickHelperSource = stopClickHelperStart >= 0 && stopClickHelperEnd > stopClickHelperStart
@@ -1495,11 +1561,44 @@ const acceptedSend = sendReceiptEvidence(
 );
 const duplicatePromptAccepted = sendReceiptEvidence(
   { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['重复问题'], running: false, composer: '重复问题' },
-  { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['重复问题'], running: false, composer: '' },
+  { sendCount: 5, messageCount: 9, activeId: 'task-a', userCount: 5, userTexts: ['重复问题', '重复问题'], running: true, composer: '' },
   '重复问题',
 );
-if (unchangedSend.ok || !acceptedSend.ok || acceptedSend.reasons.length < 3 || !duplicatePromptAccepted.ok) {
-  throw new Error(`发送回执必须拒绝无状态变化，接受多源产品回执，并识别重复提问被输入区真实接收：${JSON.stringify({ unchangedSend, acceptedSend, duplicatePromptAccepted })}`);
+const singleSignalSendReceipts = {
+  sendCount: sendReceiptEvidence(
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    { sendCount: 5, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    '真实用户问题',
+  ),
+  messageCount: sendReceiptEvidence(
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    { sendCount: 4, messageCount: 9, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    '真实用户问题',
+  ),
+  activeId: sendReceiptEvidence(
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    { sendCount: 4, messageCount: 8, activeId: 'task-b', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    '真实用户问题',
+  ),
+  running: sendReceiptEvidence(
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: false, composer: '真实用户问题' },
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['旧问题'], running: true, composer: '真实用户问题' },
+    '真实用户问题',
+  ),
+  composerCleared: sendReceiptEvidence(
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['真实用户问题'], running: false, composer: '真实用户问题' },
+    { sendCount: 4, messageCount: 8, activeId: 'task-a', userCount: 4, userTexts: ['真实用户问题'], running: false, composer: '' },
+    '真实用户问题',
+  ),
+};
+if (
+  unchangedSend.ok
+  || !acceptedSend.ok
+  || acceptedSend.reasons.length < 3
+  || !duplicatePromptAccepted.ok
+  || Object.values(singleSignalSendReceipts).some((receipt) => receipt.ok)
+) {
+  throw new Error(`发送回执必须要求本轮用户消息新增及至少一个辅助信号，不能接受孤立状态变化：${JSON.stringify({ unchangedSend, acceptedSend, duplicatePromptAccepted, singleSignalSendReceipts })}`);
 }
 
 const hardTimeoutStartedAt = Date.now();

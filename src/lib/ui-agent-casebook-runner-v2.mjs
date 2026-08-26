@@ -6342,6 +6342,21 @@ async function dismissCoreBetaV2SettingsObstruction(page, state) {
   };
 }
 
+async function openCoreBetaV2SettingsMenu(page, state) {
+  const obstruction = await dismissCoreBetaV2SettingsObstruction(page, state);
+  if (!obstruction.ok) return { ok: false, reason: obstruction.reason };
+  await ensureSidebarExpanded(page, state);
+  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
+  if (!(await visible(menu, 2500))) return { ok: false, reason: '未找到设置菜单。' };
+  try {
+    await menu.scrollIntoViewIfNeeded({ timeout: 2500 });
+    await menu.click({ timeout: 5000 });
+  } catch (error) {
+    return { ok: false, reason: `设置入口无法按真实可命中状态点击：${clip(error?.message || error, 260)}` };
+  }
+  return { ok: true, reason: '设置菜单已打开。', obstruction };
+}
+
 async function openCoreBetaV2SystemSettings(page, state) {
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   if (await visible(maintenance, 800)) return { ok: true, reason: '运行时维护区已打开。' };
@@ -6373,17 +6388,8 @@ async function openCoreBetaV2SystemSettings(page, state) {
     return { ok: false, reason: `${initialSettings.error} 页面=${clip(initialSettings.text, 300)}` };
   }
   if (await visible(maintenance, 800)) return { ok: true, reason: '已打开的系统设置完成加载。' };
-  const obstruction = await dismissCoreBetaV2SettingsObstruction(page, state);
-  if (!obstruction.ok) return { ok: false, reason: obstruction.reason };
-  await ensureSidebarExpanded(page, state);
-  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
-  if (!(await visible(menu, 2500))) return { ok: false, reason: '未找到设置菜单。' };
-  try {
-    await menu.scrollIntoViewIfNeeded({ timeout: 2500 });
-    await menu.click({ timeout: 5000 });
-  } catch (error) {
-    return { ok: false, reason: `设置入口无法按真实可命中状态点击：${clip(error?.message || error, 260)}` };
-  }
+  const settingsMenu = await openCoreBetaV2SettingsMenu(page, state);
+  if (!settingsMenu.ok) return settingsMenu;
   if (!(await visible(maintenance, 1200))) {
     const directlyOpened = await waitForOpenSettingsMaintenance();
     if (directlyOpened.error) {
@@ -15384,10 +15390,8 @@ async function qworkDailyFallbackCopyCase({ page, state, testCase, caseDir, time
 }
 
 async function qworkDailySettingsCase({ page, state, testCase, caseDir, timeoutMs }) {
-  await ensureSidebarExpanded(page, state);
-  await page.locator('[data-testid="nav-settings-menu"]').click({ timeout: 5000 });
-  const settings = page.locator('[data-testid="nav-settings"]').first();
-  if (await visible(settings, 2000)) await settings.click({ timeout: 5000 });
+  const opened = await openCoreBetaV2SystemSettings(page, state);
+  if (!opened.ok) throw new Error(`无法安全进入个人设置：${opened.reason}`);
   await expectVisibleCoreLocator(page, '[data-testid="assistant-config-view"]', '个人设置');
   const original = await page.evaluate(async () => window.agent.getAssistantConfig());
   const marker = Date.now();
@@ -15541,10 +15545,8 @@ async function qworkDailyRedactionCase({ page, state, testCase, caseDir, options
       apiKey: token,
       httpHeaders: { 'x-qwork-secret-path': secretPath },
     }), { id: connectionId, token: fakeToken, secretPath: fakePath });
-    await ensureSidebarExpanded(page, state);
-    await page.locator('[data-testid="nav-settings-menu"]').click({ timeout: 5000 });
-    const settings = page.locator('[data-testid="nav-settings"]').first();
-    if (await visible(settings, 2000)) await settings.click({ timeout: 5000 });
+    const opened = await openCoreBetaV2SystemSettings(page, state);
+    if (!opened.ok) throw new Error(`无法安全进入个人设置：${opened.reason}`);
     await expectVisibleCoreLocator(page, '[data-testid="assistant-config-view"]', '个人设置');
     const personal = await page.evaluate(async (id) => {
       const rows = await window.agent.listUserLlmConnections();
@@ -19195,21 +19197,12 @@ async function teamsIntegratedRuntimeSnapshot(page, state, caseDir, screenshotNa
 }
 
 async function executeSitInit009({ page, state, caseDir }) {
-  await ensureSidebarExpanded(page, state);
-  const menu = page.locator('[data-testid="nav-settings-menu"]').first();
-  if (!(await visible(menu, 1500))) {
-    state.screenshots.init_009_settings_missing = await shot(page, caseDir, 'init-009-settings-menu-missing');
-    markFailed(state, '未找到设置菜单，用户无法进入运行时更新维护入口。', 'bug');
-    return;
-  }
-  await menu.click({ force: true }).catch(async () => menu.evaluate((el) => el.click()));
-  const settings = page.locator('[data-testid="nav-settings"]').first();
-  if (!(await visible(settings, 1500))) {
+  const opened = await openCoreBetaV2SystemSettings(page, state);
+  if (!opened.ok) {
     state.screenshots.init_009_personal_settings_missing = await shot(page, caseDir, 'init-009-personal-settings-missing');
-    markFailed(state, '设置菜单未展示【个人设置】，无法继续检查运行时更新。', 'bug');
+    markFailed(state, `无法安全进入运行时更新维护入口：${opened.reason}`, 'automation_error');
     return;
   }
-  await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
   const maintenance = page.locator('[data-testid="assistant-runtime-maintenance"]').first();
   const update = page.locator(
     '[data-testid="assistant-prepare-python-runtimes"], [data-testid="assistant-runtime-update-check"]',
@@ -19266,8 +19259,12 @@ async function executeSitAuth003({ page, state, caseDir, options, runtime }) {
 }
 
 async function executeSitAuth005({ page, state, caseDir }) {
-  await ensureSidebarExpanded(page, state);
-  await clickSelector(page, '[data-testid="nav-settings-menu"]', '打开左下用户菜单', state);
+  const opened = await openCoreBetaV2SettingsMenu(page, state);
+  if (!opened.ok) {
+    markFailed(state, `无法安全打开左下用户菜单：${opened.reason}`, 'automation_error');
+    return;
+  }
+  recordStep(state, '打开左下用户菜单', '必须先清除可安全关闭的遮挡层，再真实点击用户菜单。', opened.reason, 'passed');
   state.screenshots.user_menu = await shot(page, caseDir, '02-user-menu');
   const logout = page.locator('[data-testid="auth-logout"]').first();
   if (!(await visible(logout, 2000))) {
@@ -24842,21 +24839,16 @@ async function executeSitSkillMaterialization({ page, state, caseDir }) {
     actionClicked = true;
     actionStrategy = '技能卡片操作';
   } else {
-    const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
-    if (await visible(settingsMenu, 1200)) {
-      await settingsMenu.click({ force: true }).catch(async () => settingsMenu.evaluate((el) => el.click()));
-      const settings = page.locator('[data-testid="nav-settings"]').first();
-      if (await visible(settings, 1200)) {
-        await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
-        const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
-        if (await visible(reconcile, 2000)) {
-          await reconcile.click({ force: true }).catch(async () => reconcile.evaluate((el) => el.click()));
-          actionClicked = true;
-          actionStrategy = '个人设置-立即对账技能';
-          await page.locator('[data-testid="assistant-reconcile-result"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
-          await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
-          card = page.locator('.skill-card').filter({ hasText: skillName }).first();
-        }
+    const opened = await openCoreBetaV2SystemSettings(page, state);
+    if (opened.ok) {
+      const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
+      if (await visible(reconcile, 2000)) {
+        await reconcile.click({ timeout: 5000 });
+        actionClicked = true;
+        actionStrategy = '个人设置-立即对账技能';
+        await page.locator('[data-testid="assistant-reconcile-result"]').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
+        await openSkillsPage(page, state, caseDir, { skillTab: '已安装' });
+        card = page.locator('.skill-card').filter({ hasText: skillName }).first();
       }
     }
   }
@@ -25803,7 +25795,7 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
     }
   }
 
-  if (['SIT-SKILL-SCOPE-001', 'SIT-SKILL-MR-001'].includes(testCase.id)) {
+  if (testCase.id === 'SIT-SKILL-SCOPE-001') {
     const slug = 'qa-scope-isolation';
     const installed = await installSkillFixtureForSetup(page, state, caseDir, slug);
     state.artifacts.skill_scope_fixture_setup = installed;
@@ -25959,6 +25951,118 @@ async function installSkillFixtureForSetup(page, state, caseDir, slug, { expectF
   }
   if (!expectFailure && feedback.error) return { ok: false, reason: `安装失败：${clip(feedback.text, 260)}` };
   return { ok: true, feedback: feedback.text, cardText: refreshedText };
+}
+
+async function installScopeIsolationSkillForMr({ page, state, testCase, caseDir }) {
+  const slug = 'qa-scope-isolation';
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) {
+    return { ok: false, product_failure: false, reason: '作用域 Skill 安装前无法建立零能力草稿。' };
+  }
+  const before = await captureCoreBetaPublicState(page, testCase);
+  const card = await searchAutomationSkillCard(page, state, caseDir, slug);
+  if (!card) {
+    markFailed(state, `${slug} 未出现在确定性技能市场中。`, 'automation_error');
+    return { ok: false, product_failure: false, reason: '技能市场缺少确定性 Fixture。' };
+  }
+  const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
+  const skillName = await skillCardName(card, cardText) || slug;
+  const install = card.locator('.skill-install:not([disabled])').first();
+  if (!(await visible(install, 1200))) {
+    markFailed(state, `${slug} 没有可点击安装入口：${clip(cardText, 220)}`, 'automation_error');
+    return { ok: false, product_failure: false, reason: '安装控件不可定位。' };
+  }
+  const controlTestId = await install.getAttribute('data-testid').catch(() => '') || 'visible-skill-market-install';
+  const baselineText = await mainSurfaceText(page);
+  try {
+    await install.click({ timeout: 5000 });
+  } catch (error) {
+    markFailed(state, `${slug} 安装控件点击失败：${clip(error?.message || error, 220)}`, 'automation_error');
+    return { ok: false, product_failure: false, reason: '安装点击未派发。' };
+  }
+  let terminal = await waitForSkillInstallTerminal(page, { skillName, marketCard: card, timeoutMs: 90000 });
+  const marketAfterText = await mainSurfaceText(page);
+  state.screenshots.skill_scope_install_terminal = await shot(page, caseDir, 'skill-scope-install-terminal');
+  await clickSkillSubtab(page, '已安装', state);
+  await page.waitForTimeout(800);
+  const installedListText = await mainSurfaceText(page);
+  const installedListReadSucceeded = await skillSubtabSelected(page, '已安装');
+  const targetPresent = await visible(page.locator('.skill-card').filter({ hasText: skillName }).first(), 1500);
+  state.screenshots.skill_scope_installed_list = await shot(page, caseDir, 'skill-scope-installed-list');
+  const actionBoundFailure = skillInstallActionBoundFailureVerdict({
+    beforeText: baselineText,
+    afterText: `${marketAfterText}\n${installedListText}`,
+    clickDispatched: true,
+    installedListReadSucceeded,
+    targetPresent,
+  });
+  if (!terminal.terminal && actionBoundFailure.terminal) terminal = actionBoundFailure;
+  if ((terminal.success === true || targetPresent) && targetPresent) {
+    recordStep(
+      state,
+      '在事务账本固化后安装任务隔离 Skill',
+      'qa-scope-isolation 必须在成功/失败事务账本之后安装，成功后才进入任务 A/B 隔离。',
+      `skill=${skillName}；source=${terminal.source || 'exact-installed-tab-card'}`,
+      'passed',
+      state.screenshots.skill_scope_installed_list,
+    );
+    return { ok: true, product_failure: false, skill_name: skillName };
+  }
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'skill',
+    stage: 'skill_installation',
+    expected_identity: skillName,
+    control_testid: controlTestId,
+    control_located: true,
+    click_dispatched: true,
+    expected_state_observed: false,
+    failure_feedback: {
+      terminal: terminal.terminal === true,
+      success: false,
+      failure: terminal.failure === true,
+      pending: terminal.pending === true,
+      source: String(terminal.source || ''),
+      text: String(terminal.text || ''),
+      action_bound: terminal.action_bound === true,
+      baseline_absent: terminal.baseline_absent === true,
+      before_failure_lines: Array.isArray(terminal.before_failure_lines) ? terminal.before_failure_lines : [],
+      after_failure_lines: Array.isArray(terminal.after_failure_lines) ? terminal.after_failure_lines : [],
+    },
+    installed_list_readback: {
+      read_succeeded: installedListReadSucceeded,
+      expected_identity: skillName,
+      target_present: targetPresent,
+      page_text: clip(installedListText, 2000),
+    },
+    screenshot: state.screenshots.skill_scope_install_terminal,
+    installed_list_screenshot: state.screenshots.skill_scope_installed_list,
+    category: terminal.terminal === true && terminal.failure === true ? 'bug' : 'automation_error',
+  };
+  if (state.artifacts.core_beta_capability_interaction.category !== 'bug') {
+    markFailed(state, `作用域 Skill 安装没有形成可归因的明确产品终态：${clip(terminal.text, 260)}`, 'automation_error');
+    return { ok: false, product_failure: false, reason: '安装终态不完整。' };
+  }
+  const materialized = await materializeCoreBetaPreSendCapabilityFailure({
+    page,
+    state,
+    testCase,
+    caseDir,
+    capabilityKind: 'skill',
+    expectedIdentity: skillName,
+    before,
+    interactionSnapshot: state.artifacts.core_beta_capability_interaction,
+  });
+  if (!materialized) return { ok: false, product_failure: false, reason: '安装失败负向证据不完整。' };
+  recordAssertion(
+    state,
+    '任务隔离 Skill 安装终态',
+    '真实安装被产品明确拒绝时，应保留失败与库存读回并停止发送，不得覆盖先前事务账本。',
+    false,
+    clip(terminal.text, 320),
+    'bug',
+  );
+  return { ok: false, product_failure: true, reason: terminal.text || '产品明确拒绝安装。' };
 }
 
 export function seedLocalSkillReadiness(qbotHome, slug, readinessStatus, { additionalRoots = [] } = {}) {
@@ -26180,10 +26284,8 @@ async function executeSitSkillAuditRejectNoAutoRetry({ page, state, testCase, ca
     if (!card) return markFailed(state, `QA SkillHub 未返回审计硬拒测试技能 ${marker}。`, 'automation_error');
     const before = await card.innerText({ timeout: 1200 }).catch(() => '');
     const name = await skillCardName(card, before);
-    const settingsMenu = page.locator('[data-testid="nav-settings-menu"]').first();
-    await settingsMenu.click({ force: true }).catch(async () => settingsMenu.evaluate((el) => el.click()));
-    const settings = page.locator('[data-testid="nav-settings"]').first();
-    await settings.click({ force: true }).catch(async () => settings.evaluate((el) => el.click()));
+    const opened = await openCoreBetaV2SystemSettings(page, state);
+    if (!opened.ok) return markFailed(state, `无法安全进入个人设置：${opened.reason}`, 'automation_error');
     const reconcile = page.locator('[data-testid="assistant-reconcile-skills"]').first();
     if (!(await visible(reconcile, 2000))) return recordAssertion(state, '立即对账技能入口', '个人设置应提供“立即对账技能”入口。', false, '未找到 assistant-reconcile-skills。');
     control.proxy.arm();
@@ -26478,7 +26580,31 @@ async function executeSitSkillMrTransactionalIsolation({
     clip(JSON.stringify(combinedLedger), 1000),
     combinedLedger?.evidence_valid === true ? '' : 'automation_error',
   );
-
+  if (combinedLedger?.evidence_valid !== true) return;
+  const ledgerShaBeforeScope = fs.existsSync(ledgerPath)
+    ? createHash('sha256').update(fs.readFileSync(ledgerPath)).digest('hex')
+    : '';
+  const scopeInstallation = await installScopeIsolationSkillForMr({ page, state, testCase, caseDir });
+  const ledgerShaAfterScope = fs.existsSync(ledgerPath)
+    ? createHash('sha256').update(fs.readFileSync(ledgerPath)).digest('hex')
+    : '';
+  const ledgerPreserved = Boolean(ledgerShaBeforeScope && ledgerShaBeforeScope === ledgerShaAfterScope);
+  state.artifacts.skill_scope_installation_ledger_preservation = {
+    ledger_path: ledgerPath,
+    sha256_before: ledgerShaBeforeScope,
+    sha256_after: ledgerShaAfterScope,
+    preserved: ledgerPreserved,
+    scope_installation: scopeInstallation,
+  };
+  recordAssertion(
+    state,
+    '作用域 Skill 安装不得覆盖事务账本',
+    '作用域安装成功或产品失败都必须保持两笔 installAttempt 账本字节级不变。',
+    ledgerPreserved,
+    JSON.stringify(state.artifacts.skill_scope_installation_ledger_preservation),
+    ledgerPreserved ? '' : 'automation_error',
+  );
+  if (!ledgerPreserved || !scopeInstallation.ok) return;
   await executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs });
 }
 
@@ -36647,9 +36773,13 @@ async function sendReceiptSnapshot(page) {
 
 export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = '') {
   const reasons = [];
-  if (Number(after.sendCount || 0) > Number(before.sendCount || 0)) reasons.push(`sendCount ${Number(before.sendCount || 0)}->${Number(after.sendCount || 0)}`);
-  if (Number(after.messageCount || 0) > Number(before.messageCount || 0)) reasons.push(`messageCount ${Number(before.messageCount || 0)}->${Number(after.messageCount || 0)}`);
-  if (String(after.activeId || '') && String(after.activeId || '') !== String(before.activeId || '')) reasons.push(`activeId ${String(before.activeId || 'draft')}->${String(after.activeId)}`);
+  const sendCountAdvanced = Number(after.sendCount || 0) > Number(before.sendCount || 0);
+  const messageCountAdvanced = Number(after.messageCount || 0) > Number(before.messageCount || 0);
+  const activeIdChanged = Boolean(String(after.activeId || '')
+    && String(after.activeId || '') !== String(before.activeId || ''));
+  if (sendCountAdvanced) reasons.push(`sendCount ${Number(before.sendCount || 0)}->${Number(after.sendCount || 0)}`);
+  if (messageCountAdvanced) reasons.push(`messageCount ${Number(before.messageCount || 0)}->${Number(after.messageCount || 0)}`);
+  if (activeIdChanged) reasons.push(`activeId ${String(before.activeId || 'draft')}->${String(after.activeId)}`);
   if (Number(after.userCount || 0) > Number(before.userCount || 0)) reasons.push(`userCount ${Number(before.userCount || 0)}->${Number(after.userCount || 0)}`);
   const expected = normalizePromptForComparison(expectedPrompt);
   const beforeExpectedCount = (before.userTexts || []).filter((text) => normalizePromptForComparison(text) === expected).length;
@@ -36657,14 +36787,23 @@ export function sendReceiptEvidence(before = {}, after = {}, expectedPrompt = ''
   const hasNewExpectedUser = expected && afterExpectedUsers.length > beforeExpectedCount;
   if (hasNewExpectedUser) reasons.push('当前会话出现本轮用户消息');
   const lastUserMatches = expected && normalizePromptForComparison((after.userTexts || []).at(-1)) === expected;
-  const composerAccepted = expected
+  const composerCleared = expected
     && normalizePromptForComparison(before.composer) === expected
-    && !normalizePromptForComparison(after.composer)
-    && Boolean(String(after.activeId || ''))
-    && lastUserMatches;
-  if (composerAccepted) reasons.push('输入区已清空且当前任务末条用户消息精确匹配');
-  if (after.running && !before.running) reasons.push('Agent 进入运行态');
-  return { ok: reasons.length > 0, reasons };
+    && !normalizePromptForComparison(after.composer);
+  if (composerCleared && lastUserMatches) reasons.push('输入区已清空且当前任务末条用户消息精确匹配');
+  const runningStarted = Boolean(after.running && !before.running);
+  if (runningStarted) reasons.push('Agent 进入运行态');
+  const auxiliaryEvidence = sendCountAdvanced
+    || messageCountAdvanced
+    || activeIdChanged
+    || runningStarted
+    || composerCleared;
+  return {
+    ok: Boolean(hasNewExpectedUser && auxiliaryEvidence),
+    reasons,
+    has_new_expected_user: Boolean(hasNewExpectedUser),
+    auxiliary_evidence: Boolean(auxiliaryEvidence),
+  };
 }
 
 export function replySendObservedRunning(sendReceipts = []) {
@@ -36712,9 +36851,10 @@ async function waitForSendReceipt(page, before, expectedPrompt, timeoutMs = 3000
 }
 
 function sendRetryIsSafe(before, after, expectedPrompt) {
-  const unchanged = !sendReceiptEvidence(before, after, expectedPrompt).ok;
+  const evidence = sendReceiptEvidence(before, after, expectedPrompt);
+  const noObservedSendMutation = !evidence.has_new_expected_user && !evidence.auxiliary_evidence;
   const composerStillExact = normalizePromptForComparison(after?.composer) === normalizePromptForComparison(expectedPrompt);
-  return unchanged && composerStillExact && !after?.running;
+  return noObservedSendMutation && composerStillExact && !after?.running;
 }
 
 export async function withReplyPollHardTimeout(promise, timeoutMs, label = 'reply poll operation') {

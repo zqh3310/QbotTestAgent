@@ -19,6 +19,25 @@
   候选漂移或 host-core 未匹配时禁止调用；失败后的事务回滚不得自动重试激活。只有这一
   闭环完成且框架已全检、提交推送后，新的 12 条精确 `READY` 才能授权 runner。
 
+- 基于框架 `fee159a99da525c4ceaf7e26846d88669f2c8e06`、Casebook SHA
+  `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
+  QWork `0.1.6-sit.6` 启动的 12 条批次永久冻结在
+  `teams360-automation/output/20260827003500_sit-qwork-mrsmoke12_teams360-5.5.13-2119081949_qwork-0.1.6-sit.6_M3_serial_framework-fee159a_casebook-d09e029`。
+  正式进度完成 `9/12`，raw 为 `passed=5/failed=4`，运行时分类为
+  `pass=5/bug=1/automation_error=3`；7 个 completed Case manifest 完整，
+  `MRSMOKE-SKILL-001` 与 `MRSMOKE-FAIL-001` manifest 不完整。第 10 条
+  `MRSMOKE-ART-001` 虽在退出前留下 Case 目录，但没有进入正式进度，不得计入 completed
+  或可信结论。`MRSMOKE-SKILL-001` 的通用准备阶段在双事务账本固化前预装作用域 Skill，
+  产品随后明确拒绝安装时又没有生成完整发送前负向证据；`MRSMOKE-FAIL-001` 则被该
+  Skill 失败终态提示遮挡设置入口，属于两个确认的 framework issue。
+  `MRSMOKE-AUTH-001` 的 manifest 虽完整，但旧发送回执允许仅凭输入区清空和历史同文
+  用户消息确认重发，无法证明删除 cwd 后的新一轮确已发送，因此不得判可信产品 Bug。
+  唯一 runner 已以退出码 130 停止，旧目录不得续写。修复必须收紧发送确认、统一安全
+  设置入口、在双事务 ledger 后安装作用域 Skill，并对明确安装拒绝材料化完整零发送
+  证据；完成全检、提交推送、新能力审计和精确 `.6 READY` 后，只能在新不可变目录从
+  `1/12` 完整重跑，`inherited=0`、`synthetic=0`。后续通过不得抹去本批次框架问题、
+  不可信 AUTH 结论或 `MRSMOKE-ACT-001` 的活动折叠产品 Bug 候选。
+
 - QWork `0.1.6-sit.3` 基于框架 `84ca05523a53403cbc8704162b41a8b6cbab119f`
   启动的第三轮生产灰度门禁批次永久冻结在
   `teams360-automation/output/20260826144400_sit-qwork-gray70_teams360-5.5.13-2119081949_qwork-0.1.6-sit.3_M3_serial_framework-84ca055_casebook-1621632`。
@@ -694,7 +713,13 @@ SHA-256: d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d
 - `MRSMOKE-SKILL-001` 固定通过组合 driver `SIT-SKILL-MR-001` 执行成功依赖事务、
   失败依赖回滚和任务 A/B 隔离；6 个确定性 Fixture 与
   `qbot-skill-install-attempt-ledger/v2` 必须绑定 personal installAttempt、operationId、
-  提交/回滚终态，外层证据和 blocker 仍只能绑定 `MRSMOKE-SKILL-001`。
+  提交/回滚终态，外层证据和 blocker 仍只能绑定 `MRSMOKE-SKILL-001`。作用域 Skill
+  只能在双 attempt ledger 固化后从零 task/消息/发送和空能力草稿真实安装；失败时必须
+  材料化 `stage=skill_installation` 的产品负向证据，且 ledger SHA 前后保持不变。
+- 确认发送必须看到当前会话中本轮规范化 prompt 的用户消息出现次数真实增长，并至少
+  同时看到 send/message 计数、taskId、running 或输入区清空的一项辅助变化。仅一个
+  辅助信号、仅旧末条同文用户消息或仅 composer 清空均不能确认发送；重复 prompt 必须
+  按出现次数区分新旧轮次。
 - picker/paste/drag 附件统一入口、81 MiB 发送前拒绝、cwd 删除后的
   `chat.workspace.cwd_missing`、Web runtime authority/provider receipt 与真实外链
   `preview | external | blocked` 均已进入机器证据合同；对应角色为
