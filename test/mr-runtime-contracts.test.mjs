@@ -9,10 +9,12 @@ import { workspaceMissingErrorVerdict } from '../src/lib/qbot-workspace-error-ev
 import {
   createTeamsSkillFixtureController,
   skillCatalogRefreshSettledVerdict,
+  skillInstallControlVerdict,
 } from '../src/lib/ui-agent-casebook-runner.mjs';
 import {
   interactiveChartReadbackVerdict,
   skillCatalogRefreshSettledVerdict as skillCatalogRefreshSettledVerdictV2,
+  skillInstallControlVerdict as skillInstallControlVerdictV2,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 const chartPrompt = '请生成曝光 12000、点击 860、报名 240、成交 28 的柱状图并显示数值标签。';
@@ -94,6 +96,33 @@ test('Skill catalog refresh accepts a stable target card while sync control rema
     }),
     fallback,
   );
+});
+
+test('Skill install waits for the target card control to become enabled', () => {
+  const pending = skillInstallControlVerdict({
+    visible: true,
+    disabled: true,
+    ariaDisabled: 'true',
+    className: 'skill-install disabled',
+    text: 'qa-dep-root-failure\n正在同步',
+  });
+  assert.equal(pending.enabled, false);
+  assert.equal(pending.pending, true);
+  const ready = skillInstallControlVerdict({
+    visible: true,
+    disabled: false,
+    ariaDisabled: 'false',
+    className: 'skill-install',
+    text: 'qa-dep-root-failure\n安装',
+  });
+  assert.equal(ready.enabled, true);
+  assert.deepEqual(skillInstallControlVerdictV2({
+    visible: true,
+    disabled: false,
+    ariaDisabled: 'false',
+    className: 'skill-install',
+    text: 'qa-dep-root-failure\n安装',
+  }), ready);
 });
 
 function chartVerdict(overrides = {}) {

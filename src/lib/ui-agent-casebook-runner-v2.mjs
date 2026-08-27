@@ -2366,7 +2366,7 @@ async function inspectModelTierAvailability(page, modelTier) {
 async function ensureModelTier(page, state, caseDir, modelTier, { captureScreenshot = true } = {}) {
   const requestedTier = String(modelTier || '').trim().toUpperCase();
   if (!requestedTier) return { ok: true, status: 'skipped', reason: '未请求固定模型档位。' };
-  const result = await page.evaluate(async (tier) => {
+  const readModelTier = () => page.evaluate(async (tier) => {
     const bridge = window.__qbotE2E || window.__deepbankE2E;
     const getConnectionView = async () => {
       const candidates = [];
@@ -2412,6 +2412,7 @@ async function ensureModelTier(page, state, caseDir, modelTier, { captureScreens
       return {
         ok: false,
         status: 'blocked',
+        reason_code: 'runtime_options_unavailable',
         reason: '当前页面未暴露 runtimeOptions，无法切换模型档位。',
         before: before || null,
       };
@@ -2496,6 +2497,34 @@ async function ensureModelTier(page, state, caseDir, modelTier, { captureScreens
     requested: requestedTier,
     reason: `切换模型档位失败：${error.message}`,
   }));
+  let result = await readModelTier();
+  if (result?.reason_code === 'runtime_options_unavailable') {
+    const recovery = {
+      attempted: true,
+      action: 'openNewTask',
+      opened_new_task: false,
+      retry_read: null,
+    };
+    try {
+      await openNewTask(page, state);
+      recovery.opened_new_task = true;
+      const retry = await readModelTier();
+      recovery.retry_read = {
+        status: retry?.status || '',
+        ok: retry?.ok === true,
+        reason_code: retry?.reason_code || '',
+        options_count: Number(retry?.options_count || retry?.before?.runtimeOptions?.options?.length || 0),
+      };
+      result = { ...retry, recovery };
+    } catch (error) {
+      recovery.error = error?.message || String(error);
+      result = {
+        ...result,
+        recovery,
+        reason: `${result.reason} 已尝试通过【新建任务】恢复工作台，但恢复失败：${recovery.error}`,
+      };
+    }
+  }
   state.artifacts.model_tier = result;
   const screenshot = captureScreenshot
     ? await shot(page, caseDir, `model-tier-${slugify(requestedTier)}-selected`).catch(() => '')
@@ -26058,6 +26087,10 @@ async function installSkillFixtureForSetup(page, state, caseDir, slug, { expectF
   const card = await searchAutomationSkillCard(page, state, caseDir, slug);
   if (!card) return { ok: false, reason: '技能市场未返回对应 Fixture 卡片。' };
   const text = await card.innerText({ timeout: 1200 }).catch(() => '');
+  if (!(/已安装|已就绪/.test(text)) || expectFailure) {
+    const installReadback = await waitForSkillInstallableControl(card);
+    if (!installReadback.ok) return { ok: false, reason: `安装入口在有界等待后仍不可点击：${clip(text, 220)}` };
+  }
   const install = card.locator('.skill-install:not([disabled])').first();
   if (!(await visible(install, 1200))) {
     if (/已安装|已就绪/.test(text) && !expectFailure) return { ok: true, reason: '已安装。' };
@@ -26083,7 +26116,7 @@ async function installScopeIsolationSkillForMr({ page, state, testCase, caseDir 
     return { ok: false, product_failure: false, reason: '作用域 Skill 安装前无法建立零能力草稿。' };
   }
   const before = await captureCoreBetaPublicState(page, testCase);
-  const card = await searchAutomationSkillCard(page, state, caseDir, slug);
+  const card = await searchAutomationSkillCard(page, state, caseDir, slug, { waitForInstallable: true });
   if (!card) {
     markFailed(state, `${slug} 未出现在确定性技能市场中。`, 'automation_error');
     return { ok: false, product_failure: false, reason: '技能市场缺少确定性 Fixture。' };
@@ -26234,7 +26267,61 @@ export function seedLocalSkillReadiness(qbotHome, slug, readinessStatus, { addit
   };
 }
 
-async function searchAutomationSkillCard(page, state, caseDir, marker, { installed = false } = {}) {
+export function skillInstallControlVerdict({
+  visible: controlVisible = false,
+  disabled = false,
+  ariaDisabled = '',
+  className = '',
+  text = '',
+} = {}) {
+  const disabledByState = disabled
+    || String(ariaDisabled).toLowerCase() === 'true'
+    || /(?:^|\s)(?:disabled|is-disabled)(?:\s|$)/i.test(String(className));
+  const pending = /同步中|正在同步|安装中|处理中|准备中/.test(String(text));
+  return {
+    visible: Boolean(controlVisible),
+    disabled: Boolean(disabledByState),
+    enabled: Boolean(controlVisible) && !disabledByState,
+    pending,
+  };
+}
+
+async function waitForSkillInstallableControl(card, { timeoutMs = 30_000, pollMs = 300 } = {}) {
+  const deadline = Date.now() + Math.max(1_000, Number(timeoutMs) || 30_000);
+  const observations = [];
+  let last = skillInstallControlVerdict();
+  while (Date.now() < deadline) {
+    const control = card.locator('.skill-install').first();
+    const controlVisible = await visible(control, 250);
+    const disabled = await control.isDisabled().catch(() => false);
+    const ariaDisabled = await control.getAttribute('aria-disabled').catch(() => '');
+    const className = await control.getAttribute('class').catch(() => '');
+    const text = await card.innerText({ timeout: 500 }).catch(() => '');
+    last = skillInstallControlVerdict({
+      visible: controlVisible,
+      disabled,
+      ariaDisabled,
+      className,
+      text,
+    });
+    observations.push({
+      at: new Date().toISOString(),
+      ...last,
+      class_name: className,
+      aria_disabled: ariaDisabled,
+      card_text: clip(text, 220),
+    });
+    if (last.enabled) return { ok: true, control, observations, last };
+    await card.page().waitForTimeout(pollMs).catch(() => {});
+  }
+  return { ok: false, control: card.locator('.skill-install').first(), observations, last };
+}
+
+async function searchAutomationSkillCard(page, state, caseDir, marker, {
+  installed = false,
+  waitForInstallable = false,
+  installWaitMs = 30_000,
+} = {}) {
   await openSkillsPage(page, state, caseDir, { skillTab: installed ? '已安装' : '技能市场' });
   const markerPattern = marker ? automationFixtureMarkerPattern(marker) : null;
   if (installed) return markerPattern ? findSkillCardByText(page, markerPattern) : null;
@@ -26252,6 +26339,12 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
     refresh_settle_observations: 0,
     search_submitted: false,
     target_found: false,
+    install_wait_requested: Boolean(waitForInstallable),
+    install_control_visible: false,
+    install_control_enabled: false,
+    install_control_pending: false,
+    install_control_timeout: false,
+    install_wait_observations: [],
     visible_card_texts: [],
     errors: [],
   };
@@ -26345,6 +26438,19 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
       if (!card) await page.waitForTimeout(250);
     }
   }
+  if (card && waitForInstallable) {
+    const installReadback = await waitForSkillInstallableControl(card, { timeoutMs: installWaitMs });
+    diagnostic.install_control_visible = installReadback.last.visible;
+    diagnostic.install_control_enabled = installReadback.last.enabled;
+    diagnostic.install_control_pending = installReadback.last.pending;
+    diagnostic.install_wait_observations = installReadback.observations;
+    if (!installReadback.ok) {
+      diagnostic.install_control_timeout = true;
+      diagnostic.errors.push(
+        `目标技能卡已出现，但安装入口在 ${Math.max(1_000, Number(installWaitMs) || 30_000)}ms 内仍不可点击：${clip(JSON.stringify(installReadback.last), 260)}`,
+      );
+    }
+  }
   diagnostic.target_found = Boolean(card);
   diagnostic.visible_card_texts = (await page.locator('.skill-card').allInnerTexts().catch(() => []))
     .map((text) => clip(text.trim(), 300))
@@ -26352,6 +26458,7 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
     .slice(0, 20);
   diagnostic.finished_at = new Date().toISOString();
   persistAutomationSkillCatalogLookup(state, caseDir, diagnostic);
+  if (waitForInstallable && diagnostic.install_control_timeout) return null;
   return card;
 }
 
@@ -26510,7 +26617,7 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
     '',
     confirmation.message ? '' : 'automation_error',
   );
-  const marketCard = await searchAutomationSkillCard(page, state, caseDir, marker);
+  const marketCard = await searchAutomationSkillCard(page, state, caseDir, marker, { waitForInstallable: true });
   const after = marketCard ? await marketCard.innerText({ timeout: 1200 }).catch(() => '') : '';
   const installVisible = marketCard ? await visible(marketCard.locator('.skill-install').first(), 1200) : false;
   const rejectedBadgeText = marketCard
@@ -26521,12 +26628,12 @@ async function executeSitSkillRejectedUninstallCleanup({ page, state, testCase, 
 }
 
 async function installAutomationDependencyRoot({ page, state, testCase, caseDir, marker }) {
-  const card = await searchAutomationSkillCard(page, state, caseDir, marker);
+  const card = await searchAutomationSkillCard(page, state, caseDir, marker, { waitForInstallable: true });
   if (!card) return { automationError: `QA SkillHub 未返回依赖测试技能 ${marker}。` };
   const cardText = await card.innerText({ timeout: 1200 }).catch(() => '');
   const name = await skillCardName(card, cardText);
   const install = card.locator('.skill-install:not([disabled])').first();
-  if (!(await visible(install, 1200))) return { productFailure: `依赖测试技能 ${marker} 是合法未安装 Fixture，但没有可点击安装入口：${clip(cardText, 220)}` };
+  if (!(await visible(install, 1200))) return { automationError: `依赖测试技能 ${marker} 的安装入口在有界等待后仍不可点击：${clip(cardText, 220)}` };
   await install.click({ force: true }).catch(async () => install.evaluate((el) => el.click()));
   const feedback = await waitForSkillOperationFeedback(page, 120000);
   return { card, name, cardText, feedback };

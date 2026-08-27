@@ -1220,6 +1220,8 @@ const required = [
   ['SKILL-026 预装两项确定性 Fixture 并进入真实 Fixture 路由', /SIT-SKILL-026'[\s\S]*qa-python-runtime[\s\S]*qa-node-runtime[\s\S]*skill_fixture_multi_select_setup/],
   ['每次确定性 Skill Fixture 查找强制清空旧搜索并刷新市场', /searchAutomationSkillCard[\s\S]*input\.fill\(''\)[\s\S]*skills-catalog-refresh[\s\S]*refresh\.click[\s\S]*refresh_settled[\s\S]*targetDeadline[\s\S]*persistAutomationSkillCatalogLookup/],
   ['Skill Fixture 市场刷新记录目标、可见卡片与失败诊断', /searchAutomationSkillCard[\s\S]*visible_card_texts[\s\S]*errors[\s\S]*persistAutomationSkillCatalogLookup[\s\S]*qbot-automation-skill-catalog-lookups\/v1[\s\S]*evidence_valid[\s\S]*oracle_valid/],
+  ['Skill Fixture 卡片出现后继续等待安装按钮恢复可点击', /waitForSkillInstallableControl[\s\S]*skillInstallControlVerdict[\s\S]*install_control_timeout[\s\S]*waitForInstallable/],
+  ['技能页结束后模型档位先恢复新建任务再二次读回', /ensureModelTier[\s\S]*readModelTier[\s\S]*runtime_options_unavailable[\s\S]*openNewTask\(page, state\)[\s\S]*retry_read/],
   ['Teams Skill Fixture 合并原始 capabilities.skills 供统一菜单选择', /createTeamsSkillFixtureController[\s\S]*\['GET', '\/api\/capabilities'\][\s\S]*includeOriginalResult: pathExact === '\/api\/capabilities'[\s\S]*if \(name === 'capabilities'\)[\s\S]*fixtureSkills[\s\S]*skills: \[\.\.\.baseSkills, \.\.\.fixtureSkills\]/],
   ['Teams Skill Fixture reconcile 返回结构化 ready/materialized 身份', /if \(name === 'reconcileSkills'\)[\s\S]*selectedSlugs[\s\S]*materialized\.push\(installedRow\(slug\)\)[\s\S]*const ready[\s\S]*localReadiness\?\.status === 'ready_on_this_process'[\s\S]*result: \{ ok: true, ready, materialized/],
   ['SKILL-026 只选择刚预装的两项 Fixture 而非创建技能入口', /executeSitSkillMultiSelect[\s\S]*QA Python Runtime[\s\S]*QA Node Runtime[\s\S]*selectManualSkillByName/],
