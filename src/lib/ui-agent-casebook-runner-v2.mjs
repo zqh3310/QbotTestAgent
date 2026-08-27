@@ -62,6 +62,12 @@ const CORE_BETA_SCREENSHOT_PRIMARY_HARD_TIMEOUT_MS = 41_000;
 const CORE_BETA_SCREENSHOT_SESSION_TIMEOUT_MS = 5_000;
 const CORE_BETA_SCREENSHOT_CAPTURE_TIMEOUT_MS = 15_000;
 const CORE_BETA_SCREENSHOT_DETACH_TIMEOUT_MS = 5_000;
+// capabilities() is a read-only IPC call, but a renderer refresh can leave its
+// promise pending. Keep every read bounded so a stale bridge cannot stall a
+// serial batch; retries remain read-only and never repeat the preceding action.
+const CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS = 2_000;
+const CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS = 3;
+const CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS = 150;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -4830,8 +4836,41 @@ async function captureCoreBetaPublicState(page, testCase) {
         return { __error: String(error?.message || error) };
       }
     };
+    const callBounded = async (fn, timeoutMs, label) => {
+      if (typeof fn !== 'function') return { __error: `missing bridge method ${label}` };
+      let timer = null;
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => fn()),
+          new Promise((_, reject) => {
+            timer = window.setTimeout(
+              () => reject(new Error(`Core Beta ${label} readback timed out after ${timeoutMs}ms`)),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } catch (error) {
+        return { __error: String(error?.message || error) };
+      } finally {
+        if (timer) window.clearTimeout(timer);
+      }
+    };
     const session = await call(e2e?.currentSession?.bind(e2e));
-    const capabilities = await call(agent.capabilities?.bind(agent));
+    const capabilitiesReadbackAttempts = [];
+    let capabilities = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const startedAt = Date.now();
+      capabilities = await callBounded(agent.capabilities?.bind(agent), 2000, 'capabilities');
+      const ok = Boolean(capabilities && typeof capabilities === 'object' && !capabilities.__error);
+      capabilitiesReadbackAttempts.push({
+        attempt,
+        ok,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        error: String(capabilities?.__error || ''),
+      });
+      if (ok) break;
+      if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, 150 * attempt));
+    }
     const connectionView = await call(e2e?.getConnectionView?.bind(e2e));
     const skillsCatalog = await call(agent.getSkillsCatalog?.bind(agent));
     const expertLifecycle = agent.expertLifecycle || null;
@@ -4875,6 +4914,7 @@ async function captureCoreBetaPublicState(page, testCase) {
         last_stat_present: Boolean(state?.lastStat),
       },
       capabilities,
+      capabilities_readback_attempts: capabilitiesReadbackAttempts,
       connection_view: connectionView,
       skills: {
         selected: selectedSkills,
@@ -30124,10 +30164,36 @@ async function visibleComposerToolStateText(page, tool) {
 }
 
 async function currentCapabilities(page) {
-  return page.evaluate(async () => {
-    if (globalThis.window?.agent?.capabilities) return globalThis.window.agent.capabilities();
-    return null;
-  }).catch(() => null);
+  const readOnce = async () => page.evaluate(async (timeoutMs) => {
+    const agent = globalThis.window?.agent;
+    if (typeof agent?.capabilities !== 'function') {
+      return { __error: 'missing bridge method capabilities' };
+    }
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => agent.capabilities()),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(
+            () => reject(new Error(`Core Beta capabilities readback timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      return { __error: String(error?.message || error) };
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }, CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS).catch((error) => ({
+    __error: `capabilities evaluate failed: ${String(error?.message || error)}`,
+  }));
+  const readback = await coreBetaCapabilitiesReadbackWithRetry(readOnce, {
+    maxAttempts: CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS,
+    timeoutMs: CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS + 500,
+    retryDelayMs: CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS,
+  });
+  return readback.ok ? readback.value : null;
 }
 
 async function unifiedComposerPlusAvailable(page) {

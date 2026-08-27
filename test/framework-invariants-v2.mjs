@@ -3159,6 +3159,25 @@ assert.deepEqual(
   ],
   'Expert capabilities 重试账本必须保留首次超时和随后成功',
 );
+let hangingCapabilitiesReadCount = 0;
+const hangingCapabilitiesRecovered = await coreBetaCapabilitiesReadbackWithRetry(async () => {
+  hangingCapabilitiesReadCount += 1;
+  if (hangingCapabilitiesReadCount === 1) return new Promise(() => {});
+  return { selectedSkills: null, selectedConnectors: null, currentExpert: null };
+}, {
+  maxAttempts: 3,
+  timeoutMs: 20,
+  retryDelayMs: 0,
+  delay: async () => {},
+});
+assert.equal(
+  hangingCapabilitiesRecovered.ok,
+  true,
+  '公开 capabilities IPC 永不 resolve 时，框架必须在有界超时后只读重试并恢复',
+);
+assert.equal(hangingCapabilitiesReadCount, 2, '公开 capabilities 挂起恢复不得重复执行任何写操作');
+assert.equal(hangingCapabilitiesRecovered.attempts[0].ok, false, '挂起的首次 capabilities 读回必须记为失败尝试');
+assert.equal(hangingCapabilitiesRecovered.attempts[1].ok, true, '第二次 capabilities 只读重试应保留成功账本');
 assert.match(
   runner,
   /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*coreBetaCapabilitiesReadbackWithRetry[\s\S]*capabilities_readback_attempts/,
@@ -3183,6 +3202,16 @@ assert.match(
   runner,
   /current = await lifecycle\.getOperation\(\s*started\.id \|\| started\.operationId,\s*draft\.id,\s*draftCas,\s*\)/,
   'BETA-EXPERT-007 必须用 operationId、draftId 和发布时 CAS 轮询三个专家发布操作',
+);
+assert.match(
+  runner,
+  /CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS[\s\S]*currentCapabilities[\s\S]*Promise\.race[\s\S]*coreBetaCapabilitiesReadbackWithRetry/,
+  'Core Beta v2 所有公开 capabilities 读回必须使用有界 Promise.race 与只读重试，禁止挂死串行批次',
+);
+assert.match(
+  runner,
+  /capabilitiesReadbackAttempts[\s\S]*Core Beta capabilities readback timed out[\s\S]*capabilities_readback_attempts/,
+  'Core Beta v2 最终公共状态证据必须保留 capabilities 读回尝试与超时诊断',
 );
 assert.match(
   runner,

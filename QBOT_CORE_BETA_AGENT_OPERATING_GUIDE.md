@@ -976,6 +976,11 @@ Teams pretest 必须在精确 QWork WebView 上只读调用一次
 均必须得到 `BLOCKED`。页面已登录、Composer 可见、版本与 control plane identity
 匹配都不能替代该检查。
 
+正式 runner 的公开 capabilities 读回必须保持同一 fail-closed 语义：每次调用使用 2 秒
+单次超时，最多执行 3 次只读重试，并在公共状态证据中保存
+`capabilities_readback_attempts` 的逐次耗时与错误。全部尝试失败时不得继续发送、不得
+使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。
+
 Teams pretest 还必须只读调用 `window.agent.runtimeReleaseStatus()`。报告仍要求
 顶层 release、兼容性内 runtime、WebView URL 与 `--expected-qwork-version` 全等；
 runtime API/字段不可读、返回非对象或 runtime 身份漂移仍必须在 Case 0 前 `BLOCKED`。

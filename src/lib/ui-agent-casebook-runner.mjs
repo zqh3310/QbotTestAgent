@@ -41,7 +41,10 @@ import {
   webRuntimeAuthorityVerdict,
   webSearchBusinessVerdict,
 } from './qbot-web-runtime-evidence.mjs';
-import { runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand } from './ui-agent-casebook-runner-v2.mjs';
+import {
+  coreBetaCapabilitiesReadbackWithRetry,
+  runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand,
+} from './ui-agent-casebook-runner-v2.mjs';
 
 const DEFAULT_CDP_URL = 'http://127.0.0.1:9224';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -52,6 +55,9 @@ const COMBO_REPLY_WAIT_MS = 180000;
 const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000;
 const LONG_CONTEXT_REPLY_WAIT_MS = 600000;
 const MULTI_TURN_REPLY_WAIT_MS = 600000;
+const CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS = 2_000;
+const CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS = 3;
+const CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS = 150;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -20531,10 +20537,36 @@ async function visibleComposerToolStateText(page, tool) {
 }
 
 async function currentCapabilities(page) {
-  return page.evaluate(async () => {
-    if (globalThis.window?.agent?.capabilities) return globalThis.window.agent.capabilities();
-    return null;
-  }).catch(() => null);
+  const readOnce = async () => page.evaluate(async (timeoutMs) => {
+    const agent = globalThis.window?.agent;
+    if (typeof agent?.capabilities !== 'function') {
+      return { __error: 'missing bridge method capabilities' };
+    }
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => agent.capabilities()),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(
+            () => reject(new Error(`Core Beta capabilities readback timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      return { __error: String(error?.message || error) };
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }, CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS).catch((error) => ({
+    __error: `capabilities evaluate failed: ${String(error?.message || error)}`,
+  }));
+  const readback = await coreBetaCapabilitiesReadbackWithRetry(readOnce, {
+    maxAttempts: CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS,
+    timeoutMs: CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS + 500,
+    retryDelayMs: CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS,
+  });
+  return readback.ok ? readback.value : null;
 }
 
 async function unifiedComposerPlusAvailable(page) {
