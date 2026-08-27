@@ -51,7 +51,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx');
-const grayExpectedSha = 'e88018cfdf51b0d1c91267b440eb340d637ba9eec84a6315a83858bc39c2ad5d';
+const grayExpectedSha = '361ca7b7b30a56c5742d337d1be4cd30a353f2a740138a389d875b007ddd7b6d';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -137,13 +137,13 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('535137d658ce98123170e328bca476be2d51a756'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('6a1ee16853312d2f50eb24dd3a44db835e8a07f7'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
 }
 const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');
 if (!/81 MiB/.test(String(gateAttachmentRejection?.scenario || ''))
   || !/只拒绝第3份/.test(String(gateAttachmentRejection?.expected_result || ''))
-  || !/MR!1305,MR!1314/.test(String(gateAttachmentRejection?.source_id || ''))) {
+  || !/MR!1305,MR!1314,MR!1352/.test(String(gateAttachmentRejection?.source_id || ''))) {
   throw new Error('BETA-FILE-006 must freeze the recent MR 81 MiB rejection, retained attachments and quota recovery contract.');
 }
 const gateAttachmentIngress = grayCases.find((item) => item.id === 'BETA-FILE-008');
