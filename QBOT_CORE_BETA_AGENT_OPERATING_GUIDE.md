@@ -979,7 +979,11 @@ Teams pretest 必须在精确 QWork WebView 上只读调用一次
 正式 runner 的公开 capabilities 读回必须保持同一 fail-closed 语义：每次调用使用 2 秒
 单次超时，最多执行 3 次只读重试，并在公共状态证据中保存
 `capabilities_readback_attempts` 的逐次耗时与错误。全部尝试失败时不得继续发送、不得
-使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。
+使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。清理阶段若当前统一 Composer
+可见且 chip/专家头像已明确为空，可用发送前权威空态加可见空态完成交叉读回；若
+Composer 可见但无法证明为空或存在残留，三次只读耗尽后允许一次受管 `openNewTask`
+恢复干净 Composer，只重新采集可见/E2E 状态，不得重复清理桥，也不把导航算作第四次
+capabilities 尝试。恢复后仍有残留或导航失败继续 fail-closed。
 
 Teams pretest 还必须只读调用 `window.agent.runtimeReleaseStatus()`。报告仍要求
 顶层 release、兼容性内 runtime、WebView URL 与 `--expected-qwork-version` 全等；

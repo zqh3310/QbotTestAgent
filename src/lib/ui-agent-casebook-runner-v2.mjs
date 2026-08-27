@@ -5243,6 +5243,19 @@ export function coreBetaExpertSummonTaskVerdict({
   };
 }
 
+function cleanupVisibleComposerIsEmpty(snapshot = {}) {
+  const visibleUi = snapshot.selection_readbacks?.visible_ui;
+  return Boolean(
+    snapshot.composer_surface_available === true
+    && visibleUi?.surface === 'unified-plus'
+    && Array.isArray(visibleUi?.visible_skill_chips)
+    && visibleUi.visible_skill_chips.length === 0
+    && Array.isArray(visibleUi?.visible_connector_chips)
+    && visibleUi.visible_connector_chips.length === 0
+    && Number(visibleUi?.visible_expert_avatar_count) === 0
+  );
+}
+
 export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
   const attempts = Array.isArray(snapshot.capabilities_readback_attempts)
     ? snapshot.capabilities_readback_attempts
@@ -5250,7 +5263,7 @@ export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
   return snapshot.capability_cleanup_required === true
     && attempts.length >= 3
     && coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after)
-    && snapshot.composer_surface_available !== true;
+    && !cleanupVisibleComposerIsEmpty(snapshot);
 }
 
 export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
@@ -5299,15 +5312,7 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
     && preCleanup?.connectors_empty === true
     && preCleanup?.expert_empty === true
   );
-  const currentUnifiedComposerVisiblyEmpty = Boolean(
-    snapshot.composer_surface_available === true
-    && visibleUi?.surface === 'unified-plus'
-    && Array.isArray(visibleUi?.visible_skill_chips)
-    && visibleUi.visible_skill_chips.length === 0
-    && Array.isArray(visibleUi?.visible_connector_chips)
-    && visibleUi.visible_connector_chips.length === 0
-    && Number(visibleUi?.visible_expert_avatar_count) === 0
-  );
+  const currentUnifiedComposerVisiblyEmpty = cleanupVisibleComposerIsEmpty(snapshot);
   const boundedCapabilitiesExhausted = Boolean(
     Array.isArray(snapshot.capabilities_readback_attempts)
     && snapshot.capabilities_readback_attempts.length === 3

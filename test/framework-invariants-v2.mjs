@@ -3289,9 +3289,33 @@ assert.equal(
   coreBetaCleanupReadbackNeedsComposerRecovery({
     ...cleanupMarketTimeout,
     composer_surface_available: true,
+    selection_readbacks: {
+      visible_ui: {
+        surface: 'unified-plus',
+        visible_skill_chips: [],
+        visible_connector_chips: [],
+        visible_expert_avatar_count: 0,
+      },
+    },
   }),
   false,
-  '当前输入区已经可见时不得通过再次导航隐藏真实能力残留',
+  '当前统一输入区已明确为空时不得通过再次导航隐藏真实能力残留',
+);
+assert.equal(
+  coreBetaCleanupReadbackNeedsComposerRecovery({
+    ...cleanupMarketTimeout,
+    composer_surface_available: true,
+    selection_readbacks: {
+      visible_ui: {
+        surface: 'unified-plus',
+        visible_skill_chips: ['本Case技能'],
+        visible_connector_chips: [],
+        visible_expert_avatar_count: 0,
+      },
+    },
+  }),
+  true,
+  '能力读回耗尽且可见统一输入区无法证明为空时，必须导航恢复独立空态读回',
 );
 assert.deepEqual(
   coreBetaCleanupReadbackVerdict({
