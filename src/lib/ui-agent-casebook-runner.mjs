@@ -16775,6 +16775,9 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
     refresh_control_visible: false,
     refresh_clicked: false,
     refresh_settled: false,
+    refresh_settle_mode: '',
+    refresh_settle_fallback: false,
+    refresh_settle_observations: 0,
     search_submitted: false,
     target_found: false,
     visible_card_texts: [],
@@ -16805,8 +16808,10 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
           page.locator('[data-testid="skills-catalog-loading"], .skills-loading, .skill-loading').first(),
           150,
         );
-        if (busy !== 'true' && !disabled && !loadingVisible) {
+        const settleVerdict = skillCatalogRefreshSettledVerdict({ busy, disabled, loadingVisible });
+        if (settleVerdict.settled) {
           diagnostic.refresh_settled = true;
+          diagnostic.refresh_settle_mode = settleVerdict.mode;
           break;
         }
         await page.waitForTimeout(200);
@@ -16818,7 +16823,41 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
     diagnostic.errors.push('稳定技能市场刷新控件不可见。');
   }
 
+  // QWork may keep the sync button disabled while the refreshed catalog is
+  // already rendered. Treat a target card plus two identical read-only card
+  // snapshots as a settled catalog, while preserving the fallback reason.
   let card = null;
+  if (markerPattern && inputVisible && diagnostic.refresh_clicked && !diagnostic.refresh_settled) {
+    let previousSnapshot = '';
+    let stableObservations = 0;
+    const fallbackDeadline = Date.now() + 2500;
+    while (Date.now() < fallbackDeadline) {
+      card = await findSkillCardByText(page, markerPattern);
+      const snapshot = (await page.locator('.skill-card').allInnerTexts().catch(() => []))
+        .map((text) => String(text || '').trim())
+        .filter(Boolean);
+      const signature = JSON.stringify(snapshot);
+      if (card && signature && signature === previousSnapshot) stableObservations += 1;
+      else stableObservations = 0;
+      const settleVerdict = skillCatalogRefreshSettledVerdict({
+        busy: 'true',
+        disabled: true,
+        loadingVisible: true,
+        targetCardVisible: Boolean(card),
+        stableSnapshotCount: stableObservations + 1,
+      });
+      if (settleVerdict.settled && settleVerdict.fallback) {
+        diagnostic.refresh_settled = true;
+        diagnostic.refresh_settle_mode = settleVerdict.mode;
+        diagnostic.refresh_settle_fallback = settleVerdict.fallback;
+        diagnostic.refresh_settle_observations = stableObservations + 1;
+        break;
+      }
+      previousSnapshot = signature;
+      await page.waitForTimeout(250);
+    }
+  }
+
   if (markerPattern && inputVisible && diagnostic.refresh_clicked && diagnostic.refresh_settled) {
     await input.fill(marker);
     const submit = page.locator('.skill-search button').filter({ hasText: /搜索/ }).first();
@@ -16847,6 +16886,22 @@ async function searchAutomationSkillCard(page, state, caseDir, marker, { install
 export function automationFixtureMarkerPattern(marker) {
   const parts = String(marker || '').trim().split(/[-_\s]+/).filter(Boolean);
   return new RegExp(parts.map(escapeRegExp).join('(?:[-_\\s]+)'), 'i');
+}
+
+export function skillCatalogRefreshSettledVerdict({
+  busy = null,
+  disabled = false,
+  loadingVisible = false,
+  targetCardVisible = false,
+  stableSnapshotCount = 0,
+} = {}) {
+  const controlIdle = busy !== 'true' && disabled !== true && loadingVisible !== true;
+  const targetCardStable = targetCardVisible === true && Number(stableSnapshotCount) >= 2;
+  return {
+    settled: controlIdle || targetCardStable,
+    mode: controlIdle ? 'control_idle' : (targetCardStable ? 'target_card_stable' : ''),
+    fallback: !controlIdle && targetCardStable,
+  };
 }
 
 function persistAutomationSkillCatalogLookup(state, caseDir, diagnostic) {

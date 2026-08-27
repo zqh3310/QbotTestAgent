@@ -6,8 +6,14 @@ import {
   webSearchBusinessVerdict,
 } from '../src/lib/qbot-web-runtime-evidence.mjs';
 import { workspaceMissingErrorVerdict } from '../src/lib/qbot-workspace-error-evidence.mjs';
-import { createTeamsSkillFixtureController } from '../src/lib/ui-agent-casebook-runner.mjs';
-import { interactiveChartReadbackVerdict } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+import {
+  createTeamsSkillFixtureController,
+  skillCatalogRefreshSettledVerdict,
+} from '../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  interactiveChartReadbackVerdict,
+  skillCatalogRefreshSettledVerdict as skillCatalogRefreshSettledVerdictV2,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 const chartPrompt = '请生成曝光 12000、点击 860、报名 240、成交 28 的柱状图并显示数值标签。';
 const chartTaskId = 'task-interactive-chart';
@@ -66,6 +72,29 @@ const chartDom = {
   svg_text_nodes: ['曝光', '12000', '点击', '860', '报名', '240', '成交', '28'],
 };
 const chartScreenshot = { path: '/tmp/qbot-chart.png', bytes: 2048, sha256: 'b'.repeat(64) };
+
+test('Skill catalog refresh accepts a stable target card while sync control remains disabled', () => {
+  const blocked = skillCatalogRefreshSettledVerdict({ busy: 'true', disabled: true, loadingVisible: true });
+  assert.deepEqual(blocked, { settled: false, mode: '', fallback: false });
+  const fallback = skillCatalogRefreshSettledVerdict({
+    busy: 'true',
+    disabled: true,
+    loadingVisible: true,
+    targetCardVisible: true,
+    stableSnapshotCount: 2,
+  });
+  assert.deepEqual(fallback, { settled: true, mode: 'target_card_stable', fallback: true });
+  assert.deepEqual(
+    skillCatalogRefreshSettledVerdictV2({
+      busy: 'true',
+      disabled: true,
+      loadingVisible: true,
+      targetCardVisible: true,
+      stableSnapshotCount: 2,
+    }),
+    fallback,
+  );
+});
 
 function chartVerdict(overrides = {}) {
   return interactiveChartReadbackVerdict({
