@@ -51,7 +51,7 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
 }
 
 const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx');
-const grayExpectedSha = '47285b322d7b20d74543e609ac7807f65666d3143d13705d0abddf0140ecda1c';
+const grayExpectedSha = 'd72552de135e5d3fca1896c954d74323c47366d664f92a3273b4e16e39e3f670';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -137,7 +137,7 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('af202b42717a1c5b7180aabd660998e318e1c419'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('f22edbac971f53e5ec743dd63d93f4dcf2fd99e1'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
 }
 const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');
