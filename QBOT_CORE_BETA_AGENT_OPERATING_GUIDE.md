@@ -10,7 +10,7 @@
 
 ## 1. 当前状态
 
-- 基于框架 `35cf3d686cf601beb98e6b0f81de10c508ccf43b`、旧 Casebook SHA
+- 基于框架 `118e024015ef1dc3068fd692f928e2c779ce95cb`、旧 Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
   QWork `0.1.6-sit.6` 启动的正式 12 条批次永久冻结在
   `teams360-automation/output/20260827101200_sit-qwork-mrsmoke12_teams360-5.5.13-2119081949_qwork-0.1.6-sit.6_M3_serial_framework-35cf3d6_casebook-d09e029`。
@@ -26,16 +26,16 @@
 
 - 最新正式 Casebook 已更新为
   `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx`，
-  SHA-256 `eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c`，
-  设计基线 `origin/release/0.1@df3492ffcd138ca5e7485cb6329b6f01386a7424`、产品版本
-  `0.1.6`。相对旧基线新增 14 个直接合入 MR：!1334、!1331、!1330、!1332、!1336、
-  !1337、!1338、!1310、!1339、!1340、!1333、!1341、!1326、!1342；
-  `.7@8f001d12` 已包含截至 !1341 的产品行为变更，之后 !1326 与 !1342 分别为
-  version-only 与 CI-only 静态合同审计，因此
-  `.7` 是当前产品行为匹配候选。必须先形成包含新 Casebook、规范和 invariant 的干净
-  pushed 框架基线，再通过受管 helper 激活 `.7`，执行新能力审计与精确 `READY`；之后
-  从 `1/12` 全量重跑并逐 Case 复核，再独立执行 `1/70`。未完成这些步骤前不得宣称
-  最新 MR 已执行或发布门禁通过。
+  SHA-256 `caa84b1e82f47fb367b9969222cbfd11f4e4e3a5132070ac49f58723abb5a98b`，
+  设计基线 `origin/release/0.1@af202b42717a1c5b7180aabd660998e318e1c419`、产品版本
+  `0.1.6`。相对旧基线新增 18 个直接合入 MR：!1334、!1331、!1330、!1332、!1336、
+  !1337、!1338、!1310、!1339、!1340、!1333、!1341、!1326、!1342、!1320、
+  !1344、!1343、!1345；其中 !1344 为 Dashboard/研究物料静态合同审计，其他产品行为
+  变更映射到现有 12/70/160 Case。当前受管 `.7@8f001d12` 只覆盖到 !1341，不能代表
+  最新 release/0.1；必须等待包含 `af202b427` 的 SIT 候选，形成包含新 Casebook、规范
+  和 invariant 的干净 pushed 框架基线后，再执行新能力审计与精确 `READY`。之后从
+  `1/12` 全量重跑并逐 Case 复核，再独立执行 `1/70`。未完成这些步骤前不得宣称最新
+  MR 已执行或发布门禁通过。
 
 - 基于框架 `f6fa9cd1acc59a3639695495989b926b480aba95`、Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
@@ -186,7 +186,7 @@
   新能力审计和精确 `.27 READY` 后，仍须从 `1/11` 在新不可变目录完整重跑，
   `inherited=0`、`synthetic=0`。
 - 产品设计基线：`origin/release/0.1`，
-  commit `df3492ffcd138ca5e7485cb6329b6f01386a7424`，版本 `0.1.6`。
+  commit `af202b42717a1c5b7180aabd660998e318e1c419`，版本 `0.1.6`。
 - 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 12 -> 70 任务：
   360Teams `5.5.13` build `2119081949`、
   QWork `0.1.4-sit.11`、UI commit `2cdcb9d7`、backend
@@ -740,7 +740,7 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 ```text
 /Users/qifu/Documents/QbotTestAgent/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx
 Sheet: 新增MR核心冒烟
-SHA-256: eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c
+SHA-256: caa84b1e82f47fb367b9969222cbfd11f4e4e3a5132070ac49f58723abb5a98b
 ```
 
 - 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -756,11 +756,11 @@ SHA-256: eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c
   路由稳定、Skill 隔离、失败脱敏、成果目录、新任务隔离和 qcharts-react 交互图表。主观视觉细节、极端参数
   矩阵、首次系统权限/升级重启、多账号或受保护资源继续按合并版手工 Casebook 执行，
   不在 12 条通过结论中豁免。
-- 本版以北京时间 2026-08-24 00:00 至 2026-08-27 10:30 的 first-parent 为准，共审计
-  49 个 `origin/release/0.1` 直接合入 MR；工作簿 `近2天MR覆盖` Sheet 对每个 merge commit
+- 本版以北京时间 2026-08-24 00:00 至 2026-08-27 15:30 的 first-parent 为准，共审计
+  53 个 `origin/release/0.1` 直接合入 MR；工作簿 `近2天MR覆盖` Sheet 对每个 merge commit
   给出可执行 Case 映射或 Dashboard/CI/设计静态合同审计，静态审计不得冒充桌面 E2E。
-- MR !1329、!1330、!1337、!1310、!1340、!1333、!1326、!1342 固定映射为
-  CI/Dashboard/eval/toolchain/version-only 静态合同审计；不新增桌面 Case，且不计入
+- MR !1329、!1330、!1337、!1310、!1340、!1333、!1326、!1342、!1344 固定映射为
+  CI/Dashboard/研究物料/eval/toolchain/version-only 静态合同审计；不新增桌面 Case，且不计入
   12/70/160 桌面通过。其余新增产品行为 MR 映射到现有 12/70/160 真实 Case。
 - `MRSMOKE-AUTO-001` 固定 `intervalMs=60000`、`activeFrom=当前时刻`，禁止
   `runNow` 和过去时间回填；删除 definition 后必须 `refresh()` 并有界读回消失。
@@ -797,7 +797,7 @@ SHA-256: eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c`
+- SHA-256：`caa84b1e82f47fb367b9969222cbfd11f4e4e3a5132070ac49f58723abb5a98b`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -832,8 +832,8 @@ SHA-256: eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
-Casebook 的设计依据包括 2026-08-24 00:00 至 2026-08-27 10:30 直接合入
-`origin/release/0.1` 的 49 个 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
+Casebook 的设计依据包括 2026-08-24 00:00 至 2026-08-27 15:30 直接合入
+`origin/release/0.1` 的 53 个 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
 删除清单、覆盖矩阵、执行配置和发布准入均在工作簿独立 Sheet 中。
 
 ## 3. 发布级门禁
@@ -945,7 +945,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 eb61eb431955d637831b2143f66178f627b9f457dcce9cf592fc616c1a32e26c \
+  --expected-sha256 caa84b1e82f47fb367b9969222cbfd11f4e4e3a5132070ac49f58723abb5a98b \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
