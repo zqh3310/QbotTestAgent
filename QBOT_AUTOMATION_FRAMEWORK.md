@@ -761,6 +761,9 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   保留原始公开字段；仅拦截 `/api/skills/catalog` 不能证明 Fixture 已进入可选择菜单。
   未安装 Fixture 不得提前注入，安装/卸载后的 capabilities 读回必须随 controller 状态
   变化，缺少目标条目仍按 framework issue fail-closed。
+  Fixture 的 `reconcileSkills` 必须返回带 `slug/name/runtimeName` 身份的结构化 `ready` 和 `materialized`
+  条目；`selection` 指向的已就绪 Skill 必须继续出现在 `ready`。禁止返回裸字符串或只报告
+  本次状态变化，否则产品客户端会把无法按 identity 回读的成功安装事务误判为未就绪并回滚。
   任一回归 fixture 丢失、声明 Skill 未进入 market、Node handler 未派发或生命周期路由
   缺失均属于 framework issue，必须冻结批次并从 1/83 完整自愈重跑。
 - Teams 包内 `window.agent` 可能由 Electron `contextBridge` 暴露为冻结对象；给

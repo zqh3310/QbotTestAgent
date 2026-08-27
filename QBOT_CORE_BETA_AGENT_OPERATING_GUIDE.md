@@ -599,6 +599,11 @@ runner PID `55433` 与 npm 父进程 `55415` 已退出，受管 360Teams PID `89
 定向清理、新能力审计和精确 `.2 READY` 后，必须在新目录从 `1/83` 全量串行重跑，
 `inherited=0`、`synthetic=0`。
 
+stateful Skill Fixture 的 `reconcileSkills` 必须返回带 `slug/name/runtimeName` 身份的
+结构化 `ready` 和 `materialized` 条目；`selection` 指向的已就绪 Skill 必须继续出现在
+`ready`。禁止返回裸字符串或只报告本次状态变化，否则产品客户端会把无法按 identity
+回读的成功安装事务误判为未就绪并回滚。
+
 基于 `dea5da1b54b1f7d296fc0aa09d602e14c233d7b3` 启动的后续冻结批次保留在
 `teams360-automation/output/20260819095300_sit-qwork-daily83_teams360-5.5.10-2119081439_qwork-0.1.4-sit.2_M3_serial_framework-dea5da1_casebook-c412ee6`：
 已完成 `42/83`，独立 manifest/SHA 复核得到顶层 `trusted_pass=15`、

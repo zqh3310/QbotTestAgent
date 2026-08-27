@@ -284,6 +284,16 @@ test('Teams Skill fixture records installAttempt and rolls back only that attemp
   assert.ok(installed.attempts[0].installCall.startedAt);
   assert.ok(installed.attempts[0].installCall.finishedAt);
 
+  const reconciled = (await controller.handle({
+    name: 'reconcileSkills',
+    args: [{ selection: ['root'], userRetrySlugs: ['root'] }],
+  })).result;
+  assert.equal(reconciled.ok, true);
+  assert.deepEqual(reconciled.ready.map((item) => item.slug), ['root']);
+  assert.equal(reconciled.ready[0].runtimeName, 'skillhub__global__root');
+  assert.deepEqual(reconciled.materialized, []);
+  assert.equal(controller.snapshot().attempts[0].status, 'succeeded');
+
   const discarded = (await controller.handle({
     name: 'uninstallSkill',
     args: [{ slug: 'root', discardFailedAttempt: true, installAttempt: install.installAttempt }],

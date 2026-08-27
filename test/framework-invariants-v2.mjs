@@ -5614,6 +5614,11 @@ assert.match(
   'Core Beta v2 renderer adapter 必须支持 stateful Skill fixture 的 Node handler 与完整生命周期路由',
 );
 assert.match(
+  legacyRunner,
+  /if \(name === 'reconcileSkills'\)[\s\S]*selectedSlugs[\s\S]*materialized\.push\(installedRow\(slug\)\)[\s\S]*const ready[\s\S]*localReadiness\?\.status === 'ready_on_this_process'[\s\S]*result: \{ ok: true, ready, materialized/,
+  'Teams Skill fixture reconcile 必须返回可按 identity 匹配的结构化 ready/materialized，禁止让成功安装被客户端误回滚',
+);
+assert.match(
   runner,
   /__qbotAutomationAgentBindingStrategy = replaced \? 'facade' : 'unavailable'[\s\S]*bound_methods[\s\S]*original_agent_frozen[\s\S]*renderer control adapter did not intercept required window\.agent methods/,
   'Core Beta v2 renderer adapter 必须兼容冻结的 contextBridge API，并在 facade 与方法替换都无效时 fail-closed',
@@ -8376,6 +8381,7 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /!1334[\s\S]*!1331[\s\S]*!1330[\s\S]*!1332[\s\S]*!1336[\s\S]*!1337[\s\S]*!1338[\s\S]*!1310[\s\S]*!1339[\s\S]*!1340[\s\S]*!1333[\s\S]*!1341[\s\S]*!1326[\s\S]*!1342/, '两份规范必须完整列出相对上一Casebook新增的14个直接合入MR');
   assert.match(documentText, /!1329[\s\S]*!1330[\s\S]*!1337[\s\S]*!1310[\s\S]*!1340[\s\S]*!1333[\s\S]*!1326[\s\S]*!1342[\s\S]*(?:静态合同审计|静态合同)/, '两份规范必须冻结8个非桌面产品行为MR的静态审计分类');
   assert.match(documentText, /MRSMOKE-SKILL-001[\s\S]*SIT-SKILL-MR-001/, '两份规范必须冻结 MR Skill 组合 driver 路由');
+  assert.match(documentText, /reconcileSkills[\s\S]*结构化 `ready` 和 `materialized`[\s\S]*成功安装事务/, '两份规范必须冻结 Skill Fixture 的结构化就绪回读合同');
   for (const evidenceRole of ['workspace_missing_error_readback', 'skill_install_attempt_ledger', 'external_navigation_trace', 'interactive_chart_readback']) {
     assert.match(documentText, new RegExp(evidenceRole), `两份规范必须冻结新增 MR 专项证据角色 ${evidenceRole}`);
   }

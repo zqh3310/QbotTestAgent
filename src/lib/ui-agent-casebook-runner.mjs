@@ -24539,14 +24539,26 @@ export function createTeamsSkillFixtureController(skills = []) {
       return { handled: true, result: { ok: true, msg: existed ? '卸载成功' : '未安装' } };
     }
     if (name === 'reconcileSkills') {
+      const selectedSlugs = new Set(
+        (Array.isArray(args[0]?.selection) ? args[0].selection : [])
+          .map(resolveSlug)
+          .filter((slug) => installed.has(slug)),
+      );
       const materialized = [];
       for (const [slug, row] of installed) {
         if (row.readiness !== 'pending_materialization') continue;
         row.readiness = 'ready_on_this_process';
         row.updatedAt = Date.now();
-        materialized.push(slug);
+        materialized.push(installedRow(slug));
       }
-      return { handled: true, result: { ok: true, materialized, unready: [], rejected: [], empty: installed.size === 0 } };
+      const ready = [...installed.keys()]
+        .filter((slug) => selectedSlugs.size === 0 || selectedSlugs.has(slug))
+        .map(installedRow)
+        .filter((row) => row?.localReadiness?.status === 'ready_on_this_process');
+      return {
+        handled: true,
+        result: { ok: true, ready, materialized, unready: [], rejected: [], empty: installed.size === 0 },
+      };
     }
     if (name === 'updateSkill') {
       const slug = resolveSlug(args[0]);

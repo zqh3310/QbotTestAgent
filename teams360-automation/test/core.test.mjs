@@ -1075,7 +1075,9 @@ test('Teams stateful SkillHub fixture handles dependencies and materialization w
     'pending_materialization',
   );
   const reconciled = await controller.handle({ name: 'reconcileSkills', args: [] });
-  assert.deepEqual(reconciled.result.materialized, ['qa-materialization-pending']);
+  assert.deepEqual(reconciled.result.materialized.map((item) => item.slug), ['qa-materialization-pending']);
+  assert.ok(reconciled.result.ready.some((item) => item.slug === 'qa-materialization-pending'));
+  assert.ok(reconciled.result.ready.every((item) => item.runtimeName && item.localReadiness?.status === 'ready_on_this_process'));
   assert.equal(
     controller.snapshot().installed.find((item) => item.slug === 'qa-materialization-pending')?.localReadiness?.status,
     'ready_on_this_process',
