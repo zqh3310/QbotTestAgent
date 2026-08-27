@@ -23,15 +23,15 @@ const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184�
 const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
-const PRODUCT_COMMIT = '6a1ee16853312d2f50eb24dd3a44db835e8a07f7';
+const PRODUCT_COMMIT = '7ed47469a843b4ff4fc24405dccc75b5b9561c35';
 const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = '94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3';
 const MR_WINDOW_BASELINE_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
 const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.6';
 const MR_WINDOW_START = '2026-08-24T00:00:00+08:00';
-const MR_WINDOW_END = '2026-08-27T19:00:00+08:00';
-const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260827_release01_recent_mr_casebook_12-70-160');
+const MR_WINDOW_END = '2026-08-27T22:00:00+08:00';
+const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260827_release01_recent_mr_casebook_12-70-160-r2');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
 const SMOKE_CASE_IDS = Object.freeze([
   'MRSMOKE-ACT-001',
@@ -89,6 +89,11 @@ const RECENT_MR_CASE_MAPPING = new Map([
   ['1356', ['MRSMOKE-ROUTE-001', 'BETA-CHAT-005', 'BETA-CHAT-007']],
   ['1357', ['MRSMOKE-AUTO-001']],
   ['1352', ['BETA-FILE-006', 'BETA-FILE-008', 'BETA-FILE-009', 'SIT-HOME-044']],
+  ['1359', ['BETA-FILE-005', 'BETA-FILE-006', 'BETA-FILE-007', 'SIT-HOME-056']],
+  ['1361', ['MRSMOKE-SKILL-001', 'BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004', 'BETA-SKILL-005', 'BETA-SKILL-014']],
+  ['1364', ['MRSMOKE-ART-001', 'BETA-ART-001', 'BETA-FILE-005']],
+  ['1358', ['MRSMOKE-ART-001', 'BETA-ART-001', 'BETA-ART-002', 'BETA-ART-003', 'BETA-ART-004']],
+  ['1365', ['MRSMOKE-ACT-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001', 'BETA-CHAT-007']],
 ]);
 const RECENT_MR_STATIC_AUDITS = new Map([
   ['1329', {
@@ -212,8 +217,8 @@ const RECENT_MR_STATIC_AUDITS = new Map([
   }],
 ]);
 
-// 本地只读 release ref 在 2026-08-27 19:00 CST 冻结的增量 MR 文件清单。
-// deepbankV2 保持只读；生成器用上一 Casebook 可读提交重建旧 35 条，再追加这 27 条。
+// 本地只读 release ref 在 2026-08-27 22:00 CST 冻结的增量 MR 文件清单。
+// deepbankV2 保持只读；生成器用上一 Casebook 可读提交重建旧 35 条，再追加这 32 条。
 const RECENT_MR_APPEND = Object.freeze([
   { mr: '1334', commit: 'f64a85f53de75ca37de0aee7aca2de3d1f5c10e2', mergedAt: '2026-08-26T23:54:58+08:00', branch: 'enhancement/1410-managed-http-proxy-ttl', files: ['docs/qbot-web-tools.md', 'electron/managed-http-proxy-cache.cjs', 'server/managed-http-proxy-config.mjs', 'test/unit/desktop/managed-http-proxy-cache.test.cjs', 'test/unit/server/managed-http-proxy-config.test.mjs'] },
   { mr: '1331', commit: '4e3ce28ac3521ea6f5feef43199198645ba1e94e', mergedAt: '2026-08-26T23:55:36+08:00', branch: 'enhancement/1405-document-processing-routing', files: ['.agent/compiled/root/AGENTS.md', '.agent/compiled/root/CLAUDE.md', '.agent/context.yaml', 'AGENTS.md', 'CLAUDE.md', 'docs/file-ingress-contract.md', 'resources/builtin-skills/document-processing/SKILL.md', 'resources/builtin-skills/document-processing/references/requirements.txt', 'scripts/e2e-module.test.mjs', 'scripts/e2e-qbot-claude-real.mjs', 'test/e2e/local-real-claude-code.spec.mjs', 'test/e2e/remote-dev-local-only-assertions.spec.mjs', 'test/e2e/remote-dev.spec.mjs', 'test/e2e/support/bug-derived-suite-materials.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/skills/document-processing-skill.test.mjs'] },
@@ -242,6 +247,11 @@ const RECENT_MR_APPEND = Object.freeze([
   { mr: '1356', commit: 'f22edbac971f53e5ec743dd63d93f4dcf2fd99e1', mergedAt: '2026-08-27T17:35:22+08:00', branch: 'codex/issue-1433-runtime-handle-revision', files: ['electron/desktop-agent-host.cjs', 'server/localdb.mjs', 'src/components/assistant-ui/thread.tsx', 'src/activity-grouping.ts', 'src/qbot.css', 'test/unit/database/personal-automation-localdb.test.mjs', 'test/unit/desktop/desktop-current-turn-authority.test.mjs', 'test/unit/desktop/personal-automation-background-turn.test.mjs', 'test/unit/projects/session-rename.test.mjs', 'test/unit/ui/activity-grouping.test.mjs', 'test/unit/ui/assistant-turn-summary-ui.test.mjs'] },
   { mr: '1357', commit: '535137d658ce98123170e328bca476be2d51a756', mergedAt: '2026-08-27T18:13:07+08:00', branch: 'codex/1417-automation-execution-guard', files: ['electron/desktop-agent-host.cjs', 'test/unit/desktop/personal-automation-background-turn.test.mjs'] },
   { mr: '1352', commit: '6a1ee16853312d2f50eb24dd3a44db835e8a07f7', mergedAt: '2026-08-27T18:23:18+08:00', branch: 'codex/issue-1438-fileinput-direct-path', files: ['.agent/compiled/electron/AGENTS.md', '.agent/compiled/electron/CLAUDE.md', '.agent/compiled/root/AGENTS.md', '.agent/compiled/root/CLAUDE.md', '.agent/context/scopes/electron.yaml', '.agent/context.yaml', 'electron/AGENTS.md', 'electron/preload.cjs', 'electron/shell-handlers.cjs', 'test/unit/desktop/shell-file-ingress.test.mjs', 'test/unit/web/web-preview-iframe.test.mjs', 'AGENTS.md'] },
+  { mr: '1359', commit: '12c0fe127550a33f4fa36809a832d159cd05d5f2', mergedAt: '2026-08-27T19:05:49+08:00', branch: 'bugfix/1422-mixed-attachment-partial-success', files: ['electron/chat-user-error-notice.cjs', 'electron/desktop-agent-host.cjs', 'electron/preload.cjs', 'scripts/ci/node-unit-test-weights.json', 'scripts/e2e-module.test.mjs', 'src/components/assistant-ui/thread.tsx', 'src/global.d.ts', 'src/runtime.tsx', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/e2e/bug-derived-materials.local.spec.mjs', 'test/unit/core/chat-user-error-notice.test.mjs', 'test/unit/desktop/desktop-file-acceptance.test.mjs', 'test/unit/skills/skill-shell-token-env.test.mjs', 'test/unit/ui/preload-session-domain.test.mjs'] },
+  { mr: '1361', commit: '1b9dfe886279ec768a922654658e167aeadf30f6', mergedAt: '2026-08-27T20:07:33+08:00', branch: 'codex/1442-skill-runtime-unit-fetch', files: ['server/skill-install.mjs', 'test/unit/skills/skill-install.test.mjs'] },
+  { mr: '1364', commit: '025649f48b6f99e35479d859f5874788e34b754a', mergedAt: '2026-08-27T20:29:04+08:00', branch: 'codex/issue-1444-encoded-win-path', files: ['src/local-file-reference.ts', 'test/unit/ui/local-file-reference.test.mts'] },
+  { mr: '1358', commit: '5a35d94dc132e55279b96ec987e7e6be17b25bb6', mergedAt: '2026-08-27T20:48:11+08:00', branch: 'codex/fix-1430-artifact-panel-session-isolation', files: ['src/runtime-artifacts.ts', 'src/runtime.tsx', 'test/unit/runtime/runtime-artifacts.test.mjs', 'test/unit/ui/result-event-turn-correlation.test.mjs', 'test/unit/web/web-preview-iframe.test.mjs'] },
+  { mr: '1365', commit: '7ed47469a843b4ff4fc24405dccc75b5b9561c35', mergedAt: '2026-08-27T20:51:32+08:00', branch: 'codex/issue-1425-automation-ui-followup', files: ['src/AutomationView.tsx', 'src/app.css', 'src/qbot.css', 'test/unit/ui/personal-automation-view-contract.test.mjs'] },
 ]);
 const LOCAL_FIXTURE_ADAPTERS = new Set([
   'native_ime_input',
@@ -388,7 +398,7 @@ function patchSmokeCase(testCase) {
   }
   next['来源类型'] = '2026-08-24~2026-08-27 release/0.1 直接合入 MR 核心路径自动化';
   next['版本范围'] = `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`;
-  next['备注'] = `${asString(next['备注'])}；本窗口62个直接合入MR已在“近2天MR覆盖”逐条映射，Dashboard/CI/eval/refactor/version-only变更只做静态合同审计。`;
+  next['备注'] = `${asString(next['备注'])}；本窗口67个直接合入MR已在“近2天MR覆盖”逐条映射，Dashboard/CI/eval/refactor/version-only变更只做静态合同审计。`;
   if (id === 'MRSMOKE-WEB-001') {
     next = withEvidenceRole(next, 'external_navigation_trace');
     next['测试数据'] = '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新；若不足两条请明确说明并列出最近两条。每条给出标题、发布日期、原始链接和一句摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
@@ -1305,7 +1315,7 @@ async function main() {
         : (staticAudit?.reason || '保留merge commit与文件清单；由源码单测/发布工程检查负责，不计12/70/160桌面通过'),
     ];
   });
-  if (mrRows.length !== 62) throw new Error(`本窗口直接合入MR必须恰好62个，actual=${mrRows.length}`);
+  if (mrRows.length !== 67) throw new Error(`本窗口直接合入MR必须恰好67个，actual=${mrRows.length}`);
   const mr1329 = mrRows.find((row) => row[1] === '!1329');
   if (!mr1329
     || mr1329[5] !== '.gitlab-ci.yml'
@@ -1487,7 +1497,7 @@ async function main() {
     ['类型', '位置/版本', '用途', '校验'], [
       ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '最新MR与产品行为设计依据；产品仓库只读', 'GitLab GraphQL mergeCommitSha 与增量MR终点全等'],
       ['上一Casebook产品基线', PREVIOUS_CASEBOOK_PRODUCT_COMMIT, '冻结26个新增直接合入MR的审计起点', '本地只读提交可达；增量文件清单由单次只读请求冻结'],
-      ['MR窗口基线', MR_WINDOW_BASELINE_COMMIT, '重建2026-08-24起全部62个直接合入MR', `git log ${MR_WINDOW_BASELINE_COMMIT}..${PREVIOUS_CASEBOOK_PRODUCT_COMMIT} --first-parent --merges + 27条只读增量`],
+      ['MR窗口基线', MR_WINDOW_BASELINE_COMMIT, '重建2026-08-24起全部67个直接合入MR', `git log ${MR_WINDOW_BASELINE_COMMIT}..${PREVIOUS_CASEBOOK_PRODUCT_COMMIT} --first-parent --merges + 32条只读增量`],
       ['产品版本', PRODUCT_VERSION, 'release/0.1 version-only MR !1326', 'Casebook/pretest按0.1.6冻结；SIT候选另按完整版本号读回'],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],
       ['MR冒烟源Casebook', SMOKE_SOURCE, '历史11条固定顺序合同来源', '只读导入并按最新MR补强，追加1条交互图表'],

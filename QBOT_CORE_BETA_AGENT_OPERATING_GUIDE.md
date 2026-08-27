@@ -25,19 +25,17 @@
   `MRSMOKE-FAIL-001` 的产品负向结果和其余已完成 Case 必须逐 Case 可信复核保留。
 
 - 最新正式 Casebook 已更新为
-  `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx`，
-  SHA-256 `361ca7b7b30a56c5742d337d1be4cd30a353f2a740138a389d875b007ddd7b6d`，
-  设计基线 `origin/release/0.1@6a1ee16853312d2f50eb24dd3a44db835e8a07f7`、产品版本
-  `0.1.6`。相对旧基线新增 27 个直接合入 MR：!1334、!1331、!1330、!1332、!1336、
-  !1337、!1338、!1310、!1339、!1340、!1333、!1341、!1326、!1342、!1320、
-  !1344、!1343、!1345、!1346、!1349、!1348、!1350、!1355、!1354、!1356、!1357、!1352；其中
-  `!1357` 映射 `MRSMOKE-AUTO-001`，验证后台 schedule 执行不会递归创建自动化；`!1352` 映射
-  `BETA-FILE-006/008/009` 与 `SIT-HOME-044`，验证完整本机路径预览/打开不再误报不可访问；其他产品行为
-  变更映射到现有 12/70/160 Case。当前受管 `.7@8f001d12` 只覆盖到 !1341，不能代表
-  最新 release/0.1；必须等待包含 `6a1ee168` 的 SIT 候选，形成包含新 Casebook、规范
-  和 invariant 的干净 pushed 框架基线后，再执行新能力审计与精确 `READY`。之后从
-  `1/12` 全量重跑并逐 Case 复核，再独立执行 `1/70`。未完成这些步骤前不得宣称最新
-  MR 已执行或发布门禁通过。
+  `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx`，
+  SHA-256 `9354636fb54d7a007119affc46cd66aeffb91789d8725d0dba45dd891501d0a2`，
+  设计基线 `origin/release/0.1@7ed47469a843b4ff4fc24405dccc75b5b9561c35`、产品版本
+  `0.1.6`。相对上一 Casebook 新增 5 个直接合入 MR：!1359、!1361、!1364、!1358、!1365；
+  窗口累计审计 67 个直接合入 MR。!1359 映射混合附件保留与逐文件拒绝，!1361 映射 Skill 安装
+  runtime fetch 注入，!1364 映射编码 Windows 本地文件路径，!1358 映射成果按会话隔离，!1365
+  映射自动化列表/响应式入口与侧栏操作；均复用现有 12/70/160 Case，不新增桌面合同。当前受管
+  QWork `.9@025649f4` 仅覆盖到 !1364，不能代表最新 `release/0.1@7ed47469`；必须等待包含
+  `7ed47469` 的 SIT 候选，形成包含新 Casebook、规范和 invariant 的干净 pushed 框架基线后，
+  再执行新能力审计与精确 `READY`。之后从 `1/12` 全量重跑并逐 Case 复核，再独立执行 `1/70`。
+  未完成这些步骤前不得宣称最新 MR 已执行或发布门禁通过。
 
 - 基于框架 `f6fa9cd1acc59a3639695495989b926b480aba95`、Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
@@ -188,7 +186,7 @@
   新能力审计和精确 `.27 READY` 后，仍须从 `1/11` 在新不可变目录完整重跑，
   `inherited=0`、`synthetic=0`。
 - 产品设计基线：`origin/release/0.1`，
-  commit `6a1ee16853312d2f50eb24dd3a44db835e8a07f7`，版本 `0.1.6`。
+  commit `7ed47469a843b4ff4fc24405dccc75b5b9561c35`，版本 `0.1.6`。
 - 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 12 -> 70 任务：
   360Teams `5.5.13` build `2119081949`、
   QWork `0.1.4-sit.11`、UI commit `2cdcb9d7`、backend
@@ -740,9 +738,9 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 新增 MR 核心冒烟入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx
 Sheet: 新增MR核心冒烟
-  SHA-256: 361ca7b7b30a56c5742d337d1be4cd30a353f2a740138a389d875b007ddd7b6d
+  SHA-256: 9354636fb54d7a007119affc46cd66aeffb91789d8725d0dba45dd891501d0a2
 ```
 
 - 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -758,9 +756,12 @@ Sheet: 新增MR核心冒烟
   路由稳定、Skill 隔离、失败脱敏、成果目录、新任务隔离和 qcharts-react 交互图表。主观视觉细节、极端参数
   矩阵、首次系统权限/升级重启、多账号或受保护资源继续按合并版手工 Casebook 执行，
   不在 12 条通过结论中豁免。
-- 本版以北京时间 2026-08-24 00:00 至 2026-08-27 19:00 的 first-parent 为准，共审计
-  62 个 `origin/release/0.1` 直接合入 MR；工作簿 `近2天MR覆盖` Sheet 对每个 merge commit
-  给出可执行 Case 映射或 Dashboard/CI/设计静态合同审计，静态审计不得冒充桌面 E2E。
+- 本版以北京时间 2026-08-24 00:00 至 2026-08-27 22:00 的 first-parent 为准，共审计
+  67 个 `origin/release/0.1` 直接合入 MR；工作簿 `近2天MR覆盖` Sheet 对每个 merge commit
+  给出可执行 Case 映射或 Dashboard/CI/设计静态合同审计，静态审计不得冒充桌面 E2E。完整同序
+  ID 为：!1334、!1331、!1330、!1332、!1336、!1337、!1338、!1310、!1339、!1340、!1333、!1341、!1326、
+  !1342、!1320、!1344、!1343、!1345、!1346、!1349、!1348、!1350、!1355、!1354、!1356、!1357、!1352、
+  !1359、!1361、!1364、!1358、!1365。
 - MR !1329、!1330、!1337、!1310、!1340、!1333、!1326、!1342、!1344 固定映射为
   CI/Dashboard/研究物料/eval/toolchain/version-only 静态合同审计；不新增桌面 Case，且不计入
   12/70/160 桌面通过。其余新增产品行为 MR 映射到现有 12/70/160 真实 Case。
@@ -793,13 +794,13 @@ Sheet: 新增MR核心冒烟
 生产灰度发布与全量功能回归唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx
 ```
 
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`361ca7b7b30a56c5742d337d1be4cd30a353f2a740138a389d875b007ddd7b6d`
+- SHA-256：`9354636fb54d7a007119affc46cd66aeffb91789d8725d0dba45dd891501d0a2`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -834,8 +835,8 @@ Sheet: 新增MR核心冒烟
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
-Casebook 的设计依据包括 2026-08-24 00:00 至 2026-08-27 19:00 直接合入
-`origin/release/0.1` 的 62 个 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
+Casebook 的设计依据包括 2026-08-24 00:00 至 2026-08-27 22:00 直接合入
+`origin/release/0.1` 的 67 个 MR、最新产品源码和历史 Casebook 收敛审计。MR 映射、
 删除清单、覆盖矩阵、执行配置和发布准入均在工作簿独立 Sheet 中。
 
 ## 3. 发布级门禁
@@ -891,13 +892,13 @@ npm run check
 npm --prefix teams360-automation run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx \
+  --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx \
   --sheet 生产灰度门禁Case \
   --profile mandatory \
   --out outputs/<new-gate70-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx \
+  --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx \
   --sheet 全量功能回归Case \
   --profile mandatory \
   --out outputs/<new-full160-capability-audit-dir>
@@ -938,7 +939,7 @@ framework issue；已产生真实事件但文本 Oracle 失败属于可继续批
 用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-CASEBOOK="$PWD/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx"
+CASEBOOK="$PWD/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
@@ -947,7 +948,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 70 \
-  --expected-sha256 361ca7b7b30a56c5742d337d1be4cd30a353f2a740138a389d875b007ddd7b6d \
+  --expected-sha256 9354636fb54d7a007119affc46cd66aeffb91789d8725d0dba45dd891501d0a2 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
