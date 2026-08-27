@@ -135,6 +135,34 @@ test('interactive chart accepts split tool/final assistant messages with task-bo
   assert.equal(verdict.oracle_checks.all_values_visible, true);
 });
 
+test('interactive chart accepts renderer unit formatting and omitted tool status', () => {
+  const verdict = chartVerdict({
+    session: {
+      id: chartTaskId,
+      messages: [
+        { role: 'user', parts: [{ t: 'text', text: chartPrompt }] },
+        {
+          role: 'assistant',
+          parts: [{
+            t: 'tool',
+            name: 'mcp__qbot_chart__render_chart',
+            result: chartEnvelope,
+          }],
+        },
+        { role: 'assistant', parts: [{ t: 'text', text: '交互柱状图已生成。' }] },
+      ],
+    },
+    dom: {
+      ...chartDom,
+      svg_text_nodes: ['曝光', '1.2万', '点击', '860', '报名', '240', '成交', '28'],
+    },
+  });
+  assert.equal(verdict.evidence_valid, true);
+  assert.equal(verdict.oracle_valid, true);
+  assert.equal(verdict.oracle_checks.tool_completed, true);
+  assert.equal(verdict.oracle_checks.all_values_visible, true);
+});
+
 test('interactive chart fallback is complete product-failure evidence, not a framework failure', () => {
   const verdict = chartVerdict({
     dom: {

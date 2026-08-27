@@ -8438,6 +8438,10 @@ assert.match(chartDriverSource, /qcharts-react-container/, '交互图表 Driver 
 assert.match(chartDriverSource, /qbot-chart-result-fallback/, '交互图表 Driver 必须显式拒绝静态失败 fallback');
 assert.match(chartDriverSource, /svg_text_nodes/, '交互图表 Driver 必须读取可见 SVG 标签与数值');
 assert.match(chartDriverSource, /document_overflow_x/, '交互图表 Driver 必须核对 document 横向边界');
+assert.match(chartDriverSource, /capability_selection\.json/, '自动连接器图表 Driver 必须固化 capability_selection 证据');
+assert.match(chartDriverSource, /capability_execution_event\.json/, '自动连接器图表 Driver 必须固化 capability_execution_event 证据');
+assert.match(chartDriverSource, /selection_mode: 'auto'/, '自动连接器图表 Driver 必须标记 auto 路由来源');
+assert.match(chartDriverSource, /builtin:qbot_chart/, '自动连接器图表 Driver 必须绑定 qbot_chart 能力身份');
 
 const inputOnlyWithSendWord = reviewCaseCredibility(reviewFixture({
   id: 'SIT-HOME-056',

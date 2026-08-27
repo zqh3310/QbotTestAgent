@@ -27606,9 +27606,24 @@ export function extractInteractiveChartEnvelope(value, depth = 0) {
 }
 
 function interactiveChartVisibleValue(svgTextNodes, expected) {
+  const expectedNumber = Number(expected);
+  if (!Number.isFinite(expectedNumber)) return false;
   return svgTextNodes.some((value) => {
-    const normalized = String(value || '').replace(/[\s,_，]/g, '');
-    return new RegExp(`(?:^|\\D)${expected}(?:\\D|$)`).test(normalized);
+    const raw = String(value || '').trim().replace(/[\s,_，]/g, '');
+    if (!raw) return false;
+    // qcharts-react formats large labels with Chinese unit suffixes (for
+    // example, 12000 is rendered as 1.2万). Compare the displayed numeric
+    // value after converting the suffix instead of requiring one spelling.
+    const match = raw.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))(万|千|百万|亿)?$/u);
+    if (match) {
+      const multiplier = match[2] === '亿' ? 100_000_000
+        : match[2] === '百万' ? 1_000_000
+          : match[2] === '万' ? 10_000
+            : match[2] === '千' ? 1_000
+              : 1;
+      return Math.abs(Number(match[1]) * multiplier - expectedNumber) < 0.0001;
+    }
+    return new RegExp(`(?:^|\\D)${expectedNumber}(?:\\D|$)`).test(raw);
   });
 }
 
@@ -27674,6 +27689,12 @@ export function interactiveChartReadbackVerdict({
   const toolStatus = typeof toolPart?.status === 'string'
     ? toolPart.status
     : String(toolPart?.status?.type || '');
+  const toolCompleted = toolStatus === 'complete'
+    // The QWork renderer may omit a separate status field for a successful
+    // chart tool part. The structured qbot-chart-result envelope is the
+    // completion signal in that protocol shape; malformed/missing envelopes
+    // still fail the business Oracle below.
+    || (!toolStatus && envelope?.ok === true && typeof envelope?.svg === 'string');
   const assistantText = assistantIndexes
     .flatMap((index) => (messages[index]?.parts || [])
       .filter((part) => part?.t === 'text')
@@ -27722,7 +27743,7 @@ export function interactiveChartReadbackVerdict({
   const oracleChecks = {
     chart_tool_bound_to_prompt_turn: assistantIndex > userIndex && assistantIndex < turnEndIndex,
     chart_tool_result_present: Boolean(rawToolResult),
-    tool_completed: toolStatus === 'complete',
+    tool_completed: toolCompleted,
     runtime_authority_ready: runtimeReadiness === true,
     effective_chart_capability_observed: effectiveConnectorIds.includes('builtin:qbot_chart'),
     materialized_chart_capability_observed: materializedConnectorIds.includes('builtin:qbot_chart'),
@@ -27913,6 +27934,48 @@ async function executeSitConnectorChartConversation({ page, state, testCase, cas
     screenshot,
     replyComplete: !reply.incomplete,
   });
+  // Auto connector routing intentionally leaves selectedConnectors empty in
+  // the public composer state. Preserve the effective/materialized qbot_chart
+  // identity and the same task-bound tool result as explicit Core Beta
+  // capability evidence so the manifest does not mistake auto routing for
+  // missing capability selection/execution.
+  const chartCapabilitySelection = {
+    schema_version: 'qbot-core-beta-capability-selection/v1',
+    case_id: coreBetaEvidenceCaseId(testCase),
+    legacy_case_id: String(testCase.id || ''),
+    capability: { kind: 'builtin_connector', id: 'builtin:qbot_chart' },
+    selection_mode: 'auto',
+    task_id: verdict.task_id,
+    prompt_sha256: verdict.prompt_sha256,
+    runtime_authority: verdict.runtime_authority,
+    effective_connector_observed: verdict.oracle_checks.effective_chart_capability_observed,
+    evidence_valid: verdict.evidence_valid,
+    // A product rendering defect must remain an Oracle failure, not invalidate
+    // the fact that the capability was selected by the auto router.
+    oracle_valid: verdict.oracle_checks.effective_chart_capability_observed
+      && verdict.oracle_checks.chart_tool_bound_to_prompt_turn,
+  };
+  const chartCapabilityExecution = {
+    schema_version: 'qbot-core-beta-capability-execution-event/v1',
+    case_id: coreBetaEvidenceCaseId(testCase),
+    legacy_case_id: String(testCase.id || ''),
+    capability: { kind: 'builtin_connector', id: 'builtin:qbot_chart' },
+    operation: 'render_chart',
+    task_id: verdict.task_id,
+    prompt_sha256: verdict.prompt_sha256,
+    runtime_authority: verdict.runtime_authority,
+    tool_result: verdict.tool_result,
+    evidence_valid: verdict.evidence_valid,
+    oracle_valid: verdict.oracle_valid,
+  };
+  const selectionFile = path.join(caseDir, 'capability_selection.json');
+  const executionFile = path.join(caseDir, 'capability_execution_event.json');
+  writeJsonFile(selectionFile, chartCapabilitySelection);
+  writeJsonFile(executionFile, chartCapabilityExecution);
+  state.artifacts.capability_selection = selectionFile;
+  state.artifacts.capability_execution_event = executionFile;
+  state.artifacts.core_beta_capability_selection = chartCapabilitySelection;
+  state.artifacts.core_beta_capability_execution = chartCapabilityExecution;
   state.artifacts.interactive_chart_readback = path.join(caseDir, 'interactive-chart-readback.json');
   state.artifacts.core_beta_interactive_chart_readback = state.artifacts.interactive_chart_readback;
   writeJsonFile(state.artifacts.interactive_chart_readback, verdict);
