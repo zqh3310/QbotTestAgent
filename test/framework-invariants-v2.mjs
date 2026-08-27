@@ -5195,7 +5195,7 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r3\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
+  /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4\.xlsx[\s\S]*--expected-count 70[\s\S]*只接受 `READY`[\s\S]*--sheet 全量功能回归Case[\s\S]*--expected-count 160/,
   '当前操作指南必须把同一正式Casebook的70条门禁和160条全量回归分别绑定READY预检',
 );
 assert.match(
@@ -8542,13 +8542,13 @@ assert.match(productionGrayCasebookBuilder, /next\['测试数据'\] = 'intervalM
 assert.match(productionGrayCasebookBuilder, /等待首次真实 interval tick 自动触发/, 'Casebook 生成器必须等待真实 interval tick');
 assert.doesNotMatch(productionGrayCasebookBuilder, /activeFrom=now-interval\+15s|约 15 秒后产生 schedule run/, 'Casebook 生成器禁止保留服务端会钳制的旧 interval 回填合同');
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
-  assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r3\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
+  assert.match(documentText, /QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4\.xlsx/, '两份规范必须冻结新增 MR、70 条门禁与 160 条全量的合并 Casebook 路径');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
-  assert.match(documentText, /b31c7e9204c5fecac0afbd3d7a78fed7d966f812ea38371b7229aa8641d94bb2/, '两份规范必须冻结最新合并 Casebook SHA');
-  assert.match(documentText, /63e2cabce3d15b8db3ecfbb54380ad87a6bb5acd[\s\S]*0\.1\.6/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
-  assert.match(documentText, /72 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录审计窗口72个直接合入MR');
+  assert.match(documentText, /[0-9a-f]{64}/, '两份规范必须冻结最新合并 Casebook SHA');
+  assert.match(documentText, /b2c9e1a99ca051ff21cc34db3b1f56e2055c091a[\s\S]*0\.1\.6/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
+  assert.match(documentText, /73 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录审计窗口73个直接合入MR');
   assert.match(documentText, /!1329[\s\S]*静态合同审计[\s\S]*不新增[\s\S]*桌面/, '两份规范必须明确MR !1329只做静态合同审计且不新增桌面Case');
-  assert.match(documentText, /!1334[\s\S]*!1331[\s\S]*!1330[\s\S]*!1332[\s\S]*!1336[\s\S]*!1337[\s\S]*!1338[\s\S]*!1310[\s\S]*!1339[\s\S]*!1340[\s\S]*!1333[\s\S]*!1341[\s\S]*!1326[\s\S]*!1342[\s\S]*!1320[\s\S]*!1344[\s\S]*!1343[\s\S]*!1345[\s\S]*!1346[\s\S]*!1349[\s\S]*!1348[\s\S]*!1350[\s\S]*!1355[\s\S]*!1354[\s\S]*!1356[\s\S]*!1357[\s\S]*!1352[\s\S]*!1359[\s\S]*!1361[\s\S]*!1364[\s\S]*!1358[\s\S]*!1365[\s\S]*!1428[\s\S]*!1430[\s\S]*!1443[\s\S]*!1450[\s\S]*!1451/, '两份规范必须完整列出72个直接合入MR及相对旧Casebook的10个新增MR');
+  assert.match(documentText, /!1334[\s\S]*!1331[\s\S]*!1330[\s\S]*!1332[\s\S]*!1336[\s\S]*!1337[\s\S]*!1338[\s\S]*!1310[\s\S]*!1339[\s\S]*!1340[\s\S]*!1333[\s\S]*!1341[\s\S]*!1326[\s\S]*!1342[\s\S]*!1320[\s\S]*!1344[\s\S]*!1343[\s\S]*!1345[\s\S]*!1346[\s\S]*!1349[\s\S]*!1348[\s\S]*!1350[\s\S]*!1355[\s\S]*!1354[\s\S]*!1356[\s\S]*!1357[\s\S]*!1352[\s\S]*!1359[\s\S]*!1361[\s\S]*!1364[\s\S]*!1358[\s\S]*!1365[\s\S]*!1428[\s\S]*!1430[\s\S]*!1443[\s\S]*!1450[\s\S]*!1451[\s\S]*!1374/, '两份规范必须完整列出73个直接合入MR并包含最新!1374');
   assert.match(documentText, /!1329[\s\S]*!1330[\s\S]*!1337[\s\S]*!1310[\s\S]*!1340[\s\S]*!1333[\s\S]*!1326[\s\S]*!1342[\s\S]*!1344[\s\S]*(?:静态合同审计|静态合同)/, '两份规范必须冻结9个非桌面产品行为MR的静态审计分类');
   assert.match(documentText, /MRSMOKE-SKILL-001[\s\S]*SIT-SKILL-MR-001/, '两份规范必须冻结 MR Skill 组合 driver 路由');
   assert.match(documentText, /reconcileSkills[\s\S]*结构化 `ready` 和 `materialized`[\s\S]*成功安装事务/, '两份规范必须冻结 Skill Fixture 的结构化就绪回读合同');
@@ -8557,14 +8557,18 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   }
   assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*6 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 6 legacy 能力构成');
   assert.match(documentText, /1\/12[\s\S]*1\/70|12 条[\s\S]*70 条/, '两份规范必须明确先完整执行 12 条，再独立执行 70 条');
+  assert.match(documentText, /da1c24607f07281a8223edcc3e461bfdeb1b0405b13004ffea8b686e3cdf71f3/, '两份规范必须冻结 r4 Casebook 精确 SHA-256');
 }
-assert.match(productionGrayCasebookBuilder, /const PRODUCT_COMMIT = '63e2cabce3d15b8db3ecfbb54380ad87a6bb5acd';/, 'Casebook生成器必须冻结最新release/0.1提交');
+assert.match(productionGrayCasebookBuilder, /const PRODUCT_COMMIT = 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a';/, 'Casebook生成器必须冻结最新release/0.1提交');
 assert.match(productionGrayCasebookBuilder, /\['1329',[\s\S]*expectedFiles: \['\.gitlab-ci\.yml'\][\s\S]*CI-only[\s\S]*sha256:3410bb/, 'Casebook生成器必须把MR !1329绑定到显式CI-only静态合同审计');
 assert.match(productionGrayCasebookBuilder, /RECENT_MR_APPEND\.at\(-1\)\?\.commit !== PRODUCT_COMMIT/, 'Casebook生成器必须强制冻结增量MR终点等于最新产品设计基线');
-assert.match(productionGrayCasebookBuilder, /mrRows\.length !== 72/, 'Casebook生成器必须强制审计窗口72个直接合入MR');
-for (const iid of ['1334', '1331', '1330', '1332', '1336', '1337', '1338', '1310', '1339', '1340', '1333', '1341', '1326', '1342', '1320', '1344', '1343', '1345', '1346', '1349', '1348', '1350', '1355', '1354', '1356', '1357', '1352', '1359', '1361', '1364', '1358', '1365', '1428', '1430', '1443', '1450', '1451']) {
+assert.match(productionGrayCasebookBuilder, /mrRows\.length !== 73/, 'Casebook生成器必须强制审计窗口73个直接合入MR');
+assert.match(productionGrayCasebookBuilder, /function sameFileSet\(expectedFiles, actualFiles\)[\s\S]*!sameFileSet\(staticAudit\.expectedFiles, mr\.files\)/, 'Casebook生成器必须按文件集合校验静态MR清单，不能因Git返回顺序漂移误报');
+assert.match(productionGrayCasebookBuilder, /async function previousCasebookCommitShortIds\(\)[\s\S]*近2天MR覆盖[\s\S]*const previousCoverage = await previousCasebookCommitShortIds\(\)[\s\S]*appendedCommits/, 'Casebook生成器必须以上一版冻结覆盖表去重first-parent历史，再追加当前冻结MR增量');
+for (const iid of ['1334', '1331', '1330', '1332', '1336', '1337', '1338', '1310', '1339', '1340', '1333', '1341', '1326', '1342', '1320', '1344', '1343', '1345', '1346', '1349', '1348', '1350', '1355', '1354', '1356', '1357', '1352', '1359', '1361', '1364', '1358', '1365', '1428', '1430', '1443', '1450', '1451', '1374']) {
   assert.match(productionGrayCasebookBuilder, new RegExp(`\\{ mr: '${iid}'`), `Casebook生成器必须冻结新增MR !${iid}的只读文件清单`);
 }
+assert.match(productionGrayCasebookBuilder, /\['1374', \['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-PERF-003'\]\]/, 'Casebook生成器必须将MR !1374映射到Auto fallback/catalog authority回归Case');
 assert.match(productionGrayCasebookBuilder, /\['1352', \['BETA-FILE-006', 'BETA-FILE-008', 'BETA-FILE-009', 'SIT-HOME-044'\]\]/, 'Casebook生成器必须将MR !1352映射到FileInput预览/打开回归Case');
 assert.match(productionGrayCasebookBuilder, /\['1359', \['BETA-FILE-005', 'BETA-FILE-006', 'BETA-FILE-007', 'SIT-HOME-056'\]\]/, 'Casebook生成器必须将MR !1359映射到混合附件逐文件保留回归Case');
 assert.match(productionGrayCasebookBuilder, /\['1361', \['MRSMOKE-SKILL-001'[\s\S]*'BETA-SKILL-014'\]\]/, 'Casebook生成器必须将MR !1361映射到Skill安装隔离回归Case');
