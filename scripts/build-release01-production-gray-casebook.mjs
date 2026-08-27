@@ -23,14 +23,15 @@ const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184�
 const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
-const PRODUCT_COMMIT = '94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3';
-const PREVIOUS_PRODUCT_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
+const PRODUCT_COMMIT = 'df3492ffcd138ca5e7485cb6329b6f01386a7424';
+const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = '94205b1ed4ba2a44ea6a50aa5712a38da6dd30c3';
+const MR_WINDOW_BASELINE_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
 const PRODUCT_REF = 'origin/release/0.1';
-const PRODUCT_VERSION = '0.1.4';
+const PRODUCT_VERSION = '0.1.6';
 const MR_WINDOW_START = '2026-08-24T00:00:00+08:00';
-const MR_WINDOW_END = '2026-08-26T23:59:59+08:00';
-const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-26.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260826_release01_recent2d_casebook_12-70-160');
+const MR_WINDOW_END = '2026-08-27T10:30:00+08:00';
+const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260827_release01_recent_mr_casebook_12-70-160');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
 const SMOKE_CASE_IDS = Object.freeze([
   'MRSMOKE-ACT-001',
@@ -70,13 +71,143 @@ const RECENT_MR_CASE_MAPPING = new Map([
   ['1294', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
   ['1292', ['MRSMOKE-SKILL-001', 'MRSMOKE-FAIL-001']],
   ['1280', ['MRSMOKE-ROUTE-001', 'MRSMOKE-ENTRY-001']],
+  ['1334', ['MRSMOKE-WEB-001', 'SIT-CONN-019']],
+  ['1331', ['MRSMOKE-ART-001', 'BETA-FILE-001', 'BETA-FILE-003', 'BETA-FILE-004', 'BETA-ART-002', 'BETA-ART-003', 'BETA-ART-004', 'SIT-HOME-040', 'SIT-HOME-066']],
+  ['1332', ['MRSMOKE-FAIL-001', 'BETA-FILE-005']],
+  ['1336', ['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001', 'BETA-INIT-001', 'BETA-ROUTE-001']],
+  ['1338', ['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001', 'BETA-ROUTE-001', 'BETA-CHAT-005', 'BETA-PERF-003']],
+  ['1339', ['MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-FILE-005', 'BETA-HOST-003']],
+  ['1341', ['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-PERF-003']],
 ]);
 const RECENT_MR_STATIC_AUDITS = new Map([
   ['1329', {
     expectedFiles: ['.gitlab-ci.yml'],
     disposition: 'CI-only：固定单元测试物料镜像digest；不新增桌面QWork E2E',
-    reason: '静态核对QBOT_CI_UNIT_IMAGE由sha256:ec7c3f更新为sha256:3410bb，保留merge commit与文件清单；由CI物料溯源/单元测试负责，不计12/70/160桌面通过',
+      reason: '静态核对QBOT_CI_UNIT_IMAGE由sha256:ec7c3f更新为sha256:3410bb，保留merge commit与文件清单；由CI物料溯源/单元测试负责，不计12/70/160桌面通过',
   }],
+  ['1330', {
+    expectedFiles: ['server/dashboard-admin-routes.mjs', 'test/unit/ui/dashboard-admin-routes.test.mjs'],
+    disposition: 'Dashboard-only：组织部门链 scope 合同静态审计；不新增桌面QWork E2E',
+    reason: '保留 Dashboard route 与单元测试文件清单；该管理面授权合同不属于当前桌面 SIT 候选，不计12/70/160桌面通过',
+  }],
+  ['1337', {
+    expectedFiles: ['.gitlab-ci.yml'],
+    disposition: 'CI-only：固定 unit-material digest；不新增桌面QWork E2E',
+    reason: '保留 merge commit 与 CI 文件清单；由 CI 物料溯源负责，不计12/70/160桌面通过',
+  }],
+  ['1310', {
+    expectedFiles: [
+      '.agent/compiled/skills-manifest.json', '.agent/skills-src/qwork-session-eval/skill.yaml',
+      '.agents/skills/qwork-session-eval/SKILL.md', '.agents/skills/qwork-session-eval/agents/openai.yaml',
+      '.claude/skills/qwork-session-eval/SKILL.md', 'eval/qwork-session-experience/.gitignore',
+      'eval/qwork-session-experience/.runs/.gitkeep', 'eval/qwork-session-experience/README.md',
+      'eval/qwork-session-experience/bin/qwork-session-eval.mjs',
+      'eval/qwork-session-experience/fixtures/attributions.jsonl',
+      'eval/qwork-session-experience/fixtures/judgments.jsonl',
+      'eval/qwork-session-experience/fixtures/managed-result.json',
+      'eval/qwork-session-experience/fixtures/synthetic-calibration-corpus.json',
+      'eval/qwork-session-experience/package-lock.json', 'eval/qwork-session-experience/package.json',
+      'eval/qwork-session-experience/prompts/attribution-judge-v1.md',
+      'eval/qwork-session-experience/prompts/journey-link-v1.md',
+      'eval/qwork-session-experience/prompts/outcome-judge-v1.md',
+      'eval/qwork-session-experience/queries/agent-session-v5-export.sql',
+      'eval/qwork-session-experience/queries/agent-session-v5-local-files.sql',
+      'eval/qwork-session-experience/report/template.html',
+      'eval/qwork-session-experience/rubric/calibration-v1.json',
+      'eval/qwork-session-experience/rubric/scoring-v1.json',
+      'eval/qwork-session-experience/schemas/attempt.schema.json',
+      'eval/qwork-session-experience/schemas/attribution-finding-input.schema.json',
+      'eval/qwork-session-experience/schemas/attribution-finding.schema.json',
+      'eval/qwork-session-experience/schemas/error-occurrence.schema.json',
+      'eval/qwork-session-experience/schemas/event.schema.json',
+      'eval/qwork-session-experience/schemas/human-turn.schema.json',
+      'eval/qwork-session-experience/schemas/journey-link-judgment.schema.json',
+      'eval/qwork-session-experience/schemas/journey.schema.json',
+      'eval/qwork-session-experience/schemas/model-comparison.schema.json',
+      'eval/qwork-session-experience/schemas/outcome-judgment-input.schema.json',
+      'eval/qwork-session-experience/schemas/outcome-judgment.schema.json',
+      'eval/qwork-session-experience/schemas/report.schema.json',
+      'eval/qwork-session-experience/schemas/run-manifest-legacy.schema.json',
+      'eval/qwork-session-experience/schemas/run-manifest.schema.json',
+      'eval/qwork-session-experience/schemas/score-receipt.schema.json',
+      'eval/qwork-session-experience/schemas/session.schema.json',
+      'eval/qwork-session-experience/src/attribution.mjs', 'eval/qwork-session-experience/src/calibration.mjs',
+      'eval/qwork-session-experience/src/cli-paths.mjs', 'eval/qwork-session-experience/src/constants.mjs',
+      'eval/qwork-session-experience/src/intake.mjs', 'eval/qwork-session-experience/src/journeys.mjs',
+      'eval/qwork-session-experience/src/local-session-files.mjs',
+      'eval/qwork-session-experience/src/managed-result.mjs', 'eval/qwork-session-experience/src/metrics.mjs',
+      'eval/qwork-session-experience/src/model-comparison.mjs', 'eval/qwork-session-experience/src/normalize.mjs',
+      'eval/qwork-session-experience/src/pipeline.mjs', 'eval/qwork-session-experience/src/redaction.mjs',
+      'eval/qwork-session-experience/src/report.mjs', 'eval/qwork-session-experience/src/schema-validator.mjs',
+      'eval/qwork-session-experience/src/scoring.mjs', 'eval/qwork-session-experience/src/util.mjs',
+      'eval/qwork-session-experience/src/verify.mjs', 'eval/qwork-session-experience/src/viewer-server.mjs',
+      'eval/qwork-session-experience/tests/eval/fixture.test.mjs',
+      'eval/qwork-session-experience/tests/helpers.mjs',
+      'eval/qwork-session-experience/tests/ui/report-interactions.mjs',
+      'eval/qwork-session-experience/tests/unit/attribution-calibration.test.mjs',
+      'eval/qwork-session-experience/tests/unit/redaction-report.test.mjs',
+      'eval/qwork-session-experience/tests/unit/schema-managed.test.mjs',
+      'eval/qwork-session-experience/tests/unit/scoring-model.test.mjs',
+      'eval/qwork-session-experience/tests/unit/segmentation-metrics.test.mjs',
+      'eval/qwork-session-experience/tests/unit/viewer-server.test.mjs',
+      'eval/qwork-session-experience/viewer/index.html', 'eval/qwork-session-experience/viewer/viewer.css',
+      'eval/qwork-session-experience/viewer/viewer.js',
+    ],
+    disposition: 'Eval-only：QWork session experience 评估与报告工具静态审计；不新增桌面QWork E2E',
+    reason: '该 MR 新增离线/受管评估管线、schema、viewer 与测试物料；不改变候选桌面产品行为，不计12/70/160桌面通过',
+  }],
+  ['1340', {
+    expectedFiles: [
+      'docs/server-structure-migration-runbook.md', 'package.json', 'scripts/build-control-plane.mjs',
+      'scripts/build-electron-runtime.mjs', 'scripts/ci/node-unit-test-weights.json',
+      'scripts/refactor/server-structure/cli.mjs',
+      'scripts/refactor/server-structure/dependency-cruiser.config.cjs',
+      'scripts/refactor/server-structure/experiment-manifest.json',
+      'scripts/refactor/server-structure/graph.mjs', 'scripts/refactor/server-structure/manifest.mjs',
+      'scripts/refactor/server-structure/manifest.schema.json',
+      'scripts/refactor/server-structure/metafile-equivalence.mjs',
+      'scripts/refactor/server-structure/package-lock.json', 'scripts/refactor/server-structure/package.json',
+      'scripts/refactor/server-structure/rewrite-imports.mjs',
+      'scripts/refactor/server-structure/test/server-structure-refactor.spec.mjs',
+      'test/unit/tools/server-structure-refactor.test.mjs',
+    ],
+    disposition: 'Toolchain-only：服务端结构迁移工具链静态审计；不新增桌面QWork E2E',
+    reason: '保留构建等价、依赖图与迁移工具测试清单；未改变当前候选桌面运行行为，不计12/70/160桌面通过',
+  }],
+  ['1333', {
+    expectedFiles: ['.gitlab-ci.yml', 'scripts/ci/gitlab-ci.test.mjs', 'scripts/ci/node-unit-affected.mjs', 'scripts/ci/node-unit-affected.test.mjs'],
+    disposition: 'CI-only：version-only 内容识别与跳过重活 job 静态审计；不新增桌面QWork E2E',
+    reason: '保留 CI route 与单元测试文件清单；只影响流水线调度，不计12/70/160桌面通过',
+  }],
+  ['1326', {
+    expectedFiles: ['.deepbank-runtime/runtime-provision-seed/0.1.5/provision-manifest.json', 'deploy/helm/qbot/Chart.yaml', 'package-lock.json', 'package.json', 'teams360.host-sync.json'],
+    disposition: 'Version-only：0.1.6 发布身份与打包清单静态审计；不冒充桌面功能通过',
+    reason: '由 Casebook 产品基线、pretest 发布身份和制品 SHA 冻结；该版本号变更本身不新增桌面业务 Case，不计12/70/160桌面通过',
+  }],
+  ['1342', {
+    expectedFiles: ['.gitlab-ci.yml', 'scripts/ci/gitlab-ci.test.mjs', 'scripts/ci/node-unit-affected.mjs', 'scripts/ci/node-unit-affected.test.mjs'],
+    disposition: 'CI-only：release version bump 路由静态审计；不新增桌面QWork E2E',
+    reason: '保留 CI route 与单元测试文件清单；只影响版本变更流水线校验，不计12/70/160桌面通过',
+  }],
+]);
+
+// GitLab GraphQL 在 2026-08-27 10:30 CST 以单次只读请求冻结的增量 MR 文件清单。
+// deepbankV2 保持只读；生成器用上一 Casebook 可读提交重建旧 35 条，再追加这 14 条。
+const RECENT_MR_APPEND = Object.freeze([
+  { mr: '1334', commit: 'f64a85f53de75ca37de0aee7aca2de3d1f5c10e2', mergedAt: '2026-08-26T23:54:58+08:00', branch: 'enhancement/1410-managed-http-proxy-ttl', files: ['docs/qbot-web-tools.md', 'electron/managed-http-proxy-cache.cjs', 'server/managed-http-proxy-config.mjs', 'test/unit/desktop/managed-http-proxy-cache.test.cjs', 'test/unit/server/managed-http-proxy-config.test.mjs'] },
+  { mr: '1331', commit: '4e3ce28ac3521ea6f5feef43199198645ba1e94e', mergedAt: '2026-08-26T23:55:36+08:00', branch: 'enhancement/1405-document-processing-routing', files: ['.agent/compiled/root/AGENTS.md', '.agent/compiled/root/CLAUDE.md', '.agent/context.yaml', 'AGENTS.md', 'CLAUDE.md', 'docs/file-ingress-contract.md', 'resources/builtin-skills/document-processing/SKILL.md', 'resources/builtin-skills/document-processing/references/requirements.txt', 'scripts/e2e-module.test.mjs', 'scripts/e2e-qbot-claude-real.mjs', 'test/e2e/local-real-claude-code.spec.mjs', 'test/e2e/remote-dev-local-only-assertions.spec.mjs', 'test/e2e/remote-dev.spec.mjs', 'test/e2e/support/bug-derived-suite-materials.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/skills/document-processing-skill.test.mjs'] },
+  { mr: '1330', commit: '34c4093940eeb4fb6306f2337b52792c23dce655', mergedAt: '2026-08-26T23:59:16+08:00', branch: 'codex/1398-org-dept-chain-scope', files: ['server/dashboard-admin-routes.mjs', 'test/unit/ui/dashboard-admin-routes.test.mjs'] },
+  { mr: '1332', commit: 'df5e3057fb2fba3ed83bd023b1cddd013a652ace', mergedAt: '2026-08-27T00:11:27+08:00', branch: 'codex/issue-1408-enametoolong-notice', files: ['electron/desktop-agent-host.cjs', 'server/engine.mjs', 'test/unit/core/chat-user-error-notice.test.mjs', 'test/unit/core/model-connection-fail-closed.test.mjs', 'test/unit/observability/client-error-observability-contract.test.mjs'] },
+  { mr: '1336', commit: 'b941861781a0467d59e8bf787d91ce6b9f1bc3ce', mergedAt: '2026-08-27T01:10:08+08:00', branch: 'chore/1411-claude-sdk-0.3.246', files: ['docs/research/web-crawl-reliability/freeze.json', 'docs/research/web-search-journey/issue-1320-searxng-v8-ledger.json', 'docs/research/web-search-journey/issue-1371-searxng-v9-experiments.jsonl', 'package-lock.json', 'package.json', 'scripts/build-desktop-runtime-mirror.test.mjs', 'server/prompt-layers.mjs', 'server/runtime-provisioner.mjs', 'test/runtime-features/README.md', 'test/runtime-features/runtime-feature-surface.baseline.json', 'test/unit/runtime/runtime-provisioner.test.mjs'] },
+  { mr: '1337', commit: 'fc26a1dde0f36c5fca1acd34bef6d231117616c1', mergedAt: '2026-08-27T05:28:37+08:00', branch: 'ci/unit-material-pin-release-0.1-3a4620263385', files: ['.gitlab-ci.yml'] },
+  { mr: '1338', commit: '157abc15d8635be8ac65b2ffc8e6fa5f031770c0', mergedAt: '2026-08-27T06:00:11+08:00', branch: 'issue/1378-claude-context-window-v2', files: ['runtime-family.mjs', 'scripts/deepbank-llm-gateway-inspect.mjs', 'scripts/e2e-module.test.mjs', 'server/engine.mjs', 'server/llm-connections.mjs', 'test/e2e/claude-custom-context-window.local.spec.mjs', 'test/e2e/support/claude-custom-context-window-fixture.mjs', 'test/e2e/support/claude-custom-context-window-probe.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/core/llm-connections.test.mjs', 'test/unit/desktop/desktop-agent-private-runtime-context.test.mjs', 'test/unit/desktop/desktop-auto-current-turn-authority.test.mjs', 'test/unit/runtime/deepbank-llm-gateway-inspect.test.mjs', 'test/unit/runtime/runtime-connection-ownership.test.mjs', 'test/unit/server/connection-view.test.mjs'] },
+  { mr: '1310', commit: 'dc55622898aab0acc96954dc93f2c4464d4f8eb5', mergedAt: '2026-08-27T07:04:27+08:00', branch: 'test/1382-qwork-session-experience', files: [...RECENT_MR_STATIC_AUDITS.get('1310').expectedFiles] },
+  { mr: '1339', commit: '2688feb0a1ac4883764846b94e58d7b7e16f4b43', mergedAt: '2026-08-27T08:00:58+08:00', branch: 'bugfix/1409-runtime-terminal-budget', files: ['electron/chat-user-error-notice.cjs', 'electron/desktop-agent-host.cjs', 'electron/preload.cjs', 'scripts/ci/node-unit-test-weights.json', 'scripts/e2e-module.test.mjs', 'server/engine.mjs', 'server/prompt-layers.mjs', 'server/prompt-templates.mjs', 'server/runtime-terminal.mjs', 'src/chat-user-error.ts', 'src/global.d.ts', 'test/e2e/agent-runtime-regression.local.spec.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/core/chat-user-error-notice.test.mjs', 'test/unit/desktop/desktop-returned-terminal-contract.test.mjs', 'test/unit/prompts/chat-error-classifier.test.mjs', 'test/unit/prompts/prompt-claude-system-prompt.test.mjs', 'test/unit/prompts/prompt-layers.test.mjs', 'test/unit/server/engine-prompt-composer.test.mjs', 'test/unit/server/engine-stream-adapters.test.mjs', 'test/unit/server/runtime-terminal.test.mjs', 'test/unit/ui/result-event-turn-correlation.test.mjs'] },
+  { mr: '1340', commit: 'eed5a8f81b7514b3adea65e2d66014f05eaa0f07', mergedAt: '2026-08-27T09:01:04+08:00', branch: 'chore/1414-server-structure-toolchain', files: [...RECENT_MR_STATIC_AUDITS.get('1340').expectedFiles] },
+  { mr: '1333', commit: 'c104139109e62df733fcf206b3dd6f9c1b171efb', mergedAt: '2026-08-27T09:15:29+08:00', branch: 'chore/1406-ci-version-only-skip', files: [...RECENT_MR_STATIC_AUDITS.get('1333').expectedFiles] },
+  { mr: '1341', commit: '8f001d12aa0b95818d64b0d334d50e6ac192c220', mergedAt: '2026-08-27T09:42:24+08:00', branch: 'issue/1415-claude-output-budget-32k', files: ['runtime-family.mjs', 'scripts/e2e-module.test.mjs', 'server/engine.mjs', 'test/e2e/claude-custom-context-window.local.spec.mjs', 'test/e2e/support/claude-custom-context-window-probe.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/runtime/runtime-connection-ownership.test.mjs'] },
+  { mr: '1326', commit: '82dc44e8155e1e978d38c4c9586bcb5e44fe8d72', mergedAt: '2026-08-27T09:51:26+08:00', branch: 'codex/bump-0.1.6', files: [...RECENT_MR_STATIC_AUDITS.get('1326').expectedFiles] },
+  { mr: '1342', commit: 'df3492ffcd138ca5e7485cb6329b6f01386a7424', mergedAt: '2026-08-27T10:20:02+08:00', branch: 'codex/release-version-only-ci-routing', files: [...RECENT_MR_STATIC_AUDITS.get('1342').expectedFiles] },
 ]);
 const LOCAL_FIXTURE_ADAPTERS = new Set([
   'native_ime_input',
@@ -221,9 +352,9 @@ function patchSmokeCase(testCase) {
   for (const [key, value] of Object.entries(next)) {
     if (typeof value === 'string') next[key] = value.replaceAll('1/11', '1/12');
   }
-  next['来源类型'] = '2026-08-24~2026-08-26 release/0.1 直接合入 MR 核心路径自动化';
+  next['来源类型'] = '2026-08-24~2026-08-27 release/0.1 直接合入 MR 核心路径自动化';
   next['版本范围'] = `${PRODUCT_REF}@${PRODUCT_COMMIT};Teams>=5.3.0;QWork>=${PRODUCT_VERSION}`;
-  next['备注'] = `${asString(next['备注'])}；最新35个直接合入MR已在“近2天MR覆盖”逐条映射，未映射的Dashboard/CI/设计变更只做静态合同审计。`;
+  next['备注'] = `${asString(next['备注'])}；本窗口49个直接合入MR已在“近2天MR覆盖”逐条映射，Dashboard/CI/eval/refactor/version-only变更只做静态合同审计。`;
   if (id === 'MRSMOKE-WEB-001') {
     next = withEvidenceRole(next, 'external_navigation_trace');
     next['测试数据'] = '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新；若不足两条请明确说明并列出最近两条。每条给出标题、发布日期、原始链接和一句摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
@@ -853,8 +984,8 @@ function orderCases(cases) {
 
 function mergedMrs() {
   const format = '%H%x1f%aI%x1f%s%x1f%B%x1e';
-  const raw = git(['log', `${PREVIOUS_PRODUCT_COMMIT}..${PRODUCT_COMMIT}`, '--first-parent', '--merges', `--since=${MR_WINDOW_START}`, `--until=${MR_WINDOW_END}`, `--pretty=format:${format}`]);
-  return raw.split('\x1e').map((record) => record.trim()).filter(Boolean).map((record) => {
+  const raw = git(['log', `${MR_WINDOW_BASELINE_COMMIT}..${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}`, '--first-parent', '--merges', `--since=${MR_WINDOW_START}`, `--until=${MR_WINDOW_END}`, `--pretty=format:${format}`]);
+  const priorRows = raw.split('\x1e').map((record) => record.trim()).filter(Boolean).map((record) => {
     const [commit, mergedAt, subject, ...bodyParts] = record.split('\x1f');
     const body = bodyParts.join('\x1f');
     const mr = body.match(/!([0-9]+)/)?.[1] || '';
@@ -862,6 +993,7 @@ function mergedMrs() {
     const files = git(['diff', '--name-only', `${commit}^1`, commit]).split('\n').filter(Boolean);
     return { commit, mergedAt, subject, body, mr, branch, files };
   });
+  return [...RECENT_MR_APPEND].reverse().concat(priorRows);
 }
 
 function mrMapping(mr) {
@@ -989,7 +1121,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
     { sheetName: '新增MR核心冒烟', rowCount: 14, lastColumn: 'AM' },
     { sheetName: '生产灰度门禁Case', rowCount: 74, lastColumn: 'AO' },
     { sheetName: '全量功能回归Case', rowCount: 164, lastColumn: 'AO' },
-    { sheetName: '近2天MR覆盖', rowCount: 40, lastColumn: 'J' },
+    { sheetName: '近2天MR覆盖', rowCount: 54, lastColumn: 'J' },
     { sheetName: '源码依据', rowCount: 20, lastColumn: 'D' },
   ];
   for (const { sheetName, rowCount, lastColumn } of inspectionScopes) {
@@ -1038,7 +1170,10 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 }
 
 async function main() {
-  git(['cat-file', '-e', `${PRODUCT_COMMIT}^{commit}`]);
+  git(['cat-file', '-e', `${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}^{commit}`]);
+  if (RECENT_MR_APPEND.at(-1)?.commit !== PRODUCT_COMMIT) {
+    throw new Error(`最新增量MR终点必须等于产品设计基线：${RECENT_MR_APPEND.at(-1)?.commit}`);
+  }
   const sourceWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(SOURCE));
   const sourceValues = sourceWorkbook.worksheets.getItem('核心内测Case').getRange('A1:AO188').values;
   const { headers, cases: allCases } = sourceCases(sourceValues);
@@ -1106,13 +1241,13 @@ async function main() {
     }
   }
   const mrRows = mergedMrs().map((mr) => {
-    const mappings = mrMapping(mr).filter((id) => smokeIdSet.has(id) || gateIdSet.has(id) || fullIdSet.has(id));
+    const staticAudit = RECENT_MR_STATIC_AUDITS.get(String(mr.mr || ''));
+    const mappings = (staticAudit ? [] : mrMapping(mr)).filter((id) => smokeIdSet.has(id) || gateIdSet.has(id) || fullIdSet.has(id));
     const area = mrArea(mr);
     const desktopRelevant = mappings.length > 0;
     const smokeMappings = mappings.filter((id) => smokeIdSet.has(id));
     const gateMappings = mappings.filter((id) => gateIdSet.has(id));
     const fullMappings = mappings.filter((id) => fullIdSet.has(id) && !gateIdSet.has(id));
-    const staticAudit = RECENT_MR_STATIC_AUDITS.get(String(mr.mr || ''));
     if (staticAudit && JSON.stringify(mr.files) !== JSON.stringify(staticAudit.expectedFiles)) {
       throw new Error(`MR !${mr.mr}静态审计文件漂移：expected=${staticAudit.expectedFiles.join(',')} actual=${mr.files.join(',')}`);
     }
@@ -1136,7 +1271,7 @@ async function main() {
         : (staticAudit?.reason || '保留merge commit与文件清单；由源码单测/发布工程检查负责，不计12/70/160桌面通过'),
     ];
   });
-  if (mrRows.length !== 35) throw new Error(`近2天直接合入MR必须恰好35个，actual=${mrRows.length}`);
+  if (mrRows.length !== 49) throw new Error(`本窗口直接合入MR必须恰好49个，actual=${mrRows.length}`);
   const mr1329 = mrRows.find((row) => row[1] === '!1329');
   if (!mr1329
     || mr1329[5] !== '.gitlab-ci.yml'
@@ -1145,6 +1280,12 @@ async function main() {
     || !/CI-only/.test(mr1329[8])
     || !/sha256:3410bb/.test(mr1329[9])) {
     throw new Error(`MR !1329必须明确映射为CI-only静态合同审计且不新增桌面Case：${JSON.stringify(mr1329)}`);
+  }
+  for (const iid of ['1330', '1337', '1310', '1340', '1333', '1326', '1342']) {
+    const row = mrRows.find((item) => item[1] === `!${iid}`);
+    if (!row || row[6] !== '' || row[7] !== '静态合同审计' || !/不新增|不冒充/.test(row[8])) {
+      throw new Error(`MR !${iid}必须保持静态合同审计且不冒充桌面E2E：${JSON.stringify(row)}`);
+    }
   }
   const omitted = allCases.filter((testCase) => !gateIdSet.has(asString(testCase['用例ID'])));
   const replacementAudit = allCases.filter((testCase) => REPLACED_CASES.has(asString(testCase['用例ID'])));
@@ -1183,7 +1324,7 @@ async function main() {
   const smokeSheet = addSheet(
     workbook,
     '新增MR核心冒烟',
-    'QWork 近2天新增 MR 核心冒烟自动化 Casebook（12条）',
+    'QWork 最新 release/0.1 MR 核心冒烟自动化 Casebook（12条）',
     `基线 ${PRODUCT_REF}@${PRODUCT_COMMIT}（v${PRODUCT_VERSION}）；固定顺序12/12可执行、可分发、可直接运行；只承担新增MR核心冒烟，不替代70/160发布门禁。`,
     smokeHeaders,
     matrix(smokeHeaders, smokeCases),
@@ -1225,7 +1366,7 @@ async function main() {
       ['全量原生本机fixture选项', fullCapability.counts.runner_native_with_fixture_option || 0, '原生IME；pretest必须就绪', 'runner_native_with_fixture_option'],
       ['全量经语义复核旧执行器', fullCapability.counts.runner_legacy_verified || 0, '9条门禁映射 + 90条常规功能映射', 'runner_legacy_verified'],
       ['新增MR核心冒烟', 12, '固定顺序独立READY后先执行并逐Case可信复核', '新增MR核心冒烟'],
-      ['近2天直接合并MR', mrRows.length, '全部记录自动化映射或静态审计结论', '近2天MR覆盖'],
+      ['审计窗口直接合并MR', mrRows.length, '全部记录自动化映射或静态审计结论', '近2天MR覆盖'],
       ['全量回归排除', FULL_REGRESSION_EXCLUDED_LEGACY_IDS.size, '网络异常、账号/权限低频、纯故障注入不进入本套', '删除场景清单'],
       ['门禁低频恢复剔除', PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.size, '从70条门禁及160条前缀同步删除', '删除场景清单'],
       ['全量准入', '至少1轮160/160', '候选release identity完整可信全绿', '生产灰度准入'],
@@ -1283,7 +1424,7 @@ async function main() {
     ['范围', '序号', 'Case ID', '模块', '场景', '执行模式', '能力类别', 'Fixture', '来源/MR', '结论'], fullCapability.items.map(({ testCase, scenario, binding, class: capabilityClass }, index) => [
       index < 70 ? '门禁70+全量160' : '全量160增量', index + 1, testCase['用例ID'], testCase['产品模块'], testCase['测试场景'], binding.mode, capabilityClass, scenario.fixture_control, testCase['来源ID'], '必跑；框架支持',
     ]), [140, 70, 125, 120, 420, 140, 220, 220, 260, 180]);
-  addSheet(workbook, '近2天MR覆盖', '近2天release/0.1直接合并MR审计', `窗口 ${MR_WINDOW_START} 至 ${MR_WINDOW_END}；以first-parent直接合入${PRODUCT_REF}为准，共${mrRows.length}个merge commit。Dashboard/CI/设计变更保留静态合同审计，不冒充桌面E2E。`,
+  addSheet(workbook, '近2天MR覆盖', '最新release/0.1直接合并MR审计', `窗口 ${MR_WINDOW_START} 至 ${MR_WINDOW_END}；以first-parent直接合入${PRODUCT_REF}为准，共${mrRows.length}个merge commit。Dashboard/CI/eval/refactor/version-only变更保留静态合同审计，不冒充桌面E2E。`,
     ['合并时间', 'MR', 'Merge commit', '分支/主题', '领域', '主要变更文件', '映射Case', '覆盖层', '处置', '理由'], mrRows,
     [165, 70, 110, 300, 130, 360, 320, 160, 260, 420]);
   addSheet(workbook, '生产灰度准入', '全量功能与生产灰度准入规则', '至少一轮完整160条可信全绿，并满足70条连续多轮与soak门禁后，才允许1%-5%受控生产灰度。',
@@ -1310,11 +1451,12 @@ async function main() {
     ], [170, 360, 500, 240]);
   addSheet(workbook, '源码依据', 'Casebook源码与审计依据', '所有依据均绑定固定commit；deepbankV2仓库只读，QbotTestAgent负责Case、执行器、证据和放行规则。',
     ['类型', '位置/版本', '用途', '校验'], [
-      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '近2天MR与产品行为设计依据', `git cat-file -e ${PRODUCT_COMMIT}^{commit}`],
-      ['上一Casebook产品基线', PREVIOUS_PRODUCT_COMMIT, '限定本次MR增量审计起点', `git log ${PREVIOUS_PRODUCT_COMMIT}..${PRODUCT_COMMIT} --first-parent --merges`],
-      ['产品版本', PRODUCT_VERSION, 'release/0.1 package.json', `git show ${PRODUCT_COMMIT}:package.json`],
+      ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '最新MR与产品行为设计依据；产品仓库只读', 'GitLab GraphQL mergeCommitSha 与增量MR终点全等'],
+      ['上一Casebook产品基线', PREVIOUS_CASEBOOK_PRODUCT_COMMIT, '冻结14个新增直接合入MR的审计起点', '本地只读提交可达；增量文件清单由单次GitLab只读请求冻结'],
+      ['MR窗口基线', MR_WINDOW_BASELINE_COMMIT, '重建2026-08-24起全部49个直接合入MR', `git log ${MR_WINDOW_BASELINE_COMMIT}..${PREVIOUS_CASEBOOK_PRODUCT_COMMIT} --first-parent --merges + 14条只读增量`],
+      ['产品版本', PRODUCT_VERSION, 'release/0.1 version-only MR !1326', 'Casebook/pretest按0.1.6冻结；SIT候选另按完整版本号读回'],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],
-      ['MR冒烟源Casebook', SMOKE_SOURCE, '历史11条固定顺序合同来源', '只读导入并按近2天MR补强，追加1条交互图表'],
+      ['MR冒烟源Casebook', SMOKE_SOURCE, '历史11条固定顺序合同来源', '只读导入并按最新MR补强，追加1条交互图表'],
       ['新Casebook', FORMAL_OUTPUT, '12条MR冒烟+70条生产门禁+160条全量功能回归合同', 'SHA写入两份框架规范'],
       ['框架协议', 'src/lib/core-beta-case-protocol.mjs', '独立scenario/fixture/证据契约', 'test/core-beta-case-protocol.mjs'],
       ['原生Runner', 'src/lib/ui-agent-casebook-runner-v2.mjs', '真实UI/bridge/CDP执行与Oracle', 'test/framework-invariants-v2.mjs'],
