@@ -52,6 +52,7 @@ import {
   coreBetaDirectSkillListReady,
   coreBetaComposerHistoryVerdict,
   coreBetaComposerIsolationReadback,
+  coreBetaUnifiedDisabledCompatibilityReadback,
   coreBetaComposerResetFailureCategory,
   confirmedSendReceiptTaskId,
   coreBetaCompletionBlockReason,
@@ -2011,6 +2012,100 @@ assert.equal(
   false,
   'Core Beta v2 不能把自动态 null 误判为技能禁用态',
 );
+const legacyNullDisabledReadbacks = {
+  init_context: {
+    available: true,
+    binding_matches: true,
+    selected_skills_observed: true,
+    selected_skills: [],
+    selected_connectors_observed: true,
+    selected_connectors: [],
+    current_expert_observed: true,
+    current_expert: null,
+  },
+  e2e_state: {
+    available: true,
+    selected_skills_observed: true,
+    selected_skills: [],
+    selected_connectors_observed: true,
+    selected_connectors: [],
+    current_expert_observed: true,
+    current_expert: null,
+  },
+  visible_ui: {
+    surface: 'unified-plus',
+    visible_skill_chips: [],
+    visible_connector_chips: [],
+    visible_expert_avatar_count: 0,
+  },
+};
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({
+    capabilityKind: 'skill',
+    bridgeSelection: null,
+    selectionReadbacks: legacyNullDisabledReadbacks,
+    composerSurfaceAvailable: true,
+  }).ok,
+  true,
+  '0.1.6-sit.8 的 setSkillsDisabled=null 只有同一 draft 的 init/E2E/UI 空态交叉读回完整时才可放行',
+);
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({
+    capabilityKind: 'skill',
+    bridgeSelection: null,
+    selectionReadbacks: {
+      ...legacyNullDisabledReadbacks,
+      e2e_state: { available: true, current_expert_observed: true, current_expert: null },
+    },
+    composerSurfaceAvailable: true,
+  }).ok,
+  true,
+  'E2E 空态只需明确当前专家为空，Skill/Connector 空选择由同 draft init 与可见 chip 证明',
+);
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({ capabilityKind: 'skill', bridgeSelection: null }).ok,
+  false,
+  'setSkillsDisabled=null 不能单独证明技能已清理',
+);
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({
+    capabilityKind: 'skill',
+    bridgeSelection: null,
+    selectionReadbacks: {
+      ...legacyNullDisabledReadbacks,
+      init_context: { ...legacyNullDisabledReadbacks.init_context, selected_skills_observed: false },
+    },
+    composerSurfaceAvailable: true,
+  }).ok,
+  false,
+  'init 缺少 selectedSkills 字段时 legacy null 兼容路径必须 fail-closed',
+);
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({
+    capabilityKind: 'connector',
+    bridgeSelection: null,
+    selectionReadbacks: {
+      ...legacyNullDisabledReadbacks,
+      visible_ui: { ...legacyNullDisabledReadbacks.visible_ui, visible_connector_chips: ['残留连接器'] },
+    },
+    composerSurfaceAvailable: true,
+  }).ok,
+  false,
+  '可见连接器 chip 残留时 legacy null 兼容路径必须失败',
+);
+assert.equal(
+  coreBetaUnifiedDisabledCompatibilityReadback({
+    capabilityKind: 'skill',
+    bridgeSelection: null,
+    selectionReadbacks: {
+      ...legacyNullDisabledReadbacks,
+      init_context: { ...legacyNullDisabledReadbacks.init_context, binding_matches: false },
+    },
+    composerSurfaceAvailable: true,
+  }).ok,
+  false,
+  'active/draft 绑定不一致时 legacy null 兼容路径必须失败',
+);
 assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: undefined }, 'disabled', []),
   true,
@@ -2048,6 +2143,26 @@ assert.equal(
   }).ok,
   false,
   '公开能力字段缺失时仍必须 fail-closed',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: null,
+    selectionReadbacks: legacyNullDisabledReadbacks,
+    composerSurfaceAvailable: true,
+    bridgeResults: { setSkillsDisabled: null, setConnectorsDisabled: null },
+  }).ok,
+  true,
+  'capabilities 超时时，完整 init/E2E/UI 空态与两个 legacy disabled bridge=null 可证明 Composer 隔离完成',
+);
+assert.equal(
+  coreBetaComposerIsolationReadback({
+    capabilities: null,
+    selectionReadbacks: legacyNullDisabledReadbacks,
+    composerSurfaceAvailable: true,
+    bridgeResults: { setSkillsDisabled: null },
+  }).ok,
+  false,
+  'Composer 隔离 fallback 缺失任一清理桥结果时必须 fail-closed',
 );
 assert.equal(
   unifiedConnectorModeApplied({ selectedConnectors: [] }, 'disabled', undefined),

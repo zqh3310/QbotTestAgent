@@ -982,7 +982,10 @@ Teams pretest 必须在精确 QWork WebView 上只读调用一次
 单次超时，最多执行 3 次只读重试，并在公共状态证据中保存
 `capabilities_readback_attempts` 的逐次耗时与错误。全部尝试失败时不得继续发送、不得
 使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。清理阶段若当前统一 Composer
-可见且 chip/专家头像已明确为空，可用发送前权威空态加可见空态完成交叉读回；若
+可见且 chip/专家头像已明确为空，可用发送前权威空态加可见空态完成交叉读回；QWork
+0.1.6-sit.8 的 legacy `setSkillsDisabled()` / `setConnectorsDisabled()` 兼容桥可合法返回
+`null`，但必须同时取得同一当前 draft 的 `agent.init()`、`__qbotE2E` 和统一 Composer
+空态交叉证据，且所有已调用清理桥无错误；`null` 本身不能放行。若
 Composer 可见但无法证明为空或存在残留，三次只读耗尽后允许一次受管 `openNewTask`
 恢复干净 Composer，只重新采集可见/E2E 状态，不得重复清理桥，也不把导航算作第四次
 capabilities 尝试。恢复后仍有残留或导航失败继续 fail-closed。

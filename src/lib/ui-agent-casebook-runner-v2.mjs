@@ -5500,15 +5500,21 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
     const expertAvatars = visibleNodes('.ctools .ctool-btn-ava');
     const skillDisabled = /技能[^\n]*禁用/.test(skillControlText);
     const connectorDisabled = /(?:连应用|连接器)[^\n]*禁用/.test(connectorControlText);
-    const skillBridgeCleared = Array.isArray(cleanupBridgeResults.setSkillsDisabled)
-      && cleanupBridgeResults.setSkillsDisabled.length === 0;
-    const connectorBridgeCleared = Array.isArray(cleanupBridgeResults.setConnectorsDisabled)
-      && cleanupBridgeResults.setConnectorsDisabled.length === 0;
-    const expertBridgeCleared = Boolean(
-      cleanupBridgeResults.setExpert
-      && typeof cleanupBridgeResults.setExpert === 'object'
-      && (cleanupBridgeResults.setExpert.expert ?? cleanupBridgeResults.setExpert.expertIdentity) == null
-    );
+    const legacyDisabledBridgeCleared = (name) => {
+      if (!Object.hasOwn(cleanupBridgeResults, name)) return false;
+      const value = cleanupBridgeResults[name];
+      if (value && typeof value === 'object' && value.__error) return false;
+      return value === null || (Array.isArray(value) && value.length === 0);
+    };
+    const skillBridgeCleared = legacyDisabledBridgeCleared('setSkillsDisabled');
+    const connectorBridgeCleared = legacyDisabledBridgeCleared('setConnectorsDisabled');
+    const expertBridgeCleared = !Object.hasOwn(cleanupBridgeResults, 'setExpert')
+      || Boolean(
+        cleanupBridgeResults.setExpert
+        && typeof cleanupBridgeResults.setExpert === 'object'
+        && !cleanupBridgeResults.setExpert.__error
+        && (cleanupBridgeResults.setExpert.expert ?? cleanupBridgeResults.setExpert.expertIdentity) == null
+      );
     const skillSurfaceReady = skillControl ? skillDisabled : Boolean(unifiedPlusControl && composer);
     const connectorSurfaceReady = connectorControl ? connectorDisabled : Boolean(unifiedPlusControl && composer);
     return {
@@ -5536,11 +5542,11 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
           ),
           error: '',
           selected_skills_observed: Boolean(skillControl || (unifiedPlusControl && composer)),
-          selected_skills: skillSurfaceReady && skillBridgeCleared
+          selected_skills: skillSurfaceReady
             ? skillChips
             : [`cleanup-not-confirmed:${skillControlText || 'unified-skill'}`],
           selected_connectors_observed: Boolean(connectorControl || (unifiedPlusControl && composer)),
-          selected_connectors: connectorSurfaceReady && connectorBridgeCleared
+          selected_connectors: connectorSurfaceReady
             ? connectorChips
             : [`cleanup-not-confirmed:${connectorControlText || 'unified-connector'}`],
           current_expert_observed: expertObserved,
@@ -29952,8 +29958,16 @@ async function resetComposerControls(page, state, caseDir, {
   await closeWorkspacePicker(page);
   const results = [];
   let failedInteractions = [];
+  const cleanupBridgeResults = {};
   const recordCapabilityOperation = (operationOk) => {
     results.push(operationOk);
+    const interaction = state.artifacts.core_beta_capability_interaction;
+    if (interaction?.bridge_results && typeof interaction.bridge_results === 'object') {
+      Object.assign(cleanupBridgeResults, structuredClone(interaction.bridge_results));
+    }
+    if (interaction?.bridge_method && Object.hasOwn(interaction, 'bridge_selection')) {
+      cleanupBridgeResults[interaction.bridge_method] = structuredClone(interaction.bridge_selection);
+    }
     failedInteractions = preserveCoreBetaFailedCapabilityInteraction(
       failedInteractions,
       state.artifacts.core_beta_capability_interaction,
@@ -29999,10 +30013,21 @@ async function resetComposerControls(page, state, caseDir, {
   const sceneTagText = await visibleSceneTagText(page);
   const attachmentText = await visibleComposerAttachmentText(page);
   const capabilityReadback = await currentCapabilities(page);
+  let fallbackSelectionReadback = null;
+  if (capabilityReadback === null && (clearSkills || clearConnectors)) {
+    fallbackSelectionReadback = await captureCleanupSelectionReadbacks(
+      page,
+      cleanupBridgeResults,
+      { readCapabilities: false },
+    );
+  }
   const isolationReadback = coreBetaComposerIsolationReadback({
     capabilities: capabilityReadback,
     requireSkills: clearSkills,
     requireConnectors: clearConnectors,
+    selectionReadbacks: fallbackSelectionReadback?.selection_readbacks || null,
+    composerSurfaceAvailable: fallbackSelectionReadback?.composer_surface_available === true,
+    bridgeResults: cleanupBridgeResults,
   });
   results.push(isolationReadback.ok);
   state.screenshots.composer_controls_reset = await shot(page, caseDir, 'composer-controls-reset');
@@ -30031,6 +30056,8 @@ async function resetComposerControls(page, state, caseDir, {
       actual: item.actual || '',
       screenshot: item.screenshot || '',
     })),
+    fallback_selection_readback: fallbackSelectionReadback,
+    cleanup_bridge_results: cleanupBridgeResults,
     isolation_readback: isolationReadback,
   };
   recordAssertion(
@@ -30058,6 +30085,9 @@ export function coreBetaComposerIsolationReadback({
   capabilities = null,
   requireSkills = true,
   requireConnectors = true,
+  selectionReadbacks = null,
+  composerSurfaceAvailable = false,
+  bridgeResults = null,
 } = {}) {
   const readable = capabilities !== null && typeof capabilities === 'object';
   const has = (field) => readable && Object.prototype.hasOwnProperty.call(capabilities, field);
@@ -30069,9 +30099,52 @@ export function coreBetaComposerIsolationReadback({
   const connectorsEmpty = !requireConnectors
     || (connectorsReadable && emptySelection(capabilities.selectedConnectors));
   const expertEmpty = expertReadable && capabilities.currentExpert === null;
+  const bridgeValueCleared = (name) => {
+    if (!bridgeResults || !Object.hasOwn(bridgeResults, name)) return false;
+    const value = bridgeResults[name];
+    if (value && typeof value === 'object' && value.__error) return false;
+    return value === null || (Array.isArray(value) && value.length === 0);
+  };
+  const init = selectionReadbacks?.init_context;
+  const e2e = selectionReadbacks?.e2e_state;
+  const visibleUi = selectionReadbacks?.visible_ui;
+  const noExplicitSelection = (value) => value == null
+    || (Array.isArray(value) && value.length === 0);
+  const crossDraftEmpty = Boolean(
+    selectionReadbacks
+      && composerSurfaceAvailable === true
+      && init?.available === true
+      && init.binding_matches === true
+      && init.selected_skills_observed === true
+      && noExplicitSelection(init.selected_skills)
+      && init.selected_connectors_observed === true
+      && noExplicitSelection(init.selected_connectors)
+      && init.current_expert_observed === true
+      && init.current_expert == null
+      && e2e?.available === true
+      && e2e.current_expert_observed === true
+      && e2e.current_expert == null
+      && visibleUi?.surface === 'unified-plus'
+      && Array.isArray(visibleUi.visible_skill_chips)
+      && visibleUi.visible_skill_chips.length === 0
+      && Array.isArray(visibleUi.visible_connector_chips)
+      && visibleUi.visible_connector_chips.length === 0
+      && Number(visibleUi.visible_expert_avatar_count) === 0
+      && (!requireSkills || bridgeValueCleared('setSkillsDisabled'))
+      && (!requireConnectors || bridgeValueCleared('setConnectorsDisabled'))
+      && (!bridgeResults?.setExpert || (typeof bridgeResults.setExpert === 'object'
+        && bridgeResults.setExpert.__error == null
+        && (bridgeResults.setExpert.expert ?? bridgeResults.setExpert.expertIdentity) == null))
+  );
+  const fallbackOk = Boolean(
+    !readable
+      && crossDraftEmpty
+      && (!requireSkills || bridgeValueCleared('setSkillsDisabled'))
+      && (!requireConnectors || bridgeValueCleared('setConnectorsDisabled'))
+  );
   return {
-    ok: readable && skillsReadable && connectorsReadable && expertReadable
-      && skillsEmpty && connectorsEmpty && expertEmpty,
+    ok: (readable && skillsReadable && connectorsReadable && expertReadable
+      && skillsEmpty && connectorsEmpty && expertEmpty) || fallbackOk,
     readable,
     skills_readable: skillsReadable,
     connectors_readable: connectorsReadable,
@@ -30082,6 +30155,9 @@ export function coreBetaComposerIsolationReadback({
     selected_skills: skillsReadable ? capabilities.selectedSkills : undefined,
     selected_connectors: connectorsReadable ? capabilities.selectedConnectors : undefined,
     current_expert: expertReadable ? capabilities.currentExpert : undefined,
+    fallback_readable: Boolean(selectionReadbacks),
+    fallback_ok: fallbackOk,
+    fallback_source: fallbackOk ? 'agent.init+e2e+visible_ui+cleanup_bridges' : '',
   };
 }
 
@@ -30860,15 +30936,29 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
   }
   const selected = capabilities?.selectedSkills;
   const exactModeApplied = unifiedSkillModeApplied(capabilities, mode, invoked.selection);
+  let fallbackSelectionReadback = null;
+  let compatibilityReadback = { ok: false };
+  if (mode === 'disabled' && invoked.selection === null && !exactModeApplied) {
+    fallbackSelectionReadback = await captureCleanupSelectionReadbacks(
+      page,
+      { setSkillsDisabled: invoked.selection },
+      { readCapabilities: false },
+    );
+    compatibilityReadback = coreBetaUnifiedDisabledCompatibilityReadback({
+      capabilityKind: 'skill',
+      bridgeSelection: invoked.selection,
+      selectionReadbacks: fallbackSelectionReadback.selection_readbacks,
+      composerSurfaceAvailable: fallbackSelectionReadback.composer_surface_available === true,
+    });
+  }
   const isolationApplied = allowAutoEmptyIsolation
     && mode === 'disabled'
     && capabilities?.selectedSkills === null
     && capabilities?.currentExpert === null;
-  const ok = exactModeApplied || isolationApplied;
-  const publicStateReadable = invoked.selection === null
+  const ok = exactModeApplied || isolationApplied || compatibilityReadback.ok;
+  const publicStateReadable = (capabilities !== null && typeof capabilities === 'object')
     || Array.isArray(invoked.selection)
-    || capabilities?.selectedSkills === null
-    || Array.isArray(capabilities?.selectedSkills);
+    || compatibilityReadback.ok;
   const interactionCategory = coreBetaCapabilityInteractionCategory({
     controlLocated: true,
     clickDispatched: true,
@@ -30886,7 +30976,11 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     public_state_readable: publicStateReadable,
     expected_state_observed: ok,
     bridge_selection: invoked.selection,
+    bridge_method: method,
+    bridge_results: { [method]: invoked.selection },
     selected_skills: selected,
+    fallback_selection_readback: fallbackSelectionReadback,
+    compatibility_readback: compatibilityReadback,
     screenshot: state.screenshots[`skill_mode_${mode}`],
     category: interactionCategory,
   };
@@ -30894,7 +30988,7 @@ async function setUnifiedSkillMode(page, state, caseDir, mode, {
     state,
     `设置统一菜单技能模式：${mode}`,
     '该调用只用于隔离用例前置状态；技能选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}；isolation_auto_empty=${isolationApplied}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedSkills=${JSON.stringify(selected)}；compatibility_readback=${JSON.stringify(compatibilityReadback)}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`skill_mode_${mode}`],
     interactionCategory,
@@ -30912,6 +31006,64 @@ export function unifiedSkillModeApplied(capabilities, mode, bridgeSelection = un
       || (Array.isArray(bridgeSelection) && bridgeSelection.length === 0);
   }
   return false;
+}
+
+/**
+ * Current QWork releases keep the legacy disabled bridge as an Auto-compatible
+ * no-selection operation and therefore return null.  A null bridge result is
+ * only useful when the same draft is independently shown empty by init/E2E/UI
+ * readbacks; it must never be treated as a standalone mode confirmation.
+ */
+export function coreBetaUnifiedDisabledCompatibilityReadback({
+  capabilityKind = 'skill',
+  bridgeSelection,
+  selectionReadbacks = null,
+  composerSurfaceAvailable = false,
+} = {}) {
+  const init = selectionReadbacks?.init_context;
+  const e2e = selectionReadbacks?.e2e_state;
+  const visible = selectionReadbacks?.visible_ui;
+  const key = capabilityKind === 'connector' ? 'connectors' : 'skills';
+  const observedKey = key === 'connectors' ? 'selected_connectors_observed' : 'selected_skills_observed';
+  const valueKey = key === 'connectors' ? 'selected_connectors' : 'selected_skills';
+  const noExplicitSelection = (value) => value == null
+    || (Array.isArray(value) && value.length === 0);
+  const initEmpty = Boolean(
+    init?.available === true
+      && init.binding_matches === true
+      && init[observedKey] === true
+      && noExplicitSelection(init[valueKey])
+      && init.selected_skills_observed === true
+      && noExplicitSelection(init.selected_skills)
+      && init.selected_connectors_observed === true
+      && noExplicitSelection(init.selected_connectors)
+      && init.current_expert_observed === true
+      && init.current_expert == null,
+  );
+  const e2eEmpty = Boolean(
+    e2e?.available === true
+      && e2e.current_expert_observed === true
+      && e2e.current_expert == null,
+  );
+  const visibleEmpty = Boolean(
+    composerSurfaceAvailable === true
+      && visible?.surface === 'unified-plus'
+      && Array.isArray(visible.visible_skill_chips)
+      && visible.visible_skill_chips.length === 0
+      && Array.isArray(visible.visible_connector_chips)
+      && visible.visible_connector_chips.length === 0
+      && Number(visible.visible_expert_avatar_count) === 0,
+  );
+  const ok = bridgeSelection === null && initEmpty && e2eEmpty && visibleEmpty;
+  return {
+    ok,
+    source: ok ? 'legacy_disabled_null_bridge+agent.init+e2e+visible_ui' : '',
+    capability_kind: key,
+    bridge_null: bridgeSelection === null,
+    init_empty: initEmpty,
+    e2e_empty: e2eEmpty,
+    visible_empty: visibleEmpty,
+  };
 }
 
 export function coreBetaManualConnectorModeReady({
@@ -31789,17 +31941,53 @@ async function setUnifiedConnectorMode(page, state, caseDir, mode, {
   const storedMode = String(capabilities?.connectorRouting?.mode || '');
   const selectedConnectors = capabilities?.selectedConnectors;
   const exactModeApplied = unifiedConnectorModeApplied(capabilities, mode, invoked.selection);
+  let fallbackSelectionReadback = null;
+  let compatibilityReadback = { ok: false };
+  if (mode === 'disabled' && invoked.selection === null && !exactModeApplied) {
+    fallbackSelectionReadback = await captureCleanupSelectionReadbacks(
+      page,
+      { setConnectorsDisabled: invoked.selection },
+      { readCapabilities: false },
+    );
+    compatibilityReadback = coreBetaUnifiedDisabledCompatibilityReadback({
+      capabilityKind: 'connector',
+      bridgeSelection: invoked.selection,
+      selectionReadbacks: fallbackSelectionReadback.selection_readbacks,
+      composerSurfaceAvailable: fallbackSelectionReadback.composer_surface_available === true,
+    });
+  }
   const isolationApplied = allowAutoEmptyIsolation
     && mode === 'disabled'
     && capabilities?.selectedConnectors === null
     && capabilities?.currentExpert === null;
-  const ok = exactModeApplied || isolationApplied;
+  const ok = exactModeApplied || isolationApplied || compatibilityReadback.ok;
+  const publicStateReadable = (capabilities !== null && typeof capabilities === 'object')
+    || Array.isArray(invoked.selection)
+    || compatibilityReadback.ok;
   state.screenshots[`connector_mode_${mode}`] = await shot(page, caseDir, `connector-mode-${mode}`);
+  state.artifacts.core_beta_capability_interaction = {
+    schema_version: 'qbot-core-beta-capability-interaction/v1',
+    capability_kind: 'connector',
+    stage: `${mode}_mode`,
+    control_testid: method,
+    control_located: true,
+    click_dispatched: true,
+    public_state_readable: publicStateReadable,
+    expected_state_observed: ok,
+    bridge_selection: invoked.selection,
+    bridge_method: method,
+    bridge_results: { [method]: invoked.selection },
+    selected_connectors: selectedConnectors,
+    compatibility_readback: compatibilityReadback,
+    fallback_selection_readback: fallbackSelectionReadback,
+    screenshot: state.screenshots[`connector_mode_${mode}`],
+    category: ok ? '' : (publicStateReadable ? 'bug' : 'automation_error'),
+  };
   recordStep(
     state,
     `设置统一菜单连接器模式：${mode}`,
     '该调用只用于隔离用例前置状态；连接器选择和功能断言仍必须通过用户可见 UI 与结果证据完成。',
-    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}；isolation_auto_empty=${isolationApplied}`,
+    `method=${method}；bridge.selection=${JSON.stringify(invoked.selection)}；capabilities.selectedConnectors=${JSON.stringify(selectedConnectors)}；capabilities.connectorRouting.mode=${storedMode || '未读取'}；compatibility_readback=${JSON.stringify(compatibilityReadback)}；isolation_auto_empty=${isolationApplied}`,
     ok ? 'passed' : 'failed',
     state.screenshots[`connector_mode_${mode}`],
     ok ? '' : 'automation_error',
