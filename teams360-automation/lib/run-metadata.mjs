@@ -27,6 +27,17 @@ const PINNED_FIELDS = [
   'release_inputs.qwork_ui_git_commit',
   'release_inputs.qwork_build_id',
   'release_inputs.qwork_release_manifest_sha256',
+  'release_observation.schema_version',
+  'release_observation.observed_sha256',
+  'release_observation.consistency.ok',
+  'release_observation.provenance.state.sha256',
+  'release_observation.provenance.envelope.sha256',
+  'release_observation.provenance.release_set_digest',
+  'release_observation.provenance.host_core_digest',
+  'release_observation.provenance.ui_digest',
+  'release_observation.provenance.qbot_core_digest',
+  'release_observation.provenance.desktop_agent_runtime.sha256',
+  'release_observation.provenance.ui_code_manifest.sha256',
   'model_tier',
   'timeout_ms',
 ];
@@ -114,6 +125,8 @@ export function buildTeamsRunMetadata({
   frameworkRoot = '',
   deepbankRoot = '',
   releaseInputs = {},
+  qworkReleaseIdentityReadback = null,
+  releaseObservationPhase = 'startup',
   observedAt = new Date().toISOString(),
 } = {}) {
   if (!session || session.profile_mode !== 'live') {
@@ -124,6 +137,10 @@ export function buildTeamsRunMetadata({
   const controlPlaneOrigin = new URL(String(controlPlane || '')).origin;
   const ids = [...new Set(caseIds.map((value) => String(value || '').trim()).filter(Boolean))];
   const artifacts = buildReleaseArtifactFingerprints({ host, qworkUiUrl: qwork.url, casebookPath });
+  if (qworkReleaseIdentityReadback && qworkReleaseIdentityReadback.ok !== true) {
+    throw new Error('Run metadata rejects an invalid authoritative QWork release identity readback.');
+  }
+  const observedRelease = qworkReleaseIdentityReadback?.observed || {};
   return {
     schema_version: 2,
     captured_at: observedAt,
@@ -138,12 +155,35 @@ export function buildTeamsRunMetadata({
     },
     release_inputs: {
       backend_version: String(releaseInputs.backend_version || '').trim(),
-      prompt_policy_version: String(releaseInputs.prompt_policy_version || '').trim(),
-      feature_flags_hash: String(releaseInputs.feature_flags_hash || '').trim(),
-      qwork_ui_git_commit: String(releaseInputs.qwork_ui_git_commit || '').trim(),
-      qwork_build_id: String(releaseInputs.qwork_build_id || '').trim(),
-      qwork_release_manifest_sha256: String(releaseInputs.qwork_release_manifest_sha256 || '').trim(),
+      prompt_policy_version: String(
+        observedRelease.prompt_policy_version || releaseInputs.prompt_policy_version || '',
+      ).trim(),
+      feature_flags_hash: String(
+        observedRelease.feature_flags_hash || releaseInputs.feature_flags_hash || '',
+      ).trim(),
+      qwork_ui_git_commit: String(
+        observedRelease.qwork_ui_git_commit || releaseInputs.qwork_ui_git_commit || '',
+      ).trim(),
+      qwork_build_id: String(
+        observedRelease.qwork_build_id || releaseInputs.qwork_build_id || '',
+      ).trim(),
+      qwork_release_manifest_sha256: String(
+        observedRelease.qwork_release_manifest_sha256
+          || releaseInputs.qwork_release_manifest_sha256
+          || '',
+      ).trim(),
     },
+    release_observation: qworkReleaseIdentityReadback
+      ? structuredClone(qworkReleaseIdentityReadback)
+      : null,
+    release_observation_checks: qworkReleaseIdentityReadback ? [{
+      phase: String(releaseObservationPhase || 'startup'),
+      observed_at: observedAt,
+      observed_sha256: String(qworkReleaseIdentityReadback.observed_sha256 || ''),
+      state_sha256: String(qworkReleaseIdentityReadback.provenance?.state?.sha256 || ''),
+      envelope_sha256: String(qworkReleaseIdentityReadback.provenance?.envelope?.sha256 || ''),
+      ok: qworkReleaseIdentityReadback.ok === true,
+    }] : [],
     model_tier: String(modelTier || '').toUpperCase(),
     timeout_ms: Number(timeoutMs),
     profile: {
@@ -178,6 +218,10 @@ export function writePinnedRunMetadata(outDir, metadata) {
     merged = {
       ...existing,
       last_observed_at: metadata.last_observed_at,
+      release_observation_checks: [
+        ...(existing.release_observation_checks || []),
+        ...(metadata.release_observation_checks || []),
+      ],
       observed_host_pids: [...new Set([
         ...(existing.observed_host_pids || []),
         ...(metadata.observed_host_pids || []),

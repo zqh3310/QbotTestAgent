@@ -69,12 +69,16 @@ ui-agent-casebook-run:
                                   Explicitly allow that cleanup across a product
                                   upgrade after strict profile/origin/root checks
   --production-gate true         Enable release-identity gate
+  --control-plane-url <origin>   Exact control plane from the matching READY
   --scoped-execution true        Explicit non-release subset execution
   --excluded-case <id[,id...]>   Exact Case IDs omitted from the scope
   --scope-reason <text>          Required immutable exclusion reason
   --backend-version <id>
   --prompt-policy-version <id>
   --feature-flags-hash <sha256>
+  --qwork-ui-git-commit <commit>
+  --qwork-build-id <id>
+  --qwork-release-manifest-sha256 <sha256>
   --skip-run                     Protocol/fixture dry-run only; synthetic and
                                   never eligible for trusted pass
 

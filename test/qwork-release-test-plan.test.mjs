@@ -126,8 +126,11 @@ function pretest(stageId, sourcePlan = plan) {
       'qwork_runtime_release_identity',
       'qwork_runtime_update_activation_safe',
       'qwork_host_runtime_compatibility',
+      'qwork_release_artifact_identity',
+      'qwork_release_identity_observed_matches_expected',
       'frozen_product_identity_complete',
       'frozen_product_identity_hashes',
+      'release_identity_observed_matches_expected',
     ].map((id) => ({ id, status: 'passed', detail: 'test fixture' })),
     framework: {
       head: sourcePlan.framework.commit,
@@ -145,7 +148,9 @@ function pretest(stageId, sourcePlan = plan) {
     },
     release_identity: {
       expected: structuredClone(sourcePlan.release_identity),
+      observed: structuredClone(sourcePlan.release_identity),
       fingerprint: sourcePlan.release_identity_sha256,
+      observed_fingerprint: sourcePlan.release_identity_sha256,
     },
     runtime: {
       teams: {
@@ -197,6 +202,26 @@ function pretest(stageId, sourcePlan = plan) {
         runtime_release_assessment: {
           release_identity_matches: true,
           update_activation_safe: true,
+        },
+        release_identity_readback: {
+          schema_version: 'qwork-release-identity-readback/v1',
+          ok: true,
+          observed_sha256: '3'.repeat(64),
+          observed: {
+            qwork_version: sourcePlan.release_identity.qwork_version,
+            prompt_policy_version: sourcePlan.release_identity.prompt_policy_version,
+            feature_flags_hash: sourcePlan.release_identity.feature_flags_hash,
+            qwork_ui_git_commit: sourcePlan.release_identity.qwork_ui_git_commit,
+            qwork_build_id: sourcePlan.release_identity.qwork_build_id,
+            qwork_release_manifest_sha256: sourcePlan.release_identity.qwork_release_manifest_sha256,
+          },
+          consistency: { ok: true, errors: [] },
+          provenance: {},
+        },
+        release_identity_assessment: {
+          ok: true,
+          readback_ok: true,
+          mismatches: [],
         },
       },
     },
@@ -309,6 +334,46 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
         qwork_build_id: identity.qwork_build_id,
         qwork_release_manifest_sha256: identity.qwork_release_manifest_sha256,
       },
+      release_observation: {
+        schema_version: 'qwork-release-identity-readback/v1',
+        ok: true,
+        observed_sha256: '3'.repeat(64),
+        observed: {
+          qwork_version: identity.qwork_version,
+          prompt_policy_version: identity.prompt_policy_version,
+          feature_flags_hash: identity.feature_flags_hash,
+          qwork_ui_git_commit: identity.qwork_ui_git_commit,
+          qwork_build_id: identity.qwork_build_id,
+          qwork_release_manifest_sha256: identity.qwork_release_manifest_sha256,
+        },
+        consistency: { ok: true, errors: [] },
+        provenance: {
+          state: { sha256: '4'.repeat(64) },
+          envelope: { sha256: identity.qwork_release_manifest_sha256 },
+          release_set_digest: '5'.repeat(64),
+          host_core_digest: 'sha512-host',
+          ui_digest: 'sha512-ui',
+          qbot_core_digest: 'sha512-qbot',
+          desktop_agent_runtime: { sha256: '6'.repeat(64) },
+          ui_code_manifest: { sha256: identity.feature_flags_hash },
+        },
+      },
+      release_observation_checks: [
+        {
+          phase: 'startup',
+          ok: true,
+          observed_sha256: '3'.repeat(64),
+          state_sha256: '4'.repeat(64),
+          envelope_sha256: identity.qwork_release_manifest_sha256,
+        },
+        {
+          phase: 'run-final',
+          ok: true,
+          observed_sha256: '3'.repeat(64),
+          state_sha256: '4'.repeat(64),
+          envelope_sha256: identity.qwork_release_manifest_sha256,
+        },
+      ],
       sources: { framework: { commit: plan.framework.commit, dirty: false } },
       artifacts: { casebook_sha256: plan.casebook.sha256 },
     },
@@ -371,6 +436,19 @@ test('READY rejects candidate update risk and identity drift', () => {
   assert.ok(audit.failures.includes('pretest_runtime_update_not_safe'));
   assert.ok(audit.failures.includes('pretest_release_identity_inputs_mismatch'));
   assert.ok(audit.failures.includes('pretest_release_identity_fingerprint_mismatch'));
+});
+
+test('READY rejects command-line identity claims when authoritative artifacts drift', () => {
+  const forged = pretest('G1');
+  forged.runtime.qwork.release_identity_readback.observed.qwork_ui_git_commit = 'feedface';
+  const audit = auditQworkStageReadiness({
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: forged,
+  });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('pretest_qwork_artifact_identity_not_authoritative'));
 });
 
 test('READY rejects unhealthy SIT or backend fingerprint drift', () => {
@@ -497,6 +575,20 @@ test('completion recomputes evidence bytes and SHA from the immutable run direct
   assert.equal(audit.passed, false);
   assert.ok(audit.failures.includes('evidence_manifest_incomplete'));
   assert.ok(audit.failures.includes('summary_evidence_manifest_incomplete'));
+});
+
+test('completion requires stable authoritative identity at startup and run-final', () => {
+  const missingFinal = completionInputs('G1');
+  missingFinal.runMetadata.release_observation_checks.pop();
+  const missingAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...missingFinal });
+  assert.equal(missingAudit.passed, false);
+  assert.ok(missingAudit.failures.includes('run_release_observation_phases_incomplete'));
+
+  const drifted = completionInputs('G1');
+  drifted.runMetadata.release_observation_checks[1].state_sha256 = '9'.repeat(64);
+  const driftAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...drifted });
+  assert.equal(driftAudit.passed, false);
+  assert.ok(driftAudit.failures.includes('run_release_observation_drift'));
 });
 
 test('a core gate failure keeps every later stage NOT_STARTED', () => {

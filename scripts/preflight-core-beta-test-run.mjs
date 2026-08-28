@@ -27,6 +27,10 @@ import {
   validateLiveCasebookSession,
 } from '../teams360-automation/lib/casebook-runner.mjs';
 import { assessRuntimeReleaseStatus } from '../teams360-automation/lib/cdp-webview.mjs';
+import {
+  assessQworkReleaseIdentity,
+  readQworkReleaseIdentity,
+} from '../teams360-automation/lib/qwork-release-identity.mjs';
 import { inspectTeamsCdp } from '../teams360-automation/lib/targets.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -749,6 +753,23 @@ async function main() {
             runtime_release_status: runtimeReleaseStatus,
             runtime_release_assessment: runtimeReleaseAssessment,
           };
+          const qworkReleaseIdentityReadback = readQworkReleaseIdentity({
+            qworkUiUrl: qworkUrl,
+            runtimeReleaseStatus,
+          });
+          const qworkReleaseIdentityAssessment = assessQworkReleaseIdentity(
+            qworkReleaseIdentityReadback,
+            {
+              qwork_version: expectedQworkVersion,
+              prompt_policy_version: options['prompt-policy-version'],
+              feature_flags_hash: options['feature-flags-hash'],
+              qwork_ui_git_commit: options['qwork-ui-git-commit'],
+              qwork_build_id: options['qwork-build-id'],
+              qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'],
+            },
+          );
+          runtime.qwork.release_identity_readback = qworkReleaseIdentityReadback;
+          runtime.qwork.release_identity_assessment = qworkReleaseIdentityAssessment;
           addCheck('qwork_release_identity',
             Boolean(expectedQworkVersion) && qworkVersion === expectedQworkVersion,
             `actual=${qworkVersion || '(unavailable)'}; expected=${expectedQworkVersion || '(missing --expected-qwork-version)'}`);
@@ -763,6 +784,18 @@ async function main() {
           addCheck('qwork_host_runtime_compatibility', runtimeReleaseAssessment.host_runtime_compatible,
             `host_core=${runtimeReleaseStatus?.host_runtime_compatibility?.host_core_version || '(missing)'}; runtime=${runtimeReleaseStatus?.host_runtime_compatibility?.runtime_version || '(missing)'}; versions_match=${runtimeReleaseStatus?.host_runtime_compatibility?.versions_match === true}`,
             { warning: true });
+          addCheck('qwork_release_artifact_identity', qworkReleaseIdentityReadback.ok === true,
+            qworkReleaseIdentityReadback.ok
+              ? `release=${qworkReleaseIdentityReadback.observed.qwork_version}; envelope_sha256=${qworkReleaseIdentityReadback.observed.qwork_release_manifest_sha256}; commit=${qworkReleaseIdentityReadback.observed.qwork_ui_git_commit}`
+              : qworkReleaseIdentityReadback.error
+                || JSON.stringify(qworkReleaseIdentityReadback.consistency?.errors || []));
+          addCheck(
+            'qwork_release_identity_observed_matches_expected',
+            qworkReleaseIdentityAssessment.ok === true,
+            qworkReleaseIdentityAssessment.ok
+              ? `observed_sha256=${qworkReleaseIdentityReadback.observed_sha256}`
+              : `mismatches=${JSON.stringify(qworkReleaseIdentityAssessment.mismatches)}`,
+          );
         }
       }
     }
@@ -815,6 +848,27 @@ async function main() {
     qwork_build_id: options['qwork-build-id'],
     qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'],
   });
+  const observedReleaseIdentity = normalizeQworkReleaseIdentity({
+    teams_version: runtime?.teams?.version,
+    teams_build: runtime?.teams?.build,
+    qwork_version: runtime?.qwork?.release_identity_readback?.observed?.qwork_version
+      || runtime?.qwork?.version,
+    control_plane_origin: runtime?.session?.control_plane_origin,
+    backend_version: runtime?.control_plane_health?.observed_backend_version,
+    prompt_policy_version: runtime?.qwork?.release_identity_readback?.observed?.prompt_policy_version,
+    feature_flags_hash: runtime?.qwork?.release_identity_readback?.observed?.feature_flags_hash,
+    qwork_ui_git_commit: runtime?.qwork?.release_identity_readback?.observed?.qwork_ui_git_commit,
+    qwork_build_id: runtime?.qwork?.release_identity_readback?.observed?.qwork_build_id,
+    qwork_release_manifest_sha256: runtime?.qwork?.release_identity_readback?.observed
+      ?.qwork_release_manifest_sha256,
+  });
+  if (productionGate && lane === 'teams') {
+    addCheck(
+      'release_identity_observed_matches_expected',
+      JSON.stringify(observedReleaseIdentity) === JSON.stringify(frozenReleaseIdentity),
+      `observed=${JSON.stringify(observedReleaseIdentity)}; expected=${JSON.stringify(frozenReleaseIdentity)}`,
+    );
+  }
 
   const report = {
     schema_version: 'qbot-core-beta-pretest/v1',
@@ -825,13 +879,9 @@ async function main() {
     release_gate_eligible: !scopedExecution,
     release_identity: {
       expected: frozenReleaseIdentity,
-      observed: {
-        teams_version: runtime?.teams?.version || '',
-        teams_build: runtime?.teams?.build || '',
-        qwork_version: runtime?.qwork?.version || '',
-        control_plane_origin: runtime?.session?.control_plane_origin || '',
-      },
+      observed: observedReleaseIdentity,
       fingerprint: qworkReleaseIdentityFingerprint(frozenReleaseIdentity),
+      observed_fingerprint: qworkReleaseIdentityFingerprint(observedReleaseIdentity),
     },
     scope,
     framework: {

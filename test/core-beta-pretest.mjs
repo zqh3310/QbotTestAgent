@@ -23,6 +23,19 @@ const cliHelp = spawnSync(process.execPath, [
 if (cliHelp.status !== 0) throw new Error(`CLI help failed: ${cliHelp.stderr}`);
 if (!/core-beta:pretest/.test(cliHelp.stdout)) throw new Error('CLI help must point to core-beta:pretest.');
 if (!/16\/12\/70\/160 Casebook stage/.test(cliHelp.stdout)) throw new Error('CLI help must include the staged QWork release contract.');
+for (const releaseOption of [
+  '--control-plane-url',
+  '--backend-version',
+  '--prompt-policy-version',
+  '--feature-flags-hash',
+  '--qwork-ui-git-commit',
+  '--qwork-build-id',
+  '--qwork-release-manifest-sha256',
+]) {
+  if (!cliHelp.stdout.includes(releaseOption)) {
+    throw new Error(`CLI help must expose production release option ${releaseOption}.`);
+  }
+}
 const autoTestAfter = fs.existsSync(autoTest) ? fs.readdirSync(autoTest).sort() : [];
 if (JSON.stringify(autoTestBefore) !== JSON.stringify(autoTestAfter)) {
   throw new Error('ui-agent-casebook-run --help must not create a run directory.');

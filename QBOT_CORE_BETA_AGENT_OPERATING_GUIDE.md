@@ -29,11 +29,12 @@ Case 的接手状态、启动顺序和禁止事项。
   SHA-256 `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c`，设计基线 `origin/release/0.1@b2c9e1a99ca051ff21cc34db3b1f56e2055c091a`、产品版本
   `0.1.6`。相对上一 Casebook 新增直接合入 MR `!1374`，窗口累计审计 73 个直接合入 MR；
   `!1374` 映射 Auto fallback/catalog authority 到 `MRSMOKE-ROUTE-001`、`MRSMOKE-FAIL-001`、
-  `BETA-CHAT-005` 与 `BETA-PERF-003`，复用现有 12/70/160 Case，不新增桌面合同。当前受管 Teams
-  为 `5.6.1` build `2119082788`，QWork WebView/runtime 为 `0.1.6-sit.13`，身份已收敛为
-  `updatePhase=idle + preparedRelease=null` 且 `window.agent.capabilities()` 可读；完成新能力审计、
-  精确 `READY` 后，必须先从 `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信
-  全绿，才依次独立执行 `1/12`、`1/70`、`1/160` 和 soak。
+  `BETA-CHAT-005` 与 `BETA-PERF-003`，复用现有 12/70/160 Case，不新增桌面合同。当前应用包
+  为 360Teams `5.6.1` build `2119082788`；磁盘 OTA `active/lastGood` 已只读确认到 QWork
+  `0.1.7-sit.1` 且 `pending=null`，但 WebView/runtime/capabilities 仍必须由新框架基线下的
+  正式 pretest 重新读回，不能用磁盘状态代替精确 `READY`。完成新能力审计、精确
+  `READY` 后，必须先从 `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，
+  才依次独立执行 `1/12`、`1/70`、`1/160` 和 soak。
 
 - 基于框架 `f6fa9cd1acc59a3639695495989b926b480aba95`、Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
@@ -800,6 +801,24 @@ Teams/QWork/session、runtime 顶层/loaded/compatibility、`updatePhase=idle`�
 `preparedRelease=null` 和十字段身份，任何聚合 `ok` 都不能替代字段读回。G4 readiness
 还必须让其前 70 个 Case ID 与状态机内已准入 G3 的 70 个 ID 精确同序，禁止绕过 G3
 或只与静态 Casebook 自身比较。
+
+十字段的权威来源固定为：Teams 版本/build 来自当前受管应用包、进程和 session；
+QWork 版本来自 versioned URL、OTA `active/lastGood`、envelope 与 loaded runtime；control
+plane 来自 session、renderer 实际配置和 health origin；backend 来自 health fingerprint；
+prompt policy 由当前 `desktop-agent-runtime.cjs` SHA-256 生成；历史字段名
+`feature_flags_hash` 的当前合同是 `qwork-ui-code-manifest/v1` 对 `index.html + 全部
+JS/CSS` 的规范化 SHA-256；UI commit/build ID 分别来自 active envelope
+`commitId`、release `id/version` 并与 runtime/state 交叉核对；release manifest SHA 是
+active envelope 原始文件字节 SHA-256。
+
+pretest 还必须验证 OTA `active == lastGood`、`pending=null`、release-set 与 host-core
+archive digest、UI/qbot-core 安装标记 descriptor fingerprint、普通文件/非符号链接/
+realpath 边界，以及 runtime `loaded.verified=true + updatePhase=idle +
+preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 runner 在 `startup`、
+每次 renderer replacement 和 `run-final` 重做同一读回；阶段完成至少必须有稳定的
+`startup + run-final` 观测，`release_observation_checks` 中任一 SHA 漂移或阶段缺失都
+拒绝 `PASS_STAGE`。所有 production-gate Teams 阶段，包括 `MRSMOKE-*`，都必须携带
+匹配 READY 的显式 `--control-plane-url`。
 
 新增 MR 核心冒烟入口：
 

@@ -126,12 +126,29 @@ export function summarizeRuntimeReleaseStatus(value) {
     ? value.preparedRelease
     : null;
   const text = (input) => String(input || '').trim();
+  const bootstrapPresent = compatibility != null
+    && Object.prototype.hasOwnProperty.call(compatibility, 'bootstrap');
+  const bootstrap = bootstrapPresent
+    && compatibility.bootstrap != null
+    && typeof compatibility.bootstrap === 'object'
+    && !Array.isArray(compatibility.bootstrap)
+    ? compatibility.bootstrap
+    : null;
+  const bootstrapSummary = bootstrap ? {
+    release_id: text(bootstrap.releaseId),
+    version: text(bootstrap.version),
+    host_core_digest: text(bootstrap.hostCoreDigest),
+    release_set_digest: text(bootstrap.releaseSetDigest),
+    source: text(bootstrap.source),
+    path: redactText(text(bootstrap.path)).slice(0, 1200),
+  } : null;
   return {
     ok: validObject,
     value_type: value == null ? String(value) : Array.isArray(value) ? 'array' : typeof value,
     keys: validObject ? Object.keys(value).sort() : [],
     release_id: validObject ? text(value.releaseId) : '',
     version: validObject ? text(value.version) : '',
+    commit_id: validObject ? text(value.commitId) : '',
     release_source: validObject ? text(value.source) : '',
     channel: validObject ? text(value.channel) : '',
     update_phase: validObject ? text(value.updatePhase) : '',
@@ -148,6 +165,7 @@ export function summarizeRuntimeReleaseStatus(value) {
       version: text(hostCore.version),
       source: text(hostCore.source),
       path: redactText(text(hostCore.path)).slice(0, 1200),
+      integrity: text(hostCore.integrity),
     } : null,
     loaded_runtime: loadedRuntime ? {
       release_id: text(loadedRuntime.releaseId),
@@ -161,6 +179,9 @@ export function summarizeRuntimeReleaseStatus(value) {
       host_core_version: text(compatibility.hostCoreVersion),
       runtime_release_id: text(compatibility.runtimeReleaseId),
       runtime_version: text(compatibility.runtimeVersion),
+      host_core_digest: text(compatibility.hostCoreDigest),
+      bootstrap: bootstrapSummary,
+      bootstrap_present: bootstrapPresent,
       versions_match: compatibility.versionsMatch === true,
     } : {
       present: false,
@@ -168,6 +189,9 @@ export function summarizeRuntimeReleaseStatus(value) {
       host_core_version: '',
       runtime_release_id: '',
       runtime_version: '',
+      host_core_digest: '',
+      bootstrap: null,
+      bootstrap_present: false,
       versions_match: false,
     },
   };

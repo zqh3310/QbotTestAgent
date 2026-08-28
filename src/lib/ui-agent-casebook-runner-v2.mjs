@@ -1344,6 +1344,26 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
     }
 
+    if (typeof options['release-identity-check-hook'] === 'function') {
+      try {
+        await options['release-identity-check-hook']({
+          browser,
+          page,
+          phase: 'run-final',
+        });
+      } catch (error) {
+        frameworkStop = stopRemainderWithoutSynthetic({
+          outDir,
+          selectedCases,
+          startIndex: Math.min(results.length, selectedCases.length),
+          results,
+          progressFile,
+          status: 'blocked',
+          resultCategory: 'automation_error',
+          reason: `QWork 发布身份结束复核失败：${error?.message || error}`,
+        });
+      }
+    }
     const summary = buildSummary({
       status: frameworkStop?.status || statusFromResults(results),
       startedAt,

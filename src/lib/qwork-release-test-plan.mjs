@@ -162,8 +162,11 @@ const REQUIRED_QWORK_PRETEST_CHECK_IDS = Object.freeze([
   'qwork_runtime_release_identity',
   'qwork_runtime_update_activation_safe',
   'qwork_host_runtime_compatibility',
+  'qwork_release_artifact_identity',
+  'qwork_release_identity_observed_matches_expected',
   'frozen_product_identity_complete',
   'frozen_product_identity_hashes',
+  'release_identity_observed_matches_expected',
 ]);
 
 function stableValue(value) {
@@ -433,18 +436,26 @@ function pretestFailures(plan, stage, report = {}) {
   if (!pretestIdentity.ok) {
     failures.push(`pretest_release_identity_missing:${pretestIdentity.missing_fields.join(',')}`);
   }
-  if (pretestIdentity.fingerprint !== plan.release_identity_sha256
-    || JSON.stringify(pretestIdentity.identity) !== JSON.stringify(plan.release_identity)) {
+  if (pretestIdentity.fingerprint !== plan.release_identity_sha256) {
     failures.push('pretest_release_identity_inputs_mismatch');
   }
   if (report?.release_identity?.fingerprint !== pretestIdentity.fingerprint
     || report?.release_identity?.fingerprint !== plan.release_identity_sha256) {
     failures.push('pretest_release_identity_fingerprint_mismatch');
   }
+  const observedIdentity = validateQworkReleaseIdentity(report?.release_identity?.observed || {});
+  if (!observedIdentity.ok || observedIdentity.fingerprint !== plan.release_identity_sha256) {
+    failures.push('pretest_release_identity_observed_mismatch');
+  }
+  if (report?.release_identity?.observed_fingerprint !== observedIdentity.fingerprint) {
+    failures.push('pretest_release_identity_observed_fingerprint_mismatch');
+  }
   const runtimeAssessment = report?.runtime?.qwork?.runtime_release_assessment;
   const controlPlaneHealth = report?.runtime?.control_plane_health;
   const publicCapabilities = report?.runtime?.teams_inspection?.public_capabilities;
   const runtimeReleaseStatus = report?.runtime?.qwork?.runtime_release_status;
+  const artifactIdentity = report?.runtime?.qwork?.release_identity_readback;
+  const artifactIdentityAssessment = report?.runtime?.qwork?.release_identity_assessment;
   if (publicCapabilities?.ok !== true || publicCapabilities?.value_type !== 'object') {
     failures.push('pretest_public_capabilities_not_readable');
   }
@@ -492,6 +503,27 @@ function pretestFailures(plan, stage, report = {}) {
   }
   if (runtimeAssessment?.release_identity_matches !== true) failures.push('pretest_runtime_identity_mismatch');
   if (runtimeAssessment?.update_activation_safe !== true) failures.push('pretest_runtime_update_not_safe');
+  const expectedQworkArtifactIdentity = {
+    qwork_version: plan.release_identity.qwork_version,
+    prompt_policy_version: plan.release_identity.prompt_policy_version,
+    feature_flags_hash: plan.release_identity.feature_flags_hash,
+    qwork_ui_git_commit: plan.release_identity.qwork_ui_git_commit,
+    qwork_build_id: plan.release_identity.qwork_build_id,
+    qwork_release_manifest_sha256: plan.release_identity.qwork_release_manifest_sha256,
+  };
+  if (artifactIdentity?.schema_version !== 'qwork-release-identity-readback/v1'
+    || artifactIdentity?.ok !== true
+    || artifactIdentity?.consistency?.ok !== true
+    || qworkReleaseIdentityFingerprint(artifactIdentity?.observed || {})
+      !== qworkReleaseIdentityFingerprint(expectedQworkArtifactIdentity)) {
+    failures.push('pretest_qwork_artifact_identity_not_authoritative');
+  }
+  if (artifactIdentityAssessment?.ok !== true
+    || artifactIdentityAssessment?.readback_ok !== true
+    || !Array.isArray(artifactIdentityAssessment?.mismatches)
+    || artifactIdentityAssessment.mismatches.length !== 0) {
+    failures.push('pretest_qwork_artifact_identity_expected_mismatch');
+  }
   return failures;
 }
 
@@ -742,6 +774,50 @@ export function auditQworkStageCompletion({
   const observedIdentity = validateQworkReleaseIdentity(runMetadata);
   if (!observedIdentity.ok) failures.push(`run_identity_missing:${observedIdentity.missing_fields.join(',')}`);
   if (observedIdentity.fingerprint !== plan.release_identity_sha256) failures.push('run_release_identity_mismatch');
+  const releaseObservation = runMetadata?.release_observation;
+  const expectedObservedQworkIdentity = {
+    qwork_version: plan.release_identity.qwork_version,
+    prompt_policy_version: plan.release_identity.prompt_policy_version,
+    feature_flags_hash: plan.release_identity.feature_flags_hash,
+    qwork_ui_git_commit: plan.release_identity.qwork_ui_git_commit,
+    qwork_build_id: plan.release_identity.qwork_build_id,
+    qwork_release_manifest_sha256: plan.release_identity.qwork_release_manifest_sha256,
+  };
+  if (releaseObservation?.schema_version !== 'qwork-release-identity-readback/v1'
+    || releaseObservation?.ok !== true
+    || releaseObservation?.consistency?.ok !== true
+    || qworkReleaseIdentityFingerprint(releaseObservation?.observed || {})
+      !== qworkReleaseIdentityFingerprint(expectedObservedQworkIdentity)) {
+    failures.push('run_release_observation_invalid');
+  }
+  const requiredReleaseProvenance = [
+    releaseObservation?.provenance?.state?.sha256,
+    releaseObservation?.provenance?.envelope?.sha256,
+    releaseObservation?.provenance?.release_set_digest,
+    releaseObservation?.provenance?.host_core_digest,
+    releaseObservation?.provenance?.ui_digest,
+    releaseObservation?.provenance?.qbot_core_digest,
+    releaseObservation?.provenance?.desktop_agent_runtime?.sha256,
+    releaseObservation?.provenance?.ui_code_manifest?.sha256,
+  ];
+  if (requiredReleaseProvenance.some((value) => !nonEmptyString(value))) {
+    failures.push('run_release_observation_provenance_incomplete');
+  }
+  const releaseObservationChecks = Array.isArray(runMetadata?.release_observation_checks)
+    ? runMetadata.release_observation_checks
+    : [];
+  const releaseObservationPhases = new Set(
+    releaseObservationChecks.map((item) => nonEmptyString(item?.phase)),
+  );
+  if (!releaseObservationPhases.has('startup') || !releaseObservationPhases.has('run-final')) {
+    failures.push('run_release_observation_phases_incomplete');
+  }
+  if (releaseObservationChecks.some((item) => item?.ok !== true
+    || nonEmptyString(item?.observed_sha256) !== nonEmptyString(releaseObservation?.observed_sha256)
+    || nonEmptyString(item?.state_sha256) !== nonEmptyString(releaseObservation?.provenance?.state?.sha256)
+    || nonEmptyString(item?.envelope_sha256) !== nonEmptyString(releaseObservation?.provenance?.envelope?.sha256))) {
+    failures.push('run_release_observation_drift');
+  }
   return {
     schema_version: 'qbot-qwork-stage-completion-audit/v1',
     generated_at: new Date().toISOString(),

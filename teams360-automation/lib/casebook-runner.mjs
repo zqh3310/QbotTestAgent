@@ -18,6 +18,12 @@ import {
 } from './launcher.mjs';
 import { qworkRuntimeBridgeSource, startCdpWebviewProxy } from './cdp-webview-proxy.mjs';
 import { buildTeamsRunMetadata, writePinnedRunMetadata } from './run-metadata.mjs';
+import { summarizeRuntimeReleaseStatus } from './cdp-webview.mjs';
+import {
+  assessQworkReleaseIdentity,
+  assertStableQworkReleaseIdentity,
+  readQworkReleaseIdentity,
+} from './qwork-release-identity.mjs';
 import {
   applyManagedQbotProfileConfig,
   waitForStagedQbotServer,
@@ -69,10 +75,29 @@ export function validateTeamsCasebookOptions(options) {
   if (!options.casebook) throw new Error('--casebook is required.');
   if (!options.case) throw new Error('--case is required.');
   const selectedCaseIds = String(options.case).split(',').map((item) => item.trim()).filter(Boolean);
-  const productionCoreBeta = /^(?:1|true|yes)$/i.test(String(options['production-gate'] || ''))
+  const productionGate = /^(?:1|true|yes)$/i.test(String(options['production-gate'] || ''));
+  const productionCoreBeta = productionGate
     && selectedCaseIds.some((id) => /^BETA-/.test(id));
-  if (productionCoreBeta && !String(options['control-plane-url'] || '').trim()) {
-    throw new Error('Production Core Beta Teams runs require --control-plane-url from the matching READY/READY_SCOPED pretest.');
+  if (productionGate) {
+    const requiredReleaseInputs = [
+      'backend-version',
+      'prompt-policy-version',
+      'feature-flags-hash',
+      'qwork-ui-git-commit',
+      'qwork-build-id',
+      'qwork-release-manifest-sha256',
+    ];
+    const missing = requiredReleaseInputs.filter((name) => !String(options[name] || '').trim());
+    if (missing.length) {
+      throw new Error(`Production Teams runs require authoritative release assertions: ${missing.map((name) => `--${name}`).join(', ')}.`);
+    }
+    if (!/^[a-f0-9]{64}$/i.test(String(options['feature-flags-hash']))
+      || !/^[a-f0-9]{64}$/i.test(String(options['qwork-release-manifest-sha256']))) {
+      throw new Error('Production Teams release hash assertions must be 64-character SHA-256 hex values.');
+    }
+  }
+  if (productionGate && !String(options['control-plane-url'] || '').trim()) {
+    throw new Error('Production Teams runs require --control-plane-url from the matching READY pretest.');
   }
   if (
     productionCoreBeta
@@ -882,6 +907,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
   let summary = null;
   let recoveryPass = 0;
   let pinnedQworkUiUrl = String(options['qwork-ui-url'] || '').trim();
+  let pinnedReleaseIdentityReadback = null;
   try {
     while (true) {
       // Playwright's Electron CDP handshake must start from the project root.
@@ -896,8 +922,19 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
       });
       const runtimeIdentity = await configureTeamsFixtureRuntime(options, browser);
       pinnedQworkUiUrl = runtimeIdentity.qworkUiUrl;
+      if (runtimeIdentity.releaseIdentityReadback) {
+        if (pinnedReleaseIdentityReadback) {
+          assertStableQworkReleaseIdentity(
+            pinnedReleaseIdentityReadback,
+            runtimeIdentity.releaseIdentityReadback,
+            'Managed QWork startup release identity',
+          );
+        } else {
+          pinnedReleaseIdentityReadback = runtimeIdentity.releaseIdentityReadback;
+        }
+      }
       pinManagedSessionControlPlane(options.session, runtimeIdentity.controlPlane);
-      const persistRunMetadata = (identity = runtimeIdentity) => {
+      const persistRunMetadata = (identity = runtimeIdentity, phase = 'startup') => {
         const session = readSession(options.session);
         return writePinnedRunMetadata(options.out, buildTeamsRunMetadata({
           session,
@@ -917,9 +954,29 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             qwork_build_id: options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
             qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
           },
+          qworkReleaseIdentityReadback: identity.releaseIdentityReadback,
+          releaseObservationPhase: phase,
         }));
       };
-      persistRunMetadata();
+      persistRunMetadata(runtimeIdentity, 'startup');
+      options['release-identity-check-hook'] = async ({ page, phase }) => {
+        if (!pinnedReleaseIdentityReadback) return null;
+        if (!page || page.isClosed()) {
+          throw new Error(`Managed QWork ${phase || 'runtime'} release identity cannot be read: page closed.`);
+        }
+        const current = await observeQworkReleaseIdentity(page, page.url());
+        assertStableQworkReleaseIdentity(
+          pinnedReleaseIdentityReadback,
+          current,
+          `Managed QWork ${phase || 'runtime'} release identity`,
+        );
+        persistRunMetadata({
+          ...runtimeIdentity,
+          qworkUiUrl: page.url(),
+          releaseIdentityReadback: current,
+        }, phase || 'runtime');
+        return current;
+      };
       if (!callerManagedCdp) {
         options['restart-reconnect-hook'] = async () => {
           // A QWork reload may expose the host's stale persisted URL. Restore
@@ -947,8 +1004,15 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             throw new Error('Fresh Teams CDP proxy connected without a QWork page.');
           }
           const nextRuntimeIdentity = await configureTeamsFixtureRuntime(options, nextBrowser);
+          if (pinnedReleaseIdentityReadback && nextRuntimeIdentity.releaseIdentityReadback) {
+            assertStableQworkReleaseIdentity(
+              pinnedReleaseIdentityReadback,
+              nextRuntimeIdentity.releaseIdentityReadback,
+              'Managed QWork replacement renderer release identity',
+            );
+          }
           pinManagedSessionControlPlane(options.session, nextRuntimeIdentity.controlPlane);
-          persistRunMetadata(nextRuntimeIdentity);
+          persistRunMetadata(nextRuntimeIdentity, 'replacement-renderer');
           return {
             browser: nextBrowser,
             page: nextPage,
@@ -1039,6 +1103,48 @@ export function teamsCasebookExitCode(summary = {}) {
     : 1;
 }
 
+function productionReleaseIdentityExpected(options = {}) {
+  return {
+    qwork_version: String(options['expected-qwork-version'] || '').trim(),
+    prompt_policy_version: String(
+      options['prompt-policy-version'] || process.env.QBOT_PROMPT_POLICY_VERSION || '',
+    ).trim(),
+    feature_flags_hash: String(
+      options['feature-flags-hash'] || process.env.QBOT_FEATURE_FLAGS_HASH || '',
+    ).trim(),
+    qwork_ui_git_commit: String(
+      options['qwork-ui-git-commit'] || process.env.QBOT_QWORK_UI_GIT_COMMIT || '',
+    ).trim(),
+    qwork_build_id: String(
+      options['qwork-build-id'] || process.env.QBOT_QWORK_BUILD_ID || '',
+    ).trim(),
+    qwork_release_manifest_sha256: String(
+      options['qwork-release-manifest-sha256']
+        || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256
+        || '',
+    ).trim(),
+  };
+}
+
+async function observeQworkReleaseIdentity(page, qworkUiUrl) {
+  const rawRuntimeReleaseStatus = await page.evaluate(async () => Promise.race([
+    Promise.resolve().then(() => {
+      if (typeof window.agent?.runtimeReleaseStatus !== 'function') {
+        throw new Error('missing window.agent.runtimeReleaseStatus');
+      }
+      return window.agent.runtimeReleaseStatus();
+    }),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('QWork runtimeReleaseStatus timed out after 5000ms')),
+      5000,
+    )),
+  ]));
+  return readQworkReleaseIdentity({
+    qworkUiUrl,
+    runtimeReleaseStatus: summarizeRuntimeReleaseStatus(rawRuntimeReleaseStatus),
+  });
+}
+
 export async function configureTeamsFixtureRuntime(options, browser) {
   const page = browser.contexts().flatMap((context) => context.pages())
     .find((candidate) => /\/\.deepbank(?:-(?:dev|local|uat|sit))?\/ui\//.test(candidate.url()));
@@ -1070,7 +1176,25 @@ export async function configureTeamsFixtureRuntime(options, browser) {
   const managedLog = String(session?.process_log || managedTeamsProcessLog(sessionFile) || '').trim();
   if (managedLog) options['qbot-stderr-log'] = managedLog;
   applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl);
-  return { controlPlane, qworkUiUrl };
+  let releaseIdentityReadback = null;
+  if (/^(?:1|true|yes)$/i.test(String(options['production-gate'] || ''))) {
+    releaseIdentityReadback = await observeQworkReleaseIdentity(page, qworkUiUrl);
+    const assessment = assessQworkReleaseIdentity(
+      releaseIdentityReadback,
+      {
+        ...productionReleaseIdentityExpected(options),
+        qwork_version: validatePinnedQworkUiUrl(qworkUiUrl).version,
+      },
+    );
+    if (!assessment.ok) {
+      throw new Error(
+        `Managed QWork authoritative release identity failed: readback_ok=${assessment.readback_ok}; `
+        + `mismatches=${JSON.stringify(assessment.mismatches)}; `
+        + `errors=${JSON.stringify(releaseIdentityReadback.consistency?.errors || [])}`,
+      );
+    }
+  }
+  return { controlPlane, qworkUiUrl, releaseIdentityReadback };
 }
 
 export function pinManagedSessionControlPlane(sessionFile, controlPlane) {

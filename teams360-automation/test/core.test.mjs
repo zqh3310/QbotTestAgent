@@ -37,6 +37,11 @@ import {
 import { sanitize } from '../lib/report.mjs';
 import { qworkRuntimeBridgeSource, rewriteCdpPayload } from '../lib/cdp-webview-proxy.mjs';
 import { managedQworkRuntimeActivationDecision } from '../lib/managed-qwork-ui.mjs';
+import {
+  assessQworkReleaseIdentity,
+  assertStableQworkReleaseIdentity,
+  readQworkReleaseIdentity,
+} from '../lib/qwork-release-identity.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
 import {
   assertRunMetadataHost,
@@ -360,19 +365,32 @@ test('runtime release pretest reports mismatched Teams host-core separately from
   const matched = summarizeRuntimeReleaseStatus({
     releaseId: '0.1.4-sit.33',
     version: '0.1.4-sit.33',
+    commitId: 'abcdef12',
     source: 'remote',
     updatePhase: 'idle',
     preparedRelease: null,
-    hostCore: { version: '0.1.4-sit.33', source: 'remote', path: '/tmp/embed-host.cjs' },
+    hostCore: {
+      version: '0.1.4-sit.33',
+      source: 'remote',
+      path: '/tmp/embed-host.cjs',
+      integrity: 'sha512-runtime-host-core',
+    },
     hostRuntimeCompatibility: {
       hostSource: 'remote',
       hostCoreVersion: '0.1.4-sit.33',
       runtimeReleaseId: '0.1.4-sit.33',
       runtimeVersion: '0.1.4-sit.33',
+      hostCoreDigest: 'sha512-runtime-host-core',
+      bootstrap: null,
       versionsMatch: true,
     },
   });
   assert.equal(matched.ok, true);
+  assert.equal(matched.commit_id, 'abcdef12');
+  assert.equal(matched.host_core.integrity, 'sha512-runtime-host-core');
+  assert.equal(matched.host_runtime_compatibility.host_core_digest, 'sha512-runtime-host-core');
+  assert.equal(matched.host_runtime_compatibility.bootstrap_present, true);
+  assert.equal(matched.host_runtime_compatibility.bootstrap, null);
   assert.deepEqual(assessRuntimeReleaseStatus(matched, '0.1.4-sit.33'), {
     ok: true,
     expected_version: '0.1.4-sit.33',
@@ -469,6 +487,190 @@ test('runtime release pretest reports mismatched Teams host-core separately from
     false,
   );
   assert.equal(summarizeRuntimeReleaseStatus([]).ok, false);
+});
+
+test('authoritative QWork release identity cross-checks runtime, OTA state, envelope and installed artifacts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-authoritative-release-'));
+  const version = '0.1.7-sit.9';
+  const uiDir = path.join(root, 'ui', version);
+  const qbotDir = path.join(root, 'runtimes', 'qbot-core', version);
+  const hostCoreDir = path.join(root, 'qwork-host-core', version);
+  const cacheRoot = path.join(root, 'qwork-host-core-cache');
+  const stateDir = path.join(root, 'qwork-host-core-state');
+  const envelopeRelative = `metadata/${version}-fixture.json`;
+  const archiveRelative = `${version}/fixture/qwork-host-core-${version}.tar.gz`;
+  const integrity = (value) => `sha512-${createHash('sha512').update(value).digest('base64')}`;
+  const uiDigest = integrity('ui-archive');
+  const qbotCoreDigest = integrity('qbot-core-archive');
+  const uiAsset = { archive: { integrity: uiDigest } };
+  const qbotCoreAsset = { archive: { integrity: qbotCoreDigest } };
+  try {
+    for (const directory of [
+      path.join(uiDir, 'assets'),
+      path.join(qbotDir, 'runtime'),
+      hostCoreDir,
+      path.dirname(path.join(cacheRoot, envelopeRelative)),
+      path.dirname(path.join(cacheRoot, archiveRelative)),
+      stateDir,
+    ]) fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<script type="module" src="./assets/app.js"></script>');
+    fs.writeFileSync(path.join(uiDir, 'assets', 'app.js'), 'export const feature = true;');
+    fs.writeFileSync(path.join(uiDir, 'assets', 'app.css'), 'body { color: black; }');
+    fs.writeFileSync(path.join(uiDir, '.installed.json'), JSON.stringify({
+      status: 'ready', version, integrity: integrity(Buffer.from(JSON.stringify(uiAsset))),
+    }));
+    fs.writeFileSync(path.join(qbotDir, '.installed.json'), JSON.stringify({
+      status: 'ready', version, integrity: integrity(Buffer.from(JSON.stringify(qbotCoreAsset))),
+    }));
+    fs.writeFileSync(path.join(qbotDir, 'runtime', 'desktop-agent-runtime.cjs'), 'module.exports = {};');
+    const archive = path.join(cacheRoot, archiveRelative);
+    fs.writeFileSync(archive, 'host-core-archive');
+    const hostCoreDigest = integrity('host-core-archive');
+    const releaseSetDigest = 'a'.repeat(64);
+    const release = {
+      id: version,
+      version,
+      commitId: 'deadbeef',
+      releaseSetDigest,
+      components: {
+        hostCore: { version, archive: { integrity: hostCoreDigest } },
+        ui: { version, digest: uiDigest },
+        qbotCore: { version, digest: qbotCoreDigest },
+      },
+      assets: {
+        ui: uiAsset,
+        'qbot-core': qbotCoreAsset,
+      },
+    };
+    fs.writeFileSync(path.join(cacheRoot, envelopeRelative), JSON.stringify({
+      assignment: { releaseId: version },
+      catalog: { releases: { [version]: release } },
+    }));
+    const active = {
+      kind: 'remote',
+      releaseId: version,
+      releaseSetDigest,
+      hostCoreDigest,
+      archiveFile: archiveRelative,
+      envelopeFile: envelopeRelative,
+    };
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
+      schemaVersion: 1,
+      active,
+      lastGood: active,
+      pending: null,
+      fingerprint: 'b'.repeat(64),
+    }));
+    const runtime = summarizeRuntimeReleaseStatus({
+      releaseId: version,
+      version,
+      commitId: release.commitId,
+      updatePhase: 'idle',
+      preparedRelease: null,
+      hostCore: { version, integrity: hostCoreDigest },
+      loadedRuntime: { releaseId: version, version, verified: true },
+      hostRuntimeCompatibility: {
+        hostCoreVersion: version,
+        runtimeReleaseId: version,
+        runtimeVersion: version,
+        hostCoreDigest,
+        versionsMatch: true,
+        bootstrap: null,
+      },
+    });
+    const qworkUiUrl = pathToFileURL(path.join(uiDir, 'index.html')).href;
+    const readback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(readback.ok, true, JSON.stringify(readback.consistency.errors));
+    assert.equal(readback.observed.qwork_version, version);
+    assert.equal(readback.observed.qwork_ui_git_commit, 'deadbeef');
+    assert.equal(readback.observed.qwork_build_id, version);
+    assert.match(readback.observed.prompt_policy_version, new RegExp(`^qwork-runtime-${version.replaceAll('.', '\\.')}-sha256-[a-f0-9]{64}$`));
+    assert.match(readback.observed.feature_flags_hash, /^[a-f0-9]{64}$/);
+    assert.match(readback.observed.qwork_release_manifest_sha256, /^[a-f0-9]{64}$/);
+    assert.equal(assessQworkReleaseIdentity(readback, readback.observed).ok, true);
+    assert.equal(assessQworkReleaseIdentity(readback, {
+      ...readback.observed,
+      qwork_ui_git_commit: 'badc0de',
+    }).ok, false);
+    const second = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(assertStableQworkReleaseIdentity(readback, second), true);
+
+    const stateFile = path.join(stateDir, 'state.json');
+    const originalState = fs.readFileSync(stateFile, 'utf8');
+    const pendingState = JSON.parse(originalState);
+    pendingState.pending = { releaseId: '0.1.7-sit.10' };
+    fs.writeFileSync(stateFile, JSON.stringify(pendingState));
+    const pendingReadback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(pendingReadback.ok, false);
+    assert.ok(pendingReadback.consistency.errors.some((item) => item.id === 'state_pending_release'));
+    fs.writeFileSync(stateFile, originalState);
+
+    const envelopeFile = path.join(cacheRoot, envelopeRelative);
+    const originalEnvelope = fs.readFileSync(envelopeFile, 'utf8');
+    const tamperedEnvelope = JSON.parse(originalEnvelope);
+    tamperedEnvelope.catalog.releases[version].commitId = 'feedface';
+    fs.writeFileSync(envelopeFile, JSON.stringify(tamperedEnvelope));
+    const envelopeReadback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(envelopeReadback.ok, false);
+    assert.ok(envelopeReadback.consistency.errors.some((item) => item.id === 'runtime_commit_id'));
+    fs.writeFileSync(envelopeFile, originalEnvelope);
+
+    const unsafeRuntime = structuredClone(runtime);
+    unsafeRuntime.update_phase = 'restart-required';
+    unsafeRuntime.prepared_release = { release_id: '0.1.7-sit.10', version: '0.1.7-sit.10' };
+    const unsafeRuntimeReadback = readQworkReleaseIdentity({
+      qworkUiUrl,
+      runtimeReleaseStatus: unsafeRuntime,
+    });
+    assert.equal(unsafeRuntimeReadback.ok, false);
+    assert.ok(unsafeRuntimeReadback.consistency.errors.some((item) => item.id === 'runtime_update_phase'));
+    assert.ok(unsafeRuntimeReadback.consistency.errors.some((item) => item.id === 'runtime_prepared_release'));
+
+    const qbotMarker = path.join(qbotDir, '.installed.json');
+    const originalQbotMarker = fs.readFileSync(qbotMarker, 'utf8');
+    fs.writeFileSync(qbotMarker, JSON.stringify({
+      status: 'ready',
+      version,
+      integrity: integrity('forged-descriptor'),
+    }));
+    const markerReadback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(markerReadback.ok, false);
+    assert.ok(markerReadback.consistency.errors.some(
+      (item) => item.id === 'qbot_core_installed_descriptor_fingerprint',
+    ));
+    fs.writeFileSync(qbotMarker, originalQbotMarker);
+
+    const appJs = path.join(uiDir, 'assets', 'app.js');
+    const originalAppJs = fs.readFileSync(appJs, 'utf8');
+    const outsideJs = path.join(root, 'outside.js');
+    fs.writeFileSync(outsideJs, 'export const outside = true;');
+    fs.unlinkSync(appJs);
+    fs.symlinkSync(outsideJs, appJs);
+    const symlinkReadback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.equal(symlinkReadback.ok, false);
+    assert.match(symlinkReadback.error, /rejects symlinks/);
+    fs.unlinkSync(appJs);
+    fs.writeFileSync(appJs, originalAppJs);
+
+    const escapedUi = path.join(root, 'escaped-ui');
+    fs.mkdirSync(escapedUi);
+    fs.writeFileSync(path.join(escapedUi, 'index.html'), '<script src="app.js"></script>');
+    fs.writeFileSync(path.join(escapedUi, 'app.js'), 'export const escaped = true;');
+    const escapedVersion = path.join(root, 'ui', 'escaped');
+    fs.symlinkSync(escapedUi, escapedVersion);
+    const escapedReadback = readQworkReleaseIdentity({
+      qworkUiUrl: pathToFileURL(path.join(escapedVersion, 'index.html')).href,
+      runtimeReleaseStatus: runtime,
+    });
+    assert.equal(escapedReadback.ok, false);
+    assert.match(escapedReadback.error, /must be a real directory/);
+
+    fs.writeFileSync(path.join(uiDir, 'assets', 'late.js'), 'export const drift = true;');
+    const drifted = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    assert.throws(() => assertStableQworkReleaseIdentity(readback, drifted), /drift detected/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('reports and URLs redact credentials', () => {
@@ -687,9 +889,31 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     '--case', 'BETA-INIT-001',
     '--out', 'teams360-automation/output/core-beta-production-run',
     '--production-gate', 'true',
+    '--backend-version', 'sit-health-test',
+    '--prompt-policy-version', 'qwork-runtime-test',
+    '--feature-flags-hash', '1'.repeat(64),
+    '--qwork-ui-git-commit', 'deadbeef',
+    '--qwork-build-id', '0.1.7-sit.1',
+    '--qwork-release-manifest-sha256', '2'.repeat(64),
   ]);
   assert.throws(
     () => validateTeamsCasebookOptions(productionCoreBetaOptions),
+    /require --control-plane-url/,
+  );
+  const productionMrSmokeOptions = parseCasebookRunnerOptions([
+    '--casebook', 'PRD/cases.xlsx',
+    '--case', 'MRSMOKE-ACT-001',
+    '--out', 'teams360-automation/output/mr-smoke-production-run',
+    '--production-gate', 'true',
+    '--backend-version', 'sit-health-test',
+    '--prompt-policy-version', 'qwork-runtime-test',
+    '--feature-flags-hash', '1'.repeat(64),
+    '--qwork-ui-git-commit', 'deadbeef',
+    '--qwork-build-id', '0.1.7-sit.1',
+    '--qwork-release-manifest-sha256', '2'.repeat(64),
+  ]);
+  assert.throws(
+    () => validateTeamsCasebookOptions(productionMrSmokeOptions),
     /require --control-plane-url/,
   );
   productionCoreBetaOptions['control-plane-url'] = 'https://deepbank-control-uat.example.test/path';
@@ -707,6 +931,12 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
       '--out', 'teams360-automation/output/core-beta-ime-run',
       '--production-gate', 'true',
       '--control-plane-url', 'https://deepbank-control-uat.example.test',
+      '--backend-version', 'sit-health-test',
+      '--prompt-policy-version', 'qwork-runtime-test',
+      '--feature-flags-hash', '1'.repeat(64),
+      '--qwork-ui-git-commit', 'deadbeef',
+      '--qwork-build-id', '0.1.7-sit.1',
+      '--qwork-release-manifest-sha256', '2'.repeat(64),
     ]);
     assert.throws(
       () => validateTeamsCasebookOptions(imeOptions),
@@ -1621,7 +1851,7 @@ test('managed Teams restart rebuilds stale proxy before shared runner touches th
   const adapter = fs.readFileSync(new URL('../lib/casebook-runner.mjs', import.meta.url), 'utf8');
   const runner = fs.readFileSync(new URL('../../src/lib/ui-agent-casebook-runner.mjs', import.meta.url), 'utf8');
   assert.match(adapter, /options\['restart-reconnect-hook'\] = async \(\) =>/);
-  assert.match(adapter, /persistRunMetadata\(nextRuntimeIdentity\)/);
+  assert.match(adapter, /persistRunMetadata\(nextRuntimeIdentity, 'replacement-renderer'\)/);
   assert.match(adapter, /await connection\.close\(\)\.catch\(\(\) => \{\}\);[\s\S]*resolveTeamsCasebookConnection/);
   assert.match(runner, /typeof options\['restart-reconnect-hook'\] === 'function'/);
   assert.match(runner, /if \(reconnected\?\.cdpUrl\) runtime\.cdpUrl = reconnected\.cdpUrl/);
@@ -2103,7 +2333,7 @@ test('managed Teams replacement reconnect waits for QWork without relaunching th
   );
   assert.match(hook, /await remountPinnedTeamsRendererInPlace\(\{/);
   assert.match(hook, /recoveryCdpUrl: ''/);
-  assert.match(hook, /persistRunMetadata\(nextRuntimeIdentity\)/);
+  assert.match(hook, /persistRunMetadata\(nextRuntimeIdentity, 'replacement-renderer'\)/);
   assert.match(hook, /rendererRemount/);
   assert.doesNotMatch(hook, /recoverTeamsQworkWorkbench|stopIsolatedTeams|launchLiveTeams/);
   assert.ok(

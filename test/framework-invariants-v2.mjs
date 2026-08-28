@@ -198,6 +198,16 @@ const runner = [
 const legacyRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8');
 const attachmentAdapter = fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-ui-attachments.mjs'), 'utf8');
 assert.match(
+  runner,
+  /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
+  'Core Beta v2 runner 必须在 summary 前执行 QWork 发布身份结束读回',
+);
+assert.match(
+  legacyRunner,
+  /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
+  'verified legacy 阶段不得绕过 QWork 发布身份结束读回',
+);
+assert.match(
   attachmentAdapter,
   /typeof shell\?\.stageFiles === 'function'[\s\S]*bridgeMethod[\s\S]*shell\[bridgeMethod\]\(\{ filePaths \}\)/,
   '统一附件适配器必须优先使用当前 QWork stageFiles，并只在接口缺失时回退 stageAttachments',

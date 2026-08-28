@@ -87,6 +87,11 @@ const runner = [
   fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8'),
   fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
 ].join('\n');
+assert.match(
+  runner,
+  /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
+  'legacy runner 必须在 summary 前执行 QWork 发布身份结束读回',
+);
 const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
 assert.match('QA Node Runtime', normalizedFixtureMarker, 'legacy Fixture slug 应与空格展示名稳定匹配');
 assert.match('qa_node-runtime', normalizedFixtureMarker, 'legacy Fixture marker 应归一化下划线、连字符与空格');

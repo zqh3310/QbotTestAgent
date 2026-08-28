@@ -112,6 +112,46 @@ fingerprint，Teams/QWork/session、runtime 顶层/loaded/compatibility、
 G4 readiness 必须把自身前 70 个 Case ID 与状态机内已准入 G3 的 70 个 ID 精确同序比对，
 不能只与静态 Casebook 自身做前缀比较。
 
+#### G0 十字段权威身份合同
+
+G0 的十字段不能只来自 CLI、环境变量、历史报告或人工作业记录。调用者仍须传入
+预期值，但 pretest 必须通过 `qwork-release-identity-readback/v1` 从受管宿主、公开
+runtime、OTA state/envelope 和当前已安装制品独立读回，再与预期逐字段全等：
+
+| 字段 | 权威观测来源 |
+|---|---|
+| `teams_version` / `teams_build` | 当前受管 360Teams 应用包、进程与 session |
+| `qwork_version` | versioned file URL、OTA `active/lastGood`、envelope、loaded runtime |
+| `control_plane_origin` | 受管 session、renderer 实际配置与 health 请求 origin |
+| `backend_version` | `GET /api/health/ready` 的环境与 fingerprint 组合值 |
+| `prompt_policy_version` | `qwork-runtime-<version>-sha256-<desktop-agent-runtime.cjs SHA256>` |
+| `feature_flags_hash` | `qwork-ui-code-manifest/v1` 对 `index.html` 和全部 JS/CSS 的规范化 SHA-256 |
+| `qwork_ui_git_commit` | OTA active envelope `commitId`，并与公开 runtime `commitId` 全等 |
+| `qwork_build_id` | OTA active release `id/version` 与 URL/state 版本交叉读回 |
+| `qwork_release_manifest_sha256` | active envelope 原始文件字节 SHA-256，不是重排后的 JSON hash |
+
+`feature_flags_hash` 是历史 CLI 字段名；在当前发布合同中的精确定义是上述 UI 代码
+manifest SHA，不能替换成服务端 flags 文案、命令行任意 hash 或只计算入口 HTML。
+`prompt_policy_version` 同理必须由当前安装的 desktop Agent runtime 字节派生，不能复用
+上一候选值。
+
+权威读回还必须证明：OTA `active == lastGood`、`pending=null`；state/envelope/release-set
+identity 一致；host-core 缓存 archive 的实际 SHA-512 与 state/envelope 一致；UI 和
+qbot-core `.installed.json` 为 ready、版本正确，其 integrity 精确等于 envelope asset
+descriptor 的 SHA-512 fingerprint；目录和文件均为普通非符号链接且 realpath 不越出
+release home；runtime 顶层、loaded、compatibility、commit、host-core digest 一致，
+loaded runtime `verified=true`、`updatePhase=idle`、`preparedRelease=null`。任何字段
+缺失、制品篡改、符号链接、路径逃逸、候选待激活或 runtime 漂移都必须在 Case 0 前
+`BLOCKED`。
+
+正式 runner 必须在 `startup`、每次 `replacement-renderer` 和 `run-final` 重做同一
+权威读回。`run-metadata.json.release_observation` 固化首个基线，
+`release_observation_checks[]` 追加各阶段 observation/state/envelope SHA；结束准入至少
+要求 `startup + run-final`，任一重连观测也必须与基线全等。缺少结束观测、任何阶段
+`ok!=true` 或 SHA 漂移时，即使所有 Case raw passed、可信计数全绿，也不得
+`PASS_STAGE`。所有 `--production-gate true` 的 Teams 批次都必须显式携带匹配 READY 的
+`--control-plane-url`，不只限于 `BETA-*` Case。
+
 QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 `MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
 `MRSMOKE-AUTH-001`、`MRSMOKE-AUTO-001`、`MRSMOKE-NAV-001`、

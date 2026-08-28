@@ -815,6 +815,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
     }
 
+    if (typeof options['release-identity-check-hook'] === 'function') {
+      await options['release-identity-check-hook']({
+        browser,
+        page,
+        phase: 'run-final',
+      });
+    }
     const results = orderedCasebookResults(resultsByIndex);
     const summary = buildSummary({
       status: statusFromResults(results),
