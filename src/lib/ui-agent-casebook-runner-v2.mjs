@@ -538,6 +538,29 @@ export const QWORK_DAILY_REGRESSION_TOP_LEVEL_CASE_IDS = Object.freeze([
   'SIT-HOME-038', 'SIT-HOME-058', 'SIT-HOME-054', 'SIT-HOME-055', 'SIT-HOME-065', 'SIT-HOME-027', 'SIT-HOME-028',
 ]);
 
+export const QWORK_CORE_LIFELINE_CASE_IDS = Object.freeze([
+  'BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004',
+  'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-FILE-001',
+  'BETA-ART-001', 'BETA-TASK-008', 'BETA-HOST-003', 'BETA-SEC-002',
+  'BETA-ROUTE-001', 'SIT-SKILL-007', 'SIT-HOME-002', 'SIT-CONN-016',
+]);
+
+const QWORK_CORE_LIFELINE_CASE_TYPES = Object.freeze([
+  'run_initialization', 'run_initialization', 'run_initialization', 'run_initialization',
+  'conversation', 'conversation', 'conversation', 'attachment',
+  'artifact', 'task_lifecycle', 'host_integration', 'security_privacy',
+  'model_routing', 'settings_lifecycle', 'conversation', 'mcp_use',
+]);
+
+export function isQworkCoreLifelineCasePlan(cases = []) {
+  if (cases.length !== QWORK_CORE_LIFELINE_CASE_IDS.length) return false;
+  return cases.every((testCase, index) => (
+    String(testCase?.id || '').trim() === QWORK_CORE_LIFELINE_CASE_IDS[index]
+    && String(testCase?.case_type || '').trim() === QWORK_CORE_LIFELINE_CASE_TYPES[index]
+    && String(testCase?.contract_version || '').trim() === 'qbot-core-beta/v2'
+  ));
+}
+
 export function isQworkDailyRegressionCasePlan(cases = []) {
   if (cases.length !== QWORK_DAILY_REGRESSION_TOP_LEVEL_CASE_IDS.length) return false;
   return cases.every((testCase, index) => (
@@ -1832,6 +1855,7 @@ export function validateProductionCasePlan(cases = [], {
   if (!cases.length) errors.push('生产门禁 Case 集为空。');
   const ids = cases.map((item) => String(item.id || '').trim()).filter(Boolean);
   if (ids.length !== cases.length || new Set(ids).size !== ids.length) errors.push('Case ID 为空或重复。');
+  const qworkCoreLifeline = isQworkCoreLifelineCasePlan(cases);
   const qworkDailyRegression = isQworkDailyRegressionCasePlan(cases);
   const qworkMrCoreSmoke = isQworkMrCoreSmokeCasePlan(cases);
   const coveredDomains = new Set();
@@ -1854,7 +1878,7 @@ export function validateProductionCasePlan(cases = [], {
       errors.push(`${testCase.id || 'unknown'} repeat_policy 必须包含明确执行次数。`);
     }
   }
-  if (!qworkDailyRegression && !qworkMrCoreSmoke) {
+  if (!qworkCoreLifeline && !qworkDailyRegression && !qworkMrCoreSmoke) {
     const missingDomains = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !coveredDomains.has(domain));
     if (missingDomains.length) errors.push(`缺少生产风险域 ${missingDomains.join(',')}`);
     const domainsWithoutHardGate = PRODUCTION_REQUIRED_RISK_DOMAINS.filter((domain) => !hardGateDomains.has(domain));
@@ -1872,12 +1896,15 @@ export function validateProductionCasePlan(cases = [], {
     covered_risk_domains: [...coveredDomains].sort(),
     hard_gate_risk_domains: [...hardGateDomains].sort(),
     required_risk_domains: PRODUCTION_REQUIRED_RISK_DOMAINS,
-    gate_contract: qworkDailyRegression
-      ? 'qwork-daily-regression/v1'
-      : qworkMrCoreSmoke
-        ? 'qwork-mr-core-smoke/v1'
-        : 'production-risk-gate/v1',
-    production_risk_domain_coverage_required: !qworkDailyRegression && !qworkMrCoreSmoke,
+    gate_contract: qworkCoreLifeline
+      ? 'qwork-core-lifeline/v1'
+      : qworkDailyRegression
+        ? 'qwork-daily-regression/v1'
+        : qworkMrCoreSmoke
+          ? 'qwork-mr-core-smoke/v1'
+          : 'production-risk-gate/v1',
+    production_risk_domain_coverage_required:
+      !qworkCoreLifeline && !qworkDailyRegression && !qworkMrCoreSmoke,
     release_inputs: {
       backend_version: String(backendVersion || ''),
       prompt_policy_version: String(promptPolicyVersion || ''),

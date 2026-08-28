@@ -750,6 +750,11 @@ SHA-256: 4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c
 dispatchable、directly runnable，`strict_controller_required=0`、
 `unsupported_runtime=0`。
 
+精确 16 条同序 ID、冻结 Case 类型和 `qbot-core-beta/v2` 使用
+`qwork-core-lifeline/v1`。每条仍校验完整生产元数据、硬门禁与冻结发布输入，但 G1
+作为最小生命线不套用 G3/G4 八大风险域全集；缺一条、乱序、ID/类型/协议漂移时必须
+恢复 `production-risk-gate/v1` 完整风险域检查并在 Case 0 前 fail-closed。
+
 正式状态机固定为：
 
 - `G0`：框架、Casebook、十字段发布身份、唯一 runner/宿主/session/CDP、公开

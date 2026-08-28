@@ -170,6 +170,8 @@ import {
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
   qworkDailyEvidenceEnvelope,
+  QWORK_CORE_LIFELINE_CASE_IDS,
+  isQworkCoreLifelineCasePlan,
   isQworkDailyRegressionCasePlan,
   qworkDailyWorkspaceSelectionFailureEvidence,
   qworkDailyWorkspaceTaskBindingVerdict,
@@ -8346,6 +8348,51 @@ const productionCasePlanNoGo = validateProductionCasePlan([{ ...productionCaseMe
 });
 if (productionCasePlanNoGo.ok || !productionCasePlanNoGo.errors.some((item) => item.includes('oracle_type'))) {
   throw new Error('生产 Case 缺少 Oracle 或发布输入时必须前置 NO-GO');
+}
+
+const qworkCoreLifelineCaseTypes = [
+  'run_initialization', 'run_initialization', 'run_initialization', 'run_initialization',
+  'conversation', 'conversation', 'conversation', 'attachment',
+  'artifact', 'task_lifecycle', 'host_integration', 'security_privacy',
+  'model_routing', 'settings_lifecycle', 'conversation', 'mcp_use',
+];
+const qworkCoreLifelineCases = QWORK_CORE_LIFELINE_CASE_IDS.map((id, index) => ({
+  ...productionCaseMetadata,
+  id,
+  case_type: qworkCoreLifelineCaseTypes[index],
+  contract_version: 'qbot-core-beta/v2',
+  risk_domain: 'functional',
+}));
+if (!isQworkCoreLifelineCasePlan(qworkCoreLifelineCases)) {
+  throw new Error('16 条核心生命线必须匹配完整有序 ID、冻结类型和 qbot-core-beta/v2。');
+}
+const qworkCoreLifelineAudit = validateProductionCasePlan(qworkCoreLifelineCases, {
+  backendVersion: 'sit-backend-1',
+  promptPolicyVersion: 'sit-prompt-1',
+  featureFlagsHash: 'd'.repeat(64),
+});
+if (!qworkCoreLifelineAudit.ok
+  || qworkCoreLifelineAudit.gate_contract !== 'qwork-core-lifeline/v1'
+  || qworkCoreLifelineAudit.production_risk_domain_coverage_required !== false) {
+  throw new Error(`核心生命线应冻结 release inputs，但不应套用 G3/G4 八大风险域：${JSON.stringify(qworkCoreLifelineAudit)}`);
+}
+for (const drifted of [
+  qworkCoreLifelineCases.slice(0, -1),
+  [...qworkCoreLifelineCases].reverse(),
+  qworkCoreLifelineCases.map((item, index) => index === 4 ? { ...item, id: 'BETA-CHAT-DRIFT' } : item),
+  qworkCoreLifelineCases.map((item, index) => index === 7 ? { ...item, case_type: 'conversation' } : item),
+]) {
+  const audit = validateProductionCasePlan(drifted, {
+    backendVersion: 'sit-backend-1',
+    promptPolicyVersion: 'sit-prompt-1',
+    featureFlagsHash: 'd'.repeat(64),
+  });
+  if (audit.ok
+    || audit.gate_contract !== 'production-risk-gate/v1'
+    || audit.production_risk_domain_coverage_required !== true
+    || !audit.errors.some((item) => item.includes('缺少生产风险域'))) {
+    throw new Error(`核心生命线的缺失、乱序、ID 或类型漂移必须 fail-closed：${JSON.stringify(audit)}`);
+  }
 }
 
 const qworkDailyPlanFile = path.join(os.tmpdir(), `qwork-daily-plan-${process.pid}.json`);

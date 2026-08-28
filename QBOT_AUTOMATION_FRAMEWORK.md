@@ -66,6 +66,12 @@ G1 固定顺序为：`BETA-INIT-001`、`BETA-INIT-002`、`BETA-INIT-003`、
 runnable，其中 11 条 native、5 条 verified legacy，且
 `strict_controller_required=0`、`unsupported_runtime=0`。
 
+完整且同序、Case 类型和 `qbot-core-beta/v2` 均精确匹配的 G1 使用
+`qwork-core-lifeline/v1` 合同：每条 Case 仍必须具备完整生产元数据、硬门禁和冻结发布
+输入，但 16 条最小生命线不承担 G3/G4 的八大风险域全集覆盖，因此不得因缺少仅属于
+后续风险层的域而在 Case 0 前误阻断。任一数量、顺序、ID、类型或协议漂移都会失去该
+合同并恢复 `production-risk-gate/v1` 的完整风险域检查，继续 fail-closed。
+
 G1-G4 每个阶段都必须使用独立能力审计、独立精确 `READY`、独立不可变执行目录和
 逐 Case 可信复核；阶段之间不得继承结果。任一阶段出现产品 Bug、可信失败、可信阻塞、
 framework/testcase issue、证据缺失、身份漂移或非精确 READY，当前候选立即 `NO_GO`，
