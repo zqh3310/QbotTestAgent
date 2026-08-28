@@ -1069,6 +1069,19 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   复核字段不完整仍按 framework issue fail-closed。专项观察不得绕过通用 no-reply
   证据合同，也不得把稳定停止后的零回复误写成 `completed` 或 `blocked`。
 - Core Beta 叶子复用 legacy driver 时，driver 分流身份只用于选择执行逻辑；所有专项证据、manifest 和 SHA 归属必须使用原始 Core Beta 叶子合同 ID。禁止把 `SIT-*` legacy 身份写入 `BETA-*` 叶子的 Case 绑定字段，或反向跨 Case 复用证据。
+- `BETA-HOST-003` 复用 `SIT-TEAMS-NEW-003` 时，legacy driver 的结构化
+  `teams_local_execution` 必须在当前 Case 内归一化为真实的
+  `host_lifecycle_trace` 和 `data_integrity_readback`。归一化必须校验外层/legacy Case
+  ID、driver、task/session、实际 execution target（并单独记录是否符合
+  `desktop-local` 期望）、cwd、源文件存在性、非空字节数、SHA-256 和目标内容；源文件可以位于受管桌面工作空间，但必须复制为当前 Case 内的普通文件，
+  并在证据中同时保留源路径和 Case 内路径。`verified-legacy-product-action-trace` 必须
+  是当前 Case 内 `qbot-core-beta-verified-legacy-trace/v1` 且 `evidence_valid=true`。
+  产品 Oracle 的 `oracle_valid=false` 不得抹掉完整证据，但空文件、`valid=false` 占位、
+  Case 外 trace、字段/身份/cwd 漂移均必须 fail-closed，禁止把占位 JSON 当作真实角色。
+- Core Beta v2 在 renderer 导航瞬态期间执行 `page.evaluate()` 时，只允许最多 3 次有界
+  只读重试；每次重试前等待新文档加载，并在公共状态快照保存尝试序号、耗时、瞬态标记和
+  错误原因。`target/page/browser closed`、CDP 断开或不可恢复错误不得重试；全部瞬态
+  重试失败必须保留原始诊断并按 framework issue 处理，禁止用缓存状态或空壳证据继续。
 - `MRSMOKE-WEB-001` 复用 `SIT-CONN-019` verified-legacy Web driver 时，
   `capability_selection` 与 `capability_execution_event` 必须由同一 Case 的
   `web-search-quality.json`、确认发送 prompt、taskId 和公开

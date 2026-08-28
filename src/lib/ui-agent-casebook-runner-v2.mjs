@@ -3697,6 +3697,18 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
     }
     state.screenshots.error = await shot(page, caseDir, '99-error').catch((err) => ({ error: err.message }));
     const message = error.message || String(error);
+    let rendererCaptureAttemptsFile = '';
+    if (Array.isArray(error?.core_beta_renderer_capture_attempts)
+      && error.core_beta_renderer_capture_attempts.length) {
+      rendererCaptureAttemptsFile = path.join(caseDir, 'renderer-capture-attempts.json');
+      writeJsonFile(rendererCaptureAttemptsFile, {
+        schema_version: 'qbot-core-beta-renderer-capture-attempts/v1',
+        case_id: testCase.id,
+        attempts: error.core_beta_renderer_capture_attempts,
+        captured_at: new Date().toISOString(),
+      });
+      state.artifacts.renderer_capture_attempts = rendererCaptureAttemptsFile;
+    }
     const diagnosticFile = path.join(caseDir, 'framework-exception.json');
     writeJsonFile(diagnosticFile, {
       case_id: testCase.id,
@@ -3706,6 +3718,8 @@ async function executeCasebookCase({ page, testCase, caseDir, order, timeoutMs, 
       code: String(error?.code || ''),
       stack: String(error?.stack || ''),
       page_url: await page?.url?.() || '',
+      renderer_capture_attempts: error?.core_beta_renderer_capture_attempts || [],
+      renderer_capture_attempts_file: rendererCaptureAttemptsFile,
     });
     state.artifacts.framework_exception = diagnosticFile;
     if (state.artifacts.core_beta_skill_creator_cleanup_plan) {
@@ -4287,6 +4301,13 @@ function writeVerifiedLegacyCoreBetaTrace(context, scenario) {
   writeJsonFile(traceFile, trace);
   state.artifacts.product_action_trace = traceFile;
   state.artifacts.verified_legacy_product_action_trace = traceFile;
+  if (testCase.id === 'BETA-HOST-003' && scenario.legacy_case_id === 'SIT-TEAMS-NEW-003') {
+    state.artifacts.core_beta_legacy_host_mapping = materializeCoreBetaLegacyHostEvidence({
+      state,
+      testCase,
+      caseDir,
+    });
+  }
 }
 
 async function executeCoreBetaExtendedProductCase(context, scenario) {
@@ -4901,8 +4922,62 @@ async function invokeCoreBetaFixtureControl({
   }
 }
 
+export function isCoreBetaRendererNavigationTransientError(error) {
+  const message = String(error?.message || error || '');
+  if (!message) return false;
+  if (/target\s*(?:page|context)?\s*(?:has been )?closed|browser\s+has been\s+closed|browser\s+disconnected|connection\s+closed|session\s+closed|target\s+closed/i.test(message)) {
+    return false;
+  }
+  return /execution context was destroyed|cannot find context with specified id|frame was detached|navigation.*context/i.test(message);
+}
+
+export async function coreBetaRendererEvaluationWithRetry(evaluate, {
+  maxAttempts = 3,
+  retryDelayMs = 150,
+  waitForNavigation = null,
+  isClosed = () => false,
+  delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const attempts = [];
+  const boundedAttempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+  const boundedDelay = Math.max(0, Number(retryDelayMs) || 0);
+  let lastError;
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      if (typeof evaluate !== 'function') throw new Error('missing renderer evaluation function');
+      const value = await evaluate();
+      attempts.push({ attempt, ok: true, transient: false, duration_ms: Math.max(0, Date.now() - startedAt), error: '' });
+      return { value, attempts };
+    } catch (error) {
+      lastError = error;
+      const transient = isCoreBetaRendererNavigationTransientError(error);
+      attempts.push({
+        attempt,
+        ok: false,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        transient,
+        error: String(error?.message || error),
+      });
+      if (!transient || attempt >= boundedAttempts || isClosed()) break;
+      try {
+        if (typeof waitForNavigation === 'function') await waitForNavigation(attempt);
+      } catch (waitError) {
+        if (isClosed() || !isCoreBetaRendererNavigationTransientError(waitError)) {
+          lastError = waitError;
+          break;
+        }
+      }
+      if (boundedDelay) await delay(boundedDelay * attempt);
+    }
+  }
+  if (lastError && typeof lastError === 'object') lastError.core_beta_renderer_capture_attempts = attempts;
+  throw lastError || new Error('renderer evaluation failed');
+}
+
 async function captureCoreBetaPublicState(page, testCase) {
-  return await page.evaluate(async ({ caseId, caseType }) => {
+  const evaluation = await coreBetaRendererEvaluationWithRetry(
+    () => page.evaluate(async ({ caseId, caseType }) => {
     const agent = window.agent || {};
     const e2e = window.__qbotE2E || null;
     const state = e2e?.state?.() || null;
@@ -5008,7 +5083,36 @@ async function captureCoreBetaPublicState(page, testCase) {
         testids: Array.from(document.querySelectorAll('[data-testid]')).map((node) => node.getAttribute('data-testid')).filter(Boolean),
       },
     };
-  }, { caseId: testCase.id, caseType: testCase.case_type });
+    }, { caseId: testCase.id, caseType: testCase.case_type }),
+    {
+      maxAttempts: 3,
+      retryDelayMs: 150,
+      isClosed: () => typeof page?.isClosed === 'function' && page.isClosed(),
+      waitForNavigation: async () => {
+        if (typeof page?.waitForLoadState === 'function') {
+          try {
+            await page.waitForLoadState('domcontentloaded', { timeout: 3_000 });
+          } catch (error) {
+            if (typeof page?.isClosed === 'function' && page.isClosed()) throw error;
+            // A still-loading document is a recoverable navigation window;
+            // the next read remains bounded and records its own outcome.
+          }
+        }
+      },
+      delay: async (ms) => {
+        if (typeof page?.waitForTimeout === 'function') {
+          await page.waitForTimeout(ms);
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, ms));
+        }
+      },
+    },
+  );
+  const snapshot = evaluation.value;
+  if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+    return { ...snapshot, renderer_capture_attempts: evaluation.attempts };
+  }
+  return snapshot;
 }
 
 const CORE_BETA_BASE_ROLES = new Set([
@@ -5043,6 +5147,143 @@ function writeCoreBetaEvidenceFile({ state, caseDir, testCase, role, valid, data
     state.core_beta_evidence_diagnostics[role] = file;
   }
   return file;
+}
+
+/**
+ * Normalize the legacy Teams local-execution driver into the two Core Beta
+ * evidence roles required by BETA-HOST-003.  The legacy driver writes its
+ * generated file in the selected desktop workspace and stores a structured
+ * object in state.artifacts; it is not itself a manifest file.
+ */
+export function materializeCoreBetaLegacyHostEvidence({ state, testCase, caseDir } = {}) {
+  const coreCaseId = String(testCase?.core_beta_case_id || testCase?.id || '').trim();
+  const legacyDriver = state?.artifacts?.core_beta_legacy_driver || {};
+  const legacyCaseId = String(testCase?.legacy_case_id || legacyDriver.legacy_case_id || '').trim();
+  const source = state?.artifacts?.teams_local_execution;
+  const traceRef = state?.artifacts?.verified_legacy_product_action_trace;
+  const reasons = [];
+  const resolvedCaseDir = path.resolve(String(caseDir || ''));
+  const caseRelative = (value) => {
+    const resolved = path.resolve(String(value || ''));
+    const relative = path.relative(resolvedCaseDir, resolved);
+    return {
+      resolved,
+      inside: Boolean(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)),
+    };
+  };
+  const fileRecord = (value, { requireInsideCase = false } = {}) => {
+    const { resolved, inside } = caseRelative(value);
+    if (!value || (requireInsideCase && !inside) || !fs.existsSync(resolved)) return null;
+    let stats;
+    try {
+      const lstat = fs.lstatSync(resolved);
+      stats = fs.statSync(resolved);
+      if (!lstat.isFile() || lstat.isSymbolicLink() || !stats.isFile() || stats.size <= 0) return null;
+    } catch {
+      return null;
+    }
+    return {
+      path: resolved,
+      bytes: stats.size,
+      sha256: createHash('sha256').update(fs.readFileSync(resolved)).digest('hex'),
+      inside_case: inside,
+    };
+  };
+  if (coreCaseId !== 'BETA-HOST-003') reasons.push('core_case_id_mismatch');
+  if (legacyCaseId !== 'SIT-TEAMS-NEW-003') reasons.push('legacy_case_id_mismatch');
+  if (!source || typeof source !== 'object' || Array.isArray(source)) reasons.push('legacy_local_execution_missing');
+  if (!source || source.exists !== true) reasons.push('legacy_local_execution_not_confirmed');
+  const generated = fileRecord(source?.file);
+  if (!generated) reasons.push('legacy_generated_file_missing_or_invalid');
+  const traceFile = fileRecord(traceRef, { requireInsideCase: true });
+  if (!traceFile) reasons.push('legacy_trace_missing_or_outside_case');
+  let trace = null;
+  if (traceFile) {
+    try { trace = JSON.parse(fs.readFileSync(traceFile.path, 'utf8')); } catch { reasons.push('legacy_trace_invalid_json'); }
+  }
+  if (!trace || trace.schema_version !== 'qbot-core-beta-verified-legacy-trace/v1') reasons.push('legacy_trace_schema_invalid');
+  if (trace && trace.case_id !== coreCaseId) reasons.push('legacy_trace_case_id_mismatch');
+  if (trace && trace.legacy_case_id !== legacyCaseId) reasons.push('legacy_trace_legacy_case_id_mismatch');
+  if (trace && trace.evidence_valid !== true) reasons.push('legacy_trace_evidence_invalid');
+  const bridge = source?.bridge || {};
+  const context = source?.context || {};
+  const diagnostics = context?.diagnostics || {};
+  const executionTarget = String(bridge.lastExecutionTarget || diagnostics.executionTarget || '').trim();
+  const cwd = String(bridge.cwd || diagnostics.cwd || '').trim();
+  const sessionId = String(bridge.activeId || diagnostics.sessionId || '').trim();
+  if (!executionTarget || !cwd || !sessionId) reasons.push('legacy_host_context_missing');
+  if (!String(legacyDriver.driver || trace?.driver || '').trim()) reasons.push('legacy_driver_missing');
+  if (generated && cwd && path.resolve(path.dirname(generated.path)) !== path.resolve(cwd)) reasons.push('legacy_generated_file_cwd_mismatch');
+  const actualContent = generated ? fs.readFileSync(generated.path, 'utf8') : '';
+  if (!actualContent.trim()) reasons.push('legacy_generated_file_content_empty');
+  if (source?.content != null && String(source.content) !== actualContent) reasons.push('legacy_content_readback_mismatch');
+  if (reasons.length) {
+    return { mapped: false, reasons, core_case_id: coreCaseId, legacy_case_id: legacyCaseId };
+  }
+
+  ensureDir(resolvedCaseDir);
+  const importedPath = path.join(resolvedCaseDir, 'legacy-host-teams-local-execution.txt');
+  fs.copyFileSync(generated.path, importedPath);
+  const imported = fileRecord(importedPath, { requireInsideCase: true });
+  if (!imported) return { mapped: false, reasons: ['imported_legacy_file_invalid'], core_case_id: coreCaseId, legacy_case_id: legacyCaseId };
+  const taskIdRef = fileRecord(state?.artifacts?.task_id, { requireInsideCase: true });
+  let taskId = '';
+  if (taskIdRef) {
+    try { taskId = String(JSON.parse(fs.readFileSync(taskIdRef.path, 'utf8'))?.task_id || '').trim(); } catch { /* trace still carries session identity */ }
+  }
+  const hostData = {
+    schema_version: 'qbot-core-beta-host-lifecycle-trace/v1',
+    case_id: coreCaseId,
+    legacy_case_id: legacyCaseId,
+    driver: String(legacyDriver.driver || trace.driver || '').trim(),
+    task_id: taskId || sessionId,
+    session_id: sessionId,
+    execution_target: executionTarget,
+    expected_execution_target: 'desktop-local',
+    execution_target_matches_expected: executionTarget === 'desktop-local',
+    execution_scope: String(bridge.executionScope || '').trim() || 'desktop-local',
+    cwd: path.resolve(cwd),
+    legacy_trace: {
+      path: traceFile.path,
+      bytes: traceFile.bytes,
+      sha256: traceFile.sha256,
+      evidence_valid: trace.evidence_valid,
+      oracle_valid: trace.oracle_valid,
+    },
+    bridge_readback: {
+      active_id: String(bridge.activeId || '').trim(),
+      running: bridge.running === false,
+      last_execution_target: executionTarget,
+    },
+    generated_file: imported,
+    captured_at: new Date().toISOString(),
+  };
+  const integrityData = {
+    schema_version: 'qbot-core-beta-data-integrity-readback/v1',
+    case_id: coreCaseId,
+    legacy_case_id: legacyCaseId,
+    source_generated_file: generated,
+    evidence_generated_file: imported,
+    exists: imported.bytes > 0,
+    bytes: imported.bytes,
+    sha256: imported.sha256,
+    target_content: actualContent,
+    expected_target_marker: 'TEAMS_DESKTOP_LOCAL_OK',
+    target_content_matches_expected: /TEAMS_DESKTOP_LOCAL_OK/.test(actualContent),
+    target_content_matches: actualContent === fs.readFileSync(imported.path, 'utf8'),
+    captured_at: new Date().toISOString(),
+  };
+  const hostFile = writeCoreBetaEvidenceFile({ state, caseDir: resolvedCaseDir, testCase, role: 'host_lifecycle_trace', valid: true, data: hostData });
+  const integrityFile = writeCoreBetaEvidenceFile({ state, caseDir: resolvedCaseDir, testCase, role: 'data_integrity_readback', valid: true, data: integrityData });
+  return {
+    mapped: true,
+    reasons: [],
+    core_case_id: coreCaseId,
+    legacy_case_id: legacyCaseId,
+    host_file: hostFile,
+    integrity_file: integrityFile,
+    imported_file: imported.path,
+  };
 }
 
 function nonEmptyObject(value) {

@@ -167,6 +167,9 @@ import {
   withReplyPollHardTimeout,
   webSearchQualityVerdict,
   coreBetaVerifiedLegacyWebCapabilityEvidence,
+  coreBetaRendererEvaluationWithRetry,
+  isCoreBetaRendererNavigationTransientError,
+  materializeCoreBetaLegacyHostEvidence,
   validateProductionCasePlan,
   validateCoreBetaArtifactOracle,
   qworkDailyEvidenceEnvelope,
@@ -219,6 +222,168 @@ assert.match(
   /(?=[\s\S]*FILE_INPUT_ATTACHMENT_PREFIX = 'qwork-file-input:')(?=[\s\S]*Array\.isArray\(result\.files\))(?=[\s\S]*invalid_file_ingress_descriptor)/,
   '统一附件适配器必须把 files[] 映射为 qwork-file-input/v1，并对畸形 descriptor fail-closed',
 );
+
+assert.equal(
+  isCoreBetaRendererNavigationTransientError(new Error('Execution context was destroyed, most likely because of a navigation.')),
+  true,
+  'renderer 导航导致 execution context 销毁时应识别为可恢复瞬态',
+);
+assert.equal(
+  isCoreBetaRendererNavigationTransientError(new Error('Target page, context or browser has been closed')),
+  false,
+  'target/page/browser 已关闭时不得误判为可重试瞬态',
+);
+{
+  let evaluationCount = 0;
+  let navigationWaitCount = 0;
+  const recovered = await coreBetaRendererEvaluationWithRetry(async () => {
+    evaluationCount += 1;
+    if (evaluationCount === 1) throw new Error('Execution context was destroyed during navigation');
+    return { page: { body_text_length: 12 } };
+  }, {
+    maxAttempts: 3,
+    retryDelayMs: 0,
+    waitForNavigation: async () => { navigationWaitCount += 1; },
+    delay: async () => {},
+  });
+  assert.deepEqual(recovered.value, { page: { body_text_length: 12 } });
+  assert.equal(evaluationCount, 2, '导航瞬态恢复只应重试一次并保持有界');
+  assert.equal(navigationWaitCount, 1, '每次导航瞬态重试前必须等待新文档加载');
+  assert.equal(recovered.attempts.length, 2);
+  assert.equal(recovered.attempts[0].transient, true);
+  assert.equal(recovered.attempts[1].ok, true);
+  assert.equal(recovered.attempts[1].transient, false);
+  let closedEvaluationCount = 0;
+  await assert.rejects(
+    () => coreBetaRendererEvaluationWithRetry(async () => {
+      closedEvaluationCount += 1;
+      throw new Error('Target page has been closed');
+    }, { maxAttempts: 3, retryDelayMs: 0, delay: async () => {} }),
+    /Target page has been closed/,
+  );
+  assert.equal(closedEvaluationCount, 1, 'target 已关闭时必须 fail-closed 且不得重试');
+  let exhaustedEvaluationCount = 0;
+  await assert.rejects(
+    () => coreBetaRendererEvaluationWithRetry(async () => {
+      exhaustedEvaluationCount += 1;
+      throw new Error('Execution context was destroyed repeatedly');
+    }, { maxAttempts: 3, retryDelayMs: 0, delay: async () => {} }),
+    (error) => {
+      assert.equal(exhaustedEvaluationCount, 3);
+      assert.equal(Array.isArray(error.core_beta_renderer_capture_attempts), true);
+      assert.equal(error.core_beta_renderer_capture_attempts.length, 3);
+      return true;
+    },
+  );
+}
+
+{
+  const evidenceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-core-beta-legacy-host-'));
+  const caseDir = path.join(evidenceRoot, 'case');
+  const workspace = path.join(evidenceRoot, 'workspace');
+  fs.mkdirSync(caseDir, { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const generatedPath = path.join(workspace, 'teams_local_execution.txt');
+  fs.writeFileSync(generatedPath, 'TEAMS_DESKTOP_LOCAL_OK\n');
+  const tracePath = path.join(caseDir, 'verified-legacy-product-action-trace.json');
+  const taskIdPath = path.join(caseDir, 'task-id.json');
+  writeJsonFile(tracePath, {
+    schema_version: 'qbot-core-beta-verified-legacy-trace/v1',
+    case_id: 'BETA-HOST-003',
+    legacy_case_id: 'SIT-TEAMS-NEW-003',
+    driver: 'production_gate_beta_host_003',
+    evidence_valid: true,
+    oracle_valid: false,
+  });
+  writeJsonFile(taskIdPath, { case_id: 'BETA-HOST-003', task_id: 'task-host-003' });
+  const baseState = () => ({
+    artifacts: {
+      core_beta_legacy_driver: {
+        core_beta_case_id: 'BETA-HOST-003',
+        legacy_case_id: 'SIT-TEAMS-NEW-003',
+        driver: 'production_gate_beta_host_003',
+      },
+      verified_legacy_product_action_trace: tracePath,
+      task_id: taskIdPath,
+      teams_local_execution: {
+        bridge: {
+          activeId: 'task-host-003',
+          running: false,
+          lastExecutionTarget: 'desktop-local',
+          executionScope: 'desktop-local',
+          cwd: workspace,
+        },
+        context: { diagnostics: { executionTarget: 'desktop-local', sessionId: 'task-host-003' } },
+        file: generatedPath,
+        exists: true,
+        content: 'TEAMS_DESKTOP_LOCAL_OK\n',
+      },
+    },
+  });
+  try {
+    const state = baseState();
+    const mapped = materializeCoreBetaLegacyHostEvidence({
+      state,
+      testCase: { id: 'BETA-HOST-003' },
+      caseDir,
+    });
+    assert.equal(mapped.mapped, true, '真实 legacy Teams 本地文件应归一化为 Core Beta 证据');
+    assert.equal(validateEvidenceFile('host_lifecycle_trace', mapped.host_file).valid, true);
+    assert.equal(validateEvidenceFile('data_integrity_readback', mapped.integrity_file).valid, true);
+    const hostEvidence = JSON.parse(fs.readFileSync(mapped.host_file, 'utf8'));
+    const integrityEvidence = JSON.parse(fs.readFileSync(mapped.integrity_file, 'utf8'));
+    assert.equal(hostEvidence.valid, true);
+    assert.equal(hostEvidence.data.legacy_case_id, 'SIT-TEAMS-NEW-003');
+    assert.equal(hostEvidence.data.execution_target, 'desktop-local');
+    assert.equal(hostEvidence.data.session_id, 'task-host-003');
+    assert.equal(integrityEvidence.data.exists, true);
+    assert.equal(integrityEvidence.data.target_content_matches, true);
+    assert.equal(integrityEvidence.data.evidence_generated_file.inside_case, true);
+
+    const productMismatchState = baseState();
+    productMismatchState.artifacts.teams_local_execution.bridge.lastExecutionTarget = 'cloud';
+    productMismatchState.artifacts.teams_local_execution.context.diagnostics.executionTarget = 'cloud';
+    const productMismatch = materializeCoreBetaLegacyHostEvidence({
+      state: productMismatchState,
+      testCase: { id: 'BETA-HOST-003' },
+      caseDir,
+    });
+    assert.equal(productMismatch.mapped, true, '实际 execution target 偏离期望时仍应保留完整产品失败证据');
+    const mismatchHost = JSON.parse(fs.readFileSync(productMismatch.host_file, 'utf8'));
+    assert.equal(mismatchHost.data.execution_target, 'cloud');
+    assert.equal(mismatchHost.data.execution_target_matches_expected, false);
+
+    const invalidCases = [
+      ['empty_source', (candidate) => { fs.writeFileSync(generatedPath, ''); candidate.artifacts.teams_local_execution.content = ''; }],
+      ['placeholder_trace', (candidate) => { writeJsonFile(tracePath, { schema_version: 'qbot-core-beta-verified-legacy-trace/v1', case_id: 'BETA-HOST-003', legacy_case_id: 'SIT-TEAMS-NEW-003', evidence_valid: false }); }],
+      ['trace_outside_case', (candidate) => { const outside = path.join(evidenceRoot, 'outside-trace.json'); writeJsonFile(outside, { schema_version: 'qbot-core-beta-verified-legacy-trace/v1', case_id: 'BETA-HOST-003', legacy_case_id: 'SIT-TEAMS-NEW-003', evidence_valid: true }); candidate.artifacts.verified_legacy_product_action_trace = outside; }],
+      ['wrong_legacy_id', (candidate) => { candidate.artifacts.core_beta_legacy_driver.legacy_case_id = 'SIT-WRONG-001'; }],
+      ['missing_target_field', (candidate) => {
+        candidate.artifacts.teams_local_execution.bridge.lastExecutionTarget = '';
+        candidate.artifacts.teams_local_execution.context.diagnostics.executionTarget = '';
+      }],
+    ];
+    for (const [label, mutate] of invalidCases) {
+      fs.writeFileSync(generatedPath, 'TEAMS_DESKTOP_LOCAL_OK\n');
+      writeJsonFile(tracePath, {
+        schema_version: 'qbot-core-beta-verified-legacy-trace/v1',
+        case_id: 'BETA-HOST-003',
+        legacy_case_id: 'SIT-TEAMS-NEW-003',
+        driver: 'production_gate_beta_host_003',
+        evidence_valid: true,
+        oracle_valid: false,
+      });
+      const candidate = baseState();
+      mutate(candidate);
+      const result = materializeCoreBetaLegacyHostEvidence({ state: candidate, testCase: { id: 'BETA-HOST-003' }, caseDir });
+      assert.equal(result.mapped, false, `${label} 必须 fail-closed`);
+      assert.equal(typeof candidate.artifacts.host_lifecycle_trace, 'undefined', `${label} 不得生成伪有效 host evidence`);
+      assert.equal(typeof candidate.artifacts.data_integrity_readback, 'undefined', `${label} 不得生成伪有效 integrity evidence`);
+    }
+  } finally {
+    fs.rmSync(evidenceRoot, { recursive: true, force: true });
+  }
+}
 const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
 assert.match('QA Node Runtime', normalizedFixtureMarker, 'Fixture slug 应与空格展示名稳定匹配');
 assert.match('qa_node-runtime', normalizedFixtureMarker, 'Fixture marker 应归一化下划线、连字符与空格');
@@ -453,6 +618,31 @@ assert.doesNotMatch(
   coreBetaOperatingGuide,
   /mktemp[^\n]*XXXXXX\.[^\s"')]+/,
   'Core Beta 操作指南不得重新引入 macOS 不兼容的 mktemp 后缀',
+);
+assert.match(
+  automationFramework,
+  /BETA-HOST-003[\s\S]*teams_local_execution[\s\S]*host_lifecycle_trace[\s\S]*data_integrity_readback[\s\S]*oracle_valid=false[\s\S]*fail-closed/,
+  '框架合同必须固定 Teams legacy 主机证据归一化和产品 Oracle/证据分离',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /BETA-HOST-003[\s\S]*teams_local_execution[\s\S]*host_lifecycle_trace[\s\S]*data_integrity_readback[\s\S]*fail-closed/,
+  'Core Beta 操作指南必须固定 legacy 主机证据归一化的 fail-closed 合同',
+);
+assert.match(
+  coreBetaOperatingGuide,
+  /renderer 导航造成[\s\S]*最多 3 次有界[\s\S]*不得重试/,
+  'Core Beta 操作指南必须固定 renderer 导航瞬态的有界重试合同',
+);
+assert.match(
+  automationFramework,
+  /renderer 导航瞬态[\s\S]*最多 3 次有界[\s\S]*target\/page\/browser closed[\s\S]*不得重试/,
+  '框架合同必须固定 renderer 导航瞬态的有界重试和关闭态禁止重试',
+);
+assert.match(
+  runner,
+  /renderer-capture-attempts\.json[\s\S]*qbot-core-beta-renderer-capture-attempts\/v1[\s\S]*renderer_capture_attempts_file/,
+  'renderer 瞬态重试耗尽时必须落盘完整 attempts 诊断，而不是丢失原始错误',
 );
 assert.match(
   qworkDailyCasebookBuilder,

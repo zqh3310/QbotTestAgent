@@ -1193,6 +1193,18 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   根因诊断，再继续后续独立 Case。只有 CDP、renderer、受管宿主或批次级发布身份
   已经失去执行能力时才进入自愈硬停止。结果优先级始终为
   `automation_error > bug > blocked > pass`，后置 blocker 不得覆盖框架错误。
+- `BETA-HOST-003` 复用 `SIT-TEAMS-NEW-003` 时，必须把真实
+  `teams_local_execution` 归一化为当前 Case 内的 `host_lifecycle_trace` 与
+  `data_integrity_readback`；校验外层/legacy ID、driver、task/session、实际 execution target（并单独记录是否符合
+  `desktop-local` 期望）、cwd、非空源文件、字节数、SHA-256 和目标内容，并将源文件复制到
+  Case 内普通文件后同时记录源路径与证据路径。legacy trace 必须是 Case 内
+  `qbot-core-beta-verified-legacy-trace/v1` 且 `evidence_valid=true`。`oracle_valid=false`
+  只表示产品失败，不得删除有效证据；空文件、`valid=false` 占位、Case 外 trace 或
+  身份/字段漂移必须 fail-closed。
+- renderer 导航造成的 `Execution context was destroyed`、frame detached 等瞬态只允许
+  最多 3 次有界只读重试，每次先等待新文档并记录耗时/错误；target/browser/CDP 已关闭
+  等不可恢复错误不得重试，全部失败必须保留诊断并作为 framework issue，不能用缓存或
+  占位状态放行。
 - 已安装 Skill 在可见手动列表中缺失、但列表仍有其它选项时，必须按
   `inventory_mismatch=true` 的发送前产品失败交互材料化：保留稳定目标 identity、
   列表结构、公开空选择、失败截图和零发送守卫，显式 N/A 后继续独立父 Case。只有
