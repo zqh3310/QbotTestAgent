@@ -4,6 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  QWORK_CORE_LIFELINE_CASE_IDS,
+  QWORK_MR_SMOKE_CASE_IDS,
+} from '../src/lib/qwork-release-test-plan.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const casebook = path.join(root, 'PRD', 'QBot核心内测门禁Casebook_74条_2026-07-31.xlsx');
@@ -18,7 +22,7 @@ const cliHelp = spawnSync(process.execPath, [
 ], { cwd: root, encoding: 'utf8' });
 if (cliHelp.status !== 0) throw new Error(`CLI help failed: ${cliHelp.stderr}`);
 if (!/core-beta:pretest/.test(cliHelp.stdout)) throw new Error('CLI help must point to core-beta:pretest.');
-if (!/74\/70\/160 Casebook batch/.test(cliHelp.stdout)) throw new Error('CLI help must include the full 160 Casebook contract.');
+if (!/16\/12\/70\/160 Casebook stage/.test(cliHelp.stdout)) throw new Error('CLI help must include the staged QWork release contract.');
 const autoTestAfter = fs.existsSync(autoTest) ? fs.readdirSync(autoTest).sort() : [];
 if (JSON.stringify(autoTestBefore) !== JSON.stringify(autoTestAfter)) {
   throw new Error('ui-agent-casebook-run --help must not create a run directory.');
@@ -50,11 +54,32 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-27-r2.xlsx');
-const grayExpectedSha = '9354636fb54d7a007119affc46cd66aeffb91789d8725d0dba45dd891501d0a2';
+const grayCasebook = path.join(root, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx');
+const grayExpectedSha = '4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
+}
+const coreAuditOut = path.join(temp, 'core16-audit');
+const coreAudit = spawnSync(process.execPath, [
+  path.join(root, 'scripts', 'audit-core-beta-execution-capabilities.mjs'),
+  '--casebook', grayCasebook,
+  '--sheet', '核心生命线门禁',
+  '--out', coreAuditOut,
+], { cwd: root, encoding: 'utf8' });
+if (coreAudit.status !== 0) throw new Error(`16 capability audit failed: ${coreAudit.stderr || coreAudit.stdout}`);
+const coreAuditReport = JSON.parse(fs.readFileSync(path.join(coreAuditOut, 'capability-audit.json'), 'utf8'));
+const coreCases = JSON.parse(fs.readFileSync(path.join(coreAuditOut, 'casebook-cases.json'), 'utf8')).cases || [];
+if (coreAuditReport.protocol.case_count !== 16
+  || coreAuditReport.protocol.executable_count !== 16
+  || coreAuditReport.runtime_dispatch?.dispatchable_count !== 16
+  || coreAuditReport.capability_summary?.runner_native !== 11
+  || coreAuditReport.capability_summary?.runner_legacy_verified !== 5
+  || coreAuditReport.capability_summary?.strict_controller_required !== 0
+  || coreAuditReport.capability_summary?.unsupported_runtime !== 0
+  || coreAuditReport.capability_summary?.directly_runnable_without_controller !== 16
+  || JSON.stringify(coreCases.map((item) => item.id)) !== JSON.stringify(QWORK_CORE_LIFELINE_CASE_IDS)) {
+  throw new Error(`16 core lifeline capability contract mismatch: ${JSON.stringify(coreAuditReport)}`);
 }
 const grayAuditOut = path.join(temp, 'gray-audit');
 const grayAudit = spawnSync(process.execPath, [
@@ -137,7 +162,7 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('7ed47469a843b4ff4fc24405dccc75b5b9561c35'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('b2c9e1a99ca051ff21cc34db3b1f56e2055c091a'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
 }
 const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');
@@ -203,20 +228,7 @@ if (mrSmokeAuditReport.protocol.case_count !== 12
   })}`);
 }
 const mrSmokeCases = JSON.parse(fs.readFileSync(path.join(mrSmokeAuditOut, 'casebook-cases.json'), 'utf8')).cases || [];
-const expectedMrSmokeIds = [
-  'MRSMOKE-ACT-001',
-  'MRSMOKE-WEB-001',
-  'MRSMOKE-WEB-002',
-  'MRSMOKE-AUTH-001',
-  'MRSMOKE-AUTO-001',
-  'MRSMOKE-NAV-001',
-  'MRSMOKE-ROUTE-001',
-  'MRSMOKE-SKILL-001',
-  'MRSMOKE-FAIL-001',
-  'MRSMOKE-ART-001',
-  'MRSMOKE-ENTRY-001',
-  'MRSMOKE-CHART-001',
-];
+const expectedMrSmokeIds = QWORK_MR_SMOKE_CASE_IDS;
 if (JSON.stringify(mrSmokeCases.map((item) => item.id)) !== JSON.stringify(expectedMrSmokeIds)) {
   throw new Error('MR smoke Casebook IDs and order must stay frozen at 12/12.');
 }
@@ -277,6 +289,14 @@ if (!/probePublicCapabilities:\s*true/.test(pretestSource)
   || !/publicCapabilities\?\.ok === true/.test(pretestSource)) {
   throw new Error('Teams pretest must fail closed when public window.agent.capabilities is unreadable.');
 }
+if (!/\/api\/health\/ready/.test(pretestSource)
+  || !/qwork_control_plane_health/.test(pretestSource)
+  || !/qwork_backend_identity/.test(pretestSource)
+  || !/body\?\.checks\?\.db === true/.test(pretestSource)
+  || !/body\?\.checks\?\.auth === true/.test(pretestSource)
+  || !/observedBackendVersion === expectedBackendVersion/.test(pretestSource)) {
+  throw new Error('Teams pretest must bind ready SIT health, DB/auth checks and the health fingerprint to backend-version.');
+}
 if (!/probeRuntimeReleaseStatus:\s*true/.test(pretestSource)
   || !/qwork_runtime_release_status/.test(pretestSource)
   || !/qwork_runtime_release_identity/.test(pretestSource)
@@ -286,6 +306,26 @@ if (!/probeRuntimeReleaseStatus:\s*true/.test(pretestSource)
   || !/qwork_host_runtime_compatibility'[\s\S]{0,500}warning:\s*true/.test(pretestSource)
   || !/assessRuntimeReleaseStatus/.test(pretestSource)) {
   throw new Error('Teams pretest must retain host-core compatibility readback as a non-blocking warning.');
+}
+for (const requiredIdentityInput of [
+  'expected-teams-version',
+  'expected-teams-build',
+  'expected-qwork-version',
+  'expected-control-plane-origin',
+  'backend-version',
+  'prompt-policy-version',
+  'feature-flags-hash',
+  'qwork-ui-git-commit',
+  'qwork-build-id',
+  'qwork-release-manifest-sha256',
+]) {
+  if (!pretestSource.includes(`'${requiredIdentityInput}'`)
+    && !pretestSource.includes(`--${requiredIdentityInput}`)) {
+    throw new Error(`Production pretest must freeze ${requiredIdentityInput}.`);
+  }
+}
+if (!/case_ids:\s*cases\.map\(\(testCase\)\s*=>\s*testCase\.id\)/.test(pretestSource)) {
+  throw new Error('Pretest report must freeze the exact ordered Case IDs.');
 }
 
 const pretestOut = path.join(temp, 'pretest');
@@ -311,9 +351,12 @@ if (!entrypointTracking) throw new Error('Pretest must audit whether its own exe
 const requiredEntrypoints = [
   'scripts/preflight-core-beta-test-run.mjs',
   'scripts/core-beta-fixture-controller.mjs',
+  'scripts/orchestrate-qwork-release-test.mjs',
   'src/lib/core-beta-fixture-controller.mjs',
+  'src/lib/qwork-release-test-plan.mjs',
   'test/core-beta-pretest.mjs',
   'test/core-beta-fixture-controller.mjs',
+  'test/qwork-release-test-plan.test.mjs',
 ];
 const allEntrypointsTracked = requiredEntrypoints.every((entrypoint) => (
   spawnSync('git', [

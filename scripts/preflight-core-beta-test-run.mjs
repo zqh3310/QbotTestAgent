@@ -15,6 +15,10 @@ import {
   validateProductionCasePlan,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
+  normalizeQworkReleaseIdentity,
+  qworkReleaseIdentityFingerprint,
+} from '../src/lib/qwork-release-test-plan.mjs';
+import {
   processMatchesSession,
   readSession,
 } from '../teams360-automation/lib/launcher.mjs';
@@ -53,6 +57,9 @@ Teams production-gate identity options:
   --backend-version <id>
   --prompt-policy-version <id>
   --feature-flags-hash <sha256>
+  --qwork-ui-git-commit <commit>
+  --qwork-build-id <id>
+  --qwork-release-manifest-sha256 <sha256>
   --native-ime-command <command> Command used by the runner for BETA-CHAT-010.
                                   With QBOT_CORE_BETA_IME_PROBE=1 it must make
                                   no input and return the probe JSON contract.
@@ -214,6 +221,75 @@ function normalizeOrigin(value) {
   return url.origin;
 }
 
+function expectedControlPlaneEnvironment(origin) {
+  if (!origin) return '';
+  const { hostname } = new URL(origin);
+  if (hostname === 'qbot-api.360shuke.com') return 'prod';
+  if (/uat/i.test(hostname)) return 'uat';
+  if (/sit/i.test(hostname)) return 'sit';
+  if (['127.0.0.1', 'localhost', '::1'].includes(hostname)) return 'local';
+  return 'dev';
+}
+
+function assessControlPlaneHealth(response, {
+  controlPlaneOrigin = '',
+  expectedBackendVersion = '',
+} = {}) {
+  const body = response?.body != null && typeof response.body === 'object' && !Array.isArray(response.body)
+    ? response.body
+    : null;
+  const environment = String(body?.env || '').trim().toLowerCase();
+  const fingerprint = String(body?.fingerprint || '').trim().toLowerCase();
+  const expectedEnvironment = expectedControlPlaneEnvironment(controlPlaneOrigin);
+  const observedBackendVersion = environment && /^[a-f0-9]{16}$/i.test(fingerprint)
+    ? `${environment}-health-${fingerprint}`
+    : '';
+  const ready = Boolean(
+    response?.ok === true
+    && response?.status === 200
+    && body?.ok === true
+    && body?.ready === true
+    && body?.checks?.db === true
+    && body?.checks?.auth === true
+    && body?.auth?.ready === true
+  );
+  const environmentMatches = Boolean(
+    environment
+    && expectedEnvironment
+    && environment === expectedEnvironment
+  );
+  const backendIdentityMatches = Boolean(
+    observedBackendVersion
+    && expectedBackendVersion
+    && observedBackendVersion === expectedBackendVersion
+  );
+  return {
+    ok: ready && environmentMatches && backendIdentityMatches,
+    control_plane_origin: controlPlaneOrigin,
+    endpoint: controlPlaneOrigin ? `${controlPlaneOrigin}/api/health/ready` : '',
+    http_ok: response?.ok === true,
+    http_status: Number(response?.status || 0),
+    ready,
+    environment,
+    expected_environment: expectedEnvironment,
+    environment_matches: environmentMatches,
+    fingerprint,
+    observed_backend_version: observedBackendVersion,
+    expected_backend_version: expectedBackendVersion,
+    backend_identity_matches: backendIdentityMatches,
+    checks: {
+      db: body?.checks?.db === true,
+      auth: body?.checks?.auth === true,
+    },
+    auth: {
+      ready: body?.auth?.ready === true,
+      provider_id: String(body?.auth?.provider?.id || ''),
+      can_login: body?.auth?.provider?.canLogin === true,
+    },
+    error: response?.ok === true ? '' : String(response?.reason || 'control plane health probe failed'),
+  };
+}
+
 function normalizeLoopbackUrl(value) {
   const url = new URL(String(value));
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error(`Invalid CDP URL: ${value}`);
@@ -327,9 +403,12 @@ async function main() {
   const requiredFrameworkEntrypoints = [
     fileURLToPath(import.meta.url),
     path.join(ROOT, 'scripts', 'core-beta-fixture-controller.mjs'),
+    path.join(ROOT, 'scripts', 'orchestrate-qwork-release-test.mjs'),
     path.join(ROOT, 'src', 'lib', 'core-beta-fixture-controller.mjs'),
+    path.join(ROOT, 'src', 'lib', 'qwork-release-test-plan.mjs'),
     path.join(ROOT, 'test', 'core-beta-pretest.mjs'),
     path.join(ROOT, 'test', 'core-beta-fixture-controller.mjs'),
+    path.join(ROOT, 'test', 'qwork-release-test-plan.test.mjs'),
   ];
   const untrackedFrameworkEntrypoints = requiredFrameworkEntrypoints
     .filter((file) => !isGitTracked(file))
@@ -603,6 +682,23 @@ async function main() {
       addCheck('control_plane_identity',
         Boolean(expectedOrigin) && actualOrigin === expectedOrigin,
         `actual=${actualOrigin || '(missing)'}; expected=${expectedOrigin || '(missing --expected-control-plane-origin)'}`);
+      const expectedBackendVersion = String(options['backend-version'] || '').trim();
+      const controlPlaneHealthResponse = expectedOrigin
+        ? await fetchJson(`${expectedOrigin}/api/health/ready`, 5000)
+        : { ok: false, status: 0, body: null, reason: 'Missing --expected-control-plane-origin' };
+      const controlPlaneHealth = assessControlPlaneHealth(controlPlaneHealthResponse, {
+        controlPlaneOrigin: expectedOrigin,
+        expectedBackendVersion,
+      });
+      runtime.control_plane_health = controlPlaneHealth;
+      addCheck('qwork_control_plane_health',
+        controlPlaneHealth.ready && controlPlaneHealth.environment_matches,
+        controlPlaneHealth.ready
+          ? `env=${controlPlaneHealth.environment}; db=${controlPlaneHealth.checks.db}; auth=${controlPlaneHealth.checks.auth}; provider=${controlPlaneHealth.auth.provider_id || '(missing)'}`
+          : controlPlaneHealth.error || `HTTP ${controlPlaneHealth.http_status}; ready=${controlPlaneHealth.ready}; env=${controlPlaneHealth.environment || '(missing)'}`);
+      addCheck('qwork_backend_identity',
+        controlPlaneHealth.backend_identity_matches,
+        `actual=${controlPlaneHealth.observed_backend_version || '(missing)'}; expected=${expectedBackendVersion || '(missing --backend-version)'}; fingerprint=${controlPlaneHealth.fingerprint || '(missing)'}`);
       if (processMatchesSession(session)) {
         const cdpUrl = normalizeLoopbackUrl(session.cdp_url);
         const cdp = await fetchJson(`${cdpUrl}/json/version`, 5000);
@@ -687,13 +783,38 @@ async function main() {
   }
 
   if (productionGate) {
-    const requiredFrozen = lane === 'teams'
-      ? ['expected-teams-version', 'expected-teams-build', 'expected-qwork-version', 'expected-control-plane-origin']
-      : [];
+    const requiredFrozen = [
+      ...(lane === 'teams'
+        ? ['expected-teams-version', 'expected-teams-build', 'expected-qwork-version', 'expected-control-plane-origin']
+        : []),
+      'backend-version',
+      'prompt-policy-version',
+      'feature-flags-hash',
+      'qwork-ui-git-commit',
+      'qwork-build-id',
+      'qwork-release-manifest-sha256',
+    ];
     const missingFrozen = requiredFrozen.filter((name) => !String(options[name] || '').trim());
     addCheck('frozen_product_identity_complete', missingFrozen.length === 0,
       missingFrozen.length ? `missing=${missingFrozen.map((name) => `--${name}`).join(',')}` : 'complete');
+    const releaseHashesValid = /^[a-f0-9]{64}$/i.test(String(options['feature-flags-hash'] || ''))
+      && /^[a-f0-9]{64}$/i.test(String(options['qwork-release-manifest-sha256'] || ''));
+    addCheck('frozen_product_identity_hashes', releaseHashesValid,
+      `feature_flags_hash=${options['feature-flags-hash'] || '(missing)'}; release_manifest_sha256=${options['qwork-release-manifest-sha256'] || '(missing)'}`);
   }
+
+  const frozenReleaseIdentity = normalizeQworkReleaseIdentity({
+    teams_version: options['expected-teams-version'],
+    teams_build: options['expected-teams-build'],
+    qwork_version: options['expected-qwork-version'],
+    control_plane_origin: options['expected-control-plane-origin'],
+    backend_version: options['backend-version'],
+    prompt_policy_version: options['prompt-policy-version'],
+    feature_flags_hash: options['feature-flags-hash'],
+    qwork_ui_git_commit: options['qwork-ui-git-commit'],
+    qwork_build_id: options['qwork-build-id'],
+    qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'],
+  });
 
   const report = {
     schema_version: 'qbot-core-beta-pretest/v1',
@@ -702,6 +823,16 @@ async function main() {
     lane,
     production_gate: productionGate,
     release_gate_eligible: !scopedExecution,
+    release_identity: {
+      expected: frozenReleaseIdentity,
+      observed: {
+        teams_version: runtime?.teams?.version || '',
+        teams_build: runtime?.teams?.build || '',
+        qwork_version: runtime?.qwork?.version || '',
+        control_plane_origin: runtime?.session?.control_plane_origin || '',
+      },
+      fingerprint: qworkReleaseIdentityFingerprint(frozenReleaseIdentity),
+    },
     scope,
     framework: {
       branch,
@@ -721,6 +852,7 @@ async function main() {
       expected_count: Number(options['expected-count']) || null,
       first_case_id: cases[0]?.id || '',
       last_case_id: cases.at(-1)?.id || '',
+      case_ids: cases.map((testCase) => testCase.id),
     },
     fixture: fixtureReadiness,
     runtime,

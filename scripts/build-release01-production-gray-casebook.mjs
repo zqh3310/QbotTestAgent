@@ -16,6 +16,10 @@ import {
   coreBetaRuntimeExecutorBinding,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import { migrateProductionCase } from '../src/lib/production-casebook-contract.mjs';
+import {
+  QWORK_CORE_LIFELINE_CASE_IDS,
+  QWORK_MR_SMOKE_CASE_IDS,
+} from '../src/lib/qwork-release-test-plan.mjs';
 
 const ROOT = path.resolve(process.env.QBOT_CASEBOOK_ROOT || path.resolve(import.meta.dirname, '..'));
 const DEEPBANK = '/Users/qifu/Documents/deepbankV2';
@@ -30,24 +34,12 @@ const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.6';
 const MR_WINDOW_START = '2026-08-24T00:00:00+08:00';
 const MR_WINDOW_END = '2026-08-28T01:06:27+08:00';
-const OUTPUT_NAME = 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260828_release01_recent_mr_casebook_12-70-160-r4');
+const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260828_release01_casebook_16-12-70-160-r5');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
-const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r3.xlsx');
-const SMOKE_CASE_IDS = Object.freeze([
-  'MRSMOKE-ACT-001',
-  'MRSMOKE-WEB-001',
-  'MRSMOKE-WEB-002',
-  'MRSMOKE-AUTH-001',
-  'MRSMOKE-AUTO-001',
-  'MRSMOKE-NAV-001',
-  'MRSMOKE-ROUTE-001',
-  'MRSMOKE-SKILL-001',
-  'MRSMOKE-FAIL-001',
-  'MRSMOKE-ART-001',
-  'MRSMOKE-ENTRY-001',
-  'MRSMOKE-CHART-001',
-]);
+const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx');
+const CORE_LIFELINE_CASE_IDS = QWORK_CORE_LIFELINE_CASE_IDS;
+const SMOKE_CASE_IDS = QWORK_MR_SMOKE_CASE_IDS;
 const RECENT_MR_CASE_MAPPING = new Map([
   ['1328', ['MRSMOKE-ACT-001', 'MRSMOKE-AUTO-001', 'MRSMOKE-NAV-001', 'BETA-CHAT-007']],
   ['1327', ['MRSMOKE-FAIL-001', 'BETA-CHAT-009']],
@@ -1201,6 +1193,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
   await fs.mkdir(renderDir, { recursive: true });
   const inspections = [];
   const inspectionScopes = [
+    { sheetName: '核心生命线门禁', rowCount: 20, lastColumn: 'AO' },
     { sheetName: '新增MR核心冒烟', rowCount: 14, lastColumn: 'AM' },
     { sheetName: '生产灰度门禁Case', rowCount: 74, lastColumn: 'AO' },
     { sheetName: '全量功能回归Case', rowCount: 164, lastColumn: 'AO' },
@@ -1229,7 +1222,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 
   const rendered = [];
   for (const sheetName of sheetNames) {
-    const largeCaseSheet = ['新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case'].includes(sheetName);
+    const largeCaseSheet = ['核心生命线门禁', '新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case'].includes(sheetName);
     const preview = await workbook.render({
       sheetName,
       ...(largeCaseSheet ? { range: 'A1:AO12' } : { autoCrop: 'all' }),
@@ -1287,6 +1280,12 @@ async function main() {
     return testCase;
   });
   const gateCases = [...gateCoreCases, ...gatePromotions];
+  const gateById = new Map(gateCases.map((testCase) => [asString(testCase['用例ID']), testCase]));
+  const coreLifelineCases = CORE_LIFELINE_CASE_IDS.map((id) => gateById.get(id));
+  if (coreLifelineCases.some((testCase) => !testCase)) {
+    const missing = CORE_LIFELINE_CASE_IDS.filter((id) => !gateById.has(id));
+    throw new Error(`核心生命线 Case 缺失：${missing.join(',')}`);
+  }
   const regressionAddons = fullFunctionPool.filter(
     (testCase) => !PRODUCTION_GRAY_PROMOTED_LEGACY_CASE_IDS.has(asString(testCase['用例ID'])),
   );
@@ -1312,10 +1311,11 @@ async function main() {
   const fullIdSet = new Set(fullIds);
   const smokeIdSet = new Set(SMOKE_CASE_IDS);
   const smokeCapability = capabilitySet(smokeCases);
+  const coreLifelineCapability = capabilitySet(coreLifelineCases);
   const gateCapability = capabilitySet(gateCases);
   const addonCapability = capabilitySet(regressionAddons);
   const fullCapability = capabilitySet(fullCases);
-  for (const [scope, summary] of [['12条冒烟', smokeCapability], ['70条门禁', gateCapability], ['160条全量', fullCapability]]) {
+  for (const [scope, summary] of [['16条核心生命线', coreLifelineCapability], ['12条冒烟', smokeCapability], ['70条门禁', gateCapability], ['160条全量', fullCapability]]) {
     if (summary.strict.length) {
       throw new Error(`${scope}仍含strict controller：${summary.strict.map((item) => item.testCase['用例ID']).join(',')}`);
     }
@@ -1404,6 +1404,16 @@ async function main() {
     }
   }
   const workbook = Workbook.create();
+  const coreLifelineSheet = addSheet(
+    workbook,
+    '核心生命线门禁',
+    'QWork 发布候选核心生命线门禁 Casebook（16条）',
+    `基线 ${PRODUCT_REF}@${PRODUCT_COMMIT}（v${PRODUCT_VERSION}）；每次候选部署必须先执行；16/16逐Case可信全绿才允许进入新增MR冒烟，任一非pass立即阻断后续阶段。`,
+    headers,
+    matrix(headers, coreLifelineCases),
+    [120, 100, 115, 110, 60, 110, 300, 250, 280, 260, 340, 280, 280, 300, 330, 90, 70, 160, 270, 145, 180, 400, 350, 220, 400, 360, 170, 120, 80, 190, 180, 260, 220, 220, 70, 260, 260, 70, 320, 240, 250],
+  );
+  coreLifelineSheet.getRangeByIndexes(4, 4, coreLifelineCases.length, 1).format.fill = '#DDEBF7';
   const smokeSheet = addSheet(
     workbook,
     '新增MR核心冒烟',
@@ -1437,8 +1447,10 @@ async function main() {
   fullSheet.getRangeByIndexes(4, 0, 70, headers.length).format.borders = {
     bottom: { style: 'medium', color: '#176B68' },
   };
-  addSheet(workbook, '设计总览', '生产灰度门禁与全量功能回归设计总览', '70条负责发布硬门禁，160条负责正常功能全回归；两层都必须真实执行、可机判、可重复，禁止用不可执行Case充数。',
+  addSheet(workbook, '设计总览', 'QWork 分层止损与生产灰度测试设计总览', '先以16条核心生命线判断候选是否具备继续测试价值，再依次执行12条变更冒烟、70条生产风险门禁、160条全量回归和soak；阶段间只接受逐Case可信结论。',
     ['指标', '结果', '门禁含义', '证据'], [
+      ['核心生命线门禁', 16, '每次候选部署首个真实Case阶段；任一非pass立即阻断后续阶段', '核心生命线门禁'],
+      ['新增MR变更冒烟', 12, '核心生命线16/16可信全绿后执行', '新增MR核心冒烟'],
       ['生产灰度门禁', 70, '每轮完整串行，禁止Case间并发', '生产灰度门禁Case'],
       ['全量功能回归', 160, '同70条门禁前缀 + 90条正常功能增量', '全量功能回归Case'],
       ['门禁框架真实分发', '70/70', 'protocol/runtime dispatch=100%', '能力审计'],
@@ -1448,7 +1460,6 @@ async function main() {
       ['全量原生公开状态执行器', fullCapability.counts.runner_native || 0, 'QWork UI/bridge/CDP真实动作与读回', 'runner_native'],
       ['全量原生本机fixture选项', fullCapability.counts.runner_native_with_fixture_option || 0, '原生IME；pretest必须就绪', 'runner_native_with_fixture_option'],
       ['全量经语义复核旧执行器', fullCapability.counts.runner_legacy_verified || 0, '9条门禁映射 + 90条常规功能映射', 'runner_legacy_verified'],
-      ['新增MR核心冒烟', 12, '固定顺序独立READY后先执行并逐Case可信复核', '新增MR核心冒烟'],
       ['审计窗口直接合并MR', mrRows.length, '全部记录自动化映射或静态审计结论', '近2天MR覆盖'],
       ['全量回归排除', FULL_REGRESSION_EXCLUDED_LEGACY_IDS.size, '网络异常、账号/权限低频、纯故障注入不进入本套', '删除场景清单'],
       ['门禁低频恢复剔除', PRODUCTION_GRAY_EXCLUDED_RARE_CASE_IDS.size, '从70条门禁及160条前缀同步删除', '删除场景清单'],
@@ -1470,8 +1481,9 @@ async function main() {
   coverageSheet.getRangeByIndexes(4, 4, byDomain.size + byType.size, 1).format.numberFormat = '0.0%';
   addSheet(workbook, '执行配置', '执行配置与串行规则', '正式轮的精确版本、Casebook SHA、框架commit和fixture选项必须在pretest冻结；READY才允许启动唯一runner。',
     ['参数', '固定值/要求', '阶段', '硬约束', '说明'], [
+      ['core_lifeline_case_count', 16, 'G1/pretest/runner/trusted-review', '固定16且逐Case可信全绿', '首道真实部署门禁；失败后G2-G5保持NOT_STARTED'],
       ['gate_case_count', 70, 'pretest/runner/gray-gate', '固定70', '不得用scoped、inherited或synthetic补齐'],
-      ['mr_smoke_case_count', 12, 'pretest/runner/trusted-review', '固定12且顺序不可漂移', '先于70条执行；不能替代生产灰度门禁'],
+      ['mr_smoke_case_count', 12, 'G2/pretest/runner/trusted-review', '固定12且顺序不可漂移', '只在G1通过后执行；不能替代生产灰度门禁'],
       ['full_case_count', 160, 'pretest/runner/full-regression', '固定160', '前70条必须与门禁逐条同序一致'],
       ['execution_policy', 'core-beta-v2-forced-serial', 'runner', '唯一runner；Case间并发=0', 'BETA-CHAT-008内部20任务仍属于单Case'],
       ['casebook', OUTPUT_NAME, 'pretest', '精确路径+Sheet+SHA-256', 'Casebook变化即新测试合同'],
@@ -1480,10 +1492,11 @@ async function main() {
       ['fixture_options', 'native IME', 'pretest', '缺少所选Case能力则BLOCKED', '不允许运行中临时降级'],
       ['gray_gate_runs', 5, '发布判定', '同一release identity连续5轮', '任一非pass或flaky归零'],
       ['soak', '至少100任务+3次受管重启', '灰度前稳定性', '至少一个候选轮次完成', '独立soak证据，不伪装成普通Case'],
-      ['monitor_policy', 'read-only + self-healing', '执行期', '仅framework/testcase issue停runner修复', '产品Bug按独立Case策略继续'],
+      ['stage_admission', 'trusted-review-only', 'G1→G5', '任一trusted非pass、证据缺失或身份漂移立即止损', 'raw passed/failed不得驱动下一阶段'],
+      ['monitor_policy', 'read-only + self-healing', '执行期', 'framework/testcase issue冻结并自愈', '阶段内可完成安全诊断，但后续阶段不得启动'],
     ], [180, 360, 180, 320, 420]);
   const evidenceCounts = new Map();
-  for (const [scope, cases] of [['门禁70', gateCases], ['全量160', fullCases]]) {
+  for (const [scope, cases] of [['核心16', coreLifelineCases], ['门禁70', gateCases], ['全量160', fullCases]]) {
     for (const testCase of cases) {
       for (const role of asString(testCase['证据角色']).split(',').map((item) => item.trim()).filter(Boolean)) {
         const key = `${scope}\u0000${role}`;
@@ -1512,24 +1525,30 @@ async function main() {
     [165, 70, 110, 300, 130, 360, 320, 160, 260, 420]);
   addSheet(workbook, '生产灰度准入', '全量功能与生产灰度准入规则', '至少一轮完整160条可信全绿，并满足70条连续多轮与soak门禁后，才允许1%-5%受控生产灰度。',
     ['门禁项', '必须满足', '失败后动作', '可否豁免'], [
-      ['Pretest', 'READY；70/70协议、分发、fixture、身份、唯一runner全部通过', '不启动runner，修复具体前置', '否'],
-      ['全量功能回归', '同一候选release identity至少1轮160/160可信全绿；前70条与门禁同序同内容', '修复framework/testcase问题后新目录重跑160；产品Bug保留并继续独立Case', '否'],
+      ['G0 静态与身份', '框架/Casebook/发布身份/runner/capabilities/health全部精确READY', '不启动runner，修复具体前置', '否'],
+      ['G1 核心生命线', '16/16真实执行、证据完整、逐Case trusted_pass', '立即停止G2-G5；产品候选NO-GO', '否'],
+      ['G2 新增MR冒烟', '12/12真实执行、证据完整、逐Case trusted_pass', '立即停止G3-G5；产品候选NO-GO', '否'],
+      ['G3 生产风险门禁', '70/70真实执行、证据完整、逐Case trusted_pass', '立即停止G4-G5；产品候选NO-GO', '否'],
+      ['G4 全量功能回归', '同一候选release identity至少1轮160/160可信全绿；前70条与门禁同序同内容', '停止G5；修复framework/testcase问题后新目录重跑160；产品Bug保留', '否'],
       ['单轮完整性', 'executed=unique=trusted_pass=evidence_complete=70；inherited=synthetic=0', '该轮不计连续全绿', '否'],
       ['可信分类', '候选绿轮次trusted_bug/fail/blocked/framework_issue/testcase_issue=0', '框架/Case问题停机修复；产品Bug继续独立Case并阻止本轮绿判定', '否'],
       ['连续稳定', '同一release identity连续5轮完整全绿；flaky=0', '计数归零，从新不可变目录重跑', '否'],
       ['轮次复用', '160条轮次的前70条完整可信结果可计入5轮70条中的1轮', '不得把后90条或不完整前缀拆算为门禁轮次', '否'],
-      ['Soak', '至少100任务、3次受管重启、0 crash、0资源泄漏且证据完整', 'NO_GO', '否'],
+      ['G5 Soak', '至少100任务、3次受管重启、0 crash、0资源泄漏且证据完整', 'NO_GO', '否'],
       ['清理', 'QA创建资源清理完成，fixture restored=true', '冻结证据并修复清理', '否'],
       ['发布范围', '仅1%-5%受控生产灰度，具备实时监控与回滚', '停止扩量/回滚', '否'],
     ], [180, 520, 420, 100]);
   addSheet(workbook, '发布判定', '发布判定状态机', 'Case通过只是输入；最终放行由连续轮次、稳定性、身份一致性和清理证据共同决定。',
     ['阶段', '输入', '通过条件', '输出'], [
-      ['设计合同', '70+160双层Casebook+框架commit', 'SHA固定；两Sheet协议/能力审计100%', '可进入pretest'],
-      ['动态预检', '真实Teams/QWork/CDP/control plane/fixture', 'READY', '可启动唯一runner'],
-      ['全量回归', '160条串行真实Case', '160/160可信全绿，前70条同门禁合同', '全量绿轮次+一个门禁绿轮次'],
+      ['G0 静态与身份', '16+12+70+160 Casebook、框架commit、真实发布身份', 'SHA固定；能力审计100%；精确READY；无候选待激活', '可启动G1'],
+      ['G1 核心生命线', '16条串行真实Case', '16/16逐Case可信全绿；evidence complete；身份不漂移', '可启动G2'],
+      ['G2 新增MR冒烟', '12条串行真实Case', '12/12逐Case可信全绿', '可启动G3'],
+      ['G3 生产风险门禁', '70条串行真实Case', '70/70逐Case可信全绿', '可启动G4'],
+      ['G4 全量回归', '160条串行真实Case', '160/160可信全绿，前70条同门禁合同', '全量绿轮次+一个门禁绿轮次'],
       ['门禁补轮', '另外4轮70条串行真实Case', '累计5轮70/70可信全绿', '候选可评估'],
       ['连续验证', '同一release identity 5轮', '5轮均可信全绿且flaky=0', '候选可评估'],
-      ['稳定性', '100任务+3重启soak', '0 crash、0泄漏、证据完整', 'GO_CONTROLLED_GRAY'],
+      ['G5 稳定性', '100任务+3重启soak', '0 crash、0泄漏、证据完整', '可进入多轮灰度聚合'],
+      ['多轮发布聚合', 'G4全量绿轮次+累计5轮G3同合同门禁+G5 soak', '同一release identity；flaky=0；清理完整', 'GO_CONTROLLED_GRAY'],
       ['生产灰度', '1%-5%流量', '监控健康、无新增P0/P1', '逐步扩量或回滚'],
     ], [170, 360, 500, 240]);
   addSheet(workbook, '源码依据', 'Casebook源码与审计依据', '所有依据均绑定固定commit；deepbankV2仓库只读，QbotTestAgent负责Case、执行器、证据和放行规则。',
@@ -1540,18 +1559,19 @@ async function main() {
       ['产品版本', PRODUCT_VERSION, 'release/0.1 version-only MR !1326', 'Casebook/pretest按0.1.6冻结；SIT候选另按完整版本号读回'],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],
       ['MR冒烟源Casebook', SMOKE_SOURCE, '历史11条固定顺序合同来源', '只读导入并按最新MR补强，追加1条交互图表'],
-      ['新Casebook', FORMAL_OUTPUT, '12条MR冒烟+70条生产门禁+160条全量功能回归合同', 'SHA写入两份框架规范'],
+      ['新Casebook', FORMAL_OUTPUT, '16条核心生命线+12条MR冒烟+70条生产门禁+160条全量功能回归合同', 'SHA写入两份框架规范'],
       ['框架协议', 'src/lib/core-beta-case-protocol.mjs', '独立scenario/fixture/证据契约', 'test/core-beta-case-protocol.mjs'],
       ['原生Runner', 'src/lib/ui-agent-casebook-runner-v2.mjs', '真实UI/bridge/CDP执行与Oracle', 'test/framework-invariants-v2.mjs'],
       ['能力审计', 'npm run core-beta:capability-audit', 'dispatchable/native/controller统计', 'strict_controller_required=0'],
-      ['动态预检', 'npm run core-beta:pretest', '身份、fixture、CDP、唯一runner', 'READY才可启动'],
+      ['动态预检', 'npm run core-beta:pretest', '完整身份、fixture、CDP、唯一runner', '每阶段独立READY才可启动'],
+      ['阶段编排', 'npm run qwork-release:orchestrate', 'G0-G5可信准入与止损状态机', '下一阶段只接受可信全绿'],
       ['灰度判定', 'npm run core-beta:gray-gate', '5轮+soak发布决策', 'GO_CONTROLLED_GRAY'],
     ], [150, 520, 420, 360]);
 
   const outputDir = path.resolve(option('out', DEFAULT_OUTPUT_DIR));
   await fs.mkdir(outputDir, { recursive: true });
   const sheetNames = [
-    '新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case', '设计总览', '覆盖矩阵', '执行配置',
+    '核心生命线门禁', '新增MR核心冒烟', '生产灰度门禁Case', '全量功能回归Case', '设计总览', '覆盖矩阵', '执行配置',
     '证据与断言', '删除场景清单', '执行器映射', '近2天MR覆盖', '生产灰度准入',
     '发布判定', '源码依据',
   ];
@@ -1561,12 +1581,15 @@ async function main() {
   await xlsx.save(outputFile);
   await fs.copyFile(outputFile, FORMAL_OUTPUT);
   const audit = {
-    schema_version: 'qbot-release01-combined-casebook-build/v3',
+    schema_version: 'qbot-release01-combined-casebook-build/v4',
     generated_at: new Date().toISOString(),
     product: { ref: PRODUCT_REF, commit: PRODUCT_COMMIT, version: PRODUCT_VERSION },
     smoke_case_count: smokeCases.length,
     smoke_case_ids: smokeCases.map((item) => item['用例ID']),
     smoke_capability_summary: smokeCapability.counts,
+    core_lifeline_case_count: coreLifelineCases.length,
+    core_lifeline_case_ids: coreLifelineCases.map((item) => item['用例ID']),
+    core_lifeline_capability_summary: coreLifelineCapability.counts,
     source_case_count: allCases.length,
     gate_case_count: gateCases.length,
     gate_case_ids: gateIds,

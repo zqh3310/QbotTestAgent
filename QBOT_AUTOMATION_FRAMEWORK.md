@@ -35,10 +35,82 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| 生产灰度发布 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx` | `生产灰度门禁Case` | 70 | `da1c24607f07281a8223edcc3e461bfdeb1b0405b13004ffea8b686e3cdf71f3` |
-| 全量正常功能回归 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx` | `全量功能回归Case` | 160 | `da1c24607f07281a8223edcc3e461bfdeb1b0405b13004ffea8b686e3cdf71f3` |
+| QWork 核心生命线门禁 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx` | `核心生命线门禁` | 16 | `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c` |
+| 生产灰度发布 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx` | `生产灰度门禁Case` | 70 | `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c` |
+| 全量正常功能回归 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx` | `全量功能回归Case` | 160 | `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c` |
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
-| QWork 新增 MR 核心冒烟 | `PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx` | `新增MR核心冒烟` | 12 | `da1c24607f07281a8223edcc3e461bfdeb1b0405b13004ffea8b686e3cdf71f3` |
+| QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx` | `新增MR核心冒烟` | 12 | `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c` |
+
+### 2.1 QWork 分层止损发布流程
+
+同一候选发布唯一允许的执行顺序是：
+
+1. `G0 静态与发布身份门禁`：框架 `main == origin/main` 且 tracked clean，Casebook
+   路径/SHA、发布身份十字段、唯一 runner/宿主/session/CDP、WebView、公开
+   capabilities、runtime release status 和 SIT health 全部精确成立。
+2. `G1 核心生命线门禁`：16 条最小但完整的核心用户生命线。只有 16/16 真实执行、
+   manifest 完整且逐 Case `trusted_pass`，才能启动 G2。
+3. `G2 新增 MR 变更冒烟`：12 条固定有序 Case。只有 12/12 逐 Case 可信全绿，才能
+   启动 G3。
+4. `G3 生产风险门禁`：70 条完整串行风险门禁。只有 70/70 逐 Case 可信全绿，才能
+   启动 G4。
+5. `G4 全量正常功能回归`：160 条完整串行回归；前 70 条必须与 G3 同序同合同。
+6. `G5 稳定性与受管重启 Soak`：至少 100 个任务、3 次受管重启、0 crash、无资源
+   泄漏且证据完整。完成后才可进入既有五轮 70 条聚合门禁。
+
+G1 固定顺序为：`BETA-INIT-001`、`BETA-INIT-002`、`BETA-INIT-003`、
+`BETA-INIT-004`、`BETA-CHAT-001`、`BETA-CHAT-002`、`BETA-CHAT-007`、
+`BETA-FILE-001`、`BETA-ART-001`、`BETA-TASK-008`、`BETA-HOST-003`、
+`BETA-SEC-002`、`BETA-ROUTE-001`、`SIT-SKILL-007`、`SIT-HOME-002`、
+`SIT-CONN-016`。能力审计必须为 16/16 executable、dispatchable、directly
+runnable，其中 11 条 native、5 条 verified legacy，且
+`strict_controller_required=0`、`unsupported_runtime=0`。
+
+G1-G4 每个阶段都必须使用独立能力审计、独立精确 `READY`、独立不可变执行目录和
+逐 Case 可信复核；阶段之间不得继承结果。任一阶段出现产品 Bug、可信失败、可信阻塞、
+framework/testcase issue、证据缺失、身份漂移或非精确 READY，当前候选立即 `NO_GO`，
+所有后续阶段保持 `NOT_STARTED`。当前阶段可按现有安全策略完成独立 Case 诊断，但绝不
+因此解锁下一阶段。raw `passed/failed`、诊断目标通过率和人工口头判断都不能驱动准入。
+
+状态机只接受 `qbot-core-beta-pretest/v1` 的 Teams/production-gate/mandatory 报告；
+`blockers` 必须显式为空，全部 checks 必须显式 `passed`，且 Git、唯一 runner、Casebook、
+协议、发布身份、capabilities、runtime release、待激活更新和 health 等 G0 关键检查不得
+缺项。仅修改顶层 `status=READY` 或伪造身份 fingerprint 永远不能获得阶段准入。
+
+机器化编排入口为 `npm run qwork-release:orchestrate`。`init` 只接受新的控制目录、
+文件名与 SHA 均精确匹配本节 r5 合同的正式 Casebook 和十字段发布身份；`readiness`
+校验能力审计与 pretest 的精确 Case ID
+顺序；`complete` 校验真实进度、未停止批次、完整 manifest、可信复核、选择的 Case ID
+顺序和发布身份；`soak` 校验 G5。状态机只允许按 G0 -> G5 顺序推进。
+
+控制目录固定包含 `release-test-plan.json`、`release-test-state.json`、
+`release-test-integrity.json` 和 `events/*.json`。计划与状态分别计算独立 SHA-256，状态
+每次变更必须令 `revision` 精确加一；每个事件记录变更前后 revision/state SHA，并以
+`previous_event_sha256` 形成前向哈希链。任何计划、状态、integrity、事件数量、事件顺序、
+历史事件或末事件 SHA 被改写，后续 `status/readiness/complete/soak` 都必须 fail-closed。
+`NO_GO` 不可逆，已登记的 readiness/completion 不得覆盖；修复后只能为新候选或新一轮
+创建新的空控制目录，禁止手工改状态解锁后续阶段。
+
+`complete` 不只看总数：summary、progress、run metadata 与可信复核中的 Case ID 必须
+全部与本阶段准入顺序一致；summary 必须为 `passed` 且 raw passed=N、其它 raw 计数为
+零，逐 Case manifest 必须为 `qbot-core-evidence/v2`、绑定同一 Case、非空 evidence 中
+每项 `valid=true/missing=false/bytes>0/SHA-256`，missing/invalid role 为零。同时必须
+证明 mandatory、M3、`core-beta-v2-forced-serial`、effective parallel=1、
+single-host-pipeline=1、唯一宿主 PID、framework clean、无 stop diagnostic、
+`executed=N/inherited=0/synthetic=0` 和十字段身份不漂移；任一缺失都不得 `PASS_STAGE`。
+
+完成审计不能只信嵌入 summary 的 manifest：必须从每个 Case 目录重新读取磁盘
+`evidence-manifest.json`，要求它与 progress/summary 中嵌入的 manifest 结构化全等；再对
+每项证据执行 `lstat`，拒绝符号链接、目录和 Case 目录越界，实读文件字节数与 SHA-256
+并与 manifest 精确比对。Teams `run-metadata.json.profile` 的真实合同是
+`{mode:"live", alias:"<non-empty>"}`，不是字符串 `mandatory`；`mandatory` 只从
+summary 的 Casebook profile 校验。G0 也不能只信聚合 `ok`：公开 capabilities 必须可读
+且为 object，health 必须逐字段满足 HTTP 200、DB/auth/auth.ready、环境和 backend
+fingerprint，Teams/QWork/session、runtime 顶层/loaded/compatibility、
+`updatePhase=idle`、`preparedRelease=null` 与十字段身份逐项一致，不得只凭身份字符串
+或聚合状态推断。
+G4 readiness 必须把自身前 70 个 Case ID 与状态机内已准入 G3 的 70 个 ID 精确同序比对，
+不能只与静态 Casebook 自身做前缀比较。
 
 QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 `MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -58,11 +130,10 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 矩阵、首次系统权限/升级重启、多账号或受保护资源等人工边界的依据；12 条通过不得
 替代这些手工检查，也不得等同于生产灰度门禁通过。
 
-同一候选发布的固定执行顺序为“新增 MR 核心冒烟 12 条 -> 逐 Case 可信复核 -> 原生产
-灰度门禁 70 条 -> 逐 Case 可信复核”。两批必须各自执行能力审计和精确 `READY`，
-使用独立不可变输出目录和同一重新读回的冻结发布身份，Case 间串行，
-`inherited=0`、`synthetic=0`；前一批存在 framework/testcase issue 时按自愈闭环从
-1/12 重跑，存在产品 Bug 或阻塞时保留证据并报告，不得把 12 条结果继承进 70 条。
+12 条不是首道部署门禁。它只允许在 G1 核心生命线 16/16 可信全绿后启动；其通过也
+只能解锁 G3，不能替代 70/160 或 soak。G1-G4 均使用同一重新读回的冻结发布身份、
+独立不可变输出目录、唯一 runner 和 Case 间串行，始终为 `inherited=0`、
+`synthetic=0`。
 
 `MRSMOKE-AUTO-001` 必须使用服务端合同允许的最小 `intervalMs=60000`，并以当前
 时刻作为 `activeFrom`。服务端创建合同会把过去的 `activeFrom` 钳制到服务端当前
@@ -195,24 +266,33 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx
+     PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+     --sheet 核心生命线门禁 \
+     --out outputs/<new-core16-capability-audit-dir>
+
+   npm run core-beta:capability-audit -- \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
      --sheet 生产灰度门禁Case \
      --out outputs/gate70-capability-audit
 
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
      --sheet 全量功能回归Case \
      --out outputs/full160-capability-audit
    ```
 
-   审计报告必须是 `qbot-core-beta-capability-audit/v2`，且同时满足
+   G1 报告必须为 `qbot-core-beta-capability-audit/v2`，固定 ID 顺序完全一致，且满足
+   `protocol.executable_count=16`、`runtime_dispatch.dispatchable_count=16`、
+   `capability_summary.directly_runnable_without_controller=16`、11 条 native、5 条
+   verified legacy、`strict_controller_required=0` 和 `unsupported_runtime=0`。
+   G3 报告必须同时满足
    `protocol.executable_count=70`、`runtime_dispatch.ok=true`、
    `runtime_dispatch.dispatchable_count=70`、
    `capability_summary.directly_runnable_without_controller=70`、
@@ -240,27 +320,31 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx \
-     --sheet 生产灰度门禁Case \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+     --sheet 核心生命线门禁 \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
-     --expected-count 70 \
-     --expected-sha256 da1c24607f07281a8223edcc3e461bfdeb1b0405b13004ffea8b686e3cdf71f3 \
+     --expected-count 16 \
+     --expected-sha256 4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
      --expected-control-plane-origin "<exact-control-plane-origin>" \
-     --native-ime-command "<managed-native-ime-input-command>" \
      --production-gate true \
      --backend-version "<backend-release-id>" \
      --prompt-policy-version "<prompt-policy-id>" \
-     --feature-flags-hash "<feature-flags-sha256>"
+     --feature-flags-hash "<feature-flags-sha256>" \
+     --qwork-ui-git-commit "<qwork-ui-commit>" \
+     --qwork-build-id "<qwork-build-id>" \
+     --qwork-release-manifest-sha256 "<manifest-sha256>"
    ```
 
-   完整 160 条回归使用同一命令，将 Sheet 改为 `全量功能回归Case`、
-   `--expected-count` 改为 `160`，SHA 保持不变。70 与 160 必须分别得到精确
-   `READY`，不能用一个 Sheet 的 pretest 替代另一个。
+   该命令首先只授权 G1。G1 可信通过后，G2/G3/G4 分别以同一命令改用
+   `新增MR核心冒烟`/12、`生产灰度门禁Case`/70、`全量功能回归Case`/160；每阶段都
+   必须重新读取发布身份、生成新 pretest 目录并取得精确 `READY`。一个 Sheet 的
+   pretest 不能替代另一个。G3/G4 包含原生 IME Case，必须再传入并通过同一受管
+   `--native-ime-command` 无副作用 probe。
 
    QWork 日常回归同样传 `--production-gate true`，用于冻结 Teams/QWork/control
    plane/backend/prompt policy/feature flags 并启用严格证据门禁；但它不是 70/160
@@ -278,6 +362,14 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    HTTP 4xx/5xx（包括 `invalid_launch_mode`）均必须在 Case 0 前令 pretest
    `BLOCKED`。可见 Composer、登录态和正确 release URL 不能替代该公开状态门禁，
    禁止在 capabilities 不可读时仍返回 `READY`。
+   Teams lane 还必须对已冻结的 control plane 执行一次无凭据、只读
+   `GET /api/health/ready`。只有 HTTP 200、`ok=true`、`ready=true`、
+   `checks.db=true`、`checks.auth=true`、`auth.ready=true`，且响应 `env` 与 control
+   plane 环境一致时，独立检查 `qwork_control_plane_health` 才可通过。框架必须按
+   `<env>-health-<fingerprint>`（即 `env-health-fingerprint`）构造观测 backend identity，
+   并与冻结 `--backend-version` 全等；`qwork_backend_identity` 不通过时同样在 Case 0
+   前 `BLOCKED`。页面登录、capabilities 可读或调用者传入的 backend 字符串都不能替代
+   这一真实健康与身份读回。
    正式 runner 内部的每次公开 capabilities 读回同样必须采用 2 秒单次超时、最多 3 次
    只读重试；最终状态证据保存 `capabilities_readback_attempts`（含耗时和错误），
    全部失败仍按不可读处理，绝不能让悬挂 IPC 阻塞串行批次或被缓存/可见文案替代。
@@ -507,7 +599,7 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx"
 SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
 OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
@@ -614,7 +706,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx"
+   CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx"
    SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
