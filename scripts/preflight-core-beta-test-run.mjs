@@ -609,6 +609,7 @@ async function main() {
           casebookSha256,
           frameworkCommit: head,
           requireReady: true,
+          requireFreshRef: true,
         });
         const ok = binding.ok && shaMatches && releaseIntake.decision === 'READY';
         addCheck('qwork_release_intake', ok,

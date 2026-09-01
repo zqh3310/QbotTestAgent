@@ -290,6 +290,7 @@ export function createQworkReleaseTestPlan({
       casebookSha256: nonEmptyString(casebookSha256),
       frameworkCommit: nonEmptyString(frameworkCommit),
       requireReady: true,
+      requireFreshRef: true,
     });
     if (!intakeValidation.ok) errors.push(`release_intake_invalid:${intakeValidation.failures.join(',')}`);
     if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(releaseIntakeSha256))) {
@@ -420,6 +421,7 @@ export function validateQworkReleaseIntakeBinding({ plan, report, reportSha256 =
     casebookSha256: plan?.casebook?.sha256,
     frameworkCommit: plan?.framework?.commit,
     requireReady: true,
+    requireFreshRef: true,
   });
   failures.push(...validation.failures.map((item) => `release_intake_${item}`));
   return { ok: failures.length === 0, failures: [...new Set(failures)], required: true };

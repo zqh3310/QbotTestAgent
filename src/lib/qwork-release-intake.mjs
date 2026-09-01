@@ -408,6 +408,7 @@ export function validateQworkReleaseIntake(report, {
   casebookSha256 = '',
   frameworkCommit = '',
   requireReady = true,
+  requireFreshRef = false,
 } = {}) {
   const failures = [];
   if (report?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) failures.push('schema_mismatch');
@@ -420,6 +421,7 @@ export function validateQworkReleaseIntake(report, {
   if (releaseHead && text(report?.release?.head) !== text(releaseHead)) failures.push('release_head_mismatch');
   if (casebookSha256 && text(report?.casebook?.sha256).toLowerCase() !== text(casebookSha256).toLowerCase()) failures.push('casebook_sha256_mismatch');
   if (frameworkCommit && text(report?.framework?.commit) !== text(frameworkCommit)) failures.push('framework_commit_mismatch');
+  if (requireFreshRef && report?.policy?.fetch_latest !== true) failures.push('release_ref_not_freshly_fetched');
   if (!HEX40.test(text(report?.release?.head))) failures.push('release_head_invalid');
   if (report?.scan_boundary?.mode === 'commit_ancestry' && !report.scan_boundary.ancestry_verified) failures.push('ancestry_not_verified');
   if (report?.unresolved?.unmapped_product_paths?.length) failures.push('unmapped_product_paths');

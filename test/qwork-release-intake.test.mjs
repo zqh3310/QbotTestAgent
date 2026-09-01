@@ -211,6 +211,7 @@ test('intake output is immutable and content hash is validated', () => {
     const files = writeQworkReleaseIntake({ report, outDir: out });
     assert.equal(fs.existsSync(files.json), true);
     assert.equal(validateQworkReleaseIntake(JSON.parse(fs.readFileSync(files.json, 'utf8')), { requireReady: false }).ok, true);
+    assert.equal(validateQworkReleaseIntake(JSON.parse(fs.readFileSync(files.json, 'utf8')), { requireReady: false, requireFreshRef: true }).ok, false);
     assert.throws(() => writeQworkReleaseIntake({ report, outDir: out }), /新的不可变目录/);
     assert.equal(typeof stableJson(report), 'string');
   } finally {
@@ -230,6 +231,7 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
     scan_boundary: { mode: 'commit_ancestry', ancestry_verified: true },
     unresolved: { unmapped_product_paths: [], unverified_mr_metadata: [] },
     blockers: [],
+    policy: { fetch_latest: true },
     integrity: { content_sha256: '' },
   };
   const withoutHash = structuredClone(report);
