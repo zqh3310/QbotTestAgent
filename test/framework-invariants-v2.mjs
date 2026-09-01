@@ -954,6 +954,33 @@ assert.deepEqual(
   assert.equal(productFailure.execution_completion.evidence_complete, true);
   assert.equal(productFailure.case_execution_recorded, true);
 
+  const initializationFailure = {
+    id: 'BETA-INIT-001',
+    status: 'failed',
+    result_category: 'bug',
+    synthetic: false,
+    evidence_manifest: { complete: true, missing_roles: [], invalid_roles: [] },
+    initialization_continuation: {
+      eligible: true,
+      safe: true,
+      release_gate_eligible: false,
+    },
+    actual_result: '运行时维护动作失败，但工作台可继续收集独立 Case 证据',
+  };
+  annotateCoreBetaExecutionResult({
+    testCase: { id: initializationFailure.id, contract_version: 'qbot-core-beta/v2' },
+    result: initializationFailure,
+  });
+  assert.equal(
+    initializationFailure.execution_completion.release_gate_eligible,
+    false,
+    '初始化连续性明确禁止放行时，即使 manifest 完整也不得标记为 release-gate eligible',
+  );
+  assert.equal(
+    initializationFailure.execution_completion.reason,
+    '初始化连续性合同明确禁止本 Case 进入发布放行。',
+  );
+
   const conflictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-conflict-negative-'));
   try {
     const conflictFile = path.join(conflictDir, 'expert-conflict-trace.json');

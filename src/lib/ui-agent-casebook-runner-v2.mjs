@@ -2225,11 +2225,18 @@ export function annotateCoreBetaExecutionResult({ testCase, result, completionIs
       result.conclusion = `失败：${result.actual_result}`;
     }
   } else {
+    const evidenceComplete = result.evidence_manifest?.complete === true;
+    const initializationGateEligible = result.initialization_continuation?.release_gate_eligible !== false;
+    const releaseGateEligible = evidenceComplete && initializationGateEligible;
     result.execution_completion = {
       status: 'recorded',
-      evidence_complete: result.evidence_manifest?.complete === true,
-      reason: result.evidence_manifest?.complete === true ? '' : '未生成可供可信放行的 evidence manifest。',
-      release_gate_eligible: result.evidence_manifest?.complete === true,
+      evidence_complete: evidenceComplete,
+      reason: !evidenceComplete
+        ? '未生成可供可信放行的 evidence manifest。'
+        : releaseGateEligible
+          ? ''
+          : '初始化连续性合同明确禁止本 Case 进入发布放行。',
+      release_gate_eligible: releaseGateEligible,
     };
   }
   result.execution_provenance = result.execution_provenance || 'executed';
