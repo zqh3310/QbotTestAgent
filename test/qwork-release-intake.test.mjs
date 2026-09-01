@@ -78,6 +78,19 @@ test('known product paths and generated metadata are classified without false un
   assert.equal(mapped.required_stages.includes('G3'), true);
 });
 
+test('purely static changes do not become desktop E2E impact from branch wording', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: ['dashboard/src/app/App.tsx', 'docs/release-runtime.md', '.gitlab-ci.yml'],
+    branch: 'codex/dashboard-yaml-runtime',
+    subject: 'Merge branch runtime update into release/0.1',
+    availableCaseIds: ['MRSMOKE-FAIL-001', 'BETA-HOST-003'],
+  });
+  assert.deepEqual(mapped.direct_case_ids, []);
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+  assert.deepEqual(mapped.required_stages, ['G1']);
+});
+
 test('release intake uses commit ancestry and binds verified MR metadata', () => {
   const { repo, baseline, releaseHead } = fixtureRepo();
   try {

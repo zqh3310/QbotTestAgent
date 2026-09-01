@@ -234,17 +234,22 @@ function isProductSourcePath(filePath) {
 
 export function mapReleaseImpact({ changedPaths: paths = [], subject = '', body = '', branch = '', labels = [], availableCaseIds = [] } = {}) {
   const files = [...new Set(paths.map((item) => text(item)).filter(Boolean))];
+  const staticFiles = files.filter((file) => staticDisposition(file));
+  const productFiles = files.filter((file) => isProductSourcePath(file));
   // Prefix paths with a slash so path rules also match when several paths are
   // joined into one searchable string (rules use ^|/ boundaries).
-  const searchText = `${branch} ${subject} ${body} ${files.map((file) => `/${file}`).join(' ')} ${labels.join(' ')}`;
+  // Purely static MRs (CI/Dashboard/docs/tests) must never become desktop E2E
+  // impact merely because a branch title contains a word such as "runtime".
+  const searchableFiles = productFiles.length ? productFiles : [];
+  const searchText = productFiles.length
+    ? `${branch} ${subject} ${body} ${searchableFiles.map((file) => `/${file}`).join(' ')} ${labels.join(' ')}`
+    : '';
   const matchedRules = IMPACT_RULES.filter((candidate) => candidate.patterns.some((pattern) => pattern.test(searchText)));
   const direct = new Set(matchedRules.flatMap((candidate) => candidate.case_ids));
   const available = new Set(availableCaseIds.map(text).filter(Boolean));
   const allDirect = [...direct];
   const directAvailable = available.size ? allDirect.filter((id) => available.has(id)) : allDirect;
   const outOfScope = available.size ? allDirect.filter((id) => !available.has(id)) : [];
-  const staticFiles = files.filter((file) => staticDisposition(file));
-  const productFiles = files.filter((file) => isProductSourcePath(file));
   // A title-level match can select the right Case set, but it cannot certify
   // every changed source file. Unknown product paths stay blocking until a
   // path rule (or an explicit Casebook mapping) covers that exact path.
