@@ -2976,6 +2976,36 @@ try {
     throw new Error('只读取隐藏节点、未真实触发目标功能时不得升级可信 Bug');
   }
 
+  const runtimeMaintenanceFailure = assessUserCenteredOutcome({
+    id: 'BETA-INIT-001',
+    status: 'failed',
+    result_category: 'bug',
+    title: '运行时维护按钮真实点击后显示失败但工作台仍可用',
+    steps: [
+      { action: '点击【新建任务】', status: 'passed' },
+      {
+        action: 'preparePythonRuntimes 真实 UI 操作与终态采样',
+        status: 'failed',
+        category: 'bug',
+        actual: 'action_observed=true；busy=true；terminal=true；ready=false；loaded=true；sdk_ready=true；composer_ready=true；workbench_ready=true；capabilities_readable=true',
+      },
+    ],
+    assertions: [{
+      name: 'preparePythonRuntimes 稳定终态',
+      expected: '维护区、SDK 状态、输入区与公开 capabilities 必须连续稳定就绪。',
+      actual: '{"ready":false,"pending":false,"failed":true,"loaded":true,"sdk_ready":true,"button_enabled":true,"composer_ready":true,"workbench_ready":true,"capabilities_readable":true}',
+      status: 'failed',
+      category: 'bug',
+    }],
+    screenshots: { assistant_prepare_python_runtimes_terminal: bugShot },
+  });
+  if (runtimeMaintenanceFailure.classification !== 'bug'
+    || !runtimeMaintenanceFailure.gates.product_action_exercised
+    || !runtimeMaintenanceFailure.gates.independent_bug_corroboration
+    || !runtimeMaintenanceFailure.gates.aligned_outcome_screenshot) {
+    throw new Error(`运行时维护真实失败且可继续时必须保留为可信产品 Bug：${JSON.stringify(runtimeMaintenanceFailure)}`);
+  }
+
   const incompleteManifest = assessUserCenteredOutcome({
     ...bugResult,
     evidence_manifest: {

@@ -31381,10 +31381,10 @@ const USER_REVIEW_SCREENSHOT_SETUP = /(?:^|[-_.])(before|model[-_. ]?tier|fixtur
 const USER_REVIEW_SEMANTIC_ORACLE_ASSERTION = /回复(?:相关性|可读性|准确性|完整性|正确性|质量)|回答(?:相关性|准确性|完整性|正确性|质量)|语义|上下文(?:沿用|记忆|一致性)|约束(?:更新|保留|一致性)|事实(?:准确|一致)|计算(?:正确|准确)|内容(?:相关|完整|准确)|是否(?:虚构|幻觉)|重复输出|三点待办|条目数量|公式正确/i;
 const USER_REVIEW_COPY_OR_NOMENCLATURE_ASSERTION = /文案|标签|名称|占位符|提示词|M1\s*[-~至到]\s*M4|安全(?:级别|档位).*(?:显示|名称|标签)/i;
 const USER_REVIEW_OBJECTIVE_UI_ASSERTION = /入口|按钮|菜单|列表|对话框|弹窗|页面|卡片|状态|终态|持久|保存|删除|安装|卸载|重试|重开|重新进入|重命名|焦点|滚动|可见|数量|创建|召唤|选中|启用|停用|chip|preview|artifact|成果/i;
-const USER_REVIEW_OBJECTIVE_FAILURE_OBSERVATION = /(?:visible|exists|present|enabled|selected|persisted|restored|created|installed|deleted)\s*=\s*false|(?:count|数量)\s*=\s*0|未出现|未显示|不可见|没有[^。\n]*(?:入口|按钮|菜单|结果|任务|卡片|专家|技能|连接器)|找不到|变为空闲空任务|仍为空|列表为空|未保存|未生效|未持久|未恢复|未创建|无法继续|不能继续/i;
+const USER_REVIEW_OBJECTIVE_FAILURE_OBSERVATION = /(?:visible|exists|present|enabled|selected|persisted|restored|created|installed|deleted)\s*=\s*false|(?:["'](?:ready|pending|failed|authoritative_ready|visible_activity|loaded|sdk_ready|button_enabled|composer_ready|workbench_ready|selected|persisted|restored|created|installed|deleted)["']\s*:\s*false)|(?:count|数量)\s*=\s*0|未出现|未显示|不可见|没有[^。\n]*(?:入口|按钮|菜单|结果|任务|卡片|专家|技能|连接器)|找不到|变为空闲空任务|仍为空|列表为空|未保存|未生效|未持久|未恢复|未创建|无法继续|不能继续/i;
 const USER_REVIEW_HARD_PRODUCT_FAILURE = /本地执行上下文尚未就绪|模型服务暂时不可用|模型服务(?:暂时)?不可达|无法连接模型服务|Unknown skill\s*:|HTTP\s*5\d\d|原始\s*JSON|Traceback\s*\(most recent|系统内部错误|服务内部错误|供应商错误详情|运行时(?:尚未|未)就绪/i;
 const USER_REVIEW_TIMEOUT_FAILURE = /(?:等待|回复|生成).{0,20}(?:超时|无回复|未响应)|(?:超时|无回复|未响应).{0,20}(?:等待|回复|生成)/i;
-const USER_REVIEW_PRODUCT_ACTION_VERB = /点击|进入|打开|关闭|重开|重新进入|选择|删除|安装|卸载|提交|右键|双击|滚动|切换|查看|创建|召唤|拖拽|上传|下载|复制|粘贴|输入/i;
+const USER_REVIEW_PRODUCT_ACTION_VERB = /点击|进入|打开|关闭|重开|重新进入|选择|删除|安装|卸载|提交|右键|双击|滚动|切换|查看|创建|召唤|拖拽|上传|下载|复制|粘贴|输入|preparePythonRuntimes|全量重初始化|一键重装\s*Skill|清空全部会话/i;
 const USER_REVIEW_PRODUCT_ACTION_SETUP = /前置|准备|清理|复核|检查|校验|读取|采集|记录|测试数据|发送.*前/i;
 const USER_REVIEW_FEATURE_ACTION_RULES = [
   [/连接器/i, /连接器/i],
