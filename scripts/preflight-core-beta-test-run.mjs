@@ -464,18 +464,18 @@ async function main() {
     fs.existsSync(casebook) && isGitTracked(casebook),
     isGitTracked(casebook) ? 'Casebook is tracked by Git' : `untracked=${path.relative(ROOT, casebook)}`,
   );
-  let casebookSha = '';
+  let casebookSha256 = '';
   let cases = [];
   let fullCases = [];
   let protocol = null;
   let scope = null;
   if (fs.existsSync(casebook) && fs.statSync(casebook).isFile()) {
-    casebookSha = sha256File(casebook);
+    casebookSha256 = sha256File(casebook);
     const expectedSha = String(options['expected-sha256'] || '').trim().toLowerCase();
     addCheck(
       'casebook_sha256',
-      Boolean(expectedSha) && casebookSha === expectedSha,
-      `actual=${casebookSha}; expected=${expectedSha || '(missing --expected-sha256)'}`,
+      Boolean(expectedSha) && casebookSha256 === expectedSha,
+      `actual=${casebookSha256}; expected=${expectedSha || '(missing --expected-sha256)'}`,
     );
     const exportedFile = path.join(outDir, 'casebook-cases.json');
     const exporter = commandResult(String(options.python || process.env.PYTHON || 'python3'), [
@@ -942,7 +942,7 @@ async function main() {
       path: casebook,
       sheet,
       profile,
-      sha256: casebookSha,
+      sha256: casebookSha256,
       expected_sha256: String(options['expected-sha256'] || ''),
       case_count: cases.length,
       expected_count: Number(options['expected-count']) || null,

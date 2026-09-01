@@ -10,6 +10,16 @@ import {
 } from '../src/lib/qwork-release-test-plan.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const preflightSource = fs.readFileSync(
+  path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),
+  'utf8',
+);
+if (!/let\s+casebookSha256\s*=\s*''/.test(preflightSource)
+  || !/casebookSha256\s*=\s*sha256File\(casebook\)/.test(preflightSource)
+  || !/validateQworkReleaseIntake\(releaseIntake,\s*\{\s*casebookSha256,/.test(preflightSource)
+  || /let\s+casebookSha\s*=/.test(preflightSource)) {
+  throw new Error('Pretest must bind release intake to the computed Casebook SHA variable.');
+}
 const casebook = path.join(root, 'PRD', 'QBot核心内测门禁Casebook_74条_2026-07-31.xlsx');
 const expectedSha = '25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6';
 const autoTest = path.join(root, 'autoTest');
