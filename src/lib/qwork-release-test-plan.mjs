@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  validateQworkReleaseIntake,
+} from './qwork-release-intake.mjs';
 
 export const QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan/v1';
 export const QWORK_RELEASE_TEST_STATE_SCHEMA = 'qbot-qwork-release-test-state/v1';
@@ -259,6 +263,9 @@ export function createQworkReleaseTestPlan({
   casebookSha256,
   frameworkCommit,
   releaseIdentity,
+  releaseIntake,
+  releaseIntakePath = '',
+  releaseIntakeSha256 = '',
 } = {}) {
   const identityAudit = validateQworkReleaseIdentity(releaseIdentity);
   const errors = [];
@@ -275,6 +282,33 @@ export function createQworkReleaseTestPlan({
   if (identityAudit.invalid_fields.length) {
     errors.push(`release_identity_invalid:${identityAudit.invalid_fields.join(',')}`);
   }
+  let intakeBinding = null;
+  if (releaseIntake != null) {
+    const intakeValidation = validateQworkReleaseIntake(releaseIntake, {
+      releaseRef: releaseIntake?.release?.ref,
+      releaseHead: releaseIntake?.release?.head,
+      casebookSha256: nonEmptyString(casebookSha256),
+      frameworkCommit: nonEmptyString(frameworkCommit),
+      requireReady: true,
+    });
+    if (!intakeValidation.ok) errors.push(`release_intake_invalid:${intakeValidation.failures.join(',')}`);
+    if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(releaseIntakeSha256))) {
+      errors.push('release_intake_sha256_invalid');
+    }
+    if (releaseIntake?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) {
+      errors.push('release_intake_schema_mismatch');
+    }
+    intakeBinding = {
+      schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
+      path: nonEmptyString(releaseIntakePath),
+      sha256: nonEmptyString(releaseIntakeSha256).toLowerCase(),
+      content_sha256: nonEmptyString(releaseIntake?.integrity?.content_sha256),
+      release_ref: nonEmptyString(releaseIntake?.release?.ref),
+      release_head: nonEmptyString(releaseIntake?.release?.head),
+      required_stages: Array.isArray(releaseIntake?.summary?.required_stages)
+        ? [...releaseIntake.summary.required_stages] : [],
+    };
+  }
   if (errors.length) throw new Error(`QWork 发布测试计划输入无效：${errors.join('；')}`);
   return {
     schema_version: QWORK_RELEASE_TEST_PLAN_SCHEMA,
@@ -286,6 +320,7 @@ export function createQworkReleaseTestPlan({
     framework: { commit: nonEmptyString(frameworkCommit).toLowerCase() },
     release_identity: identityAudit.identity,
     release_identity_sha256: identityAudit.fingerprint,
+    release_intake: intakeBinding,
     policy: {
       case_execution: 'single-runner-forced-serial',
       model_tier: 'M3',
@@ -294,6 +329,8 @@ export function createQworkReleaseTestPlan({
       admission_source: 'trusted-review-only',
       stop_on_non_pass: true,
       immutable_stage_outputs: true,
+      release_intake_required: Boolean(intakeBinding),
+      release_intake_source: intakeBinding ? 'qbot-qwork-release-intake/v1' : 'not-bound-legacy-plan',
     },
     stages: QWORK_RELEASE_TEST_STAGES.map((stage) => ({ ...stage })),
   };
@@ -363,6 +400,33 @@ export function validateQworkReleaseControlState({ plan, state, integrity } = {}
     plan_sha256: planSha256,
     state_sha256: stateSha256,
   };
+}
+
+export function validateQworkReleaseIntakeBinding({ plan, report, reportSha256 = '' } = {}) {
+  const failures = [];
+  const binding = plan?.release_intake;
+  if (plan?.policy?.release_intake_required !== true || !binding) {
+    return { ok: true, failures: [], required: false };
+  }
+  if (report?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) failures.push('release_intake_schema_mismatch');
+  if (binding.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) failures.push('plan_release_intake_schema_mismatch');
+  if (textValue(report?.release?.ref) !== textValue(binding.release_ref)) failures.push('release_intake_release_ref_mismatch');
+  if (textValue(report?.release?.head) !== textValue(binding.release_head)) failures.push('release_intake_release_head_mismatch');
+  if (textValue(report?.integrity?.content_sha256) !== textValue(binding.content_sha256)) failures.push('release_intake_content_hash_mismatch');
+  if (reportSha256 && textValue(reportSha256).toLowerCase() !== textValue(binding.sha256).toLowerCase()) failures.push('release_intake_artifact_sha256_mismatch');
+  const validation = validateQworkReleaseIntake(report, {
+    releaseRef: binding.release_ref,
+    releaseHead: binding.release_head,
+    casebookSha256: plan?.casebook?.sha256,
+    frameworkCommit: plan?.framework?.commit,
+    requireReady: true,
+  });
+  failures.push(...validation.failures.map((item) => `release_intake_${item}`));
+  return { ok: failures.length === 0, failures: [...new Set(failures)], required: true };
+}
+
+function textValue(value) {
+  return String(value ?? '').trim();
 }
 
 function capabilityAuditFailures(plan, stage, report = {}) {
@@ -450,6 +514,17 @@ function pretestFailures(plan, stage, report = {}) {
   if (report?.release_identity?.observed_fingerprint !== observedIdentity.fingerprint) {
     failures.push('pretest_release_identity_observed_fingerprint_mismatch');
   }
+  if (plan?.policy?.release_intake_required === true) {
+    const intakeCheck = checks.find((check) => check?.id === 'qwork_release_intake');
+    if (intakeCheck?.status !== 'passed') failures.push('pretest_release_intake_check_missing_or_failed');
+    const intake = report?.release_intake;
+    const binding = plan.release_intake || {};
+    if (intake?.sha256 !== binding.sha256
+      || intake?.content_sha256 !== binding.content_sha256
+      || intake?.release_head !== binding.release_head) {
+      failures.push('pretest_release_intake_binding_mismatch');
+    }
+  }
   const runtimeAssessment = report?.runtime?.qwork?.runtime_release_assessment;
   const controlPlaneHealth = report?.runtime?.control_plane_health;
   const publicCapabilities = report?.runtime?.teams_inspection?.public_capabilities;
@@ -533,6 +608,8 @@ export function auditQworkStageReadiness({
   capabilityAudit,
   pretest,
   expectedPrefixCaseIds,
+  releaseIntake,
+  releaseIntakeSha256 = '',
 } = {}) {
   const stage = qworkReleaseStage(stageId);
   if (!stage || stage.kind !== 'casebook') throw new Error(`阶段 ${stageId || 'missing'} 不是 Casebook 阶段`);
@@ -540,6 +617,8 @@ export function auditQworkStageReadiness({
     ...capabilityAuditFailures(plan, stage, capabilityAudit),
     ...pretestFailures(plan, stage, pretest),
   ];
+  const intakeBinding = validateQworkReleaseIntakeBinding({ plan, report: releaseIntake, reportSha256: releaseIntakeSha256 });
+  failures.push(...intakeBinding.failures);
   const capabilityCaseIds = Array.isArray(capabilityAudit?.cases)
     ? capabilityAudit.cases.map((item) => nonEmptyString(item?.case_id))
     : [];
@@ -567,6 +646,7 @@ export function auditQworkStageReadiness({
       casebook_sha256: plan.casebook.sha256,
       framework_commit: plan.framework.commit,
       release_identity_sha256: plan.release_identity_sha256,
+      release_intake: plan.release_intake || null,
       case_ids: capabilityCaseIds,
     },
   };

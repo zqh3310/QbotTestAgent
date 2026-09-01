@@ -14,6 +14,7 @@ import {
   createQworkReleaseTestState,
   qworkReleaseIdentityFingerprint,
   qworkReleaseStage,
+  validateQworkReleaseIntakeBinding,
   validateQworkReleaseControlState,
 } from '../src/lib/qwork-release-test-plan.mjs';
 
@@ -24,7 +25,9 @@ Usage:
   npm run qwork-release:orchestrate -- init \\
     --state-dir <new-control-directory> \\
     --casebook <xlsx> \\
-    --release-identity <release-identity.json>
+    --release-identity <release-identity.json> \\
+    --release-intake <release-intake.json> \\
+    --require-release-intake true
 
   npm run qwork-release:orchestrate -- readiness \\
     --state-dir <control-directory> \\
@@ -45,7 +48,8 @@ Usage:
 
 编排器永远不使用 raw passed/failed 作为阶段准入。Casebook 阶段必须同时具备
 精确能力审计、精确 READY、完整真实执行、完整 evidence manifest、匹配的发布身份
-以及 trusted_pass=N。任何其他可信分类都会停止流水线，后续阶段保持 NOT_STARTED。
+以及 trusted_pass=N。若计划绑定 release intake，还必须证明报告文件 SHA、release HEAD、
+Casebook SHA 和 framework commit 全等。任何其他可信分类都会停止流水线，后续阶段保持 NOT_STARTED。
 `;
 }
 
@@ -237,6 +241,14 @@ function init(options) {
   if (fs.existsSync(files.root) && fs.readdirSync(files.root).length) {
     throw new Error(`控制目录必须是新的空目录：${files.root}`);
   }
+  const requireReleaseIntake = ['1', 'true', 'yes'].includes(String(options['require-release-intake'] || '').toLowerCase());
+  const releaseIntakePath = options['release-intake'] ? path.resolve(options['release-intake']) : '';
+  if (requireReleaseIntake && !releaseIntakePath) {
+    throw new Error('正式发布计划要求 --release-intake；请先运行 qwork-release:scan。');
+  }
+  if (releaseIntakePath && (!fs.existsSync(releaseIntakePath) || !fs.statSync(releaseIntakePath).isFile())) {
+    throw new Error(`release intake 报告不存在：${releaseIntakePath}`);
+  }
   const casebook = path.resolve(options.casebook);
   if (!fs.existsSync(casebook) || !fs.statSync(casebook).isFile()) throw new Error(`Casebook 不存在：${casebook}`);
   const head = git('rev-parse', 'HEAD');
@@ -247,11 +259,15 @@ function init(options) {
     throw new Error(`正式计划要求 main==origin/main 且 tracked clean：branch=${branch} HEAD=${head} origin/main=${originMain} dirty=${Boolean(dirty)}`);
   }
   const identity = readJson(path.resolve(options['release-identity']));
+  const releaseIntake = releaseIntakePath ? readJson(releaseIntakePath) : undefined;
   const plan = createQworkReleaseTestPlan({
     casebookPath: casebook,
     casebookSha256: sha256File(casebook),
     frameworkCommit: head,
     releaseIdentity: identity,
+    releaseIntake,
+    releaseIntakePath,
+    releaseIntakeSha256: releaseIntakePath ? sha256File(releaseIntakePath) : '',
   });
   const state = createQworkReleaseTestState(plan);
   const integrity = createQworkReleaseTestIntegrity(plan, state);
@@ -269,6 +285,17 @@ function readiness(options) {
   if (!stage || stage.kind !== 'casebook') throw new Error(`readiness 只接受 G1-G4：${options.stage}`);
   const capabilityFile = resolveReport(options['capability-audit'], 'capability-audit.json');
   const pretestFile = resolveReport(options.pretest, 'core-beta-pretest-report.json');
+  let releaseIntake;
+  let releaseIntakeSha256 = '';
+  if (plan.policy?.release_intake_required === true) {
+    const intakePath = String(plan.release_intake?.path || '').trim();
+    const intakeFile = intakePath ? path.resolve(intakePath) : '';
+    if (!intakeFile || !fs.existsSync(intakeFile)) throw new Error(`计划绑定的 release intake 不存在：${intakeFile || '(missing)'}`);
+    releaseIntake = readJson(intakeFile);
+    releaseIntakeSha256 = sha256File(intakeFile);
+    const binding = validateQworkReleaseIntakeBinding({ plan, report: releaseIntake, reportSha256: releaseIntakeSha256 });
+    if (!binding.ok) throw new Error(`release intake 绑定校验失败：${binding.failures.join('；')}`);
+  }
   const audit = auditQworkStageReadiness({
     plan,
     stageId: stage.id,
@@ -277,6 +304,8 @@ function readiness(options) {
     expectedPrefixCaseIds: stage.id === 'G4'
       ? state?.stages?.G3?.admission?.expected?.case_ids
       : undefined,
+    releaseIntake,
+    releaseIntakeSha256,
   });
   const saved = saveAudit({ files, plan, state, integrity, audit, phase: 'readiness' });
   return { command: 'readiness', audit, event: saved.eventFile, state: saved.nextState };

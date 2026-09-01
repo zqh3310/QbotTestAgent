@@ -1308,3 +1308,52 @@ git diff --check
 ```
 
 未经上述校验，不得提交为新的框架基线。
+
+## 14. 每轮执行前的 release intake 与变更影响扫描
+
+快速迭代项目不能只依赖固定的“最近两天 MR”列表。每一个新的正式候选在 G0 和正式
+pretest 之前都必须先生成一次只读 `qbot-qwork-release-intake/v1` 报告，并将报告文件
+SHA-256 绑定到本轮 Casebook、QbotTestAgent framework commit 和 release/0.1 HEAD。
+推荐入口为：
+
+```bash
+npm run qwork-release:scan -- \
+  --repo /Users/qifu/Documents/deepbankV2 \
+  --release-ref origin/release/0.1 \
+  --casebook <Casebook.xlsx> --sheet <exact-name> \
+  --baseline-commit <last-accepted-release-commit> \
+  --framework-commit <QbotTestAgent-main-commit> \
+  --out outputs/<new-immutable-release-intake>
+```
+
+扫描器只读刷新 release 引用，枚举 first-parent 的直接合入提交，读取每个提交的真实
+changed paths/diff SHA，并通过一次次独立的 GitLab 只读 API 请求核对 MR iid、标题、标签、
+合并提交 SHA 和时间。GitLab Token 只能使用关闭回显的标准输入临时注入 curl 的 stdin；
+不得出现在命令参数、环境持久化、日志、报告或 Git 配置中。扫描器不修改 deepbankV2，
+不自动改写冻结 Casebook，也不产生任何 Case 结果。
+
+扫描边界按以下优先级确定：
+
+1. 上一次已接受 intake 的 release HEAD 到当前 HEAD；
+2. 当前 Casebook 设计基线 commit 到当前 HEAD；
+3. 只有在祖先关系无法证明、分支被重写或历史缺失时，才使用时间窗口兜底。
+
+默认日常窗口为最近 24 小时，并与上一次扫描重叠 48 小时；每日回归至少回看 7 天；
+发布候选优先使用完整 commit ancestry，不以固定天数替代；周期性完整审计使用最近 14 天
+或 100 个 first-parent commit（取较大者）。祖先不可证明时自动扩大到最近 30 天，仍不能
+确定边界则 `BLOCKED`。因此时间窗口是补偿机制，commit ancestry 才是权威边界。
+
+扫描结果把 MR 映射为 feature/risk domain、直接 Case、共享依赖闭包和所需阶段。核心
+门禁永远先于受影响 Case：任何产品行为变更至少要求 G1，随后才按映射解锁 G2/G3/G4。
+静态 CI、Dashboard、eval、文档和工具链变更保留静态合同审计，不冒充桌面 E2E。未知
+产品源码路径、未验证 MR 元数据、Casebook SHA/framework/release HEAD 不一致，均必须
+在 Case 0 前阻断；扫描器不能以“可能已有覆盖”放行，也不能自行新增或删除 Case。
+
+MR/提交阶段可以运行同一模块的轻量 diff 扫描，快速给出推荐 Case 集合，但不产生发布
+结论，也不能替代正式 G0。正式 runner 启动后冻结扫描报告和测试范围，不重新获取 MR，
+只监控 release SHA、运行时身份、OTA 和 health；发现漂移立即冻结当前不可变批次。
+
+正式 pretest 可通过 `--release-intake <release-intake.json>` 和
+`--release-intake-sha256 <sha256>` 绑定报告；`--production-gate true` 默认要求该绑定。
+状态机 `init/readiness` 在计划含 intake 时重新读取磁盘报告并校验文件 SHA、报告内容哈希、
+release HEAD、Casebook SHA、framework commit 和 `READY` 决策，旧报告不得跨 release 复用。

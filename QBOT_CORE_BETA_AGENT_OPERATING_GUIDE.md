@@ -1270,3 +1270,42 @@ raw `passed/failed` 不能直接用于发布。后续重跑通过不能抹去历
 1/160 与 soak。任一阶段失败都停止后续阶段。最终结论必须分别报告所有已启动阶段的
 真实执行、raw/可信分类、证据完整性和发布身份，禁止只报 raw `passed/failed`，也
 不得用较小阶段替代较大门禁或多轮发布聚合。
+
+## 11. G0 前置的 release intake 扫描
+
+快速迭代候选不得沿用上一批次的 MR 清单或 READY。每次正式 16/12/70/160 执行前，先在
+G0/pretest 前运行一次只读 release intake：
+
+```bash
+npm run qwork-release:scan -- \
+  --repo /Users/qifu/Documents/deepbankV2 \
+  --release-ref origin/release/0.1 \
+  --casebook <Casebook.xlsx> --sheet <exact-name> \
+  --baseline-commit <last-accepted-release-commit> \
+  --framework-commit <QbotTestAgent-main-commit> \
+  --out outputs/<new-immutable-release-intake>
+```
+
+扫描器先只读刷新 release ref，再按 first-parent 读取真实源码 diff 和直接合入 MR，核对
+GitLab 返回的 iid、merge commit SHA、标题、标签和 merged_at。Token 只能在关闭回显的
+标准输入中临时提供给单次只读 curl 请求，不得进入参数、环境、Git 配置或输出。报告
+`qbot-qwork-release-intake/v1` 必须保留 release HEAD、framework commit、Casebook SHA、
+扫描起止边界、MR、changed paths、diff SHA、影响域、直接 Case、依赖闭包和未覆盖变更。
+
+边界优先从上次已接受 intake HEAD 或 Casebook 设计基线 commit 到当前 release HEAD；只有
+祖先关系无法证明时才兜底最近 24 小时（日常窗口与上轮重叠 48 小时），每日回归至少回看
+7 天，周期审计为 14 天或 100 个 first-parent commit 取较大者，异常时扩大到 30 天，仍
+无法建立可信边界就保持 `BLOCKED`。时间窗口只是补偿，不是 MR 覆盖的权威依据。
+
+扫描到产品行为变化时必须先跑 G1 核心生命线，再按影响映射执行 G2/G3/G4；未知产品源码
+路径、MR 元数据未被 API 验证、静态审计与桌面 Case 混淆、或报告与本轮 release/Casebook/
+framework 不一致，均在 Case 0 前阻断。扫描不会自动修改或追加正式 Casebook；需要新增覆盖
+时必须先更新设计基线并形成新 SHA、新 commit、新报告。
+
+MR 阶段可运行轻量 diff 扫描做快速反馈，但不能产生发布结论。正式 runner 启动后不再扫描
+或改变范围，只做 release/runtime/OTA/health 身份漂移监控；intake 报告与范围一旦冻结，
+任何漂移都必须冻结批次并按 framework issue 规则处置。
+
+正式 pretest 的 `--production-gate true` 默认要求 `--release-intake`；状态机会重新读取
+报告文件并校验报告 SHA、内容哈希、release HEAD、Casebook SHA、framework commit 和
+`READY`，因此旧 intake 不能跨候选复用。
