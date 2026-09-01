@@ -1187,6 +1187,10 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
   从 1/70、1/160 或本轮 1/83 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
   放弃后续 Case。
+- 超时后的残留运行态清理必须每次重新读取同一非空 taskId 和公开状态，并重新定位当前
+  可见停止控件，最多进行两次短超时点击；仅当公开状态可读、taskId 未漂移、`running=false`
+  且停止控件消失时才算成功。不可读、漂移或控件仍可见都必须保留清理诊断并按
+  `automation_error` 处理，禁止把旧 locator 或 `evaluate()` 回退当作成功。
 - 日常回归专项证据的 `evidence_valid` 与产品 `oracle_valid` 必须分离。产品
   Oracle 失败但取证完整时记产品 Bug 并继续后续独立父 Case；取证或框架失败时，
   当前已开始执行的 Case 必须先落盘 `failed/automation_error` 或 `blocked`、进度和

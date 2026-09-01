@@ -33417,36 +33417,90 @@ async function waitForCredentialStability(page, timeoutMs = 30_000) {
 }
 
 async function cancelRunningReplyAfterTimeout(page, state, caseDir, label) {
-  const cancel = page.locator('[data-testid="composer-cancel"], button[aria-label="停止生成"], button[aria-label="正在停止"]').first();
+  const stopSelector = STOP_GENERATION_CONTROL_SELECTOR;
   const bridgeBefore = await qbotE2EState(page);
-  const shouldCancel = Boolean(bridgeBefore?.running) || await visible(cancel, 800);
-  if (!shouldCancel) {
+  const expectedTaskId = String(bridgeBefore?.activeId || '').trim();
+  const initialCancel = await lastVisibleLocator(page.locator(stopSelector), 800);
+  const shouldCancel = Boolean(bridgeBefore?.available === true && bridgeBefore?.running === true)
+    || Boolean(initialCancel);
+  if (!shouldCancel && bridgeBefore?.available === true && bridgeBefore?.running === false) {
     recordStep(state, `超时后清理运行态（${label}）`, '回复等待超时后若 Agent 仍运行，runner 必须停止本轮，避免污染下一条 case。', '未检测到仍在运行的 Agent，无需停止。', 'passed');
     return true;
   }
-  if (!(await visible(cancel, 1500))) {
-    recordStep(state, `超时后清理运行态（${label}）`, '回复等待超时后若 Agent 仍运行，runner 必须停止本轮，避免污染下一条 case。', `bridge.running=${Boolean(bridgeBefore?.running)}，但未找到 composer-cancel。`, 'failed', '', 'automation_error');
+  if (!expectedTaskId || bridgeBefore?.available !== true) {
+    recordStep(state, `超时后清理运行态（${label}）`, '清理前必须能读取同一非空 taskId 和公开运行态。', `清理前公开状态不可验证；taskId=${expectedTaskId || '空'}，available=${Boolean(bridgeBefore?.available)}。`, 'failed', '', 'automation_error');
     return false;
   }
-  await cancel.click({ force: true }).catch(async () => cancel.evaluate((el) => el.click()));
-  const deadline = Date.now() + 20000;
+  const attempts = [];
   let bridgeAfter = bridgeBefore;
   let stopped = false;
-  while (Date.now() < deadline) {
-    bridgeAfter = await qbotE2EState(page);
-    const cancelVisible = await visible(cancel, 300);
-    if ((!bridgeAfter?.available || !bridgeAfter.running) && !cancelVisible) {
-      stopped = true;
+  let failureReason = '';
+  for (let attempt = 1; attempt <= 2 && !stopped; attempt += 1) {
+    const currentBridge = await qbotE2EState(page);
+    const currentTaskId = String(currentBridge?.activeId || '').trim();
+    const currentCancel = await lastVisibleLocator(page.locator(stopSelector), 500);
+    const attemptRecord = {
+      attempt,
+      task_id: currentTaskId,
+      running: currentBridge?.running === true,
+      cancel_visible: Boolean(currentCancel),
+      clicked: false,
+      error: '',
+    };
+    attempts.push(attemptRecord);
+    if (currentBridge?.available !== true || currentTaskId !== expectedTaskId) {
+      failureReason = currentBridge?.available !== true
+        ? '清理期间公开运行态不可读。'
+        : `清理期间 taskId 发生漂移：expected=${expectedTaskId} observed=${currentTaskId || '空'}。`;
       break;
     }
-    await page.waitForTimeout(500);
+    if (currentBridge.running !== true) {
+      if (!currentCancel) {
+        stopped = true;
+        break;
+      }
+      failureReason = '同一 task 已停止但停止控件仍可见。';
+      await page.waitForTimeout(300);
+      continue;
+    }
+    if (!currentCancel) {
+      failureReason = '同一 task 仍在运行但当前停止控件不可见。';
+      break;
+    }
+    try {
+      await currentCancel.click({ force: true, timeout: 1500 });
+      attemptRecord.clicked = true;
+    } catch (error) {
+      attemptRecord.error = String(error?.message || error);
+      failureReason = attemptRecord.error;
+      if (attempt < 2) await page.waitForTimeout(100);
+      continue;
+    }
+    const settleDeadline = Date.now() + 20000;
+    while (Date.now() < settleDeadline) {
+      bridgeAfter = await qbotE2EState(page);
+      const settledTaskId = String(bridgeAfter?.activeId || '').trim();
+      const cancelStillVisible = Boolean(await lastVisibleLocator(page.locator(stopSelector), 300));
+      if (bridgeAfter?.available === true && settledTaskId === expectedTaskId && bridgeAfter.running === false && !cancelStillVisible) {
+        stopped = true;
+        break;
+      }
+      if (bridgeAfter?.available !== true || settledTaskId !== expectedTaskId) {
+        failureReason = bridgeAfter?.available !== true
+          ? '停止后公开运行态不可读。'
+          : `停止后 taskId 发生漂移：expected=${expectedTaskId} observed=${settledTaskId || '空'}。`;
+        break;
+      }
+      await page.waitForTimeout(500);
+    }
+    if (!stopped && !failureReason) failureReason = '停止后 20 秒内运行态或停止控件未收敛。';
   }
   state.screenshots[`timeout_cancel_${slugify(label)}`] = await shot(page, caseDir, `timeout-cancel-${slugify(label)}`);
   recordStep(
     state,
     `超时后停止当前 Agent（${label}）`,
     '等待超时后应停止仍在运行的 Agent，并确认运行态清理完成后再进入下一条 case。',
-    stopped ? '已点击停止生成，bridge.running=false，取消按钮已消失。' : `停止后仍未收敛；bridge.running=${Boolean(bridgeAfter?.running)}。`,
+    stopped ? '已按同一 task 重新定位并点击停止，bridge.running=false，取消按钮已消失。' : `${failureReason || `停止后仍未收敛；bridge.running=${Boolean(bridgeAfter?.running)}。`} attempts=${JSON.stringify(attempts)}`,
     stopped ? 'passed' : 'failed',
     state.screenshots[`timeout_cancel_${slugify(label)}`],
     stopped ? '' : 'automation_error',
@@ -41430,8 +41484,10 @@ function userOutcomeAssertions(result) {
 
 function isAutomationReviewFailure(item) {
   const text = `${item?.name || ''}\n${item?.action || ''}\n${item?.expected || ''}\n${item?.actual || ''}`;
+  const cdpFailure = /(?:\bcdp\b\s*(?:(?:runtime(?:\.evaluate)?|target|session|connection)\s*)?(?:断开|关闭|超时|错误|失败|不可用|disconnect(?:ed)?|closed|timeout|error|failure)|(?:断开|关闭|超时|错误|失败|不可用)\s*(?:的\s*)?\bcdp\b)/i;
   return item?.category === 'automation_error'
-    || item?.status === 'failed' && /selector|locator|runner|自动化(?:框架|链路|执行(?:失败|错误)|能力(?:不足|缺失))|无法定位|无法点击|步骤未执行|fixture.*(?:缺失|失败)|\bcdp\b/i.test(text);
+    || item?.status === 'failed' && /selector|locator|runner|自动化(?:框架|链路|执行(?:失败|错误)|能力(?:不足|缺失))|无法定位|无法点击|步骤未执行|fixture.*(?:缺失|失败)/i.test(text)
+      || item?.status === 'failed' && cdpFailure.test(text);
 }
 
 function screenshotOutcomeScore(item) {

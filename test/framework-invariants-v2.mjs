@@ -8015,6 +8015,22 @@ for (const [label, source] of [
   assert.equal(/\.evaluate\s*\(/.test(helperSource), false, `${label} 停止点击 helper 禁止 stale locator evaluate fallback`);
   assert.match(helperSource, /maxClickAttempts = 2/);
   assert.match(helperSource, /clickTimeoutMs = 1_500/);
+  const timeoutCleanupStart = source.indexOf('async function cancelRunningReplyAfterTimeout');
+  const timeoutCleanupEnd = source.indexOf('function writeReplyArtifacts', timeoutCleanupStart);
+  const timeoutCleanupSource = timeoutCleanupStart >= 0 && timeoutCleanupEnd > timeoutCleanupStart
+    ? source.slice(timeoutCleanupStart, timeoutCleanupEnd)
+    : '';
+  assert.match(
+    timeoutCleanupSource,
+    /expectedTaskId[\s\S]*lastVisibleLocator[\s\S]*currentCancel\.click\(\{ force: true, timeout: 1500 \}\)/,
+    `${label} 超时清理必须绑定 task、每次重定位当前停止控件并使用短超时点击`,
+  );
+  assert.match(
+    timeoutCleanupSource,
+    /bridgeAfter\?\.available === true[\s\S]*settledTaskId === expectedTaskId[\s\S]*bridgeAfter\.running === false[\s\S]*!cancelStillVisible/,
+    `${label} 超时清理必须验证同一 task 的公开 running=false 且停止控件消失`,
+  );
+  assert.doesNotMatch(timeoutCleanupSource, /\.first\(\)|cancel\.evaluate\s*\(/, `${label} 超时清理不得复用旧 locator 或 stale evaluate`);
 }
 assert.match(legacyRunner, /inventory_mismatch: inventoryMismatch/);
 assert.match(legacyRunner, /selection_surface_located: true/);
@@ -10206,6 +10222,46 @@ try {
     assertions: [{ name: 'selector 定位', expected: '可点击', actual: 'selector not found', status: 'failed', category: 'automation_error' }],
   });
   if (automationReview.classification !== 'framework_issue') throw new Error('自动化错误不得冒充产品 Bug');
+
+  const runtimeMaintenanceWithNormalCdpSkill = assessUserCenteredOutcome({
+    id: 'BETA-INIT-001',
+    status: 'failed',
+    result_category: 'bug',
+    title: '运行时维护按钮真实点击后显示失败但工作台仍可用',
+    steps: [
+      { action: '点击【新建任务】', status: 'passed' },
+      {
+        action: 'preparePythonRuntimes 真实 UI 操作与终态采样',
+        status: 'failed',
+        category: 'bug',
+        actual: 'action_observed=true；terminal=true；ready=false；loaded=true；sdk_ready=true；composer_ready=true；workbench_ready=true；capabilities_readable=true；skills=[{"slug":"cdp-label","name":"CDP Label"}]',
+      },
+    ],
+    assertions: [{
+      name: 'preparePythonRuntimes 稳定终态',
+      expected: '维护区、SDK 状态、输入区与公开 capabilities 必须连续稳定就绪。',
+      actual: '{"ready":false,"pending":false,"failed":true,"loaded":true,"sdk_ready":true,"composer_ready":true,"workbench_ready":true,"capabilities_readable":true,"skills":[{"slug":"cdp-label"}]}',
+      status: 'failed',
+      category: 'bug',
+    }],
+    screenshots: { assistant_prepare_python_runtimes_terminal: modelShot },
+  });
+  if (runtimeMaintenanceWithNormalCdpSkill.classification !== 'bug') {
+    throw new Error('正常能力 slug cdp-label 不得被宽泛 CDP 关键词误判为框架问题');
+  }
+
+  const genuineCdpFailure = assessUserCenteredOutcome({
+    id: 'CDP-FAILURE',
+    status: 'failed',
+    result_category: 'bug',
+    title: '页面读取失败',
+    steps: [{ action: '读取页面', status: 'failed', category: 'bug', actual: 'CDP Runtime.evaluate 超时' }],
+    assertions: [{ name: '公开状态', expected: '可读取', actual: 'CDP Runtime.evaluate timeout', status: 'failed', category: 'bug' }],
+    screenshots: { assistant_prepare_python_runtimes_terminal: modelShot },
+  });
+  if (genuineCdpFailure.classification !== 'framework_issue') {
+    throw new Error('真实 CDP Runtime.evaluate 超时仍必须归类为框架问题');
+  }
 } finally {
   fs.rmSync(userReviewTemp, { recursive: true, force: true });
 }
