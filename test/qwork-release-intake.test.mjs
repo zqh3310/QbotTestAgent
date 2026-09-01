@@ -99,6 +99,7 @@ test('latest repository refactors classify known product domains and governance 
       'eval/qwork-session-experience/src/pipeline.mjs',
       'openspec/changes/add-local-model-gateway-diagnostics/design.md',
       'schemas/expert-definition-v1.schema.json',
+      'server/docs/capabilities.yaml',
       'server/qbot-core/engine/engine.mjs',
       'server/control-plane/index.mjs',
       'server/expert-definition/codec.mjs',
@@ -117,7 +118,7 @@ test('latest repository refactors classify known product domains and governance 
     ],
   });
   assert.deepEqual(mapped.unmapped_product_paths, []);
-  assert.equal(mapped.static_paths.length, 5);
+  assert.equal(mapped.static_paths.length, 6);
   assert.equal(mapped.in_scope_case_ids.length, 12);
   assert.equal(mapped.direct_case_ids.includes('BETA-SEC-002'), true);
   assert.equal(mapped.mapping_status, 'MAPPED');

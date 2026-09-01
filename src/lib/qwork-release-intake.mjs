@@ -235,6 +235,7 @@ function staticDisposition(filePath) {
   if (/^dashboard\//i.test(normalized) || /dashboard-admin|dashboard-admin-routes/i.test(normalized)) return 'Dashboard-only';
   if (/^eval\//i.test(normalized)) return 'Eval-only';
   if (/^(?:docs?|research|benchmark|openspec)\//i.test(normalized)) return 'Research/docs-only';
+  if (/^(?:server\/docs|dashboard\/docs)\//i.test(normalized)) return 'Research/docs-only';
   if (/^(?:test|tests|testcase|scripts|toolchain)\//i.test(normalized)) return 'Toolchain/test-only';
   if (/^deploy\/dashboard\//i.test(normalized)) return 'Dashboard-only';
   if (/^deploy\//i.test(normalized)) return 'Deployment-only';
