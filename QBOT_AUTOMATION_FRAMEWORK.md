@@ -1354,6 +1354,13 @@ remote-tracking ref 宣称为最新候选，fetch 认证失败时正式流程保
 产品源码路径、未验证 MR 元数据、Casebook SHA/framework/release HEAD 不一致，均必须
 在 Case 0 前阻断；扫描器不能以“可能已有覆盖”放行，也不能自行新增或删除 Case。
 
+路径分类采用显式白名单：`.gitlab/`、`scripts/`、`eval/`、`openspec/`、`schemas/`、
+`deploy/`、`test*` 和目录内 `AGENTS.md`/`CLAUDE.md` 只进入静态合同；已知的
+`server/qbot-core/`、`server/control-plane/`、`server/shared/`、`server/expert-definition/`、
+`src/`、`electron/`、`assets/lib/ui/`、`resources/builtin-skills/`、数据库迁移和受管
+runtime 目录按跨域产品影响映射到完整核心冒烟集合。任何不在这些静态或产品白名单中的
+路径仍视为未映射产品路径并保持 `BLOCKED`，不能用 MR 标题或“已有覆盖”绕过。
+
 MR/提交阶段可以运行同一模块的轻量 diff 扫描，快速给出推荐 Case 集合，但不产生发布
 结论，也不能替代正式 G0。正式 runner 启动后冻结扫描报告和测试范围，不重新获取 MR，
 只监控 release SHA、运行时身份、OTA 和 health；发现漂移立即冻结当前不可变批次。

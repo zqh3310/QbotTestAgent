@@ -1304,6 +1304,13 @@ GitLab 返回的 iid、merge commit SHA、标题、标签和 merged_at。Token �
 framework 不一致，均在 Case 0 前阻断。扫描不会自动修改或追加正式 Casebook；需要新增覆盖
 时必须先更新设计基线并形成新 SHA、新 commit、新报告。
 
+扫描器对仓库重构保持显式路径白名单：`.gitlab/`、`scripts/`、`eval/`、`openspec/`、
+`schemas/`、`deploy/`、`test*` 及目录内 `AGENTS.md`/`CLAUDE.md` 仅做静态合同审计；
+`server/qbot-core/`、`server/control-plane/`、`server/shared/`、`server/expert-definition/`、
+`src/`、`electron/`、`assets/lib/ui/`、`resources/builtin-skills/`、数据库迁移和受管
+runtime 目录使用保守的跨域 Case 映射。陌生产品目录不属于白名单，必须继续 `BLOCKED`，
+不得通过标题命中或人工口头判断放行。
+
 MR 阶段可运行轻量 diff 扫描做快速反馈，但不能产生发布结论。正式 runner 启动后不再扫描
 或改变范围，只做 release/runtime/OTA/health 身份漂移监控；intake 报告与范围一旦冻结，
 任何漂移都必须冻结批次并按 framework issue 规则处置。

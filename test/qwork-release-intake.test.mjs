@@ -91,6 +91,49 @@ test('purely static changes do not become desktop E2E impact from branch wording
   assert.deepEqual(mapped.required_stages, ['G1']);
 });
 
+test('latest repository refactors classify known product domains and governance material', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: [
+      '.gitlab/policies/ci-policy-reference.md',
+      'scripts/governance/context/agent-context.mjs',
+      'eval/qwork-session-experience/src/pipeline.mjs',
+      'openspec/changes/add-local-model-gateway-diagnostics/design.md',
+      'schemas/expert-definition-v1.schema.json',
+      'server/qbot-core/engine/engine.mjs',
+      'server/control-plane/index.mjs',
+      'server/expert-definition/codec.mjs',
+      'src/nav.ts',
+      'electron/preload.cjs',
+      'assets/lib/ui/icons/common/circle-play.svg',
+      'resources/builtin-skills/expert-creator/SKILL.md',
+      'db/migrations/20260831000100_preserve_owner_expert_visibility.sql',
+      'runtime-family.mjs',
+    ],
+    subject: 'Merge branch refactor into release/0.1',
+    availableCaseIds: [
+      'MRSMOKE-ACT-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'MRSMOKE-AUTH-001',
+      'MRSMOKE-AUTO-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001',
+      'MRSMOKE-FAIL-001', 'MRSMOKE-ART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-CHART-001',
+    ],
+  });
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.static_paths.length, 5);
+  assert.equal(mapped.in_scope_case_ids.length, 12);
+  assert.equal(mapped.direct_case_ids.includes('BETA-SEC-002'), true);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+  assert.deepEqual(mapped.required_stages, ['G1', 'G2', 'G3']);
+});
+
+test('unknown nested server domains remain fail-closed after refactor mappings', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: ['server/qbot-core/engine/engine.mjs', 'server/unknown-domain/contract.mjs'],
+    subject: 'server refactor',
+    availableCaseIds: ['MRSMOKE-AUTH-001'],
+  });
+  assert.deepEqual(mapped.unmapped_product_paths, ['server/unknown-domain/contract.mjs']);
+  assert.equal(mapped.mapping_status, 'BLOCKED');
+});
+
 test('release intake uses commit ancestry and binds verified MR metadata', () => {
   const { repo, baseline, releaseHead } = fixtureRepo();
   try {

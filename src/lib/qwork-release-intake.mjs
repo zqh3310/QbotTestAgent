@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.0.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.1.0';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -206,21 +206,40 @@ const IMPACT_RULES = Object.freeze([
   rule(['MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001', 'BETA-CHAT-007'], '导航与桌面 UI', '入口/会话列表/布局', [/sidebar|navigation|responsive|composer|chat-ui|history|entry|desktop-ui|(?:^|\/)src\/(?:App|app|main|Sidebar|AutomationView|components\/|activity-grouping)|(?:^|\/)src\/[^/]+\.(?:css|d\.ts)$|(?:app|expert-center|qbot)\.css/i], 'G2'),
   rule(['MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-005'], '路由与失败收敛', '模型路由/重试/fallback', [/route|routing|fallback|retry|provider|model-sdk|error-redact|server\/(?:engine|llm-connections|prompt-|runtime-terminal|model-auto-routing)|electron\/(?:chat-user-error|client-error|preload)|(?:^|\/)src\/chat-(?:user-)?error|package(?:-lock)?\.json/i], 'G2'),
   rule(['BETA-INIT-001', 'BETA-HOST-003'], '宿主与发布运行时', 'OTA/宿主/版本身份', [/electron|desktop|teams|host-core|ota|quarantine|bootstrap|release|runtime|update|electron\/desktop-agent-host|\.deepbank-runtime|teams360\.host-sync|deploy\/(?:helm|k8s)\/qbot/i], 'G1'),
+  // The repository was reorganized into explicit server/control-plane/qbot-core
+  // domains.  These are known product locations, but a single file can affect
+  // more than one user journey.  Keep the mapping deliberately broad so a
+  // refactor cannot silently escape the real-device gates.
+  rule([
+    'MRSMOKE-ACT-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'MRSMOKE-AUTH-001',
+    'MRSMOKE-AUTO-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001',
+    'MRSMOKE-FAIL-001', 'MRSMOKE-ART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-CHART-001',
+  ], '已知产品源码目录', '跨域回归', [
+    /(?:^|\/)server\/(?:qbot-core|control-plane|shared|expert-definition)\//i,
+    /(?:^|\/)server\/[^/]+(?:\.[^/]+)?$/i,
+    /(?:^|\/)src\//i,
+    /(?:^|\/)electron\//i,
+    /(?:^|\/)assets\/lib\/ui\//i,
+    /(?:^|\/)resources\/builtin-skills\//i,
+    /(?:^|\/)db\/(?:migrations|migration-manifests)\//i,
+    /(?:^|\/)\.deepbank-runtime\//i,
+    /(?:^|\/)(?:model-vision-capability|runtime-family|runtime-paths|release-identity|chart-tool-result|connection-view|diagram-tool-result)\.(?:mjs|cjs|ts|tsx)$/i,
+  ], 'G2'),
 ]);
 
 function staticDisposition(filePath) {
   const normalized = text(filePath).replaceAll('\\', '/');
   if (/^(?:\.agent|\.agents|\.claude)\//i.test(normalized)
-    || /^(?:AGENTS|CLAUDE)\.md$/i.test(normalized)) return 'Agent-metadata-only';
-  if (/^\.gitlab-ci\.yml$|^\.github\//i.test(normalized)) return 'CI-only';
+    || /(?:^|\/)(?:AGENTS|CLAUDE)\.md$/i.test(normalized)) return 'Agent-metadata-only';
+  if (/^\.gitlab\//i.test(normalized) || /^\.gitlab-ci\.yml$|^\.github\//i.test(normalized)) return 'CI/governance-only';
   if (/^dashboard\//i.test(normalized) || /dashboard-admin|dashboard-admin-routes/i.test(normalized)) return 'Dashboard-only';
   if (/^eval\//i.test(normalized)) return 'Eval-only';
-  if (/^(?:docs?|research|benchmark)\//i.test(normalized)) return 'Research/docs-only';
-  if (/^(?:test|tests|scripts\/(?:ci|e2e|refactor)|toolchain)\//i.test(normalized)
-    || /^scripts\/e2e[-/]/i.test(normalized)) return 'Toolchain/test-only';
-  if (/^scripts\/(?:build-control-plane|deepbank-llm-gateway-inspect)(?:\.|\/)/i.test(normalized)) return 'Toolchain/test-only';
+  if (/^(?:docs?|research|benchmark|openspec)\//i.test(normalized)) return 'Research/docs-only';
+  if (/^(?:test|tests|testcase|scripts|toolchain)\//i.test(normalized)) return 'Toolchain/test-only';
   if (/^deploy\/dashboard\//i.test(normalized)) return 'Dashboard-only';
-  if (/^deploy\/(?:helm|k8s)\/(?:qwork-dashboard|searxng)\//i.test(normalized)) return 'Deployment-only';
+  if (/^deploy\//i.test(normalized)) return 'Deployment-only';
+  if (/^(?:schemas?)\//i.test(normalized)) return 'Schema-contract-only';
+  if (/^(?:\.env(?:\..*)?|\.gitignore|\.gitattributes|CODEOWNERS)$/i.test(normalized)) return 'Repository-metadata-only';
   if (/^(?:README|LICENSE|CHANGELOG)(?:\.|$)/i.test(normalized)) return 'Research/docs-only';
   return '';
 }
