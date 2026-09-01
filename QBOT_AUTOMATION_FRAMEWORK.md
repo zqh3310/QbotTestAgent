@@ -1332,6 +1332,11 @@ changed paths/diff SHA，并通过一次次独立的 GitLab 只读 API 请求核
 不得出现在命令参数、环境持久化、日志、报告或 Git 配置中。扫描器不修改 deepbankV2，
 不自动改写冻结 Casebook，也不产生任何 Case 结果。
 
+正式扫描默认必须成功刷新 `release-ref`。Git fetch 的只读凭据与 GitLab API token 是两条
+独立链路：前者应由受管机器的短期只读 credential helper 提供，后者才通过本命令的 stdin
+注入。`--no-fetch` 只允许用于诊断或已由外部可信观测证明 ref 新鲜的场景；不能把本地旧
+remote-tracking ref 宣称为最新候选，fetch 认证失败时正式流程保持 `BLOCKED`。
+
 扫描边界按以下优先级确定：
 
 1. 上一次已接受 intake 的 release HEAD 到当前 HEAD；

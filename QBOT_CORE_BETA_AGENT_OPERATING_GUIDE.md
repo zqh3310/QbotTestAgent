@@ -1291,6 +1291,8 @@ GitLab 返回的 iid、merge commit SHA、标题、标签和 merged_at。Token �
 标准输入中临时提供给单次只读 curl 请求，不得进入参数、环境、Git 配置或输出。报告
 `qbot-qwork-release-intake/v1` 必须保留 release HEAD、framework commit、Casebook SHA、
 扫描起止边界、MR、changed paths、diff SHA、影响域、直接 Case、依赖闭包和未覆盖变更。
+正式候选必须成功刷新 release ref；`--no-fetch` 仅用于诊断或已有可信 freshness 证明的
+场景。Git fetch 凭据与 GitLab API token 分离，fetch 认证失败时不得使用本地旧 ref 放行。
 
 边界优先从上次已接受 intake HEAD 或 Casebook 设计基线 commit 到当前 release HEAD；只有
 祖先关系无法证明时才兜底最近 24 小时（日常窗口与上轮重叠 48 小时），每日回归至少回看

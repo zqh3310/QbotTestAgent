@@ -28,7 +28,7 @@ Usage:
     --out <new-immutable-directory>
 
 Options:
-  --fetch / --no-fetch              是否先只读刷新 release 引用（默认开启）
+  --fetch / --no-fetch              是否先只读刷新 release 引用（默认开启；--no-fetch 仅适用于已外部确认 ref 的诊断）
   --previous-intake <json>          上一份 intake；其 release HEAD 优先作为增量边界
   --casebook-baseline-commit <sha>  Casebook 设计基线提交
   --case-ids <id,id,...>            不读取 xlsx 时直接提供可用 Case ID
