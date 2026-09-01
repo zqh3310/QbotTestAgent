@@ -25,9 +25,9 @@ Case 的接手状态、启动顺序和禁止事项。
   `MRSMOKE-FAIL-001` 的产品负向结果和其余已完成 Case 必须逐 Case 可信复核保留。
 
 - 最新正式 Casebook 已更新为
-  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx`，
-  SHA-256 `4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c`，设计基线 `origin/release/0.1@b2c9e1a99ca051ff21cc34db3b1f56e2055c091a`、产品版本
-  `0.1.6`。相对上一 Casebook 新增直接合入 MR `!1374`，窗口累计审计 73 个直接合入 MR；
+  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx`，
+  SHA-256 `8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672`，设计基线 `origin/release/0.1@57db57b95a87245195b6a48ffd414abb654281e5`、产品版本
+  `0.1.7`。相对上一 Casebook 扫描 release ancestry 的 73 个直接合入 MR；
   `!1374` 映射 Auto fallback/catalog authority 到 `MRSMOKE-ROUTE-001`、`MRSMOKE-FAIL-001`、
   `BETA-CHAT-005` 与 `BETA-PERF-003`，复用现有 12/70/160 Case，不新增桌面合同。当前应用包
   为 360Teams `5.6.1` build `2119082788`；磁盘 OTA `active/lastGood` 已只读确认到 QWork
@@ -186,7 +186,7 @@ Case 的接手状态、启动顺序和禁止事项。
   新能力审计和精确 `.27 READY` 后，仍须从 `1/11` 在新不可变目录完整重跑，
   `inherited=0`、`synthetic=0`。
 - 产品设计基线：`origin/release/0.1`，
-  commit `b2c9e1a99ca051ff21cc34db3b1f56e2055c091a`，版本 `0.1.6`。
+  commit `57db57b95a87245195b6a48ffd414abb654281e5`，版本 `0.1.7`。
 - 以下是历史 Daily83 SIT 批次的冻结身份，不得直接复用于当前 12 -> 70 任务：
   360Teams `5.5.13` build `2119081949`、
   QWork `0.1.4-sit.11`、UI commit `2cdcb9d7`、backend
@@ -738,8 +738,8 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 唯一正式 Casebook：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx
-SHA-256: 4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx
+SHA-256: 8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672
 ```
 
 核心生命线入口为 Sheet `核心生命线门禁`，固定 16 条：
@@ -771,7 +771,7 @@ G1-G4 每阶段都必须有独立能力审计、独立精确 `READY`、独立不
 独立诊断，但不能解锁下一阶段。使用 `npm run qwork-release:orchestrate` 将上述规则
 固化到状态文件，禁止靠人工记忆跨阶段推进。
 
-状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r5 合同的正式 Casebook；内容
+状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r8 合同的正式 Casebook；内容
 自洽但文件名错误、同名但 SHA 漂移或旧版工作簿都必须在创建控制状态前拒绝。
 
 状态机只消费 `qbot-core-beta-pretest/v1` 的 Teams/production-gate/mandatory 报告；
@@ -828,9 +828,9 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 新增 MR 核心冒烟入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx
-Sheet: 新增MR核心冒烟
-  SHA-256: 4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx
+  Sheet: 新增MR核心冒烟
+  SHA-256: 8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672
 ```
 
 - 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -885,13 +885,13 @@ Sheet: 新增MR核心冒烟
 生产灰度发布与全量功能回归唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx
 ```
 
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c`
+- SHA-256：`8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -983,25 +983,25 @@ npm run check
 npm --prefix teams360-automation run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
   --sheet 核心生命线门禁 \
   --profile mandatory \
   --out outputs/<new-core16-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
   --sheet 新增MR核心冒烟 \
   --profile mandatory \
   --out outputs/<new-smoke12-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
   --sheet 生产灰度门禁Case \
   --profile mandatory \
   --out outputs/<new-gate70-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
   --sheet 全量功能回归Case \
   --profile mandatory \
   --out outputs/<new-full160-capability-audit-dir>
@@ -1043,7 +1043,7 @@ framework issue；已产生真实事件但文本 Oracle 失败属于可继续批
 用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
@@ -1052,7 +1052,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 16 \
-  --expected-sha256 4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c \
+  --expected-sha256 8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \

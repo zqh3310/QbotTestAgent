@@ -5399,7 +5399,7 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5\.xlsx[\s\S]*--sheet 核心生命线门禁[\s\S]*--expected-count 16[\s\S]*只接受 `READY`[\s\S]*12\/70\/160/,
+  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8\.xlsx[\s\S]*--sheet 核心生命线门禁[\s\S]*--expected-count 16[\s\S]*只接受 `READY`[\s\S]*12\/70\/160/,
   '当前操作指南必须先为16条核心生命线取得READY，再按阶段分别预检12/70/160',
 );
 assert.match(
@@ -8791,11 +8791,11 @@ assert.match(productionGrayCasebookBuilder, /next\['测试数据'\] = 'intervalM
 assert.match(productionGrayCasebookBuilder, /等待首次真实 interval tick 自动触发/, 'Casebook 生成器必须等待真实 interval tick');
 assert.doesNotMatch(productionGrayCasebookBuilder, /activeFrom=now-interval\+15s|约 15 秒后产生 schedule run/, 'Casebook 生成器禁止保留服务端会钳制的旧 interval 回填合同');
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
-  assert.match(documentText, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5\.xlsx/, '两份规范必须冻结16/12/70/160分层Casebook路径');
+  assert.match(documentText, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8\.xlsx/, '两份规范必须冻结16/12/70/160分层Casebook路径');
   assert.match(documentText, /核心生命线门禁/, '两份规范必须冻结16条核心生命线Sheet');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
   assert.match(documentText, /[0-9a-f]{64}/, '两份规范必须冻结最新合并 Casebook SHA');
-  assert.match(documentText, /b2c9e1a99ca051ff21cc34db3b1f56e2055c091a[\s\S]*0\.1\.6/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
+  assert.match(documentText, /57db57b95a87245195b6a48ffd414abb654281e5[\s\S]*0\.1\.7/, '两份规范必须冻结最新 release\/0.1 设计基线与产品版本');
   assert.match(documentText, /73 个[\s\S]*(?:直接合入 MR|直接合入MR)/, '两份规范必须记录审计窗口73个直接合入MR');
   assert.match(documentText, /!1329[\s\S]*静态合同审计[\s\S]*不新增[\s\S]*桌面/, '两份规范必须明确MR !1329只做静态合同审计且不新增桌面Case');
   assert.match(documentText, /!1334[\s\S]*!1331[\s\S]*!1330[\s\S]*!1332[\s\S]*!1336[\s\S]*!1337[\s\S]*!1338[\s\S]*!1310[\s\S]*!1339[\s\S]*!1340[\s\S]*!1333[\s\S]*!1341[\s\S]*!1326[\s\S]*!1342[\s\S]*!1320[\s\S]*!1344[\s\S]*!1343[\s\S]*!1345[\s\S]*!1346[\s\S]*!1349[\s\S]*!1348[\s\S]*!1350[\s\S]*!1355[\s\S]*!1354[\s\S]*!1356[\s\S]*!1357[\s\S]*!1352[\s\S]*!1359[\s\S]*!1361[\s\S]*!1364[\s\S]*!1358[\s\S]*!1365[\s\S]*!1428[\s\S]*!1430[\s\S]*!1443[\s\S]*!1450[\s\S]*!1451[\s\S]*!1374/, '两份规范必须完整列出73个直接合入MR并包含最新!1374');
@@ -8809,7 +8809,7 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /11 条 native[\s\S]*5 条 verified legacy|11 条(?:使用)?原生[\s\S]*5 条(?:使用)?经过语义复核/, '两份规范必须冻结核心生命线 11 native / 5 legacy 能力构成');
   assert.match(documentText, /G0[\s\S]*G1[\s\S]*G2[\s\S]*G3[\s\S]*G4[\s\S]*G5/, '两份规范必须固定G0-G5执行顺序');
   assert.match(documentText, /NOT_STARTED[\s\S]*raw `passed\/failed`|raw `passed\/failed`[\s\S]*NOT_STARTED/, '两份规范必须让可信非pass阻断后续阶段且禁止raw结果驱动准入');
-  assert.match(documentText, /4fe630f16f12cb84bf4a214f179ad31b83d04491e0ccebb81a6dcdafc5d9516c/, '两份规范必须冻结 r5 Casebook 精确 SHA-256');
+  assert.match(documentText, /8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672/, '两份规范必须冻结 r8 Casebook 精确 SHA-256');
   assert.match(documentText, /release-test-integrity\.json[\s\S]*revision[\s\S]*previous_event_sha256[\s\S]*前向哈希链/, '两份规范必须冻结计划、状态和事件前向哈希完整性合同');
   assert.match(documentText, /summary[\s\S]*progress[\s\S]*run metadata[\s\S]*可信复核[\s\S]*qbot-core-evidence\/v2/, '两份规范必须要求四源完成审计和逐Case v2 manifest');
   assert.match(documentText, /core-beta-v2-forced-serial[\s\S]*effective parallel=1[\s\S]*single-host-pipeline=1/, '两份规范必须冻结M3单宿主强制串行完成门禁');
@@ -8831,7 +8831,7 @@ assert.match(qworkReleaseTestPlan, /core-beta-v2-forced-serial[\s\S]*effective_p
 assert.match(qworkReleaseTestPlan, /qwork_control_plane_health[\s\S]*qwork_backend_identity[\s\S]*pretest_control_plane_health_not_ready[\s\S]*pretest_backend_identity_mismatch/, '发布状态库必须拒绝SIT health或backend fingerprint漂移');
 assert.match(qworkReleaseOrchestrator, /previous_event_sha256[\s\S]*event_chain_mismatch[\s\S]*last_event_sha256_mismatch/, '编排器必须逐事件复核前向哈希链');
 assert.match(productionGrayCasebookBuilder, /QWORK_CORE_LIFELINE_CASE_IDS[\s\S]*coreLifelineCases[\s\S]*核心生命线门禁/, 'Casebook生成器必须从共享合同生成16条核心生命线Sheet');
-assert.match(productionGrayCasebookBuilder, /const PRODUCT_COMMIT = 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a';/, 'Casebook生成器必须冻结最新release/0.1提交');
+assert.match(productionGrayCasebookBuilder, /const PRODUCT_COMMIT = '57db57b95a87245195b6a48ffd414abb654281e5';/, 'Casebook生成器必须冻结最新release/0.1提交');
 assert.match(productionGrayCasebookBuilder, /\['1329',[\s\S]*expectedFiles: \['\.gitlab-ci\.yml'\][\s\S]*CI-only[\s\S]*sha256:3410bb/, 'Casebook生成器必须把MR !1329绑定到显式CI-only静态合同审计');
 assert.match(productionGrayCasebookBuilder, /RECENT_MR_APPEND\.at\(-1\)\?\.commit !== PRODUCT_COMMIT/, 'Casebook生成器必须强制冻结增量MR终点等于最新产品设计基线');
 assert.match(productionGrayCasebookBuilder, /mrRows\.length !== 73/, 'Casebook生成器必须强制审计窗口73个直接合入MR');

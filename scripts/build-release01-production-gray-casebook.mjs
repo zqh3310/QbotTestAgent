@@ -27,17 +27,17 @@ const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184�
 const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
-const PRODUCT_COMMIT = 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a';
-const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = '63e2cabce3d15b8db3ecfbb54380ad87a6bb5acd';
-const MR_WINDOW_BASELINE_COMMIT = '0b741371b27285c06b849a2f0febb2ffb58cb338';
+const PRODUCT_COMMIT = '57db57b95a87245195b6a48ffd414abb654281e5';
+const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a';
+const MR_WINDOW_BASELINE_COMMIT = 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a';
 const PRODUCT_REF = 'origin/release/0.1';
-const PRODUCT_VERSION = '0.1.6';
-const MR_WINDOW_START = '2026-08-24T00:00:00+08:00';
-const MR_WINDOW_END = '2026-08-28T01:06:27+08:00';
-const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260828_release01_casebook_16-12-70-160-r5');
+const PRODUCT_VERSION = '0.1.7';
+const MR_WINDOW_START = '2026-08-27T00:00:00+08:00';
+const MR_WINDOW_END = '2026-09-01T12:00:00+08:00';
+const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260901_release01_casebook_16-12-70-160-r8');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
-const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot新增MR核心冒烟与生产灰度全量回归Casebook_12-70-160条_2026-08-28-r4.xlsx');
+const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-08-28-r5.xlsx');
 const CORE_LIFELINE_CASE_IDS = QWORK_CORE_LIFELINE_CASE_IDS;
 const SMOKE_CASE_IDS = QWORK_MR_SMOKE_CASE_IDS;
 const RECENT_MR_CASE_MAPPING = new Map([
@@ -216,9 +216,9 @@ const RECENT_MR_STATIC_AUDITS = new Map([
   }],
 ]);
 
-// GitLab 只读 release/0.1 ref 在 2026-08-28 01:06 CST 冻结的增量 MR 文件清单。
-// deepbankV2 保持只读；生成器用上一 Casebook 可读提交重建旧窗口，再追加至最新设计基线。
-const RECENT_MR_APPEND = Object.freeze([
+// 历史 r5 增量清单保留为静态回归约束；正式生成改用 release ancestry。
+// deepbankV2 保持只读，当前发布清单由冻结基线到 PRODUCT_COMMIT 的 first-parent 读取。
+const LEGACY_MR_APPEND = Object.freeze([
   { mr: '1334', commit: 'f64a85f53de75ca37de0aee7aca2de3d1f5c10e2', mergedAt: '2026-08-26T23:54:58+08:00', branch: 'enhancement/1410-managed-http-proxy-ttl', files: ['docs/qbot-web-tools.md', 'electron/managed-http-proxy-cache.cjs', 'server/managed-http-proxy-config.mjs', 'test/unit/desktop/managed-http-proxy-cache.test.cjs', 'test/unit/server/managed-http-proxy-config.test.mjs'] },
   { mr: '1331', commit: '4e3ce28ac3521ea6f5feef43199198645ba1e94e', mergedAt: '2026-08-26T23:55:36+08:00', branch: 'enhancement/1405-document-processing-routing', files: ['.agent/compiled/root/AGENTS.md', '.agent/compiled/root/CLAUDE.md', '.agent/context.yaml', 'AGENTS.md', 'CLAUDE.md', 'docs/file-ingress-contract.md', 'resources/builtin-skills/document-processing/SKILL.md', 'resources/builtin-skills/document-processing/references/requirements.txt', 'scripts/e2e-module.test.mjs', 'scripts/e2e-qbot-claude-real.mjs', 'test/e2e/local-real-claude-code.spec.mjs', 'test/e2e/remote-dev-local-only-assertions.spec.mjs', 'test/e2e/remote-dev.spec.mjs', 'test/e2e/support/bug-derived-suite-materials.mjs', 'test/e2e/support/module-suites.mjs', 'test/e2e/support/module-suites.test.mjs', 'test/unit/skills/document-processing-skill.test.mjs'] },
   { mr: '1330', commit: '34c4093940eeb4fb6306f2337b52792c23dce655', mergedAt: '2026-08-26T23:59:16+08:00', branch: 'codex/1398-org-dept-chain-scope', files: ['server/dashboard-admin-routes.mjs', 'test/unit/ui/dashboard-admin-routes.test.mjs'] },
@@ -258,6 +258,29 @@ const RECENT_MR_APPEND = Object.freeze([
   { mr: '1451', commit: '63e2cabce3d15b8db3ecfbb54380ad87a6bb5acd', mergedAt: '2026-08-28T00:08:35+08:00', branch: 'fix/1451-claude-fallback-alias', files: ['server/engine.mjs', 'test/e2e/support/claude-sdk-resilience.conformance.mjs', 'test/unit/server/engine-stream-adapters.test.mjs'] },
   { mr: '1374', commit: 'b2c9e1a99ca051ff21cc34db3b1f56e2055c091a', mergedAt: '2026-08-28T01:06:27+08:00', branch: 'fix/1344-catalog-tier-routing', files: ['.agent/context/_shared/references/auto-model-policy.md', 'docs/desktop-local-sqlite-design.md', 'electron/desktop-agent-host.cjs', 'server/model-auto-routing.mjs', 'test/fixtures/preferred-order-v1-platform-connections.json', 'test/unit/core/model-auto-routing.test.mjs', 'test/unit/desktop/desktop-auto-current-turn-authority.test.mjs', 'test/README.md'] },
 ]);
+
+const RELEASE_MR_IID_FALLBACKS = new Map([
+  ['ba535cb350624fe0983004d6c9b8497376ef7cac', '1386'],
+]);
+
+function currentReleaseMergeRows() {
+  const format = '%H%x1f%aI%x1f%s%x1f%B%x1e';
+  const raw = git([
+    'log', `${MR_WINDOW_BASELINE_COMMIT}..${PRODUCT_COMMIT}`, '--first-parent', '--reverse',
+    '--merges', '--pretty=format:' + format,
+  ]);
+  return raw.split('\x1e').map((record) => record.trim()).filter(Boolean).map((record) => {
+    const [commit, mergedAt, subject, ...bodyParts] = record.split('\x1f');
+    const body = bodyParts.join('\x1f');
+    const mr = body.match(/!([0-9]+)/)?.[1] || RELEASE_MR_IID_FALLBACKS.get(commit) || '';
+    const branch = subject.match(/Merge branch '([^']+)'/)?.[1] || subject;
+    const files = git(['diff', '--name-only', `${commit}^1`, commit]).split('\n').filter(Boolean);
+    return { commit, mergedAt, subject, body, mr, branch, files };
+  });
+}
+
+const RECENT_MR_APPEND = Object.freeze(currentReleaseMergeRows());
+
 const LOCAL_FIXTURE_ADAPTERS = new Set([
   'native_ime_input',
   'managed_teams_restart',
