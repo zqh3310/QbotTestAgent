@@ -4596,6 +4596,7 @@ export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
   'qwork_daily_credential_redaction_copy',
   'qwork_mr_activity_timeline',
   'qwork_mr_interval_schedule',
+  'qwork_mr_connector_retry_recovery',
 ]);
 
 export const CORE_BETA_NATIVE_CASE_TYPES = new Set([
@@ -5389,6 +5390,8 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
     accessibility_scan: artifacts.core_beta_accessibility_scan || null,
     external_navigation_trace: artifacts.core_beta_external_navigation_trace || null,
     interactive_chart_readback: artifacts.core_beta_interactive_chart_readback || null,
+    connector_retry_recovery_trace: artifacts.core_beta_connector_retry_recovery_trace || null,
+    horizontal_overflow_readback: artifacts.core_beta_horizontal_overflow_readback || null,
     rollback_trace: artifacts.core_beta_rollback_trace || null,
     model_route_trace: artifacts.core_beta_model_route_trace || null,
     activation_snapshot: artifacts.core_beta_activation_snapshot || null,
@@ -13285,6 +13288,89 @@ async function executeCoreBetaConversationDispatchCollect20(context) {
   );
 }
 
+export function horizontalOverflowReadbackVerdict(phases = []) {
+  const rows = Array.isArray(phases) ? phases : [];
+  const evidenceValid = rows.length > 0 && rows.every((item) => (
+    item?.captured === true
+    && Number(item?.assistant_body_count || 0) > 0
+    && Boolean(item?.screenshot?.path)
+    && Number(item?.screenshot?.bytes || 0) > 0
+    && /^[a-f0-9]{64}$/iu.test(String(item?.screenshot?.sha256 || ''))
+  ));
+  const oracleChecks = {
+    assistant_body_no_overflow: rows.length > 0 && rows.every((item) => Number(item?.assistant_body_overflow_x || 0) <= 1),
+    assistant_message_no_overflow: rows.length > 0 && rows.every((item) => Number(item?.assistant_message_overflow_x || 0) <= 1),
+    message_list_no_overflow: rows.length > 0 && rows.every((item) => Number(item?.message_list_overflow_x || 0) <= 1),
+    document_no_overflow: rows.length > 0 && rows.every((item) => Number(item?.document_overflow_x || 0) <= 1),
+  };
+  return {
+    schema_version: 'qbot-horizontal-overflow-readback/v1',
+    captured_at: new Date().toISOString(),
+    evidence_valid: evidenceValid,
+    oracle_valid: evidenceValid && Object.values(oracleChecks).every(Boolean),
+    oracle_checks: oracleChecks,
+    phases: rows,
+  };
+}
+
+async function captureAssistantHorizontalOverflowReadback({ page, state, testCase, caseDir, phase }) {
+  const dom = await page.locator('body').evaluate((body) => {
+    const assistantMessages = [...body.querySelectorAll('[data-testid="message-list"] [data-role="assistant"], [data-testid="assistant-thread"] [data-role="assistant"]')];
+    const assistant = assistantMessages.at(-1) || null;
+    const assistantBody = assistant?.querySelector('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content') || null;
+    const messageList = assistant?.closest('[data-testid="message-list"]') || body.querySelector('[data-testid="message-list"]');
+    const overflow = (node) => node ? Math.max(0, Number(node.scrollWidth || 0) - Number(node.clientWidth || 0)) : -1;
+    const rect = (node) => {
+      const value = node?.getBoundingClientRect();
+      return value ? { width: value.width, left: value.left, right: value.right } : null;
+    };
+    return {
+      captured: Boolean(assistant && assistantBody && messageList),
+      assistant_body_count: assistant?.querySelectorAll('.aui-assistant-message-content, [data-testid="assistant-message-content"], .assistant-message-content').length || 0,
+      assistant_body_overflow_x: overflow(assistantBody),
+      assistant_message_overflow_x: overflow(assistant),
+      message_list_overflow_x: overflow(messageList),
+      document_overflow_x: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      assistant_body_rect: rect(assistantBody),
+      assistant_message_rect: rect(assistant),
+      message_list_rect: rect(messageList),
+      viewport_width: document.documentElement.clientWidth,
+      assistant_text_bytes: new TextEncoder().encode(String(assistantBody?.innerText || assistantBody?.textContent || '')).length,
+    };
+  }).catch((error) => ({ captured: false, error: error.message }));
+  const screenshotPath = await shot(page, caseDir, `horizontal-overflow-${slugify(phase)}`);
+  const screenshot = screenshotPath && fs.existsSync(screenshotPath) ? {
+    path: screenshotPath,
+    bytes: fs.statSync(screenshotPath).size,
+    sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+  } : null;
+  const prior = state.artifacts.core_beta_horizontal_overflow_readback;
+  const phases = [
+    ...(Array.isArray(prior?.phases) ? prior.phases.filter((item) => item?.phase !== phase) : []),
+    { phase, ...dom, screenshot },
+  ];
+  const verdict = horizontalOverflowReadbackVerdict(phases);
+  verdict.case_id = coreBetaEvidenceCaseId(testCase);
+  writeQworkDailyEvidence(state, caseDir, 'horizontal_overflow_readback', verdict, verdict.oracle_valid, verdict.evidence_valid);
+  recordStep(
+    state,
+    `读取${phase}四层横向边界`,
+    '助手正文、助手消息、消息列表和document必须分别读回scrollWidth/clientWidth差值并绑定截图。',
+    JSON.stringify({ phase, captured: dom.captured, screenshot }),
+    verdict.evidence_valid ? 'passed' : 'failed',
+    screenshotPath,
+    verdict.evidence_valid ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    `${phase}无横向溢出`,
+    '四层 overflow-x 差值均不得超过 1px，长文本或中断回复不得撑宽工作台。',
+    verdict.oracle_valid,
+    JSON.stringify(verdict.oracle_checks),
+  );
+  return verdict;
+}
+
 async function executeCoreBetaConversationCase(context, scenario) {
   const { page, state, testCase, caseDir, timeoutMs } = context;
   switch (scenario.driver) {
@@ -13300,6 +13386,13 @@ async function executeCoreBetaConversationCase(context, scenario) {
         || state.result_category === 'automation_error'
         || state.assertions.some((item) => item.status === 'failed')
       ) return;
+      await captureAssistantHorizontalOverflowReadback({
+        page,
+        state,
+        testCase,
+        caseDir,
+        phase: '停止后保留回复',
+      });
       const followup = testCase.conversation_turns?.at(-1);
       if (!followup?.prompt) throw new Error(`${testCase.id} 缺少停止后的追问`);
       await runPromptInCurrentTask({
@@ -13310,6 +13403,13 @@ async function executeCoreBetaConversationCase(context, scenario) {
         timeoutMs,
         prompt: followup.prompt,
         label: '停止后继续追问',
+      });
+      await captureAssistantHorizontalOverflowReadback({
+        page,
+        state,
+        testCase,
+        caseDir,
+        phase: '停止后追问回复',
       });
       return;
     }
@@ -15998,6 +16098,338 @@ async function qworkDailyRedactionCase({ page, state, testCase, caseDir, options
   }
 }
 
+const CONNECTOR_RETRY_FORBIDDEN_PATTERN = /connector_circuit_open|(?:本轮|当前轮).{0,20}(?:不再|停止|禁止).{0,12}(?:重试|调用)|stop(?:ping)? retries for this tool/iu;
+
+function connectorRetryToolInput(toolPart) {
+  for (const value of [toolPart?.input, toolPart?.args, toolPart?.arguments, toolPart?.parameters]) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+  }
+  return {};
+}
+
+function connectorRetryResultSummary(toolPart) {
+  const raw = typeof toolPart?.result === 'string'
+    ? toolPart.result
+    : (toolPart?.result == null ? '' : JSON.stringify(toolPart.result));
+  let parsed = null;
+  try { parsed = raw ? JSON.parse(raw) : null; } catch {}
+  const structured = parsed?.structuredContent || parsed?.structured_content || parsed?.result?.structuredContent
+    || toolPart?.result?.structuredContent || toolPart?.result?.structured_content || null;
+  const text = [
+    raw,
+    structured?.error,
+    structured?.errorCode,
+    ...(Array.isArray(parsed?.content) ? parsed.content.map((item) => item?.text || '') : []),
+  ].filter(Boolean).join('\n');
+  const envelope = extractInteractiveChartEnvelope(toolPart?.result);
+  const status = typeof toolPart?.status === 'string'
+    ? toolPart.status
+    : String(toolPart?.status?.type || '');
+  const failed = Boolean(
+    parsed?.isError === true
+    || toolPart?.result?.isError === true
+    || structured?.ok === false
+    || /invalid_chart_(?:data|spec)|validation|at least one|参数.{0,8}(?:错误|无效)|校验.{0,8}(?:失败|错误)/iu.test(text)
+  );
+  const succeeded = Boolean(
+    envelope?.ok === true
+    && envelope?.mimeType === 'image/svg+xml'
+    && (status === 'complete' || !status)
+  );
+  return {
+    bytes: Buffer.byteLength(raw),
+    sha256: raw ? sha256Text(raw) : '',
+    status,
+    failed,
+    succeeded,
+    error_code: String(structured?.errorCode || ''),
+    forbidden_marker_found: CONNECTOR_RETRY_FORBIDDEN_PATTERN.test(text),
+    envelope,
+  };
+}
+
+async function captureQworkTaskRuntimeReadback(page, taskId) {
+  return page.evaluate(async (id) => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    const sessionPromise = id && typeof window.agent?.readSession === 'function'
+      ? window.agent.readSession(id, 'desktop-local').catch(() => null)
+      : (typeof e2e?.currentSession === 'function'
+        ? Promise.resolve(e2e.currentSession()).catch(() => null)
+        : Promise.resolve(null));
+    const contextPromise = typeof e2e?.getLastTurnContextEvidence === 'function'
+      ? Promise.resolve(e2e.getLastTurnContextEvidence()).catch(() => null)
+      : Promise.resolve(null);
+    const diagnosticsPromise = typeof e2e?.diagnostics === 'function'
+      ? Promise.resolve(e2e.diagnostics()).catch(() => null)
+      : Promise.resolve(null);
+    const [session, context, diagnostics] = await Promise.all([
+      sessionPromise,
+      contextPromise,
+      diagnosticsPromise,
+    ]);
+    return { session, runtimeEvidence: { context, diagnostics } };
+  }, taskId).catch((error) => ({ error: error.message, session: null, runtimeEvidence: { error: error.message } }));
+}
+
+export function connectorRetryTurnReadback({
+  caseId = '',
+  prompt = '',
+  sendReceipts = [],
+  session = null,
+  runtimeEvidence = null,
+  screenshot = null,
+  replyText = '',
+  replyComplete = true,
+  expectedType = '',
+  expectedPoints = null,
+} = {}) {
+  const promptText = String(prompt || '');
+  const promptSha256 = promptText ? sha256Text(promptText) : '';
+  const taskId = confirmedSendReceiptTaskId(sendReceipts, promptText);
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = (message?.parts || [])
+      .filter((part) => part?.t === 'text')
+      .map((part) => String(part.text || ''))
+      .join('\n');
+    if (message?.role === 'user' && text.includes(promptText)) {
+      userIndex = index;
+      break;
+    }
+  }
+  let turnEndIndex = messages.length;
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    if (messages[index]?.role === 'user') {
+      turnEndIndex = index;
+      break;
+    }
+  }
+  const toolParts = [];
+  for (let index = userIndex + 1; index < turnEndIndex; index += 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant') continue;
+    for (const part of message?.parts || []) {
+      if (part?.t === 'tool' && INTERACTIVE_CHART_TOOL_NAMES.has(String(part.name || ''))) {
+        toolParts.push({ index, part });
+      }
+    }
+  }
+  const selected = toolParts[0]?.part || null;
+  const input = connectorRetryToolInput(selected);
+  const result = connectorRetryResultSummary(selected);
+  const diagnostics = runtimeEvidence?.diagnostics || {};
+  const authority = diagnostics?.e2eCurrentTurnAuthority || {};
+  const providerReceiptHash = String(authority?.providerReceiptHash || '');
+  const effectiveConnectorIds = Array.isArray(authority?.connectorRouting?.effectiveConnectorIds)
+    ? authority.connectorRouting.effectiveConnectorIds.map(String)
+    : [];
+  const materializedConnectorIds = Array.isArray(authority?.connectorRuntimeMaterialization?.materializedConnectorIds)
+    ? authority.connectorRuntimeMaterialization.materializedConnectorIds.map(String)
+    : [];
+  const normalizedExpectedPoints = Array.isArray(expectedPoints) ? expectedPoints : null;
+  const normalizedActualPoints = Array.isArray(input?.data)
+    ? input.data.map((point) => ({ label: String(point?.label || ''), value: Number(point?.value) }))
+    : null;
+  const inputMatches = String(input?.type || '') === String(expectedType || '')
+    && (normalizedExpectedPoints == null
+      || JSON.stringify(normalizedActualPoints) === JSON.stringify(normalizedExpectedPoints));
+  const evidenceChecks = {
+    case_id_present: Boolean(String(caseId || '').trim()),
+    prompt_present: Boolean(promptText),
+    prompt_sha256_present: /^[a-f0-9]{64}$/iu.test(promptSha256),
+    confirmed_send_task_id_present: Boolean(taskId),
+    session_id_matches_task: Boolean(taskId) && String(session?.id || '') === taskId,
+    prompt_bound_user_turn_present: userIndex >= 0,
+    exactly_one_chart_tool_part: toolParts.length === 1,
+    tool_result_present: result.bytes > 0,
+    runtime_evidence_readable: Boolean(runtimeEvidence && typeof runtimeEvidence === 'object' && !runtimeEvidence.error),
+    runtime_session_matches_task: Boolean(taskId) && String(diagnostics?.sessionId || '') === taskId,
+    runtime_authority_captured: Boolean(authority && typeof authority === 'object' && Object.keys(authority).length),
+    runtime_readiness_captured: typeof diagnostics?.e2eCurrentTurnAuthorityReadiness?.ready === 'boolean',
+    provider_receipt_hash_present: /^[a-f0-9]{64}$/iu.test(providerReceiptHash),
+    screenshot_captured: Boolean(screenshot?.path)
+      && Number(screenshot?.bytes || 0) > 0
+      && /^[a-f0-9]{64}$/iu.test(String(screenshot?.sha256 || '')),
+  };
+  return {
+    schema_version: 'qbot-connector-retry-turn-readback/v1',
+    case_id: String(caseId || ''),
+    captured_at: new Date().toISOString(),
+    evidence_valid: Object.values(evidenceChecks).every(Boolean),
+    prompt: promptText,
+    prompt_sha256: promptSha256,
+    task_id: taskId,
+    evidence_checks: evidenceChecks,
+    tool: {
+      name: String(selected?.name || ''),
+      input,
+      input_matches_expected: inputMatches,
+      result: {
+        bytes: result.bytes,
+        sha256: result.sha256,
+        status: result.status,
+        failed: result.failed,
+        succeeded: result.succeeded,
+        error_code: result.error_code,
+        forbidden_marker_found: result.forbidden_marker_found,
+        envelope: result.envelope ? {
+          kind: String(result.envelope.kind || ''),
+          mime_type: String(result.envelope.mimeType || ''),
+          type: String(result.envelope.type || ''),
+          data: Array.isArray(result.envelope.data) ? result.envelope.data : [],
+          spec_sha256: String(result.envelope.specSha256 || ''),
+        } : null,
+      },
+    },
+    runtime_authority: {
+      ready: diagnostics?.e2eCurrentTurnAuthorityReadiness?.ready === true,
+      effective_connector_ids: effectiveConnectorIds,
+      materialized_connector_ids: materializedConnectorIds,
+      provider_receipt_hash: providerReceiptHash,
+    },
+    reply: {
+      complete: replyComplete === true,
+      bytes: Buffer.byteLength(String(replyText || '')),
+      sha256: sha256Text(String(replyText || '')),
+      forbidden_marker_found: CONNECTOR_RETRY_FORBIDDEN_PATTERN.test(String(replyText || '')),
+    },
+    screenshot,
+  };
+}
+
+export function connectorRetryRecoveryVerdict(turns = []) {
+  const rows = Array.isArray(turns) ? turns : [];
+  const taskIds = rows.map((item) => String(item?.task_id || '')).filter(Boolean);
+  const firstTwo = rows.slice(0, 2);
+  const finalTurn = rows[2] || null;
+  const finalData = Array.isArray(finalTurn?.tool?.result?.envelope?.data)
+    ? finalTurn.tool.result.envelope.data
+    : [];
+  const exactFinalPoints = INTERACTIVE_CHART_EXPECTED_POINTS.every((expected) => finalData.some((point) => (
+    String(point?.label || '') === expected.label && Number(point?.value) === expected.value
+  ))) && finalData.length === INTERACTIVE_CHART_EXPECTED_POINTS.length;
+  const evidenceChecks = {
+    exact_turn_count: rows.length === 3,
+    all_turn_evidence_valid: rows.length === 3 && rows.every((item) => item?.evidence_valid === true),
+    same_nonempty_task_id: taskIds.length === 3 && new Set(taskIds).size === 1,
+    distinct_prompt_hashes: rows.length === 3 && new Set(rows.map((item) => item?.prompt_sha256)).size === 3,
+  };
+  const oracleChecks = {
+    invalid_inputs_exact: firstTwo.length === 2 && firstTwo.every((item) => (
+      item?.tool?.input_matches_expected === true && Array.isArray(item?.tool?.input?.data) && item.tool.input.data.length === 0
+    )),
+    first_two_real_failures: firstTwo.length === 2 && firstTwo.every((item) => item?.tool?.result?.failed === true),
+    final_input_exact: finalTurn?.tool?.input_matches_expected === true,
+    final_tool_succeeded: finalTurn?.tool?.result?.succeeded === true,
+    final_envelope_exact_four_points: exactFinalPoints,
+    runtime_authority_ready_each_turn: rows.length === 3 && rows.every((item) => item?.runtime_authority?.ready === true),
+    qbot_chart_effective_each_turn: rows.length === 3 && rows.every((item) => item?.runtime_authority?.effective_connector_ids?.includes('builtin:qbot_chart')),
+    qbot_chart_materialized_each_turn: rows.length === 3 && rows.every((item) => item?.runtime_authority?.materialized_connector_ids?.includes('builtin:qbot_chart')),
+    no_connector_circuit_open: rows.length === 3 && rows.every((item) => (
+      item?.tool?.result?.forbidden_marker_found === false && item?.reply?.forbidden_marker_found === false
+    )),
+    replies_complete: rows.length === 3 && rows.every((item) => item?.reply?.complete === true),
+  };
+  const evidenceValid = Object.values(evidenceChecks).every(Boolean);
+  return {
+    schema_version: 'qbot-connector-retry-recovery-trace/v1',
+    captured_at: new Date().toISOString(),
+    evidence_valid: evidenceValid,
+    oracle_valid: evidenceValid && Object.values(oracleChecks).every(Boolean),
+    evidence_checks: evidenceChecks,
+    oracle_checks: oracleChecks,
+    task_id: evidenceChecks.same_nonempty_task_id ? taskIds[0] : '',
+    turns: rows,
+  };
+}
+
+async function qworkMrConnectorRetryRecoveryCase(context) {
+  const { page, state, testCase, caseDir, timeoutMs } = context;
+  await qworkDailyRedactionCase(context);
+  await openNewTask(page, state);
+  if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
+  const turnSpecs = [
+    {
+      label: '连接器失败恢复第1轮',
+      expectedType: 'bar',
+      expectedPoints: [],
+      prompt: '连接器恢复探针 1/3：必须且只能真实调用一次内置 qbot_chart 的 render_chart；参数精确为 {"type":"bar","data":[]}，不要自行修正。工具失败后只用一句话说明参数无效。',
+    },
+    {
+      label: '连接器失败恢复第2轮',
+      expectedType: 'line',
+      expectedPoints: [],
+      prompt: '连接器恢复探针 2/3：在同一任务中再次且只能真实调用一次 qbot_chart 的 render_chart；参数精确为 {"type":"line","data":[]}，不要自行修正。工具失败后只用一句话说明仍需有效数据。',
+    },
+    {
+      label: '连接器失败后修正成功第3轮',
+      expectedType: 'bar',
+      expectedPoints: INTERACTIVE_CHART_EXPECTED_POINTS,
+      prompt: '连接器恢复探针 3/3：修正参数并且只能真实调用一次 qbot_chart 的 render_chart，type=bar，data 精确为曝光12000、点击860、报名240、成交28；必须成功生成四点柱状图。',
+    },
+  ];
+  const turns = [];
+  for (const spec of turnSpecs) {
+    const reply = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt: spec.prompt,
+      label: spec.label,
+    });
+    const taskId = confirmedSendReceiptTaskId(state.artifacts.send_receipts || [], spec.prompt);
+    const runtimeReadback = await captureQworkTaskRuntimeReadback(page, taskId);
+    const screenshotPath = await shot(page, caseDir, `${slugify(spec.label)}-tool-terminal`);
+    const screenshot = screenshotPath && fs.existsSync(screenshotPath) ? {
+      path: screenshotPath,
+      bytes: fs.statSync(screenshotPath).size,
+      sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+    } : null;
+    turns.push(connectorRetryTurnReadback({
+      caseId: coreBetaEvidenceCaseId(testCase),
+      prompt: spec.prompt,
+      sendReceipts: state.artifacts.send_receipts || [],
+      session: runtimeReadback.session,
+      runtimeEvidence: runtimeReadback.runtimeEvidence,
+      screenshot,
+      replyText: reply.deltaText,
+      replyComplete: !reply.incomplete,
+      expectedType: spec.expectedType,
+      expectedPoints: spec.expectedPoints,
+    }));
+    if (reply.incomplete) break;
+  }
+  const verdict = connectorRetryRecoveryVerdict(turns);
+  verdict.case_id = coreBetaEvidenceCaseId(testCase);
+  writeQworkDailyEvidence(state, caseDir, 'connector_retry_recovery_trace', verdict, verdict.oracle_valid, verdict.evidence_valid);
+  recordStep(
+    state,
+    '同一任务连续两次参数失败后第三次修正成功',
+    '三轮必须分别绑定确认发送、同一taskId、tool-use/result、runtime authority、provider receipt和截图。',
+    JSON.stringify(verdict.evidence_checks),
+    verdict.evidence_valid ? 'passed' : 'failed',
+    turns.at(-1)?.screenshot?.path || '',
+    verdict.evidence_valid ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    '连接器失败不得产生同轮或跨轮熔断',
+    '同一 qbot_chart/render_chart 两次确定性参数失败后，第三轮合法参数仍须真实调用成功；任何 connector_circuit_open 或“本轮不再重试”均为产品缺陷。',
+    verdict.oracle_valid,
+    JSON.stringify(verdict.oracle_checks),
+  );
+}
+
 async function mrSmokeActivityDomSnapshot(page) {
   return page.evaluate(() => {
     const visibleCount = (selector, root = document) => Array.from(root.querySelectorAll(selector))
@@ -16465,6 +16897,8 @@ async function executeQworkDailyNativeCase(context, scenario) {
       return await qworkDailyPromptInjectionCase(context);
     case 'qwork_daily_credential_redaction_copy':
       return await qworkDailyRedactionCase(context);
+    case 'qwork_mr_connector_retry_recovery':
+      return await qworkMrConnectorRetryRecoveryCase(context);
     case 'qwork_mr_activity_timeline':
       return await qworkMrActivityTimelineCase(context);
     case 'qwork_mr_interval_schedule':
@@ -19295,6 +19729,13 @@ async function executeIssue793StreamingScrollFollow({ page, state, testCase, cas
     `issue-793-${replyEvidence.screenshot_file_suffix || 'after-reply'}`,
   );
   state.screenshots[`issue_793_${String(replyEvidence.screenshot_phase || 'after_reply')}`] = completionScreenshot;
+  await captureAssistantHorizontalOverflowReadback({
+    page,
+    state,
+    testCase,
+    caseDir,
+    phase: '长文本流式回复终态',
+  });
   const replyRecord = {
     label: '长文本流式回复',
     ...replyEvidence,
@@ -26270,6 +26711,115 @@ async function prepareSkillRegressionFixtureState({ page, state, testCase, caseD
   return true;
 }
 
+export function skillNativeInvocationReadback({
+  caseId = '',
+  prompt = '',
+  expectedSkill = '',
+  expectedMarker = '',
+  sendReceipts = [],
+  session = null,
+  runtimeEvidence = null,
+  screenshot = null,
+  replyText = '',
+} = {}) {
+  const promptText = String(prompt || '');
+  const promptSha256 = promptText ? sha256Text(promptText) : '';
+  const taskId = confirmedSendReceiptTaskId(sendReceipts, promptText);
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = (message?.parts || [])
+      .filter((part) => part?.t === 'text')
+      .map((part) => String(part.text || ''))
+      .join('\n');
+    if (message?.role === 'user' && text.includes(promptText)) {
+      userIndex = index;
+      break;
+    }
+  }
+  let turnEndIndex = messages.length;
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    if (messages[index]?.role === 'user') {
+      turnEndIndex = index;
+      break;
+    }
+  }
+  const nativeParts = [];
+  const assistantTexts = [];
+  for (let index = userIndex + 1; index < turnEndIndex; index += 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant') continue;
+    for (const part of message?.parts || []) {
+      if (part?.t === 'tool' && /^(?:Skill|skill)$/u.test(String(part.name || ''))) nativeParts.push(part);
+      if (part?.t === 'text') assistantTexts.push(String(part.text || ''));
+    }
+  }
+  const nativePart = nativeParts[0] || null;
+  const input = connectorRetryToolInput(nativePart);
+  const inputIdentity = String(input?.skill || input?.name || input?.slug || '');
+  const rawResult = typeof nativePart?.result === 'string'
+    ? nativePart.result
+    : (nativePart?.result == null ? '' : JSON.stringify(nativePart.result));
+  const fullText = `${assistantTexts.join('\n')}\n${rawResult}\n${String(replyText || '')}`;
+  const preflightRejectionPattern = /skill_runtime_(?:materialization|dependency)_unavailable|local_skill_runtime_materialization_failed|installed-but-not-mounted|installed but not mounted|unknown skill|skill.{0,20}(?:unavailable|不可用|未挂载)/iu;
+  const diagnostics = runtimeEvidence?.diagnostics || {};
+  const authority = diagnostics?.e2eCurrentTurnAuthority || {};
+  const evidenceChecks = {
+    case_id_present: Boolean(String(caseId || '').trim()),
+    prompt_present: Boolean(promptText),
+    prompt_sha256_present: /^[a-f0-9]{64}$/iu.test(promptSha256),
+    confirmed_send_task_id_present: Boolean(taskId),
+    session_id_matches_task: Boolean(taskId) && String(session?.id || '') === taskId,
+    prompt_bound_user_turn_present: userIndex >= 0,
+    native_skill_tool_part_present: nativeParts.length >= 1,
+    native_skill_tool_result_present: Buffer.byteLength(rawResult) > 0,
+    runtime_evidence_readable: Boolean(runtimeEvidence && typeof runtimeEvidence === 'object' && !runtimeEvidence.error),
+    runtime_session_matches_task: Boolean(taskId) && String(diagnostics?.sessionId || '') === taskId,
+    runtime_authority_captured: Boolean(authority && typeof authority === 'object' && Object.keys(authority).length),
+    provider_receipt_hash_present: /^[a-f0-9]{64}$/iu.test(String(authority?.providerReceiptHash || '')),
+    screenshot_captured: Boolean(screenshot?.path)
+      && Number(screenshot?.bytes || 0) > 0
+      && /^[a-f0-9]{64}$/iu.test(String(screenshot?.sha256 || '')),
+  };
+  const normalizedExpected = String(expectedSkill || '').toLowerCase();
+  const identityMatches = Boolean(inputIdentity)
+    && (inputIdentity.toLowerCase().includes(normalizedExpected)
+      || normalizedExpected.includes(inputIdentity.toLowerCase()));
+  const evidenceValid = Object.values(evidenceChecks).every(Boolean);
+  const oracleChecks = {
+    native_skill_identity_matches: identityMatches,
+    server_preflight_rejection_absent: !preflightRejectionPattern.test(fullText),
+    deterministic_skill_marker_returned: Boolean(expectedMarker) && String(replyText || '').includes(String(expectedMarker)),
+    runtime_authority_ready: diagnostics?.e2eCurrentTurnAuthorityReadiness?.ready === true,
+  };
+  return {
+    schema_version: 'qbot-skill-native-invocation-trace/v1',
+    case_id: String(caseId || ''),
+    captured_at: new Date().toISOString(),
+    evidence_valid: evidenceValid,
+    oracle_valid: evidenceValid && Object.values(oracleChecks).every(Boolean),
+    prompt: promptText,
+    prompt_sha256: promptSha256,
+    task_id: taskId,
+    evidence_checks: evidenceChecks,
+    oracle_checks: oracleChecks,
+    native_skill_tool: {
+      count: nativeParts.length,
+      name: String(nativePart?.name || ''),
+      input,
+      result_bytes: Buffer.byteLength(rawResult),
+      result_sha256: rawResult ? sha256Text(rawResult) : '',
+    },
+    runtime_authority: {
+      provider_receipt_hash: String(authority?.providerReceiptHash || ''),
+      skill_routing: authority?.skillRouting || null,
+      skill_runtime_materialization: authority?.skillRuntimeMaterialization || null,
+    },
+    screenshot,
+  };
+}
+
 async function executeSitSkillScopeIsolation({ page, state, testCase, caseDir, timeoutMs }) {
   const skillName = 'QA Scope Isolation';
   const skillMatcher = /QA Scope Isolation|qa-scope-isolation/i;
@@ -26310,6 +26860,48 @@ async function executeSitSkillScopeIsolation({ page, state, testCase, caseDir, t
   replies.push({ label: '任务 A 选择技能后自检', ...firstA });
   const taskASnapshot = await conversationSnapshot(page);
   const taskAId = taskASnapshot.activeTaskId;
+  const nativeRuntimeReadback = await captureQworkTaskRuntimeReadback(page, taskAId);
+  const nativeScreenshotPath = await shot(page, caseDir, 'skill-scope-task-a-native-skill-terminal');
+  const nativeScreenshot = nativeScreenshotPath && fs.existsSync(nativeScreenshotPath) ? {
+    path: nativeScreenshotPath,
+    bytes: fs.statSync(nativeScreenshotPath).size,
+    sha256: createHash('sha256').update(fs.readFileSync(nativeScreenshotPath)).digest('hex'),
+  } : null;
+  const nativeInvocation = skillNativeInvocationReadback({
+    caseId: coreBetaEvidenceCaseId(testCase),
+    prompt,
+    expectedSkill: 'qa-scope-isolation',
+    expectedMarker: marker,
+    sendReceipts: state.artifacts.send_receipts || [],
+    session: nativeRuntimeReadback.session,
+    runtimeEvidence: nativeRuntimeReadback.runtimeEvidence,
+    screenshot: nativeScreenshot,
+    replyText: firstA.deltaText,
+  });
+  writeQworkDailyEvidence(
+    state,
+    caseDir,
+    'skill_execution_trace',
+    nativeInvocation,
+    nativeInvocation.oracle_valid,
+    nativeInvocation.evidence_valid,
+  );
+  recordStep(
+    state,
+    '绑定 Claude Code 原生 Skill 调用',
+    '确认发送、同一taskId、原生Skill tool-use/result、runtime authority、provider receipt与截图必须完整。',
+    JSON.stringify(nativeInvocation.evidence_checks),
+    nativeInvocation.evidence_valid ? 'passed' : 'failed',
+    nativeScreenshotPath,
+    nativeInvocation.evidence_valid ? '' : 'automation_error',
+  );
+  recordAssertion(
+    state,
+    'Skill 由原生工具判定且未被服务端提前拒绝',
+    '选中的 qa-scope-isolation 必须进入原生 Skill 工具并返回确定性标识；不得出现 unavailable/not-mounted/materialization 预检拒绝。',
+    nativeInvocation.oracle_valid,
+    JSON.stringify(nativeInvocation.oracle_checks),
+  );
   recordAssertion(
     state,
     '任务 A 技能真实生效',

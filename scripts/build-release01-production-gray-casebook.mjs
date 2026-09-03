@@ -30,17 +30,17 @@ const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自�
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
 const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测试用例_框架清零版_2026-07-11.xlsx');
 let PRODUCT_COMMIT = '';
-const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = 'c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d';
+const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = '11d713eac3402a9f8c12699918d63c333d1d8f55';
 const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.7';
 let MR_WINDOW_START = '';
 let MR_WINDOW_END = '';
-const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260903_release01_casebook_16-12-70-160-r10');
+const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx';
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260903_release01_casebook_16-12-70-160-r11');
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
-const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx');
-const PREVIOUS_CASEBOOK_SHA256 = '7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb';
-const EXPECTED_PREVIOUS_MR_COUNT = 130;
+const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx');
+const PREVIOUS_CASEBOOK_SHA256 = '6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155';
+const EXPECTED_PREVIOUS_MR_COUNT = 131;
 const EXPECTED_INCREMENTAL_MR_COUNT = 1;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
 const CORE_LIFELINE_CASE_IDS = QWORK_CORE_LIFELINE_CASE_IDS;
@@ -134,6 +134,7 @@ const RECENT_MR_CASE_MAPPING = new Map([
   ['1521', ['MRSMOKE-AUTO-001', 'MRSMOKE-FAIL-001', 'BETA-INIT-001', 'BETA-HOST-003', 'BETA-CHAT-001', 'BETA-CHAT-005']],
   ['1520', ['MRSMOKE-NAV-001', 'BETA-INIT-001', 'BETA-INIT-003', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003']],
   ['1516', ['MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-005', 'BETA-PERF-003']],
+  ['1526', ['MRSMOKE-SKILL-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-006', 'BETA-PERF-003']],
 ]);
 const RECENT_MR_STATIC_AUDITS = new Map([
   ['1329', {
@@ -496,13 +497,16 @@ function patchSmokeCase(testCase) {
   }
   if (id === 'MRSMOKE-SKILL-001') {
     next = withEvidenceRole(next, 'skill_install_attempt_ledger');
-    next['测试场景'] = 'Skill 依赖安装以 personal installAttempt 事务提交/回滚，并保持任务级选择隔离';
-    next['执行步骤'] = '1. 通过可见技能市场安装含必填依赖的确定性 Skill，读取 personal installAttempt、operationId 与成功库存/历史。\n2. 安装含失败必填依赖的确定性 Skill，读取失败 attempt 并证明只回滚本 attempt、库存/个人历史无残留。\n3. 选择隔离 Skill 完成任务 A/B 选择、移除和回复标记闭环。\n4. 定向卸载本 Case Fixture。';
-    next['预期结果'] = '成功 attempt 原子提交根技能与依赖；失败 attempt 原子回滚且不污染个人历史；每项 operationId 稳定；任务 A/B 技能选择不串扰。';
-    next['来源ID'] = `${asString(next['来源ID'])}; MR!1277; MR!1292; MR!1295; MR!1302; MR!1311`;
+    next = withEvidenceRole(next, 'skill_execution_trace');
+    next['测试场景'] = 'Skill 依赖安装以 personal installAttempt 事务提交/回滚，原生 Skill 工具判定不被服务端预检提前拒绝，并保持任务级选择隔离';
+    next['执行步骤'] = '1. 通过可见技能市场安装含必填依赖的确定性 Skill，读取 personal installAttempt、operationId 与成功库存/历史。\n2. 安装含失败必填依赖的确定性 Skill，读取失败 attempt 并证明只回滚本 attempt、库存/个人历史无残留。\n3. 选择 qa-scope-isolation，在任务 A 发送自检并绑定原生 Skill tool-use/result、同一taskId、runtime authority和provider receipt；禁止服务端因旧available=false/materialization投影提前拒绝。\n4. 新建任务 B、重开任务 A 并移除 Skill，核对任务级隔离。\n5. 定向卸载本 Case Fixture。';
+    next['预期结果'] = '成功 attempt 原子提交根技能与依赖；失败 attempt 原子回滚且不污染个人历史；任务 A 的原生 Skill 调用返回SKILL_SCOPE_ACTIVE且无服务端提前拒绝；任务 A/B 技能选择不串扰。';
+    next['来源ID'] = `${asString(next['来源ID'])}; MR!1277; MR!1292; MR!1295; MR!1302; MR!1311; MR!1526`;
     next = appendHardOracles(next, [
       '成功安装产生 schemaVersion=1、scope=personal 的 installAttempt，并按 operationId 提交根技能与依赖',
       '依赖失败产生 failed_rolled_back attempt，installed/history 对该 attempt 均无残留',
+      '任务 A 的确认发送、taskId、原生 Skill tool-use/result、runtime authority 与 provider receipt 完整绑定',
+      'Skill 由 Claude Code 原生工具判定，禁止 skill_runtime_materialization_unavailable、installed-but-not-mounted 或 unknown skill 服务端提前拒绝',
       '任务 A/B 技能选择与移除仍保持 task-bound 隔离',
     ]);
   }
@@ -511,7 +515,39 @@ function patchSmokeCase(testCase) {
   if (id === 'MRSMOKE-AUTO-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1328`;
   if (id === 'MRSMOKE-NAV-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1328`;
   if (id === 'MRSMOKE-ROUTE-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1280; MR!1315`;
-  if (id === 'MRSMOKE-FAIL-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1292; MR!1315; MR!1319; MR!1327`;
+  if (id === 'MRSMOKE-FAIL-001') {
+    const roles = unique([
+      ...asString(next['证据要求']).split(',').map((role) => role.trim()),
+      ...asString(next['证据角色']).split(',').map((role) => role.trim()),
+      ...CONVERSATION_EVIDENCE_ROLES,
+      'credential_redaction_scan',
+      'security_boundary_trace',
+      'negative_ui_trace',
+      'log_excerpt',
+      'connector_retry_recovery_trace',
+    ]);
+    next['测试场景'] = '凭据失败脱敏；同一 qbot_chart/render_chart 连续两次参数失败后，第三轮修正参数仍可真实成功，不得同轮或跨轮熔断';
+    next['测试数据'] = '先保存确定性测试凭据并验证UI/日志/结构化读回脱敏；随后同一task依次调用render_chart：1) type=bar,data=[]；2) type=line,data=[]；3) type=bar,data=曝光12000/点击860/报名240/成交28。每轮只能调用一次。';
+    next['执行步骤'] = '1. 保存只属于本Case的测试LLM连接，触发连接失败并扫描UI、日志增量和结构化API，确认密钥与路径不泄漏后定向删除。\n2. 新建干净任务，技能禁用、连接器自动。\n3. 第一轮精确发送type=bar,data=[]，等待真实render_chart参数拒绝。\n4. 同一task第二轮精确发送type=line,data=[]，等待第二次真实参数拒绝。\n5. 同一task第三轮修正为合法四点bar并等待真实成功。\n6. 每轮分别绑定prompt SHA、确认发送、同一taskId、tool-use/result、runtime authority、provider receipt和截图；禁止connector_circuit_open或“本轮不再重试”。';
+    next['预期结果'] = '测试凭据在UI、日志和证据中保持脱敏；前两轮均为真实invalid_chart_data失败；第三轮仍真实调用同一工具并成功返回四点图表；三轮taskId一致且无熔断标记。';
+    next['成功判定'] = '脱敏Oracle通过；三轮各恰好一个qbot_chart/render_chart工具part且证据完整；前两轮失败、第三轮四点envelope成功；runtime authority每轮ready；不存在connector_circuit_open/停止重试。';
+    next['失败/阻塞判定'] = '任一秘密泄漏、第二/三轮被熔断、第三轮未真实调用或合法参数失败记trusted_bug；发送/task/tool/runtime/provider/screenshot关联缺失记framework_issue。';
+    next['来源ID'] = `${asString(next['来源ID'])}; MR!1292; MR!1315; MR!1319; MR!1327; MR!1526`;
+    next['证据要求'] = roles.join(',');
+    next['证据角色'] = roles.join(',');
+    next['会话轮次JSON'] = json([
+      { turn: 1, prompt: '连接器恢复探针 1/3：必须且只能真实调用一次内置 qbot_chart 的 render_chart；参数精确为 {"type":"bar","data":[]}，不要自行修正。工具失败后只用一句话说明参数无效。', oracle: '真实调用一次并返回invalid_chart_data，不得熔断。' },
+      { turn: 2, prompt: '连接器恢复探针 2/3：在同一任务中再次且只能真实调用一次 qbot_chart 的 render_chart；参数精确为 {"type":"line","data":[]}，不要自行修正。工具失败后只用一句话说明仍需有效数据。', oracle: '同task再次真实调用并返回参数失败，不得connector_circuit_open。' },
+      { turn: 3, prompt: '连接器恢复探针 3/3：修正参数并且只能真实调用一次 qbot_chart 的 render_chart，type=bar，data 精确为曝光12000、点击860、报名240、成交28；必须成功生成四点柱状图。', oracle: '同task第三次真实调用成功并返回精确四点envelope。' },
+    ]);
+    next['动作计划JSON'] = json(actionPlan(id, asString(next['用例类型']) || 'security_privacy', next['执行步骤']));
+    next['精准断言JSON'] = json(assertions([
+      'UI、日志增量和结构化读回均不出现测试密钥或私有路径原值',
+      '三轮确认发送、prompt SHA、taskId、tool-use/result、runtime authority、provider receipt和截图分别完整',
+      '前两轮输入精确为空data且真实失败，第三轮合法四点输入真实成功',
+      '三轮使用同一非空taskId，且不出现connector_circuit_open或本轮/当前轮停止重试',
+    ], next['预期结果']));
+  }
   if (id === 'MRSMOKE-ENTRY-001') next['来源ID'] = `${asString(next['来源ID'])}; MR!1280`;
   if (id === 'MRSMOKE-CHART-001') {
     next['产品模块'] = '内置图表与助手消息';
@@ -1071,6 +1107,19 @@ function patchRecentCases(testCase) {
       'Executor路由': CORE_BETA_SCENARIO_REGISTRY.get(id).executor_route,
     });
   }
+  if (['BETA-CHAT-006', 'BETA-PERF-003'].includes(id)) {
+    next = withEvidenceRole(next, 'horizontal_overflow_readback');
+    next['来源ID'] = `${asString(next['来源ID'])},MR!1526`.replace(/^,/, '');
+    next['预期结果'] = `${asString(next['预期结果'])}；助手正文、助手消息、消息列表和document四层均无横向溢出。`;
+    next['成功判定'] = `${asString(next['成功判定'])}；四层scrollWidth-clientWidth差值均不超过1px。`;
+    next['失败/阻塞判定'] = `${asString(next['失败/阻塞判定'])}；任一层横向溢出记trusted_bug，DOM或截图证据缺失记framework_issue。`;
+    next = appendHardOracles(next, [
+      '助手正文、助手消息、消息列表和document四层横向溢出差值均不超过1px',
+      id === 'BETA-CHAT-006'
+        ? '停止后保留回复与继续追问回复分别完成四层边界读回'
+        : '80条长文本流式回复终态完成四层边界读回',
+    ]);
+  }
   return next;
 }
 
@@ -1112,7 +1161,7 @@ async function previousCasebookMrRows() {
   if (rows.length !== EXPECTED_PREVIOUS_MR_COUNT
     || new Set(rows.map((row) => asString(row[1]))).size !== EXPECTED_PREVIOUS_MR_COUNT
     || new Set(rows.map((row) => asString(row[2]))).size !== EXPECTED_PREVIOUS_MR_COUNT) {
-    throw new Error(`r9 历史 MR 覆盖行必须恰好${EXPECTED_PREVIOUS_MR_COUNT}条且IID/commit唯一`);
+    throw new Error(`r10 历史 MR 覆盖行必须恰好${EXPECTED_PREVIOUS_MR_COUNT}条且IID/commit唯一`);
   }
   return rows;
 }
@@ -1131,11 +1180,11 @@ async function loadReleaseIntake() {
   if (!validation.ok) throw new Error(`release intake 校验失败：${validation.failures.join(',')}`);
   if (report.scan_boundary?.baseline_commit !== PREVIOUS_CASEBOOK_PRODUCT_COMMIT
     || report.policy?.api_freshness?.compare_from !== PREVIOUS_CASEBOOK_PRODUCT_COMMIT) {
-    throw new Error(`release intake 必须从 r9 产品基线开始：${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}`);
+    throw new Error(`release intake 必须从 r10 产品基线开始：${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}`);
   }
   if (report.policy?.api_freshness?.first_parent_merge_count !== EXPECTED_INCREMENTAL_MR_COUNT
     || report.merge_requests?.length !== EXPECTED_INCREMENTAL_MR_COUNT) {
-    throw new Error(`r10 增量直接 MR 必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}个，actual=${report.merge_requests?.length || 0}`);
+    throw new Error(`r11 增量直接 MR 必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}个，actual=${report.merge_requests?.length || 0}`);
   }
   const rows = report.merge_requests.map((mr) => ({
     mr: asString(mr.iid),
@@ -1165,6 +1214,9 @@ async function loadReleaseIntake() {
 }
 
 function mrMapping(mr) {
+  if (String(mr.mr || '') === '1526') {
+    return [...(RECENT_MR_CASE_MAPPING.get('1526') || [])];
+  }
   if (String(mr.mr || '') === '1516') {
     return [...(RECENT_MR_CASE_MAPPING.get('1516') || [])];
   }
@@ -1343,7 +1395,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 
 async function main() {
   if (sha256File(PREVIOUS_CASEBOOK) !== PREVIOUS_CASEBOOK_SHA256) {
-    throw new Error(`r9 Casebook SHA-256 漂移：${sha256File(PREVIOUS_CASEBOOK)}`);
+    throw new Error(`r10 Casebook SHA-256 漂移：${sha256File(PREVIOUS_CASEBOOK)}`);
   }
   const releaseIntake = await loadReleaseIntake();
   PRODUCT_COMMIT = releaseIntake.report.release.head;
@@ -1481,6 +1533,11 @@ async function main() {
   const mr1516Expected = 'MRSMOKE-FAIL-001,MRSMOKE-ROUTE-001,BETA-CHAT-005,BETA-PERF-003';
   if (!mr1516 || mr1516[6] !== mr1516Expected || mr1516[7] !== '12条冒烟+70条门禁') {
     throw new Error(`MR !1516必须精确覆盖VPN失败提示、路由恢复和长文本收敛：${JSON.stringify(mr1516)}`);
+  }
+  const mr1526 = mrRows.find((row) => row[1] === '!1526');
+  const mr1526Expected = 'MRSMOKE-SKILL-001,MRSMOKE-FAIL-001,BETA-CHAT-006,BETA-PERF-003';
+  if (!mr1526 || mr1526[6] !== mr1526Expected || mr1526[7] !== '12条冒烟+70条门禁') {
+    throw new Error(`MR !1526必须精确覆盖Skill原生判定、连接器失败恢复与中断/长文本布局：${JSON.stringify(mr1526)}`);
   }
   const omitted = allCases.filter((testCase) => !gateIdSet.has(asString(testCase['用例ID'])));
   const replacementAudit = allCases.filter((testCase) => REPLACED_CASES.has(asString(testCase['用例ID'])));
@@ -1666,8 +1723,8 @@ async function main() {
   addSheet(workbook, '源码依据', 'Casebook源码与审计依据', '所有依据均绑定固定commit；deepbankV2仓库只读，QbotTestAgent负责Case、执行器、证据和放行规则。',
     ['类型', '位置/版本', '用途', '校验'], [
       ['产品源码', `/Users/qifu/Documents/deepbankV2 ${PRODUCT_REF}@${PRODUCT_COMMIT}`, '最新MR与产品行为设计依据；产品仓库只读', 'GitLab GraphQL mergeCommitSha 与增量MR终点全等'],
-      ['上一Casebook产品基线', PREVIOUS_CASEBOOK_PRODUCT_COMMIT, '冻结r9的130个直接合入MR审计终点', `r9 SHA-256=${PREVIOUS_CASEBOOK_SHA256}`],
-      ['MR增量窗口', `${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}..${PRODUCT_COMMIT}`, `继承r9的${EXPECTED_PREVIOUS_MR_COUNT}条并追加${EXPECTED_INCREMENTAL_MR_COUNT}条API验证增量`, 'GitLab API branch HEAD稳定 + compare first-parent完整 + MR changes无overflow'],
+      ['上一Casebook产品基线', PREVIOUS_CASEBOOK_PRODUCT_COMMIT, '冻结r10的131个直接合入MR审计终点', `r10 SHA-256=${PREVIOUS_CASEBOOK_SHA256}`],
+      ['MR增量窗口', `${PREVIOUS_CASEBOOK_PRODUCT_COMMIT}..${PRODUCT_COMMIT}`, `继承r10的${EXPECTED_PREVIOUS_MR_COUNT}条并追加${EXPECTED_INCREMENTAL_MR_COUNT}条API验证增量`, 'GitLab API branch HEAD稳定 + compare first-parent完整 + MR changes无overflow'],
       ['Release intake', `${releaseIntake.resolved}\nSHA-256=${releaseIntake.artifactSha256}`, '扫描前后HEAD、first-parent、MR元数据与changes完整性', `decision=READY; release=${PRODUCT_COMMIT}; incremental=${EXPECTED_INCREMENTAL_MR_COUNT}`],
       ['产品版本', PRODUCT_VERSION, 'release/0.1 产品版本设计范围', `Casebook设计按${PRODUCT_VERSION}冻结；SIT候选另按完整版本号与十字段身份读回`],
       ['源Casebook', SOURCE, '184条历史合同与字段/样式来源', '只读导入'],

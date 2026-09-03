@@ -9,8 +9,8 @@ import {
 export const QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan/v1';
 export const QWORK_RELEASE_TEST_STATE_SCHEMA = 'qbot-qwork-release-test-state/v1';
 export const QWORK_RELEASE_TEST_INTEGRITY_SCHEMA = 'qbot-qwork-release-test-integrity/v1';
-export const QWORK_RELEASE_CASEBOOK_BASENAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx';
-export const QWORK_RELEASE_CASEBOOK_SHA256 = '6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155';
+export const QWORK_RELEASE_CASEBOOK_BASENAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx';
+export const QWORK_RELEASE_CASEBOOK_SHA256 = '5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269';
 
 export const QWORK_CORE_LIFELINE_CASE_IDS = Object.freeze([
   'BETA-INIT-001',

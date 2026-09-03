@@ -25,13 +25,14 @@ Case 的接手状态、启动顺序和禁止事项。
   `MRSMOKE-FAIL-001` 的产品负向结果和其余已完成 Case 必须逐 Case 可信复核保留。
 
 - 最新正式 Casebook 已更新为
-  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx`，
-  SHA-256 `6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155`，设计基线
-  `origin/release/0.1@11d713eac3402a9f8c12699918d63c333d1d8f55`、产品版本 `0.1.7`。
-  r10 继承 r9 已验证的 130 个直接合入 MR，并通过 GitLab API freshness 新增验证 1 个，
-  共审计 131 个 MR。最新 `!1516` 精确映射到 `MRSMOKE-FAIL-001`、
-  `MRSMOKE-ROUTE-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，覆盖 VPN 未连接时的明确提示、
-  错误脱敏、同任务路由恢复、续写文案优先级和 retry 埋点。受管应用更新后的 Teams/QWork
+  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx`，
+  SHA-256 `5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269`，设计基线
+  `origin/release/0.1@1970fe47ac681b36242b0be5c4175238f7d9918b`、产品版本 `0.1.7`。
+  r11 继承 r10 已验证的 131 个直接合入 MR，并通过 GitLab API freshness 新增验证
+  `!1526`，共审计 132 个 MR。`!1526` 精确映射到 `MRSMOKE-SKILL-001`、
+  `MRSMOKE-FAIL-001`、`BETA-CHAT-006` 与 `BETA-PERF-003`，覆盖 Skill 原生判定不被
+  服务端预检误阻断、连接器失败后的同任务恢复，以及停止/长文本助手消息四层横向边界。
+  受管应用更新后的 Teams/QWork
   十字段身份、WebView、runtime、
   capabilities 与 SIT health 必须由最终干净框架基线下的新 pretest 重新读回，不能用
   历史应用或磁盘状态代替精确 `READY`。完成新能力审计、精确 `READY` 后，必须先从
@@ -740,8 +741,8 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 唯一正式 Casebook：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
-SHA-256: 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx
+SHA-256: 5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269
 ```
 
 核心生命线入口为 Sheet `核心生命线门禁`，固定 16 条：
@@ -773,7 +774,7 @@ G1-G4 每阶段都必须有独立能力审计、独立精确 `READY`、独立不
 独立诊断，但不能解锁下一阶段。使用 `npm run qwork-release:orchestrate` 将上述规则
 固化到状态文件，禁止靠人工记忆跨阶段推进。
 
-状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r10 合同的正式 Casebook；内容
+状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r11 合同的正式 Casebook；内容
 自洽但文件名错误、同名但 SHA 漂移或旧版工作簿都必须在创建控制状态前拒绝。
 
 状态机只消费 `qbot-core-beta-pretest/v1` 的 Teams/production-gate/mandatory 报告；
@@ -830,9 +831,9 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 新增 MR 核心冒烟入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx
   Sheet: 新增MR核心冒烟
-  SHA-256: 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155
+  SHA-256: 5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269
 ```
 
 - 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -848,13 +849,14 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
   路由稳定、Skill 隔离、失败脱敏、成果目录、新任务隔离和 qcharts-react 交互图表。主观视觉细节、极端参数
   矩阵、首次系统权限/升级重启、多账号或受保护资源继续按合并版手工 Casebook 执行，
   不在 12 条通过结论中豁免。
-- r10 以 GitLab API freshness 从 r9 设计基线
-  `c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d` 扫描到
-  `origin/release/0.1@11d713eac3402a9f8c12699918d63c333d1d8f55`。扫描前后 branch HEAD
+- r11 以 GitLab API freshness 从 r10 设计基线
+  `11d713eac3402a9f8c12699918d63c333d1d8f55` 扫描到
+  `origin/release/0.1@1970fe47ac681b36242b0be5c4175238f7d9918b`。扫描前后 branch HEAD
   必须一致，compare first-parent 链必须完整，每个直接 merge commit 必须精确绑定一个
   `state=merged`、`target_branch=release/0.1`、merge SHA 全等且 changes_count 完整的 MR；
   compare 超时/缺失、changes overflow、元数据不一致或扫描期间 HEAD 漂移均为 `BLOCKED`。
-- r10 继承 r9 已验证的 130 个 MR，并新增 1 个直接合入 MR `!1516`，共审计 131 个。
+- r11 继承 r10 已验证的 131 个 MR，并新增 1 个直接合入 MR `!1526`，共审计 132 个。
+  r10 继承 r9 已验证的 130 个 MR，并新增 1 个直接合入 MR `!1516`。
   r9 继承 r8 已验证的 73 个 MR，并新增 57 个直接合入 MR；57 个增量的
   同序 IID 为：!1459、!1462、!1393、!1430、!1463、!1464、!1465、!1468、!1466、
   !1469、!1454、!1458、!1467、!1471、!1470、!1473、!1472、!1476、!1461、!1475、
@@ -875,6 +877,10 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
   `MRSMOKE-FAIL-001`、`MRSMOKE-ROUTE-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，
   核对 VPN 错误提示、内部错误脱敏、同任务路由恢复、续写文案优先级与长文本重试收敛；
   禁止按文件名启发式泛化到其它 Case。
+- 最新 `!1526` 的 Skill/Connector 误阻断修复与助手消息布局变更精确映射
+  `MRSMOKE-SKILL-001`、`MRSMOKE-FAIL-001`、`BETA-CHAT-006` 与 `BETA-PERF-003`，
+  核对原生 Skill 判定不被服务端提前拒绝、连接器两次参数失败后同任务第三次恢复成功，
+  以及停止/长文本助手消息四层横向边界；禁止按标题或目录启发式泛化到其它 Case。
 - MR !1329、!1330、!1337、!1310、!1340、!1333、!1326、!1342、!1344 继续固定为
   CI/Dashboard/研究物料/eval/toolchain/version-only 静态合同审计；Dashboard、CI、eval、
   文档/治理和纯可观测性变更不新增桌面 Case，也不计入 16/12/70/160 桌面通过。
@@ -887,6 +893,18 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
   提交/回滚终态，外层证据和 blocker 仍只能绑定 `MRSMOKE-SKILL-001`。作用域 Skill
   只能在双 attempt ledger 固化后从零 task/消息/发送和空能力草稿真实安装；失败时必须
   材料化 `stage=skill_installation` 的产品负向证据，且 ledger SHA 前后保持不变。
+- `MRSMOKE-SKILL-001` 还必须生成 `skill_execution_trace`，绑定任务 A 的确认发送、
+  同一 taskId、原生 `Skill` tool-use/result、runtime authority、provider receipt 与截图。
+  `skill_runtime_materialization_unavailable`、`installed-but-not-mounted` 或 `unknown skill`
+  等服务端提前拒绝属于产品 Oracle 失败，证据完整时不得误判为框架缺口。
+- `MRSMOKE-FAIL-001` 改用原生 `qwork_mr_connector_retry_recovery` driver；保留凭据
+  脱敏检查后，在同一 task 对 `qbot_chart/render_chart` 连续执行两次空 data 参数失败和
+  一次合法四点柱状图成功。`connector_retry_recovery_trace` 必须逐轮绑定 prompt SHA、
+  确认发送、同一 taskId、tool-use/result、runtime authority、provider receipt 与截图，
+  并拒绝 `connector_circuit_open` 或“本轮不再重试”。
+- `BETA-CHAT-006` 与 `BETA-PERF-003` 必须生成 `horizontal_overflow_readback`，对
+  assistant body、assistant message、message list、document 四层执行横向边界读回；
+  任一层差值超过 1px 记产品 Bug，读回或截图缺失才记框架问题。
 - 确认发送必须看到当前会话中本轮规范化 prompt 的用户消息出现次数真实增长，并至少
   同时看到 send/message 计数、taskId、running 或输入区清空的一项辅助变化。仅一个
   辅助信号、仅旧末条同文用户消息或仅 composer 清空均不能确认发送；重复 prompt 必须
@@ -907,13 +925,13 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 生产灰度发布与全量功能回归唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx
 ```
 
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155`
+- SHA-256：`5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -948,10 +966,11 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
-Casebook 的设计依据是 r9 已验证的 130 个 MR，以及从
-`c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d` 到
-`11d713eac3402a9f8c12699918d63c333d1d8f55` 由 GitLab API freshness 完整验证的
-1 个增量 MR，共 131 个。r9 仍完整保留 r8 的 73 个 MR 与后续 57 个增量 MR 历史序列。
+Casebook 的设计依据是 r10 已验证的 131 个 MR，以及从
+`11d713eac3402a9f8c12699918d63c333d1d8f55` 到
+`1970fe47ac681b36242b0be5c4175238f7d9918b` 由 GitLab API freshness 完整验证的
+1 个增量 MR，共 132 个。r10 仍完整保留 r9 的 130 个 MR、r9 的 57 个增量 MR 历史序列
+与 r8 的 73 个 MR 继承关系。
 本地 deepbankV2 缺少已验证历史 Git 对象时，允许以正式 GitLab API intake 作为权威边界
 证明，但必须保持扫描前后 branch HEAD 稳定、compare first-parent 完整、MR merge SHA
 与目标分支全等且 changes `overflow=false`，任一缺失均 fail-closed。MR 映射、删除清单、
@@ -1010,25 +1029,25 @@ npm run check
 npm --prefix teams360-automation run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx \
   --sheet 核心生命线门禁 \
   --profile mandatory \
   --out outputs/<new-core16-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx \
   --sheet 新增MR核心冒烟 \
   --profile mandatory \
   --out outputs/<new-smoke12-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx \
   --sheet 生产灰度门禁Case \
   --profile mandatory \
   --out outputs/<new-gate70-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx \
   --sheet 全量功能回归Case \
   --profile mandatory \
   --out outputs/<new-full160-capability-audit-dir>
@@ -1070,7 +1089,7 @@ framework issue；已产生真实事件但文本 Oracle 失败属于可继续批
 用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
@@ -1079,7 +1098,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 16 \
-  --expected-sha256 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155 \
+  --expected-sha256 5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \

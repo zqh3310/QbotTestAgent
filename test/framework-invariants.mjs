@@ -87,6 +87,33 @@ const runner = [
   fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner.mjs'), 'utf8'),
   fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
 ].join('\n');
+const qworkReleasePlanSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-release-test-plan.mjs'),
+  'utf8',
+);
+const coreBetaProtocolSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'),
+  'utf8',
+);
+const coreBetaV2RunnerSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'),
+  'utf8',
+);
+assert.match(
+  qworkReleasePlanSource,
+  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11\.xlsx[\s\S]*5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269/,
+  '发布状态机必须冻结 r11 Casebook 文件名和 SHA-256',
+);
+assert.match(
+  coreBetaProtocolSource,
+  /MRSMOKE-FAIL-001', 'qwork_mr_connector_retry_recovery'[\s\S]*skill_execution_trace[\s\S]*connector_retry_recovery_trace[\s\S]*horizontal_overflow_readback/,
+  'Core Beta 协议必须冻结 !1526 driver 与三类新增证据角色',
+);
+assert.match(
+  coreBetaV2RunnerSource,
+  /qwork_mr_connector_retry_recovery[\s\S]*skill_execution_trace[\s\S]*connector_retry_recovery_trace[\s\S]*horizontal_overflow_readback/,
+  'Core Beta v2 runner 必须实现 !1526 原生执行与证据材料化',
+);
 assert.match(
   runner,
   /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,

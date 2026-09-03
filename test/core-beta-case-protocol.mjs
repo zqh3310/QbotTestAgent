@@ -28,12 +28,15 @@ import {
   aggregateCompoundOutcome,
   buildCompoundEvidenceManifest,
   compoundBlockedReason,
+  connectorRetryRecoveryVerdict,
+  connectorRetryTurnReadback,
   coreBetaCompletionBlockReason,
   coreBetaPreSendCapabilityFailureEvidence,
   coreBetaRuntimeExecutorBinding,
   coreBetaRunOwnedExpertPrerequisiteBlocker,
   coreBetaSuiteLedgerPath,
   coreBetaSuiteRoot,
+  horizontalOverflowReadbackVerdict,
   qworkDailyEvidenceEnvelope,
   qworkDailyExpertAudienceRejectionEvidence,
   qworkDailyExpertCatalogBridgeRoute,
@@ -43,6 +46,7 @@ import {
   qworkDailyRedactionVerdict,
   qworkDailySecretFindings,
   qworkDailyWorkspaceTaskBindingVerdict,
+  skillNativeInvocationReadback,
   normalizeQworkDailyExpertCatalog,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
@@ -379,7 +383,7 @@ for (const [id, driver, mode, legacyCaseId = '', caseType = 'conversation'] of [
   ['MRSMOKE-NAV-001', 'qwork_mr_sidebar_collapse_expand', 'verified_legacy', 'SIT-HOME-051'],
   ['MRSMOKE-ROUTE-001', 'qwork_daily_route_task_stability', 'native'],
   ['MRSMOKE-SKILL-001', 'qwork_mr_skill_install_use_isolation', 'verified_legacy', 'SIT-SKILL-MR-001'],
-  ['MRSMOKE-FAIL-001', 'qwork_daily_credential_redaction_copy', 'native'],
+  ['MRSMOKE-FAIL-001', 'qwork_mr_connector_retry_recovery', 'native'],
   ['MRSMOKE-ART-001', 'qwork_daily_artifact_exact_directory', 'native'],
   ['MRSMOKE-ENTRY-001', 'qwork_daily_new_task_auto_isolation', 'native'],
   ['MRSMOKE-CHART-001', 'qwork_mr_interactive_chart', 'verified_legacy', 'SIT-CONN-016', 'mcp_use'],
@@ -394,6 +398,156 @@ for (const [id, driver, mode, legacyCaseId = '', caseType = 'conversation'] of [
 }
 assert.equal(CORE_BETA_SCENARIO_REGISTRY.get('MRSMOKE-WEB-002')?.conversation_required, false);
 assert.equal(CORE_BETA_SCENARIO_REGISTRY.get('MRSMOKE-NAV-001')?.conversation_required, false);
+
+{
+  const taskId = 'task-connector-retry-1526';
+  const runtimeEvidence = {
+    diagnostics: {
+      sessionId: taskId,
+      e2eCurrentTurnAuthorityReadiness: { ready: true },
+      e2eCurrentTurnAuthority: {
+        providerReceiptHash: 'a'.repeat(64),
+        connectorRouting: { effectiveConnectorIds: ['builtin:qbot_chart'] },
+        connectorRuntimeMaterialization: { materializedConnectorIds: ['builtin:qbot_chart'] },
+      },
+    },
+  };
+  const screenshot = { path: '/tmp/connector-retry.png', bytes: 256, sha256: 'b'.repeat(64) };
+  const pointData = [
+    { label: '曝光', value: 12000 },
+    { label: '点击', value: 860 },
+    { label: '报名', value: 240 },
+    { label: '成交', value: 28 },
+  ];
+  const buildTurn = ({ prompt, type, data, result, replyText }) => connectorRetryTurnReadback({
+    caseId: 'MRSMOKE-FAIL-001',
+    prompt,
+    sendReceipts: [{
+      prompt,
+      attempts: [{ clicked: true, receipt: { ok: true, snapshot: { activeId: taskId } } }],
+    }],
+    session: {
+      id: taskId,
+      messages: [
+        { role: 'user', parts: [{ t: 'text', text: prompt }] },
+        { role: 'assistant', parts: [
+          { t: 'tool', name: 'mcp__qbot_chart__render_chart', input: { type, data }, result },
+          { t: 'text', text: replyText },
+        ] },
+      ],
+    },
+    runtimeEvidence,
+    screenshot,
+    replyText,
+    replyComplete: true,
+    expectedType: type,
+    expectedPoints: data,
+  });
+  const first = buildTurn({
+    prompt: 'retry-turn-1', type: 'bar', data: [],
+    result: JSON.stringify({ isError: true, structuredContent: { ok: false, errorCode: 'invalid_chart_data', error: 'at least one data point' } }),
+    replyText: '参数无效。',
+  });
+  const second = buildTurn({
+    prompt: 'retry-turn-2', type: 'line', data: [],
+    result: JSON.stringify({ isError: true, structuredContent: { ok: false, errorCode: 'invalid_chart_data', error: 'at least one data point' } }),
+    replyText: '仍需有效数据。',
+  });
+  const third = buildTurn({
+    prompt: 'retry-turn-3', type: 'bar', data: pointData,
+    result: JSON.stringify({
+      isError: false,
+      structuredContent: { ok: true },
+      _meta: { 'qbot/chart-result': { ok: true, kind: 'qbot-chart-result', mimeType: 'image/svg+xml', type: 'bar', data: pointData, svg: '<svg></svg>' } },
+    }),
+    replyText: '四点柱状图已生成。',
+  });
+  const recovery = connectorRetryRecoveryVerdict([first, second, third]);
+  assert.equal(recovery.evidence_valid, true, '三轮真实工具证据必须完整绑定同一task');
+  assert.equal(recovery.oracle_valid, true, '两次参数失败后第三次合法调用必须允许恢复成功');
+  const fused = connectorRetryRecoveryVerdict([
+    first,
+    { ...second, reply: { ...second.reply, forbidden_marker_found: true } },
+    third,
+  ]);
+  assert.equal(fused.evidence_valid, true, '产品熔断文案不得破坏证据完整性分类');
+  assert.equal(fused.oracle_valid, false, 'connector_circuit_open必须成为产品Oracle失败');
+}
+
+{
+  const taskId = 'task-skill-native-1526';
+  const prompt = '运行技能作用域自检';
+  const trace = skillNativeInvocationReadback({
+    caseId: 'MRSMOKE-SKILL-001',
+    prompt,
+    expectedSkill: 'qa-scope-isolation',
+    expectedMarker: 'SKILL_SCOPE_ACTIVE',
+    sendReceipts: [{
+      prompt,
+      attempts: [{ clicked: true, receipt: { ok: true, snapshot: { activeId: taskId } } }],
+    }],
+    session: {
+      id: taskId,
+      messages: [
+        { role: 'user', parts: [{ t: 'text', text: prompt }] },
+        { role: 'assistant', parts: [
+          { t: 'tool', name: 'Skill', input: { skill: 'skillhub__global__qa-scope-isolation' }, result: 'Loaded QA Scope Isolation.' },
+          { t: 'text', text: 'SKILL_SCOPE_ACTIVE' },
+        ] },
+      ],
+    },
+    runtimeEvidence: {
+      diagnostics: {
+        sessionId: taskId,
+        e2eCurrentTurnAuthorityReadiness: { ready: true },
+        e2eCurrentTurnAuthority: { providerReceiptHash: 'c'.repeat(64), skillRouting: { mode: 'manual' } },
+      },
+    },
+    screenshot: { path: '/tmp/skill-native.png', bytes: 256, sha256: 'd'.repeat(64) },
+    replyText: 'SKILL_SCOPE_ACTIVE',
+  });
+  assert.equal(trace.evidence_valid, true, '原生Skill tool-use/result必须绑定确认发送与runtime authority');
+  assert.equal(trace.oracle_valid, true, '原生Skill返回确定性标识且无服务端提前拒绝时应通过');
+  const rejected = skillNativeInvocationReadback({
+    ...trace,
+    caseId: 'MRSMOKE-SKILL-001',
+    prompt,
+    expectedSkill: 'qa-scope-isolation',
+    expectedMarker: 'SKILL_SCOPE_ACTIVE',
+    sendReceipts: [{ prompt, attempts: [{ clicked: true, receipt: { ok: true, snapshot: { activeId: taskId } } }] }],
+    session: {
+      id: taskId,
+      messages: [
+        { role: 'user', parts: [{ t: 'text', text: prompt }] },
+        { role: 'assistant', parts: [{ t: 'tool', name: 'Skill', input: { skill: 'qa-scope-isolation' }, result: 'skill_runtime_materialization_unavailable' }] },
+      ],
+    },
+    runtimeEvidence: {
+      diagnostics: {
+        sessionId: taskId,
+        e2eCurrentTurnAuthorityReadiness: { ready: true },
+        e2eCurrentTurnAuthority: { providerReceiptHash: 'e'.repeat(64) },
+      },
+    },
+    screenshot: { path: '/tmp/skill-native-rejected.png', bytes: 256, sha256: 'f'.repeat(64) },
+    replyText: 'SKILL_SCOPE_ACTIVE',
+  });
+  assert.equal(rejected.evidence_valid, true);
+  assert.equal(rejected.oracle_valid, false, '服务端materialization预检拒绝必须保留为产品Oracle失败');
+}
+
+{
+  const cleanPhase = {
+    phase: '停止后保留回复', captured: true, assistant_body_count: 1,
+    assistant_body_overflow_x: 0, assistant_message_overflow_x: 0,
+    message_list_overflow_x: 0, document_overflow_x: 0,
+    screenshot: { path: '/tmp/overflow.png', bytes: 256, sha256: '1'.repeat(64) },
+  };
+  assert.equal(horizontalOverflowReadbackVerdict([cleanPhase]).oracle_valid, true);
+  const overflow = horizontalOverflowReadbackVerdict([{ ...cleanPhase, assistant_body_overflow_x: 24 }]);
+  assert.equal(overflow.evidence_valid, true, '横向溢出是产品Oracle失败，不是证据失败');
+  assert.equal(overflow.oracle_valid, false, '助手正文scrollWidth超出clientWidth必须失败');
+}
 
 assert.equal(qworkDailyNewTaskAutoIsolationVerdict({
   expected_draft: '任务B草稿',
