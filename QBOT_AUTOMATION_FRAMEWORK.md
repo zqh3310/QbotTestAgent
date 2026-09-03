@@ -35,11 +35,11 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| QWork 核心生命线门禁 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx` | `核心生命线门禁` | 16 | `8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672` |
-| 生产灰度发布 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx` | `生产灰度门禁Case` | 70 | `8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672` |
-| 全量正常功能回归 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx` | `全量功能回归Case` | 160 | `8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672` |
+| QWork 核心生命线门禁 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx` | `核心生命线门禁` | 16 | `7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb` |
+| 生产灰度发布 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx` | `生产灰度门禁Case` | 70 | `7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb` |
+| 全量正常功能回归 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx` | `全量功能回归Case` | 160 | `7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb` |
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
-| QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx` | `新增MR核心冒烟` | 12 | `8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672` |
+| QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx` | `新增MR核心冒烟` | 12 | `7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb` |
 
 ### 2.1 QWork 分层止损发布流程
 
@@ -84,7 +84,7 @@ framework/testcase issue、证据缺失、身份漂移或非精确 READY，当�
 缺项。仅修改顶层 `status=READY` 或伪造身份 fingerprint 永远不能获得阶段准入。
 
 机器化编排入口为 `npm run qwork-release:orchestrate`。`init` 只接受新的控制目录、
-文件名与 SHA 均精确匹配本节 r8 合同的正式 Casebook 和十字段发布身份；`readiness`
+文件名与 SHA 均精确匹配本节 r9 合同的正式 Casebook 和十字段发布身份；`readiness`
 校验能力审计与 pretest 的精确 Case ID
 顺序；`complete` 校验真实进度、未停止批次、完整 manifest、可信复核、选择的 Case ID
 顺序和发布身份；`soak` 校验 G5。状态机只允许按 G0 -> G5 顺序推进。
@@ -188,14 +188,21 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 与 succeeded 终态。定向删除定义后还必须显式调用公开 `refresh()`，在有界窗口内
 连续读回目标定义消失；DELETE 200 或本地异步 refresh 动作本身不能替代终态对账。
 
-本版按北京时间 2026-08-24 00:00:00 至 2026-08-28 01:06:27 扫描
-`origin/release/0.1` first-parent，共审计 73 个直接合入 MR。相对上一 Casebook 基线
-`63e2cabce3d15b8db3ecfbb54380ad87a6bb5acd` 新增审计 !1374；此前窗口已包含 !1334、!1331、!1330、
-!1332、!1336、!1337、!1338、!1310、!1339、!1340、!1333、!1341、!1326、
-!1342、!1320、!1344、!1343、!1345、!1346、!1349、!1348、!1350、!1355、!1354、!1356、!1357、!1352、
-!1359、!1361、!1364、!1358、!1365、!1428、!1430、!1443、!1450、!1451、!1374。产品行为变更映射到现有 12/70/160 真实 Case；!1329、!1330、!1337、!1310、
-!1340、!1333、!1326、!1342、!1344 分别属于 CI、Dashboard、研究物料、eval、工具链或 version-only
-  静态合同审计，不新增桌面 QWork E2E Case，也不计入 12/70/160 桌面通过。新增合同还必须满足：
+本版以 GitLab API freshness 从 r8 设计基线
+`57db57b95a87245195b6a48ffd414abb654281e5` 扫描到
+`origin/release/0.1@c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d`。扫描前后 branch HEAD
+必须一致，compare first-parent 链必须完整，每个直接 merge commit 必须精确绑定一个
+`state=merged`、`target_branch=release/0.1`、merge SHA 全等且 changes_count 完整的 MR；
+任一漂移、compare 超时/缺失、changes overflow 或元数据不一致都必须 `BLOCKED`。
+r9 继承 r8 已验证的 73 个 MR，并新增 57 个直接合入 MR，共审计 130 个。新增同序 IID 为：
+!1459、!1462、!1393、!1430、!1463、!1464、!1465、!1468、!1466、!1469、!1454、
+!1458、!1467、!1471、!1470、!1473、!1472、!1476、!1461、!1475、!1460、!1480、
+!1477、!1484、!1481、!1494、!1474、!1488、!1495、!1496、!1491、!1492、!1498、
+!1499、!1485、!1501、!1479、!1490、!1486、!1489、!1504、!1506、!1483、!1487、
+!1497、!1508、!1512、!1514、!1515、!1509、!1503、!1513、!1518、!1519、!1524、
+!1521、!1520。产品行为变更映射到现有 16/12/70/160 真实 Case；Dashboard、CI、eval、
+文档/治理和纯可观测性变更保留静态合同审计，不新增桌面 QWork E2E Case，也不计入
+16/12/70/160 桌面通过。新增合同还必须满足：
 
 - !1359 的混合附件部分失败路径映射 `BETA-FILE-005/006/007` 与 `SIT-HOME-056`，核对有效附件保留、逐文件拒绝和原子回滚语义。
 - !1361 的 Skill 安装 runtime fetch 注入映射 `MRSMOKE-SKILL-001` 与 `BETA-SKILL-001/002/003/004/005/014`，核对真实安装事务仍可复现且不会意外下载运行时。
@@ -203,11 +210,13 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 - !1358 的成果按会话隔离映射 `MRSMOKE-ART-001` 与 `BETA-ART-001/002/003/004`，核对并行会话成果不串台。
 - !1365 的自动化列表与响应式操作映射 `MRSMOKE-ACT-001`、`MRSMOKE-NAV-001`、`MRSMOKE-ENTRY-001` 与 `BETA-CHAT-007`，核对真实任务列表操作和侧栏/入口布局。
 - !1428 的 Claude SDK 重试/fallback 变更映射 `MRSMOKE-FAIL-001`、`MRSMOKE-ROUTE-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，核对失败收敛、路由与长文本恢复。
-- !1430 的成果归属与预览会话隔离映射 `MRSMOKE-ART-001`、`BETA-ART-001/002/003/004`，核对成果不串台与预览安全。
+- !1430 的首次工作台引导弹窗映射 `MRSMOKE-NAV-001`、`MRSMOKE-ENTRY-001`、`BETA-CHAT-007`、`SIT-INIT-002` 与 `SIT-HOME-051`，核对入口、侧栏和首次使用布局。
 - !1443 的用户 workplace profile 注入映射 `MRSMOKE-AUTH-001`、`BETA-CHAT-001` 与 `BETA-CHAT-009`，核对组织上下文与脱敏边界。
 - !1450 的 OTA quarantine loop 映射 `BETA-INIT-001` 与 `BETA-HOST-003`，核对运行时更新状态和宿主身份收敛。
 - !1451 的 Claude fallback alias 映射 `MRSMOKE-FAIL-001`、`MRSMOKE-ROUTE-001` 与 `BETA-CHAT-005`，核对 fallback 身份和错误脱敏。
 - !1374 的 Auto fallback/catalog authority 变更映射 `MRSMOKE-ROUTE-001`、`MRSMOKE-FAIL-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，核对 Auto fallback 来源、路由稳定性和长文本恢复。
+- !1520 的 SDK 解压让出事件循环变更映射 `BETA-INIT-001/003`、`BETA-HOST-003`、`MRSMOKE-NAV-001` 与 `SIT-TEAMS-NEW-001/003`，核对运行时物化期间 Teams Tab 切换和宿主身份不阻塞。
+- !1329 及同类 CI、Dashboard、eval、研究物料、工具链、version-only 变更只做静态合同审计；明确不新增桌面 QWork E2E Case，也不计入 16/12/70/160 桌面通过。
 
 - `SIT-HOME-044` 的 picker/paste/drag 三入口统一进入 FileInput 合同；81 MiB
   必须发送前拒绝且保持零 task/消息/send，拒绝第三份不能抹去前两份附件。
@@ -247,7 +256,7 @@ QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 正常功能增量保持总数不变。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
-当前设计基线是 `origin/release/0.1@57db57b95a87245195b6a48ffd414abb654281e5`，
+当前设计基线是 `origin/release/0.1@c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d`，
 产品版本 `0.1.7`；`/Users/qifu/Documents/deepbankV2` 始终只读。
 Casebook 生成器只需用 `git cat-file -e <commit>^{commit}` 证明该冻结设计提交仍可读取；
 不得要求持续演进的 `origin/release/0.1` 永远指向旧设计提交，也不得因此改写冻结合同。
@@ -312,24 +321,24 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx
+     PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
      --sheet 核心生命线门禁 \
      --out outputs/<new-core16-capability-audit-dir>
 
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
      --sheet 生产灰度门禁Case \
      --out outputs/gate70-capability-audit
 
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
      --sheet 全量功能回归Case \
      --out outputs/full160-capability-audit
    ```
@@ -366,13 +375,13 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
      --sheet 核心生命线门禁 \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 16 \
-     --expected-sha256 8360687d319ada5c6aeed9b6a9f1a8817792d862d1c0a1154fd6b0f7087b8672 \
+     --expected-sha256 7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb \
      --expected-teams-version "<teams-version>" \
      --expected-teams-build "<teams-build>" \
      --expected-qwork-version "<qwork-version>" \
@@ -645,7 +654,7 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx"
 SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
 OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
@@ -752,7 +761,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-01-r8.xlsx"
+   CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx"
    SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
@@ -1320,6 +1329,8 @@ SHA-256 绑定到本轮 Casebook、QbotTestAgent framework commit 和 release/0.
 npm run qwork-release:scan -- \
   --repo /Users/qifu/Documents/deepbankV2 \
   --release-ref origin/release/0.1 \
+  --freshness-source gitlab-api \
+  --gitlab-token-stdin \
   --casebook <Casebook.xlsx> --sheet <exact-name> \
   --baseline-commit <last-accepted-release-commit> \
   --framework-commit <QbotTestAgent-main-commit> \

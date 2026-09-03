@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.1.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.2.0';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -76,6 +76,13 @@ function parseCommitRecord(record) {
   const branch = (subject.match(/Merge (?:branch|remote-tracking branch) ['"]([^'"]+)['"]/) || [])[1]
     || subject;
   return { commit: text(commit), authored_at: text(authoredAt), subject: text(subject), body, mr, branch };
+}
+
+function normalizeReleaseBranch(releaseRef) {
+  return text(releaseRef)
+    .replace(/^refs\/remotes\/origin\//, '')
+    .replace(/^origin\//, '')
+    .replace(/^refs\/heads\//, '');
 }
 
 function commitParents(repoRoot, commit) {
@@ -229,13 +236,16 @@ const IMPACT_RULES = Object.freeze([
 
 function staticDisposition(filePath) {
   const normalized = text(filePath).replaceAll('\\', '/');
+  if (/^\.architecture\.ya?ml$/i.test(normalized)) return 'Repository-architecture-only';
+  if (/^\.codex\/(?:environments\/environment\.toml|hooks\.json)$/i.test(normalized)) return 'Codex-governance-only';
+  if (/^(?:CONTEXT\.md)$/i.test(normalized)) return 'Agent-metadata-only';
   if (/^(?:\.agent|\.agents|\.claude)\//i.test(normalized)
     || /(?:^|\/)(?:AGENTS|CLAUDE)\.md$/i.test(normalized)) return 'Agent-metadata-only';
   if (/^\.gitlab\//i.test(normalized) || /^\.gitlab-ci\.yml$|^\.github\//i.test(normalized)) return 'CI/governance-only';
   if (/^dashboard\//i.test(normalized) || /dashboard-admin|dashboard-admin-routes/i.test(normalized)) return 'Dashboard-only';
   if (/^eval\//i.test(normalized)) return 'Eval-only';
   if (/^(?:docs?|research|benchmark|openspec)\//i.test(normalized)) return 'Research/docs-only';
-  if (/^(?:server\/docs|dashboard\/docs)\//i.test(normalized)) return 'Research/docs-only';
+  if (/^(?:server\/(?:[^/]+\/)*docs|dashboard\/docs)\//i.test(normalized)) return 'Research/docs-only';
   if (/^(?:test|tests|testcase|scripts|toolchain)\//i.test(normalized)) return 'Toolchain/test-only';
   if (/^deploy\/dashboard\//i.test(normalized)) return 'Dashboard-only';
   if (/^deploy\//i.test(normalized)) return 'Deployment-only';
@@ -355,7 +365,7 @@ export function createGitLabReadOnlyReader({ host = QWORK_RELEASE_INTAKE_DEFAULT
   };
 }
 
-function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = true } = {}) {
+function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = true, targetBranch = 'release/0.1' } = {}) {
   const byCommit = new Map();
   const byIid = new Map();
   const apiErrors = [];
@@ -380,7 +390,11 @@ function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = tru
   for (const commit of commits) {
     const row = byCommit.get(commit.commit) || (commit.mr ? byIid.get(commit.mr) : null);
     const iid = text(row?.iid || commit.mr);
-    const verified = Boolean(row && iid && text(row.merge_commit_sha) === commit.commit);
+    const verified = Boolean(row
+      && iid
+      && text(row.state) === 'merged'
+      && text(row.target_branch) === targetBranch
+      && text(row.merge_commit_sha) === commit.commit);
     const source = row ? 'gitlab-api' : 'git-commit-message';
     metadata.push({
       iid,
@@ -390,6 +404,9 @@ function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = tru
       merged_at: text(row?.merged_at || commit.authored_at),
       merge_commit_sha: text(row?.merge_commit_sha || commit.commit),
       web_url: text(row?.web_url),
+      source_branch: text(row?.source_branch),
+      state: text(row?.state),
+      target_branch: text(row?.target_branch),
       source,
       verified,
       commit: commit.commit,
@@ -401,6 +418,229 @@ function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = tru
     api_errors: apiErrors,
     unverified: missing.map((item) => item.iid || item.commit),
     api_available: apiErrors.length === 0 && typeof readGitLab === 'function',
+  };
+}
+
+function apiBoundaryCandidates({ baselineCommit = '', previousIntake = null, casebookBaselineCommit = '' } = {}) {
+  return [
+    { commit: text(baselineCommit), source: 'explicit_baseline_commit' },
+    {
+      commit: ['READY', 'PASS'].includes(text(previousIntake?.decision || previousIntake?.status))
+        ? text(previousIntake?.release?.head) : '',
+      source: 'previous_intake_head',
+    },
+    { commit: text(casebookBaselineCommit), source: 'casebook_design_baseline' },
+  ].filter((candidate) => HEX40.test(candidate.commit));
+}
+
+function reconstructFirstParentChain({ compare, baselineCommit, releaseHead } = {}) {
+  if (baselineCommit === releaseHead) return { ok: true, commits: [] };
+  if (!compare || !Array.isArray(compare.commits)) {
+    return { ok: false, reason: 'compare_commits_missing', commits: [] };
+  }
+  if (compare.compare_timeout === true) {
+    return { ok: false, reason: 'compare_timeout', commits: [] };
+  }
+  const commitMap = new Map(compare.commits
+    .filter((item) => HEX40.test(text(item?.id)))
+    .map((item) => [text(item.id), item]));
+  const reversed = [];
+  const seen = new Set();
+  let cursor = releaseHead;
+  while (cursor !== baselineCommit) {
+    if (seen.has(cursor)) return { ok: false, reason: 'first_parent_cycle', commits: [] };
+    seen.add(cursor);
+    const row = commitMap.get(cursor);
+    if (!row) return { ok: false, reason: `first_parent_commit_missing:${cursor}`, commits: [] };
+    const parents = Array.isArray(row.parent_ids) ? row.parent_ids.map(text).filter(Boolean) : [];
+    if (!parents.length) return { ok: false, reason: `first_parent_missing:${cursor}`, commits: [] };
+    reversed.push(row);
+    cursor = parents[0];
+    if (!HEX40.test(cursor)) return { ok: false, reason: `first_parent_invalid:${row.id}`, commits: [] };
+  }
+  return { ok: true, commits: reversed.reverse() };
+}
+
+function apiChangedPaths(changes = []) {
+  const normalized = changes.map((change) => ({
+    old_path: text(change?.old_path),
+    new_path: text(change?.new_path),
+    new_file: Boolean(change?.new_file),
+    renamed_file: Boolean(change?.renamed_file),
+    deleted_file: Boolean(change?.deleted_file),
+    diff: String(change?.diff || ''),
+  }));
+  const diffText = normalized.map((item) => stableJson(item)).join('\n');
+  return {
+    paths: [...new Set(normalized.map((item) => item.new_path || item.old_path).filter(Boolean))],
+    diff_sha256: sha256Text(diffText),
+    diff_bytes: Buffer.byteLength(diffText, 'utf8'),
+    numstat: [],
+  };
+}
+
+function scanWithGitLabApi({
+  readGitLab,
+  releaseRef,
+  baselineCommit = '',
+  previousIntake = null,
+  casebookBaselineCommit = '',
+  requireGitLabMetadata = true,
+  maxCommits = QWORK_RELEASE_INTAKE_MAX_COMMITS,
+  now = new Date(),
+} = {}) {
+  if (typeof readGitLab !== 'function') throw new Error('GitLab API freshness 需要只读 reader');
+  const branch = normalizeReleaseBranch(releaseRef);
+  const encodedBranch = encodeURIComponent(branch);
+  const apiErrors = [];
+  let before = null;
+  try {
+    before = readGitLab(`repository/branches/${encodedBranch}`);
+  } catch (error) {
+    apiErrors.push(redact(error.message));
+  }
+  const releaseHead = text(before?.commit?.id);
+  const candidates = apiBoundaryCandidates({ baselineCommit, previousIntake, casebookBaselineCommit });
+  let boundaryCandidate = null;
+  let compare = null;
+  let chain = { ok: false, reason: 'branch_head_unavailable', commits: [] };
+  const compareAttempts = [];
+  if (HEX40.test(releaseHead)) {
+    for (const candidate of candidates) {
+      try {
+        const response = readGitLab(`repository/compare?from=${candidate.commit}&to=${releaseHead}&straight=true`);
+        const attempt = reconstructFirstParentChain({ compare: response, baselineCommit: candidate.commit, releaseHead });
+        compareAttempts.push({ baseline_commit: candidate.commit, source: candidate.source, ok: attempt.ok, reason: attempt.reason || '' });
+        if (attempt.ok) {
+          boundaryCandidate = candidate;
+          compare = response;
+          chain = attempt;
+          break;
+        }
+      } catch (error) {
+        compareAttempts.push({ baseline_commit: candidate.commit, source: candidate.source, ok: false, reason: redact(error.message) });
+      }
+    }
+  }
+  if (!boundaryCandidate && candidates.length === 0) chain = { ok: false, reason: 'baseline_not_provided', commits: [] };
+  const selected = chain.commits.filter((commit) => Array.isArray(commit.parent_ids) && commit.parent_ids.length > 1);
+  const limited = selected.slice(0, Number(maxCommits) || QWORK_RELEASE_INTAKE_MAX_COMMITS);
+  const scannedCommits = [];
+  const metadata = [];
+  const unverified = [];
+  for (const commit of limited) {
+    const commitSha = text(commit.id);
+    let mrRows = [];
+    let mr = null;
+    let changesPayload = null;
+    try {
+      mrRows = readGitLab(`repository/commits/${commitSha}/merge_requests`);
+      if (!Array.isArray(mrRows)) throw new Error('commit merge requests 返回不是数组');
+      const matches = mrRows.filter((row) => text(row?.merge_commit_sha) === commitSha
+        && text(row?.target_branch) === branch
+        && text(row?.state) === 'merged');
+      if (matches.length !== 1) throw new Error(`精确 MR 数量必须为1，actual=${matches.length}`);
+      [mr] = matches;
+      changesPayload = readGitLab(`merge_requests/${mr.iid}/changes`);
+      if (!changesPayload || !Array.isArray(changesPayload.changes) || changesPayload.changes.length === 0) {
+        throw new Error('MR changes 缺失或为空');
+      }
+      if (changesPayload.overflow === true) throw new Error('MR changes overflow，无法证明完整源码变更集合');
+      if (text(changesPayload.state) !== 'merged'
+        || text(changesPayload.target_branch) !== branch
+        || text(changesPayload.merge_commit_sha) !== commitSha
+        || text(changesPayload.iid) !== text(mr.iid)) {
+        throw new Error('MR changes 元数据与 first-parent merge commit 不一致');
+      }
+      if (!/^\d+$/.test(text(changesPayload.changes_count))) {
+        throw new Error(`MR changes_count 非精确整数：${text(changesPayload.changes_count) || '(missing)'}`);
+      }
+      const declaredChanges = Number(changesPayload.changes_count);
+      if (declaredChanges !== changesPayload.changes.length) {
+        throw new Error(`MR changes 不完整：declared=${declaredChanges} actual=${changesPayload.changes.length}`);
+      }
+      const changed = apiChangedPaths(changesPayload.changes);
+      scannedCommits.push({
+        commit: commitSha,
+        authored_at: text(commit.committed_date || commit.created_at || commit.authored_date),
+        subject: text(commit.title || commit.message),
+        body: text(commit.message),
+        mr: text(mr.iid),
+        branch: text(mr.source_branch || commit.title),
+        parent: text(commit.parent_ids[0]),
+        parent_count: commit.parent_ids.length,
+        ...changed,
+      });
+      metadata.push({
+        iid: text(mr.iid),
+        title: text(mr.title),
+        description_sha256: mr.description ? sha256Text(mr.description) : '',
+        labels: parseLabels(mr.labels),
+        merged_at: text(mr.merged_at || commit.committed_date || commit.created_at),
+        merge_commit_sha: commitSha,
+        web_url: text(mr.web_url),
+        source_branch: text(mr.source_branch),
+        state: text(mr.state),
+        target_branch: text(mr.target_branch),
+        source: 'gitlab-api-changes',
+        verified: true,
+        commit: commitSha,
+      });
+    } catch (error) {
+      const iid = text(mr?.iid) || commitSha;
+      unverified.push(iid);
+      apiErrors.push(`commit ${commitSha}: ${redact(error.message)}`);
+    }
+  }
+  let after = null;
+  try {
+    after = readGitLab(`repository/branches/${encodedBranch}`);
+  } catch (error) {
+    apiErrors.push(redact(error.message));
+  }
+  const releaseHeadAfter = text(after?.commit?.id);
+  const compareComplete = Boolean(boundaryCandidate && chain.ok && limited.length === selected.length);
+  const verified = Boolean(
+    HEX40.test(releaseHead)
+    && releaseHeadAfter === releaseHead
+    && compareComplete
+    && scannedCommits.length === selected.length
+    && metadata.length === selected.length
+    && unverified.length === 0,
+  );
+  return {
+    releaseHead,
+    boundary: {
+      mode: 'commit_ancestry',
+      source: boundaryCandidate?.source || 'gitlab_api_compare',
+      baseline_commit: boundaryCandidate?.commit || '',
+      window_start: null,
+      window_end: now.toISOString(),
+      ancestry_verified: Boolean(boundaryCandidate && chain.ok),
+      fallback_reason: boundaryCandidate ? '' : (chain.reason || 'gitlab_api_compare_not_proven'),
+      verification_source: 'gitlab-api',
+      compare_attempts: compareAttempts,
+    },
+    scannedCommits,
+    metadataAudit: {
+      metadata,
+      api_errors: apiErrors,
+      unverified,
+      api_available: apiErrors.length === 0,
+    },
+    freshness: {
+      mode: 'gitlab-api',
+      verified,
+      branch,
+      branch_head_before: releaseHead,
+      branch_head_after: releaseHeadAfter,
+      compare_from: boundaryCandidate?.commit || '',
+      compare_to: releaseHead,
+      compare_commit_count: Array.isArray(compare?.commits) ? compare.commits.length : 0,
+      first_parent_merge_count: selected.length,
+      first_parent_complete: compareComplete,
+      mr_changes_verified_count: metadata.length,
+    },
   };
 }
 
@@ -441,7 +681,16 @@ export function validateQworkReleaseIntake(report, {
   if (releaseHead && text(report?.release?.head) !== text(releaseHead)) failures.push('release_head_mismatch');
   if (casebookSha256 && text(report?.casebook?.sha256).toLowerCase() !== text(casebookSha256).toLowerCase()) failures.push('casebook_sha256_mismatch');
   if (frameworkCommit && text(report?.framework?.commit) !== text(frameworkCommit)) failures.push('framework_commit_mismatch');
-  if (requireFreshRef && report?.policy?.fetch_latest !== true) failures.push('release_ref_not_freshly_fetched');
+  const apiFreshness = report?.policy?.api_freshness;
+  const apiFreshnessVerified = Boolean(apiFreshness
+    && apiFreshness.mode === 'gitlab-api'
+    && apiFreshness.verified === true
+    && HEX40.test(text(apiFreshness.branch_head_before))
+    && apiFreshness.branch_head_before === apiFreshness.branch_head_after
+    && apiFreshness.branch_head_before === report?.release?.head
+    && apiFreshness.first_parent_complete === true
+    && Number(apiFreshness.mr_changes_verified_count) === Number(apiFreshness.first_parent_merge_count));
+  if (requireFreshRef && report?.policy?.fetch_latest !== true && !apiFreshnessVerified) failures.push('release_ref_not_freshly_verified');
   if (!HEX40.test(text(report?.release?.head))) failures.push('release_head_invalid');
   if (report?.scan_boundary?.mode === 'commit_ancestry' && !report.scan_boundary.ancestry_verified) failures.push('ancestry_not_verified');
   if (report?.unresolved?.unmapped_product_paths?.length) failures.push('unmapped_product_paths');
@@ -475,23 +724,40 @@ export function scanQworkReleaseIntake({
   windowHours = QWORK_RELEASE_INTAKE_WINDOW_HOURS,
   fallbackDays = QWORK_RELEASE_INTAKE_FALLBACK_DAYS,
   maxCommits = QWORK_RELEASE_INTAKE_MAX_COMMITS,
+  freshnessSource = 'git',
 } = {}) {
   const root = path.resolve(repoRoot || '.');
-  if (fetchLatest) {
+  const previousIntake = previousIntakeFile && fs.existsSync(previousIntakeFile)
+    ? JSON.parse(fs.readFileSync(previousIntakeFile, 'utf8')) : null;
+  const reader = gitlabReader || createGitLabReadOnlyReader({ host: gitlabHost, projectPath: gitlabProject, token: gitlabToken });
+  const useApiFreshness = text(freshnessSource) === 'gitlab-api';
+  if (!useApiFreshness && fetchLatest) {
     const refName = text(releaseRef).replace(/^origin\//, '');
     const remote = text(releaseRef).startsWith('origin/') ? 'origin' : 'origin';
     runGit(root, ['fetch', '--no-tags', '--prune', remote, refName]);
   }
-  const releaseHead = runGit(root, ['rev-parse', releaseRef]);
+  const apiScan = useApiFreshness ? scanWithGitLabApi({
+    readGitLab: reader,
+    releaseRef,
+    baselineCommit,
+    previousIntake,
+    casebookBaselineCommit,
+    requireGitLabMetadata,
+    maxCommits,
+    now,
+  }) : null;
+  const releaseHead = apiScan?.releaseHead || runGit(root, ['rev-parse', releaseRef]);
   if (!HEX40.test(releaseHead)) throw new Error(`release ref 解析失败：${releaseRef}`);
-  const previousIntake = previousIntakeFile && fs.existsSync(previousIntakeFile)
-    ? JSON.parse(fs.readFileSync(previousIntakeFile, 'utf8')) : null;
-  const boundary = resolveBoundary({ repoRoot: root, releaseHead, baselineCommit, previousIntake, casebookBaselineCommit, now, windowHours, fallbackDays });
-  const commits = enumerateCommits({ repoRoot: root, releaseHead, boundary, maxCommits: Number(maxCommits) || QWORK_RELEASE_INTAKE_MAX_COMMITS });
-  const scannedCommits = commits.map((commit) => ({ ...commit, ...changedPaths(root, commit.commit) }));
+  const boundary = apiScan?.boundary || resolveBoundary({ repoRoot: root, releaseHead, baselineCommit, previousIntake, casebookBaselineCommit, now, windowHours, fallbackDays });
+  const commits = useApiFreshness ? [] : enumerateCommits({ repoRoot: root, releaseHead, boundary, maxCommits: Number(maxCommits) || QWORK_RELEASE_INTAKE_MAX_COMMITS });
+  const scannedCommits = apiScan?.scannedCommits || commits.map((commit) => ({ ...commit, ...changedPaths(root, commit.commit) }));
   const ids = loadCaseIds({ caseIds, casebookPath, sheet });
-  const reader = gitlabReader || createGitLabReadOnlyReader({ host: gitlabHost, projectPath: gitlabProject, token: gitlabToken });
-  const metadataAudit = mergeRequestMetadata({ commits: scannedCommits, readGitLab: reader, requireGitLabMetadata });
+  const metadataAudit = apiScan?.metadataAudit || mergeRequestMetadata({
+    commits: scannedCommits,
+    readGitLab: reader,
+    requireGitLabMetadata,
+    targetBranch: normalizeReleaseBranch(releaseRef),
+  });
   const mergeRequests = scannedCommits.map((commit, index) => {
     const metadata = metadataAudit.metadata[index];
     const impact = mapReleaseImpact({ changedPaths: commit.paths, subject: commit.subject, body: commit.body, branch: commit.branch, labels: metadata.labels, availableCaseIds: ids });
@@ -501,7 +767,7 @@ export function scanQworkReleaseIntake({
       parent: commit.parent,
       parent_count: commit.parent_count,
       title: metadata.title,
-      branch: commit.branch,
+      branch: metadata.source_branch || commit.branch,
       merged_at: metadata.merged_at,
       labels: metadata.labels,
       web_url: metadata.web_url,
@@ -527,6 +793,9 @@ export function scanQworkReleaseIntake({
   if (boundary.mode === 'time_window_fallback') {
     blockers.push('无法证明扫描起点与 release HEAD 的祖先关系；时间窗口仅可作诊断兜底，正式执行必须提供可验证基线');
   }
+  if (useApiFreshness && !apiScan?.freshness?.verified) {
+    blockers.push('GitLab API freshness 未完整证明 branch HEAD、compare first-parent 链、MR changes 与扫描后 HEAD 稳定');
+  }
   if (unresolved.unmapped_product_paths.length) blockers.push(`存在未映射产品源码路径：${unresolved.unmapped_product_paths.join(',')}`);
   if (requireGitLabMetadata && unresolved.unverified_mr_metadata.length) blockers.push(`MR 元数据未被 GitLab API 验证：${unresolved.unverified_mr_metadata.join(',')}`);
   if (requireGitLabMetadata && unresolved.api_errors.length && scannedCommits.length) blockers.push('GitLab 只读 API 不可用，不能确认 MR 元数据');
@@ -546,7 +815,8 @@ export function scanQworkReleaseIntake({
       daily_window_hours: QWORK_RELEASE_INTAKE_WINDOW_HOURS,
       overlap_hours: QWORK_RELEASE_INTAKE_OVERLAP_HOURS,
       fallback_days: Number(fallbackDays) || QWORK_RELEASE_INTAKE_FALLBACK_DAYS,
-      fetch_latest: Boolean(fetchLatest),
+      fetch_latest: !useApiFreshness && Boolean(fetchLatest),
+      api_freshness: apiScan?.freshness || null,
       metadata_read_only: true,
       require_gitlab_metadata: Boolean(requireGitLabMetadata),
       runner_must_not_rescan: true,

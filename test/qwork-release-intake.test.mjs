@@ -44,6 +44,64 @@ function fixtureRepo() {
   return { repo, baseline, releaseHead };
 }
 
+function apiFixture({
+  baseline = 'a'.repeat(40),
+  head = 'b'.repeat(40),
+  afterHead = head,
+  mrState = 'merged',
+  targetBranch = 'release/0.1',
+  mergeCommitSha = head,
+  changesCount = '1',
+  changes = [{ old_path: 'README.md', new_path: 'docs/release.md', diff: '+release' }],
+  overflow = false,
+  omitHeadFromCompare = false,
+} = {}) {
+  let branchReads = 0;
+  const reader = (endpoint) => {
+    if (endpoint.startsWith('repository/branches/')) {
+      branchReads += 1;
+      return { commit: { id: branchReads === 1 ? head : afterHead } };
+    }
+    if (endpoint.startsWith('repository/compare?')) {
+      return {
+        compare_timeout: false,
+        commits: omitHeadFromCompare ? [] : [{
+          id: head,
+          parent_ids: [baseline, 'c'.repeat(40)],
+          title: 'Merge branch feature into release/0.1',
+          message: 'Merge branch feature into release/0.1',
+          committed_date: '2026-09-03T01:00:00Z',
+        }],
+      };
+    }
+    if (endpoint === `repository/commits/${head}/merge_requests`) {
+      return [{
+        iid: 901,
+        title: 'release change',
+        state: mrState,
+        target_branch: targetBranch,
+        source_branch: 'feature/release-change',
+        merge_commit_sha: mergeCommitSha,
+        merged_at: '2026-09-03T01:00:00Z',
+        labels: ['area/runtime'],
+      }];
+    }
+    if (endpoint === 'merge_requests/901/changes') {
+      return {
+        iid: 901,
+        state: mrState,
+        target_branch: targetBranch,
+        merge_commit_sha: mergeCommitSha,
+        changes_count: changesCount,
+        overflow,
+        changes,
+      };
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`);
+  };
+  return { baseline, head, reader };
+}
+
 test('impact mapping stays conservative for unknown product paths', () => {
   const mapped = mapReleaseImpact({
     changedPaths: ['server/automation/scheduler.mjs', 'server/mystery/contract.mjs'],
@@ -145,7 +203,7 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
       caseIds: ['MRSMOKE-AUTO-001', 'MRSMOKE-ROUTE-001', 'BETA-TASK-008'],
       frameworkCommit: 'a'.repeat(40),
       fetchLatest: false,
-      gitlabReader: () => [{ iid: 101, title: 'automation scheduler', merge_commit_sha: releaseHead, labels: ['area/automation'], merged_at: '2026-08-31T01:00:00Z' }],
+      gitlabReader: () => [{ iid: 101, title: 'automation scheduler', state: 'merged', target_branch: 'HEAD', merge_commit_sha: releaseHead, labels: ['area/automation'], merged_at: '2026-08-31T01:00:00Z' }],
       now: new Date('2026-08-31T02:00:00Z'),
     });
     assert.equal(report.schema_version, QWORK_RELEASE_INTAKE_SCHEMA);
@@ -224,9 +282,11 @@ test('GitLab MR intake paginates beyond the first 100 rows', () => {
           return Array.from({ length: 100 }, (_, index) => ({
             iid: String(index + 1),
             merge_commit_sha: index === 0 ? releaseHead : '0'.repeat(40),
+            state: 'merged',
+            target_branch: 'HEAD',
           }));
         }
-        return [{ iid: '101', merge_commit_sha: '1'.repeat(40) }];
+        return [{ iid: '101', merge_commit_sha: '1'.repeat(40), state: 'merged', target_branch: 'HEAD' }];
       },
     });
     assert.equal(calls.length, 2);
@@ -235,6 +295,104 @@ test('GitLab MR intake paginates beyond the first 100 rows', () => {
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('GitLab API freshness proves stable branch, complete first-parent chain, and exact MR changes', () => {
+  const fixture = apiFixture();
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY');
+  assert.equal(report.release.head, fixture.head);
+  assert.equal(report.policy.fetch_latest, false);
+  assert.equal(report.policy.api_freshness.verified, true);
+  assert.equal(report.policy.api_freshness.mr_changes_verified_count, 1);
+  assert.equal(report.merge_requests[0].metadata_verified, true);
+  assert.equal(validateQworkReleaseIntake(report, { requireFreshRef: true }).ok, true);
+});
+
+test('GitLab API freshness blocks when release branch moves during the scan', () => {
+  const fixture = apiFixture({ afterHead: 'e'.repeat(40) });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'BLOCKED');
+  assert.equal(report.policy.api_freshness.verified, false);
+  assert.equal(validateQworkReleaseIntake(report, { requireReady: false, requireFreshRef: true }).ok, false);
+});
+
+test('GitLab API freshness blocks incomplete compare first-parent data', () => {
+  const fixture = apiFixture({ omitHeadFromCompare: true });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'BLOCKED');
+  assert.match(report.blockers.join('\n'), /freshness/);
+});
+
+for (const scenario of [
+  { name: 'unmerged MR', options: { mrState: 'opened' } },
+  { name: 'wrong target branch', options: { targetBranch: 'main' } },
+  { name: 'wrong merge SHA', options: { mergeCommitSha: 'f'.repeat(40) } },
+  { name: 'incomplete changes', options: { changesCount: '2' } },
+  { name: 'overflow changes', options: { overflow: true } },
+]) {
+  test(`GitLab API freshness blocks ${scenario.name}`, () => {
+    const fixture = apiFixture(scenario.options);
+    const report = scanQworkReleaseIntake({
+      repoRoot: process.cwd(),
+      releaseRef: 'origin/release/0.1',
+      baselineCommit: fixture.baseline,
+      caseIds: ['BETA-INIT-001'],
+      frameworkCommit: 'd'.repeat(40),
+      gitlabReader: fixture.reader,
+      freshnessSource: 'gitlab-api',
+    });
+    assert.equal(report.decision, 'BLOCKED');
+    assert.equal(report.policy.api_freshness.verified, false);
+    assert.equal(report.unresolved.unverified_mr_metadata.length, 1);
+  });
+}
+
+test('new repository governance paths remain static-only', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: [
+      '.architecture.yaml',
+      '.codex/environments/environment.toml',
+      '.codex/hooks.json',
+      'CONTEXT.md',
+      'server/qbot-core/docs/model-gateway-local-diagnostics.md',
+    ],
+    subject: 'repository governance cleanup',
+    availableCaseIds: ['BETA-INIT-001'],
+  });
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.direct_case_ids.length, 0);
+  assert.deepEqual(mapped.static_dispositions.map((item) => item.disposition).sort(), [
+    'Agent-metadata-only',
+    'Codex-governance-only',
+    'Codex-governance-only',
+    'Repository-architecture-only',
+    'Research/docs-only',
+  ]);
 });
 
 test('intake output is immutable and content hash is validated', () => {

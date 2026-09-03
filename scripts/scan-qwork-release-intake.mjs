@@ -28,6 +28,8 @@ Usage:
     --out <new-immutable-directory>
 
 Options:
+  --freshness-source <mode>        git|gitlab-api；正式远端扫描推荐 gitlab-api
+  --gitlab-api-freshness           --freshness-source gitlab-api 的便捷别名
   --fetch / --no-fetch              是否先只读刷新 release 引用（默认开启；--no-fetch 仅适用于已外部确认 ref 的诊断）
   --previous-intake <json>          上一份 intake；其 release HEAD 优先作为增量边界
   --casebook-baseline-commit <sha>  Casebook 设计基线提交
@@ -88,6 +90,15 @@ function main() {
   const repo = path.resolve(options.repo);
   const casebook = options.casebook ? path.resolve(options.casebook) : '';
   const token = readToken(options);
+  const freshnessSource = options['gitlab-api-freshness']
+    ? 'gitlab-api'
+    : String(options['freshness-source'] || 'git').trim();
+  if (!['git', 'gitlab-api'].includes(freshnessSource)) {
+    throw new Error(`--freshness-source 仅支持 git 或 gitlab-api，actual=${freshnessSource}`);
+  }
+  if (freshnessSource === 'gitlab-api' && !options['gitlab-token-stdin']) {
+    throw new Error('GitLab API freshness 必须通过 --gitlab-token-stdin 从标准输入临时注入 token');
+  }
   const report = scanQworkReleaseIntake({
     repoRoot: repo,
     releaseRef: options['release-ref'] || QWORK_RELEASE_INTAKE_DEFAULT_REF,
@@ -107,6 +118,7 @@ function main() {
     windowHours: Number(options['window-hours'] || 24),
     fallbackDays: Number(options['fallback-days'] || 30),
     maxCommits: Number(options['max-commits'] || 500),
+    freshnessSource,
   });
   const files = writeQworkReleaseIntake({ report, outDir: options.out });
   const validation = validateQworkReleaseIntake(report, {
@@ -114,6 +126,7 @@ function main() {
     casebookSha256: report.casebook.sha256,
     frameworkCommit: options['framework-commit'],
     requireReady: false,
+    requireFreshRef: true,
   });
   process.stdout.write(`${JSON.stringify({
     status: report.decision,
