@@ -25,13 +25,14 @@ Case 的接手状态、启动顺序和禁止事项。
   `MRSMOKE-FAIL-001` 的产品负向结果和其余已完成 Case 必须逐 Case 可信复核保留。
 
 - 最新正式 Casebook 已更新为
-  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx`，
-  SHA-256 `7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb`，设计基线
-  `origin/release/0.1@c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d`、产品版本 `0.1.7`。
-  r9 继承 r8 已验证的 73 个直接合入 MR，并通过 GitLab API freshness 新增验证 57 个，
-  共审计 130 个 MR。最新 `!1520` 映射到 `BETA-INIT-001/003`、`BETA-HOST-003`、
-  `MRSMOKE-NAV-001` 与 `SIT-TEAMS-NEW-001/003`，覆盖 SDK 解压期间 Teams Tab 切换和
-  宿主身份稳定性。受管应用更新后的 Teams/QWork 十字段身份、WebView、runtime、
+  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx`，
+  SHA-256 `6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155`，设计基线
+  `origin/release/0.1@11d713eac3402a9f8c12699918d63c333d1d8f55`、产品版本 `0.1.7`。
+  r10 继承 r9 已验证的 130 个直接合入 MR，并通过 GitLab API freshness 新增验证 1 个，
+  共审计 131 个 MR。最新 `!1516` 精确映射到 `MRSMOKE-FAIL-001`、
+  `MRSMOKE-ROUTE-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，覆盖 VPN 未连接时的明确提示、
+  错误脱敏、同任务路由恢复、续写文案优先级和 retry 埋点。受管应用更新后的 Teams/QWork
+  十字段身份、WebView、runtime、
   capabilities 与 SIT health 必须由最终干净框架基线下的新 pretest 重新读回，不能用
   历史应用或磁盘状态代替精确 `READY`。完成新能力审计、精确 `READY` 后，必须先从
   `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，才依次独立执行
@@ -739,8 +740,8 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 唯一正式 Casebook：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx
-SHA-256: 7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
+SHA-256: 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155
 ```
 
 核心生命线入口为 Sheet `核心生命线门禁`，固定 16 条：
@@ -772,7 +773,7 @@ G1-G4 每阶段都必须有独立能力审计、独立精确 `READY`、独立不
 独立诊断，但不能解锁下一阶段。使用 `npm run qwork-release:orchestrate` 将上述规则
 固化到状态文件，禁止靠人工记忆跨阶段推进。
 
-状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r9 合同的正式 Casebook；内容
+状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r10 合同的正式 Casebook；内容
 自洽但文件名错误、同名但 SHA 漂移或旧版工作簿都必须在创建控制状态前拒绝。
 
 状态机只消费 `qbot-core-beta-pretest/v1` 的 Teams/production-gate/mandatory 报告；
@@ -829,9 +830,9 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 新增 MR 核心冒烟入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
   Sheet: 新增MR核心冒烟
-  SHA-256: 7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb
+  SHA-256: 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155
 ```
 
 - 固定顺序：`MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
@@ -847,13 +848,14 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
   路由稳定、Skill 隔离、失败脱敏、成果目录、新任务隔离和 qcharts-react 交互图表。主观视觉细节、极端参数
   矩阵、首次系统权限/升级重启、多账号或受保护资源继续按合并版手工 Casebook 执行，
   不在 12 条通过结论中豁免。
-- r9 以 GitLab API freshness 从 r8 设计基线
-  `57db57b95a87245195b6a48ffd414abb654281e5` 扫描到
-  `origin/release/0.1@c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d`。扫描前后 branch HEAD
+- r10 以 GitLab API freshness 从 r9 设计基线
+  `c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d` 扫描到
+  `origin/release/0.1@11d713eac3402a9f8c12699918d63c333d1d8f55`。扫描前后 branch HEAD
   必须一致，compare first-parent 链必须完整，每个直接 merge commit 必须精确绑定一个
   `state=merged`、`target_branch=release/0.1`、merge SHA 全等且 changes_count 完整的 MR；
   compare 超时/缺失、changes overflow、元数据不一致或扫描期间 HEAD 漂移均为 `BLOCKED`。
-- r9 继承 r8 已验证的 73 个 MR，并新增 57 个直接合入 MR，共审计 130 个。57 个增量的
+- r10 继承 r9 已验证的 130 个 MR，并新增 1 个直接合入 MR `!1516`，共审计 131 个。
+  r9 继承 r8 已验证的 73 个 MR，并新增 57 个直接合入 MR；57 个增量的
   同序 IID 为：!1459、!1462、!1393、!1430、!1463、!1464、!1465、!1468、!1466、
   !1469、!1454、!1458、!1467、!1471、!1470、!1473、!1472、!1476、!1461、!1475、
   !1460、!1480、!1477、!1484、!1481、!1494、!1474、!1488、!1495、!1496、!1491、
@@ -869,6 +871,10 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 - 最新 `!1520` 的 SDK 解压让出事件循环变更映射 `BETA-INIT-001/003`、
   `BETA-HOST-003`、`MRSMOKE-NAV-001` 与 `SIT-TEAMS-NEW-001/003`，核对运行时物化期间
   Teams Tab 切换和宿主身份不阻塞。
+- 最新 `!1516` 的 VPN 未连接明确提示与 retry 埋点变更精确映射
+  `MRSMOKE-FAIL-001`、`MRSMOKE-ROUTE-001`、`BETA-CHAT-005` 与 `BETA-PERF-003`，
+  核对 VPN 错误提示、内部错误脱敏、同任务路由恢复、续写文案优先级与长文本重试收敛；
+  禁止按文件名启发式泛化到其它 Case。
 - MR !1329、!1330、!1337、!1310、!1340、!1333、!1326、!1342、!1344 继续固定为
   CI/Dashboard/研究物料/eval/toolchain/version-only 静态合同审计；Dashboard、CI、eval、
   文档/治理和纯可观测性变更不新增桌面 Case，也不计入 16/12/70/160 桌面通过。
@@ -901,13 +907,13 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 生产灰度发布与全量功能回归唯一入口：
 
 ```text
-/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx
+/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx
 ```
 
 - Sheet `生产灰度门禁Case`：70 条；70/70 executable、dispatchable、directly runnable。
 - Sheet `全量功能回归Case`：160 条；160/160 executable、dispatchable、directly runnable。
 - 160 条的前 70 条 ID、顺序和合同内容必须与门禁 Sheet 完全一致，后 90 条为正常功能增量。
-- SHA-256：`7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb`
+- SHA-256：`6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155`
 - `strict_controller_required=0`
 - `unsupported_runtime=0`
 - 两个 Sheet 的 Case 间执行永久串行，有效 parallel/pipeline 均为 1
@@ -942,11 +948,14 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 - `BETA-EXPERT-001`：发布记录严格等于 `owned=true` 专家集合；从干净草稿发送确定性短提示，证明新 taskId 以及 expert/version/release/最近召唤 identity 全链一致，禁止继承上一条 Case 的 taskId。
 - `BETA-ART-001`：受管 HTML 网页预览、分享入口和宿主隔离。
 
-Casebook 的设计依据是 r8 已验证的 73 个 MR，以及从
-`57db57b95a87245195b6a48ffd414abb654281e5` 到
-`c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d` 由 GitLab API freshness 完整验证的
-57 个增量 MR，共 130 个。MR 映射、删除清单、覆盖矩阵、执行配置和发布准入均在
-工作簿独立 Sheet 中；静态合同审计不得冒充桌面 E2E。
+Casebook 的设计依据是 r9 已验证的 130 个 MR，以及从
+`c6faeb57c2f93b4a57ea2f459ad78c92d4f3a19d` 到
+`11d713eac3402a9f8c12699918d63c333d1d8f55` 由 GitLab API freshness 完整验证的
+1 个增量 MR，共 131 个。r9 仍完整保留 r8 的 73 个 MR 与后续 57 个增量 MR 历史序列。
+本地 deepbankV2 缺少已验证历史 Git 对象时，允许以正式 GitLab API intake 作为权威边界
+证明，但必须保持扫描前后 branch HEAD 稳定、compare first-parent 完整、MR merge SHA
+与目标分支全等且 changes `overflow=false`，任一缺失均 fail-closed。MR 映射、删除清单、
+覆盖矩阵、执行配置和发布准入均在工作簿独立 Sheet 中；静态合同审计不得冒充桌面 E2E。
 
 ## 3. 发布级门禁
 
@@ -1001,25 +1010,25 @@ npm run check
 npm --prefix teams360-automation run check
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
   --sheet 核心生命线门禁 \
   --profile mandatory \
   --out outputs/<new-core16-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
   --sheet 新增MR核心冒烟 \
   --profile mandatory \
   --out outputs/<new-smoke12-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
   --sheet 生产灰度门禁Case \
   --profile mandatory \
   --out outputs/<new-gate70-capability-audit-dir>
 
 npm run core-beta:capability-audit -- \
-  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx \
+  --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx \
   --sheet 全量功能回归Case \
   --profile mandatory \
   --out outputs/<new-full160-capability-audit-dir>
@@ -1061,7 +1070,7 @@ framework issue；已产生真实事件但文本 Oracle 失败属于可继续批
 用户恢复测试、真实版本身份已经重新读取后，创建新的不可变 pretest 目录：
 
 ```bash
-CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r9.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r10.xlsx"
 
 npm run core-beta:pretest -- \
   --casebook "$CASEBOOK" \
@@ -1070,7 +1079,7 @@ npm run core-beta:pretest -- \
   --lane teams \
   --out "$PWD/outputs/<new-immutable-pretest-dir>" \
   --expected-count 16 \
-  --expected-sha256 7c2b31e6380c4313cb80511322803370c8a3c961f994fbd8630416b822563dcb \
+  --expected-sha256 6beac5fb6b55bd55f87630147f392d360c156198586f69d3b9e1cc8b6bccf155 \
   --expected-teams-version "<actual-teams-version>" \
   --expected-teams-build "<actual-teams-build>" \
   --expected-qwork-version "<actual-qwork-version>" \
