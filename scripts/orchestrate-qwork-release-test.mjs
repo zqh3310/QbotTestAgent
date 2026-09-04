@@ -27,7 +27,8 @@ Usage:
     --casebook <xlsx> \\
     --release-identity <release-identity.json> \\
     --release-intake <release-intake.json> \\
-    --require-release-intake true
+    --expected-release-ref origin/release/0.1 \\
+    --expected-release-head <40-hex-release-head>
 
   npm run qwork-release:orchestrate -- readiness \\
     --state-dir <control-directory> \\
@@ -48,8 +49,9 @@ Usage:
 
 编排器永远不使用 raw passed/failed 作为阶段准入。Casebook 阶段必须同时具备
 精确能力审计、精确 READY、完整真实执行、完整 evidence manifest、匹配的发布身份
-以及 trusted_pass=N。若计划绑定 release intake，还必须证明报告文件 SHA、release HEAD、
-Casebook SHA 和 framework commit 全等。任何其他可信分类都会停止流水线，后续阶段保持 NOT_STARTED。
+以及 trusted_pass=N。正式计划必须绑定 release intake，并将其 release ref/HEAD 与调用者
+独立提供的当前观测值全等校验，同时证明报告文件 SHA、Casebook SHA 和 framework commit
+全等。任何其他可信分类都会停止流水线，后续阶段保持 NOT_STARTED。
 `;
 }
 
@@ -236,17 +238,24 @@ function saveAudit({ files, plan, state, integrity, audit, phase }) {
 }
 
 function init(options) {
-  required(options, ['state-dir', 'casebook', 'release-identity']);
+  required(options, [
+    'state-dir',
+    'casebook',
+    'release-identity',
+    'release-intake',
+    'expected-release-ref',
+    'expected-release-head',
+  ]);
   const files = stateFiles(options['state-dir']);
   if (fs.existsSync(files.root) && fs.readdirSync(files.root).length) {
     throw new Error(`控制目录必须是新的空目录：${files.root}`);
   }
-  const requireReleaseIntake = ['1', 'true', 'yes'].includes(String(options['require-release-intake'] || '').toLowerCase());
-  const releaseIntakePath = options['release-intake'] ? path.resolve(options['release-intake']) : '';
-  if (requireReleaseIntake && !releaseIntakePath) {
-    throw new Error('正式发布计划要求 --release-intake；请先运行 qwork-release:scan。');
+  if (Object.hasOwn(options, 'require-release-intake')
+    && !['1', 'true', 'yes'].includes(String(options['require-release-intake']).toLowerCase())) {
+    throw new Error('正式发布计划不能关闭 release intake 门禁');
   }
-  if (releaseIntakePath && (!fs.existsSync(releaseIntakePath) || !fs.statSync(releaseIntakePath).isFile())) {
+  const releaseIntakePath = path.resolve(options['release-intake']);
+  if (!fs.existsSync(releaseIntakePath) || !fs.statSync(releaseIntakePath).isFile()) {
     throw new Error(`release intake 报告不存在：${releaseIntakePath}`);
   }
   const casebook = path.resolve(options.casebook);
@@ -259,7 +268,7 @@ function init(options) {
     throw new Error(`正式计划要求 main==origin/main 且 tracked clean：branch=${branch} HEAD=${head} origin/main=${originMain} dirty=${Boolean(dirty)}`);
   }
   const identity = readJson(path.resolve(options['release-identity']));
-  const releaseIntake = releaseIntakePath ? readJson(releaseIntakePath) : undefined;
+  const releaseIntake = readJson(releaseIntakePath);
   const plan = createQworkReleaseTestPlan({
     casebookPath: casebook,
     casebookSha256: sha256File(casebook),
@@ -267,7 +276,9 @@ function init(options) {
     releaseIdentity: identity,
     releaseIntake,
     releaseIntakePath,
-    releaseIntakeSha256: releaseIntakePath ? sha256File(releaseIntakePath) : '',
+    releaseIntakeSha256: sha256File(releaseIntakePath),
+    expectedReleaseRef: options['expected-release-ref'],
+    expectedReleaseHead: options['expected-release-head'],
   });
   const state = createQworkReleaseTestState(plan);
   const integrity = createQworkReleaseTestIntegrity(plan, state);

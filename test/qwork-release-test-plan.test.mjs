@@ -7,6 +7,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  QWORK_RELEASE_INTAKE_DEFAULT_REF,
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  QWORK_RELEASE_INTAKE_TOOL_VERSION,
+  stableJson,
+} from '../src/lib/qwork-release-intake.mjs';
+import {
   QWORK_RELEASE_TEST_STAGES,
   applyQworkStageAudit,
   auditQworkSoakCompletion,
@@ -19,6 +25,7 @@ import {
   QWORK_RELEASE_CASEBOOK_SHA256,
   QWORK_CORE_LIFELINE_CASE_IDS,
   QWORK_MR_SMOKE_CASE_IDS,
+  validateQworkReleaseIntakeBinding,
   validateQworkReleaseControlState,
 } from '../src/lib/qwork-release-test-plan.mjs';
 
@@ -26,6 +33,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const orchestrator = path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs');
 const evidenceFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-evidence-'));
 test.after(() => fs.rmSync(evidenceFixtureRoot, { recursive: true, force: true }));
+
+test('release plan freezes the independently accepted r14 Casebook identity', () => {
+  assert.equal(
+    QWORK_RELEASE_CASEBOOK_BASENAME,
+    'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx',
+  );
+  assert.equal(
+    QWORK_RELEASE_CASEBOOK_SHA256,
+    '439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed',
+  );
+  assert.deepEqual(
+    QWORK_RELEASE_TEST_STAGES.find((stage) => stage.id === 'G4')?.expected_capability_classes,
+    { runner_native: 61, runner_native_with_fixture_option: 1, runner_legacy_verified: 98 },
+  );
+});
 
 const identity = {
   teams_version: '5.6.1',
@@ -40,12 +62,69 @@ const identity = {
   qwork_release_manifest_sha256: '2'.repeat(64),
 };
 
+function makeReleaseIntake({
+  casebookSha256 = QWORK_RELEASE_CASEBOOK_SHA256,
+  frameworkCommit = 'b'.repeat(40),
+  releaseHead = 'c'.repeat(40),
+  releaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF,
+} = {}) {
+  const report = {
+    schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
+    tool: { version: QWORK_RELEASE_INTAKE_TOOL_VERSION },
+    decision: 'READY',
+    release: { ref: releaseRef, head: releaseHead },
+    framework: { commit: frameworkCommit },
+    casebook: { sha256: casebookSha256 },
+    scan_boundary: { mode: 'commit_ancestry', ancestry_verified: true },
+    merge_requests: [],
+    source_contracts: [],
+    summary: {
+      source_contract_count: 0,
+      source_contract_verified_count: 0,
+      source_contract_failure_count: 0,
+      required_stages: ['G1', 'G2', 'G3', 'G4'],
+    },
+    unresolved: {
+      unmapped_product_paths: [],
+      unverified_mr_metadata: [],
+      unattributed_direct_commits: [],
+      source_contract_failures: [],
+    },
+    blockers: [],
+    policy: { fetch_latest: true },
+    integrity: { content_sha256: '' },
+  };
+  const withoutHash = structuredClone(report);
+  delete withoutHash.integrity.content_sha256;
+  report.integrity.content_sha256 = crypto
+    .createHash('sha256')
+    .update(stableJson(withoutHash))
+    .digest('hex');
+  return report;
+}
+
+const releaseIntake = makeReleaseIntake();
+const releaseIntakeSha256 = 'f'.repeat(64);
+const expectedReleaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF;
+const expectedReleaseHead = 'c'.repeat(40);
 const plan = createQworkReleaseTestPlan({
   casebookPath: path.join('/tmp', QWORK_RELEASE_CASEBOOK_BASENAME),
   casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
   frameworkCommit: 'b'.repeat(40),
   releaseIdentity: identity,
+  releaseIntake,
+  releaseIntakePath: '/tmp/release-intake.json',
+  releaseIntakeSha256,
+  expectedReleaseRef,
+  expectedReleaseHead,
 });
+
+function releaseIntakeInputs(sourcePlan = plan, report = releaseIntake) {
+  return {
+    releaseIntake: report,
+    releaseIntakeSha256: sourcePlan.release_intake.sha256,
+  };
+}
 
 test('orchestrator exposes top-level help', () => {
   const result = spawnSync(process.execPath, [orchestrator, '--help'], {
@@ -92,6 +171,11 @@ function pretest(stageId, sourcePlan = plan) {
     production_gate: true,
     release_gate_eligible: true,
     blockers: [],
+    release_intake: {
+      sha256: sourcePlan.release_intake.sha256,
+      content_sha256: sourcePlan.release_intake.content_sha256,
+      release_head: sourcePlan.release_intake.release_head,
+    },
     checks: [
       'git_branch_main',
       'git_head_matches_origin_main',
@@ -104,6 +188,7 @@ function pretest(stageId, sourcePlan = plan) {
       'casebook_git_tracked',
       'casebook_sha256',
       'casebook_exact_sheet_export',
+      'qwork_release_intake',
       'case_count',
       'case_id_unique',
       'scoped_execution_not_implicit',
@@ -399,17 +484,171 @@ test('release plan rejects any non-canonical Casebook identity', () => {
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
+    releaseIntake,
+    releaseIntakePath: '/tmp/release-intake.json',
+    releaseIntakeSha256,
+    expectedReleaseRef,
+    expectedReleaseHead,
   }), /casebook_basename_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     casebookPath: path.join('/tmp', QWORK_RELEASE_CASEBOOK_BASENAME),
     casebookSha256: 'a'.repeat(64),
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
+    releaseIntake,
+    releaseIntakePath: '/tmp/release-intake.json',
+    releaseIntakeSha256,
+    expectedReleaseRef,
+    expectedReleaseHead,
   }), /casebook_sha256_mismatch/);
+});
+
+test('release plan requires a READY intake bound to the Casebook and framework', () => {
+  const base = {
+    casebookPath: path.join('/tmp', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
+    frameworkCommit: 'b'.repeat(40),
+    releaseIdentity: identity,
+    releaseIntakePath: '/tmp/release-intake.json',
+    releaseIntakeSha256,
+    expectedReleaseRef,
+    expectedReleaseHead,
+  };
+  const { expectedReleaseRef: ignoredRef, expectedReleaseHead: ignoredHead, ...withoutObservation } = base;
+  assert.equal(ignoredRef, expectedReleaseRef);
+  assert.equal(ignoredHead, expectedReleaseHead);
+  assert.throws(
+    () => createQworkReleaseTestPlan({ ...withoutObservation, releaseIntake }),
+    /expected_release_ref_invalid.*expected_release_head_invalid/,
+  );
+  assert.throws(() => createQworkReleaseTestPlan(base), /release_intake_required/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseIntake: makeReleaseIntake({ casebookSha256: 'a'.repeat(64) }),
+  }), /release_intake_invalid:casebook_sha256_mismatch/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseIntake: makeReleaseIntake({ frameworkCommit: 'a'.repeat(40) }),
+  }), /release_intake_invalid:framework_commit_mismatch/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseIntake: makeReleaseIntake({ releaseRef: 'origin/release/old' }),
+  }), /release_intake_invalid:release_ref_mismatch/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseIntake: makeReleaseIntake({ releaseHead: 'd'.repeat(40) }),
+  }), /release_intake_invalid:release_head_mismatch/);
+  const notReady = makeReleaseIntake();
+  notReady.decision = 'BLOCKED';
+  notReady.blockers = ['test blocker'];
+  const withoutHash = structuredClone(notReady);
+  delete withoutHash.integrity.content_sha256;
+  notReady.integrity.content_sha256 = crypto.createHash('sha256').update(stableJson(withoutHash)).digest('hex');
+  assert.throws(() => createQworkReleaseTestPlan({ ...base, releaseIntake: notReady }), /decision_BLOCKED/);
+});
+
+test('release state and control integrity reject an unbound legacy plan', () => {
+  const unboundPlan = structuredClone(plan);
+  unboundPlan.release_intake = null;
+  unboundPlan.policy.release_intake_required = false;
+  assert.throws(
+    () => createQworkReleaseTestState(unboundPlan),
+    /缺少.*强制 release intake.*绑定/,
+  );
+
+  const state = createQworkReleaseTestState(plan);
+  const integrity = createQworkReleaseTestIntegrity(plan, state);
+  const audit = validateQworkReleaseControlState({ plan: unboundPlan, state, integrity });
+  assert.equal(audit.ok, false);
+  assert.ok(audit.failures.includes('plan_release_intake_binding_required'));
+});
+
+test('release state and control integrity reject malformed intake bindings', () => {
+  const state = createQworkReleaseTestState(plan);
+  const integrity = createQworkReleaseTestIntegrity(plan, state);
+  const scenarios = [
+    {
+      name: 'empty binding',
+      mutate: (candidate) => { candidate.release_intake = {}; },
+      failure: 'plan_release_intake_schema_mismatch',
+    },
+    {
+      name: 'missing absolute path',
+      mutate: (candidate) => { candidate.release_intake.path = ''; },
+      failure: 'plan_release_intake_path_invalid',
+    },
+    {
+      name: 'missing artifact hash',
+      mutate: (candidate) => { candidate.release_intake.sha256 = ''; },
+      failure: 'plan_release_intake_artifact_sha256_invalid',
+    },
+    {
+      name: 'missing content hash',
+      mutate: (candidate) => { candidate.release_intake.content_sha256 = ''; },
+      failure: 'plan_release_intake_content_sha256_invalid',
+    },
+    {
+      name: 'non-canonical ref',
+      mutate: (candidate) => { candidate.release_intake.release_ref = 'origin/release/old'; },
+      failure: 'plan_release_intake_release_ref_invalid',
+    },
+    {
+      name: 'missing release HEAD',
+      mutate: (candidate) => { candidate.release_intake.release_head = ''; },
+      failure: 'plan_release_intake_release_head_invalid',
+    },
+  ];
+  for (const scenario of scenarios) {
+    const malformedPlan = structuredClone(plan);
+    scenario.mutate(malformedPlan);
+    assert.throws(
+      () => createQworkReleaseTestState(malformedPlan),
+      /缺少.*强制 release intake.*绑定/,
+      scenario.name,
+    );
+    const audit = validateQworkReleaseControlState({ plan: malformedPlan, state, integrity });
+    assert.equal(audit.ok, false, scenario.name);
+    assert.ok(audit.failures.includes(scenario.failure), scenario.name);
+  }
+});
+
+test('release intake binding requires an explicit exact artifact SHA', () => {
+  for (const reportSha256 of [undefined, '', 'not-a-sha256']) {
+    const binding = validateQworkReleaseIntakeBinding({
+      plan,
+      report: releaseIntake,
+      reportSha256,
+    });
+    assert.equal(binding.ok, false);
+    assert.ok(binding.failures.includes('release_intake_artifact_sha256_invalid'));
+  }
+  const readiness = auditQworkStageReadiness({
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: pretest('G1'),
+    releaseIntake,
+  });
+  assert.equal(readiness.passed, false);
+  assert.ok(readiness.failures.includes('release_intake_artifact_sha256_invalid'));
+});
+
+test('readiness rejects an intake replaced with a stale release HEAD', () => {
+  const staleIntake = makeReleaseIntake({ releaseHead: 'd'.repeat(40) });
+  const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(plan, staleIntake),
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: pretest('G1'),
+  });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('release_intake_release_head_mismatch'));
 });
 
 test('G1 exact READY marks G0 passed and G1 ready', () => {
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -427,6 +666,7 @@ test('READY rejects candidate update risk and identity drift', () => {
   unsafe.release_identity.expected.qwork_build_id = 'forged-build';
   unsafe.release_identity.fingerprint = '0'.repeat(64);
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -442,6 +682,7 @@ test('READY rejects command-line identity claims when authoritative artifacts dr
   const forged = pretest('G1');
   forged.runtime.qwork.release_identity_readback.observed.qwork_ui_git_commit = 'feedface';
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -458,6 +699,7 @@ test('READY rejects unhealthy SIT or backend fingerprint drift', () => {
   unhealthy.runtime.control_plane_health.backend_identity_matches = false;
   unhealthy.runtime.control_plane_health.observed_backend_version = 'sit-health-deadbeefdeadbeef';
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -472,6 +714,7 @@ test('READY rejects any Case ID order drift', () => {
   const driftedCapability = capability('G1');
   driftedCapability.cases.reverse();
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: driftedCapability,
@@ -489,6 +732,7 @@ test('G4 readiness requires the exact admitted G3 prefix', () => {
   const fullPretest = pretest('G4');
   fullPretest.casebook.case_ids = full.cases.map((item) => item.case_id);
   const accepted = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G4',
     capabilityAudit: full,
@@ -499,6 +743,7 @@ test('G4 readiness requires the exact admitted G3 prefix', () => {
   full.cases[0].case_id = 'DRIFTED-GATE-PREFIX';
   fullPretest.casebook.case_ids[0] = 'DRIFTED-GATE-PREFIX';
   const rejected = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G4',
     capabilityAudit: full,
@@ -514,6 +759,7 @@ test('READY rejects a forged report with missing or failed G0 checks', () => {
   forged.checks = forged.checks.filter((check) => check.id !== 'qwork_public_capabilities');
   forged.checks.find((check) => check.id === 'single_runner_precondition').status = 'failed';
   const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -593,6 +839,7 @@ test('completion requires stable authoritative identity at startup and run-final
 
 test('a core gate failure keeps every later stage NOT_STARTED', () => {
   const readiness = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -616,6 +863,7 @@ test('a core gate failure keeps every later stage NOT_STARTED', () => {
 
 test('a stage readiness audit cannot overwrite an existing admission', () => {
   const readiness = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
     plan,
     stageId: 'G1',
     capabilityAudit: capability('G1'),
@@ -700,17 +948,110 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     assert.equal(run('git', ['commit', '-m', 'initial']).status, 0);
     assert.equal(run('git', ['remote', 'add', 'origin', remote]).status, 0);
     assert.equal(run('git', ['push', '-u', 'origin', 'main']).status, 0);
+    assert.equal(run('git', ['branch', 'release/0.1']).status, 0);
+    assert.equal(run('git', ['push', 'origin', 'release/0.1']).status, 0);
 
     const casebook = path.join(temporaryRoot, QWORK_RELEASE_CASEBOOK_BASENAME);
     const identityFile = path.join(temporaryRoot, 'release-identity.json');
+    const releaseIntakeFile = path.join(temporaryRoot, 'release-intake.json');
+    const frameworkCommit = run('git', ['rev-parse', 'HEAD']).stdout.trim();
+    const currentReleaseIntake = makeReleaseIntake({
+      frameworkCommit,
+      releaseHead: frameworkCommit,
+    });
+    const expectedReleaseArguments = [
+      '--expected-release-ref', QWORK_RELEASE_INTAKE_DEFAULT_REF,
+      '--expected-release-head', frameworkCommit,
+    ];
     fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebook);
     fs.writeFileSync(identityFile, `${JSON.stringify(identity)}\n`);
+
+    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+    const missingIntake = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      ...expectedReleaseArguments,
+    ]);
+    assert.notEqual(missingIntake.status, 0);
+    assert.match(missingIntake.stderr, /Missing required options: --release-intake/);
+
+    const missingExpectedRelease = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+    ]);
+    assert.notEqual(missingExpectedRelease.status, 0);
+    assert.match(
+      missingExpectedRelease.stderr,
+      /Missing required options: --expected-release-ref, --expected-release-head/,
+    );
+    assert.equal(fs.existsSync(stateDir), false);
+
+    const disabledIntake = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+      '--require-release-intake', 'false',
+      ...expectedReleaseArguments,
+    ]);
+    assert.notEqual(disabledIntake.status, 0);
+    assert.match(disabledIntake.stderr, /不能关闭 release intake 门禁/);
+
+    const staleRefIntake = makeReleaseIntake({
+      frameworkCommit,
+      releaseHead: frameworkCommit,
+      releaseRef: 'origin/release/old',
+    });
+    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleRefIntake)}\n`);
+    const staleRefInit = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+      ...expectedReleaseArguments,
+    ]);
+    assert.notEqual(staleRefInit.status, 0);
+    assert.match(staleRefInit.stderr, /release_ref_mismatch/);
+    assert.equal(fs.existsSync(stateDir), false);
+
+    const staleHeadIntake = makeReleaseIntake({
+      frameworkCommit,
+      releaseHead: 'd'.repeat(40),
+    });
+    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleHeadIntake)}\n`);
+    const staleHeadInit = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+      ...expectedReleaseArguments,
+    ]);
+    assert.notEqual(staleHeadInit.status, 0);
+    assert.match(staleHeadInit.stderr, /release_head_mismatch/);
+    assert.equal(fs.existsSync(stateDir), false);
+
+    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
     const initialized = run(process.execPath, [
       orchestrator,
       'init',
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+      ...expectedReleaseArguments,
     ]);
     assert.equal(initialized.status, 0, initialized.stderr);
     const cliPlan = JSON.parse(fs.readFileSync(path.join(stateDir, 'release-test-plan.json'), 'utf8'));
@@ -718,6 +1059,68 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     const pretestFile = path.join(temporaryRoot, 'core-beta-pretest-report.json');
     fs.writeFileSync(capabilityFile, `${JSON.stringify(capability('G1', cliPlan))}\n`);
     fs.writeFileSync(pretestFile, `${JSON.stringify(pretest('G1', cliPlan))}\n`);
+
+    const readinessArguments = [
+      orchestrator,
+      'readiness',
+      '--state-dir', stateDir,
+      '--stage', 'G1',
+      '--capability-audit', capabilityFile,
+      '--pretest', pretestFile,
+    ];
+    const assertControlStateUnchanged = () => {
+      const unchangedState = JSON.parse(fs.readFileSync(path.join(stateDir, 'release-test-state.json'), 'utf8'));
+      const unchangedIntegrity = JSON.parse(fs.readFileSync(path.join(stateDir, 'release-test-integrity.json'), 'utf8'));
+      assert.equal(unchangedState.revision, 0);
+      assert.equal(unchangedState.decision, 'NOT_READY');
+      assert.equal(unchangedIntegrity.event_count, 0);
+      assert.deepEqual(fs.readdirSync(path.join(stateDir, 'events')), []);
+    };
+    const expectReadinessRejection = (mutate, pattern) => {
+      mutate();
+      const rejected = run(process.execPath, readinessArguments);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, pattern);
+      assertControlStateUnchanged();
+      fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+    };
+
+    expectReadinessRejection(
+      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+        frameworkCommit,
+        releaseHead: 'd'.repeat(40),
+      }))}\n`),
+      /release_intake_release_head_mismatch/,
+    );
+    expectReadinessRejection(
+      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+        frameworkCommit,
+        releaseHead: frameworkCommit,
+        casebookSha256: 'a'.repeat(64),
+      }))}\n`),
+      /release_intake_casebook_sha256_mismatch/,
+    );
+    expectReadinessRejection(
+      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+        frameworkCommit: 'a'.repeat(40),
+        releaseHead: frameworkCommit,
+      }))}\n`),
+      /release_intake_framework_commit_mismatch/,
+    );
+    expectReadinessRejection(
+      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake, null, 2)}\n`),
+      /release_intake_artifact_sha256_mismatch/,
+    );
+    expectReadinessRejection(() => {
+      const invalidContentHash = structuredClone(currentReleaseIntake);
+      invalidContentHash.integrity.content_sha256 = '0'.repeat(64);
+      fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(invalidContentHash)}\n`);
+    }, /release_intake_content_hash_mismatch|release_intake_content_sha256_mismatch/);
+    expectReadinessRejection(
+      () => fs.unlinkSync(releaseIntakeFile),
+      /计划绑定的 release intake 不存在/,
+    );
+
     const admitted = run(process.execPath, [
       orchestrator,
       'readiness',

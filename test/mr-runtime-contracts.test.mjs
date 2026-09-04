@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   webPreviewOpenResult,
   webRuntimeAuthorityVerdict,
   webSearchBusinessVerdict,
+  webSearchFixedQuotaRejection,
+  webSearchQuotaTraceVerdict,
 } from '../src/lib/qbot-web-runtime-evidence.mjs';
 import { workspaceMissingErrorVerdict } from '../src/lib/qbot-workspace-error-evidence.mjs';
 import {
@@ -16,6 +19,10 @@ import {
   skillCatalogRefreshSettledVerdict as skillCatalogRefreshSettledVerdictV2,
   skillInstallControlVerdict as skillInstallControlVerdictV2,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
+import {
+  QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
+  QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
+} from '../src/lib/qwork-release-source-contracts.mjs';
 
 const chartPrompt = '请生成曝光 12000、点击 860、报名 240、成交 28 的柱状图并显示数值标签。';
 const chartTaskId = 'task-interactive-chart';
@@ -74,6 +81,79 @@ const chartDom = {
   svg_text_nodes: ['曝光', '12000', '点击', '860', '报名', '240', '成交', '28'],
 };
 const chartScreenshot = { path: '/tmp/qbot-chart.png', bytes: 2048, sha256: 'b'.repeat(64) };
+
+function structuredWebReply(seed, { secondUrl = '', secondTitle = '', suffix = '' } = {}) {
+  const urlA = `https://openai.com/news/${seed}-a`;
+  const urlB = secondUrl || `https://openai.com/research/${seed}-b`;
+  const titleB = secondTitle || `OpenAI 研究更新 ${seed}B`;
+  return [
+    `1. 标题：OpenAI 产品更新 ${seed}A`,
+    `日期：2026-09-${String(seed).padStart(2, '0')}`,
+    `官方链接：${urlA}`,
+    `摘要：这是第 ${seed} 轮第一条官方产品更新的具体内容说明。`,
+    '',
+    `2. 标题：${titleB}`,
+    `日期：2026-08-${String(seed).padStart(2, '0')}`,
+    `官方链接：${urlB}`,
+    `摘要：这是第 ${seed} 轮第二条官方研究更新的具体内容说明。`,
+    suffix,
+  ].join('\n');
+}
+
+test('MR !1561 declares one shared 32 MiB execution-worker envelope boundary', () => {
+  const contract = QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT;
+  const bindings = new Map(contract.integration_bindings.map((binding) => [binding.id, binding.addition.source]));
+  assert.equal(contract.claim_scope, 'source_and_test_declarations');
+  assert.equal(contract.test_execution_attested, false);
+  assert.equal(
+    bindings.get('shared_worker_envelope_limit_32_mib'),
+    'const MAX_ENVELOPE_BYTES = 32 * 1024 * 1024;',
+  );
+  assert.equal(
+    bindings.get('test_declares_shared_32_mib_envelope_limit'),
+    "test('execution messages share the 32 MiB envelope limit', () => {",
+  );
+  assert.equal(
+    bindings.get('test_asserts_execution_start_matches_shared_limit'),
+    '  assert.equal(MAX_EXECUTION_START_ENVELOPE_BYTES, MAX_ENVELOPE_BYTES);',
+  );
+  assert.equal(
+    contract.forbidden_fragments.some((item) => item.value.source === 'const MAX_ENVELOPE_BYTES = 256 * 1024;'),
+    true,
+  );
+  assert.equal(
+    contract.forbidden_fragments.some((item) => (
+      item.value.source === '  assert.ok(MAX_EXECUTION_START_ENVELOPE_BYTES > MAX_ENVELOPE_BYTES);'
+    )),
+    true,
+  );
+});
+
+test('MR !1560 declares cache-first local turn-authority readiness without re-accepting', () => {
+  const contract = QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT;
+  const bindings = new Map(contract.integration_bindings.map((binding) => [binding.id, binding.addition.source]));
+  assert.equal(contract.claim_scope, 'source_and_test_declarations');
+  assert.equal(contract.test_execution_attested, false);
+  assert.equal(bindings.get('readiness_default_timeout_10_seconds'), '  timeoutMs = 10_000,');
+  assert.equal(bindings.get('readiness_default_interval_100_ms'), '  intervalMs = 100,');
+  assert.equal(
+    bindings.get('readiness_returns_ok_or_non_transient_error_immediately'),
+    "    if (result?.ok || result?.code !== 'desktop_model_authority_not_ready') return result;",
+  );
+  assert.equal(
+    bindings.get('readiness_wait_is_interval_and_deadline_bounded'),
+    '    await wait(Math.min(intervalMs, remaining));',
+  );
+  assert.match(bindings.get('desktop_host_wraps_single_accept_authority_read'), /readReadyTurnAuthority.*currentTurnAuthorityForScope/u);
+  assert.match(bindings.get('test_declares_last_good_immediate'), /last-good authority is returned without waiting/u);
+  assert.match(bindings.get('test_cold_start_ready_on_third_read'), /\+\+reads === 3/u);
+  assert.equal(bindings.get('test_bounded_failure_timeout_250_ms'), '    timeoutMs: 250, now: () => elapsed,');
+  assert.match(bindings.get('test_covers_scope_and_permanent_error_codes'), /desktop_local_authority_not_ready/u);
+  assert.equal(
+    contract.forbidden_fragments.some((item) => item.id === 'desktop_host_direct_authority_read_without_readiness'),
+    true,
+  );
+});
 
 test('Skill catalog refresh accepts a stable target card while sync control remains disabled', () => {
   const blocked = skillCatalogRefreshSettledVerdict({ busy: 'true', disabled: true, loadingVisible: true });
@@ -298,10 +378,11 @@ test('web search business oracle is independent from task-bound runtime authorit
   const prompt = '查找两条更新';
   const taskId = 'task-web-runtime';
   const business = webSearchBusinessVerdict(
-    '2026-08-25 https://openai.com/news/a\n2026-08-24 https://www.iana.org/domains/reserved',
+    structuredWebReply(1, { suffix: '公共外链：https://www.iana.org/domains/reserved' }),
     'qbot_web web_search completed',
   );
   assert.equal(business.ok, true);
+  assert.equal(business.officialResultCount, 2);
   const sendReceipts = [{
     prompt,
     confirmed_at: '2026-08-26T00:00:00.000Z',
@@ -348,6 +429,201 @@ test('web search business oracle is independent from task-bound runtime authorit
     ],
     ['preview', 'external', 'blocked'],
   );
+});
+
+test('web search business oracle rejects unbound, incomplete, third-party, duplicate, and shortage results', () => {
+  const tool = 'qbot_web web_search completed';
+  const oneOfficialAndThirdParty = structuredWebReply(2, {
+    secondUrl: 'https://example.org/third-party-update',
+  });
+  assert.equal(webSearchBusinessVerdict(oneOfficialAndThirdParty, tool).ok, false);
+
+  const strayDates = [
+    '2026-09-02 2026-08-02',
+    '标题：第一条更新',
+    '官方链接：https://openai.com/news/stray-a',
+    '摘要：第一条包含足够长且具体的官方更新摘要。',
+    '',
+    '标题：第二条更新',
+    '官方链接：https://openai.com/news/stray-b',
+    '摘要：第二条包含足够长且具体的官方更新摘要。',
+  ].join('\n');
+  assert.equal(webSearchBusinessVerdict(strayDates, tool).ok, false);
+
+  const missingTitle = structuredWebReply(3).replace('2. 标题：OpenAI 研究更新 3B\n', '2. OpenAI 研究更新 3B\n');
+  assert.equal(webSearchBusinessVerdict(missingTitle, tool).ok, false);
+
+  const missingSummary = structuredWebReply(4).replace('摘要：这是第 4 轮第二条官方研究更新的具体内容说明。', '说明缺失。');
+  assert.equal(webSearchBusinessVerdict(missingSummary, tool).ok, false);
+
+  const duplicateUrl = structuredWebReply(5, { secondUrl: 'https://openai.com/news/5-a' });
+  const duplicateUrlVerdict = webSearchBusinessVerdict(duplicateUrl, tool);
+  assert.equal(duplicateUrlVerdict.ok, false);
+  assert.deepEqual(duplicateUrlVerdict.duplicateOfficialUrls, ['https://openai.com/news/5-a']);
+
+  const duplicateEntry = structuredWebReply(6, {
+    secondUrl: 'https://openai.com/news/6-a',
+    secondTitle: 'OpenAI 产品更新 6A',
+  });
+  const duplicateEntryVerdict = webSearchBusinessVerdict(duplicateEntry, tool);
+  assert.equal(duplicateEntryVerdict.ok, false);
+  assert.deepEqual(duplicateEntryVerdict.duplicateTitles, ['OpenAI 产品更新 6A']);
+
+  const shortageBypass = `${structuredWebReply(7).split('\n\n')[0]}\n不足两条，只有一条。`;
+  const shortageVerdict = webSearchBusinessVerdict(shortageBypass, tool);
+  assert.equal(shortageVerdict.explicitShortage, true);
+  assert.equal(shortageVerdict.ok, false);
+
+  const contradictoryShortage = webSearchBusinessVerdict(`${structuredWebReply(8)}\n仍然不足两条。`, tool);
+  assert.equal(contradictoryShortage.officialResultCount, 2);
+  assert.equal(contradictoryShortage.checks.no_explicit_shortage_claim, false);
+  assert.equal(contradictoryShortage.ok, false);
+});
+
+test('four-round web quota trace requires one task and unique provider receipts', () => {
+  const taskId = 'task-web-four-rounds';
+  const rounds = Array.from({ length: 4 }, (_, index) => {
+    const round = index + 1;
+    const prompt = `第${round}轮真实 Web 搜索`;
+    const providerReceiptHash = `${String.fromCharCode(97 + round)}`.repeat(64);
+    const runtimeEvidence = {
+      diagnostics: {
+        sessionId: taskId,
+        e2eCurrentTurnAuthorityReadiness: { ready: true },
+        e2eCurrentTurnAuthority: {
+          executionTarget: 'desktop-local',
+          routeTarget: 'desktop-local',
+          connectorRouting: { mode: 'auto', effectiveConnectorIds: ['builtin:qbot_web'] },
+          connectorRuntimeMaterialization: {
+            materializedConnectorIds: ['builtin:qbot_web'],
+            unsupportedConnectorIds: [],
+          },
+          providerReceiptHash,
+        },
+      },
+    };
+    const sendReceipts = [{
+      prompt,
+      confirmed_at: '2026-08-26T00:00:00.000Z',
+      attempts: [{ clicked: true, receipt: { ok: true, snapshot: { activeId: taskId, userTexts: [prompt] } } }],
+    }];
+    const reply = structuredWebReply(round);
+    return {
+      round,
+      prompt,
+      prompt_sha256: createHash('sha256').update(prompt).digest('hex'),
+      task_id: taskId,
+      reply,
+      tool_texts: ['qbot_web web_search completed'],
+      runtime_evidence: runtimeEvidence,
+      send_receipts: sendReceipts,
+      business_oracle: webSearchBusinessVerdict(reply, `qbot_web web_search completed\n${JSON.stringify(runtimeEvidence)}`),
+      runtime_authority: webRuntimeAuthorityVerdict({ runtimeEvidence, prompt, sendReceipts }),
+      post_round_state: { available: true, activeId: taskId, running: false },
+      timeout_cleanup_ok: true,
+      screenshot: { path: `/case/round-${round}.png`, bytes: 1024, sha256: 'f'.repeat(64) },
+    };
+  });
+  const verdict = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds,
+  });
+  assert.equal(verdict.evidence_valid, true);
+  assert.equal(verdict.oracle_valid, true);
+  assert.equal(verdict.task_id, taskId);
+  assert.equal(verdict.oracle_checks.provider_receipts_valid_and_unique, true);
+
+  const reusedReceipt = structuredClone(rounds);
+  reusedReceipt[3].runtime_evidence.diagnostics.e2eCurrentTurnAuthority.providerReceiptHash =
+    reusedReceipt[2].runtime_evidence.diagnostics.e2eCurrentTurnAuthority.providerReceiptHash;
+  reusedReceipt[3].runtime_authority = webRuntimeAuthorityVerdict({
+    runtimeEvidence: reusedReceipt[3].runtime_evidence,
+    prompt: reusedReceipt[3].prompt,
+    sendReceipts: reusedReceipt[3].send_receipts,
+    expectedTaskId: taskId,
+  });
+  const reusedVerdict = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds: reusedReceipt,
+  });
+  assert.equal(reusedVerdict.evidence_valid, true);
+  assert.equal(reusedVerdict.oracle_valid, false);
+  assert.equal(reusedVerdict.oracle_checks.provider_receipts_valid_and_unique, false);
+});
+
+test('fourth web round fixed quota wording is a product oracle failure', () => {
+  for (const wording of [
+    '最多三次搜索，当前额度已用尽。',
+    'You can only search three times.',
+    'The server rejected the fourth search.',
+    'The server refused another search.',
+    'The search quota has been hit.',
+  ]) {
+    assert.equal(webSearchFixedQuotaRejection(wording), true, wording);
+  }
+  for (const wording of [
+    '第 4 轮已再次调用搜索并返回结果。',
+    'The fourth search was not rejected and returned results.',
+    'The server accepted another search and returned results.',
+    'There is no fixed search limit; the fourth search succeeded.',
+    'The search quota has not been exhausted.',
+    '搜索配额没有耗尽，第四轮已成功。',
+    '不存在固定搜索次数上限，第四轮已成功。',
+  ]) {
+    assert.equal(webSearchFixedQuotaRejection(wording), false, wording);
+  }
+  const rounds = Array.from({ length: 4 }, (_, index) => {
+    const prompt = `quota-prompt-${index + 1}`;
+    const taskId = 'task-quota-rejection';
+    const providerReceiptHash = `${String.fromCharCode(97 + index)}`.repeat(64);
+    const runtimeEvidence = {
+      diagnostics: {
+        sessionId: taskId,
+        e2eCurrentTurnAuthorityReadiness: { ready: true },
+        e2eCurrentTurnAuthority: {
+          connectorRouting: { mode: 'auto', effectiveConnectorIds: ['builtin:qbot_web'] },
+          connectorRuntimeMaterialization: {
+            materializedConnectorIds: ['builtin:qbot_web'],
+            unsupportedConnectorIds: [],
+          },
+          providerReceiptHash,
+        },
+      },
+    };
+    const sendReceipts = [{
+      prompt,
+      confirmed_at: '2026-08-26T00:00:00.000Z',
+      attempts: [{ clicked: true, receipt: { ok: true, snapshot: { activeId: taskId, userTexts: [prompt] } } }],
+    }];
+    const reply = structuredWebReply(index + 1, {
+      suffix: index === 3 ? '已达到固定上限，服务端拒绝继续搜索。' : '',
+    });
+    return {
+      round: index + 1,
+      prompt,
+      prompt_sha256: createHash('sha256').update(prompt).digest('hex'),
+      task_id: taskId,
+      reply,
+      tool_texts: ['qbot_web web_search completed'],
+      runtime_evidence: runtimeEvidence,
+      send_receipts: sendReceipts,
+      business_oracle: webSearchBusinessVerdict(reply, `qbot_web web_search completed\n${JSON.stringify(runtimeEvidence)}`),
+      runtime_authority: webRuntimeAuthorityVerdict({ runtimeEvidence, prompt, sendReceipts }),
+      post_round_state: { available: true, activeId: taskId, running: false },
+      timeout_cleanup_ok: true,
+      screenshot: { path: `/case/quota-${index + 1}.png`, bytes: 100, sha256: 'e'.repeat(64) },
+    };
+  });
+  const verdict = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds,
+  });
+  assert.equal(verdict.evidence_valid, true);
+  assert.equal(verdict.oracle_valid, false);
+  assert.equal(verdict.oracle_checks.fourth_round_has_no_fixed_quota_rejection, false);
 });
 
 test('Teams Skill fixture records installAttempt and rolls back only that attempt', async () => {

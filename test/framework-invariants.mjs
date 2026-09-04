@@ -91,6 +91,14 @@ const qworkReleasePlanSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-test-plan.mjs'),
   'utf8',
 );
+const qworkReleaseOrchestratorSource = fs.readFileSync(
+  path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs'),
+  'utf8',
+);
+const qworkReleaseSourceContractsSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
+  'utf8',
+);
 const coreBetaProtocolSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'),
   'utf8',
@@ -99,10 +107,108 @@ const coreBetaV2RunnerSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'),
   'utf8',
 );
+const taskRegenerateEvidenceSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'task-regenerate-evidence.mjs'),
+  'utf8',
+);
+for (const [name, source] of [['legacy', runner], ['v2', coreBetaV2RunnerSource]]) {
+  assert.match(
+    source,
+    /async function executeSitTaskRegenerate[\s\S]*await reload\.click\(\{ force: true \}\);[\s\S]*waitForTaskRegenerateImmediateProjection[\s\S]*waitForRunStartAndIdle[\s\S]*stage: 'final'[\s\S]*reopenSessionAndReadback[\s\S]*stage: 'reopened'[\s\S]*task-regenerate-transition\.json/,
+    `${name} runner 必须单击重新生成并按 before/immediate/final/reopened 顺序生成专项证据`,
+  );
+  assert.doesNotMatch(
+    source.match(/async function executeSitTaskRegenerate[\s\S]*?\n}\n\nasync function waitForTaskRegenerateImmediateProjection/)?.[0] || '',
+    /reload\.click\([^\n]*\)\.catch[\s\S]*reload\.evaluate/,
+    `${name} runner 不得以 click + evaluate 回退造成重新生成重复点击`,
+  );
+}
+assert.match(
+  taskRegenerateEvidenceSource,
+  /qbot-task-regenerate-transition\/v1[\s\S]*same_nonempty_task_id[\s\S]*user_sequence_preserved[\s\S]*historical_messages_preserved[\s\S]*immediate_running_empty_assistant[\s\S]*final_second_version_complete[\s\S]*second_version_differs_from_first[\s\S]*reopened_second_version_stable/,
+  '重新生成专项证据必须分离四阶段取证完整性与最终/重开产品 Oracle',
+);
+assert.match(
+  coreBetaProtocolSource,
+  /validateTaskRegenerateTransitionPayload[\s\S]*taskRegenerateTransitionEvidence\([\s\S]*task_regenerate_transition[\s\S]*validateTaskRegenerateTransitionPayload/,
+  'Core Beta manifest 必须从磁盘重建并校验 task_regenerate_transition',
+);
+const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
+const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
+const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
+for (const [documentName, documentText] of [
+  ['QBOT_AUTOMATION_FRAMEWORK.md', automationFramework],
+  ['QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md', coreBetaOperatingGuide],
+]) {
+  const productionGatePretestExamples = [...documentText.matchAll(/```bash\s*\n([\s\S]*?)```/g)]
+    .map((match) => match[1])
+    .filter((block) => block.includes('npm run core-beta:pretest --') && block.includes('--production-gate true'));
+  assert.ok(productionGatePretestExamples.length > 0, `${documentName} 必须保留正式 production-gate pretest 示例`);
+  for (const example of productionGatePretestExamples) {
+    assert.match(example, /^\s*--release-intake\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 报告`);
+    assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
+    assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
+  }
+  assert.match(
+    documentText,
+    /全部合同[\s\S]*current-release 持续性鉴证[\s\S]*当前 release HEAD[\s\S]*不能冒充本轮 MR changes 鉴证[\s\S]*origin_change_attestation[\s\S]*不在本次增量范围时该字段必须为空/,
+    `${documentName} 必须拆分全注册表 current-release 持续性鉴证与仅本轮 MR 的 origin changes 鉴证`,
+  );
+  assert.match(
+    documentText,
+    /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*移入错误 test[\s\S]*复制 owner block[\s\S]*origin changes 鉴证继续[\s\S]*精确出现一次[\s\S]*forbidden fragment[\s\S]*精确为 0/,
+    `${documentName} 必须锁定 MR1540 owner scope，且其它 current-release/origin/forbidden 断言保持严格`,
+  );
+}
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /CURRENT_RELEASE_SCOPED_BINDINGS[\s\S]*QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body/,
+  'current-release owner scope 白名单必须只由 MR1540 合同显式声明',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /if \(!scope\)[\s\S]*occurrenceCount === 1[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every/,
+  'current-release continuity 必须保持默认唯一，并以唯一顶层 test owner scope 收紧 MR1540 例外',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /addition_count: occurrenceCount[\s\S]*occurrence_count: occurrenceCount[\s\S]*owner_occurrence_count: ownerIndexes\.length[\s\S]*required_fragments: requiredFragments/,
+  'current-release attestation 必须同时保留全文件与 owner scope 计数',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /const integrationBindings = contract\.integration_bindings\.map[\s\S]*additionCount === 1[\s\S]*integration_binding_mismatch/,
+  'origin changes integration binding 必须继续精确唯一',
+);
+assert.match(
+  coreBetaPretestSource,
+  /const releaseIntakeRequired = productionGate[\s\S]*options\['require-release-intake'\][\s\S]*options\['release-intake'\][\s\S]*if \(releaseIntakeRequired\)[\s\S]*options\['release-intake-sha256'\]/,
+  '正式 production-gate pretest 必须默认强制 release intake，并校验显式报告路径与 SHA-256',
+);
 assert.match(
   qworkReleasePlanSource,
-  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r11\.xlsx[\s\S]*5aacbb6ae1635930e2684165ec754329ea48d362616530895957a7d9ae486269/,
-  '发布状态机必须冻结 r11 Casebook 文件名和 SHA-256',
+  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14\.xlsx[\s\S]*439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed/,
+  '发布状态机必须冻结 r14 Casebook 文件名和 SHA-256',
+);
+assert.match(
+  qworkReleasePlanSource,
+  /(?=[\s\S]*nonEmptyString\(expectedReleaseRef\) !== QWORK_RELEASE_INTAKE_DEFAULT_REF)(?=[\s\S]*\^\[a-f0-9\]\{40\}\$\/i\.test\(nonEmptyString\(expectedReleaseHead\)\))(?=[\s\S]*if \(releaseIntake == null\)[\s\S]*release_intake_required)/,
+  '发布计划必须强制 release intake 并使用独立 ref/HEAD 观测校验',
+);
+assert.match(
+  qworkReleasePlanSource,
+  /(?=[\s\S]*release_intake_required: true)(?=[\s\S]*releaseIntakePlanBindingFailures\(plan\))(?=[\s\S]*release_intake_artifact_sha256_invalid)(?=[\s\S]*validateQworkReleaseIntake\(report)/,
+  '状态机必须拒绝未绑定计划并校验 intake 文件 SHA 与内容',
+);
+assert.match(
+  qworkReleaseOrchestratorSource,
+  /required\(options, \[[\s\S]*'release-intake'[\s\S]*'expected-release-ref'[\s\S]*'expected-release-head'[\s\S]*\]\)[\s\S]*正式发布计划不能关闭 release intake 门禁[\s\S]*expectedReleaseRef: options\['expected-release-ref'\][\s\S]*expectedReleaseHead: options\['expected-release-head'\]/,
+  '编排 CLI 必须在创建控制状态前强制 intake 和独立 release ref/HEAD',
+);
+assert.match(
+  qworkReleaseOrchestratorSource,
+  /const intakePath = String\(plan\.release_intake\?\.path[\s\S]*readJson\(intakeFile\)[\s\S]*sha256File\(intakeFile\)[\s\S]*validateQworkReleaseIntakeBinding/,
+  'readiness 必须重读计划绑定的磁盘 intake 并重算文件 SHA',
 );
 assert.match(
   coreBetaProtocolSource,
@@ -114,6 +220,38 @@ assert.match(
   /qwork_mr_connector_retry_recovery[\s\S]*skill_execution_trace[\s\S]*connector_retry_recovery_trace[\s\S]*horizontal_overflow_readback/,
   'Core Beta v2 runner 必须实现 !1526 原生执行与证据材料化',
 );
+assert.match(
+  coreBetaProtocolSource,
+  /MRSMOKE-WEB-001', 'qwork_mr_web_search_success'[\s\S]*web_search_quota_trace/,
+  'Core Beta 协议必须仅为 MRSMOKE-WEB-001 注册四轮 Web 搜索与 quota trace 证据',
+);
+assert.match(
+  coreBetaProtocolSource,
+  /validateWebSearchQuotaTracePayload[\s\S]*expectedCaseDir[\s\S]*realpathSync[\s\S]*lstatSync[\s\S]*isSymbolicLink[\s\S]*Number\.isSafeInteger[\s\S]*sha256File/,
+  'quota trace manifest 校验必须绑定权威 Case 目录并实读截图类型、字节和 SHA',
+);
+assert.match(
+  coreBetaProtocolSource,
+  /import \{ webSearchQuotaTraceVerdict \} from '\.\/qbot-web-runtime-evidence\.mjs';[\s\S]*function validateWebSearchQuotaTracePayload[\s\S]*const rebuilt = webSearchQuotaTraceVerdict\(/,
+  '协议必须把 quota 业务语义复算委托给 Web 运行时证据模块',
+);
+assert.match(
+  coreBetaProtocolSource,
+  /if \(\[[^\]]*'web_search_quota_trace'[^\]]*\]\.includes\(role\)\)[\s\S]*path\.extname\(file\)\.toLowerCase\(\) !== '\.json'[\s\S]*error: `\$\{role\}_json_required`[\s\S]*if \(role === 'web_search_quota_trace'\)[\s\S]*validateWebSearchQuotaTracePayload/,
+  'quota trace 角色必须先进入共享 JSON-only 守卫再进入专用校验，不能靠扩展名绕过',
+);
+for (const runnerSource of [coreBetaV2RunnerSource, runner]) {
+  assert.match(
+    runnerSource,
+    /const declaredPrompts = \(Array\.isArray\(testCase\.conversation_turns\)[\s\S]*const prompts = (?:caseId|evidenceCaseId) === 'MRSMOKE-WEB-001'\s*\? declaredPrompts[\s\S]*(?:caseId|evidenceCaseId) === 'MRSMOKE-WEB-001' && prompts\.length !== 4[\s\S]*if \(prompts\.length === 4\)[\s\S]*web_search_quota_trace/,
+    '两套 runner 必须仅按 MRSMOKE-WEB-001 分流，从冻结 Casebook 读取精确四轮 prompt 并材料化 quota trace',
+  );
+  assert.match(
+    runnerSource,
+    /if \(id === 'SIT-CONN-019'\) return executeSitConnectorWebSearchQuality/,
+    '两套 runner 必须保留 SIT-CONN-019 单轮 Web 质量执行入口',
+  );
+}
 assert.match(
   runner,
   /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
@@ -1115,7 +1253,17 @@ assert.equal(caseAwareReplyAssertion(
 ).ok, true, 'Markdown 表格判定应接受 QWork 渲染后 DOM 的四列制表符文本');
 
 assert.equal(webSearchQualityVerdict(
-  '1. 更新 A（2026-07-20）：https://openai.com/news/update-a\n2. 更新 B（2026-07-18）：https://openai.com/index/update-b',
+  [
+    '标题：更新 A',
+    '发布日期：2026-07-20',
+    '官方链接：https://openai.com/news/update-a',
+    '摘要：OpenAI 官方发布的产品更新 A。',
+    '',
+    '标题：更新 B',
+    '发布日期：2026-07-18',
+    '官方链接：https://openai.com/index/update-b',
+    '摘要：OpenAI 官方发布的产品更新 B。',
+  ].join('\n'),
   '网页搜索 qbot_web 已完成',
 ).ok, true, 'Web 搜索质量门禁应接受带官方链接、日期和真实工具证据的回复');
 assert.equal(webSearchQualityVerdict(
@@ -1345,7 +1493,7 @@ const required = [
   ['WORKSPACE-001 创建 A/B 边界并验证四类越界秘密不泄漏', /(?=[\s\S]*executeSitWorkspaceBoundary)(?=[\s\S]*workspace-boundary-fixture)(?=[\s\S]*B_NOT_AUTHORIZED)(?=[\s\S]*PARENT_NOT_AUTHORIZED)(?=[\s\S]*SYMLINK_NOT_AUTHORIZED)(?=[\s\S]*TRAVERSAL_NOT_AUTHORIZED)(?=[\s\S]*prepareTaskContextAndConfirm)(?=[\s\S]*boundaryProbes)(?=[\s\S]*\$\{probe\.label\}不泄露)/],
   ['FILE-NEW-001 上传真实有效 DOCX 与截断 PDF', /executeSitFilePartialFailure[\s\S]*createPartialAttachmentFixtures[\s\S]*valid-report\.docx[\s\S]*broken-report\.pdf[\s\S]*有效附件结论：通过/],
   ['TASK-EDIT-001 使用真实编辑入口、结构化条目计数、精确旧回答识别并回读会话', /executeSitTaskEdit[\s\S]*aui-user-action-edit[\s\S]*aui-edit-composer-input[\s\S]*Update[\s\S]*countEnumeratedItems[\s\S]*continuedOldLoginAnswer[\s\S]*reopenSessionAndReadback/],
-  ['TASK-REGEN-001 使用真实重新生成且校验消息唯一', /executeSitTaskRegenerate[\s\S]*重新生成[\s\S]*waitForRunStartAndIdle[\s\S]*userTexts\.filter[\s\S]*第二版回复完整且任务稳定/],
+  ['TASK-REGEN-001 使用单次真实重新生成并校验四阶段消息结构', /executeSitTaskRegenerate[\s\S]*reload\.click\(\{ force: true \}\)[\s\S]*waitForTaskRegenerateImmediateProjection[\s\S]*taskRegenerateTransitionEvidence[\s\S]*重生成证据链完整[\s\S]*重开保持第二版/],
   ['Teams 三类重启与本地执行走独立实机处理器', /SIT-TEAMS-NEW-001'[\s\S]*executeSitTeamsReopenCompletedTask[\s\S]*SIT-TEAMS-NEW-002'[\s\S]*executeSitTeamsReopenRunningTask[\s\S]*SIT-TEAMS-NEW-003'[\s\S]*executeSitTeamsLocalExecution/],
   ['自定义等待处理器写入 60 秒 reply_waits', /executeIssue793StreamingScrollFollow[\s\S]*recordReplyWaitAssertion[\s\S]*executeIssue800ModelServiceStateConsistency[\s\S]*recordReplyWaitAssertion[\s\S]*executeSitHitlSkipDefault[\s\S]*recordReplyWaitAssertion[\s\S]*executeSitTeamsReopenRunningTask[\s\S]*recordReplyWaitAssertion/],
   ['多轮证据按 label 累积不被后续轮次覆盖', /function writeReplyArtifacts[\s\S]*reply_records[\s\S]*findIndex[\s\S]*writeTextFile\(state\.artifacts\.reply_delta/],
@@ -1371,7 +1519,7 @@ const required = [
   ['ART-019 观察实际 shell.openPath 调用并恢复原方法', /SIT-ART-019'[\s\S]*captureShellOpenPathDuring[\s\S]*__qbotAutomationShellOpenCalls[\s\S]*__qbotAutomationShellOpenOriginal/],
   ['INIT-009 真实进入个人设置并检查运行时更新反馈', /SIT-INIT-009'[\s\S]*executeSitInit009[\s\S]*assistant-prepare-python-runtimes[\s\S]*assistant-runtime-update-check[\s\S]*运行时检查更新收敛且不泄密/],
   ['CONN-019 真实执行 Web 搜索并断言官方来源日期与工具证据', /SIT-CONN-019'[\s\S]*executeSitConnectorWebSearchQuality[\s\S]*webSearchQualityVerdict[\s\S]*Web 搜索新鲜度、相关性与可追溯性/],
-  ['CONN-019 日期证据兼容带空格的中文年月日', /dateEvidence = \([\s\S]*20\\d\{2\}\\s\*[\s\S]*年[\s\S]*月[\s\S]*日/],
+  ['CONN-019 日期证据兼容带空格的中文年月日', /const WEB_DATE = \/\\b20\\d\{2\}\\s\*\(\?:\[-\/\.年\]\\s\*\)[\s\S]*月[\s\S]*日/],
   ['KNOWLEDGE-001 生成成果后进入知识页并回到来源任务', /SIT-KNOWLEDGE-001'[\s\S]*executeSitKnowledgeClosedLoop[\s\S]*knowledge_gate\.md[\s\S]*知识成果可回到来源任务复核/],
   ['ART-024 在 iframe 或 webview 中点击交互 HTML 且验证宿主隔离', /SIT-ART-024[\s\S]*interactive_preview\.html[\s\S]*interactWithEmbeddedArtifactPreview[\s\S]*__QBOT_PREVIEW_ESCAPE__/],
   ['ART-CONFIRM-001 必须操作显性确认并核验正式成果唯一入库', /SIT-ART-CONFIRM-001'[\s\S]*executeSitArtifactConfirmationGate[\s\S]*正式成果显性确认入口[\s\S]*正式成果唯一入库且临时\/失败产物不污染/],

@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CORE_BETA_SCENARIO_REGISTRY,
   coreBetaCaseContractSha256,
   coreBetaLeafCases,
+  coreBetaScenarioSpec,
   validateCoreBetaCasePlan,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import {
@@ -91,7 +91,7 @@ const localOptionAdapters = new Set([
   'expert_publish_fault_matrix',
 ]);
 const rows = cases.map((testCase) => {
-  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(testCase.id);
+  const scenario = coreBetaScenarioSpec(testCase);
   const runtimeBinding = coreBetaRuntimeExecutorBinding(testCase, scenario);
   const isCompound = String(testCase?.case_type || '') === 'compound';
   const nativePublic = scenario?.fixture_control === 'public_product_state';
@@ -146,7 +146,7 @@ const rows = cases.map((testCase) => {
 
 const leafCases = coreBetaLeafCases(cases);
 const leafRows = leafCases.map((testCase) => {
-  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(testCase.id);
+  const scenario = coreBetaScenarioSpec(testCase);
   const binding = coreBetaRuntimeExecutorBinding(testCase, scenario);
   return {
     case_id: testCase.id,

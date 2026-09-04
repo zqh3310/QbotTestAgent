@@ -18,11 +18,19 @@ import {
   captureExternalWebLinkOutcome,
   webRuntimeAuthorityVerdict,
   webSearchBusinessVerdict,
+  webSearchQuotaTraceVerdict,
 } from './qbot-web-runtime-evidence.mjs';
 import {
   uploadAttachmentsInComposer,
   uploadAttachmentsViaVisiblePicker,
 } from './qbot-ui-attachments.mjs';
+import {
+  buildTaskRegenerateActionReceipt,
+  captureTaskRegenerateControlIdentity,
+  captureTaskRegenerateProjection,
+  taskRegenerateScreenshotReceipt,
+  taskRegenerateTransitionEvidence,
+} from './task-regenerate-evidence.mjs';
 import {
   DEFAULT_CASE_PARALLELISM,
   buildCaseExecutionPlan,
@@ -37,6 +45,7 @@ import {
   classifyCoreBetaScopedFixtureExclusions,
   coreBetaAttachmentFixtureNames,
   coreBetaCaseContractSha256,
+  coreBetaExpertMaintenanceTaskEvidence,
   coreBetaExecutorRoute,
   coreBetaLeafCases,
   coreBetaScenarioSpec,
@@ -4089,6 +4098,9 @@ async function executeCoreBetaRoute(context, route) {
   if (route === 'task_lifecycle' && scenario.driver === 'composer_history_navigation') {
     return await executeCoreBetaComposerHistoryCase(context);
   }
+  if (route === 'task_lifecycle' && scenario.driver === 'task_regenerate_transition') {
+    return await executeSitTaskRegenerate(context);
+  }
   if (route === 'model_routing' && scenario.driver === 'model_menu_sdk_filter') {
     return await executeCoreBetaModelMenuSdkFilterCase(context);
   }
@@ -4579,6 +4591,7 @@ export const CORE_BETA_CONTROLLER_SCENARIO_DRIVERS = new Set([
 
 export const CORE_BETA_NATIVE_SCENARIO_DRIVERS = new Set([
   'composer_history_navigation',
+  'task_regenerate_transition',
   'model_menu_sdk_filter',
   'qwork_daily_new_task_auto_isolation',
   'qwork_daily_workspace_task_binding',
@@ -4628,7 +4641,10 @@ export function coreBetaRuntimeExecutorBinding(testCase, providedScenario = null
       subcase_bindings: bindings,
     };
   }
-  const scenario = providedScenario || coreBetaScenarioSpec(testCase);
+  const authoritativeScenario = coreBetaScenarioSpec(testCase);
+  const scenario = String(testCase?.id || '') === 'BETA-EXPERT-012'
+    ? authoritativeScenario
+    : providedScenario || authoritativeScenario;
   const caseType = String(testCase?.case_type || '');
   const driver = String(scenario?.driver || '');
   if (!scenario) {
@@ -4653,6 +4669,8 @@ export function coreBetaRuntimeExecutorBinding(testCase, providedScenario = null
   const nativeScenarioTypeMatches = driver.startsWith('qwork_daily_')
     || driver.startsWith('qwork_mr_') || (
     driver === 'composer_history_navigation' && caseType === 'task_lifecycle'
+  ) || (
+    driver === 'task_regenerate_transition' && caseType === 'task_lifecycle'
   ) || (
     driver === 'model_menu_sdk_filter' && caseType === 'model_routing'
   );
@@ -5352,6 +5370,7 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
     expert_publish_operation: artifacts.core_beta_expert_publish_operation || null,
     expert_publish_confirmation: artifacts.core_beta_expert_publish_confirmation || null,
     expert_authoring_mcp_trace: artifacts.core_beta_expert_authoring_mcp_trace || null,
+    expert_maintenance_task_trace: artifacts.core_beta_expert_maintenance_task_trace || null,
     expert_authoring_security_trace: artifacts.core_beta_expert_authoring_security_trace || null,
     expert_share_authorization: artifacts.core_beta_expert_share_authorization || null,
     expert_history_readback: artifacts.core_beta_expert_history_readback || null,
@@ -5389,6 +5408,9 @@ async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, pub
     performance_metrics: artifacts.core_beta_performance_metrics || null,
     accessibility_scan: artifacts.core_beta_accessibility_scan || null,
     external_navigation_trace: artifacts.core_beta_external_navigation_trace || null,
+    web_search_quota_trace: artifacts.web_search_quota_trace || null,
+    task_regenerate_transition: artifacts.task_regenerate_transition || null,
+    regenerate_placeholder_readback: artifacts.regenerate_placeholder_readback || null,
     interactive_chart_readback: artifacts.core_beta_interactive_chart_readback || null,
     connector_retry_recovery_trace: artifacts.core_beta_connector_retry_recovery_trace || null,
     horizontal_overflow_readback: artifacts.core_beta_horizontal_overflow_readback || null,
@@ -11029,7 +11051,288 @@ export function coreBetaExpertBuilderOutcomeEvidence({
   };
 }
 
+function coreBetaExpertMaintenanceMetric(state = {}) {
+  return {
+    captured: state?.captured === true,
+    active_id: state?.active_id ?? null,
+    send_count: Number.isSafeInteger(state?.send_count) && state.send_count >= 0
+      ? state.send_count
+      : null,
+    message_count: Number.isSafeInteger(state?.message_count) && state.message_count >= 0
+      ? state.message_count
+      : null,
+    is_draft: state?.is_draft === true,
+    draft_instance_id: String(state?.draft_instance_id || ''),
+  };
+}
+
+function coreBetaExpertMaintenanceScreenshotReceipt(file) {
+  const screenshotPath = path.resolve(String(file || ''));
+  let stats;
+  try {
+    stats = fs.lstatSync(screenshotPath);
+  } catch {
+    return { path: screenshotPath, bytes: 0, sha256: '' };
+  }
+  return {
+    path: screenshotPath,
+    bytes: stats.isFile() && !stats.isSymbolicLink() ? stats.size : 0,
+    sha256: stats.isFile() && !stats.isSymbolicLink()
+      ? createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex')
+      : '',
+  };
+}
+
+function coreBetaExpertMaintenanceSession(session = null) {
+  return {
+    id: String(session?.id || ''),
+    messages: Array.isArray(session?.messages)
+      ? JSON.parse(JSON.stringify(session.messages))
+      : [],
+  };
+}
+
+function coreBetaExpertMaintenanceDraft(draft = {}) {
+  return {
+    id: String(draft?.id || ''),
+    expert_id: String(draft?.expertId || draft?.expert_id || ''),
+    base_version_id: String(draft?.baseVersionId || draft?.base_version_id || ''),
+    revision: Number.isSafeInteger(draft?.revision) && draft.revision > 0
+      ? draft.revision
+      : null,
+    etag: String(draft?.etag || ''),
+    content: {
+      summary: String(draft?.content?.summary || ''),
+      persona_body: String(draft?.content?.personaBody || draft?.content?.persona_body || ''),
+    },
+  };
+}
+
+async function captureCoreBetaExpertMaintenanceState(page) {
+  return page.evaluate(async () => {
+    const e2e = window.__qbotE2E || window.__deepbankE2E;
+    const [raw, current, capabilities] = await Promise.all([
+      typeof e2e?.state === 'function' ? Promise.resolve(e2e.state()).catch(() => null) : null,
+      typeof e2e?.currentSession === 'function'
+        ? Promise.resolve(e2e.currentSession()).catch(() => null)
+        : null,
+      typeof window.agent?.capabilities === 'function'
+        ? window.agent.capabilities().catch(() => null)
+        : null,
+    ]);
+    const view = raw?.expertAuthoringView || current?.expertAuthoringView || null;
+    const text = (selector) => String(document.querySelector(selector)?.textContent || '').trim();
+    const shown = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const messages = Array.isArray(current?.messages) ? current.messages : [];
+    return {
+      captured: Boolean(raw && typeof raw === 'object'),
+      active_id: raw?.activeId || current?.id || null,
+      send_count: Number.isSafeInteger(raw?.sendCount) && raw.sendCount >= 0
+        ? raw.sendCount
+        : null,
+      message_count: Number.isSafeInteger(raw?.messageCount) && raw.messageCount >= 0
+        ? raw.messageCount
+        : (Array.isArray(current?.messages) ? messages.length : null),
+      is_draft: raw?.isDraft === true,
+      draft_instance_id: String(raw?.draftInstanceId || ''),
+      current_expert: raw?.currentExpert ?? current?.currentExpert ?? null,
+      expert_authoring_view: view ? {
+        schema_version: Number(view.schemaVersion || view.schema_version || 0),
+        draft_id: String(view.draftId || view.draft_id || ''),
+        expert_id: String(view.expertId || view.expert_id || ''),
+      } : null,
+      title: String(current?.title || ''),
+      messages: JSON.parse(JSON.stringify(messages)),
+      selected_skills: capabilities?.selectedSkills ?? null,
+      selected_connectors: capabilities?.selectedConnectors ?? raw?.selectedConnectors ?? null,
+      attachment_count: document.querySelectorAll(
+        '.aui-composer-attachments .aui-attachment-root, .aui-composer-attachments .aui-attachment-chip',
+      ).length,
+      surface: {
+        header: shown('[data-testid="expert-maintenance-header"]'),
+        name: shown('[data-testid="expert-maintenance-name"]'),
+        status: shown('[data-testid="expert-maintenance-status"]'),
+        welcome: shown('[data-testid="expert-maintenance-welcome"]'),
+        quick_tasks: shown('[data-testid="expert-maintenance-quick-tasks"]'),
+        adjust_responsibilities: shown('[data-testid="expert-maintenance-task-调整职责"]'),
+        composer_input: shown('[data-testid="composer-input"]'),
+        composer_expert_chip: shown('[data-testid="composer-expert-chip"]'),
+        open_config: shown('[data-testid="expert-maintenance-open-config"]'),
+        name_text: text('[data-testid="expert-maintenance-name"]'),
+        status_text: text('[data-testid="expert-maintenance-status"]'),
+        welcome_text: text('[data-testid="expert-maintenance-welcome"]'),
+      },
+    };
+  });
+}
+
+function coreBetaExpertMaintenanceToolTrace(session, taskId) {
+  const calls = (Array.isArray(session?.messages) ? session.messages : [])
+    .filter((message) => message?.role === 'assistant')
+    .flatMap((message) => Array.isArray(message?.parts) ? message.parts : [])
+    .filter((part) => part?.t === 'tool')
+    .map((part) => {
+      const resultPresent = part?.result !== undefined && part?.result !== null
+        && (typeof part.result !== 'string' || part.result.trim().length > 0);
+      const resultText = typeof part?.result === 'string'
+        ? part.result
+        : (resultPresent ? JSON.stringify(part.result) : '');
+      return {
+        id: String(part?.id || ''),
+        name: String(part?.name || ''),
+        input: part?.input ?? part?.args ?? part?.arguments ?? null,
+        result_present: resultPresent,
+        result_text: resultText,
+        result: (() => {
+          if (!resultText.trim()) return null;
+          try {
+            const parsed = JSON.parse(resultText);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+          } catch {
+            return null;
+          }
+        })(),
+        result_sha256: resultText
+          ? createHash('sha256').update(resultText).digest('hex')
+          : '',
+        is_error: part?.isError === true || part?.is_error === true,
+      };
+    });
+  return {
+    captured: Boolean(session && typeof session === 'object'),
+    source: 'window.agent.readSession/currentSession.messages.parts',
+    task_id: String(taskId || session?.id || ''),
+    calls,
+  };
+}
+
+async function installCoreBetaExpertPublishProbe(page) {
+  return page.evaluate(() => {
+    const key = '__qbotBetaExpert012PublishProbe';
+    const lifecycle = window.agent?.expertLifecycle;
+    if (!lifecycle || typeof lifecycle.publish !== 'function' || typeof lifecycle.getOperation !== 'function') {
+      return { installed: false, reason: 'expert lifecycle publish/getOperation unavailable' };
+    }
+    if (window[key]?.restore) window[key].restore();
+    const originalPublish = lifecycle.publish;
+    const originalGetOperation = lifecycle.getOperation;
+    const clone = (value) => {
+      try { return value === undefined ? null : JSON.parse(JSON.stringify(value)); }
+      catch { return null; }
+    };
+    const trace = {
+      installed: false,
+      restored: false,
+      publish_calls: [],
+      get_operation_calls: [],
+    };
+    const wrappedPublish = async (draftId, expectedRevision, idempotencyKey) => {
+      const call = {
+        args: {
+          draft_id: String(draftId || ''),
+          expected_revision: expectedRevision,
+          idempotency_key: String(idempotencyKey || ''),
+        },
+        result: null,
+        error: null,
+      };
+      trace.publish_calls.push(call);
+      try {
+        const result = await originalPublish.call(lifecycle, draftId, expectedRevision, idempotencyKey);
+        call.result = clone(result);
+        return result;
+      } catch (error) {
+        call.error = { name: String(error?.name || ''), message: String(error?.message || error) };
+        throw error;
+      }
+    };
+    const wrappedGetOperation = async (operationId, draftId, expectedRevision) => {
+      const call = {
+        args: {
+          operation_id: String(operationId || ''),
+          draft_id: String(draftId || ''),
+          expected_revision: expectedRevision,
+        },
+        result: null,
+        error: null,
+      };
+      trace.get_operation_calls.push(call);
+      try {
+        const result = await originalGetOperation.call(lifecycle, operationId, draftId, expectedRevision);
+        call.result = clone(result);
+        return result;
+      } catch (error) {
+        call.error = { name: String(error?.name || ''), message: String(error?.message || error) };
+        throw error;
+      }
+    };
+    const restore = () => {
+      lifecycle.publish = originalPublish;
+      lifecycle.getOperation = originalGetOperation;
+      trace.restored = lifecycle.publish === originalPublish
+        && lifecycle.getOperation === originalGetOperation;
+      return trace.restored;
+    };
+    try {
+      lifecycle.publish = wrappedPublish;
+      lifecycle.getOperation = wrappedGetOperation;
+    } catch (error) {
+      restore();
+      return { installed: false, reason: String(error?.message || error) };
+    }
+    trace.installed = lifecycle.publish === wrappedPublish
+      && lifecycle.getOperation === wrappedGetOperation;
+    if (!trace.installed) {
+      restore();
+      return { installed: false, reason: 'expert lifecycle methods are not writable' };
+    }
+    window[key] = { trace, restore };
+    return { installed: true, reason: '' };
+  });
+}
+
+async function readAndRestoreCoreBetaExpertPublishProbe(page) {
+  return page.evaluate(() => {
+    const key = '__qbotBetaExpert012PublishProbe';
+    const probe = window[key];
+    if (!probe?.trace || typeof probe.restore !== 'function') {
+      return {
+        installed: false,
+        restored: false,
+        publish_calls: [],
+        get_operation_calls: [],
+      };
+    }
+    probe.restore();
+    const trace = JSON.parse(JSON.stringify(probe.trace));
+    delete window[key];
+    return trace;
+  }).catch((error) => ({
+    installed: false,
+    restored: false,
+    publish_calls: [],
+    get_operation_calls: [],
+    error: String(error?.message || error),
+  }));
+}
+
 async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeoutMs, fixturesDir, options = {} }) {
+  const expert012Driver = testCase.id === 'BETA-EXPERT-012'
+    ? String(coreBetaScenarioSpec(testCase)?.driver || '')
+    : '';
+  if (
+    testCase.id === 'BETA-EXPERT-012'
+    && !['expert_immutable_version_upgrade', 'expert_published_maintenance_task_roundtrip']
+      .includes(expert012Driver)
+  ) {
+    throw new Error('BETA-EXPERT-012 合同变体缺失、残缺或混合，禁止执行任何产品动作');
+  }
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
@@ -11781,7 +12084,10 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
     return;
   }
 
-  if (testCase.id === 'BETA-EXPERT-012') {
+  if (
+    testCase.id === 'BETA-EXPERT-012'
+    && expert012Driver === 'expert_immutable_version_upgrade'
+  ) {
     const published = runOwnedExpert;
     const versioned = await page.evaluate(async (expertId) => {
       const lifecycle = window.agent.expertLifecycle;
@@ -11822,13 +12128,611 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         },
       };
     }, published.id);
-    writeExpertArtifact('expert_history_readback', versioned, versioned.after.versions.length > versioned.before.versions.length);
-    writeExpertArtifact('expert_runtime_trace', { base_version_id: versioned.base_version_id, latest: versioned.after.expert });
+    writeExpertArtifact(
+      'expert_history_readback',
+      versioned,
+      versioned.after.versions.length > versioned.before.versions.length,
+    );
+    writeExpertArtifact('expert_runtime_trace', {
+      base_version_id: versioned.base_version_id,
+      latest: versioned.after.expert,
+    });
     ledger.experts.published = versioned.after.expert;
     ledger.experts.published_versioned = versioned.after.expert;
     writeCoreBetaSuiteLedger(caseDir, ledger);
     state.artifacts.capability_selection = identityFile;
     state.artifacts.capability_execution_event = state.artifacts.expert_history_readback;
+    return;
+  }
+
+  if (
+    testCase.id === 'BETA-EXPERT-012'
+    && expert012Driver === 'expert_published_maintenance_task_roundtrip'
+  ) {
+    const published = runOwnedExpert;
+    const expertId = String(published?.id || '');
+    const expertName = String(
+      published?.display?.label
+      || published?.version?.content?.label
+      || published?.content?.label
+      || published?.label
+      || published?.name
+      || '',
+    ).trim();
+    if (!expertId || !expertName) throw new Error('BETA-EXPERT-012 缺少本轮已发布 Expert 的稳定 ID/名称');
+    const unique = createHash('sha256')
+      .update(`${caseDir}:${Date.now()}:${expertId}`)
+      .digest('hex')
+      .slice(0, 16);
+    const marker = `__QBOT_EXPERT_AUTHORING_TARGET_UPDATE_${unique}__`;
+    const expectedSummary = `QA maintenance summary ${unique}`;
+    const expectedPersona = `QA maintenance persona ${unique}: only return concise and auditable conclusions.`;
+    const lifecycleBeforeEntry = await page.evaluate(async (id) => {
+      const lifecycle = window.agent.expertLifecycle;
+      return {
+        expert: await lifecycle.get(id),
+        versions: await lifecycle.listVersions(id),
+        releases: await lifecycle.listReleases(id),
+        drafts: await lifecycle.listDrafts(id),
+      };
+    }, expertId);
+    const entryBeforeState = await captureCoreBetaExpertMaintenanceState(page);
+    const finishEntryProductBug = async ({
+      failureStage,
+      failureReason,
+      cardVisible = false,
+      menuVisible = false,
+      menuPanelVisible = false,
+      actionVisible = false,
+    }) => {
+      const [entryAfterFailureState, lifecycleAfterFailure] = await Promise.all([
+        captureCoreBetaExpertMaintenanceState(page),
+        page.evaluate(async (id) => ({
+          drafts: await window.agent.expertLifecycle.listDrafts(id),
+        }), expertId),
+      ]);
+      const failureScreenshot = coreBetaExpertMaintenanceScreenshotReceipt(
+        await shot(page, caseDir, `expert-012-entry-${failureStage}-missing`),
+      );
+      const entry = {
+        captured: true,
+        card_visible: cardVisible,
+        menu_visible: menuVisible,
+        menu_panel_visible: menuPanelVisible,
+        action_visible: actionVisible,
+        action_clicked: false,
+        failure_stage: failureStage,
+        failure_reason: failureReason,
+        no_prompt_recorded: !state.artifacts.prompt
+          && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0),
+        no_send_receipt_recorded: !state.artifacts.send_receipt
+          && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0),
+        before: coreBetaExpertMaintenanceMetric(entryBeforeState),
+        after: coreBetaExpertMaintenanceMetric(entryAfterFailureState),
+        surface: entryAfterFailureState.surface,
+        draft_inventory_before: lifecycleBeforeEntry.drafts,
+        draft_inventory_after: lifecycleAfterFailure.drafts,
+        screenshot: failureScreenshot,
+      };
+      const maintenanceTrace = coreBetaExpertMaintenanceTaskEvidence({
+        caseId: testCase.id,
+        expectedExpertId: expertId,
+        expertName,
+        marker,
+        expectedSummary,
+        expectedPersona,
+        entry,
+      });
+      writeExpertArtifact(
+        'expert_maintenance_task_trace',
+        maintenanceTrace,
+        maintenanceTrace.evidence_valid,
+        maintenanceTrace.oracle_valid,
+      );
+      const notReached = {
+        branch: 'entry_product_bug',
+        failure_stage: failureStage,
+        failure_reason: failureReason,
+        entry,
+        subsequent_actions_performed: false,
+      };
+      writeExpertArtifact('expert_draft_lifecycle', {
+        ...notReached,
+        entry_drafts_before: lifecycleBeforeEntry.drafts,
+        entry_drafts_after: lifecycleAfterFailure.drafts,
+      }, maintenanceTrace.evidence_valid, false);
+      writeExpertArtifact('expert_authoring_mcp_trace', notReached, maintenanceTrace.evidence_valid, false);
+      writeExpertArtifact('expert_publish_operation', notReached, maintenanceTrace.evidence_valid, false);
+      writeExpertArtifact('expert_history_readback', notReached, maintenanceTrace.evidence_valid, false);
+      writeExpertArtifact('expert_runtime_trace', notReached, maintenanceTrace.evidence_valid, false);
+      const capabilitySelectionFile = writeExpertArtifact('capability_selection', {
+        expert_id: expertId,
+        draft_id: null,
+        task_id: null,
+        entry_failure_stage: failureStage,
+      }, maintenanceTrace.evidence_valid, false);
+      const capabilityExecutionFile = writeExpertArtifact('capability_execution_event', notReached, maintenanceTrace.evidence_valid, false);
+      recordAssertion(
+        state,
+        'BETA-EXPERT-012 入口失败证据完整性',
+        '卡片、更多菜单或“通过对话修改”入口缺失时，必须保留公开状态、零发送守卫、草稿库存和截图 receipt 后终止后续动作。',
+        maintenanceTrace.evidence_valid,
+        JSON.stringify(maintenanceTrace.evidence_failures),
+        'automation_error',
+      );
+      recordAssertion(
+        state,
+        '已发布 Expert 维护入口可用',
+        '本轮已发布 Expert 必须存在可见卡片、更多菜单及“通过对话修改”入口。',
+        false,
+        JSON.stringify({ failureStage, failureReason, expertId }),
+        'bug',
+      );
+      state.artifacts.core_beta_capability_selection = {
+        expert_id: expertId,
+        draft_id: null,
+        task_id: null,
+      };
+      state.artifacts.core_beta_capability_execution = notReached;
+      state.artifacts.capability_selection = capabilitySelectionFile;
+      state.artifacts.capability_execution_event = capabilityExecutionFile;
+    };
+    const refresh = page.locator('[data-testid="experts-catalog-refresh"]').first();
+    if (await visible(refresh, 1000)) {
+      await refresh.click();
+      await page.waitForTimeout(700);
+    }
+    const mineTab = page.getByRole('tab', { name: '我的专家', exact: true }).first();
+    if (await visible(mineTab, 2000)) await mineTab.click();
+    await expectVisibleCoreLocator(page, '[data-testid="experts-mine"]', '我的专家列表');
+    const card = page.locator('[data-testid="experts-mine"]')
+      .locator(`[data-testid="expert-card-${expertId}"]`).first();
+    const cardVisible = await visible(card, 15_000);
+    if (!cardVisible) {
+      await finishEntryProductBug({
+        failureStage: 'card',
+        failureReason: `本轮 Expert 卡片不可见：${expertId}`,
+        cardVisible,
+      });
+      return;
+    }
+    await card.hover();
+    const menu = card.locator(`[data-testid="expert-card-menu-${expertId}"]`);
+    const menuVisible = await visible(menu, 5000);
+    if (!menuVisible) {
+      await finishEntryProductBug({
+        failureStage: 'menu',
+        failureReason: `Expert 卡片真实更多菜单不可见：${expertId}`,
+        cardVisible,
+        menuVisible,
+      });
+      return;
+    }
+    await menu.click();
+    const menuPanel = card.locator(`[data-testid="expert-card-menu-panel-${expertId}"]`);
+    const menuPanelVisible = await visible(menuPanel, 5000);
+    const maintenanceAction = card.locator(`[data-testid="expert-card-conversation-edit-${expertId}"]`);
+    const actionVisible = await visible(maintenanceAction, 5000);
+    if (!menuPanelVisible) {
+      await finishEntryProductBug({
+        failureStage: 'menu_panel',
+        failureReason: `Expert 卡片更多菜单面板不可见：${expertId}`,
+        cardVisible,
+        menuVisible,
+        menuPanelVisible,
+        actionVisible,
+      });
+      return;
+    }
+    if (!actionVisible) {
+      await finishEntryProductBug({
+        failureStage: 'action',
+        failureReason: `缺少真实“通过对话修改”入口：${expertId}`,
+        cardVisible,
+        menuVisible,
+        menuPanelVisible,
+        actionVisible,
+      });
+      return;
+    }
+    await maintenanceAction.click();
+    await expectVisibleCoreLocator(page, '[data-testid="expert-maintenance-header"]', 'Expert 维护任务头部');
+    await expectVisibleCoreLocator(page, '[data-testid="composer-input"]', 'Expert 维护任务 Composer');
+    const entryAfterState = await captureCoreBetaExpertMaintenanceState(page);
+    const lifecycleAfterEntry = await page.evaluate(async (id) => ({
+      drafts: await window.agent.expertLifecycle.listDrafts(id),
+    }), expertId);
+    const draftId = String(entryAfterState?.expert_authoring_view?.draft_id || '');
+    if (!draftId) throw new Error('BETA-EXPERT-012 维护任务未公开绑定 draftId');
+    const draftBeforeRaw = await page.evaluate(
+      (id) => window.agent.expertLifecycle.getDraft(id),
+      draftId,
+    );
+    const entryScreenshot = await shot(page, caseDir, 'expert-012-maintenance-entry');
+    const entry = {
+      captured: true,
+      card_visible: cardVisible,
+      menu_visible: menuVisible,
+      menu_panel_visible: menuPanelVisible,
+      action_visible: actionVisible,
+      action_clicked: true,
+      failure_stage: '',
+      failure_reason: '',
+      no_prompt_recorded: !state.artifacts.prompt
+        && (!Array.isArray(state.artifacts.sent_prompts) || state.artifacts.sent_prompts.length === 0),
+      no_send_receipt_recorded: !state.artifacts.send_receipt
+        && (!Array.isArray(state.artifacts.send_receipts) || state.artifacts.send_receipts.length === 0),
+      before: coreBetaExpertMaintenanceMetric(entryBeforeState),
+      after: {
+        ...coreBetaExpertMaintenanceMetric(entryAfterState),
+        current_expert: entryAfterState.current_expert,
+        expert_authoring_view: entryAfterState.expert_authoring_view,
+      },
+      surface: entryAfterState.surface,
+      draft_inventory_before: lifecycleBeforeEntry.drafts,
+      draft_inventory_after: lifecycleAfterEntry.drafts,
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(entryScreenshot),
+    };
+
+    const quickBeforeState = await captureCoreBetaExpertMaintenanceState(page);
+    const quickTaskControl = page.locator('[data-testid="expert-maintenance-task-调整职责"]');
+    const quickTaskVisible = await visible(quickTaskControl, 5000);
+    if (quickTaskVisible) await quickTaskControl.click();
+    await page.waitForTimeout(250);
+    const quickComposerText = await composerTextValue(page);
+    const quickAfterState = await captureCoreBetaExpertMaintenanceState(page);
+    const quickScreenshot = await shot(page, caseDir, 'expert-012-quick-task-prefill');
+    const quickTask = {
+      captured: true,
+      clicked: quickTaskVisible,
+      before: coreBetaExpertMaintenanceMetric(quickBeforeState),
+      after: coreBetaExpertMaintenanceMetric(quickAfterState),
+      composer_text: quickComposerText,
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(quickScreenshot),
+    };
+    const prompt = [
+      '修改当前绑定的专家草稿，不要创建或复制其他专家。',
+      '__QBOT_EXPERT_AUTHORING_TARGET_UPDATE__',
+      marker,
+      `expert-summary: ${expectedSummary}`,
+      `expert-persona: ${expectedPersona}`,
+      '必须先且只读取当前草稿，再且只更新当前草稿；不得调用其他工具。',
+    ].join('\n');
+    const authoringBeforeState = await captureCoreBetaExpertMaintenanceState(page);
+    const authoringReply = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt,
+      label: '已发布 Expert 维护任务',
+    });
+    const authoringAfterState = await captureCoreBetaExpertMaintenanceState(page);
+    const authoringTaskId = String(authoringAfterState.active_id || '');
+    const sessionReadback = await captureQworkTaskRuntimeReadback(page, authoringTaskId);
+    const toolTrace = coreBetaExpertMaintenanceToolTrace(sessionReadback.session, authoringTaskId);
+    const draftAfterRaw = await page.evaluate(
+      (id) => window.agent.expertLifecycle.getDraft(id),
+      draftId,
+    );
+    const authoringScreenshot = await shot(page, caseDir, 'expert-012-authoring-turn');
+    const authoringTurn = {
+      captured: true,
+      prompt,
+      task_id: authoringTaskId,
+      reply_incomplete: authoringReply.incomplete === true,
+      before: coreBetaExpertMaintenanceMetric(authoringBeforeState),
+      after: {
+        ...coreBetaExpertMaintenanceMetric(authoringAfterState),
+        current_expert: authoringAfterState.current_expert,
+        expert_authoring_view: authoringAfterState.expert_authoring_view,
+      },
+      session: coreBetaExpertMaintenanceSession(sessionReadback.session),
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(authoringScreenshot),
+    };
+
+    const maintenanceHeader = page.locator('[data-testid="expert-maintenance-header"]');
+    const configMaintenanceHeader = page.locator('[data-testid="expert-maintenance-header"]').first();
+    await expectVisibleCoreLocator(page, '[data-testid="expert-maintenance-header"]', 'Expert 维护任务头部');
+    const configOpenConfig = configMaintenanceHeader.locator('[data-testid="expert-maintenance-open-config"]');
+    if (!await visible(configOpenConfig, 5000)) {
+      throw new Error('BETA-EXPERT-012 无法定位“打开完整配置”入口');
+    }
+    await configOpenConfig.click();
+    const lifecycleView = page.locator('[data-testid="expert-v2-lifecycle"]');
+    const lifecycleVisible = await visible(lifecycleView, 15_000);
+    const selectedDraftId = String(await lifecycleView.getAttribute('data-selected-draft-id').catch(() => '') || '');
+    const selectedExpertId = String(await lifecycleView.getAttribute('data-selected-expert-id').catch(() => '') || '');
+    const summaryValue = await lifecycleView.getByLabel('一句话能力介绍').inputValue().catch(() => '');
+    const personaValue = await page.locator('[data-testid="expert-v2-persona"]').inputValue().catch(() => '');
+    const builderBack = page.locator('[data-testid="expert-builder-back"]');
+    const backAriaLabel = String(await builderBack.getAttribute('aria-label').catch(() => '') || '');
+    const configScreenshot = await shot(page, caseDir, 'expert-012-config-readback');
+    if (await visible(builderBack, 5000)) await builderBack.click();
+    const returnedToMaintenance = await visible(maintenanceHeader, 15_000);
+    const configRoundtrip = {
+      captured: true,
+      lifecycle_visible: lifecycleVisible,
+      selected_draft_id: selectedDraftId,
+      selected_expert_id: selectedExpertId,
+      summary_value: summaryValue,
+      persona_value: personaValue,
+      back_aria_label: backAriaLabel,
+      returned_to_maintenance: returnedToMaintenance,
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(configScreenshot),
+    };
+
+    const publicationBefore = await page.evaluate(async (id) => ({
+      versions: await window.agent.expertLifecycle.listVersions(id),
+      releases: await window.agent.expertLifecycle.listReleases(id),
+    }), expertId);
+    const publishMaintenanceHeader = page.locator('[data-testid="expert-maintenance-header"]').first();
+    await expectVisibleCoreLocator(page, '[data-testid="expert-maintenance-header"]', 'Expert 维护任务头部');
+    const publishOpenConfig = publishMaintenanceHeader.locator('[data-testid="expert-maintenance-open-config"]');
+    if (!await visible(publishOpenConfig, 5000)) {
+      throw new Error('BETA-EXPERT-012 发布前无法重新定位“打开完整配置”入口');
+    }
+    await publishOpenConfig.click();
+    await expectVisibleCoreLocator(page, '[data-testid="expert-v2-lifecycle"]', 'Expert 配置发布页');
+    const publishButton = page.locator('[data-testid="expert-v2-publish"]');
+    const publishButtonVisible = await visible(publishButton, 5000);
+    if (publishButtonVisible) await publishButton.click();
+    const review = page.locator('[data-testid="expert-v2-publish-review"]');
+    const reviewVisible = await visible(review, 15_000);
+    const warningAck = review.locator('[data-testid="expert-v2-publish-warning-ack"]');
+    const warningAckPresent = await warningAck.count().then((count) => count > 0).catch(() => false);
+    let warningAcknowledgedOrNotRequired = !warningAckPresent;
+    if (warningAckPresent) {
+      await warningAck.check();
+      warningAcknowledgedOrNotRequired = await warningAck.isChecked().catch(() => false);
+    }
+    const publishConfirm = review.locator('[data-testid="expert-v2-publish-confirm"]');
+    const confirmVisible = await visible(publishConfirm, 5000);
+    const publishProbeReady = await installCoreBetaExpertPublishProbe(page);
+    if (!publishProbeReady.installed) {
+      throw new Error(`BETA-EXPERT-012 无法安装可见发布 operation/CAS 只读探针：${publishProbeReady.reason}`);
+    }
+    let confirmClicked = false;
+    let reviewClosed = false;
+    let operationVisible = false;
+    let operationText = '';
+    let operationClass = '';
+    let operationProbe;
+    try {
+      if (confirmVisible) {
+        await publishConfirm.click();
+        confirmClicked = true;
+        reviewClosed = await review.waitFor({ state: 'hidden', timeout: 30_000 })
+          .then(() => true)
+          .catch(() => false);
+      }
+      const operation = page.locator('[data-testid="expert-v2-publish-operation"]');
+      operationVisible = await visible(operation, 30_000);
+      operationText = operationVisible ? await operation.innerText().catch(() => '') : '';
+      const operationDeadline = Date.now() + 60_000;
+      while (operationVisible && Date.now() < operationDeadline && !/发布完成|发布失败/u.test(operationText)) {
+        await page.waitForTimeout(500);
+        operationText = await operation.innerText().catch(() => operationText);
+      }
+      operationClass = operationVisible ? String(await operation.getAttribute('class').catch(() => '') || '') : '';
+    } finally {
+      operationProbe = await readAndRestoreCoreBetaExpertPublishProbe(page);
+    }
+    const publishCall = operationProbe.publish_calls[0] || null;
+    const operationStates = [
+      publishCall?.result,
+      ...operationProbe.get_operation_calls.map((call) => call?.result),
+    ].filter((item) => item && typeof item === 'object');
+    const terminalOperation = operationStates.at(-1) || {};
+    const operationId = String(
+      publishCall?.result?.id
+      || publishCall?.result?.operationId
+      || terminalOperation?.id
+      || terminalOperation?.operationId
+      || '',
+    );
+    const expectedRevision = publishCall?.args?.expected_revision;
+    const idempotencyKey = String(publishCall?.args?.idempotency_key || '');
+    const publicationAfter = await page.evaluate(async (id) => ({
+      expert: await window.agent.expertLifecycle.get(id),
+      versions: await window.agent.expertLifecycle.listVersions(id),
+      releases: await window.agent.expertLifecycle.listReleases(id),
+    }), expertId);
+    const publicationScreenshot = await shot(page, caseDir, 'expert-012-publish-operation');
+    const publication = {
+      captured: true,
+      before: {
+        versions: publicationBefore.versions,
+        releases: publicationBefore.releases,
+        version_count: publicationBefore.versions.length,
+        release_count: publicationBefore.releases.length,
+      },
+      publish_button_visible: publishButtonVisible,
+      review_visible: reviewVisible,
+      warning_ack_present: warningAckPresent,
+      warning_acknowledged_or_not_required: warningAcknowledgedOrNotRequired,
+      confirm_visible: confirmVisible,
+      confirm_clicked: confirmClicked,
+      review_closed: reviewClosed,
+      operation_visible: operationVisible,
+      operation_text: operationText,
+      operation_class: operationClass,
+      terminal_state: String(terminalOperation?.state || ''),
+      after: {
+        expert: publicationAfter.expert,
+        versions: publicationAfter.versions,
+        releases: publicationAfter.releases,
+        version_count: publicationAfter.versions.length,
+        release_count: publicationAfter.releases.length,
+      },
+      expert_id: String(publicationAfter.expert?.id || expertId),
+      draft_id: draftId,
+      operation_id: operationId,
+      expected_revision: expectedRevision,
+      idempotency_key: idempotencyKey,
+      operation_probe: operationProbe,
+      operation_states: operationStates,
+      terminal_operation: terminalOperation,
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(publicationScreenshot),
+    };
+
+    const publishBack = page.locator('[data-testid="expert-builder-back"]');
+    if (await visible(publishBack, 5000)) await publishBack.click();
+    if (await visible(maintenanceHeader, 10_000)) {
+      const maintenanceBack = page.locator('[data-testid="expert-maintenance-back"]');
+      if (await visible(maintenanceBack, 3000)) await maintenanceBack.click();
+    }
+    const reopened = await reopenSessionAndReadback(page, authoringTaskId);
+    const reopenStateRaw = await captureCoreBetaExpertMaintenanceState(page);
+    const reopenedSessionMetadata = await page.evaluate(async (id) => (
+      (await window.agent.listSessions()).find((item) => item.id === id) || null
+    ), authoringTaskId).catch(() => null);
+    const reopenedSessionReadback = await captureQworkTaskRuntimeReadback(page, authoringTaskId);
+    const reopenedSession = coreBetaExpertMaintenanceSession(reopenedSessionReadback.session);
+    const reopenedToolTrace = coreBetaExpertMaintenanceToolTrace(
+      reopenedSessionReadback.session,
+      authoringTaskId,
+    );
+    const reopenScreenshot = await shot(page, caseDir, 'expert-012-session-reopened');
+    const reopen = {
+      captured: true,
+      ok: reopened.ok === true,
+      task_id: authoringTaskId,
+      title: String(reopenedSessionMetadata?.title || reopenStateRaw.title || ''),
+      maintenance_visible: reopenStateRaw.surface?.header === true,
+      state: {
+        ...coreBetaExpertMaintenanceMetric(reopenStateRaw),
+        current_expert: reopenStateRaw.current_expert,
+        expert_authoring_view: reopenStateRaw.expert_authoring_view,
+      },
+      session: reopenedSession,
+      tool_trace: reopenedToolTrace,
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(reopenScreenshot),
+    };
+    await openNewTask(page, state);
+    const newTaskStateRaw = await captureCoreBetaExpertMaintenanceState(page);
+    const newTaskScreenshot = await shot(page, caseDir, 'expert-012-new-task-cleared');
+    const newTask = {
+      captured: true,
+      maintenance_visible: newTaskStateRaw.surface?.header === true,
+      state: {
+        ...coreBetaExpertMaintenanceMetric(newTaskStateRaw),
+        current_expert: newTaskStateRaw.current_expert,
+        expert_authoring_view: newTaskStateRaw.expert_authoring_view,
+        messages: newTaskStateRaw.messages,
+        selected_skills: newTaskStateRaw.selected_skills,
+        selected_connectors: newTaskStateRaw.selected_connectors,
+        attachment_count: newTaskStateRaw.attachment_count,
+      },
+      screenshot: coreBetaExpertMaintenanceScreenshotReceipt(newTaskScreenshot),
+    };
+
+    const maintenanceTrace = coreBetaExpertMaintenanceTaskEvidence({
+      caseId: testCase.id,
+      expectedExpertId: expertId,
+      expectedDraftId: draftId,
+      expertName,
+      marker,
+      expectedSummary,
+      expectedPersona,
+      entry,
+      quickTask,
+      authoringTurn,
+      toolTrace,
+      draftBefore: coreBetaExpertMaintenanceDraft(draftBeforeRaw),
+      draftAfter: coreBetaExpertMaintenanceDraft(draftAfterRaw),
+      configRoundtrip,
+      publication,
+      reopen,
+      newTask,
+    });
+    writeExpertArtifact(
+      'expert_maintenance_task_trace',
+      maintenanceTrace,
+      maintenanceTrace.evidence_valid,
+      maintenanceTrace.oracle_valid,
+    );
+    writeExpertArtifact('expert_draft_lifecycle', {
+      entry_drafts_before: lifecycleBeforeEntry.drafts,
+      entry_drafts_after: lifecycleAfterEntry.drafts,
+      before: maintenanceTrace.draft_before,
+      after: maintenanceTrace.draft_after,
+    }, maintenanceTrace.evidence_valid, maintenanceTrace.oracle_checks.draft_revision_and_content);
+    writeExpertArtifact(
+      'expert_authoring_mcp_trace',
+      toolTrace,
+      maintenanceTrace.evidence_checks.tool_trace_captured,
+      maintenanceTrace.oracle_checks.exact_authoring_tool_sequence
+        && maintenanceTrace.oracle_checks.authoring_tool_target_and_results,
+    );
+    writeExpertArtifact(
+      'expert_publish_operation',
+      publication,
+      maintenanceTrace.evidence_checks.publication_trace_captured,
+      maintenanceTrace.oracle_checks.visible_publish_exactly_one_version_release,
+    );
+    writeExpertArtifact('expert_history_readback', {
+      publication,
+      reopen,
+      versions_before: publicationBefore.versions,
+      versions_after: publicationAfter.versions,
+      releases_before: publicationBefore.releases,
+      releases_after: publicationAfter.releases,
+    }, maintenanceTrace.evidence_valid, maintenanceTrace.oracle_checks.visible_publish_exactly_one_version_release
+      && maintenanceTrace.oracle_checks.reopened_session_target_stable);
+    writeExpertArtifact('expert_runtime_trace', {
+      entry,
+      quick_task: quickTask,
+      authoring_turn: authoringTurn,
+      reopen,
+      new_task: newTask,
+    }, maintenanceTrace.evidence_valid, maintenanceTrace.oracle_valid);
+    const capabilitySelectionFile = writeExpertArtifact('capability_selection', {
+      current_expert: 'qwork.builtin.expert-authoring',
+      expert_id: expertId,
+      draft_id: draftId,
+      task_id: authoringTaskId,
+    }, maintenanceTrace.evidence_valid, maintenanceTrace.oracle_checks.maintenance_state_bound);
+    const capabilityExecutionFile = writeExpertArtifact('capability_execution_event', {
+      task_id: authoringTaskId,
+      tool_trace: toolTrace,
+      draft_after: maintenanceTrace.draft_after,
+    }, maintenanceTrace.evidence_valid, maintenanceTrace.oracle_checks.exact_authoring_tool_sequence
+      && maintenanceTrace.oracle_checks.authoring_tool_target_and_results
+      && maintenanceTrace.oracle_checks.draft_revision_and_content);
+    recordAssertion(
+      state,
+      'BETA-EXPERT-012 维护任务证据完整性',
+      '专家卡入口、维护态、快捷任务、工具 parts、草稿、配置、发布、重开和新任务必须全部形成独立结构化读回。',
+      maintenanceTrace.evidence_valid,
+      JSON.stringify(maintenanceTrace.evidence_failures),
+      'automation_error',
+    );
+    recordAssertion(
+      state,
+      '已发布 Expert 真实维护任务闭环',
+      '真实专家卡“通过对话修改”必须绑定固定 Builder 和原 draft/expert，快捷任务零发送；真实工具精确 get/update；配置往返一致；可见发布恰好增加一个 version/release；原会话重开稳定且新任务不继承。',
+      maintenanceTrace.oracle_valid,
+      JSON.stringify(maintenanceTrace.oracle_failures),
+      'bug',
+    );
+    if (maintenanceTrace.oracle_valid === true) {
+      ledger.experts.published = publicationAfter.expert;
+      ledger.experts.published_versioned = publicationAfter.expert;
+      writeCoreBetaSuiteLedger(caseDir, ledger);
+    }
+    state.artifacts.core_beta_capability_selection = {
+      expert_id: expertId,
+      draft_id: draftId,
+      task_id: authoringTaskId,
+    };
+    state.artifacts.core_beta_capability_execution = {
+      tool_trace: toolTrace,
+      draft_after: maintenanceTrace.draft_after,
+    };
+    state.artifacts.capability_selection = capabilitySelectionFile;
+    state.artifacts.capability_execution_event = capabilityExecutionFile;
     return;
   }
 
@@ -21852,8 +22756,9 @@ async function executeSitTaskRegenerate({ page, state, testCase, caseDir, timeou
   const prompt = String(testCase.test_data || '').trim() || '请生成一段包含唯一标识 REGEN_BASE 的 100 字以内发布说明。';
   const first = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '重新生成第一版' });
   if (first.incomplete) return;
-  const before = await conversationSnapshot(page);
-  const bridgeBefore = await qbotE2EState(page);
+  const before = await captureTaskRegenerateProjection(page, { stage: 'before', captureSequence: 1 });
+  const beforeScreenshot = await shot(page, caseDir, 'task-regen-before-click');
+  state.screenshots.task_regen_before_click = beforeScreenshot;
   const assistant = page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').last();
   await assistant.hover().catch(() => {});
   const reload = assistant.locator('button[aria-label="重新生成"], button[title="重新生成"]').first()
@@ -21863,24 +22768,143 @@ async function executeSitTaskRegenerate({ page, state, testCase, caseDir, timeou
     recordAssertion(state, '重新生成入口', '完成的助手回复应提供重新生成入口。', false, '未找到重新生成按钮。');
     return;
   }
-  await reload.click({ force: true }).catch(async () => reload.evaluate((el) => el.click()));
-  const transition = await waitForRunStartAndIdle(page, Math.min(Number(timeoutMs || 180000), 600000));
-  const after = await conversationSnapshot(page);
-  const bridgeAfter = await qbotE2EState(page);
-  const branchText = await assistant.locator('.aui-branch-picker-state').innerText({ timeout: 800 }).catch(() => '');
-  const secondText = String(after.latestAssistantText || '');
+  const controlIdentity = await captureTaskRegenerateControlIdentity(reload);
+  await reload.click({ force: true });
+  const clickedAt = new Date().toISOString();
+  const immediateCapture = await waitForTaskRegenerateImmediateProjection(page);
+  const afterClickScreenshot = await shot(page, caseDir, 'task-regen-after-click');
+  state.screenshots.task_regen_after_click = afterClickScreenshot;
+  const canonicalCaseId = testCase.core_beta_case_id || 'BETA-TASK-002';
+  const actionReceipt = buildTaskRegenerateActionReceipt({
+    caseId: canonicalCaseId,
+    taskId: before.task_id,
+    attempt: {
+      attempt: 1,
+      terminal_state: 'dispatched',
+      clicked: true,
+      dispatched: true,
+      clicked_at: clickedAt,
+      task_id: before.task_id,
+      before_assistant_message_id: before.target_assistant?.message_id || '',
+      control: controlIdentity,
+      before_state: {
+        task_id: before.task_id,
+        running: before.running,
+        send_count: before.send_count,
+        assistant_message_id: before.target_assistant?.message_id || '',
+        generation_version: before.generation_version,
+      },
+      after_state: {
+        task_id: immediateCapture.projection?.task_id || '',
+        running: immediateCapture.projection?.running ?? null,
+        send_count: immediateCapture.projection?.send_count ?? null,
+        assistant_message_id: immediateCapture.projection?.target_assistant?.message_id || '',
+        generation_version: immediateCapture.projection?.generation_version || '',
+      },
+      before_screenshot: taskRegenerateScreenshotReceipt(beforeScreenshot),
+      after_screenshot: taskRegenerateScreenshotReceipt(afterClickScreenshot),
+    },
+  });
+  const transition = immediateCapture.projection?.running === false
+    ? {
+      schema_version: 'qbot-task-regenerate-transition-wait/v1',
+      captured_at: new Date().toISOString(),
+      started: false,
+      idle: true,
+      elapsed_ms: 0,
+      state: {
+        active_id: immediateCapture.projection.task_id,
+        running: false,
+        send_count: immediateCapture.projection.send_count,
+      },
+      reason: 'immediate_projection_not_observed_before_idle',
+    }
+    : await waitForRunStartAndIdle(
+      page,
+      Math.min(Number(timeoutMs || 180000), 600000),
+      immediateCapture.projection?.running === true,
+    );
+  const finalProjection = await captureTaskRegenerateProjection(page, { stage: 'final', captureSequence: 3 });
+  const secondText = String(finalProjection.target_assistant?.body_text || '');
   state.screenshots.task_regen_second_version = await shot(page, caseDir, 'task-regen-second-version');
   writeReplyArtifacts(state, caseDir, [
     { label: '第一版', ...first },
-    { label: '第二版', deltaText: secondText, fullText: after.threadText || secondText },
+    { label: '第二版', deltaText: secondText, fullText: secondText },
   ]);
-  state.artifacts.task_regenerate = { transition, branch_text: branchText, before, after, send_count_before: bridgeBefore.sendCount, send_count_after: bridgeAfter.sendCount };
-  recordStep(state, '点击重新生成并等待第二版收敛', '必须真实触发重新生成运行态并等待完成，不能再次发送用户消息冒充重生成。', `transition=${JSON.stringify(transition)}；branch=${branchText || '未显示'}；sendCount=${bridgeBefore.sendCount}->${bridgeAfter.sendCount}`, transition.started && transition.idle ? 'passed' : 'failed', state.screenshots.task_regen_second_version, transition.started ? '' : 'automation_error');
-  recordAssertion(state, '重生成不重复用户消息', '重新生成前后用户消息数量应保持不变且唯一问题仍包含 REGEN_BASE。', after.userCount === before.userCount && after.userTexts.filter((text) => text.includes('REGEN_BASE')).length === 1, `before=${before.userCount}；after=${after.userCount}；users=${JSON.stringify(after.userTexts)}`);
-  recordAssertion(state, '第二版回复完整且任务稳定', '重生成后应有包含 REGEN_BASE 的可读回复，running=false；分支计数或 sendCount 应证明发生过新一轮生成。', /REGEN_BASE/.test(secondText) && !bridgeAfter.running && (/[2-9]\s*\/\s*[2-9]/.test(branchText) || Number(bridgeAfter.sendCount || 0) > Number(bridgeBefore.sendCount || 0)), `running=${bridgeAfter.running}；branch=${branchText}；reply=${clip(secondText, 420)}`);
-  const reopened = await reopenSessionAndReadback(page, bridgeBefore.activeId);
-  state.artifacts.task_regen_readback = reopened;
-  recordAssertion(state, '重生成结果可恢复', '重新打开同一任务后应保留 REGEN_BASE 回复且任务非运行态。', reopened.ok && /REGEN_BASE/.test(reopened.text) && !reopened.running, JSON.stringify({ ...reopened, text: clip(reopened.text, 420) }));
+  const reopenedRaw = await reopenSessionAndReadback(page, before.task_id);
+  const reopenedProjection = await captureTaskRegenerateProjection(page, { stage: 'reopened', captureSequence: 4 });
+  const reopenedReadback = {
+    schema_version: 'qbot-task-regenerate-reopened-readback/v1',
+    captured_at: new Date().toISOString(),
+    requested_task_id: before.task_id,
+    ok: reopenedRaw.ok === true,
+    active_id: String(reopenedRaw.activeId || ''),
+    running: reopenedRaw.running === true,
+    text: String(reopenedRaw.text || ''),
+    target_assistant_message_id: String(reopenedProjection.target_assistant?.message_id || ''),
+    target_assistant_body: String(reopenedProjection.target_assistant?.body_text || ''),
+    branch_index: reopenedProjection.branch_index,
+    branch_count: reopenedProjection.branch_count,
+    generation_version: reopenedProjection.generation_version,
+  };
+  const evidence = taskRegenerateTransitionEvidence({
+    caseId: canonicalCaseId,
+    legacyCaseId: testCase.core_beta_case_id ? testCase.id : 'SIT-TASK-REGEN-001',
+    actionReceipt,
+    before,
+    immediateProjection: immediateCapture.projection,
+    final: finalProjection,
+    reopened: reopenedProjection,
+    captureAttempts: immediateCapture.attempts,
+    transitionWait: transition,
+    reopenedReadback,
+  });
+  const evidenceFile = path.join(caseDir, 'task-regenerate-transition.json');
+  writeJsonFile(evidenceFile, evidence);
+  state.artifacts.task_regenerate_transition = evidenceFile;
+  state.artifacts.regenerate_placeholder_readback = evidenceFile;
+  state.artifacts.task_regenerate = evidence;
+  state.artifacts.task_regen_readback = reopenedReadback;
+  recordStep(
+    state,
+    '单击重新生成并捕获即时占位后等待第二版收敛',
+    '必须只有一次真实点击，并在最终回复前捕获同一 taskId 的 running=true、空正文 assistant 占位。',
+    `attempts=${immediateCapture.attempts.length}；transition=${JSON.stringify(transition)}；reason=${evidence.reason}`,
+    evidence.evidence_valid && evidence.oracle_checks.transition_started_and_idle ? 'passed' : 'failed',
+    state.screenshots.task_regen_second_version,
+    evidence.evidence_valid && evidence.oracle_checks.transition_started_and_idle
+      ? ''
+      : (evidence.evidence_valid ? 'bug' : 'automation_error'),
+  );
+  recordAssertion(state, '重生成证据链完整', '四阶段 taskId、用户消息序列、历史消息和结构 SHA 必须一致且可重建。', evidence.evidence_valid, evidence.reason, 'automation_error');
+  recordAssertion(state, '第二版身份与版本转换', '新 assistant messageId 必须非空、区别第一版，且 immediate/final/reopened 的 identity 与 generation/version 全等并相对第一版增长。', evidence.oracle_checks.replacement_assistant_identity_stable && evidence.oracle_checks.generation_version_advanced_and_stable, JSON.stringify(evidence.oracle_checks), 'bug');
+  recordAssertion(state, '第二版回复完整且与第一版不同', '最终第二版应非空、running=false，且不能恢复成第一版。', evidence.oracle_checks.final_second_version_complete && evidence.oracle_checks.second_version_differs_from_first && evidence.oracle_checks.regeneration_transition_observed, JSON.stringify(evidence.oracle_checks), 'bug');
+  recordAssertion(state, '重开保持第二版', '重新打开同一 task 后应继续显示完整第二版且不恢复第一版，并与独立读回绑定。', evidence.oracle_checks.reopened_second_version_stable && evidence.oracle_checks.reopened_readback_bound, JSON.stringify({ readback: reopenedReadback, oracle: evidence.oracle_checks }), 'bug');
+  recordAssertion(state, '重生成完整产品 Oracle', 'Task、用户/历史消息、即时占位、替代版本、终态和重开读回的全部强 Oracle 必须成立。', evidence.oracle_valid, JSON.stringify(evidence.oracle_checks), 'bug');
+}
+
+async function waitForTaskRegenerateImmediateProjection(page, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  const attempts = [];
+  let projection = null;
+  while (Date.now() < deadline) {
+    projection = await captureTaskRegenerateProjection(page, {
+      stage: 'immediate_projection',
+      captureSequence: 2,
+    });
+    attempts.push({
+      attempt: attempts.length + 1,
+      projection,
+    });
+    if (projection.running === true
+      && projection.target_assistant
+      && projection.target_assistant.visible === true
+      && projection.target_assistant_body_empty === true) {
+      return { projection, attempts };
+    }
+    await page.waitForTimeout(40);
+  }
+  return { projection, attempts };
 }
 
 export function countEnumeratedItems(text) {
@@ -21910,17 +22934,42 @@ export function isContinuedOldLoginAnswer(text) {
   return /登录测试点|正常登录流程|账号不存在|密码错误|空账号|空密码/.test(String(text || ''));
 }
 
-async function waitForRunStartAndIdle(page, timeoutMs) {
+async function waitForRunStartAndIdle(page, timeoutMs, initialStarted = false) {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
-  let started = false;
+  let started = initialStarted === true;
   let last = await qbotE2EState(page);
   while (Date.now() < deadline) {
     last = await qbotE2EState(page);
     if (last.running) started = true;
-    if (started && !last.running) return { started: true, idle: true, elapsed_ms: timeoutMs - Math.max(0, deadline - Date.now()), state: last };
+    if (started && !last.running) return {
+      schema_version: 'qbot-task-regenerate-transition-wait/v1',
+      captured_at: new Date().toISOString(),
+      started: true,
+      idle: true,
+      elapsed_ms: Date.now() - startedAt,
+      state: {
+        active_id: String(last.activeId || ''),
+        running: false,
+        send_count: Number.isSafeInteger(last.sendCount) ? last.sendCount : null,
+      },
+      reason: 'started_then_idle',
+    };
     await page.waitForTimeout(250);
   }
-  return { started, idle: false, elapsed_ms: timeoutMs, state: last };
+  return {
+    schema_version: 'qbot-task-regenerate-transition-wait/v1',
+    captured_at: new Date().toISOString(),
+    started,
+    idle: false,
+    elapsed_ms: Date.now() - startedAt,
+    state: {
+      active_id: String(last?.activeId || ''),
+      running: Boolean(last?.running),
+      send_count: Number.isSafeInteger(last?.sendCount) ? last.sendCount : null,
+    },
+    reason: 'wait_timeout',
+  };
 }
 
 async function reopenSessionAndReadback(page, sessionId) {
@@ -28286,29 +29335,157 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
   await page.keyboard.press('Escape').catch(() => {});
-  const prompt = String(testCase.test_data || '').trim() || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
-  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '内置 Web 搜索质量任务' });
-  const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
-  const runtimeEvidence = await page.evaluate(async () => {
-    const e2e = window.__qbotE2E || window.__deepbankE2E;
-    const [context, diagnostics] = await Promise.all([
-      e2e?.getLastTurnContextEvidence?.().catch(() => null),
-      e2e?.diagnostics?.().catch(() => null),
-    ]);
-    return { context, diagnostics };
-  }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
-  const runtimeToolText = JSON.stringify(runtimeEvidence);
-  const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
   const evidenceCaseId = String(testCase.core_beta_case_id || testCase.id || '');
-  const runtimeVerdict = webRuntimeAuthorityVerdict({
-    runtimeEvidence,
-    prompt,
-    sendReceipts: state.artifacts.send_receipts || [],
-  });
-  state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
-  const externalTarget = verdict.uniqueUrls.find((url) => {
+  const legacyCaseId = String(testCase.id || '');
+  const declaredPrompts = (Array.isArray(testCase.conversation_turns) ? testCase.conversation_turns : [])
+    .map((turn) => String(turn?.prompt || '').trim())
+    .filter(Boolean);
+  const firstPrompt = declaredPrompts[0]
+    || String(testCase.test_data || '').trim()
+    || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
+  const prompts = evidenceCaseId === 'MRSMOKE-WEB-001'
+    ? declaredPrompts
+    : [firstPrompt];
+  if (evidenceCaseId === 'MRSMOKE-WEB-001' && prompts.length !== 4) {
+    throw new Error(`${evidenceCaseId} 必须从冻结 Casebook 读取精确四轮 Web 搜索 prompt；actual=${prompts.length}`);
+  }
+  const rounds = [];
+  let frozenTaskId = '';
+  let unsafeRoundFailure = null;
+  for (let index = 0; index < prompts.length; index += 1) {
+    const prompt = prompts[index];
+    const reply = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt,
+      label: prompts.length === 4 ? `内置 Web 搜索配额第${index + 1}轮` : '内置 Web 搜索质量任务',
+    });
+    const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
+    const runtimeEvidence = await page.evaluate(async () => {
+      const e2e = window.__qbotE2E || window.__deepbankE2E;
+      const [context, diagnostics] = await Promise.all([
+        e2e?.getLastTurnContextEvidence?.().catch(() => null),
+        e2e?.diagnostics?.().catch(() => null),
+      ]);
+      return { context, diagnostics };
+    }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
+    const runtimeToolText = JSON.stringify(runtimeEvidence);
+    const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
+    const roundSendReceipts = (Array.isArray(state.artifacts.send_receipts)
+      ? state.artifacts.send_receipts
+      : []).filter((receipt) => String(receipt?.prompt || '') === prompt);
+    const runtimeVerdict = webRuntimeAuthorityVerdict({
+      runtimeEvidence,
+      prompt,
+      sendReceipts: roundSendReceipts,
+      expectedTaskId: frozenTaskId,
+    });
+    if (!frozenTaskId && runtimeVerdict.taskId) frozenTaskId = runtimeVerdict.taskId;
+    const postRoundState = await qbotE2EState(page);
+    const runtimeEvidenceReadable = !runtimeEvidence?.error
+      && runtimeEvidence?.diagnostics
+      && typeof runtimeEvidence.diagnostics === 'object';
+    const screenshotPath = await shot(page, caseDir, `connector-019-web-search-round-${index + 1}`);
+    state.screenshots[`connector_019_search_round_${index + 1}`] = screenshotPath;
+    state.screenshots.connector_019_search_result = screenshotPath;
+    const screenshot = {
+      path: screenshotPath,
+      bytes: fs.statSync(screenshotPath).size,
+      sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+    };
+    rounds.push({
+      round: index + 1,
+      prompt,
+      prompt_sha256: runtimeVerdict.promptSha256,
+      task_id: runtimeVerdict.taskId,
+      reply: reply.deltaText,
+      tool_texts: toolTexts,
+      runtime_evidence: runtimeEvidence,
+      send_receipts: structuredClone(roundSendReceipts),
+      runtime_authority: runtimeVerdict,
+      business_oracle: verdict,
+      post_round_state: postRoundState,
+      timeout_cleanup_ok: reply.timeout_cleanup_ok !== false,
+      screenshot,
+    });
+    recordStep(
+      state,
+      prompts.length === 4 ? `执行同任务第${index + 1}轮内置 Web 搜索` : '执行内置 Web 搜索并收集来源',
+      '应形成真实网页搜索工具证据，并返回每轮至少两个独立 OpenAI 官方结果；每个结果结构化绑定标题、日期、官方链接与摘要。',
+      `task=${runtimeVerdict.taskId || '无'}; receipt=${runtimeVerdict.providerReceiptHash || '无'}; urls=${verdict.uniqueUrls.join(', ') || '无'}; official_results=${verdict.officialResultCount}; structured=${verdict.structuredResults.length}`,
+      verdict.toolEvidence ? 'passed' : 'failed',
+      screenshotPath,
+    );
+    recordAssertion(
+      state,
+      prompts.length === 4 ? `第${index + 1}轮 Web 搜索业务结果` : 'Web 搜索新鲜度、相关性与可追溯性',
+      '每轮回复必须包含至少两个独立 OpenAI 官方结果，且每条在同一结构块中绑定标题、日期、唯一官方 HTTPS 链接和摘要；第三方链接、游离日期、重复条目或不足说明均不能替代。',
+      verdict.ok,
+      JSON.stringify(verdict),
+    );
+    recordAssertion(
+      state,
+      prompts.length === 4 ? `第${index + 1}轮 Web runtime authority 与 provider receipt` : 'Web runtime authority 与 provider receipt',
+      '确认发送必须与同一非空 taskId、builtin:qbot_web runtime authority、物化能力和有效 provider receipt 绑定。',
+      runtimeVerdict.ok,
+      JSON.stringify(runtimeVerdict),
+      runtimeEvidenceReadable ? '' : 'automation_error',
+    );
+    if (prompts.length === 4) {
+      const unsafeReasons = [
+        reply.incomplete === true ? 'reply_incomplete' : '',
+        reply.timeout_cleanup_ok === false ? 'timeout_cleanup_failed' : '',
+        runtimeEvidenceReadable ? '' : 'runtime_evidence_unreadable',
+        runtimeVerdict.ok ? '' : 'runtime_authority_invalid',
+        postRoundState?.available === true ? '' : 'post_round_state_unreadable',
+        String(postRoundState?.activeId || '') === runtimeVerdict.taskId ? '' : 'post_round_task_drift',
+        postRoundState?.running === false ? '' : 'post_round_still_running',
+      ].filter(Boolean);
+      if (unsafeReasons.length) {
+        unsafeRoundFailure = { round: index + 1, reasons: unsafeReasons };
+        recordStep(
+          state,
+          `第${index + 1}轮后停止四轮 Web 搜索`,
+          '任一轮发送、task/runtime authority、回复终态或超时清理不安全时，必须停止本 Case 后续发送。',
+          JSON.stringify(unsafeRoundFailure),
+          'failed',
+          screenshotPath,
+          'automation_error',
+        );
+        break;
+      }
+    }
+  }
+  if (prompts.length === 4) {
+    const quotaTrace = webSearchQuotaTraceVerdict({ caseId: evidenceCaseId, legacyCaseId, rounds });
+    state.artifacts.web_search_quota_trace = path.join(caseDir, 'web-search-quota-trace.json');
+    state.artifacts.core_beta_web_search_quota_trace = state.artifacts.web_search_quota_trace;
+    writeJsonFile(state.artifacts.web_search_quota_trace, quotaTrace);
+    recordAssertion(
+      state,
+      '四轮 Web 搜索证据完整性',
+      '四轮必须分别绑定唯一 prompt SHA、确认发送、同一非空 taskId、runtime authority、provider receipt 和截图。',
+      quotaTrace.evidence_valid,
+      JSON.stringify({ checks: quotaTrace.evidence_checks, failures: quotaTrace.evidence_failures }),
+      quotaTrace.evidence_valid ? '' : 'automation_error',
+    );
+    recordAssertion(
+      state,
+      '第四轮仍真实调用 provider 且无固定搜索次数误导',
+      '四轮 provider receipt 必须有效且唯一；第四轮不得出现最多三次、额度用尽、固定上限或服务端拒绝等误导。',
+      quotaTrace.oracle_valid,
+      JSON.stringify({ checks: quotaTrace.oracle_checks, failures: quotaTrace.oracle_failures }),
+    );
+    if (unsafeRoundFailure) return;
+  }
+  const firstRound = rounds[0];
+  const lastRound = rounds.at(-1);
+  const externalTarget = firstRound.business_oracle.uniqueUrls.find((url) => {
     try { return new URL(url).hostname === 'www.iana.org'; } catch { return false; }
-  }) || verdict.uniqueUrls.find((url) => !verdict.officialUrls.includes(url)) || verdict.officialUrls[0] || '';
+  }) || firstRound.business_oracle.uniqueUrls.find((url) => !firstRound.business_oracle.officialUrls.includes(url)) || firstRound.business_oracle.officialUrls[0] || '';
   const externalLink = externalTarget
     ? await captureExternalWebLinkOutcome({ page, targetUrl: externalTarget })
     : { ok: false, reason: 'search_reply_has_no_https_link', requestedUrl: '' };
@@ -28318,9 +29495,9 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   writeJsonFile(state.artifacts.core_beta_external_navigation_trace, {
     schema_version: 'qbot-external-navigation-trace/v1',
     case_id: evidenceCaseId,
-    legacy_case_id: testCase.id,
-    task_id: runtimeVerdict.taskId,
-    prompt_sha256: runtimeVerdict.promptSha256,
+    legacy_case_id: legacyCaseId,
+    task_id: firstRound.runtime_authority.taskId,
+    prompt_sha256: firstRound.runtime_authority.promptSha256,
     evidence_valid: externalLink.ok === true && externalLink.resultEnumValid === true,
     oracle_valid: externalLink.publicResult === 'external'
       && externalLink.calls?.at(-1)?.result?.code === 'external_opened'
@@ -28332,44 +29509,18 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   writeJsonFile(state.artifacts.web_search_quality, {
     schema_version: 'qbot-web-search-quality/v2',
     case_id: evidenceCaseId,
-    legacy_case_id: testCase.id,
-    task_id: runtimeVerdict.taskId,
-    prompt_sha256: runtimeVerdict.promptSha256,
-    prompt,
-    reply: reply.deltaText,
-    toolTexts,
-    runtimeEvidence,
-    verdict,
-    business_oracle: verdict,
-    runtime_authority_oracle: runtimeVerdict,
+    legacy_case_id: legacyCaseId,
+    task_id: lastRound.runtime_authority.taskId,
+    prompt_sha256: lastRound.runtime_authority.promptSha256,
+    prompt: lastRound.prompt,
+    reply: lastRound.reply,
+    toolTexts: lastRound.tool_texts,
+    runtimeEvidence: lastRound.runtime_evidence,
+    verdict: lastRound.business_oracle,
+    business_oracle: lastRound.business_oracle,
+    runtime_authority_oracle: lastRound.runtime_authority,
     external_link_oracle: externalLink,
   });
-  recordStep(
-    state,
-    '执行内置 Web 搜索并收集来源',
-    '应形成真实网页搜索工具证据，并返回可追溯的官方来源链接与日期。',
-    `tools=${clip(`${toolTexts.join(' | ')} ${runtimeToolText}`, 360)}; urls=${verdict.uniqueUrls.join(', ') || '无'}; official=${verdict.officialUrls.length}; dates=${verdict.dateEvidence}; shortage=${verdict.explicitShortage}`,
-    verdict.toolEvidence ? 'passed' : 'failed',
-    state.screenshots.connector_019_search_result,
-  );
-  recordAssertion(
-    state,
-    'Web 搜索新鲜度、相关性与可追溯性',
-    '回复至少包含两个可追溯 https 来源、至少一个 OpenAI 官方来源，并为每条给出日期；若近 30 天不足两条应明确说明。',
-    verdict.ok,
-    JSON.stringify(verdict),
-  );
-  const runtimeEvidenceReadable = !runtimeEvidence?.error
-    && runtimeEvidence?.diagnostics
-    && typeof runtimeEvidence.diagnostics === 'object';
-  recordAssertion(
-    state,
-    'Web runtime authority 与 provider receipt',
-    '同一确认发送任务必须由 builtin:qbot_web 生效并物化，unsupported 列表不得包含它，provider receipt 必须为 64 位 SHA-256。',
-    runtimeVerdict.ok,
-    JSON.stringify(runtimeVerdict),
-    runtimeEvidenceReadable ? '' : 'automation_error',
-  );
   recordStep(
     state,
     '点击真实搜索结果链接并读取 openPreview 原始终态',
@@ -33973,10 +35124,13 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
     const latest = state.artifacts.credential_rotation_recovery?.at(-1);
     markBlocked(state, `DEV 登录凭证在管理请求期间持续轮换，框架已最多完成 3 次稳定性恢复仍未收敛：${latest?.stability?.reason || clip(reply.deltaText, 240)}`);
   }
+  const timeoutCleanupOk = reply.incomplete
+    ? await cancelRunningReplyAfterTimeout(page, state, caseDir, label)
+    : true;
+  reply = { ...reply, timeout_cleanup_ok: timeoutCleanupOk };
   writeReplyArtifacts(state, caseDir, [{ label, ...reply }]);
   recordReplyWaitAssertion(state, reply, label);
   recordReplyAssertions(state, testCase, prompt, reply, label);
-  if (reply.incomplete) await cancelRunningReplyAfterTimeout(page, state, caseDir, label);
   return reply;
 }
 

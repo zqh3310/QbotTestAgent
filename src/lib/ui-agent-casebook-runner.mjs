@@ -40,7 +40,15 @@ import {
   captureExternalWebLinkOutcome,
   webRuntimeAuthorityVerdict,
   webSearchBusinessVerdict,
+  webSearchQuotaTraceVerdict,
 } from './qbot-web-runtime-evidence.mjs';
+import {
+  buildTaskRegenerateActionReceipt,
+  captureTaskRegenerateControlIdentity,
+  captureTaskRegenerateProjection,
+  taskRegenerateScreenshotReceipt,
+  taskRegenerateTransitionEvidence,
+} from './task-regenerate-evidence.mjs';
 import {
   coreBetaCapabilitiesReadbackWithRetry,
   runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand,
@@ -2867,7 +2875,7 @@ async function recordSingleHostPipelineCapabilityReplyAssertions(page, state, te
     recordAssertion(
       state,
       'Web 搜索新鲜度、相关性与可追溯性',
-      '回复至少包含两个可追溯来源、至少一个 OpenAI 官方来源和日期；不足时应明确说明，并有真实 Web 工具证据。',
+      '回复必须包含至少两个独立 OpenAI 官方结果，每条结构化绑定标题、日期、唯一官方 HTTPS 链接和摘要；第三方链接、游离日期、重复条目或不足说明均不能替代，并须有真实 Web 工具证据。',
       verdict.ok,
       JSON.stringify(verdict),
     );
@@ -11550,8 +11558,9 @@ async function executeSitTaskRegenerate({ page, state, testCase, caseDir, timeou
   const prompt = String(testCase.test_data || '').trim() || '请生成一段包含唯一标识 REGEN_BASE 的 100 字以内发布说明。';
   const first = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '重新生成第一版' });
   if (first.incomplete) return;
-  const before = await conversationSnapshot(page);
-  const bridgeBefore = await qbotE2EState(page);
+  const before = await captureTaskRegenerateProjection(page, { stage: 'before', captureSequence: 1 });
+  const beforeScreenshot = await shot(page, caseDir, 'task-regen-before-click');
+  state.screenshots.task_regen_before_click = beforeScreenshot;
   const assistant = page.locator('[data-testid="assistant-thread"] [data-testid="message-list"] [data-role="assistant"]').last();
   await assistant.hover().catch(() => {});
   const reload = assistant.locator('button[aria-label="重新生成"], button[title="重新生成"]').first()
@@ -11561,24 +11570,143 @@ async function executeSitTaskRegenerate({ page, state, testCase, caseDir, timeou
     recordAssertion(state, '重新生成入口', '完成的助手回复应提供重新生成入口。', false, '未找到重新生成按钮。');
     return;
   }
-  await reload.click({ force: true }).catch(async () => reload.evaluate((el) => el.click()));
-  const transition = await waitForRunStartAndIdle(page, Math.min(Number(timeoutMs || 180000), 600000));
-  const after = await conversationSnapshot(page);
-  const bridgeAfter = await qbotE2EState(page);
-  const branchText = await assistant.locator('.aui-branch-picker-state').innerText({ timeout: 800 }).catch(() => '');
-  const secondText = String(after.latestAssistantText || '');
+  const controlIdentity = await captureTaskRegenerateControlIdentity(reload);
+  await reload.click({ force: true });
+  const clickedAt = new Date().toISOString();
+  const immediateCapture = await waitForTaskRegenerateImmediateProjection(page);
+  const afterClickScreenshot = await shot(page, caseDir, 'task-regen-after-click');
+  state.screenshots.task_regen_after_click = afterClickScreenshot;
+  const canonicalCaseId = testCase.core_beta_case_id || 'BETA-TASK-002';
+  const actionReceipt = buildTaskRegenerateActionReceipt({
+    caseId: canonicalCaseId,
+    taskId: before.task_id,
+    attempt: {
+      attempt: 1,
+      terminal_state: 'dispatched',
+      clicked: true,
+      dispatched: true,
+      clicked_at: clickedAt,
+      task_id: before.task_id,
+      before_assistant_message_id: before.target_assistant?.message_id || '',
+      control: controlIdentity,
+      before_state: {
+        task_id: before.task_id,
+        running: before.running,
+        send_count: before.send_count,
+        assistant_message_id: before.target_assistant?.message_id || '',
+        generation_version: before.generation_version,
+      },
+      after_state: {
+        task_id: immediateCapture.projection?.task_id || '',
+        running: immediateCapture.projection?.running ?? null,
+        send_count: immediateCapture.projection?.send_count ?? null,
+        assistant_message_id: immediateCapture.projection?.target_assistant?.message_id || '',
+        generation_version: immediateCapture.projection?.generation_version || '',
+      },
+      before_screenshot: taskRegenerateScreenshotReceipt(beforeScreenshot),
+      after_screenshot: taskRegenerateScreenshotReceipt(afterClickScreenshot),
+    },
+  });
+  const transition = immediateCapture.projection?.running === false
+    ? {
+      schema_version: 'qbot-task-regenerate-transition-wait/v1',
+      captured_at: new Date().toISOString(),
+      started: false,
+      idle: true,
+      elapsed_ms: 0,
+      state: {
+        active_id: immediateCapture.projection.task_id,
+        running: false,
+        send_count: immediateCapture.projection.send_count,
+      },
+      reason: 'immediate_projection_not_observed_before_idle',
+    }
+    : await waitForRunStartAndIdle(
+      page,
+      Math.min(Number(timeoutMs || 180000), 600000),
+      immediateCapture.projection?.running === true,
+    );
+  const finalProjection = await captureTaskRegenerateProjection(page, { stage: 'final', captureSequence: 3 });
+  const secondText = String(finalProjection.target_assistant?.body_text || '');
   state.screenshots.task_regen_second_version = await shot(page, caseDir, 'task-regen-second-version');
   writeReplyArtifacts(state, caseDir, [
     { label: '第一版', ...first },
-    { label: '第二版', deltaText: secondText, fullText: after.threadText || secondText },
+    { label: '第二版', deltaText: secondText, fullText: secondText },
   ]);
-  state.artifacts.task_regenerate = { transition, branch_text: branchText, before, after, send_count_before: bridgeBefore.sendCount, send_count_after: bridgeAfter.sendCount };
-  recordStep(state, '点击重新生成并等待第二版收敛', '必须真实触发重新生成运行态并等待完成，不能再次发送用户消息冒充重生成。', `transition=${JSON.stringify(transition)}；branch=${branchText || '未显示'}；sendCount=${bridgeBefore.sendCount}->${bridgeAfter.sendCount}`, transition.started && transition.idle ? 'passed' : 'failed', state.screenshots.task_regen_second_version, transition.started ? '' : 'automation_error');
-  recordAssertion(state, '重生成不重复用户消息', '重新生成前后用户消息数量应保持不变且唯一问题仍包含 REGEN_BASE。', after.userCount === before.userCount && after.userTexts.filter((text) => text.includes('REGEN_BASE')).length === 1, `before=${before.userCount}；after=${after.userCount}；users=${JSON.stringify(after.userTexts)}`);
-  recordAssertion(state, '第二版回复完整且任务稳定', '重生成后应有包含 REGEN_BASE 的可读回复，running=false；分支计数或 sendCount 应证明发生过新一轮生成。', /REGEN_BASE/.test(secondText) && !bridgeAfter.running && (/[2-9]\s*\/\s*[2-9]/.test(branchText) || Number(bridgeAfter.sendCount || 0) > Number(bridgeBefore.sendCount || 0)), `running=${bridgeAfter.running}；branch=${branchText}；reply=${clip(secondText, 420)}`);
-  const reopened = await reopenSessionAndReadback(page, bridgeBefore.activeId);
-  state.artifacts.task_regen_readback = reopened;
-  recordAssertion(state, '重生成结果可恢复', '重新打开同一任务后应保留 REGEN_BASE 回复且任务非运行态。', reopened.ok && /REGEN_BASE/.test(reopened.text) && !reopened.running, JSON.stringify({ ...reopened, text: clip(reopened.text, 420) }));
+  const reopenedRaw = await reopenSessionAndReadback(page, before.task_id);
+  const reopenedProjection = await captureTaskRegenerateProjection(page, { stage: 'reopened', captureSequence: 4 });
+  const reopenedReadback = {
+    schema_version: 'qbot-task-regenerate-reopened-readback/v1',
+    captured_at: new Date().toISOString(),
+    requested_task_id: before.task_id,
+    ok: reopenedRaw.ok === true,
+    active_id: String(reopenedRaw.activeId || ''),
+    running: reopenedRaw.running === true,
+    text: String(reopenedRaw.text || ''),
+    target_assistant_message_id: String(reopenedProjection.target_assistant?.message_id || ''),
+    target_assistant_body: String(reopenedProjection.target_assistant?.body_text || ''),
+    branch_index: reopenedProjection.branch_index,
+    branch_count: reopenedProjection.branch_count,
+    generation_version: reopenedProjection.generation_version,
+  };
+  const evidence = taskRegenerateTransitionEvidence({
+    caseId: canonicalCaseId,
+    legacyCaseId: testCase.core_beta_case_id ? testCase.id : 'SIT-TASK-REGEN-001',
+    actionReceipt,
+    before,
+    immediateProjection: immediateCapture.projection,
+    final: finalProjection,
+    reopened: reopenedProjection,
+    captureAttempts: immediateCapture.attempts,
+    transitionWait: transition,
+    reopenedReadback,
+  });
+  const evidenceFile = path.join(caseDir, 'task-regenerate-transition.json');
+  writeJsonFile(evidenceFile, evidence);
+  state.artifacts.task_regenerate_transition = evidenceFile;
+  state.artifacts.regenerate_placeholder_readback = evidenceFile;
+  state.artifacts.task_regenerate = evidence;
+  state.artifacts.task_regen_readback = reopenedReadback;
+  recordStep(
+    state,
+    '单击重新生成并捕获即时占位后等待第二版收敛',
+    '必须只有一次真实点击，并在最终回复前捕获同一 taskId 的 running=true、空正文 assistant 占位。',
+    `attempts=${immediateCapture.attempts.length}；transition=${JSON.stringify(transition)}；reason=${evidence.reason}`,
+    evidence.evidence_valid && evidence.oracle_checks.transition_started_and_idle ? 'passed' : 'failed',
+    state.screenshots.task_regen_second_version,
+    evidence.evidence_valid && evidence.oracle_checks.transition_started_and_idle
+      ? ''
+      : (evidence.evidence_valid ? 'bug' : 'automation_error'),
+  );
+  recordAssertion(state, '重生成证据链完整', '四阶段 taskId、用户消息序列、历史消息和结构 SHA 必须一致且可重建。', evidence.evidence_valid, evidence.reason, 'automation_error');
+  recordAssertion(state, '第二版身份与版本转换', '新 assistant messageId 必须非空、区别第一版，且 immediate/final/reopened 的 identity 与 generation/version 全等并相对第一版增长。', evidence.oracle_checks.replacement_assistant_identity_stable && evidence.oracle_checks.generation_version_advanced_and_stable, JSON.stringify(evidence.oracle_checks), 'bug');
+  recordAssertion(state, '第二版回复完整且与第一版不同', '最终第二版应非空、running=false，且不能恢复成第一版。', evidence.oracle_checks.final_second_version_complete && evidence.oracle_checks.second_version_differs_from_first && evidence.oracle_checks.regeneration_transition_observed, JSON.stringify(evidence.oracle_checks), 'bug');
+  recordAssertion(state, '重开保持第二版', '重新打开同一 task 后应继续显示完整第二版且不恢复第一版，并与独立读回绑定。', evidence.oracle_checks.reopened_second_version_stable && evidence.oracle_checks.reopened_readback_bound, JSON.stringify({ readback: reopenedReadback, oracle: evidence.oracle_checks }), 'bug');
+  recordAssertion(state, '重生成完整产品 Oracle', 'Task、用户/历史消息、即时占位、替代版本、终态和重开读回的全部强 Oracle 必须成立。', evidence.oracle_valid, JSON.stringify(evidence.oracle_checks), 'bug');
+}
+
+async function waitForTaskRegenerateImmediateProjection(page, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  const attempts = [];
+  let projection = null;
+  while (Date.now() < deadline) {
+    projection = await captureTaskRegenerateProjection(page, {
+      stage: 'immediate_projection',
+      captureSequence: 2,
+    });
+    attempts.push({
+      attempt: attempts.length + 1,
+      projection,
+    });
+    if (projection.running === true
+      && projection.target_assistant
+      && projection.target_assistant.visible === true
+      && projection.target_assistant_body_empty === true) {
+      return { projection, attempts };
+    }
+    await page.waitForTimeout(40);
+  }
+  return { projection, attempts };
 }
 
 export function countEnumeratedItems(text) {
@@ -11608,17 +11736,42 @@ export function isContinuedOldLoginAnswer(text) {
   return /登录测试点|正常登录流程|账号不存在|密码错误|空账号|空密码/.test(String(text || ''));
 }
 
-async function waitForRunStartAndIdle(page, timeoutMs) {
+async function waitForRunStartAndIdle(page, timeoutMs, initialStarted = false) {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
-  let started = false;
+  let started = initialStarted === true;
   let last = await qbotE2EState(page);
   while (Date.now() < deadline) {
     last = await qbotE2EState(page);
     if (last.running) started = true;
-    if (started && !last.running) return { started: true, idle: true, elapsed_ms: timeoutMs - Math.max(0, deadline - Date.now()), state: last };
+    if (started && !last.running) return {
+      schema_version: 'qbot-task-regenerate-transition-wait/v1',
+      captured_at: new Date().toISOString(),
+      started: true,
+      idle: true,
+      elapsed_ms: Date.now() - startedAt,
+      state: {
+        active_id: String(last.activeId || ''),
+        running: false,
+        send_count: Number.isSafeInteger(last.sendCount) ? last.sendCount : null,
+      },
+      reason: 'started_then_idle',
+    };
     await page.waitForTimeout(250);
   }
-  return { started, idle: false, elapsed_ms: timeoutMs, state: last };
+  return {
+    schema_version: 'qbot-task-regenerate-transition-wait/v1',
+    captured_at: new Date().toISOString(),
+    started,
+    idle: false,
+    elapsed_ms: Date.now() - startedAt,
+    state: {
+      active_id: String(last?.activeId || ''),
+      running: Boolean(last?.running),
+      send_count: Number.isSafeInteger(last?.sendCount) ? last.sendCount : null,
+    },
+    reason: 'wait_timeout',
+  };
 }
 
 async function reopenSessionAndReadback(page, sessionId) {
@@ -18248,28 +18401,157 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   await openNewTask(page, state);
   if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'auto' })) return;
   await page.keyboard.press('Escape').catch(() => {});
-  const prompt = String(testCase.test_data || '').trim() || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
-  const reply = await runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutMs, prompt, label: '内置 Web 搜索质量任务' });
-  const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
-  const runtimeEvidence = await page.evaluate(async () => {
-    const e2e = window.__qbotE2E || window.__deepbankE2E;
-    const [context, diagnostics] = await Promise.all([
-      e2e?.getLastTurnContextEvidence?.().catch(() => null),
-      e2e?.diagnostics?.().catch(() => null),
-    ]);
-    return { context, diagnostics };
-  }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
-  const runtimeToolText = JSON.stringify(runtimeEvidence);
-  const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
-  const runtimeVerdict = webRuntimeAuthorityVerdict({
-    runtimeEvidence,
-    prompt,
-    sendReceipts: state.artifacts.send_receipts || [],
-  });
-  state.screenshots.connector_019_search_result = await shot(page, caseDir, 'connector-019-web-search-result');
-  const externalTarget = verdict.uniqueUrls.find((url) => {
+  const caseId = String(testCase.core_beta_case_id || testCase.id || '');
+  const legacyCaseId = String(testCase.id || '');
+  const declaredPrompts = (Array.isArray(testCase.conversation_turns) ? testCase.conversation_turns : [])
+    .map((turn) => String(turn?.prompt || '').trim())
+    .filter(Boolean);
+  const firstPrompt = declaredPrompts[0]
+    || String(testCase.test_data || '').trim()
+    || '请使用内置 Web 搜索查找 OpenAI 官方网站最近 30 天发布的两条产品更新，给出标题、发布日期、原始链接和摘要；回答末尾另附 https://www.iana.org/domains/reserved 作为公共外链打开验证。';
+  const prompts = caseId === 'MRSMOKE-WEB-001'
+    ? declaredPrompts
+    : [firstPrompt];
+  if (caseId === 'MRSMOKE-WEB-001' && prompts.length !== 4) {
+    throw new Error(`${caseId} 必须从冻结 Casebook 读取精确四轮 Web 搜索 prompt；actual=${prompts.length}`);
+  }
+  const rounds = [];
+  let frozenTaskId = '';
+  let unsafeRoundFailure = null;
+  for (let index = 0; index < prompts.length; index += 1) {
+    const prompt = prompts[index];
+    const reply = await runPromptInCurrentTask({
+      page,
+      state,
+      testCase,
+      caseDir,
+      timeoutMs,
+      prompt,
+      label: prompts.length === 4 ? `内置 Web 搜索配额第${index + 1}轮` : '内置 Web 搜索质量任务',
+    });
+    const toolTexts = await page.locator('[data-slot="tool-fallback"]').allInnerTexts().catch(() => []);
+    const runtimeEvidence = await page.evaluate(async () => {
+      const e2e = window.__qbotE2E || window.__deepbankE2E;
+      const [context, diagnostics] = await Promise.all([
+        e2e?.getLastTurnContextEvidence?.().catch(() => null),
+        e2e?.diagnostics?.().catch(() => null),
+      ]);
+      return { context, diagnostics };
+    }).catch((error) => ({ error: error.message, context: null, diagnostics: null }));
+    const runtimeToolText = JSON.stringify(runtimeEvidence);
+    const verdict = webSearchQualityVerdict(reply.deltaText, `${toolTexts.join('\n')}\n${runtimeToolText}`);
+    const roundSendReceipts = (Array.isArray(state.artifacts.send_receipts)
+      ? state.artifacts.send_receipts
+      : []).filter((receipt) => String(receipt?.prompt || '') === prompt);
+    const runtimeVerdict = webRuntimeAuthorityVerdict({
+      runtimeEvidence,
+      prompt,
+      sendReceipts: roundSendReceipts,
+      expectedTaskId: frozenTaskId,
+    });
+    if (!frozenTaskId && runtimeVerdict.taskId) frozenTaskId = runtimeVerdict.taskId;
+    const postRoundState = await qbotE2EState(page);
+    const runtimeEvidenceReadable = !runtimeEvidence?.error
+      && runtimeEvidence?.diagnostics
+      && typeof runtimeEvidence.diagnostics === 'object';
+    const screenshotPath = await shot(page, caseDir, `connector-019-web-search-round-${index + 1}`);
+    state.screenshots[`connector_019_search_round_${index + 1}`] = screenshotPath;
+    state.screenshots.connector_019_search_result = screenshotPath;
+    const screenshot = {
+      path: screenshotPath,
+      bytes: fs.statSync(screenshotPath).size,
+      sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+    };
+    rounds.push({
+      round: index + 1,
+      prompt,
+      prompt_sha256: runtimeVerdict.promptSha256,
+      task_id: runtimeVerdict.taskId,
+      reply: reply.deltaText,
+      tool_texts: toolTexts,
+      runtime_evidence: runtimeEvidence,
+      send_receipts: structuredClone(roundSendReceipts),
+      runtime_authority: runtimeVerdict,
+      business_oracle: verdict,
+      post_round_state: postRoundState,
+      timeout_cleanup_ok: reply.timeout_cleanup_ok !== false,
+      screenshot,
+    });
+    recordStep(
+      state,
+      prompts.length === 4 ? `执行同任务第${index + 1}轮内置 Web 搜索` : '执行内置 Web 搜索并收集来源',
+      '应形成真实网页搜索工具证据，并返回每轮至少两个独立 OpenAI 官方结果；每个结果结构化绑定标题、日期、官方链接与摘要。',
+      `task=${runtimeVerdict.taskId || '无'}; receipt=${runtimeVerdict.providerReceiptHash || '无'}; urls=${verdict.uniqueUrls.join(', ') || '无'}; official_results=${verdict.officialResultCount}; structured=${verdict.structuredResults.length}`,
+      verdict.toolEvidence ? 'passed' : 'failed',
+      screenshotPath,
+    );
+    recordAssertion(
+      state,
+      prompts.length === 4 ? `第${index + 1}轮 Web 搜索业务结果` : 'Web 搜索新鲜度、相关性与可追溯性',
+      '每轮回复必须包含至少两个独立 OpenAI 官方结果，且每条在同一结构块中绑定标题、日期、唯一官方 HTTPS 链接和摘要；第三方链接、游离日期、重复条目或不足说明均不能替代。',
+      verdict.ok,
+      JSON.stringify(verdict),
+    );
+    recordAssertion(
+      state,
+      prompts.length === 4 ? `第${index + 1}轮 Web runtime authority 与 provider receipt` : 'Web runtime authority 与 provider receipt',
+      '确认发送必须与同一非空 taskId、builtin:qbot_web runtime authority、物化能力和有效 provider receipt 绑定。',
+      runtimeVerdict.ok,
+      JSON.stringify(runtimeVerdict),
+      runtimeEvidenceReadable ? '' : 'automation_error',
+    );
+    if (prompts.length === 4) {
+      const unsafeReasons = [
+        reply.incomplete === true ? 'reply_incomplete' : '',
+        reply.timeout_cleanup_ok === false ? 'timeout_cleanup_failed' : '',
+        runtimeEvidenceReadable ? '' : 'runtime_evidence_unreadable',
+        runtimeVerdict.ok ? '' : 'runtime_authority_invalid',
+        postRoundState?.available === true ? '' : 'post_round_state_unreadable',
+        String(postRoundState?.activeId || '') === runtimeVerdict.taskId ? '' : 'post_round_task_drift',
+        postRoundState?.running === false ? '' : 'post_round_still_running',
+      ].filter(Boolean);
+      if (unsafeReasons.length) {
+        unsafeRoundFailure = { round: index + 1, reasons: unsafeReasons };
+        recordStep(
+          state,
+          `第${index + 1}轮后停止四轮 Web 搜索`,
+          '任一轮发送、task/runtime authority、回复终态或超时清理不安全时，必须停止本 Case 后续发送。',
+          JSON.stringify(unsafeRoundFailure),
+          'failed',
+          screenshotPath,
+          'automation_error',
+        );
+        break;
+      }
+    }
+  }
+  if (prompts.length === 4) {
+    const quotaTrace = webSearchQuotaTraceVerdict({ caseId, legacyCaseId, rounds });
+    state.artifacts.web_search_quota_trace = path.join(caseDir, 'web-search-quota-trace.json');
+    state.artifacts.core_beta_web_search_quota_trace = state.artifacts.web_search_quota_trace;
+    writeJsonFile(state.artifacts.web_search_quota_trace, quotaTrace);
+    recordAssertion(
+      state,
+      '四轮 Web 搜索证据完整性',
+      '四轮必须分别绑定唯一 prompt SHA、确认发送、同一非空 taskId、runtime authority、provider receipt 和截图。',
+      quotaTrace.evidence_valid,
+      JSON.stringify({ checks: quotaTrace.evidence_checks, failures: quotaTrace.evidence_failures }),
+      quotaTrace.evidence_valid ? '' : 'automation_error',
+    );
+    recordAssertion(
+      state,
+      '第四轮仍真实调用 provider 且无固定搜索次数误导',
+      '四轮 provider receipt 必须有效且唯一；第四轮不得出现最多三次、额度用尽、固定上限或服务端拒绝等误导。',
+      quotaTrace.oracle_valid,
+      JSON.stringify({ checks: quotaTrace.oracle_checks, failures: quotaTrace.oracle_failures }),
+    );
+    if (unsafeRoundFailure) return;
+  }
+  const firstRound = rounds[0];
+  const lastRound = rounds.at(-1);
+  const externalTarget = firstRound.business_oracle.uniqueUrls.find((url) => {
     try { return new URL(url).hostname === 'www.iana.org'; } catch { return false; }
-  }) || verdict.uniqueUrls.find((url) => !verdict.officialUrls.includes(url)) || verdict.officialUrls[0] || '';
+  }) || firstRound.business_oracle.uniqueUrls.find((url) => !firstRound.business_oracle.officialUrls.includes(url)) || firstRound.business_oracle.officialUrls[0] || '';
   const externalLink = externalTarget
     ? await captureExternalWebLinkOutcome({ page, targetUrl: externalTarget })
     : { ok: false, reason: 'search_reply_has_no_https_link', requestedUrl: '' };
@@ -18278,10 +18560,10 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   state.artifacts.external_navigation_trace = state.artifacts.core_beta_external_navigation_trace;
   writeJsonFile(state.artifacts.core_beta_external_navigation_trace, {
     schema_version: 'qbot-external-navigation-trace/v1',
-    case_id: String(testCase.core_beta_case_id || testCase.id || ''),
-    legacy_case_id: testCase.id,
-    task_id: runtimeVerdict.taskId,
-    prompt_sha256: runtimeVerdict.promptSha256,
+    case_id: caseId,
+    legacy_case_id: legacyCaseId,
+    task_id: firstRound.runtime_authority.taskId,
+    prompt_sha256: firstRound.runtime_authority.promptSha256,
     evidence_valid: externalLink.ok === true && externalLink.resultEnumValid === true,
     oracle_valid: externalLink.publicResult === 'external'
       && externalLink.calls?.at(-1)?.result?.code === 'external_opened'
@@ -18292,45 +18574,19 @@ async function executeSitConnectorWebSearchQuality({ page, state, testCase, case
   state.artifacts.web_search_quality = path.join(caseDir, 'web-search-quality.json');
   writeJsonFile(state.artifacts.web_search_quality, {
     schema_version: 'qbot-web-search-quality/v2',
-    case_id: String(testCase.core_beta_case_id || testCase.id || ''),
-    legacy_case_id: testCase.id,
-    task_id: runtimeVerdict.taskId,
-    prompt_sha256: runtimeVerdict.promptSha256,
-    prompt,
-    reply: reply.deltaText,
-    toolTexts,
-    runtimeEvidence,
-    verdict,
-    business_oracle: verdict,
-    runtime_authority_oracle: runtimeVerdict,
+    case_id: caseId,
+    legacy_case_id: legacyCaseId,
+    task_id: lastRound.runtime_authority.taskId,
+    prompt_sha256: lastRound.runtime_authority.promptSha256,
+    prompt: lastRound.prompt,
+    reply: lastRound.reply,
+    toolTexts: lastRound.tool_texts,
+    runtimeEvidence: lastRound.runtime_evidence,
+    verdict: lastRound.business_oracle,
+    business_oracle: lastRound.business_oracle,
+    runtime_authority_oracle: lastRound.runtime_authority,
     external_link_oracle: externalLink,
   });
-  recordStep(
-    state,
-    '执行内置 Web 搜索并收集来源',
-    '应形成真实网页搜索工具证据，并返回可追溯的官方来源链接与日期。',
-    `tools=${clip(`${toolTexts.join(' | ')} ${runtimeToolText}`, 360)}; urls=${verdict.uniqueUrls.join(', ') || '无'}; official=${verdict.officialUrls.length}; dates=${verdict.dateEvidence}; shortage=${verdict.explicitShortage}`,
-    verdict.toolEvidence ? 'passed' : 'failed',
-    state.screenshots.connector_019_search_result,
-  );
-  recordAssertion(
-    state,
-    'Web 搜索新鲜度、相关性与可追溯性',
-    '回复至少包含两个可追溯 https 来源、至少一个 OpenAI 官方来源，并为每条给出日期；若近 30 天不足两条应明确说明。',
-    verdict.ok,
-    JSON.stringify(verdict),
-  );
-  const runtimeEvidenceReadable = !runtimeEvidence?.error
-    && runtimeEvidence?.diagnostics
-    && typeof runtimeEvidence.diagnostics === 'object';
-  recordAssertion(
-    state,
-    'Web runtime authority 与 provider receipt',
-    '同一确认发送任务必须由 builtin:qbot_web 生效并物化，unsupported 列表不得包含它，provider receipt 必须为 64 位 SHA-256。',
-    runtimeVerdict.ok,
-    JSON.stringify(runtimeVerdict),
-    runtimeEvidenceReadable ? '' : 'automation_error',
-  );
   recordStep(
     state,
     '点击真实搜索结果链接并读取 openPreview 原始终态',
@@ -22205,10 +22461,13 @@ async function runPromptInCurrentTask({ page, state, testCase, caseDir, timeoutM
     const latest = state.artifacts.credential_rotation_recovery?.at(-1);
     markBlocked(state, `DEV 登录凭证在管理请求期间持续轮换，框架已最多完成 3 次稳定性恢复仍未收敛：${latest?.stability?.reason || clip(reply.deltaText, 240)}`);
   }
+  const timeoutCleanupOk = reply.incomplete
+    ? await cancelRunningReplyAfterTimeout(page, state, caseDir, label)
+    : true;
+  reply = { ...reply, timeout_cleanup_ok: timeoutCleanupOk };
   writeReplyArtifacts(state, caseDir, [{ label, ...reply }]);
   recordReplyWaitAssertion(state, reply, label);
   recordReplyAssertions(state, testCase, prompt, reply, label);
-  if (reply.incomplete) await cancelRunningReplyAfterTimeout(page, state, caseDir, label);
   return reply;
 }
 

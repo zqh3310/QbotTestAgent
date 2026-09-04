@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { webSearchQuotaTraceVerdict } from './qbot-web-runtime-evidence.mjs';
+import { taskRegenerateTransitionEvidence } from './task-regenerate-evidence.mjs';
 
 export const CORE_BETA_CONTRACT_VERSION = 'qbot-core-beta/v2';
 export const CORE_BETA_AUTOMATION_PROTOCOL = 'core-beta-action-plan/v2';
@@ -354,7 +356,7 @@ const registerScenario = (id, driver, {
   ['BETA-EXPERT-009', 'expert_data_three_turn_attachment'],
   ['BETA-EXPERT-010', 'expert_delivery_three_turn_artifact'],
   ['BETA-EXPERT-011', 'expert_owner_only_second_account', { fixture_control: 'secondary_account' }],
-  ['BETA-EXPERT-012', 'expert_immutable_version_upgrade'],
+  ['BETA-EXPERT-012', 'expert_published_maintenance_task_roundtrip'],
   ['BETA-EXPERT-013', 'expert_authenticated_viewer', { fixture_control: 'secondary_account' }],
   ['BETA-EXPERT-014', 'expert_three_task_identity_isolation'],
   ['BETA-EXPERT-015', 'expert_export_import_security'],
@@ -431,6 +433,10 @@ const registerScenario = (id, driver, {
   ['MRSMOKE-CHART-001', 'qwork_mr_interactive_chart', { legacy_case_id: 'SIT-CONN-016' }],
 ].forEach(([id, driver, options]) => registerScenario(id, driver, options));
 
+registerScenario('BETA-TASK-002', 'task_regenerate_transition', {
+  fixture_control: 'public_product_state',
+});
+
 const productionExtensionLegacyDrivers = Object.freeze({
   'BETA-TASK-003': 'SIT-TASK-RECOVER-001',
   'BETA-HOST-003': 'SIT-TEAMS-NEW-003',
@@ -445,7 +451,6 @@ const productionExtensionFixtureControls = Object.freeze({
   'BETA-AUTH-005': 'logout_credential_recovery_matrix',
   'BETA-AUTH-006': 'secondary_account',
   'BETA-TASK-001': 'task_edit_branch_artifact_matrix',
-  'BETA-TASK-002': 'task_regenerate_version_artifact_matrix',
   'BETA-TASK-005': 'task_work_mode_three_task_matrix',
   'BETA-TASK-006': 'task_security_tier_execution_matrix',
   'BETA-TASK-007': 'task_security_tier_immutability',
@@ -582,11 +587,84 @@ export const CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS = new Map([
   }],
 ]);
 
+export const CORE_BETA_EXPERT_012_CONTRACT_VARIANTS = Object.freeze({
+  IMMUTABLE_VERSION_UPGRADE: 'expert_immutable_version_upgrade',
+  PUBLISHED_MAINTENANCE_TASK: 'expert_published_maintenance_task_roundtrip',
+  UNKNOWN: 'expert_contract_variant_unknown',
+});
+
+export function coreBetaExpert012ContractVariant(testCaseOrId) {
+  const id = typeof testCaseOrId === 'string'
+    ? testCaseOrId.trim()
+    : String(testCaseOrId?.id || '').trim();
+  if (id !== 'BETA-EXPERT-012') return '';
+  if (typeof testCaseOrId === 'string') return CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN;
+
+  const oracleType = String(testCaseOrId?.oracle_type || '').trim();
+  const oracleTokens = new Set(oracleType.split('+').map((token) => token.trim()).filter(Boolean));
+  const scenario = String(testCaseOrId?.scenario || '').trim();
+  const maintenanceEntryText = `${scenario}\n${String(testCaseOrId?.steps || '')}`;
+  const oldContractText = [
+    scenario,
+    testCaseOrId?.expected_result,
+    testCaseOrId?.success_criteria,
+    ...(Array.isArray(testCaseOrId?.precise_assertions?.hard_oracles)
+      ? testCaseOrId.precise_assertions.hard_oracles
+      : []),
+  ].map((value) => String(value || '')).join('\n');
+  const evidenceRoles = new Set(
+    Array.isArray(testCaseOrId?.evidence_roles) ? testCaseOrId.evidence_roles : [],
+  );
+  const maintenanceSignals = [
+    oracleTokens.has('expert_published_maintenance_task_roundtrip'),
+    maintenanceEntryText.includes('通过对话修改'),
+    evidenceRoles.has('expert_maintenance_task_trace'),
+  ];
+  const hasAnyMaintenanceSignal = maintenanceSignals.some(Boolean);
+  const hasCompleteMaintenanceContract = maintenanceSignals.every(Boolean);
+  const hasImmutableOracle = oracleTokens.has('immutable_readback');
+  const hasImmutableVersionSemantics = /(?:v1|旧版本).{0,24}(?:完全)?(?:不变|不可变)/iu
+    .test(oldContractText);
+  const hasNewVersionSemantics = /v2.{0,24}(?:新\s*(?:release|version|版本)|发布|可选择)/iu
+    .test(oldContractText);
+  const hasPinnedLegacySessionSemantics = /旧会话.{0,16}(?:仍|继续|保持).{0,16}(?:v1|旧版本)/iu
+    .test(oldContractText);
+  const hasNewInvocationSemantics = /新召唤.{0,16}(?:v2|新版本)/iu.test(oldContractText);
+  const hasLegacyContractSemantics = hasImmutableOracle
+    || hasImmutableVersionSemantics
+    || hasPinnedLegacySessionSemantics;
+
+  if (hasCompleteMaintenanceContract && !hasLegacyContractSemantics) {
+    return CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.PUBLISHED_MAINTENANCE_TASK;
+  }
+  if (
+    !hasAnyMaintenanceSignal
+    && hasImmutableOracle
+    && hasImmutableVersionSemantics
+    && hasNewVersionSemantics
+    && hasPinnedLegacySessionSemantics
+    && hasNewInvocationSemantics
+  ) {
+    return CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE;
+  }
+  return CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN;
+}
+
 export function coreBetaScenarioSpec(testCaseOrId) {
   const id = typeof testCaseOrId === 'string'
     ? testCaseOrId.trim()
     : String(testCaseOrId?.id || '').trim();
-  return CORE_BETA_SCENARIO_REGISTRY.get(id) || null;
+  const scenario = CORE_BETA_SCENARIO_REGISTRY.get(id) || null;
+  if (!scenario || id !== 'BETA-EXPERT-012') return scenario;
+  const contractVariant = coreBetaExpert012ContractVariant(testCaseOrId);
+  if (contractVariant === CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN) return null;
+  if (contractVariant === CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE) {
+    return Object.freeze({
+      ...scenario,
+      driver: CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE,
+    });
+  }
+  return scenario;
 }
 
 export function coreBetaLeafCases(cases = []) {
@@ -644,6 +722,7 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'expert_publish_operation',
   'expert_publish_confirmation',
   'expert_authoring_mcp_trace',
+  'expert_maintenance_task_trace',
   'expert_authoring_security_trace',
   'expert_share_authorization',
   'expert_history_readback',
@@ -670,6 +749,9 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'performance_metrics',
   'accessibility_scan',
   'external_navigation_trace',
+  'web_search_quota_trace',
+  'task_regenerate_transition',
+  'regenerate_placeholder_readback',
   'interactive_chart_readback',
   'connector_retry_recovery_trace',
   'horizontal_overflow_readback',
@@ -809,7 +891,7 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
   if (!CORE_BETA_CASE_TYPES.has(String(testCase?.case_type || ''))) {
     errors.push(`${id} 不支持的 case_type=${testCase?.case_type || '空'}`);
   }
-  const scenarioSpec = coreBetaScenarioSpec(id);
+  const scenarioSpec = coreBetaScenarioSpec(testCase);
   const isCompound = String(testCase?.case_type || '') === 'compound';
   if (!isCompound && !CORE_BETA_SCENARIO_IDS.has(id)) errors.push(`${id} 没有注册独立场景执行器`);
   if (!isCompound && !scenarioSpec?.driver) errors.push(`${id} 场景注册表缺少 driver`);
@@ -969,6 +1051,98 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
           }
         }
       }
+    }
+  }
+  if (id === 'MRSMOKE-WEB-001') {
+    const turns = Array.isArray(testCase?.conversation_turns) ? testCase.conversation_turns : [];
+    const prompts = turns.map((turn) => String(turn?.prompt || '').trim());
+    if (turns.length !== 4) errors.push(`${id} 必须精确声明四轮 Web 搜索 conversation_turns`);
+    if (turns.length === 4 && turns.some((turn, index) => Number(turn?.turn) !== index + 1)) {
+      errors.push(`${id} 四轮 Web 搜索 turn 必须严格为 1,2,3,4`);
+    }
+    if (turns.length === 4 && new Set(prompts).size !== 4) {
+      errors.push(`${id} 四轮 Web 搜索 prompt 必须全部唯一`);
+    }
+    if (turns.length === 4 && turns.some((turn) => {
+      const prompt = String(turn?.prompt || '');
+      return !/内置\s*Web\s*搜索/iu.test(prompt)
+        || !/OpenAI/iu.test(prompt)
+        || !/(?:至少)?两条|2\s*条/iu.test(prompt)
+        || !/标题/iu.test(prompt)
+        || !/日期|发布时间/iu.test(prompt)
+        || !/(?:HTTPS?|原始链接)/iu.test(prompt)
+        || !/摘要/iu.test(prompt);
+    })) {
+      errors.push(`${id} 每轮 prompt 都必须要求真实内置 Web 搜索、OpenAI、至少两条结果，并逐条绑定标题、日期、原始 HTTPS 链接和摘要`);
+    }
+    if (turns.length === 4 && turns.some((turn) => {
+      const oracle = String(turn?.oracle || '');
+      return !/(?:至少)?两(?:组|条)|2\s*(?:组|条)/iu.test(oracle)
+        || !/独立/iu.test(oracle)
+        || !/OpenAI/iu.test(oracle)
+        || !/官方/iu.test(oracle)
+        || !/标题/iu.test(oracle)
+        || !/日期|发布时间/iu.test(oracle)
+        || !/(?:HTTPS?|链接|URL)/iu.test(oracle)
+        || !/摘要/iu.test(oracle);
+    })) {
+      errors.push(`${id} 每轮 oracle 都必须要求至少两组独立 OpenAI 官方结果，并逐组绑定标题、日期、官方链接和摘要`);
+    }
+    if (turns.length === 4
+      && !String(turns[0]?.prompt || '').includes('https://www.iana.org/domains/reserved')) {
+      errors.push(`${id} 首轮 prompt 必须冻结 IANA 公共外链点击目标`);
+    }
+    if (turns.length === 4 && !/(?:第\s*4\s*轮|第四轮|四轮)/u.test(String(turns[3]?.prompt || ''))) {
+      errors.push(`${id} 第四轮 prompt 必须明确标识配额回归边界`);
+    }
+    if (!evidenceRoles.has('web_search_quota_trace')) {
+      errors.push(`${id} evidence_roles 缺少 web_search_quota_trace`);
+    }
+  }
+  if (id === 'BETA-EXPERT-012') {
+    const contractVariant = coreBetaExpert012ContractVariant(testCase);
+    if (contractVariant === CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.PUBLISHED_MAINTENANCE_TASK) {
+      // The variant classifier already requires the complete, non-mixed contract.
+    } else if (contractVariant !== CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE) {
+      const oracleType = String(testCase?.oracle_type || '');
+      const oracleTokens = new Set(oracleType.split('+').map((token) => token.trim()).filter(Boolean));
+      const scenario = String(testCase?.scenario || '');
+      const maintenanceEntryText = `${scenario}\n${String(testCase?.steps || '')}`;
+      const contractText = [
+        scenario,
+        testCase?.expected_result,
+        testCase?.success_criteria,
+        ...(Array.isArray(testCase?.precise_assertions?.hard_oracles)
+          ? testCase.precise_assertions.hard_oracles
+          : []),
+      ].map((value) => String(value || '')).join('\n');
+      const hasAnyMaintenanceSignal = oracleTokens.has('expert_published_maintenance_task_roundtrip')
+        || maintenanceEntryText.includes('通过对话修改')
+        || evidenceRoles.has('expert_maintenance_task_trace');
+      if (hasAnyMaintenanceSignal) {
+        if (!oracleTokens.has('expert_published_maintenance_task_roundtrip')) {
+          errors.push(`${id} 新维护任务合同 oracle_type 缺少 expert_published_maintenance_task_roundtrip`);
+        }
+        if (!maintenanceEntryText.includes('通过对话修改')) {
+          errors.push(`${id} 新维护任务合同 scenario/steps 缺少“通过对话修改”`);
+        }
+        if (!evidenceRoles.has('expert_maintenance_task_trace')) {
+          errors.push(`${id} evidence_roles 缺少 expert_maintenance_task_trace`);
+        }
+        if (oracleTokens.has('immutable_readback')) {
+          errors.push(`${id} 新维护任务合同不得混入旧 immutable_readback Oracle`);
+        }
+        if (/(?:v1|旧版本).{0,24}(?:完全)?(?:不变|不可变)/iu.test(contractText)
+          || /旧会话.{0,16}(?:仍|继续|保持).{0,16}(?:v1|旧版本)/iu.test(contractText)) {
+          errors.push(`${id} 新维护任务合同不得混入旧版本不可变或旧会话 pin v1 语义`);
+        }
+      }
+      errors.push(`${id} 无法识别 Expert 合同变体；必须完整声明旧不可变版本或新维护任务合同`);
+    }
+  }
+  if (id === 'BETA-TASK-002') {
+    for (const role of ['task_regenerate_transition', 'regenerate_placeholder_readback']) {
+      if (!evidenceRoles.has(role)) errors.push(`${id} evidence_roles 缺少 ${role}`);
     }
   }
   if (id === 'BETA-EXPERT-008') {
@@ -1237,6 +1411,700 @@ export function sha256File(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+const EXPERT_MAINTENANCE_SURFACE_KEYS = Object.freeze([
+  'header',
+  'name',
+  'status',
+  'welcome',
+  'quick_tasks',
+  'adjust_responsibilities',
+  'composer_input',
+  'composer_expert_chip',
+  'open_config',
+]);
+
+function protocolObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function protocolHasOwn(value, key) {
+  return protocolObject(value) && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function protocolMetricSnapshot(value) {
+  return Boolean(
+    protocolObject(value)
+    && value.captured === true
+    && Number.isSafeInteger(value.send_count)
+    && value.send_count >= 0
+    && Number.isSafeInteger(value.message_count)
+    && value.message_count >= 0
+    && protocolHasOwn(value, 'active_id')
+    && (value.active_id == null || typeof value.active_id === 'string'),
+  );
+}
+
+function protocolAuthoringState(value) {
+  return Boolean(
+    protocolMetricSnapshot(value)
+    && protocolHasOwn(value, 'current_expert')
+    && protocolHasOwn(value, 'expert_authoring_view'),
+  );
+}
+
+function protocolMaintenanceSurface(value) {
+  return Boolean(
+    protocolObject(value)
+    && EXPERT_MAINTENANCE_SURFACE_KEYS.every((key) => typeof value[key] === 'boolean')
+    && typeof value.name_text === 'string'
+    && typeof value.status_text === 'string'
+    && typeof value.welcome_text === 'string',
+  );
+}
+
+function protocolToolName(value) {
+  return String(value || '').split(/__|:/u).at(-1) || '';
+}
+
+function protocolToolCall(value) {
+  return Boolean(
+    protocolObject(value)
+    && typeof value.id === 'string'
+    && value.id.trim().length > 0
+    && typeof value.name === 'string'
+    && value.name.trim().length > 0
+    && protocolHasOwn(value, 'input')
+    && protocolHasOwn(value, 'result_present')
+    && typeof value.result_present === 'boolean'
+    && protocolHasOwn(value, 'is_error')
+    && typeof value.is_error === 'boolean'
+    && typeof value.result_text === 'string'
+    && protocolHasOwn(value, 'result')
+    && protocolHasOwn(value, 'result_sha256')
+    && /^[a-f0-9]{64}$/u.test(String(value.result_sha256 || '')),
+  );
+}
+
+function protocolScreenshot(value) {
+  return Boolean(
+    protocolObject(value)
+    && typeof value.path === 'string'
+    && value.path.trim().length > 0
+    && Number.isSafeInteger(value.bytes)
+    && value.bytes >= 128
+    && /^[a-f0-9]{64}$/u.test(String(value.sha256 || '')),
+  );
+}
+
+function protocolSessionSnapshot(value) {
+  return Boolean(
+    protocolObject(value)
+    && typeof value.id === 'string'
+    && value.id.trim().length > 0
+    && Array.isArray(value.messages),
+  );
+}
+
+function protocolMessageText(message) {
+  if (!protocolObject(message)) return '';
+  if (typeof message.text === 'string' && message.text) return message.text;
+  return (Array.isArray(message.parts) ? message.parts : [])
+    .filter((part) => part?.t === 'text')
+    .map((part) => String(part?.text || ''))
+    .join('\n');
+}
+
+function protocolToolResultFromText(value) {
+  const text = String(value || '');
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return protocolObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function protocolToolTraceFromSession(session, taskId) {
+  const calls = (Array.isArray(session?.messages) ? session.messages : [])
+    .filter((message) => message?.role === 'assistant')
+    .flatMap((message) => Array.isArray(message?.parts) ? message.parts : [])
+    .filter((part) => part?.t === 'tool')
+    .map((part) => {
+      const resultPresent = part?.result !== undefined && part?.result !== null
+        && (typeof part.result !== 'string' || part.result.trim().length > 0);
+      const resultText = typeof part?.result === 'string'
+        ? part.result
+        : (resultPresent ? JSON.stringify(part.result) : '');
+      return {
+        id: String(part?.id || ''),
+        name: String(part?.name || ''),
+        input: part?.input ?? part?.args ?? part?.arguments ?? null,
+        result_present: resultPresent,
+        result_text: resultText,
+        result: protocolToolResultFromText(resultText),
+        result_sha256: resultText
+          ? createHash('sha256').update(resultText).digest('hex')
+          : '',
+        is_error: part?.isError === true || part?.is_error === true,
+      };
+    });
+  return {
+    captured: protocolSessionSnapshot(session),
+    source: 'window.agent.readSession/currentSession.messages.parts',
+    task_id: String(taskId || session?.id || ''),
+    calls,
+  };
+}
+
+function protocolDraftInventoryRecord(value) {
+  if (!protocolObject(value)) return null;
+  const id = String(value.id || value.draftId || value.draft_id || '').trim();
+  const expertId = String(value.expertId || value.expert_id || '').trim();
+  return id ? { id, expert_id: expertId } : null;
+}
+
+function protocolVersionId(value) {
+  return String(value?.version?.id || value?.versionId || value?.version_id || value?.id || '').trim();
+}
+
+function protocolReleaseId(value) {
+  return String(value?.release?.id || value?.releaseId || value?.release_id || value?.id || '').trim();
+}
+
+function protocolReleaseVersionId(value) {
+  return String(value?.release?.versionId || value?.versionId || value?.version_id || '').trim();
+}
+
+function protocolPublicationSnapshot(value, { after = false } = {}) {
+  if (!protocolObject(value)
+    || !Array.isArray(value.versions)
+    || !Array.isArray(value.releases)
+    || !Number.isSafeInteger(value.version_count)
+    || !Number.isSafeInteger(value.release_count)
+    || value.version_count !== value.versions.length
+    || value.release_count !== value.releases.length) return false;
+  if (after && !protocolObject(value.expert)) return false;
+  return value.versions.every((item) => Boolean(protocolVersionId(item)))
+    && value.releases.every((item) => Boolean(protocolReleaseId(item) && protocolReleaseVersionId(item)));
+}
+
+function protocolDraftReadback(value) {
+  return Boolean(
+    protocolObject(value)
+    && typeof value.id === 'string'
+    && value.id.trim().length > 0
+    && typeof value.expert_id === 'string'
+    && value.expert_id.trim().length > 0
+    && Number.isSafeInteger(value.revision)
+    && value.revision >= 0
+    && protocolObject(value.content)
+    && typeof value.content.summary === 'string'
+    && typeof value.content.persona_body === 'string',
+  );
+}
+
+function protocolAuthoringViewMatches(value, draftId, expertId) {
+  return Boolean(
+    protocolObject(value)
+    && Number(value.schema_version) === 1
+    && String(value.draft_id || '') === draftId
+    && String(value.expert_id || '') === expertId,
+  );
+}
+
+/**
+ * Builds the immutable evidence verdict for BETA-EXPERT-012. Capture
+ * completeness is intentionally independent from the product Oracle: a fully
+ * observed product failure remains manifest-valid and is classified as a bug.
+ */
+export function coreBetaExpertMaintenanceTaskEvidence({
+  caseId = 'BETA-EXPERT-012',
+  expectedExpertId = '',
+  expectedDraftId = '',
+  expertName = '',
+  marker = '',
+  expectedSummary = '',
+  expectedPersona = '',
+  entry = null,
+  quickTask = null,
+  authoringTurn = null,
+  toolTrace = null,
+  draftBefore = null,
+  draftAfter = null,
+  configRoundtrip = null,
+  publication = null,
+  reopen = null,
+  newTask = null,
+} = {}) {
+  const normalizedCaseId = String(caseId || '').trim();
+  const expertId = String(expectedExpertId || '').trim();
+  const draftId = String(expectedDraftId || '').trim();
+  const label = String(expertName || '').trim();
+  const uniqueMarker = String(marker || '').trim();
+  const summary = String(expectedSummary || '');
+  const persona = String(expectedPersona || '');
+  const entryFailureStage = String(entry?.failure_stage || '').trim();
+  const entryFailed = ['card', 'menu', 'menu_panel', 'action'].includes(entryFailureStage);
+  const calls = Array.isArray(toolTrace?.calls) ? toolTrace.calls : [];
+  const expectedToolTrace = protocolToolTraceFromSession(
+    authoringTurn?.session,
+    authoringTurn?.task_id,
+  );
+
+  const evidenceChecks = {
+    case_identity: normalizedCaseId === 'BETA-EXPERT-012',
+    target_identity_declared: Boolean(
+      expertId
+      && label
+      && uniqueMarker
+      && summary
+      && persona
+      && (entryFailed || draftId),
+    ),
+    entry_trace_captured: Boolean(
+      entry?.captured === true
+      && typeof entry.card_visible === 'boolean'
+      && typeof entry.menu_visible === 'boolean'
+      && typeof entry.menu_panel_visible === 'boolean'
+      && typeof entry.action_visible === 'boolean'
+      && typeof entry.action_clicked === 'boolean'
+      && typeof entry.failure_stage === 'string'
+      && typeof entry.failure_reason === 'string'
+      && typeof entry.no_prompt_recorded === 'boolean'
+      && typeof entry.no_send_receipt_recorded === 'boolean'
+      && protocolMetricSnapshot(entry.before)
+      && (entryFailed ? protocolMetricSnapshot(entry.after) : protocolAuthoringState(entry.after))
+      && (entryFailed || protocolMaintenanceSurface(entry.surface))
+      && Array.isArray(entry.draft_inventory_before)
+      && Array.isArray(entry.draft_inventory_after)
+      && protocolScreenshot(entry.screenshot)
+    ),
+    entry_failure_branch_captured: Boolean(!entryFailed || (
+      entry.failure_reason.trim()
+      && entry.no_prompt_recorded === true
+      && entry.no_send_receipt_recorded === true
+      && entry.before.send_count === entry.after.send_count
+      && entry.before.message_count === entry.after.message_count
+      && entry.before.active_id === entry.after.active_id
+      && entry.action_clicked === false
+      && JSON.stringify(entry.draft_inventory_before) === JSON.stringify(entry.draft_inventory_after)
+      && (
+        (entryFailureStage === 'card' && entry.card_visible === false)
+        || (entryFailureStage === 'menu' && entry.card_visible === true && entry.menu_visible === false)
+        || (entryFailureStage === 'menu_panel'
+          && entry.card_visible === true
+          && entry.menu_visible === true
+          && entry.menu_panel_visible === false)
+        || (entryFailureStage === 'action'
+          && entry.card_visible === true
+          && entry.menu_visible === true
+          && entry.menu_panel_visible === true
+          && entry.action_visible === false)
+      )
+    )),
+    quick_task_trace_captured: Boolean(entryFailed || (
+      quickTask?.captured === true
+      && typeof quickTask.clicked === 'boolean'
+      && protocolMetricSnapshot(quickTask.before)
+      && protocolMetricSnapshot(quickTask.after)
+      && typeof quickTask.composer_text === 'string'
+      && protocolScreenshot(quickTask.screenshot)
+    )),
+    authoring_turn_captured: Boolean(entryFailed || (
+      authoringTurn?.captured === true
+      && typeof authoringTurn.prompt === 'string'
+      && typeof authoringTurn.task_id === 'string'
+      && typeof authoringTurn.reply_incomplete === 'boolean'
+      && protocolMetricSnapshot(authoringTurn.before)
+      && protocolAuthoringState(authoringTurn.after)
+      && protocolSessionSnapshot(authoringTurn.session)
+      && protocolScreenshot(authoringTurn.screenshot)
+    )),
+    tool_trace_captured: Boolean(entryFailed || (
+      toolTrace?.captured === true
+      && typeof toolTrace.source === 'string'
+      && toolTrace.source.trim()
+      && typeof toolTrace.task_id === 'string'
+      && Array.isArray(toolTrace.calls)
+      && calls.every(protocolToolCall)
+    )),
+    tool_trace_recomputed_from_session: Boolean(
+      entryFailed || JSON.stringify(toolTrace) === JSON.stringify(expectedToolTrace),
+    ),
+    draft_readbacks_captured: entryFailed
+      || (protocolDraftReadback(draftBefore) && protocolDraftReadback(draftAfter)),
+    config_roundtrip_captured: Boolean(entryFailed || (
+      configRoundtrip?.captured === true
+      && typeof configRoundtrip.lifecycle_visible === 'boolean'
+      && typeof configRoundtrip.selected_draft_id === 'string'
+      && typeof configRoundtrip.selected_expert_id === 'string'
+      && typeof configRoundtrip.summary_value === 'string'
+      && typeof configRoundtrip.persona_value === 'string'
+      && typeof configRoundtrip.back_aria_label === 'string'
+      && typeof configRoundtrip.returned_to_maintenance === 'boolean'
+      && protocolScreenshot(configRoundtrip.screenshot)
+    )),
+    publication_trace_captured: Boolean(entryFailed || (
+      publication?.captured === true
+      && protocolPublicationSnapshot(publication.before)
+      && protocolPublicationSnapshot(publication.after, { after: true })
+      && typeof publication.publish_button_visible === 'boolean'
+      && typeof publication.review_visible === 'boolean'
+      && typeof publication.warning_ack_present === 'boolean'
+      && typeof publication.warning_acknowledged_or_not_required === 'boolean'
+      && typeof publication.confirm_visible === 'boolean'
+      && typeof publication.confirm_clicked === 'boolean'
+      && typeof publication.review_closed === 'boolean'
+      && typeof publication.operation_visible === 'boolean'
+      && typeof publication.operation_text === 'string'
+      && typeof publication.operation_class === 'string'
+      && typeof publication.terminal_state === 'string'
+      && typeof publication.expert_id === 'string'
+      && typeof publication.draft_id === 'string'
+      && typeof publication.operation_id === 'string'
+      && Number.isSafeInteger(publication.expected_revision)
+      && publication.expected_revision > 0
+      && typeof publication.idempotency_key === 'string'
+      && protocolObject(publication.operation_probe)
+      && publication.operation_probe.installed === true
+      && publication.operation_probe.restored === true
+      && Array.isArray(publication.operation_probe.publish_calls)
+      && Array.isArray(publication.operation_probe.get_operation_calls)
+      && protocolObject(publication.terminal_operation)
+      && protocolScreenshot(publication.screenshot)
+    )),
+    reopen_trace_captured: Boolean(entryFailed || (
+      reopen?.captured === true
+      && typeof reopen.ok === 'boolean'
+      && typeof reopen.task_id === 'string'
+      && typeof reopen.title === 'string'
+      && typeof reopen.maintenance_visible === 'boolean'
+      && protocolAuthoringState(reopen.state)
+      && protocolSessionSnapshot(reopen.session)
+      && protocolObject(reopen.tool_trace)
+      && protocolScreenshot(reopen.screenshot)
+    )),
+    new_task_trace_captured: Boolean(entryFailed || (
+      newTask?.captured === true
+      && typeof newTask.maintenance_visible === 'boolean'
+      && protocolAuthoringState(newTask.state)
+      && typeof newTask.state.is_draft === 'boolean'
+      && typeof newTask.state.draft_instance_id === 'string'
+      && Array.isArray(newTask.state.messages)
+      && protocolHasOwn(newTask.state, 'selected_skills')
+      && protocolHasOwn(newTask.state, 'selected_connectors')
+      && Number.isSafeInteger(newTask.state.attachment_count)
+      && newTask.state.attachment_count >= 0
+      && protocolScreenshot(newTask.screenshot)
+    )),
+  };
+  const evidenceValid = Object.values(evidenceChecks).every(Boolean);
+
+  const entryView = entry?.after?.expert_authoring_view;
+  const authoringView = authoringTurn?.after?.expert_authoring_view;
+  const reopenView = reopen?.state?.expert_authoring_view;
+  const beforeDraftRecords = (Array.isArray(entry?.draft_inventory_before)
+    ? entry.draft_inventory_before
+    : []).map(protocolDraftInventoryRecord).filter(Boolean);
+  const afterDraftRecords = (Array.isArray(entry?.draft_inventory_after)
+    ? entry.draft_inventory_after
+    : []).map(protocolDraftInventoryRecord).filter(Boolean);
+  const beforeDraftIds = new Set(beforeDraftRecords.map((item) => item.id));
+  const addedDraftRecords = afterDraftRecords.filter((item) => !beforeDraftIds.has(item.id));
+  const firstCall = calls[0] || {};
+  const secondCall = calls[1] || {};
+  const firstResult = protocolObject(firstCall.result) ? firstCall.result : {};
+  const secondResult = protocolObject(secondCall.result) ? secondCall.result : {};
+  const firstResultDraft = protocolObject(firstResult.draft) ? firstResult.draft : {};
+  const secondResultDraft = protocolObject(secondResult.draft) ? secondResult.draft : {};
+  const toolNames = calls.map((call) => protocolToolName(call?.name));
+  const toolInputsMatch = Boolean(
+    String(firstCall?.input?.draftId || '') === draftId
+    && String(secondCall?.input?.draftId || '') === draftId
+    && secondCall?.input?.patch?.summary === summary
+    && secondCall?.input?.patch?.personaBody === persona,
+  );
+  const promptText = String(authoringTurn?.prompt || '');
+  const authoringMessages = Array.isArray(authoringTurn?.session?.messages)
+    ? authoringTurn.session.messages
+    : [];
+  const promptMessageCount = authoringMessages.filter((message) => (
+    message?.role === 'user' && protocolMessageText(message) === promptText
+  )).length;
+  const beforeVersionIds = (Array.isArray(publication?.before?.versions)
+    ? publication.before.versions
+    : []).map(protocolVersionId).filter(Boolean);
+  const afterVersionIds = (Array.isArray(publication?.after?.versions)
+    ? publication.after.versions
+    : []).map(protocolVersionId).filter(Boolean);
+  const beforeReleaseIds = (Array.isArray(publication?.before?.releases)
+    ? publication.before.releases
+    : []).map(protocolReleaseId).filter(Boolean);
+  const afterReleaseIds = (Array.isArray(publication?.after?.releases)
+    ? publication.after.releases
+    : []).map(protocolReleaseId).filter(Boolean);
+  const beforeVersionSet = new Set(beforeVersionIds);
+  const beforeReleaseSet = new Set(beforeReleaseIds);
+  const addedVersionIds = afterVersionIds.filter((id) => !beforeVersionSet.has(id));
+  const addedReleaseIds = afterReleaseIds.filter((id) => !beforeReleaseSet.has(id));
+  const publishCalls = Array.isArray(publication?.operation_probe?.publish_calls)
+    ? publication.operation_probe.publish_calls
+    : [];
+  const operationReads = Array.isArray(publication?.operation_probe?.get_operation_calls)
+    ? publication.operation_probe.get_operation_calls
+    : [];
+  const publishCall = publishCalls[0] || {};
+  const terminalOperation = protocolObject(publication?.terminal_operation)
+    ? publication.terminal_operation
+    : {};
+  const terminalResult = protocolObject(terminalOperation.result) ? terminalOperation.result : {};
+  const versionId = String(terminalResult.versionId || '').trim();
+  const releaseId = String(terminalResult.releaseId || '').trim();
+  const addedVersion = (Array.isArray(publication?.after?.versions)
+    ? publication.after.versions
+    : []).find((item) => protocolVersionId(item) === versionId);
+  const addedRelease = (Array.isArray(publication?.after?.releases)
+    ? publication.after.releases
+    : []).find((item) => protocolReleaseId(item) === releaseId);
+  const publishedExpert = protocolObject(publication?.after?.expert) ? publication.after.expert : {};
+  const expectedOperationId = String(publication?.operation_id || '').trim();
+  const expectedRevision = publication?.expected_revision;
+  const operationCallsBound = publishCalls.length === 1
+    && publishCall.error == null
+    && String(publishCall?.args?.draft_id || '') === draftId
+    && publishCall?.args?.expected_revision === expectedRevision
+    && String(publishCall?.args?.idempotency_key || '') === String(publication?.idempotency_key || '')
+    && protocolObject(publishCall.result)
+    && String(publishCall.result.id || publishCall.result.operationId || '') === expectedOperationId
+    && operationReads.every((call) => (
+      call?.error == null
+      && String(call?.args?.operation_id || '') === expectedOperationId
+      && String(call?.args?.draft_id || '') === draftId
+      && call?.args?.expected_revision === expectedRevision
+      && protocolObject(call.result)
+      && String(call.result.id || call.result.operationId || '') === expectedOperationId
+    ));
+  const oracleChecks = {
+    card_menu_maintenance_entry: Boolean(
+      !entryFailed
+      &&
+      entry?.card_visible
+      && entry?.menu_visible
+      && entry?.menu_panel_visible
+      && entry?.action_visible
+      && entry?.action_clicked
+      && entry?.before?.send_count === entry?.after?.send_count
+      && entry?.before?.message_count === entry?.after?.message_count
+      && entry?.before?.active_id === entry?.after?.active_id
+    ),
+    fresh_maintenance_draft_created: Boolean(entryFailed || (
+      addedDraftRecords.length === 1
+      && addedDraftRecords[0].id === draftId
+      && addedDraftRecords[0].expert_id === expertId
+      && !beforeDraftIds.has(draftId)
+      && afterDraftRecords.filter((item) => item.id === draftId).length === 1
+    )),
+    maintenance_surface_complete: Boolean(entryFailed || (
+      protocolMaintenanceSurface(entry?.surface)
+      && EXPERT_MAINTENANCE_SURFACE_KEYS.every((key) => entry.surface[key] === true)
+      && entry.surface.name_text.includes(label)
+      && entry.surface.status_text.trim()
+      && entry.surface.welcome_text.trim()
+    )),
+    maintenance_state_bound: Boolean(entryFailed || (
+      entry?.after?.current_expert === 'qwork.builtin.expert-authoring'
+      && protocolAuthoringViewMatches(entryView, draftId, expertId)
+    )),
+    quick_task_prefill_only: Boolean(entryFailed || (
+      quickTask?.clicked
+      && quickTask?.composer_text?.trim()
+      && /Persona|职责|角色/iu.test(quickTask.composer_text)
+      && quickTask?.before?.send_count === quickTask?.after?.send_count
+      && quickTask?.before?.message_count === quickTask?.after?.message_count
+      && quickTask?.before?.active_id === quickTask?.after?.active_id
+    )),
+    unique_prompt_and_single_send: Boolean(entryFailed || (
+      promptText.includes('__QBOT_EXPERT_AUTHORING_TARGET_UPDATE__')
+      && promptText.includes(uniqueMarker)
+      && promptText.includes(`expert-summary: ${summary}`)
+      && promptText.includes(`expert-persona: ${persona}`)
+      && authoringTurn?.before?.message_count === 0
+      && authoringTurn?.after?.send_count === authoringTurn?.before?.send_count + 1
+      && authoringTurn?.after?.message_count > authoringTurn?.before?.message_count
+      && String(authoringTurn?.task_id || '')
+      && authoringTurn?.task_id === authoringTurn?.after?.active_id
+      && authoringTurn?.session?.id === authoringTurn?.task_id
+      && authoringTurn?.after?.message_count === authoringMessages.length
+      && promptMessageCount === 1
+      && authoringTurn?.reply_incomplete === false
+      && protocolAuthoringViewMatches(authoringView, draftId, expertId)
+    )),
+    exact_authoring_tool_sequence: entryFailed || JSON.stringify(toolNames) === JSON.stringify([
+        'get_expert_draft',
+        'update_expert_draft',
+      ]),
+    authoring_tool_target_and_results: Boolean(entryFailed || (
+      toolInputsMatch
+      && calls.length === 2
+      && calls.every((call) => (
+        call.result_present === true
+        && call.is_error === false
+        && call.result_text.trim()
+        && call.result_sha256 === createHash('sha256').update(call.result_text).digest('hex')
+        && JSON.stringify(call.result) === JSON.stringify(protocolToolResultFromText(call.result_text))
+      ))
+      && toolTrace?.task_id === authoringTurn?.task_id
+      && firstResult.ok === true
+      && firstResult.operation === 'get_expert_draft'
+      && firstResult.draftId === draftId
+      && firstResult.revision === draftBefore?.revision
+      && firstResultDraft.id === draftId
+      && firstResultDraft.revision === draftBefore?.revision
+      && firstResultDraft.content?.summary === draftBefore?.content?.summary
+      && firstResultDraft.content?.personaBody === draftBefore?.content?.persona_body
+      && secondResult.ok === true
+      && secondResult.operation === 'update_expert_draft'
+      && secondResult.draftId === draftId
+      && secondResult.revision === draftAfter?.revision
+      && secondResultDraft.id === draftId
+      && secondResultDraft.revision === draftAfter?.revision
+      && secondResultDraft.content?.summary === summary
+      && secondResultDraft.content?.personaBody === persona
+    )),
+    draft_revision_and_content: Boolean(entryFailed || (
+      draftBefore?.id === draftId
+      && draftAfter?.id === draftId
+      && draftBefore?.expert_id === expertId
+      && draftAfter?.expert_id === expertId
+      && Number.isSafeInteger(draftBefore?.revision)
+      && draftBefore.revision > 0
+      && Number.isSafeInteger(draftAfter?.revision)
+      && draftAfter.revision > draftBefore.revision
+      && draftAfter?.content?.summary === summary
+      && draftAfter?.content?.persona_body === persona
+    )),
+    configuration_roundtrip: Boolean(entryFailed || (
+      configRoundtrip?.lifecycle_visible
+      && configRoundtrip?.selected_draft_id === draftId
+      && configRoundtrip?.selected_expert_id === expertId
+      && configRoundtrip?.summary_value === summary
+      && configRoundtrip?.persona_value === persona
+      && configRoundtrip?.back_aria_label === '返回维护任务'
+      && configRoundtrip?.returned_to_maintenance
+    )),
+    visible_publish_exactly_one_version_release: Boolean(entryFailed || (
+      publication?.publish_button_visible
+      && publication?.review_visible
+      && publication?.warning_acknowledged_or_not_required
+      && publication?.confirm_visible
+      && publication?.confirm_clicked
+      && publication?.review_closed
+      && publication?.operation_visible
+      && /发布完成/u.test(publication?.operation_text || '')
+      && publication?.terminal_state === 'succeeded'
+      && publication?.expert_id === expertId
+      && publication?.draft_id === draftId
+      && publication?.operation_probe?.installed === true
+      && publication?.operation_probe?.restored === true
+      && expectedOperationId
+      && Number.isSafeInteger(expectedRevision)
+      && expectedRevision === draftAfter?.revision
+      && String(publication?.idempotency_key || '').trim()
+      && operationCallsBound
+      && String(terminalOperation.id || terminalOperation.operationId || '') === expectedOperationId
+      && terminalOperation.draftId === draftId
+      && terminalOperation.expertId === expertId
+      && terminalOperation.state === 'succeeded'
+      && terminalResult.expertId === expertId
+      && versionId
+      && releaseId
+      && publication?.after?.version_count === publication?.before?.version_count + 1
+      && publication?.after?.release_count === publication?.before?.release_count + 1
+      && new Set(beforeVersionIds).size === beforeVersionIds.length
+      && new Set(afterVersionIds).size === afterVersionIds.length
+      && new Set(beforeReleaseIds).size === beforeReleaseIds.length
+      && new Set(afterReleaseIds).size === afterReleaseIds.length
+      && addedVersionIds.length === 1
+      && addedVersionIds[0] === versionId
+      && addedReleaseIds.length === 1
+      && addedReleaseIds[0] === releaseId
+      && addedVersion?.expertId === expertId
+      && addedRelease?.expertId === expertId
+      && protocolReleaseVersionId(addedRelease) === versionId
+      && publishedExpert.id === expertId
+      && publishedExpert.version?.id === versionId
+      && publishedExpert.release?.id === releaseId
+      && publishedExpert.release?.versionId === versionId
+      && publishedExpert.activeReleaseId === releaseId
+    )),
+    reopened_session_target_stable: Boolean(entryFailed || (
+      reopen?.ok
+      && reopen?.task_id === authoringTurn?.task_id
+      && reopen?.title === `修改 · ${label}`
+      && reopen?.maintenance_visible
+      && reopen?.state?.active_id === authoringTurn?.task_id
+      && reopen?.state?.current_expert === 'qwork.builtin.expert-authoring'
+      && protocolAuthoringViewMatches(reopenView, draftId, expertId)
+      && reopen?.session?.id === authoringTurn?.session?.id
+      && JSON.stringify(reopen?.session?.messages) === JSON.stringify(authoringMessages)
+      && JSON.stringify(reopen?.tool_trace) === JSON.stringify(toolTrace)
+    )),
+    new_task_clears_maintenance_context: Boolean(entryFailed || (
+      newTask?.maintenance_visible === false
+      && newTask?.state?.active_id == null
+      && newTask?.state?.is_draft === true
+      && newTask?.state?.draft_instance_id.trim()
+      && (!reopen?.state?.draft_instance_id
+        || newTask.state.draft_instance_id !== reopen.state.draft_instance_id)
+      && newTask?.state?.message_count === 0
+      && newTask?.state?.messages?.length === 0
+      && newTask?.state?.current_expert == null
+      && newTask?.state?.expert_authoring_view == null
+      && (newTask.state.selected_skills == null
+        || (Array.isArray(newTask.state.selected_skills) && newTask.state.selected_skills.length === 0))
+      && (newTask.state.selected_connectors == null
+        || (Array.isArray(newTask.state.selected_connectors) && newTask.state.selected_connectors.length === 0))
+      && newTask.state.attachment_count === 0
+      && newTask.state.send_count === reopen?.state?.send_count
+    )),
+  };
+  const oracleValid = evidenceValid && Object.values(oracleChecks).every(Boolean);
+  const evidenceFailures = Object.entries(evidenceChecks).filter(([, ok]) => !ok).map(([name]) => name);
+  const oracleFailures = Object.entries(oracleChecks).filter(([, ok]) => !ok).map(([name]) => name);
+
+  return {
+    schema_version: 'qbot-core-beta-expert-maintenance-task-trace/v1',
+    case_id: normalizedCaseId,
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    outcome: evidenceValid ? (oracleValid ? 'pass' : 'bug') : 'automation_error',
+    reason: evidenceFailures[0] || oracleFailures[0] || 'expert_maintenance_task_roundtrip_complete',
+    target: {
+      expert_id: expertId,
+      draft_id: draftId,
+      expert_name: label,
+      marker: uniqueMarker,
+      expected_summary: summary,
+      expected_persona: persona,
+    },
+    evidence_checks: evidenceChecks,
+    oracle_checks: oracleChecks,
+    evidence_failures: evidenceFailures,
+    oracle_failures: oracleFailures,
+    entry,
+    quick_task: quickTask,
+    authoring_turn: authoringTurn,
+    tool_trace: toolTrace,
+    draft_before: draftBefore,
+    draft_after: draftAfter,
+    config_roundtrip: configRoundtrip,
+    publication,
+    reopen,
+    new_task: newTask,
+  };
+}
+
 export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, screenshots = {}, actions = [] }) {
   const declared = Array.isArray(testCase?.evidence_roles) ? testCase.evidence_roles : [];
   // A verified-legacy driver may execute with its legacy ID, but every
@@ -1347,7 +2215,10 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   ]);
   const add = (role, file) => {
     if (typeof file !== 'string' || !file || !fs.existsSync(file)) return;
-    const validation = validateEvidenceFile(role, file, { expectedCaseId: evidenceCaseId });
+    const validation = validateEvidenceFile(role, file, {
+      expectedCaseId: evidenceCaseId,
+      expectedCaseDir: caseDir,
+    });
     candidates.set(role, {
       role,
       path: path.resolve(file),
@@ -2259,7 +3130,357 @@ export function buildCoreEvidenceManifest({ testCase, caseDir, artifacts = {}, s
   };
 }
 
-export function validateEvidenceFile(role, file, { expectedCaseId = '' } = {}) {
+function pathIsInsideDirectory(directory, candidate) {
+  const relative = path.relative(directory, candidate);
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function validateWebSearchQuotaTracePayload(parsed, file, expectedCaseId, expectedCaseDir) {
+  const resolvedTraceFile = path.resolve(file);
+  const caseDir = path.resolve(expectedCaseDir || path.dirname(resolvedTraceFile));
+  let realCaseDir;
+  let realTraceFile;
+  try {
+    realCaseDir = fs.realpathSync(caseDir);
+    realTraceFile = fs.realpathSync(resolvedTraceFile);
+  } catch {
+    return { valid: false, error: 'web_search_quota_trace_case_dir_unreadable' };
+  }
+  if (!pathIsInsideDirectory(caseDir, resolvedTraceFile)
+    || !pathIsInsideDirectory(realCaseDir, realTraceFile)) {
+    return { valid: false, error: 'web_search_quota_trace_outside_case' };
+  }
+  const rounds = Array.isArray(parsed?.rounds) ? parsed.rounds : [];
+  if (parsed?.schema_version !== 'qbot-web-search-quota-trace/v1'
+    || parsed?.case_id !== 'MRSMOKE-WEB-001'
+    || (String(expectedCaseId || '').trim() && parsed?.case_id !== expectedCaseId)
+    || parsed?.legacy_case_id !== 'SIT-CONN-019'
+    || parsed?.evidence_valid !== true
+    || rounds.length !== 4
+    || Number(parsed?.round_count) !== 4) {
+    return { valid: false, error: 'web_search_quota_trace_identity_invalid' };
+  }
+
+  const promptSha256s = [];
+  const screenshotPaths = new Set();
+  for (let index = 0; index < rounds.length; index += 1) {
+    const round = rounds[index];
+    const prompt = String(round?.prompt || '').trim();
+    const promptSha256 = prompt
+      ? createHash('sha256').update(prompt).digest('hex')
+      : '';
+    if (Number(round?.round) !== index + 1
+      || !prompt
+      || String(round?.prompt_sha256 || '') !== promptSha256
+      || String(round?.runtime_authority?.promptSha256 || '') !== promptSha256) {
+      return { valid: false, error: 'web_search_quota_trace_prompt_binding_invalid' };
+    }
+    promptSha256s.push(promptSha256);
+
+    const declaredScreenshotPath = String(round?.screenshot?.path || '').trim();
+    if (!declaredScreenshotPath) {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_missing' };
+    }
+    const resolvedScreenshotPath = path.isAbsolute(declaredScreenshotPath)
+      ? path.resolve(declaredScreenshotPath)
+      : path.resolve(caseDir, declaredScreenshotPath);
+    if (!pathIsInsideDirectory(caseDir, resolvedScreenshotPath)) {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_outside_case' };
+    }
+    let screenshotStats;
+    let realScreenshotPath;
+    try {
+      screenshotStats = fs.lstatSync(resolvedScreenshotPath);
+      if (screenshotStats.isSymbolicLink() || !screenshotStats.isFile()) {
+        return { valid: false, error: 'web_search_quota_trace_screenshot_not_regular_file' };
+      }
+      realScreenshotPath = fs.realpathSync(resolvedScreenshotPath);
+    } catch {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_unreadable' };
+    }
+    if (!pathIsInsideDirectory(realCaseDir, realScreenshotPath)) {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_realpath_outside_case' };
+    }
+    if (screenshotPaths.has(realScreenshotPath)) {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_reused' };
+    }
+    screenshotPaths.add(realScreenshotPath);
+    if (screenshotStats.size < 128
+      || typeof round?.screenshot?.bytes !== 'number'
+      || !Number.isSafeInteger(round.screenshot.bytes)
+      || round.screenshot.bytes !== screenshotStats.size
+      || !/^[a-f0-9]{64}$/i.test(String(round?.screenshot?.sha256 || ''))
+      || sha256File(realScreenshotPath) !== round.screenshot.sha256) {
+      return { valid: false, error: 'web_search_quota_trace_screenshot_integrity_invalid' };
+    }
+  }
+
+  if (new Set(promptSha256s).size !== 4
+    || JSON.stringify(parsed?.prompt_sha256s) !== JSON.stringify(promptSha256s)) {
+    return { valid: false, error: 'web_search_quota_trace_prompt_summary_invalid' };
+  }
+
+  const rebuilt = webSearchQuotaTraceVerdict({
+    caseId: parsed.case_id,
+    legacyCaseId: parsed.legacy_case_id,
+    rounds,
+  });
+  for (const key of [
+    'schema_version',
+    'case_id',
+    'legacy_case_id',
+    'evidence_valid',
+    'oracle_valid',
+    'task_id',
+    'round_count',
+    'prompt_sha256s',
+    'provider_receipt_hashes',
+    'evidence_checks',
+    'oracle_checks',
+    'evidence_failures',
+    'oracle_failures',
+  ]) {
+    if (JSON.stringify(parsed?.[key]) !== JSON.stringify(rebuilt[key])) {
+      return { valid: false, error: `web_search_quota_trace_${key}_mismatch` };
+    }
+  }
+  return { valid: true };
+}
+
+function validateExpertMaintenanceTaskTracePayload(parsed, file, expectedCaseId, expectedCaseDir) {
+  const payload = parsed?.schema_version === 'qbot-core-beta-expert-maintenance-task-trace/v1'
+    ? parsed
+    : parsed?.data;
+  if (!protocolObject(payload)
+    || payload.schema_version !== 'qbot-core-beta-expert-maintenance-task-trace/v1'
+    || payload.case_id !== 'BETA-EXPERT-012'
+    || (String(expectedCaseId || '').trim() && payload.case_id !== expectedCaseId)
+    || payload.evidence_valid !== true) {
+    return { valid: false, error: 'expert_maintenance_task_trace_identity_invalid' };
+  }
+  if (parsed !== payload && (
+    parsed?.case_id !== payload.case_id
+    || parsed?.evidence_valid !== payload.evidence_valid
+    || parsed?.oracle_valid !== payload.oracle_valid
+  )) {
+    return { valid: false, error: 'expert_maintenance_task_trace_envelope_mismatch' };
+  }
+  const resolvedTraceFile = path.resolve(file);
+  const caseDir = path.resolve(expectedCaseDir || path.dirname(resolvedTraceFile));
+  let realCaseDir;
+  let realTraceFile;
+  try {
+    realCaseDir = fs.realpathSync(caseDir);
+    realTraceFile = fs.realpathSync(resolvedTraceFile);
+  } catch {
+    return { valid: false, error: 'expert_maintenance_task_trace_case_dir_unreadable' };
+  }
+  if (!pathIsInsideDirectory(caseDir, resolvedTraceFile)
+    || !pathIsInsideDirectory(realCaseDir, realTraceFile)) {
+    return { valid: false, error: 'expert_maintenance_task_trace_outside_case' };
+  }
+  const entryFailed = ['card', 'menu', 'menu_panel', 'action']
+    .includes(String(payload?.entry?.failure_stage || ''));
+  const screenshotReceipts = entryFailed
+    ? [['entry', payload?.entry?.screenshot]]
+    : [
+      ['entry', payload?.entry?.screenshot],
+      ['quick_task', payload?.quick_task?.screenshot],
+      ['authoring_turn', payload?.authoring_turn?.screenshot],
+      ['config_roundtrip', payload?.config_roundtrip?.screenshot],
+      ['publication', payload?.publication?.screenshot],
+      ['reopen', payload?.reopen?.screenshot],
+      ['new_task', payload?.new_task?.screenshot],
+    ];
+  const screenshotRealpaths = new Set();
+  for (const [label, receipt] of screenshotReceipts) {
+    if (!protocolScreenshot(receipt) || !path.isAbsolute(receipt.path)) {
+      return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_receipt_invalid` };
+    }
+    const resolvedScreenshot = path.resolve(receipt.path);
+    if (!pathIsInsideDirectory(caseDir, resolvedScreenshot)) {
+      return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_outside_case` };
+    }
+    let screenshotStats;
+    let realScreenshot;
+    try {
+      screenshotStats = fs.lstatSync(resolvedScreenshot);
+      if (screenshotStats.isSymbolicLink() || !screenshotStats.isFile()) {
+        return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_not_regular_file` };
+      }
+      realScreenshot = fs.realpathSync(resolvedScreenshot);
+    } catch {
+      return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_unreadable` };
+    }
+    if (!pathIsInsideDirectory(realCaseDir, realScreenshot)) {
+      return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_realpath_outside_case` };
+    }
+    if (screenshotRealpaths.has(realScreenshot)) {
+      return { valid: false, error: 'expert_maintenance_task_trace_screenshot_reused' };
+    }
+    screenshotRealpaths.add(realScreenshot);
+    if (screenshotStats.size !== receipt.bytes || sha256File(realScreenshot) !== receipt.sha256) {
+      return { valid: false, error: `expert_maintenance_task_trace_${label}_screenshot_integrity_invalid` };
+    }
+  }
+  const rebuilt = coreBetaExpertMaintenanceTaskEvidence({
+    caseId: payload.case_id,
+    expectedExpertId: payload.target?.expert_id,
+    expectedDraftId: payload.target?.draft_id,
+    expertName: payload.target?.expert_name,
+    marker: payload.target?.marker,
+    expectedSummary: payload.target?.expected_summary,
+    expectedPersona: payload.target?.expected_persona,
+    entry: payload.entry,
+    quickTask: payload.quick_task,
+    authoringTurn: payload.authoring_turn,
+    toolTrace: payload.tool_trace,
+    draftBefore: payload.draft_before,
+    draftAfter: payload.draft_after,
+    configRoundtrip: payload.config_roundtrip,
+    publication: payload.publication,
+    reopen: payload.reopen,
+    newTask: payload.new_task,
+  });
+  for (const key of [
+    'schema_version',
+    'case_id',
+    'evidence_valid',
+    'oracle_valid',
+    'outcome',
+    'reason',
+    'target',
+    'evidence_checks',
+    'oracle_checks',
+    'evidence_failures',
+    'oracle_failures',
+  ]) {
+    if (JSON.stringify(payload?.[key]) !== JSON.stringify(rebuilt[key])) {
+      return { valid: false, error: `expert_maintenance_task_trace_${key}_mismatch` };
+    }
+  }
+  return { valid: true };
+}
+
+function validateTaskRegenerateTransitionPayload(parsed, file, expectedCaseId, expectedCaseDir) {
+  const resolvedTraceFile = path.resolve(file);
+  const caseDir = path.resolve(expectedCaseDir || path.dirname(resolvedTraceFile));
+  let realCaseDir;
+  let realTraceFile;
+  try {
+    realCaseDir = fs.realpathSync(caseDir);
+    realTraceFile = fs.realpathSync(resolvedTraceFile);
+  } catch {
+    return { valid: false, error: 'task_regenerate_transition_case_dir_unreadable' };
+  }
+  if (!pathIsInsideDirectory(caseDir, resolvedTraceFile)
+    || !pathIsInsideDirectory(realCaseDir, realTraceFile)) {
+    return { valid: false, error: 'task_regenerate_transition_outside_case' };
+  }
+  if (parsed?.schema_version !== 'qbot-task-regenerate-transition/v1'
+    || parsed?.case_id !== 'BETA-TASK-002'
+    || parsed?.legacy_case_id !== 'SIT-TASK-REGEN-001'
+    || (String(expectedCaseId || '').trim() && parsed?.case_id !== expectedCaseId)
+    || parsed?.evidence_valid !== true) {
+    return { valid: false, error: 'task_regenerate_transition_identity_invalid' };
+  }
+  const screenshotReceipts = [
+    parsed?.action_receipt?.attempts?.[0]?.before_screenshot,
+    parsed?.action_receipt?.attempts?.[0]?.after_screenshot,
+  ];
+  const screenshotRealpaths = new Set();
+  for (const receipt of screenshotReceipts) {
+    const declaredPath = String(receipt?.path || '').trim();
+    if (!path.isAbsolute(declaredPath)) {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_absolute_path_required' };
+    }
+    const resolvedScreenshot = path.resolve(declaredPath);
+    if (!pathIsInsideDirectory(caseDir, resolvedScreenshot)) {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_outside_case' };
+    }
+    let screenshotStats;
+    let realScreenshot;
+    try {
+      screenshotStats = fs.lstatSync(resolvedScreenshot);
+      if (screenshotStats.isSymbolicLink() || !screenshotStats.isFile()) {
+        return { valid: false, error: 'task_regenerate_transition_screenshot_not_regular_file' };
+      }
+      realScreenshot = fs.realpathSync(resolvedScreenshot);
+    } catch {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_unreadable' };
+    }
+    if (!pathIsInsideDirectory(realCaseDir, realScreenshot)) {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_realpath_outside_case' };
+    }
+    if (screenshotRealpaths.has(realScreenshot)) {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_reused' };
+    }
+    screenshotRealpaths.add(realScreenshot);
+    if (screenshotStats.size < 128
+      || typeof receipt?.bytes !== 'number'
+      || !Number.isSafeInteger(receipt.bytes)
+      || receipt.bytes !== screenshotStats.size
+      || !/^[a-f0-9]{64}$/iu.test(String(receipt?.sha256 || ''))
+      || sha256File(realScreenshot) !== receipt.sha256) {
+      return { valid: false, error: 'task_regenerate_transition_screenshot_integrity_invalid' };
+    }
+  }
+  const rebuilt = taskRegenerateTransitionEvidence({
+    caseId: parsed.case_id,
+    legacyCaseId: parsed.legacy_case_id,
+    actionReceipt: parsed.action_receipt,
+    before: parsed.before,
+    immediateProjection: parsed.immediate_projection,
+    final: parsed.final,
+    reopened: parsed.reopened,
+    captureAttempts: parsed.capture_attempts,
+    transitionWait: parsed.transition_wait,
+    reopenedReadback: parsed.reopened_readback,
+  });
+  for (const key of [
+    'schema_version',
+    'case_id',
+    'legacy_case_id',
+    'task_id',
+    'click_count',
+    'clicked_at',
+    'evidence_valid',
+    'oracle_valid',
+    'outcome',
+    'reason',
+    'evidence_checks',
+    'oracle_checks',
+    'evidence_failures',
+    'oracle_failures',
+    'action_receipt',
+    'before',
+    'immediate_projection',
+    'final',
+    'reopened',
+    'capture_attempts',
+    'transition_wait',
+    'reopened_readback',
+  ]) {
+    if (JSON.stringify(parsed?.[key]) !== JSON.stringify(rebuilt[key])) {
+      return { valid: false, error: `task_regenerate_transition_${key}_mismatch` };
+    }
+  }
+  return { valid: true };
+}
+
+export function validateEvidenceFile(role, file, { expectedCaseId = '', expectedCaseDir = '' } = {}) {
+  if (['web_search_quota_trace', 'expert_maintenance_task_trace', 'task_regenerate_transition', 'regenerate_placeholder_readback'].includes(role)) {
+    if (path.extname(file).toLowerCase() !== '.json') {
+      return { valid: false, error: `${role}_json_required` };
+    }
+    let fileStats;
+    try {
+      fileStats = fs.lstatSync(file);
+    } catch {
+      return { valid: false, error: 'file_unreadable' };
+    }
+    if (fileStats.isSymbolicLink()) return { valid: false, error: 'evidence_symlink_forbidden' };
+  }
   const stats = fs.statSync(file);
   if (!stats.isFile()) return { valid: false, error: 'not_a_file' };
   if (stats.size <= 0) return { valid: false, error: 'empty_file' };
@@ -2340,6 +3561,28 @@ export function validateEvidenceFile(role, file, { expectedCaseId = '' } = {}) {
         || samplesPayload.samples.length !== Number(parsed.sample_count)) {
         return { valid: false, error: 'performance_metrics_sample_count_mismatch' };
       }
+    }
+    if (role === 'web_search_quota_trace') {
+      const quotaTrace = validateWebSearchQuotaTracePayload(parsed, file, expectedCaseId, expectedCaseDir);
+      if (!quotaTrace.valid) return quotaTrace;
+    }
+    if (role === 'expert_maintenance_task_trace') {
+      const maintenanceTrace = validateExpertMaintenanceTaskTracePayload(
+        parsed,
+        file,
+        expectedCaseId,
+        expectedCaseDir,
+      );
+      if (!maintenanceTrace.valid) return maintenanceTrace;
+    }
+    if (['task_regenerate_transition', 'regenerate_placeholder_readback'].includes(role)) {
+      const regenerateTrace = validateTaskRegenerateTransitionPayload(
+        parsed,
+        file,
+        expectedCaseId,
+        expectedCaseDir,
+      );
+      if (!regenerateTrace.valid) return regenerateTrace;
     }
     if (role === 'action_receipt') {
       if (!Array.isArray(parsed) || !parsed.length) return { valid: false, error: 'action_receipts_missing' };

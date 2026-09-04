@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CORE_BETA_EXPERT_012_CONTRACT_VARIANTS,
   CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
   CORE_BETA_BASE_SCENARIO_IDS,
   CORE_BETA_EVIDENCE_ADAPTERS,
@@ -16,14 +17,23 @@ import {
   classifyCoreBetaScopedDependencyGaps,
   classifyCoreBetaScopedFixtureExclusions,
   coreBetaCaseContractSha256,
+  coreBetaExpert012ContractVariant,
+  coreBetaExpertMaintenanceTaskEvidence,
   coreBetaExecutorRoute,
   coreBetaLeafCases,
+  coreBetaScenarioSpec,
   evaluateMachineAssertions,
   validateEvidenceFile,
   validateCoreBetaCase,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
 } from '../src/lib/core-beta-case-protocol.mjs';
+import {
+  webRuntimeAuthorityVerdict,
+  webSearchBusinessVerdict,
+  webSearchFixedQuotaRejection,
+  webSearchQuotaTraceVerdict,
+} from '../src/lib/qbot-web-runtime-evidence.mjs';
 import {
   aggregateCompoundOutcome,
   buildCompoundEvidenceManifest,
@@ -50,11 +60,1072 @@ import {
   normalizeQworkDailyExpertCatalog,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
+function structuredProtocolWebReply(round) {
+  return [
+    `标题：OpenAI 官方更新 ${round}A`,
+    `日期：2026-09-0${round}`,
+    `官方链接：https://openai.com/update-${round}-a`,
+    `摘要：第 ${round} 轮第一条官方更新的完整业务摘要。`,
+    '',
+    `标题：OpenAI 官方更新 ${round}B`,
+    `日期：2026-08-1${round}`,
+    `官方链接：https://platform.openai.com/news-${round}-b`,
+    `摘要：第 ${round} 轮第二条官方更新的完整业务摘要。`,
+  ].join('\n');
+}
+
+function expertMaintenanceEvidenceInput(screenshot) {
+  const screenshotDir = path.dirname(screenshot);
+  const screenshotReceipt = (name, fill) => {
+    const file = path.join(screenshotDir, `expert-maintenance-${name}.png`);
+    fs.writeFileSync(file, Buffer.alloc(256, fill));
+    return {
+      path: file,
+      bytes: fs.statSync(file).size,
+      sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+    };
+  };
+  const expertId = 'expert-maintenance-target';
+  const draftId = 'draft-maintenance-target';
+  const expertName = 'QA 发布维护专家';
+  const marker = '__QBOT_EXPERT_AUTHORING_TARGET_UPDATE_marker__';
+  const expectedSummary = 'QA maintenance summary marker';
+  const expectedPersona = 'QA maintenance persona marker: concise and auditable.';
+  const authoringTaskId = 'task-expert-maintenance';
+  const authoringView = {
+    schema_version: 1,
+    draft_id: draftId,
+    expert_id: expertId,
+  };
+  const idleMetric = {
+    captured: true,
+    active_id: null,
+    send_count: 10,
+    message_count: 0,
+  };
+  const getResult = {
+    ok: true,
+    operation: 'get_expert_draft',
+    draftId,
+    revision: 4,
+    draft: {
+      id: draftId,
+      revision: 4,
+      status: 'draft',
+      content: { summary: 'old summary', personaBody: 'old persona' },
+    },
+  };
+  const updateResult = {
+    ok: true,
+    operation: 'update_expert_draft',
+    draftId,
+    revision: 5,
+    draft: {
+      id: draftId,
+      revision: 5,
+      status: 'draft',
+      content: { summary: expectedSummary, personaBody: expectedPersona },
+    },
+  };
+  const getResultText = JSON.stringify(getResult);
+  const updateResultText = JSON.stringify(updateResult);
+  const toolCalls = [
+    {
+      id: 'tool-get',
+      name: 'mcp__qwork_expert_authoring__get_expert_draft',
+      input: { draftId },
+      result_present: true,
+      result_text: getResultText,
+      result: getResult,
+      result_sha256: createHash('sha256').update(getResultText).digest('hex'),
+      is_error: false,
+    },
+    {
+      id: 'tool-update',
+      name: 'mcp__qwork_expert_authoring__update_expert_draft',
+      input: {
+        draftId,
+        patch: {
+          summary: expectedSummary,
+          personaBody: expectedPersona,
+        },
+      },
+      result_present: true,
+      result_text: updateResultText,
+      result: updateResult,
+      result_sha256: createHash('sha256').update(updateResultText).digest('hex'),
+      is_error: false,
+    },
+  ];
+  const prompt = [
+    '修改当前绑定的专家草稿，不要创建或复制其他专家。',
+    '__QBOT_EXPERT_AUTHORING_TARGET_UPDATE__',
+    marker,
+    `expert-summary: ${expectedSummary}`,
+    `expert-persona: ${expectedPersona}`,
+  ].join('\n');
+  const session = {
+    id: authoringTaskId,
+    messages: [
+      { role: 'user', parts: [{ t: 'text', text: prompt }] },
+      {
+        role: 'assistant',
+        parts: [
+          {
+            t: 'tool',
+            id: toolCalls[0].id,
+            name: toolCalls[0].name,
+            input: toolCalls[0].input,
+            result: toolCalls[0].result_text,
+            isError: false,
+          },
+          {
+            t: 'tool',
+            id: toolCalls[1].id,
+            name: toolCalls[1].name,
+            input: toolCalls[1].input,
+            result: toolCalls[1].result_text,
+            isError: false,
+          },
+          { t: 'text', text: '专家草稿已更新。' },
+        ],
+      },
+    ],
+  };
+  const startedOperation = {
+    id: 'operation-maintenance-publish',
+    expertId,
+    draftId,
+    state: 'queued',
+    result: null,
+  };
+  const terminalOperation = {
+    id: startedOperation.id,
+    expertId,
+    draftId,
+    state: 'succeeded',
+    result: {
+      expertId,
+      versionId: 'version-maintenance-3',
+      releaseId: 'release-maintenance-3',
+    },
+  };
+  const beforeVersions = [1, 2].map((index) => ({
+    expertId,
+    version: { id: `version-maintenance-${index}` },
+  }));
+  const beforeReleases = [1, 2].map((index) => ({
+    expertId,
+    release: { id: `release-maintenance-${index}`, versionId: `version-maintenance-${index}` },
+  }));
+  const afterExpert = {
+    id: expertId,
+    activeReleaseId: terminalOperation.result.releaseId,
+    version: { id: terminalOperation.result.versionId },
+    release: {
+      id: terminalOperation.result.releaseId,
+      versionId: terminalOperation.result.versionId,
+    },
+  };
+  return {
+    caseId: 'BETA-EXPERT-012',
+    expectedExpertId: expertId,
+    expectedDraftId: draftId,
+    expertName,
+    marker,
+    expectedSummary,
+    expectedPersona,
+    entry: {
+      captured: true,
+      card_visible: true,
+      menu_visible: true,
+      menu_panel_visible: true,
+      action_visible: true,
+      action_clicked: true,
+      failure_stage: '',
+      failure_reason: '',
+      no_prompt_recorded: true,
+      no_send_receipt_recorded: true,
+      before: structuredClone(idleMetric),
+      after: {
+        ...structuredClone(idleMetric),
+        current_expert: 'qwork.builtin.expert-authoring',
+        expert_authoring_view: structuredClone(authoringView),
+      },
+      surface: {
+        header: true,
+        name: true,
+        status: true,
+        welcome: true,
+        quick_tasks: true,
+        adjust_responsibilities: true,
+        composer_input: true,
+        composer_expert_chip: true,
+        open_config: true,
+        name_text: expertName,
+        status_text: '有未发布修改',
+        welcome_text: `你想怎么调整「${expertName}」？`,
+      },
+      draft_inventory_before: [],
+      draft_inventory_after: [{ id: draftId, expertId }],
+      screenshot: screenshotReceipt('entry', 1),
+    },
+    quickTask: {
+      captured: true,
+      clicked: true,
+      before: structuredClone(idleMetric),
+      after: structuredClone(idleMetric),
+      composer_text: '请调整这个专家的 Persona 与职责。',
+      screenshot: screenshotReceipt('quick-task', 2),
+    },
+    authoringTurn: {
+      captured: true,
+      prompt,
+      task_id: authoringTaskId,
+      reply_incomplete: false,
+      before: structuredClone(idleMetric),
+      after: {
+        captured: true,
+        active_id: authoringTaskId,
+        send_count: 11,
+        message_count: 2,
+        current_expert: 'qwork.builtin.expert-authoring',
+        expert_authoring_view: structuredClone(authoringView),
+      },
+      session,
+      screenshot: screenshotReceipt('authoring-turn', 3),
+    },
+    toolTrace: {
+      captured: true,
+      source: 'window.agent.readSession/currentSession.messages.parts',
+      task_id: authoringTaskId,
+      calls: toolCalls,
+    },
+    draftBefore: {
+      id: draftId,
+      expert_id: expertId,
+      revision: 4,
+      content: { summary: 'old summary', persona_body: 'old persona' },
+    },
+    draftAfter: {
+      id: draftId,
+      expert_id: expertId,
+      revision: 5,
+      content: { summary: expectedSummary, persona_body: expectedPersona },
+    },
+    configRoundtrip: {
+      captured: true,
+      lifecycle_visible: true,
+      selected_draft_id: draftId,
+      selected_expert_id: expertId,
+      summary_value: expectedSummary,
+      persona_value: expectedPersona,
+      back_aria_label: '返回维护任务',
+      returned_to_maintenance: true,
+      screenshot: screenshotReceipt('config-roundtrip', 4),
+    },
+    publication: {
+      captured: true,
+      before: {
+        versions: beforeVersions,
+        releases: beforeReleases,
+        version_count: beforeVersions.length,
+        release_count: beforeReleases.length,
+      },
+      after: {
+        expert: afterExpert,
+        versions: [...beforeVersions, {
+          expertId,
+          version: { id: terminalOperation.result.versionId },
+        }],
+        releases: [...beforeReleases, {
+          expertId,
+          release: {
+            id: terminalOperation.result.releaseId,
+            versionId: terminalOperation.result.versionId,
+          },
+        }],
+        version_count: 3,
+        release_count: 3,
+      },
+      publish_button_visible: true,
+      review_visible: true,
+      warning_ack_present: true,
+      warning_acknowledged_or_not_required: true,
+      confirm_visible: true,
+      confirm_clicked: true,
+      review_closed: true,
+      operation_visible: true,
+      operation_text: '发布完成',
+      operation_class: 'expert-v2-operation-succeeded',
+      terminal_state: 'succeeded',
+      expert_id: expertId,
+      draft_id: draftId,
+      operation_id: startedOperation.id,
+      expected_revision: 5,
+      idempotency_key: 'expert-maintenance-visible-publish-key',
+      operation_probe: {
+        installed: true,
+        restored: true,
+        publish_calls: [{
+          args: {
+            draft_id: draftId,
+            expected_revision: 5,
+            idempotency_key: 'expert-maintenance-visible-publish-key',
+          },
+          result: startedOperation,
+          error: null,
+        }],
+        get_operation_calls: [{
+          args: {
+            operation_id: startedOperation.id,
+            draft_id: draftId,
+            expected_revision: 5,
+          },
+          result: terminalOperation,
+          error: null,
+        }],
+      },
+      operation_states: [startedOperation, terminalOperation],
+      terminal_operation: terminalOperation,
+      screenshot: screenshotReceipt('publication', 5),
+    },
+    reopen: {
+      captured: true,
+      ok: true,
+      task_id: authoringTaskId,
+      title: `修改 · ${expertName}`,
+      maintenance_visible: true,
+      state: {
+        captured: true,
+        active_id: authoringTaskId,
+        send_count: 11,
+        message_count: 2,
+        is_draft: false,
+        draft_instance_id: 'draft-instance-maintenance',
+        current_expert: 'qwork.builtin.expert-authoring',
+        expert_authoring_view: structuredClone(authoringView),
+      },
+      session: structuredClone(session),
+      tool_trace: {
+        captured: true,
+        source: 'window.agent.readSession/currentSession.messages.parts',
+        task_id: authoringTaskId,
+        calls: structuredClone(toolCalls),
+      },
+      screenshot: screenshotReceipt('reopen', 6),
+    },
+    newTask: {
+      captured: true,
+      maintenance_visible: false,
+      state: {
+        captured: true,
+        active_id: null,
+        send_count: 11,
+        message_count: 0,
+        is_draft: true,
+        draft_instance_id: 'draft-instance-fresh',
+        current_expert: null,
+        expert_authoring_view: null,
+        messages: [],
+        selected_skills: null,
+        selected_connectors: null,
+        attachment_count: 0,
+      },
+      screenshot: screenshotReceipt('new-task', 7),
+    },
+  };
+}
+
 assert.equal(
   CORE_BETA_EVIDENCE_ADAPTERS.has('workspace_missing_error_readback'),
   true,
   'cwd 删除后的结构化工作空间错误必须有正式证据适配器',
 );
+
+{
+  const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-maintenance-trace-'));
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-maintenance-outside-'));
+  try {
+    const screenshot = path.join(caseDir, 'expert-maintenance.png');
+    fs.writeFileSync(screenshot, Buffer.alloc(256, 3));
+    const validInput = expertMaintenanceEvidenceInput(screenshot);
+    const validTrace = coreBetaExpertMaintenanceTaskEvidence(validInput);
+    assert.equal(validTrace.evidence_valid, true);
+    assert.equal(validTrace.oracle_valid, true);
+    assert.equal(validTrace.outcome, 'pass');
+
+    const traceFile = path.join(caseDir, 'expert-maintenance-task-trace.json');
+    fs.writeFileSync(traceFile, JSON.stringify(validTrace));
+    assert.equal(
+      validateEvidenceFile('expert_maintenance_task_trace', traceFile, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      }).valid,
+      true,
+      '完整专家维护任务 trace 必须通过专用复算校验',
+    );
+    const completeManifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-012', evidence_roles: ['expert_maintenance_task_trace'] },
+      caseDir,
+      artifacts: { expert_maintenance_task_trace: traceFile },
+    });
+    assert.equal(completeManifest.complete, true);
+    assert.deepEqual(completeManifest.invalid_roles, []);
+
+    const missingTraceManifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-012', evidence_roles: ['expert_maintenance_task_trace'] },
+      caseDir,
+    });
+    assert.equal(missingTraceManifest.complete, false);
+    assert.deepEqual(missingTraceManifest.missing_roles, ['expert_maintenance_task_trace']);
+
+    const quickTaskSent = expertMaintenanceEvidenceInput(screenshot);
+    quickTaskSent.quickTask.after.send_count += 1;
+    quickTaskSent.quickTask.after.message_count += 1;
+    quickTaskSent.quickTask.after.active_id = 'unexpected-task';
+    const quickTaskSentTrace = coreBetaExpertMaintenanceTaskEvidence(quickTaskSent);
+    assert.equal(quickTaskSentTrace.evidence_valid, true);
+    assert.equal(quickTaskSentTrace.oracle_checks.quick_task_prefill_only, false);
+    assert.equal(quickTaskSentTrace.outcome, 'bug');
+
+    const identityDrift = expertMaintenanceEvidenceInput(screenshot);
+    identityDrift.entry.after.expert_authoring_view.expert_id = 'other-expert';
+    const identityDriftTrace = coreBetaExpertMaintenanceTaskEvidence(identityDrift);
+    assert.equal(identityDriftTrace.evidence_valid, true);
+    assert.equal(identityDriftTrace.oracle_checks.maintenance_state_bound, false);
+    assert.equal(identityDriftTrace.outcome, 'bug');
+
+    const reusedDraft = expertMaintenanceEvidenceInput(screenshot);
+    reusedDraft.entry.draft_inventory_before = structuredClone(reusedDraft.entry.draft_inventory_after);
+    const reusedDraftTrace = coreBetaExpertMaintenanceTaskEvidence(reusedDraft);
+    assert.equal(reusedDraftTrace.evidence_valid, true);
+    assert.equal(reusedDraftTrace.oracle_checks.fresh_maintenance_draft_created, false);
+
+    const entryFailure = expertMaintenanceEvidenceInput(screenshot);
+    entryFailure.expectedDraftId = '';
+    entryFailure.entry.failure_stage = 'action';
+    entryFailure.entry.failure_reason = '缺少真实“通过对话修改”入口';
+    entryFailure.entry.action_visible = false;
+    entryFailure.entry.action_clicked = false;
+    entryFailure.entry.after = structuredClone(entryFailure.entry.before);
+    entryFailure.entry.draft_inventory_after = structuredClone(entryFailure.entry.draft_inventory_before);
+    entryFailure.quickTask = null;
+    entryFailure.authoringTurn = null;
+    entryFailure.toolTrace = null;
+    entryFailure.draftBefore = null;
+    entryFailure.draftAfter = null;
+    entryFailure.configRoundtrip = null;
+    entryFailure.publication = null;
+    entryFailure.reopen = null;
+    entryFailure.newTask = null;
+    const entryFailureTrace = coreBetaExpertMaintenanceTaskEvidence(entryFailure);
+    assert.equal(entryFailureTrace.evidence_valid, true, '入口缺失且零发送证据完整时应保留为产品 Bug');
+    assert.equal(entryFailureTrace.oracle_valid, false);
+    assert.equal(entryFailureTrace.outcome, 'bug');
+    fs.writeFileSync(traceFile, JSON.stringify(entryFailureTrace));
+    assert.equal(
+      validateEvidenceFile('expert_maintenance_task_trace', traceFile, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      }).valid,
+      true,
+      '入口缺失产品 Bug 的完整 trace 应保持 manifest-valid',
+    );
+
+    const unsafeEntryFailure = structuredClone(entryFailure);
+    unsafeEntryFailure.entry.no_send_receipt_recorded = false;
+    assert.equal(
+      coreBetaExpertMaintenanceTaskEvidence(unsafeEntryFailure).evidence_valid,
+      false,
+      '入口缺失但无法证明零发送时必须归类为证据错误',
+    );
+
+    const missingTool = expertMaintenanceEvidenceInput(screenshot);
+    missingTool.toolTrace.calls.pop();
+    missingTool.authoringTurn.session.messages[1].parts.splice(1, 1);
+    missingTool.reopen.session = structuredClone(missingTool.authoringTurn.session);
+    missingTool.reopen.tool_trace = structuredClone(missingTool.toolTrace);
+    const missingToolTrace = coreBetaExpertMaintenanceTaskEvidence(missingTool);
+    assert.equal(missingToolTrace.evidence_valid, true);
+    assert.equal(missingToolTrace.oracle_checks.exact_authoring_tool_sequence, false);
+    assert.equal(missingToolTrace.outcome, 'bug');
+
+    const extraTool = expertMaintenanceEvidenceInput(screenshot);
+    const extraToolResultText = JSON.stringify({ ok: true, operation: 'publish_expert_draft' });
+    const extraToolCall = {
+      id: 'tool-extra',
+      name: 'mcp__qwork_expert_authoring__publish_expert_draft',
+      input: { draftId: extraTool.expectedDraftId },
+      result_present: true,
+      result_text: extraToolResultText,
+      result: JSON.parse(extraToolResultText),
+      result_sha256: createHash('sha256').update(extraToolResultText).digest('hex'),
+      is_error: false,
+    };
+    extraTool.toolTrace.calls.push(extraToolCall);
+    extraTool.authoringTurn.session.messages[1].parts.splice(2, 0, {
+      t: 'tool',
+      id: extraToolCall.id,
+      name: extraToolCall.name,
+      input: extraToolCall.input,
+      result: extraToolCall.result_text,
+      isError: false,
+    });
+    extraTool.reopen.session = structuredClone(extraTool.authoringTurn.session);
+    extraTool.reopen.tool_trace = structuredClone(extraTool.toolTrace);
+    const extraToolTrace = coreBetaExpertMaintenanceTaskEvidence(extraTool);
+    assert.equal(extraToolTrace.evidence_valid, true);
+    assert.equal(extraToolTrace.oracle_checks.exact_authoring_tool_sequence, false);
+
+    const staleRevision = expertMaintenanceEvidenceInput(screenshot);
+    staleRevision.draftAfter.revision = staleRevision.draftBefore.revision;
+    const staleRevisionTrace = coreBetaExpertMaintenanceTaskEvidence(staleRevision);
+    assert.equal(staleRevisionTrace.evidence_valid, true);
+    assert.equal(staleRevisionTrace.oracle_checks.draft_revision_and_content, false);
+
+    const wrongToolResult = expertMaintenanceEvidenceInput(screenshot);
+    const wrongUpdateResult = structuredClone(wrongToolResult.toolTrace.calls[1].result);
+    wrongUpdateResult.draftId = 'other-draft';
+    wrongUpdateResult.draft.id = 'other-draft';
+    const wrongUpdateResultText = JSON.stringify(wrongUpdateResult);
+    wrongToolResult.toolTrace.calls[1].result_text = wrongUpdateResultText;
+    wrongToolResult.toolTrace.calls[1].result = wrongUpdateResult;
+    wrongToolResult.toolTrace.calls[1].result_sha256 = createHash('sha256').update(wrongUpdateResultText).digest('hex');
+    wrongToolResult.authoringTurn.session.messages[1].parts[1].result = wrongUpdateResultText;
+    wrongToolResult.reopen.session = structuredClone(wrongToolResult.authoringTurn.session);
+    wrongToolResult.reopen.tool_trace = structuredClone(wrongToolResult.toolTrace);
+    const wrongToolResultTrace = coreBetaExpertMaintenanceTaskEvidence(wrongToolResult);
+    assert.equal(wrongToolResultTrace.evidence_valid, true);
+    assert.equal(wrongToolResultTrace.oracle_checks.authoring_tool_target_and_results, false);
+
+    const forgedParsedToolResult = expertMaintenanceEvidenceInput(screenshot);
+    forgedParsedToolResult.toolTrace.calls[1].result.draft.content.summary = 'forged parsed summary';
+    const forgedParsedTrace = coreBetaExpertMaintenanceTaskEvidence(forgedParsedToolResult);
+    assert.equal(forgedParsedTrace.evidence_valid, false, 'parsed result 与原始 result_text 不一致必须拒绝');
+    assert.equal(forgedParsedTrace.evidence_checks.tool_trace_recomputed_from_session, false);
+
+    const missingRevision = expertMaintenanceEvidenceInput(screenshot);
+    missingRevision.draftBefore.revision = null;
+    const missingRevisionTrace = coreBetaExpertMaintenanceTaskEvidence(missingRevision);
+    assert.equal(missingRevisionTrace.evidence_valid, false);
+    assert.equal(missingRevisionTrace.outcome, 'automation_error');
+
+    const extraPublication = expertMaintenanceEvidenceInput(screenshot);
+    extraPublication.publication.after.versions.push({
+      expertId: extraPublication.expectedExpertId,
+      version: { id: 'version-maintenance-unexpected' },
+    });
+    extraPublication.publication.after.releases.push({
+      expertId: extraPublication.expectedExpertId,
+      release: {
+        id: 'release-maintenance-unexpected',
+        versionId: 'version-maintenance-unexpected',
+      },
+    });
+    extraPublication.publication.after.version_count = extraPublication.publication.after.versions.length;
+    extraPublication.publication.after.release_count = extraPublication.publication.after.releases.length;
+    const extraPublicationTrace = coreBetaExpertMaintenanceTaskEvidence(extraPublication);
+    assert.equal(extraPublicationTrace.evidence_valid, true);
+    assert.equal(extraPublicationTrace.oracle_checks.visible_publish_exactly_one_version_release, false);
+
+    const stalePublishCas = expertMaintenanceEvidenceInput(screenshot);
+    stalePublishCas.publication.expected_revision = 4;
+    stalePublishCas.publication.operation_probe.publish_calls[0].args.expected_revision = 4;
+    stalePublishCas.publication.operation_probe.get_operation_calls[0].args.expected_revision = 4;
+    const stalePublishCasTrace = coreBetaExpertMaintenanceTaskEvidence(stalePublishCas);
+    assert.equal(stalePublishCasTrace.evidence_valid, true);
+    assert.equal(stalePublishCasTrace.oracle_checks.visible_publish_exactly_one_version_release, false);
+
+    const operationIdentityDrift = expertMaintenanceEvidenceInput(screenshot);
+    operationIdentityDrift.publication.operation_id = 'other-operation';
+    const operationIdentityDriftTrace = coreBetaExpertMaintenanceTaskEvidence(operationIdentityDrift);
+    assert.equal(operationIdentityDriftTrace.evidence_valid, true);
+    assert.equal(operationIdentityDriftTrace.oracle_checks.visible_publish_exactly_one_version_release, false);
+
+    const reopenDrift = expertMaintenanceEvidenceInput(screenshot);
+    reopenDrift.reopen.task_id = 'other-task';
+    reopenDrift.reopen.state.active_id = 'other-task';
+    const reopenDriftTrace = coreBetaExpertMaintenanceTaskEvidence(reopenDrift);
+    assert.equal(reopenDriftTrace.evidence_valid, true);
+    assert.equal(reopenDriftTrace.oracle_checks.reopened_session_target_stable, false);
+
+    const reopenMessageDrift = expertMaintenanceEvidenceInput(screenshot);
+    reopenMessageDrift.reopen.session.messages[1].parts.at(-1).text = '重开后被篡改的助手消息';
+    const reopenMessageDriftTrace = coreBetaExpertMaintenanceTaskEvidence(reopenMessageDrift);
+    assert.equal(reopenMessageDriftTrace.evidence_valid, true);
+    assert.equal(reopenMessageDriftTrace.oracle_checks.reopened_session_target_stable, false);
+
+    const inheritedNewTask = expertMaintenanceEvidenceInput(screenshot);
+    inheritedNewTask.newTask.maintenance_visible = true;
+    inheritedNewTask.newTask.state.current_expert = 'qwork.builtin.expert-authoring';
+    inheritedNewTask.newTask.state.expert_authoring_view = {
+      schema_version: 1,
+      draft_id: inheritedNewTask.expectedDraftId,
+      expert_id: inheritedNewTask.expectedExpertId,
+    };
+    const inheritedNewTaskTrace = coreBetaExpertMaintenanceTaskEvidence(inheritedNewTask);
+    assert.equal(inheritedNewTaskTrace.evidence_valid, true);
+    assert.equal(inheritedNewTaskTrace.oracle_checks.new_task_clears_maintenance_context, false);
+
+    for (const [name, mutate] of [
+      ['messages', (input) => input.newTask.state.messages.push({ role: 'user', parts: [{ t: 'text', text: 'old' }] })],
+      ['skill', (input) => { input.newTask.state.selected_skills = ['inherited-skill']; }],
+      ['connector', (input) => { input.newTask.state.selected_connectors = ['inherited-connector']; }],
+      ['attachment', (input) => { input.newTask.state.attachment_count = 1; }],
+      ['draft', (input) => { input.newTask.state.draft_instance_id = input.reopen.state.draft_instance_id; }],
+    ]) {
+      const inherited = expertMaintenanceEvidenceInput(screenshot);
+      mutate(inherited);
+      const trace = coreBetaExpertMaintenanceTaskEvidence(inherited);
+      assert.equal(trace.evidence_valid, true, `${name} 继承仍应保留完整产品证据`);
+      assert.equal(trace.oracle_checks.new_task_clears_maintenance_context, false, `${name} 继承必须失败`);
+    }
+
+    fs.writeFileSync(traceFile, JSON.stringify(extraPublicationTrace));
+    const productFailureManifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-012', evidence_roles: ['expert_maintenance_task_trace'] },
+      caseDir,
+      artifacts: { expert_maintenance_task_trace: traceFile },
+    });
+    assert.equal(extraPublicationTrace.oracle_valid, false);
+    assert.equal(productFailureManifest.complete, true, '产品 Oracle 失败不得令完整证据失效');
+
+    const evidenceFailure = expertMaintenanceEvidenceInput(screenshot);
+    evidenceFailure.entry.before.send_count = null;
+    const evidenceFailureTrace = coreBetaExpertMaintenanceTaskEvidence(evidenceFailure);
+    fs.writeFileSync(traceFile, JSON.stringify(evidenceFailureTrace));
+    const evidenceFailureManifest = buildCoreEvidenceManifest({
+      testCase: { id: 'BETA-EXPERT-012', evidence_roles: ['expert_maintenance_task_trace'] },
+      caseDir,
+      artifacts: { expert_maintenance_task_trace: traceFile },
+    });
+    assert.equal(evidenceFailureTrace.evidence_valid, false);
+    assert.equal(evidenceFailureManifest.complete, false);
+    assert.deepEqual(evidenceFailureManifest.invalid_roles, ['expert_maintenance_task_trace']);
+
+    const tamperedTrace = structuredClone(validTrace);
+    tamperedTrace.new_task.state.current_expert = 'qwork.builtin.expert-authoring';
+    fs.writeFileSync(traceFile, JSON.stringify(tamperedTrace));
+    assert.equal(
+      validateEvidenceFile('expert_maintenance_task_trace', traceFile, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      }).valid,
+      false,
+      'trace 原始字段被篡改后必须通过复算拒绝自报结论',
+    );
+
+    const assertRejectedTrace = (trace, expectedError, message) => {
+      fs.writeFileSync(traceFile, JSON.stringify(trace));
+      const validation = validateEvidenceFile('expert_maintenance_task_trace', traceFile, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      });
+      assert.equal(validation.valid, false, message);
+      assert.equal(validation.error, expectedError, message);
+    };
+
+    const outsideTraceFile = path.join(outsideDir, 'expert-maintenance-task-trace.json');
+    fs.writeFileSync(outsideTraceFile, JSON.stringify(validTrace));
+    assert.equal(
+      validateEvidenceFile('expert_maintenance_task_trace', outsideTraceFile, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      }).valid,
+      false,
+      '专家维护 trace 本体越出 Case 目录时必须拒绝',
+    );
+
+    fs.writeFileSync(traceFile, JSON.stringify(validTrace));
+    const traceSymlink = path.join(caseDir, 'expert-maintenance-task-trace-link.json');
+    fs.symlinkSync(traceFile, traceSymlink);
+    assert.equal(
+      validateEvidenceFile('expert_maintenance_task_trace', traceSymlink, {
+        expectedCaseId: 'BETA-EXPERT-012',
+        expectedCaseDir: caseDir,
+      }).error,
+      'evidence_symlink_forbidden',
+      '专家维护 trace 本体为符号链接时必须拒绝',
+    );
+
+    const outsideScreenshotInput = expertMaintenanceEvidenceInput(screenshot);
+    const outsideScreenshot = path.join(outsideDir, 'expert-maintenance-outside.png');
+    fs.writeFileSync(outsideScreenshot, Buffer.alloc(256, 8));
+    outsideScreenshotInput.entry.screenshot = {
+      path: outsideScreenshot,
+      bytes: fs.statSync(outsideScreenshot).size,
+      sha256: createHash('sha256').update(fs.readFileSync(outsideScreenshot)).digest('hex'),
+    };
+    assertRejectedTrace(
+      coreBetaExpertMaintenanceTaskEvidence(outsideScreenshotInput),
+      'expert_maintenance_task_trace_entry_screenshot_outside_case',
+      '专家维护截图越出 Case 目录时必须拒绝',
+    );
+
+    const symlinkScreenshotInput = expertMaintenanceEvidenceInput(screenshot);
+    const screenshotSymlink = path.join(caseDir, 'expert-maintenance-entry-link.png');
+    fs.symlinkSync(symlinkScreenshotInput.entry.screenshot.path, screenshotSymlink);
+    symlinkScreenshotInput.entry.screenshot = {
+      ...symlinkScreenshotInput.entry.screenshot,
+      path: screenshotSymlink,
+    };
+    assertRejectedTrace(
+      coreBetaExpertMaintenanceTaskEvidence(symlinkScreenshotInput),
+      'expert_maintenance_task_trace_entry_screenshot_not_regular_file',
+      '专家维护截图为符号链接时必须拒绝',
+    );
+
+    const bytesMismatchInput = expertMaintenanceEvidenceInput(screenshot);
+    bytesMismatchInput.entry.screenshot.bytes += 1;
+    assertRejectedTrace(
+      coreBetaExpertMaintenanceTaskEvidence(bytesMismatchInput),
+      'expert_maintenance_task_trace_entry_screenshot_integrity_invalid',
+      '专家维护截图声明 bytes 与磁盘不一致时必须拒绝',
+    );
+
+    const shaMismatchInput = expertMaintenanceEvidenceInput(screenshot);
+    shaMismatchInput.entry.screenshot.sha256 = 'f'.repeat(64);
+    assertRejectedTrace(
+      coreBetaExpertMaintenanceTaskEvidence(shaMismatchInput),
+      'expert_maintenance_task_trace_entry_screenshot_integrity_invalid',
+      '专家维护截图声明 SHA 与磁盘不一致时必须拒绝',
+    );
+
+    const reusedScreenshotInput = expertMaintenanceEvidenceInput(screenshot);
+    reusedScreenshotInput.quickTask.screenshot = structuredClone(reusedScreenshotInput.entry.screenshot);
+    assertRejectedTrace(
+      coreBetaExpertMaintenanceTaskEvidence(reusedScreenshotInput),
+      'expert_maintenance_task_trace_screenshot_reused',
+      '专家维护多个阶段重复引用同一截图时必须拒绝',
+    );
+  } finally {
+    fs.rmSync(caseDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+}
+
+{
+  const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-web-search-quota-trace-'));
+  const taskId = 'task-web-search-quota-trace';
+  const rounds = Array.from({ length: 4 }, (_, index) => {
+    const round = index + 1;
+    const prompt = `第${round}轮真实 Web 搜索`;
+    const promptSha256 = createHash('sha256').update(prompt).digest('hex');
+    const screenshotPath = path.join(caseDir, `round-${round}.png`);
+    fs.writeFileSync(screenshotPath, Buffer.alloc(256, round));
+    const runtimeEvidence = {
+      diagnostics: {
+        sessionId: taskId,
+        e2eCurrentTurnAuthorityReadiness: { ready: true },
+        e2eCurrentTurnAuthority: {
+          connectorRouting: {
+            effectiveConnectorIds: ['builtin:qbot_web'],
+            mode: 'auto',
+          },
+          connectorRuntimeMaterialization: {
+            materializedConnectorIds: ['builtin:qbot_web'],
+            unsupportedConnectorIds: [],
+          },
+          providerReceiptHash: `${String.fromCharCode(96 + round)}`.repeat(64),
+          executionTarget: 'desktop-local',
+          routeTarget: 'builtin:qbot_web',
+        },
+      },
+    };
+    const toolTexts = ['qbot_web provider search completed'];
+    const sendReceipts = [{
+      action: `发送第${round}轮`,
+      prompt,
+      confirmed_at: '2026-09-04T00:00:00.000Z',
+      attempts: [{
+        clicked: true,
+        receipt: { ok: true, snapshot: { activeId: taskId, userTexts: [prompt] } },
+      }],
+    }];
+    const businessOracle = webSearchBusinessVerdict(
+      structuredProtocolWebReply(round),
+      `${toolTexts.join('\n')}\n${JSON.stringify(runtimeEvidence)}`,
+    );
+    const runtimeAuthority = webRuntimeAuthorityVerdict({
+      runtimeEvidence,
+      prompt,
+      sendReceipts,
+      expectedTaskId: round === 1 ? '' : taskId,
+    });
+    return {
+      round,
+      prompt,
+      prompt_sha256: promptSha256,
+      task_id: taskId,
+      reply: structuredProtocolWebReply(round),
+      tool_texts: toolTexts,
+      runtime_evidence: runtimeEvidence,
+      send_receipts: sendReceipts,
+      business_oracle: businessOracle,
+      runtime_authority: runtimeAuthority,
+      post_round_state: { available: true, activeId: taskId, running: false },
+      timeout_cleanup_ok: true,
+      screenshot: {
+        path: screenshotPath,
+        bytes: fs.statSync(screenshotPath).size,
+        sha256: createHash('sha256').update(fs.readFileSync(screenshotPath)).digest('hex'),
+      },
+    };
+  });
+  const validTrace = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds,
+  });
+  const traceFile = path.join(caseDir, 'web-search-quota-trace.json');
+  fs.writeFileSync(traceFile, JSON.stringify(validTrace));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    true,
+    '四轮 Web 搜索 trace 必须从磁盘实读 prompt 与四张 Case 内截图后才可进入 manifest',
+  );
+
+  const emptyTaskRound = structuredClone(validTrace);
+  emptyTaskRound.rounds[2].task_id = '';
+  emptyTaskRound.rounds[2].runtime_authority.taskId = '';
+  emptyTaskRound.rounds[2].post_round_state.activeId = '';
+  emptyTaskRound.rounds[2].runtime_authority.ok = true;
+  fs.writeFileSync(traceFile, JSON.stringify(emptyTaskRound));
+  const emptyTaskResult = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds: emptyTaskRound.rounds,
+  });
+  assert.equal(emptyTaskResult.evidence_checks.one_nonempty_task_for_all_rounds, false, '任一轮 taskId 为空必须失败');
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    '任一轮 taskId 为空不得进入 manifest',
+  );
+
+  const forgedBusiness = structuredClone(validTrace);
+  forgedBusiness.rounds[0].reply = '这不是搜索结果';
+  fs.writeFileSync(traceFile, JSON.stringify(forgedBusiness));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    '业务 Oracle 必须从原始回复和工具证据重算，不能信任自报 ok',
+  );
+
+  const forgedRuntime = structuredClone(validTrace);
+  forgedRuntime.rounds[1].runtime_evidence.diagnostics.e2eCurrentTurnAuthority.connectorRuntimeMaterialization.materializedConnectorIds = [];
+  fs.writeFileSync(traceFile, JSON.stringify(forgedRuntime));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'runtime authority 必须从原始 runtime evidence 和发送回执重算',
+  );
+
+  const forgedReceipt = structuredClone(validTrace);
+  forgedReceipt.rounds[0].send_receipts[0].confirmed_at = '';
+  fs.writeFileSync(traceFile, JSON.stringify(forgedReceipt));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    '发送回执原始字段被篡改时不得继续使用自报 runtime authority',
+  );
+
+  const promptTampered = structuredClone(validTrace);
+  promptTampered.rounds[0].prompt = '篡改后的搜索请求';
+  fs.writeFileSync(traceFile, JSON.stringify(promptTampered));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 不得接受未随 prompt 重算的自报 SHA',
+  );
+
+  const checksumTampered = structuredClone(validTrace);
+  checksumTampered.rounds[1].screenshot.sha256 = 'f'.repeat(64);
+  fs.writeFileSync(traceFile, JSON.stringify(checksumTampered));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 不得接受与截图实际字节不一致的自报 SHA',
+  );
+
+  const stringBytes = structuredClone(validTrace);
+  stringBytes.rounds[1].screenshot.bytes = String(stringBytes.rounds[1].screenshot.bytes);
+  fs.writeFileSync(traceFile, JSON.stringify(stringBytes));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 截图 bytes 必须是与磁盘严格相等的安全整数，不能接受字符串强转',
+  );
+
+  const smallScreenshot = path.join(caseDir, 'round-small.png');
+  fs.writeFileSync(smallScreenshot, Buffer.alloc(64, 7));
+  const tooSmall = structuredClone(validTrace);
+  tooSmall.rounds[1].screenshot = {
+    path: smallScreenshot,
+    bytes: fs.statSync(smallScreenshot).size,
+    sha256: createHash('sha256').update(fs.readFileSync(smallScreenshot)).digest('hex'),
+  };
+  fs.writeFileSync(traceFile, JSON.stringify(tooSmall));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 截图必须满足正式截图最小字节合同',
+  );
+
+  const wrongIdentity = structuredClone(validTrace);
+  wrongIdentity.schema_version = 'qbot-web-search-quota-trace/forged';
+  fs.writeFileSync(traceFile, JSON.stringify(wrongIdentity));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 必须拒绝错误 schema 或 Case identity',
+  );
+
+  const productFailureRounds = structuredClone(rounds);
+  productFailureRounds[3].reply = 'The server rejected the fourth search.';
+  productFailureRounds[3].business_oracle = webSearchBusinessVerdict(
+    productFailureRounds[3].reply,
+    `${productFailureRounds[3].tool_texts.join('\n')}\n${JSON.stringify(productFailureRounds[3].runtime_evidence)}`,
+  );
+  const productFailureTrace = webSearchQuotaTraceVerdict({
+    caseId: 'MRSMOKE-WEB-001',
+    legacyCaseId: 'SIT-CONN-019',
+    rounds: productFailureRounds,
+  });
+  assert.equal(productFailureTrace.evidence_valid, true);
+  assert.equal(productFailureTrace.oracle_valid, false);
+  fs.writeFileSync(traceFile, JSON.stringify(productFailureTrace));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    true,
+    '产品第四轮配额拒绝应保留 manifest-valid 负向证据，不能误升为框架问题',
+  );
+
+  assert.equal(webSearchFixedQuotaRejection('服务端未限制第四轮搜索。'), false);
+  assert.equal(webSearchFixedQuotaRejection('服务端没有拒绝第四轮搜索。'), false);
+  assert.equal(webSearchFixedQuotaRejection('搜索配额没有耗尽，第四轮已成功。'), false);
+  assert.equal(webSearchFixedQuotaRejection('不存在固定搜索次数上限。'), false);
+  assert.equal(webSearchFixedQuotaRejection('服务端拒绝第四轮搜索。'), true);
+
+  const outsideScreenshot = path.join(path.dirname(caseDir), `${path.basename(caseDir)}-outside.png`);
+  fs.writeFileSync(outsideScreenshot, Buffer.alloc(256, 8));
+  const escaped = structuredClone(validTrace);
+  escaped.rounds[2].screenshot = {
+    path: outsideScreenshot,
+    bytes: fs.statSync(outsideScreenshot).size,
+    sha256: createHash('sha256').update(fs.readFileSync(outsideScreenshot)).digest('hex'),
+  };
+  fs.writeFileSync(traceFile, JSON.stringify(escaped));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 不得引用 Case 目录外截图',
+  );
+
+  const screenshotDirectory = path.join(caseDir, 'round-directory.png');
+  fs.mkdirSync(screenshotDirectory);
+  const directoryBacked = structuredClone(validTrace);
+  directoryBacked.rounds[2].screenshot.path = screenshotDirectory;
+  directoryBacked.rounds[2].screenshot.bytes = fs.statSync(screenshotDirectory).size;
+  fs.writeFileSync(traceFile, JSON.stringify(directoryBacked));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 不得把目录冒充截图文件',
+  );
+
+  const symlinkScreenshot = path.join(caseDir, 'round-symlink.png');
+  fs.symlinkSync(rounds[3].screenshot.path, symlinkScreenshot);
+  const symlinked = structuredClone(validTrace);
+  symlinked.rounds[3].screenshot = {
+    path: symlinkScreenshot,
+    bytes: fs.statSync(symlinkScreenshot).size,
+    sha256: createHash('sha256').update(fs.readFileSync(symlinkScreenshot)).digest('hex'),
+  };
+  fs.writeFileSync(traceFile, JSON.stringify(symlinked));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceFile, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'trace 不得把符号链接冒充 Case 内真实截图',
+  );
+
+  fs.writeFileSync(traceFile, JSON.stringify(validTrace));
+  const traceSymlink = path.join(caseDir, 'web-search-quota-trace-link.json');
+  fs.symlinkSync(traceFile, traceSymlink);
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', traceSymlink, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'quota trace 文件本身也不得是符号链接',
+  );
+
+  const nonJsonTrace = path.join(caseDir, 'web-search-quota-trace.txt');
+  fs.writeFileSync(nonJsonTrace, JSON.stringify(validTrace));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', nonJsonTrace, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'quota trace 角色不得通过改扩展名绕过专用 JSON 校验',
+  );
+
+  const outsideTrace = path.join(path.dirname(caseDir), `${path.basename(caseDir)}-outside.json`);
+  fs.writeFileSync(outsideTrace, JSON.stringify(validTrace));
+  assert.equal(
+    validateEvidenceFile('web_search_quota_trace', outsideTrace, {
+      expectedCaseId: 'MRSMOKE-WEB-001',
+      expectedCaseDir: caseDir,
+    }).valid,
+    false,
+    'manifest 必须用权威 Case 目录拒绝 trace 文件自身越界',
+  );
+}
 
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-qwork-expert-audience-rejection-'));
@@ -1002,6 +2073,219 @@ const planCase = (id, caseType) => {
   }));
   return item;
 };
+
+{
+  const webQuotaCase = planCase('MRSMOKE-WEB-001', 'conversation');
+  webQuotaCase.evidence_roles.push('web_search_quota_trace');
+  const webThemes = ['产品', 'API', '官方文档', '安全与可靠性'];
+  webQuotaCase.conversation_turns = Array.from({ length: 4 }, (_, index) => ({
+    turn: index + 1,
+    prompt: `${index === 3 ? '第四轮：' : ''}请继续使用内置 Web 搜索查找 OpenAI 官方最近至少两条${webThemes[index]}更新，每条按“标题、日期、官方原始 HTTPS 链接、摘要”结构化给出${index === 0 ? '；末尾附 https://www.iana.org/domains/reserved' : ''}。`,
+    oracle: `第${index + 1}轮真实 provider receipt 与同一 task 绑定，且回复至少两组独立 OpenAI 官方结果，每组绑定标题、日期、官方 HTTPS 链接和摘要。`,
+  }));
+  assert.equal(validateCoreBetaCase(webQuotaCase).ok, true, validateCoreBetaCase(webQuotaCase).errors.join('\n'));
+
+  const missingRound = structuredClone(webQuotaCase);
+  missingRound.conversation_turns.pop();
+  assert.match(validateCoreBetaCase(missingRound).errors.join('\n'), /精确声明四轮/);
+
+  const duplicatePrompt = structuredClone(webQuotaCase);
+  duplicatePrompt.conversation_turns[3].prompt = duplicatePrompt.conversation_turns[2].prompt;
+  assert.match(validateCoreBetaCase(duplicatePrompt).errors.join('\n'), /prompt 必须全部唯一/);
+
+  const weakRound = structuredClone(webQuotaCase);
+  weakRound.conversation_turns[1].prompt = '继续搜索一条更新。';
+  assert.match(validateCoreBetaCase(weakRound).errors.join('\n'), /每轮 prompt 都必须要求真实内置 Web 搜索/);
+
+  const missingTitle = structuredClone(webQuotaCase);
+  missingTitle.conversation_turns[1].prompt = missingTitle.conversation_turns[1].prompt.replace('标题、', '');
+  assert.match(validateCoreBetaCase(missingTitle).errors.join('\n'), /逐条绑定标题/);
+
+  const missingSummary = structuredClone(webQuotaCase);
+  missingSummary.conversation_turns[2].prompt = missingSummary.conversation_turns[2].prompt.replace('、摘要', '');
+  assert.match(validateCoreBetaCase(missingSummary).errors.join('\n'), /逐条绑定标题/);
+
+  const weakOracle = structuredClone(webQuotaCase);
+  weakOracle.conversation_turns[1].oracle = '第2轮真实 provider receipt 与同一 task 绑定。';
+  assert.match(validateCoreBetaCase(weakOracle).errors.join('\n'), /每轮 oracle 都必须要求至少两组独立/);
+
+  const oracleMissingSummary = structuredClone(webQuotaCase);
+  oracleMissingSummary.conversation_turns[2].oracle = oracleMissingSummary.conversation_turns[2].oracle.replace('和摘要', '');
+  assert.match(validateCoreBetaCase(oracleMissingSummary).errors.join('\n'), /每轮 oracle 都必须要求至少两组独立/);
+
+  const missingEvidence = structuredClone(webQuotaCase);
+  missingEvidence.evidence_roles = missingEvidence.evidence_roles.filter((role) => role !== 'web_search_quota_trace');
+  assert.match(validateCoreBetaCase(missingEvidence).errors.join('\n'), /evidence_roles 缺少 web_search_quota_trace/);
+}
+{
+  const regenerateCase = planCase('BETA-TASK-002', 'task_lifecycle');
+  assert.equal(
+    CORE_BETA_SCENARIO_REGISTRY.get('BETA-TASK-002')?.fixture_control,
+    'public_product_state',
+    'BETA-TASK-002 必须由真实 public_product_state 原生执行器直接运行',
+  );
+  assert.equal(
+    CORE_BETA_SCENARIO_REGISTRY.get('BETA-TASK-002')?.driver,
+    'task_regenerate_transition',
+  );
+  const regenerateBinding = coreBetaRuntimeExecutorBinding(
+    regenerateCase,
+    CORE_BETA_SCENARIO_REGISTRY.get('BETA-TASK-002'),
+  );
+  assert.equal(regenerateBinding.dispatchable, true);
+  assert.equal(regenerateBinding.mode, 'native');
+  regenerateCase.evidence_roles.push('task_regenerate_transition', 'regenerate_placeholder_readback');
+  assert.equal(
+    validateCoreBetaCase(regenerateCase).ok,
+    true,
+    validateCoreBetaCase(regenerateCase).errors.join('\n'),
+  );
+
+  for (const role of ['task_regenerate_transition', 'regenerate_placeholder_readback']) {
+    const missingRole = structuredClone(regenerateCase);
+    missingRole.evidence_roles = missingRole.evidence_roles.filter((item) => item !== role);
+    assert.match(
+      validateCoreBetaCase(missingRole).errors.join('\n'),
+      new RegExp(`evidence_roles 缺少 ${role}`),
+      `${role} 必须为 BETA-TASK-002 强制证据角色`,
+    );
+  }
+}
+{
+  assert.equal(
+    coreBetaExpert012ContractVariant('BETA-EXPERT-012'),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+    '仅有 Case ID 不能选择会执行产品动作的 Expert 合同变体',
+  );
+  assert.equal(coreBetaScenarioSpec('BETA-EXPERT-012'), null);
+
+  const immutableVersionCase = planCase('BETA-EXPERT-012', 'expert_lifecycle');
+  immutableVersionCase.scenario = '从已发布专家创建新版本草稿并发布，旧版本字节与依赖不变，既有会话不会被新版本追溯改写';
+  immutableVersionCase.expected_result = 'v1完全不变；v2为新release/version；旧会话仍用v1，新召唤可选择v2。';
+  immutableVersionCase.success_criteria = '两个releaseId/version/SHA、依赖图与旧/新session pin全部可读且关系正确。';
+  immutableVersionCase.oracle_type = 'public_state_machine+immutable_readback';
+  immutableVersionCase.evidence_roles.push('capability_selection', 'capability_execution_event');
+  assert.equal(
+    coreBetaExpert012ContractVariant(immutableVersionCase),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE,
+  );
+  assert.equal(coreBetaScenarioSpec(immutableVersionCase)?.driver, 'expert_immutable_version_upgrade');
+  assert.equal(
+    validateCoreBetaCase(immutableVersionCase).ok,
+    true,
+    validateCoreBetaCase(immutableVersionCase).errors.join('\n'),
+  );
+  const immutableBinding = coreBetaRuntimeExecutorBinding(
+    immutableVersionCase,
+    CORE_BETA_SCENARIO_REGISTRY.get('BETA-EXPERT-012'),
+  );
+  assert.equal(immutableBinding.dispatchable, true);
+  assert.equal(
+    immutableBinding.driver,
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.IMMUTABLE_VERSION_UPGRADE,
+    'runtime binding 不得用注册表默认新 driver 覆盖旧冻结 Case 的权威合同变体',
+  );
+
+  const maintenanceTaskCase = structuredClone(immutableVersionCase);
+  maintenanceTaskCase.scenario = '从本轮已发布 Expert 卡片进入真实“通过对话修改”维护任务并完成发布';
+  maintenanceTaskCase.expected_result = '原专家草稿更新后生成一个新版本和发布，原维护任务可重开且新任务不继承。';
+  maintenanceTaskCase.success_criteria = '入口、工具、草稿、发布、重开与新任务隔离证据全部有效。';
+  maintenanceTaskCase.oracle_type = 'expert_published_maintenance_task_roundtrip+exact_tool_sequence';
+  maintenanceTaskCase.evidence_roles.push('expert_maintenance_task_trace');
+  assert.equal(
+    coreBetaExpert012ContractVariant(maintenanceTaskCase),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.PUBLISHED_MAINTENANCE_TASK,
+  );
+  assert.equal(coreBetaScenarioSpec(maintenanceTaskCase)?.driver, 'expert_published_maintenance_task_roundtrip');
+  assert.equal(
+    validateCoreBetaCase(maintenanceTaskCase).ok,
+    true,
+    validateCoreBetaCase(maintenanceTaskCase).errors.join('\n'),
+  );
+
+  const maintenanceMissingTrace = structuredClone(maintenanceTaskCase);
+  maintenanceMissingTrace.evidence_roles = maintenanceMissingTrace.evidence_roles
+    .filter((role) => role !== 'expert_maintenance_task_trace');
+  assert.match(
+    validateCoreBetaCase(maintenanceMissingTrace).errors.join('\n'),
+    /evidence_roles 缺少 expert_maintenance_task_trace/,
+    '新维护任务合同缺少专用 trace 时必须 fail-closed，不能回退旧合同',
+  );
+
+  const mixedContract = structuredClone(immutableVersionCase);
+  mixedContract.evidence_roles.push('expert_maintenance_task_trace');
+  const mixedErrors = validateCoreBetaCase(mixedContract).errors.join('\n');
+  assert.match(mixedErrors, /oracle_type 缺少 expert_published_maintenance_task_roundtrip/);
+  assert.match(mixedErrors, /scenario\/steps 缺少“通过对话修改”/);
+
+  const ambiguousContract = structuredClone(maintenanceTaskCase);
+  ambiguousContract.oracle_type += '+immutable_readback';
+  assert.equal(
+    coreBetaExpert012ContractVariant(ambiguousContract),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+  );
+  assert.match(
+    validateCoreBetaCase(ambiguousContract).errors.join('\n'),
+    /不得混入旧 immutable_readback Oracle/,
+    '新旧 Oracle 混合时必须在执行前 fail-closed',
+  );
+  const ambiguousBinding = coreBetaRuntimeExecutorBinding(
+    ambiguousContract,
+    CORE_BETA_SCENARIO_REGISTRY.get('BETA-EXPERT-012'),
+  );
+  assert.equal(ambiguousBinding.dispatchable, false);
+  assert.equal(ambiguousBinding.mode, 'unsupported');
+
+  const mixedSemantics = structuredClone(maintenanceTaskCase);
+  mixedSemantics.expected_result = 'v1完全不变；旧会话仍用v1；新召唤可选择v2。';
+  assert.equal(
+    coreBetaExpert012ContractVariant(mixedSemantics),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+  );
+  assert.match(
+    validateCoreBetaCase(mixedSemantics).errors.join('\n'),
+    /不得混入旧版本不可变或旧会话 pin v1 语义/,
+  );
+
+  const forgedImmutableToken = structuredClone(immutableVersionCase);
+  forgedImmutableToken.oracle_type = 'public_state_machine+not_immutable_readback';
+  assert.equal(
+    coreBetaExpert012ContractVariant(forgedImmutableToken),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+    '旧合同 Oracle 必须按完整 token 匹配，不能接受伪前缀',
+  );
+  assert.equal(validateCoreBetaCase(forgedImmutableToken).ok, false);
+
+  const contradictoryLegacySession = structuredClone(immutableVersionCase);
+  contradictoryLegacySession.expected_result = 'v1完全不变；v2为新release/version；旧会话迁移到v2，新召唤可选择v2。';
+  assert.equal(
+    coreBetaExpert012ContractVariant(contradictoryLegacySession),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+    '旧会话迁移到 v2 的反向语义不得被误判为旧会话继续 pin v1',
+  );
+  assert.equal(validateCoreBetaCase(contradictoryLegacySession).ok, false);
+
+  const forgedMaintenanceToken = structuredClone(maintenanceTaskCase);
+  forgedMaintenanceToken.oracle_type = 'not_expert_published_maintenance_task_roundtrip+exact_tool_sequence';
+  assert.equal(
+    coreBetaExpert012ContractVariant(forgedMaintenanceToken),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.UNKNOWN,
+    '新合同 Oracle 必须按完整 token 匹配，不能接受伪前缀',
+  );
+  assert.match(
+    validateCoreBetaCase(forgedMaintenanceToken).errors.join('\n'),
+    /oracle_type 缺少 expert_published_maintenance_task_roundtrip/,
+  );
+
+  const maintenanceEntryInSteps = structuredClone(maintenanceTaskCase);
+  maintenanceEntryInSteps.scenario = '已发布 Expert 维护任务闭环';
+  maintenanceEntryInSteps.steps = '从专家卡片打开“通过对话修改”并完成维护。';
+  assert.equal(
+    coreBetaExpert012ContractVariant(maintenanceEntryInSteps),
+    CORE_BETA_EXPERT_012_CONTRACT_VARIANTS.PUBLISHED_MAINTENANCE_TASK,
+    '入口声明允许位于冻结 scenario 或 steps，但不能两者均缺失',
+  );
+}
 {
   const catalogCase = planCase('QWD-EXPERT-002', 'expert_lifecycle');
   catalogCase.conversation_turns = [];
