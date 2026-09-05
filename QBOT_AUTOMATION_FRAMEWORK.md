@@ -35,11 +35,11 @@
 | 用途 | 文件 | Sheet | Case 数 | SHA-256 |
 |---|---|---|---:|---|
 | 核心内测 | `PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx` | `核心内测Case` | 74 | `25c1c3df11e3d65ec0927edd5ddd2e693aa4bfdccdb92899fe3344a7f7dbe8f6` |
-| QWork 核心生命线门禁 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx` | `核心生命线门禁` | 16 | `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` |
-| 生产灰度发布 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx` | `生产灰度门禁Case` | 70 | `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` |
-| 全量正常功能回归 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx` | `全量功能回归Case` | 160 | `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` |
+| QWork 核心生命线门禁 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx` | `核心生命线门禁` | 16 | `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a` |
+| 生产灰度发布 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx` | `生产灰度门禁Case` | 70 | `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a` |
+| 全量正常功能回归 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx` | `全量功能回归Case` | 160 | `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a` |
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
-| QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx` | `新增MR核心冒烟` | 12 | `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` |
+| QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx` | `新增MR核心冒烟` | 12 | `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a` |
 
 ### 2.1 QWork 分层止损发布流程
 
@@ -84,7 +84,7 @@ framework/testcase issue、证据缺失、身份漂移或非精确 READY，当�
 缺项。仅修改顶层 `status=READY` 或伪造身份 fingerprint 永远不能获得阶段准入。
 
 机器化编排入口为 `npm run qwork-release:orchestrate`。`init` 只接受新的控制目录、
-文件名与 SHA 均精确匹配本节 r14 合同的正式 Casebook、十字段发布身份和强制
+文件名与 SHA 均精确匹配本节 r15 合同的正式 Casebook、十字段发布身份和强制
 `--release-intake`；调用者还必须独立提供
 `--expected-release-ref origin/release/0.1` 与当前观测的 40 位
 `--expected-release-head`，以及独立普通文件
@@ -251,20 +251,27 @@ r13 候选 `QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12
 协议与 runtime 全绿；独立验收为 16/16、12/12、70/70、160/160，14 个 Sheet、15 张
 渲染和公式检查全部通过。
 
-r15 当前仅是待生成候选，目标文件名为
-`PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx`；
-该文件尚未生成，也没有可登记的正式 SHA-256。生成、导出后审计、独立验收和干净 pushed
-framework 基线全部完成前，r14 继续是唯一正式执行入口，任何 pretest、状态机或 runner
-都不得提前切换到 r15，也不得为 r15 填写占位 SHA。最新只读设计 intake 为
-`outputs/20260905133500_release01-r15-refresh-design-intake_framework-e23ea8f_casebook-r14/release-intake.json`，
-文件 SHA-256 为 `a13c61b3c640462fc1465390671faf0ff5065132a260b640f887272b198b1370`；它只证明 r14
-终点之后新增的 `!1573` 已合入 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
-用于设计映射，不具备生成或执行授权。正式生成前必须在最新干净 pushed framework commit
-上从 r12 产品基线 `4693c5bd57b1170bed530e7559f9dc93a0b4a492` 以 `--max-commits 500`
-重新完成 GitLab API 全量扫描；若 release HEAD 仍为上述提交，应得到 37 个 first-parent
-增量 MR、171 个总 MR，并包含 `!1573` 的专用源码合同。本轮共 37 个增量 MR，累计 171 个总 MR。
-Casebook 生成器只能显式接收该新
-普通文件的 `--release-intake`、与文件实际字节重新计算值全等的
+r15 已通过排他事务正式生成并独立验收，当前唯一正式文件为
+`PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx`，
+SHA-256 为 `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a`。
+生成输入为
+`outputs/20260905161230_release01-r12-to-latest-r15-intake_framework-e3ed6d5_casebook-da9181f/release-intake.json`，
+文件 SHA-256 为 `13bd0f57bbf6b07720b470feb708865ea7f60c75f6d55ae98a47a15940599a09`；
+该 intake 在框架 `e3ed6d519e0f947185c29a04a6f0290df48371bb` 上从 r12 产品基线
+`4693c5bd57b1170bed530e7559f9dc93a0b4a492` 以 `--max-commits 500` 完成 GitLab API
+全量扫描，冻结 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
+共 37 个增量 MR、171 个总 MR，并包含 `!1573` 专用源码合同。构建目录为
+`outputs/20260905162000_release01-r15-casebook-build_framework-e3ed6d5_intake-13bd0f57`；
+14 个 Sheet、15 张渲染、公式错误扫描和 G1/G2/G3/G4 导出后协议/runtime 审计全部通过，
+四层能力分别为 16/16、12/12、70/70、160/160，`strict_controller_required=0`、
+`unsupported_runtime=0`，G4 前 70 条与 G3 精确同序。该设计 intake 的
+构建审计 `casebook-build-audit.json` 的 `release_intake.execution_authorized=false` 仍然
+有效；原始 `release-intake.json` 顶层不定义 `execution_authorized`。正式执行必须基于
+提交推送后的最终框架 commit 重新扫描 release/0.1，并生成新的执行 intake、独立
+observation 和精确 READY，不能复用本次生成输入。r14 转为历史正式基线，其历史批次和
+失败证据继续永久保留。
+
+Casebook 生成器只能显式接收普通文件 `--release-intake`、与文件实际字节重新计算值全等的
 `--release-intake-sha256`、同一 `--expected-product-commit` 和非空 `--out`；
 `!1573` 的桌面相邻映射固定同序为 `SIT-MEM-001`、`BETA-CHAT-001`、
 `BETA-CHAT-002`、`BETA-CHAT-009`、`BETA-SEC-002`、`BETA-MCP-001`、
@@ -276,11 +283,11 @@ Casebook 生成器只能显式接收该新
 `deepbankv2-mr-1573-memory-session-profile-stability/v1` 鉴证源码与测试声明，
 `claim_scope=source_and_test_declarations`、`test_execution_attested=false`，不得用桌面
 相邻链通过冒充这些内部合同已执行或通过。
-`--out` 在调用前必须不存在，即使已存在目录为空也禁止复用。已存在的
-`outputs/20260905_release01_casebook_16-12-70-160-r15` 因而无资格作为正式生成目录。
-正式 r15 目标文件也必须在调用前不存在，生成器只能在 G1/G2/G3/G4 导出后协议与 runtime
-能力分别达到 16/16、12/12、70/70、160/160 后原子排他发布；任何已有目标、审计失败或
-中途产物都不得覆盖 r14 或取得正式身份。
+`--out` 在调用前必须不存在，即使已存在目录为空也禁止复用。历史空目录
+`outputs/20260905_release01_casebook_16-12-70-160-r15` 未被复用，正式生成使用上述新目录。
+正式目标也必须在调用前不存在；生成器只能在 G1/G2/G3/G4 导出后协议与 runtime 能力分别
+达到 16/16、12/12、70/70、160/160 后原子排他发布。任何已有目标、审计失败或中途产物都
+不得覆盖既有正式 Casebook 或取得正式身份。
 生成器不得直接在 `--out` 或正式 `PRD` 目标中边构建边暴露文件：`--out` 的全部祖先必须
 无符号链接，父目录和同父目录私有 staging 必须由当前用户拥有且禁止 group/other 写入，
 并在构建前后绑定 device/inode/uid/mode。staging 树只允许当前用户拥有、不可被
@@ -417,7 +424,7 @@ G4 的能力构成固定为 61 条原生/public-state、1 条原生 IME 选项�
 legacy executor，即 `61/1/98`；任一类别或总数漂移均须在能力审计阶段 fail-closed。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
-当前待生成设计基线是 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
+当前正式设计基线是 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
 产品版本 `0.1.7`；`/Users/qifu/Documents/deepbankV2` 始终只读。
 本地 deepbankV2 缺少已验证历史 Git 对象时，Casebook 生成器允许以正式 GitLab API
 intake 作为权威边界证明，但必须同时证明扫描前后 branch HEAD 稳定、compare first-parent
@@ -485,24 +492,24 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    ```bash
    shasum -a 256 \
      PRD/QBot核心内测门禁Casebook_74条_2026-07-31.xlsx \
-     PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx
+     PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx
    ```
 
 4. 执行能力审计：
 
    ```bash
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx \
      --sheet 核心生命线门禁 \
      --out outputs/<new-core16-capability-audit-dir>
 
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx \
      --sheet 生产灰度门禁Case \
      --out outputs/gate70-capability-audit
 
    npm run core-beta:capability-audit -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx \
      --sheet 全量功能回归Case \
      --out outputs/full160-capability-audit
    ```
@@ -539,13 +546,13 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    ```bash
    npm run core-beta:pretest -- \
-     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx \
+     --casebook PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx \
      --sheet 核心生命线门禁 \
      --profile mandatory \
      --lane teams \
      --out outputs/<new-immutable-pretest-dir> \
      --expected-count 16 \
-     --expected-sha256 439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed \
+     --expected-sha256 8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a \
      --release-intake outputs/<new-immutable-release-intake-dir>/release-intake.json \
      --release-intake-sha256 "<release-intake-sha256>" \
      --require-release-intake true \
@@ -826,7 +833,7 @@ OAuth、GitLab QA namespace、签名升级/回退包、故障注入、真实 IME
 ```bash
 cd /Users/qifu/Documents/QbotTestAgent
 
-CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx"
+CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx"
 SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
 OUT="$PWD/outputs/$(date +%Y%m%d%H%M)_core-beta-70_<release-id>"
 
@@ -933,7 +940,7 @@ blocked，补齐当前 Case 的显式 N/A manifest 后继续后续独立 Case。
 2. 导出精确 Case ID 列表：
 
    ```bash
-   CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx"
+   CASEBOOK="$PWD/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx"
    SHEET="生产灰度门禁Case" # 全量回归使用：全量功能回归Case
    PLAN="$(mktemp /tmp/qbot-core-beta-plan.XXXXXX)"
 
@@ -1620,7 +1627,7 @@ merge”的 first-parent compare；后继架构切换点同样双向证明。只
 `VERIFIED_NOT_APPLICABLE`，正反向均不完整、API 错误或两边同时声称完整都必须保持
 `UNKNOWN/BLOCKED`。
 
-从 `qbot-release-intake/1.6.0` 起，intake 复核还必须按 first-parent 顺序逐条重放 MR
+从 `qbot-release-intake/1.6.1` 起，intake 复核还必须按 first-parent 顺序逐条重放 MR
 语义：MR IID/commit/parent/parent_count/merge 或 squash 归因必须与
 `commit_accounting` 一一绑定，元数据必须来自 `gitlab-api-changes` 且保持
 `state=merged`、目标分支正确。复核器必须用报告中冻结的 commit subject/body、source
@@ -1629,6 +1636,15 @@ branch、labels、changed paths 和 Casebook Case ID 重新计算每个 MR 的 i
 换序或改写任一行后即使重算报告内容 SHA，也必须 `BLOCKED`。GitLab token 的传输目标固定
 为 `https://gitlab.daikuan.qihoo.net` 的 `songrongxin/deepbankv2` API，必须保持 TLS
 证书校验并限制为 HTTPS；禁止使用 `insecure/-k`、自定义主机或自定义项目承载正式 token。
+
+MR `!1573` 只有在 `iid=1573` 且 `merge_commit_sha` 精确等于
+`6d482c9ccbceb74d4ebf81610d980e5fe15def6c` 时，才允许覆盖通用关键词映射并固定同序 11 条
+直接 Case：`SIT-MEM-001`、`BETA-CHAT-001`、`BETA-CHAT-002`、`BETA-CHAT-009`、
+`BETA-SEC-002`、`BETA-MCP-001`、`BETA-MCP-002`、`BETA-HOST-003`、
+`BETA-INIT-001`、`BETA-ROUTE-001`、`MRSMOKE-ROUTE-001`，所需阶段必须精确为
+`G1/G2/G3/G4`。错误 IID、错误 merge SHA 或仅命中 memory/Profile 关键词不得取得该专用
+映射。验证器必须从冻结 MR 身份重算该 impact；删除 `SIT-MEM-001`、删除 `G4` 或改写汇总
+后，即使攻击者同步重算 `content_sha256`，也必须因语义重放或汇总不一致而 `BLOCKED`。
 
 MR !1559 后继架构的阻断风险证明固定使用
 `qbot-qwork-release-blocking-risk-attestation/v3`。审计器必须先词法剔除注释、模板和正则

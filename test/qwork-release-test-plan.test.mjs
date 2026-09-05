@@ -56,14 +56,18 @@ const evidenceFixtureRoot = fs.realpathSync(
 );
 test.after(() => fs.rmSync(evidenceFixtureRoot, { recursive: true, force: true }));
 
-test('release plan freezes the independently accepted r14 Casebook identity', () => {
+test('release plan freezes the independently accepted r15 Casebook identity', () => {
   assert.equal(
     QWORK_RELEASE_CASEBOOK_BASENAME,
-    'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx',
+    'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx',
   );
   assert.equal(
     QWORK_RELEASE_CASEBOOK_SHA256,
-    '439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed',
+    '8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a',
+  );
+  assert.equal(
+    QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
+    '6d482c9ccbceb74d4ebf81610d980e5fe15def6c',
   );
   assert.deepEqual(
     QWORK_RELEASE_TEST_STAGES.find((stage) => stage.id === 'G4')?.expected_capability_classes,

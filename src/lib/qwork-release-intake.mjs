@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
   QWORK_RELEASE_SOURCE_CONTRACTS,
   auditCurrentReleaseSourceContract,
   auditKnownReleaseSourceContracts,
@@ -25,7 +26,7 @@ import {
 } from './qwork-release-blocking-risks.mjs';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.6.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.6.1';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -50,6 +51,25 @@ const KNOWN_PRODUCT_PATHS = Object.freeze([
   /^(?:model-vision-capability|runtime-family|runtime-paths|release-identity|chart-tool-result|connection-view|diagram-tool-result)\.(?:mjs|cjs|js|ts|tsx)$/i,
   /^package(?:-lock)?\.json$/i,
 ]);
+
+const MR1573_EXACT_IMPACT = Object.freeze({
+  case_ids: Object.freeze([
+    'SIT-MEM-001',
+    'BETA-CHAT-001',
+    'BETA-CHAT-002',
+    'BETA-CHAT-009',
+    'BETA-SEC-002',
+    'BETA-MCP-001',
+    'BETA-MCP-002',
+    'BETA-HOST-003',
+    'BETA-INIT-001',
+    'BETA-ROUTE-001',
+    'MRSMOKE-ROUTE-001',
+  ]),
+  feature_domains: Object.freeze(['会话与Composer']),
+  risk_domains: Object.freeze(['记忆/会话/Profile 稳定性']),
+  required_stages: Object.freeze(['G1', 'G2', 'G3', 'G4']),
+});
 
 function text(value) {
   return String(value ?? '').trim();
@@ -291,7 +311,24 @@ function isKnownProductSourcePath(filePath) {
   return KNOWN_PRODUCT_PATHS.some((pattern) => pattern.test(normalized));
 }
 
-export function mapReleaseImpact({ changedPaths: paths = [], subject = '', body = '', branch = '', labels = [], availableCaseIds = [] } = {}) {
+function exactReleaseImpact({ mrIid = '', mergeCommitSha = '' } = {}) {
+  if (text(mrIid) !== text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.mr_iid)
+    || text(mergeCommitSha) !== text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.merge_commit_sha)) {
+    return null;
+  }
+  return MR1573_EXACT_IMPACT;
+}
+
+export function mapReleaseImpact({
+  changedPaths: paths = [],
+  subject = '',
+  body = '',
+  branch = '',
+  labels = [],
+  availableCaseIds = [],
+  mrIid = '',
+  mergeCommitSha = '',
+} = {}) {
   const files = [...new Set(paths.map((item) => text(item)).filter(Boolean))];
   const staticFiles = files.filter((file) => staticDisposition(file));
   const productFiles = files.filter((file) => !staticDisposition(file));
@@ -306,7 +343,8 @@ export function mapReleaseImpact({ changedPaths: paths = [], subject = '', body 
     ? `${branch} ${subject} ${body} ${searchableFiles.map((file) => `/${file}`).join(' ')} ${labels.join(' ')}`
     : '';
   const matchedRules = IMPACT_RULES.filter((candidate) => candidate.patterns.some((pattern) => pattern.test(searchText)));
-  const direct = new Set(matchedRules.flatMap((candidate) => candidate.case_ids));
+  const exactImpact = exactReleaseImpact({ mrIid, mergeCommitSha });
+  const direct = new Set(exactImpact?.case_ids || matchedRules.flatMap((candidate) => candidate.case_ids));
   const available = new Set(availableCaseIds.map(text).filter(Boolean));
   const allDirect = [...direct];
   const directAvailable = available.size ? allDirect.filter((id) => available.has(id)) : allDirect;
@@ -320,16 +358,18 @@ export function mapReleaseImpact({ changedPaths: paths = [], subject = '', body 
       candidate.patterns.some((pattern) => pattern.test(file))
     ))),
   ];
-  const domains = [...new Set(matchedRules.map((candidate) => candidate.feature_domain))];
-  const risks = [...new Set(matchedRules.map((candidate) => candidate.risk_domain))];
-  const requiredStages = new Set(['G1']);
-  for (const candidate of matchedRules) requiredStages.add(candidate.required_stage);
+  const domains = [...new Set(exactImpact?.feature_domains || matchedRules.map((candidate) => candidate.feature_domain))];
+  const risks = [...new Set(exactImpact?.risk_domains || matchedRules.map((candidate) => candidate.risk_domain))];
+  const requiredStages = new Set(exactImpact?.required_stages || ['G1']);
+  if (!exactImpact) for (const candidate of matchedRules) requiredStages.add(candidate.required_stage);
   // Stage selection is based on the complete impact set, not only the current
   // Sheet projection. A smoke scan can still discover a BETA/SIT dependency
   // that requires the later production-risk gate.
-  if (allDirect.some((id) => /^BETA-/.test(id))) requiredStages.add('G3');
-  if (allDirect.some((id) => /^SIT-/.test(id))) requiredStages.add('G3');
-  if (allDirect.some((id) => /^MRSMOKE-/.test(id))) requiredStages.add('G2');
+  if (!exactImpact) {
+    if (allDirect.some((id) => /^BETA-/.test(id))) requiredStages.add('G3');
+    if (allDirect.some((id) => /^SIT-/.test(id))) requiredStages.add('G3');
+    if (allDirect.some((id) => /^MRSMOKE-/.test(id))) requiredStages.add('G2');
+  }
   return {
     changed_paths: files,
     static_paths: staticFiles,
@@ -337,9 +377,9 @@ export function mapReleaseImpact({ changedPaths: paths = [], subject = '', body 
     known_product_paths: knownProductFiles,
     feature_domains: domains,
     risk_domains: risks,
-    direct_case_ids: allDirect.sort(),
-    in_scope_case_ids: directAvailable.sort(),
-    out_of_scope_case_ids: outOfScope.sort(),
+    direct_case_ids: exactImpact ? allDirect : allDirect.sort(),
+    in_scope_case_ids: exactImpact ? directAvailable : directAvailable.sort(),
+    out_of_scope_case_ids: exactImpact ? outOfScope : outOfScope.sort(),
     unmapped_product_paths: [...new Set(unmappedPaths)].sort(),
     static_dispositions: [...new Set(staticFiles.map((file) => ({ path: file, disposition: staticDisposition(file) })))],
     required_stages: [...requiredStages].filter(Boolean).sort(),
@@ -1267,6 +1307,8 @@ function validateApiMergeRequestSemantics(report, sourceContracts = QWORK_RELEAS
       branch: text(mr?.branch),
       labels: mr?.labels,
       availableCaseIds,
+      mrIid: iid,
+      mergeCommitSha: text(mr?.merge_commit_sha),
     });
     if (stableJson(mr?.impact) !== stableJson(expectedImpact)) failures.push(`impact_mismatch:${prefix}`);
     const expectedSourceContractIds = effectiveSourceContracts
@@ -1482,7 +1524,16 @@ export function scanQworkReleaseIntake({
   const blockingRisks = apiScan?.blockingRisks || [];
   const mergeRequests = scannedCommits.map((commit, index) => {
     const metadata = metadataAudit.metadata[index];
-    const impact = mapReleaseImpact({ changedPaths: commit.paths, subject: commit.subject, body: commit.body, branch: commit.branch, labels: metadata.labels, availableCaseIds: ids });
+    const impact = mapReleaseImpact({
+      changedPaths: commit.paths,
+      subject: commit.subject,
+      body: commit.body,
+      branch: metadata.source_branch || commit.branch,
+      labels: metadata.labels,
+      availableCaseIds: ids,
+      mrIid: metadata.iid,
+      mergeCommitSha: metadata.merge_commit_sha,
+    });
     return {
       iid: metadata.iid,
       commit: commit.commit,

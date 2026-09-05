@@ -6414,7 +6414,7 @@ assert.match(
 );
 assert.match(
   coreBetaOperatingGuide,
-  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14\.xlsx[\s\S]*--sheet 核心生命线门禁[\s\S]*--expected-count 16[\s\S]*只接受 `READY`[\s\S]*12\/70\/160/,
+  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx[\s\S]*--sheet 核心生命线门禁[\s\S]*--expected-count 16[\s\S]*只接受 `READY`[\s\S]*12\/70\/160/,
   '当前操作指南必须先为16条核心生命线取得READY，再按阶段分别预检12/70/160',
 );
 assert.match(
@@ -12108,14 +12108,16 @@ const r9IncrementalMrIids = [
 ];
 const r9IncrementalMrSequence = new RegExp(r9IncrementalMrIids.map((iid) => `!${iid}`).join('[\\s\\S]*'));
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
-  assert.match(documentText, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14\.xlsx/, '两份规范必须冻结16/12/70/160分层Casebook路径');
+  assert.match(documentText, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx/, '两份规范必须冻结16/12/70/160分层Casebook路径');
   assert.match(documentText, /核心生命线门禁/, '两份规范必须冻结16条核心生命线Sheet');
   assert.match(documentText, /新增MR核心冒烟/, '两份规范必须冻结新增 MR 核心冒烟 Sheet');
   assert.match(documentText, /[0-9a-f]{64}/, '两份规范必须冻结最新合并 Casebook SHA');
   assert.match(documentText, /0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c[\s\S]*0\.1\.7/, '两份规范必须冻结 r14 release/0.1 设计基线与产品版本');
   assert.match(documentText, /r12[\s\S]*134 个[\s\S]*36 个[\s\S]*170 个/, '两份规范必须记录 r12 继承、r14 增量和170个MR总量');
-  assert.match(documentText, /6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*37 个增量 MR[\s\S]*171 个总 MR/, '两份规范必须记录 !1573 后的 r15 待生成设计边界');
+  assert.match(documentText, /6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*37 个增量 MR[\s\S]*171 个总 MR/, '两份规范必须记录 !1573 后的 r15 正式设计边界');
+  assert.match(documentText, /casebook-build-audit\.json[\s\S]*release_intake\.execution_authorized=false[\s\S]*原始 `release-intake\.json` 顶层\s*不\s*定义 `execution_authorized`/, '两份规范必须准确区分构建审计授权包装层与原始 intake 顶层字段');
   assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
+  assert.match(documentText, /qbot-release-intake\/1\.6\.1[\s\S]*iid=1573[\s\S]*6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*11 条[\s\S]*SIT-MEM-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*G1\/G2\/G3\/G4[\s\S]*错误 IID[\s\S]*错误 merge SHA[\s\S]*content_sha256[\s\S]*BLOCKED/, '两份规范必须冻结 !1573 双身份专用 impact、G4 覆盖和重哈希语义重放合同');
   assert.match(documentText, /deepbankv2-mr-1573-memory-session-profile-stability\/v1[\s\S]*claim_scope=source_and_test_declarations[\s\S]*test_execution_attested=false[\s\S]*(?:不得|禁止).*冒充/, '两份规范必须区分 !1573 源码声明鉴证与桌面 E2E 结论');
   assert.match(documentText, r9IncrementalMrSequence, '两份规范必须完整同序列出 r9 的57个增量MR');
   assert.match(documentText, /!1516[\s\S]*MRSMOKE-FAIL-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*BETA-CHAT-005[\s\S]*BETA-PERF-003/, '两份规范必须固定MR !1516的四条精确覆盖映射');
@@ -12139,10 +12141,10 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   }
   assert.match(documentText, /6 条(?:使用)?原生 driver[\s\S]*6 条(?:使用)?经过语义复核的 legacy driver/, '两份规范必须冻结 6 native / 6 legacy 能力构成');
   assert.match(documentText, /11 条 native[\s\S]*5 条 verified legacy|11 条(?:使用)?原生[\s\S]*5 条(?:使用)?经过语义复核/, '两份规范必须冻结核心生命线 11 native / 5 legacy 能力构成');
-  assert.match(documentText, /160 条全量[\s\S]*61(?: 条)?(?:原生| native)[\s\S]*1 条(?:原生 )?IME[\s\S]*98(?: 条)?(?:经过语义复核| legacy)/, '两份规范必须冻结 r14 全量回归 61 native / 1 IME / 98 legacy 能力构成');
+  assert.match(documentText, /160 条全量[\s\S]*61(?: 条)?(?:原生| native)[\s\S]*1 条(?:原生 )?IME[\s\S]*98(?: 条)?(?:经过语义复核| legacy)/, '两份规范必须冻结 r15 全量回归 61 native / 1 IME / 98 legacy 能力构成');
   assert.match(documentText, /G0[\s\S]*G1[\s\S]*G2[\s\S]*G3[\s\S]*G4[\s\S]*G5/, '两份规范必须固定G0-G5执行顺序');
   assert.match(documentText, /NOT_STARTED[\s\S]*raw `passed\/failed`|raw `passed\/failed`[\s\S]*NOT_STARTED/, '两份规范必须让可信非pass阻断后续阶段且禁止raw结果驱动准入');
-  assert.match(documentText, /439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed/, '两份规范必须冻结 r14 Casebook 精确 SHA-256');
+  assert.match(documentText, /8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a/, '两份规范必须冻结 r15 Casebook 精确 SHA-256');
   assert.match(documentText, /release-test-integrity\.json[\s\S]*revision[\s\S]*previous_event_sha256[\s\S]*前向哈希链/, '两份规范必须冻结计划、状态和事件前向哈希完整性合同');
   assert.match(documentText, /summary[\s\S]*progress[\s\S]*run metadata[\s\S]*可信复核[\s\S]*qbot-core-evidence\/v2/, '两份规范必须要求四源完成审计和逐Case v2 manifest');
   assert.match(documentText, /core-beta-v2-forced-serial[\s\S]*effective parallel=1[\s\S]*single-host-pipeline=1/, '两份规范必须冻结M3单宿主强制串行完成门禁');

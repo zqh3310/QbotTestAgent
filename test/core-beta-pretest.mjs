@@ -77,8 +77,8 @@ if (!auditReport.runtime_dispatch?.ok || auditReport.runtime_dispatch.dispatchab
   throw new Error(`Capability audit runtime dispatch mismatch: ${JSON.stringify(auditReport.runtime_dispatch)}`);
 }
 
-const grayCasebook = path.join(root, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx');
-const grayExpectedSha = '439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed';
+const grayCasebook = path.join(root, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx');
+const grayExpectedSha = '8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a';
 const grayActualSha = crypto.createHash('sha256').update(fs.readFileSync(grayCasebook)).digest('hex');
 if (grayActualSha !== grayExpectedSha) {
   throw new Error(`70 Casebook SHA mismatch: expected=${grayExpectedSha} actual=${grayActualSha}`);
@@ -185,7 +185,7 @@ for (const id of [
 ]) {
   if (!fullIds.includes(id)) throw new Error(`160 Casebook missing normal-function Case ${id}.`);
 }
-if (!fullCases.every((item) => String(item.version_scope || '').includes('0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c'))) {
+if (!fullCases.every((item) => String(item.version_scope || '').includes('6d482c9ccbceb74d4ebf81610d980e5fe15def6c'))) {
   throw new Error('Every 160 Case must freeze the latest product baseline.');
 }
 const gateAttachmentRejection = grayCases.find((item) => item.id === 'BETA-FILE-006');

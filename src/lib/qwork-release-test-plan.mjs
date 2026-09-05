@@ -21,9 +21,9 @@ export const QWORK_RELEASE_TEST_INTEGRITY_SCHEMA = 'qbot-qwork-release-test-inte
 export const QWORK_RELEASE_REF_OBSERVATION_SCHEMA = 'qbot-qwork-release-ref-observation/v1';
 export const QWORK_RELEASE_SOAK_REPORT_SCHEMA = QWORK_SOAK_REPORT_SCHEMA;
 export const QWORK_RELEASE_IDENTITY_SCHEMA = 'qbot-qwork-release-identity/v1';
-export const QWORK_RELEASE_CASEBOOK_BASENAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx';
-export const QWORK_RELEASE_CASEBOOK_SHA256 = '439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed';
-export const QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT = '0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c';
+export const QWORK_RELEASE_CASEBOOK_BASENAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx';
+export const QWORK_RELEASE_CASEBOOK_SHA256 = '8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a';
+export const QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT = '6d482c9ccbceb74d4ebf81610d980e5fe15def6c';
 
 const QWORK_RELEASE_IDENTITY_FIELDS = Object.freeze([
   'teams_version',

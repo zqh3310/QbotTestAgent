@@ -24,6 +24,7 @@ import {
   QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT,
   QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
   QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
+  QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
   QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT,
   QWORK_MR1544_CLAUDE_TURN_HEADER_BRANDING_CONTRACT,
   QWORK_MR1548_CALL_TOOL_BUDGET_CONTRACT,
@@ -2375,6 +2376,52 @@ test('unknown nested server domains remain fail-closed after refactor mappings',
   assert.equal(mapped.mapping_status, 'BLOCKED');
 });
 
+test('MR !1573 receives its exact Case and stage impact only with the frozen IID and merge SHA', () => {
+  const expectedCaseIds = [
+    'SIT-MEM-001',
+    'BETA-CHAT-001',
+    'BETA-CHAT-002',
+    'BETA-CHAT-009',
+    'BETA-SEC-002',
+    'BETA-MCP-001',
+    'BETA-MCP-002',
+    'BETA-HOST-003',
+    'BETA-INIT-001',
+    'BETA-ROUTE-001',
+    'MRSMOKE-ROUTE-001',
+  ];
+  const base = {
+    changedPaths: ['server/qbot-core/engine/memory-runtime.mjs'],
+    subject: 'memory session Profile stability',
+    body: 'preserve memory across session transitions',
+    branch: 'feature/memory-profile-stability',
+    labels: ['area/runtime'],
+  };
+  const exact = mapReleaseImpact({
+    ...base,
+    mrIid: QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.mr_iid,
+    mergeCommitSha: QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.merge_commit_sha,
+  });
+  assert.deepEqual(exact.direct_case_ids, expectedCaseIds);
+  assert.deepEqual(exact.required_stages, ['G1', 'G2', 'G3', 'G4']);
+
+  for (const identity of [
+    {
+      mrIid: '1572',
+      mergeCommitSha: QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.merge_commit_sha,
+    },
+    {
+      mrIid: QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.mr_iid,
+      mergeCommitSha: '0'.repeat(40),
+    },
+    { mrIid: '', mergeCommitSha: '' },
+  ]) {
+    const mapped = mapReleaseImpact({ ...base, ...identity });
+    assert.equal(mapped.direct_case_ids.includes('SIT-MEM-001'), false);
+    assert.equal(mapped.required_stages.includes('G4'), false);
+  }
+});
+
 test('release intake uses commit ancestry and binds verified MR metadata', () => {
   const { repo, baseline, releaseHead } = fixtureRepo();
   try {
@@ -3226,6 +3273,88 @@ test('release intake validation replays MR attribution, impact and coverage afte
       `${scenario.expected}: ${validation.failures.join(',')}`,
     );
     assert.equal(validation.failures.includes('content_sha256_mismatch'), false, scenario.expected);
+  }
+});
+
+test('MR !1573 impact replay rejects removed memory coverage or G4 after related summaries are rehashed', () => {
+  const contract = QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT;
+  const caseIds = [
+    'SIT-MEM-001',
+    'BETA-CHAT-001',
+    'BETA-CHAT-002',
+    'BETA-CHAT-009',
+    'BETA-SEC-002',
+    'BETA-MCP-001',
+    'BETA-MCP-002',
+    'BETA-HOST-003',
+    'BETA-INIT-001',
+    'BETA-ROUTE-001',
+    'MRSMOKE-ROUTE-001',
+  ];
+  const fixture = apiFixture({
+    head: contract.merge_commit_sha,
+    mrIid: Number(contract.mr_iid),
+    mergeCommitSha: contract.merge_commit_sha,
+    changes: [{
+      old_path: 'server/qbot-core/engine/memory-runtime.mjs',
+      new_path: 'server/qbot-core/engine/memory-runtime.mjs',
+      diff: '+export const memorySessionProfileStability = true;',
+    }],
+  });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds,
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  const baselineValidation = validateQworkReleaseIntake(report, { requireReady: false });
+  assert.equal(
+    baselineValidation.failures.some((failure) => failure.startsWith('merge_request_semantics:impact_mismatch')),
+    false,
+    baselineValidation.failures.join(','),
+  );
+
+  const rehash = (candidate) => {
+    const value = structuredClone(candidate);
+    delete value.integrity.content_sha256;
+    candidate.integrity.content_sha256 = sha256Text(stableJson(value));
+    return candidate;
+  };
+  const scenarios = [
+    {
+      name: 'SIT-MEM-001',
+      mutate(candidate) {
+        const impact = candidate.merge_requests[0].impact;
+        impact.direct_case_ids = impact.direct_case_ids.filter((id) => id !== 'SIT-MEM-001');
+        impact.in_scope_case_ids = impact.in_scope_case_ids.filter((id) => id !== 'SIT-MEM-001');
+        candidate.summary.direct_case_ids = candidate.summary.direct_case_ids
+          .filter((id) => id !== 'SIT-MEM-001');
+      },
+    },
+    {
+      name: 'G4',
+      mutate(candidate) {
+        candidate.merge_requests[0].impact.required_stages = candidate.merge_requests[0]
+          .impact.required_stages.filter((stage) => stage !== 'G4');
+        candidate.summary.required_stages = candidate.summary.required_stages
+          .filter((stage) => stage !== 'G4');
+      },
+    },
+  ];
+  for (const scenario of scenarios) {
+    const forged = structuredClone(report);
+    scenario.mutate(forged);
+    const validation = validateQworkReleaseIntake(rehash(forged), { requireReady: false });
+    assert.equal(validation.ok, false, scenario.name);
+    assert.equal(
+      validation.failures.some((failure) => failure.startsWith('merge_request_semantics:impact_mismatch')),
+      true,
+      `${scenario.name}: ${validation.failures.join(',')}`,
+    );
+    assert.equal(validation.failures.includes('content_sha256_mismatch'), false, scenario.name);
   }
 });
 

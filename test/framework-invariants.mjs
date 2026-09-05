@@ -196,8 +196,8 @@ assert.match(
 );
 assert.match(
   qworkReleasePlanSource,
-  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14\.xlsx[\s\S]*439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed/,
-  '发布状态机必须冻结 r14 Casebook 文件名和 SHA-256',
+  /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx[\s\S]*8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a/,
+  '发布状态机必须冻结 r15 Casebook 文件名和 SHA-256',
 );
 assert.match(
   qworkReleasePlanSource,
