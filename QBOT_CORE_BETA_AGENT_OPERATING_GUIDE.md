@@ -779,7 +779,16 @@ G1-G4 每阶段都必须有独立能力审计、独立精确 `READY`、独立不
 
 状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r14 合同的正式 Casebook，并且
 无条件要求 `--release-intake`、`--expected-release-ref origin/release/0.1` 和调用者独立
-观测的 40 位 `--expected-release-head`；省略任一输入或显式传入
+观测的 40 位 `--expected-release-head`，以及与 intake 不同路径的普通文件
+`--expected-release-observation <qbot-qwork-release-ref-observation/v1>`；该文件固化观测
+来源、时间、仓库、ref、HEAD 和文件 SHA，本地 Git 来源还必须只读 `rev-parse` 复核。
+私有仓库使用 `npm run qwork-release:observe` 从关闭回显 stdin 注入只读 token，对固定
+deepbankV2 GitLab API 连续两次读取稳定 HEAD；后续状态机命令继续携带
+`--gitlab-token-stdin` 做独立实时复核，token 不进入参数、环境、日志或 Git 配置。
+扫描器、独立观测器和状态机只接受单独出现一次的无值布尔开关
+`--gitlab-token-stdin`；内联值、后随值或重复开关必须在读取 stdin 前拒绝，且错误不得
+回显疑似 token。token 只能由关闭回显的标准输入提供。
+省略任一输入或显式传入
 `--require-release-intake false` 都必须在创建控制状态前拒绝。期望 ref/HEAD 禁止从待验证
 intake 自身取得；内容自洽但 ref/HEAD 陈旧、文件名错误、同名但 SHA 漂移、旧版工作簿或
 历史可选 intake 计划都不能进入正式状态机。
@@ -790,12 +799,27 @@ Casebook、协议、发布身份、capabilities、runtime release、待激活更
 关键检查。手工改顶层 `status=READY` 或只伪造身份 fingerprint 不构成有效准入。
 
 编排控制目录固定包含 `release-test-plan.json`、`release-test-state.json`、
-`release-test-integrity.json` 与 `events/*.json`。计划和状态使用独立 SHA-256 封印，
+`release-test-integrity.json` 与 `events/*.json`，plan/state/integrity/event 均为明确不兼容的
+`v2` schema，旧 `v1` 控制树不得静默续跑。所有命令必须持有 macOS `lockf` 或同等级进程
+生命周期 advisory lock；遗留普通锁文件不能阻塞后续命令。控制目录和写入目录必须属于
+当前用户、禁止 group/other 写，并在耗时校验及每次写入前后核对 dev/inode/uid/mode。
+计划和状态使用独立 SHA-256 封印，
 每次合法状态变更令 `revision` 精确加一；事件同时固化变更前后 revision/state SHA，
 并通过 `previous_event_sha256` 形成前向哈希链。`status/readiness/complete/soak` 每次读取
-都复核计划、状态、integrity、事件数量/顺序/链和末事件 SHA；任一文件或历史事件被
-改写立即 fail-closed。`NO_GO` 不可逆，已有 readiness/completion 不允许覆盖；恢复测试
+都复核计划、状态、integrity、事件数量/顺序/链和末事件 SHA。初始状态必须由计划确定性
+重建并以 `initial_state_sha256` 锚定；事件必须保存完整 `state_before/state_after`，并用
+原始 `audit/phase/recorded_at` 重放转换后与快照及链尾状态全等；任一文件或历史事件被
+改写立即 fail-closed。`init` 必须在同父目录私有 staging 完整 fsync 后原子 rename；阶段
+更新先保存 write-ahead transaction，再写 event/state/integrity；进程中断后只允许回滚未提交事件，或以严格绑定的尾事件幂等
+补齐 state/integrity。独立 release observation 必须先证明规范 deepbankV2 origin，再实时
+查询 release ref：Git credential 路径要求 remote/观测/本地 remote-tracking ref 全等；
+stdin API 路径固定 GitLab 主机与项目、强制 HTTPS/TLS，并要求两次稳定 branch read 与
+观测 HEAD 全等。仅改 URL 后沿用旧观测不得通过。`NO_GO` 不可逆，已有 readiness/completion 不允许覆盖；恢复测试
 必须新建空控制目录，禁止编辑 JSON 伪造准入。
+独立观测的输出目录必须在调用前不存在，不能复用空目录；写入前后必须证明全部祖先无
+符号链接、父目录和目标目录属于当前用户且不可被 group/other 写入，并锁定两级目录的
+dev/inode/uid/mode。观测文件必须以 `O_EXCL/O_NOFOLLOW`、私有权限和 fsync 落盘，再核对
+普通文件类型、字节数与权限；任一替换或漂移均 fail-closed。
 
 `complete` 必须交叉核对 summary、progress、run metadata 和可信复核中的完整有序
 Case ID。summary 要求 `status=passed`、raw passed=N 且其它 raw 计数为零；每条
@@ -808,7 +832,10 @@ single-host-pipeline=1、唯一宿主 PID、framework clean、无 stop diagnosti
 
 完成审计必须实读每个 Case 目录的磁盘 `evidence-manifest.json`，并与 progress/summary
 嵌入 manifest 结构化全等；每项证据都要通过 `lstat` 拒绝符号链接、目录和 Case 目录
-越界，再以实际文件字节数和 SHA-256 对账，不能只信 manifest 声明。Teams 的
+越界，再以实际文件字节数和 SHA-256 对账，不能只信 manifest 声明。run/cases/Case/
+manifest/证据路径还要逐级拒绝符号链接，并在 realpath 后继续位于 run 根。可信复核必须
+是 run 根内普通文件并把实读 SHA 写入 completion audit；每项必须显式 `trusted=true`
+且显式分类为 `trusted_pass` 或 `可信通过-用户可接受`，缺字段不能由汇总计数补足。Teams 的
 `run-metadata.json.profile` 按真实 `{mode:"live", alias:"<non-empty>"}` 对象校验；
 字符串 `mandatory` 只属于 summary 的 Casebook profile。G0 必须逐字段复核公开
 capabilities object、health HTTP 200/DB/auth/auth.ready/环境/backend fingerprint、
@@ -816,6 +843,15 @@ Teams/QWork/session、runtime 顶层/loaded/compatibility、`updatePhase=idle`�
 `preparedRelease=null` 和十字段身份，任何聚合 `ok` 都不能替代字段读回。G4 readiness
 还必须让其前 70 个 Case ID 与状态机内已准入 G3 的 70 个 ID 精确同序，禁止绕过 G3
 或只与静态 Casebook 自身比较。
+
+每次 `readiness` 在写入事件前必须重算 Casebook 磁盘 SHA，并验证当前
+`branch=main`、`HEAD == origin/main == plan.framework.commit`、tracked clean；同时重读
+独立 release HEAD 观测并校验文件 SHA。失败时 revision、integrity 和 events 均不得变化。
+G5 仅接受磁盘 `qbot-qwork-soak-report/v1` 普通文件及其实读 SHA；报告逐项列出至少 100
+个唯一真实 task、至少 3 次受管重启、`startup/run-final` 与每次重启后的十字段身份观测、
+显式空 crash 账本和带阈值/多点采样的无泄漏账本。每个 task、restart、identity observation
+和资源账本都必须绑定目录内唯一普通证据文件，并逐祖先/realpath/bytes/SHA 校验；自报
+计数、布尔值或单一 identity hash 不构成 G5 证据。
 
 十字段的权威来源固定为：Teams 版本/build 来自当前受管应用包、进程和 session；
 QWork 版本来自 versioned URL、OTA `active/lastGood`、envelope 与 loaded runtime；control
@@ -1023,7 +1059,51 @@ Casebook 的设计依据是 r11 已验证的 132 个 MR，以及从
 合同完全相同，可计为其中 1 轮。另需至少一个候选轮次完成不少于 100 个任务、
 3 次受管重启的 soak，三项全部满足才可进入 1%-5% 受控生产灰度。
 
-每轮必须同时满足：
+G5 不接受汇总对象中的自报布尔值或计数。唯一合法输入是新不可变目录中的磁盘
+`qbot-qwork-soak-report/v1` 及其实读 SHA；报告和全部证据必须位于同一目录树，均为
+互不复用、非符号链接的普通 JSON 文件，并逐项校验 owner/role、realpath、inode、bytes
+和 SHA-256。每个 task 必须绑定唯一 prompt/marker、task/session、host/renderer context、
+dispatch/严格发送/成功终态三类 receipt 和至少三次稳定终态观察，且 100 个以上 task
+全局串行、全部真实执行、无 inherited/synthetic。
+
+至少 3 次受管重启都必须替换 host/renderer PID 与 process-start、session、CDP 和 WebView
+target 的完整 tuple，并由精确的 `restart-before/restart-after` 十字段身份读回闭合；观察
+集合只允许 `startup + 每次重启前后 + run-final`，且首尾及重启边界观察不得陈旧超过策略
+最大采样间隔。crash ledger 连续覆盖每个宿主 epoch并证明零异常；资源账本按每个 epoch 的
+host/renderer 进程身份至少各采样两次，声明和实际采样间隔均不得超过上限。校验器从全部
+样本重算中途 RSS peak、相对 epoch 首样本的最大 growth 和相邻样本最大 slope，三项均须
+低于阈值；仅首尾 RSS 正常或 `no_leak=true` 不能放行。
+
+G1-G4 全部由同一状态机可信通过后，先生成新的真实 G5 报告。Token 必须只通过关闭回显
+的标准输入临时注入本次只读状态复核：
+
+```bash
+IFS= read -r -s QBOT_G5_GITLAB_TOKEN
+printf '\n'
+printf '%s\n' "$QBOT_G5_GITLAB_TOKEN" | npm --prefix teams360-automation run soak -- \
+  --state-dir /absolute/path/to/release-control \
+  --out /Users/qifu/Documents/QbotTestAgent/teams360-automation/output/<new-immutable-soak-dir> \
+  --tasks 100 \
+  --restarts 3 \
+  --gitlab-token-stdin
+unset QBOT_G5_GITLAB_TOKEN
+```
+
+G1-G4 Casebook 与 G5 Soak 直接入口共用
+`teams360-automation/runtime/.qwork-managed-runner.lock` 的 macOS `lockf` 生命周期锁，竞争时
+只允许一个 runner；锁文件本身被精确忽略，但不得忽略整个 `runtime/`。G5 输出目录必须
+此前不存在、位于受管输出根内且全链路无符号链接。报告生成并自审通过后，执行：
+
+```bash
+npm run qwork-release:orchestrate -- soak \
+  --state-dir /absolute/path/to/release-control \
+  --soak-report /absolute/path/to/new-immutable-soak/soak-report.json
+```
+
+只有磁盘复核生成的 `qbot-qwork-soak-completion-audit/v1` 为 `PASS_STAGE` 才完成 G5；
+报告身份 SHA 与 framework commit 必须和冻结计划、本轮候选精确一致。
+
+状态机的每轮 G3/G4 completion audit 必须同时证明：
 
 - `total=completed=executed=unique_case_count=trusted_pass=70`
 - `inherited=0`
@@ -1039,6 +1119,26 @@ Casebook 的设计依据是 r11 已验证的 132 个 MR，以及从
 
 任一轮出现非 pass、阻塞、框架问题、Case 问题、证据缺失或身份漂移，该轮不计入
 连续全绿，连续计数归零。`GO_CONTROLLED_GRAY` 只允许受控灰度，不等于 GA。
+
+多轮 `runs.json` 固定精确 5 项，每项 schema 必须为 `qbot-core-gray-run/v2`，只允许
+`run_id/stage_id/control_dir/release_plan/completion_event/soak_report` 六个载荷字段；
+`control_dir`、plan 和 G3/G4 completion event 都必须使用绝对规范路径与实读文件 SHA。
+`run_id` 必须等于 completion evidence tree 目录名。旧式
+`total/completed/trusted_counts/evidence` 自报即使全绿也必须拒绝。
+
+聚合器从初始状态完整重放五棵 v2 event/state/hash 链，逐 event 重算外部文件和目录树
+SHA，并通过 `applyQworkStageAudit()` 重新执行磁盘 `auditQworkStageCompletion()`。五轮
+release identity、framework commit、正式 Casebook 路径/SHA、G3 等价 70 条 Case ID 和
+完整 Case 合同必须全等，completion 时间严格递增；控制目录、completion event、全部
+阶段 run directory、可信复核、证据树的路径、内容 SHA-256 或 device/inode 任一跨轮复用
+都必须拒绝，五项 `run_id` 也必须唯一。至少一项
+必须是真实 G4 160/160，其前 70 条同序同合同，且只计一个 70 等价轮次。
+
+五项中精确一个 `soak_report` 可为 `{path,sha256}`，且只能位于 G4 项；同一控制树必须在
+目标 G4 completion 后存在唯一 G5 `PASS_STAGE` completion event，并由该 event 绑定同一
+Soak 路径/SHA、计划身份和 framework commit。旧式内嵌 Soak、自报身份、跨控制树报告、
+混合 commit、重复证据或非法 3/4 轮策略统一返回结构化 `NO_GO/STOP_PIPELINE`，不得抛出
+未捕获异常。
 
 ## 4. 接手只读确认
 
@@ -1272,6 +1372,10 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
 - Expert 发布轮询必须把发起发布时的同一 `operationId`、`draftId` 和 CAS 一并传给
   `expertLifecycle.getOperation`。缺少 draft/CAS 导致的 `expert draft was not found`
   是框架合同错误，必须自愈后从新目录全量重跑，不能当产品 Bug 或普通 blocked。
+- `BETA-EXPERT-012` 维护回复必须先显式满足 `reply_incomplete=false` 且
+  `timeout_cleanup_ok=true`，随后才允许读取草稿、打开完整配置或发布。回复未终态、字段
+  缺失或清理失败时立即记录 automation error 并终止该路径，严禁在 Agent 仍运行时继续
+  产生真实 version/release。
 - 确认 `framework_issue` 或 `testcase_issue` 时，冻结旧目录、停止唯一 runner、
   修复框架/Casebook、强化 invariant、全检、提交推送、重新 pretest，并在新目录
   从 1/70、1/160 或本轮 1/83 完整重跑所选 Sheet。停止旧 runner 只是保护证据，不是允许
@@ -1389,6 +1493,19 @@ GitLab 返回的 iid、merge commit SHA、标题、标签和 merged_at。Token �
 正式候选必须成功刷新 release ref；`--no-fetch` 仅用于诊断或已有可信 freshness 证明的
 场景。Git fetch 凭据与 GitLab API token 分离，fetch 认证失败时不得使用本地旧 ref 放行。
 
+正式状态计划只接受 `mode=gitlab-api`，且 branch HEAD 前后稳定、first-parent
+`commit_accounting` 闭合、全部 MR changes、current-release source contracts 和 blocking
+risk 均独立验证通过的 intake。`fetch_latest=true` 的本地 Git 结果不能替代该证明；删除
+或弱化任一证明后即使重新计算内容 SHA 也必须 fail-closed。GitLab changes 中
+`renamed_file=true` 时必须同时保留 `old_path` 与 `new_path` 参与风险映射和源码合同，不能
+因目标路径变成 docs/static 而遗漏旧产品路径。
+
+current-release Files API 返回的受保护文件必须把 `blob_id` 精确绑定到内容字节：验证器
+按 `sha1("blob <byte-length>\\0" + content-bytes)` 重算 Git blob SHA-1 并全等比较；40 位
+格式本身不能放行。Casebook 必须为可读的普通非符号链接文件，必须显式提供存在的 Sheet，
+导出结果至少包含一个唯一 Case ID，声明 SHA-256 与磁盘实际字节全等。文件、Sheet、导出、
+唯一性或 SHA 任一失败都令 intake `BLOCKED`，禁止吞错后以空 Case 集继续。
+
 从 `qbot-release-intake/1.5.0` 起，compare 中每个 first-parent commit 都必须进入
 `commit_accounting`。多父提交只接受精确 `merge_commit_sha`，单父提交只接受精确
 `squash_commit_sha`；两类均要求唯一 merged MR、目标分支全等和完整 changes。无法可信
@@ -1398,6 +1515,21 @@ accounted、merge、squash 和 direct 五类计数必须与逐提交账本闭合
 MR 风险生效点和后继架构切换点必须各做正向、反向两次 first-parent compare。只有反向
 完整证据可判定当前 release 位于风险之前；两向均无法证明、请求失败、证据不完整或相互
 冲突时均为 `UNKNOWN/BLOCKED`，禁止按提交日期、标题或 SHA 字面顺序推断。
+
+从 `qbot-release-intake/1.6.0` 起，验证器必须再按 first-parent 顺序重放每个 MR 的
+IID、commit、parent、归因类型、merged/target 元数据，并从冻结的 commit 文本、source
+branch、labels、changed paths 和 Casebook Case ID 重新计算 impact、源码合同触发、直接
+Case、依赖闭包、required stages、静态/未知计数及 unresolved 集合。报告即使重算内容
+SHA，也不能靠改写 MR 行、覆盖映射或汇总字段取得 `READY`。正式 token 只能发往
+`https://gitlab.daikuan.qihoo.net` 的 `songrongxin/deepbankv2` API，TLS 证书校验和
+HTTPS 限制必须开启；`insecure/-k`、自定义主机或自定义项目均不得用于正式 freshness。
+
+MR !1559 后继架构必须生成
+`qbot-qwork-release-blocking-risk-attestation/v3`：注释、模板、正则和普通字符串中的伪代码
+不能满足风险断言；`onExit` 的 typed failure、acquisition 到 pressure admission 的可达
+调用链、同一 supervisor factory 的 `maxPendingRequests:1/maxRestarts:0`、同一 acquisition
+内的 request set/release delete+stop，以及 desktop 同函数同 `try/finally` 的 lease
+acquire/release 必须逐项成立。旧 v2 或任何错误作用域均 `BLOCKED` 并要求新 intake。
 
 边界优先从上次已接受 intake HEAD 或 Casebook 设计基线 commit 到当前 release HEAD；只有
 祖先关系无法证明时才兜底最近 24 小时（日常窗口与上轮重叠 48 小时），每日回归至少回看
@@ -1439,11 +1571,16 @@ MR 阶段可运行轻量 diff 扫描做快速反馈，但不能产生发布结�
 或改变范围，只做 release/runtime/OTA/health 身份漂移监控；intake 报告与范围一旦冻结，
 任何漂移都必须冻结批次并按 framework issue 规则处置。
 
-正式 pretest 的 `--production-gate true` 默认要求 `--release-intake`；状态机 `init`
-同样无条件要求并封印 intake 路径、文件 SHA 与内容身份，且不能通过
-`--require-release-intake false` 关闭；调用者必须另行提供固定
-`--expected-release-ref origin/release/0.1` 与当前 40 位 `--expected-release-head`，禁止
-由 intake 自证。空对象、非绝对路径、缺失/畸形文件 SHA、内容 SHA、ref 或 HEAD 的计划绑定
+正式 pretest 的 `--production-gate true` 默认要求 `--release-intake`；正式
+production-gate pretest 自身不可关闭 intake，且必须显式提供有效的 64 位
+`--release-intake-sha256`。它必须再次要求 GitLab API freshness，并将 intake 的规范
+release ref、Casebook 绝对路径、精确 Sheet 和有序 Case ID 与本次真实导出逐项全等比对；
+同一工作簿其它 Sheet、Case 重排、仅 `fetch_latest=true` 的本地 Git 报告或重算哈希后的
+替换报告都必须在 Case 0 前拒绝。状态机 `init` 同样无条件要求并封印 intake 路径、文件
+SHA 与内容身份，且不能通过 `--require-release-intake false` 关闭；调用者还必须另行提供固定
+`--expected-release-ref origin/release/0.1`、当前 40 位 `--expected-release-head` 与独立
+`--expected-release-observation` 普通文件，禁止由 intake 自证。空对象、非绝对路径、
+缺失/畸形文件 SHA、内容 SHA、ref 或 HEAD 的计划绑定
 均无效。每次 `readiness` 都从计划路径重新读取磁盘报告，强制校验非空 64 位报告文件 SHA、
 内容哈希、release HEAD、Casebook SHA、framework commit 和 `READY`；文件缺失、仅重排
 JSON、被替换或属于旧候选时均 fail-closed，且不得写事件或推进 revision，旧 intake 不能

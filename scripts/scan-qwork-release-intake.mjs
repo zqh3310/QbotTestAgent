@@ -34,8 +34,8 @@ Options:
   --previous-intake <json>          上一份 intake；其 release HEAD 优先作为增量边界
   --casebook-baseline-commit <sha>  Casebook 设计基线提交
   --case-ids <id,id,...>            不读取 xlsx 时直接提供可用 Case ID
-  --gitlab-host <host>              GitLab 主机
-  --gitlab-project <path>           GitLab 项目路径
+  --gitlab-host <host>              固定为 gitlab.daikuan.qihoo.net
+  --gitlab-project <path>           固定为 songrongxin/deepbankv2
   --gitlab-token-stdin              从标准输入读取一次 token；token 仅注入 curl 配置 stdin，不落盘不输出
   --allow-unverified-mr             仅诊断时允许 Git 提交信息代替 GitLab MR 元数据
   --window-hours <n>                日常兜底时间窗口（默认 24 小时）
@@ -53,7 +53,17 @@ function parseArgs(argv) {
     if (token === '--help' || token === '-h') { options.help = true; continue; }
     if (token === '--no-fetch') { options.fetch = false; continue; }
     if (token === '--fetch') { options.fetch = true; continue; }
-    if (!token.startsWith('--')) throw new Error(`Unexpected argument: ${token}`);
+    if (!token.startsWith('--')) throw new Error('Unexpected positional argument');
+    if (token === '--gitlab-token-stdin') {
+      if (Object.hasOwn(options, 'gitlab-token-stdin')) {
+        throw new Error('--gitlab-token-stdin 只能传入一次');
+      }
+      options['gitlab-token-stdin'] = true;
+      continue;
+    }
+    if (token.startsWith('--gitlab-token-stdin=')) {
+      throw new Error('--gitlab-token-stdin 必须作为无值布尔开关单独传入');
+    }
     const [name, inline] = token.slice(2).split(/=(.*)/s, 2);
     const value = inline == null ? argv[index + 1] : inline;
     if (value == null || String(value).startsWith('--')) { options[name] = true; continue; }
@@ -89,6 +99,16 @@ function main() {
   if (!options.casebook && !options['case-ids']) throw new Error('必须提供 --casebook 或 --case-ids');
   const repo = path.resolve(options.repo);
   const casebook = options.casebook ? path.resolve(options.casebook) : '';
+  if (casebook) {
+    if (!String(options.sheet || '').trim()) throw new Error('使用 --casebook 时必须提供 --sheet');
+    let stat;
+    try {
+      stat = fs.lstatSync(casebook);
+    } catch {
+      throw new Error(`Casebook 不存在或不可读：${casebook}`);
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Casebook 必须是普通文件：${casebook}`);
+  }
   const token = readToken(options);
   const freshnessSource = options['gitlab-api-freshness']
     ? 'gitlab-api'
@@ -123,10 +143,14 @@ function main() {
   const files = writeQworkReleaseIntake({ report, outDir: options.out });
   const validation = validateQworkReleaseIntake(report, {
     releaseRef: options['release-ref'] || QWORK_RELEASE_INTAKE_DEFAULT_REF,
+    casebookPath: casebook,
+    sheet: options.sheet || '',
+    caseIds: report.casebook.available_case_ids,
     casebookSha256: report.casebook.sha256,
     frameworkCommit: options['framework-commit'],
     requireReady: false,
     requireFreshRef: true,
+    requireGitLabApiFreshness: freshnessSource === 'gitlab-api',
   });
   process.stdout.write(`${JSON.stringify({
     status: report.decision,

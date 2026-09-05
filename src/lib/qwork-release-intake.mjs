@@ -25,7 +25,7 @@ import {
 } from './qwork-release-blocking-risks.mjs';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.5.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.6.0';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -376,27 +376,43 @@ function curlConfig(url, token) {
     `url = "${escapedUrl}"`,
     'silent',
     'show-error',
-    'insecure',
+    'fail-with-body',
+    'proto = "=https"',
+    'tlsv1.2',
     'max-time = 60',
     escapedToken ? `header = "PRIVATE-TOKEN: ${escapedToken}"` : '',
   ].filter(Boolean).join('\n') + '\n';
 }
 
 export function createGitLabReadOnlyReader({ host = QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST, projectPath = QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_PROJECT, token = '' } = {}) {
-  const encodedProject = encodeURIComponent(projectPath);
-  const base = `https://${host}/api/v4/projects/${encodedProject}`;
+  const normalizedHost = text(host).toLowerCase();
+  const normalizedProject = text(projectPath);
+  const normalizedToken = String(token || '').trim();
+  if (normalizedHost !== QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST
+    || normalizedProject !== QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_PROJECT) {
+    throw new Error('GitLab 只读 token 仅允许发送到冻结的 deepbankV2 项目');
+  }
+  if (/[\r\n\0]/u.test(normalizedToken)) throw new Error('GitLab 只读 token 格式非法');
+  const encodedProject = encodeURIComponent(normalizedProject);
+  const base = `https://${normalizedHost}/api/v4/projects/${encodedProject}`;
   return (endpoint) => {
-    const url = `${base}/${endpoint.replace(/^\//, '')}`;
+    const normalizedEndpoint = text(endpoint).replace(/^\//, '');
+    if (!normalizedEndpoint
+      || /[\r\n]/u.test(normalizedEndpoint)
+      || normalizedEndpoint.split(/[/?#&=]+/u).includes('..')) {
+      throw new Error('GitLab 只读 API endpoint 非法');
+    }
+    const url = `${base}/${normalizedEndpoint}`;
     try {
       const stdout = execFileSync(process.platform === 'win32' ? 'curl.exe' : 'curl', ['--config', '-'], {
-        input: curlConfig(url, token),
+        input: curlConfig(url, normalizedToken),
         encoding: 'utf8',
         maxBuffer: 50 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       return JSON.parse(stdout);
     } catch (error) {
-      const stderr = redact(error.stderr || error.message || 'GitLab API 请求失败', token);
+      const stderr = redact(error.stderr || error.message || 'GitLab API 请求失败', normalizedToken);
       throw new Error(`GitLab 只读 API ${endpoint} 失败：${stderr}`);
     }
   };
@@ -622,8 +638,13 @@ function apiChangedPaths(changes = []) {
     diff: String(change?.diff || ''),
   }));
   const diffText = normalized.map((item) => stableJson(item)).join('\n');
+  const paths = normalized.flatMap((item) => (
+    item.renamed_file
+      ? [item.old_path, item.new_path]
+      : [item.new_path || item.old_path]
+  )).filter(Boolean);
   return {
-    paths: [...new Set(normalized.map((item) => item.new_path || item.old_path).filter(Boolean))],
+    paths: [...new Set(paths)],
     diff_sha256: sha256Text(diffText),
     diff_bytes: Buffer.byteLength(diffText, 'utf8'),
     numstat: [],
@@ -1020,17 +1041,50 @@ function scanWithGitLabApi({
 
 function loadCaseIds({ caseIds = [], casebookPath = '', sheet = '', python = 'python3' } = {}) {
   const explicit = caseIds.map(text).filter(Boolean);
-  if (explicit.length || !casebookPath) return explicit;
+  if (!casebookPath) {
+    return {
+      ids: explicit,
+      source: 'explicit-case-ids',
+      ok: explicit.length > 0,
+      error: explicit.length ? '' : 'casebook_and_case_ids_missing',
+    };
+  }
+  const resolvedCasebook = path.resolve(casebookPath);
+  if (!text(sheet)) return { ids: [], source: 'casebook-sheet', ok: false, error: 'casebook_sheet_missing' };
+  try {
+    const stat = fs.lstatSync(resolvedCasebook);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return { ids: [], source: 'casebook-sheet', ok: false, error: 'casebook_not_regular_file' };
+    }
+  } catch (error) {
+    return {
+      ids: [],
+      source: 'casebook-sheet',
+      ok: false,
+      error: `casebook_unreadable:${redact(error?.message || 'unknown')}`,
+    };
+  }
   const helper = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../skills/qbot-execute-automation-tests/scripts/casebook_io.py');
-  if (!fs.existsSync(helper)) return [];
+  if (!fs.existsSync(helper)) return { ids: [], source: 'casebook-sheet', ok: false, error: 'casebook_helper_missing' };
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-release-intake-'));
   const output = path.join(tempDir, 'cases.json');
   try {
-    execFileSync(python, [helper, 'export-cases', '--casebook', path.resolve(casebookPath), '--sheet', sheet, '--profile', 'all', '--output', output], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024 });
+    execFileSync(python, [helper, 'export-cases', '--casebook', resolvedCasebook, '--sheet', sheet, '--profile', 'all', '--output', output], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024 });
     const value = JSON.parse(fs.readFileSync(output, 'utf8'));
-    return Array.isArray(value.cases) ? value.cases.map((item) => text(item.id)).filter(Boolean) : [];
-  } catch {
-    return [];
+    if (!Array.isArray(value.cases)) {
+      return { ids: [], source: 'casebook-sheet', ok: false, error: 'casebook_cases_missing' };
+    }
+    const ids = value.cases.map((item) => text(item.id)).filter(Boolean);
+    if (ids.length === 0) return { ids, source: 'casebook-sheet', ok: false, error: 'casebook_sheet_empty' };
+    if (new Set(ids).size !== ids.length) return { ids, source: 'casebook-sheet', ok: false, error: 'casebook_case_ids_duplicate' };
+    return { ids, source: 'casebook-sheet', ok: true, error: '' };
+  } catch (error) {
+    return {
+      ids: [],
+      source: 'casebook-sheet',
+      ok: false,
+      error: `casebook_export_failed:${redact(error?.message || 'unknown')}`,
+    };
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1107,13 +1161,172 @@ function validateApiCommitAccounting(report) {
   return { ok: failures.length === 0, failures: [...new Set(failures)] };
 }
 
+function validateApiMergeRequestSemantics(report, sourceContracts = QWORK_RELEASE_SOURCE_CONTRACTS) {
+  const freshness = report?.policy?.api_freshness;
+  if (!freshness) return { ok: true, failures: [] };
+  const failures = [];
+  const baselineCommit = text(report?.scan_boundary?.baseline_commit);
+  const compareFrom = text(freshness?.compare_from);
+  const compareTo = text(freshness?.compare_to);
+  const releaseHead = text(report?.release?.head);
+  const accounting = Array.isArray(report?.commit_accounting) ? report.commit_accounting : [];
+  const verifiedRows = accounting.filter((row) => (
+    row?.attribution_verified === true && ['merge_mr', 'squash_mr'].includes(text(row?.classification))
+  ));
+  const mergeRequests = Array.isArray(report?.merge_requests) ? report.merge_requests : [];
+  const availableCaseIds = Array.isArray(report?.casebook?.available_case_ids)
+    ? report.casebook.available_case_ids.map(text).filter(Boolean)
+    : [];
+  const effectiveSourceContracts = resolveReleaseSourceContracts(sourceContracts);
+  if (!HEX40.test(baselineCommit)) failures.push('baseline_commit_invalid');
+  if (!HEX40.test(compareFrom) || compareFrom !== baselineCommit) failures.push('compare_from_boundary_mismatch');
+  if (!HEX40.test(compareTo) || compareTo !== releaseHead) failures.push('compare_to_release_mismatch');
+  if (baselineCommit === releaseHead) {
+    const zeroLengthFields = [
+      'compare_commit_count',
+      'first_parent_commit_count',
+      'accounted_commit_count',
+      'merge_commit_count',
+      'squash_mr_commit_count',
+      'unattributed_direct_commit_count',
+      'attributed_mr_commit_count',
+      'first_parent_merge_count',
+      'mr_changes_verified_count',
+    ];
+    if (accounting.length !== 0 || mergeRequests.length !== 0
+      || zeroLengthFields.some((field) => Number(freshness?.[field]) !== 0)
+      || Number(report?.summary?.scanned_commit_count) !== 0
+      || Number(report?.summary?.merge_request_count) !== 0) {
+      failures.push('zero_length_boundary_not_empty');
+    }
+  }
+  if (mergeRequests.length !== verifiedRows.length) failures.push('row_count_mismatch');
+  const seenIids = new Set();
+  const seenCommits = new Set();
+  let expectedParent = text(report?.scan_boundary?.baseline_commit);
+  for (let index = 0; index < mergeRequests.length; index += 1) {
+    const mr = mergeRequests[index];
+    const accountingRow = verifiedRows[index];
+    const prefix = text(mr?.commit) || String(index);
+    const iid = text(mr?.iid);
+    const commit = text(mr?.commit);
+    const parent = text(mr?.parent);
+    const parentCount = Number(mr?.parent_count);
+    const attributionKind = text(mr?.attribution_kind);
+    const changedPaths = Array.isArray(mr?.changed_paths)
+      ? mr.changed_paths.map(text).filter(Boolean)
+      : [];
+    if (!/^\d+$/.test(iid) || seenIids.has(iid)) failures.push(`iid_invalid_or_duplicate:${prefix}`);
+    if (!HEX40.test(commit) || seenCommits.has(commit)) failures.push(`commit_invalid_or_duplicate:${prefix}`);
+    if (commit && commit === parent) failures.push(`first_parent_self_cycle:${prefix}`);
+    seenIids.add(iid);
+    seenCommits.add(commit);
+    if (!accountingRow
+      || commit !== text(accountingRow.commit)
+      || iid !== text(accountingRow.mr_iid)
+      || parentCount !== Number(accountingRow.parent_count)
+      || attributionKind !== text(accountingRow.classification)) {
+      failures.push(`commit_accounting_binding_mismatch:${prefix}`);
+    }
+    if (!HEX40.test(parent) || parent !== expectedParent) failures.push(`first_parent_chain_mismatch:${prefix}`);
+    expectedParent = commit;
+    if (attributionKind === 'merge_mr' && (parentCount <= 1 || text(mr?.merge_commit_sha) !== commit)) {
+      failures.push(`merge_attribution_mismatch:${prefix}`);
+    }
+    if (attributionKind === 'squash_mr' && (parentCount !== 1 || text(mr?.squash_commit_sha) !== commit)) {
+      failures.push(`squash_attribution_mismatch:${prefix}`);
+    }
+    if (mr?.metadata_verified !== true
+      || text(mr?.metadata_source) !== 'gitlab-api-changes'
+      || text(mr?.state) !== 'merged'
+      || text(mr?.target_branch) !== text(freshness.branch)) {
+      failures.push(`metadata_binding_mismatch:${prefix}`);
+    }
+    if (!Array.isArray(mr?.labels)
+      || !Number.isFinite(Date.parse(text(mr?.merged_at)))
+      || (text(mr?.description_sha256) && !HEX64.test(text(mr.description_sha256)))
+      || !text(mr?.commit_subject)
+      || !text(mr?.commit_body)) {
+      failures.push(`metadata_fields_incomplete:${prefix}`);
+    }
+    if (!changedPaths.length
+      || new Set(changedPaths).size !== changedPaths.length
+      || changedPaths.some((file) => path.isAbsolute(file)
+        || file.split(/[\\/]+/u).includes('..'))) {
+      failures.push(`changed_paths_invalid:${prefix}`);
+    }
+    if (!HEX64.test(text(mr?.diff_sha256))
+      || !Number.isSafeInteger(Number(mr?.diff_bytes))
+      || Number(mr.diff_bytes) <= 0) {
+      failures.push(`diff_identity_invalid:${prefix}`);
+    }
+    const expectedImpact = mapReleaseImpact({
+      changedPaths,
+      subject: text(mr?.commit_subject),
+      body: text(mr?.commit_body),
+      branch: text(mr?.branch),
+      labels: mr?.labels,
+      availableCaseIds,
+    });
+    if (stableJson(mr?.impact) !== stableJson(expectedImpact)) failures.push(`impact_mismatch:${prefix}`);
+    const expectedSourceContractIds = effectiveSourceContracts
+      .filter((contract) => releaseSourceContractTrigger({
+        iid,
+        commit,
+        changed_paths: changedPaths,
+      }, contract).triggered)
+      .map((contract) => contract.contract_id);
+    if (stableJson(mr?.source_contract_ids) !== stableJson(expectedSourceContractIds)) {
+      failures.push(`source_contract_ids_mismatch:${prefix}`);
+    }
+  }
+  if (expectedParent !== releaseHead) failures.push('first_parent_terminal_mismatch');
+  const expectedDirectCases = [...new Set(mergeRequests.flatMap((item) => (
+    Array.isArray(item?.impact?.direct_case_ids) ? item.impact.direct_case_ids.map(text).filter(Boolean) : []
+  )))].sort();
+  const expectedDependencyCases = dependencyClosure(expectedDirectCases, availableCaseIds);
+  const expectedRequiredStages = [...new Set(mergeRequests.flatMap((item) => (
+    Array.isArray(item?.impact?.required_stages) ? item.impact.required_stages.map(text).filter(Boolean) : []
+  )))].sort();
+  const expectedUnmapped = [...new Set(mergeRequests.flatMap((item) => (
+    Array.isArray(item?.impact?.unmapped_product_paths)
+      ? item.impact.unmapped_product_paths.map(text).filter(Boolean)
+      : []
+  )))].sort();
+  const expectedOutOfScope = [...new Set(mergeRequests.flatMap((item) => (
+    Array.isArray(item?.impact?.out_of_scope_case_ids)
+      ? item.impact.out_of_scope_case_ids.map(text).filter(Boolean)
+      : []
+  )))].sort();
+  const exactArray = (actual, expected, failure) => {
+    const normalized = Array.isArray(actual) ? actual.map(text).filter(Boolean) : null;
+    if (!normalized || stableJson(normalized) !== stableJson(expected)) failures.push(failure);
+  };
+  exactArray(report?.summary?.direct_case_ids, expectedDirectCases, 'summary_direct_case_ids_mismatch');
+  exactArray(report?.summary?.dependency_case_ids, expectedDependencyCases, 'summary_dependency_case_ids_mismatch');
+  exactArray(report?.summary?.required_stages, expectedRequiredStages, 'summary_required_stages_mismatch');
+  exactArray(report?.unresolved?.unmapped_product_paths, expectedUnmapped, 'unresolved_unmapped_paths_mismatch');
+  exactArray(report?.unresolved?.out_of_scope_case_ids, expectedOutOfScope, 'unresolved_out_of_scope_cases_mismatch');
+  const expectedStaticOnly = mergeRequests.filter((item) => (
+    item?.impact?.mapping_status === 'MAPPED' && item?.impact?.direct_case_ids?.length === 0
+  )).length;
+  const expectedUnknown = mergeRequests.filter((item) => item?.impact?.mapping_status === 'UNKNOWN').length;
+  if (Number(report?.summary?.static_only_count) !== expectedStaticOnly) failures.push('summary_static_only_count_mismatch');
+  if (Number(report?.summary?.unknown_count) !== expectedUnknown) failures.push('summary_unknown_count_mismatch');
+  return { ok: failures.length === 0, failures: [...new Set(failures)] };
+}
+
 export function validateQworkReleaseIntake(report, {
   releaseRef = '',
   releaseHead = '',
+  casebookPath = '',
+  sheet = '',
+  caseIds = [],
   casebookSha256 = '',
   frameworkCommit = '',
   requireReady = true,
   requireFreshRef = false,
+  requireGitLabApiFreshness = false,
   sourceContracts = QWORK_RELEASE_SOURCE_CONTRACTS,
 } = {}) {
   const failures = [];
@@ -1125,11 +1338,42 @@ export function validateQworkReleaseIntake(report, {
   if (report?.decision === 'BLOCKED' && Array.isArray(report.blockers) && report.blockers.length === 0) failures.push('blocked_without_reason');
   if (releaseRef && text(report?.release?.ref) !== text(releaseRef)) failures.push('release_ref_mismatch');
   if (releaseHead && text(report?.release?.head) !== text(releaseHead)) failures.push('release_head_mismatch');
+  if (casebookPath
+    && path.resolve(text(report?.casebook?.path)) !== path.resolve(text(casebookPath))) {
+    failures.push('casebook_path_mismatch');
+  }
+  if (sheet && text(report?.casebook?.sheet) !== text(sheet)) failures.push('casebook_sheet_mismatch');
+  const expectedCaseIds = Array.isArray(caseIds) ? caseIds.map(text).filter(Boolean) : [];
+  if (expectedCaseIds.length) {
+    const actualCaseIds = Array.isArray(report?.casebook?.available_case_ids)
+      ? report.casebook.available_case_ids.map(text).filter(Boolean)
+      : [];
+    if (stableJson(actualCaseIds) !== stableJson(expectedCaseIds)) failures.push('casebook_case_ids_mismatch');
+  }
   if (casebookSha256 && text(report?.casebook?.sha256).toLowerCase() !== text(casebookSha256).toLowerCase()) failures.push('casebook_sha256_mismatch');
+  if (casebookSha256) {
+    if (!path.isAbsolute(text(report?.casebook?.path))) failures.push('casebook_path_invalid');
+    if (!text(report?.casebook?.sheet)) failures.push('casebook_sheet_missing');
+    if (!HEX64.test(text(report?.casebook?.sha256))) failures.push('casebook_sha256_invalid');
+    if (text(report?.casebook?.observed_sha256).toLowerCase() !== text(report?.casebook?.sha256).toLowerCase()) {
+      failures.push('casebook_observed_sha256_mismatch');
+    }
+    if (report?.casebook?.identity_verified !== true) failures.push('casebook_identity_not_verified');
+    if (text(report?.casebook?.load_error)) failures.push('casebook_load_error');
+    const availableCaseIds = Array.isArray(report?.casebook?.available_case_ids)
+      ? report.casebook.available_case_ids.map(text).filter(Boolean) : [];
+    if (!availableCaseIds.length) failures.push('casebook_cases_empty');
+    if (new Set(availableCaseIds).size !== availableCaseIds.length) failures.push('casebook_case_ids_duplicate');
+    if (Number(report?.casebook?.available_case_count) !== availableCaseIds.length) {
+      failures.push('casebook_case_count_mismatch');
+    }
+  }
   if (frameworkCommit && text(report?.framework?.commit) !== text(frameworkCommit)) failures.push('framework_commit_mismatch');
   const apiFreshness = report?.policy?.api_freshness;
   const commitAccountingValidation = validateApiCommitAccounting(report);
   failures.push(...commitAccountingValidation.failures.map((failure) => `commit_accounting:${failure}`));
+  const mergeRequestSemanticsValidation = validateApiMergeRequestSemantics(report, sourceContracts);
+  failures.push(...mergeRequestSemanticsValidation.failures.map((failure) => `merge_request_semantics:${failure}`));
   const apiFreshnessVerified = Boolean(apiFreshness
     && apiFreshness.mode === 'gitlab-api'
     && apiFreshness.verified === true
@@ -1138,10 +1382,12 @@ export function validateQworkReleaseIntake(report, {
     && apiFreshness.branch_head_before === report?.release?.head
     && apiFreshness.first_parent_complete === true
     && commitAccountingValidation.ok
+    && mergeRequestSemanticsValidation.ok
     && Number(apiFreshness.unattributed_direct_commit_count) === 0
     && Number(apiFreshness.mr_changes_verified_count) === Number(apiFreshness.first_parent_merge_count)
     && apiFreshness.source_contracts_verified === true
     && apiFreshness.blocking_risks_verified === true);
+  if (requireGitLabApiFreshness && !apiFreshnessVerified) failures.push('gitlab_api_freshness_required');
   if (requireFreshRef && report?.policy?.fetch_latest !== true && !apiFreshnessVerified) failures.push('release_ref_not_freshly_verified');
   if (!HEX40.test(text(report?.release?.head))) failures.push('release_head_invalid');
   if (report?.scan_boundary?.mode === 'commit_ancestry' && !report.scan_boundary.ancestry_verified) failures.push('ancestry_not_verified');
@@ -1214,7 +1460,18 @@ export function scanQworkReleaseIntake({
   const boundary = apiScan?.boundary || resolveBoundary({ repoRoot: root, releaseHead, baselineCommit, previousIntake, casebookBaselineCommit, now, windowHours, fallbackDays });
   const commits = useApiFreshness ? [] : enumerateCommits({ repoRoot: root, releaseHead, boundary, maxCommits: Number(maxCommits) || QWORK_RELEASE_INTAKE_MAX_COMMITS });
   const scannedCommits = apiScan?.scannedCommits || commits.map((commit) => ({ ...commit, ...changedPaths(root, commit.commit) }));
-  const ids = loadCaseIds({ caseIds, casebookPath, sheet });
+  const casebookLoad = loadCaseIds({ caseIds, casebookPath, sheet });
+  const ids = casebookLoad.ids;
+  const resolvedCasebookPath = casebookPath ? path.resolve(casebookPath) : '';
+  let observedCasebookSha256 = '';
+  if (casebookLoad.ok && resolvedCasebookPath) observedCasebookSha256 = sha256File(resolvedCasebookPath);
+  const normalizedExpectedCasebookSha256 = text(casebookSha256).toLowerCase();
+  const casebookIdentityVerified = Boolean(
+    casebookLoad.ok
+    && resolvedCasebookPath
+    && HEX64.test(normalizedExpectedCasebookSha256)
+    && observedCasebookSha256 === normalizedExpectedCasebookSha256,
+  );
   const metadataAudit = apiScan?.metadataAudit || mergeRequestMetadata({
     commits: scannedCommits,
     readGitLab: reader,
@@ -1232,12 +1489,17 @@ export function scanQworkReleaseIntake({
       parent: commit.parent,
       parent_count: commit.parent_count,
       title: metadata.title,
+      commit_subject: commit.subject,
+      commit_body: commit.body,
       branch: metadata.source_branch || commit.branch,
       merged_at: metadata.merged_at,
       labels: metadata.labels,
+      description_sha256: metadata.description_sha256,
       web_url: metadata.web_url,
       metadata_source: metadata.source,
       metadata_verified: metadata.verified,
+      state: metadata.state,
+      target_branch: metadata.target_branch,
       attribution_kind: metadata.attribution_kind || (commit.parent_count > 1 ? 'merge_mr' : ''),
       merge_commit_sha: text(metadata.merge_commit_sha),
       squash_commit_sha: text(metadata.squash_commit_sha),
@@ -1268,6 +1530,10 @@ export function scanQworkReleaseIntake({
     blocking_risk_failures: [...new Set(apiScan?.blockingRiskFailures || [])],
   };
   const blockers = [];
+  if (!casebookLoad.ok) blockers.push(`Casebook/Sheet 读取失败：${casebookLoad.error || 'unknown'}`);
+  if (resolvedCasebookPath && casebookLoad.ok && !casebookIdentityVerified) {
+    blockers.push('Casebook 文件 SHA-256 缺失、非法或与磁盘实际字节不一致');
+  }
   if (boundary.mode === 'time_window_fallback') {
     blockers.push('无法证明扫描起点与 release HEAD 的祖先关系；时间窗口仅可作诊断兜底，正式执行必须提供可验证基线');
   }
@@ -1290,7 +1556,17 @@ export function scanQworkReleaseIntake({
     decision: blockers.length ? 'BLOCKED' : 'READY',
     release: { ref: text(releaseRef), head: releaseHead, repository: root },
     framework: { commit: text(frameworkCommit), tracked_clean_required: true },
-    casebook: { path: text(casebookPath), sheet: text(sheet), sha256: text(casebookSha256).toLowerCase(), available_case_count: ids.length, available_case_ids: ids },
+    casebook: {
+      path: resolvedCasebookPath,
+      sheet: text(sheet),
+      sha256: normalizedExpectedCasebookSha256,
+      observed_sha256: observedCasebookSha256,
+      identity_verified: casebookIdentityVerified,
+      load_source: casebookLoad.source,
+      load_error: casebookLoad.error,
+      available_case_count: ids.length,
+      available_case_ids: ids,
+    },
     scan_boundary: boundary,
     policy: {
       source_of_truth: 'commit-ancestry-first',

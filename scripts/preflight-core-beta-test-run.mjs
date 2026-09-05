@@ -19,6 +19,7 @@ import {
   qworkReleaseIdentityFingerprint,
 } from '../src/lib/qwork-release-test-plan.mjs';
 import {
+  QWORK_RELEASE_INTAKE_DEFAULT_REF,
   sha256File as sha256ReleaseIntakeFile,
   validateQworkReleaseIntake,
 } from '../src/lib/qwork-release-intake.mjs';
@@ -69,8 +70,8 @@ Teams production-gate identity options:
   --qwork-build-id <id>
   --qwork-release-manifest-sha256 <sha256>
   --release-intake <release-intake.json>  G0 前置的只读 MR/源码扫描报告
-  --release-intake-sha256 <sha256>        可选的报告文件 SHA-256
-  --require-release-intake true           正式 release-gate 默认应开启
+  --release-intake-sha256 <sha256>        正式 release-gate 必填的报告文件 SHA-256
+  --require-release-intake true           正式 release-gate 必须开启且不能关闭
   --native-ime-command <command> Command used by the runner for BETA-CHAT-010.
                                   With QBOT_CORE_BETA_IME_PROBE=1 it must make
                                   no input and return the probe JSON contract.
@@ -395,8 +396,8 @@ async function main() {
   const sheet = String(options.sheet);
   const profile = String(options.profile || 'mandatory');
   const productionGate = TRUE_VALUES.has(String(options['production-gate'] || '').toLowerCase());
-  const releaseIntakeRequired = productionGate
-    && String(options['require-release-intake'] ?? 'true').toLowerCase() !== 'false';
+  const releaseIntakeMode = String(options['require-release-intake'] ?? '').trim().toLowerCase();
+  const releaseIntakeRequired = productionGate || TRUE_VALUES.has(releaseIntakeMode);
   const scopedExecution = TRUE_VALUES.has(String(options['scoped-execution'] || '').toLowerCase());
   const checks = [];
   const blockers = [];
@@ -409,6 +410,16 @@ async function main() {
   let releaseIntake = null;
   let releaseIntakeSha256 = '';
   const releaseIntakePath = String(options['release-intake'] || '').trim();
+
+  if (productionGate) {
+    addCheck(
+      'release_intake_cannot_be_disabled',
+      releaseIntakeMode !== 'false',
+      releaseIntakeMode === 'false'
+        ? '正式 production-gate 禁止 --require-release-intake false'
+        : '正式 production-gate 强制 release intake',
+    );
+  }
 
   const head = commandText('git', ['rev-parse', 'HEAD']);
   const originMain = commandText('git', ['rev-parse', 'origin/main']);
@@ -604,18 +615,24 @@ async function main() {
         releaseIntake = JSON.parse(fs.readFileSync(resolvedIntake, 'utf8'));
         releaseIntakeSha256 = sha256ReleaseIntakeFile(resolvedIntake);
         const expectedSha = String(options['release-intake-sha256'] || '').trim().toLowerCase();
-        const shaMatches = !expectedSha || releaseIntakeSha256 === expectedSha;
+        const expectedShaValid = /^[a-f0-9]{64}$/i.test(expectedSha);
+        const shaMatches = expectedShaValid && releaseIntakeSha256 === expectedSha;
         const binding = validateQworkReleaseIntake(releaseIntake, {
+          releaseRef: productionGate ? QWORK_RELEASE_INTAKE_DEFAULT_REF : '',
+          casebookPath: casebook,
+          sheet,
+          caseIds: cases.map((testCase) => testCase.id),
           casebookSha256,
           frameworkCommit: head,
           requireReady: true,
           requireFreshRef: true,
+          requireGitLabApiFreshness: productionGate,
         });
         const ok = binding.ok && shaMatches && releaseIntake.decision === 'READY';
         addCheck('qwork_release_intake', ok,
           ok
             ? `release=${releaseIntake.release?.ref}@${releaseIntake.release?.head}; report_sha256=${releaseIntakeSha256}`
-            : `扫描报告不可作为准入：${binding.failures.join(',')}${shaMatches ? '' : `; sha256=${releaseIntakeSha256} expected=${expectedSha}`}`);
+            : `扫描报告不可作为准入：${binding.failures.join(',')}${shaMatches ? '' : `; sha256=${releaseIntakeSha256} expected=${expectedShaValid ? expectedSha : '(missing-or-invalid --release-intake-sha256)'}`}`);
       } catch (error) {
         addCheck('qwork_release_intake', false, `报告不可读：${error.message}`);
       }

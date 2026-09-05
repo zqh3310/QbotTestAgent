@@ -16,5 +16,6 @@ state/*
 Thumbs.db
 autoTest/
 bug/
+/teams360-automation/runtime/.qwork-managed-runner.lock
 __pycache__/
 *.pyc

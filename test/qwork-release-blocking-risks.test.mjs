@@ -139,23 +139,31 @@ require('./host-core/agent/execution-worker-entry.cjs');
 `;
 
 const successorManager = `
-async function acquire(operation, identity, options) {
-  const requestId = identity.requestId;
-  if (executions.size >= maxConcurrentExecutions) {
-    const error = new Error('execution worker admission is closed');
-    error.code = 'execution_worker_pressure_admission_closed';
-    throw error;
+function managerError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+function waitForExecutionSlot(manager, requestId) {
+  if (manager.executions.size >= manager.maxConcurrentExecutions) {
+    return Promise.reject(managerError('execution_worker_pressure_admission_closed', 'queue full'));
   }
-  const supervisor = supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
+  return Promise.resolve(true);
+}
+async function acquireExecutionWorker(manager, operation, identity, options) {
+  const requestId = identity.requestId;
+  await waitForExecutionSlot(manager, requestId);
+  const supervisor = manager.supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
   const record = { supervisor };
-  executions.set(requestId, record);
-  return {
-    supervisor,
-    release: async () => {
-      executions.delete(requestId);
-      await supervisor.stop();
-    },
+  manager.executions.set(requestId, record);
+  const release = async () => {
+    manager.executions.delete(requestId);
+    await supervisor.stop();
   };
+  return { supervisor, release };
+}
+function createExecutionWorkerManager(manager) {
+  return { acquire: (operation, identity, options) => acquireExecutionWorker(manager, operation, identity, options) };
 }
 `;
 
@@ -168,9 +176,16 @@ const onExit = (code, signal) => {
 `;
 
 const successorDesktopHost = `
-executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
-supervisor = executionWorkerLease.supervisor;
-try { await supervisor.request(); } finally { await executionWorkerLease?.release?.(); }
+async function runAgentInExecutionWorker(identity, signal) {
+  let executionWorkerLease = null;
+  try {
+    executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
+    const supervisor = executionWorkerLease.supervisor;
+    await supervisor.request();
+  } finally {
+    await executionWorkerLease?.release?.();
+  }
+}
 `;
 
 function successorFiles(overrides = new Map()) {
@@ -273,6 +288,153 @@ for (const [name, filePath, source, expected] of [
     assert.deepEqual(risk.failure_ids, [expected]);
   });
 }
+
+test('MR !1559 comments, strings and regex literals cannot satisfy any blocking-risk assertion', () => {
+  const decoys = new Map([
+    ['electron/execution-worker.cjs', `
+      // require('./host-core/agent/execution-worker-entry.cjs');
+      const entryText = "require('./host-core/agent/execution-worker-entry.cjs')";
+      const entryPattern = /require\\(['"]\\.\\/host-core\\/agent\\/execution-worker-entry\\.cjs/;
+    `],
+    ['electron/host-core/agent/execution-worker-manager.cjs', `
+      /* if (full) { error.code = 'execution_worker_pressure_admission_closed'; throw error; } */
+      const policyText = 'supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 })';
+      const leaseText = 'executions.set(requestId, record); executions.delete(requestId); await supervisor.stop()';
+    `],
+    ['electron/host-core/agent/execution-worker-supervisor.cjs', `
+      // const onExit = () => rejectPending(executionWorkerExitFailure());
+      const exitText = 'rejectPending(executionWorkerExitFailure(code, signal))';
+      const exitPattern = /rejectPending\\(executionWorkerExitFailure/;
+    `],
+    ['electron/host-core/agent/desktop-host-context.cjs', `
+      const hostText = 'executionWorkerLease = await manager.acquire(); finally await executionWorkerLease.release()';
+    `],
+  ]);
+  const risk = auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(decoys),
+  });
+  assert.deepEqual(risk.failure_ids, QWORK_MR1552_FAILURE_IDS);
+});
+
+test('MR !1559 executable template interpolation cannot hide a shared Worker', () => {
+  const interpolatedWorkerEntry = `${successorEntry}\nconst marker = \`worker-\${new Worker('./shared-worker.cjs')}\`;\n`;
+  const risk = auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(new Map([
+      ['electron/execution-worker.cjs', interpolatedWorkerEntry],
+    ])),
+  });
+  assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]]);
+});
+
+test('MR !1559 pressure assertions in statically false branches remain unreachable', () => {
+  for (const falseCondition of ['false', '0']) {
+    const unreachablePressureManager = successorManager.replace(
+      'manager.executions.size >= manager.maxConcurrentExecutions',
+      falseCondition,
+    );
+    const risk = auditQworkReleaseBlockingRisk({
+      releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+      originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+      successorAncestry: successorAncestry(),
+      files: successorFiles(new Map([
+        ['electron/host-core/agent/execution-worker-manager.cjs', unreachablePressureManager],
+      ])),
+    });
+    assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[1]], falseCondition);
+  }
+});
+
+test('MR !1559 typed exit assertions after an unconditional terminator remain unreachable', () => {
+  for (const terminator of ['return;', "throw new Error('already terminated');"]) {
+    const unreachableExitSupervisor = `
+      function rejectPending(error) { return error; }
+      function executionWorkerExitFailure(code, signal) { return { code, signal }; }
+      const onExit = (code, signal) => {
+        ${terminator}
+        rejectPending(executionWorkerExitFailure(code, signal));
+      };
+    `;
+    const risk = auditQworkReleaseBlockingRisk({
+      releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+      originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+      successorAncestry: successorAncestry(),
+      files: successorFiles(new Map([
+        ['electron/host-core/agent/execution-worker-supervisor.cjs', unreachableExitSupervisor],
+      ])),
+    });
+    assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[0]], terminator);
+  }
+});
+
+test('MR !1559 typed exit calls in the wrong function scope do not satisfy onExit', () => {
+  const wrongScopedSupervisor = `
+    const onExit = () => { logger.info('worker exited'); };
+    function unrelatedCleanup(code, signal) {
+      rejectPending(executionWorkerExitFailure(code, signal));
+    }
+  `;
+  const risk = auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(new Map([
+      ['electron/host-core/agent/execution-worker-supervisor.cjs', wrongScopedSupervisor],
+    ])),
+  });
+  assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[0]]);
+});
+
+test('MR !1559 pressure helper must be reachable from the acquisition implementation', () => {
+  const disconnectedManager = successorManager.replace(
+    'await waitForExecutionSlot(manager, requestId);',
+    'await Promise.resolve(true);',
+  );
+  const risk = auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', disconnectedManager],
+    ])),
+  });
+  assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[1]]);
+});
+
+test('MR !1559 acquire and release tokens in different try/finally scopes do not satisfy host isolation', () => {
+  const splitDesktopHost = `
+    async function acquireOnly(identity) {
+      let executionWorkerLease = null;
+      try {
+        executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity);
+        await executionWorkerLease.supervisor.request();
+      } finally {
+        await unrelatedCleanup();
+      }
+    }
+    async function releaseOnly() {
+      try {
+        await unrelatedWork();
+      } finally {
+        await executionWorkerLease?.release?.();
+      }
+    }
+  `;
+  const risk = auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(new Map([
+      ['electron/host-core/agent/desktop-host-context.cjs', splitDesktopHost],
+    ])),
+  });
+  assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]]);
+});
 
 test('MR !1559 assertions fail closed when successor relationship is not proven', () => {
   for (const successor of [

@@ -186,6 +186,7 @@ import {
 import {
   buildCoreEvidenceManifest,
   coreBetaAttachmentFixtureNames,
+  coreBetaCaseContractSha256,
   validateEvidenceFile,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
@@ -516,6 +517,11 @@ const projectMemory = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
 const qworkReleaseTestPlan = fs.readFileSync(path.join(root, 'src', 'lib', 'qwork-release-test-plan.mjs'), 'utf8');
+const qworkSoakReportSource = fs.readFileSync(path.join(root, 'src', 'lib', 'qwork-soak-report.mjs'), 'utf8');
+const qworkReleaseObservationSource = fs.readFileSync(path.join(root, 'src', 'lib', 'qwork-release-ref-observation.mjs'), 'utf8');
+const qworkReleaseObservationCli = fs.readFileSync(path.join(root, 'scripts', 'observe-qwork-release-ref.mjs'), 'utf8');
+const qworkReleaseIntakeCli = fs.readFileSync(path.join(root, 'scripts', 'scan-qwork-release-intake.mjs'), 'utf8');
+const coreBetaGrayGateSource = fs.readFileSync(path.join(root, 'src', 'lib', 'core-beta-gray-gate.mjs'), 'utf8');
 const qworkReleaseSourceContractsSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
   'utf8',
@@ -523,6 +529,24 @@ const qworkReleaseSourceContractsSource = fs.readFileSync(
 const coreBetaProtocolSource = fs.readFileSync(path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'), 'utf8');
 const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
 const qworkReleaseOrchestrator = fs.readFileSync(path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs'), 'utf8');
+assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-plan\/v2/);
+assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-state\/v2/);
+assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-integrity\/v2/);
+assert.match(qworkReleaseOrchestrator, /qbot-qwork-release-test-event\/v2/);
+assert.match(qworkReleaseOrchestrator, /\/usr\/bin\/lockf[\s\S]*QBOT_QWORK_CONTROL_LOCK_ROOT/);
+assert.match(qworkReleaseOrchestrator, /captureDirectoryGuard[\s\S]*assertDirectoryGuard/);
+assert.match(qworkReleaseOrchestrator, /\.staging-\$\{process\.pid\}[\s\S]*renameSync\(stagingRoot, files\.root\)/);
+assert.match(qworkReleaseOrchestrator, /qbot-qwork-release-test-transaction\/v2[\s\S]*recoverControlTransaction/);
+assert.match(qworkReleaseOrchestrator, /ls-remote[\s\S]*refs\/heads\/release\/0\.1/);
+assert.match(qworkReleaseObservationSource, /repository\/branches\/\$\{encodeURIComponent\(QWORK_RELEASE_BRANCH\)\}[\s\S]*before !== after/);
+assert.match(qworkReleaseObservationCli, /gitlab-token-stdin[\s\S]*createGitLabReadOnlyReader/);
+assert.match(qworkReleaseOrchestrator, /gitlab-token-stdin[\s\S]*createGitLabReadOnlyReader[\s\S]*readStableQworkReleaseHead/);
+for (const source of [qworkReleaseObservationCli, qworkReleaseIntakeCli, qworkReleaseOrchestrator]) {
+  assert.match(source, /token\.startsWith\('--gitlab-token-stdin='\)[\s\S]*无值布尔开关/);
+  assert.match(source, /Unexpected positional argument/);
+}
+assert.match(qworkReleaseObservationSource, /fs\.existsSync\(root\)[\s\S]*must be new/);
+assert.match(qworkReleaseObservationSource, /captureDirectoryGuard\(path\.dirname\(root\)[\s\S]*assertDirectoryGuard\(rootGuard/);
 for (const [documentName, documentText] of [
   ['QBOT_AUTOMATION_FRAMEWORK.md', automationFramework],
   ['QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md', coreBetaOperatingGuide],
@@ -536,6 +560,11 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
+  assert.match(
+    documentText,
+    /v2[\s\S]*lockf[\s\S]*dev\/inode\/uid\/mode[\s\S]*staging[\s\S]*write-ahead transaction[\s\S]*remote-tracking ref/,
+    `${documentName} 必须固化 v2 控制树、生命周期锁、目录守卫、原子初始化、事务恢复和实时 remote 合同`,
+  );
   assert.match(
     documentText,
     /全部合同[\s\S]*current-release 持续性鉴证[\s\S]*当前 release HEAD[\s\S]*不能冒充本轮 MR changes 鉴证[\s\S]*origin_change_attestation[\s\S]*不在本次增量范围时该字段必须为空/,
@@ -569,8 +598,8 @@ assert.match(
 );
 assert.match(
   coreBetaPretestSource,
-  /const releaseIntakeRequired = productionGate[\s\S]*options\['require-release-intake'\][\s\S]*options\['release-intake'\][\s\S]*if \(releaseIntakeRequired\)[\s\S]*options\['release-intake-sha256'\]/,
-  '正式 production-gate pretest 必须默认强制 release intake，并校验显式报告路径与 SHA-256',
+  /const releaseIntakeRequired = productionGate \|\| TRUE_VALUES\.has\(releaseIntakeMode\)[\s\S]*release_intake_cannot_be_disabled[\s\S]*if \(releaseIntakeRequired\)[\s\S]*expectedShaValid = \/\^\[a-f0-9\]\{64\}\$\/i[\s\S]*releaseRef: productionGate \? QWORK_RELEASE_INTAKE_DEFAULT_REF[\s\S]*casebookPath: casebook[\s\S]*sheet,[\s\S]*caseIds: cases\.map[\s\S]*requireGitLabApiFreshness: productionGate/,
+  '正式 production-gate pretest 必须不可关闭 release intake，强制文件 SHA、GitLab API freshness 与精确 Casebook/Sheet/Case ID 绑定',
 );
 assert.match(
   automationFramework,
@@ -765,6 +794,10 @@ const {
   QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS: casebookDesignSuccessorPaths,
   auditQworkReleaseBlockingRisk: auditCasebookDesignBlockingRisk,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-blocking-risks.mjs')).href);
+const {
+  QWORK_RELEASE_INTAKE_TOOL_VERSION: casebookDesignIntakeToolVersion,
+  mapReleaseImpact: mapCasebookDesignReleaseImpact,
+} = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-intake.mjs')).href);
 const casebookDesignStableValue = (value) => {
   if (Array.isArray(value)) return value.map(casebookDesignStableValue);
   if (value && typeof value === 'object') {
@@ -862,9 +895,16 @@ const onExit = (code, signal) => {
 };
 `;
   const successorDesktopHostSource = blocked ? '// blocked successor desktop host fixture' : `
-executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
-supervisor = executionWorkerLease.supervisor;
-try { await supervisor.request(); } finally { await executionWorkerLease?.release?.(); }
+async function runAgentInExecutionWorker(identity, signal) {
+  let executionWorkerLease = null;
+  try {
+    executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
+    const supervisor = executionWorkerLease.supervisor;
+    await supervisor.request();
+  } finally {
+    await executionWorkerLease?.release?.();
+  }
+}
 `;
   const fileSource = (filePath) => {
     if (filePath === 'electron/execution-worker.cjs') return successorEntrySource;
@@ -1050,6 +1090,22 @@ const sealCasebookDesignIntake = (report) => {
   report.integrity.content_sha256 = casebookDesignSha256(reportValue);
   return report;
 };
+const casebookDesignDependencyClosure = (caseIds) => {
+  const dependencies = new Set();
+  const add = (...ids) => ids.forEach((id) => dependencies.add(id));
+  for (const id of caseIds) {
+    if (id === 'MRSMOKE-AUTO-001') add('BETA-TASK-008', 'BETA-ROUTE-001');
+    if (id === 'MRSMOKE-SKILL-001') add('SIT-SKILL-007', 'BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004', 'BETA-SKILL-005', 'BETA-SKILL-014');
+    if (id === 'MRSMOKE-AUTH-001') add('BETA-SEC-002', 'SIT-WORKSPACE-001');
+    if (id === 'MRSMOKE-CHART-001') add('SIT-CONN-016');
+    if (id === 'MRSMOKE-WEB-001' || id === 'MRSMOKE-WEB-002') add('BETA-CHAT-005', 'SIT-CONN-019');
+    if (id === 'MRSMOKE-ART-001') add('BETA-ART-001', 'BETA-ART-002', 'BETA-ART-003', 'BETA-ART-004');
+    if (id === 'MRSMOKE-FAIL-001' || id === 'MRSMOKE-ROUTE-001') add('BETA-CHAT-005', 'BETA-PERF-003');
+    if (id === 'MRSMOKE-NAV-001' || id === 'MRSMOKE-ENTRY-001') add('BETA-CHAT-007');
+    if (id === 'MRSMOKE-ACT-001') add('BETA-CHAT-007');
+  }
+  return [...dependencies].sort();
+};
 const casebookDesignIntakeFixture = ({ blocked }) => {
   const baseline = 'a'.repeat(40);
   const head = casebookDesignMr1560Contract.merge_commit_sha;
@@ -1058,9 +1114,13 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
       iid: '1552', commit: casebookDesignRiskMerge, parent: baseline, parent_count: 2,
       title: 'execution runner isolation', branch: 'codex/execution-runner', merged_at: '2026-09-04T10:00:00.000Z',
       web_url: 'https://gitlab.example.test/project/-/merge_requests/1552', labels: ['kind/bug'],
-      metadata_source: 'gitlab-api-changes', metadata_verified: true,
+      commit_subject: 'Merge branch codex/execution-runner into release/0.1',
+      commit_body: 'Bind the execution worker lifecycle to the release runner.',
+      metadata_source: 'gitlab-api-changes', metadata_verified: true, state: 'merged', target_branch: 'release/0.1',
+      attribution_kind: 'merge_mr', merge_commit_sha: casebookDesignRiskMerge, squash_commit_sha: '',
+      changes_count: 1,
       changed_paths: ['electron/execution-worker.cjs'], diff_sha256: '1'.repeat(64), diff_bytes: 100,
-      source_contract_ids: [], impact: { mapping_status: 'MAPPED', unmapped_product_paths: [] },
+      source_contract_ids: [],
     },
     {
       iid: casebookDesignMr1560Contract.mr_iid,
@@ -1069,15 +1129,26 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
       parent_count: 2,
       title: 'turn authority readiness', branch: 'fix/turn-authority-readiness', merged_at: '2026-09-04T11:00:00.000Z',
       web_url: 'https://gitlab.example.test/project/-/merge_requests/1560', labels: ['kind/bug'],
-      metadata_source: 'gitlab-api-changes', metadata_verified: true,
+      commit_subject: 'Merge branch fix/turn-authority-readiness into release/0.1',
+      commit_body: 'Require turn authority readiness before dispatch.',
+      metadata_source: 'gitlab-api-changes', metadata_verified: true, state: 'merged', target_branch: 'release/0.1',
+      attribution_kind: 'merge_mr', merge_commit_sha: casebookDesignMr1560Contract.merge_commit_sha, squash_commit_sha: '',
       changes_count: casebookDesignMr1560Contract.changes_count,
       changed_paths: [...casebookDesignMr1560Contract.changed_paths],
       diff_sha256: casebookDesignMr1560Contract.mr_diff.sha256,
       diff_bytes: casebookDesignMr1560Contract.mr_diff.bytes,
       source_contract_ids: [casebookDesignMr1560Contract.contract_id],
-      impact: { mapping_status: 'MAPPED', unmapped_product_paths: [] },
     },
-  ];
+  ].map((mr) => ({
+    ...mr,
+    impact: mapCasebookDesignReleaseImpact({
+      changedPaths: mr.changed_paths,
+      subject: mr.commit_subject,
+      body: mr.commit_body,
+      branch: mr.branch,
+      labels: mr.labels,
+    }),
+  }));
   const sourceContracts = casebookDesignCurrentSourceAttestations({ head, mergeRequests });
   for (const attestation of sourceContracts) {
     assert.equal(
@@ -1106,9 +1177,18 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
     attribution_verified: true,
     reason: '',
   }));
+  const directCaseIds = [...new Set(mergeRequests.flatMap((mr) => mr.impact.direct_case_ids))].sort();
+  const dependencyCaseIds = casebookDesignDependencyClosure(directCaseIds);
+  const requiredStages = [...new Set(mergeRequests.flatMap((mr) => mr.impact.required_stages))].sort();
+  const unmappedProductPaths = [...new Set(mergeRequests.flatMap((mr) => mr.impact.unmapped_product_paths))].sort();
+  const outOfScopeCaseIds = [...new Set(mergeRequests.flatMap((mr) => mr.impact.out_of_scope_case_ids))].sort();
+  const staticOnlyCount = mergeRequests.filter((mr) => (
+    mr.impact.mapping_status === 'MAPPED' && mr.impact.direct_case_ids.length === 0
+  )).length;
+  const unknownCount = mergeRequests.filter((mr) => mr.impact.mapping_status === 'UNKNOWN').length;
   const report = {
     schema_version: 'qbot-qwork-release-intake/v1',
-    tool: { name: 'qbot-release-intake', version: 'qbot-release-intake/1.5.0' },
+    tool: { name: 'qbot-release-intake', version: casebookDesignIntakeToolVersion },
     decision: blocked ? 'BLOCKED' : 'READY',
     blockers: blocked ? ['release 阻断风险审计未通过，存在必须在 G0 修复的 P1 执行隔离缺陷'] : [],
     release: { ref: 'origin/release/0.1', head },
@@ -1144,7 +1224,12 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
     source_contracts: sourceContracts,
     blocking_risks: [risk],
     summary: {
-      scanned_commit_count: 2, merge_request_count: 2, unknown_count: 0,
+      scanned_commit_count: 2, merge_request_count: 2,
+      direct_case_ids: directCaseIds,
+      dependency_case_ids: dependencyCaseIds,
+      required_stages: requiredStages,
+      static_only_count: staticOnlyCount,
+      unknown_count: unknownCount,
       source_contract_count: sourceContracts.length, source_contract_verified_count: sourceContracts.length,
       source_contract_current_count: sourceContracts.length, source_contract_current_verified_count: sourceContracts.length,
       source_contract_origin_count: sourceContractOriginCount,
@@ -1155,7 +1240,7 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
       blocking_risk_failure_count: riskFailureIds.length,
     },
     unresolved: {
-      unmapped_product_paths: [], out_of_scope_case_ids: [], unverified_mr_metadata: [],
+      unmapped_product_paths: unmappedProductPaths, out_of_scope_case_ids: outOfScopeCaseIds, unverified_mr_metadata: [],
       unattributed_direct_commits: [], api_errors: [],
       source_contract_failures: [],
       blocking_risk_failures: riskFailureIds.map((id) => `${casebookDesignRiskId}:${id}`),
@@ -1213,8 +1298,13 @@ assert.match(
 );
 assert.match(
   qworkReleaseOrchestrator,
-  /const intakePath = String\(plan\.release_intake\?\.path[\s\S]*readJson\(intakeFile\)[\s\S]*sha256File\(intakeFile\)[\s\S]*validateQworkReleaseIntakeBinding/,
-  'readiness 必须重读计划绑定的磁盘 intake 并重算文件 SHA',
+  /function validatePlanSourceArtifacts\(plan\)[\s\S]*snapshots\.set\(specification\.role, stableFileSnapshot\([\s\S]*const intakeSnapshot = snapshots\.get\('release_intake'\)[\s\S]*parseJsonSnapshot\(intakeSnapshot, 'release intake'\)[\s\S]*validateQworkReleaseIntakeBinding\(\{[\s\S]*reportSha256: intakeSnapshot\.sha256/,
+  '控制状态加载必须从同一稳定磁盘快照重读 intake、重算 SHA 并验证计划绑定',
+);
+assert.match(
+  qworkReleaseOrchestrator,
+  /function readiness\(options[\s\S]*loadControlState\([\s\S]*options\['state-dir'\][\s\S]*releaseIntake: sourceArtifacts\.releaseIntake[\s\S]*releaseIntakeSha256: sourceArtifacts\.snapshots\.get\('release_intake'\)\.sha256/,
+  'readiness 必须消费控制状态加载时重新验证的 intake 内容与文件 SHA',
 );
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 const coreGateCasebook = JSON.parse(fs.readFileSync(
@@ -1630,6 +1720,18 @@ assert.deepEqual(
 }
 
 {
+  const testCase = {
+    id: 'BETA-CHAT-001',
+    case_type: 'conversation',
+    contract_version: 'qbot-core-beta/v2',
+    automation_protocol: 'qbot-core-beta/v2',
+    evidence_schema_version: 'qbot-core-evidence/v2',
+    pipeline_policy: 'serial',
+    batch_size: 1,
+    action_plan: [],
+    conversation_turns: [],
+    evidence_roles: [],
+  };
   const failed = {
     id: 'BETA-CHAT-001',
     status: 'failed',
@@ -1639,7 +1741,7 @@ assert.deepEqual(
     actual_result: '截图或回复证据未生成',
   };
   annotateCoreBetaExecutionResult({
-    testCase: { id: failed.id, contract_version: 'qbot-core-beta/v2' },
+    testCase,
     result: failed,
     completionIssue: '框架发布门禁 BETA-CHAT-001 拒绝不完整 manifest',
   });
@@ -1648,6 +1750,11 @@ assert.deepEqual(
   assert.equal(failed.case_execution_recorded, true);
   assert.equal(failed.execution_completion.evidence_complete, false);
   assert.equal(failed.execution_provenance, 'executed');
+  assert.equal(
+    failed.contract_sha256,
+    coreBetaCaseContractSha256(testCase),
+    '真实执行结果必须直接封印运行前完整 Case 合同，不能从结果残片重新推导',
+  );
 
   const productFailure = {
     id: 'BETA-EXPERT-005',
@@ -4275,6 +4382,25 @@ assert.match(
   runner,
   /BETA-EXPERT-012[\s\S]*const draftCas = String\(draft\?\.etag \|\| ''\)\.trim\(\) \|\| Number\(draft\?\.revision\)[\s\S]*getOperation\(operationId, draft\.id, draftCas\)/,
   'BETA-EXPERT-012 新版本发布轮询必须绑定同一 draft 和 CAS',
+);
+const expert012AuthoringReplyIndex = runner.indexOf('const authoringReply = await runPromptInCurrentTask({');
+const expert012ReplyGuardIndex = runner.indexOf(
+  'if (authoringReply.incomplete !== false || authoringReply.timeout_cleanup_ok !== true)',
+  expert012AuthoringReplyIndex,
+);
+const expert012ConfigOpenIndex = runner.indexOf('await configOpenConfig.click();', expert012AuthoringReplyIndex);
+const expert012PublishOpenIndex = runner.indexOf('await publishOpenConfig.click();', expert012AuthoringReplyIndex);
+assert.ok(
+  expert012AuthoringReplyIndex >= 0
+    && expert012ReplyGuardIndex > expert012AuthoringReplyIndex
+    && expert012ConfigOpenIndex > expert012ReplyGuardIndex
+    && expert012PublishOpenIndex > expert012ReplyGuardIndex,
+  'BETA-EXPERT-012 回复必须显式完整且超时清理成功，硬门禁必须早于任何配置读回或发布动作',
+);
+assert.match(
+  runner.slice(expert012ReplyGuardIndex, expert012ConfigOpenIndex),
+  /BETA-EXPERT-012 维护回复未可靠终态，禁止后续配置与发布/,
+  'BETA-EXPERT-012 回复终态失败必须在配置动作前 fail-closed',
 );
 assert.match(
   runner,
@@ -9605,7 +9731,30 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /run-metadata\.json\.profile[\s\S]*mode:\"live\"[\s\S]*alias:[\s\S]*summary[\s\S]*mandatory/, '两份规范必须按Teams真实profile对象与summary mandatory分别校验');
   assert.match(documentText, /G0[\s\S]*capabilities[\s\S]*object[\s\S]*health[\s\S]*HTTP 200[\s\S]*preparedRelease=null[\s\S]*十字段身份/, '两份规范必须逐字段复核G0且不得只信聚合状态');
   assert.match(documentText, /G4 readiness[\s\S]*已准入 G3[\s\S]*70 个 ID[\s\S]*精确同序/, '两份规范必须让G4前缀绑定已准入G3');
+  assert.match(documentText, /qbot-qwork-soak-report\/v1[\s\S]*(?:realpath|路径)[\s\S]*(?:inode|device\/inode)[\s\S]*bytes[\s\S]*SHA-256/, '两份规范必须冻结G5磁盘证据与路径/inode/bytes/SHA合同');
+  assert.match(documentText, /100[^\n]*(?:task|任务)[\s\S]*3 次受管重启[\s\S]*restart-before\/restart-after[\s\S]*startup[\s\S]*run-final/, '两份规范必须冻结G5任务、重启与首尾身份观察合同');
+  assert.match(documentText, /(?=[\s\S]*RSS peak)(?=[\s\S]*growth)(?=[\s\S]*slope)(?=[\s\S]*中途)/, '两份规范必须要求从全量资源样本重算峰值、增长量和斜率');
+  assert.match(
+    documentText,
+    /qbot-core-gray-run\/v2[\s\S]*control_dir[\s\S]*release_plan[\s\S]*completion_event[\s\S]*soak_report[\s\S]*路径\/SHA/,
+    '两份规范必须要求灰度聚合只接受状态机控制树、completion event 和磁盘Soak绑定',
+  );
+  assert.match(documentText, /完整(?:的)?\s*event\/state\/hash 链|完整重放五棵 v2 event\/state\/hash 链/, '两份规范必须要求重放完整状态机事件链');
+  assert.match(documentText, /framework commit[\s\S]*Casebook[\s\S]*Case 合同[\s\S]*(?:device\/inode|证据树)/, '两份规范必须冻结五轮 framework/Casebook/Case 合同与证据 provenance');
+  assert.match(documentText, /160\/160[\s\S]*(?:一个|1 个).*70\s*等价轮次/, '两份规范必须要求五轮候选含一轮完整160且只计一个70等价轮次');
 }
+assert.match(qworkSoakReportSource, /TASK_ARTIFACT_ROLES[\s\S]*dispatch_receipt[\s\S]*send_receipt[\s\S]*terminal_receipt/, 'G5校验器必须要求每任务三类独立receipt');
+assert.match(qworkSoakReportSource, /stability\.length >= 3[\s\S]*running === false[\s\S]*status === 'succeeded'/, 'G5校验器必须要求至少三次稳定成功终态观察');
+assert.match(qworkSoakReportSource, /host_process_started_at[\s\S]*renderer_process_started_at[\s\S]*session_id[\s\S]*cdp_endpoint[\s\S]*webview_target_id/, 'G5校验器必须绑定完整宿主与renderer上下文');
+assert.match(qworkSoakReportSource, /startedAt - beforeObservedAt > policy\.maximum_resource_sample_gap_ms[\s\S]*afterObservedAt - recoveredAt > policy\.maximum_resource_sample_gap_ms/, 'G5重启前后身份观察必须有界新鲜');
+assert.match(qworkSoakReportSource, /startupAt - reportStart > policy\.maximum_resource_sample_gap_ms[\s\S]*reportEnd - finalAt > policy\.maximum_resource_sample_gap_ms/, 'G5首尾身份观察必须贴近报告边界');
+assert.match(qworkSoakReportSource, /intervalWithinMaximum[\s\S]*monitoring_interval_ms[\s\S]*intervalWithinMaximum[\s\S]*sampling_interval_ms/, 'G5声明采样间隔允许小于上限但必须为正且不得超限');
+assert.match(qworkSoakReportSource, /soak_artifact_file_reused[\s\S]*soak_artifact_bytes_mismatch[\s\S]*soak_artifact_sha256_mismatch[\s\S]*soak_artifact_orphaned/, 'G5校验器必须拒绝复用、字节或SHA漂移和孤立证据');
+assert.match(coreBetaGrayGateSource, /qbot-core-gray-run\/v2[\s\S]*replayControlTree[\s\S]*applyQworkStageAudit[\s\S]*required_full160_not_passed_in_candidate_runs/, '灰度聚合必须从状态机事件重放磁盘完成审计且要求至少一轮完整160');
+assert.match(coreBetaGrayGateSource, /verifyEventExternalArtifacts[\s\S]*snapshotDirectoryTree[\s\S]*directory_sha256_mismatch/, '灰度聚合必须重验完整事件链的文件与目录树SHA');
+assert.match(coreBetaGrayGateSource, /framework_commit_not_stable_across_candidate_runs[\s\S]*reused_run_id[\s\S]*reused_completion_event[\s\S]*reused_trusted_review_sha256[\s\S]*reused_evidence_inode/, '灰度聚合必须拒绝混合framework commit、重复run/event、复用可信复核内容和证据inode');
+assert.match(coreBetaGrayGateSource, /required_consecutive_runs_must_be_5[\s\S]*fixed_case_policy_must_be_70_and_160[\s\S]*STOP_PIPELINE/, '灰度聚合必须固定五轮70\/160并结构化fail-closed');
+assert.doesNotMatch(coreBetaGrayGateSource, /soak\.tasks_completed[\s\S]*soak\.restart_count[\s\S]*soak\.evidence_complete/, '灰度聚合不得恢复旧式Soak自报放行');
 assert.match(qworkReleaseTestPlan, /QWORK_RELEASE_TEST_INTEGRITY_SCHEMA[\s\S]*event_count[\s\S]*last_event_sha256/, '发布状态库必须封印事件计数和末事件SHA');
 assert.match(qworkReleaseTestPlan, /QWORK_RELEASE_CASEBOOK_BASENAME[\s\S]*QWORK_RELEASE_CASEBOOK_SHA256[\s\S]*casebook_basename_mismatch[\s\S]*casebook_sha256_mismatch/, '发布状态库必须锁定正式Casebook文件名与SHA');
 assert.match(qworkReleaseTestPlan, /summary_status_not_passed/, '发布状态库必须校验summary通过状态');

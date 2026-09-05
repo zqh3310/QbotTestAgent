@@ -29,6 +29,11 @@ import {
   waitForStagedQbotServer,
 } from './teams-profile-qbot-config.mjs';
 import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
+import {
+  createNewManagedOutputDirectory,
+  executeUnderManagedRunnerLock,
+  inspectNewManagedOutputPath,
+} from './managed-runner-lock.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../..');
@@ -152,6 +157,7 @@ export function validateTeamsCasebookOptions(options) {
   if (!options.out || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`360Teams output must stay under ${TEAMS_OUTPUT_ROOT}.`);
   }
+  inspectNewManagedOutputPath({ outDir: out, outputRoot: TEAMS_OUTPUT_ROOT });
   options.casebook = path.isAbsolute(String(options.casebook))
     ? path.resolve(String(options.casebook))
     : path.resolve(ROOT, String(options.casebook));
@@ -897,6 +903,7 @@ export function repairInterruptedTeamsProgress({ outDir, pass = 1 }) {
 
 export async function runTeamsCasebook(argv = process.argv.slice(2)) {
   const options = validateTeamsCasebookOptions(parseCasebookRunnerOptions(argv));
+  createNewManagedOutputDirectory({ outDir: options.out, outputRoot: TEAMS_OUTPUT_ROOT });
   const originalConnectOverCDP = chromium.connectOverCDP;
   const callerManagedCdp = Boolean(options.cdp);
   let connection = await resolveTeamsCasebookConnection(options);
@@ -1280,9 +1287,21 @@ function shellArgument(value) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const summary = await runTeamsCasebook();
-  // runTeamsCasebook has already restored cwd, closed its CDP proxy and
-  // completed managed-host cleanup. Exit explicitly so stale HTTP keep-alive
-  // handles cannot leave a completed runner looking alive to the monitor.
-  process.exit(teamsCasebookExitCode(summary));
+  try {
+    const argv = process.argv.slice(2);
+    const lock = executeUnderManagedRunnerLock({
+      entrypoint: fileURLToPath(import.meta.url),
+      argv,
+      binding: { runner: 'teams-casebook', argv },
+    });
+    if (lock.reexecuted) process.exit(lock.status);
+    const summary = await runTeamsCasebook(argv);
+    // runTeamsCasebook has already restored cwd, closed its CDP proxy and
+    // completed managed-host cleanup. Exit explicitly so stale HTTP keep-alive
+    // handles cannot leave a completed runner looking alive to the monitor.
+    process.exit(teamsCasebookExitCode(summary));
+  } catch (error) {
+    process.stderr.write(`${String(error?.stack || error?.message || error)}\n`);
+    process.exit(1);
+  }
 }

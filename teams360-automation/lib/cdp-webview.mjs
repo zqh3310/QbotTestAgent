@@ -231,7 +231,10 @@ export function assessRuntimeReleaseStatus(summary, expectedVersion) {
   };
 }
 
-export async function probeWebviewPublicCapabilities(targetRef) {
+export async function probeWebviewPublicCapabilities(
+  targetRef,
+  { attemptTimeoutMs = 2_000, maxAttempts = 3 } = {},
+) {
   const checkedAt = new Date().toISOString();
   if (!targetRef?.webSocketDebuggerUrl) {
     return {
@@ -239,43 +242,87 @@ export async function probeWebviewPublicCapabilities(targetRef) {
       checked_at: checkedAt,
       source: 'window.agent.capabilities',
       error: 'The full QWork QBot WebView target is unavailable.',
+      attempts: [],
     };
   }
-  try {
-    const result = await withTargetClient(targetRef.webSocketDebuggerUrl, async (client) => client.evaluate(`(async () => {
-      try {
-        if (typeof globalThis.window?.agent?.capabilities !== 'function') {
-          throw new Error('missing window.agent.capabilities');
+  if (!Number.isSafeInteger(attemptTimeoutMs) || attemptTimeoutMs !== 2_000
+    || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) {
+    throw new Error('QWork public capabilities probes require 2000ms attempts and at most three attempts.');
+  }
+  const attempts = [];
+  let finalError = '';
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    try {
+      const result = await withTargetClient(targetRef.webSocketDebuggerUrl, async (client, deadline) => {
+        const rendererTimeoutMs = deadline.remainingTimeoutMs();
+        return client.evaluate(`(async () => {
+        try {
+          if (typeof globalThis.window?.agent?.capabilities !== 'function') {
+            throw new Error('missing window.agent.capabilities');
+          }
+          return { ok: true, value: await Promise.race([
+            globalThis.window.agent.capabilities(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('window.agent.capabilities timed out')), ${rendererTimeoutMs}))
+          ]) };
+        } catch (error) {
+          return { ok: false, error: String(error?.stack || error) };
         }
-        return { ok: true, value: await globalThis.window.agent.capabilities() };
-      } catch (error) {
-        return { ok: false, error: String(error?.stack || error) };
+      })()`, deadline.remainingTimeoutMs());
+      }, {
+        connectTimeoutMs: attemptTimeoutMs,
+        operationTimeoutMs: attemptTimeoutMs,
+        timeoutLabel: 'QWork public capabilities attempt',
+      });
+      if (result?.ok !== true) {
+        throw new Error(result?.error || 'window.agent.capabilities probe failed');
       }
-    })()`));
-    if (result?.ok !== true) {
+      const summary = summarizePublicCapabilities(result.value);
+      if (!summary.ok) throw new Error('window.agent.capabilities returned a non-object value');
+      attempts.push({
+        attempt,
+        timeout_ms: attemptTimeoutMs,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        duration_ms: Date.now() - startedMs,
+        ok: true,
+        value_type: summary.value_type,
+        error: '',
+      });
       return {
-        ok: false,
+        ...summary,
         checked_at: checkedAt,
         source: 'window.agent.capabilities',
-        error: redactText(result?.error || 'window.agent.capabilities probe failed').slice(0, 1200),
+        error: '',
+        attempt_timeout_ms: attemptTimeoutMs,
+        max_attempts: maxAttempts,
+        attempts,
       };
+    } catch (error) {
+      finalError = redactText(error?.message || String(error)).slice(0, 1200);
+      attempts.push({
+        attempt,
+        timeout_ms: attemptTimeoutMs,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        duration_ms: Date.now() - startedMs,
+        ok: false,
+        value_type: '',
+        error: finalError,
+      });
+      if (attempt < maxAttempts) await delay(100);
     }
-    const value = result.value;
-    const summary = summarizePublicCapabilities(value);
-    return {
-      ...summary,
-      checked_at: checkedAt,
-      source: 'window.agent.capabilities',
-      error: summary.ok ? '' : 'window.agent.capabilities returned a non-object value',
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      checked_at: checkedAt,
-      source: 'window.agent.capabilities',
-      error: redactText(error?.message || String(error)).slice(0, 1200),
-    };
   }
+  return {
+    ok: false,
+    checked_at: checkedAt,
+    source: 'window.agent.capabilities',
+    error: finalError || 'window.agent.capabilities probe failed',
+    attempt_timeout_ms: attemptTimeoutMs,
+    max_attempts: maxAttempts,
+    attempts,
+  };
 }
 
 export async function probeWebviewRuntimeReleaseStatus(targetRef) {
@@ -334,6 +381,18 @@ export async function captureWebviewScreenshot(targetRef, file) {
     fs.writeFileSync(file, Buffer.from(result.data, 'base64'));
     return true;
   }).catch(() => false);
+}
+
+export async function withWebviewTargetClient(targetRef, callback) {
+  if (!targetRef?.webSocketDebuggerUrl || typeof callback !== 'function') {
+    throw new Error('A QWork WebView target and callback are required.');
+  }
+  const endpoint = new URL(String(targetRef.webSocketDebuggerUrl));
+  if (!['ws:', 'wss:'].includes(endpoint.protocol)
+    || !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(endpoint.hostname)) {
+    throw new Error('QWork WebView CDP targets must use a loopback WebSocket endpoint.');
+  }
+  return withTargetClient(endpoint.href, callback);
 }
 
 export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, timeoutMs = 120_000 }) {
@@ -507,13 +566,40 @@ async function captureWithClient(client, file) {
   if (result?.data) fs.writeFileSync(file, Buffer.from(result.data, 'base64'));
 }
 
-async function withTargetClient(webSocketDebuggerUrl, callback) {
-  const client = await TargetCdpClient.connect(webSocketDebuggerUrl);
+async function withTargetClient(webSocketDebuggerUrl, callback, {
+  connectTimeoutMs = 10_000,
+  operationTimeoutMs = 0,
+  timeoutLabel = 'QBot WebView CDP operation',
+} = {}) {
+  const deadlineAt = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : 0;
+  const remainingTimeoutMs = () => {
+    if (!deadlineAt) return 15_000;
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) throw new Error(`${timeoutLabel} timed out.`);
+    return remaining;
+  };
+  let client = null;
+  let deadlineTimer = null;
   try {
-    await client.send('Runtime.enable');
-    return await callback(client);
+    const operation = (async () => {
+      client = await TargetCdpClient.connect(
+        webSocketDebuggerUrl,
+        deadlineAt ? Math.min(connectTimeoutMs, remainingTimeoutMs()) : connectTimeoutMs,
+      );
+      await client.send('Runtime.enable', {}, remainingTimeoutMs());
+      return callback(client, { deadlineAt, remainingTimeoutMs });
+    })();
+    if (!deadlineAt) return await operation;
+    const deadline = new Promise((_, reject) => {
+      deadlineTimer = setTimeout(
+        () => reject(new Error(`${timeoutLabel} timed out.`)),
+        operationTimeoutMs,
+      );
+    });
+    return await Promise.race([operation, deadline]);
   } finally {
-    client.close();
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    client?.close();
   }
 }
 
@@ -541,17 +627,33 @@ class TargetCdpClient {
 
   static async connect(url, timeoutMs = 10_000) {
     const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Timed out connecting to the QBot WebView CDP target.')), timeoutMs);
-      socket.addEventListener('open', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
-      socket.addEventListener('error', () => {
-        clearTimeout(timer);
-        reject(new Error('Unable to connect to the QBot WebView CDP target.'));
-      }, { once: true });
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        let timer = null;
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          socket.removeEventListener('open', onOpen);
+          socket.removeEventListener('error', onError);
+          socket.removeEventListener('close', onClose);
+        };
+        const settle = (callback, value) => {
+          cleanup();
+          callback(value);
+        };
+        const onOpen = () => settle(resolve);
+        const onError = () => settle(reject, new Error('Unable to connect to the QBot WebView CDP target.'));
+        const onClose = () => settle(reject, new Error('The QBot WebView CDP target closed before connecting.'));
+        socket.addEventListener('open', onOpen, { once: true });
+        socket.addEventListener('error', onError, { once: true });
+        socket.addEventListener('close', onClose, { once: true });
+        timer = setTimeout(() => {
+          settle(reject, new Error('Timed out connecting to the QBot WebView CDP target.'));
+        }, timeoutMs);
+      });
+    } catch (error) {
+      try { socket.close(); } catch {}
+      throw error;
+    }
     return new TargetCdpClient(socket);
   }
 
@@ -567,13 +669,13 @@ class TargetCdpClient {
     });
   }
 
-  async evaluate(expression) {
+  async evaluate(expression, timeoutMs = 15_000) {
     const result = await this.send('Runtime.evaluate', {
       expression,
       returnByValue: true,
       awaitPromise: true,
       userGesture: true,
-    });
+    }, timeoutMs);
     if (result?.exceptionDetails) throw new Error(result.exceptionDetails.text || 'QBot WebView evaluation failed.');
     return result?.result?.value;
   }

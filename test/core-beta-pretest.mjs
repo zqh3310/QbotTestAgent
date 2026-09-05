@@ -16,7 +16,7 @@ const preflightSource = fs.readFileSync(
 );
 if (!/let\s+casebookSha256\s*=\s*''/.test(preflightSource)
   || !/casebookSha256\s*=\s*sha256File\(casebook\)/.test(preflightSource)
-  || !/validateQworkReleaseIntake\(releaseIntake,\s*\{\s*casebookSha256,/.test(preflightSource)
+  || !/validateQworkReleaseIntake\(releaseIntake,\s*\{[\s\S]*?casebookSha256,[\s\S]*?\}\);/.test(preflightSource)
   || /let\s+casebookSha\s*=/.test(preflightSource)) {
   throw new Error('Pretest must bind release intake to the computed Casebook SHA variable.');
 }

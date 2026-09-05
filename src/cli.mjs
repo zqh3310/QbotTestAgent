@@ -18,6 +18,7 @@ import { loadLiveGitLabIssues } from './lib/live-gitlab.mjs';
 import { buildMonitorReport } from './lib/monitor.mjs';
 import { renderIssueIntelligence, renderMonitor, writeReports } from './lib/reports.mjs';
 import { generateTestCases } from './lib/testcases.mjs';
+import { executeUnderManagedRunnerLock } from '../teams360-automation/lib/managed-runner-lock.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const COMMANDS = [
@@ -280,6 +281,14 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
   if (!COMMANDS.includes(command)) {
     console.error(`Unknown command: ${command}`);
     process.exit(2);
+  }
+  if (command === 'ui-agent-casebook-run') {
+    const lock = executeUnderManagedRunnerLock({
+      entrypoint: fileURLToPath(import.meta.url),
+      argv,
+      binding: { runner: 'root-casebook', argv },
+    });
+    if (lock.reexecuted) process.exit(lock.status);
   }
   const effectiveCommand = command === 'analyze' ? 'generate' : command;
   const result = await run(effectiveCommand, options);

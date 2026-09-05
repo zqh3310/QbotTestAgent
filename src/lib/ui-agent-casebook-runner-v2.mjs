@@ -2211,6 +2211,7 @@ function persistCasebookProgress({
 
 export function annotateCoreBetaExecutionResult({ testCase, result, completionIssue = '' }) {
   if (!result || result.synthetic === true) return result;
+  result.contract_sha256 = coreBetaCaseContractSha256(testCase);
   const validStatuses = new Set(['passed', 'failed', 'blocked']);
   if (!validStatuses.has(String(result.status || ''))) {
     result.status = 'failed';
@@ -2249,6 +2250,8 @@ export function annotateCoreBetaExecutionResult({ testCase, result, completionIs
     };
   }
   result.execution_provenance = result.execution_provenance || 'executed';
+  result.inherited = false;
+  result.synthetic = false;
   result.case_execution_recorded = true;
   return result;
 }
@@ -2637,7 +2640,10 @@ function createCaseState({ testCase, caseDir, order, modelTier, options = {} }) 
     capability_sampling: testCase.capability_sampling || null,
     precise_assertions: testCase.precise_assertions || null,
     kind: testCase.kind,
+    contract_sha256: coreBetaCaseContractSha256(testCase),
     execution_provenance: 'executed',
+    inherited: false,
+    synthetic: false,
     status: 'failed',
     result_category: 'bug',
     actual_result: '',
@@ -12408,6 +12414,11 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       prompt,
       label: '已发布 Expert 维护任务',
     });
+    if (authoringReply.incomplete !== false || authoringReply.timeout_cleanup_ok !== true) {
+      throw new Error(
+        `BETA-EXPERT-012 维护回复未可靠终态，禁止后续配置与发布：reply_incomplete=${String(authoringReply.incomplete)}，timeout_cleanup_ok=${String(authoringReply.timeout_cleanup_ok)}`,
+      );
+    }
     const authoringAfterState = await captureCoreBetaExpertMaintenanceState(page);
     const authoringTaskId = String(authoringAfterState.active_id || '');
     const sessionReadback = await captureQworkTaskRuntimeReadback(page, authoringTaskId);
@@ -42517,6 +42528,7 @@ function buildSyntheticResult({ outDir, testCase, index, status, resultCategory,
     precondition: testCase.precondition,
     test_data: testCase.test_data,
     expected_result: testCase.expected_result,
+    contract_sha256: coreBetaCaseContractSha256(testCase),
     status,
     result_category: resultCategory,
     actual_result: reason,

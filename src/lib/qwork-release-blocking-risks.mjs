@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v2';
+export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v3';
 export const QWORK_MR1552_EXECUTION_RUNNER_RISK_ID = 'deepbankv2-mr-1552-execution-runner-isolation/v1';
 export const QWORK_MR1552_MERGE_COMMIT_SHA = '0720d31baf1d53bfd61e5428173d39b59472cdb7';
 export const QWORK_MR1559_EXECUTION_RUNNER_SUCCESSOR_ID = 'deepbankv2-mr-1559-per-turn-utility-process/v1';
@@ -155,6 +155,609 @@ function extractBalancedCall(source, marker) {
     }
   }
   return '';
+}
+
+const REGEX_PREFIX_IDENTIFIERS = new Set([
+  'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new', 'of', 'return',
+  'throw', 'typeof', 'void', 'yield',
+]);
+const REGEX_PREFIX_PUNCTUATORS = new Set([
+  '(', '[', '{', ',', ';', ':', '=', '=>', '!', '?', '??', '&&', '||', '+', '-',
+  '*', '%', '&', '|', '^', '~', '<', '>', '<=', '>=', '==', '===', '!=', '!==',
+]);
+const NON_METHOD_IDENTIFIERS = new Set([
+  'catch', 'for', 'if', 'switch', 'while', 'with',
+]);
+const MULTI_CHAR_PUNCTUATORS = Object.freeze([
+  '===', '!==', '>>>', '**=', '&&=', '||=', '??=', '=>', '?.', '==', '!=', '<=', '>=',
+  '++', '--', '&&', '||', '??', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '**',
+  '<<', '>>', '...',
+]);
+
+function regexLiteralCanStart(tokens, tokenFloor = 0) {
+  const previous = tokens.length > tokenFloor ? tokens.at(-1) : null;
+  if (!previous) return true;
+  if (previous.type === 'identifier') return REGEX_PREFIX_IDENTIFIERS.has(previous.value);
+  return previous.type === 'punctuator' && REGEX_PREFIX_PUNCTUATORS.has(previous.value);
+}
+
+// The successor risk audit needs syntax ownership, not text occurrence. This
+// deliberately small lexer retains identifiers, numbers, string values and
+// punctuators while discarding comments, template text and regex bodies. Code
+// inside template interpolation remains executable and is tokenized recursively.
+function tokenizeJavascriptForRiskAudit(source) {
+  const input = String(source || '');
+  const tokens = [];
+  const push = (type, value, start, end) => tokens.push({ type, value, start, end });
+  const scanCode = (start, limit, stopAtTemplateBrace = false) => {
+    let index = start;
+    let braceDepth = 0;
+    const tokenFloor = tokens.length;
+    while (index < limit) {
+      const char = input[index];
+      if (stopAtTemplateBrace && char === '}' && braceDepth === 0) return index + 1;
+      if (/\s/u.test(char)) {
+        index += 1;
+        continue;
+      }
+      if (char === '/' && input[index + 1] === '/') {
+        index += 2;
+        while (index < limit && input[index] !== '\n' && input[index] !== '\r') index += 1;
+        continue;
+      }
+      if (char === '/' && input[index + 1] === '*') {
+        index += 2;
+        while (index < limit && !(input[index] === '*' && input[index + 1] === '/')) index += 1;
+        index = Math.min(limit, index + 2);
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        const stringStart = index;
+        const quote = char;
+        let value = '';
+        index += 1;
+        while (index < limit) {
+          const current = input[index];
+          if (current === '\\') {
+            if (index + 1 < limit) value += input[index + 1];
+            index += 2;
+            continue;
+          }
+          if (current === quote) {
+            index += 1;
+            break;
+          }
+          value += current;
+          index += 1;
+        }
+        push('string', value, stringStart, index);
+        continue;
+      }
+      if (char === '`') {
+        index += 1;
+        while (index < limit) {
+          if (input[index] === '\\') {
+            index += 2;
+            continue;
+          }
+          if (input[index] === '`') {
+            index += 1;
+            break;
+          }
+          if (input[index] === '$' && input[index + 1] === '{') {
+            index = scanCode(index + 2, limit, true);
+            continue;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (char === '/' && regexLiteralCanStart(tokens, tokenFloor)) {
+        index += 1;
+        let inCharacterClass = false;
+        while (index < limit) {
+          if (input[index] === '\\') {
+            index += 2;
+            continue;
+          }
+          if (input[index] === '[') inCharacterClass = true;
+          else if (input[index] === ']') inCharacterClass = false;
+          else if (input[index] === '/' && !inCharacterClass) {
+            index += 1;
+            while (/[A-Za-z]/u.test(input[index] || '')) index += 1;
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (/[A-Za-z_$]/u.test(char)) {
+        const tokenStart = index;
+        index += 1;
+        while (/[A-Za-z0-9_$]/u.test(input[index] || '')) index += 1;
+        push('identifier', input.slice(tokenStart, index), tokenStart, index);
+        continue;
+      }
+      if (/[0-9]/u.test(char)) {
+        const tokenStart = index;
+        index += 1;
+        while (/[A-Za-z0-9_.]/u.test(input[index] || '')) index += 1;
+        push('number', input.slice(tokenStart, index), tokenStart, index);
+        continue;
+      }
+      const punctuator = MULTI_CHAR_PUNCTUATORS.find((candidate) => input.startsWith(candidate, index)) || char;
+      push('punctuator', punctuator, index, index + punctuator.length);
+      if (punctuator === '{') braceDepth += 1;
+      else if (punctuator === '}') braceDepth -= 1;
+      index += punctuator.length;
+    }
+    return index;
+  };
+  scanCode(0, input.length);
+  return tokens.map((token, tokenIndex) => ({ ...token, index: tokenIndex }));
+}
+
+function matchingTokenIndex(tokens, startIndex, open = '(', close = ')', limit = tokens.length) {
+  if (tokens[startIndex]?.value !== open) return -1;
+  let depth = 0;
+  for (let index = startIndex; index < limit; index += 1) {
+    if (tokens[index].value === open) depth += 1;
+    else if (tokens[index].value === close) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function matchingOpenTokenIndex(tokens, closeIndex, open = '(', close = ')') {
+  if (tokens[closeIndex]?.value !== close) return -1;
+  let depth = 0;
+  for (let index = closeIndex; index >= 0; index -= 1) {
+    if (tokens[index].value === close) depth += 1;
+    else if (tokens[index].value === open) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function definitelyFalseCondition(tokens, openIndex, closeIndex) {
+  const condition = tokens.slice(openIndex + 1, closeIndex);
+  return condition.length === 1 && (
+    (condition[0]?.type === 'identifier' && condition[0].value === 'false')
+    || (condition[0]?.type === 'number' && Number(condition[0].value) === 0)
+  );
+}
+
+function conditionallyGuardedTerminator(tokens, index) {
+  if (tokens[index - 1]?.value === 'else') return true;
+  if (tokens[index - 1]?.value !== ')') return false;
+  const conditionOpen = matchingOpenTokenIndex(tokens, index - 1);
+  return conditionOpen > 0 && ['if', 'for', 'while', 'with'].includes(tokens[conditionOpen - 1]?.value);
+}
+
+function statementTerminatorIndex(tokens, startIndex, limit) {
+  let roundDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let index = startIndex + 1; index < limit; index += 1) {
+    const value = tokens[index].value;
+    if (value === '(') roundDepth += 1;
+    else if (value === ')') roundDepth -= 1;
+    else if (value === '{') braceDepth += 1;
+    else if (value === '}') braceDepth -= 1;
+    else if (value === '[') bracketDepth += 1;
+    else if (value === ']') bracketDepth -= 1;
+    else if (value === ';' && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) return index;
+  }
+  return -1;
+}
+
+function reachableTokens(tokens) {
+  const reachable = tokens.map(() => true);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value !== 'if' || tokens[index + 1]?.value !== '(') continue;
+    const conditionClose = matchingTokenIndex(tokens, index + 1);
+    const bodyOpen = conditionClose + 1;
+    if (conditionClose < 0 || tokens[bodyOpen]?.value !== '{'
+      || !definitelyFalseCondition(tokens, index + 1, conditionClose)) continue;
+    const bodyClose = matchingTokenIndex(tokens, bodyOpen, '{', '}');
+    if (bodyClose < 0) continue;
+    for (let cursor = bodyOpen + 1; cursor < bodyClose; cursor += 1) reachable[cursor] = false;
+  }
+
+  const blockStack = [-1];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value === '{') {
+      blockStack.push(index);
+      continue;
+    }
+    if (tokens[index]?.value === '}') {
+      blockStack.pop();
+      continue;
+    }
+    if (!reachable[index] || !['return', 'throw'].includes(tokens[index]?.value)
+      || blockStack.length === 0 || conditionallyGuardedTerminator(tokens, index)) continue;
+    const blockOpen = blockStack.at(-1);
+    const blockClose = blockOpen === -1
+      ? tokens.length
+      : matchingTokenIndex(tokens, blockOpen, '{', '}');
+    const statementEnd = statementTerminatorIndex(tokens, index, blockClose);
+    if (blockClose < 0 || statementEnd < 0) continue;
+    for (let cursor = statementEnd + 1; cursor < blockClose; cursor += 1) reachable[cursor] = false;
+  }
+  return tokens.filter((_, index) => reachable[index]);
+}
+
+function arrowFunctionName(tokens, arrowIndex) {
+  let beforeParameters = arrowIndex - 1;
+  if (tokens[beforeParameters]?.value === ')') {
+    beforeParameters = matchingOpenTokenIndex(tokens, beforeParameters) - 1;
+  } else if (tokens[beforeParameters]?.type === 'identifier') {
+    beforeParameters -= 1;
+  }
+  if (tokens[beforeParameters]?.value === 'async') beforeParameters -= 1;
+  if (tokens[beforeParameters]?.value === '=' || tokens[beforeParameters]?.value === ':') {
+    return tokens[beforeParameters - 1]?.type === 'identifier' ? tokens[beforeParameters - 1].value : '';
+  }
+  return '';
+}
+
+function collectFunctionScopes(tokens) {
+  const scopes = [];
+  const seenBodies = new Set();
+  const addScope = (name, bodyOpen, bodyClose, kind) => {
+    if (!name || bodyOpen < 0 || bodyClose < 0 || seenBodies.has(bodyOpen)) return;
+    seenBodies.add(bodyOpen);
+    scopes.push({ name, body_open: bodyOpen, body_close: bodyClose, kind, parent: null });
+  };
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].value === 'function') {
+      let cursor = index + 1;
+      if (tokens[cursor]?.value === '*') cursor += 1;
+      const name = tokens[cursor]?.type === 'identifier' ? tokens[cursor].value : '';
+      if (!name) continue;
+      cursor += 1;
+      if (tokens[cursor]?.value !== '(') continue;
+      const parametersClose = matchingTokenIndex(tokens, cursor);
+      const bodyOpen = parametersClose + 1;
+      const bodyClose = matchingTokenIndex(tokens, bodyOpen, '{', '}');
+      addScope(name, bodyOpen, bodyClose, 'function');
+      continue;
+    }
+    if (tokens[index].value === '=>' && tokens[index + 1]?.value === '{') {
+      const bodyOpen = index + 1;
+      addScope(
+        arrowFunctionName(tokens, index),
+        bodyOpen,
+        matchingTokenIndex(tokens, bodyOpen, '{', '}'),
+        'arrow',
+      );
+      continue;
+    }
+    if (tokens[index].type === 'identifier'
+      && !NON_METHOD_IDENTIFIERS.has(tokens[index].value)
+      && tokens[index + 1]?.value === '(') {
+      const parametersClose = matchingTokenIndex(tokens, index + 1);
+      const bodyOpen = parametersClose + 1;
+      const previous = tokens[index - 1]?.value;
+      if (tokens[bodyOpen]?.value === '{' && previous !== '.' && previous !== '?.' && previous !== 'function') {
+        addScope(tokens[index].value, bodyOpen, matchingTokenIndex(tokens, bodyOpen, '{', '}'), 'method');
+      }
+    }
+  }
+  for (const scope of scopes) {
+    scope.parent = scopes
+      .filter((candidate) => candidate !== scope
+        && candidate.body_open < scope.body_open
+        && candidate.body_close > scope.body_close)
+      .sort((left, right) => (left.body_close - left.body_open) - (right.body_close - right.body_open))[0] || null;
+  }
+  return scopes;
+}
+
+function tokensOwnedByScope(tokens, scope, scopes) {
+  const nested = scopes.filter((candidate) => candidate !== scope
+    && candidate.body_open > scope.body_open
+    && candidate.body_close < scope.body_close);
+  const owned = [];
+  let skipped = false;
+  for (let index = scope.body_open + 1; index < scope.body_close; index += 1) {
+    if (nested.some((candidate) => index >= candidate.body_open && index <= candidate.body_close)) {
+      if (!skipped) owned.push({ type: 'boundary', value: '<function>', index: -1 });
+      skipped = true;
+      continue;
+    }
+    skipped = false;
+    owned.push(tokens[index]);
+  }
+  return owned;
+}
+
+function callAt(tokens, startIndex) {
+  if (tokens[startIndex]?.type !== 'identifier') return null;
+  const path = [tokens[startIndex].value];
+  let cursor = startIndex + 1;
+  while ((tokens[cursor]?.value === '.' || tokens[cursor]?.value === '?.')
+    && tokens[cursor + 1]?.type === 'identifier') {
+    path.push(tokens[cursor + 1].value);
+    cursor += 2;
+  }
+  if (tokens[cursor]?.value === '?.') cursor += 1;
+  if (tokens[cursor]?.value !== '(') return null;
+  const close = matchingTokenIndex(tokens, cursor);
+  return close < 0 ? null : { start: startIndex, open: cursor, close, path };
+}
+
+function callsInTokens(tokens) {
+  const calls = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const call = callAt(tokens, index);
+    if (call) calls.push(call);
+  }
+  return calls;
+}
+
+function callPathEndsWith(call, suffix) {
+  return suffix.length <= call.path.length
+    && suffix.every((part, index) => call.path[call.path.length - suffix.length + index] === part);
+}
+
+function splitCallArguments(tokens, call) {
+  const ranges = [];
+  let start = call.open + 1;
+  let roundDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let index = start; index < call.close; index += 1) {
+    const value = tokens[index].value;
+    if (value === '(') roundDepth += 1;
+    else if (value === ')') roundDepth -= 1;
+    else if (value === '{') braceDepth += 1;
+    else if (value === '}') braceDepth -= 1;
+    else if (value === '[') bracketDepth += 1;
+    else if (value === ']') bracketDepth -= 1;
+    else if (value === ',' && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+      ranges.push([start, index]);
+      start = index + 1;
+    }
+  }
+  if (start < call.close) ranges.push([start, call.close]);
+  return ranges;
+}
+
+function callHasIdentifierArguments(tokens, call, expected) {
+  const arguments_ = splitCallArguments(tokens, call);
+  if (arguments_.length < expected.length) return false;
+  return expected.every((name, index) => {
+    const [start, end] = arguments_[index];
+    return end - start === 1 && tokens[start]?.type === 'identifier' && tokens[start].value === name;
+  });
+}
+
+function objectArgumentHasNumericProperty(tokens, call, property, expectedValue) {
+  const [first] = splitCallArguments(tokens, call);
+  if (!first || tokens[first[0]]?.value !== '{') return false;
+  const objectClose = matchingTokenIndex(tokens, first[0], '{', '}', first[1]);
+  if (objectClose < 0) return false;
+  for (let index = first[0] + 1; index + 2 < objectClose; index += 1) {
+    if (tokens[index]?.type === 'identifier'
+      && tokens[index].value === property
+      && tokens[index + 1]?.value === ':'
+      && tokens[index + 2]?.type === 'number'
+      && Number(tokens[index + 2].value) === expectedValue) return true;
+  }
+  return false;
+}
+
+function pressureRejectionInIfBlock(tokens) {
+  tokens = reachableTokens(tokens);
+  const calls = callsInTokens(tokens);
+  const pressureCode = 'execution_worker_pressure_admission_closed';
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].value !== 'if' || tokens[index + 1]?.value !== '(') continue;
+    const conditionClose = matchingTokenIndex(tokens, index + 1);
+    const bodyOpen = conditionClose + 1;
+    if (tokens[bodyOpen]?.value !== '{') continue;
+    const bodyClose = matchingTokenIndex(tokens, bodyOpen, '{', '}');
+    if (bodyClose < 0) continue;
+    const branchCalls = calls.filter((call) => call.start > bodyOpen && call.close < bodyClose);
+    const pressureCalls = branchCalls.filter((call) => {
+      const [first] = splitCallArguments(tokens, call);
+      return first && first[1] - first[0] === 1
+        && tokens[first[0]]?.type === 'string'
+        && tokens[first[0]].value === pressureCode;
+    });
+    if (pressureCalls.some((pressureCall) => (
+      tokens[pressureCall.start - 1]?.value === 'throw'
+      || branchCalls.some((outer) => callPathEndsWith(outer, ['reject'])
+        && outer.open < pressureCall.start && outer.close > pressureCall.close)
+    ))) return true;
+    for (let cursor = bodyOpen + 1; cursor + 4 < bodyClose; cursor += 1) {
+      const variable = tokens[cursor]?.type === 'identifier' ? tokens[cursor].value : '';
+      if (!variable
+        || tokens[cursor + 1]?.value !== '.'
+        || tokens[cursor + 2]?.value !== 'code'
+        || tokens[cursor + 3]?.value !== '='
+        || tokens[cursor + 4]?.type !== 'string'
+        || tokens[cursor + 4].value !== pressureCode) continue;
+      for (let throwIndex = cursor + 5; throwIndex + 1 < bodyClose; throwIndex += 1) {
+        if (tokens[throwIndex]?.value === 'throw' && tokens[throwIndex + 1]?.value === variable) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function reachableFunctionScopes(root, tokens, scopes) {
+  const byName = new Map();
+  for (const scope of scopes) {
+    if (!byName.has(scope.name)) byName.set(scope.name, []);
+    byName.get(scope.name).push(scope);
+  }
+  const reached = new Set([root]);
+  const queue = [root];
+  while (queue.length) {
+    const current = queue.shift();
+    const calledNames = new Set(callsInTokens(reachableTokens(tokensOwnedByScope(tokens, current, scopes)))
+      .map((call) => call.path.at(-1)));
+    for (const calledName of calledNames) {
+      for (const candidate of byName.get(calledName) || []) {
+        if (reached.has(candidate)) continue;
+        reached.add(candidate);
+        queue.push(candidate);
+      }
+    }
+  }
+  return [...reached];
+}
+
+function managerSuccessorContract(source) {
+  const tokens = tokenizeJavascriptForRiskAudit(source);
+  const scopes = collectFunctionScopes(tokens);
+  const acquisitions = scopes.filter((scope) => /acquire/iu.test(scope.name));
+  for (const acquisition of acquisitions) {
+    const owned = reachableTokens(tokensOwnedByScope(tokens, acquisition, scopes));
+    const calls = callsInTokens(owned);
+    const supervisorCalls = calls.filter((call) => callPathEndsWith(call, ['supervisorFactory']));
+    const onePendingPerTurn = supervisorCalls.some((call) => (
+      objectArgumentHasNumericProperty(owned, call, 'maxPendingRequests', 1)
+    ));
+    const restartDisabled = supervisorCalls.some((call) => (
+      objectArgumentHasNumericProperty(owned, call, 'maxRestarts', 0)
+    ));
+    const supervisorPolicySameCall = supervisorCalls.some((call) => (
+      objectArgumentHasNumericProperty(owned, call, 'maxPendingRequests', 1)
+      && objectArgumentHasNumericProperty(owned, call, 'maxRestarts', 0)
+    ));
+    const requestIndexed = calls.some((call) => callPathEndsWith(call, ['executions', 'set'])
+      && callHasIdentifierArguments(owned, call, ['requestId', 'record']));
+    const releaseScope = scopes.find((scope) => scope.name === 'release'
+      && scope.parent === acquisition
+      && (() => {
+        const releaseTokens = reachableTokens(tokensOwnedByScope(tokens, scope, scopes));
+        const releaseCalls = callsInTokens(releaseTokens);
+        const deletesRequest = releaseCalls.some((call) => callPathEndsWith(call, ['executions', 'delete'])
+          && callHasIdentifierArguments(releaseTokens, call, ['requestId']));
+        const stopsSupervisor = releaseCalls.some((call) => callPathEndsWith(call, ['supervisor', 'stop'])
+          && releaseTokens[call.start - 1]?.value === 'await');
+        return deletesRequest && stopsSupervisor;
+      })());
+    const reachable = reachableFunctionScopes(acquisition, tokens, scopes);
+    const pressureAdmissionClosed = reachable.some((scope) => pressureRejectionInIfBlock(
+      reachableTokens(tokensOwnedByScope(tokens, scope, scopes)),
+    ));
+    if (supervisorCalls.length > 0 && requestIndexed && releaseScope) {
+      return {
+        pressure_admission_closed: pressureAdmissionClosed,
+        supervisor_created_per_acquire: true,
+        request_indexed: true,
+        request_released: true,
+        one_pending_per_turn: onePendingPerTurn,
+        restart_disabled: restartDisabled,
+        supervisor_policy_same_call: supervisorPolicySameCall,
+      };
+    }
+  }
+  return {
+    pressure_admission_closed: false,
+    supervisor_created_per_acquire: false,
+    request_indexed: false,
+    request_released: false,
+    one_pending_per_turn: false,
+    restart_disabled: false,
+    supervisor_policy_same_call: false,
+  };
+}
+
+function supervisorExitContract(source) {
+  const tokens = tokenizeJavascriptForRiskAudit(source);
+  const scopes = collectFunctionScopes(tokens);
+  const exits = scopes.filter((scope) => scope.name === 'onExit');
+  let rejectsPending = false;
+  let typedFailure = false;
+  for (const exit of exits) {
+    const owned = reachableTokens(tokensOwnedByScope(tokens, exit, scopes));
+    const calls = callsInTokens(owned);
+    for (const rejectCall of calls.filter((call) => callPathEndsWith(call, ['rejectPending']))) {
+      rejectsPending = true;
+      if (calls.some((call) => callPathEndsWith(call, ['executionWorkerExitFailure'])
+        && call.start > rejectCall.open && call.close < rejectCall.close)) typedFailure = true;
+    }
+  }
+  return { rejects_pending: rejectsPending, typed_failure: typedFailure };
+}
+
+function topLevelRequireContract(source) {
+  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
+  let braceDepth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].value === '{') braceDepth += 1;
+    else if (tokens[index].value === '}') braceDepth -= 1;
+    if (braceDepth !== 0) continue;
+    const call = callAt(tokens, index);
+    if (!call || !callPathEndsWith(call, ['require'])) continue;
+    const [first] = splitCallArguments(tokens, call);
+    if (first && first[1] - first[0] === 1
+      && tokens[first[0]]?.type === 'string'
+      && tokens[first[0]].value === './host-core/agent/execution-worker-entry.cjs') return true;
+  }
+  return false;
+}
+
+function sharedWorkerRegistryIsAbsent(source) {
+  const tokens = tokenizeJavascriptForRiskAudit(source);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].value === 'new'
+      && tokens[index + 1]?.value === 'Worker'
+      && tokens[index + 2]?.value === '(') return false;
+    if (tokens[index].value === 'runners'
+      && tokens[index + 1]?.value === '='
+      && tokens[index + 2]?.value === 'new'
+      && tokens[index + 3]?.value === 'Map'
+      && tokens[index + 4]?.value === '(') return false;
+  }
+  return true;
+}
+
+function desktopLeaseContract(source) {
+  const tokens = tokenizeJavascriptForRiskAudit(source);
+  const scopes = collectFunctionScopes(tokens);
+  for (const scope of scopes) {
+    const owned = reachableTokens(tokensOwnedByScope(tokens, scope, scopes));
+    for (let index = 0; index < owned.length; index += 1) {
+      if (owned[index].value !== 'try' || owned[index + 1]?.value !== '{') continue;
+      const tryClose = matchingTokenIndex(owned, index + 1, '{', '}');
+      if (tryClose < 0) continue;
+      let cursor = tryClose + 1;
+      if (owned[cursor]?.value === 'catch') {
+        cursor += 1;
+        if (owned[cursor]?.value === '(') cursor = matchingTokenIndex(owned, cursor) + 1;
+        if (owned[cursor]?.value !== '{') continue;
+        cursor = matchingTokenIndex(owned, cursor, '{', '}') + 1;
+      }
+      if (owned[cursor]?.value !== 'finally' || owned[cursor + 1]?.value !== '{') continue;
+      const finallyClose = matchingTokenIndex(owned, cursor + 1, '{', '}');
+      if (finallyClose < 0) continue;
+      const tryTokens = owned.slice(index + 2, tryClose);
+      const finallyTokens = owned.slice(cursor + 2, finallyClose);
+      const tryCalls = callsInTokens(tryTokens);
+      for (const acquireCall of tryCalls.filter((call) => callPathEndsWith(call, ['acquire']))) {
+        let assignment = acquireCall.start - 1;
+        while (assignment >= 0 && tryTokens[assignment].value !== ';' && tryTokens[assignment].value !== '=') assignment -= 1;
+        if (tryTokens[assignment]?.value !== '=' || tryTokens[assignment - 1]?.type !== 'identifier') continue;
+        const leaseName = tryTokens[assignment - 1].value;
+        if (tryTokens[assignment + 1]?.value !== 'await') continue;
+        const releaseCall = callsInTokens(finallyTokens).find((call) => call.path[0] === leaseName
+          && callPathEndsWith(call, ['release'])
+          && finallyTokens[call.start - 1]?.value === 'await');
+        if (releaseCall) return { acquired: true, released: true, same_try_finally_scope: true };
+      }
+    }
+  }
+  return { acquired: false, released: false, same_try_finally_scope: false };
 }
 
 function verifiedFirstParentCompare(ancestry, compareFrom, compareTo) {
@@ -339,24 +942,25 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
   const supervisor = sourceByPath.get('electron/host-core/agent/execution-worker-supervisor.cjs') || '';
   const desktopHost = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
 
-  const unsettledExitUsesTypedFailure = /executionWorkerExitFailure\s*\(/u.test(supervisor)
-    && /rejectPending\s*\(/u.test(supervisor);
-  const pressureAdmissionClosed = /execution_worker_pressure_admission_closed/u.test(manager);
-  const onePendingPerTurn = /maxPendingRequests\s*:\s*1/u.test(manager);
-  const restartDisabled = /maxRestarts\s*:\s*0/u.test(manager);
-  const pressurePassed = pressureAdmissionClosed && onePendingPerTurn && restartDisabled;
+  const supervisorContract = supervisorExitContract(supervisor);
+  const managerContract = managerSuccessorContract(manager);
+  const desktopContract = desktopLeaseContract(desktopHost);
+  const unsettledExitUsesTypedFailure = supervisorContract.typed_failure;
+  const pressureAdmissionClosed = managerContract.pressure_admission_closed;
+  const onePendingPerTurn = managerContract.one_pending_per_turn;
+  const restartDisabled = managerContract.restart_disabled;
+  const pressurePassed = pressureAdmissionClosed
+    && onePendingPerTurn
+    && restartDisabled
+    && managerContract.supervisor_policy_same_call;
 
-  const supervisorCreatedPerAcquire = /supervisorFactory\s*\(/u.test(manager);
-  const requestIndexed = /executions\.set\s*\(\s*requestId\s*,\s*record\s*\)/u.test(manager);
-  const requestReleased = /executions\.delete\s*\(\s*requestId\s*\)/u.test(manager)
-    && /await\s+supervisor\.stop\s*\(\s*\)/u.test(manager);
-  const leaseAcquired = /executionWorkerLease\s*=\s*await\s+[^;\n]*\.acquire\s*\(/u.test(desktopHost)
-    || /executionWorkerLease\s*=\s*await\s+executionWorkerManager\.acquire\s*\(/u.test(desktopHost);
-  const leaseReleased = /await\s+executionWorkerLease\?\.release\?\.\s*\(\s*\)/u.test(desktopHost)
-    || /await\s+executionWorkerLease\?\.release\?\s*\(\s*\)/u.test(desktopHost);
-  const stableSingleTurnEntry = /require\s*\(\s*['"]\.\/host-core\/agent\/execution-worker-entry\.cjs['"]\s*\)/u.test(entry);
-  const sharedWorkerRegistryAbsent = !/\bnew\s+Worker\s*\(/u.test(entry)
-    && !/\brunners\s*=\s*new\s+Map\s*\(/u.test(entry);
+  const supervisorCreatedPerAcquire = managerContract.supervisor_created_per_acquire;
+  const requestIndexed = managerContract.request_indexed;
+  const requestReleased = managerContract.request_released;
+  const leaseAcquired = desktopContract.acquired;
+  const leaseReleased = desktopContract.released && desktopContract.same_try_finally_scope;
+  const stableSingleTurnEntry = topLevelRequireContract(entry);
+  const sharedWorkerRegistryAbsent = sharedWorkerRegistryIsAbsent(entry);
   const isolationPassed = supervisorCreatedPerAcquire
     && requestIndexed
     && requestReleased
@@ -371,7 +975,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
       passed: unsettledExitUsesTypedFailure,
       observations: {
         supervisor_unsettled_exit_uses_typed_failure: unsettledExitUsesTypedFailure,
-        supervisor_rejects_pending_on_exit: /rejectPending\s*\(/u.test(supervisor),
+        supervisor_rejects_pending_on_exit: supervisorContract.rejects_pending,
       },
     },
     {
@@ -381,6 +985,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
         manager_pressure_admission_closed: pressureAdmissionClosed,
         per_turn_max_pending_requests_one: onePendingPerTurn,
         per_turn_restarts_disabled: restartDisabled,
+        per_turn_supervisor_policy_same_call: managerContract.supervisor_policy_same_call,
       },
     },
     {
@@ -392,6 +997,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
         release_deletes_request_and_stops_supervisor: requestReleased,
         desktop_host_acquires_execution_lease: leaseAcquired,
         desktop_host_releases_execution_lease: leaseReleased,
+        desktop_host_lease_same_try_finally_scope: desktopContract.same_try_finally_scope,
         stable_single_turn_entry: stableSingleTurnEntry,
         shared_worker_registry_absent: sharedWorkerRegistryAbsent,
       },

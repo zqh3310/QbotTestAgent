@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   QWORK_RELEASE_INTAKE_SCHEMA,
   QWORK_RELEASE_INTAKE_TOOL_VERSION,
+  createGitLabReadOnlyReader,
   mapReleaseImpact,
   scanQworkReleaseIntake,
   sha256Text,
@@ -44,7 +45,12 @@ import {
   validateReleaseSourceContractAttestation,
   validateReleaseSourceContractsForReport,
 } from '../src/lib/qwork-release-source-contracts.mjs';
-import { validateQworkReleaseIntakeBinding } from '../src/lib/qwork-release-test-plan.mjs';
+import {
+  QWORK_RELEASE_CASEBOOK_BASENAME,
+  QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
+  QWORK_RELEASE_CASEBOOK_SHA256,
+  validateQworkReleaseIntakeBinding,
+} from '../src/lib/qwork-release-test-plan.mjs';
 import {
   QWORK_MR1552_LEGACY_PROTECTED_PATHS,
   QWORK_MR1552_MERGE_COMMIT_SHA,
@@ -64,6 +70,29 @@ function gitBlobSha1(source) {
     body,
   ])).digest('hex');
 }
+
+test('GitLab token transport keeps TLS verification and freezes the destination', () => {
+  const intakeSource = fs.readFileSync(
+    new URL('../src/lib/qwork-release-intake.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(intakeSource, /^\s*['"]insecure['"],?\s*$/mu);
+  assert.match(intakeSource, /'proto = "=https"'/u);
+  assert.match(intakeSource, /'tlsv1\.2'/u);
+  assert.doesNotThrow(() => createGitLabReadOnlyReader());
+  assert.throws(
+    () => createGitLabReadOnlyReader({ host: 'attacker.invalid' }),
+    /仅允许发送到冻结的 deepbankV2 项目/,
+  );
+  assert.throws(
+    () => createGitLabReadOnlyReader({ projectPath: 'another/project' }),
+    /仅允许发送到冻结的 deepbankV2 项目/,
+  );
+  assert.throws(
+    () => createGitLabReadOnlyReader({ token: 'token\nurl = "https://attacker.invalid"' }),
+    /token 格式非法/,
+  );
+});
 
 function gitLabFilePayload(filePath, source, head) {
   return {
@@ -149,7 +178,7 @@ function currentReleaseFileFixtures(contracts, head) {
       }
     }
   }
-  return new Map([...linesByPath].map(([filePath, lines], index) => {
+  return new Map([...linesByPath].map(([filePath, lines]) => {
     const source = `${lines.join('\n')}\n`;
     return [filePath, {
       file_name: path.basename(filePath),
@@ -158,7 +187,7 @@ function currentReleaseFileFixtures(contracts, head) {
       encoding: 'base64',
       content: Buffer.from(source, 'utf8').toString('base64'),
       ref: head,
-      blob_id: String(index + 1).padStart(40, '1').slice(-40),
+      blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
     }];
@@ -1150,6 +1179,7 @@ test('MR !1557 source contract preserves !1546 origin while transferring three c
     const rewritten = source.replace(`${observed.addition.source}\n`, `// removed ${id}\n`);
     target.payload.content = Buffer.from(rewritten, 'utf8').toString('base64');
     target.payload.size = Buffer.byteLength(rewritten, 'utf8');
+    target.payload.blob_id = gitBlobSha1(rewritten);
     assert.equal(audit(missing).failures.includes(`current_integration_binding_mismatch:${id}`), true, id);
   }
 
@@ -1160,6 +1190,7 @@ test('MR !1557 source contract preserves !1546 origin while transferring three c
   const withOldSnapshot = `${oldSnapshotSource}${oldSnapshot.value.source}\n`;
   oldSnapshotFile.payload.content = Buffer.from(withOldSnapshot, 'utf8').toString('base64');
   oldSnapshotFile.payload.size = Buffer.byteLength(withOldSnapshot, 'utf8');
+  oldSnapshotFile.payload.blob_id = gitBlobSha1(withOldSnapshot);
   assert.equal(
     audit(restoredOldBehavior).failures.includes('current_forbidden_fragment:unconditional_latest_assistant_snapshot'),
     true,
@@ -1404,6 +1435,7 @@ test('MR !1561 current-release persistence verifies declarations and blocks remo
     assert.notEqual(rewritten, source, from);
     file.payload.content = Buffer.from(rewritten, 'utf8').toString('base64');
     file.payload.size = Buffer.byteLength(rewritten, 'utf8');
+    file.payload.blob_id = gitBlobSha1(rewritten);
     return drifted;
   };
   for (const scenario of [
@@ -1626,6 +1658,7 @@ test('MR !1560 current-release persistence requires every readiness binding and 
     assert.notEqual(rewritten, source, filePath);
     file.payload.content = Buffer.from(rewritten, 'utf8').toString('base64');
     file.payload.size = Buffer.byteLength(rewritten, 'utf8');
+    file.payload.blob_id = gitBlobSha1(rewritten);
     return drifted;
   };
   for (const binding of contract.integration_bindings) {
@@ -1776,6 +1809,7 @@ test('MR !1558 current-release continuity requires every binding exactly once wi
     const duplicated = `${source}${binding.addition.source}\n`;
     target.payload.content = Buffer.from(duplicated, 'utf8').toString('base64');
     target.payload.size = Buffer.byteLength(duplicated, 'utf8');
+    target.payload.blob_id = gitBlobSha1(duplicated);
     const attestation = audit(duplicatedFiles);
     assert.equal(attestation.verified, false, binding.id);
     assert.equal(
@@ -2019,6 +2053,7 @@ test('current release audit keeps !1522 integration ownership while enforcing !1
   const driftedSource = `${source}${forbidden}\n`;
   sourceFile.payload.content = Buffer.from(driftedSource, 'utf8').toString('base64');
   sourceFile.payload.size = Buffer.byteLength(driftedSource, 'utf8');
+  sourceFile.payload.blob_id = gitBlobSha1(driftedSource);
   const drifted = audit({ files: driftedFiles });
   assert.equal(drifted.verified, false);
   assert.equal(drifted.failures.includes(`current_forbidden_fragment:${successor.forbidden_fragments[0].id}`), true);
@@ -2030,6 +2065,7 @@ test('current release audit keeps !1522 integration ownership while enforcing !1
   const headerDriftSource = headerSource.replace(expectedEmission, expectedEmission.replace('x-qwork-turn-id', 'x-turn-id'));
   headerSourceFile.payload.content = Buffer.from(headerDriftSource, 'utf8').toString('base64');
   headerSourceFile.payload.size = Buffer.byteLength(headerDriftSource, 'utf8');
+  headerSourceFile.payload.blob_id = gitBlobSha1(headerDriftSource);
   const headerDrift = audit({ files: headerDriftFiles });
   assert.equal(headerDrift.verified, false);
   assert.equal(headerDrift.failures.includes('current_header_source_mismatch:x-qwork-turn-id'), true);
@@ -2057,6 +2093,7 @@ test('MR !1540 current release continuity scopes repeated test assertions to uni
     const rewritten = rewrite(source);
     file.payload.content = Buffer.from(rewritten, 'utf8').toString('base64');
     file.payload.size = Buffer.byteLength(rewritten, 'utf8');
+    file.payload.blob_id = gitBlobSha1(rewritten);
     return next;
   };
   const audit = (auditFiles) => auditCurrentReleaseSourceContract({
@@ -2204,6 +2241,24 @@ test('origin changes attestation continues to require each positive binding exac
   assert.equal(attestation.failures.includes(`integration_binding_mismatch:${binding.id}`), true);
 });
 
+test('renamed GitLab changes retain both old and new paths for release risk mapping', () => {
+  const oldPath = 'server/qbot-core/automation/scheduler.mjs';
+  const newPath = 'docs/automation-scheduler.md';
+  const summarized = summarizeGitLabChanges([{
+    old_path: oldPath,
+    new_path: newPath,
+    renamed_file: true,
+    diff: '',
+  }]);
+  assert.deepEqual(summarized.paths, [oldPath, newPath]);
+  const mapped = mapReleaseImpact({
+    changedPaths: summarized.paths,
+    availableCaseIds: ['MRSMOKE-AUTO-001'],
+  });
+  assert.equal(mapped.direct_case_ids.includes('MRSMOKE-AUTO-001'), true);
+  assert.equal(mapped.product_paths.includes(oldPath), true);
+});
+
 test('impact mapping stays conservative for unknown product paths', () => {
   const mapped = mapReleaseImpact({
     changedPaths: ['server/qbot-core/automation/scheduler.mjs', 'server/mystery/contract.mjs'],
@@ -2341,6 +2396,76 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
     assert.equal(report.summary.direct_case_ids.includes('MRSMOKE-AUTO-001'), true);
     assert.equal(report.summary.dependency_case_ids.includes('BETA-TASK-008'), true);
     assert.equal(validateQworkReleaseIntake(report, { releaseRef: 'HEAD', releaseHead, frameworkCommit: 'a'.repeat(40) }).ok, true);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('formal intake validation rejects fetch-only freshness and cross-Sheet scope reuse after rehashing', () => {
+  const { repo, baseline } = fixtureRepo();
+  try {
+    const report = scanQworkReleaseIntake({
+      repoRoot: repo,
+      releaseRef: 'HEAD',
+      baselineCommit: baseline,
+      caseIds: ['MRSMOKE-AUTO-001', 'BETA-TASK-008'],
+      frameworkCommit: 'a'.repeat(40),
+      fetchLatest: false,
+      requireGitLabMetadata: false,
+      gitlabReader: () => [],
+    });
+    const rehash = (candidate) => {
+      const value = structuredClone(candidate);
+      delete value.integrity.content_sha256;
+      candidate.integrity.content_sha256 = sha256Text(stableJson(value));
+      return candidate;
+    };
+
+    report.policy.fetch_latest = true;
+    report.casebook = {
+      path: '/tmp/formal-casebook.xlsx',
+      sheet: '核心生命线门禁',
+      sha256: 'b'.repeat(64),
+      observed_sha256: 'b'.repeat(64),
+      identity_verified: true,
+      load_source: 'casebook-sheet',
+      load_error: '',
+      available_case_count: 2,
+      available_case_ids: ['MRSMOKE-AUTO-001', 'BETA-TASK-008'],
+    };
+    rehash(report);
+    const expected = {
+      releaseRef: 'HEAD',
+      casebookPath: '/tmp/formal-casebook.xlsx',
+      sheet: '核心生命线门禁',
+      caseIds: ['MRSMOKE-AUTO-001', 'BETA-TASK-008'],
+      casebookSha256: 'b'.repeat(64),
+      frameworkCommit: 'a'.repeat(40),
+      requireReady: true,
+      requireFreshRef: true,
+    };
+    assert.equal(validateQworkReleaseIntake(report, expected).ok, true);
+    const strictFreshness = validateQworkReleaseIntake(report, {
+      ...expected,
+      requireGitLabApiFreshness: true,
+    });
+    assert.equal(strictFreshness.ok, false);
+    assert.equal(strictFreshness.failures.includes('gitlab_api_freshness_required'), true);
+
+    const mutations = [
+      ['casebook_path_mismatch', (candidate) => { candidate.casebook.path = '/tmp/other.xlsx'; }],
+      ['casebook_sheet_mismatch', (candidate) => { candidate.casebook.sheet = '全量功能回归Case'; }],
+      ['casebook_case_ids_mismatch', (candidate) => { candidate.casebook.available_case_ids.reverse(); }],
+    ];
+    for (const [failure, mutate] of mutations) {
+      const forged = structuredClone(report);
+      mutate(forged);
+      rehash(forged);
+      const validation = validateQworkReleaseIntake(forged, expected);
+      assert.equal(validation.ok, false, failure);
+      assert.equal(validation.failures.includes(failure), true, validation.failures.join(','));
+      assert.equal(validation.failures.includes('content_sha256_mismatch'), false, failure);
+    }
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
@@ -2494,6 +2619,58 @@ test('GitLab API freshness proves stable branch, complete first-parent chain, an
   assert.equal(rehashedValidation.failures.some((failure) => (
     failure.includes('attestation_current_assertion_owners_mismatch')
   )), true);
+});
+
+test('GitLab API intake preserves a renamed product source path when the destination is documentation', () => {
+  const oldPath = 'server/qbot-core/automation/scheduler.mjs';
+  const newPath = 'docs/automation-scheduler.md';
+  const fixture = apiFixture({
+    changes: [{
+      old_path: oldPath,
+      new_path: newPath,
+      renamed_file: true,
+      diff: '',
+    }],
+  });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['MRSMOKE-AUTO-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  assert.deepEqual(report.merge_requests[0].changed_paths, [oldPath, newPath]);
+  assert.equal(report.merge_requests[0].impact.direct_case_ids.includes('MRSMOKE-AUTO-001'), true);
+});
+
+test('GitLab API current-release source rejects a blob id that is not bound to content bytes', () => {
+  const fixture = apiFixture();
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const reader = (endpoint) => {
+    if (endpoint.startsWith(`repository/files/${encodeURIComponent(targetPath)}?`)) {
+      const payload = structuredClone(fixture.reader(endpoint));
+      payload.blob_id = '0'.repeat(40);
+      return payload;
+    }
+    return fixture.reader(endpoint);
+  };
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'BLOCKED');
+  assert.equal(
+    report.unresolved.source_contract_failures.some((failure) => failure.includes('blob_id_content_mismatch')),
+    true,
+  );
 });
 
 test('GitLab API intake proves a release between MR !1552 and MR !1559 and audits legacy source', () => {
@@ -2901,6 +3078,157 @@ test('release intake validation rejects rehashed first-parent accounting drift',
   assert.equal(validation.failures.includes('content_sha256_mismatch'), false);
 });
 
+test('release intake validation rejects a rehashed MR ledger forged inside an empty first-parent boundary', () => {
+  const head = 'b'.repeat(40);
+  const emptyFixture = apiFixture({ baseline: head, head, compareCommits: [] });
+  const emptyReport = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: emptyFixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: emptyFixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(emptyReport.decision, 'READY', emptyReport.blockers.join('; '));
+  assert.equal(emptyReport.commit_accounting.length, 0);
+  assert.equal(emptyReport.merge_requests.length, 0);
+
+  const populatedFixture = apiFixture({ head });
+  const populatedReport = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: populatedFixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: populatedFixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(populatedReport.decision, 'READY', populatedReport.blockers.join('; '));
+
+  const forged = structuredClone(emptyReport);
+  forged.commit_accounting = structuredClone(populatedReport.commit_accounting);
+  forged.merge_requests = structuredClone(populatedReport.merge_requests);
+  forged.merge_requests[0].parent = head;
+  for (const field of [
+    'compare_commit_count',
+    'first_parent_commit_count',
+    'accounted_commit_count',
+    'merge_commit_count',
+    'squash_mr_commit_count',
+    'unattributed_direct_commit_count',
+    'attributed_mr_commit_count',
+    'first_parent_merge_count',
+    'mr_changes_verified_count',
+  ]) forged.policy.api_freshness[field] = populatedReport.policy.api_freshness[field];
+  forged.policy.api_freshness.compare_from = head;
+  forged.policy.api_freshness.compare_to = head;
+  for (const field of [
+    'scanned_commit_count',
+    'merge_request_count',
+    'direct_case_ids',
+    'dependency_case_ids',
+    'required_stages',
+    'static_only_count',
+    'unknown_count',
+  ]) forged.summary[field] = structuredClone(populatedReport.summary[field]);
+  forged.unresolved.unmapped_product_paths = structuredClone(populatedReport.unresolved.unmapped_product_paths);
+  forged.unresolved.out_of_scope_case_ids = structuredClone(populatedReport.unresolved.out_of_scope_case_ids);
+  const forgedValue = structuredClone(forged);
+  delete forgedValue.integrity.content_sha256;
+  forged.integrity.content_sha256 = sha256Text(stableJson(forgedValue));
+
+  const validation = validateQworkReleaseIntake(forged, {
+    requireFreshRef: true,
+    requireGitLabApiFreshness: true,
+  });
+  assert.equal(validation.ok, false);
+  assert.equal(
+    validation.failures.includes('merge_request_semantics:zero_length_boundary_not_empty'),
+    true,
+    validation.failures.join(','),
+  );
+  assert.equal(
+    validation.failures.includes(`merge_request_semantics:first_parent_self_cycle:${head}`),
+    true,
+    validation.failures.join(','),
+  );
+  assert.equal(validation.failures.includes('content_sha256_mismatch'), false);
+});
+
+test('release intake validation replays MR attribution, impact and coverage after report rehashing', () => {
+  const fixture = apiFixture();
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  const rehash = (candidate) => {
+    const value = structuredClone(candidate);
+    delete value.integrity.content_sha256;
+    candidate.integrity.content_sha256 = sha256Text(stableJson(value));
+    return candidate;
+  };
+  const scenarios = [
+    {
+      expected: 'merge_request_semantics:commit_accounting_binding_mismatch',
+      mutate(candidate) { candidate.merge_requests[0].iid = '999999'; },
+    },
+    {
+      expected: 'merge_request_semantics:first_parent_chain_mismatch',
+      mutate(candidate) { candidate.merge_requests[0].parent = '9'.repeat(40); },
+    },
+    {
+      expected: 'merge_request_semantics:compare_from_boundary_mismatch',
+      mutate(candidate) { candidate.scan_boundary.baseline_commit = '9'.repeat(40); },
+    },
+    {
+      expected: 'merge_request_semantics:compare_to_release_mismatch',
+      mutate(candidate) { candidate.policy.api_freshness.compare_to = '9'.repeat(40); },
+    },
+    {
+      expected: 'merge_request_semantics:metadata_binding_mismatch',
+      mutate(candidate) { candidate.merge_requests[0].target_branch = 'main'; },
+    },
+    {
+      expected: 'merge_request_semantics:impact_mismatch',
+      mutate(candidate) { candidate.merge_requests[0].impact.mapping_status = 'UNKNOWN'; },
+    },
+    {
+      expected: 'merge_request_semantics:source_contract_ids_mismatch',
+      mutate(candidate) { candidate.merge_requests[0].source_contract_ids = ['forged-contract']; },
+    },
+    {
+      expected: 'merge_request_semantics:summary_direct_case_ids_mismatch',
+      mutate(candidate) { candidate.summary.direct_case_ids = ['FORGED-CASE']; },
+    },
+    {
+      expected: 'merge_request_semantics:summary_dependency_case_ids_mismatch',
+      mutate(candidate) { candidate.summary.dependency_case_ids = ['FORGED-DEPENDENCY']; },
+    },
+  ];
+  for (const scenario of scenarios) {
+    const forged = structuredClone(report);
+    scenario.mutate(forged);
+    const validation = validateQworkReleaseIntake(rehash(forged), {
+      requireFreshRef: true,
+      requireGitLabApiFreshness: true,
+    });
+    assert.equal(validation.ok, false, scenario.expected);
+    assert.equal(
+      validation.failures.some((failure) => failure.startsWith(scenario.expected)),
+      true,
+      `${scenario.expected}: ${validation.failures.join(',')}`,
+    );
+    assert.equal(validation.failures.includes('content_sha256_mismatch'), false, scenario.expected);
+  }
+});
+
 test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven MR !1559 architecture', () => {
   const fixture = apiFixture({
     head: QWORK_MR1559_MERGE_COMMIT_SHA,
@@ -2910,13 +3238,31 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
   const sources = new Map([
     ['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-entry.cjs');\n"],
     ['electron/host-core/agent/execution-worker-manager.cjs', `
-      async function acquire(identity) {
-        if (executions.size >= maxConcurrentExecutions) throw Object.assign(new Error(), { code: 'execution_worker_pressure_admission_closed' });
-        const supervisor = supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
+      function managerError(code, message) {
+        const error = new Error(message);
+        error.code = code;
+        return error;
+      }
+      function waitForExecutionSlot(manager, requestId) {
+        if (manager.executions.size >= manager.maxConcurrentExecutions) {
+          return Promise.reject(managerError('execution_worker_pressure_admission_closed', 'queue full'));
+        }
+        return Promise.resolve(true);
+      }
+      async function acquireExecutionWorker(manager, operation, identity, options) {
         const requestId = identity.requestId;
+        await waitForExecutionSlot(manager, requestId);
+        const supervisor = manager.supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
         const record = { supervisor };
-        executions.set(requestId, record);
-        return { supervisor, release: async () => { executions.delete(requestId); await supervisor.stop(); } };
+        manager.executions.set(requestId, record);
+        const release = async () => {
+          manager.executions.delete(requestId);
+          await supervisor.stop();
+        };
+        return { supervisor, release };
+      }
+      function createExecutionWorkerManager(manager) {
+        return { acquire: (operation, identity, options) => acquireExecutionWorker(manager, operation, identity, options) };
       }
     `],
     ['electron/host-core/agent/execution-worker-supervisor.cjs', `
@@ -2925,9 +3271,16 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
       function onExit(code, signal) { rejectPending(executionWorkerExitFailure(code, signal)); }
     `],
     ['electron/host-core/agent/desktop-host-context.cjs', `
-      executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
-      supervisor = executionWorkerLease.supervisor;
-      try { await supervisor.request(); } finally { await executionWorkerLease?.release?.(); }
+      async function runAgentInExecutionWorker(identity, signal) {
+        let executionWorkerLease = null;
+        try {
+          executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
+          const supervisor = executionWorkerLease.supervisor;
+          await supervisor.request();
+        } finally {
+          await executionWorkerLease?.release?.();
+        }
+      }
     `],
   ]);
   const blockingRiskFiles = new Map(QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS.map((filePath, index) => {
@@ -3076,7 +3429,7 @@ test('GitLab API scan treats an explicit empty registry as all built-in source c
     repoRoot: process.cwd(),
     releaseRef: 'origin/release/0.1',
     baselineCommit: fixture.baseline,
-    caseIds: [],
+    caseIds: ['BETA-INIT-001'],
     frameworkCommit: 'd'.repeat(40),
     gitlabReader: fixture.reader,
     freshnessSource: 'gitlab-api',
@@ -3237,34 +3590,104 @@ test('intake output is immutable and content hash is validated', () => {
   }
 });
 
+test('Casebook and Sheet failures block release intake before a runner can start', () => {
+  const fixture = apiFixture();
+  const casebookPath = path.resolve('PRD', QWORK_RELEASE_CASEBOOK_BASENAME);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-intake-casebook-'));
+  const missingPath = path.join(tempRoot, 'missing.xlsx');
+  const emptyPath = path.join(tempRoot, 'empty.xlsx');
+  execFileSync('python3', ['-c', [
+    'from openpyxl import Workbook',
+    'import sys',
+    'wb = Workbook()',
+    "ws = wb.active",
+    "ws.title = 'Empty'",
+    "ws.append(['用例ID', '测试场景'])",
+    'wb.save(sys.argv[1])',
+  ].join('; '), emptyPath]);
+  const emptySha = createHash('sha256').update(fs.readFileSync(emptyPath)).digest('hex');
+  const scan = (overrides = {}) => scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    casebookPath,
+    casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
+    sheet: '核心生命线门禁',
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+    ...overrides,
+  });
+  try {
+    const missing = scan({ casebookPath: missingPath });
+    assert.equal(missing.decision, 'BLOCKED');
+    assert.match(missing.casebook.load_error, /^casebook_unreadable:/);
+
+    const missingSheet = scan({ sheet: '' });
+    assert.equal(missingSheet.decision, 'BLOCKED');
+    assert.equal(missingSheet.casebook.load_error, 'casebook_sheet_missing');
+
+    const wrongSheet = scan({ sheet: '不存在的 Sheet' });
+    assert.equal(wrongSheet.decision, 'BLOCKED');
+    assert.match(wrongSheet.casebook.load_error, /^casebook_export_failed:/);
+
+    const emptySheet = scan({ casebookPath: emptyPath, casebookSha256: emptySha, sheet: 'Empty' });
+    assert.equal(emptySheet.decision, 'BLOCKED');
+    assert.equal(emptySheet.casebook.load_error, 'casebook_sheet_empty');
+
+    const shaMismatch = scan({ casebookSha256: '0'.repeat(64) });
+    assert.equal(shaMismatch.decision, 'BLOCKED');
+    assert.equal(shaMismatch.casebook.identity_verified, false);
+    assert.match(shaMismatch.blockers.join('\n'), /SHA-256/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('release intake CLI rejects a missing Sheet or unreadable Casebook before scanning', () => {
+  const script = path.resolve('scripts/scan-qwork-release-intake.mjs');
+  const casebookPath = path.resolve('PRD', QWORK_RELEASE_CASEBOOK_BASENAME);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-intake-cli-'));
+  const baseArgs = [
+    script,
+    '--repo', process.cwd(),
+    '--out', path.join(tempRoot, 'out'),
+    '--framework-commit', 'd'.repeat(40),
+  ];
+  try {
+    const missingSheet = spawnSync(process.execPath, [
+      ...baseArgs,
+      '--casebook', casebookPath,
+    ], { encoding: 'utf8' });
+    assert.notEqual(missingSheet.status, 0);
+    assert.match(missingSheet.stderr, /必须提供 --sheet/);
+
+    const missingCasebook = spawnSync(process.execPath, [
+      ...baseArgs,
+      '--casebook', path.join(tempRoot, 'missing.xlsx'),
+      '--sheet', '核心生命线门禁',
+    ], { encoding: 'utf8' });
+    assert.notEqual(missingCasebook.status, 0);
+    assert.match(missingCasebook.stderr, /Casebook 不存在或不可读/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('a bound intake cannot cross release, Casebook, or framework identity', () => {
-  const report = {
-    schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
-    tool: { version: QWORK_RELEASE_INTAKE_TOOL_VERSION },
-    decision: 'READY',
-    release: { ref: 'origin/release/0.1', head: 'c'.repeat(40) },
-    framework: { commit: 'd'.repeat(40) },
-    casebook: { sha256: 'e'.repeat(64) },
-    scan_boundary: { mode: 'commit_ancestry', ancestry_verified: true },
-    merge_requests: [],
-    source_contracts: [],
-    summary: {
-      source_contract_count: 0,
-      source_contract_verified_count: 0,
-      source_contract_failure_count: 0,
-    },
-    unresolved: {
-      unmapped_product_paths: [],
-      unverified_mr_metadata: [],
-      source_contract_failures: [],
-    },
-    blockers: [],
-    policy: { fetch_latest: true },
-    integrity: { content_sha256: '' },
-  };
-  const withoutHash = structuredClone(report);
-  delete withoutHash.integrity.content_sha256;
-  report.integrity.content_sha256 = sha256Text(stableJson(withoutHash));
+  const fixture = apiFixture({ baseline: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    casebookPath: path.resolve('PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
+    sheet: '核心生命线门禁',
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: fixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
   const plan = {
     policy: { release_intake_required: true },
     release_intake: {
@@ -3274,6 +3697,9 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
       content_sha256: report.integrity.content_sha256,
       release_ref: report.release.ref,
       release_head: report.release.head,
+      repository: report.release.repository,
+      baseline_commit: report.scan_boundary.baseline_commit,
+      required_stages: report.summary.required_stages,
     },
     casebook: { sha256: report.casebook.sha256 },
     framework: { commit: report.framework.commit },
@@ -3287,4 +3713,41 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
   });
   assert.equal(drifted.ok, false);
   assert.equal(drifted.failures.some((item) => item.includes('framework_commit')), true);
+
+  const rehash = (candidate) => {
+    const value = structuredClone(candidate);
+    delete value.integrity.content_sha256;
+    candidate.integrity.content_sha256 = sha256Text(stableJson(value));
+    return candidate;
+  };
+  const weakGit = structuredClone(report);
+  delete weakGit.policy.api_freshness;
+  weakGit.policy.fetch_latest = true;
+  const weak = validateQworkReleaseIntakeBinding({ plan, report: rehash(weakGit), reportSha256: 'f'.repeat(64) });
+  assert.equal(weak.ok, false);
+  assert.equal(weak.failures.includes('release_intake_gitlab_api_freshness_required'), true);
+
+  const missingSourceContracts = structuredClone(report);
+  missingSourceContracts.source_contracts = [];
+  missingSourceContracts.summary.source_contract_count = 0;
+  missingSourceContracts.summary.source_contract_verified_count = 0;
+  missingSourceContracts.summary.source_contract_current_count = 0;
+  missingSourceContracts.summary.source_contract_current_verified_count = 0;
+  const missingSources = validateQworkReleaseIntakeBinding({
+    plan,
+    report: rehash(missingSourceContracts),
+    reportSha256: 'f'.repeat(64),
+  });
+  assert.equal(missingSources.ok, false);
+  assert.equal(missingSources.failures.some((failure) => failure.startsWith('release_intake_source_contract:')), true);
+
+  const missingBlockingRisks = structuredClone(report);
+  missingBlockingRisks.blocking_risks = [];
+  const missingRisks = validateQworkReleaseIntakeBinding({
+    plan,
+    report: rehash(missingBlockingRisks),
+    reportSha256: 'f'.repeat(64),
+  });
+  assert.equal(missingRisks.ok, false);
+  assert.equal(missingRisks.failures.some((failure) => failure.startsWith('release_intake_blocking_risk:')), true);
 });

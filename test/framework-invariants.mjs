@@ -111,6 +111,12 @@ const taskRegenerateEvidenceSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'task-regenerate-evidence.mjs'),
   'utf8',
 );
+const rootCliSource = fs.readFileSync(path.join(root, 'src', 'cli.mjs'), 'utf8');
+assert.match(
+  rootCliSource,
+  /command === 'ui-agent-casebook-run'[\s\S]*executeUnderManagedRunnerLock\([\s\S]*runner: 'root-casebook'[\s\S]*if \(lock\.reexecuted\) process\.exit\(lock\.status\)/,
+  '统一 ui-agent-casebook-run CLI 必须与 Teams Casebook/G5 共用进程生命周期锁',
+);
 for (const [name, source] of [['legacy', runner], ['v2', coreBetaV2RunnerSource]]) {
   assert.match(
     source,
@@ -182,8 +188,8 @@ assert.match(
 );
 assert.match(
   coreBetaPretestSource,
-  /const releaseIntakeRequired = productionGate[\s\S]*options\['require-release-intake'\][\s\S]*options\['release-intake'\][\s\S]*if \(releaseIntakeRequired\)[\s\S]*options\['release-intake-sha256'\]/,
-  '正式 production-gate pretest 必须默认强制 release intake，并校验显式报告路径与 SHA-256',
+  /const releaseIntakeRequired = productionGate \|\| TRUE_VALUES\.has\(releaseIntakeMode\)[\s\S]*release_intake_cannot_be_disabled[\s\S]*if \(releaseIntakeRequired\)[\s\S]*expectedShaValid = \/\^\[a-f0-9\]\{64\}\$\/i[\s\S]*releaseRef: productionGate \? QWORK_RELEASE_INTAKE_DEFAULT_REF[\s\S]*casebookPath: casebook[\s\S]*sheet,[\s\S]*caseIds: cases\.map[\s\S]*requireGitLabApiFreshness: productionGate/,
+  '正式 production-gate pretest 必须不可关闭 release intake，强制文件 SHA、GitLab API freshness 与精确 Casebook/Sheet/Case ID 绑定',
 );
 assert.match(
   qworkReleasePlanSource,
@@ -207,7 +213,7 @@ assert.match(
 );
 assert.match(
   qworkReleaseOrchestratorSource,
-  /const intakePath = String\(plan\.release_intake\?\.path[\s\S]*readJson\(intakeFile\)[\s\S]*sha256File\(intakeFile\)[\s\S]*validateQworkReleaseIntakeBinding/,
+  /function validatePlanSourceArtifacts\(plan\)[\s\S]*stableFileSnapshot\([\s\S]*parseJsonSnapshot\(intakeSnapshot[\s\S]*validateQworkReleaseIntakeBinding[\s\S]*function readiness\(options[\s\S]*releaseIntake: sourceArtifacts\.releaseIntake[\s\S]*snapshots\.get\('release_intake'\)\.sha256/,
   'readiness 必须重读计划绑定的磁盘 intake 并重算文件 SHA',
 );
 assert.match(

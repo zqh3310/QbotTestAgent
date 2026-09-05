@@ -49,6 +49,13 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function gitBlobSha1(bytes) {
+  return createHash('sha1')
+    .update(`blob ${bytes.length}\0`, 'utf8')
+    .update(bytes)
+    .digest('hex');
+}
+
 function byteRecord(source) {
   return Object.freeze({
     source,
@@ -1178,9 +1185,14 @@ export function normalizeGitLabChanges(changes = []) {
 export function summarizeGitLabChanges(changes = []) {
   const normalized = normalizeGitLabChanges(changes);
   const serialized = normalized.map((item) => stableJson(item)).join('\n');
+  const paths = normalized.flatMap((item) => (
+    item.renamed_file
+      ? [item.old_path, item.new_path]
+      : [item.new_path || item.old_path]
+  )).filter(Boolean);
   return {
     normalized,
-    paths: [...new Set(normalized.map((item) => item.new_path || item.old_path).filter(Boolean))],
+    paths: [...new Set(paths)],
     diff_bytes: Buffer.byteLength(serialized, 'utf8'),
     diff_sha256: sha256(serialized),
   };
@@ -1686,6 +1698,10 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
     }
     if (bytes.length !== declaredSize) failures.push(`${prefix}:size_mismatch`);
     if (bytes.length === 0) failures.push(`${prefix}:content_empty`);
+    if (bytes.length && HEX40.test(text(payload?.blob_id))
+      && text(payload.blob_id).toLowerCase() !== gitBlobSha1(bytes)) {
+      failures.push(`${prefix}:blob_id_content_mismatch`);
+    }
   }
   const source = bytes.toString('utf8');
   return {

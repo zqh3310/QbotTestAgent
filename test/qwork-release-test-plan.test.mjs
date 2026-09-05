@@ -10,8 +10,18 @@ import {
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
   QWORK_RELEASE_INTAKE_SCHEMA,
   QWORK_RELEASE_INTAKE_TOOL_VERSION,
+  scanQworkReleaseIntake,
   stableJson,
 } from '../src/lib/qwork-release-intake.mjs';
+import {
+  QWORK_RELEASE_SOURCE_CONTRACTS,
+  releaseSourceContractProtectedPaths,
+  resolveCurrentReleaseHeaderContract,
+} from '../src/lib/qwork-release-source-contracts.mjs';
+import {
+  QWORK_MR1552_MERGE_COMMIT_SHA,
+  QWORK_MR1559_MERGE_COMMIT_SHA,
+} from '../src/lib/qwork-release-blocking-risks.mjs';
 import {
   QWORK_RELEASE_TEST_STAGES,
   applyQworkStageAudit,
@@ -22,16 +32,28 @@ import {
   createQworkReleaseTestPlan,
   createQworkReleaseTestState,
   QWORK_RELEASE_CASEBOOK_BASENAME,
+  QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
   QWORK_RELEASE_CASEBOOK_SHA256,
+  QWORK_RELEASE_IDENTITY_SCHEMA,
+  QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
+  QWORK_RELEASE_SOAK_REPORT_SCHEMA,
   QWORK_CORE_LIFELINE_CASE_IDS,
   QWORK_MR_SMOKE_CASE_IDS,
+  qworkReleaseIdentityFingerprint,
   validateQworkReleaseIntakeBinding,
   validateQworkReleaseControlState,
 } from '../src/lib/qwork-release-test-plan.mjs';
+import {
+  createQworkSoakFixture,
+  persistQworkSoakFixture,
+  rewriteQworkSoakArtifact,
+} from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const orchestrator = path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs');
-const evidenceFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-evidence-'));
+const evidenceFixtureRoot = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-evidence-')),
+);
 test.after(() => fs.rmSync(evidenceFixtureRoot, { recursive: true, force: true }));
 
 test('release plan freezes the independently accepted r14 Casebook identity', () => {
@@ -62,61 +84,219 @@ const identity = {
   qwork_release_manifest_sha256: '2'.repeat(64),
 };
 
+function gitBlobSha1(source) {
+  const body = Buffer.from(source, 'utf8');
+  return crypto.createHash('sha1').update(Buffer.concat([
+    Buffer.from(`blob ${body.length}\0`, 'utf8'),
+    body,
+  ])).digest('hex');
+}
+
+function currentReleaseFileFixtures(contracts, head) {
+  const linesByPath = new Map();
+  const addLine = (filePath, line) => {
+    if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
+    const lines = linesByPath.get(filePath);
+    if (line && !lines.includes(line)) lines.push(line);
+  };
+  const appendLine = (filePath, line) => {
+    if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
+    if (line) linesByPath.get(filePath).push(line);
+  };
+  const ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
+    verified: true,
+    first_parent_complete: true,
+  }]));
+  for (const contract of contracts) {
+    const headerOwner = resolveCurrentReleaseHeaderContract(contract, {
+      contracts,
+      ancestryByContractId,
+    }).owner;
+    const replacedBindingIds = new Set((headerOwner.supersedes || [])
+      .find((item) => item.contract_id === contract.contract_id)?.current_assertions
+      ?.filter((item) => item.startsWith('integration_binding:'))
+      .map((item) => item.slice('integration_binding:'.length)) || []);
+    for (const filePath of releaseSourceContractProtectedPaths(contract)) {
+      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
+    }
+    for (const filePath of releaseSourceContractProtectedPaths(headerOwner)) {
+      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
+    }
+    for (const header of headerOwner.header_emissions) {
+      addLine(headerOwner.source_file.path, header.value_definition?.source);
+      addLine(headerOwner.source_file.path, header.emission?.source);
+    }
+    for (const binding of contract.integration_bindings.filter((item) => (
+      !item.current_release_scope && !replacedBindingIds.has(item.id)
+    ))) {
+      addLine(binding.path, binding.addition?.source);
+    }
+    for (const binding of contract.integration_bindings.filter((item) => item.current_release_scope)) {
+      appendLine(binding.path, binding.current_release_scope.owner_start.source);
+      for (const fragment of binding.current_release_scope.required_fragments) {
+        appendLine(binding.path, fragment.value.source);
+      }
+    }
+  }
+  return new Map([...linesByPath].map(([filePath, lines]) => {
+    const source = `${lines.join('\n')}\n`;
+    return [filePath, {
+      file_name: path.basename(filePath),
+      file_path: filePath,
+      size: Buffer.byteLength(source, 'utf8'),
+      encoding: 'base64',
+      content: Buffer.from(source, 'utf8').toString('base64'),
+      ref: head,
+      blob_id: gitBlobSha1(source),
+      commit_id: head,
+      last_commit_id: head,
+    }];
+  }));
+}
+
 function makeReleaseIntake({
   casebookSha256 = QWORK_RELEASE_CASEBOOK_SHA256,
   frameworkCommit = 'b'.repeat(40),
-  releaseHead = 'c'.repeat(40),
+  releaseHead = QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
   releaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF,
+  repositoryPath = root,
 } = {}) {
-  const report = {
-    schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
-    tool: { version: QWORK_RELEASE_INTAKE_TOOL_VERSION },
-    decision: 'READY',
-    release: { ref: releaseRef, head: releaseHead },
-    framework: { commit: frameworkCommit },
-    casebook: { sha256: casebookSha256 },
-    scan_boundary: { mode: 'commit_ancestry', ancestry_verified: true },
-    merge_requests: [],
-    source_contracts: [],
-    summary: {
-      source_contract_count: 0,
-      source_contract_verified_count: 0,
-      source_contract_failure_count: 0,
-      required_stages: ['G1', 'G2', 'G3', 'G4'],
-    },
-    unresolved: {
-      unmapped_product_paths: [],
-      unverified_mr_metadata: [],
-      unattributed_direct_commits: [],
-      source_contract_failures: [],
-    },
-    blockers: [],
-    policy: { fetch_latest: true },
-    integrity: { content_sha256: '' },
+  const releaseFiles = currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, releaseHead);
+  const blockingRiskMerges = new Set([
+    QWORK_MR1552_MERGE_COMMIT_SHA,
+    QWORK_MR1559_MERGE_COMMIT_SHA,
+  ]);
+  const fixtureMrIid = '999999';
+  const fixtureMr = {
+    iid: fixtureMrIid,
+    title: 'test fixture static change',
+    description: 'Deterministic release-intake fixture.',
+    labels: ['scope/test'],
+    merged_at: '2026-09-05T00:00:00.000Z',
+    merge_commit_sha: releaseHead,
+    squash_commit_sha: null,
+    web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/merge_requests/${fixtureMrIid}`,
+    source_branch: 'test/release-intake-fixture',
+    state: 'merged',
+    target_branch: 'release/0.1',
   };
-  const withoutHash = structuredClone(report);
-  delete withoutHash.integrity.content_sha256;
-  report.integrity.content_sha256 = crypto
-    .createHash('sha256')
-    .update(stableJson(withoutHash))
-    .digest('hex');
-  return report;
+  const fixtureChanges = {
+    ...fixtureMr,
+    changes_count: '1',
+    overflow: false,
+    changes: [{
+      old_path: 'docs/release-intake-fixture.md',
+      new_path: 'docs/release-intake-fixture.md',
+      new_file: true,
+      renamed_file: false,
+      deleted_file: false,
+      diff: '@@ -0,0 +1 @@\n+fixture\n',
+    }],
+  };
+  const gitlabReader = (endpoint) => {
+    if (endpoint.startsWith('repository/branches/')) return { commit: { id: releaseHead } };
+    if (endpoint.startsWith('repository/compare?')) {
+      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
+      const from = query.get('from');
+      const to = query.get('to');
+      if (from === QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT && to === releaseHead) {
+        if (from === to) return { compare_timeout: false, commits: [] };
+        return {
+          compare_timeout: false,
+          commits: [{
+            id: releaseHead,
+            parent_ids: [from, '9'.repeat(40)],
+            committed_date: '2026-09-05T00:00:00.000Z',
+            title: 'test fixture static change',
+            message: 'test fixture static change',
+          }],
+        };
+      }
+      if (QWORK_RELEASE_SOURCE_CONTRACTS.some((contract) => contract.merge_commit_sha === from)
+        && to === releaseHead) {
+        return {
+          compare_timeout: false,
+          commits: [{ id: releaseHead, parent_ids: [from] }],
+        };
+      }
+      if (from === releaseHead && blockingRiskMerges.has(to)) {
+        return {
+          compare_timeout: false,
+          commits: [{ id: to, parent_ids: [releaseHead] }],
+        };
+      }
+      if (blockingRiskMerges.has(from) && to === releaseHead) {
+        return { compare_timeout: false, commits: [] };
+      }
+      throw new Error(`unexpected compare ${from}..${to}`);
+    }
+    if (endpoint === `repository/commits/${releaseHead}/merge_requests`) return [fixtureMr];
+    if (endpoint === `merge_requests/${fixtureMrIid}/changes`) return fixtureChanges;
+    if (endpoint.startsWith('repository/files/')) {
+      const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
+      const filePath = decodeURIComponent(encodedPath);
+      if (!releaseFiles.has(filePath)) throw new Error(`missing release file fixture ${filePath}`);
+      return releaseFiles.get(filePath);
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`);
+  };
+  return scanQworkReleaseIntake({
+    repoRoot: repositoryPath,
+    releaseRef,
+    baselineCommit: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
+    casebookPath: path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookSha256,
+    sheet: '核心生命线门禁',
+    frameworkCommit,
+    gitlabReader,
+    freshnessSource: 'gitlab-api',
+    sourceContracts: QWORK_RELEASE_SOURCE_CONTRACTS,
+    now: new Date('2026-09-05T00:00:00.000Z'),
+  });
 }
 
 const releaseIntake = makeReleaseIntake();
-const releaseIntakeSha256 = 'f'.repeat(64);
 const expectedReleaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF;
-const expectedReleaseHead = 'c'.repeat(40);
+const expectedReleaseHead = QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT;
+const releaseHeadObservation = {
+  schema_version: QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
+  observed_at: '2026-09-05T00:00:00.000Z',
+  repository: releaseIntake.release.repository,
+  release_ref: expectedReleaseRef,
+  release_head: expectedReleaseHead,
+  source: 'gitlab-api',
+};
+const fixtureJsonArtifact = (name, value) => {
+  const file = path.join(evidenceFixtureRoot, name);
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  return {
+    path: file,
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+  };
+};
+const releaseIdentityArtifact = fixtureJsonArtifact('release-identity.json', {
+  schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
+  captured_at: '2026-09-05T00:00:00.000Z',
+  ...identity,
+});
+const releaseIntakeArtifact = fixtureJsonArtifact('release-intake.json', releaseIntake);
+const releaseObservationArtifact = fixtureJsonArtifact('release-observation.json', releaseHeadObservation);
+const releaseIntakeSha256 = releaseIntakeArtifact.sha256;
 const plan = createQworkReleaseTestPlan({
-  casebookPath: path.join('/tmp', QWORK_RELEASE_CASEBOOK_BASENAME),
+  casebookPath: path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
   casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
   frameworkCommit: 'b'.repeat(40),
   releaseIdentity: identity,
+  releaseIdentityPath: releaseIdentityArtifact.path,
+  releaseIdentitySha256: releaseIdentityArtifact.sha256,
   releaseIntake,
-  releaseIntakePath: '/tmp/release-intake.json',
+  releaseIntakePath: releaseIntakeArtifact.path,
   releaseIntakeSha256,
   expectedReleaseRef,
   expectedReleaseHead,
+  releaseHeadObservation,
+  releaseHeadObservationPath: releaseObservationArtifact.path,
+  releaseHeadObservationSha256: releaseObservationArtifact.sha256,
 });
 
 function releaseIntakeInputs(sourcePlan = plan, report = releaseIntake) {
@@ -144,7 +324,12 @@ function capability(stageId, sourcePlan = plan) {
     : Array.from({ length: stage.expected_case_count }, (_, index) => `${stageId}-CASE-${index + 1}`);
   return {
     schema_version: 'qbot-core-beta-capability-audit/v2',
-    casebook: { sha256: sourcePlan.casebook.sha256, sheet: stage.sheet },
+    casebook: {
+      path: sourcePlan.casebook.path,
+      sha256: sourcePlan.casebook.sha256,
+      sheet: stage.sheet,
+      profile: 'mandatory',
+    },
     protocol: {
       ok: true,
       case_count: stage.expected_case_count,
@@ -157,7 +342,20 @@ function capability(stageId, sourcePlan = plan) {
       unsupported_runtime: 0,
       ...stage.expected_capability_classes,
     },
-    cases: caseIds.map((caseId) => ({ case_id: caseId, runtime_dispatchable: true })),
+    cases: caseIds.map((caseId) => ({
+      case_id: caseId,
+      case_type: 'release-gate-fixture',
+      driver: 'fixture-driver',
+      fixture_control: 'fixture-adapter',
+      executor_route: 'fixture-route',
+      contract_sha256: crypto.createHash('sha256').update(`contract:${caseId}`).digest('hex'),
+      protocol_ok: true,
+      runtime_dispatchable: true,
+      directly_runnable_without_controller: true,
+      action_count: 1,
+      evidence_role_count: 1,
+      hard_oracle_count: 1,
+    })),
   };
 }
 
@@ -230,6 +428,20 @@ function pretest(stageId, sourcePlan = plan) {
       case_count: stage.expected_case_count,
       expected_count: stage.expected_case_count,
       case_ids: caseIds,
+    },
+    fixture: {
+      ok: true,
+      requirements: capability(stageId, sourcePlan).cases.map((item) => ({
+        case_id: item.case_id,
+        driver: item.driver,
+        adapter: item.fixture_control,
+        executor_route: item.executor_route,
+        contract_sha256: item.contract_sha256,
+        local_ready: true,
+        action_ids: [`${item.case_id}:action-1`],
+        evidence_roles: ['before_screenshot'],
+        oracle_sha256s: [crypto.createHash('sha256').update(`oracle:${item.case_id}`).digest('hex')],
+      })),
     },
     release_identity: {
       expected: structuredClone(sourcePlan.release_identity),
@@ -313,16 +525,59 @@ function pretest(stageId, sourcePlan = plan) {
   };
 }
 
+let externalArtifactSequence = 0;
+
+function jsonExternalArtifact(role, value, directory = evidenceFixtureRoot) {
+  externalArtifactSequence += 1;
+  const file = path.join(
+    directory,
+    `${String(externalArtifactSequence).padStart(4, '0')}-${role.replace(/[^a-zA-Z0-9_.-]+/g, '_')}.json`,
+  );
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  return {
+    role,
+    path: file,
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+    type: 'file',
+  };
+}
+
+function readinessInputs(stageId, {
+  capabilityAudit = capability(stageId),
+  pretestReport = pretest(stageId),
+  sourcePlan = plan,
+  intake = releaseIntake,
+} = {}) {
+  return {
+    ...releaseIntakeInputs(sourcePlan, intake),
+    plan: sourcePlan,
+    stageId,
+    capabilityAudit,
+    pretest: pretestReport,
+    externalArtifacts: [
+      jsonExternalArtifact(`${stageId}.readiness.capability_audit`, capabilityAudit),
+      jsonExternalArtifact(`${stageId}.readiness.pretest`, pretestReport),
+    ],
+  };
+}
+
 function completionInputs(stageId, trustedStatus = 'trusted_pass') {
   const stage = QWORK_RELEASE_TEST_STAGES.find((item) => item.id === stageId);
   const count = stage.expected_case_count;
-  const caseIds = capability(stageId).cases.map((item) => item.case_id);
+  const capabilityReport = capability(stageId);
+  const caseIds = capabilityReport.cases.map((item) => item.case_id);
   const runDir = fs.mkdtempSync(path.join(evidenceFixtureRoot, `${stageId.toLowerCase()}-run-`));
   const results = caseIds.map((caseId, index) => {
+    const caseCapability = capabilityReport.cases[index];
+    const actionId = `${caseId}:action-1`;
+    const hardOracle = `oracle:${caseId}`;
     const caseDir = path.join(runDir, 'cases', `${String(index + 1).padStart(3, '0')}-${caseId}`);
     fs.mkdirSync(caseDir, { recursive: true });
     const evidencePath = path.join(caseDir, 'before.png');
-    const evidenceBytes = Buffer.from(`evidence:${caseId}:${index}`);
+    const evidenceBytes = Buffer.concat([
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+      Buffer.alloc(128, index),
+    ]);
     fs.writeFileSync(evidencePath, evidenceBytes);
     const evidenceManifest = {
       schema_version: 'qbot-core-evidence/v2',
@@ -344,16 +599,27 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
       path.join(caseDir, 'evidence-manifest.json'),
       `${JSON.stringify(evidenceManifest, null, 2)}\n`,
     );
-    return {
+    const result = {
       id: caseId,
       case_dir: caseDir,
+      contract_version: 'qbot-core-beta/v2',
+      case_type: caseCapability.case_type,
+      contract_sha256: caseCapability.contract_sha256,
+      action_plan: [{ action_id: actionId }],
+      precise_assertions: { hard_oracles: [hardOracle] },
+      status: 'passed',
+      result_category: 'pass',
       execution_provenance: 'executed',
       inherited: false,
       synthetic: false,
+      case_execution_recorded: true,
+      evidence_roles: ['before_screenshot'],
       evidence_manifest: evidenceManifest,
     };
+    fs.writeFileSync(path.join(caseDir, 'case-result.json'), `${JSON.stringify(result, null, 2)}\n`);
+    return result;
   });
-  const categories = ['trusted_pass', 'trusted_bug', 'trusted_blocked', 'framework_issue', 'case_needs_update', 'needs_llm_review'];
+  const categories = ['trusted_pass', 'trusted_fail', 'trusted_bug', 'trusted_blocked', 'framework_issue', 'case_needs_update', 'needs_llm_review'];
   const trustedCounts = Object.fromEntries(categories.map((category) => [category, 0]));
   trustedCounts[trustedStatus] = count;
   const reviewCategory = {
@@ -363,7 +629,18 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
     framework_issue: '不可信-框架问题',
     case_needs_update: '可信执行-case需优化',
   }[trustedStatus] || trustedStatus;
-  return {
+  const trustedReview = {
+    counts: { total: count, ...trustedCounts },
+    production_release_gate: { all_trusted_pass: trustedStatus === 'trusted_pass' },
+    items: results.map((result) => ({
+      id: result.id,
+      review_category: reviewCategory,
+      trusted: trustedStatus !== 'framework_issue',
+    })),
+  };
+  const trustedReviewPath = path.join(runDir, '可信二次复核结果.json');
+  fs.writeFileSync(trustedReviewPath, `${JSON.stringify(trustedReview, null, 2)}\n`);
+  const inputs = {
     progress: { total: count, completed: count, results },
     summary: {
       status: trustedStatus === 'trusted_pass' ? 'passed' : 'failed',
@@ -398,11 +675,9 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
         synthetic_diagnostics: 0,
       },
     },
-    trustedReview: {
-      counts: { total: count, ...trustedCounts },
-      production_release_gate: { all_trusted_pass: trustedStatus === 'trusted_pass' },
-      items: results.map((result) => ({ id: result.id, review_category: reviewCategory, trusted: trustedStatus !== 'framework_issue' })),
-    },
+    trustedReview,
+    trustedReviewPath,
+    trustedReviewSha256: crypto.createHash('sha256').update(fs.readFileSync(trustedReviewPath)).digest('hex'),
     runMetadata: {
       selected_case_ids: caseIds,
       model_tier: 'M3',
@@ -465,6 +740,66 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
     expectedCaseIds: caseIds,
     runDir,
   };
+  const readinessAudit = auditQworkStageReadiness(readinessInputs(stageId));
+  assert.equal(readinessAudit.passed, true, readinessAudit.failures.join(','));
+  inputs.readinessAudit = readinessAudit;
+  const progressPath = path.join(runDir, 'automation-progress.json');
+  const summaryPath = path.join(runDir, 'automation-run-summary.json');
+  const metadataPath = path.join(runDir, 'run-metadata.json');
+  fs.writeFileSync(progressPath, `${JSON.stringify(inputs.progress, null, 2)}\n`);
+  fs.writeFileSync(summaryPath, `${JSON.stringify(inputs.summary, null, 2)}\n`);
+  fs.writeFileSync(metadataPath, `${JSON.stringify(inputs.runMetadata, null, 2)}\n`);
+  inputs.externalArtifacts = [
+    {
+      role: `${stageId}.completion.progress`,
+      path: progressPath,
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(progressPath)).digest('hex'),
+      type: 'file',
+    },
+    {
+      role: `${stageId}.completion.summary`,
+      path: summaryPath,
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(summaryPath)).digest('hex'),
+      type: 'file',
+    },
+    {
+      role: `${stageId}.completion.metadata`,
+      path: metadataPath,
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(metadataPath)).digest('hex'),
+      type: 'file',
+    },
+    {
+      role: `${stageId}.completion.trusted_review`,
+      path: trustedReviewPath,
+      sha256: inputs.trustedReviewSha256,
+      type: 'file',
+    },
+    {
+      role: `${stageId}.completion.evidence_tree`,
+      path: runDir,
+      sha256: crypto.createHash('sha256').update(`fixture-tree:${runDir}`).digest('hex'),
+      type: 'directory-tree',
+    },
+  ];
+  return inputs;
+}
+
+function rewriteTrustedReview(inputs) {
+  fs.writeFileSync(inputs.trustedReviewPath, `${JSON.stringify(inputs.trustedReview, null, 2)}\n`);
+  inputs.trustedReviewSha256 = crypto.createHash('sha256')
+    .update(fs.readFileSync(inputs.trustedReviewPath))
+    .digest('hex');
+  return inputs;
+}
+
+function rewriteCompletionResult(inputs, index, mutate) {
+  mutate(inputs.progress.results[index]);
+  inputs.summary.results[index] = structuredClone(inputs.progress.results[index]);
+  fs.writeFileSync(
+    path.join(inputs.progress.results[index].case_dir, 'case-result.json'),
+    `${JSON.stringify(inputs.progress.results[index], null, 2)}\n`,
+  );
+  return inputs;
 }
 
 test('release plan fixes the fail-fast stage order and counts', () => {
@@ -513,6 +848,9 @@ test('release plan requires a READY intake bound to the Casebook and framework',
     releaseIntakeSha256,
     expectedReleaseRef,
     expectedReleaseHead,
+    releaseHeadObservation,
+    releaseHeadObservationPath: '/tmp/release-observation.json',
+    releaseHeadObservationSha256: 'e'.repeat(64),
   };
   const { expectedReleaseRef: ignoredRef, expectedReleaseHead: ignoredHead, ...withoutObservation } = base;
   assert.equal(ignoredRef, expectedReleaseRef);
@@ -525,7 +863,7 @@ test('release plan requires a READY intake bound to the Casebook and framework',
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
     releaseIntake: makeReleaseIntake({ casebookSha256: 'a'.repeat(64) }),
-  }), /release_intake_invalid:casebook_sha256_mismatch/);
+  }), /casebook_sha256_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
     releaseIntake: makeReleaseIntake({ frameworkCommit: 'a'.repeat(40) }),
@@ -533,11 +871,11 @@ test('release plan requires a READY intake bound to the Casebook and framework',
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
     releaseIntake: makeReleaseIntake({ releaseRef: 'origin/release/old' }),
-  }), /release_intake_invalid:release_ref_mismatch/);
+  }), /release_ref_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
     releaseIntake: makeReleaseIntake({ releaseHead: 'd'.repeat(40) }),
-  }), /release_intake_invalid:release_head_mismatch/);
+  }), /release_head_mismatch/);
   const notReady = makeReleaseIntake();
   notReady.decision = 'BLOCKED';
   notReady.blockers = ['test blocker'];
@@ -547,13 +885,90 @@ test('release plan requires a READY intake bound to the Casebook and framework',
   assert.throws(() => createQworkReleaseTestPlan({ ...base, releaseIntake: notReady }), /decision_BLOCKED/);
 });
 
+test('release plan requires an independently sourced release HEAD observation', () => {
+  const base = {
+    casebookPath: path.join('/tmp', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
+    frameworkCommit: 'b'.repeat(40),
+    releaseIdentity: identity,
+    releaseIntake,
+    releaseIntakePath: '/tmp/release-intake.json',
+    releaseIntakeSha256,
+    expectedReleaseRef,
+    expectedReleaseHead,
+  };
+  assert.throws(() => createQworkReleaseTestPlan(base), /release_head_observation_invalid/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseHeadObservation: { ...releaseHeadObservation, release_head: 'd'.repeat(40) },
+    releaseHeadObservationPath: '/tmp/release-observation.json',
+    releaseHeadObservationSha256: 'e'.repeat(64),
+  }), /release_observation_release_head_mismatch/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseHeadObservation,
+    releaseHeadObservationPath: base.releaseIntakePath,
+    releaseHeadObservationSha256: 'e'.repeat(64),
+  }), /release_head_observation_must_be_independent/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    releaseHeadObservation: { ...releaseHeadObservation, repository: '/tmp/another-repository' },
+    releaseHeadObservationPath: '/tmp/release-observation.json',
+    releaseHeadObservationSha256: 'e'.repeat(64),
+  }), /release_observation_repository_mismatch/);
+});
+
+test('release repository binding accepts canonical macOS /var aliases', (t) => {
+  const temporaryRepository = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-repository-'));
+  try {
+    const canonicalRepository = fs.realpathSync(temporaryRepository);
+    if (canonicalRepository === temporaryRepository) {
+      t.skip('当前平台没有需要归一化的临时目录别名');
+      return;
+    }
+    const canonicalIntake = makeReleaseIntake({ repositoryPath: canonicalRepository });
+    const casebookPath = path.join(canonicalRepository, QWORK_RELEASE_CASEBOOK_BASENAME);
+    const identityPath = path.join(canonicalRepository, 'release-identity.json');
+    const intakePath = path.join(canonicalRepository, 'release-intake.json');
+    const observationPath = path.join(canonicalRepository, 'release-observation.json');
+    const observation = { ...releaseHeadObservation, repository: temporaryRepository };
+    fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebookPath);
+    fs.writeFileSync(identityPath, `${JSON.stringify({
+      schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
+      captured_at: '2026-09-05T00:00:00.000Z',
+      ...identity,
+    }, null, 2)}\n`);
+    fs.writeFileSync(intakePath, `${JSON.stringify(canonicalIntake, null, 2)}\n`);
+    fs.writeFileSync(observationPath, `${JSON.stringify(observation, null, 2)}\n`);
+    const artifactSha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    assert.doesNotThrow(() => createQworkReleaseTestPlan({
+      casebookPath,
+      casebookSha256: artifactSha256(casebookPath),
+      frameworkCommit: 'b'.repeat(40),
+      releaseIdentity: identity,
+      releaseIdentityPath: identityPath,
+      releaseIdentitySha256: artifactSha256(identityPath),
+      releaseIntake: canonicalIntake,
+      releaseIntakePath: intakePath,
+      releaseIntakeSha256: artifactSha256(intakePath),
+      expectedReleaseRef,
+      expectedReleaseHead,
+      releaseHeadObservation: observation,
+      releaseHeadObservationPath: observationPath,
+      releaseHeadObservationSha256: artifactSha256(observationPath),
+    }));
+  } finally {
+    fs.rmSync(temporaryRepository, { recursive: true, force: true });
+  }
+});
+
 test('release state and control integrity reject an unbound legacy plan', () => {
   const unboundPlan = structuredClone(plan);
   unboundPlan.release_intake = null;
   unboundPlan.policy.release_intake_required = false;
   assert.throws(
     () => createQworkReleaseTestState(unboundPlan),
-    /缺少.*强制 release intake.*绑定/,
+    /plan_release_intake_binding_required/,
   );
 
   const state = createQworkReleaseTestState(plan);
@@ -603,7 +1018,7 @@ test('release state and control integrity reject malformed intake bindings', () 
     scenario.mutate(malformedPlan);
     assert.throws(
       () => createQworkReleaseTestState(malformedPlan),
-      /缺少.*强制 release intake.*绑定/,
+      new RegExp(scenario.failure),
       scenario.name,
     );
     const audit = validateQworkReleaseControlState({ plan: malformedPlan, state, integrity });
@@ -647,15 +1062,9 @@ test('readiness rejects an intake replaced with a stale release HEAD', () => {
 });
 
 test('G1 exact READY marks G0 passed and G1 ready', () => {
-  const audit = auditQworkStageReadiness({
-    ...releaseIntakeInputs(),
-    plan,
-    stageId: 'G1',
-    capabilityAudit: capability('G1'),
-    pretest: pretest('G1'),
-  });
+  const audit = auditQworkStageReadiness(readinessInputs('G1'));
   assert.equal(audit.decision, 'READY_TO_RUN');
-  const state = applyQworkStageAudit(createQworkReleaseTestState(plan), audit, { phase: 'readiness' });
+  const state = applyQworkStageAudit(createQworkReleaseTestState(plan), audit, { plan, phase: 'readiness' });
   assert.equal(state.stages.G0.status, 'PASSED');
   assert.equal(state.stages.G1.status, 'READY');
 });
@@ -732,22 +1141,14 @@ test('G4 readiness requires the exact admitted G3 prefix', () => {
   const fullPretest = pretest('G4');
   fullPretest.casebook.case_ids = full.cases.map((item) => item.case_id);
   const accepted = auditQworkStageReadiness({
-    ...releaseIntakeInputs(),
-    plan,
-    stageId: 'G4',
-    capabilityAudit: full,
-    pretest: fullPretest,
+    ...readinessInputs('G4', { capabilityAudit: full, pretestReport: fullPretest }),
     expectedPrefixCaseIds: gate.cases.map((item) => item.case_id),
   });
   assert.equal(accepted.passed, true, accepted.failures.join(','));
   full.cases[0].case_id = 'DRIFTED-GATE-PREFIX';
   fullPretest.casebook.case_ids[0] = 'DRIFTED-GATE-PREFIX';
   const rejected = auditQworkStageReadiness({
-    ...releaseIntakeInputs(),
-    plan,
-    stageId: 'G4',
-    capabilityAudit: full,
-    pretest: fullPretest,
+    ...readinessInputs('G4', { capabilityAudit: full, pretestReport: fullPretest }),
     expectedPrefixCaseIds: gate.cases.map((item) => item.case_id),
   });
   assert.equal(rejected.passed, false);
@@ -776,7 +1177,7 @@ test('only all trusted passes admit the next stage', () => {
     stageId: 'G1',
     ...completionInputs('G1'),
   });
-  assert.equal(passed.decision, 'PASS_STAGE');
+  assert.equal(passed.decision, 'PASS_STAGE', passed.failures.join(','));
 
   const failed = completionInputs('G1', 'trusted_bug');
   const rejected = auditQworkStageCompletion({ plan, stageId: 'G1', ...failed });
@@ -813,6 +1214,38 @@ test('completion rejects a manifest without explicit valid evidence entries', ()
   assert.ok(audit.failures.includes('evidence_manifest_incomplete'));
 });
 
+test('completion requires every trusted review item to explicitly be trusted and pass-classified', () => {
+  const inputs = completionInputs('G1');
+  delete inputs.trustedReview.items[0].trusted;
+  delete inputs.trustedReview.items[1].review_category;
+  fs.writeFileSync(inputs.trustedReviewPath, `${JSON.stringify(inputs.trustedReview, null, 2)}\n`);
+  inputs.trustedReviewSha256 = crypto.createHash('sha256').update(fs.readFileSync(inputs.trustedReviewPath)).digest('hex');
+  const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('trusted_review_untrusted_item_present'));
+  assert.ok(audit.failures.includes('trusted_review_non_pass_item_present'));
+});
+
+test('completion rejects trusted review files outside the run and symlinked evidence ancestors', () => {
+  const outsideReview = completionInputs('G1');
+  const externalReview = path.join(evidenceFixtureRoot, 'external-review.json');
+  fs.copyFileSync(outsideReview.trustedReviewPath, externalReview);
+  outsideReview.trustedReviewPath = externalReview;
+  outsideReview.trustedReviewSha256 = crypto.createHash('sha256').update(fs.readFileSync(externalReview)).digest('hex');
+  const reviewAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...outsideReview });
+  assert.equal(reviewAudit.passed, false);
+  assert.ok(reviewAudit.failures.includes('trusted_review_file_invalid'));
+
+  const symlinked = completionInputs('G1');
+  const caseDir = symlinked.progress.results[0].case_dir;
+  const realCaseDir = `${caseDir}-real`;
+  fs.renameSync(caseDir, realCaseDir);
+  fs.symlinkSync(realCaseDir, caseDir, 'dir');
+  const evidenceAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...symlinked });
+  assert.equal(evidenceAudit.passed, false);
+  assert.ok(evidenceAudit.failures.includes('evidence_manifest_incomplete'));
+});
+
 test('completion recomputes evidence bytes and SHA from the immutable run directory', () => {
   const inputs = completionInputs('G1');
   const evidencePath = inputs.progress.results[0].evidence_manifest.evidence[0].path;
@@ -837,43 +1270,153 @@ test('completion requires stable authoritative identity at startup and run-final
   assert.ok(driftAudit.failures.includes('run_release_observation_drift'));
 });
 
-test('a core gate failure keeps every later stage NOT_STARTED', () => {
-  const readiness = auditQworkStageReadiness({
-    ...releaseIntakeInputs(),
-    plan,
-    stageId: 'G1',
-    capabilityAudit: capability('G1'),
-    pretest: pretest('G1'),
+test('completion rejects non-passing raw Case status or result category despite green aggregates', () => {
+  const variants = [
+    ['status', 'failed'],
+    ['result_category', 'bug'],
+  ];
+  for (const [field, value] of variants) {
+    const inputs = rewriteCompletionResult(completionInputs('G1'), 0, (result) => {
+      result[field] = value;
+    });
+    const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+    assert.equal(audit.passed, false, `${field}=${value} must fail closed`);
+    assert.equal(audit.decision, 'STOP_PIPELINE');
+    assert.ok(audit.failures.includes('raw_case_result_not_passed'), audit.failures.join(','));
+  }
+});
+
+test('completion rejects a run-root framework stop diagnostic even when summaries omit it', () => {
+  const inputs = completionInputs('G1');
+  fs.writeFileSync(
+    path.join(inputs.runDir, 'framework-stop-diagnostic.json'),
+    `${JSON.stringify({ schema_version: 'qbot-framework-stop-diagnostic/v1', reason: 'test-stop' })}\n`,
+  );
+  const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('run_framework_stop_diagnostic_present'), audit.failures.join(','));
+});
+
+test('completion requires explicit false inherited and synthetic flags on every Case result', () => {
+  for (const field of ['inherited', 'synthetic']) {
+    const inputs = rewriteCompletionResult(completionInputs('G1'), 0, (result) => {
+      delete result[field];
+    });
+    const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+    assert.equal(audit.passed, false, `missing ${field} must fail closed`);
+    assert.ok(audit.failures.includes('result_execution_flags_invalid'), audit.failures.join(','));
+  }
+});
+
+test('completion rejects conflicting trusted classification fields on the same review item', () => {
+  const inputs = completionInputs('G1');
+  Object.assign(inputs.trustedReview.items[0], {
+    trusted_status: 'trusted_pass',
+    classification: 'trusted_bug',
+    review_category: '可信通过-用户可接受',
   });
-  let state = applyQworkStageAudit(createQworkReleaseTestState(plan), readiness, { phase: 'readiness' });
+  rewriteTrustedReview(inputs);
+  const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('trusted_review_classification_conflict'), audit.failures.join(','));
+});
+
+test('completion rejects every non-pass trusted count even when pass count and gate claim are green', () => {
+  const variants = [
+    ['trusted_fail', 'trusted_fail_must_be_zero'],
+    ['trusted_bug', 'trusted_bug_must_be_zero'],
+    ['trusted_blocked', 'trusted_blocked_must_be_zero'],
+    ['framework_issue', 'framework_issue_must_be_zero'],
+    ['case_needs_update', 'testcase_issue_must_be_zero'],
+    ['needs_llm_review', 'needs_review_must_be_zero'],
+  ];
+  for (const [field, expectedFailure] of variants) {
+    const inputs = completionInputs('G1');
+    inputs.trustedReview.counts[field] = 1;
+    inputs.trustedReview.counts.trusted_pass = inputs.progress.total;
+    inputs.trustedReview.production_release_gate.all_trusted_pass = true;
+    rewriteTrustedReview(inputs);
+    const audit = auditQworkStageCompletion({ plan, stageId: 'G1', ...inputs });
+    assert.equal(audit.passed, false, `${field}>0 must fail closed`);
+    assert.ok(audit.failures.includes(expectedFailure), audit.failures.join(','));
+  }
+});
+
+test('a core gate failure keeps every later stage NOT_STARTED', () => {
+  const readiness = auditQworkStageReadiness(readinessInputs('G1'));
+  let state = applyQworkStageAudit(createQworkReleaseTestState(plan), readiness, { plan, phase: 'readiness' });
   const failed = auditQworkStageCompletion({
     plan,
     stageId: 'G1',
     ...completionInputs('G1', 'framework_issue'),
   });
-  state = applyQworkStageAudit(state, failed, { phase: 'completion' });
+  state = applyQworkStageAudit(state, failed, { plan, phase: 'completion' });
   assert.equal(state.decision, 'NO_GO');
   assert.equal(state.stages.G1.status, 'STOPPED');
   for (const stageId of ['G2', 'G3', 'G4', 'G5']) assert.equal(state.stages[stageId].status, 'NOT_STARTED');
   assert.throws(
-    () => applyQworkStageAudit(state, readiness, { phase: 'readiness' }),
+    () => applyQworkStageAudit(state, readiness, { plan, phase: 'readiness' }),
     /状态已冻结/,
   );
 });
 
 test('a stage readiness audit cannot overwrite an existing admission', () => {
-  const readiness = auditQworkStageReadiness({
-    ...releaseIntakeInputs(),
-    plan,
-    stageId: 'G1',
-    capabilityAudit: capability('G1'),
-    pretest: pretest('G1'),
-  });
-  const state = applyQworkStageAudit(createQworkReleaseTestState(plan), readiness, { phase: 'readiness' });
+  const readiness = auditQworkStageReadiness(readinessInputs('G1'));
+  const state = applyQworkStageAudit(createQworkReleaseTestState(plan), readiness, { plan, phase: 'readiness' });
   assert.throws(
-    () => applyQworkStageAudit(state, readiness, { phase: 'readiness' }),
+    () => applyQworkStageAudit(state, readiness, { plan, phase: 'readiness' }),
     /不得覆盖准入/,
   );
+});
+
+test('stage state machine rejects phases that are invalid for G0 and G5', () => {
+  const baseState = createQworkReleaseTestState(plan);
+  const readyForSoak = structuredClone(baseState);
+  for (const stageId of ['G0', 'G1', 'G2', 'G3', 'G4']) readyForSoak.stages[stageId].status = 'PASSED';
+  const invalidApplications = [
+    {
+      state: baseState,
+      phase: 'readiness',
+      audit: {
+        schema_version: 'qbot-qwork-stage-readiness-audit/v1',
+        stage_id: 'G0',
+        passed: true,
+        decision: 'READY_TO_RUN',
+        failures: [],
+      },
+    },
+    {
+      state: baseState,
+      phase: 'completion',
+      audit: {
+        schema_version: 'qbot-qwork-stage-completion-audit/v1',
+        stage_id: 'G0',
+        passed: true,
+        decision: 'PASS_STAGE',
+        failures: [],
+      },
+    },
+    {
+      state: readyForSoak,
+      phase: 'readiness',
+      audit: {
+        schema_version: 'qbot-qwork-soak-completion-audit/v1',
+        stage_id: 'G5',
+        passed: true,
+        decision: 'READY_TO_RUN',
+        failures: [],
+      },
+    },
+  ];
+  for (const application of invalidApplications) {
+    const before = structuredClone(application.state);
+    assert.throws(() => applyQworkStageAudit(
+      application.state,
+      application.audit,
+      { phase: application.phase },
+    ));
+    assert.deepEqual(application.state, before);
+  }
 });
 
 test('control integrity rejects plan and state tampering', () => {
@@ -899,44 +1442,193 @@ test('control integrity rejects plan and state tampering', () => {
   assert.ok(eventAudit.failures.includes('integrity_last_event_sha256_invalid'));
 });
 
-test('soak requires 100 tasks, three restarts and exact identity', () => {
-  const passed = auditQworkSoakCompletion({
-    plan,
-    soak: {
-      tasks_completed: 100,
-      restart_count: 3,
-      crash_count: 0,
-      resource_leak_detected: false,
-      evidence_complete: true,
-      passed: true,
-      release_identity_sha256: plan.release_identity_sha256,
+function soakExternalArtifacts(fixture) {
+  return [
+    {
+      role: 'G5.soak.report',
+      path: fixture.reportPath,
+      sha256: fixture.reportSha256,
+      type: 'file',
     },
+    ...fixture.report.external_artifacts.map((descriptor, index) => ({
+      role: `G5.soak.artifact.${String(index + 1).padStart(6, '0')}`,
+      path: descriptor.path,
+      sha256: descriptor.sha256,
+      type: 'file',
+    })),
+  ];
+}
+
+function soakInputs() {
+  const fixture = createQworkSoakFixture({
+    root: fs.mkdtempSync(path.join(evidenceFixtureRoot, 'soak-')),
+    releaseIdentity: plan.release_identity,
+    frameworkCommit: plan.framework.commit,
   });
-  assert.equal(passed.decision, 'PASS_STAGE');
+  return {
+    fixture,
+    soak: fixture.report,
+    soakReportPath: fixture.reportPath,
+    soakReportSha256: fixture.reportSha256,
+    externalArtifacts: soakExternalArtifacts(fixture),
+  };
+}
+
+function rewriteSoakReport(inputs) {
+  persistQworkSoakFixture(inputs.fixture);
+  inputs.soakReportSha256 = inputs.fixture.reportSha256;
+  inputs.externalArtifacts = soakExternalArtifacts(inputs.fixture);
+  return inputs;
+}
+
+test('soak requires 100 tasks, three restarts and exact identity', () => {
+  const valid = soakInputs();
+  const passed = auditQworkSoakCompletion({ plan, ...valid });
+  assert.equal(passed.decision, 'PASS_STAGE', passed.failures.join(','));
+  const invalid = soakInputs();
+  invalid.soak.tasks.pop();
+  invalid.soak.restarts.pop();
+  invalid.soak.crashes.push({ crash_id: 'crash-1' });
+  invalid.soak.resource_usage.leak_detected = true;
+  invalid.soak.resource_usage.verdict = 'leak';
+  invalid.soak.evidence_complete = false;
+  invalid.soak.passed = false;
+  invalid.soak.release_identity_sha256 = '0'.repeat(64);
+  rewriteSoakReport(invalid);
   const failed = auditQworkSoakCompletion({
     plan,
-    soak: {
-      tasks_completed: 99,
-      restart_count: 2,
-      crash_count: 1,
-      resource_leak_detected: true,
-      evidence_complete: false,
-      passed: false,
-      release_identity_sha256: '0'.repeat(64),
-    },
+    ...invalid,
   });
   assert.equal(failed.decision, 'STOP_PIPELINE');
   assert.ok(failed.failures.length >= 6);
 });
 
+test('soak rejects 100 tasks that reuse one synthetic time window', () => {
+  const inputs = soakInputs();
+  for (const task of inputs.soak.tasks) {
+    task.started_at = '2026-09-05T00:00:00.000Z';
+    task.ended_at = '2026-09-05T00:01:00.000Z';
+  }
+  rewriteSoakReport(inputs);
+  const audit = auditQworkSoakCompletion({ plan, ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(
+    audit.failures.some((failure) => failure.startsWith('soak_task_execution_invalid:')),
+    audit.failures.join(','),
+  );
+  assert.ok(
+    audit.failures.some((failure) => failure.startsWith('soak_task_serial_timeline_invalid:')),
+    audit.failures.join(','),
+  );
+});
+
+test('soak rejects restarts that reuse PID, session and CDP transitions under new IDs', () => {
+  const inputs = soakInputs();
+  const repeatedBefore = structuredClone(inputs.soak.restarts[0].before);
+  const repeatedAfter = structuredClone(inputs.soak.restarts[0].after);
+  for (const restart of inputs.soak.restarts) {
+    restart.before = structuredClone(repeatedBefore);
+    restart.after = structuredClone(repeatedAfter);
+    rewriteQworkSoakArtifact(inputs.fixture, restart.artifacts.restart_receipt, (receipt) => {
+      receipt.before = structuredClone(repeatedBefore);
+      receipt.after = structuredClone(repeatedAfter);
+    });
+    for (const [observationId, context] of [
+      [restart.identity_observation_before_id, repeatedBefore],
+      [restart.identity_observation_after_id, repeatedAfter],
+    ]) {
+      const observation = inputs.soak.identity_observations.find(
+        (item) => item.observation_id === observationId,
+      );
+      observation.context = structuredClone(context);
+      rewriteQworkSoakArtifact(
+        inputs.fixture,
+        observation.artifacts.identity_readback,
+        (readback) => { readback.context = structuredClone(context); },
+      );
+    }
+  }
+  rewriteSoakReport(inputs);
+  const audit = auditQworkSoakCompletion({ plan, ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(
+    audit.failures.some((failure) => failure.startsWith('soak_restart_continuity_invalid:')),
+    audit.failures.join(','),
+  );
+});
+
+test('soak requires each restart to bind its own exact identity observation', () => {
+  const inputs = soakInputs();
+  inputs.soak.restarts[0].identity_observation_after_id =
+    inputs.soak.restarts[1].identity_observation_after_id;
+  rewriteSoakReport(inputs);
+  const audit = auditQworkSoakCompletion({ plan, ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(
+    audit.failures.includes('soak_restart_after_observation_invalid:restart-1'),
+    audit.failures.join(','),
+  );
+});
+
+test('soak rejects self-declared RSS thresholds and non-monotonic resource samples', () => {
+  const inflated = soakInputs();
+  rewriteQworkSoakArtifact(
+    inflated.fixture,
+    inflated.fixture.artifactIds.resourceUsage,
+    (resource) => { resource.thresholds.rss_growth_bytes = Number.MAX_SAFE_INTEGER; },
+    { mirror: 'resource_usage' },
+  );
+  rewriteSoakReport(inflated);
+  const inflatedAudit = auditQworkSoakCompletion({ plan, ...inflated });
+  assert.equal(inflatedAudit.passed, false);
+  assert.ok(inflatedAudit.failures.includes('soak_resource_leak_not_proven_absent'), inflatedAudit.failures.join(','));
+
+  const reversed = soakInputs();
+  rewriteQworkSoakArtifact(
+    reversed.fixture,
+    reversed.fixture.artifactIds.resourceUsage,
+    (resource) => { resource.samples[1].observed_at = '2026-09-04T23:59:59.000Z'; },
+    { mirror: 'resource_usage' },
+  );
+  rewriteSoakReport(reversed);
+  const reversedAudit = auditQworkSoakCompletion({ plan, ...reversed });
+  assert.equal(reversedAudit.passed, false);
+  assert.ok(
+    reversedAudit.failures.some((failure) => failure.startsWith('soak_resource_sample_invalid:')),
+    reversedAudit.failures.join(','),
+  );
+});
+
+test('soak requires an independent crash ledger even when aggregate crash fields are zero', () => {
+  const inputs = soakInputs();
+  delete inputs.soak.crash_ledger;
+  rewriteSoakReport(inputs);
+  const audit = auditQworkSoakCompletion({ plan, ...inputs });
+  assert.equal(audit.passed, false);
+  assert.ok(
+    audit.failures.some((failure) => failure.startsWith('soak_crash_ledger')),
+    audit.failures.join(','),
+  );
+});
+
 test('orchestrator persists and verifies the forward event hash chain', () => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-orchestrator-'));
+  const temporaryRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-orchestrator-')),
+  );
   const remote = path.join(temporaryRoot, 'remote.git');
   const work = path.join(temporaryRoot, 'work');
   const stateDir = path.join(temporaryRoot, 'state');
+  const canonicalOrigin = 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2.git';
+  const gitTestEnvironment = {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: `url.file://${remote}.insteadOf`,
+    GIT_CONFIG_VALUE_0: canonicalOrigin,
+  };
   const run = (command, args, cwd = work) => spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
+    env: gitTestEnvironment,
   });
   try {
     assert.equal(run('git', ['init', '--bare', remote], temporaryRoot).status, 0);
@@ -950,21 +1642,42 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     assert.equal(run('git', ['push', '-u', 'origin', 'main']).status, 0);
     assert.equal(run('git', ['branch', 'release/0.1']).status, 0);
     assert.equal(run('git', ['push', 'origin', 'release/0.1']).status, 0);
+    assert.equal(run('git', [
+      'remote',
+      'set-url',
+      'origin',
+      canonicalOrigin,
+    ]).status, 0);
 
     const casebook = path.join(temporaryRoot, QWORK_RELEASE_CASEBOOK_BASENAME);
     const identityFile = path.join(temporaryRoot, 'release-identity.json');
     const releaseIntakeFile = path.join(temporaryRoot, 'release-intake.json');
+    const releaseObservationFile = path.join(temporaryRoot, 'release-observation.json');
     const frameworkCommit = run('git', ['rev-parse', 'HEAD']).stdout.trim();
     const currentReleaseIntake = makeReleaseIntake({
       frameworkCommit,
       releaseHead: frameworkCommit,
+      repositoryPath: work,
     });
     const expectedReleaseArguments = [
+      '--expected-release-observation', releaseObservationFile,
       '--expected-release-ref', QWORK_RELEASE_INTAKE_DEFAULT_REF,
       '--expected-release-head', frameworkCommit,
     ];
     fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebook);
-    fs.writeFileSync(identityFile, `${JSON.stringify(identity)}\n`);
+    fs.writeFileSync(identityFile, `${JSON.stringify({
+      schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
+      captured_at: '2026-09-05T00:00:00.000Z',
+      ...identity,
+    })}\n`);
+    fs.writeFileSync(releaseObservationFile, `${JSON.stringify({
+      schema_version: QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
+      observed_at: '2026-09-05T00:00:00.000Z',
+      repository: work,
+      release_ref: QWORK_RELEASE_INTAKE_DEFAULT_REF,
+      release_head: frameworkCommit,
+      source: 'git-rev-parse-after-fetch',
+    })}\n`);
 
     fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
     const missingIntake = run(process.execPath, [
@@ -985,6 +1698,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       '--casebook', casebook,
       '--release-identity', identityFile,
       '--release-intake', releaseIntakeFile,
+      '--expected-release-observation', releaseObservationFile,
     ]);
     assert.notEqual(missingExpectedRelease.status, 0);
     assert.match(
@@ -1010,6 +1724,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       frameworkCommit,
       releaseHead: frameworkCommit,
       releaseRef: 'origin/release/old',
+      repositoryPath: work,
     });
     fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleRefIntake)}\n`);
     const staleRefInit = run(process.execPath, [
@@ -1028,6 +1743,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     const staleHeadIntake = makeReleaseIntake({
       frameworkCommit,
       releaseHead: 'd'.repeat(40),
+      repositoryPath: work,
     });
     fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleHeadIntake)}\n`);
     const staleHeadInit = run(process.execPath, [
@@ -1044,6 +1760,27 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     assert.equal(fs.existsSync(stateDir), false);
 
     fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+    const linkedRepository = path.join(temporaryRoot, 'work-link');
+    fs.symlinkSync(work, linkedRepository, 'dir');
+    const originalObservation = JSON.parse(fs.readFileSync(releaseObservationFile, 'utf8'));
+    fs.writeFileSync(releaseObservationFile, `${JSON.stringify({
+      ...originalObservation,
+      repository: linkedRepository,
+    })}\n`);
+    const symlinkedRepositoryInit = run(process.execPath, [
+      orchestrator,
+      'init',
+      '--state-dir', stateDir,
+      '--casebook', casebook,
+      '--release-identity', identityFile,
+      '--release-intake', releaseIntakeFile,
+      ...expectedReleaseArguments,
+    ]);
+    assert.notEqual(symlinkedRepositoryInit.status, 0);
+    assert.match(symlinkedRepositoryInit.stderr, /路径祖先不能是符号链接/);
+    assert.equal(fs.existsSync(stateDir), false);
+    fs.writeFileSync(releaseObservationFile, `${JSON.stringify(originalObservation)}\n`);
+
     const initialized = run(process.execPath, [
       orchestrator,
       'init',
@@ -1089,6 +1826,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
         frameworkCommit,
         releaseHead: 'd'.repeat(40),
+        repositoryPath: work,
       }))}\n`),
       /release_intake_release_head_mismatch/,
     );
@@ -1097,6 +1835,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
         frameworkCommit,
         releaseHead: frameworkCommit,
         casebookSha256: 'a'.repeat(64),
+        repositoryPath: work,
       }))}\n`),
       /release_intake_casebook_sha256_mismatch/,
     );
@@ -1104,6 +1843,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
         frameworkCommit: 'a'.repeat(40),
         releaseHead: frameworkCommit,
+        repositoryPath: work,
       }))}\n`),
       /release_intake_framework_commit_mismatch/,
     );
@@ -1120,6 +1860,32 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       () => fs.unlinkSync(releaseIntakeFile),
       /计划绑定的 release intake 不存在/,
     );
+
+    const originalCasebook = fs.readFileSync(casebook);
+    fs.appendFileSync(casebook, 'tampered');
+    const casebookRejected = run(process.execPath, readinessArguments);
+    assert.notEqual(casebookRejected.status, 0);
+    assert.match(casebookRejected.stderr, /Casebook SHA-256 已漂移/);
+    assertControlStateUnchanged();
+    fs.writeFileSync(casebook, originalCasebook);
+
+    fs.appendFileSync(path.join(work, 'README.md'), 'tracked drift\n');
+    const gitRejected = run(process.execPath, readinessArguments);
+    assert.notEqual(gitRejected.status, 0);
+    assert.match(gitRejected.stderr, /Git 身份不满足/);
+    assertControlStateUnchanged();
+    fs.writeFileSync(path.join(work, 'README.md'), 'temporary release orchestrator repository\n');
+
+    const originalObservationText = fs.readFileSync(releaseObservationFile, 'utf8');
+    fs.writeFileSync(releaseObservationFile, `${JSON.stringify({
+      ...JSON.parse(originalObservationText),
+      release_head: 'd'.repeat(40),
+    })}\n`);
+    const observationRejected = run(process.execPath, readinessArguments);
+    assert.notEqual(observationRejected.status, 0);
+    assert.match(observationRejected.stderr, /release HEAD 观测绑定校验失败/);
+    assertControlStateUnchanged();
+    fs.writeFileSync(releaseObservationFile, originalObservationText);
 
     const admitted = run(process.execPath, [
       orchestrator,
@@ -1139,6 +1905,10 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
 
     const eventFile = path.join(stateDir, 'events', '0001-G1-readiness.json');
     const originalEventText = fs.readFileSync(eventFile, 'utf8');
+    const stateFile = path.join(stateDir, 'release-test-state.json');
+    const integrityFile = path.join(stateDir, 'release-test-integrity.json');
+    const originalStateText = fs.readFileSync(stateFile, 'utf8');
+    const originalIntegrityText = fs.readFileSync(integrityFile, 'utf8');
     const event = JSON.parse(originalEventText);
     event.audit.decision = 'BLOCKED';
     fs.writeFileSync(eventFile, `${JSON.stringify(event, null, 2)}\n`);
@@ -1150,13 +1920,29 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
     const revisionForged = JSON.parse(originalEventText);
     revisionForged.state_revision_after = 2;
     fs.writeFileSync(eventFile, `${JSON.stringify(revisionForged, null, 2)}\n`);
-    const integrityFile = path.join(stateDir, 'release-test-integrity.json');
     const forgedIntegrity = JSON.parse(fs.readFileSync(integrityFile, 'utf8'));
     forgedIntegrity.last_event_sha256 = crypto.createHash('sha256').update(fs.readFileSync(eventFile)).digest('hex');
     fs.writeFileSync(integrityFile, `${JSON.stringify(forgedIntegrity, null, 2)}\n`);
     const revisionRejected = run(process.execPath, [orchestrator, 'status', '--state-dir', stateDir]);
     assert.notEqual(revisionRejected.status, 0);
     assert.match(revisionRejected.stderr, /event_revision_mismatch/);
+
+    fs.writeFileSync(eventFile, originalEventText);
+    fs.writeFileSync(stateFile, originalStateText);
+    fs.writeFileSync(integrityFile, originalIntegrityText);
+    const semanticForgery = JSON.parse(originalEventText);
+    semanticForgery.state_after.updated_at = '2099-01-01T00:00:00.000Z';
+    semanticForgery.state_sha256_after = qworkReleaseIdentityFingerprint(semanticForgery.state_after);
+    fs.writeFileSync(eventFile, `${JSON.stringify(semanticForgery, null, 2)}\n`);
+    const forgedState = semanticForgery.state_after;
+    fs.writeFileSync(stateFile, `${JSON.stringify(forgedState, null, 2)}\n`);
+    const semanticIntegrity = JSON.parse(originalIntegrityText);
+    semanticIntegrity.state_sha256 = semanticForgery.state_sha256_after;
+    semanticIntegrity.last_event_sha256 = crypto.createHash('sha256').update(fs.readFileSync(eventFile)).digest('hex');
+    fs.writeFileSync(integrityFile, `${JSON.stringify(semanticIntegrity, null, 2)}\n`);
+    const semanticRejected = run(process.execPath, [orchestrator, 'status', '--state-dir', stateDir]);
+    assert.notEqual(semanticRejected.status, 0);
+    assert.match(semanticRejected.stderr, /event_semantic_replay_mismatch/);
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
