@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
 import {
@@ -2661,7 +2661,127 @@ test('trusted review selects the archived complete result over a recovery sentin
   assert.match(source, /candidateProgressJson\.aborted\s*!==\s*true/);
   assert.match(source, /verifiedReviewOverride: override\?\.strict === true/);
   assert.match(source, /assessment\.classification === 'framework_issue'[\s\S]*'framework_issue'/);
+  assert.match(
+    source,
+    /initialization_continuation_safe === false[\s\S]*skill_reinstall_readiness_evidence_valid === false[\s\S]*if \(finalReviewOverrides\.has/,
+    '初始化连续性或 INIT-003 专项证据失败必须先于 final override 固定为 framework_issue',
+  );
+  assert.match(
+    source,
+    /coreBetaInitializationSkillReinstallEvidenceVerdict\([\s\S]*\{ runRoot: outDir \}[\s\S]*if \(finalReviewOverrides\.has/,
+    'INIT-003 专项证据必须绑定 Teams 可信复核的真实 outDir，且人工 override 不得绕过',
+  );
   assert.match(source, /raw failed 与语义关键词断言不能单独升级/);
+});
+
+test('trusted review rejects missing and cross-run initialization evidence before final overrides', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-init-trusted-review-'));
+  const foreignRun = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-init-foreign-run-'));
+  const localCaseDir = path.join(outDir, 'cases', '001-BETA-INIT-001');
+  const foreignCaseDir = path.join(foreignRun, 'cases', '002-BETA-INIT-002');
+  fs.mkdirSync(localCaseDir, { recursive: true });
+  fs.mkdirSync(foreignCaseDir, { recursive: true });
+  const result = (id, caseDir, method, testid) => ({
+    id,
+    order: id.endsWith('001') ? 1 : 2,
+    title: `${id} 初始化失败`,
+    status: 'failed',
+    result_category: 'bug',
+    actual_result: '维护动作已执行但产品终态失败。',
+    case_dir: caseDir,
+    initialization_action_observation: {
+      schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+      case_id: id,
+      method,
+      testid,
+      action_observed: true,
+      source: 'busy',
+      attempts: [{
+        attempt: 1,
+        action_observed: true,
+        source: 'busy',
+        confirmation_accepted: id !== 'BETA-INIT-001',
+        confirmation_source: id === 'BETA-INIT-001' ? 'none' : 'custom-dialog',
+      }],
+    },
+    initialization_continuation: {
+      schema_version: 'qbot-core-beta-initialization-continuation/v1',
+      case_id: id,
+      eligible: true,
+      safe: true,
+      release_gate_eligible: false,
+      signals: {
+        terminal_pending: false,
+        terminal_failed: true,
+        product_failure_observed: true,
+        product_failure_source: 'maintenance_terminal',
+        runtime_loaded: true,
+        sdk_ready: true,
+        button_enabled: true,
+        composer_ready: true,
+        composer_ready_source: 'recovered_workbench_surface',
+        workbench_ready: true,
+        workbench_ready_source: 'recovered_workbench_surface',
+        continuation_surface_valid: true,
+        capabilities_readable: true,
+        after_page_readable: true,
+      },
+    },
+    artifacts: {},
+    assertions: [],
+    steps: [],
+    screenshots: {},
+    screenshots_flat: [],
+  });
+  const results = [
+    result('BETA-INIT-001', localCaseDir, 'preparePythonRuntimes', 'assistant-prepare-python-runtimes'),
+    result('BETA-INIT-002', foreignCaseDir, 'runtimeResetAll', 'assistant-runtime-reset-all'),
+  ];
+  try {
+    fs.writeFileSync(path.join(outDir, 'automation-progress.json'), JSON.stringify({
+      completed: results.length,
+      total: results.length,
+      results,
+    }));
+    fs.writeFileSync(path.join(outDir, 'automation-run-summary.json'), JSON.stringify({
+      status: 'failed',
+      ended_at: new Date().toISOString(),
+      counts: { total: results.length, passed: 0, failed: results.length, blocked: 0 },
+    }));
+    fs.writeFileSync(path.join(outDir, 'run-metadata.json'), JSON.stringify({
+      host: { version: '5.6.7', build: '2119083191' },
+      qwork: { version: '0.1.7-sit.48' },
+      control_plane: { origin: 'https://sit.example.test' },
+      model_tier: 'M3',
+      timeout_ms: 600000,
+    }));
+    fs.writeFileSync(path.join(outDir, 'final-trusted-review-overrides.json'), JSON.stringify({
+      results: results.map(({ id }) => ({
+        id,
+        classification: '可信 Bug',
+        reason: '终审覆盖试图保留产品 Bug。',
+      })),
+    }));
+
+    const trustedReviewScript = fileURLToPath(new URL('../lib/trusted-review.mjs', import.meta.url));
+    const execution = spawnSync(process.execPath, [trustedReviewScript, outDir], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    assert.equal(execution.status, 0, execution.stderr || execution.stdout);
+    const review = JSON.parse(fs.readFileSync(path.join(outDir, '可信二次复核结果.json'), 'utf8'));
+    assert.deepEqual(
+      review.results.map((item) => item.trusted_status),
+      ['framework_issue', 'framework_issue'],
+      '磁盘证据缺失或跨 runRoot 的初始化结果不得被 final override 升级为可信产品 Bug',
+    );
+    assert.match(review.results[0].review_reason, /initialization_continuation_maintenance_file_invalid/);
+    assert.match(review.results[1].review_reason, /initialization_continuation_case_dir_run_root_binding_invalid/);
+    assert.equal(review.results.every((item) => item.review_source === 'evidence-heuristic'), true);
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.rmSync(foreignRun, { recursive: true, force: true });
+  }
 });
 
 test('strict trusted-review overrides reject cross-case and setup-only screenshots', () => {

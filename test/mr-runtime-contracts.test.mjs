@@ -20,8 +20,10 @@ import {
   skillInstallControlVerdict as skillInstallControlVerdictV2,
 } from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 import {
+  QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
   QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
   QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
+  resolveReleaseSourceContracts,
 } from '../src/lib/qwork-release-source-contracts.mjs';
 
 const chartPrompt = '请生成曝光 12000、点击 860、报名 240、成交 28 的柱状图并显示数值标签。';
@@ -153,6 +155,63 @@ test('MR !1560 declares cache-first local turn-authority readiness without re-ac
     contract.forbidden_fragments.some((item) => item.id === 'desktop_host_direct_authority_read_without_readiness'),
     true,
   );
+});
+
+test('MR !1573 freezes memory session/profile stability and dual runtime boundaries', () => {
+  const contract = QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT;
+  assert.equal(contract.contract_id, 'deepbankv2-mr-1573-memory-session-profile-stability/v1');
+  assert.equal(contract.mr_iid, '1573');
+  assert.equal(contract.merge_commit_sha, '6d482c9ccbceb74d4ebf81610d980e5fe15def6c');
+  assert.equal(contract.contract_sha256, '06ec7db3e7734f4f2dbcfa9cbd93f41d80a03f7209132636acd31c3a1673c68d');
+  assert.deepEqual(contract.mr_diff, {
+    bytes: 43377,
+    sha256: 'dc1d7e0acf8f9001c70621b28c3ffbf83ba2a4b12d185a2e278ab6b2b0eb7394',
+  });
+  assert.deepEqual(contract.source_file, {
+    proof_mode: 'exact-new-file',
+    path: 'electron/host-core/bridge/contracts/organization-identity.cjs',
+    old_path: 'electron/host-core/bridge/contracts/organization-identity.cjs',
+    new_file: true,
+    renamed_file: false,
+    deleted_file: false,
+    change_bytes: 1976,
+    change_sha256: '20f920797bb31a63d6131a123c87b12f063e0c215fbf8327299279c5514cb0bc',
+    source_bytes: 1638,
+    source_sha256: '0f5cc6d693a27c89bbeee7be29a373f2b3a7c77dcaf900db3718e81567112779',
+    source_line_count: 50,
+  });
+  assert.equal(contract.claim_scope, 'source_and_test_declarations');
+  assert.equal(contract.test_execution_attested, false);
+  assert.equal(contract.integration_bindings.length, 24);
+  const bindings = new Map(contract.integration_bindings.map((binding) => [binding.id, binding.addition.source]));
+  assert.equal(
+    bindings.get('feature_refresh_preserves_verified_state'),
+    "    if (!isVerified(state)) Object.assign(state, { state: 'unavailable', enabled: false });",
+  );
+  assert.equal(bindings.get('mcp_uses_native_url'), "import { URL } from 'node:url';");
+  assert.equal(bindings.get('mcp_dual_host_contract'), "for (const host of ['standalone', 'teams360']) {");
+  assert.equal(
+    bindings.get('identity_direct_object_normalized'),
+    '  const direct = object(user.directSuperior);',
+  );
+  assert.equal(
+    bindings.get('runtime_host_disables_claude_mds'),
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },",
+  );
+  assert.equal(
+    bindings.get('runtime_standalone_disables_claude_mds'),
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },",
+  );
+  assert.deepEqual(
+    contract.forbidden_fragments.map((item) => item.id),
+    [
+      'legacy_unconditional_refresh_hide',
+      'legacy_bridge_direct_superior_string_coercion',
+      'legacy_host_auto_memory_only_env',
+      'legacy_standalone_auto_memory_only_env',
+    ],
+  );
+  assert.doesNotThrow(() => resolveReleaseSourceContracts([contract]));
 });
 
 test('Skill catalog refresh accepts a stable target card while sync control remains disabled', () => {

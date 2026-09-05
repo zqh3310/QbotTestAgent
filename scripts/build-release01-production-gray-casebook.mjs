@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import fsSync, { constants as fsConstants } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -40,6 +42,7 @@ import {
 } from '../src/lib/qwork-release-source-contracts.mjs';
 
 const ROOT = path.resolve(process.env.QBOT_CASEBOOK_ROOT || path.resolve(import.meta.dirname, '..'));
+const ATOMIC_RENAME_HELPER = path.join(import.meta.dirname, 'atomic-rename-no-replace.py');
 const SOURCE = path.join(ROOT, 'PRD', 'QBot完整生产灰度门禁Casebook_184条_2026-08-03.xlsx');
 const SMOKE_SOURCE = path.join(ROOT, 'PRD', 'QWork_MR1243-1260_核心冒烟自动化Casebook_11条_2026-08-23.xlsx');
 const LEGACY_SOURCE_JSON = path.join(ROOT, 'PRD', 'QBot核心上线门禁用例_Teams-QWork_2026-07-22_框架修复版.json');
@@ -50,8 +53,7 @@ const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.7';
 let MR_WINDOW_START = '';
 let MR_WINDOW_END = '';
-const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14.xlsx';
-const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'outputs', '20260905_release01_casebook_16-12-70-160-r14');
+const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx';
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
 const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r12.xlsx');
 const PREVIOUS_CASEBOOK_SHA256 = 'da9181fdc4e8d63ec5e9ed1bad231b4ffe78870b085d96598586070b97cf8c54';
@@ -75,7 +77,7 @@ const R13_INCREMENTAL_MR_ORDER = Object.freeze([
   '1527', '1532', '1531', '1500', '1528', '1530', '1537', '1535',
   '1533', '1539', '1529', '1538', '1536', '1541', '1544', '1547', '1548', '1546',
   '1540', '1550', '1511', '1552', '1558', '1556', '1549', '1557', '1559', '1561', '1560',
-  '1564', '1563', '1566', '1568', '1569', '1570', '1572',
+  '1564', '1563', '1566', '1568', '1569', '1570', '1572', '1573',
 ]);
 const EXPECTED_INCREMENTAL_MR_COUNT = R13_INCREMENTAL_MR_ORDER.length;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
@@ -285,6 +287,12 @@ const R13_INCREMENTAL_MR_CONTRACTS = new Map([
     caseIds: ['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-PERF-003', 'BETA-HOST-003'],
     coverageStrength: '相邻回归',
     reason: '活动流、失败终态、长回复、停止、滚动性能和宿主 Case 回归 runtime tail 可见状态、正文保持与最终收敛；tail copy、pulse 样式和 host runtime-tail 状态接线只做 GitLab changes 与测试资产静态审查，当前无确定性 copy/pulse 专项桌面 Oracle，不把普通完成态或截图冒充直接 E2E 证明。',
+  }],
+  ['1573', {
+    caseIds: ['SIT-MEM-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-MCP-001', 'BETA-MCP-002', 'BETA-HOST-003', 'BETA-INIT-001', 'BETA-ROUTE-001', 'MRSMOKE-ROUTE-001'],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1573-memory-session-profile-stability/v1'],
+    reason: '桌面 Case 只回归记忆首会话/跨会话连续性、Recall/MCP、组织身份与隐私边界、路由、宿主和初始化主链；deepbankv2-mr-1573-memory-session-profile-stability/v1 仅鉴证 Feature 已验证状态在后台刷新失败时保留、Feature/Recall/MCP 跨 session cadence、node:url 原生 URL、直属上级多形态归一化与统一 bridge helper，以及 standalone/teams360 两套 runtime 同时关闭 CLAUDE.md 和 auto memory 的源码行与测试声明存在，claim_scope=source_and_test_declarations、test_execution_attested=false；桌面 E2E 不直接证明缓存失败分支、URL 构造、Profile 归一化或本地记忆关闭，禁止把相邻主链通过冒充这些内部合同已执行或通过。',
   }],
 ]);
 const DIRECT_E2E_MR_CASE_CONTRACTS = new Map([
@@ -646,41 +654,769 @@ export function assertExpectedProductCommit(expectedProductCommit, releaseHead) 
     throw new Error(`--expected-product-commit 必须是 40 位提交 SHA：${expected}`);
   }
   if (expected !== asString(releaseHead)) {
-    throw new Error(`r13 release intake HEAD 与 --expected-product-commit 不一致：expected=${expected} actual=${releaseHead}`);
+    throw new Error(`r15 release intake HEAD 与 --expected-product-commit 不一致：expected=${expected} actual=${releaseHead}`);
   }
   return expected;
+}
+
+export function assertExpectedReleaseIntakeSha256(expectedSha256, actualSha256) {
+  const expected = asString(expectedSha256).trim().toLowerCase();
+  const actual = asString(actualSha256).trim().toLowerCase();
+  if (!expected) throw new Error('必须通过 --release-intake-sha256 绑定 release intake 文件 SHA-256');
+  if (!/^[a-f0-9]{64}$/u.test(expected)) {
+    throw new Error('--release-intake-sha256 必须是 64 位 SHA-256');
+  }
+  if (expected !== actual) {
+    throw new Error(`release intake 文件 SHA-256 不一致：expected=${expected} actual=${actual}`);
+  }
+  return expected;
+}
+
+function securePathSegments(candidate) {
+  const resolved = path.resolve(candidate);
+  const parsed = path.parse(resolved);
+  const relative = path.relative(parsed.root, resolved);
+  const segments = relative ? relative.split(path.sep).filter(Boolean) : [];
+  const paths = [parsed.root];
+  let cursor = parsed.root;
+  for (const segment of segments) {
+    cursor = path.join(cursor, segment);
+    paths.push(cursor);
+  }
+  return { resolved, paths };
+}
+
+function assertNoSymlinkAncestors(candidate, label, { missingLeafAllowed = false } = {}) {
+  const { resolved, paths } = securePathSegments(candidate);
+  for (const [index, current] of paths.entries()) {
+    let stat;
+    try {
+      stat = fsSync.lstatSync(current, { bigint: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT' && missingLeafAllowed && index === paths.length - 1) return resolved;
+      throw new Error(`${label} 路径不可读：${current}；${error?.message || error}`);
+    }
+    if (stat.isSymbolicLink()) throw new Error(`${label} 的路径祖先不得是符号链接：${current}`);
+    if (index < paths.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${label} 的路径祖先必须是目录：${current}`);
+    }
+  }
+  return resolved;
+}
+
+function captureSecureDirectory(candidate, label) {
+  const resolved = assertNoSymlinkAncestors(candidate, label);
+  const stat = fsSync.lstatSync(resolved, { bigint: true });
+  const currentUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : stat.uid;
+  const permissions = Number(stat.mode & 0o777n);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`${label} 必须是普通目录且不得是符号链接：${resolved}`);
+  }
+  if (fsSync.realpathSync(resolved) !== resolved) {
+    throw new Error(`${label} canonical realpath 漂移：${resolved}`);
+  }
+  if (stat.uid !== currentUid) throw new Error(`${label} 必须由当前用户拥有：${resolved}`);
+  if ((permissions & 0o022) !== 0) {
+    throw new Error(`${label} 禁止 group/other 写入：${resolved}`);
+  }
+  return {
+    path: resolved,
+    dev: stat.dev,
+    ino: stat.ino,
+    uid: stat.uid,
+    permissions,
+  };
+}
+
+function assertSecureDirectoryGuard(guard, label) {
+  const current = captureSecureDirectory(guard?.path || '', label);
+  if (current.dev !== guard.dev || current.ino !== guard.ino || current.uid !== guard.uid
+    || current.permissions !== guard.permissions) {
+    throw new Error(`${label} 在生成期间发生替换或权限漂移：${guard.path}`);
+  }
+  return current.path;
+}
+
+function assertPathAbsent(candidate, label) {
+  const resolved = assertNoSymlinkAncestors(candidate, label, { missingLeafAllowed: true });
+  try {
+    fsSync.lstatSync(resolved);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return resolved;
+    throw error;
+  }
+  throw new Error(`${label} 必须在调用前不存在，禁止复用或覆盖：${resolved}`);
+}
+
+function stableRegularFileSnapshot(candidate, label, { allowedLinkCounts = [1] } = {}) {
+  const resolved = assertNoSymlinkAncestors(candidate, label);
+  const lexical = fsSync.lstatSync(resolved, { bigint: true });
+  const currentUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : lexical.uid;
+  const permissions = Number(lexical.mode & 0o777n);
+  const allowedLinks = new Set(allowedLinkCounts.map((value) => BigInt(value)));
+  if (!lexical.isFile() || lexical.isSymbolicLink()) {
+    throw new Error(`${label} 必须是普通文件且不得是符号链接：${resolved}`);
+  }
+  if (lexical.uid !== currentUid || (permissions & 0o022) !== 0 || !allowedLinks.has(lexical.nlink)) {
+    throw new Error(`${label} 必须由当前用户独占且禁止 group/other 写入：${resolved}`);
+  }
+  if (fsSync.realpathSync(resolved) !== resolved) {
+    throw new Error(`${label} canonical realpath 漂移：${resolved}`);
+  }
+  const descriptor = fsSync.openSync(
+    resolved,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0),
+  );
+  try {
+    const before = fsSync.fstatSync(descriptor, { bigint: true });
+    if (!before.isFile() || before.dev !== lexical.dev || before.ino !== lexical.ino
+      || !allowedLinks.has(before.nlink)) {
+      throw new Error(`${label} 在打开期间发生替换或硬链接复用：${resolved}`);
+    }
+    const bytes = fsSync.readFileSync(descriptor);
+    const after = fsSync.fstatSync(descriptor, { bigint: true });
+    const final = fsSync.lstatSync(resolved, { bigint: true });
+    if (!final.isFile() || final.isSymbolicLink()
+      || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs
+      || before.dev !== final.dev || before.ino !== final.ino || before.size !== final.size
+      || before.mtimeNs !== final.mtimeNs || before.ctimeNs !== final.ctimeNs
+      || !allowedLinks.has(final.nlink) || BigInt(bytes.length) !== before.size) {
+      throw new Error(`${label} 在读取期间发生变化：${resolved}`);
+    }
+    return {
+      path: resolved,
+      bytes,
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      dev: before.dev,
+      ino: before.ino,
+      uid: before.uid,
+      permissions,
+      nlink: before.nlink,
+      mtime_ns: before.mtimeNs,
+      ctime_ns: before.ctimeNs,
+    };
+  } finally {
+    fsSync.closeSync(descriptor);
+  }
+}
+
+function fsyncDirectory(directory, expectedGuard = null) {
+  const guard = captureSecureDirectory(directory, 'fsync 目录');
+  if (expectedGuard && (
+    guard.dev !== expectedGuard.dev
+    || guard.ino !== expectedGuard.ino
+    || guard.uid !== expectedGuard.uid
+    || guard.permissions !== expectedGuard.permissions
+  )) {
+    throw new Error(`fsync 目录在打开前发生替换或权限漂移：${guard.path}`);
+  }
+  const descriptor = fsSync.openSync(
+    guard.path,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0),
+  );
+  try {
+    const opened = fsSync.fstatSync(descriptor, { bigint: true });
+    if (!opened.isDirectory() || opened.dev !== guard.dev || opened.ino !== guard.ino) {
+      throw new Error(`fsync 目录在打开期间发生替换：${guard.path}`);
+    }
+    fsSync.fsyncSync(descriptor);
+    const after = fsSync.fstatSync(descriptor, { bigint: true });
+    const final = fsSync.lstatSync(guard.path, { bigint: true });
+    if (!final.isDirectory() || final.isSymbolicLink()
+      || after.dev !== opened.dev || after.ino !== opened.ino
+      || final.dev !== opened.dev || final.ino !== opened.ino
+      || final.uid !== opened.uid || Number(final.mode & 0o777n) !== guard.permissions) {
+      throw new Error(`fsync 目录在同步期间发生替换或权限漂移：${guard.path}`);
+    }
+  } finally {
+    fsSync.closeSync(descriptor);
+  }
+}
+
+function captureSecureTreeSnapshot(root, { sync = false } = {}) {
+  const rootResolved = path.resolve(root);
+  const entries = [];
+  const visit = (candidate) => {
+    const resolved = assertNoSymlinkAncestors(candidate, 'Casebook staging');
+    const stat = fsSync.lstatSync(resolved, { bigint: true });
+    const currentUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : stat.uid;
+    const permissions = Number(stat.mode & 0o777n);
+    if (stat.uid !== currentUid || (permissions & 0o022) !== 0 || stat.isSymbolicLink()) {
+      throw new Error(`Casebook staging 节点所有权、权限或类型不安全：${resolved}`);
+    }
+    const relative = path.relative(rootResolved, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`Casebook staging 节点越界：${resolved}`);
+    }
+    if (stat.isDirectory()) {
+      for (const entry of fsSync.readdirSync(resolved).sort()) visit(path.join(resolved, entry));
+      const beforeSync = fsSync.lstatSync(resolved, { bigint: true });
+      if (!beforeSync.isDirectory() || beforeSync.isSymbolicLink()
+        || beforeSync.dev !== stat.dev || beforeSync.ino !== stat.ino
+        || beforeSync.uid !== stat.uid || Number(beforeSync.mode & 0o777n) !== permissions
+        || beforeSync.mtimeNs !== stat.mtimeNs || beforeSync.ctimeNs !== stat.ctimeNs) {
+        throw new Error(`Casebook staging 目录在遍历期间发生变化：${resolved}`);
+      }
+      const guard = {
+        path: resolved,
+        dev: stat.dev,
+        ino: stat.ino,
+        uid: stat.uid,
+        permissions,
+      };
+      if (sync) fsyncDirectory(resolved, guard);
+      entries.push({
+        path: path.relative(rootResolved, resolved) || '.',
+        type: 'directory',
+        dev: stat.dev.toString(),
+        ino: stat.ino.toString(),
+        uid: stat.uid.toString(),
+        permissions,
+        nlink: stat.nlink.toString(),
+      });
+      return;
+    }
+    if (!stat.isFile() || stat.nlink !== 1n) {
+      throw new Error(`Casebook staging 只允许独占普通文件和目录：${resolved}`);
+    }
+    const descriptor = fsSync.openSync(
+      resolved,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0),
+    );
+    try {
+      const opened = fsSync.fstatSync(descriptor, { bigint: true });
+      if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino
+        || opened.size !== stat.size || opened.nlink !== 1n) {
+        throw new Error(`Casebook staging 文件在 fsync 前发生替换：${resolved}`);
+      }
+      const bytes = fsSync.readFileSync(descriptor);
+      if (sync) fsSync.fsyncSync(descriptor);
+      const after = fsSync.fstatSync(descriptor, { bigint: true });
+      const final = fsSync.lstatSync(resolved, { bigint: true });
+      if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size
+        || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs
+        || !final.isFile() || final.isSymbolicLink()
+        || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size
+        || final.mtimeNs !== opened.mtimeNs || final.ctimeNs !== opened.ctimeNs
+        || final.nlink !== 1n || BigInt(bytes.length) !== opened.size) {
+        throw new Error(`Casebook staging 文件在 fsync 期间发生变化：${resolved}`);
+      }
+      entries.push({
+        path: path.relative(rootResolved, resolved),
+        type: 'file',
+        dev: opened.dev.toString(),
+        ino: opened.ino.toString(),
+        uid: opened.uid.toString(),
+        permissions,
+        nlink: opened.nlink.toString(),
+        size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      });
+    } finally {
+      fsSync.closeSync(descriptor);
+    }
+  };
+  visit(rootResolved);
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    schema_version: 'qbot-casebook-secure-tree-snapshot/v1',
+    entries,
+    sha256: createHash('sha256').update(JSON.stringify(entries)).digest('hex'),
+  };
+}
+
+function fsyncSecureTree(root) {
+  return captureSecureTreeSnapshot(root, { sync: true });
+}
+
+function verifySecureTreeSnapshot(root, expected, label) {
+  if (!expected || expected.schema_version !== 'qbot-casebook-secure-tree-snapshot/v1'
+    || !Array.isArray(expected.entries) || !/^[a-f0-9]{64}$/u.test(asString(expected.sha256))) {
+    throw new Error(`${label} 缺少有效的整树快照`);
+  }
+  const actual = captureSecureTreeSnapshot(root);
+  if (actual.sha256 !== expected.sha256
+    || JSON.stringify(actual.entries) !== JSON.stringify(expected.entries)) {
+    throw new Error(`${label} 与 fsync 时的整树身份或内容快照不一致`);
+  }
+  return actual;
+}
+
+export function atomicRenameNoReplace(source, target) {
+  const sourceValue = asString(source).trim();
+  const targetValue = asString(target).trim();
+  if (!sourceValue || !targetValue) {
+    throw new Error('排他原子 rename 的 source/target 不能为空');
+  }
+  const resolvedSource = path.resolve(sourceValue);
+  const resolvedTarget = path.resolve(targetValue);
+  const helper = stableRegularFileSnapshot(ATOMIC_RENAME_HELPER, '排他原子 rename helper');
+  const execution = spawnSync(
+    '/usr/bin/python3',
+    ['-I', '-B', '-c', helper.bytes.toString('utf8'), resolvedSource, resolvedTarget],
+    {
+      cwd: ROOT,
+      env: {
+        PATH: '/usr/bin:/bin',
+        LANG: 'C',
+        LC_ALL: 'C',
+        PYTHONDONTWRITEBYTECODE: '1',
+        PYTHONNOUSERSITE: '1',
+      },
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024,
+      shell: false,
+      timeout: 10_000,
+    },
+  );
+  if (execution.error || execution.signal || execution.status !== 0) {
+    const reason = execution.error?.message
+      || execution.stderr?.trim()
+      || execution.signal
+      || `exit=${execution.status}`;
+    throw new Error(`Casebook 输出目录排他原子提交失败：${reason}`);
+  }
+  return resolvedTarget;
+}
+
+function directoryIdentityMatches(stat, guard) {
+  return Boolean(stat?.isDirectory?.())
+    && !stat.isSymbolicLink()
+    && stat.dev === guard.dev
+    && stat.ino === guard.ino
+    && stat.uid === guard.uid
+    && Number(stat.mode & 0o777n) === guard.permissions;
+}
+
+function regularFileIdentityMatches(snapshot, guard) {
+  return snapshot.dev === guard.dev
+    && snapshot.ino === guard.ino
+    && snapshot.uid === guard.uid
+    && snapshot.size === guard.size
+    && snapshot.sha256 === guard.sha256
+    && snapshot.permissions === guard.permissions;
+}
+
+function transactionQuarantinePath(target, label) {
+  const quarantine = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${label}-${process.pid}-${randomBytes(8).toString('hex')}`,
+  );
+  assertPathAbsent(quarantine, `${label} 隔离路径`);
+  return quarantine;
+}
+
+function testFaultEnabled(name) {
+  return process.env.NODE_ENV === 'test' && process.env[name] === '1';
+}
+
+function transactionFailure(error, stateLabel, transaction) {
+  const reason = error?.message || String(error);
+  const wrapped = new Error(`${reason}；${stateLabel}=${transaction.state}`, { cause: error });
+  wrapped.transaction_state = transaction.state;
+  wrapped.rollback = transaction.rollback || null;
+  return wrapped;
+}
+
+function restoreQuarantinedPath(quarantine, target, parentGuard, label) {
+  try {
+    assertSecureDirectoryGuard(parentGuard, `${label} 父目录`);
+    assertPathAbsent(target, `${label} 恢复目标`);
+    atomicRenameNoReplace(quarantine, target);
+    fsyncDirectory(parentGuard.path, parentGuard);
+    return { restored: true, preserved_path: target, error: null };
+  } catch (error) {
+    return {
+      restored: false,
+      preserved_path: fsSync.existsSync(quarantine) ? quarantine : target,
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function isolateAndRetainGuardedDirectory({ target, guard, parentGuard, label }) {
+  assertSecureDirectoryGuard(parentGuard, `${label} 父目录`);
+  let lexical;
+  try {
+    lexical = fsSync.lstatSync(target, { bigint: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { status: 'absent', preserved_path: null };
+    return { status: 'rollback_incomplete', preserved_path: target, error: error?.message || String(error) };
+  }
+  if (!directoryIdentityMatches(lexical, guard)) {
+    return { status: 'rollback_conflict', preserved_path: target, error: `${label} 已被非本事务目录替换` };
+  }
+  const quarantine = transactionQuarantinePath(target, 'rollback-quarantine');
+  try {
+    atomicRenameNoReplace(target, quarantine);
+  } catch (error) {
+    return { status: 'rollback_incomplete', preserved_path: target, error: error?.message || String(error) };
+  }
+  let isolated;
+  try {
+    isolated = fsSync.lstatSync(quarantine, { bigint: true });
+  } catch (error) {
+    return { status: 'rollback_incomplete', preserved_path: quarantine, error: error?.message || String(error) };
+  }
+  if (!directoryIdentityMatches(isolated, guard)) {
+    const restoration = restoreQuarantinedPath(quarantine, target, parentGuard, label);
+    return {
+      status: 'rollback_conflict',
+      preserved_path: restoration.preserved_path,
+      restored: restoration.restored,
+      error: restoration.error || `${label} 与本事务目录身份不一致`,
+    };
+  }
+  try {
+    assertSecureDirectoryGuard({ ...guard, path: quarantine }, `${label} 隔离目录`);
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_DIRECTORY_QUARANTINE_AFTER_VERIFY')) {
+      const transactionPreservedPath = `${quarantine}.transaction-owned`;
+      atomicRenameNoReplace(quarantine, transactionPreservedPath);
+      fsSync.mkdirSync(quarantine, { mode: 0o700 });
+      fsSync.writeFileSync(path.join(quarantine, 'third-party.txt'), 'third-party-directory-quarantine');
+      return {
+        status: 'rollback_conflict',
+        preserved_path: quarantine,
+        transaction_preserved_path: transactionPreservedPath,
+        error: `${label} 隔离目录在最终复核后被第三方替换`,
+      };
+    }
+    const finalCheck = fsSync.lstatSync(quarantine, { bigint: true });
+    if (!directoryIdentityMatches(finalCheck, guard)) {
+      return {
+        status: 'rollback_conflict',
+        preserved_path: quarantine,
+        error: `${label} 隔离目录在最终复核后发生身份漂移`,
+      };
+    }
+    fsyncDirectory(parentGuard.path, parentGuard);
+    return {
+      status: 'retained',
+      preserved_path: quarantine,
+      error: `${label} 已隔离保留；当前平台无法按 inode 条件原子递归删除`,
+    };
+  } catch (error) {
+    return {
+      status: 'rollback_incomplete',
+      preserved_path: fsSync.existsSync(quarantine) ? quarantine : null,
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function isolateAndRetainGuardedRegularFile({
+  target,
+  guard,
+  parentGuard,
+  label,
+  syncParent = true,
+}) {
+  assertSecureDirectoryGuard(parentGuard, `${label} 父目录`);
+  let lexical;
+  try {
+    lexical = fsSync.lstatSync(target, { bigint: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { status: 'absent', preserved_path: null };
+    return { status: 'rollback_incomplete', preserved_path: target, error: error?.message || String(error) };
+  }
+  if (!lexical.isFile() || lexical.isSymbolicLink()) {
+    return { status: 'rollback_conflict', preserved_path: target, error: `${label} 已被非普通文件替换` };
+  }
+  try {
+    const beforeIsolation = stableRegularFileSnapshot(target, `${label} 隔离前复核`, { allowedLinkCounts: [1, 2] });
+    if (!regularFileIdentityMatches(beforeIsolation, guard)) {
+      return { status: 'rollback_conflict', preserved_path: target, error: `${label} 在隔离前发生身份或内容漂移` };
+    }
+  } catch (error) {
+    return { status: 'rollback_conflict', preserved_path: target, error: error?.message || String(error) };
+  }
+  const quarantine = transactionQuarantinePath(target, 'rollback-quarantine');
+  try {
+    atomicRenameNoReplace(target, quarantine);
+  } catch (error) {
+    return { status: 'rollback_incomplete', preserved_path: target, error: error?.message || String(error) };
+  }
+  let isolated;
+  try {
+    isolated = stableRegularFileSnapshot(quarantine, `${label} 隔离文件`, { allowedLinkCounts: [1, 2] });
+  } catch (error) {
+    const restoration = restoreQuarantinedPath(quarantine, target, parentGuard, label);
+    return {
+      status: 'rollback_conflict',
+      preserved_path: restoration.preserved_path,
+      restored: restoration.restored,
+      error: restoration.error || error?.message || String(error),
+    };
+  }
+  if (!regularFileIdentityMatches(isolated, guard)) {
+    const restoration = restoreQuarantinedPath(quarantine, target, parentGuard, label);
+    return {
+      status: 'rollback_conflict',
+      preserved_path: restoration.preserved_path,
+      restored: restoration.restored,
+      error: restoration.error || `${label} 与本事务文件身份或内容不一致`,
+    };
+  }
+  try {
+    const finalCheck = stableRegularFileSnapshot(quarantine, `${label} 删除前复核`, { allowedLinkCounts: [1, 2] });
+    if (!regularFileIdentityMatches(finalCheck, guard)) {
+      throw new Error(`${label} 在隔离后发生身份或内容漂移`);
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_FILE_QUARANTINE_AFTER_VERIFY')) {
+      const transactionPreservedPath = `${quarantine}.transaction-owned`;
+      atomicRenameNoReplace(quarantine, transactionPreservedPath);
+      fsSync.writeFileSync(quarantine, 'third-party-file-quarantine', { mode: 0o600, flag: 'wx' });
+      return {
+        status: 'rollback_conflict',
+        preserved_path: quarantine,
+        transaction_preserved_path: transactionPreservedPath,
+        error: `${label} 隔离文件在最终复核后被第三方替换`,
+      };
+    }
+    if (syncParent) fsyncDirectory(parentGuard.path, parentGuard);
+    return {
+      status: 'retained',
+      preserved_path: quarantine,
+      error: `${label} 已隔离保留；当前平台无法按 inode 条件原子删除`,
+    };
+  } catch (error) {
+    return {
+      status: 'rollback_incomplete',
+      preserved_path: fsSync.existsSync(quarantine) ? quarantine : null,
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function guardedRollbackAttempt(action, preservedPath) {
+  try {
+    return await action();
+  } catch (error) {
+    return {
+      status: 'rollback_incomplete',
+      preserved_path: preservedPath,
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function rollbackCasebookOutputDirectory(transaction) {
+  const finalResult = await guardedRollbackAttempt(
+    () => isolateAndRetainGuardedDirectory({
+      target: transaction.final,
+      guard: transaction.staging_guard,
+      parentGuard: transaction.parent_guard,
+      label: 'Casebook 最终输出目录回滚',
+    }),
+    transaction.final,
+  );
+  const stagingResult = await guardedRollbackAttempt(
+    () => isolateAndRetainGuardedDirectory({
+      target: transaction.staging,
+      guard: transaction.staging_guard,
+      parentGuard: transaction.parent_guard,
+      label: 'Casebook staging 目录回滚',
+    }),
+    transaction.staging,
+  );
+  transaction.rollback = { final: finalResult, staging: stagingResult };
+  transaction.committed = false;
+  if ([finalResult, stagingResult].some((item) => item.status === 'rollback_incomplete')) {
+    transaction.state = 'rollback_incomplete';
+  } else if ([finalResult, stagingResult].some((item) => item.status === 'rollback_conflict')) {
+    transaction.state = 'rollback_conflict';
+  } else if ([finalResult, stagingResult].some((item) => item.status === 'retained')) {
+    transaction.state = 'rollback_incomplete';
+  } else {
+    transaction.state = 'rolled_back';
+  }
+  return transaction.rollback;
 }
 
 export async function prepareCasebookOutputDirectory(outputDirectory) {
   const requested = asString(outputDirectory).trim();
   if (!requested) throw new Error('必须提供非空 --out 输出目录');
   const resolved = path.resolve(requested);
+  if (resolved === path.parse(resolved).root) throw new Error('--out 不得是文件系统根目录');
+  const parentGuard = captureSecureDirectory(path.dirname(resolved), 'Casebook 输出父目录');
+  assertPathAbsent(resolved, '--out');
+  const staging = await fs.mkdtemp(path.join(
+    parentGuard.path,
+    `.${path.basename(resolved)}.staging-${process.pid}-`,
+  ));
+  let stagingGuard = null;
+  let transactionOwnedPath = null;
   try {
-    const stat = await fs.lstat(resolved);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error(`--out 必须是全新目录或已存在的普通空目录：${resolved}`);
+    stagingGuard = captureSecureDirectory(staging, 'Casebook 新建私有 staging 目录');
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_STAGING_DURING_PREPARE')) {
+      transactionOwnedPath = `${staging}.transaction-owned`;
+      atomicRenameNoReplace(staging, transactionOwnedPath);
+      fsSync.mkdirSync(staging, { mode: 0o700 });
+      fsSync.writeFileSync(path.join(staging, 'third-party.txt'), 'third-party-prepare-staging');
+      throw new Error('fault_injected_staging_replaced_during_prepare');
     }
-    const entries = await fs.readdir(resolved);
-    if (entries.length !== 0) {
-      throw new Error(`--out 禁止复用非空目录：${resolved}`);
+    await fs.chmod(staging, 0o700);
+    assertSecureDirectoryGuard(parentGuard, 'Casebook 输出父目录');
+    assertPathAbsent(resolved, '--out');
+    const finalStagingGuard = captureSecureDirectory(staging, 'Casebook 私有 staging 目录');
+    if (finalStagingGuard.dev !== stagingGuard.dev || finalStagingGuard.ino !== stagingGuard.ino
+      || finalStagingGuard.uid !== stagingGuard.uid) {
+      throw new Error(`Casebook 私有 staging 目录在 prepare 期间发生替换：${staging}`);
     }
+    stagingGuard = finalStagingGuard;
+    return {
+      final: resolved,
+      staging,
+      parent_guard: parentGuard,
+      staging_guard: stagingGuard,
+      state: 'prepared',
+      rollback: null,
+      committed: false,
+    };
   } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-    await fs.mkdir(resolved, { recursive: true });
+    const rollback = stagingGuard
+      ? await guardedRollbackAttempt(
+        () => isolateAndRetainGuardedDirectory({
+          target: staging,
+          guard: stagingGuard,
+          parentGuard,
+          label: 'Casebook staging prepare 失败隔离',
+        }),
+        staging,
+      )
+      : {
+        status: 'rollback_incomplete',
+        preserved_path: staging,
+        error: 'staging 身份尚未建立，禁止按路径删除',
+      };
+    const failedTransaction = {
+      final: resolved,
+      staging,
+      parent_guard: parentGuard,
+      staging_guard: stagingGuard,
+      state: rollback.status === 'rollback_conflict' ? 'rollback_conflict' : 'rollback_incomplete',
+      rollback: { staging_prepare: rollback },
+      committed: false,
+    };
+    const wrapped = transactionFailure(error, 'casebook_output_prepare_transaction_state', failedTransaction);
+    wrapped.staging_path = staging;
+    wrapped.transaction_owned_path = transactionOwnedPath;
+    throw wrapped;
   }
-  return resolved;
+}
+
+export async function commitCasebookOutputDirectory(transaction) {
+  if (!transaction || typeof transaction !== 'object' || transaction.state !== 'prepared'
+    || transaction.committed === true) {
+    throw new Error('Casebook 输出事务无效或已经提交');
+  }
+  try {
+    assertSecureDirectoryGuard(transaction.parent_guard, 'Casebook 输出父目录');
+    assertSecureDirectoryGuard(transaction.staging_guard, 'Casebook 私有 staging 目录');
+    assertPathAbsent(transaction.final, '--out');
+    transaction.tree_snapshot = fsyncSecureTree(transaction.staging);
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_MUTATE_TREE_AFTER_FSYNC')) {
+      const file = transaction.tree_snapshot.entries.find((entry) => entry.type === 'file');
+      if (!file) throw new Error('fault_injected_tree_mutation_requires_file');
+      fsSync.appendFileSync(path.join(transaction.staging, file.path), 'third-party-tree-mutation');
+    }
+    assertSecureDirectoryGuard(transaction.parent_guard, 'Casebook 输出父目录');
+    assertSecureDirectoryGuard(transaction.staging_guard, 'Casebook 私有 staging 目录');
+    assertPathAbsent(transaction.final, '--out');
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_BEFORE_OUTPUT_COMMIT')) {
+      throw new Error('fault_injected_before_casebook_output_commit');
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_RACE_EMPTY_OUTPUT_AFTER_GUARD')) {
+      fsSync.mkdirSync(transaction.final, { mode: 0o700 });
+    }
+    atomicRenameNoReplace(transaction.staging, transaction.final);
+    transaction.state = 'renamed_pending_commit';
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_OUTPUT_AFTER_RENAME')) {
+      fsSync.renameSync(transaction.final, transaction.staging);
+      fsSync.mkdirSync(transaction.final, { mode: 0o700 });
+      fsSync.writeFileSync(path.join(transaction.final, 'third-party.txt'), 'third-party-output');
+      throw new Error('fault_injected_output_replaced_after_rename');
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_RENAME')) {
+      throw new Error('fault_injected_after_casebook_output_rename');
+    }
+    fsyncDirectory(transaction.parent_guard.path, transaction.parent_guard);
+    transaction.state = 'parent_synced';
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_PARENT_FSYNC')) {
+      throw new Error('fault_injected_after_casebook_output_parent_fsync');
+    }
+    const finalGuard = captureSecureDirectory(transaction.final, 'Casebook 最终输出目录');
+    if (finalGuard.dev !== transaction.staging_guard.dev
+      || finalGuard.ino !== transaction.staging_guard.ino
+      || finalGuard.uid !== transaction.staging_guard.uid
+      || finalGuard.permissions !== transaction.staging_guard.permissions) {
+      throw new Error(`Casebook 最终输出目录与 staging inode 不一致：${transaction.final}`);
+    }
+    transaction.committed_tree_snapshot = verifySecureTreeSnapshot(
+      transaction.final,
+      transaction.tree_snapshot,
+      'Casebook rename 后最终输出目录',
+    );
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_FINAL_VERIFY')) {
+      throw new Error('fault_injected_after_casebook_output_final_verify');
+    }
+    transaction.state = 'committed';
+    transaction.committed = true;
+    return transaction.final;
+  } catch (error) {
+    if (transaction.state === 'renamed_pending_commit' || transaction.state === 'parent_synced') {
+      await rollbackCasebookOutputDirectory(transaction);
+    }
+    throw transactionFailure(error, 'casebook_output_transaction_state', transaction);
+  }
+}
+
+export async function abortCasebookOutputDirectory(transaction) {
+  if (!transaction || transaction.committed === true || transaction.state === 'committed'
+    || !transaction.staging) return false;
+  if (transaction.state === 'renamed_pending_commit' || transaction.state === 'parent_synced') {
+    await rollbackCasebookOutputDirectory(transaction);
+    return transaction.state === 'rolled_back';
+  }
+  if (['rolled_back', 'rollback_incomplete', 'rollback_conflict', 'aborted', 'aborted_retained']
+    .includes(transaction.state)) return false;
+  const result = await guardedRollbackAttempt(
+    () => isolateAndRetainGuardedDirectory({
+      target: transaction.staging,
+      guard: transaction.staging_guard,
+      parentGuard: transaction.parent_guard,
+      label: 'Casebook staging 目录中止清理',
+    }),
+    transaction.staging,
+  );
+  transaction.rollback = { ...(transaction.rollback || {}), staging_abort: result };
+  if (result.status === 'retained') {
+    transaction.state = 'aborted_retained';
+    return true;
+  }
+  if (result.status === 'absent') {
+    if (transaction.state !== 'rollback_conflict') transaction.state = 'aborted';
+    return false;
+  }
+  transaction.state = result.status;
+  throw transactionFailure(
+    new Error(result.error || 'Casebook staging 目录无法安全清理'),
+    'casebook_output_transaction_state',
+    transaction,
+  );
 }
 
 export async function assertCasebookOutputAbsent(outputFile) {
   const resolved = path.resolve(asString(outputFile).trim());
   if (!asString(outputFile).trim()) throw new Error('正式 Casebook 输出路径不能为空');
+  captureSecureDirectory(path.dirname(resolved), '正式 Casebook 输出父目录');
   try {
-    await fs.lstat(resolved);
+    return assertPathAbsent(resolved, '正式 Casebook 输出');
   } catch (error) {
-    if (error?.code === 'ENOENT') return resolved;
-    throw error;
+    throw new Error(`禁止覆盖已存在的正式 Casebook：${resolved}；${error.message}`);
   }
-  throw new Error(`禁止覆盖已存在的正式 Casebook：${resolved}`);
 }
 
 export function assertR13CasebookLayering({ gateIds, fullIds, regressionAddonIds, mrRows }) {
@@ -1339,6 +2075,31 @@ async function loadFullFunctionLegacyCases() {
 export function patchRecentCases(testCase) {
   const id = asString(testCase['用例ID']);
   let next = patchBaseline(testCase);
+  if (id === 'BETA-INIT-003') {
+    next = withEvidenceRole(next, 'product_action_trace');
+    next = withEvidenceRole(next, 'skill_reinstall_readiness_verdict');
+    next = withEvidenceRole(next, 'initialization_continuation_surface');
+    next['测试场景'] = '真实点击一键重装 Skill 并完成破坏性确认；以前后完整 catalog、同一 identity/readiness 签名三次稳定 idle 和逐项 ready 证明运行层重建成功';
+    next['用户旅程'] = '设置 → 系统设置 → 一键重装 Skill → 破坏性确认 → 完整 catalog 前后对账 → 三次稳定终态 → 新建任务恢复';
+    next['前置条件'] = '固定发布身份与测试账号有效；无运行中任务；重装前可读取非空且 identity 唯一的完整 getSkillsCatalog()。release/0.1 的重装 Skill 只重建运行层，不得删除安装账本。';
+    next['测试数据'] = '每个已安装 Skill 以 sourcePlatform/namespace/slug/installedVersion|version|revision|packageDigest|fingerprint 组成 identity；readiness 必须包含 ready/installStatus/localReadiness/error，禁止只看安装数量或 catalog 顶层 ready。';
+    next['自动化执行步骤'] = '1. 在真实 UI 动作前读取完整 getSkillsCatalog()，保存所有 installed identity 与 readiness，要求集合非空、唯一且字段完整。\n2. 真实点击【一键重装 Skill】，捕获并接受与 skillsReinstall 严格绑定的破坏性确认；只允许一次产品点击。\n3. 以单次 getSkillsCatalog() 5 秒硬超时有界采样；只有同一 identity/readiness 签名连续三次 syncStatus=idle 才收敛。\n4. 对账前后 identity 集合逐项全等；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed、半安装或错误状态。\n5. 专项 Oracle 成功或失败后均真实点击【新建任务】恢复 continuation surface，写入 initialization-continuation-surface.json；必须读回非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空。\n6. 恢复前后 PNG 均须为 Case 内普通文件，并固化路径、bytes、SHA-256 供可信复核从磁盘重放。';
+    next['预期结果'] = '真实重装动作及破坏性确认可证明；安装账本 identity 前后完全一致；同一 identity/readiness 签名连续三次 idle；每个已安装 Skill 均处于明确 ready 终态；最终 continuation surface 具有非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false，且 Skill/Connector/Expert 全空。';
+    next['成功判定'] = 'action receipt 证明一次真实点击、匹配的破坏性确认和动作因果；前后完整 catalog 非空且 identity 唯一/全等；同一 identity/readiness 签名连续三次稳定 idle；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；专项 verdict 从原始 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重算为 pass；initialization-continuation-surface.json 中恢复态为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false、Skill/Connector/Expert 全空，前后 PNG 为 Case 内普通文件且路径、bytes、SHA-256 可重放。';
+    next['失败/阻塞判定'] = '真实产品动作完成且原始证据完整时，安装丢失/新增、任一 installed unready/python_runtime_failed/半安装/错误记 trusted_bug；catalog 调用超时、样本不足、签名漂移、恢复 surface 缺失或不干净、draftInstanceId 为空、task/message/send/running/能力选择残留、前后 PNG 非 Case 内普通文件、路径/bytes/SHA 漂移，或引用/schema/Case/method/testid 不一致均记 framework_issue；仅登录、权限、发布身份或服务真实不可用可记 trusted_blocked。';
+    next['判定Oracle'] = 'public_state_machine+skill_reinstall_readiness+immutable_readback';
+    next['动作计划JSON'] = json(actionPlan(id, 'run_initialization', next['自动化执行步骤']));
+    next['精准断言JSON'] = json(assertions([
+      '真实点击一键重装 Skill 且破坏性确认与 skillsReinstall 动作严格绑定，只允许一次产品点击',
+      '重装前后 catalog.installed identity 集合非空、唯一并逐项全等',
+      '同一 identity/readiness 签名连续三次 syncStatus=idle 后才允许收敛',
+      '每个已安装 Skill ready=true，且不存在 unready/python_runtime_failed/半安装/错误状态',
+      '原始 maintenance/terminal/catalog/截图引用均为本 Case 普通文件，bytes/SHA/schema/Case/method/testid 全等',
+      '专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，并生成 initialization-continuation-surface.json 恢复文件',
+      '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空',
+      '恢复前后 PNG 均为 Case 内普通文件，其路径、bytes、SHA-256 可重放',
+    ], next['预期结果']));
+  }
   if (id === 'BETA-FILE-006') {
     next['测试场景'] = '不支持类型、单文件超限与81 MiB总量均发送前拒绝；总量拒绝只拒第3份并保留前2份，删除后可恢复额度';
     next['测试数据'] = '不支持扩展名fixture；>30 MiB单文件；picker与paste各27 MiB后，以drag加入第3份27 MiB使累计达到81 MiB。';
@@ -1831,7 +2592,11 @@ async function loadReleaseIntake() {
   const intakeFile = option('release-intake');
   if (!intakeFile) throw new Error('必须通过 --release-intake 提供最新 GitLab API freshness 报告');
   const resolved = path.resolve(intakeFile);
-  const report = JSON.parse(await fs.readFile(resolved, 'utf8'));
+  const intakeSnapshot = stableRegularFileSnapshot(resolved, 'release intake');
+  const intakeBytes = intakeSnapshot.bytes;
+  const artifactSha256 = intakeSnapshot.sha256;
+  assertExpectedReleaseIntakeSha256(option('release-intake-sha256'), artifactSha256);
+  const report = JSON.parse(intakeBytes.toString('utf8'));
   const validation = validateCasebookDesignReleaseIntake(report, {
     releaseRef: PRODUCT_REF,
     casebookSha256: PREVIOUS_CASEBOOK_SHA256,
@@ -1951,7 +2716,7 @@ async function loadReleaseIntake() {
   if (rows.at(-1)?.commit !== report.release.head) {
     throw new Error(`release intake 最后一条 first-parent MR 必须等于 HEAD：${rows.at(-1)?.commit}`);
   }
-  return { report, resolved, artifactSha256: sha256File(resolved), rows, acceptance: validation.acceptance };
+  return { report, resolved, artifactSha256, rows, acceptance: validation.acceptance };
 }
 
 function mrMapping(mr) {
@@ -2093,7 +2858,7 @@ export function auditCasebookRuntimeScopes(scopes, { fixtureRoot = path.join(ROO
   ];
   const sheets = expectedScopes.map(([sheetName, expectedCount]) => {
     const sourceRows = scopes?.[sheetName];
-    if (!Array.isArray(sourceRows)) throw new Error(`r14 导出后能力审计缺少 Sheet：${sheetName}`);
+    if (!Array.isArray(sourceRows)) throw new Error(`r15 导出后能力审计缺少 Sheet：${sheetName}`);
     const cases = sourceRows.map(normalizeCasebookContractCase);
     const protocol = validateCoreBetaCasePlan(cases, { fixtureRoot });
     const rows = cases.map((testCase) => {
@@ -2160,7 +2925,7 @@ export function auditCasebookRuntimeScopes(scopes, { fixtureRoot = path.join(ROO
     }
     return errors.map((error) => `${sheet.sheet_name}:${error}`);
   });
-  if (failures.length) throw new Error(`r14 导出后完整协议与运行时能力审计失败：${failures.join('; ')}`);
+  if (failures.length) throw new Error(`r15 导出后完整协议与运行时能力审计失败：${failures.join('; ')}`);
   return {
     schema_version: 'qbot-release01-exported-runtime-audit/v1',
     ok: true,
@@ -2168,9 +2933,248 @@ export function auditCasebookRuntimeScopes(scopes, { fixtureRoot = path.join(ROO
   };
 }
 
-export async function publishCasebookAfterRuntimeAudit({ artifactFile, formalOutput, scopes }) {
+export async function publishValidatedCasebookArtifact({
+  artifactFile,
+  formalOutput,
+  expectedArtifactSha256 = '',
+  expectedArtifactSize = null,
+}) {
+  const artifact = stableRegularFileSnapshot(artifactFile, '已验收 Casebook artifact');
+  const expectedSha256 = asString(expectedArtifactSha256).trim().toLowerCase();
+  if (expectedSha256 && (!/^[a-f0-9]{64}$/u.test(expectedSha256) || artifact.sha256 !== expectedSha256)) {
+    throw new Error(`已验收 Casebook artifact 与 runtime audit SHA-256 不一致：expected=${expectedSha256} actual=${artifact.sha256}`);
+  }
+  if (expectedArtifactSize != null && Number(expectedArtifactSize) !== artifact.size) {
+    throw new Error(`已验收 Casebook artifact 与 runtime audit 字节数不一致：expected=${expectedArtifactSize} actual=${artifact.size}`);
+  }
+  const resolvedFormalOutput = await assertCasebookOutputAbsent(formalOutput);
+  const parentGuard = captureSecureDirectory(
+    path.dirname(resolvedFormalOutput),
+    '正式 Casebook 输出父目录',
+  );
+  const temporary = path.join(
+    parentGuard.path,
+    `.${path.basename(resolvedFormalOutput)}.staging-${process.pid}-${randomBytes(8).toString('hex')}`,
+  );
+  const publication = {
+    state: 'prepared',
+    committed: false,
+    formal_created: false,
+    temporary,
+    temporary_guard: null,
+    temporary_open_guard: null,
+    rollback: null,
+  };
+  let handle;
+  let failure = null;
+  try {
+    handle = await fs.open(
+      temporary,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL
+        | (fsConstants.O_NOFOLLOW || 0),
+      0o600,
+    );
+    const opened = await handle.stat({ bigint: true });
+    publication.temporary_open_guard = {
+      dev: opened.dev,
+      ino: opened.ino,
+      uid: opened.uid,
+      permissions: Number(opened.mode & 0o777n),
+    };
+    await handle.writeFile(artifact.bytes);
+    await handle.sync();
+    const written = await handle.stat({ bigint: true });
+    const currentUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : written.uid;
+    if (!written.isFile() || written.size !== BigInt(artifact.size) || written.nlink !== 1n
+      || written.uid !== currentUid || Number(written.mode & 0o777n) !== 0o600) {
+      throw new Error('正式 Casebook staging 文件写入不完整或被复用');
+    }
+    await handle.close();
+    handle = null;
+    assertSecureDirectoryGuard(parentGuard, '正式 Casebook 输出父目录');
+    assertPathAbsent(resolvedFormalOutput, '正式 Casebook 输出');
+    const staged = stableRegularFileSnapshot(temporary, '正式 Casebook staging 文件');
+    if (staged.sha256 !== artifact.sha256 || staged.size !== artifact.size) {
+      throw new Error('正式 Casebook staging 文件与已验收 artifact 不一致');
+    }
+    publication.temporary_guard = staged;
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_ARTIFACT_BEFORE_FORMAL_PUBLISH')) {
+      const displacedArtifact = `${artifact.path}.audited-artifact`;
+      atomicRenameNoReplace(artifact.path, displacedArtifact);
+      fsSync.writeFileSync(artifact.path, 'third-party-artifact', { mode: 0o600, flag: 'wx' });
+      publication.displaced_artifact = displacedArtifact;
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_BEFORE_FORMAL_PUBLISH')) {
+      throw new Error('fault_injected_before_formal_casebook_publish');
+    }
+    const prepublishArtifact = stableRegularFileSnapshot(artifact.path, '正式发布前 Casebook artifact');
+    if (!regularFileIdentityMatches(prepublishArtifact, artifact)) {
+      throw new Error('正式发布前 Casebook artifact 与 runtime audit 快照不一致');
+    }
+    assertSecureDirectoryGuard(parentGuard, '正式 Casebook 输出父目录');
+    assertPathAbsent(resolvedFormalOutput, '正式 Casebook 输出');
+    atomicRenameNoReplace(temporary, resolvedFormalOutput);
+    publication.formal_created = true;
+    publication.state = 'renamed_pending_commit';
+    const renamed = stableRegularFileSnapshot(resolvedFormalOutput, '正式 Casebook rename 结果');
+    if (!regularFileIdentityMatches(renamed, staged) || renamed.nlink !== 1n) {
+      throw new Error('正式 Casebook rename 后身份、权限、内容或 link count 漂移');
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_TEST_REPLACE_FORMAL_BEFORE_ROLLBACK')) {
+      const displacedFormal = `${resolvedFormalOutput}.transaction-owned`;
+      atomicRenameNoReplace(resolvedFormalOutput, displacedFormal);
+      await fs.writeFile(resolvedFormalOutput, 'third-party-formal', { mode: 0o600, flag: 'wx' });
+      publication.displaced_formal = displacedFormal;
+      throw new Error('fault_injected_formal_replaced_before_rollback');
+    }
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_FORMAL_RENAME')) {
+      throw new Error('fault_injected_after_formal_rename');
+    }
+    fsyncDirectory(parentGuard.path, parentGuard);
+    publication.state = 'parent_synced';
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_FORMAL_PARENT_FSYNC')) {
+      throw new Error('fault_injected_after_formal_parent_fsync');
+    }
+    assertSecureDirectoryGuard(parentGuard, '正式 Casebook 输出父目录');
+    const published = stableRegularFileSnapshot(resolvedFormalOutput, '正式 Casebook');
+    const publishedStat = fsSync.lstatSync(resolvedFormalOutput, { bigint: true });
+    if (published.sha256 !== artifact.sha256 || published.size !== artifact.size
+      || published.dev !== staged.dev || published.ino !== staged.ino
+      || published.uid !== staged.uid || published.permissions !== staged.permissions
+      || Number(publishedStat.mode & 0o777n) !== 0o600 || publishedStat.nlink !== 1n) {
+      throw new Error('正式 Casebook 原子发布后字节或 SHA-256 漂移');
+    }
+    publication.state = 'verified_pending_commit';
+    if (testFaultEnabled('QBOT_CASEBOOK_FAULT_AFTER_FORMAL_FINAL_VERIFY')) {
+      throw new Error('fault_injected_after_formal_final_verify');
+    }
+    publication.state = 'committed';
+    publication.committed = true;
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch (error) {
+        if (!failure) failure = error;
+      }
+    }
+  }
+  if (failure) {
+    let formalRollback;
+    if (publication.formal_created) {
+      formalRollback = await guardedRollbackAttempt(
+        () => isolateAndRetainGuardedRegularFile({
+          target: resolvedFormalOutput,
+          guard: publication.temporary_guard,
+          parentGuard,
+          label: '正式 Casebook 发布回滚',
+        }),
+        resolvedFormalOutput,
+      );
+    } else {
+      try {
+        fsSync.lstatSync(resolvedFormalOutput);
+        formalRollback = {
+          status: 'rollback_conflict',
+          preserved_path: resolvedFormalOutput,
+          error: '正式目标已被非本事务对象抢占',
+        };
+      } catch (error) {
+        formalRollback = error?.code === 'ENOENT'
+          ? { status: 'absent', preserved_path: null }
+          : { status: 'rollback_incomplete', preserved_path: resolvedFormalOutput, error: error?.message || String(error) };
+      }
+    }
+
+    let temporaryGuard = publication.temporary_guard;
+    if (!temporaryGuard && publication.temporary_open_guard) {
+      try {
+        const candidate = stableRegularFileSnapshot(
+          temporary,
+          '正式 Casebook staging 失败清理身份复核',
+          { allowedLinkCounts: [1, 2] },
+        );
+        const opened = publication.temporary_open_guard;
+        if (candidate.dev === opened.dev && candidate.ino === opened.ino
+          && candidate.uid === opened.uid && candidate.permissions === opened.permissions) {
+          temporaryGuard = candidate;
+        }
+      } catch {
+        // Unknown or replaced temporary names are intentionally preserved.
+      }
+    }
+    let temporaryRollback;
+    if (temporaryGuard) {
+      temporaryRollback = await guardedRollbackAttempt(
+        () => isolateAndRetainGuardedRegularFile({
+          target: temporary,
+          guard: temporaryGuard,
+          parentGuard,
+          label: '正式 Casebook staging 失败清理',
+        }),
+        temporary,
+      );
+    } else {
+      try {
+        fsSync.lstatSync(temporary);
+        temporaryRollback = {
+          status: 'rollback_incomplete',
+          preserved_path: temporary,
+          error: '临时文件身份未建立，禁止按路径删除',
+        };
+      } catch (error) {
+        temporaryRollback = error?.code === 'ENOENT'
+          ? { status: 'absent', preserved_path: null }
+          : { status: 'rollback_incomplete', preserved_path: temporary, error: error?.message || String(error) };
+      }
+    }
+    publication.rollback = { formal: formalRollback, temporary: temporaryRollback };
+    if ([formalRollback, temporaryRollback].some((item) => item.status === 'rollback_incomplete')) {
+      publication.state = 'rollback_incomplete';
+    } else if ([formalRollback, temporaryRollback].some((item) => item.status === 'rollback_conflict')) {
+      publication.state = 'rollback_conflict';
+    } else if ([formalRollback, temporaryRollback].some((item) => item.status === 'retained')) {
+      publication.state = 'rollback_incomplete';
+    } else {
+      publication.state = 'rolled_back';
+    }
+    const wrapped = transactionFailure(failure, 'casebook_publication_transaction_state', publication);
+    wrapped.publication_state = publication.state;
+    wrapped.temporary_path = temporary;
+    throw wrapped;
+  }
+  return {
+    path: resolvedFormalOutput,
+    bytes: artifact.size,
+    sha256: artifact.sha256,
+    state: publication.state,
+    committed: publication.committed,
+  };
+}
+
+export async function publishCasebookAfterRuntimeAudit({
+  artifactFile,
+  formalOutput,
+  scopes,
+  expectedArtifactSha256,
+  expectedArtifactSize,
+}) {
   const runtimeAudit = auditCasebookRuntimeScopes(scopes);
-  await fs.copyFile(artifactFile, formalOutput, fsConstants.COPYFILE_EXCL);
+  const auditedArtifact = stableRegularFileSnapshot(artifactFile, 'runtime audit 绑定的 Casebook artifact');
+  const expectedSha256 = asString(expectedArtifactSha256).trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(expectedSha256) || auditedArtifact.sha256 !== expectedSha256
+    || !Number.isSafeInteger(Number(expectedArtifactSize))
+    || auditedArtifact.size !== Number(expectedArtifactSize)) {
+    throw new Error(`runtime audit 与 Casebook artifact 字节绑定不一致：expected=${expectedSha256}/${expectedArtifactSize} actual=${auditedArtifact.sha256}/${auditedArtifact.size}`);
+  }
+  await publishValidatedCasebookArtifact({
+    artifactFile,
+    formalOutput,
+    expectedArtifactSha256: expectedSha256,
+    expectedArtifactSize: Number(expectedArtifactSize),
+  });
   return runtimeAudit;
 }
 
@@ -2269,8 +3273,10 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 }
 
 async function main() {
-  const outputDir = await prepareCasebookOutputDirectory(option('out', DEFAULT_OUTPUT_DIR));
-  await assertCasebookOutputAbsent(FORMAL_OUTPUT);
+  const outputTransaction = await prepareCasebookOutputDirectory(option('out'));
+  const outputDir = outputTransaction.staging;
+  try {
+    await assertCasebookOutputAbsent(FORMAL_OUTPUT);
   if (sha256File(PREVIOUS_CASEBOOK) !== PREVIOUS_CASEBOOK_SHA256) {
     throw new Error(`r12 Casebook SHA-256 漂移：${sha256File(PREVIOUS_CASEBOOK)}`);
   }
@@ -2584,6 +3590,17 @@ async function main() {
     || !/不把普通完成态或截图冒充直接 E2E 证明/.test(mr1572[10])) {
     throw new Error(`MR !1572必须精确映射runtime-tail文案与pulse相邻链并限制直接覆盖声明：${JSON.stringify(mr1572)}`);
   }
+  const mr1573 = mrRows.find((row) => row[1] === '!1573');
+  const mr1573Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1573').caseIds.join(',');
+  if (!mr1573 || mr1573[6] !== mr1573Expected || mr1573[7] !== '12条冒烟+70条门禁'
+    || mr1573[8] !== '相邻回归+源码合同'
+    || !/记忆首会话\/跨会话连续性/.test(mr1573[10])
+    || !/deepbankv2-mr-1573-memory-session-profile-stability\/v1/.test(mr1573[10])
+    || !/claim_scope=source_and_test_declarations/.test(mr1573[10])
+    || !/test_execution_attested=false/.test(mr1573[10])
+    || !/禁止把相邻主链通过冒充这些内部合同已执行或通过/.test(mr1573[10])) {
+    throw new Error(`MR !1573必须区分Memory/Profile桌面相邻链与非执行态源码合同：${JSON.stringify(mr1573)}`);
+  }
   for (const row of mrRows) {
     const iid = asString(row[1]).replace(/^!/, '');
     const strength = asString(row[8]);
@@ -2813,15 +3830,25 @@ async function main() {
   const outputFile = path.join(outputDir, OUTPUT_NAME);
   const xlsx = await SpreadsheetFile.exportXlsx(workbook);
   await xlsx.save(outputFile);
-  const exportedWorkbook = await SpreadsheetFile.importXlsx(await FileBlob.load(outputFile));
-  const verification = await verifyWorkbook(exportedWorkbook, outputDir, sheetNames);
-  const exportedRuntimeAudit = await publishCasebookAfterRuntimeAudit({
-    artifactFile: outputFile,
-    formalOutput: FORMAL_OUTPUT,
-    scopes: exportedCasebookScopes(exportedWorkbook),
-  });
+  const auditedArtifact = stableRegularFileSnapshot(outputFile, '导出后 runtime audit Casebook artifact');
+  const exportedWorkbook = await SpreadsheetFile.importXlsx(new FileBlob(
+    auditedArtifact.bytes,
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ));
+  const stagingVerification = await verifyWorkbook(exportedWorkbook, outputDir, sheetNames);
+  const rebaseOutputPath = (candidate) => path.join(
+    outputTransaction.final,
+    path.relative(outputDir, path.resolve(candidate)),
+  );
+  const verification = {
+    ...stagingVerification,
+    inspection_file: rebaseOutputPath(stagingVerification.inspection_file),
+    rendered: stagingVerification.rendered.map(rebaseOutputPath),
+  };
+  const exportedScopes = exportedCasebookScopes(exportedWorkbook);
+  const exportedRuntimeAudit = auditCasebookRuntimeScopes(exportedScopes);
   const audit = {
-    schema_version: 'qbot-release01-combined-casebook-build/v7',
+    schema_version: 'qbot-release01-combined-casebook-build/v8',
     generated_at: new Date().toISOString(),
     product: { ref: PRODUCT_REF, commit: PRODUCT_COMMIT, version: PRODUCT_VERSION },
     release_intake: {
@@ -2862,12 +3889,34 @@ async function main() {
       test_execution_attested: QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED,
       contract_ids: unique([...REQUIRED_SOURCE_CONTRACTS_BY_MR.values()].flat()),
     },
+    audited_artifact: {
+      bytes: auditedArtifact.size,
+      sha256: auditedArtifact.sha256,
+    },
     exported_runtime_audit: exportedRuntimeAudit,
     verification,
-    outputs: { formal: FORMAL_OUTPUT, artifact: outputFile },
+    outputs: {
+      formal: FORMAL_OUTPUT,
+      artifact: path.join(outputTransaction.final, OUTPUT_NAME),
+    },
   };
   await fs.writeFile(path.join(outputDir, 'casebook-build-audit.json'), `${JSON.stringify(audit, null, 2)}\n`);
+  const committedOutputDir = await commitCasebookOutputDirectory(outputTransaction);
+  if (process.env.NODE_ENV === 'test'
+    && process.env.QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_COMMIT === '1') {
+    throw new Error('fault_injected_after_casebook_output_commit');
+  }
+  await publishCasebookAfterRuntimeAudit({
+    artifactFile: path.join(committedOutputDir, OUTPUT_NAME),
+    formalOutput: FORMAL_OUTPUT,
+    scopes: exportedScopes,
+    expectedArtifactSha256: auditedArtifact.sha256,
+    expectedArtifactSize: auditedArtifact.size,
+  });
   process.stdout.write(`${JSON.stringify(audit, null, 2)}\n`);
+  } finally {
+    await abortCasebookOutputDirectory(outputTransaction);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

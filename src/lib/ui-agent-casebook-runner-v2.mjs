@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import { ensureDir, slugify, writeJsonFile, writeTextFile } from './fs.mjs';
 import { expertGeneralAssistantExecutionVerdict } from './expert-general-assistant-evidence.mjs';
 import {
@@ -1494,6 +1495,14 @@ export function applyFailureOutcome(state, reason, category = 'bug', { source = 
   const normalizedReason = String(reason || '').trim() || '自动化执行失败。';
   const currentCategory = String(state?.result_category || '');
   const currentReason = String(state?.actual_result || '').trim();
+  state.failure_history = Array.isArray(state.failure_history) ? state.failure_history : [];
+  const sameFailure = (left, right) => Boolean(
+    left
+    && right
+    && String(left.category || '') === String(right.category || '')
+    && String(left.reason || '') === String(right.reason || '')
+    && String(left.source || '') === String(right.source || ''),
+  );
   if (!state.primary_failure && ['bug', 'automation_error'].includes(currentCategory) && currentReason) {
     state.primary_failure = {
       category: currentCategory,
@@ -1502,14 +1511,23 @@ export function applyFailureOutcome(state, reason, category = 'bug', { source = 
       recorded_at: new Date().toISOString(),
     };
   }
-  const failure = {
+  if (state.primary_failure && !state.failure_history.some((item) => sameFailure(item, state.primary_failure))) {
+    // A result can reach this helper with a top-level product failure created by
+    // an older path that did not maintain failure_history. Preserve it as the
+    // first event before appending a later, higher-priority framework failure.
+    state.failure_history.unshift({ ...state.primary_failure });
+  }
+  const candidateFailure = {
     category: normalizedCategory,
     reason: normalizedReason,
     source: String(source || 'runtime'),
     recorded_at: new Date().toISOString(),
   };
-  state.failure_history = Array.isArray(state.failure_history) ? state.failure_history : [];
-  state.failure_history.push(failure);
+  let failure = state.failure_history.find((item) => sameFailure(item, candidateFailure));
+  if (!failure) {
+    failure = candidateFailure;
+    state.failure_history.push(failure);
+  }
   const primary = state.primary_failure;
   if (!primary
     || (FAILURE_CATEGORY_PRIORITY[normalizedCategory] || 0)
@@ -1522,6 +1540,228 @@ export function applyFailureOutcome(state, reason, category = 'bug', { source = 
   state.conclusion = `失败：${state.actual_result}`;
   state.problem_description = state.result_category === 'bug' ? buildProblemDescription(state) : '';
   return state.primary_failure;
+}
+
+const CORE_BETA_INITIALIZATION_CASE_IDS = new Set([
+  'BETA-INIT-001',
+  'BETA-INIT-002',
+  'BETA-INIT-003',
+  'BETA-INIT-004',
+]);
+
+const CORE_BETA_INITIALIZATION_ACTION_IDENTITIES = Object.freeze({
+  'BETA-INIT-001': Object.freeze({
+    method: 'preparePythonRuntimes',
+    testid: 'assistant-prepare-python-runtimes',
+  }),
+  'BETA-INIT-002': Object.freeze({
+    method: 'runtimeResetAll',
+    testid: 'assistant-runtime-reset-all',
+  }),
+  'BETA-INIT-003': Object.freeze({
+    method: 'skillsReinstall',
+    testid: 'assistant-skills-reinstall',
+  }),
+  'BETA-INIT-004': Object.freeze({
+    method: 'sessionsPurgeAllEnvs',
+    testid: 'assistant-sessions-purge',
+  }),
+});
+
+const CORE_BETA_INITIALIZATION_DISK_EVIDENCE_ROLES = Object.freeze([
+  'core_beta_runtime_maintenance',
+  'initialization_action_observation',
+  'core_beta_runtime_maintenance_observations',
+  'initialization_before_public_state',
+  'initialization_after_public_state',
+  'initialization_terminal_screenshot',
+]);
+
+const CORE_BETA_INITIALIZATION_CONTINUATION_BOOLEAN_SIGNALS = Object.freeze([
+  'terminal_pending',
+  'terminal_failed',
+  'product_failure_observed',
+  'runtime_loaded',
+  'sdk_ready',
+  'button_enabled',
+  'composer_ready',
+  'workbench_ready',
+  'continuation_surface_valid',
+  'capabilities_readable',
+  'after_page_readable',
+]);
+
+export function coreBetaInitializationActionObservationFromEvidence(evidence = {}) {
+  const attempts = Array.isArray(evidence?.attempts) ? evidence.attempts : [];
+  const finalAction = attempts.at(-1) || null;
+  return {
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: String(evidence?.case_id || ''),
+    method: String(evidence?.method || ''),
+    testid: String(evidence?.testid || ''),
+    action_observed: finalAction?.action_observed === true,
+    source: String(finalAction?.action_observation_source || 'none'),
+    attempts: attempts.map((item, index) => ({
+      attempt: index + 1,
+      action_observed: item?.action_observed === true,
+      source: String(item?.action_observation_source || 'none'),
+      confirmation_accepted: item?.confirmation?.accepted === true,
+      confirmation_source: String(item?.confirmation?.source || 'none'),
+    })),
+  };
+}
+
+export function coreBetaInitializationContinuationVerdict(result = {}) {
+  const id = String(result?.id || result?.case_id || '');
+  const continuation = result?.initialization_continuation;
+  const failed = result?.status === 'failed'
+    || ['bug', 'automation_error'].includes(String(result?.result_category || ''));
+  const applicable = CORE_BETA_INITIALIZATION_CASE_IDS.has(id);
+  if (!applicable) {
+    return { applicable: false, valid: true, safe: true, reasons: [] };
+  }
+
+  const continuationRequired = failed || continuation != null;
+  const reasons = [];
+  if (continuationRequired && (!continuation || typeof continuation !== 'object' || Array.isArray(continuation))) {
+    reasons.push('continuation_missing_or_not_object');
+  } else if (continuationRequired) {
+    if (continuation.schema_version !== 'qbot-core-beta-initialization-continuation/v1') {
+      reasons.push('schema_version_mismatch');
+    }
+    if (String(continuation.case_id || '') !== id) reasons.push('case_id_mismatch');
+    if (continuation.eligible !== true) reasons.push('eligible_must_be_true');
+    if (continuation.release_gate_eligible !== false) reasons.push('release_gate_eligible_must_be_false');
+    if (typeof continuation.safe !== 'boolean') reasons.push('safe_must_be_boolean');
+    const signals = continuation.signals;
+    if (!signals || typeof signals !== 'object' || Array.isArray(signals)) {
+      reasons.push('signals_missing_or_not_object');
+    } else {
+      for (const name of CORE_BETA_INITIALIZATION_CONTINUATION_BOOLEAN_SIGNALS) {
+        if (typeof signals[name] !== 'boolean') reasons.push(`signal_${name}_must_be_boolean`);
+      }
+      const validSurfaceSource = (value, ready) => (
+        ready === true
+          ? String(value || '') === 'recovered_workbench_surface'
+          : String(value || '') === 'unavailable'
+      );
+      if (!validSurfaceSource(signals.composer_ready_source, signals.composer_ready)) {
+        reasons.push('composer_ready_source_inconsistent');
+      }
+      if (!validSurfaceSource(signals.workbench_ready_source, signals.workbench_ready)) {
+        reasons.push('workbench_ready_source_inconsistent');
+      }
+      if (signals.continuation_surface_valid !== true) {
+        reasons.push('recovered_surface_required');
+      }
+      const productFailureSource = String(signals.product_failure_source || '');
+      const validProductFailureSources = new Set([
+        'maintenance_terminal',
+        'skill_reinstall_readiness_oracle',
+        'unavailable',
+      ]);
+      if (!validProductFailureSources.has(productFailureSource)) {
+        reasons.push('product_failure_source_invalid');
+      }
+      if (signals.terminal_failed === true && productFailureSource !== 'maintenance_terminal') {
+        reasons.push('terminal_failure_source_mismatch');
+      }
+      if (signals.terminal_failed !== true && productFailureSource === 'maintenance_terminal') {
+        reasons.push('maintenance_failure_source_without_terminal_failure');
+      }
+      if (
+        productFailureSource === 'skill_reinstall_readiness_oracle'
+        && (id !== 'BETA-INIT-003' || signals.terminal_failed === true)
+      ) reasons.push('skill_reinstall_failure_source_mismatch');
+      const expectedProductFailureObserved = signals.terminal_failed === true
+        || productFailureSource === 'skill_reinstall_readiness_oracle';
+      if (signals.product_failure_observed !== expectedProductFailureObserved) {
+        reasons.push('product_failure_signal_inconsistent');
+      }
+      if (signals.product_failure_observed !== true && productFailureSource !== 'unavailable') {
+        reasons.push('product_failure_source_must_be_unavailable');
+      }
+      const expectedSafe = continuation.eligible === true
+        && signals.product_failure_observed === true
+        && signals.terminal_pending === false
+        && signals.runtime_loaded === true
+        && signals.sdk_ready === true
+        && signals.button_enabled === true
+        && signals.continuation_surface_valid === true
+        && signals.composer_ready === true
+        && signals.workbench_ready === true
+        && signals.capabilities_readable === true
+        && signals.after_page_readable === true;
+      if (typeof continuation.safe === 'boolean' && continuation.safe !== expectedSafe) {
+        reasons.push('safe_signal_mismatch');
+      }
+    }
+  }
+
+  const actionObservation = result?.initialization_action_observation;
+  if (!actionObservation || typeof actionObservation !== 'object' || Array.isArray(actionObservation)) {
+    reasons.push('initialization_action_observation_missing');
+  } else {
+    const expectedAction = CORE_BETA_INITIALIZATION_ACTION_IDENTITIES[id];
+    if (actionObservation.schema_version !== 'qbot-core-beta-initialization-action-observation/v1') {
+      reasons.push('initialization_action_observation_schema_mismatch');
+    }
+    if (String(actionObservation.case_id || '') !== id) {
+      reasons.push('initialization_action_observation_case_id_mismatch');
+    }
+    if (String(actionObservation.method || '') !== expectedAction.method) {
+      reasons.push('initialization_action_observation_method_mismatch');
+    }
+    if (String(actionObservation.testid || '') !== expectedAction.testid) {
+      reasons.push('initialization_action_observation_testid_mismatch');
+    }
+    if (actionObservation.action_observed !== true) reasons.push('initialization_action_not_observed');
+  }
+
+  const structurallyValid = reasons.length === 0;
+  const safe = structurallyValid && (!continuationRequired || continuation?.safe === true);
+  if (structurallyValid && continuationRequired && !safe) reasons.push('continuation_not_safe');
+  return {
+    applicable: true,
+    continuation_required: continuationRequired,
+    valid: structurallyValid,
+    safe,
+    reasons,
+    reason: reasons.join(',') || 'initialization_continuation_safe',
+  };
+}
+
+export function enforceCoreBetaInitializationContinuationOutcome(result = {}) {
+  const verdict = coreBetaInitializationContinuationVerdict(result);
+  if (!verdict.applicable || verdict.safe) {
+    return { applied: false, reason: '', verdict };
+  }
+  const continuationReason = String(result?.initialization_continuation?.reason || '').trim();
+  const reason = `初始化连续性安全门禁未通过：${continuationReason
+    || verdict.reasons.join(',')
+    || '初始化失败后的公开可用性信号不完整。'}`;
+  result.failure_history = Array.isArray(result.failure_history) ? result.failure_history : [];
+  let failure = result.failure_history.find((item) => (
+    item?.source === 'initialization_continuation'
+    && item?.category === 'automation_error'
+  ));
+  const applied = !failure;
+  if (!failure) {
+    applyFailureOutcome(result, reason, 'automation_error', {
+      source: 'initialization_continuation',
+    });
+    failure = result.failure_history.at(-1);
+  }
+  // Re-assert the terminal classification on every call. This keeps the gate
+  // fail-closed even if a later annotation layer accidentally rewrites the
+  // top-level result back to a lower-priority product category.
+  result.status = 'failed';
+  result.result_category = 'automation_error';
+  result.primary_failure = failure;
+  result.actual_result = failure.reason;
+  result.conclusion = `失败：${failure.reason}`;
+  result.problem_description = '';
+  return { applied, reason, verdict };
 }
 
 export function coreBetaBatchStopReason(testCase, result) {
@@ -1558,28 +1798,28 @@ export function coreBetaInitializationContinuation({
   terminalReadback = {},
   afterReadback = {},
   continuationSurface = {},
+  productFailureObserved = false,
+  productFailureSource = '',
 } = {}) {
   const id = String(testCase?.id || '');
-  const eligible = ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004'].includes(id);
+  const eligible = CORE_BETA_INITIALIZATION_CASE_IDS.has(id);
   const recoveredSurfaceValid = continuationSurface?.valid === true;
-  const terminalComposerReady = terminalReadback?.composer_ready === true;
   const recoveredComposerReady = recoveredSurfaceValid && continuationSurface?.composer_ready === true;
-  const terminalWorkbenchReady = terminalReadback?.workbench_ready === true;
   const recoveredWorkbenchReady = recoveredSurfaceValid && continuationSurface?.workbench_ready === true;
   const signals = {
     terminal_pending: terminalReadback?.pending === true,
     terminal_failed: terminalReadback?.failed === true,
+    product_failure_observed: terminalReadback?.failed === true || productFailureObserved === true,
+    product_failure_source: terminalReadback?.failed === true
+      ? 'maintenance_terminal'
+      : productFailureObserved === true ? String(productFailureSource || 'specialized_oracle') : 'unavailable',
     runtime_loaded: terminalReadback?.loaded === true,
     sdk_ready: terminalReadback?.sdk_ready === true,
     button_enabled: terminalReadback?.button_enabled === true,
-    composer_ready: terminalComposerReady || recoveredComposerReady,
-    composer_ready_source: terminalComposerReady
-      ? 'maintenance_terminal'
-      : recoveredComposerReady ? 'recovered_workbench_surface' : 'unavailable',
-    workbench_ready: terminalWorkbenchReady || recoveredWorkbenchReady,
-    workbench_ready_source: terminalWorkbenchReady
-      ? 'maintenance_terminal'
-      : recoveredWorkbenchReady ? 'recovered_workbench_surface' : 'unavailable',
+    composer_ready: recoveredComposerReady,
+    composer_ready_source: recoveredComposerReady ? 'recovered_workbench_surface' : 'unavailable',
+    workbench_ready: recoveredWorkbenchReady,
+    workbench_ready_source: recoveredWorkbenchReady ? 'recovered_workbench_surface' : 'unavailable',
     continuation_surface_valid: recoveredSurfaceValid,
     capabilities_readable: terminalReadback?.capabilities_readable === true,
     after_page_readable: Number(
@@ -1589,11 +1829,12 @@ export function coreBetaInitializationContinuation({
     ) > 0,
   };
   const safe = eligible
-    && signals.terminal_failed
+    && signals.product_failure_observed
     && !signals.terminal_pending
     && signals.runtime_loaded
     && signals.sdk_ready
     && signals.button_enabled
+    && signals.continuation_surface_valid
     && signals.composer_ready
     && signals.workbench_ready
     && signals.capabilities_readable
@@ -2219,6 +2460,7 @@ export function annotateCoreBetaExecutionResult({ testCase, result, completionIs
     result.actual_result = result.actual_result || 'Case 执行结束但未生成明确的 passed/failed/blocked 状态。';
     result.conclusion = `失败：${result.actual_result}`;
   }
+  enforceCoreBetaInitializationContinuationOutcome(result);
   if (completionIssue) {
     result.execution_completion = {
       status: 'recorded',
@@ -2609,6 +2851,17 @@ async function ensureModelTier(page, state, caseDir, modelTier, { captureScreens
 
 function createCaseState({ testCase, caseDir, order, modelTier, options = {} }) {
   const frozenQworkUiUrl = String(options['qwork-ui-url'] || '').trim();
+  const evidenceRoles = Array.isArray(testCase.evidence_roles) ? [...testCase.evidence_roles] : [];
+  if (CORE_BETA_INITIALIZATION_CASE_IDS.has(String(testCase?.id || ''))) {
+    for (const role of CORE_BETA_INITIALIZATION_DISK_EVIDENCE_ROLES) {
+      if (!evidenceRoles.includes(role)) evidenceRoles.push(role);
+    }
+  }
+  if (testCase.id === 'BETA-INIT-003') {
+    for (const role of ['skill_reinstall_readiness_verdict', 'initialization_continuation_surface']) {
+      if (!evidenceRoles.includes(role)) evidenceRoles.push(role);
+    }
+  }
   return {
     order,
     id: testCase.id,
@@ -2625,7 +2878,7 @@ function createCaseState({ testCase, caseDir, order, modelTier, options = {} }) 
     success_criteria: testCase.success_criteria,
     failure_criteria: testCase.failure_criteria,
     evidence_required: testCase.evidence_required,
-    evidence_roles: Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [],
+    evidence_roles: evidenceRoles,
     evidence_schema_version: testCase.evidence_schema_version || '',
     case_type: testCase.case_type || '',
     core_domain: testCase.core_domain || '',
@@ -5055,7 +5308,11 @@ async function captureCoreBetaPublicState(page, testCase) {
       if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, 150 * attempt));
     }
     const connectionView = await call(e2e?.getConnectionView?.bind(e2e));
-    const skillsCatalog = await call(agent.getSkillsCatalog?.bind(agent));
+    const skillsCatalog = await callBounded(
+      agent.getSkillsCatalog?.bind(agent),
+      5_000,
+      'getSkillsCatalog',
+    );
     const expertLifecycle = agent.expertLifecycle || null;
     const expertInventory = expertLifecycle
       ? await call(expertLifecycle.list?.bind(expertLifecycle))
@@ -5324,7 +5581,9 @@ function nonEmptyObject(value) {
 }
 
 async function materializeCoreBetaEvidence({ page, state, testCase, caseDir, publicState, actionReceipts }) {
-  const declared = Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [];
+  const declared = Array.isArray(state?.evidence_roles)
+    ? state.evidence_roles
+    : Array.isArray(testCase.evidence_roles) ? testCase.evidence_roles : [];
   const notApplicableRoles = new Set(
     (Array.isArray(state.artifacts?.core_beta_not_applicable_roles)
       ? state.artifacts.core_beta_not_applicable_roles
@@ -7469,6 +7728,7 @@ async function waitForCoreBetaV2MaintenanceTerminal({
   caseDir,
   testCase,
   maintenance,
+  actionEvidence = null,
   timeoutMs,
 }) {
   const startedAt = Date.now();
@@ -7490,26 +7750,39 @@ async function waitForCoreBetaV2MaintenanceTerminal({
     });
     if (!resolved.ok) {
       errorStreak += 1;
+      stableReadyObservations = 0;
+      authoritativeReadyObservations = 0;
       lastReadback = {
         ...lastReadback,
         ready: false,
         reason: resolved.reason || 'QWork renderer 暂时不可读，等待导航或 replacement renderer。',
       };
+      observations.push({
+        captured_at: new Date().toISOString(),
+        elapsed_ms: Date.now() - startedAt,
+        read_ok: false,
+        raw: null,
+        error: lastReadback.reason,
+      });
+      if (observations.length > 60) observations.shift();
       await new Promise((resolve) => setTimeout(resolve, 1000));
       continue;
     }
     activePage = resolved.page;
     try {
       const body = await bodyText(activePage);
-      const workbenchReady = /新建任务/.test(body) && /专家|连接器|知识/.test(body);
+      const pageText = clip(body, 20_000);
+      const workbenchReady = /新建任务/.test(pageText) && /专家|连接器|知识/.test(pageText);
       const composerReady = await visible(
         activePage.locator('[data-testid="composer-input"], .aui-composer-input').first(),
         800,
       );
       let maintenanceRegion = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
-      if (!(await visible(maintenanceRegion, 800))) {
+      let maintenanceRegionVisible = await visible(maintenanceRegion, 800);
+      if (!maintenanceRegionVisible) {
         await openCoreBetaV2SystemSettings(activePage, state);
         maintenanceRegion = activePage.locator('[data-testid="assistant-runtime-maintenance"]').first();
+        maintenanceRegionVisible = await visible(maintenanceRegion, 800);
       }
       const text = await maintenanceRegion.innerText({ timeout: 2000 }).catch(() => '');
       const button = activePage.locator(`[data-testid="${maintenance.testId}"]`).first();
@@ -7548,6 +7821,7 @@ async function waitForCoreBetaV2MaintenanceTerminal({
       const capabilitiesReadable = Boolean(
         runtimeData.capabilities
         && typeof runtimeData.capabilities === 'object'
+        && !Array.isArray(runtimeData.capabilities)
         && !runtimeData.capabilities.__error,
       );
       const elapsedMs = Date.now() - startedAt;
@@ -7633,30 +7907,56 @@ async function waitForCoreBetaV2MaintenanceTerminal({
         capabilities: runtimeData.capabilities,
         sessions: runtimeData.sessions,
         reconnected: resolved.reconnected,
+        page_readable: body.length > 0 && pageText.length > 0,
+        maintenance_region_visible: maintenanceRegionVisible,
       };
       observations.push({
         captured_at: new Date().toISOString(),
         elapsed_ms: elapsedMs,
-        ready: lastReadback.ready,
-        pending: lastReadback.pending,
-        failed: lastReadback.failed,
-        stable_ready_observations: stableReadyObservations,
-        authoritative_ready_observations: authoritativeReadyObservations,
-        product_ui_state_conflict: lastReadback.product_ui_state_conflict === true,
-        maintenance_text: clip(text, 500),
-        sdk_statuses: runtimeData.sdkStatuses,
-        session_count: Array.isArray(runtimeData.sessions) ? runtimeData.sessions.length : null,
+        read_ok: true,
+        raw: {
+          page_url: String(activePage.url?.() || ''),
+          page_text: pageText,
+          page_body_text_length: body.length,
+          maintenance_region_visible: maintenanceRegionVisible,
+          maintenance_text: clip(text, 1_800),
+          composer_visible: Boolean(composerReady),
+          maintenance_button_enabled: Boolean(buttonEnabled),
+          sdk_statuses: runtimeData.sdkStatuses,
+          capabilities: runtimeData.capabilities,
+          sessions: runtimeData.sessions,
+          reconnected: resolved.reconnected === true,
+        },
+        reported: {
+          ready: lastReadback.ready,
+          pending: lastReadback.pending,
+          failed: lastReadback.failed,
+          stable_ready_observations: stableReadyObservations,
+          authoritative_ready_observations: authoritativeReadyObservations,
+          product_ui_state_conflict: lastReadback.product_ui_state_conflict === true,
+        },
+        error: '',
       });
       if (observations.length > 60) observations.shift();
       errorStreak = 0;
       if (lastReadback.failed || stable) break;
     } catch (error) {
       errorStreak += 1;
+      stableReadyObservations = 0;
+      authoritativeReadyObservations = 0;
       lastReadback = {
         ...lastReadback,
         ready: false,
         reason: `终态采样暂时失败：${clip(error?.message || String(error), 320)}`,
       };
+      observations.push({
+        captured_at: new Date().toISOString(),
+        elapsed_ms: Date.now() - startedAt,
+        read_ok: false,
+        raw: null,
+        error: lastReadback.reason,
+      });
+      if (observations.length > 60) observations.shift();
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
@@ -7664,8 +7964,11 @@ async function waitForCoreBetaV2MaintenanceTerminal({
   if (screenshot) state.screenshots[`${maintenance.testId.replaceAll('-', '_')}_terminal`] = screenshot;
   const diagnosticFile = path.join(caseDir, `${slugify(maintenance.method)}-terminal-observations.json`);
   writeJsonFile(diagnosticFile, {
+    schema_version: 'qbot-core-beta-runtime-maintenance-observations/v2',
     case_id: testCase.id,
     method: maintenance.method,
+    testid: maintenance.testId,
+    action_evidence: actionEvidence,
     terminal_kind: maintenance.terminal,
     timeout_ms: timeoutMs,
     completed_at: new Date().toISOString(),
@@ -7682,7 +7985,450 @@ async function waitForCoreBetaV2MaintenanceTerminal({
   };
 }
 
+export function coreBetaInitializationMaintenanceObservationsVerdict({
+  ledger,
+  caseId = '',
+  method = '',
+  testid = '',
+  terminalKind = '',
+} = {}) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const expectedIdentity = CORE_BETA_INITIALIZATION_ACTION_IDENTITIES[String(caseId || '')];
+  const expectedTerminalKinds = {
+    'BETA-INIT-001': 'update',
+    'BETA-INIT-002': 'runtime-ready',
+    'BETA-INIT-003': 'runtime-ready',
+    'BETA-INIT-004': 'sessions-empty',
+  };
+  const resolvedTerminalKind = String(terminalKind || ledger?.terminal_kind || '');
+  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) {
+    addReason('maintenance_observations_missing_or_invalid');
+  } else {
+    if (ledger.schema_version !== 'qbot-core-beta-runtime-maintenance-observations/v2') {
+      addReason('maintenance_observations_schema_mismatch');
+    }
+    if (String(ledger.case_id || '') !== String(caseId || '')) addReason('maintenance_observations_case_id_mismatch');
+    if (String(ledger.method || '') !== String(method || expectedIdentity?.method || '')) {
+      addReason('maintenance_observations_method_mismatch');
+    }
+    if (String(ledger.testid || '') !== String(testid || expectedIdentity?.testid || '')) {
+      addReason('maintenance_observations_testid_mismatch');
+    }
+    if (resolvedTerminalKind !== expectedTerminalKinds[String(caseId || '')]) {
+      addReason('maintenance_observations_terminal_kind_mismatch');
+    }
+    if (!(Number(ledger.timeout_ms) >= 30_000)) addReason('maintenance_observations_timeout_invalid');
+    if (!Number.isFinite(Date.parse(String(ledger.completed_at || '')))) {
+      addReason('maintenance_observations_completed_at_invalid');
+    }
+  }
+
+  const observations = Array.isArray(ledger?.observations) ? ledger.observations : [];
+  if (!Array.isArray(ledger?.observations) || observations.length === 0) {
+    addReason('maintenance_observations_empty');
+  }
+  let stableReadyObservations = 0;
+  let authoritativeReadyObservations = 0;
+  let lastElapsedMs = -1;
+  let lastReadback = { ready: false, reason: '尚未开始终态采样。' };
+  let successfulObservationCount = 0;
+  let readErrorCount = 0;
+  const replayedObservations = [];
+
+  observations.forEach((observation, index) => {
+    const prefix = `maintenance_observation_${index + 1}`;
+    if (!observation || typeof observation !== 'object' || Array.isArray(observation)) {
+      addReason(`${prefix}_invalid`);
+      stableReadyObservations = 0;
+      authoritativeReadyObservations = 0;
+      readErrorCount += 1;
+      return;
+    }
+    const elapsedMs = Number(observation.elapsed_ms);
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs < lastElapsedMs) {
+      addReason(`${prefix}_elapsed_invalid`);
+    } else {
+      lastElapsedMs = elapsedMs;
+    }
+    if (!Number.isFinite(Date.parse(String(observation.captured_at || '')))) {
+      addReason(`${prefix}_captured_at_invalid`);
+    }
+    if (observation.read_ok !== true) {
+      readErrorCount += 1;
+      stableReadyObservations = 0;
+      authoritativeReadyObservations = 0;
+      if (observation.read_ok !== false
+        || observation.raw !== null
+        || !String(observation.error || '').trim()) {
+        addReason(`${prefix}_read_error_shape_invalid`);
+      }
+      lastReadback = {
+        ...lastReadback,
+        ready: false,
+        reason: String(observation.error || ''),
+      };
+      replayedObservations.push({ read_ok: false, elapsed_ms: elapsedMs, readback: lastReadback });
+      return;
+    }
+
+    successfulObservationCount += 1;
+    const raw = observation.raw;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      addReason(`${prefix}_raw_invalid`);
+      stableReadyObservations = 0;
+      authoritativeReadyObservations = 0;
+      return;
+    }
+    const rawShapeValid = typeof raw.page_url === 'string'
+      && typeof raw.page_text === 'string'
+      && Number.isSafeInteger(Number(raw.page_body_text_length))
+      && Number(raw.page_body_text_length) >= 0
+      && typeof raw.maintenance_region_visible === 'boolean'
+      && typeof raw.maintenance_text === 'string'
+      && typeof raw.composer_visible === 'boolean'
+      && typeof raw.maintenance_button_enabled === 'boolean'
+      && Array.isArray(raw.sdk_statuses)
+      && typeof raw.reconnected === 'boolean';
+    if (!rawShapeValid) addReason(`${prefix}_raw_shape_invalid`);
+    if (String(observation.error || '')) addReason(`${prefix}_unexpected_error`);
+    const pageText = String(raw.page_text || '');
+    const maintenanceText = String(raw.maintenance_text || '');
+    const pageReadable = Number(raw.page_body_text_length) > 0 && pageText.length > 0;
+    const workbenchReady = /新建任务/.test(pageText) && /专家|连接器|知识/.test(pageText);
+    const capabilitiesReadable = Boolean(
+      raw.capabilities
+      && typeof raw.capabilities === 'object'
+      && !Array.isArray(raw.capabilities)
+      && !raw.capabilities.__error,
+    );
+    const baseState = coreBetaV2RuntimeMaintenanceState({
+      text: maintenanceText,
+      composerReady: raw.composer_visible === true,
+      workbenchReady,
+      buttonEnabled: raw.maintenance_button_enabled === true,
+      capabilitiesReadable,
+      sdkStatuses: raw.sdk_statuses,
+      stableReadyObservations: 1,
+      minimumReadyObservations: 1,
+    });
+    authoritativeReadyObservations = baseState.authoritative_ready
+      ? authoritativeReadyObservations + 1
+      : 0;
+    const activeSessionRejected = resolvedTerminalKind === 'sessions-empty'
+      && coreBetaV2MaintenanceActiveSessionRejection(maintenanceText);
+    const visibleStateConflict = coreBetaV2MaintenanceProductStateConflict({
+      maintenanceState: baseState,
+      stableObservations: authoritativeReadyObservations,
+      elapsedMs,
+    });
+    const terminalState = activeSessionRejected
+      ? {
+        ...baseState,
+        ready: false,
+        pending: false,
+        failed: true,
+        active_session_rejected: true,
+        reason: '全部公开会话已确认 idle 后，产品仍以 active-session 拒绝清空会话。',
+      }
+      : visibleStateConflict.confirmed
+        ? {
+          ...baseState,
+          ready: false,
+          pending: false,
+          failed: true,
+          product_ui_state_conflict: true,
+          product_ui_state_conflict_evidence: visibleStateConflict,
+          reason: '结构化 SDK、capabilities、工作台、输入区和按钮已连续稳定 ready，但可见维护区仍显示处理中。',
+        }
+        : baseState;
+    const updateReady = resolvedTerminalKind === 'update'
+      && elapsedMs >= 1000
+      && raw.maintenance_button_enabled === true
+      && capabilitiesReadable
+      && !terminalState.pending
+      && !terminalState.failed
+      && /当前|完成|就绪|ready|已开始|远端|同版本|无需更新/i.test(maintenanceText);
+    const sessionsEmpty = resolvedTerminalKind === 'sessions-empty'
+      && elapsedMs >= 1500
+      && workbenchReady
+      && capabilitiesReadable
+      && Array.isArray(raw.sessions)
+      && raw.sessions.length === 0;
+    const runtimeReady = resolvedTerminalKind === 'runtime-ready'
+      && elapsedMs >= 5000
+      && terminalState.ready;
+    const sampleReady = updateReady || sessionsEmpty || runtimeReady;
+    stableReadyObservations = sampleReady ? stableReadyObservations + 1 : 0;
+    const stableRequired = resolvedTerminalKind === 'update' ? 2 : 3;
+    const stable = stableReadyObservations >= stableRequired;
+    lastReadback = {
+      ...terminalState,
+      ready: stable,
+      reason: stable
+        ? resolvedTerminalKind === 'sessions-empty'
+          ? '工作台已恢复，公开会话列表连续稳定为空。'
+          : resolvedTerminalKind === 'update'
+            ? '检查更新动作已收敛，维护按钮与公开 capabilities 连续稳定可用。'
+            : '运行时维护区、SDK、工作台、输入区与 capabilities 连续稳定就绪。'
+        : terminalState.failed
+          ? terminalState.reason
+          : `终态尚未达到连续 ${stableRequired} 次稳定采样：current=${stableReadyObservations}`,
+      elapsed_ms: elapsedMs,
+      terminal_kind: resolvedTerminalKind,
+      stable_ready_observations: stableReadyObservations,
+      authoritative_ready_observations: authoritativeReadyObservations,
+      stable_required: stableRequired,
+      maintenance_text: maintenanceText,
+      sdk_statuses: raw.sdk_statuses,
+      capabilities: raw.capabilities,
+      sessions: raw.sessions,
+      reconnected: raw.reconnected === true,
+      page_readable: pageReadable,
+      maintenance_region_visible: raw.maintenance_region_visible === true,
+    };
+    const reported = observation.reported;
+    if (!reported || typeof reported !== 'object' || Array.isArray(reported)
+      || reported.ready !== lastReadback.ready
+      || reported.pending !== lastReadback.pending
+      || reported.failed !== lastReadback.failed
+      || Number(reported.stable_ready_observations) !== stableReadyObservations
+      || Number(reported.authoritative_ready_observations) !== authoritativeReadyObservations
+      || reported.product_ui_state_conflict !== (lastReadback.product_ui_state_conflict === true)) {
+      addReason(`${prefix}_reported_projection_mismatch`);
+    }
+    replayedObservations.push({
+      read_ok: true,
+      elapsed_ms: elapsedMs,
+      page_readable: pageReadable,
+      workbench_ready: workbenchReady,
+      capabilities_readable: capabilitiesReadable,
+      sample_ready: sampleReady,
+      readback: lastReadback,
+    });
+  });
+
+  if (!successfulObservationCount) addReason('maintenance_observations_no_successful_sample');
+  const canonicalEqual = (left, right) => (
+    JSON.stringify(canonicalCoreBetaInitializationValue(left))
+      === JSON.stringify(canonicalCoreBetaInitializationValue(right))
+  );
+  if (ledger && !canonicalEqual(ledger.final, lastReadback)) {
+    addReason('maintenance_observations_final_replay_mismatch');
+  }
+  return {
+    valid: reasons.length === 0,
+    evidence_valid: reasons.length === 0,
+    ready: reasons.length === 0 && lastReadback.ready === true,
+    failed: lastReadback.failed === true,
+    pending: lastReadback.pending === true,
+    reasons,
+    reason: reasons.join(',') || (lastReadback.ready ? 'maintenance_terminal_replayed_ready' : 'maintenance_terminal_replayed'),
+    successful_observation_count: successfulObservationCount,
+    read_error_count: readErrorCount,
+    replayed_final: lastReadback,
+    replayed_observations: replayedObservations,
+  };
+}
+
+function canonicalCoreBetaInitializationValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalCoreBetaInitializationValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .filter((key) => value[key] !== undefined)
+        .map((key) => [key, canonicalCoreBetaInitializationValue(value[key])]),
+    );
+  }
+  return value;
+}
+
+export function coreBetaInitializationSkillCatalogObservation({
+  catalog,
+  previousSignatureSha256 = '',
+  previousIdleStableObservations = 0,
+} = {}) {
+  const summary = coreBetaInitializationSkillCatalogSummary(catalog);
+  const normalizedTuple = {
+    sync_status: summary.sync_status,
+    installed: summary.items
+      .map((item) => ({
+        identity: item.identity,
+        source_platform: item.source_platform,
+        namespace: item.namespace,
+        slug: item.slug,
+        version: item.version,
+        local_readiness_status: item.local_readiness_status,
+        readiness_status: item.readiness_status,
+        install_status: item.install_status,
+        reported_ready: item.reported_ready,
+        management_installed: item.management_installed,
+        installed: item.installed,
+        ready: item.ready,
+        failed_or_pending: item.failed_or_pending,
+        half_installed: item.half_installed,
+        readiness_error: item.readiness_error,
+      }))
+      .sort((left, right) => String(left.identity || '').localeCompare(String(right.identity || ''))),
+  };
+  const canonicalPayload = JSON.stringify(canonicalCoreBetaInitializationValue(normalizedTuple));
+  const canonicalSha256 = summary.structure_valid
+    ? createHash('sha256').update(canonicalPayload).digest('hex')
+    : '';
+  const idle = summary.structure_valid
+    && summary.sync_status === 'idle'
+    && /^[a-f0-9]{64}$/i.test(canonicalSha256);
+  const sameSignature = idle
+    && previousSignatureSha256
+    && previousSignatureSha256 === canonicalSha256;
+  return {
+    summary,
+    normalized_tuple: normalizedTuple,
+    canonical_sha256: canonicalSha256,
+    idle,
+    same_signature_as_previous: Boolean(sameSignature),
+    idle_stable_observations: idle
+      ? sameSignature ? Math.max(0, Number(previousIdleStableObservations) || 0) + 1 : 1
+      : 0,
+    next_signature_sha256: idle ? canonicalSha256 : '',
+  };
+}
+
+async function waitForCoreBetaInitializationSkillCatalogIdle({
+  page,
+  caseId = 'BETA-INIT-003',
+  method = 'skillsReinstall',
+  testId = 'assistant-skills-reinstall',
+  actionEvidence = null,
+  timeoutMs = 60_000,
+  pollMs = 1_000,
+} = {}) {
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(10_000, Math.min(Number(timeoutMs) || 60_000, 120_000));
+  const observations = [];
+  let idleStableObservations = 0;
+  let stableSignatureSha256 = '';
+  let readErrorCount = 0;
+  let catalog = null;
+  let lastError = '';
+  while (Date.now() < deadline) {
+    const capturedAt = new Date().toISOString();
+    try {
+      const evaluation = await coreBetaRendererEvaluationWithRetry(
+        () => page.evaluate(async () => {
+          if (typeof window.agent?.getSkillsCatalog !== 'function') {
+            throw new Error('missing bridge method getSkillsCatalog');
+          }
+          let timer = null;
+          try {
+            return await Promise.race([
+              window.agent.getSkillsCatalog(),
+              new Promise((_, reject) => {
+                timer = window.setTimeout(
+                  () => reject(new Error('Core Beta getSkillsCatalog readback timed out after 5000ms')),
+                  5_000,
+                );
+              }),
+            ]);
+          } finally {
+            if (timer) window.clearTimeout(timer);
+          }
+        }),
+        {
+          maxAttempts: 3,
+          retryDelayMs: 150,
+          isClosed: () => typeof page?.isClosed === 'function' && page.isClosed(),
+          waitForNavigation: async () => {
+            await page.waitForLoadState?.('domcontentloaded', { timeout: 3_000 }).catch(() => {});
+          },
+          delay: async (ms) => page.waitForTimeout?.(ms),
+        },
+      );
+      catalog = evaluation.value;
+      const failedCaptureAttempts = evaluation.attempts.filter((attempt) => attempt?.ok !== true).length;
+      readErrorCount += failedCaptureAttempts;
+      const observation = coreBetaInitializationSkillCatalogObservation({
+        catalog,
+        previousSignatureSha256: stableSignatureSha256,
+        previousIdleStableObservations: idleStableObservations,
+      });
+      const { summary } = observation;
+      idleStableObservations = observation.idle_stable_observations;
+      stableSignatureSha256 = observation.next_signature_sha256;
+      observations.push({
+        captured_at: capturedAt,
+        elapsed_ms: Date.now() - startedAt,
+        read_ok: true,
+        raw_catalog: catalog,
+        normalized_tuple: observation.normalized_tuple,
+        canonical_sha256: observation.canonical_sha256,
+        same_signature_as_previous: observation.same_signature_as_previous,
+        sync_status: summary.sync_status,
+        installed_count: summary.installed_count,
+        identity_count: summary.identities.length,
+        duplicate_count: summary.duplicate_identities.length,
+        invalid_identity_count: summary.invalid_identity_indexes.length,
+        readiness_missing_count: summary.readiness_missing_indexes.length,
+        unready_count: summary.unready_identities.length,
+        idle_stable_observations: idleStableObservations,
+        read_error_count: failedCaptureAttempts,
+        error: '',
+        renderer_capture_attempts: evaluation.attempts,
+      });
+      lastError = '';
+      if (idleStableObservations >= 3) break;
+    } catch (error) {
+      idleStableObservations = 0;
+      stableSignatureSha256 = '';
+      lastError = String(error?.message || error);
+      const rendererCaptureAttempts = Array.isArray(error?.core_beta_renderer_capture_attempts)
+        ? error.core_beta_renderer_capture_attempts
+        : [];
+      const failedCaptureAttempts = rendererCaptureAttempts.filter((attempt) => attempt?.ok !== true).length;
+      const observationReadErrors = Math.max(1, failedCaptureAttempts);
+      readErrorCount += observationReadErrors;
+      observations.push({
+        captured_at: capturedAt,
+        elapsed_ms: Date.now() - startedAt,
+        read_ok: false,
+        raw_catalog: null,
+        normalized_tuple: null,
+        canonical_sha256: '',
+        same_signature_as_previous: false,
+        error: lastError,
+        idle_stable_observations: 0,
+        read_error_count: observationReadErrors,
+        renderer_capture_attempts: rendererCaptureAttempts,
+      });
+    }
+    await page.waitForTimeout?.(Math.max(100, Number(pollMs) || 1_000));
+  }
+  return {
+    schema_version: 'qbot-core-beta-skill-reinstall-catalog-observations/v2',
+    case_id: caseId,
+    method,
+    testid: testId,
+    action_evidence: actionEvidence,
+    ok: idleStableObservations >= 3 && readErrorCount === 0,
+    evidence_valid: readErrorCount === 0,
+    started_at: new Date(startedAt).toISOString(),
+    ended_at: new Date().toISOString(),
+    timeout_ms: Math.max(10_000, Math.min(Number(timeoutMs) || 60_000, 120_000)),
+    idle_stable_observations: idleStableObservations,
+    stable_signature_sha256: idleStableObservations >= 3 ? stableSignatureSha256 : '',
+    read_error_count: readErrorCount,
+    last_error: lastError,
+    observations,
+    catalog,
+  };
+}
+
 async function verifyCoreBetaInitializationContinuationSurface({ page, state, caseDir, testCase }) {
+  const actionIdentity = CORE_BETA_INITIALIZATION_ACTION_IDENTITIES[String(testCase?.id || '')];
+  if (!actionIdentity) throw new Error(`不支持的初始化恢复 Case：${String(testCase?.id || '')}`);
   const beforeScreenshot = await shot(page, caseDir, 'initialization-continuation-surface-before').catch(() => '');
   let error = '';
   try {
@@ -7703,34 +8449,85 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     ? await draftSurfaceState(page)
     : { ok: false, reason: 'open_new_task_failed' };
   const cleanDraftIsolated = cleanDraftSurface.ok === true
-    && (
-      cleanDraftState.available !== true
-      || (!cleanDraftState.activeId && Number(cleanDraftState.messageCount || 0) === 0)
-    );
+    && cleanDraftState.available === true
+    && !cleanDraftState.activeId
+    && cleanDraftState.isDraft === true
+    && Boolean(String(cleanDraftState.draftInstanceId || '').trim())
+    && Number(cleanDraftState.messageCount || 0) === 0
+    && Number(cleanDraftState.sendCount || 0) === 0
+    && cleanDraftState.running === false;
   const publicState = await captureCoreBetaPublicState(page, testCase).catch((caught) => {
     error ||= String(caught?.message || caught);
     return null;
   });
   const afterScreenshot = await shot(page, caseDir, 'initialization-continuation-surface-after').catch(() => '');
+  const capabilitiesReadable = Boolean(
+    publicState?.capabilities
+    && typeof publicState.capabilities === 'object'
+    && !Array.isArray(publicState.capabilities)
+    && !publicState.capabilities.__error,
+  );
+  const publicTaskClean = Boolean(
+    publicState?.task
+    && publicState.task.id === null
+    && publicState.task.running === false
+    && Number(publicState.task.message_count) === 0
+    && Number(publicState.task.send_count) === 0,
+  );
+  const publicSelectionsClean = Array.isArray(publicState?.skills?.selected)
+    && publicState.skills.selected.length === 0
+    && Array.isArray(publicState?.connectors?.selected)
+    && publicState.connectors.selected.length === 0
+    && publicState?.expert === null;
+  const screenshotRecord = (candidate) => {
+    const record = coreBetaCaseBoundFileRecord({ case_dir: caseDir }, candidate);
+    if (!record) return null;
+    return coreBetaFrozenPngValid(record) ? record : null;
+  };
+  const beforeScreenshotRecord = screenshotRecord(beforeScreenshot);
+  const afterScreenshotRecord = screenshotRecord(afterScreenshot);
+  const screenshotPairValid = Boolean(
+    beforeScreenshotRecord
+    && afterScreenshotRecord
+    && beforeScreenshotRecord.path !== afterScreenshotRecord.path,
+  );
+  const continuationState = {
+    draft_instance_id: String(cleanDraftState?.draftInstanceId || '').trim(),
+    task_id: publicState?.task?.id ?? null,
+    message_count: Number(publicState?.task?.message_count),
+    send_count: Number(publicState?.task?.send_count),
+    running: publicState?.task?.running,
+    selected_skills: Array.isArray(publicState?.skills?.selected) ? publicState.skills.selected : null,
+    selected_connectors: Array.isArray(publicState?.connectors?.selected) ? publicState.connectors.selected : null,
+    current_expert: publicState?.expert ?? null,
+  };
   const valid = !error
     && composerReady
     && workbenchReady
     && cleanDraftIsolated
+    && capabilitiesReadable
+    && publicTaskClean
+    && publicSelectionsClean
     && Number(publicState?.page?.body_text_length || 0) > 0
-    && Boolean(beforeScreenshot)
-    && Boolean(afterScreenshot);
+    && screenshotPairValid;
   const readback = {
     schema_version: 'qbot-core-beta-initialization-continuation-surface/v1',
     case_id: testCase.id,
+    method: actionIdentity.method,
+    testid: actionIdentity.testid,
     valid,
     composer_ready: Boolean(composerReady),
     workbench_ready: workbenchReady,
     clean_draft_isolated: cleanDraftIsolated,
     clean_draft_state: cleanDraftState,
     clean_draft_surface: cleanDraftSurface,
+    capabilities_readable: capabilitiesReadable,
+    public_task_clean: publicTaskClean,
+    public_selections_clean: publicSelectionsClean,
     public_state_readable: Number(publicState?.page?.body_text_length || 0) > 0,
-    before_screenshot: beforeScreenshot,
-    after_screenshot: afterScreenshot,
+    continuation_state: continuationState,
+    before_screenshot: beforeScreenshotRecord,
+    after_screenshot: afterScreenshotRecord,
     error,
     public_state: publicState,
   };
@@ -7738,6 +8535,39 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
   writeJsonFile(file, readback);
   state.artifacts.initialization_continuation_surface = file;
   return { ...readback, file };
+}
+
+function coreBetaInitializationWrittenFileRecord(candidate) {
+  const file = path.resolve(String(candidate || ''));
+  if (!candidate || !fs.existsSync(file)) return null;
+  const lstat = fs.lstatSync(file);
+  if (lstat.isSymbolicLink() || !lstat.isFile() || lstat.size <= 0) return null;
+  const bytes = fs.readFileSync(file);
+  return {
+    path: file,
+    bytes: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+function writeCoreBetaInitializationPublicStateEvidence({
+  caseDir,
+  testCase,
+  maintenance,
+  phase,
+  publicState,
+}) {
+  const file = path.join(caseDir, `initialization-${phase}-public-state.json`);
+  writeJsonFile(file, {
+    schema_version: 'qbot-core-beta-initialization-public-state-observation/v1',
+    case_id: testCase.id,
+    method: maintenance.method,
+    testid: maintenance.testId,
+    phase,
+    captured_at: new Date().toISOString(),
+    public_state: publicState,
+  });
+  return file;
 }
 
 async function executeCoreBetaInitializationCase(context) {
@@ -7779,6 +8609,14 @@ async function executeCoreBetaInitializationCase(context) {
   const maintenance = maintenanceByCase[testCase.id];
   if (maintenance) {
     const before = await captureCoreBetaPublicState(page, testCase);
+    const beforePublicStateFile = writeCoreBetaInitializationPublicStateEvidence({
+      caseDir,
+      testCase,
+      maintenance,
+      phase: 'before-action',
+      publicState: before,
+    });
+    state.artifacts.initialization_before_public_state = beforePublicStateFile;
     const startedAt = Date.now();
     const opened = await openCoreBetaV2SystemSettings(page, state);
     if (!opened.ok) {
@@ -7836,6 +8674,20 @@ async function executeCoreBetaInitializationCase(context) {
       }
       actionAttempts.push(clicked);
     }
+    const actionEvidenceFile = path.join(caseDir, 'initialization-action-observations.json');
+    const actionEvidence = {
+      schema_version: 'qbot-core-beta-initialization-action-evidence/v1',
+      case_id: testCase.id,
+      method: maintenance.method,
+      testid: maintenance.testId,
+      destructive: maintenance.destructive === true,
+      captured_at: new Date().toISOString(),
+      attempts: actionAttempts,
+    };
+    writeJsonFile(actionEvidenceFile, actionEvidence);
+    state.artifacts.initialization_action_observation = actionEvidenceFile;
+    state.initialization_action_observation = coreBetaInitializationActionObservationFromEvidence(actionEvidence);
+    const actionEvidenceRecord = coreBetaInitializationWrittenFileRecord(actionEvidenceFile);
     const terminal = await waitForCoreBetaV2MaintenanceTerminal({
       page,
       runtime,
@@ -7844,43 +8696,141 @@ async function executeCoreBetaInitializationCase(context) {
       caseDir,
       testCase,
       maintenance,
+      actionEvidence: actionEvidenceRecord,
       timeoutMs: Math.max(Number(timeoutMs || 0), maintenance.terminal === 'update' ? 90_000 : 600_000),
     });
+    if (terminal.screenshot) {
+      state.artifacts.initialization_terminal_screenshot = terminal.screenshot;
+    }
     page = terminal.page || runtime?.page || page;
     context.page = page;
     if (runtime) runtime.page = page;
-    const continuationSurface = !terminal.ok && terminal.readback?.failed === true
+    const skillCatalogPoll = testCase.id === 'BETA-INIT-003'
+      ? await waitForCoreBetaInitializationSkillCatalogIdle({
+        page,
+        caseId: testCase.id,
+        method: maintenance.method,
+        testId: maintenance.testId,
+        actionEvidence: actionEvidenceRecord,
+        timeoutMs: Math.max(30_000, Math.min(Number(timeoutMs) || 60_000, 120_000)),
+      })
+      : null;
+    let maintenanceAfter = await captureCoreBetaPublicState(page, testCase);
+    if (skillCatalogPoll?.catalog && maintenanceAfter?.skills) {
+      maintenanceAfter = {
+        ...maintenanceAfter,
+        skills: { ...maintenanceAfter.skills, catalog: skillCatalogPoll.catalog },
+      };
+    }
+    const afterPublicStateFile = writeCoreBetaInitializationPublicStateEvidence({
+      caseDir,
+      testCase,
+      maintenance,
+      phase: 'after-maintenance',
+      publicState: maintenanceAfter,
+    });
+    state.artifacts.initialization_after_public_state = afterPublicStateFile;
+    let after = maintenanceAfter;
+    const file = path.join(caseDir, `${slugify(maintenance.method)}-readback.json`);
+    const skillReinstallVerdict = testCase.id === 'BETA-INIT-003'
+      ? coreBetaInitializationSkillReinstallVerdict({
+        caseId: testCase.id,
+        beforeCatalog: before?.skills?.catalog,
+        afterCatalog: skillCatalogPoll?.catalog || maintenanceAfter?.skills?.catalog,
+        afterIdleStableObservations: skillCatalogPoll?.idle_stable_observations || 0,
+        catalogObservations: skillCatalogPoll,
+      })
+      : null;
+    const specializedProductFailure = skillReinstallVerdict?.evidence_valid === true
+      && skillReinstallVerdict?.oracle_valid === false;
+    const specializedEvidenceFailure = Boolean(skillReinstallVerdict)
+      && skillReinstallVerdict.evidence_valid !== true;
+    const productTerminalFailure = terminal.readback?.failed === true;
+    const productFailureObserved = productTerminalFailure || specializedProductFailure;
+    // INIT-003 always leaves the maintenance surface through the same real
+    // user path. This both proves a clean continuation surface and prevents a
+    // passing readiness Oracle from leaking settings state into the next Case.
+    const recoveryRequired = testCase.id === 'BETA-INIT-003' || productTerminalFailure;
+    const continuationSurface = recoveryRequired
       ? await verifyCoreBetaInitializationContinuationSurface({ page, state, caseDir, testCase })
       : null;
-    const after = continuationSurface?.public_state
-      || await captureCoreBetaPublicState(page, testCase);
-    const file = path.join(caseDir, `${slugify(maintenance.method)}-readback.json`);
+    if (continuationSurface) {
+      state.evidence_roles = Array.isArray(state.evidence_roles) ? state.evidence_roles : [];
+      if (!state.evidence_roles.includes('initialization_continuation_surface')) {
+        state.evidence_roles.push('initialization_continuation_surface');
+      }
+    }
+    if (continuationSurface?.public_state) after = continuationSurface.public_state;
+    const recoveryOk = !recoveryRequired || continuationSurface?.valid === true;
+    const actionEvidenceOk = clicked.action_observed === true
+      && (!maintenance.destructive || (
+        clicked.confirmation?.accepted === true
+        && Boolean(String(clicked.confirmation?.message || '').trim())
+      ));
+    const overallOk = actionEvidenceOk
+      && terminal.ok
+      && (!skillReinstallVerdict || skillReinstallVerdict.oracle_valid === true)
+      && recoveryOk;
     const readback = {
-      valid: terminal.ok,
+      schema_version: 'qbot-core-beta-runtime-maintenance-readback/v1',
+      case_id: testCase.id,
+      evidence_valid: true,
+      oracle_valid: overallOk,
+      valid: overallOk,
       method: maintenance.method,
       testid: maintenance.testId,
       elapsed_ms: Date.now() - startedAt,
       before,
       action: clicked,
       action_attempts: actionAttempts,
+      initialization_action_observation: state.initialization_action_observation,
       terminal: terminal.readback,
-      after,
+      after: maintenanceAfter,
+      continuation_surface: continuationSurface,
+      skill_reinstall_readiness_verdict: skillReinstallVerdict,
     };
-    if (!terminal.ok) {
+    if (!overallOk) {
       state.initialization_continuation = coreBetaInitializationContinuation({
         testCase,
         terminalReadback: terminal.readback,
         afterReadback: after,
         continuationSurface,
+        productFailureObserved: specializedProductFailure,
+        productFailureSource: specializedProductFailure ? 'skill_reinstall_readiness_oracle' : '',
       });
-      readback.continuation_surface = continuationSurface;
       readback.initialization_continuation = state.initialization_continuation;
     }
     writeJsonFile(file, readback);
     state.artifacts.capability_execution_event = file;
     state.artifacts.core_beta_runtime_maintenance = file;
-    const productTerminalFailure = terminal.readback?.failed === true;
-    const terminalFailureCategory = productTerminalFailure ? 'bug' : 'automation_error';
+    if (skillReinstallVerdict) {
+      const catalogObservationsFile = path.join(caseDir, 'skill-reinstall-catalog-observations.json');
+      writeJsonFile(catalogObservationsFile, {
+        ...skillCatalogPoll,
+      });
+      const skillVerdictFile = path.join(caseDir, 'skill-reinstall-readiness-verdict.json');
+      writeJsonFile(skillVerdictFile, {
+        ...skillReinstallVerdict,
+        captured_at: new Date().toISOString(),
+        evidence_refs: {
+          maintenance_readback: coreBetaInitializationWrittenFileRecord(file),
+          action_observations: coreBetaInitializationWrittenFileRecord(actionEvidenceFile),
+          before_public_state: coreBetaInitializationWrittenFileRecord(beforePublicStateFile),
+          after_public_state: coreBetaInitializationWrittenFileRecord(afterPublicStateFile),
+          terminal_observations: coreBetaInitializationWrittenFileRecord(terminal.observations_file),
+          catalog_observations: coreBetaInitializationWrittenFileRecord(catalogObservationsFile),
+          terminal_screenshot: coreBetaInitializationWrittenFileRecord(terminal.screenshot || ''),
+          continuation_surface: coreBetaInitializationWrittenFileRecord(continuationSurface?.file || ''),
+        },
+      });
+      state.skill_reinstall_readiness_verdict = skillReinstallVerdict;
+      state.artifacts.skill_reinstall_readiness_verdict = skillVerdictFile;
+      state.artifacts.core_beta_skill_reinstall_readiness_verdict = skillVerdictFile;
+      state.artifacts.core_beta_skill_reinstall_catalog_observations = catalogObservationsFile;
+    }
+    const terminalFailureCategory = clicked.action_observed !== true || specializedEvidenceFailure
+      ? 'automation_error'
+      : productFailureObserved ? 'bug' : 'automation_error';
     recordStep(
       state,
       `${maintenance.method} 真实 UI 操作与终态采样`,
@@ -7888,10 +8838,10 @@ async function executeCoreBetaInitializationCase(context) {
       `testid=${maintenance.testId}；confirmation=${clicked.confirmation?.source || 'none'}；`
         + `attempts=${actionAttempts.length}；`
         + `action_observed=${clicked.action_observed}(${clicked.action_observation_source || 'none'})；`
-        + `busy=${clicked.busy_observed}；terminal=${terminal.ok}；${terminal.readback?.reason || ''}`,
-      terminal.ok ? 'passed' : 'failed',
+        + `busy=${clicked.busy_observed}；terminal=${terminal.ok}；overall=${overallOk}；${terminal.readback?.reason || ''}`,
+      overallOk ? 'passed' : 'failed',
       terminal.screenshot || clicked.busy_screenshot || '',
-      terminal.ok ? '' : terminalFailureCategory,
+      overallOk ? '' : terminalFailureCategory,
     );
     if (maintenance.destructive) {
       recordAssertion(
@@ -7918,7 +8868,7 @@ async function executeCoreBetaInitializationCase(context) {
         before_text: clicked.before_text,
         action_text: clicked.action_text,
       }),
-      productTerminalFailure ? 'bug' : 'automation_error',
+      'automation_error',
     );
     recordAssertion(
       state,
@@ -7928,8 +8878,31 @@ async function executeCoreBetaInitializationCase(context) {
         : '维护区、SDK 状态、输入区与公开 capabilities 必须连续稳定就绪。',
       terminal.ok,
       JSON.stringify(terminal.readback),
-      terminalFailureCategory,
+      clicked.action_observed === true && productTerminalFailure ? 'bug' : 'automation_error',
     );
+    if (skillReinstallVerdict) {
+      recordAssertion(
+        state,
+        'skillsReinstall 安装集合与本机 readiness 专项终态',
+        'catalog.syncStatus 必须连续三次为 idle；安装 identity 四元组前后全等、非空且唯一；每个安装项必须进入明确 ready 终态，禁止 installStatus=ok 与 readiness failed 并存。',
+        skillReinstallVerdict.oracle_valid === true,
+        JSON.stringify({
+          outcome: skillReinstallVerdict.outcome,
+          reason: skillReinstallVerdict.reason,
+          evidence_valid: skillReinstallVerdict.evidence_valid,
+          oracle_valid: skillReinstallVerdict.oracle_valid,
+          before_count: skillReinstallVerdict.before.installed_count,
+          after_count: skillReinstallVerdict.after.installed_count,
+          identity_set_equal: skillReinstallVerdict.identity_set_equal,
+          missing_after: skillReinstallVerdict.missing_after,
+          unexpected_after: skillReinstallVerdict.unexpected_after,
+          unready_identities: skillReinstallVerdict.after.unready_identities,
+          half_installed_identities: skillReinstallVerdict.after.half_installed_identities,
+          evidence_file: state.artifacts.skill_reinstall_readiness_verdict,
+        }),
+        skillReinstallVerdict.evidence_valid === true ? 'bug' : 'automation_error',
+      );
+    }
     return;
   }
   if (testCase.id === 'BETA-INIT-005') {
@@ -8335,6 +9308,2095 @@ function skillQualifiedIdentity(skill) {
   ].join('/');
 }
 
+const CORE_BETA_INITIALIZATION_SKILL_READY_STATUSES = new Set([
+  'ready_on_this_process',
+  'ready_on_demand',
+  'available_on_demand',
+]);
+
+export function coreBetaInitializationSkillIdentity(skill = {}) {
+  const sourcePlatform = String(skill?.sourcePlatform || '').trim();
+  const namespace = String(skill?.namespace || '').trim();
+  const slug = String(skill?.slug || '').trim();
+  // Agent-created skills can be intentionally versionless. Their immutable
+  // package digest is the only stable installed-revision token available.
+  const version = String(
+    skill?.installedVersion
+    || skill?.version
+    || skill?.revision
+    || skill?.packageDigest
+    || skill?.fingerprint
+    || '',
+  ).trim();
+  const components = { source_platform: sourcePlatform, namespace, slug, version };
+  const missing_components = Object.entries(components)
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+  return {
+    ...components,
+    valid: missing_components.length === 0,
+    missing_components,
+    identity: missing_components.length === 0
+      ? [sourcePlatform, namespace, slug, version].join('/')
+      : '',
+  };
+}
+
+function coreBetaInitializationSkillCatalogSummary(catalog) {
+  const structureValid = Boolean(
+    catalog
+    && typeof catalog === 'object'
+    && !Array.isArray(catalog)
+    && Array.isArray(catalog.installed)
+    && catalog.installed.length > 0
+    && typeof catalog.syncStatus === 'string'
+    && String(catalog.syncStatus).trim(),
+  );
+  const installed = structureValid ? catalog.installed : [];
+  const items = installed.map((skill) => {
+    const identity = coreBetaInitializationSkillIdentity(skill);
+    const localStatus = String(skill?.localReadiness?.status || '').trim();
+    const readinessStatus = String(
+      skill?.localReadiness?.readinessStatus
+      || skill?.readinessStatus
+      || '',
+    ).trim();
+    const installStatus = String(
+      skill?.localReadiness?.installStatus
+      || skill?.installStatus
+      || '',
+    ).trim();
+    const reportedReady = typeof skill?.ready === 'boolean'
+      ? skill.ready
+      : typeof skill?.localReadiness?.ready === 'boolean' ? skill.localReadiness.ready : null;
+    const readinessError = canonicalCoreBetaInitializationValue(
+      skill?.localReadiness?.error ?? skill?.error ?? null,
+    );
+    const statusText = `${localStatus}\n${readinessStatus}\n${installStatus}`;
+    const explicitReady = CORE_BETA_INITIALIZATION_SKILL_READY_STATUSES.has(localStatus);
+    const failedOrPending = /failed|failure|error|unready|pending|installing|syncing/i.test(statusText);
+    const halfInstalled = skill?.managementInstalled === false
+      || skill?.installed === false
+      || Boolean(installStatus && !['ok', 'installed', 'ready'].includes(installStatus.toLowerCase()));
+    return {
+      ...identity,
+      local_readiness_status: localStatus,
+      readiness_status: readinessStatus,
+      install_status: installStatus,
+      reported_ready: reportedReady,
+      readiness_error: readinessError,
+      management_installed: skill?.managementInstalled !== false,
+      installed: skill?.installed !== false,
+      ready: explicitReady && reportedReady !== false && !readinessError && !failedOrPending && !halfInstalled,
+      failed_or_pending: failedOrPending,
+      half_installed: halfInstalled,
+    };
+  });
+  const identities = items.map((item) => item.identity).filter(Boolean);
+  const duplicates = [...new Set(identities.filter((identity, index) => identities.indexOf(identity) !== index))].sort();
+  return {
+    structure_valid: structureValid,
+    sync_status: structureValid ? String(catalog.syncStatus).trim() : '',
+    installed_count: installed.length,
+    identities: [...identities].sort(),
+    duplicate_identities: duplicates,
+    invalid_identity_indexes: items.flatMap((item, index) => item.valid ? [] : [index]),
+    readiness_missing_indexes: items.flatMap((item, index) => item.local_readiness_status ? [] : [index]),
+    unready_identities: items.filter((item) => !item.ready).map((item) => item.identity || '(invalid-identity)'),
+    half_installed_identities: items.filter((item) => item.half_installed).map((item) => item.identity || '(invalid-identity)'),
+    items,
+  };
+}
+
+export function coreBetaInitializationSkillReinstallVerdict({
+  caseId = 'BETA-INIT-003',
+  beforeCatalog,
+  afterCatalog,
+  afterIdleStableObservations = 0,
+  catalogObservations = null,
+} = {}) {
+  const before = coreBetaInitializationSkillCatalogSummary(beforeCatalog);
+  const after = coreBetaInitializationSkillCatalogSummary(afterCatalog);
+  const evidenceFailures = [];
+  const addEvidenceFailure = (reason) => {
+    if (!evidenceFailures.includes(reason)) evidenceFailures.push(reason);
+  };
+  if (caseId !== 'BETA-INIT-003') evidenceFailures.push('case_id_mismatch');
+  if (!before.structure_valid) evidenceFailures.push('before_catalog_structure_invalid');
+  if (!after.structure_valid) evidenceFailures.push('after_catalog_structure_invalid');
+  if (before.structure_valid && before.sync_status !== 'idle') {
+    evidenceFailures.push('before_catalog_not_idle');
+  }
+  if (before.invalid_identity_indexes.length) evidenceFailures.push('before_identity_incomplete');
+  if (after.invalid_identity_indexes.length) evidenceFailures.push('after_identity_incomplete');
+  if (before.duplicate_identities.length) evidenceFailures.push('before_duplicate_identity');
+  if (after.duplicate_identities.length) evidenceFailures.push('after_duplicate_identity');
+  if (before.readiness_missing_indexes.length) evidenceFailures.push('before_readiness_missing');
+  if (after.readiness_missing_indexes.length) evidenceFailures.push('after_readiness_missing');
+
+  const ledger = catalogObservations;
+  let replayedStableObservations = 0;
+  let replayedStableSignatureSha256 = '';
+  let replayedReadErrorCount = 0;
+  let lastSuccessfulRawCatalog = null;
+  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) {
+    addEvidenceFailure('catalog_observations_missing_or_invalid');
+  } else {
+    if (ledger.schema_version !== 'qbot-core-beta-skill-reinstall-catalog-observations/v2') {
+      addEvidenceFailure('catalog_observations_schema_mismatch');
+    }
+    if (String(ledger.case_id || '') !== caseId) addEvidenceFailure('catalog_observations_case_id_mismatch');
+    const observations = Array.isArray(ledger.observations) ? ledger.observations : [];
+    if (!Array.isArray(ledger.observations) || observations.length < 3) {
+      addEvidenceFailure('catalog_observations_insufficient');
+    }
+    for (const observation of observations) {
+      const attempts = Array.isArray(observation?.renderer_capture_attempts)
+        ? observation.renderer_capture_attempts
+        : [];
+      const attemptErrors = attempts.filter((attempt) => attempt?.ok !== true).length;
+      if (observation?.read_ok !== true) {
+        replayedReadErrorCount += Math.max(1, Number(observation?.read_error_count) || attemptErrors || 0);
+        replayedStableObservations = 0;
+        replayedStableSignatureSha256 = '';
+        continue;
+      }
+      replayedReadErrorCount += attemptErrors;
+      if (!attempts.length || attemptErrors > 0 || String(observation?.error || '')) {
+        addEvidenceFailure('catalog_observation_retry_or_read_error');
+      }
+      const replayed = coreBetaInitializationSkillCatalogObservation({
+        catalog: observation.raw_catalog,
+        previousSignatureSha256: replayedStableSignatureSha256,
+        previousIdleStableObservations: replayedStableObservations,
+      });
+      if (
+        JSON.stringify(observation.normalized_tuple) !== JSON.stringify(replayed.normalized_tuple)
+        || String(observation.canonical_sha256 || '') !== replayed.canonical_sha256
+        || Boolean(observation.same_signature_as_previous) !== replayed.same_signature_as_previous
+        || Number(observation.idle_stable_observations) !== replayed.idle_stable_observations
+      ) addEvidenceFailure('catalog_observation_replay_mismatch');
+      replayedStableObservations = replayed.idle_stable_observations;
+      replayedStableSignatureSha256 = replayed.next_signature_sha256;
+      lastSuccessfulRawCatalog = observation.raw_catalog;
+    }
+    if (replayedReadErrorCount > 0 || Number(ledger.read_error_count) > 0) {
+      addEvidenceFailure('catalog_observation_read_error');
+    }
+    if (Number(ledger.read_error_count) !== replayedReadErrorCount) {
+      addEvidenceFailure('catalog_observation_read_error_count_mismatch');
+    }
+    if (Number(ledger.idle_stable_observations) !== replayedStableObservations
+      || Number(afterIdleStableObservations) !== replayedStableObservations) {
+      addEvidenceFailure('catalog_observation_stable_count_mismatch');
+    }
+    const stableSignature = replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '';
+    if (String(ledger.stable_signature_sha256 || '') !== stableSignature) {
+      addEvidenceFailure('catalog_observation_stable_signature_mismatch');
+    }
+    const replayedOk = replayedReadErrorCount === 0
+      && replayedStableObservations >= 3
+      && /^[a-f0-9]{64}$/i.test(stableSignature);
+    if (ledger.ok !== replayedOk || ledger.evidence_valid !== (replayedReadErrorCount === 0)) {
+      addEvidenceFailure('catalog_observation_summary_inconsistent');
+    }
+    if (!replayedOk) addEvidenceFailure('catalog_observation_signature_not_stable');
+    if (
+      !lastSuccessfulRawCatalog
+      || JSON.stringify(canonicalCoreBetaInitializationValue(lastSuccessfulRawCatalog))
+        !== JSON.stringify(canonicalCoreBetaInitializationValue(afterCatalog))
+      || JSON.stringify(canonicalCoreBetaInitializationValue(ledger.catalog))
+        !== JSON.stringify(canonicalCoreBetaInitializationValue(afterCatalog))
+    ) addEvidenceFailure('catalog_observation_final_catalog_mismatch');
+  }
+
+  const oracleFailures = [];
+  if (after.structure_valid && after.sync_status !== 'idle') oracleFailures.push('after_catalog_not_idle');
+  if (after.structure_valid && Number(afterIdleStableObservations) < 3) {
+    addEvidenceFailure('after_catalog_idle_not_stable_three_times');
+  }
+  const beforeSet = new Set(before.identities);
+  const afterSet = new Set(after.identities);
+  const missingAfter = before.identities.filter((identity) => !afterSet.has(identity));
+  const unexpectedAfter = after.identities.filter((identity) => !beforeSet.has(identity));
+  if (missingAfter.length) oracleFailures.push('installed_identity_missing_after_reinstall');
+  if (unexpectedAfter.length) oracleFailures.push('unexpected_or_ghost_identity_after_reinstall');
+  if (after.unready_identities.length) oracleFailures.push('installed_skill_not_ready');
+  if (after.half_installed_identities.length) oracleFailures.push('installed_skill_half_installed');
+
+  const evidenceValid = evidenceFailures.length === 0;
+  const oracleValid = evidenceValid && oracleFailures.length === 0;
+  return {
+    schema_version: 'qbot-core-beta-skill-reinstall-readiness-verdict/v1',
+    case_id: caseId,
+    method: 'skillsReinstall',
+    testid: 'assistant-skills-reinstall',
+    evidence_valid: evidenceValid,
+    oracle_valid: oracleValid,
+    outcome: evidenceValid ? (oracleValid ? 'pass' : 'bug') : 'automation_error',
+    reason: evidenceFailures[0] || oracleFailures[0] || 'skill_reinstall_inventory_and_readiness_stable',
+    after_idle_stable_observations: Number(afterIdleStableObservations) || 0,
+    stable_signature_sha256: replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '',
+    catalog_read_error_count: replayedReadErrorCount,
+    identity_set_equal: missingAfter.length === 0 && unexpectedAfter.length === 0,
+    missing_after: missingAfter,
+    unexpected_after: unexpectedAfter,
+    evidence_failures: evidenceFailures,
+    oracle_failures: oracleFailures,
+    before,
+    after,
+  };
+}
+
+function coreBetaStrictPathDescendant(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return Boolean(
+    relative
+    && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function coreBetaDirectoryChainWithoutSymlinks(ancestor, directory) {
+  if (ancestor !== directory && !coreBetaStrictPathDescendant(ancestor, directory)) return false;
+  let cursor = directory;
+  while (true) {
+    const lstat = fs.lstatSync(cursor, { bigint: true });
+    if (
+      lstat.isSymbolicLink()
+      || !lstat.isDirectory()
+      || !coreBetaOwnedAndNotSharedWritable(lstat)
+    ) return false;
+    if (cursor === ancestor) return true;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+}
+
+const CORE_BETA_FROZEN_FILE_BYTES = Symbol('core-beta-frozen-file-bytes');
+const CORE_BETA_FROZEN_FILE_STAT = Symbol('core-beta-frozen-file-stat');
+const CORE_BETA_INITIALIZATION_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CORE_BETA_INITIALIZATION_PNG_MAX_BYTES = 32 * 1024 * 1024;
+const CORE_BETA_INITIALIZATION_PNG_MAX_DIMENSION = 16_384;
+const CORE_BETA_INITIALIZATION_PNG_MAX_PIXELS = 32n * 1024n * 1024n;
+const CORE_BETA_INITIALIZATION_PNG_MAX_DECODED_BYTES = 128n * 1024n * 1024n;
+const CORE_BETA_INITIALIZATION_PNG_MAX_CHUNKS = 4_096;
+const CORE_BETA_INITIALIZATION_PNG_EVIDENCE_ROLES = new Set([
+  'initialization_terminal_screenshot',
+  'initialization_continuation_before_screenshot',
+  'initialization_continuation_after_screenshot',
+]);
+
+function coreBetaEvidenceValidationSession(existing = null) {
+  if (
+    existing
+    && existing.fileCache instanceof Map
+    && existing.inodeRoles instanceof Map
+    && existing.roleInodes instanceof Map
+  ) {
+    if (!(existing.directoryCache instanceof Map)) existing.directoryCache = new Map();
+    return existing;
+  }
+  return {
+    fileCache: new Map(),
+    inodeRoles: new Map(),
+    roleInodes: new Map(),
+    directoryCache: new Map(),
+    directoryContext: null,
+  };
+}
+
+function coreBetaOwnedAndNotSharedWritable(stat) {
+  if (!stat) return false;
+  const uid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : stat.uid;
+  const mode = typeof stat.mode === 'bigint' ? stat.mode : BigInt(stat.mode);
+  return stat.uid === uid && (mode & 0o022n) === 0n;
+}
+
+function coreBetaStatIdentity(stat) {
+  if (!stat) return null;
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    uid: stat.uid,
+    gid: stat.gid,
+    mode: stat.mode,
+    nlink: stat.nlink,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function coreBetaSameStatIdentity(left, right) {
+  const a = coreBetaStatIdentity(left);
+  const b = coreBetaStatIdentity(right);
+  return Boolean(a && b && Object.keys(a).every((key) => a[key] === b[key]));
+}
+
+function coreBetaTrackEvidenceDirectoryChain(session, caseDir, directory) {
+  if (!session?.directoryCache || !(session.directoryCache instanceof Map)) return false;
+  if (directory !== caseDir && !coreBetaStrictPathDescendant(caseDir, directory)) return false;
+  let cursor = directory;
+  while (true) {
+    const current = fs.lstatSync(cursor, { bigint: true });
+    if (
+      current.isSymbolicLink()
+      || !current.isDirectory()
+      || !coreBetaOwnedAndNotSharedWritable(current)
+    ) return false;
+    const frozen = session.directoryCache.get(cursor);
+    if (frozen && !coreBetaSameStatIdentity(frozen, current)) return false;
+    if (!frozen) session.directoryCache.set(cursor, current);
+    if (cursor === caseDir) return true;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+}
+
+function coreBetaCaseDirectoryContext(result, { runRoot = '' } = {}) {
+  const caseDirInput = String(result?.case_dir || '').trim();
+  if (!caseDirInput) return null;
+  const caseDir = path.resolve(caseDirInput);
+  if (caseDir === path.parse(caseDir).root) return null;
+  try {
+    const caseDirStat = fs.lstatSync(caseDir, { bigint: true });
+    if (
+      caseDirStat.isSymbolicLink()
+      || !caseDirStat.isDirectory()
+      || !coreBetaOwnedAndNotSharedWritable(caseDirStat)
+    ) {
+      return null;
+    }
+    const realCaseDir = fs.realpathSync(caseDir);
+    const runRootInput = String(runRoot || '').trim();
+    if (!runRootInput) {
+      return {
+        caseDir,
+        realCaseDir,
+        runRoot: '',
+        realRunRoot: '',
+        caseDirStat,
+        casesDirStat: null,
+        runRootStat: null,
+      };
+    }
+
+    const resolvedRunRoot = path.resolve(runRootInput);
+    if (resolvedRunRoot === path.parse(resolvedRunRoot).root) return null;
+    const casesDir = path.join(resolvedRunRoot, 'cases');
+    const id = String(result?.id || result?.case_id || '').trim();
+    const order = Number(result?.order);
+    const basename = path.basename(caseDir);
+    const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const expectedPrefix = Number.isInteger(order) && order > 0
+      ? `${String(order).padStart(3, '0')}-${id}`
+      : '';
+    const identityBound = Boolean(
+      id
+      && path.dirname(caseDir) === casesDir
+      && (expectedPrefix
+        ? (basename === expectedPrefix || basename.startsWith(`${expectedPrefix}-`))
+        : (basename === id || new RegExp(`^\\d{3}-${escapedId}(?:-|$)`).test(basename))),
+    );
+    if (!identityBound) return null;
+    const runRootStat = fs.lstatSync(resolvedRunRoot, { bigint: true });
+    const casesDirStat = fs.lstatSync(casesDir, { bigint: true });
+    if (
+      runRootStat.isSymbolicLink()
+      || !runRootStat.isDirectory()
+      || !coreBetaOwnedAndNotSharedWritable(runRootStat)
+      || casesDirStat.isSymbolicLink()
+      || !casesDirStat.isDirectory()
+      || !coreBetaOwnedAndNotSharedWritable(casesDirStat)
+      || !coreBetaStrictPathDescendant(casesDir, caseDir)
+      || !coreBetaDirectoryChainWithoutSymlinks(resolvedRunRoot, caseDir)
+    ) return null;
+    const realRunRoot = fs.realpathSync(resolvedRunRoot);
+    const realCasesDir = fs.realpathSync(casesDir);
+    if (
+      !coreBetaStrictPathDescendant(realRunRoot, realCasesDir)
+      || !coreBetaStrictPathDescendant(realCasesDir, realCaseDir)
+    ) return null;
+    return {
+      caseDir,
+      realCaseDir,
+      runRoot: resolvedRunRoot,
+      realRunRoot,
+      caseDirStat,
+      casesDirStat,
+      runRootStat,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function coreBetaCaseBoundFileRecord(result, candidate, expected = null, {
+  runRoot = '',
+  cache = null,
+  inodeOwners = null,
+  session = null,
+  semanticRole = '',
+} = {}) {
+  const context = coreBetaCaseDirectoryContext(result, { runRoot });
+  const fileInput = String(candidate || expected?.path || '').trim();
+  if (!context || !candidate || !fileInput) return null;
+  const { caseDir, realCaseDir } = context;
+  const file = path.resolve(fileInput);
+  try {
+    const relative = path.relative(caseDir, file);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return null;
+    }
+    if (!coreBetaDirectoryChainWithoutSymlinks(caseDir, path.dirname(file))) return null;
+    const validationSession = session ? coreBetaEvidenceValidationSession(session) : null;
+    const resolvedCache = validationSession?.fileCache || (cache instanceof Map ? cache : null);
+    const resolvedInodeRoles = validationSession?.inodeRoles || (inodeOwners instanceof Map ? inodeOwners : null);
+    const resolvedRoleInodes = validationSession?.roleInodes || null;
+    const role = String(semanticRole || '').trim();
+    const maxBytes = CORE_BETA_INITIALIZATION_PNG_EVIDENCE_ROLES.has(role)
+      ? CORE_BETA_INITIALIZATION_PNG_MAX_BYTES
+      : CORE_BETA_INITIALIZATION_JSON_MAX_BYTES;
+    if (validationSession
+      && !coreBetaTrackEvidenceDirectoryChain(validationSession, caseDir, path.dirname(file))) return null;
+    let record = resolvedCache instanceof Map ? resolvedCache.get(file) : null;
+    if (record) {
+      const current = fs.lstatSync(file, { bigint: true });
+      const frozenStat = record[CORE_BETA_FROZEN_FILE_STAT];
+      if (
+        current.isSymbolicLink()
+        || !current.isFile()
+        || !coreBetaOwnedAndNotSharedWritable(current)
+        || !coreBetaSameStatIdentity(frozenStat, current)
+        || record.bytes > maxBytes
+      ) return null;
+    }
+    if (!record) {
+      const lstatBefore = fs.lstatSync(file, { bigint: true });
+      if (
+        lstatBefore.isSymbolicLink()
+        || !lstatBefore.isFile()
+        || lstatBefore.size <= 0n
+        || lstatBefore.size > BigInt(maxBytes)
+        || !coreBetaOwnedAndNotSharedWritable(lstatBefore)
+      ) return null;
+      const flags = fs.constants.O_RDONLY
+        | (fs.constants.O_NOFOLLOW || 0)
+        | (fs.constants.O_CLOEXEC || 0);
+      const fd = fs.openSync(file, flags);
+      let bytes;
+      let fdBefore;
+      let fdAfter;
+      try {
+        fdBefore = fs.fstatSync(fd, { bigint: true });
+        if (
+          !fdBefore.isFile()
+          || fdBefore.size <= 0n
+          || fdBefore.size > BigInt(maxBytes)
+          || fdBefore.nlink !== 1n
+          || !coreBetaSameStatIdentity(lstatBefore, fdBefore)
+          || !coreBetaOwnedAndNotSharedWritable(fdBefore)
+        ) return null;
+        bytes = fs.readFileSync(fd);
+        fdAfter = fs.fstatSync(fd, { bigint: true });
+        if (
+          BigInt(bytes.length) !== fdBefore.size
+          || !coreBetaSameStatIdentity(fdBefore, fdAfter)
+        ) return null;
+      } finally {
+        fs.closeSync(fd);
+      }
+      const lstatAfter = fs.lstatSync(file, { bigint: true });
+      if (
+        lstatAfter.isSymbolicLink()
+        || !lstatAfter.isFile()
+        || !coreBetaSameStatIdentity(fdAfter, lstatAfter)
+      ) return null;
+      const contextAfter = coreBetaCaseDirectoryContext(result, { runRoot });
+      if (
+        !contextAfter
+        || !coreBetaSameStatIdentity(context.caseDirStat, contextAfter.caseDirStat)
+        || (context.runRoot && (
+          !coreBetaSameStatIdentity(context.runRootStat, contextAfter.runRootStat)
+          || !coreBetaSameStatIdentity(context.casesDirStat, contextAfter.casesDirStat)
+        ))
+      ) return null;
+      if (validationSession
+        && !coreBetaTrackEvidenceDirectoryChain(validationSession, caseDir, path.dirname(file))) return null;
+      const realFile = fs.realpathSync(file);
+      const realRelative = path.relative(realCaseDir, realFile);
+      if (!realRelative || realRelative === '..' || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+        return null;
+      }
+      record = {
+        path: file,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      };
+      Object.defineProperty(record, CORE_BETA_FROZEN_FILE_BYTES, {
+        value: bytes,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
+      Object.defineProperty(record, CORE_BETA_FROZEN_FILE_STAT, {
+        value: fdAfter,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
+      if (resolvedCache instanceof Map) resolvedCache.set(file, record);
+    }
+    const frozenStat = record[CORE_BETA_FROZEN_FILE_STAT];
+    const inodeKey = frozenStat ? `${String(frozenStat.dev)}:${String(frozenStat.ino)}` : '';
+    if (resolvedInodeRoles instanceof Map) {
+      const prior = resolvedInodeRoles.get(inodeKey);
+      const priorPath = typeof prior === 'string' ? prior : prior?.path;
+      const priorRole = typeof prior === 'object' ? prior?.role : '';
+      if (priorPath && priorPath !== file) return null;
+      if (role && priorRole && priorRole !== role) return null;
+      resolvedInodeRoles.set(inodeKey, { path: file, role: role || priorRole || '' });
+    }
+    if (role && resolvedRoleInodes instanceof Map) {
+      const priorInode = resolvedRoleInodes.get(role);
+      if (priorInode && priorInode !== inodeKey) return null;
+      resolvedRoleInodes.set(role, inodeKey);
+    }
+    if (expected && (
+      path.resolve(String(expected.path || '')) !== file
+      || Number(expected.bytes) !== record.bytes
+      || String(expected.sha256 || '') !== record.sha256
+    )) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function coreBetaFinalizeEvidenceValidationSession(session, result, { runRoot = '' } = {}) {
+  const validationSession = coreBetaEvidenceValidationSession(session);
+  try {
+    const currentContext = coreBetaCaseDirectoryContext(result, { runRoot });
+    const initialContext = validationSession.directoryContext;
+    if (!currentContext || !initialContext) return false;
+    for (const key of ['caseDirStat', 'casesDirStat', 'runRootStat']) {
+      if ((initialContext[key] || currentContext[key])
+        && !coreBetaSameStatIdentity(initialContext[key], currentContext[key])) return false;
+    }
+    for (const [directory, frozenStat] of validationSession.directoryCache) {
+      const current = fs.lstatSync(directory, { bigint: true });
+      if (
+        current.isSymbolicLink()
+        || !current.isDirectory()
+        || !coreBetaOwnedAndNotSharedWritable(current)
+        || !coreBetaSameStatIdentity(frozenStat, current)
+      ) return false;
+    }
+    for (const [file, record] of validationSession.fileCache) {
+      const current = fs.lstatSync(file, { bigint: true });
+      if (
+        current.isSymbolicLink()
+        || !current.isFile()
+        || current.nlink !== 1n
+        || !coreBetaOwnedAndNotSharedWritable(current)
+        || !coreBetaSameStatIdentity(record[CORE_BETA_FROZEN_FILE_STAT], current)
+      ) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function coreBetaFrozenFileBytes(record) {
+  const bytes = record?.[CORE_BETA_FROZEN_FILE_BYTES];
+  return Buffer.isBuffer(bytes) ? bytes : null;
+}
+
+function coreBetaPngCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function coreBetaFrozenPngValid(record) {
+  const bytes = coreBetaFrozenFileBytes(record);
+  if (
+    !bytes
+    || bytes.length < 45
+    || bytes.length > CORE_BETA_INITIALIZATION_PNG_MAX_BYTES
+  ) return false;
+  if (!bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return false;
+  let offset = 8;
+  let chunkIndex = 0;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = -1;
+  const idatChunks = [];
+  let sawPlte = false;
+  let sawIdat = false;
+  let idatSequenceEnded = false;
+  let sawIend = false;
+  let idatBytes = 0;
+  const knownCriticalChunks = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND']);
+  while (offset < bytes.length) {
+    if (chunkIndex >= CORE_BETA_INITIALIZATION_PNG_MAX_CHUNKS) return false;
+    if (offset + 12 > bytes.length) return false;
+    const length = bytes.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = typeStart + 4;
+    const dataEnd = dataStart + length;
+    const crcOffset = dataEnd;
+    const nextOffset = crcOffset + 4;
+    if (dataEnd < dataStart || nextOffset > bytes.length) return false;
+    const typeBytes = bytes.subarray(typeStart, dataStart);
+    if (typeBytes.length !== 4
+      || [...typeBytes].some((byte) => !(
+        (byte >= 0x41 && byte <= 0x5a)
+        || (byte >= 0x61 && byte <= 0x7a)
+      ))
+      || (typeBytes[2] & 0x20) !== 0) return false;
+    const type = typeBytes.toString('ascii');
+    const critical = (typeBytes[0] & 0x20) === 0;
+    if (critical && !knownCriticalChunks.has(type)) return false;
+    const expectedCrc = bytes.readUInt32BE(crcOffset);
+    const actualCrc = coreBetaPngCrc32(bytes.subarray(typeStart, dataEnd));
+    if (actualCrc !== expectedCrc) return false;
+    if (chunkIndex === 0) {
+      if (type !== 'IHDR' || length !== 13) return false;
+      width = bytes.readUInt32BE(dataStart);
+      height = bytes.readUInt32BE(dataStart + 4);
+      if (
+        width <= 0
+        || height <= 0
+        || width > CORE_BETA_INITIALIZATION_PNG_MAX_DIMENSION
+        || height > CORE_BETA_INITIALIZATION_PNG_MAX_DIMENSION
+        || BigInt(width) * BigInt(height) > CORE_BETA_INITIALIZATION_PNG_MAX_PIXELS
+      ) return false;
+      bitDepth = bytes[dataStart + 8];
+      colorType = bytes[dataStart + 9];
+      const compressionMethod = bytes[dataStart + 10];
+      const filterMethod = bytes[dataStart + 11];
+      const interlaceMethod = bytes[dataStart + 12];
+      const allowedBitDepths = {
+        0: new Set([1, 2, 4, 8, 16]),
+        2: new Set([8, 16]),
+        3: new Set([1, 2, 4, 8]),
+        4: new Set([8, 16]),
+        6: new Set([8, 16]),
+      };
+      if (
+        !allowedBitDepths[colorType]?.has(bitDepth)
+        || compressionMethod !== 0
+        || filterMethod !== 0
+        || interlaceMethod !== 0
+      ) return false;
+    } else if (type === 'IHDR') {
+      return false;
+    }
+    if (type === 'PLTE') {
+      if (sawPlte || sawIdat || length === 0 || length % 3 !== 0 || length > 768) return false;
+      if ([0, 4].includes(colorType)) return false;
+      const entries = length / 3;
+      if (colorType === 3 && entries > 2 ** bitDepth) return false;
+      sawPlte = true;
+    }
+    if (type === 'IDAT') {
+      if (idatSequenceEnded || (colorType === 3 && !sawPlte)) return false;
+      sawIdat = true;
+      idatBytes += length;
+      if (idatBytes > CORE_BETA_INITIALIZATION_PNG_MAX_BYTES) return false;
+      idatChunks.push(Buffer.from(bytes.subarray(dataStart, dataEnd)));
+    } else if (sawIdat && type !== 'IEND') {
+      idatSequenceEnded = true;
+    }
+    if (type === 'IEND') {
+      if (sawIend || !sawIdat || length !== 0 || nextOffset !== bytes.length) return false;
+      if (colorType === 3 && !sawPlte) return false;
+      sawIend = true;
+      offset = nextOffset;
+      break;
+    }
+    offset = nextOffset;
+    chunkIndex += 1;
+  }
+  if (!(width > 0 && height > 0 && sawIdat && sawIend && offset === bytes.length)) return false;
+  if (colorType === 3 && !sawPlte) return false;
+  const channelsByColorType = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+  const bitsPerPixel = BigInt(channelsByColorType[colorType] * bitDepth);
+  const rowBytesBigInt = ((BigInt(width) * bitsPerPixel) + 7n) / 8n;
+  const inflatedBytesBigInt = (rowBytesBigInt + 1n) * BigInt(height);
+  if (
+    inflatedBytesBigInt <= 0n
+    || inflatedBytesBigInt > CORE_BETA_INITIALIZATION_PNG_MAX_DECODED_BYTES
+    || inflatedBytesBigInt > BigInt(Number.MAX_SAFE_INTEGER)
+    || rowBytesBigInt > CORE_BETA_INITIALIZATION_PNG_MAX_DECODED_BYTES
+    || rowBytesBigInt > BigInt(Number.MAX_SAFE_INTEGER)
+  ) return false;
+  const rowBytes = Number(rowBytesBigInt);
+  const expectedInflatedBytes = Number(inflatedBytesBigInt);
+  try {
+    const inflated = inflateSync(Buffer.concat(idatChunks), {
+      maxOutputLength: expectedInflatedBytes,
+    });
+    if (inflated.length !== expectedInflatedBytes) return false;
+    for (let row = 0; row < height; row += 1) {
+      const filterByte = inflated[row * (rowBytes + 1)];
+      if (!Number.isInteger(filterByte) || filterByte < 0 || filterByte > 4) return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function coreBetaInitializationActionEvidenceVerdict(evidence, {
+  caseId,
+  method,
+  testid,
+} = {}) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const destructive = String(caseId || '') !== 'BETA-INIT-001';
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    addReason('initialization_action_evidence_missing_or_invalid');
+  } else {
+    if (evidence.schema_version !== 'qbot-core-beta-initialization-action-evidence/v1') {
+      addReason('initialization_action_evidence_schema_mismatch');
+    }
+    if (String(evidence.case_id || '') !== String(caseId || '')) addReason('initialization_action_evidence_case_id_mismatch');
+    if (String(evidence.method || '') !== String(method || '')) addReason('initialization_action_evidence_method_mismatch');
+    if (String(evidence.testid || '') !== String(testid || '')) addReason('initialization_action_evidence_testid_mismatch');
+    if (evidence.destructive !== destructive) addReason('initialization_action_evidence_destructive_mismatch');
+    if (!Number.isFinite(Date.parse(String(evidence.captured_at || '')))) {
+      addReason('initialization_action_evidence_captured_at_invalid');
+    }
+  }
+  const attempts = Array.isArray(evidence?.attempts) ? evidence.attempts : [];
+  const allowedAttemptCounts = String(caseId || '') === 'BETA-INIT-004' ? [1, 2] : [1];
+  if (!allowedAttemptCounts.includes(attempts.length)) addReason('initialization_action_attempt_count_invalid');
+  const confirmationContract = destructive ? coreBetaV2MaintenanceConfirmationContract(testid) : null;
+  attempts.forEach((action, index) => {
+    const prefix = `initialization_action_attempt_${index + 1}`;
+    if (!action || typeof action !== 'object' || Array.isArray(action)) {
+      addReason(`${prefix}_invalid`);
+      return;
+    }
+    if (action.ok !== true) addReason(`${prefix}_not_ok`);
+    if (String(action.testid || '') !== String(testid || '')) addReason(`${prefix}_testid_mismatch`);
+    if (action.action_observed !== true) addReason(`${prefix}_not_observed`);
+    const source = String(action.action_observation_source || '');
+    if (!['busy', 'explicit-completion-transition', 'causal-main-frame-reload'].includes(source)) {
+      addReason(`${prefix}_source_invalid`);
+    }
+    if (source === 'busy' && action.busy_observed !== true) addReason(`${prefix}_busy_signal_missing`);
+    if (source === 'explicit-completion-transition' && !String(action.completion_transition || '').trim()) {
+      addReason(`${prefix}_completion_transition_missing`);
+    }
+    if (source === 'causal-main-frame-reload'
+      && (String(caseId || '') !== 'BETA-INIT-004' || action.navigation_observed !== true)) {
+      addReason(`${prefix}_causal_reload_invalid`);
+    }
+    if (destructive) {
+      const confirmation = action.confirmation;
+      const customValid = confirmation?.source === 'custom-dialog'
+        && confirmationContract?.confirm.test(String(confirmation?.confirmation_label || ''));
+      const nativeValid = confirmation?.source === 'native-dialog'
+        && confirmation?.confirmation_label === 'dialog.accept';
+      if (!confirmation
+        || typeof confirmation !== 'object'
+        || Array.isArray(confirmation)
+        || confirmation.accepted !== true
+        || !String(confirmation.message || '').trim()
+        || !confirmationContract?.prompt.test(String(confirmation.message || ''))
+        || (!customValid && !nativeValid)) {
+        addReason(`${prefix}_destructive_confirmation_invalid`);
+      }
+    }
+  });
+  if (String(caseId || '') === 'BETA-INIT-004' && attempts.length === 2
+    && !coreBetaV2MaintenanceActiveSessionRejection(attempts[0]?.action_text)) {
+    addReason('initialization_action_retry_without_active_session_rejection');
+  }
+  const observation = coreBetaInitializationActionObservationFromEvidence(evidence || {});
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    reason: reasons.join(',') || 'initialization_action_evidence_valid',
+    attempts,
+    final_action: attempts.at(-1) || null,
+    observation,
+  };
+}
+
+function coreBetaInitializationPublicStateEvidenceVerdict(evidence, {
+  caseId,
+  method,
+  testid,
+  phase,
+} = {}) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    addReason(`initialization_${phase}_public_state_evidence_missing_or_invalid`);
+  } else {
+    if (evidence.schema_version !== 'qbot-core-beta-initialization-public-state-observation/v1') {
+      addReason(`initialization_${phase}_public_state_schema_mismatch`);
+    }
+    if (String(evidence.case_id || '') !== String(caseId || '')) {
+      addReason(`initialization_${phase}_public_state_case_id_mismatch`);
+    }
+    if (String(evidence.method || '') !== String(method || '')) {
+      addReason(`initialization_${phase}_public_state_method_mismatch`);
+    }
+    if (String(evidence.testid || '') !== String(testid || '')) {
+      addReason(`initialization_${phase}_public_state_testid_mismatch`);
+    }
+    if (String(evidence.phase || '') !== String(phase || '')) {
+      addReason(`initialization_${phase}_public_state_phase_mismatch`);
+    }
+    if (!Number.isFinite(Date.parse(String(evidence.captured_at || '')))) {
+      addReason(`initialization_${phase}_public_state_captured_at_invalid`);
+    }
+  }
+  const publicState = evidence?.public_state;
+  if (!publicState || typeof publicState !== 'object' || Array.isArray(publicState)
+    || String(publicState.case_id || '') !== String(caseId || '')) {
+    addReason(`initialization_${phase}_public_state_payload_invalid`);
+  }
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    reason: reasons.join(',') || `initialization_${phase}_public_state_evidence_valid`,
+    public_state: publicState || null,
+  };
+}
+
+export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
+  runRoot = '',
+  evidenceSession = null,
+} = {}) {
+  const id = String(result?.id || result?.case_id || '').trim();
+  if (!CORE_BETA_INITIALIZATION_CASE_IDS.has(id)) {
+    return {
+      applicable: false,
+      required: false,
+      valid: true,
+      safe: true,
+      reasons: [],
+      reason: 'not_applicable',
+    };
+  }
+
+  const inMemoryVerdict = coreBetaInitializationContinuationVerdict(result);
+  const continuationRequired = inMemoryVerdict.continuation_required === true;
+
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const canonicalEqual = (left, right) => (
+    JSON.stringify(canonicalCoreBetaInitializationValue(left))
+      === JSON.stringify(canonicalCoreBetaInitializationValue(right))
+  );
+  const expectedIdentity = CORE_BETA_INITIALIZATION_ACTION_IDENTITIES[id];
+  const validationSession = coreBetaEvidenceValidationSession(evidenceSession);
+  const root = String(runRoot || '').trim();
+  if (!root) addReason('initialization_continuation_run_root_required');
+  const directoryContext = root ? coreBetaCaseDirectoryContext(result, { runRoot: root }) : null;
+  if (root && !directoryContext) {
+    addReason('initialization_continuation_case_dir_run_root_binding_invalid');
+  } else if (directoryContext) {
+    if (validationSession.directoryContext
+      && !coreBetaSameStatIdentity(validationSession.directoryContext.caseDirStat, directoryContext.caseDirStat)) {
+      addReason('initialization_continuation_case_dir_identity_drift');
+    } else {
+      validationSession.directoryContext ||= directoryContext;
+    }
+  }
+  const caseBoundFileRecord = (candidate, expected = null, semanticRole = '') => coreBetaCaseBoundFileRecord(
+    result,
+    candidate,
+    expected,
+    { runRoot: root, session: validationSession, semanticRole },
+  );
+  const parseJsonRecord = (record, reason) => {
+    if (!record) return null;
+    try {
+      const frozenBytes = coreBetaFrozenFileBytes(record);
+      if (!frozenBytes) throw new Error('frozen_bytes_missing');
+      const parsed = JSON.parse(frozenBytes.toString('utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not_object');
+      return parsed;
+    } catch {
+      addReason(reason);
+      return null;
+    }
+  };
+
+  const maintenanceRecord = caseBoundFileRecord(
+    result?.artifacts?.core_beta_runtime_maintenance,
+    null,
+    'core_beta_runtime_maintenance',
+  );
+  const actionRecord = caseBoundFileRecord(
+    result?.artifacts?.initialization_action_observation,
+    null,
+    'initialization_action_observation',
+  );
+  const terminalRecord = caseBoundFileRecord(
+    result?.artifacts?.core_beta_runtime_maintenance_observations,
+    null,
+    'core_beta_runtime_maintenance_observations',
+  );
+  const beforePublicStateRecord = caseBoundFileRecord(
+    result?.artifacts?.initialization_before_public_state,
+    null,
+    'initialization_before_public_state',
+  );
+  const afterPublicStateRecord = caseBoundFileRecord(
+    result?.artifacts?.initialization_after_public_state,
+    null,
+    'initialization_after_public_state',
+  );
+  const surfaceRequired = continuationRequired || id === 'BETA-INIT-003';
+  const surfaceRecord = result?.artifacts?.initialization_continuation_surface
+    ? caseBoundFileRecord(
+      result.artifacts.initialization_continuation_surface,
+      null,
+      'initialization_continuation_surface',
+    )
+    : null;
+  const manifestRecord = caseBoundFileRecord(
+    result?.artifacts?.evidence_manifest,
+    null,
+    'evidence_manifest',
+  );
+  const expectedTerminalScreenshotKey = `${expectedIdentity.testid.replaceAll('-', '_')}_terminal`;
+  const terminalScreenshotArtifact = String(
+    result?.artifacts?.initialization_terminal_screenshot || '',
+  ).trim();
+  const terminalScreenshotCandidate = terminalScreenshotArtifact
+    || result?.screenshots?.[expectedTerminalScreenshotKey]
+    || Object.entries(result?.screenshots || {})
+      .find(([key]) => /terminal/i.test(String(key || '')))?.[1]
+    || '';
+  const terminalScreenshotRecord = caseBoundFileRecord(
+    terminalScreenshotCandidate,
+    null,
+    'initialization_terminal_screenshot',
+  );
+  if (!maintenanceRecord) addReason('initialization_continuation_maintenance_file_invalid');
+  if (!actionRecord) addReason('initialization_continuation_action_file_invalid');
+  if (!terminalRecord) addReason('initialization_continuation_terminal_observations_file_invalid');
+  if (!beforePublicStateRecord) addReason('initialization_continuation_before_public_state_file_invalid');
+  if (!afterPublicStateRecord) addReason('initialization_continuation_after_public_state_file_invalid');
+  if (surfaceRequired && !surfaceRecord) addReason('initialization_continuation_surface_file_invalid');
+  if (!manifestRecord) addReason('initialization_continuation_manifest_file_invalid');
+  if (!coreBetaFrozenPngValid(terminalScreenshotRecord)) {
+    addReason('initialization_terminal_screenshot_invalid');
+  }
+  if (!terminalScreenshotArtifact
+    || !terminalScreenshotRecord
+    || path.resolve(terminalScreenshotArtifact) !== terminalScreenshotRecord.path) {
+    addReason('initialization_terminal_screenshot_artifact_binding_invalid');
+  }
+  const maintenance = parseJsonRecord(
+    maintenanceRecord,
+    'initialization_continuation_maintenance_json_invalid',
+  );
+  const actionEvidence = parseJsonRecord(actionRecord, 'initialization_continuation_action_json_invalid');
+  const terminalEvidence = parseJsonRecord(
+    terminalRecord,
+    'initialization_continuation_terminal_observations_json_invalid',
+  );
+  const beforePublicStateEvidence = parseJsonRecord(
+    beforePublicStateRecord,
+    'initialization_continuation_before_public_state_json_invalid',
+  );
+  const afterPublicStateEvidence = parseJsonRecord(
+    afterPublicStateRecord,
+    'initialization_continuation_after_public_state_json_invalid',
+  );
+  const surface = parseJsonRecord(surfaceRecord, 'initialization_continuation_surface_json_invalid');
+  const manifest = parseJsonRecord(manifestRecord, 'initialization_continuation_manifest_json_invalid');
+
+  for (const [label, value, schema] of [
+    ['maintenance', maintenance, 'qbot-core-beta-runtime-maintenance-readback/v1'],
+    ['surface', surface, 'qbot-core-beta-initialization-continuation-surface/v1'],
+  ]) {
+    if (!value) continue;
+    if (value.schema_version !== schema) addReason(`initialization_continuation_${label}_schema_mismatch`);
+    if (String(value.case_id || '') !== id) addReason(`initialization_continuation_${label}_case_id_mismatch`);
+    if (String(value.method || '') !== expectedIdentity.method) {
+      addReason(`initialization_continuation_${label}_method_mismatch`);
+    }
+    if (String(value.testid || '') !== expectedIdentity.testid) {
+      addReason(`initialization_continuation_${label}_testid_mismatch`);
+    }
+  }
+
+  const actionVerdict = coreBetaInitializationActionEvidenceVerdict(actionEvidence, {
+    caseId: id,
+    method: expectedIdentity.method,
+    testid: expectedIdentity.testid,
+  });
+  for (const reason of actionVerdict.reasons) addReason(`initialization_continuation_${reason}`);
+  const action = actionVerdict.final_action;
+  const actionAttempts = actionVerdict.attempts;
+  const expectedActionObservation = actionVerdict.observation;
+  if (!canonicalEqual(maintenance?.action, action)
+    || !canonicalEqual(maintenance?.action_attempts, actionAttempts)) {
+    addReason('initialization_continuation_maintenance_action_projection_mismatch');
+  }
+  if (!canonicalEqual(maintenance?.initialization_action_observation, expectedActionObservation)) {
+    addReason('initialization_continuation_maintenance_action_observation_mismatch');
+  }
+  if (!canonicalEqual(result?.initialization_action_observation, expectedActionObservation)) {
+    addReason('initialization_continuation_result_action_observation_mismatch');
+  }
+
+  const beforePublicVerdict = coreBetaInitializationPublicStateEvidenceVerdict(beforePublicStateEvidence, {
+    caseId: id,
+    method: expectedIdentity.method,
+    testid: expectedIdentity.testid,
+    phase: 'before-action',
+  });
+  const afterPublicVerdict = coreBetaInitializationPublicStateEvidenceVerdict(afterPublicStateEvidence, {
+    caseId: id,
+    method: expectedIdentity.method,
+    testid: expectedIdentity.testid,
+    phase: 'after-maintenance',
+  });
+  for (const reason of beforePublicVerdict.reasons) addReason(reason);
+  for (const reason of afterPublicVerdict.reasons) addReason(reason);
+  if (!canonicalEqual(maintenance?.before, beforePublicVerdict.public_state)) {
+    addReason('initialization_continuation_maintenance_before_projection_mismatch');
+  }
+  if (!canonicalEqual(maintenance?.after, afterPublicVerdict.public_state)) {
+    addReason('initialization_continuation_maintenance_after_projection_mismatch');
+  }
+
+  const terminalReplay = coreBetaInitializationMaintenanceObservationsVerdict({
+    ledger: terminalEvidence,
+    caseId: id,
+    method: expectedIdentity.method,
+    testid: expectedIdentity.testid,
+  });
+  for (const reason of terminalReplay.reasons) addReason(`initialization_continuation_${reason}`);
+  if (!actionRecord || !caseBoundFileRecord(
+    actionRecord.path,
+    terminalEvidence?.action_evidence,
+    'initialization_action_observation',
+  )) {
+    addReason('initialization_continuation_terminal_action_evidence_binding_invalid');
+  }
+  if (!canonicalEqual(maintenance?.terminal, terminalReplay.replayed_final)) {
+    addReason('initialization_continuation_maintenance_terminal_projection_mismatch');
+  }
+
+  if (maintenance) {
+    if (maintenance.evidence_valid !== true) addReason('initialization_continuation_maintenance_evidence_invalid');
+    if (continuationRequired) {
+      if (maintenance.oracle_valid !== false || maintenance.valid !== false) {
+        addReason('initialization_continuation_maintenance_not_product_failure');
+      }
+    } else if (maintenance.oracle_valid !== true || maintenance.valid !== true) {
+      addReason('initialization_maintenance_not_successful');
+    }
+  }
+  const skillEvidenceVerdict = id === 'BETA-INIT-003'
+    ? coreBetaInitializationSkillReinstallEvidenceVerdict(result, {
+      runRoot: root,
+      evidenceSession: validationSession,
+    })
+    : null;
+  if (id === 'BETA-INIT-003' && skillEvidenceVerdict?.valid !== true) {
+    addReason('initialization_continuation_skill_reinstall_replay_invalid');
+  }
+  const specializedFailure = skillEvidenceVerdict?.valid === true
+    && skillEvidenceVerdict?.oracle_valid === false;
+  const terminalFailure = terminalReplay.valid === true && terminalReplay.replayed_final?.failed === true;
+  if (continuationRequired && !terminalFailure && !specializedFailure) {
+    addReason('initialization_continuation_product_failure_not_replayed');
+  }
+  if (!continuationRequired && (
+    terminalReplay.valid !== true
+    || terminalReplay.ready !== true
+    || terminalReplay.replayed_final?.ready !== true
+    || terminalReplay.replayed_final?.pending !== false
+    || terminalReplay.replayed_final?.failed !== false
+  )) addReason('initialization_maintenance_success_terminal_replay_invalid');
+
+  if (surfaceRequired && surface) {
+    for (const field of [
+      'valid',
+      'composer_ready',
+      'workbench_ready',
+      'clean_draft_isolated',
+      'capabilities_readable',
+      'public_task_clean',
+      'public_selections_clean',
+      'public_state_readable',
+    ]) {
+      if (surface[field] !== true) addReason(`initialization_continuation_surface_${field}_invalid`);
+    }
+    if (String(surface.error || '')) addReason('initialization_continuation_surface_error_present');
+    const draft = surface.clean_draft_state;
+    if (
+      !draft
+      || typeof draft !== 'object'
+      || Array.isArray(draft)
+      || draft.available !== true
+      || draft.activeId !== null
+      || draft.isDraft !== true
+      || !String(draft.draftInstanceId || '').trim()
+      || draft.messageCount !== 0
+      || draft.sendCount !== 0
+      || draft.running !== false
+    ) addReason('initialization_continuation_clean_draft_invalid');
+    if (surface.clean_draft_surface?.ok !== true) {
+      addReason('initialization_continuation_dom_surface_not_clean');
+    }
+    const publicState = surface.public_state;
+    if (
+      !publicState
+      || typeof publicState !== 'object'
+      || Array.isArray(publicState)
+      || String(publicState.case_id || '') !== id
+      || publicState.task?.id !== null
+      || publicState.task?.running !== false
+      || publicState.task?.message_count !== 0
+      || publicState.task?.send_count !== 0
+      || !Array.isArray(publicState.task?.messages)
+      || publicState.task.messages.length !== 0
+      || !Array.isArray(publicState.skills?.selected)
+      || publicState.skills.selected.length !== 0
+      || !Array.isArray(publicState.connectors?.selected)
+      || publicState.connectors.selected.length !== 0
+      || publicState.expert !== null
+      || !publicState.capabilities
+      || typeof publicState.capabilities !== 'object'
+      || Array.isArray(publicState.capabilities)
+      || publicState.capabilities.__error
+      || !(Number(publicState.page?.body_text_length) > 0)
+    ) addReason('initialization_continuation_public_state_invalid');
+    const continuationState = surface.continuation_state;
+    if (
+      !continuationState
+      || typeof continuationState !== 'object'
+      || Array.isArray(continuationState)
+      || !String(continuationState.draft_instance_id || '').trim()
+      || String(continuationState.draft_instance_id || '') !== String(draft?.draftInstanceId || '')
+      || continuationState.task_id !== null
+      || continuationState.message_count !== 0
+      || continuationState.send_count !== 0
+      || continuationState.running !== false
+      || !Array.isArray(continuationState.selected_skills)
+      || continuationState.selected_skills.length !== 0
+      || !Array.isArray(continuationState.selected_connectors)
+      || continuationState.selected_connectors.length !== 0
+      || continuationState.current_expert !== null
+    ) addReason('initialization_continuation_state_invalid');
+    const beforeScreenshot = caseBoundFileRecord(
+      surface.before_screenshot?.path,
+      surface.before_screenshot,
+      'initialization_continuation_before_screenshot',
+    );
+    const afterScreenshot = caseBoundFileRecord(
+      surface.after_screenshot?.path,
+      surface.after_screenshot,
+      'initialization_continuation_after_screenshot',
+    );
+    if (!coreBetaFrozenPngValid(beforeScreenshot)) {
+      addReason('initialization_continuation_before_screenshot_invalid');
+    }
+    if (!coreBetaFrozenPngValid(afterScreenshot)) {
+      addReason('initialization_continuation_after_screenshot_invalid');
+    }
+    if (beforeScreenshot && afterScreenshot && beforeScreenshot.path === afterScreenshot.path) {
+      addReason('initialization_continuation_screenshot_path_reused');
+    }
+    if (beforeScreenshot && afterScreenshot && beforeScreenshot.sha256 === afterScreenshot.sha256) {
+      addReason('initialization_continuation_screenshot_content_reused');
+    }
+    for (const [label, screenshot] of [
+      ['before', beforeScreenshot],
+      ['after', afterScreenshot],
+    ]) {
+      const declaredPath = String(surface?.[`${label}_screenshot`]?.path || '').trim();
+      if (terminalScreenshotRecord && declaredPath
+        && path.resolve(declaredPath) === terminalScreenshotRecord.path) {
+        addReason(`initialization_terminal_${label}_screenshot_path_reused`);
+      }
+      if (terminalScreenshotRecord && screenshot
+        && terminalScreenshotRecord.sha256 === screenshot.sha256) {
+        addReason(`initialization_terminal_${label}_screenshot_content_reused`);
+      }
+    }
+  }
+
+  const embeddedSurface = maintenance?.continuation_surface;
+  if (surfaceRequired) {
+    if (!embeddedSurface || typeof embeddedSurface !== 'object' || Array.isArray(embeddedSurface)) {
+      addReason('initialization_continuation_maintenance_surface_missing');
+    } else {
+      const { file: embeddedSurfaceFile, ...embeddedSurfacePayload } = embeddedSurface;
+      if (!surfaceRecord || path.resolve(String(embeddedSurfaceFile || '')) !== surfaceRecord.path) {
+        addReason('initialization_continuation_maintenance_surface_path_mismatch');
+      }
+      if (!canonicalEqual(embeddedSurfacePayload, surface)) {
+        addReason('initialization_continuation_maintenance_surface_mismatch');
+      }
+    }
+  } else if (embeddedSurface != null || surfaceRecord) {
+    addReason('initialization_success_unexpected_continuation_surface');
+  }
+
+  const replayedContinuation = continuationRequired
+    ? coreBetaInitializationContinuation({
+      testCase: { id },
+      terminalReadback: terminalReplay.replayed_final,
+      afterReadback: afterPublicVerdict.public_state,
+      continuationSurface: surface,
+      productFailureObserved: specializedFailure,
+      productFailureSource: specializedFailure ? 'skill_reinstall_readiness_oracle' : '',
+    })
+    : null;
+  if (continuationRequired) {
+    if (!canonicalEqual(maintenance?.initialization_continuation, replayedContinuation)) {
+      addReason('initialization_continuation_maintenance_replay_mismatch');
+    }
+    if (!canonicalEqual(result?.initialization_continuation, replayedContinuation)) {
+      addReason('initialization_continuation_result_replay_mismatch');
+    }
+    if (replayedContinuation?.safe !== true) addReason('initialization_continuation_replayed_not_safe');
+  } else if (maintenance?.initialization_continuation != null || result?.initialization_continuation != null) {
+    addReason('initialization_success_unexpected_continuation');
+  }
+  if (!inMemoryVerdict.valid || !inMemoryVerdict.safe) {
+    for (const reason of inMemoryVerdict.reasons || []) addReason(`initialization_continuation_memory:${reason}`);
+  }
+
+  const manifestRows = Array.isArray(manifest?.evidence) ? manifest.evidence : [];
+  const surfaceRows = manifestRows.filter((item) => item?.role === 'initialization_continuation_surface');
+  const manifestRoles = manifestRows.map((item) => String(item?.role || ''));
+  const manifestRolesUnique = manifestRoles.every(Boolean)
+    && new Set(manifestRoles).size === manifestRoles.length;
+  const manifestRowValid = (row) => row?.valid === true
+    && row?.missing === false
+    && String(row?.validation_error || '') === '';
+  const independentRoleRecords = new Map([
+    ['initialization_action_observation', actionRecord],
+    ['core_beta_runtime_maintenance_observations', terminalRecord],
+    ['initialization_before_public_state', beforePublicStateRecord],
+    ['initialization_after_public_state', afterPublicStateRecord],
+  ]);
+  let independentManifestBindingsValid = true;
+  for (const [role, record] of independentRoleRecords) {
+    const rows = manifestRows.filter((item) => item?.role === role);
+    if (rows.length !== 1
+      || !record
+      || !manifestRowValid(rows[0])
+      || !caseBoundFileRecord(record.path, rows[0], role)) {
+      independentManifestBindingsValid = false;
+    }
+  }
+  const maintenanceRows = manifestRows.filter((item) => item?.role === 'core_beta_runtime_maintenance');
+  const maintenanceManifestValid = maintenanceRows.length === 1
+    && maintenanceRecord
+    && manifestRowValid(maintenanceRows[0])
+    && caseBoundFileRecord(
+      maintenanceRecord.path,
+      maintenanceRows[0],
+      'core_beta_runtime_maintenance',
+    );
+  const terminalScreenshotRows = manifestRows.filter(
+    (item) => item?.role === 'initialization_terminal_screenshot',
+  );
+  const terminalScreenshotManifestValid = terminalScreenshotRows.length === 1
+    && terminalScreenshotRecord
+    && manifestRowValid(terminalScreenshotRows[0])
+    && caseBoundFileRecord(
+      terminalScreenshotRecord.path,
+      terminalScreenshotRows[0],
+      'initialization_terminal_screenshot',
+    );
+  const surfaceManifestValid = surfaceRequired
+    ? surfaceRows.length === 1
+      && surfaceRecord
+      && manifestRowValid(surfaceRows[0])
+      && caseBoundFileRecord(
+        surfaceRecord.path,
+        surfaceRows[0],
+        'initialization_continuation_surface',
+      )
+    : surfaceRows.length === 0 && !surfaceRecord;
+  if (
+    manifest?.schema_version !== 'qbot-core-evidence/v2'
+    || String(manifest?.case_id || '') !== id
+    || manifest?.complete !== true
+    || !Array.isArray(manifest?.missing_roles)
+    || manifest.missing_roles.length !== 0
+    || !Array.isArray(manifest?.invalid_roles)
+    || manifest.invalid_roles.length !== 0
+    || !manifestRolesUnique
+    || manifestRows.some((item) => !manifestRowValid(item))
+    || !independentManifestBindingsValid
+    || !maintenanceManifestValid
+    || !terminalScreenshotManifestValid
+    || !surfaceManifestValid
+  ) addReason('initialization_continuation_manifest_binding_invalid');
+  if (!manifest || !canonicalEqual(result?.evidence_manifest, manifest)) {
+    addReason('initialization_continuation_embedded_manifest_mismatch');
+  }
+  if (continuationRequired) {
+    if (String(result?.status || '') !== 'failed' || String(result?.result_category || '') !== 'bug') {
+      addReason('initialization_continuation_raw_result_mismatch');
+    }
+  } else if (String(result?.status || '') !== 'passed' || String(result?.result_category || '') !== 'pass') {
+    addReason('initialization_success_raw_result_mismatch');
+  }
+  if (!coreBetaFinalizeEvidenceValidationSession(validationSession, result, { runRoot: root })) {
+    addReason('initialization_evidence_identity_drift');
+  }
+
+  return {
+    applicable: true,
+    required: true,
+    continuation_required: continuationRequired,
+    valid: reasons.length === 0,
+    safe: reasons.length === 0 && (!continuationRequired || replayedContinuation?.safe === true),
+    reasons,
+    reason: reasons.join(',') || 'initialization_continuation_evidence_valid',
+    maintenance_file: maintenanceRecord?.path || '',
+    action_file: actionRecord?.path || '',
+    terminal_observations_file: terminalRecord?.path || '',
+    before_public_state_file: beforePublicStateRecord?.path || '',
+    after_public_state_file: afterPublicStateRecord?.path || '',
+    surface_file: surfaceRecord?.path || '',
+    manifest_file: manifestRecord?.path || '',
+    terminal_screenshot_file: terminalScreenshotRecord?.path || '',
+    replayed_continuation: replayedContinuation,
+    skill_reinstall_evidence: skillEvidenceVerdict,
+  };
+}
+
+export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {}, {
+  runRoot = '',
+  evidenceSession = null,
+} = {}) {
+  const applicable = String(result?.id || '') === 'BETA-INIT-003';
+  if (!applicable) return { applicable: false, valid: true, reason: 'not_applicable' };
+  const expectedCaseId = 'BETA-INIT-003';
+  const expectedMethod = 'skillsReinstall';
+  const expectedTestId = 'assistant-skills-reinstall';
+  const expectedRefNames = [
+    'maintenance_readback',
+    'action_observations',
+    'before_public_state',
+    'after_public_state',
+    'terminal_observations',
+    'catalog_observations',
+    'terminal_screenshot',
+    'continuation_surface',
+  ];
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const canonicalEqual = (left, right) => (
+    JSON.stringify(canonicalCoreBetaInitializationValue(left))
+      === JSON.stringify(canonicalCoreBetaInitializationValue(right))
+  );
+  const validationSession = coreBetaEvidenceValidationSession(evidenceSession);
+  const parseJsonRecord = (record, reason) => {
+    if (!record) return null;
+    try {
+      const frozenBytes = coreBetaFrozenFileBytes(record);
+      if (!frozenBytes) throw new Error('frozen_bytes_missing');
+      const value = JSON.parse(frozenBytes.toString('utf8'));
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not_object');
+      return value;
+    } catch {
+      addReason(reason);
+      return null;
+    }
+  };
+  const root = String(runRoot || '').trim();
+  const directoryContext = root ? coreBetaCaseDirectoryContext(result, { runRoot: root }) : null;
+  if (!root) {
+    addReason('skill_reinstall_run_root_required');
+  } else if (!directoryContext) {
+    addReason('skill_reinstall_case_dir_run_root_binding_invalid');
+  } else {
+    if (validationSession.directoryContext
+      && !coreBetaSameStatIdentity(validationSession.directoryContext.caseDirStat, directoryContext.caseDirStat)) {
+      addReason('skill_reinstall_case_dir_identity_drift');
+    } else {
+      validationSession.directoryContext ||= directoryContext;
+    }
+  }
+  const caseBoundFileRecord = (candidate, expected = null, semanticRole = '') => (
+    coreBetaCaseBoundFileRecord(result, candidate, expected, {
+      runRoot: root,
+      session: validationSession,
+      semanticRole,
+    })
+  );
+  const artifactFile = String(result?.artifacts?.skill_reinstall_readiness_verdict || '');
+  const artifactRecord = caseBoundFileRecord(artifactFile, null, 'skill_reinstall_readiness_verdict');
+  let data = null;
+  if (!artifactRecord) {
+    addReason('skill_reinstall_readiness_verdict_file_invalid');
+  } else {
+    data = parseJsonRecord(artifactRecord, 'skill_reinstall_readiness_verdict_json_invalid');
+  }
+
+  const referencedRecords = {};
+  const referencedPayloads = {};
+  if (data) {
+    if (data.schema_version !== 'qbot-core-beta-skill-reinstall-readiness-verdict/v1') {
+      addReason('skill_reinstall_readiness_verdict_schema_mismatch');
+    }
+    if (String(data.case_id || '') !== expectedCaseId) addReason('skill_reinstall_readiness_verdict_case_id_mismatch');
+    if (String(data.method || '') !== expectedMethod) addReason('skill_reinstall_readiness_verdict_method_mismatch');
+    if (String(data.testid || '') !== expectedTestId) addReason('skill_reinstall_readiness_verdict_testid_mismatch');
+    const refs = data.evidence_refs;
+    if (!refs || typeof refs !== 'object' || Array.isArray(refs)) {
+      addReason('skill_reinstall_evidence_refs_invalid');
+    } else {
+      if (!canonicalEqual(Object.keys(refs).sort(), [...expectedRefNames].sort())) {
+        addReason('skill_reinstall_evidence_refs_set_mismatch');
+      }
+      const seenPaths = new Set();
+      const semanticRoles = {
+        maintenance_readback: 'core_beta_runtime_maintenance',
+        action_observations: 'initialization_action_observation',
+        before_public_state: 'initialization_before_public_state',
+        after_public_state: 'initialization_after_public_state',
+        terminal_observations: 'core_beta_runtime_maintenance_observations',
+        catalog_observations: 'core_beta_skill_reinstall_catalog_observations',
+        terminal_screenshot: 'initialization_terminal_screenshot',
+        continuation_surface: 'initialization_continuation_surface',
+      };
+      for (const name of expectedRefNames) {
+        const record = caseBoundFileRecord(refs[name]?.path, refs[name], semanticRoles[name]);
+        if (!record) {
+          addReason(`skill_reinstall_evidence_ref_invalid:${name}`);
+          continue;
+        }
+        if (seenPaths.has(record.path)) addReason('skill_reinstall_evidence_ref_path_reused');
+        seenPaths.add(record.path);
+        referencedRecords[name] = record;
+        if (name !== 'terminal_screenshot') {
+          referencedPayloads[name] = parseJsonRecord(record, `skill_reinstall_evidence_ref_json_invalid:${name}`);
+        }
+      }
+    }
+  }
+
+  const maintenance = referencedPayloads.maintenance_readback;
+  const actionEvidence = referencedPayloads.action_observations;
+  const beforePublicStateEvidence = referencedPayloads.before_public_state;
+  const afterPublicStateEvidence = referencedPayloads.after_public_state;
+  const terminal = referencedPayloads.terminal_observations;
+  const catalogLedger = referencedPayloads.catalog_observations;
+  const continuationSurface = referencedPayloads.continuation_surface;
+  const identityMatches = (payload, schemaVersion, label) => {
+    if (!payload) return false;
+    let valid = true;
+    if (payload.schema_version !== schemaVersion) {
+      addReason(`${label}_schema_mismatch`);
+      valid = false;
+    }
+    if (String(payload.case_id || '') !== expectedCaseId) {
+      addReason(`${label}_case_id_mismatch`);
+      valid = false;
+    }
+    if (String(payload.method || '') !== expectedMethod) {
+      addReason(`${label}_method_mismatch`);
+      valid = false;
+    }
+    if (String(payload.testid || '') !== expectedTestId) {
+      addReason(`${label}_testid_mismatch`);
+      valid = false;
+    }
+    return valid;
+  };
+  identityMatches(
+    maintenance,
+    'qbot-core-beta-runtime-maintenance-readback/v1',
+    'skill_reinstall_maintenance_readback',
+  );
+  identityMatches(
+    terminal,
+    'qbot-core-beta-runtime-maintenance-observations/v2',
+    'skill_reinstall_terminal_observations',
+  );
+  identityMatches(
+    catalogLedger,
+    'qbot-core-beta-skill-reinstall-catalog-observations/v2',
+    'skill_reinstall_catalog_observations',
+  );
+  identityMatches(
+    continuationSurface,
+    'qbot-core-beta-initialization-continuation-surface/v1',
+    'skill_reinstall_continuation_surface',
+  );
+  const actionVerdict = coreBetaInitializationActionEvidenceVerdict(actionEvidence, {
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+  });
+  for (const reason of actionVerdict.reasons) addReason(`skill_reinstall_${reason}`);
+  const beforePublicVerdict = coreBetaInitializationPublicStateEvidenceVerdict(beforePublicStateEvidence, {
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+    phase: 'before-action',
+  });
+  const afterPublicVerdict = coreBetaInitializationPublicStateEvidenceVerdict(afterPublicStateEvidence, {
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+    phase: 'after-maintenance',
+  });
+  for (const reason of beforePublicVerdict.reasons) addReason(`skill_reinstall_${reason}`);
+  for (const reason of afterPublicVerdict.reasons) addReason(`skill_reinstall_${reason}`);
+
+  if (continuationSurface) {
+    for (const field of [
+      'valid',
+      'composer_ready',
+      'workbench_ready',
+      'clean_draft_isolated',
+      'capabilities_readable',
+      'public_task_clean',
+      'public_selections_clean',
+      'public_state_readable',
+    ]) {
+      if (continuationSurface[field] !== true) addReason(`skill_reinstall_continuation_surface_${field}_invalid`);
+    }
+    if (String(continuationSurface.error || '')) {
+      addReason('skill_reinstall_continuation_surface_error_present');
+    }
+    const cleanDraft = continuationSurface.clean_draft_state;
+    if (!cleanDraft || typeof cleanDraft !== 'object' || Array.isArray(cleanDraft)) {
+      addReason('skill_reinstall_continuation_clean_draft_invalid');
+    } else {
+      if (cleanDraft.available !== true) addReason('skill_reinstall_continuation_clean_draft_unavailable');
+      if (cleanDraft.activeId !== null) addReason('skill_reinstall_continuation_active_task_present');
+      if (cleanDraft.isDraft !== true) addReason('skill_reinstall_continuation_not_draft');
+      if (!String(cleanDraft.draftInstanceId || '').trim()) {
+        addReason('skill_reinstall_continuation_draft_instance_id_missing');
+      }
+      if (cleanDraft.messageCount !== 0) addReason('skill_reinstall_continuation_message_count_nonzero');
+      if (cleanDraft.sendCount !== 0) addReason('skill_reinstall_continuation_send_count_nonzero');
+      if (cleanDraft.running !== false) addReason('skill_reinstall_continuation_running_not_false');
+    }
+    if (continuationSurface.clean_draft_surface?.ok !== true) {
+      addReason('skill_reinstall_continuation_dom_surface_not_clean');
+    }
+
+    const publicState = continuationSurface.public_state;
+    if (!publicState || typeof publicState !== 'object' || Array.isArray(publicState)) {
+      addReason('skill_reinstall_continuation_public_state_invalid');
+    } else {
+      if (String(publicState.case_id || '') !== expectedCaseId) {
+        addReason('skill_reinstall_continuation_public_state_case_id_mismatch');
+      }
+      if (
+        publicState.task?.id !== null
+        || publicState.task?.running !== false
+        || publicState.task?.message_count !== 0
+        || publicState.task?.send_count !== 0
+        || !Array.isArray(publicState.task?.messages)
+        || publicState.task.messages.length !== 0
+      ) addReason('skill_reinstall_continuation_public_task_not_clean');
+      if (!Array.isArray(publicState.skills?.selected) || publicState.skills.selected.length !== 0) {
+        addReason('skill_reinstall_continuation_skill_selection_not_empty');
+      }
+      if (!Array.isArray(publicState.connectors?.selected) || publicState.connectors.selected.length !== 0) {
+        addReason('skill_reinstall_continuation_connector_selection_not_empty');
+      }
+      if (publicState.expert !== null) addReason('skill_reinstall_continuation_expert_selection_not_empty');
+      if (
+        !publicState.capabilities
+        || typeof publicState.capabilities !== 'object'
+        || Array.isArray(publicState.capabilities)
+        || publicState.capabilities.__error
+      ) addReason('skill_reinstall_continuation_capabilities_not_readable');
+      if (!(Number(publicState.page?.body_text_length) > 0)) {
+        addReason('skill_reinstall_continuation_page_not_readable');
+      }
+    }
+
+    const continuationState = continuationSurface.continuation_state;
+    if (!continuationState || typeof continuationState !== 'object' || Array.isArray(continuationState)) {
+      addReason('skill_reinstall_continuation_state_invalid');
+    } else {
+      if (!String(continuationState.draft_instance_id || '').trim()) {
+        addReason('skill_reinstall_continuation_state_draft_instance_id_missing');
+      }
+      if (String(continuationState.draft_instance_id || '') !== String(cleanDraft?.draftInstanceId || '')) {
+        addReason('skill_reinstall_continuation_state_draft_instance_id_mismatch');
+      }
+      if (continuationState.task_id !== null) addReason('skill_reinstall_continuation_state_task_id_not_null');
+      if (continuationState.message_count !== 0) addReason('skill_reinstall_continuation_state_message_count_nonzero');
+      if (continuationState.send_count !== 0) addReason('skill_reinstall_continuation_state_send_count_nonzero');
+      if (continuationState.running !== false) addReason('skill_reinstall_continuation_state_running_not_false');
+      if (!Array.isArray(continuationState.selected_skills) || continuationState.selected_skills.length !== 0) {
+        addReason('skill_reinstall_continuation_state_skill_selection_not_empty');
+      }
+      if (!Array.isArray(continuationState.selected_connectors) || continuationState.selected_connectors.length !== 0) {
+        addReason('skill_reinstall_continuation_state_connector_selection_not_empty');
+      }
+      if (continuationState.current_expert !== null) {
+        addReason('skill_reinstall_continuation_state_expert_selection_not_empty');
+      }
+    }
+
+    const beforeScreenshot = caseBoundFileRecord(
+      continuationSurface.before_screenshot?.path,
+      continuationSurface.before_screenshot,
+      'initialization_continuation_before_screenshot',
+    );
+    const afterScreenshot = caseBoundFileRecord(
+      continuationSurface.after_screenshot?.path,
+      continuationSurface.after_screenshot,
+      'initialization_continuation_after_screenshot',
+    );
+    if (!coreBetaFrozenPngValid(beforeScreenshot)) addReason('skill_reinstall_continuation_before_screenshot_invalid');
+    if (!coreBetaFrozenPngValid(afterScreenshot)) addReason('skill_reinstall_continuation_after_screenshot_invalid');
+    if (beforeScreenshot && afterScreenshot && beforeScreenshot.path === afterScreenshot.path) {
+      addReason('skill_reinstall_continuation_screenshot_path_reused');
+    }
+    if (beforeScreenshot && afterScreenshot && beforeScreenshot.sha256 === afterScreenshot.sha256) {
+      addReason('skill_reinstall_continuation_screenshot_content_reused');
+    }
+    const terminalScreenshot = referencedRecords.terminal_screenshot;
+    for (const [label, screenshot] of [
+      ['before', beforeScreenshot],
+      ['after', afterScreenshot],
+    ]) {
+      const declaredPath = String(continuationSurface?.[`${label}_screenshot`]?.path || '').trim();
+      if (terminalScreenshot && declaredPath
+        && path.resolve(declaredPath) === terminalScreenshot.path) {
+        addReason(`skill_reinstall_terminal_${label}_screenshot_path_reused`);
+      }
+      if (terminalScreenshot && screenshot && terminalScreenshot.sha256 === screenshot.sha256) {
+        addReason(`skill_reinstall_terminal_${label}_screenshot_content_reused`);
+      }
+    }
+
+    const surfaceRecord = referencedRecords.continuation_surface;
+    const artifactSurfaceRecord = caseBoundFileRecord(
+      result?.artifacts?.initialization_continuation_surface,
+      surfaceRecord,
+      'initialization_continuation_surface',
+    );
+    if (!surfaceRecord || !artifactSurfaceRecord || artifactSurfaceRecord.path !== surfaceRecord.path) {
+      addReason('skill_reinstall_continuation_surface_artifact_binding_invalid');
+    }
+    const embeddedSurface = maintenance?.continuation_surface;
+    if (!embeddedSurface || typeof embeddedSurface !== 'object' || Array.isArray(embeddedSurface)) {
+      addReason('skill_reinstall_maintenance_embedded_continuation_surface_missing');
+    } else {
+      const { file: embeddedFile, ...embeddedPayload } = embeddedSurface;
+      if (!surfaceRecord || path.resolve(String(embeddedFile || '')) !== surfaceRecord.path) {
+        addReason('skill_reinstall_maintenance_embedded_continuation_surface_path_mismatch');
+      }
+      if (!canonicalEqual(embeddedPayload, continuationSurface)) {
+        addReason('skill_reinstall_maintenance_embedded_continuation_surface_mismatch');
+      }
+    }
+  }
+
+  const maintenanceAction = actionVerdict.final_action;
+  const actionAttempts = actionVerdict.attempts;
+  if (!canonicalEqual(maintenance?.action, maintenanceAction)
+    || !canonicalEqual(maintenance?.action_attempts, actionAttempts)) {
+    addReason('skill_reinstall_maintenance_action_projection_mismatch');
+  }
+  const expectedActionObservation = actionVerdict.observation;
+  if (!canonicalEqual(maintenance?.initialization_action_observation, expectedActionObservation)
+    || !canonicalEqual(result?.initialization_action_observation, expectedActionObservation)) {
+    addReason('skill_reinstall_action_observation_projection_mismatch');
+  }
+  if (maintenance?.evidence_valid !== true) addReason('skill_reinstall_maintenance_evidence_invalid');
+  const beforePublicState = beforePublicVerdict.public_state;
+  const afterPublicState = afterPublicVerdict.public_state;
+  if (!beforePublicState?.skills || !Object.hasOwn(beforePublicState.skills, 'catalog')) {
+    addReason('skill_reinstall_before_catalog_missing');
+  }
+  if (!afterPublicState?.skills || !Object.hasOwn(afterPublicState.skills, 'catalog')) {
+    addReason('skill_reinstall_after_catalog_missing');
+  }
+  if (!canonicalEqual(maintenance?.before, beforePublicState)) {
+    addReason('skill_reinstall_maintenance_before_projection_mismatch');
+  }
+  if (!canonicalEqual(maintenance?.after, afterPublicState)) {
+    addReason('skill_reinstall_maintenance_after_projection_mismatch');
+  }
+
+  const terminalReplay = coreBetaInitializationMaintenanceObservationsVerdict({
+    ledger: terminal,
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+  });
+  for (const reason of terminalReplay.reasons) addReason(`skill_reinstall_${reason}`);
+  if (terminal) {
+    if (!referencedRecords.action_observations
+      || !caseBoundFileRecord(
+        referencedRecords.action_observations.path,
+        terminal.action_evidence,
+        'initialization_action_observation',
+      )) {
+      addReason('skill_reinstall_terminal_action_evidence_binding_invalid');
+    }
+    if (!canonicalEqual(maintenance?.terminal, terminalReplay.replayed_final)) {
+      addReason('skill_reinstall_terminal_projection_mismatch');
+    }
+    const replayedFinal = terminalReplay.replayed_final;
+    if (terminalReplay.valid !== true
+      || terminalReplay.ready !== true
+      || replayedFinal?.ready !== true
+      || replayedFinal?.pending !== false
+      || replayedFinal?.failed !== false
+      || replayedFinal?.loaded !== true
+      || replayedFinal?.sdk_ready !== true
+      || replayedFinal?.button_enabled !== true
+      || replayedFinal?.capabilities_readable !== true
+      || replayedFinal?.page_readable !== true
+      || replayedFinal?.maintenance_region_visible !== true
+      || Number(replayedFinal?.stable_ready_observations) < 3) {
+      addReason('skill_reinstall_terminal_readiness_replay_invalid');
+    }
+  }
+  if (catalogLedger) {
+    if (!referencedRecords.action_observations
+      || !caseBoundFileRecord(
+        referencedRecords.action_observations.path,
+        catalogLedger.action_evidence,
+        'initialization_action_observation',
+      )) {
+      addReason('skill_reinstall_catalog_action_evidence_binding_invalid');
+    }
+  }
+
+  const screenshotRecord = referencedRecords.terminal_screenshot;
+  if (screenshotRecord && !coreBetaFrozenPngValid(screenshotRecord)) {
+    addReason('skill_reinstall_terminal_screenshot_not_png');
+  }
+  const terminalScreenshotArtifact = String(
+    result?.artifacts?.initialization_terminal_screenshot || '',
+  ).trim();
+  if (!screenshotRecord
+    || !terminalScreenshotArtifact
+    || path.resolve(terminalScreenshotArtifact) !== screenshotRecord.path
+    || !caseBoundFileRecord(
+      terminalScreenshotArtifact,
+      screenshotRecord,
+      'initialization_terminal_screenshot',
+    )) {
+    addReason('skill_reinstall_terminal_screenshot_artifact_binding_invalid');
+  }
+
+  let replayedStableObservations = 0;
+  let replayedStableSignatureSha256 = '';
+  let replayedReadErrorCount = 0;
+  let lastSuccessfulRawCatalog = null;
+  const observations = Array.isArray(catalogLedger?.observations) ? catalogLedger.observations : [];
+  if (observations.length < 3) addReason('skill_reinstall_catalog_observations_insufficient');
+  observations.forEach((observation, index) => {
+    const prefix = `skill_reinstall_catalog_observation_${index + 1}`;
+    if (!observation || typeof observation !== 'object' || Array.isArray(observation)) {
+      addReason(`${prefix}_invalid`);
+      replayedStableObservations = 0;
+      replayedStableSignatureSha256 = '';
+      replayedReadErrorCount += 1;
+      return;
+    }
+    const attempts = Array.isArray(observation.renderer_capture_attempts)
+      ? observation.renderer_capture_attempts
+      : [];
+    const attemptErrors = attempts.filter((attempt) => attempt?.ok !== true).length;
+    if (observation.read_ok !== true) {
+      const expectedReadErrors = Math.max(1, attemptErrors);
+      replayedReadErrorCount += expectedReadErrors;
+      replayedStableObservations = 0;
+      replayedStableSignatureSha256 = '';
+      if (
+        observation.read_ok !== false
+        || observation.raw_catalog !== null
+        || observation.normalized_tuple !== null
+        || String(observation.canonical_sha256 || '')
+        || observation.same_signature_as_previous !== false
+        || Number(observation.idle_stable_observations) !== 0
+        || Number(observation.read_error_count) !== expectedReadErrors
+        || !String(observation.error || '').trim()
+      ) addReason(`${prefix}_read_error_fields_mismatch`);
+      return;
+    }
+    if (!attempts.length || attemptErrors > 0 || String(observation.error || '')) {
+      addReason(`${prefix}_capture_attempts_invalid`);
+    }
+    replayedReadErrorCount += attemptErrors;
+    const replayedObservation = coreBetaInitializationSkillCatalogObservation({
+      catalog: observation.raw_catalog,
+      previousSignatureSha256: replayedStableSignatureSha256,
+      previousIdleStableObservations: replayedStableObservations,
+    });
+    const summary = replayedObservation.summary;
+    const derivedFieldsMatch = (
+      String(observation.sync_status || '') === summary.sync_status
+      && Number(observation.installed_count) === summary.installed_count
+      && Number(observation.identity_count) === summary.identities.length
+      && Number(observation.duplicate_count) === summary.duplicate_identities.length
+      && Number(observation.invalid_identity_count) === summary.invalid_identity_indexes.length
+      && Number(observation.readiness_missing_count) === summary.readiness_missing_indexes.length
+      && Number(observation.unready_count) === summary.unready_identities.length
+    );
+    if (
+      !canonicalEqual(observation.normalized_tuple, replayedObservation.normalized_tuple)
+      || String(observation.canonical_sha256 || '') !== replayedObservation.canonical_sha256
+      || Boolean(observation.same_signature_as_previous) !== replayedObservation.same_signature_as_previous
+      || Number(observation.idle_stable_observations) !== replayedObservation.idle_stable_observations
+      || Number(observation.read_error_count) !== attemptErrors
+      || !derivedFieldsMatch
+    ) addReason(`${prefix}_replay_mismatch`);
+    replayedStableObservations = replayedObservation.idle_stable_observations;
+    replayedStableSignatureSha256 = replayedObservation.next_signature_sha256;
+    lastSuccessfulRawCatalog = observation.raw_catalog;
+  });
+
+  const replayedStableSha = replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '';
+  const replayedLedgerOk = replayedReadErrorCount === 0
+    && replayedStableObservations >= 3
+    && /^[a-f0-9]{64}$/i.test(replayedStableSha);
+  if (catalogLedger && (
+    Number(catalogLedger.read_error_count) !== replayedReadErrorCount
+    || Number(catalogLedger.idle_stable_observations) !== replayedStableObservations
+    || String(catalogLedger.stable_signature_sha256 || '') !== replayedStableSha
+    || catalogLedger.ok !== replayedLedgerOk
+    || catalogLedger.evidence_valid !== (replayedReadErrorCount === 0)
+    || !canonicalEqual(catalogLedger.catalog, lastSuccessfulRawCatalog)
+  )) addReason('skill_reinstall_catalog_ledger_replay_mismatch');
+  if (catalogLedger && observations.length) {
+    const lastObservation = observations.at(-1);
+    const expectedLastError = lastObservation?.read_ok === true ? '' : String(lastObservation?.error || '');
+    if (String(catalogLedger.last_error || '') !== expectedLastError) {
+      addReason('skill_reinstall_catalog_last_error_mismatch');
+    }
+  }
+  if (!canonicalEqual(afterPublicState?.skills?.catalog, lastSuccessfulRawCatalog)) {
+    addReason('skill_reinstall_after_public_state_catalog_mismatch');
+  }
+
+  const replayedVerdict = coreBetaInitializationSkillReinstallVerdict({
+    caseId: expectedCaseId,
+    beforeCatalog: beforePublicState?.skills?.catalog,
+    afterCatalog: lastSuccessfulRawCatalog,
+    afterIdleStableObservations: replayedStableObservations,
+    catalogObservations: catalogLedger,
+  });
+  const verdictFields = [
+    'schema_version',
+    'case_id',
+    'method',
+    'testid',
+    'evidence_valid',
+    'oracle_valid',
+    'outcome',
+    'reason',
+    'after_idle_stable_observations',
+    'stable_signature_sha256',
+    'catalog_read_error_count',
+    'identity_set_equal',
+    'missing_after',
+    'unexpected_after',
+    'evidence_failures',
+    'oracle_failures',
+    'before',
+    'after',
+  ];
+  const verdictProjection = (value) => Object.fromEntries(
+    verdictFields.map((field) => [field, value?.[field]]),
+  );
+  if (!canonicalEqual(verdictProjection(data), verdictProjection(replayedVerdict))) {
+    addReason('skill_reinstall_readiness_verdict_replay_mismatch');
+  }
+  if (!canonicalEqual(
+    verdictProjection(maintenance?.skill_reinstall_readiness_verdict),
+    verdictProjection(replayedVerdict),
+  )) addReason('skill_reinstall_maintenance_embedded_verdict_mismatch');
+  if (replayedVerdict.evidence_valid !== true) addReason('skill_reinstall_replayed_evidence_not_valid');
+
+  for (const [refName, artifactName] of [
+    ['maintenance_readback', 'core_beta_runtime_maintenance'],
+    ['action_observations', 'initialization_action_observation'],
+    ['before_public_state', 'initialization_before_public_state'],
+    ['after_public_state', 'initialization_after_public_state'],
+    ['terminal_observations', 'core_beta_runtime_maintenance_observations'],
+    ['catalog_observations', 'core_beta_skill_reinstall_catalog_observations'],
+    ['continuation_surface', 'initialization_continuation_surface'],
+  ]) {
+    const referenced = referencedRecords[refName];
+    const semanticRoles = {
+      maintenance_readback: 'core_beta_runtime_maintenance',
+      action_observations: 'initialization_action_observation',
+      before_public_state: 'initialization_before_public_state',
+      after_public_state: 'initialization_after_public_state',
+      terminal_observations: 'core_beta_runtime_maintenance_observations',
+      catalog_observations: 'core_beta_skill_reinstall_catalog_observations',
+      continuation_surface: 'initialization_continuation_surface',
+    };
+    const bound = referenced && caseBoundFileRecord(
+      result?.artifacts?.[artifactName],
+      referenced,
+      semanticRoles[refName],
+    );
+    if (!referenced || !bound || referenced.path !== bound.path) {
+      addReason(`skill_reinstall_${refName}_artifact_binding_invalid`);
+    }
+  }
+
+  const manifestFile = String(result?.artifacts?.evidence_manifest || '');
+  const manifestRecord = caseBoundFileRecord(manifestFile, null, 'evidence_manifest');
+  let manifest = null;
+  if (!manifestRecord) {
+    addReason('skill_reinstall_manifest_file_invalid');
+  } else {
+    manifest = parseJsonRecord(manifestRecord, 'skill_reinstall_manifest_json_invalid');
+  }
+  const manifestRows = Array.isArray(manifest?.evidence) ? manifest.evidence : [];
+  const manifestRoles = manifestRows.map((item) => String(item?.role || ''));
+  const manifestRolesUnique = manifestRoles.every(Boolean)
+    && new Set(manifestRoles).size === manifestRoles.length;
+  const manifestRowValid = (row) => row?.valid === true
+    && row?.missing === false
+    && String(row?.validation_error || '') === '';
+  const manifestVerdictRows = manifestRows.filter((item) => item?.role === 'skill_reinstall_readiness_verdict');
+  const manifestEvidence = manifestVerdictRows[0];
+  const manifestSurfaceRows = manifestRows.filter((item) => item?.role === 'initialization_continuation_surface');
+  const manifestSurfaceEvidence = manifestSurfaceRows[0];
+  const manifestMaintenanceRows = manifestRows.filter((item) => item?.role === 'core_beta_runtime_maintenance');
+  const manifestMaintenanceEvidence = manifestMaintenanceRows[0];
+  const manifestTerminalScreenshotRows = manifestRows.filter(
+    (item) => item?.role === 'initialization_terminal_screenshot',
+  );
+  const manifestTerminalScreenshotEvidence = manifestTerminalScreenshotRows[0];
+  const surfaceRecord = referencedRecords.continuation_surface;
+  const independentManifestRoles = new Map([
+    ['initialization_action_observation', referencedRecords.action_observations],
+    ['core_beta_runtime_maintenance_observations', referencedRecords.terminal_observations],
+    ['initialization_before_public_state', referencedRecords.before_public_state],
+    ['initialization_after_public_state', referencedRecords.after_public_state],
+  ]);
+  let independentManifestBindingsValid = true;
+  for (const [role, record] of independentManifestRoles) {
+    const rows = manifestRows.filter((item) => item?.role === role);
+    if (rows.length !== 1
+      || !record
+      || !manifestRowValid(rows[0])
+      || !caseBoundFileRecord(record.path, rows[0], role)) {
+      independentManifestBindingsValid = false;
+    }
+  }
+  if (
+    manifest?.schema_version !== 'qbot-core-evidence/v2'
+    || manifest?.case_id !== expectedCaseId
+    || manifest?.complete !== true
+    || !Array.isArray(manifest?.missing_roles)
+    || manifest.missing_roles.length !== 0
+    || !Array.isArray(manifest?.invalid_roles)
+    || manifest.invalid_roles.length !== 0
+    || !manifestRolesUnique
+    || manifestRows.some((item) => !manifestRowValid(item))
+    || manifestVerdictRows.length !== 1
+    || manifestSurfaceRows.length !== 1
+    || manifestMaintenanceRows.length !== 1
+    || manifestTerminalScreenshotRows.length !== 1
+    || !independentManifestBindingsValid
+    || !manifestEvidence
+    || !manifestSurfaceEvidence
+    || !manifestMaintenanceEvidence
+    || !manifestTerminalScreenshotEvidence
+    || !manifestRowValid(manifestEvidence)
+    || !manifestRowValid(manifestSurfaceEvidence)
+    || !manifestRowValid(manifestMaintenanceEvidence)
+    || !manifestRowValid(manifestTerminalScreenshotEvidence)
+    || !artifactRecord
+    || !caseBoundFileRecord(
+      artifactRecord.path,
+      manifestEvidence,
+      'skill_reinstall_readiness_verdict',
+    )
+    || !surfaceRecord
+    || !caseBoundFileRecord(
+      surfaceRecord.path,
+      manifestSurfaceEvidence,
+      'initialization_continuation_surface',
+    )
+    || !referencedRecords.maintenance_readback
+    || !caseBoundFileRecord(
+      referencedRecords.maintenance_readback.path,
+      manifestMaintenanceEvidence,
+      'core_beta_runtime_maintenance',
+    )
+    || !screenshotRecord
+    || !caseBoundFileRecord(
+      screenshotRecord.path,
+      manifestTerminalScreenshotEvidence,
+      'initialization_terminal_screenshot',
+    )
+  ) addReason('skill_reinstall_manifest_binding_invalid');
+  if (!result?.evidence_manifest || !manifest || !canonicalEqual(result.evidence_manifest, manifest)) {
+    addReason('skill_reinstall_embedded_manifest_mismatch');
+  }
+
+  const rawStatus = String(result?.status || '');
+  const rawCategory = String(result?.result_category || '');
+  if (replayedVerdict.evidence_valid === true && replayedVerdict.oracle_valid === true
+    && (rawStatus !== 'passed' || rawCategory !== 'pass')) {
+    addReason('skill_reinstall_raw_result_mismatches_pass_verdict');
+  }
+  if (replayedVerdict.evidence_valid === true && replayedVerdict.oracle_valid === false
+    && (rawStatus !== 'failed' || rawCategory !== 'bug')) {
+    addReason('skill_reinstall_raw_result_mismatches_bug_verdict');
+  }
+  if (!coreBetaFinalizeEvidenceValidationSession(validationSession, result, { runRoot: root })) {
+    addReason('skill_reinstall_evidence_identity_drift');
+  }
+  return {
+    applicable: true,
+    valid: reasons.length === 0,
+    oracle_valid: replayedVerdict.oracle_valid === true,
+    outcome: replayedVerdict.outcome || '',
+    reason: reasons.join(',') || String(data?.reason || 'skill_reinstall_evidence_valid'),
+    reasons,
+    file: artifactRecord?.path || '',
+    data,
+    replayed_verdict: replayedVerdict,
+  };
+}
+
 export function coreBetaSkillUninstallRequestName(skill = {}) {
   const name = String(skill?.name || skill?.slug || '').trim();
   if (!name) throw new Error('Skill 卸载目标缺少产品 API 要求的字符串 name。');
@@ -8359,7 +11421,21 @@ async function selectCoreBetaSkillTab(page, name) {
 
 async function readCoreBetaSkillCatalog(page) {
   return await page.evaluate(async () => {
-    const catalog = await window.agent.getSkillsCatalog();
+    if (typeof window.agent?.getSkillsCatalog !== 'function') {
+      throw new Error('missing bridge method getSkillsCatalog');
+    }
+    let timer = null;
+    const catalog = await Promise.race([
+      window.agent.getSkillsCatalog(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error('Core Beta getSkillsCatalog readback timed out after 5000ms')),
+          5_000,
+        );
+      }),
+    ]).finally(() => {
+      if (timer) window.clearTimeout(timer);
+    });
     return {
       ...catalog,
       observed_at: new Date().toISOString(),
@@ -24900,16 +27976,14 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
     if (!await selectGeneralAssistantForCase(page, state, caseDir)) return;
     await openNewTask(page, state);
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-    const fixtureAvailability = await page.evaluate(async () => {
-      const [skills, connectors] = await Promise.all([
-        window.agent.getSkillsCatalog().catch(() => ({})),
-        window.agent.getConnectorCatalog().catch(() => ({})),
-      ]);
-      return {
-        qaSkill: (skills?.installed || []).some((item) => /QA Python Runtime|qa-python-runtime/i.test(`${item?.label || ''}\n${item?.slug || ''}`)),
-        qaConnector: (connectors?.connectors || []).find((item) => /(?:^|:)dev_healthy$/.test(String(item?.key || '')))?.key || '',
-      };
-    }).catch(() => ({ qaSkill: false, qaConnector: '' }));
+    const [skills, connectors] = await Promise.all([
+      readCoreBetaSkillCatalog(page).catch(() => ({})),
+      page.evaluate(async () => window.agent.getConnectorCatalog().catch(() => ({}))).catch(() => ({})),
+    ]);
+    const fixtureAvailability = {
+      qaSkill: (skills?.installed || []).some((item) => /QA Python Runtime|qa-python-runtime/i.test(`${item?.label || ''}\n${item?.slug || ''}`)),
+      qaConnector: (connectors?.connectors || []).find((item) => /(?:^|:)dev_healthy$/.test(String(item?.key || '')))?.key || '',
+    };
     if (!(fixtureAvailability.qaSkill
       ? await selectManualSkillByName(page, state, caseDir, 'QA Python Runtime')
       : await selectFirstManualSkill(page, state, caseDir))) return;
@@ -31815,14 +34889,12 @@ async function waitForSkillInstallTerminal(page, {
         return { terminal: true, success: true, failure: false, pending: false, source: 'visible installed-card action', text: text || combined };
       }
     }
-    const catalogInstalled = await page.evaluate(async ({ slug, name }) => {
-      if (typeof window.agent?.getSkillsCatalog !== 'function') return false;
-      const catalog = await window.agent.getSkillsCatalog('');
-      return (catalog?.installed || []).some((item) => (
-        (slug && String(item?.slug || '') === slug)
-        || (name && String(item?.name || '') === name)
-      ));
-    }, { slug: String(skillSlug || ''), name: String(skillName || '') }).catch(() => false);
+    const catalogInstalled = await readCoreBetaSkillCatalog(page)
+      .then((catalog) => (catalog?.installed || []).some((item) => (
+        (skillSlug && String(item?.slug || '') === String(skillSlug))
+        || (skillName && String(item?.name || '') === String(skillName))
+      )))
+      .catch(() => false);
     if (catalogInstalled) {
       return { terminal: true, success: true, failure: false, pending: false, source: 'window.agent.getSkillsCatalog().installed', text: text || combined };
     }
@@ -42081,6 +45153,7 @@ function finalizeState(state) {
 }
 
 async function finishCase({ page, state, caseDir }) {
+  enforceCoreBetaInitializationContinuationOutcome(state);
   state.ended_at = new Date().toISOString();
   state.screenshots.final = state.screenshots.final || await shot(page, caseDir, '03-assertion').catch(() => '');
   state.screenshots_flat = dedupe(Object.values(state.screenshots).filter((item) => typeof item === 'string'), (item) => item);
@@ -42580,7 +45653,7 @@ function statusFromResults(results) {
   return 'passed';
 }
 
-export function buildFrameworkStopCredibilityDiagnostic(frameworkStop) {
+export function buildFrameworkStopCredibilityDiagnostic(frameworkStop, { runRoot = '' } = {}) {
   if (!frameworkStop || typeof frameworkStop !== 'object') return null;
   const failedResult = frameworkStop.failed_result && typeof frameworkStop.failed_result === 'object'
     ? frameworkStop.failed_result
@@ -42599,7 +45672,7 @@ export function buildFrameworkStopCredibilityDiagnostic(frameworkStop) {
       screenshots: {},
       artifacts: {},
     };
-  const reviewed = reviewCaseCredibility(failedResult);
+  const reviewed = reviewCaseCredibility(failedResult, { runRoot });
   return {
     ...reviewed,
     id: String(failedResult.id || frameworkStop.stopped_case_id || 'FRAMEWORK-STOP'),
@@ -42688,8 +45761,8 @@ export function buildSummary({
       screenshots_flat: result.screenshots_flat?.length ? result.screenshots_flat : Object.values(result.screenshots || {}).filter((item) => typeof item === 'string'),
     })),
   };
-  summary.credibility_review = buildCredibilityReview(summary.results);
-  const frameworkStopReview = buildFrameworkStopCredibilityDiagnostic(frameworkStop);
+  summary.credibility_review = buildCredibilityReview(summary.results, { runRoot: outDir });
+  const frameworkStopReview = buildFrameworkStopCredibilityDiagnostic(frameworkStop, { runRoot: outDir });
   summary.framework_stop_review = frameworkStopReview;
   summary.credibility_review.diagnostics = frameworkStopReview ? [frameworkStopReview] : [];
   summary.credibility_review.counts.framework_issue_completed = summary.credibility_review.counts.framework_issue;
@@ -42714,7 +45787,10 @@ function writeRunArtifacts(outDir, summary) {
   summary.credibility_review_json = path.join(outDir, '二次复核结构化结果.json');
   summary.framework_fix_list = path.join(outDir, '框架修复清单.md');
   writeJsonFile(path.join(outDir, 'automation-run-summary.json'), summary);
-  writeJsonFile(summary.credibility_review_json, summary.credibility_review || buildCredibilityReview(summary.results || []));
+  writeJsonFile(
+    summary.credibility_review_json,
+    summary.credibility_review || buildCredibilityReview(summary.results || [], { runRoot: outDir }),
+  );
   writeTextFile(path.join(outDir, 'automation-run-report.md'), renderRunReport(summary));
   writeTextFile(summary.final_report, renderFinalDetailedReport(summary));
   writeTextFile(summary.evidence_gallery_html, renderEvidenceGalleryHtml(summary));
@@ -42749,8 +45825,8 @@ async function writeResultExcel({ python, root, casebook, outDir, summary, resul
   }
 }
 
-export function buildCredibilityReview(results = []) {
-  const items = results.map(reviewCaseCredibility);
+export function buildCredibilityReview(results = [], { runRoot = '' } = {}) {
+  const items = results.map((result) => reviewCaseCredibility(result, { runRoot }));
   const trusted = items.filter((item) => item.trusted).length;
   const total = items.length;
   const counts = {
@@ -42970,7 +46046,7 @@ function verifiedQworkDailyExpertAudienceRejection(result) {
   return valid ? evidence : null;
 }
 
-export function reviewCaseCredibility(result) {
+export function reviewCaseCredibility(result, { runRoot = '' } = {}) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
   const steps = Array.isArray(result.steps) ? result.steps : [];
@@ -43109,7 +46185,12 @@ export function reviewCaseCredibility(result) {
   }
 
   if (!reasons.length && status !== 'blocked') {
-    const userReview = assessUserExperience(result, { status, category, assertions });
+    const userReview = assessUserExperience(result, {
+      status,
+      category,
+      assertions,
+      runRoot,
+    });
     userCenteredAssessment = userReview.assessment || null;
     reviewCategory = userReview.review_category;
     trusted = userReview.trusted;
@@ -43289,7 +46370,86 @@ export function assessUserCenteredOutcome(result, {
   userOperationOverride = '',
   expectedOutcomeOverride = '',
   userImpactOverride = '',
+  runRoot = '',
 } = {}) {
+  const initializationContinuation = coreBetaInitializationContinuationVerdict(result);
+  const initializationContinuationFailure = [
+    result?.primary_failure,
+    ...(Array.isArray(result?.failure_history) ? result.failure_history : []),
+  ].find((item) => (
+    item?.category === 'automation_error'
+    && item?.source === 'initialization_continuation'
+  ));
+  if (
+    initializationContinuationFailure
+    || initializationContinuation.applicable && initializationContinuation.safe !== true
+  ) {
+    const detail = String(
+      initializationContinuationFailure?.reason
+      || result?.initialization_continuation?.reason
+      || initializationContinuation.reason
+      || '初始化失败后的连续执行安全性无法证明。',
+    ).trim();
+    return {
+      classification: 'framework_issue',
+      reason: `初始化连续性安全门禁未通过：${detail}`,
+      description: '用户操作：执行初始化维护用例；结果：初始化失败后的公开可用性或证据结构未通过连续执行门禁；影响：不能据此判断产品是否有 Bug。',
+      userOperation: '执行初始化维护用例',
+      expected: '初始化失败后仅在结构化连续执行合同完整且 safe=true 时形成产品结论。',
+      observed: detail,
+      impact: '不能据此判断产品是否有 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: '初始化连续性安全门禁优先于截图和人工覆盖。',
+      gates: { initialization_continuation_safe: false },
+      missingGates: ['initialization_continuation_safe'],
+      initializationContinuation,
+    };
+  }
+  const initializationContinuationEvidence = coreBetaInitializationContinuationEvidenceVerdict(
+    result,
+    { runRoot },
+  );
+  if (
+    initializationContinuationEvidence.applicable
+    && initializationContinuationEvidence.required
+    && initializationContinuationEvidence.valid !== true
+  ) {
+    return {
+      classification: 'framework_issue',
+      reason: `初始化连续性磁盘证据门禁未通过：${initializationContinuationEvidence.reason}`,
+      description: '用户操作：执行初始化维护用例；结果：maintenance、恢复表面、截图或 manifest 未能从当前不可变运行目录完成可信重放；影响：不能据此判断产品是否有 Bug。',
+      userOperation: '执行初始化维护用例',
+      expected: '初始化产品失败必须由当前 run root 内的冻结字节证据重放并与结果逐字段一致。',
+      observed: initializationContinuationEvidence.reason,
+      impact: '不能据此判断产品是否有 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: '初始化连续性磁盘证据门禁优先于截图和人工覆盖。',
+      gates: { initialization_continuation_evidence_valid: false },
+      missingGates: ['initialization_continuation_evidence_valid'],
+      initializationContinuationEvidence,
+    };
+  }
+  const skillReinstallEvidence = initializationContinuationEvidence.skill_reinstall_evidence
+    || coreBetaInitializationSkillReinstallEvidenceVerdict(result, { runRoot });
+  if (skillReinstallEvidence.applicable && skillReinstallEvidence.valid !== true) {
+    return {
+      classification: 'framework_issue',
+      reason: `INIT-003 专项证据门禁未通过：${skillReinstallEvidence.reason}`,
+      description: '用户操作：重装 Skill 运行层；结果：专项 readiness verdict、证据引用或 manifest 绑定不完整；影响：不能据此判断产品通过或 Bug。',
+      userOperation: '重装 Skill 运行层',
+      expected: '安装 identity 保持一致、catalog 连续稳定 idle，且每个安装项进入明确 ready 终态。',
+      observed: skillReinstallEvidence.reason,
+      impact: '不能据此判断产品通过或 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: 'INIT-003 专项结构化证据完整性优先于通用截图和人工覆盖。',
+      gates: { skill_reinstall_readiness_evidence_valid: false },
+      missingGates: ['skill_reinstall_readiness_evidence_valid'],
+      skillReinstallEvidence,
+    };
+  }
   const status = String(result?.status || '');
   const category = String(result?.result_category || '');
   const steps = Array.isArray(result?.steps) ? result.steps : [];
@@ -43457,13 +46617,34 @@ export function assessUserCenteredOutcome(result, {
   };
 }
 
-function assessUserExperience(result, { status, category, assertions }) {
+function assessUserExperience(result, {
+  status,
+  category,
+  assertions,
+  runRoot = '',
+}) {
+  const initializationGateAssessment = assessUserCenteredOutcome(result, { runRoot });
+  if (
+    initializationGateAssessment.gates?.initialization_continuation_safe === false
+    || initializationGateAssessment.gates?.initialization_continuation_evidence_valid === false
+    || initializationGateAssessment.gates?.skill_reinstall_readiness_evidence_valid === false
+  ) {
+    return {
+      review_category: '不可信-框架问题',
+      trusted: false,
+      reason: initializationGateAssessment.reason,
+      user_view_conclusion: '初始化连续执行、磁盘重放或 INIT-003 专项证据门禁未通过，不能形成产品质量结论。',
+      action: '修复框架或证据合同后，在新不可变目录从当前阶段第 1 条完整重跑。',
+      assessment: initializationGateAssessment,
+    };
+  }
   const text = userReviewText(result, assertions);
   if (status === 'failed' && category !== 'automation_error') {
     const expertAudienceRejection = verifiedQworkDailyExpertAudienceRejection(result);
     if (expertAudienceRejection) {
       const evidence = expertAudienceRejection.data;
       const assessment = assessUserCenteredOutcome(result, {
+        runRoot,
         explicitEvidence: [evidence.screenshot.path],
         intendedClassification: 'bug',
         reviewReason: '结构化组织可见专家产品拒绝证据已验证，生命周期调用、库存读回、零发送守卫和截图完整。',
@@ -43487,6 +46668,7 @@ function assessUserExperience(result, { status, category, assertions }) {
     if (preSendCapabilityFailure) {
       const evidence = preSendCapabilityFailure.data;
       const assessment = assessUserCenteredOutcome(result, {
+        runRoot,
         explicitEvidence: [evidence.screenshot.path],
         intendedClassification: 'bug',
         reviewReason: '结构化发送前能力负向证据已验证，控件定位、点击派发、公开状态和零发送守卫完整。',
@@ -43532,7 +46714,7 @@ function assessUserExperience(result, { status, category, assertions }) {
       };
     }
   }
-  const assessment = assessUserCenteredOutcome(result);
+  const assessment = assessUserCenteredOutcome(result, { runRoot });
   if (assessment.classification === 'pass') return {
     review_category: '可信通过-用户可接受',
     trusted: true,
@@ -43738,7 +46920,10 @@ function credibilityFrameworkItems(review = {}) {
 }
 
 function renderCredibilityReviewReport(summary) {
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const lines = [
     '# QBot 自动化执行二次复核报告',
     '',
@@ -43821,7 +47006,10 @@ function renderCredibilityReviewReport(summary) {
 }
 
 function renderFrameworkFixList(summary) {
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const items = credibilityFrameworkItems(review);
   const lines = [
     '# QBot 自动化框架修复清单',
@@ -43845,7 +47033,10 @@ function renderFrameworkFixList(summary) {
 function renderFinalDetailedReport(summary) {
   const moduleRows = moduleResultRows(summary.results || []);
   const sourceInfo = readOptionalSourceInfo(summary.run_dir);
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const lines = [
     '# QBot 自动化测试最终报告',
     '',

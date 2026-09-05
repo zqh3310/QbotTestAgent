@@ -51,6 +51,9 @@ import {
 } from './task-regenerate-evidence.mjs';
 import {
   coreBetaCapabilitiesReadbackWithRetry,
+  coreBetaInitializationContinuationEvidenceVerdict,
+  coreBetaInitializationContinuationVerdict,
+  coreBetaInitializationSkillReinstallEvidenceVerdict,
   runUiAgentCasebookCommand as runCoreBetaV2CasebookCommand,
 } from './ui-agent-casebook-runner-v2.mjs';
 
@@ -66,6 +69,7 @@ const MULTI_TURN_REPLY_WAIT_MS = 600000;
 const CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS = 2_000;
 const CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS = 3;
 const CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS = 150;
+const SKILLS_CATALOG_RENDERER_TIMEOUT_MS = 5_000;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -6595,10 +6599,7 @@ async function coreBetaSkillInventory(ctx, tab = '技能市场') {
   await openSkillsPage(ctx.page, ctx.state, ctx.caseDir, { skillTab: tab });
   const [capabilities, catalog] = await Promise.all([
     currentCapabilities(ctx.page),
-    ctx.page.evaluate(async () => {
-      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
-      return window.agent.getSkillsCatalog('');
-    }).catch(() => null),
+    readSkillsCatalogWithRendererTimeout(ctx.page).catch(() => null),
   ]);
   const actionSelectors = coreBetaSkillCardActionSelectorCandidates();
   const domSkills = await ctx.page.locator('.skill-card').evaluateAll((cards, selectors) => cards.map((card) => {
@@ -6723,17 +6724,15 @@ async function coreBetaInstallSkill(ctx, sampled) {
       card.locator(coreBetaInstalledSkillTerminalSelectorCandidates().join(', ')).first(),
       700,
     );
-    const catalogSkill = await ctx.page.evaluate(async ({ slug, names }) => {
-      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
-      const catalog = await window.agent.getSkillsCatalog('');
+    const catalogSkill = await readSkillsCatalogWithRendererTimeout(ctx.page).then((catalog) => {
       return (catalog?.installed || []).find((item) => (
-        item?.slug === slug
-        || names.includes(String(item?.name || ''))
-        || names.includes(String(item?.label || ''))
-        || names.includes(String(item?.cnName || ''))
-        || names.includes(String(item?.displayName || ''))
+        item?.slug === sampled.slug
+        || identities.includes(String(item?.name || ''))
+        || identities.includes(String(item?.label || ''))
+        || identities.includes(String(item?.cnName || ''))
+        || identities.includes(String(item?.displayName || ''))
       )) || null;
-    }, { slug: sampled.slug, names: identities }).catch(() => null);
+    }).catch(() => null);
     const readinessStatus = String(
       catalogSkill?.localReadiness?.status
       || catalogSkill?.localReadiness?.readinessStatus
@@ -6787,17 +6786,15 @@ async function coreBetaInstallSkill(ctx, sampled) {
   let catalogSkill = null;
   const readinessDeadline = Date.now() + 120000;
   while (Date.now() < readinessDeadline) {
-    catalogSkill = await ctx.page.evaluate(async ({ slug, names }) => {
-      if (typeof window.agent?.getSkillsCatalog !== 'function') return null;
-      const catalog = await window.agent.getSkillsCatalog('');
+    catalogSkill = await readSkillsCatalogWithRendererTimeout(ctx.page).then((catalog) => {
       return (catalog?.installed || []).find((item) => (
-        item?.slug === slug
-        || names.includes(String(item?.name || ''))
-        || names.includes(String(item?.label || ''))
-        || names.includes(String(item?.cnName || ''))
-        || names.includes(String(item?.displayName || ''))
+        item?.slug === sampled.slug
+        || identities.includes(String(item?.name || ''))
+        || identities.includes(String(item?.label || ''))
+        || identities.includes(String(item?.cnName || ''))
+        || identities.includes(String(item?.displayName || ''))
       )) || null;
-    }, { slug: sampled.slug, names: identities }).catch(() => null);
+    }).catch(() => null);
     const status = String(catalogSkill?.localReadiness?.status || catalogSkill?.localReadiness?.readinessStatus || '');
     if (/ready|loaded|active|available|ok/i.test(status)) break;
     if (/reject|fail|error|unready|missing/i.test(status)) break;
@@ -13724,16 +13721,14 @@ async function executeSitHomeAbilityCombination({ page, state, testCase, caseDir
     if (!await selectGeneralAssistantForCase(page, state, caseDir)) return;
     await openNewTask(page, state);
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
-    const fixtureAvailability = await page.evaluate(async () => {
-      const [skills, connectors] = await Promise.all([
-        window.agent.getSkillsCatalog().catch(() => ({})),
-        window.agent.getConnectorCatalog().catch(() => ({})),
-      ]);
-      return {
-        qaSkill: (skills?.installed || []).some((item) => /QA Python Runtime|qa-python-runtime/i.test(`${item?.label || ''}\n${item?.slug || ''}`)),
-        qaConnector: (connectors?.connectors || []).find((item) => /(?:^|:)dev_healthy$/.test(String(item?.key || '')))?.key || '',
-      };
-    }).catch(() => ({ qaSkill: false, qaConnector: '' }));
+    const [skills, connectors] = await Promise.all([
+      readSkillsCatalogWithRendererTimeout(page).catch(() => ({})),
+      page.evaluate(async () => window.agent.getConnectorCatalog().catch(() => ({}))).catch(() => ({})),
+    ]);
+    const fixtureAvailability = {
+      qaSkill: (skills?.installed || []).some((item) => /QA Python Runtime|qa-python-runtime/i.test(`${item?.label || ''}\n${item?.slug || ''}`)),
+      qaConnector: (connectors?.connectors || []).find((item) => /(?:^|:)dev_healthy$/.test(String(item?.key || '')))?.key || '',
+    };
     if (!(fixtureAvailability.qaSkill
       ? await selectManualSkillByName(page, state, caseDir, 'QA Python Runtime')
       : await selectFirstManualSkill(page, state, caseDir))) return;
@@ -20382,14 +20377,14 @@ async function waitForSkillInstallTerminal(page, {
         };
       }
     }
-    const catalogInstalled = await page.evaluate(async ({ slug, name }) => {
-      if (typeof window.agent?.getSkillsCatalog !== 'function') return false;
-      const catalog = await window.agent.getSkillsCatalog('');
+    const catalogInstalled = await readSkillsCatalogWithRendererTimeout(page).then((catalog) => {
+      const slug = String(skillSlug || '');
+      const name = String(skillName || '');
       return (catalog?.installed || []).some((item) => (
         (slug && String(item?.slug || '') === slug)
         || (name && String(item?.name || '') === name)
       ));
-    }, { slug: String(skillSlug || ''), name: String(skillName || '') }).catch(() => false);
+    }).catch(() => false);
     if (catalogInstalled) {
       return {
         terminal: true,
@@ -20992,6 +20987,37 @@ async function currentCapabilities(page) {
     retryDelayMs: CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS,
   });
   return readback.ok ? readback.value : null;
+}
+
+async function readSkillsCatalogWithRendererTimeout(page, query = '') {
+  const timeoutMs = SKILLS_CATALOG_RENDERER_TIMEOUT_MS;
+  return withCoreBetaOperationHardTimeout(
+    page.evaluate(async ({ requestedQuery, rendererTimeoutMs }) => {
+      const agent = globalThis.window?.agent;
+      if (typeof agent?.getSkillsCatalog !== 'function') {
+        throw new Error('missing bridge method getSkillsCatalog');
+      }
+      let timer = null;
+      try {
+        return await Promise.race([
+          Promise.resolve().then(() => agent.getSkillsCatalog(requestedQuery)),
+          new Promise((_, reject) => {
+            timer = globalThis.setTimeout(
+              () => reject(new Error(`QWork getSkillsCatalog readback timed out after ${rendererTimeoutMs}ms`)),
+              rendererTimeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== null) globalThis.clearTimeout(timer);
+      }
+    }, {
+      requestedQuery: String(query || ''),
+      rendererTimeoutMs: timeoutMs,
+    }),
+    timeoutMs + 500,
+    'getSkillsCatalog renderer readback',
+  );
 }
 
 async function unifiedComposerPlusAvailable(page) {
@@ -31337,7 +31363,7 @@ function buildSummary({ status, startedAt, outDir, casebook, resultExcel, profil
       screenshots_flat: result.screenshots_flat?.length ? result.screenshots_flat : Object.values(result.screenshots || {}).filter((item) => typeof item === 'string'),
     })),
   };
-  summary.credibility_review = buildCredibilityReview(summary.results);
+  summary.credibility_review = buildCredibilityReview(summary.results, { runRoot: outDir });
   return summary;
 }
 
@@ -31349,7 +31375,10 @@ function writeRunArtifacts(outDir, summary) {
   summary.credibility_review_json = path.join(outDir, '二次复核结构化结果.json');
   summary.framework_fix_list = path.join(outDir, '框架修复清单.md');
   writeJsonFile(path.join(outDir, 'automation-run-summary.json'), summary);
-  writeJsonFile(summary.credibility_review_json, summary.credibility_review || buildCredibilityReview(summary.results || []));
+  writeJsonFile(
+    summary.credibility_review_json,
+    summary.credibility_review || buildCredibilityReview(summary.results || [], { runRoot: outDir }),
+  );
   writeTextFile(path.join(outDir, 'automation-run-report.md'), renderRunReport(summary));
   writeTextFile(summary.final_report, renderFinalDetailedReport(summary));
   writeTextFile(summary.evidence_gallery_html, renderEvidenceGalleryHtml(summary));
@@ -31384,8 +31413,8 @@ async function writeResultExcel({ python, root, casebook, outDir, summary, resul
   }
 }
 
-export function buildCredibilityReview(results = []) {
-  const items = results.map(reviewCaseCredibility);
+export function buildCredibilityReview(results = [], { runRoot = '' } = {}) {
+  const items = results.map((result) => reviewCaseCredibility(result, { runRoot }));
   const trusted = items.filter((item) => item.trusted).length;
   const total = items.length;
   const counts = {
@@ -31457,7 +31486,7 @@ export function sentPromptFidelity(result) {
   };
 }
 
-export function reviewCaseCredibility(result) {
+export function reviewCaseCredibility(result, { runRoot = '' } = {}) {
   const status = String(result.status || '');
   const category = String(result.result_category || '');
   const steps = Array.isArray(result.steps) ? result.steps : [];
@@ -31600,7 +31629,12 @@ export function reviewCaseCredibility(result) {
   }
 
   if (!reasons.length && status !== 'blocked') {
-    const userReview = assessUserExperience(result, { status, category, assertions });
+    const userReview = assessUserExperience(result, {
+      status,
+      category,
+      assertions,
+      runRoot,
+    });
     userCenteredAssessment = userReview.assessment || null;
     reviewCategory = userReview.review_category;
     trusted = userReview.trusted;
@@ -31943,7 +31977,94 @@ export function assessUserCenteredOutcome(result, {
   expectedOutcomeOverride = '',
   userImpactOverride = '',
   verifiedReviewOverride = false,
+  runRoot = '',
 } = {}) {
+  const initializationContinuationEvidence = coreBetaInitializationContinuationEvidenceVerdict(
+    result,
+    { runRoot },
+  );
+  if (
+    initializationContinuationEvidence.applicable
+    && initializationContinuationEvidence.required
+    && (
+      initializationContinuationEvidence.valid !== true
+      || initializationContinuationEvidence.safe !== true
+    )
+  ) {
+    const detail = initializationContinuationEvidence.reason
+      || '初始化失败后的磁盘证据无法从当前运行根重放。';
+    return {
+      classification: 'framework_issue',
+      reason: `初始化连续性磁盘证据门禁未通过：${detail}`,
+      description: '用户操作：执行初始化维护用例；结果：当前不可变运行目录中的初始化连续性证据未通过磁盘重放；影响：不能据此判断产品是否有 Bug。',
+      userOperation: '执行初始化维护用例',
+      expected: '初始化失败后的动作、维护终态、恢复工作台和 manifest 必须从当前 run root 实读并完整重放。',
+      observed: detail,
+      impact: '不能据此判断产品是否有 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: '初始化连续性磁盘证据门禁优先于截图和人工覆盖。',
+      gates: {
+        initialization_continuation_safe: false,
+        initialization_continuation_evidence_valid: false,
+      },
+      missingGates: ['initialization_continuation_evidence_valid'],
+      initializationContinuationEvidence,
+    };
+  }
+  const initializationContinuation = coreBetaInitializationContinuationVerdict(result);
+  const initializationContinuationFailure = [
+    result?.primary_failure,
+    ...(Array.isArray(result?.failure_history) ? result.failure_history : []),
+  ].find((item) => (
+    item?.category === 'automation_error'
+    && item?.source === 'initialization_continuation'
+  ));
+  if (
+    initializationContinuationFailure
+    || initializationContinuation.applicable && initializationContinuation.safe !== true
+  ) {
+    const detail = String(
+      initializationContinuationFailure?.reason
+      || initializationContinuation.reason
+      || result?.initialization_continuation?.reason
+      || '初始化失败后的连续执行安全性无法证明。',
+    ).trim();
+    return {
+      classification: 'framework_issue',
+      reason: `初始化连续性安全门禁未通过：${detail}`,
+      description: '用户操作：执行初始化维护用例；结果：初始化失败后的公开可用性或证据结构未通过连续执行门禁；影响：不能据此判断产品是否有 Bug。',
+      userOperation: '执行初始化维护用例',
+      expected: '初始化失败后仅在结构化连续执行合同完整且 safe=true 时形成产品结论。',
+      observed: detail,
+      impact: '不能据此判断产品是否有 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: '初始化连续性安全门禁优先于截图和人工覆盖。',
+      gates: { initialization_continuation_safe: false },
+      missingGates: ['initialization_continuation_safe'],
+      initializationContinuation,
+    };
+  }
+  const skillReinstallEvidence = initializationContinuationEvidence.skill_reinstall_evidence
+    || coreBetaInitializationSkillReinstallEvidenceVerdict(result, { runRoot });
+  if (skillReinstallEvidence.applicable && skillReinstallEvidence.valid !== true) {
+    return {
+      classification: 'framework_issue',
+      reason: `INIT-003 专项证据门禁未通过：${skillReinstallEvidence.reason}`,
+      description: '用户操作：重装 Skill 运行层；结果：专项 readiness verdict、证据引用或 manifest 绑定不完整；影响：不能据此判断产品通过或 Bug。',
+      userOperation: '重装 Skill 运行层',
+      expected: '安装 identity 保持一致、catalog 连续稳定 idle，且每个安装项进入明确 ready 终态。',
+      observed: skillReinstallEvidence.reason,
+      impact: '不能据此判断产品通过或 Bug。',
+      keyScreenshot: '',
+      alignedScreenshots: [],
+      screenshotReason: 'INIT-003 专项结构化证据完整性优先于通用截图和人工覆盖。',
+      gates: { skill_reinstall_readiness_evidence_valid: false },
+      missingGates: ['skill_reinstall_readiness_evidence_valid'],
+      skillReinstallEvidence,
+    };
+  }
   const status = String(result?.status || '');
   const category = String(result?.result_category || '');
   const steps = Array.isArray(result?.steps) ? result.steps : [];
@@ -32092,8 +32213,14 @@ export function assessUserCenteredOutcome(result, {
     && (hasReplyDelta || timeoutFailure)
     && (USER_REVIEW_HARD_PRODUCT_FAILURE.test(hardFailureText) || timeoutFailure);
   const objectiveFailureAssertion = failedAssertions.find(isObjectiveUiFailureAssertion) || null;
+  const verifiedInitializationProductAction = intended === 'bug'
+    && initializationContinuation.applicable === true
+    && initializationContinuation.continuation_required === true
+    && initializationContinuation.valid === true
+    && initializationContinuation.safe === true;
   const productActionExercised = objectiveFailureAssertion
-    ? hasMatchingProductAction(actions, objectiveFailureAssertion)
+    ? verifiedInitializationProductAction
+      || hasMatchingProductAction(actions, objectiveFailureAssertion)
     : false;
   const verifiedOverrideEvidence = verifiedReviewOverride === true
     && Boolean(reviewReason)
@@ -32111,7 +32238,10 @@ export function assessUserCenteredOutcome(result, {
     String(result?.execution_provenance || ''),
   );
   const gates = {
-    reached_user_action: actions.length > 0 || verifiedPreSendProductFailure || verifiedProductActionFailure,
+    reached_user_action: actions.length > 0
+      || verifiedInitializationProductAction
+      || verifiedPreSendProductFailure
+      || verifiedProductActionFailure,
     user_outcome_assertion: intended === 'bug'
       ? failedAssertions.length > 0
         || verifiedPreSendProductFailure
@@ -32242,7 +32372,26 @@ export function assessUserCenteredOutcome(result, {
   };
 }
 
-function assessUserExperience(result, { status, category, assertions }) {
+function assessUserExperience(result, {
+  status,
+  category,
+  assertions,
+  runRoot = '',
+}) {
+  const initializationGateAssessment = assessUserCenteredOutcome(result, { runRoot });
+  if (
+    initializationGateAssessment.gates?.initialization_continuation_safe === false
+    || initializationGateAssessment.gates?.skill_reinstall_readiness_evidence_valid === false
+  ) {
+    return {
+      review_category: '不可信-框架问题',
+      trusted: false,
+      reason: initializationGateAssessment.reason,
+      user_view_conclusion: '初始化连续执行或 INIT-003 专项证据门禁未通过，不能形成产品质量结论。',
+      action: '修复框架或证据合同后，在新不可变目录从当前阶段第 1 条完整重跑。',
+      assessment: initializationGateAssessment,
+    };
+  }
   const text = userReviewText(result, assertions);
   if (status === 'failed' && category !== 'automation_error') {
     if (looksLikeAcceptableSafeRefusal(result, text)) {
@@ -32273,7 +32422,7 @@ function assessUserExperience(result, { status, category, assertions }) {
       };
     }
   }
-  const assessment = assessUserCenteredOutcome(result);
+  const assessment = assessUserCenteredOutcome(result, { runRoot });
   if (assessment.classification === 'pass') return {
     review_category: '可信通过-用户可接受',
     trusted: true,
@@ -32472,7 +32621,10 @@ function renderRunReport(summary) {
 }
 
 function renderCredibilityReviewReport(summary) {
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const lines = [
     '# QBot 自动化执行二次复核报告',
     '',
@@ -32554,7 +32706,10 @@ function renderCredibilityReviewReport(summary) {
 }
 
 function renderFrameworkFixList(summary) {
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const items = review.items.filter((item) => item.review_category === '不可信-框架问题');
   const lines = [
     '# QBot 自动化框架修复清单',
@@ -32578,7 +32733,10 @@ function renderFrameworkFixList(summary) {
 function renderFinalDetailedReport(summary) {
   const moduleRows = moduleResultRows(summary.results || []);
   const sourceInfo = readOptionalSourceInfo(summary.run_dir);
-  const review = summary.credibility_review || buildCredibilityReview(summary.results || []);
+  const review = summary.credibility_review || buildCredibilityReview(
+    summary.results || [],
+    { runRoot: summary.out_dir || summary.run_dir || '' },
+  );
   const lines = [
     '# QBot 自动化测试最终报告',
     '',

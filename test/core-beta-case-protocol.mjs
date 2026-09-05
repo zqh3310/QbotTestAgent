@@ -2346,15 +2346,59 @@ const planCase = (id, caseType) => {
   assert.ok(ready.fixture_spec.includes('file:qbot-image-risk.png'));
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 }
+const legacyInitializedSkillReinstallCase = planCase('BETA-INIT-003', 'run_initialization');
+assert.equal(
+  validateCoreBetaCase(legacyInitializedSkillReinstallCase).ok,
+  true,
+  '历史冻结 Casebook 未声明专项角色时仍须可加载；runner 会在执行态强制追加并复核新证据',
+);
+const initializedSkillReinstallCase = structuredClone(legacyInitializedSkillReinstallCase);
+initializedSkillReinstallCase.evidence_roles.push(
+  'skill_reinstall_readiness_verdict',
+  'initialization_continuation_surface',
+);
+initializedSkillReinstallCase.oracle_type = 'public_state_machine+skill_reinstall_readiness+immutable_readback';
+initializedSkillReinstallCase.scenario = '真实点击一键重装 Skill 并完成破坏性确认；以前后完整 catalog、同一 identity/readiness 签名三次稳定 idle 和逐项 ready 证明运行层重建成功';
+initializedSkillReinstallCase.steps = '真实点击一键重装 Skill 并完成破坏性确认；读取重装前后完整 catalog；同一 identity/readiness 签名连续三次 idle；每个已安装 Skill ready=true，排除 unready/python_runtime_failed；成功或失败后点击【新建任务】恢复 continuation surface，并写入 initialization-continuation-surface.json 恢复文件；恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空；前后 PNG 均位于 Case 内普通文件，其路径、bytes、SHA-256 可重放；重放 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid。';
+initializedSkillReinstallCase.expected_result = '重装前后完整 catalog identity 全等，同一 identity/readiness 签名连续三次稳定 idle，每个已安装 Skill ready=true 且无失败态；专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，恢复后保持非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 和 Skill/Connector/Expert 全空。';
+initializedSkillReinstallCase.success_criteria = '真实点击一键重装 Skill、破坏性确认、前后完整 catalog、同一 identity/readiness 签名连续三次稳定 idle、每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重放一致；成功或失败后点击【新建任务】恢复 continuation surface；恢复 surface 为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false、Skill/Connector/Expert 全空；前后 PNG 是 Case 内普通文件且路径、bytes、SHA-256 可重放。';
+initializedSkillReinstallCase.precise_assertions = {
+  ...initializedSkillReinstallCase.precise_assertions,
+  hard_oracles: [
+    '真实点击一键重装 Skill 且破坏性确认严格绑定。',
+    '重装前后完整 catalog identity 集合非空、唯一并全等。',
+    '同一 identity/readiness 签名连续三次稳定 idle。',
+    '每个已安装 Skill ready=true，且不存在 unready/python_runtime_failed。',
+    '原始 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 均可重放。',
+    '专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，并生成 initialization-continuation-surface.json 恢复文件。',
+    '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空。',
+    '恢复前后 PNG 均为 Case 内普通文件，其路径、bytes、SHA-256 可重放。',
+  ],
+};
+
+for (const role of [
+  'skill_reinstall_readiness_verdict',
+  'initialization_continuation_surface',
+]) {
+  const missingRole = structuredClone(initializedSkillReinstallCase);
+  missingRole.evidence_roles = missingRole.evidence_roles.filter((item) => item !== role);
+  assert.match(
+    validateCoreBetaCase(missingRole).errors.join('\n'),
+    new RegExp(`evidence_roles 缺少 ${role}`),
+    `BETA-INIT-003 缺少 ${role} 时必须 fail-closed`,
+  );
+}
+
 const initializedPlan = [
   planCase('BETA-INIT-001', 'run_initialization'),
   planCase('BETA-INIT-002', 'run_initialization'),
-  planCase('BETA-INIT-003', 'run_initialization'),
+  initializedSkillReinstallCase,
   planCase('BETA-INIT-004', 'run_initialization'),
   planCase('BETA-INIT-005', 'run_initialization'),
   planCase('BETA-CHAT-001', 'conversation'),
 ];
-assert.equal(validateCoreBetaCasePlan(initializedPlan).ok, true);
+const initializedPlanValidation = validateCoreBetaCasePlan(initializedPlan);
+assert.equal(initializedPlanValidation.ok, true, initializedPlanValidation.errors.join('\n'));
 const misorderedPlan = [
   initializedPlan[1],
   initializedPlan[0],

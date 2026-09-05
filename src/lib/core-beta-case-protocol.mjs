@@ -710,6 +710,12 @@ export const CORE_BETA_EVIDENCE_ADAPTERS = new Set([
   'capability_execution_event',
   'skill_execution_trace',
   'skill_runtime_readiness',
+  'skill_reinstall_readiness_verdict',
+  'initialization_continuation_surface',
+  'initialization_action_observation',
+  'core_beta_runtime_maintenance_observations',
+  'initialization_before_public_state',
+  'initialization_after_public_state',
   'skill_install_attempt_ledger',
   'negative_tool_trace',
   'connector_prompt_layers',
@@ -1097,6 +1103,56 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
     }
     if (!evidenceRoles.has('web_search_quota_trace')) {
       errors.push(`${id} evidence_roles 缺少 web_search_quota_trace`);
+    }
+  }
+  const declaresSkillReinstallReadinessContract = id === 'BETA-INIT-003' && (
+    evidenceRoles.has('skill_reinstall_readiness_verdict')
+    || evidenceRoles.has('initialization_continuation_surface')
+    || String(testCase?.oracle_type || '').split('+').includes('skill_reinstall_readiness')
+  );
+  if (declaresSkillReinstallReadinessContract) {
+    const contractText = [
+      testCase?.scenario,
+      testCase?.steps,
+      testCase?.expected_result,
+      testCase?.success_criteria,
+      ...(Array.isArray(testCase?.precise_assertions?.hard_oracles)
+        ? testCase.precise_assertions.hard_oracles
+        : []),
+    ].map((value) => String(value || '')).join('\n');
+    for (const role of [
+      'skill_reinstall_readiness_verdict',
+      'initialization_continuation_surface',
+    ]) {
+      if (!evidenceRoles.has(role)) errors.push(`${id} evidence_roles 缺少 ${role}`);
+    }
+    if (!String(testCase?.oracle_type || '').split('+').includes('skill_reinstall_readiness')) {
+      errors.push(`${id} oracle_type 缺少 skill_reinstall_readiness`);
+    }
+    for (const [signal, pattern] of [
+      ['真实一键重装点击', /真实点击.{0,16}一键重装\s*Skill/iu],
+      ['破坏性确认', /破坏性确认/iu],
+      ['完整 catalog 前后读回', /前后.{0,24}(?:完整\s*)?catalog|(?:完整\s*)?catalog.{0,24}前后/iu],
+      ['同签名三次稳定 idle', /同一\s*identity\/readiness\s*签名.{0,24}(?:连续)?三次.{0,16}(?:idle|稳定)|(?:连续)?三次.{0,24}同一\s*identity\/readiness\s*签名/iu],
+      ['逐项 ready 与失败态排除', /每个已安装\s*Skill\s*ready=true[\s\S]*unready\/python_runtime_failed/iu],
+      ['失败后新建任务恢复', /(?:成功或失败|无论.{0,12}成功或失败|专项\s*Oracle\s*成功或失败).{0,32}(?:点击)?【新建任务】.{0,24}恢复/iu],
+      ['原始证据引用重放', /maintenance\/terminal\/catalog\/截图.{0,48}(?:bytes\/SHA\/schema\/Case\/method\/testid|bytes\/SHA)/iu],
+      [
+        '恢复 surface 文件',
+        /initialization[-_]continuation[-_]surface\.json|(?:恢复|continuation).{0,24}surface.{0,12}(?:文件|JSON)/iu,
+      ],
+      ['非空 draftInstanceId', /(?:非空.{0,12}draftInstanceId|draftInstanceId.{0,12}非空)/iu],
+      ['taskId=null', /taskId\s*=\s*null/iu],
+      ['messageCount=0', /messageCount\s*=\s*0/iu],
+      ['sendCount=0', /sendCount\s*=\s*0/iu],
+      ['running=false', /running\s*=\s*false/iu],
+      ['Skill/Connector/Expert 全空', /Skill\s*\/\s*Connector\s*\/\s*Expert.{0,16}(?:全空|均为空|全部为空)/iu],
+      [
+        '前后 PNG Case 内普通文件及 bytes/SHA 可重放',
+        /前后\s*PNG(?=[^\n。]*Case\s*内)(?=[^\n。]*普通文件)(?=[^\n。]*(?:path|路径))(?=[^\n。]*bytes)(?=[^\n。]*SHA(?:-?256)?)(?=[^\n。]*(?:可重放|重放))[^\n。]+/iu,
+      ],
+    ]) {
+      if (!pattern.test(contractText)) errors.push(`${id} 正式合同缺少${signal}`);
     }
   }
   if (id === 'BETA-EXPERT-012') {

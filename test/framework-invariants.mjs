@@ -81,6 +81,9 @@ import {
   sendReceiptRecordEvidenceValid,
   workspaceRejectedSendReceiptEvidence,
 } from '../src/lib/qbot-workspace-error-evidence.mjs';
+import {
+  coreBetaInitializationContinuation,
+} from '../src/lib/ui-agent-casebook-runner-v2.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = [
@@ -1391,7 +1394,8 @@ const required = [
   ['#736 单 Skill 校验句内 chip、选择状态和 marker 泄露', /executeSitSkillManualSelect[\s\S]*composerSkillSelectionSnapshot[\s\S]*composer-skill-chip-[\s\S]*selectedSkillCount === 1[\s\S]*hasRawMarker/],
   ['#736 多 Skill 执行 2→1→2 删除恢复闭环', /executeSitSkillMultiSelect[\s\S]*skill_026_before_removal[\s\S]*skill_026_after_removal[\s\S]*selectedSkillCount === 1[\s\S]*skill_026_after_restore[\s\S]*selectedSkillCount === 2/],
   ['#736 多 Skill 删除按钮限定在输入区 chip 内', /const firstChip = composer\.locator\([\s\S]*aria-label\^="移除"/],
-  ['技能安装以新版勾选试用动作或产品已安装目录优先判定成功', /waitForSkillInstallTerminal[\s\S]*coreBetaInstalledSkillTerminalSelectorCandidates[\s\S]*visible installed-card action[\s\S]*getSkillsCatalog[\s\S]*catalogInstalled[\s\S]*identityTerminal/],
+  ['技能目录统一读取同时受 renderer 与外层硬超时约束', /async function readSkillsCatalogWithRendererTimeout[\s\S]*withCoreBetaOperationHardTimeout[\s\S]*Promise\.race\(\[[\s\S]*agent\.getSkillsCatalog\(requestedQuery\)[\s\S]*rendererTimeoutMs[\s\S]*clearTimeout/],
+  ['技能安装以新版勾选试用动作或产品已安装目录优先判定成功', /waitForSkillInstallTerminal[\s\S]*coreBetaInstalledSkillTerminalSelectorCandidates[\s\S]*visible installed-card action[\s\S]*readSkillsCatalogWithRendererTimeout[\s\S]*catalogInstalled[\s\S]*identityTerminal/],
   ['技能中断续跑仅在已安装目录与 runtime ready 同时成立时复用抽样技能', /if \(!\(await visible\(install[\s\S]*catalogSkill[\s\S]*readinessStatus[\s\S]*const reused = installed && runtimeReady[\s\S]*upsertCoreBetaManagedResource/],
   ['回复等待尊重显式 Case timeout', /const requestedBudget = Number\.isFinite\(requested\)[\s\S]*\? requested : budget[\s\S]*Math\.max\(MIN_REPLY_WAIT_MS, requestedBudget\)/],
   ['同 Case 多次受控重启保留不可覆盖的逐次日志', /restartEvidenceName[\s\S]*restart-command-\$\{restartEvidenceName\}\.stdout\.log[\s\S]*state\.artifacts\.restart_commands\.push/],
@@ -2162,10 +2166,22 @@ if (pureUi.review_category !== '可信通过-用户可接受' || !pureUi.trusted
 const noSendInitialization = reviewCaseCredibility(reviewFixture({
   id: 'BETA-INIT-001',
   requested_model_tier: 'M3',
+  initialization_action_observation: {
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: 'BETA-INIT-001',
+    method: 'preparePythonRuntimes',
+    testid: 'assistant-prepare-python-runtimes',
+    action_observed: true,
+    source: 'explicit-completion-transition',
+  },
   steps: [{ action: '点击立即检查运行时', status: 'passed' }],
 }));
-if (noSendInitialization.review_category !== '可信通过-用户可接受' || !noSendInitialization.trusted) {
-  throw new Error('不发送模型请求的初始化 Case 不得因缺少模型档位证据被判为框架问题');
+if (
+  noSendInitialization.review_category !== '不可信-框架问题'
+  || noSendInitialization.trusted
+  || noSendInitialization.reason.includes('缺少可信的模型档位证据')
+) {
+  throw new Error('初始化 Case 缺少当前 run root 磁盘证据时必须 fail-closed，但不得误归因于缺少模型档位证据');
 }
 const sentWithoutModelTierEvidence = reviewCaseCredibility(reviewFixture({
   id: 'BETA-CHAT-001',
@@ -2184,32 +2200,68 @@ if (
 ) {
   throw new Error('真实发送仍必须同时提供 Case 档位和逐次发送前模型档位证据');
 }
-const maintenanceProductBug = reviewCaseCredibility(reviewFixture({
-  id: 'BETA-INIT-003',
-  scenario: '一键重装技能运行层并等待稳定终态',
+const maintenanceProductBugFixture = reviewFixture({
+  id: 'BETA-INIT-001',
+  scenario: '检查运行时并等待稳定终态',
   status: 'failed',
   result_category: 'bug',
   requested_model_tier: 'M3',
+  initialization_action_observation: {
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: 'BETA-INIT-001',
+    method: 'preparePythonRuntimes',
+    testid: 'assistant-prepare-python-runtimes',
+    action_observed: true,
+    source: 'explicit-completion-transition',
+  },
+  initialization_continuation: coreBetaInitializationContinuation({
+    testCase: { id: 'BETA-INIT-001' },
+    terminalReadback: {
+      pending: false,
+      failed: true,
+      loaded: true,
+      sdk_ready: true,
+      button_enabled: true,
+      capabilities_readable: true,
+    },
+    afterReadback: { page: { body_text_length: 100 } },
+    continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
+  }),
   steps: [{
-    action: '点击一键重装技能',
+    action: '点击 Python 运行时维护按钮',
     status: 'failed',
     category: 'bug',
     expected: '点击真实维护按钮并等待稳定终态。',
-    actual: '技能安装未生效，界面新增失败回执：ENOTEMPTY, Directory not empty: skill-venvs。',
+    actual: '运行时检查完成后，界面新增失败回执：Python runtime preparation failed。',
   }],
   assertions: [{
-    name: '技能安装稳定终态',
+    name: '运行时检查稳定终态',
     status: 'failed',
     category: 'bug',
-    expected: '技能运行层重装成功并恢复 ready。',
-    actual: '技能安装未生效，界面显示失败：ENOTEMPTY, Directory not empty: skill-venvs。',
+    expected: 'Python 运行时检查成功并恢复 ready。',
+    actual: '界面维护终态显示失败，{"ready":false,"failed":true}；Python runtime preparation failed。',
   }],
   screenshots: { maintenance_terminal: evidenceScreenshot },
   screenshots_flat: [evidenceScreenshot],
-  actual_result: '用户点击并确认重装后，维护区显示 ENOTEMPTY 失败。',
-}));
-if (maintenanceProductBug.review_category !== '可信失败-产品Bug候选' || !maintenanceProductBug.trusted) {
-  throw new Error('有失败终态截图的已执行维护动作必须保留为可信产品 Bug，不能因 failed 状态或普通“自动化”文本误判为框架问题');
+  actual_result: '用户点击检查运行时后，维护区显示 Python runtime preparation failed。',
+});
+const maintenanceProductBug = reviewCaseCredibility(maintenanceProductBugFixture);
+if (maintenanceProductBug.review_category !== '不可信-框架问题' || maintenanceProductBug.trusted) {
+  throw new Error('只有内存 continuation 和截图、缺少当前 run root 磁盘重放的维护失败必须 fail-closed');
+}
+const mismatchedMaintenanceAction = reviewCaseCredibility({
+  ...maintenanceProductBugFixture,
+  initialization_action_observation: {
+    ...maintenanceProductBugFixture.initialization_action_observation,
+    method: 'runtimeResetAll',
+  },
+});
+if (
+  mismatchedMaintenanceAction.review_category !== '不可信-框架问题'
+  || mismatchedMaintenanceAction.trusted
+  || !mismatchedMaintenanceAction.reason.includes('initialization_action_observation_method_mismatch')
+) {
+  throw new Error('初始化动作 identity 不匹配时不得借结构化观察升级为可信产品 Bug');
 }
 const productionSingleRunPass = buildCredibilityReview([reviewFixture()]);
 if (productionSingleRunPass.production_release_gate?.decision !== 'ELIGIBLE_FOR_MULTI_RUN_GATE') {
@@ -3174,6 +3226,29 @@ try {
     throw new Error('只读取隐藏节点、未真实触发目标功能时不得升级可信 Bug');
   }
 
+  const runtimeMaintenanceInitializationEvidence = {
+    initialization_action_observation: {
+      schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+      case_id: 'BETA-INIT-001',
+      method: 'preparePythonRuntimes',
+      testid: 'assistant-prepare-python-runtimes',
+      action_observed: true,
+      source: 'busy',
+    },
+    initialization_continuation: coreBetaInitializationContinuation({
+      testCase: { id: 'BETA-INIT-001' },
+      terminalReadback: {
+        pending: false,
+        failed: true,
+        loaded: true,
+        sdk_ready: true,
+        button_enabled: true,
+        capabilities_readable: true,
+      },
+      afterReadback: { page: { body_text_length: 100 } },
+      continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
+    }),
+  };
   const runtimeMaintenanceFailure = assessUserCenteredOutcome({
     id: 'BETA-INIT-001',
     status: 'failed',
@@ -3196,16 +3271,15 @@ try {
       category: 'bug',
     }],
     screenshots: { assistant_prepare_python_runtimes_terminal: bugShot },
+    ...runtimeMaintenanceInitializationEvidence,
   });
-  if (runtimeMaintenanceFailure.classification !== 'bug'
-    || !runtimeMaintenanceFailure.gates.product_action_exercised
-    || !runtimeMaintenanceFailure.gates.independent_bug_corroboration
-    || !runtimeMaintenanceFailure.gates.aligned_outcome_screenshot) {
-    throw new Error(`运行时维护真实失败且可继续时必须保留为可信产品 Bug：${JSON.stringify(runtimeMaintenanceFailure)}`);
+  if (runtimeMaintenanceFailure.classification !== 'framework_issue'
+    || runtimeMaintenanceFailure.gates.initialization_continuation_evidence_valid !== false) {
+    throw new Error(`缺少当前 run root 磁盘重放的运行时维护失败必须 fail-closed：${JSON.stringify(runtimeMaintenanceFailure)}`);
   }
 
   const runtimeMaintenanceWithNormalCdpSkill = assessUserCenteredOutcome({
-    id: 'BETA-INIT-001',
+    id: 'BETA-CHAT-001',
     status: 'failed',
     result_category: 'bug',
     title: '运行时维护按钮真实点击后显示失败但工作台仍可用',

@@ -3,6 +3,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assessUserCenteredOutcome } from '../../src/lib/ui-agent-casebook-runner.mjs';
+import {
+  coreBetaInitializationContinuationEvidenceVerdict,
+  coreBetaInitializationSkillReinstallEvidenceVerdict,
+} from '../../src/lib/ui-agent-casebook-runner-v2.mjs';
 import { resolveScopedEvidence, validateStrictReviewOverride } from './review-evidence.mjs';
 
 const input = process.argv[2];
@@ -255,6 +259,7 @@ function classifyWithUserGate(result, trustedStatus, reason, override = null) {
     expectedOutcomeOverride: override?.expectedOutcome || '',
     userImpactOverride: override?.userImpact || '',
     verifiedReviewOverride: override?.strict === true,
+    runRoot: outDir,
   });
   if (assessment.classification !== intendedClassification) {
     const downgradedStatus = assessment.classification === 'framework_issue'
@@ -268,6 +273,75 @@ function classifyWithUserGate(result, trustedStatus, reason, override = null) {
 }
 
 function classify(result) {
+  const runBoundInitializationEvidence = coreBetaInitializationContinuationEvidenceVerdict(
+    result,
+    { runRoot: outDir },
+  );
+  if (
+    runBoundInitializationEvidence.applicable
+    && runBoundInitializationEvidence.required
+    && (
+      runBoundInitializationEvidence.valid !== true
+      || runBoundInitializationEvidence.safe !== true
+    )
+  ) {
+    const reason = `初始化连续性证据未绑定当前运行目录：${runBoundInitializationEvidence.reason}`;
+    return [
+      'framework_issue',
+      reason,
+      null,
+      {
+        classification: 'framework_issue',
+        description: reason,
+        userOperation: '执行初始化维护用例',
+        expected: '动作、维护终态、恢复工作台与 manifest 必须从当前不可变运行目录重放。',
+        observed: runBoundInitializationEvidence.reason,
+        impact: '证据可能来自其它批次，不能据此判断产品通过或 Bug。',
+        alignedScreenshots: [],
+        screenshotReason: '运行根目录绑定门禁优先于截图和人工覆盖。',
+        gates: { initialization_continuation_evidence_valid: false },
+        missingGates: ['initialization_continuation_evidence_valid'],
+        initializationContinuationEvidence: runBoundInitializationEvidence,
+      },
+    ];
+  }
+  const runBoundSkillReinstallEvidence = runBoundInitializationEvidence.skill_reinstall_evidence
+    || coreBetaInitializationSkillReinstallEvidenceVerdict(result, { runRoot: outDir });
+  if (runBoundSkillReinstallEvidence.applicable && runBoundSkillReinstallEvidence.valid !== true) {
+    const reason = `INIT-003 专项证据未绑定当前运行目录：${runBoundSkillReinstallEvidence.reason}`;
+    return [
+      'framework_issue',
+      reason,
+      null,
+      {
+        classification: 'framework_issue',
+        description: reason,
+        userOperation: '重装 Skill 运行层',
+        expected: '专项证据必须全部位于当前不可变运行目录的 cases 子树内。',
+        observed: runBoundSkillReinstallEvidence.reason,
+        impact: '证据可能来自其它批次，不能据此判断产品通过或 Bug。',
+        alignedScreenshots: [],
+        screenshotReason: '运行根目录绑定门禁优先于截图和人工覆盖。',
+        gates: { skill_reinstall_run_root_bound: false },
+        missingGates: ['skill_reinstall_run_root_bound'],
+        skillReinstallEvidence: runBoundSkillReinstallEvidence,
+      },
+    ];
+  }
+  if (/^BETA-INIT-00[1-4]$/.test(String(result?.id || ''))) {
+    const initializationAssessment = assessUserCenteredOutcome(result, { runRoot: outDir });
+    if (
+      initializationAssessment.gates?.initialization_continuation_safe === false
+      || initializationAssessment.gates?.skill_reinstall_readiness_evidence_valid === false
+    ) {
+      return [
+        'framework_issue',
+        initializationAssessment.description,
+        null,
+        initializationAssessment,
+      ];
+    }
+  }
   if (finalReviewOverrides.has(result.id)) {
     const override = finalReviewOverrides.get(result.id);
     return classifyWithUserGate(result, override.trustedStatus, override.reason, override);
@@ -288,7 +362,7 @@ function classify(result) {
   if (result.id === 'SIT-EXPERT-011' && /Unknown skill:/i.test(evidence)) {
     return classifyWithUserGate(result, 'trusted_bug', '专家已成功创建、可见并被召唤，但实际调用其私有技能返回 Unknown skill；创建链路成立，能力执行缺陷可信。');
   }
-  const assessment = assessUserCenteredOutcome(result);
+  const assessment = assessUserCenteredOutcome(result, { runRoot: outDir });
   if (assessment.classification === 'pass') return ['trusted_pass', assessment.description, null, assessment];
   if (assessment.classification === 'bug') return ['trusted_bug', assessment.description, null, assessment];
   if (assessment.classification === 'blocked') return ['trusted_blocked', blockerReason(result.actual_result), null, assessment];

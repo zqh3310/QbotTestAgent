@@ -10,6 +10,24 @@ Case 的接手状态、启动顺序和禁止事项。
 
 ## 1. 当前状态
 
+- 基于框架 `e23ea8fde27eee318c89acb88b730f20f4e0ddb1`、正式 Casebook SHA
+  `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` 和冻结候选
+  Teams `5.6.7` build `2119083191`、QWork `0.1.7-sit.48`、UI commit `849afc3b`
+  启动的 G1 批次永久冻结在
+  `teams360-automation/output/20260905094025_sit-qwork-core16_teams360-5.6.7-2119083191_qwork-0.1.7-sit.48_M3_serial_framework-e23ea8f_casebook-439f146`。
+  已真实完成 `6/16`，`inherited=0/synthetic=0`，raw 为 `passed=5/failed=1`，运行时
+  分类为 `pass=5/bug=1`；第 7 条只有未完成目录，不计入 completed。`BETA-INIT-001`
+  虽真实点击并读到 Python `0` 个就绪、`22` 个失败，但 `capabilities()` 超时，旧框架
+  未要求完整安全连续执行合同便把它保留为产品 Bug；该结论不可信，必须保留为
+  framework issue。`BETA-INIT-003` 被旧通用 runtime-ready Oracle 误判 raw pass；其
+  同 Case 公开 catalog 实际为 35 个已安装项中 16 个 `unready/python_runtime_failed`，
+  且最终 `syncStatus=syncing`，构成明确 false pass 与产品失败信号，但旧 manifest 未绑定
+  专项 readiness verdict，不能据此形成发布级可信通过或可信 Bug。唯一 runner 已退出，
+  旧目录不得续写。修复必须补初始化动作观察与安全连续执行合同、INIT-003 安装 identity/
+  readiness 原始证据语义重放、Teams/legacy/v2 复核优先级及反例 invariant；完成全检、
+  提交推送、新 release intake、新能力审计和精确 `READY` 后，只能在新不可变目录从
+  `1/16` 完整重跑，`inherited=0`、`synthetic=0`。后续通过不得抹去本批次两个框架问题。
+
 - 基于框架 `118e024015ef1dc3068fd692f928e2c779ce95cb`、旧 Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
   QWork `0.1.6-sit.6` 启动的正式 12 条批次永久冻结在
@@ -41,6 +59,51 @@ Case 的接手状态、启动顺序和禁止事项。
   历史应用或磁盘状态代替精确 `READY`。完成新能力审计、精确 `READY` 后，必须先从
   `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，才依次独立执行
   `1/12`、`1/70`、`1/160` 和 soak。
+
+- r15 目前只处于设计和生成准备态，目标
+  `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx`
+  尚未生成，因此不存在正式 r15 SHA-256，也没有任何 r15 pretest/runner 准入。r14 必须
+  继续作为唯一正式基线，直至 r15 生成、四层导出后能力审计、独立验收、文档/invariant、
+  提交推送和 tracked clean 全部闭环。最新只读设计 intake 为
+  `outputs/20260905133500_release01-r15-refresh-design-intake_framework-e23ea8f_casebook-r14/release-intake.json`，
+  实际文件 SHA-256 `a13c61b3c640462fc1465390671faf0ff5065132a260b640f887272b198b1370`；它只证明 r14
+  终点后新增 `!1573`，冻结
+  `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，只用于设计映射，不具备生成或
+  执行授权。正式生成前必须在最新干净 pushed framework commit 上，从 r12 产品基线
+  `4693c5bd57b1170bed530e7559f9dc93a0b4a492` 以 `--max-commits 500` 重做 GitLab API
+全量扫描；若 HEAD 未变化，应闭合 37 个增量 MR、171 个总 MR，并包含 `!1573` 专用源码
+合同。本轮共 37 个增量 MR，累计 171 个总 MR。生成器必须显式接收与该新 intake 文件字节全等的
+`--release-intake-sha256`、同一
+  HEAD 的 `--expected-product-commit` 和调用前不存在的 `--out`。
+  `!1573` 的桌面相邻映射固定同序为 `SIT-MEM-001`、`BETA-CHAT-001`、
+  `BETA-CHAT-002`、`BETA-CHAT-009`、`BETA-SEC-002`、`BETA-MCP-001`、
+  `BETA-MCP-002`、`BETA-HOST-003`、`BETA-INIT-001`、`BETA-ROUTE-001`、
+  `MRSMOKE-ROUTE-001`；内部 Feature/Recall/MCP 跨 session cadence、直属上级 Profile
+  归一化、bridge/host/runtime 接线和本地记忆关闭只由
+  `deepbankv2-mr-1573-memory-session-profile-stability/v1` 鉴证源码与测试声明，
+  `claim_scope=source_and_test_declarations`、`test_execution_attested=false`，桌面相邻链
+  通过不得冒充这些内部合同已执行或通过。已有空目录
+  `outputs/20260905_release01_casebook_16-12-70-160-r15` 禁止复用；不得覆盖既有正式目标，
+  不得预填 r15 SHA，也不得在四个执行 Sheet 的 16/16、12/12、70/70、160/160 导出后
+  protocol/runtime 审计全绿前发布到 `PRD`。生成器必须在 `--out` 同父目录的当前用户私有
+  staging 中完成全部构建、14 Sheet/渲染/公式检查和四层 runtime 审计；全部祖先不得是
+  symlink，父/staging 目录必须禁止 group/other 写入并在耗时操作前后绑定
+  device/inode/uid/mode，staging 文件必须是 link count 为 1 的普通文件。整树 fsync 后只能
+  通过 macOS `renamex_np(RENAME_EXCL | RENAME_NOFOLLOW_ANY)` 一次排他原子提交到调用前仍不
+  存在的 `--out`；普通可覆盖空目录的 `rename` 不符合合同。正式 xlsx 只能从已提交 artifact 实读，先以
+  `O_EXCL|O_NOFOLLOW` 和 `0600` 写入同目录临时普通文件并 fsync，再通过同目录 macOS
+  `renamex_np(RENAME_EXCL | RENAME_NOFOLLOW_ANY)` 排他原子发布，随后复核
+  bytes/SHA-256/inode/link count。目标抢占、目录替换、权限漂移、
+  symlink/hardlink 或故障注入均须 fail-closed，且不得留下正式 r15。
+  输出目录事务必须依次经过 `prepared -> renamed_pending_commit -> parent_synced -> committed`；
+  正式文件事务必须依次经过 `prepared -> renamed_pending_commit -> parent_synced ->
+  verified_pending_commit -> committed`。父目录 fsync、最终
+  bytes/SHA-256/inode/link count 复核完成前均不得声明 committed。任何 pending 阶段失败
+  必须先把本事务对象排他隔离到同父目录 quarantine，再按冻结的
+  dev/inode/uid/size/SHA-256/mode 身份核对后保留，禁止按可变的最终名、临时名或 quarantine
+  名删除；第三方替换必须原样保留并报告 `rollback_conflict`，无法完成隔离、复核或恢复则
+  报告 `rollback_incomplete`。成功路径不得遗留 staging 或 quarantine；失败路径必须报告
+  所保留对象的精确路径。
 
 - 基于框架 `f6fa9cd1acc59a3639695495989b926b480aba95`、Casebook SHA
   `d09e0294ff912e4f559fbaa1143d06ad612da173dcebe1a1e5004ec6a1865f1d` 和冻结
@@ -748,6 +811,11 @@ Skill 清理超时对账、MCP 负向证据被标无效、产品 home 选择错�
 SHA-256: 439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed
 ```
 
+r15 目标文件尚未生成，当前没有 r15 SHA 或执行资格。本节全部正式命令继续使用上述 r14；
+只有生成器排他创建 r15、完成独立验收、计算并登记真实 SHA，且框架形成新的干净 pushed
+基线后，才能在同一提交中把本节、主框架手册、状态机正式文件名/SHA 和 invariant 一并
+切换。仅有设计 intake、构建目录、临时 xlsx 或生成器代码变化均不构成正式切换。
+
 核心生命线入口为 Sheet `核心生命线门禁`，固定 16 条：
 `BETA-INIT-001~004`、`BETA-CHAT-001/002/007`、`BETA-FILE-001`、
 `BETA-ART-001`、`BETA-TASK-008`、`BETA-HOST-003`、`BETA-SEC-002`、
@@ -1366,6 +1434,29 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   会话并连续 3 次读回全部 idle。首次真实 UI 清空若明确返回 `active-session`，只允许
   再次完成 idle 对账后重试一次真实 UI 清空；两次点击都必须保留独立确认弹窗、截图和
   动作账本。禁止直接调用 preload 清空、盲等 10 分钟或无限重试。
+- 初始化失败若要作为可信产品 Bug 继续收集后续独立 Case，必须同时存在本轮真实动作
+  观察和完整 `initialization_continuation.safe=true`。合同必须绑定同一 Case，明确产品
+  失败来源、非 pending、runtime/SDK/按钮/capabilities/页面读回和干净工作台恢复；任何
+  字段缺失、畸形、不一致或不可读都优先归为 `automation_error/framework_issue`。升级时
+  必须保留原始产品失败候选，再追加 continuation failure；人工说明、manual/final override
+  和其它快捷分类不得覆盖该门禁。
+- `BETA-INIT-003` 必须在真实点击与破坏性确认后，保存重装前后完整 Skill catalog、
+  catalog 稳定采样、维护终态和截图。前后安装 identity 集合必须非空、唯一且全等；重装后
+  `syncStatus=idle` 连续至少 3 次，所有已安装 Skill 必须为明确 ready，禁止
+  `installStatus=ok` 与 `unready/python_runtime_failed` 并存。专项 Oracle 无论成功还是形成
+  证据完整的产品失败，均须真实点击【新建任务】恢复工作台，独立生成
+  `qbot-core-beta-initialization-continuation-surface/v1`，并以唯一 manifest 角色
+  `initialization_continuation_surface` 证明同一 Case 的非空 `draftInstanceId`、
+  `taskId=null`、`messageCount=0`、`sendCount=0`、`running=false`、Skill/Connector 空数组、
+  Expert 为空；恢复前后两张互异 PNG 必须是 Case 内普通文件，并记录路径、bytes、SHA-256。
+  该角色不能由 `product_action_trace`、`skill_reinstall_readiness_verdict` 或通用 continuation
+  证据代替。可信复核必须从不可变可信 run root 实读 surface、verdict 及全部引用，逐级
+  `lstat` 拒绝符号链接、目录、Case/run root 越界和文件替换，再执行 readiness 与恢复态
+  Oracle，并逐字段比对 summary、失败集合、outcome、surface 和 manifest；仅有自洽
+  SHA/manifest 或自报 verdict 不足以通过。引用缺失、角色缺失/重复、空文件、越界、
+  schema/case/action/method/testid/确认/采样不匹配或重放漂移一律为 framework issue，且
+  不得被人工或 final override 绕过。r15 生成器必须把该合同同步写入 `核心生命线门禁`、
+  `生产灰度门禁Case`、`全量功能回归Case` 与 `证据与断言`；固定 G2 12 条不含本 Case。
 - 产品 Bug 在证据完整且后续 Case 独立时继续；不得修改 deepbankV2。
 - 普通 prerequisite `blocked` 记录后继续独立 Case，不得覆盖更高优先级的
   `automation_error`。

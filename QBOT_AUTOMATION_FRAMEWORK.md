@@ -251,6 +251,55 @@ r13 候选 `QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12
 协议与 runtime 全绿；独立验收为 16/16、12/12、70/70、160/160，14 个 Sheet、15 张
 渲染和公式检查全部通过。
 
+r15 当前仅是待生成候选，目标文件名为
+`PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx`；
+该文件尚未生成，也没有可登记的正式 SHA-256。生成、导出后审计、独立验收和干净 pushed
+framework 基线全部完成前，r14 继续是唯一正式执行入口，任何 pretest、状态机或 runner
+都不得提前切换到 r15，也不得为 r15 填写占位 SHA。最新只读设计 intake 为
+`outputs/20260905133500_release01-r15-refresh-design-intake_framework-e23ea8f_casebook-r14/release-intake.json`，
+文件 SHA-256 为 `a13c61b3c640462fc1465390671faf0ff5065132a260b640f887272b198b1370`；它只证明 r14
+终点之后新增的 `!1573` 已合入 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
+用于设计映射，不具备生成或执行授权。正式生成前必须在最新干净 pushed framework commit
+上从 r12 产品基线 `4693c5bd57b1170bed530e7559f9dc93a0b4a492` 以 `--max-commits 500`
+重新完成 GitLab API 全量扫描；若 release HEAD 仍为上述提交，应得到 37 个 first-parent
+增量 MR、171 个总 MR，并包含 `!1573` 的专用源码合同。本轮共 37 个增量 MR，累计 171 个总 MR。
+Casebook 生成器只能显式接收该新
+普通文件的 `--release-intake`、与文件实际字节重新计算值全等的
+`--release-intake-sha256`、同一 `--expected-product-commit` 和非空 `--out`；
+`!1573` 的桌面相邻映射固定同序为 `SIT-MEM-001`、`BETA-CHAT-001`、
+`BETA-CHAT-002`、`BETA-CHAT-009`、`BETA-SEC-002`、`BETA-MCP-001`、
+`BETA-MCP-002`、`BETA-HOST-003`、`BETA-INIT-001`、`BETA-ROUTE-001`、
+`MRSMOKE-ROUTE-001`；内部 Feature/Recall/MCP 跨 session cadence、直属上级 Profile
+归一化、bridge/host/runtime 接线和本地记忆关闭只由
+`deepbankv2-mr-1573-memory-session-profile-stability/v1` 鉴证源码与测试声明，
+`claim_scope=source_and_test_declarations`、`test_execution_attested=false`，不得用桌面
+相邻链通过冒充这些内部合同已执行或通过。
+`--out` 在调用前必须不存在，即使已存在目录为空也禁止复用。已存在的
+`outputs/20260905_release01_casebook_16-12-70-160-r15` 因而无资格作为正式生成目录。
+正式 r15 目标文件也必须在调用前不存在，生成器只能在 G1/G2/G3/G4 导出后协议与 runtime
+能力分别达到 16/16、12/12、70/70、160/160 后原子排他发布；任何已有目标、审计失败或
+中途产物都不得覆盖 r14 或取得正式身份。
+生成器不得直接在 `--out` 或正式 `PRD` 目标中边构建边暴露文件：`--out` 的全部祖先必须
+无符号链接，父目录和同父目录私有 staging 必须由当前用户拥有且禁止 group/other 写入，
+并在构建前后绑定 device/inode/uid/mode。staging 树只允许当前用户拥有、不可被
+group/other 写入且 link count 为 1 的普通文件/目录；全部文件和目录 fsync 后，只能通过
+macOS `renamex_np(RENAME_EXCL | RENAME_NOFOLLOW_ANY)` 将 staging 一次排他原子提交为调用前
+仍不存在的 `--out`；普通可覆盖空目录的 `rename` 不符合合同。正式 xlsx 必须从该已提交 artifact
+重新实读，以 `O_EXCL|O_NOFOLLOW`、`0600` 临时普通文件写入并 fsync，再通过同目录 macOS
+`renamex_np(RENAME_EXCL | RENAME_NOFOLLOW_ANY)` 排他原子发布，并复核 bytes/SHA-256/inode/link
+count。目标抢占、祖先或目录
+替换、symlink/hardlink、权限漂移或任一故障注入都必须 fail-closed；正式目标不得出现，
+已经完成的诊断输出目录也不得被复用续写。
+目录发布事务的状态固定为 `prepared -> renamed_pending_commit -> parent_synced -> committed`；
+rename 之后直到父目录 fsync 和最终目录身份复核全部完成前都不得声明提交。正式文件事务
+固定为 `prepared -> renamed_pending_commit -> parent_synced -> verified_pending_commit ->
+committed`；排他 rename 后，父目录 fsync 和最终 bytes/SHA-256/inode/link count 复核任一
+未完成时仍属于 pending。`committed` 之前任一步失败都必须先将本事务对象排他隔离到同父
+目录 quarantine，并按冻结的 dev/inode/uid/size/SHA-256/mode 复核后保留，禁止按可变的
+原最终名、临时名或 quarantine 名删除。身份冲突时必须恢复并保留第三方对象、报告
+`rollback_conflict`；无法完成隔离、复核或恢复时报告 `rollback_incomplete`。成功提交不得
+遗留任何 staging 或 quarantine；失败路径必须报告所保留对象的精确路径。
+
 本版 r12 以 GitLab API freshness 从 r11 设计基线
 `1970fe47ac681b36242b0be5c4175238f7d9918b` 扫描到
 `origin/release/0.1@4693c5bd57b1170bed530e7559f9dc93a0b4a492`。扫描前后 branch HEAD
@@ -366,7 +415,7 @@ G4 的能力构成固定为 61 条原生/public-state、1 条原生 IME 选项�
 legacy executor，即 `61/1/98`；任一类别或总数漂移均须在能力审计阶段 fail-closed。
 
 Casebook、Sheet、Case ID 顺序或 SHA 发生变化时，视为新测试合同，必须重新审计并更新本文。
-当前设计基线是 `origin/release/0.1@0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c`，
+当前待生成设计基线是 `origin/release/0.1@6d482c9ccbceb74d4ebf81610d980e5fe15def6c`，
 产品版本 `0.1.7`；`/Users/qifu/Documents/deepbankV2` 始终只读。
 本地 deepbankV2 缺少已验证历史 Git 对象时，Casebook 生成器允许以正式 GitLab API
 intake 作为权威边界证明，但必须同时证明扫描前后 branch HEAD 稳定、compare first-parent
@@ -1251,6 +1300,8 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
 - 初始化动作必须证明本次点击引起了状态转换。优先取证按钮 busy/disabled 或维护区处理中状态；若动作短于轮询采样窗口，只有“动作前不存在、动作后新增、且与当前按钮精确匹配”的完成回执，加上确认弹窗和连续稳定终态，才可替代 transient busy。产品成功契约明确会刷新 renderer 的维护动作（当前仅清空全部会话），允许把确认动作后发生的主框架刷新作为因果动作信号，但仍必须同时满足匹配确认弹窗和刷新后的连续稳定终态；其他导航不得复用。陈旧完成文案不得复用。
 - `BETA-INIT-001` 必须点击当前发布界面实际显示的“立即检查运行时”入口（当前 `assistant-prepare-python-runtimes`）；只有发布界面明确提供旧“检查更新运行时”入口时才兼容 `assistant-runtime-update-check`，不得因 testid 演进把可见入口误判为缺失。
 - `BETA-INIT-001` 至 `BETA-INIT-004` 本身不发送模型请求，不能被全局模型档位门禁挡在初始化之前，可信复核也不得因这四条没有 `model_tier_before_send` 而判为框架问题。若启动时连接视图尚未恢复，runner 只可把模型检查延后到真实初始化之后；首个需要模型的 Case 及其每次发送前仍必须读取连接视图并精确锁定请求档位，无可用档位时禁止发送。
+- `BETA-INIT-001` 至 `BETA-INIT-004` 的失败只有在 `initialization_action_observation.action_observed=true`，且 `qbot-core-beta-initialization-continuation/v1` 结构完整、`safe=true` 时，才可保留为产品 Bug 并继续收集后续独立 Case 证据。连续执行合同必须显式绑定同一 Case，并同时证明非 pending、产品失败来源、runtime/SDK/维护按钮/capabilities/页面读回可用，以及系统设置遮挡输入区时通过真实【新建任务】恢复的干净工作台。字段缺失、类型畸形、来源与终态不一致或任一信号不可读时，必须优先归为 `failed/automation_error`，可信复核固定为 `framework_issue`；人工说明、manual override、final override、安全拒绝或其它用户视角快捷分类均不得绕过。升级分类时必须保留原始产品失败候选及 reason，再追加初始化连续性失败，重复复核不得重复追加或抹除历史。
+- `BETA-INIT-003` 不能只凭通用 runtime/SDK/capabilities ready 或“技能运行环境已清理”文案通过。真实点击和破坏性确认后，必须读取重装前后完整 `getSkillsCatalog()`，以前后 `sourcePlatform/namespace/slug/installedVersion|version|revision|packageDigest|fingerprint` 四元 identity 集合全等、非空且唯一为安装账本 Oracle；重装后 `syncStatus=idle` 必须连续至少 3 次，每个已安装项必须进入明确 ready 终态，`installStatus=ok` 与 `unready/python_runtime_failed` 并存属于产品失败，空 catalog、identity/readiness 缺失或重复属于证据失败。Case 必须生成 `qbot-core-beta-skill-reinstall-readiness-verdict/v1` 和 `skill_reinstall_readiness_verdict` manifest 角色，并引用同 Case 目录内的维护读回、终态采样、catalog 采样和终态截图。无论专项 Oracle 成功或形成证据完整的产品失败，收尾都必须通过真实【新建任务】恢复干净工作台，并另行生成 `qbot-core-beta-initialization-continuation-surface/v1` 与唯一独立 manifest 角色 `initialization_continuation_surface`；该角色不得由 `product_action_trace`、`skill_reinstall_readiness_verdict` 或通用 `initialization_continuation` 代替。恢复证据必须绑定同一 `BETA-INIT-003`，同时证明非空 `draftInstanceId`、`taskId=null`、`messageCount=0`、`sendCount=0`、`running=false`、Skill 与 Connector 选择均为空数组、Expert 为空，并固化互异的恢复前/后 PNG 普通文件路径、bytes 和 SHA-256。可信复核不得相信 verdict、surface、嵌入 manifest 或汇总的自报摘要：必须从可信不可变 run root 重新打开 JSON 和所有引用，逐级 `lstat` 拒绝符号链接、目录、Case/run root 越界和读取期间文件替换，以磁盘实际 bytes/SHA/schema/case/action/method/testid/确认/稳定采样重新执行 catalog 与 continuation Oracle，并与 verdict/surface/manifest 逐字段全等。任何引用伪造、漂移、缺失、角色重复或重放不一致一律为 `framework_issue`，且优先于人工/最终覆盖。Casebook 生成器必须把该完整合同同步写入含本 Case 的 `核心生命线门禁`、`生产灰度门禁Case`、`全量功能回归Case` 三张执行 Sheet，并在 `证据与断言` Sheet 汇总该独立角色；固定 G2 `新增MR核心冒烟` 不含 `BETA-INIT-003`，不得为其伪造适用性。
 - 重初始化或清空会话可能触发页面导航或 replacement renderer。runner 必须刷新共享 page、必要时重建受管 WebView 连接，并在同一 Case 内等待公开维护区、Claude/Codex SDK、工作台、输入区和 capabilities 连续稳定；默认最长等待 `600000ms`，不得把“正在准备”截图当作 ready。
 - 若维护区可见文案持续显示“准备中/处理中”，但 Claude/Codex SDK 均为 `ready/100%`，且运行时 loaded、维护按钮、capabilities、工作台和输入区连续至少 3 次全部可用，框架必须把该稳定矛盾固化为 `product_ui_state_conflict` 产品 Bug：终态为 `failed=true/pending=false`，专项证据 `evidence_valid=true/oracle_valid=false`。`BETA-INIT-001` 至 `BETA-INIT-004` 在页面读回也完整时必须写入 `initialization_continuation.safe=true` 并继续后续独立 Case；不得继续空等到超时后误报 `automation_error`。`BETA-INIT-001` 的运行时检查若得到明确失败终态，但 runtime loaded、Claude/Codex SDK、维护按钮、capabilities、工作台、输入区和页面读回全部可用，也适用同一安全降级合同。任一结构化信号未 ready 时仍按真实 pending 处理，并在有界超时后 fail-closed。
 - 初始化异常必须保存原始 `message`、`stack`、动作回执和终态采样文件；最终结论可以是 `framework_issue`，但不得只留下“精准断言未全部成立”而丢失根因。

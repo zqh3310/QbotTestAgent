@@ -7,12 +7,14 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { deflateSync } from 'node:zlib';
 import {
   activateCoreBetaNativeImeHost,
   assistantClarificationEvidence,
   assistantConfirmationClickProgressVerdict,
   assistantConfirmationProgressFingerprintEvidence,
   assistantConfirmationSurfaceVerdict,
+  applyFailureOutcome,
   applyBlockedOutcome,
   annotateCoreBetaExecutionResult,
   artifactTextHasFacts,
@@ -65,7 +67,15 @@ import {
   coreBetaExpertSummonTaskVerdict,
   coreBetaExecutionConcurrencyPolicy,
   coreBetaEvidenceCaseId,
+  enforceCoreBetaInitializationContinuationOutcome,
   coreBetaInitializationContinuation,
+  coreBetaInitializationContinuationEvidenceVerdict,
+  coreBetaInitializationContinuationVerdict,
+  coreBetaInitializationMaintenanceObservationsVerdict,
+  coreBetaInitializationSkillCatalogObservation,
+  coreBetaInitializationSkillIdentity,
+  coreBetaInitializationSkillReinstallEvidenceVerdict,
+  coreBetaInitializationSkillReinstallVerdict,
   managedAttachmentDialogEvidenceVerdict,
   coreBetaMarkdownHtmlPreviewVerdict,
   coreBetaManualConnectorModeReady,
@@ -187,6 +197,7 @@ import {
   buildCoreEvidenceManifest,
   coreBetaAttachmentFixtureNames,
   coreBetaCaseContractSha256,
+  validateCoreBetaCase,
   validateEvidenceFile,
 } from '../src/lib/core-beta-case-protocol.mjs';
 import { replaceUnpairedSurrogates, writeJsonFile } from '../src/lib/fs.mjs';
@@ -617,17 +628,23 @@ const connectorFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts',
 const capabilityFixtureRestartHelper = fs.readFileSync(path.join(root, 'scripts', 'restart-qbot-capability-fixture-control-plane.sh'), 'utf8');
 const qworkDailyCasebookBuilder = fs.readFileSync(path.join(root, 'scripts', 'build-qwork-daily-regression-casebook.mjs'), 'utf8');
 const productionGrayCasebookBuilder = fs.readFileSync(path.join(root, 'scripts', 'build-release01-production-gray-casebook.mjs'), 'utf8');
+const atomicRenameNoReplaceHelper = fs.readFileSync(path.join(root, 'scripts', 'atomic-rename-no-replace.py'), 'utf8');
 const {
+  abortCasebookOutputDirectory,
+  atomicRenameNoReplace,
   assertCasebookOutputAbsent,
   assertExpectedProductCommit,
+  assertExpectedReleaseIntakeSha256,
   assertR13CasebookLayering,
   auditCasebookRuntimeScopes,
   capability: casebookDesignRuntimeCapability,
+  commitCasebookOutputDirectory,
   normalizeCasebookContractCase,
   normalizeCasebookSourceIds,
   patchSmokeCase: patchR14SmokeCase,
   patchRecentCases: patchR13RecentCase,
   publishCasebookAfterRuntimeAudit,
+  publishValidatedCasebookArtifact,
   prepareCasebookOutputDirectory,
   validateCasebookDesignReleaseIntake,
 } = await import(pathToFileURL(
@@ -733,7 +750,7 @@ assert.equal(
   'r14 来源 ID 归一化必须幂等',
 );
 
-const casebookProtocolGuardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-r14-protocol-guard-'));
+const casebookProtocolGuardDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'qbot-r14-protocol-guard-'));
 try {
   const artifactFile = path.join(casebookProtocolGuardDir, 'artifact.xlsx');
   const formalOutput = path.join(casebookProtocolGuardDir, 'formal.xlsx');
@@ -770,7 +787,7 @@ const casebookDesignMixedExpert012Capability = casebookDesignRuntimeCapability(c
 assert.equal(casebookDesignMixedExpert012Capability.binding.dispatchable, false);
 assert.equal(casebookDesignMixedExpert012Capability.binding.reason, 'scenario_missing');
 
-const casebookFormalOutputGuardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-r13-formal-output-guard-'));
+const casebookFormalOutputGuardDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'qbot-r13-formal-output-guard-'));
 try {
   const guardedOutput = path.join(casebookFormalOutputGuardDir, 'r13.xlsx');
   assert.equal(await assertCasebookOutputAbsent(guardedOutput), path.resolve(guardedOutput));
@@ -1773,17 +1790,37 @@ assert.deepEqual(
   assert.equal(productFailure.execution_completion.evidence_complete, true);
   assert.equal(productFailure.case_execution_recorded, true);
 
+  const initializationActionObserved = (caseId, actionObserved = true) => ({
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: caseId,
+    method: 'preparePythonRuntimes',
+    testid: 'assistant-prepare-python-runtimes',
+    action_observed: actionObserved,
+    source: actionObserved ? 'busy' : 'none',
+    attempts: [{ attempt: 1, action_observed: actionObserved }],
+  });
   const initializationFailure = {
     id: 'BETA-INIT-001',
     status: 'failed',
     result_category: 'bug',
     synthetic: false,
     evidence_manifest: { complete: true, missing_roles: [], invalid_roles: [] },
-    initialization_continuation: {
-      eligible: true,
-      safe: true,
-      release_gate_eligible: false,
-    },
+    initialization_action_observation: initializationActionObserved('BETA-INIT-001'),
+    initialization_continuation: coreBetaInitializationContinuation({
+      testCase: { id: 'BETA-INIT-001' },
+      terminalReadback: {
+        pending: false,
+        failed: true,
+        loaded: true,
+        sdk_ready: true,
+        button_enabled: true,
+        composer_ready: true,
+        workbench_ready: true,
+        capabilities_readable: true,
+      },
+      continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
+      afterReadback: { page: { body_text_length: 100 } },
+    }),
     actual_result: '运行时维护动作失败，但工作台可继续收集独立 Case 证据',
   };
   annotateCoreBetaExecutionResult({
@@ -1799,6 +1836,119 @@ assert.deepEqual(
     initializationFailure.execution_completion.reason,
     '初始化连续性合同明确禁止本 Case 进入发布放行。',
   );
+
+  const unsafeInitializationFailure = {
+    id: 'BETA-INIT-001',
+    status: 'failed',
+    result_category: 'bug',
+    synthetic: false,
+    evidence_manifest: { complete: true, missing_roles: [], invalid_roles: [] },
+    initialization_action_observation: initializationActionObserved('BETA-INIT-001'),
+    initialization_continuation: coreBetaInitializationContinuation({
+      testCase: { id: 'BETA-INIT-001' },
+      terminalReadback: {
+        pending: false,
+        failed: true,
+        loaded: true,
+        sdk_ready: true,
+        button_enabled: true,
+        composer_ready: true,
+        workbench_ready: true,
+        capabilities_readable: false,
+      },
+      continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
+      afterReadback: { page: { body_text_length: 100 } },
+    }),
+    actual_result: '完成：Python 0 个就绪、22 个失败；Node 1 个就绪',
+    primary_failure: {
+      category: 'bug',
+      reason: '完成：Python 0 个就绪、22 个失败；Node 1 个就绪',
+      source: 'markFailed',
+      recorded_at: '2026-09-05T01:45:34.173Z',
+    },
+    failure_history: [{
+      category: 'bug',
+      reason: '完成：Python 0 个就绪、22 个失败；Node 1 个就绪',
+      source: 'markFailed',
+      recorded_at: '2026-09-05T01:45:34.173Z',
+    }],
+  };
+  annotateCoreBetaExecutionResult({
+    testCase: { id: unsafeInitializationFailure.id, contract_version: 'qbot-core-beta/v2' },
+    result: unsafeInitializationFailure,
+  });
+  assert.equal(
+    unsafeInitializationFailure.result_category,
+    'automation_error',
+    '初始化连续性 safe=false 时不得把公开能力缺口保留为产品 bug',
+  );
+  assert.equal(unsafeInitializationFailure.primary_failure.category, 'automation_error');
+  assert.equal(
+    unsafeInitializationFailure.failure_history[0].category,
+    'bug',
+    '提升为 automation_error 时必须保留原始产品失败候选',
+  );
+  assert.equal(
+    unsafeInitializationFailure.failure_history.at(-1).source,
+    'initialization_continuation',
+    '安全门禁失败必须留下独立、可审计的失败来源',
+  );
+  assert.equal(
+    unsafeInitializationFailure.failure_history[0].reason,
+    '完成：Python 0 个就绪、22 个失败；Node 1 个就绪',
+    '框架分类修复不得抹去产品维护终态',
+  );
+  assert.equal(unsafeInitializationFailure.execution_completion.release_gate_eligible, false);
+  const failureHistoryLength = unsafeInitializationFailure.failure_history.length;
+  enforceCoreBetaInitializationContinuationOutcome(unsafeInitializationFailure);
+  assert.equal(
+    unsafeInitializationFailure.failure_history.length,
+    failureHistoryLength,
+    'Case 收尾与外层注解重复执行同一安全门禁时必须幂等',
+  );
+  unsafeInitializationFailure.result_category = 'bug';
+  unsafeInitializationFailure.primary_failure = unsafeInitializationFailure.failure_history[0];
+  unsafeInitializationFailure.actual_result = unsafeInitializationFailure.failure_history[0].reason;
+  enforceCoreBetaInitializationContinuationOutcome(unsafeInitializationFailure);
+  assert.equal(
+    unsafeInitializationFailure.result_category,
+    'automation_error',
+    '后置注解误写回 bug 时，幂等门禁仍必须重新固定 automation_error 顶层分类',
+  );
+  assert.equal(
+    unsafeInitializationFailure.failure_history.length,
+    failureHistoryLength,
+    '重新固定顶层分类不得重复追加同一 continuation failure',
+  );
+
+  const unobservedInitializationAction = {
+    ...initializationFailure,
+    initialization_action_observation: initializationActionObserved('BETA-INIT-001', false),
+    failure_history: [],
+    primary_failure: null,
+  };
+  const unobservedActionVerdict = coreBetaInitializationContinuationVerdict(unobservedInitializationAction);
+  assert.equal(unobservedActionVerdict.safe, false);
+  assert.ok(unobservedActionVerdict.reasons.includes('initialization_action_not_observed'));
+  enforceCoreBetaInitializationContinuationOutcome(unobservedInitializationAction);
+  assert.equal(
+    unobservedInitializationAction.result_category,
+    'automation_error',
+    '维护终态即使像产品失败，真实动作未观察到也必须归 framework issue',
+  );
+
+  const malformedSafeContinuation = {
+    ...initializationFailure,
+    initialization_continuation: {
+      ...initializationFailure.initialization_continuation,
+      case_id: 'BETA-INIT-002',
+    },
+    failure_history: [],
+    primary_failure: null,
+  };
+  assert.equal(coreBetaInitializationContinuationVerdict(malformedSafeContinuation).safe, false);
+  enforceCoreBetaInitializationContinuationOutcome(malformedSafeContinuation);
+  assert.equal(malformedSafeContinuation.result_category, 'automation_error');
 
   const conflictDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-expert-conflict-negative-'));
   try {
@@ -6632,6 +6782,7 @@ const staleMaintenanceContinuation = coreBetaInitializationContinuation({
     failed: true,
     product_ui_state_conflict: true,
   },
+  continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
   afterReadback: { page: { body_text_length: 100 } },
 });
 assert.equal(
@@ -6663,6 +6814,7 @@ const runtimeCheckProductFailureContinuation = coreBetaInitializationContinuatio
     workbench_ready: true,
     capabilities_readable: true,
   },
+  continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
   afterReadback: { page: { body_text_length: 100 } },
 });
 assert.equal(
@@ -6770,6 +6922,2197 @@ assert.match(
   /terminal\.readback\?\.failed === true[\s\S]*verifyCoreBetaInitializationContinuationSurface[\s\S]*continuationSurface/,
   '初始化产品失败后必须通过框架新建任务路径回到干净工作台，再判定 composer 是否可继续',
 );
+const readyInstalledSkill = ({
+  sourcePlatform = 'skillhub',
+  namespace = 'global',
+  slug = 'sample-skill',
+  version = '1.0.0',
+  ...overrides
+} = {}) => ({
+  sourcePlatform,
+  namespace,
+  slug,
+  version,
+  managementInstalled: true,
+  installStatus: 'ok',
+  readinessStatus: 'projected_for_both',
+  localReadiness: {
+    status: 'ready_on_this_process',
+    readinessStatus: 'projected_for_both',
+    installStatus: 'ok',
+  },
+  ...overrides,
+});
+const initializationCatalogBefore = {
+  syncStatus: 'idle',
+  installed: [
+    readyInstalledSkill({ slug: 'alpha', version: '1.0.0' }),
+    readyInstalledSkill({
+      sourcePlatform: 'builtin',
+      namespace: 'qbot',
+      slug: 'document-processing',
+      version: '1.2.0',
+      installStatus: '',
+      readinessStatus: 'builtin_available_on_demand',
+      localReadiness: {
+        status: 'ready_on_demand',
+        readinessStatus: 'builtin_available_on_demand',
+      },
+    }),
+    readyInstalledSkill({
+      sourcePlatform: 'agent-created',
+      namespace: 'local',
+      slug: 'source-verification',
+      version: '',
+      packageDigest: 'a'.repeat(64),
+      installStatus: '',
+      readinessStatus: 'agent_created',
+      localReadiness: {
+        status: 'ready_on_this_process',
+        readinessStatus: 'agent_created',
+      },
+    }),
+  ],
+};
+const initializationCatalogAfter = {
+  syncStatus: 'idle',
+  installed: [...initializationCatalogBefore.installed].reverse(),
+};
+const initializationCatalogLedger = (catalogs, { readErrorIndexes = [] } = {}) => {
+  let signature = '';
+  let stable = 0;
+  let readErrorCount = 0;
+  let finalCatalog = null;
+  const observations = catalogs.map((catalog, index) => {
+    if (readErrorIndexes.includes(index)) {
+      signature = '';
+      stable = 0;
+      readErrorCount += 1;
+      return {
+        captured_at: new Date(index + 1).toISOString(),
+        elapsed_ms: index * 1000,
+        read_ok: false,
+        raw_catalog: null,
+        normalized_tuple: null,
+        canonical_sha256: '',
+        same_signature_as_previous: false,
+        error: 'fixture catalog read failed',
+        idle_stable_observations: 0,
+        read_error_count: 1,
+        renderer_capture_attempts: [{ attempt: 1, ok: false, error: 'fixture catalog read failed' }],
+      };
+    }
+    const replayed = coreBetaInitializationSkillCatalogObservation({
+      catalog,
+      previousSignatureSha256: signature,
+      previousIdleStableObservations: stable,
+    });
+    signature = replayed.next_signature_sha256;
+    stable = replayed.idle_stable_observations;
+    finalCatalog = catalog;
+    return {
+      captured_at: new Date(index + 1).toISOString(),
+      elapsed_ms: index * 1000,
+      read_ok: true,
+      raw_catalog: catalog,
+      normalized_tuple: replayed.normalized_tuple,
+      canonical_sha256: replayed.canonical_sha256,
+      same_signature_as_previous: replayed.same_signature_as_previous,
+      sync_status: replayed.summary.sync_status,
+      installed_count: replayed.summary.installed_count,
+      identity_count: replayed.summary.identities.length,
+      duplicate_count: replayed.summary.duplicate_identities.length,
+      invalid_identity_count: replayed.summary.invalid_identity_indexes.length,
+      readiness_missing_count: replayed.summary.readiness_missing_indexes.length,
+      unready_count: replayed.summary.unready_identities.length,
+      idle_stable_observations: stable,
+      read_error_count: 0,
+      error: '',
+      renderer_capture_attempts: [{ attempt: 1, ok: true, error: '' }],
+    };
+  });
+  const ok = stable >= 3 && readErrorCount === 0;
+  return {
+    schema_version: 'qbot-core-beta-skill-reinstall-catalog-observations/v2',
+    case_id: 'BETA-INIT-003',
+    method: 'skillsReinstall',
+    testid: 'assistant-skills-reinstall',
+    ok,
+    evidence_valid: readErrorCount === 0,
+    started_at: new Date(0).toISOString(),
+    ended_at: new Date(catalogs.length + 1).toISOString(),
+    timeout_ms: 60_000,
+    idle_stable_observations: stable,
+    stable_signature_sha256: stable >= 3 ? signature : '',
+    read_error_count: readErrorCount,
+    last_error: readErrorCount ? 'fixture catalog read failed' : '',
+    observations,
+    catalog: finalCatalog,
+  };
+};
+assert.equal(
+  coreBetaInitializationSkillIdentity(initializationCatalogBefore.installed[2]).identity,
+  `agent-created/local/source-verification/${'a'.repeat(64)}`,
+  '版本为空的 agent-created Skill 必须使用不可变 package digest 形成完整四元 identity',
+);
+const skillReinstallPass = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogAfter,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger([
+    initializationCatalogAfter,
+    initializationCatalogAfter,
+    initializationCatalogAfter,
+  ]),
+});
+assert.equal(skillReinstallPass.evidence_valid, true);
+assert.equal(skillReinstallPass.oracle_valid, true, '仅列表顺序变化不得误报安装账本漂移');
+assert.equal(skillReinstallPass.identity_set_equal, true);
+
+const initializationCatalogPythonFailure = {
+  syncStatus: 'idle',
+  installed: initializationCatalogBefore.installed.map((item, index) => index === 0 ? {
+    ...item,
+    installStatus: 'ok',
+    readinessStatus: 'python_runtime_failed',
+    localReadiness: {
+      status: 'unready',
+      readinessStatus: 'python_runtime_failed',
+      installStatus: 'ok',
+    },
+  } : item),
+};
+const skillReinstallPythonFailure = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogPythonFailure,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger(Array(3).fill(initializationCatalogPythonFailure)),
+});
+assert.equal(skillReinstallPythonFailure.evidence_valid, true);
+assert.equal(skillReinstallPythonFailure.oracle_valid, false);
+assert.equal(skillReinstallPythonFailure.outcome, 'bug');
+assert.ok(skillReinstallPythonFailure.oracle_failures.includes('installed_skill_not_ready'));
+
+const initializationCatalogStillSyncing = { ...initializationCatalogAfter, syncStatus: 'syncing' };
+const skillReinstallStillSyncing = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogStillSyncing,
+  afterIdleStableObservations: 0,
+  catalogObservations: initializationCatalogLedger(Array(3).fill(initializationCatalogStillSyncing)),
+});
+assert.equal(skillReinstallStillSyncing.evidence_valid, false);
+assert.equal(skillReinstallStillSyncing.outcome, 'automation_error');
+assert.ok(skillReinstallStillSyncing.oracle_failures.includes('after_catalog_not_idle'));
+
+const initializationCatalogIdentityDrift = {
+  syncStatus: 'idle',
+  installed: initializationCatalogBefore.installed.map((item, index) => (
+    index === 0 ? { ...item, slug: 'ghost-replacement' } : item
+  )),
+};
+const skillReinstallIdentityDrift = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogIdentityDrift,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger(Array(3).fill(initializationCatalogIdentityDrift)),
+});
+assert.equal(skillReinstallIdentityDrift.evidence_valid, true);
+assert.equal(skillReinstallIdentityDrift.outcome, 'bug');
+assert.equal(skillReinstallIdentityDrift.missing_after.length, 1);
+assert.equal(skillReinstallIdentityDrift.unexpected_after.length, 1);
+
+const initializationCatalogDuplicateIdentity = {
+  syncStatus: 'idle',
+  installed: [
+    ...initializationCatalogBefore.installed,
+    { ...initializationCatalogBefore.installed[0] },
+  ],
+};
+const skillReinstallDuplicateIdentity = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogDuplicateIdentity,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger(Array(3).fill(initializationCatalogDuplicateIdentity)),
+});
+assert.equal(skillReinstallDuplicateIdentity.evidence_valid, false);
+assert.equal(skillReinstallDuplicateIdentity.outcome, 'automation_error');
+assert.ok(skillReinstallDuplicateIdentity.evidence_failures.includes('after_duplicate_identity'));
+
+const initializationCatalogMissingReadiness = {
+  syncStatus: 'idle',
+  installed: initializationCatalogBefore.installed.map((item, index) => (
+    index === 0 ? { ...item, readinessStatus: '', localReadiness: {} } : item
+  )),
+};
+const skillReinstallMissingReadiness = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: initializationCatalogMissingReadiness,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger(Array(3).fill(initializationCatalogMissingReadiness)),
+});
+assert.equal(skillReinstallMissingReadiness.evidence_valid, false);
+assert.ok(skillReinstallMissingReadiness.evidence_failures.includes('after_readiness_missing'));
+assert.equal(
+  coreBetaInitializationSkillReinstallVerdict({
+    beforeCatalog: initializationCatalogBefore,
+    afterCatalog: { syncStatus: 'idle', installed: [] },
+    afterIdleStableObservations: 0,
+    catalogObservations: initializationCatalogLedger(Array(3).fill({ syncStatus: 'idle', installed: [] })),
+  }).outcome,
+  'automation_error',
+  '空 installed 不能被当作重装后零项产品结论，必须视为取证结构失败',
+);
+
+const specializedSkillFailureContinuation = coreBetaInitializationContinuation({
+  testCase: { id: 'BETA-INIT-003' },
+  terminalReadback: {
+    pending: false,
+    failed: false,
+    loaded: true,
+    sdk_ready: true,
+    button_enabled: true,
+    composer_ready: true,
+    workbench_ready: true,
+    capabilities_readable: true,
+  },
+  afterReadback: { page: { body_text_length: 100 } },
+  continuationSurface: {
+    valid: true,
+    composer_ready: true,
+    workbench_ready: true,
+  },
+  productFailureObserved: true,
+  productFailureSource: 'skill_reinstall_readiness_oracle',
+});
+assert.equal(
+  specializedSkillFailureContinuation.safe,
+  true,
+  'INIT-003 专项 readiness 产品失败不应伪造通用 terminal.failed，但可在公开运行能力完整时安全继续独立 Case',
+);
+assert.equal(
+  coreBetaInitializationContinuationVerdict({
+    id: 'BETA-INIT-003',
+    status: 'failed',
+    result_category: 'bug',
+    initialization_action_observation: {
+      schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      action_observed: true,
+    },
+    initialization_continuation: specializedSkillFailureContinuation,
+  }).safe,
+  true,
+  'INIT-003 专项产品失败必须在真实新建任务恢复表面后才允许继续独立 Case',
+);
+
+const catalogA = initializationCatalogAfter;
+const catalogB = {
+  ...initializationCatalogAfter,
+  installed: initializationCatalogAfter.installed.map((item, index) => (
+    index === 0 ? { ...item, localReadiness: { ...item.localReadiness, status: 'unready' } } : item
+  )),
+};
+const abaLedger = initializationCatalogLedger([catalogA, catalogB, catalogA]);
+assert.equal(abaLedger.idle_stable_observations, 1, 'A→B→A 只能得到一次连续同签名样本');
+const skillReinstallAba = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: catalogA,
+  afterIdleStableObservations: abaLedger.idle_stable_observations,
+  catalogObservations: abaLedger,
+});
+assert.equal(skillReinstallAba.evidence_valid, false);
+assert.ok(skillReinstallAba.evidence_failures.includes('catalog_observation_signature_not_stable'));
+
+const readErrorLedger = initializationCatalogLedger(
+  [null, catalogA, catalogA, catalogA],
+  { readErrorIndexes: [0] },
+);
+const skillReinstallReadError = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBefore,
+  afterCatalog: catalogA,
+  afterIdleStableObservations: readErrorLedger.idle_stable_observations,
+  catalogObservations: readErrorLedger,
+});
+assert.equal(skillReinstallReadError.evidence_valid, false);
+assert.ok(skillReinstallReadError.evidence_failures.includes('catalog_observation_read_error'));
+
+const initializationCatalogBeforeMissingReadiness = {
+  ...initializationCatalogBefore,
+  installed: initializationCatalogBefore.installed.map((item, index) => (
+    index === 0 ? { ...item, readinessStatus: '', localReadiness: {} } : item
+  )),
+};
+const skillReinstallBeforeMissingReadiness = coreBetaInitializationSkillReinstallVerdict({
+  beforeCatalog: initializationCatalogBeforeMissingReadiness,
+  afterCatalog: catalogA,
+  afterIdleStableObservations: 3,
+  catalogObservations: initializationCatalogLedger([catalogA, catalogA, catalogA]),
+});
+assert.equal(skillReinstallBeforeMissingReadiness.evidence_valid, false);
+assert.ok(skillReinstallBeforeMissingReadiness.evidence_failures.includes('before_readiness_missing'));
+
+{
+  const evidenceRoots = [];
+  const cloneJson = (value) => JSON.parse(JSON.stringify(value));
+  const png1x1 = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  );
+  const png1x1Alternative = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=',
+    'base64',
+  );
+  const pngCrc32 = (buffer) => {
+    let crc = 0xffffffff;
+    for (const byte of buffer) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) {
+        crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const replaceFirstPngChunk = (png, wantedType, replaceData) => {
+    let offset = 8;
+    while (offset < png.length) {
+      const length = png.readUInt32BE(offset);
+      const type = png.subarray(offset + 4, offset + 8).toString('ascii');
+      const nextOffset = offset + 12 + length;
+      if (type === wantedType) {
+        const typeBytes = Buffer.from(type, 'ascii');
+        const currentData = png.subarray(offset + 8, offset + 8 + length);
+        const data = Buffer.from(replaceData(Buffer.from(currentData)));
+        const chunk = Buffer.alloc(12 + data.length);
+        chunk.writeUInt32BE(data.length, 0);
+        typeBytes.copy(chunk, 4);
+        data.copy(chunk, 8);
+        chunk.writeUInt32BE(pngCrc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+        return Buffer.concat([png.subarray(0, offset), chunk, png.subarray(nextOffset)]);
+      }
+      offset = nextOffset;
+    }
+    throw new Error(`PNG chunk not found: ${wantedType}`);
+  };
+  const createPngChunk = (type, data = Buffer.alloc(0)) => {
+    const typeBytes = Buffer.from(type, 'ascii');
+    const payload = Buffer.from(data);
+    const chunk = Buffer.alloc(12 + payload.length);
+    chunk.writeUInt32BE(payload.length, 0);
+    typeBytes.copy(chunk, 4);
+    payload.copy(chunk, 8);
+    chunk.writeUInt32BE(pngCrc32(Buffer.concat([typeBytes, payload])), 8 + payload.length);
+    return chunk;
+  };
+  const insertPngChunkBefore = (png, wantedType, type, data = Buffer.alloc(0)) => {
+    let offset = 8;
+    while (offset < png.length) {
+      const length = png.readUInt32BE(offset);
+      const currentType = png.subarray(offset + 4, offset + 8).toString('ascii');
+      if (currentType === wantedType) {
+        return Buffer.concat([
+          png.subarray(0, offset),
+          createPngChunk(type, data),
+          png.subarray(offset),
+        ]);
+      }
+      offset += 12 + length;
+    }
+    throw new Error(`PNG chunk not found: ${wantedType}`);
+  };
+  const insertRepeatedPngChunksBefore = (png, wantedType, count) => {
+    let offset = 8;
+    while (offset < png.length) {
+      const length = png.readUInt32BE(offset);
+      const currentType = png.subarray(offset + 4, offset + 8).toString('ascii');
+      if (currentType === wantedType) {
+        const chunks = Array.from({ length: count }, () => createPngChunk('tEXt'));
+        return Buffer.concat([png.subarray(0, offset), ...chunks, png.subarray(offset)]);
+      }
+      offset += 12 + length;
+    }
+    throw new Error(`PNG chunk not found: ${wantedType}`);
+  };
+  const splitIdatWithAncillaryChunk = (png) => {
+    let offset = 8;
+    while (offset < png.length) {
+      const length = png.readUInt32BE(offset);
+      const type = png.subarray(offset + 4, offset + 8).toString('ascii');
+      const nextOffset = offset + 12 + length;
+      if (type === 'IDAT') {
+        const payload = png.subarray(offset + 8, offset + 8 + length);
+        const splitAt = Math.max(1, Math.floor(payload.length / 2));
+        return Buffer.concat([
+          png.subarray(0, offset),
+          createPngChunk('IDAT', payload.subarray(0, splitAt)),
+          createPngChunk('tEXt', Buffer.from('fixture')),
+          createPngChunk('IDAT', payload.subarray(splitAt)),
+          png.subarray(nextOffset),
+        ]);
+      }
+      offset = nextOffset;
+    }
+    throw new Error('PNG chunk not found: IDAT');
+  };
+  const png1x1Third = replaceFirstPngChunk(
+    png1x1,
+    'IDAT',
+    () => deflateSync(Buffer.from([0, 128, 255])),
+  );
+  const buildSkillReinstallEvidenceFixture = ({
+    beforeCatalog = initializationCatalogBefore,
+    afterCatalog = initializationCatalogAfter,
+    catalogs = [afterCatalog, afterCatalog, afterCatalog],
+    readErrorIndexes = [],
+    actionObserved = true,
+    status,
+    resultCategory,
+  } = {}) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-init-003-trusted-review-'));
+    evidenceRoots.push(root);
+    const caseDir = path.join(root, 'cases', 'BETA-INIT-003');
+    fs.mkdirSync(caseDir, { recursive: true });
+    const paths = {
+      maintenance: path.join(caseDir, 'skillsReinstall-readback.json'),
+      action: path.join(caseDir, 'skillsReinstall-action-observation.json'),
+      beforePublicState: path.join(caseDir, 'skillsReinstall-before-public-state.json'),
+      afterPublicState: path.join(caseDir, 'skillsReinstall-after-public-state.json'),
+      terminal: path.join(caseDir, 'skillsReinstall-terminal-observations.json'),
+      catalog: path.join(caseDir, 'skill-reinstall-catalog-observations.json'),
+      screenshot: path.join(caseDir, 'assistant-skills-reinstall-terminal.png'),
+      continuationBefore: path.join(caseDir, 'initialization-continuation-surface-before.png'),
+      continuationAfter: path.join(caseDir, 'initialization-continuation-surface-after.png'),
+      continuationSurface: path.join(caseDir, 'initialization-continuation-surface.json'),
+      verdict: path.join(caseDir, 'skill-reinstall-readiness-verdict.json'),
+      manifest: path.join(caseDir, 'evidence-manifest.json'),
+    };
+    const fileRecord = (file) => {
+      const bytes = fs.statSync(file).size;
+      return {
+        path: file,
+        bytes,
+        sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+      };
+    };
+    const confirmation = {
+      message: '确认一键重装 Skill，将清理现有环境并重新物化，确定继续。',
+      source: 'custom-dialog',
+      accepted: true,
+      confirmation_label: '一键重装 Skill',
+      screenshot: '',
+    };
+    const action = {
+      ok: true,
+      testid: 'assistant-skills-reinstall',
+      before_text: '一键重装 Skill',
+      action_text: actionObserved ? '重装中' : '一键重装 Skill',
+      confirmation,
+      busy_observed: actionObserved,
+      navigation_observed: false,
+      navigation_url: '',
+      action_observed: actionObserved,
+      action_observation_source: actionObserved ? 'busy' : 'none',
+      completion_transition: '',
+      busy_screenshot: '',
+    };
+    const actionEvidence = {
+      schema_version: 'qbot-core-beta-initialization-action-evidence/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      destructive: true,
+      captured_at: new Date(1).toISOString(),
+      attempts: [action],
+    };
+    fs.writeFileSync(paths.action, `${JSON.stringify(actionEvidence, null, 2)}\n`);
+    const ledger = {
+      ...initializationCatalogLedger(catalogs, { readErrorIndexes }),
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      action_evidence: fileRecord(paths.action),
+      action,
+      confirmation,
+    };
+    const computedVerdict = coreBetaInitializationSkillReinstallVerdict({
+      beforeCatalog,
+      afterCatalog,
+      afterIdleStableObservations: ledger.idle_stable_observations,
+      catalogObservations: ledger,
+    });
+    const maintenanceText = '运行时完成就绪，本进程已加载并校验；Claude Code SDK 已就绪；Codex SDK 已就绪。';
+    const sdkStatuses = [
+      { family: 'claude-code', phase: 'ready' },
+      { family: 'codex', phase: 'ready' },
+    ];
+    const terminal = {
+      schema_version: 'qbot-core-beta-runtime-maintenance-observations/v2',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      action_evidence: fileRecord(paths.action),
+      terminal_kind: 'runtime-ready',
+      timeout_ms: 600_000,
+      completed_at: new Date(8).toISOString(),
+      final: null,
+      observations: [1, 2, 3].map((stable, index) => ({
+        captured_at: new Date(index + 2).toISOString(),
+        elapsed_ms: 5_000 + (index * 1_000),
+        read_ok: true,
+        raw: {
+          page_url: 'file:///fixture/ui/index.html',
+          page_text: '新建任务 专家 技能 连接器 知识',
+          page_body_text_length: 100,
+          maintenance_region_visible: true,
+          maintenance_text: maintenanceText,
+          composer_visible: true,
+          maintenance_button_enabled: true,
+          sdk_statuses: sdkStatuses,
+          capabilities: { modelTiers: ['M3'] },
+          sessions: [],
+          reconnected: false,
+        },
+        reported: {
+          ready: stable === 3,
+          pending: false,
+          failed: false,
+          stable_ready_observations: stable,
+          authoritative_ready_observations: stable,
+          product_ui_state_conflict: false,
+        },
+        error: '',
+      })),
+    };
+    terminal.final = coreBetaInitializationMaintenanceObservationsVerdict({
+      ledger: terminal,
+      caseId: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+    }).replayed_final;
+    const terminalFinal = terminal.final;
+    fs.writeFileSync(paths.screenshot, png1x1);
+    fs.writeFileSync(paths.continuationBefore, png1x1Alternative);
+    fs.writeFileSync(paths.continuationAfter, png1x1Third);
+    const publicStateForCatalog = (catalog) => ({
+      case_id: 'BETA-INIT-003',
+      page: { body_text_length: 100 },
+      task: {
+        id: null,
+        running: false,
+        message_count: 0,
+        send_count: 0,
+        messages: [],
+      },
+      capabilities: { modelTiers: ['M3'] },
+      skills: { selected: [], catalog },
+      connectors: { selected: [] },
+      expert: null,
+    });
+    const beforePublicState = publicStateForCatalog(beforeCatalog);
+    const afterPublicState = publicStateForCatalog(afterCatalog);
+    const beforePublicStateEvidence = {
+      schema_version: 'qbot-core-beta-initialization-public-state-observation/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      phase: 'before-action',
+      captured_at: new Date(1).toISOString(),
+      public_state: beforePublicState,
+    };
+    const afterPublicStateEvidence = {
+      schema_version: 'qbot-core-beta-initialization-public-state-observation/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      phase: 'after-maintenance',
+      captured_at: new Date(7).toISOString(),
+      public_state: afterPublicState,
+    };
+    fs.writeFileSync(paths.beforePublicState, `${JSON.stringify(beforePublicStateEvidence, null, 2)}\n`);
+    fs.writeFileSync(paths.afterPublicState, `${JSON.stringify(afterPublicStateEvidence, null, 2)}\n`);
+    const continuationSurface = {
+      schema_version: 'qbot-core-beta-initialization-continuation-surface/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      valid: true,
+      composer_ready: true,
+      workbench_ready: true,
+      clean_draft_isolated: true,
+      clean_draft_state: {
+        available: true,
+        activeId: null,
+        isDraft: true,
+        draftInstanceId: 'draft-init-003-fixture',
+        messageCount: 0,
+        sendCount: 0,
+        running: false,
+      },
+      clean_draft_surface: { ok: true, reason: 'fixture clean draft surface' },
+      capabilities_readable: true,
+      public_task_clean: true,
+      public_selections_clean: true,
+      public_state_readable: true,
+      continuation_state: {
+        draft_instance_id: 'draft-init-003-fixture',
+        task_id: null,
+        message_count: 0,
+        send_count: 0,
+        running: false,
+        selected_skills: [],
+        selected_connectors: [],
+        current_expert: null,
+      },
+      before_screenshot: fileRecord(paths.continuationBefore),
+      after_screenshot: fileRecord(paths.continuationAfter),
+      error: '',
+      public_state: afterPublicState,
+    };
+    const initializationActionObservation = {
+      schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      action_observed: action.action_observed === true,
+      source: action.action_observation_source,
+      attempts: [{
+        attempt: 1,
+        action_observed: action.action_observed === true,
+        source: action.action_observation_source,
+        confirmation_accepted: confirmation.accepted === true,
+        confirmation_source: confirmation.source,
+      }],
+    };
+    const initializationContinuation = computedVerdict.oracle_valid ? null : coreBetaInitializationContinuation({
+      testCase: { id: 'BETA-INIT-003' },
+      terminalReadback: terminalFinal,
+      afterReadback: afterPublicState,
+      continuationSurface,
+      productFailureObserved: true,
+      productFailureSource: 'skill_reinstall_readiness_oracle',
+    });
+    const maintenance = {
+      schema_version: 'qbot-core-beta-runtime-maintenance-readback/v1',
+      case_id: 'BETA-INIT-003',
+      method: 'skillsReinstall',
+      testid: 'assistant-skills-reinstall',
+      evidence_valid: true,
+      oracle_valid: computedVerdict.oracle_valid,
+      valid: computedVerdict.oracle_valid,
+      before: beforePublicState,
+      action,
+      action_attempts: [action],
+      initialization_action_observation: initializationActionObservation,
+      terminal: terminalFinal,
+      after: afterPublicState,
+      continuation_surface: { ...continuationSurface, file: paths.continuationSurface },
+      skill_reinstall_readiness_verdict: computedVerdict,
+      ...(initializationContinuation ? { initialization_continuation: initializationContinuation } : {}),
+    };
+    fs.writeFileSync(paths.maintenance, `${JSON.stringify(maintenance, null, 2)}\n`);
+    fs.writeFileSync(paths.terminal, `${JSON.stringify(terminal, null, 2)}\n`);
+    fs.writeFileSync(paths.catalog, `${JSON.stringify(ledger, null, 2)}\n`);
+    fs.writeFileSync(paths.continuationSurface, `${JSON.stringify(continuationSurface, null, 2)}\n`);
+    const verdict = {
+      ...computedVerdict,
+      captured_at: new Date(5).toISOString(),
+      evidence_refs: {
+        maintenance_readback: fileRecord(paths.maintenance),
+        action_observations: fileRecord(paths.action),
+        before_public_state: fileRecord(paths.beforePublicState),
+        after_public_state: fileRecord(paths.afterPublicState),
+        terminal_observations: fileRecord(paths.terminal),
+        catalog_observations: fileRecord(paths.catalog),
+        terminal_screenshot: fileRecord(paths.screenshot),
+        continuation_surface: fileRecord(paths.continuationSurface),
+      },
+    };
+    let manifest = null;
+    const writeManifest = () => {
+      const verdictRecord = fileRecord(paths.verdict);
+      manifest = manifest || {
+        schema_version: 'qbot-core-evidence/v2',
+        case_id: 'BETA-INIT-003',
+        generated_at: new Date(6).toISOString(),
+        complete: true,
+        missing_roles: [],
+        invalid_roles: [],
+        not_applicable_roles: [],
+        evidence: [],
+      };
+      const nextRows = [{
+        role: 'skill_reinstall_readiness_verdict',
+        ...verdictRecord,
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_terminal_screenshot',
+        ...fileRecord(paths.screenshot),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_continuation_surface',
+        ...fileRecord(paths.continuationSurface),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'core_beta_runtime_maintenance',
+        ...fileRecord(paths.maintenance),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_action_observation',
+        ...fileRecord(paths.action),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'core_beta_runtime_maintenance_observations',
+        ...fileRecord(paths.terminal),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_before_public_state',
+        ...fileRecord(paths.beforePublicState),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_after_public_state',
+        ...fileRecord(paths.afterPublicState),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }];
+      for (const nextRow of nextRows) {
+        const existingIndex = manifest.evidence.findIndex((item) => item.role === nextRow.role);
+        if (existingIndex >= 0) manifest.evidence[existingIndex] = nextRow;
+        else manifest.evidence.push(nextRow);
+      }
+      fs.writeFileSync(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+    };
+    const commitVerdict = () => {
+      fs.writeFileSync(paths.verdict, `${JSON.stringify(verdict, null, 2)}\n`);
+      writeManifest();
+    };
+    const refreshRefsAndCommit = () => {
+      verdict.evidence_refs = {
+        maintenance_readback: fileRecord(paths.maintenance),
+        action_observations: fileRecord(paths.action),
+        before_public_state: fileRecord(paths.beforePublicState),
+        after_public_state: fileRecord(paths.afterPublicState),
+        terminal_observations: fileRecord(paths.terminal),
+        catalog_observations: fileRecord(paths.catalog),
+        terminal_screenshot: fileRecord(paths.screenshot),
+        continuation_surface: fileRecord(paths.continuationSurface),
+      };
+      commitVerdict();
+    };
+    commitVerdict();
+    const result = {
+      id: 'BETA-INIT-003',
+      case_dir: caseDir,
+      evidence_roles: [
+        'skill_reinstall_readiness_verdict',
+        'initialization_continuation_surface',
+        'initialization_action_observation',
+        'core_beta_runtime_maintenance_observations',
+        'initialization_before_public_state',
+        'initialization_after_public_state',
+      ],
+      status: status || (computedVerdict.oracle_valid ? 'passed' : 'failed'),
+      result_category: resultCategory || (computedVerdict.oracle_valid ? 'pass' : (
+        computedVerdict.evidence_valid ? 'bug' : 'automation_error'
+      )),
+      artifacts: {
+        skill_reinstall_readiness_verdict: paths.verdict,
+        core_beta_runtime_maintenance: paths.maintenance,
+        initialization_action_observation: paths.action,
+        initialization_before_public_state: paths.beforePublicState,
+        initialization_after_public_state: paths.afterPublicState,
+        core_beta_runtime_maintenance_observations: paths.terminal,
+        core_beta_skill_reinstall_catalog_observations: paths.catalog,
+        initialization_terminal_screenshot: paths.screenshot,
+        initialization_continuation_surface: paths.continuationSurface,
+        evidence_manifest: paths.manifest,
+      },
+      screenshots: { assistant_skills_reinstall_terminal: paths.screenshot },
+      screenshots_flat: [paths.screenshot],
+      evidence_manifest: cloneJson(manifest),
+      initialization_action_observation: cloneJson(initializationActionObservation),
+      ...(initializationContinuation
+        ? { initialization_continuation: cloneJson(initializationContinuation) }
+        : {}),
+    };
+    const syncEmbeddedManifest = () => { result.evidence_manifest = cloneJson(manifest); };
+    return {
+      root,
+      caseDir,
+      paths,
+      result,
+      action,
+      confirmation,
+      ledger,
+      terminal,
+      maintenance,
+      continuationSurface,
+      verdict,
+      fileRecord,
+      commitVerdict: () => { commitVerdict(); syncEmbeddedManifest(); },
+      refreshRefsAndCommit: () => { refreshRefsAndCommit(); syncEmbeddedManifest(); },
+      writeContinuationSurface: () => {
+        maintenance.continuation_surface = { ...continuationSurface, file: paths.continuationSurface };
+        fs.writeFileSync(paths.continuationSurface, `${JSON.stringify(continuationSurface, null, 2)}\n`);
+        fs.writeFileSync(paths.maintenance, `${JSON.stringify(maintenance, null, 2)}\n`);
+        refreshRefsAndCommit();
+        syncEmbeddedManifest();
+      },
+      writeManifest: () => { writeManifest(); syncEmbeddedManifest(); },
+      get manifest() { return manifest; },
+    };
+  };
+
+  const buildInitializationProductFailureFixture = (id) => {
+    const identities = {
+      'BETA-INIT-001': {
+        method: 'preparePythonRuntimes',
+        testid: 'assistant-prepare-python-runtimes',
+        confirmation: null,
+      },
+      'BETA-INIT-002': {
+        method: 'runtimeResetAll',
+        testid: 'assistant-runtime-reset-all',
+        confirmation: {
+          message: '确认全量重初始化，将清空现有运行环境并重新下载，此操作不可恢复。',
+          source: 'custom-dialog',
+          accepted: true,
+          confirmation_label: '全量重初始化',
+        },
+      },
+      'BETA-INIT-004': {
+        method: 'sessionsPurgeAllEnvs',
+        testid: 'assistant-sessions-purge',
+        confirmation: {
+          message: '确认清空全部会话和所有环境，此操作不可恢复。',
+          source: 'custom-dialog',
+          accepted: true,
+          confirmation_label: '清空全部会话',
+        },
+      },
+    };
+    const identity = identities[id];
+    assert.ok(identity, `unsupported initialization fixture: ${id}`);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-init-continuation-review-'));
+    evidenceRoots.push(root);
+    const caseDir = path.join(root, 'cases', id);
+    fs.mkdirSync(caseDir, { recursive: true });
+    const paths = {
+      maintenance: path.join(caseDir, `${identity.method}-readback.json`),
+      action: path.join(caseDir, `${identity.method}-action-observation.json`),
+      terminal: path.join(caseDir, `${identity.method}-terminal-observations.json`),
+      beforePublicState: path.join(caseDir, `${identity.method}-before-public-state.json`),
+      afterPublicState: path.join(caseDir, `${identity.method}-after-public-state.json`),
+      surface: path.join(caseDir, 'initialization-continuation-surface.json'),
+      terminalScreenshot: path.join(caseDir, `${identity.testid}-terminal.png`),
+      before: path.join(caseDir, 'initialization-continuation-surface-before.png'),
+      after: path.join(caseDir, 'initialization-continuation-surface-after.png'),
+      manifest: path.join(caseDir, 'evidence-manifest.json'),
+      report: path.join(caseDir, 'case-report.md'),
+    };
+    fs.writeFileSync(paths.terminalScreenshot, png1x1);
+    fs.writeFileSync(paths.before, png1x1Alternative);
+    fs.writeFileSync(paths.after, png1x1Third);
+    fs.writeFileSync(paths.report, `# ${id}\n\n产品维护终态失败。\n`);
+    const fileRecord = (file) => ({
+      path: file,
+      bytes: fs.statSync(file).size,
+      sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+    });
+    const action = {
+      ok: true,
+      testid: identity.testid,
+      before_text: '维护动作可用',
+      action_text: '处理中',
+      confirmation: identity.confirmation,
+      busy_observed: true,
+      navigation_observed: false,
+      navigation_url: '',
+      action_observed: true,
+      action_observation_source: 'busy',
+      completion_transition: '',
+      busy_screenshot: '',
+    };
+    const actionEvidence = {
+      schema_version: 'qbot-core-beta-initialization-action-evidence/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      destructive: id !== 'BETA-INIT-001',
+      captured_at: new Date(1).toISOString(),
+      attempts: [action],
+    };
+    fs.writeFileSync(paths.action, `${JSON.stringify(actionEvidence, null, 2)}\n`);
+    const actionObservation = {
+      schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      action_observed: true,
+      source: 'busy',
+      attempts: [{
+        attempt: 1,
+        action_observed: true,
+        source: 'busy',
+        confirmation_accepted: identity.confirmation?.accepted === true,
+        confirmation_source: identity.confirmation?.source || 'none',
+      }],
+    };
+    const publicState = {
+      case_id: id,
+      page: { body_text_length: 100 },
+      task: { id: null, running: false, message_count: 0, send_count: 0, messages: [] },
+      capabilities: { modelTiers: ['M3'] },
+      skills: { selected: [] },
+      connectors: { selected: [] },
+      expert: null,
+    };
+    const beforeReadback = cloneJson(publicState);
+    const afterReadback = cloneJson(publicState);
+    const beforePublicStateEvidence = {
+      schema_version: 'qbot-core-beta-initialization-public-state-observation/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      phase: 'before-action',
+      captured_at: new Date(1).toISOString(),
+      public_state: beforeReadback,
+    };
+    const afterPublicStateEvidence = {
+      schema_version: 'qbot-core-beta-initialization-public-state-observation/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      phase: 'after-maintenance',
+      captured_at: new Date(4).toISOString(),
+      public_state: afterReadback,
+    };
+    fs.writeFileSync(paths.beforePublicState, `${JSON.stringify(beforePublicStateEvidence, null, 2)}\n`);
+    fs.writeFileSync(paths.afterPublicState, `${JSON.stringify(afterPublicStateEvidence, null, 2)}\n`);
+    const surface = {
+      schema_version: 'qbot-core-beta-initialization-continuation-surface/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      valid: true,
+      composer_ready: true,
+      workbench_ready: true,
+      clean_draft_isolated: true,
+      clean_draft_state: {
+        available: true,
+        activeId: null,
+        isDraft: true,
+        draftInstanceId: `draft-${id.toLowerCase()}`,
+        messageCount: 0,
+        sendCount: 0,
+        running: false,
+      },
+      clean_draft_surface: { ok: true, reason: 'fixture clean draft surface' },
+      capabilities_readable: true,
+      public_task_clean: true,
+      public_selections_clean: true,
+      public_state_readable: true,
+      continuation_state: {
+        draft_instance_id: `draft-${id.toLowerCase()}`,
+        task_id: null,
+        message_count: 0,
+        send_count: 0,
+        running: false,
+        selected_skills: [],
+        selected_connectors: [],
+        current_expert: null,
+      },
+      before_screenshot: fileRecord(paths.before),
+      after_screenshot: fileRecord(paths.after),
+      error: '',
+      public_state: afterReadback,
+    };
+    const terminalKind = id === 'BETA-INIT-001'
+      ? 'update'
+      : id === 'BETA-INIT-004' ? 'sessions-empty' : 'runtime-ready';
+    const terminalEvidence = {
+      schema_version: 'qbot-core-beta-runtime-maintenance-observations/v2',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      action_evidence: fileRecord(paths.action),
+      terminal_kind: terminalKind,
+      timeout_ms: 600_000,
+      completed_at: new Date(3).toISOString(),
+      final: null,
+      observations: [{
+        captured_at: new Date(2).toISOString(),
+        elapsed_ms: 6_000,
+        read_ok: true,
+        raw: {
+          page_url: 'file:///fixture/ui/index.html',
+          page_text: '新建任务 专家 技能 连接器 知识',
+          page_body_text_length: 100,
+          maintenance_region_visible: true,
+          maintenance_text: '运行时失败，但本进程已加载并校验；Claude Code SDK 已就绪；Codex SDK 已就绪。',
+          composer_visible: true,
+          maintenance_button_enabled: true,
+          sdk_statuses: [
+            { family: 'claude-code', phase: 'ready' },
+            { family: 'codex', phase: 'ready' },
+          ],
+          capabilities: { modelTiers: ['M3'] },
+          sessions: [],
+          reconnected: false,
+        },
+        reported: {
+          ready: false,
+          pending: false,
+          failed: true,
+          stable_ready_observations: id === 'BETA-INIT-004' ? 1 : 0,
+          authoritative_ready_observations: 0,
+          product_ui_state_conflict: false,
+        },
+        error: '',
+      }],
+    };
+    terminalEvidence.final = coreBetaInitializationMaintenanceObservationsVerdict({
+      ledger: terminalEvidence,
+      caseId: id,
+      method: identity.method,
+      testid: identity.testid,
+      terminalKind,
+    }).replayed_final;
+    const terminal = terminalEvidence.final;
+    const continuation = coreBetaInitializationContinuation({
+      testCase: { id },
+      terminalReadback: terminal,
+      afterReadback,
+      continuationSurface: surface,
+    });
+    const maintenance = {
+      schema_version: 'qbot-core-beta-runtime-maintenance-readback/v1',
+      case_id: id,
+      method: identity.method,
+      testid: identity.testid,
+      evidence_valid: true,
+      oracle_valid: false,
+      valid: false,
+      action,
+      action_attempts: [action],
+      initialization_action_observation: actionObservation,
+      before: beforeReadback,
+      terminal,
+      after: afterReadback,
+      continuation_surface: { ...surface, file: paths.surface },
+      initialization_continuation: continuation,
+    };
+    fs.writeFileSync(paths.surface, `${JSON.stringify(surface, null, 2)}\n`);
+    fs.writeFileSync(paths.terminal, `${JSON.stringify(terminalEvidence, null, 2)}\n`);
+    fs.writeFileSync(paths.maintenance, `${JSON.stringify(maintenance, null, 2)}\n`);
+    const manifest = {
+      schema_version: 'qbot-core-evidence/v2',
+      case_id: id,
+      generated_at: new Date(6).toISOString(),
+      complete: true,
+      missing_roles: [],
+      invalid_roles: [],
+      not_applicable_roles: [],
+      evidence: [{
+        role: 'core_beta_runtime_maintenance',
+        ...fileRecord(paths.maintenance),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_terminal_screenshot',
+        ...fileRecord(paths.terminalScreenshot),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_continuation_surface',
+        ...fileRecord(paths.surface),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_action_observation',
+        ...fileRecord(paths.action),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'core_beta_runtime_maintenance_observations',
+        ...fileRecord(paths.terminal),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_before_public_state',
+        ...fileRecord(paths.beforePublicState),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }, {
+        role: 'initialization_after_public_state',
+        ...fileRecord(paths.afterPublicState),
+        valid: true,
+        validation_error: '',
+        missing: false,
+      }],
+    };
+    fs.writeFileSync(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+    const result = {
+      id,
+      case_dir: caseDir,
+      case_report: paths.report,
+      status: 'failed',
+      result_category: 'bug',
+      scenario: '初始化维护动作产品终态失败但恢复工作台可用',
+      expected_result: '维护动作成功完成。',
+      actual_result: '维护动作真实执行后产品终态明确失败。',
+      conclusion: '失败：产品维护终态失败。',
+      steps: [{
+        action: `点击 ${identity.testid}`,
+        status: 'failed',
+        category: 'bug',
+        expected: '维护动作成功完成。',
+        actual: '动作已观察，产品终态明确失败。',
+      }],
+      assertions: [{
+        name: '初始化维护产品终态',
+        status: 'failed',
+        category: 'bug',
+        expected: '产品维护终态成功。',
+        actual: '产品维护终态 failed。',
+      }],
+      screenshots: {
+        [`${identity.testid.replaceAll('-', '_')}_terminal`]: paths.terminalScreenshot,
+        maintenance_terminal: paths.terminalScreenshot,
+      },
+      screenshots_flat: [paths.terminalScreenshot],
+      artifacts: {
+        core_beta_runtime_maintenance: paths.maintenance,
+        initialization_action_observation: paths.action,
+        core_beta_runtime_maintenance_observations: paths.terminal,
+        initialization_before_public_state: paths.beforePublicState,
+        initialization_after_public_state: paths.afterPublicState,
+        initialization_terminal_screenshot: paths.terminalScreenshot,
+        initialization_continuation_surface: paths.surface,
+        evidence_manifest: paths.manifest,
+      },
+      evidence_manifest: cloneJson(manifest),
+      initialization_action_observation: cloneJson(actionObservation),
+      initialization_continuation: cloneJson(continuation),
+    };
+    return {
+      root,
+      caseDir,
+      paths,
+      result,
+      maintenance,
+      terminal: terminalEvidence,
+      surface,
+      manifest,
+      fileRecord,
+    };
+  };
+
+  const convertInitializationFixtureToPass = (fixture) => {
+    const { result, maintenance, terminal, manifest, paths, fileRecord } = fixture;
+    const readyText = '运行时完成就绪，本进程已加载并校验；Claude Code SDK 已就绪；Codex SDK 已就绪。';
+    const rawTemplate = terminal.observations[0].raw;
+    const stableRequired = terminal.terminal_kind === 'update' ? 2 : 3;
+    terminal.observations = [1, 2, 3].map((stable, index) => ({
+      captured_at: new Date(index + 2).toISOString(),
+      elapsed_ms: 5_000 + (index * 1_000),
+      read_ok: true,
+      raw: {
+        ...cloneJson(rawTemplate),
+        maintenance_text: readyText,
+        maintenance_button_enabled: true,
+        sessions: [],
+      },
+      reported: {
+        ready: stable >= stableRequired,
+        pending: false,
+        failed: false,
+        stable_ready_observations: stable,
+        authoritative_ready_observations: stable,
+        product_ui_state_conflict: false,
+      },
+      error: '',
+    }));
+    terminal.completed_at = new Date(8).toISOString();
+    terminal.final = coreBetaInitializationMaintenanceObservationsVerdict({
+      ledger: terminal,
+      caseId: result.id,
+      method: maintenance.method,
+      testid: maintenance.testid,
+      terminalKind: terminal.terminal_kind,
+    }).replayed_final;
+    maintenance.evidence_valid = true;
+    maintenance.oracle_valid = true;
+    maintenance.valid = true;
+    maintenance.terminal = cloneJson(terminal.final);
+    delete maintenance.continuation_surface;
+    delete maintenance.initialization_continuation;
+    fs.writeFileSync(paths.terminal, `${JSON.stringify(terminal, null, 2)}\n`);
+    fs.writeFileSync(paths.maintenance, `${JSON.stringify(maintenance, null, 2)}\n`);
+    manifest.evidence = manifest.evidence.filter(
+      (item) => item.role !== 'initialization_continuation_surface',
+    );
+    for (const [role, file] of [
+      ['core_beta_runtime_maintenance', paths.maintenance],
+      ['core_beta_runtime_maintenance_observations', paths.terminal],
+    ]) {
+      const row = manifest.evidence.find((item) => item.role === role);
+      Object.assign(row, fileRecord(file), { valid: true, validation_error: '', missing: false });
+    }
+    fs.writeFileSync(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+    result.status = 'passed';
+    result.result_category = 'pass';
+    result.steps = result.steps.map((item) => ({ ...item, status: 'passed', category: 'pass' }));
+    result.assertions = result.assertions.map((item) => ({ ...item, status: 'passed', category: 'pass' }));
+    result.actual_result = '初始化维护动作成功并达到稳定终态。';
+    result.conclusion = '通过';
+    delete result.initialization_continuation;
+    delete result.artifacts.initialization_continuation_surface;
+    result.evidence_manifest = cloneJson(manifest);
+    return fixture;
+  };
+
+  try {
+    for (const id of ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-004']) {
+      const fixture = buildInitializationProductFailureFixture(id);
+      const evidenceVerdict = coreBetaInitializationContinuationEvidenceVerdict(
+        fixture.result,
+        { runRoot: fixture.root },
+      );
+      assert.equal(
+        evidenceVerdict.valid,
+        true,
+        `${id} 合法产品失败证据必须可从当前 run root 重放：${evidenceVerdict.reason}`,
+      );
+      assert.equal(evidenceVerdict.safe, true);
+      const assessment = assessUserCenteredOutcome(fixture.result, {
+        runRoot: fixture.root,
+        explicitEvidence: [fixture.paths.after],
+        intendedClassification: 'bug',
+        reviewReason: '当前 run root 的动作、终态、恢复表面、截图和 manifest 已完整重放。',
+        productObservation: '维护动作已观察，产品终态明确失败。',
+        userOperationOverride: '执行初始化维护动作。',
+        expectedOutcomeOverride: '维护动作应成功完成。',
+        userImpactOverride: '用户无法完成对应初始化维护操作。',
+      });
+      assert.equal(
+        assessment.classification,
+        'bug',
+        `${id} 完整磁盘证据的产品失败必须保留为 Bug：${assessment.reason}`,
+      );
+    }
+    for (const id of ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-004']) {
+      const passingInitialization = convertInitializationFixtureToPass(
+        buildInitializationProductFailureFixture(id),
+      );
+      const verdict = coreBetaInitializationContinuationEvidenceVerdict(
+        passingInitialization.result,
+        { runRoot: passingInitialization.root },
+      );
+      assert.equal(
+        verdict.valid,
+        true,
+        `${id} raw pass 必须完整执行当前 run root 的磁盘语义重放：${verdict.reason}`,
+      );
+      assert.equal(verdict.continuation_required, false);
+      assert.equal(verdict.safe, true);
+    }
+    const passing = buildSkillReinstallEvidenceFixture();
+    const passingVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      passing.result,
+      { runRoot: passing.root },
+    );
+    assert.equal(passingVerdict.valid, true, `合法 INIT-003 pass 证据必须可信：${passingVerdict.reason}`);
+    assert.equal(passingVerdict.oracle_valid, true);
+
+    const missingRunRoot = coreBetaInitializationSkillReinstallEvidenceVerdict(passing.result);
+    assert.equal(missingRunRoot.valid, false, 'INIT 可信复核缺少 runRoot 时必须 fail-closed');
+    assert.ok(
+      missingRunRoot.reasons.includes('skill_reinstall_run_root_required'),
+      `缺少 runRoot 必须暴露精确原因：${missingRunRoot.reason}`,
+    );
+
+    const forgedRawPass = buildInitializationProductFailureFixture('BETA-INIT-002');
+    forgedRawPass.result.status = 'passed';
+    forgedRawPass.result.result_category = 'pass';
+    const forgedRawPassVerdict = coreBetaInitializationContinuationEvidenceVerdict(
+      forgedRawPass.result,
+      { runRoot: forgedRawPass.root },
+    );
+    assert.equal(forgedRawPassVerdict.valid, false, '产品失败证据不得由伪 raw pass 报告放行');
+    assert.ok(
+      forgedRawPassVerdict.reasons.includes('initialization_continuation_raw_result_mismatch'),
+      `伪 raw pass 必须暴露结果投影不一致：${forgedRawPassVerdict.reason}`,
+    );
+
+    for (const [pathKey, refName] of [
+      ['action', 'action_observations'],
+      ['terminal', 'terminal_observations'],
+      ['beforePublicState', 'before_public_state'],
+      ['afterPublicState', 'after_public_state'],
+    ]) {
+      const missingIndependentEvidence = buildSkillReinstallEvidenceFixture();
+      fs.unlinkSync(missingIndependentEvidence.paths[pathKey]);
+      const missingVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        missingIndependentEvidence.result,
+        { runRoot: missingIndependentEvidence.root },
+      );
+      assert.equal(missingVerdict.valid, false, `缺少独立 ${refName} 文件时必须 fail-closed`);
+      assert.ok(
+        missingVerdict.reasons.includes(`skill_reinstall_evidence_ref_invalid:${refName}`),
+        `缺少 ${refName} 必须暴露精确原因：${missingVerdict.reason}`,
+      );
+    }
+
+    const forgedTerminalFinal = buildSkillReinstallEvidenceFixture();
+    forgedTerminalFinal.terminal.final.button_enabled = false;
+    fs.writeFileSync(
+      forgedTerminalFinal.paths.terminal,
+      `${JSON.stringify(forgedTerminalFinal.terminal, null, 2)}\n`,
+    );
+    forgedTerminalFinal.refreshRefsAndCommit();
+    const forgedTerminalFinalVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      forgedTerminalFinal.result,
+      { runRoot: forgedTerminalFinal.root },
+    );
+    assert.equal(forgedTerminalFinalVerdict.valid, false, '原始观察不变时伪造 terminal.final 不得通过');
+    assert.ok(
+      forgedTerminalFinalVerdict.reasons.includes('skill_reinstall_maintenance_observations_final_replay_mismatch'),
+      `伪造 terminal.final 必须由原始观察重放识别：${forgedTerminalFinalVerdict.reason}`,
+    );
+
+    for (const [label, mutate] of [
+      ['稳定次数', (observation) => { observation.reported.stable_ready_observations = 99; }],
+      ['runtime loaded', (observation) => { observation.raw.maintenance_text = '维护区空白'; }],
+      ['SDK ready', (observation) => { observation.raw.sdk_statuses[0].phase = 'failed'; }],
+      ['维护按钮', (observation) => { observation.raw.maintenance_button_enabled = false; }],
+      ['capabilities', (observation) => { observation.raw.capabilities = null; }],
+      ['页面 readiness', (observation) => {
+        observation.raw.page_text = '';
+        observation.raw.page_body_text_length = 0;
+      }],
+    ]) {
+      const forgedReadiness = buildSkillReinstallEvidenceFixture();
+      mutate(forgedReadiness.terminal.observations.at(-1));
+      fs.writeFileSync(
+        forgedReadiness.paths.terminal,
+        `${JSON.stringify(forgedReadiness.terminal, null, 2)}\n`,
+      );
+      forgedReadiness.refreshRefsAndCommit();
+      const forgedReadinessVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        forgedReadiness.result,
+        { runRoot: forgedReadiness.root },
+      );
+      assert.equal(forgedReadinessVerdict.valid, false, `伪造 ${label} 投影不得通过`);
+      assert.ok(
+        forgedReadinessVerdict.reasons.includes(
+          'skill_reinstall_maintenance_observation_3_reported_projection_mismatch',
+        ),
+        `伪造 ${label} 必须由逐次原始观察重算识别：${forgedReadinessVerdict.reason}`,
+      );
+    }
+
+    const forgedMaintenanceProjection = buildSkillReinstallEvidenceFixture();
+    forgedMaintenanceProjection.maintenance.terminal.button_enabled = false;
+    fs.writeFileSync(
+      forgedMaintenanceProjection.paths.maintenance,
+      `${JSON.stringify(forgedMaintenanceProjection.maintenance, null, 2)}\n`,
+    );
+    forgedMaintenanceProjection.refreshRefsAndCommit();
+    const forgedMaintenanceVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      forgedMaintenanceProjection.result,
+      { runRoot: forgedMaintenanceProjection.root },
+    );
+    assert.equal(forgedMaintenanceVerdict.valid, false, '只篡改 maintenance 内嵌终态不得通过');
+    assert.ok(
+      forgedMaintenanceVerdict.reasons.includes('skill_reinstall_terminal_projection_mismatch'),
+      `maintenance 内嵌投影必须与原始观察重放全等：${forgedMaintenanceVerdict.reason}`,
+    );
+
+    const productBug = buildSkillReinstallEvidenceFixture({
+      afterCatalog: initializationCatalogPythonFailure,
+      catalogs: Array(3).fill(initializationCatalogPythonFailure),
+    });
+    const productBugVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      productBug.result,
+      { runRoot: productBug.root },
+    );
+    assert.equal(productBugVerdict.valid, true, `readiness 产品失败证据必须可信：${productBugVerdict.reason}`);
+    assert.equal(productBugVerdict.oracle_valid, false);
+    assert.equal(productBugVerdict.outcome, 'bug');
+    const productBugContinuationVerdict = coreBetaInitializationContinuationEvidenceVerdict(
+      productBug.result,
+      { runRoot: productBug.root },
+    );
+    assert.equal(
+      productBugContinuationVerdict.valid,
+      true,
+      `合法 INIT-003 产品失败的通用连续性证据必须可从当前 run root 重放：${productBugContinuationVerdict.reason}`,
+    );
+    assert.equal(productBugContinuationVerdict.safe, true);
+    Object.assign(productBug.result, {
+      scenario: '一键重装 Skill 后产品 readiness 失败',
+      expected_result: '重装后安装 identity 保持一致且全部 Skill ready。',
+      steps: [{
+        action: '点击并确认一键重装 Skill',
+        status: 'failed',
+        category: 'bug',
+        expected: '产品完成重装并恢复 ready。',
+        actual: '动作已执行，但安装项进入 python_runtime_failed。',
+      }],
+      assertions: [{
+        name: 'Skill 重装 readiness',
+        status: 'failed',
+        category: 'bug',
+        expected: '全部安装项进入 ready。',
+        actual: '安装项进入 python_runtime_failed。',
+      }],
+      screenshots: { maintenance_terminal: productBug.paths.continuationAfter },
+      screenshots_flat: [productBug.paths.continuationAfter],
+      actual_result: '一键重装动作已执行，产品终态存在 python_runtime_failed。',
+      conclusion: '失败：Skill 重装 readiness 未通过。',
+    });
+    const productBugAssessment = assessUserCenteredOutcome(productBug.result, {
+      runRoot: productBug.root,
+      explicitEvidence: [productBug.paths.continuationAfter],
+      intendedClassification: 'bug',
+      reviewReason: '当前 run root 的动作、维护终态、恢复表面、截图和 manifest 已完整重放。',
+      productObservation: '一键重装后安装项进入 python_runtime_failed。',
+      userOperationOverride: '点击并确认一键重装 Skill。',
+      expectedOutcomeOverride: '重装完成后全部安装项应恢复 ready。',
+      userImpactOverride: '用户无法使用依赖该运行时的 Skill。',
+    });
+    assert.equal(
+      productBugAssessment.classification,
+      'bug',
+      `完整磁盘证据的 INIT-003 产品失败必须保留为 Bug：${productBugAssessment.reason}`,
+    );
+
+    const detachedEvidence = buildSkillReinstallEvidenceFixture();
+    const trustedRunRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-init-003-run-root-'));
+    evidenceRoots.push(trustedRunRoot);
+    fs.mkdirSync(path.join(trustedRunRoot, 'cases'));
+    const detachedVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      detachedEvidence.result,
+      { runRoot: trustedRunRoot },
+    );
+    assert.equal(
+      detachedVerdict.valid,
+      false,
+      '另一棵完整且内部自洽的 Case 证据树不得冒充当前 run root 的 INIT-003 证据',
+    );
+    assert.ok(
+      detachedVerdict.reasons.includes('skill_reinstall_case_dir_run_root_binding_invalid'),
+      `detached caseDir 必须暴露 run-root 绑定原因：${detachedVerdict.reason}`,
+    );
+
+    const unobserved = buildSkillReinstallEvidenceFixture({ actionObserved: false });
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(unobserved.result).valid, false);
+
+    const emptyObjectEvidence = buildSkillReinstallEvidenceFixture();
+    fs.writeFileSync(emptyObjectEvidence.paths.maintenance, '{}\n');
+    emptyObjectEvidence.refreshRefsAndCommit();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(emptyObjectEvidence.result).valid,
+      false,
+      '原始 maintenance 引用即便重算 SHA 与 manifest，空对象仍不得通过',
+    );
+
+    const forgedFailureLists = buildSkillReinstallEvidenceFixture();
+    forgedFailureLists.verdict.evidence_failures = ['forged_failure'];
+    forgedFailureLists.commitVerdict();
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(forgedFailureLists.result).valid, false);
+
+    const tamperedOriginal = buildSkillReinstallEvidenceFixture();
+    tamperedOriginal.ledger.observations[1].raw_catalog = catalogB;
+    fs.writeFileSync(tamperedOriginal.paths.catalog, `${JSON.stringify(tamperedOriginal.ledger, null, 2)}\n`);
+    const tamperedRecomputed = coreBetaInitializationSkillReinstallVerdict({
+      beforeCatalog: initializationCatalogBefore,
+      afterCatalog: initializationCatalogAfter,
+      afterIdleStableObservations: tamperedOriginal.ledger.idle_stable_observations,
+      catalogObservations: tamperedOriginal.ledger,
+    });
+    Object.assign(tamperedOriginal.verdict, tamperedRecomputed);
+    tamperedOriginal.maintenance.skill_reinstall_readiness_verdict = tamperedRecomputed;
+    fs.writeFileSync(tamperedOriginal.paths.maintenance, `${JSON.stringify(tamperedOriginal.maintenance, null, 2)}\n`);
+    tamperedOriginal.result.status = 'failed';
+    tamperedOriginal.result.result_category = 'automation_error';
+    tamperedOriginal.refreshRefsAndCommit();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(tamperedOriginal.result).valid,
+      false,
+      '篡改原始样本后即便重算引用 SHA、verdict 与 manifest，证据错误仍必须 fail-closed',
+    );
+
+    const abaEvidence = buildSkillReinstallEvidenceFixture({ catalogs: [catalogA, catalogB, catalogA] });
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(abaEvidence.result).valid, false);
+    const beforeReadinessMissing = buildSkillReinstallEvidenceFixture({
+      beforeCatalog: initializationCatalogBeforeMissingReadiness,
+    });
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(beforeReadinessMissing.result).valid, false);
+    const catalogReadError = buildSkillReinstallEvidenceFixture({
+      catalogs: [null, catalogA, catalogA, catalogA],
+      readErrorIndexes: [0],
+    });
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(catalogReadError.result).valid, false);
+    const insufficientStable = buildSkillReinstallEvidenceFixture({ catalogs: [catalogA, catalogA] });
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(insufficientStable.result).valid, false);
+
+    const missingContinuationSurface = buildSkillReinstallEvidenceFixture();
+    fs.unlinkSync(missingContinuationSurface.paths.continuationSurface);
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(missingContinuationSurface.result).valid,
+      false,
+      'INIT-003 缺少 continuation surface 文件时必须 fail-closed',
+    );
+
+    const forgedTaskState = buildSkillReinstallEvidenceFixture();
+    forgedTaskState.continuationSurface.public_state.task.id = 'forged-task-id';
+    forgedTaskState.continuationSurface.continuation_state.task_id = 'forged-task-id';
+    forgedTaskState.writeContinuationSurface();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(forgedTaskState.result).valid,
+      false,
+      '即便重算 surface、verdict 和 manifest SHA，非空 taskId 仍不得通过',
+    );
+
+    const residualSelection = buildSkillReinstallEvidenceFixture();
+    residualSelection.continuationSurface.public_state.skills.selected = [{ slug: 'residual-skill' }];
+    residualSelection.continuationSurface.continuation_state.selected_skills = [{ slug: 'residual-skill' }];
+    residualSelection.writeContinuationSurface();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(residualSelection.result).valid,
+      false,
+      '恢复后的 Skill/Connector/Expert 任一残留即使自报 clean 也必须被语义重放拒绝',
+    );
+
+    const emptyDraftInstance = buildSkillReinstallEvidenceFixture();
+    emptyDraftInstance.continuationSurface.clean_draft_state.draftInstanceId = '';
+    emptyDraftInstance.continuationSurface.continuation_state.draft_instance_id = '';
+    emptyDraftInstance.writeContinuationSurface();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(emptyDraftInstance.result).valid,
+      false,
+      '恢复 surface 的 draftInstanceId 为空时不得形成可信初始化结论',
+    );
+
+    const screenshotShaDrift = buildSkillReinstallEvidenceFixture();
+    fs.appendFileSync(screenshotShaDrift.paths.continuationAfter, Buffer.from([1]));
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(screenshotShaDrift.result).valid,
+      false,
+      'surface 固化后替换截图字节必须因 bytes/SHA 漂移而 fail-closed',
+    );
+
+    const disguisedOversizeJson = buildSkillReinstallEvidenceFixture();
+    const disguisedMaintenancePath = path.join(
+      disguisedOversizeJson.caseDir,
+      'maintenance-readback-disguised-as-png.png',
+    );
+    fs.writeFileSync(disguisedMaintenancePath, `${JSON.stringify({
+      ...disguisedOversizeJson.maintenance,
+      padding: 'x'.repeat(16 * 1024 * 1024),
+    })}\n`);
+    fs.unlinkSync(disguisedOversizeJson.paths.maintenance);
+    disguisedOversizeJson.paths.maintenance = disguisedMaintenancePath;
+    disguisedOversizeJson.result.artifacts.core_beta_runtime_maintenance = disguisedMaintenancePath;
+    disguisedOversizeJson.refreshRefsAndCommit();
+    assert.ok(fs.statSync(disguisedMaintenancePath).size > 16 * 1024 * 1024);
+    const disguisedOversizeJsonVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      disguisedOversizeJson.result,
+      { runRoot: disguisedOversizeJson.root },
+    );
+    assert.equal(
+      disguisedOversizeJsonVerdict.valid,
+      false,
+      'JSON 角色即使使用 .png 文件名也不得绕过 16 MiB 上限',
+    );
+    assert.ok(
+      disguisedOversizeJsonVerdict.reasons.includes('skill_reinstall_evidence_ref_invalid:maintenance_readback'),
+      `伪装扩展名的超限 JSON 必须按 semanticRole 拒绝：${disguisedOversizeJsonVerdict.reason}`,
+    );
+
+    const oversizePng = buildSkillReinstallEvidenceFixture();
+    fs.truncateSync(oversizePng.paths.screenshot, (32 * 1024 * 1024) + 1);
+    oversizePng.refreshRefsAndCommit();
+    assert.ok(fs.statSync(oversizePng.paths.screenshot).size > 32 * 1024 * 1024);
+    const oversizePngVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      oversizePng.result,
+      { runRoot: oversizePng.root },
+    );
+    assert.equal(oversizePngVerdict.valid, false, 'PNG 角色超过 32 MiB 时必须在读取前 fail-closed');
+    assert.ok(
+      oversizePngVerdict.reasons.includes('skill_reinstall_evidence_ref_invalid:terminal_screenshot'),
+      `超限 PNG 必须暴露证据引用无效：${oversizePngVerdict.reason}`,
+    );
+
+    const reusedJsonPath = buildSkillReinstallEvidenceFixture();
+    reusedJsonPath.paths.beforePublicState = reusedJsonPath.paths.action;
+    reusedJsonPath.result.artifacts.initialization_before_public_state = reusedJsonPath.paths.action;
+    reusedJsonPath.refreshRefsAndCommit();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedJsonPath.result,
+        { runRoot: reusedJsonPath.root },
+      ).valid,
+      false,
+      '同一 JSON 文件不得跨 action/before-public-state 角色复用',
+    );
+
+    const reusedJsonInode = buildSkillReinstallEvidenceFixture();
+    fs.unlinkSync(reusedJsonInode.paths.beforePublicState);
+    fs.linkSync(reusedJsonInode.paths.action, reusedJsonInode.paths.beforePublicState);
+    reusedJsonInode.refreshRefsAndCommit();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedJsonInode.result,
+        { runRoot: reusedJsonInode.root },
+      ).valid,
+      false,
+      '不同路径指向同一 JSON inode 时不得跨角色复用',
+    );
+
+    const renamedMaintenanceManifestRole = buildSkillReinstallEvidenceFixture();
+    renamedMaintenanceManifestRole.manifest.evidence.find(
+      (item) => item.role === 'core_beta_runtime_maintenance',
+    ).role = 'maintenance_readback';
+    fs.writeFileSync(
+      renamedMaintenanceManifestRole.paths.manifest,
+      `${JSON.stringify(renamedMaintenanceManifestRole.manifest, null, 2)}\n`,
+    );
+    renamedMaintenanceManifestRole.result.evidence_manifest = cloneJson(
+      renamedMaintenanceManifestRole.manifest,
+    );
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(
+        renamedMaintenanceManifestRole.result,
+        { runRoot: renamedMaintenanceManifestRole.root },
+      ).valid,
+      false,
+      'maintenance manifest 角色改名后不得由路径与 SHA 自洽绕过',
+    );
+
+    for (const [field, value] of [['valid', false], ['missing', true]]) {
+      const invalidSurfaceManifest = buildSkillReinstallEvidenceFixture();
+      invalidSurfaceManifest.manifest.evidence.find(
+        (item) => item.role === 'initialization_continuation_surface',
+      )[field] = value;
+      fs.writeFileSync(
+        invalidSurfaceManifest.paths.manifest,
+        `${JSON.stringify(invalidSurfaceManifest.manifest, null, 2)}\n`,
+      );
+      invalidSurfaceManifest.result.evidence_manifest = cloneJson(invalidSurfaceManifest.manifest);
+      assert.equal(
+        coreBetaInitializationSkillReinstallEvidenceVerdict(
+          invalidSurfaceManifest.result,
+          { runRoot: invalidSurfaceManifest.root },
+        ).valid,
+        false,
+        `continuation surface manifest ${field} 欺骗必须 fail-closed`,
+      );
+    }
+
+    const assertInvalidContinuationPng = (mutate, message) => {
+      const fixture = buildSkillReinstallEvidenceFixture();
+      fs.writeFileSync(
+        fixture.paths.continuationAfter,
+        mutate(fs.readFileSync(fixture.paths.continuationAfter)),
+      );
+      fixture.continuationSurface.after_screenshot = fixture.fileRecord(
+        fixture.paths.continuationAfter,
+      );
+      fixture.writeContinuationSurface();
+      const verdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        fixture.result,
+        { runRoot: fixture.root },
+      );
+      assert.equal(verdict.valid, false, message);
+      assert.ok(
+        verdict.reasons.includes('skill_reinstall_continuation_after_screenshot_invalid'),
+        `${message}: ${verdict.reason}`,
+      );
+    };
+    assertInvalidContinuationPng(
+      (png) => png.subarray(0, png.length - 1),
+      '截断 PNG 即使重新固化 bytes/SHA 也必须被完整性校验拒绝',
+    );
+    assertInvalidContinuationPng(
+      (png) => {
+        const changed = Buffer.from(png);
+        changed[changed.length - 1] ^= 1;
+        return changed;
+      },
+      'CRC 错误 PNG 即使重新固化 bytes/SHA 也必须被拒绝',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IDAT', (data) => Buffer.alloc(data.length)),
+      'CRC 合法但无法 inflate 的 IDAT 不得作为截图证据',
+    );
+    for (const [label, mutate] of [
+      ['非法 bitDepth/colorType 组合', (data) => { data[8] = 4; return data; }],
+      ['非法 compression method', (data) => { data[10] = 1; return data; }],
+      ['非法 filter method', (data) => { data[11] = 1; return data; }],
+      ['不支持的 interlace method', (data) => { data[12] = 1; return data; }],
+    ]) {
+      assertInvalidContinuationPng(
+        (png) => replaceFirstPngChunk(png, 'IHDR', mutate),
+        `${label}不得作为截图证据`,
+      );
+    }
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IDAT', 'ABCD'),
+      '未知 critical chunk 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IDAT', 'A1CD'),
+      '包含非字母字符的 chunk type 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IDAT', 'tExt'),
+      'reserved bit 非法的 chunk type 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IDAT', 'PLTE', Buffer.from([0, 0, 0])),
+      '灰度 alpha PNG 不允许出现 PLTE',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IHDR', (data) => {
+        data[8] = 8;
+        data[9] = 3;
+        return data;
+      }),
+      'indexed-color PNG 缺少 PLTE 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IDAT', 'IHDR', png.subarray(16, 29)),
+      '重复 IHDR 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertPngChunkBefore(png, 'IEND', 'IEND'),
+      '重复或非末尾 IEND 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      splitIdatWithAncillaryChunk,
+      'IDAT 序列被 ancillary chunk 打断时不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IDAT', () => deflateSync(Buffer.from([5, 0, 0]))),
+      '解压后行 filter byte 超出 0..4 不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IDAT', () => deflateSync(Buffer.from([0, 0]))),
+      '解压后 scanline 长度不等于 IHDR 推导长度不得作为截图证据',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IHDR', (data) => {
+        data.writeUInt32BE(16_385, 0);
+        return data;
+      }),
+      'PNG 任一维度超过 16384 时必须在解码前拒绝',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IHDR', (data) => {
+        data.writeUInt32BE(8_192, 0);
+        data.writeUInt32BE(4_097, 4);
+        return data;
+      }),
+      'PNG 总像素超过 32 MiPixels 时必须在解码前拒绝',
+    );
+    assertInvalidContinuationPng(
+      (png) => replaceFirstPngChunk(png, 'IHDR', (data) => {
+        data.writeUInt32BE(8_192, 0);
+        data.writeUInt32BE(4_096, 4);
+        data[8] = 16;
+        data[9] = 6;
+        return data;
+      }),
+      'PNG 推导解码字节超过 128 MiB 时必须在 inflate 前拒绝',
+    );
+    assertInvalidContinuationPng(
+      (png) => insertRepeatedPngChunksBefore(png, 'IDAT', 4_096),
+      'PNG chunk 数超过 4096 时必须有界拒绝',
+    );
+
+    const reusedScreenshotContent = buildSkillReinstallEvidenceFixture();
+    fs.copyFileSync(
+      reusedScreenshotContent.paths.continuationBefore,
+      reusedScreenshotContent.paths.continuationAfter,
+    );
+    reusedScreenshotContent.continuationSurface.after_screenshot = reusedScreenshotContent.fileRecord(
+      reusedScreenshotContent.paths.continuationAfter,
+    );
+    reusedScreenshotContent.writeContinuationSurface();
+    const reusedScreenshotVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      reusedScreenshotContent.result,
+      { runRoot: reusedScreenshotContent.root },
+    );
+    assert.equal(reusedScreenshotVerdict.valid, false);
+    assert.ok(
+      reusedScreenshotVerdict.reasons.includes('skill_reinstall_continuation_screenshot_content_reused'),
+      `前后截图内容相同必须被拒绝：${reusedScreenshotVerdict.reason}`,
+    );
+
+    const reusedContinuationPath = buildSkillReinstallEvidenceFixture();
+    reusedContinuationPath.continuationSurface.after_screenshot = cloneJson(
+      reusedContinuationPath.continuationSurface.before_screenshot,
+    );
+    reusedContinuationPath.writeContinuationSurface();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedContinuationPath.result,
+        { runRoot: reusedContinuationPath.root },
+      ).valid,
+      false,
+      'continuation before/after 使用同一路径时必须拒绝',
+    );
+
+    const reusedContinuationInode = buildSkillReinstallEvidenceFixture();
+    fs.unlinkSync(reusedContinuationInode.paths.continuationAfter);
+    fs.linkSync(
+      reusedContinuationInode.paths.continuationBefore,
+      reusedContinuationInode.paths.continuationAfter,
+    );
+    reusedContinuationInode.continuationSurface.after_screenshot = reusedContinuationInode.fileRecord(
+      reusedContinuationInode.paths.continuationAfter,
+    );
+    reusedContinuationInode.writeContinuationSurface();
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedContinuationInode.result,
+        { runRoot: reusedContinuationInode.root },
+      ).valid,
+      false,
+      'continuation before/after 不同路径硬链接到同一 inode 时必须拒绝',
+    );
+
+    for (const [surfaceField, pathKey, label] of [
+      ['before_screenshot', 'continuationBefore', 'before'],
+      ['after_screenshot', 'continuationAfter', 'after'],
+    ]) {
+      const reusedTerminalPath = buildSkillReinstallEvidenceFixture();
+      reusedTerminalPath.continuationSurface[surfaceField] = cloneJson(
+        reusedTerminalPath.verdict.evidence_refs.terminal_screenshot,
+      );
+      reusedTerminalPath.writeContinuationSurface();
+      const reusedTerminalPathVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedTerminalPath.result,
+        { runRoot: reusedTerminalPath.root },
+      );
+      assert.equal(reusedTerminalPathVerdict.valid, false, `terminal/${label} 同路径复用必须拒绝`);
+      assert.ok(
+        reusedTerminalPathVerdict.reasons.includes(`skill_reinstall_terminal_${label}_screenshot_path_reused`),
+        `terminal/${label} 同路径复用必须暴露精确原因：${reusedTerminalPathVerdict.reason}`,
+      );
+
+      const reusedTerminalInode = buildSkillReinstallEvidenceFixture();
+      fs.unlinkSync(reusedTerminalInode.paths[pathKey]);
+      fs.linkSync(reusedTerminalInode.paths.screenshot, reusedTerminalInode.paths[pathKey]);
+      reusedTerminalInode.continuationSurface[surfaceField] = reusedTerminalInode.fileRecord(
+        reusedTerminalInode.paths[pathKey],
+      );
+      reusedTerminalInode.writeContinuationSurface();
+      assert.equal(
+        coreBetaInitializationSkillReinstallEvidenceVerdict(
+          reusedTerminalInode.result,
+          { runRoot: reusedTerminalInode.root },
+        ).valid,
+        false,
+        `terminal/${label} 不同路径硬链接到同一 inode 时必须拒绝`,
+      );
+
+      const reusedTerminalContent = buildSkillReinstallEvidenceFixture();
+      fs.copyFileSync(reusedTerminalContent.paths.screenshot, reusedTerminalContent.paths[pathKey]);
+      reusedTerminalContent.continuationSurface[surfaceField] = reusedTerminalContent.fileRecord(
+        reusedTerminalContent.paths[pathKey],
+      );
+      reusedTerminalContent.writeContinuationSurface();
+      const reusedTerminalContentVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        reusedTerminalContent.result,
+        { runRoot: reusedTerminalContent.root },
+      );
+      assert.equal(reusedTerminalContentVerdict.valid, false, `terminal/${label} 内容复用必须拒绝`);
+      assert.ok(
+        reusedTerminalContentVerdict.reasons.includes(`skill_reinstall_terminal_${label}_screenshot_content_reused`),
+        `terminal/${label} 内容复用必须暴露精确原因：${reusedTerminalContentVerdict.reason}`,
+      );
+    }
+
+    const missingSurfaceManifestRole = buildSkillReinstallEvidenceFixture();
+    missingSurfaceManifestRole.manifest.evidence = missingSurfaceManifestRole.manifest.evidence
+      .filter((item) => item.role !== 'initialization_continuation_surface');
+    fs.writeFileSync(
+      missingSurfaceManifestRole.paths.manifest,
+      `${JSON.stringify(missingSurfaceManifestRole.manifest, null, 2)}\n`,
+    );
+    missingSurfaceManifestRole.result.evidence_manifest = cloneJson(missingSurfaceManifestRole.manifest);
+    assert.equal(
+      coreBetaInitializationSkillReinstallEvidenceVerdict(missingSurfaceManifestRole.result).valid,
+      false,
+      'manifest 缺少 initialization_continuation_surface 专项角色时必须 fail-closed',
+    );
+
+    const symlinkEvidence = buildSkillReinstallEvidenceFixture();
+    const terminalTarget = path.join(symlinkEvidence.caseDir, 'terminal-target.json');
+    fs.copyFileSync(symlinkEvidence.paths.terminal, terminalTarget);
+    fs.unlinkSync(symlinkEvidence.paths.terminal);
+    fs.symlinkSync(terminalTarget, symlinkEvidence.paths.terminal);
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(symlinkEvidence.result).valid, false);
+
+    const traversalEvidence = buildSkillReinstallEvidenceFixture();
+    const outsideCatalog = path.join(traversalEvidence.root, 'outside-catalog.json');
+    fs.copyFileSync(traversalEvidence.paths.catalog, outsideCatalog);
+    traversalEvidence.verdict.evidence_refs.catalog_observations = traversalEvidence.fileRecord(outsideCatalog);
+    traversalEvidence.commitVerdict();
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(traversalEvidence.result).valid, false);
+
+    const emptyEvidence = buildSkillReinstallEvidenceFixture();
+    fs.writeFileSync(emptyEvidence.paths.catalog, '');
+    emptyEvidence.verdict.evidence_refs.catalog_observations = emptyEvidence.fileRecord(emptyEvidence.paths.catalog);
+    emptyEvidence.commitVerdict();
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(emptyEvidence.result).valid, false);
+
+    const duplicateRole = buildSkillReinstallEvidenceFixture();
+    duplicateRole.manifest.evidence.push(cloneJson(duplicateRole.manifest.evidence[0]));
+    fs.writeFileSync(duplicateRole.paths.manifest, `${JSON.stringify(duplicateRole.manifest, null, 2)}\n`);
+    duplicateRole.result.evidence_manifest = cloneJson(duplicateRole.manifest);
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(duplicateRole.result).valid, false);
+
+    const duplicateSurfaceRole = buildSkillReinstallEvidenceFixture();
+    duplicateSurfaceRole.manifest.evidence.push(cloneJson(
+      duplicateSurfaceRole.manifest.evidence.find((item) => item.role === 'initialization_continuation_surface'),
+    ));
+    fs.writeFileSync(
+      duplicateSurfaceRole.paths.manifest,
+      `${JSON.stringify(duplicateSurfaceRole.manifest, null, 2)}\n`,
+    );
+    duplicateSurfaceRole.result.evidence_manifest = cloneJson(duplicateSurfaceRole.manifest);
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(duplicateSurfaceRole.result).valid, false);
+
+    const embeddedManifestDrift = buildSkillReinstallEvidenceFixture();
+    embeddedManifestDrift.result.evidence_manifest.generated_at = new Date(99).toISOString();
+    assert.equal(coreBetaInitializationSkillReinstallEvidenceVerdict(embeddedManifestDrift.result).valid, false);
+
+    const cachedEvidence = buildSkillReinstallEvidenceFixture();
+    const validationSession = {
+      fileCache: new Map(),
+      inodeRoles: new Map(),
+      roleInodes: new Map(),
+    };
+    const cachedFirstVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      cachedEvidence.result,
+      { runRoot: cachedEvidence.root, evidenceSession: validationSession },
+    );
+    assert.equal(cachedFirstVerdict.valid, true, `缓存前合法证据必须通过：${cachedFirstVerdict.reason}`);
+    const cachedCatalogBytes = fs.readFileSync(cachedEvidence.paths.catalog);
+    cachedCatalogBytes[cachedCatalogBytes.length - 1] = 0x20;
+    fs.writeFileSync(cachedEvidence.paths.catalog, cachedCatalogBytes);
+    fs.utimesSync(cachedEvidence.paths.catalog, new Date(), new Date(Date.now() + 5_000));
+    const cachedSecondVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      cachedEvidence.result,
+      { runRoot: cachedEvidence.root, evidenceSession: validationSession },
+    );
+    assert.equal(cachedSecondVerdict.valid, false, '缓存命中后原位替换证据不得复用冻结字节放行');
+
+    const replaceBeforeFinalize = buildSkillReinstallEvidenceFixture();
+    const finalCatalogBytes = fs.readFileSync(replaceBeforeFinalize.paths.catalog);
+    let finalReplacementApplied = false;
+    Object.defineProperty(replaceBeforeFinalize.result, 'status', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (!finalReplacementApplied) {
+          finalReplacementApplied = true;
+          finalCatalogBytes[finalCatalogBytes.length - 1] = 0x20;
+          fs.writeFileSync(replaceBeforeFinalize.paths.catalog, finalCatalogBytes);
+          fs.utimesSync(
+            replaceBeforeFinalize.paths.catalog,
+            new Date(),
+            new Date(Date.now() + 5_000),
+          );
+        }
+        return 'passed';
+      },
+    });
+    const replaceBeforeFinalizeVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      replaceBeforeFinalize.result,
+      { runRoot: replaceBeforeFinalize.root },
+    );
+    assert.equal(finalReplacementApplied, true, '最终返回前替换攻击夹具必须实际触发');
+    assert.equal(replaceBeforeFinalizeVerdict.valid, false, '最终返回前替换已读取证据必须 fail-closed');
+    assert.ok(
+      replaceBeforeFinalizeVerdict.reasons.includes('skill_reinstall_evidence_identity_drift'),
+      `最终返回前替换必须由会话终态复核识别：${replaceBeforeFinalizeVerdict.reason}`,
+    );
+
+    for (const [label, targetFromFixture] of [
+      ['run root', (fixture) => fixture.root],
+      ['cases directory', (fixture) => path.join(fixture.root, 'cases')],
+      ['case directory', (fixture) => fixture.caseDir],
+    ]) {
+      const directoryModeDrift = buildSkillReinstallEvidenceFixture();
+      const target = targetFromFixture(directoryModeDrift);
+      const originalMode = fs.statSync(target).mode & 0o777;
+      let driftApplied = false;
+      Object.defineProperty(directoryModeDrift.result, 'status', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          if (!driftApplied) {
+            driftApplied = true;
+            fs.chmodSync(target, 0o777);
+          }
+          return 'passed';
+        },
+      });
+      let directoryModeDriftVerdict;
+      try {
+        directoryModeDriftVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+          directoryModeDrift.result,
+          { runRoot: directoryModeDrift.root },
+        );
+      } finally {
+        fs.chmodSync(target, originalMode);
+      }
+      assert.equal(driftApplied, true, `${label} 权限漂移攻击夹具必须实际触发`);
+      assert.equal(directoryModeDriftVerdict.valid, false, `${label} 复核末段权限漂移必须 fail-closed`);
+      assert.ok(
+        directoryModeDriftVerdict.reasons.includes('skill_reinstall_evidence_identity_drift'),
+        `${label} 权限漂移必须由会话终态复核识别：${directoryModeDriftVerdict.reason}`,
+      );
+    }
+
+    const nestedDirectoryModeDrift = buildSkillReinstallEvidenceFixture();
+    const nestedDirectory = path.join(nestedDirectoryModeDrift.caseDir, 'nested-evidence');
+    fs.mkdirSync(nestedDirectory);
+    const nestedCatalog = path.join(nestedDirectory, path.basename(nestedDirectoryModeDrift.paths.catalog));
+    fs.renameSync(nestedDirectoryModeDrift.paths.catalog, nestedCatalog);
+    nestedDirectoryModeDrift.paths.catalog = nestedCatalog;
+    nestedDirectoryModeDrift.result.artifacts.core_beta_skill_reinstall_catalog_observations = nestedCatalog;
+    nestedDirectoryModeDrift.refreshRefsAndCommit();
+    let nestedModeDriftApplied = false;
+    Object.defineProperty(nestedDirectoryModeDrift.result, 'status', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (!nestedModeDriftApplied) {
+          nestedModeDriftApplied = true;
+          fs.chmodSync(nestedDirectory, 0o777);
+        }
+        return 'passed';
+      },
+    });
+    let nestedDirectoryModeDriftVerdict;
+    try {
+      nestedDirectoryModeDriftVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+        nestedDirectoryModeDrift.result,
+        { runRoot: nestedDirectoryModeDrift.root },
+      );
+    } finally {
+      fs.chmodSync(nestedDirectory, 0o755);
+    }
+    assert.equal(nestedModeDriftApplied, true, '中间目录权限漂移攻击夹具必须实际触发');
+    assert.equal(nestedDirectoryModeDriftVerdict.valid, false, '中间证据目录权限漂移必须 fail-closed');
+    assert.ok(
+      nestedDirectoryModeDriftVerdict.reasons.includes('skill_reinstall_evidence_identity_drift'),
+      `中间目录漂移必须由 directoryCache 终态复核识别：${nestedDirectoryModeDriftVerdict.reason}`,
+    );
+
+    const nestedDirectorySwap = buildSkillReinstallEvidenceFixture();
+    const nestedSwapDirectory = path.join(nestedDirectorySwap.caseDir, 'nested-swap-evidence');
+    const displacedNestedSwapDirectory = path.join(
+      nestedDirectorySwap.caseDir,
+      'nested-swap-evidence-displaced',
+    );
+    fs.mkdirSync(nestedSwapDirectory);
+    const nestedSwapCatalog = path.join(nestedSwapDirectory, path.basename(nestedDirectorySwap.paths.catalog));
+    fs.renameSync(nestedDirectorySwap.paths.catalog, nestedSwapCatalog);
+    nestedDirectorySwap.paths.catalog = nestedSwapCatalog;
+    nestedDirectorySwap.result.artifacts.core_beta_skill_reinstall_catalog_observations = nestedSwapCatalog;
+    nestedDirectorySwap.refreshRefsAndCommit();
+    let nestedSwapApplied = false;
+    Object.defineProperty(nestedDirectorySwap.result, 'status', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (!nestedSwapApplied) {
+          nestedSwapApplied = true;
+          fs.renameSync(nestedSwapDirectory, displacedNestedSwapDirectory);
+          fs.symlinkSync(path.basename(displacedNestedSwapDirectory), nestedSwapDirectory, 'dir');
+        }
+        return 'passed';
+      },
+    });
+    const nestedDirectorySwapVerdict = coreBetaInitializationSkillReinstallEvidenceVerdict(
+      nestedDirectorySwap.result,
+      { runRoot: nestedDirectorySwap.root },
+    );
+    assert.equal(nestedSwapApplied, true, '中间目录移动并回链攻击夹具必须实际触发');
+    assert.equal(
+      nestedDirectorySwapVerdict.valid,
+      false,
+      '移动中间目录并以 symlink 指回原证据 inode 时必须 fail-closed',
+    );
+    assert.ok(
+      nestedDirectorySwapVerdict.reasons.includes('skill_reinstall_evidence_identity_drift'),
+      `中间目录移动并回链必须由终态身份复核识别：${nestedDirectorySwapVerdict.reason}`,
+    );
+  } finally {
+    for (const root of evidenceRoots) fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+{
+  const failureState = {
+    status: 'failed',
+    result_category: 'bug',
+    actual_result: '首个产品失败必须保留',
+    conclusion: '失败：首个产品失败必须保留',
+    failure_history: [],
+  };
+  applyFailureOutcome(
+    failureState,
+    '同一个框架失败只应记录一次',
+    'automation_error',
+    { source: 'idempotency-regression' },
+  );
+  const historyLength = failureState.failure_history.length;
+  const primaryFailure = JSON.parse(JSON.stringify(failureState.primary_failure));
+  applyFailureOutcome(
+    failureState,
+    '同一个框架失败只应记录一次',
+    'automation_error',
+    { source: 'idempotency-regression' },
+  );
+  assert.equal(failureState.failure_history.length, historyLength, '相同 failure 不得重复追加 history');
+  assert.deepEqual(failureState.primary_failure, primaryFailure, '相同 failure 重放不得漂移 primary_failure');
+  assert.ok(
+    failureState.failure_history.some((item) => (
+      item.category === 'bug'
+      && item.reason === '首个产品失败必须保留'
+      && item.source === 'existing_state'
+    )),
+    '更高优先级框架失败不能抹去首个产品失败历史',
+  );
+}
 const genuineProvisioning = coreBetaV2RuntimeMaintenanceState({
   text: '本进程正在准备中 42%',
   composerReady: true,
@@ -6824,6 +9167,43 @@ assert.match(coreGateById.get('SIT-TEAMS-DOC-001').steps, /按 key 选择 Teams 
 const skillHubRestartSource = runner.slice(
   runner.indexOf('async function restartWithSkillHubFault'),
   runner.indexOf('async function restoreNormalQbotAfterFault'),
+);
+const boundedSkillCatalogReadSource = runner.slice(
+  runner.indexOf('async function readCoreBetaSkillCatalog'),
+  runner.indexOf('async function waitForCoreBetaSkillIdentitiesAbsent'),
+);
+assert.match(
+  boundedSkillCatalogReadSource,
+  /Promise\.race\(\[[\s\S]*window\.agent\.getSkillsCatalog\(\)[\s\S]*5_000[\s\S]*window\.clearTimeout/,
+  'Core Beta v2 Skill catalog 统一读取必须在 renderer 内使用 5 秒硬超时并清理 timer',
+);
+const sitHomeAbilityCombinationSource = runner.slice(
+  runner.indexOf('async function executeSitHomeAbilityCombination'),
+  runner.indexOf('async function executeSitHomeAutoAbility'),
+);
+assert.match(
+  sitHomeAbilityCombinationSource,
+  /SIT-HOME-009[\s\S]*readCoreBetaSkillCatalog\(page\)/,
+  'SIT-HOME-009 fixture availability 必须通过统一有界 helper 读取 Skill catalog',
+);
+assert.doesNotMatch(
+  sitHomeAbilityCombinationSource,
+  /^\s*(?:const\s+\w+\s*=\s*await\s+)?window\.agent\??\.getSkillsCatalog\s*\(/m,
+  'SIT-HOME-009 不得绕过统一 helper 直调 getSkillsCatalog',
+);
+const skillInstallTerminalSource = runner.slice(
+  runner.indexOf('async function waitForSkillInstallTerminal'),
+  runner.indexOf('async function findSkillCardByText'),
+);
+assert.match(
+  skillInstallTerminalSource,
+  /readCoreBetaSkillCatalog\(page\)[\s\S]*catalog\?\.installed/,
+  'Skill 安装终态轮询必须通过统一有界 helper 读取 installed catalog',
+);
+assert.doesNotMatch(
+  skillInstallTerminalSource,
+  /^\s*(?:const\s+\w+\s*=\s*await\s+)?window\.agent\??\.getSkillsCatalog\s*\(/m,
+  'Skill 安装终态轮询不得绕过统一 helper 直调 getSkillsCatalog',
 );
 assert.match(
   skillHubRestartSource,
@@ -7181,6 +9561,7 @@ const safeInitializationContinuation = coreBetaInitializationContinuation({
     workbench_ready: true,
     capabilities_readable: true,
   },
+  continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
   afterReadback: { page: { body_text_length: 100 } },
 });
 assert.equal(
@@ -9343,9 +11724,22 @@ const noSendInitialization = reviewCaseCredibility(reviewFixture({
   id: 'BETA-INIT-001',
   requested_model_tier: 'M3',
   steps: [{ action: '点击立即检查运行时', status: 'passed' }],
+  initialization_action_observation: {
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: 'BETA-INIT-001',
+    method: 'preparePythonRuntimes',
+    testid: 'assistant-prepare-python-runtimes',
+    action_observed: true,
+    source: 'busy',
+  },
 }));
-if (noSendInitialization.review_category !== '可信通过-用户可接受' || !noSendInitialization.trusted) {
-  throw new Error('不发送模型请求的初始化 Case 不得因缺少模型档位证据被判为框架问题');
+if (
+  noSendInitialization.review_category !== '不可信-框架问题'
+  || noSendInitialization.trusted
+  || /模型档位证据/.test(String(noSendInitialization.reason || ''))
+  || !/磁盘证据门禁/.test(String(noSendInitialization.reason || ''))
+) {
+  throw new Error('初始化 Case 可因缺少磁盘证据 fail-closed，但不得因未发送模型请求而要求模型档位证据');
 }
 const sentWithoutModelTierEvidence = reviewCaseCredibility(reviewFixture({
   id: 'BETA-CHAT-001',
@@ -9365,8 +11759,8 @@ if (
   throw new Error('真实发送仍必须同时提供 Case 档位和逐次发送前模型档位证据');
 }
 const maintenanceProductBug = reviewCaseCredibility(reviewFixture({
-  id: 'BETA-INIT-003',
-  scenario: '一键重装技能运行层并等待稳定终态',
+  id: 'BETA-INIT-002',
+  scenario: '一键重建全部运行环境并等待稳定终态',
   status: 'failed',
   result_category: 'bug',
   requested_model_tier: 'M3',
@@ -9386,10 +11780,33 @@ const maintenanceProductBug = reviewCaseCredibility(reviewFixture({
   }],
   screenshots: { maintenance_terminal: evidenceScreenshot },
   screenshots_flat: [evidenceScreenshot],
+  initialization_action_observation: {
+    schema_version: 'qbot-core-beta-initialization-action-observation/v1',
+    case_id: 'BETA-INIT-002',
+    method: 'runtimeResetAll',
+    testid: 'assistant-runtime-reset-all',
+    action_observed: true,
+    source: 'explicit-completion-transition',
+  },
+  initialization_continuation: coreBetaInitializationContinuation({
+    testCase: { id: 'BETA-INIT-002' },
+    terminalReadback: {
+      pending: false,
+      failed: true,
+      loaded: true,
+      sdk_ready: true,
+      button_enabled: true,
+      composer_ready: true,
+      workbench_ready: true,
+      capabilities_readable: true,
+    },
+    continuationSurface: { valid: true, composer_ready: true, workbench_ready: true },
+    afterReadback: { page: { body_text_length: 100 } },
+  }),
   actual_result: '用户点击并确认重装后，维护区显示 ENOTEMPTY 失败。',
 }));
-if (maintenanceProductBug.review_category !== '可信失败-产品Bug候选' || !maintenanceProductBug.trusted) {
-  throw new Error('有失败终态截图的已执行维护动作必须保留为可信产品 Bug，不能因 failed 状态或普通“自动化”文本误判为框架问题');
+if (maintenanceProductBug.review_category !== '不可信-框架问题' || maintenanceProductBug.trusted) {
+  throw new Error('只有内存 continuation 和截图、缺少当前 run root 磁盘重放的维护失败必须 fail-closed');
 }
 const productionSingleRunPass = buildCredibilityReview([reviewFixture()]);
 if (productionSingleRunPass.production_release_gate?.decision !== 'ELIGIBLE_FOR_MULTI_RUN_GATE') {
@@ -9697,6 +12114,9 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /[0-9a-f]{64}/, '两份规范必须冻结最新合并 Casebook SHA');
   assert.match(documentText, /0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c[\s\S]*0\.1\.7/, '两份规范必须冻结 r14 release/0.1 设计基线与产品版本');
   assert.match(documentText, /r12[\s\S]*134 个[\s\S]*36 个[\s\S]*170 个/, '两份规范必须记录 r12 继承、r14 增量和170个MR总量');
+  assert.match(documentText, /6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*37 个增量 MR[\s\S]*171 个总 MR/, '两份规范必须记录 !1573 后的 r15 待生成设计边界');
+  assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
+  assert.match(documentText, /deepbankv2-mr-1573-memory-session-profile-stability\/v1[\s\S]*claim_scope=source_and_test_declarations[\s\S]*test_execution_attested=false[\s\S]*(?:不得|禁止).*冒充/, '两份规范必须区分 !1573 源码声明鉴证与桌面 E2E 结论');
   assert.match(documentText, r9IncrementalMrSequence, '两份规范必须完整同序列出 r9 的57个增量MR');
   assert.match(documentText, /!1516[\s\S]*MRSMOKE-FAIL-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*BETA-CHAT-005[\s\S]*BETA-PERF-003/, '两份规范必须固定MR !1516的四条精确覆盖映射');
   assert.match(documentText, /!1526[\s\S]*MRSMOKE-SKILL-001[\s\S]*MRSMOKE-FAIL-001[\s\S]*BETA-CHAT-006[\s\S]*BETA-PERF-003/, '两份规范必须固定MR !1526的四条精确覆盖映射');
@@ -9770,35 +12190,665 @@ assert.match(productionGrayCasebookBuilder, /QWORK_CORE_LIFELINE_CASE_IDS[\s\S]*
 assert.match(productionGrayCasebookBuilder, /let PRODUCT_COMMIT = '';[\s\S]*PRODUCT_COMMIT = releaseIntake\.report\.release\.head;/, 'Casebook生成器必须从通过校验的intake动态冻结最新release/0.1提交');
 assert.match(productionGrayCasebookBuilder, /(?=[\s\S]*EXPECTED_INCREMENTAL_MR_COUNT)(?=[\s\S]*async function loadReleaseIntake\(\)[\s\S]*--release-intake)(?=[\s\S]*requireFreshRef: true)(?=[\s\S]*api_freshness)/, 'Casebook生成器必须强制消费READY的GitLab API freshness intake');
 assert.match(productionGrayCasebookBuilder, /assertExpectedProductCommit\(expectedProductCommit, releaseHead\)/, 'Casebook生成器必须强制校验 expected-product-commit 与 intake HEAD 精确一致');
-assert.match(productionGrayCasebookBuilder, /prepareCasebookOutputDirectory\(option\('out', DEFAULT_OUTPUT_DIR\)\)[\s\S]*sha256File\(PREVIOUS_CASEBOOK\)/, 'Casebook生成器必须在读取和构建前锁定全新或精确空输出目录');
-assert.match(productionGrayCasebookBuilder, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r14\.xlsx/, '正式输出必须升级到全新 r14 文件名');
-assert.match(productionGrayCasebookBuilder, /20260905_release01_casebook_16-12-70-160-r14/, '默认构建目录必须升级到全新 r14 目录');
-assert.match(productionGrayCasebookBuilder, /const PREVIOUS_CASEBOOK = path\.join\(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r12\.xlsx'\)/, 'r14 增量生成基线必须继续锁定 r12');
-assert.doesNotMatch(productionGrayCasebookBuilder, /const OUTPUT_NAME = '[^']*r13\.xlsx'/, '旧 r13 不得继续作为正式输出目标');
+assert.match(productionGrayCasebookBuilder, /prepareCasebookOutputDirectory\(option\('out'\)\)[\s\S]*outputTransaction\.staging[\s\S]*sha256File\(PREVIOUS_CASEBOOK\)/, 'Casebook生成器必须显式接收 --out，并在读取和构建前锁定调用前不存在的私有 staging 目录');
+assert.doesNotMatch(productionGrayCasebookBuilder, /prepareCasebookOutputDirectory\(option\('out',\s*DEFAULT_OUTPUT_DIR\)\)/, 'Casebook生成器不得通过默认目录绕过显式 --out');
+assert.match(productionGrayCasebookBuilder, /assertExpectedReleaseIntakeSha256\(option\('release-intake-sha256'\), artifactSha256\)/, 'Casebook生成器必须显式接收并校验 --release-intake-sha256');
+assert.match(productionGrayCasebookBuilder, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx/, '正式输出必须升级到全新 r15 文件名');
+assert.doesNotMatch(productionGrayCasebookBuilder, /const DEFAULT_OUTPUT_DIR\s*=/, '生成器不得保留默认构建目录，--out 必须由调用者显式提供');
+assert.match(productionGrayCasebookBuilder, /const PREVIOUS_CASEBOOK = path\.join\(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r12\.xlsx'\)/, 'r15 增量生成基线必须继续锁定 r12');
+assert.doesNotMatch(productionGrayCasebookBuilder, /const OUTPUT_NAME = '[^']*r(?:13|14)\.xlsx'/, '旧 r13/r14 不得继续作为正式输出目标');
 assert.match(
   productionGrayCasebookBuilder,
-  /(?=[\s\S]*const runtimeAudit = auditCasebookRuntimeScopes\(scopes\))(?=[\s\S]*fs\.copyFile\(artifactFile, formalOutput, fsConstants\.COPYFILE_EXCL\))(?=[\s\S]*scopes: exportedCasebookScopes\(exportedWorkbook\))/,
-  '导出后四层完整协议与 runtime 审计必须先于正式 COPYFILE_EXCL，任何错误均 fail-closed',
+  /captureSecureDirectory[\s\S]*assertSecureDirectoryGuard[\s\S]*fsyncSecureTree[\s\S]*atomicRenameNoReplace[\s\S]*spawnSync\([\s\S]*'\/usr\/bin\/python3'[\s\S]*atomicRenameNoReplace\(transaction\.staging, transaction\.final\)/,
+  'r15 生成器必须绑定安全目录身份、fsync 私有 staging 并以受控 helper 排他原子提交 --out',
+);
+assert.match(
+  atomicRenameNoReplaceHelper,
+  /renamex_np[\s\S]*RENAME_EXCL\s*\|\s*RENAME_NOFOLLOW_ANY/,
+  '目录提交 helper 必须使用 macOS renamex_np 的 RENAME_EXCL 与 RENAME_NOFOLLOW_ANY',
+);
+assert.doesNotMatch(
+  productionGrayCasebookBuilder,
+  /fs\.rename\(transaction\.staging, transaction\.final\)/,
+  '目录提交不得退化为可覆盖并发空目标目录的普通 fs.rename',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /transaction\.tree_snapshot = fsyncSecureTree[\s\S]*transaction\.state = 'renamed_pending_commit'[\s\S]*transaction\.state = 'parent_synced'[\s\S]*verifySecureTreeSnapshot[\s\S]*transaction\.state = 'committed'[\s\S]*transaction\.committed = true/,
+  '输出目录必须在 fsync 整树快照、rename、父目录 fsync 和 rename 后整树复核后才进入 committed',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /atomicRenameNoReplace\(temporary, resolvedFormalOutput\)[\s\S]*publication\.state = 'renamed_pending_commit'[\s\S]*publication\.state = 'parent_synced'[\s\S]*publication\.state = 'verified_pending_commit'[\s\S]*publication\.state = 'committed'[\s\S]*publication\.committed = true/,
+  '正式文件必须在排他原子 rename、父目录 fsync 和最终内容复核后才进入 committed',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /transactionQuarantinePath[\s\S]*isolateAndRetainGuardedDirectory[\s\S]*directoryIdentityMatches[\s\S]*status: 'retained'[\s\S]*rollback_conflict[\s\S]*rollback_incomplete/,
+  '输出目录回滚必须先排他隔离保留并区分身份冲突和无法闭合',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /isolateAndRetainGuardedRegularFile[\s\S]*stableRegularFileSnapshot\(quarantine[\s\S]*regularFileIdentityMatches[\s\S]*status: 'retained'[\s\S]*rollback_conflict[\s\S]*rollback_incomplete/,
+  '正式文件回滚必须在隔离后复核身份与内容并保留，禁止按可变路径删除',
+);
+assert.doesNotMatch(
+  productionGrayCasebookBuilder,
+  /fs\.(?:rm|unlink)\(quarantine|fs\.rm\(staging|await fs\.unlink\(temporary\)/,
+  '生成器不得在身份复核后按可变 quarantine/staging/临时名删除',
+);
+const atomicRenameHelperSyntax = spawnSync(
+  '/usr/bin/python3',
+  ['-I', '-B', '-c', 'import ast,sys; ast.parse(sys.stdin.read())'],
+  { encoding: 'utf8', input: atomicRenameNoReplaceHelper },
+);
+assert.equal(
+  atomicRenameHelperSyntax.status,
+  0,
+  `排他原子 rename helper Python 语法必须有效：${atomicRenameHelperSyntax.stderr || ''}`,
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /stableRegularFileSnapshot[\s\S]*fsConstants\.O_NOFOLLOW[\s\S]*written\.nlink !== 1n[\s\S]*atomicRenameNoReplace\(temporary, resolvedFormalOutput\)[\s\S]*published\.sha256 !== artifact\.sha256/,
+  'r15 正式文件必须拒绝 symlink/hardlink，以 fsync 后的同目录临时文件排他原子 rename 并复核 SHA',
+);
+assert.doesNotMatch(productionGrayCasebookBuilder, /fs\.link\(temporary, resolvedFormalOutput\)/, '正式发布不得回退到需要二次删除临时 hard-link 的路径');
+for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
+  assert.match(
+    documentText,
+    /r15[\s\S]*私有\s*staging[\s\S]*device\/inode\/uid\/mode[\s\S]*fsync[\s\S]*O_EXCL\|O_NOFOLLOW[\s\S]*renamex_np\(RENAME_EXCL \| RENAME_NOFOLLOW_ANY\)[\s\S]*bytes\/SHA-256\/inode\/link count/,
+    '两份规范必须冻结 r15 staging、目录身份、fsync 与正式原子排他发布合同',
+  );
+  assert.match(
+    documentText,
+    /renamed_pending_commit[\s\S]*parent_synced[\s\S]*committed[\s\S]*正式文件事务[\s\S]*renamed_pending_commit[\s\S]*verified_pending_commit[\s\S]*quarantine[\s\S]*rollback_conflict[\s\S]*rollback_incomplete/,
+    '两份规范必须冻结目录和正式文件的 pending 提交状态及排他回滚分类',
+  );
+}
+assert.match(
+  productionGrayCasebookBuilder,
+  /(?=[\s\S]*const auditedArtifact = stableRegularFileSnapshot\(outputFile)(?=[\s\S]*new FileBlob\([\s\S]*auditedArtifact\.bytes)(?=[\s\S]*const runtimeAudit = auditCasebookRuntimeScopes\(scopes\))(?=[\s\S]*expectedArtifactSha256: auditedArtifact\.sha256)(?=[\s\S]*verifySecureTreeSnapshot)(?=[\s\S]*atomicRenameNoReplace\(temporary, resolvedFormalOutput\))/,
+  '导出后四层 runtime 审计必须与同一 artifact 字节/SHA 及 rename 后整树快照强绑定，任何漂移均 fail-closed',
 );
 const expectedProductCommitFixture = '0cfdfa1ec9f18d2ef2e78d380b4b2896c6dc607c';
 assert.equal(assertExpectedProductCommit(expectedProductCommitFixture, expectedProductCommitFixture), expectedProductCommitFixture, '40位且与intake HEAD全等的expected-product-commit必须通过');
 assert.throws(() => assertExpectedProductCommit('', expectedProductCommitFixture), /必须通过 --expected-product-commit/, '省略expected-product-commit必须fail-closed');
 assert.throws(() => assertExpectedProductCommit('0cfdfa1', expectedProductCommitFixture), /必须是 40 位提交 SHA/, '非40位expected-product-commit必须fail-closed');
 assert.throws(() => assertExpectedProductCommit('ffffffffffffffffffffffffffffffffffffffff', expectedProductCommitFixture), /HEAD 与 --expected-product-commit 不一致/, '与intake HEAD不同的40位SHA必须fail-closed');
+const expectedReleaseIntakeSha256Fixture = 'a'.repeat(64);
+assert.equal(
+  assertExpectedReleaseIntakeSha256(expectedReleaseIntakeSha256Fixture, expectedReleaseIntakeSha256Fixture),
+  expectedReleaseIntakeSha256Fixture,
+  '合法且与实际文件一致的 release intake SHA-256 必须通过',
+);
+assert.throws(
+  () => assertExpectedReleaseIntakeSha256('', expectedReleaseIntakeSha256Fixture),
+  /必须通过 --release-intake-sha256/,
+  '省略 --release-intake-sha256 必须 fail-closed',
+);
+assert.throws(
+  () => assertExpectedReleaseIntakeSha256('not-a-sha256', expectedReleaseIntakeSha256Fixture),
+  /必须是 64 位 SHA-256/,
+  '畸形 --release-intake-sha256 必须 fail-closed',
+);
+assert.throws(
+  () => assertExpectedReleaseIntakeSha256('b'.repeat(64), expectedReleaseIntakeSha256Fixture),
+  /release intake 文件 SHA-256 不一致/,
+  '声明值与实际 intake 文件 SHA-256 不一致时必须 fail-closed',
+);
 
-const casebookOutputGuardRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-casebook-output-guard-'));
+const casebookOutputGuardRoot = fs.mkdtempSync(path.join(
+  fs.realpathSync(os.tmpdir()),
+  'qbot-casebook-output-guard-',
+));
+fs.chmodSync(casebookOutputGuardRoot, 0o700);
+const previousNodeEnv = process.env.NODE_ENV;
+const casebookTransactionEnvironmentKeys = [
+  'QBOT_CASEBOOK_FAULT_BEFORE_OUTPUT_COMMIT',
+  'QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_RENAME',
+  'QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_PARENT_FSYNC',
+  'QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_FINAL_VERIFY',
+  'QBOT_CASEBOOK_TEST_RACE_EMPTY_OUTPUT_AFTER_GUARD',
+  'QBOT_CASEBOOK_TEST_REPLACE_OUTPUT_AFTER_RENAME',
+  'QBOT_CASEBOOK_TEST_MUTATE_TREE_AFTER_FSYNC',
+  'QBOT_CASEBOOK_TEST_REPLACE_STAGING_DURING_PREPARE',
+  'QBOT_CASEBOOK_TEST_REPLACE_DIRECTORY_QUARANTINE_AFTER_VERIFY',
+  'QBOT_CASEBOOK_FAULT_BEFORE_FORMAL_PUBLISH',
+  'QBOT_CASEBOOK_FAULT_AFTER_FORMAL_RENAME',
+  'QBOT_CASEBOOK_FAULT_AFTER_FORMAL_PARENT_FSYNC',
+  'QBOT_CASEBOOK_FAULT_AFTER_FORMAL_FINAL_VERIFY',
+  'QBOT_CASEBOOK_TEST_REPLACE_FORMAL_BEFORE_ROLLBACK',
+  'QBOT_CASEBOOK_TEST_REPLACE_FILE_QUARANTINE_AFTER_VERIFY',
+  'QBOT_CASEBOOK_TEST_REPLACE_ARTIFACT_BEFORE_FORMAL_PUBLISH',
+];
+const previousCasebookTransactionEnvironment = new Map(
+  casebookTransactionEnvironmentKeys.map((key) => [key, process.env[key]]),
+);
+for (const key of casebookTransactionEnvironmentKeys) delete process.env[key];
 try {
+  assert.throws(
+    () => atomicRenameNoReplace('', ''),
+    /source\/target 不能为空/,
+    '排他原子 rename 必须拒绝空 source/target',
+  );
+  await assert.rejects(
+    prepareCasebookOutputDirectory(''),
+    /必须提供非空 --out 输出目录/,
+    '省略显式 --out 必须在创建任何目录前 fail-closed',
+  );
+  process.env.NODE_ENV = 'test';
+  const prepareRaceOutput = path.join(casebookOutputGuardRoot, 'prepare-race-output');
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_STAGING_DURING_PREPARE = '1';
+  let prepareRaceError;
+  await assert.rejects(
+    prepareCasebookOutputDirectory(prepareRaceOutput),
+    (error) => {
+      prepareRaceError = error;
+      return /fault_injected_staging_replaced_during_prepare/.test(error?.message || String(error));
+    },
+    'prepare 期间 staging 被替换时必须 fail-closed',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_STAGING_DURING_PREPARE;
+  assert.equal(prepareRaceError?.transaction_state, 'rollback_conflict', 'prepare 替换必须报告 rollback_conflict');
+  assert.equal(prepareRaceError?.rollback?.staging_prepare?.status, 'rollback_conflict');
+  assert.equal(
+    fs.readFileSync(path.join(prepareRaceError.staging_path, 'third-party.txt'), 'utf8'),
+    'third-party-prepare-staging',
+    'prepare 失败不得删除第三方替换目录',
+  );
+  assert.equal(fs.existsSync(prepareRaceError.transaction_owned_path), true, 'prepare 失败必须保留本事务原 staging');
+
   const newOutputDir = path.join(casebookOutputGuardRoot, 'new-output');
-  assert.equal(await prepareCasebookOutputDirectory(newOutputDir), newOutputDir, '全新不存在的输出目录必须创建并通过');
-  assert.deepEqual(fs.readdirSync(newOutputDir), [], '全新输出目录必须保持为空等待真实构建');
-  assert.equal(await prepareCasebookOutputDirectory(newOutputDir), newOutputDir, '已存在且精确为空的输出目录必须通过');
+  const outputTransaction = await prepareCasebookOutputDirectory(newOutputDir);
+  assert.equal(outputTransaction.final, newOutputDir, '输出事务必须绑定调用者指定的最终目录');
+  assert.equal(fs.existsSync(newOutputDir), false, '构建完成前不得暴露最终输出目录');
+  assert.deepEqual(fs.readdirSync(outputTransaction.staging), [], '私有 staging 必须从空目录开始');
+  assert.equal(fs.statSync(outputTransaction.staging).mode & 0o777, 0o700, '私有 staging 权限必须为0700');
+  fs.writeFileSync(path.join(outputTransaction.staging, 'artifact.txt'), 'atomic-output');
+  assert.equal(await commitCasebookOutputDirectory(outputTransaction), newOutputDir);
+  assert.equal(outputTransaction.state, 'committed', '输出目录成功路径必须进入 committed 状态');
+  assert.equal(outputTransaction.committed, true, '输出目录成功路径必须显式标记 committed=true');
+  assert.equal(fs.existsSync(outputTransaction.staging), false, '输出目录提交成功后不得遗留 staging');
+  assert.equal(fs.readFileSync(path.join(newOutputDir, 'artifact.txt'), 'utf8'), 'atomic-output');
+  assert.equal(await abortCasebookOutputDirectory(outputTransaction), false, '已提交事务不得再删除最终输出');
+  await assert.rejects(
+    prepareCasebookOutputDirectory(newOutputDir),
+    /必须在调用前不存在，禁止复用或覆盖/,
+    '任何已存在目录即使为空也必须 fail-closed',
+  );
   fs.writeFileSync(path.join(newOutputDir, '.partial-build'), 'occupied');
-  await assert.rejects(prepareCasebookOutputDirectory(newOutputDir), /禁止复用非空目录/, '含隐藏文件的非空输出目录必须fail-closed');
+  await assert.rejects(prepareCasebookOutputDirectory(newOutputDir), /禁止复用或覆盖/, '含隐藏文件的非空输出目录必须fail-closed');
   const outputFile = path.join(casebookOutputGuardRoot, 'not-a-directory');
   fs.writeFileSync(outputFile, 'occupied');
-  await assert.rejects(prepareCasebookOutputDirectory(outputFile), /普通空目录/, '普通文件不得作为输出目录');
+  await assert.rejects(prepareCasebookOutputDirectory(outputFile), /禁止复用或覆盖/, '普通文件不得作为输出目录');
+
+  const realParent = path.join(casebookOutputGuardRoot, 'real-parent');
+  fs.mkdirSync(realParent, { mode: 0o700 });
+  const linkedParent = path.join(casebookOutputGuardRoot, 'linked-parent');
+  fs.symlinkSync(realParent, linkedParent);
+  await assert.rejects(
+    prepareCasebookOutputDirectory(path.join(linkedParent, 'out')),
+    /路径祖先不得是符号链接/,
+    '输出路径任一祖先为符号链接时必须 fail-closed',
+  );
+
+  const writableParent = path.join(casebookOutputGuardRoot, 'writable-parent');
+  fs.mkdirSync(writableParent, { mode: 0o700 });
+  fs.chmodSync(writableParent, 0o777);
+  await assert.rejects(
+    prepareCasebookOutputDirectory(path.join(writableParent, 'out')),
+    /禁止 group\/other 写入/,
+    'group/other 可写输出父目录必须 fail-closed',
+  );
+  fs.chmodSync(writableParent, 0o700);
+
+  const raceOutput = path.join(casebookOutputGuardRoot, 'race-output');
+  const raceTransaction = await prepareCasebookOutputDirectory(raceOutput);
+  fs.writeFileSync(path.join(raceTransaction.staging, 'artifact.txt'), 'race');
+  process.env.NODE_ENV = 'test';
+  process.env.QBOT_CASEBOOK_TEST_RACE_EMPTY_OUTPUT_AFTER_GUARD = '1';
+  await assert.rejects(
+    commitCasebookOutputDirectory(raceTransaction),
+    /排他原子提交失败/,
+    '最终存在性检查后目标被并发抢占为空目录时不得覆盖',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_RACE_EMPTY_OUTPUT_AFTER_GUARD;
+  assert.deepEqual(fs.readdirSync(raceOutput), [], '并发抢占者的空目标目录必须保持为空且不被替换');
+  fs.rmdirSync(raceOutput);
+  await abortCasebookOutputDirectory(raceTransaction);
+
+  const hardlinkOutput = path.join(casebookOutputGuardRoot, 'hardlink-output');
+  const hardlinkTransaction = await prepareCasebookOutputDirectory(hardlinkOutput);
+  const hardlinkSource = path.join(hardlinkTransaction.staging, 'source.txt');
+  fs.writeFileSync(hardlinkSource, 'hardlink');
+  fs.linkSync(hardlinkSource, path.join(hardlinkTransaction.staging, 'alias.txt'));
+  await assert.rejects(
+    commitCasebookOutputDirectory(hardlinkTransaction),
+    /只允许独占普通文件和目录/,
+    'staging 内硬链接复用必须 fail-closed',
+  );
+  await abortCasebookOutputDirectory(hardlinkTransaction);
+
+  const symlinkOutput = path.join(casebookOutputGuardRoot, 'symlink-output');
+  const symlinkTransaction = await prepareCasebookOutputDirectory(symlinkOutput);
+  fs.symlinkSync(outputFile, path.join(symlinkTransaction.staging, 'artifact-link'));
+  await assert.rejects(
+    commitCasebookOutputDirectory(symlinkTransaction),
+    /路径祖先不得是符号链接/,
+    'staging 内符号链接必须 fail-closed',
+  );
+  await abortCasebookOutputDirectory(symlinkTransaction);
+
+  const faultOutput = path.join(casebookOutputGuardRoot, 'fault-output');
+  const faultTransaction = await prepareCasebookOutputDirectory(faultOutput);
+  fs.writeFileSync(path.join(faultTransaction.staging, 'artifact.txt'), 'fault');
+  process.env.NODE_ENV = 'test';
+  process.env.QBOT_CASEBOOK_FAULT_BEFORE_OUTPUT_COMMIT = '1';
+  await assert.rejects(
+    commitCasebookOutputDirectory(faultTransaction),
+    /fault_injected_before_casebook_output_commit/,
+  );
+  assert.equal(fs.existsSync(faultOutput), false, '目录提交故障注入不得暴露最终输出');
+  delete process.env.QBOT_CASEBOOK_FAULT_BEFORE_OUTPUT_COMMIT;
+  await abortCasebookOutputDirectory(faultTransaction);
+
+  const outputPostRenameFaults = [
+    ['QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_RENAME', /fault_injected_after_casebook_output_rename/],
+    ['QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_PARENT_FSYNC', /fault_injected_after_casebook_output_parent_fsync/],
+    ['QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_FINAL_VERIFY', /fault_injected_after_casebook_output_final_verify/],
+  ];
+  for (const [environmentKey, expectedError] of outputPostRenameFaults) {
+    const suffix = environmentKey.toLowerCase().replaceAll('_', '-');
+    const postRenameOutput = path.join(casebookOutputGuardRoot, suffix);
+    const postRenameTransaction = await prepareCasebookOutputDirectory(postRenameOutput);
+    const postRenameStaging = postRenameTransaction.staging;
+    fs.writeFileSync(path.join(postRenameStaging, 'artifact.txt'), environmentKey);
+    process.env[environmentKey] = '1';
+    let observedError;
+    await assert.rejects(
+      commitCasebookOutputDirectory(postRenameTransaction),
+      (error) => {
+        observedError = error;
+        return expectedError.test(error?.message || String(error));
+      },
+      `${environmentKey} 必须触发可识别的目录提交故障`,
+    );
+    delete process.env[environmentKey];
+    assert.equal(postRenameTransaction.state, 'rollback_incomplete', `${environmentKey} 必须报告隔离保留`);
+    assert.equal(postRenameTransaction.committed, false, `${environmentKey} 不得标记 committed`);
+    assert.equal(observedError?.transaction_state, 'rollback_incomplete', `${environmentKey} 错误必须报告保留状态`);
+    assert.equal(fs.existsSync(postRenameOutput), false, `${environmentKey} 后最终目录必须不存在`);
+    assert.equal(fs.existsSync(postRenameStaging), false, `${environmentKey} 后 staging 必须不存在`);
+    assert.equal(observedError?.rollback?.final?.status, 'retained', `${environmentKey} 必须隔离保留本事务目录`);
+    assert.equal(fs.existsSync(observedError.rollback.final.preserved_path), true, `${environmentKey} 保留路径必须存在`);
+  }
+
+  const mutatedTreeOutput = path.join(casebookOutputGuardRoot, 'mutated-tree-output');
+  const mutatedTreeTransaction = await prepareCasebookOutputDirectory(mutatedTreeOutput);
+  fs.writeFileSync(path.join(mutatedTreeTransaction.staging, 'artifact.txt'), 'audited-tree-bytes');
+  process.env.QBOT_CASEBOOK_TEST_MUTATE_TREE_AFTER_FSYNC = '1';
+  let mutatedTreeError;
+  await assert.rejects(
+    commitCasebookOutputDirectory(mutatedTreeTransaction),
+    (error) => {
+      mutatedTreeError = error;
+      return /与 fsync 时的整树身份或内容快照不一致/.test(error?.message || String(error));
+    },
+    'fsync 后改写内部文件必须在 rename 后整树复核时 fail-closed',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_MUTATE_TREE_AFTER_FSYNC;
+  assert.equal(mutatedTreeError?.transaction_state, 'rollback_incomplete');
+  assert.equal(fs.existsSync(mutatedTreeOutput), false, '整树漂移后不得保留最终输出名');
+  assert.equal(mutatedTreeError?.rollback?.final?.status, 'retained');
+  assert.match(
+    fs.readFileSync(path.join(mutatedTreeError.rollback.final.preserved_path, 'artifact.txt'), 'utf8'),
+    /^audited-tree-bytesthird-party-tree-mutation$/,
+  );
+
+  const directoryQuarantineRaceOutput = path.join(casebookOutputGuardRoot, 'directory-quarantine-race');
+  const directoryQuarantineRaceTransaction = await prepareCasebookOutputDirectory(directoryQuarantineRaceOutput);
+  fs.writeFileSync(path.join(directoryQuarantineRaceTransaction.staging, 'artifact.txt'), 'transaction-directory');
+  process.env.QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_RENAME = '1';
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_DIRECTORY_QUARANTINE_AFTER_VERIFY = '1';
+  let directoryQuarantineRaceError;
+  await assert.rejects(
+    commitCasebookOutputDirectory(directoryQuarantineRaceTransaction),
+    (error) => {
+      directoryQuarantineRaceError = error;
+      return /fault_injected_after_casebook_output_rename/.test(error?.message || String(error));
+    },
+  );
+  delete process.env.QBOT_CASEBOOK_FAULT_AFTER_OUTPUT_RENAME;
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_DIRECTORY_QUARANTINE_AFTER_VERIFY;
+  assert.equal(directoryQuarantineRaceError?.transaction_state, 'rollback_conflict');
+  assert.equal(directoryQuarantineRaceError?.rollback?.final?.status, 'rollback_conflict');
+  assert.equal(
+    fs.readFileSync(path.join(directoryQuarantineRaceError.rollback.final.preserved_path, 'third-party.txt'), 'utf8'),
+    'third-party-directory-quarantine',
+    '目录 quarantine 最终复核后的第三方替换者不得被删除',
+  );
+  assert.equal(fs.existsSync(directoryQuarantineRaceError.rollback.final.transaction_preserved_path), true, '本事务目录也必须保留');
+
+  const thirdPartyOutput = path.join(casebookOutputGuardRoot, 'third-party-output-conflict');
+  const thirdPartyOutputTransaction = await prepareCasebookOutputDirectory(thirdPartyOutput);
+  const thirdPartyOutputStaging = thirdPartyOutputTransaction.staging;
+  fs.writeFileSync(path.join(thirdPartyOutputStaging, 'artifact.txt'), 'transaction-owned-output');
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_OUTPUT_AFTER_RENAME = '1';
+  let thirdPartyOutputError;
+  await assert.rejects(
+    commitCasebookOutputDirectory(thirdPartyOutputTransaction),
+    (error) => {
+      thirdPartyOutputError = error;
+      return /fault_injected_output_replaced_after_rename/.test(error?.message || String(error));
+    },
+    'rename 后最终目录被第三方替换时必须拒绝提交',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_OUTPUT_AFTER_RENAME;
+  assert.equal(thirdPartyOutputTransaction.state, 'rollback_conflict', '第三方输出目录替换必须报告 rollback_conflict');
+  assert.equal(thirdPartyOutputTransaction.committed, false, '第三方输出目录替换不得标记 committed');
+  assert.equal(thirdPartyOutputError?.transaction_state, 'rollback_conflict', '第三方输出目录替换错误必须暴露冲突状态');
+  assert.equal(fs.readFileSync(path.join(thirdPartyOutput, 'third-party.txt'), 'utf8'), 'third-party-output', '回滚不得删除第三方输出目录');
+  assert.equal(fs.existsSync(thirdPartyOutputStaging), false, '第三方替换冲突时本事务原 staging 必须清理');
+  fs.rmSync(thirdPartyOutput, { recursive: true, force: false });
+
+  const replacedOutput = path.join(casebookOutputGuardRoot, 'replaced-output');
+  const replacedTransaction = await prepareCasebookOutputDirectory(replacedOutput);
+  const displacedStaging = `${replacedTransaction.staging}-displaced`;
+  fs.renameSync(replacedTransaction.staging, displacedStaging);
+  fs.mkdirSync(replacedTransaction.staging, { mode: 0o700 });
+  await assert.rejects(
+    commitCasebookOutputDirectory(replacedTransaction),
+    /发生替换或权限漂移/,
+    'staging 目录 inode 被替换时必须 fail-closed',
+  );
+
+  const successfulPublishRoot = path.join(casebookOutputGuardRoot, 'successful-publish');
+  fs.mkdirSync(successfulPublishRoot, { mode: 0o700 });
+  const publishArtifact = path.join(successfulPublishRoot, 'publish-artifact.xlsx');
+  const publishedFormal = path.join(successfulPublishRoot, 'published-formal.xlsx');
+  fs.writeFileSync(publishArtifact, 'validated-casebook-bytes');
+  const publication = await publishValidatedCasebookArtifact({
+    artifactFile: publishArtifact,
+    formalOutput: publishedFormal,
+  });
+  assert.equal(publication.path, publishedFormal);
+  assert.equal(publication.state, 'committed', '正式发布成功路径必须进入 committed 状态');
+  assert.equal(publication.committed, true, '正式发布成功路径必须显式标记 committed=true');
+  assert.equal(fs.readFileSync(publishedFormal, 'utf8'), 'validated-casebook-bytes');
+  assert.equal(fs.statSync(publishedFormal).mode & 0o777, 0o600, '正式 Casebook 权限必须为0600');
+  assert.equal(
+    fs.readdirSync(successfulPublishRoot).some((entry) => entry.startsWith(`.${path.basename(publishedFormal)}.staging-`)
+      || entry.includes('rollback-quarantine')),
+    false,
+    '正式发布成功后不得遗留 staging 或 quarantine',
+  );
+  await assert.rejects(
+    publishValidatedCasebookArtifact({ artifactFile: publishArtifact, formalOutput: publishedFormal }),
+    /禁止覆盖已存在的正式 Casebook/,
+    '正式 Casebook 原子发布不得覆盖已有目标',
+  );
+
+  const faultFormal = path.join(casebookOutputGuardRoot, 'fault-formal.xlsx');
+  process.env.QBOT_CASEBOOK_FAULT_BEFORE_FORMAL_PUBLISH = '1';
+  let beforeFormalPublishError;
+  await assert.rejects(
+    publishValidatedCasebookArtifact({ artifactFile: publishArtifact, formalOutput: faultFormal }),
+    (error) => {
+      beforeFormalPublishError = error;
+      return /fault_injected_before_formal_casebook_publish/.test(error?.message || String(error));
+    },
+  );
+  assert.equal(fs.existsSync(faultFormal), false, '正式发布故障注入不得留下目标文件');
+  assert.equal(beforeFormalPublishError?.publication_state, 'rollback_incomplete', '正式发布前故障必须报告安全隔离保留');
+  assert.equal(fs.existsSync(beforeFormalPublishError?.temporary_path || ''), false, '正式发布前故障不得遗留 staging 临时名');
+  assert.equal(beforeFormalPublishError?.rollback?.temporary?.status, 'retained');
+  assert.equal(fs.existsSync(beforeFormalPublishError.rollback.temporary.preserved_path), true, '隔离后的临时 artifact 必须保留并报告');
+  delete process.env.QBOT_CASEBOOK_FAULT_BEFORE_FORMAL_PUBLISH;
+
+  const formalPublicationFaults = [
+    ['QBOT_CASEBOOK_FAULT_AFTER_FORMAL_RENAME', /fault_injected_after_formal_rename/],
+    ['QBOT_CASEBOOK_FAULT_AFTER_FORMAL_PARENT_FSYNC', /fault_injected_after_formal_parent_fsync/],
+    ['QBOT_CASEBOOK_FAULT_AFTER_FORMAL_FINAL_VERIFY', /fault_injected_after_formal_final_verify/],
+  ];
+  for (const [environmentKey, expectedError] of formalPublicationFaults) {
+    const suffix = environmentKey.toLowerCase().replaceAll('_', '-');
+    const postLinkFormal = path.join(casebookOutputGuardRoot, `${suffix}.xlsx`);
+    process.env[environmentKey] = '1';
+    let observedError;
+    await assert.rejects(
+      publishValidatedCasebookArtifact({ artifactFile: publishArtifact, formalOutput: postLinkFormal }),
+      (error) => {
+        observedError = error;
+        return expectedError.test(error?.message || String(error));
+      },
+      `${environmentKey} 必须触发可识别的正式发布故障`,
+    );
+    delete process.env[environmentKey];
+    assert.equal(observedError?.publication_state, 'rollback_incomplete', `${environmentKey} 必须报告隔离保留`);
+    assert.equal(fs.existsSync(postLinkFormal), false, `${environmentKey} 后正式目标必须不存在`);
+    assert.equal(fs.existsSync(observedError?.temporary_path || ''), false, `${environmentKey} 后临时名必须不存在`);
+    assert.equal(observedError?.rollback?.formal?.status, 'retained');
+    assert.equal(fs.existsSync(observedError.rollback.formal.preserved_path), true, `${environmentKey} 本事务正式 artifact 必须隔离保留`);
+  }
+
+  const thirdPartyFormal = path.join(casebookOutputGuardRoot, 'third-party-formal-conflict.xlsx');
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_FORMAL_BEFORE_ROLLBACK = '1';
+  let thirdPartyFormalError;
+  await assert.rejects(
+    publishValidatedCasebookArtifact({ artifactFile: publishArtifact, formalOutput: thirdPartyFormal }),
+    (error) => {
+      thirdPartyFormalError = error;
+      return /fault_injected_formal_replaced_before_rollback/.test(error?.message || String(error));
+    },
+    '正式目标被第三方替换时必须拒绝提交',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_FORMAL_BEFORE_ROLLBACK;
+  assert.equal(thirdPartyFormalError?.publication_state, 'rollback_conflict', '第三方正式目标替换必须报告 rollback_conflict');
+  assert.equal(thirdPartyFormalError?.rollback?.formal?.status, 'rollback_conflict', '正式目标回滚必须保留身份冲突');
+  assert.equal(fs.readFileSync(thirdPartyFormal, 'utf8'), 'third-party-formal', '回滚不得删除第三方正式目标');
+  assert.equal(fs.existsSync(thirdPartyFormalError?.temporary_path || ''), false, '正式目标冲突时本事务临时文件必须清理');
+  fs.unlinkSync(thirdPartyFormal);
+
+  const auditedArtifact = path.join(casebookOutputGuardRoot, 'audited-artifact.xlsx');
+  const auditedArtifactBytes = Buffer.from('runtime-audited-artifact');
+  fs.writeFileSync(auditedArtifact, auditedArtifactBytes);
+  const auditedArtifactSha256 = createHash('sha256').update(auditedArtifactBytes).digest('hex');
+  const driftedArtifactFormal = path.join(casebookOutputGuardRoot, 'drifted-artifact-formal.xlsx');
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_ARTIFACT_BEFORE_FORMAL_PUBLISH = '1';
+  let driftedArtifactError;
+  await assert.rejects(
+    publishValidatedCasebookArtifact({
+      artifactFile: auditedArtifact,
+      formalOutput: driftedArtifactFormal,
+      expectedArtifactSha256: auditedArtifactSha256,
+      expectedArtifactSize: auditedArtifactBytes.length,
+    }),
+    (error) => {
+      driftedArtifactError = error;
+      return /正式发布前 Casebook artifact 与 runtime audit 快照不一致/.test(error?.message || String(error));
+    },
+    'runtime audit 后替换 artifact 必须在正式发布前 fail-closed',
+  );
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_ARTIFACT_BEFORE_FORMAL_PUBLISH;
+  assert.equal(fs.existsSync(driftedArtifactFormal), false, '未审核的替换 artifact 不得发布');
+  assert.equal(fs.readFileSync(auditedArtifact, 'utf8'), 'third-party-artifact');
+  assert.deepEqual(fs.readFileSync(`${auditedArtifact}.audited-artifact`), auditedArtifactBytes, '已审核字节必须保留');
+  assert.equal(driftedArtifactError?.rollback?.temporary?.status, 'retained', '发布前漂移时 staging 只能隔离保留');
+
+  const fileQuarantineRaceFormal = path.join(casebookOutputGuardRoot, 'file-quarantine-race.xlsx');
+  process.env.QBOT_CASEBOOK_FAULT_AFTER_FORMAL_RENAME = '1';
+  process.env.QBOT_CASEBOOK_TEST_REPLACE_FILE_QUARANTINE_AFTER_VERIFY = '1';
+  let fileQuarantineRaceError;
+  await assert.rejects(
+    publishValidatedCasebookArtifact({ artifactFile: publishArtifact, formalOutput: fileQuarantineRaceFormal }),
+    (error) => {
+      fileQuarantineRaceError = error;
+      return /fault_injected_after_formal_rename/.test(error?.message || String(error));
+    },
+  );
+  delete process.env.QBOT_CASEBOOK_FAULT_AFTER_FORMAL_RENAME;
+  delete process.env.QBOT_CASEBOOK_TEST_REPLACE_FILE_QUARANTINE_AFTER_VERIFY;
+  assert.equal(fileQuarantineRaceError?.publication_state, 'rollback_conflict');
+  assert.equal(fileQuarantineRaceError?.rollback?.formal?.status, 'rollback_conflict');
+  assert.equal(fs.existsSync(fileQuarantineRaceFormal), false, '故障后正式目标名必须撤销');
+  assert.equal(
+    fs.readFileSync(fileQuarantineRaceError.rollback.formal.preserved_path, 'utf8'),
+    'third-party-file-quarantine',
+    '文件 quarantine 最终复核后的第三方替换者不得被删除',
+  );
+  assert.equal(
+    fs.readFileSync(fileQuarantineRaceError.rollback.formal.transaction_preserved_path, 'utf8'),
+    'validated-casebook-bytes',
+    '本事务正式 artifact 也必须保留',
+  );
+
+  const linkedArtifact = path.join(casebookOutputGuardRoot, 'linked-artifact.xlsx');
+  fs.linkSync(publishArtifact, linkedArtifact);
+  await assert.rejects(
+    publishValidatedCasebookArtifact({
+      artifactFile: publishArtifact,
+      formalOutput: path.join(casebookOutputGuardRoot, 'hardlink-formal.xlsx'),
+    }),
+    /当前用户独占/,
+    '被硬链接复用的 artifact 不得发布为正式 Casebook',
+  );
+
+  const freshArtifact = path.join(casebookOutputGuardRoot, 'fresh-artifact.xlsx');
+  const symlinkArtifact = path.join(casebookOutputGuardRoot, 'symlink-artifact.xlsx');
+  fs.writeFileSync(freshArtifact, 'fresh');
+  fs.symlinkSync(freshArtifact, symlinkArtifact);
+  await assert.rejects(
+    publishValidatedCasebookArtifact({
+      artifactFile: symlinkArtifact,
+      formalOutput: path.join(casebookOutputGuardRoot, 'symlink-artifact-formal.xlsx'),
+    }),
+    /路径祖先不得是符号链接/,
+    '符号链接 artifact 不得发布为正式 Casebook',
+  );
+
+  const unsafeFormalParent = path.join(casebookOutputGuardRoot, 'unsafe-formal-parent');
+  fs.mkdirSync(unsafeFormalParent, { mode: 0o700 });
+  fs.chmodSync(unsafeFormalParent, 0o777);
+  await assert.rejects(
+    publishValidatedCasebookArtifact({
+      artifactFile: freshArtifact,
+      formalOutput: path.join(unsafeFormalParent, 'formal.xlsx'),
+    }),
+    /禁止 group\/other 写入/,
+    'group/other 可写正式输出父目录必须 fail-closed',
+  );
+  fs.chmodSync(unsafeFormalParent, 0o700);
+
+  const symlinkFormalTarget = path.join(casebookOutputGuardRoot, 'symlink-formal-target.xlsx');
+  fs.symlinkSync(freshArtifact, symlinkFormalTarget);
+  await assert.rejects(
+    publishValidatedCasebookArtifact({
+      artifactFile: freshArtifact,
+      formalOutput: symlinkFormalTarget,
+    }),
+    /禁止覆盖已存在的正式 Casebook/,
+    '正式目标为符号链接时必须拒绝且不得跟随覆盖',
+  );
 } finally {
+  if (previousNodeEnv == null) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousNodeEnv;
+  for (const [key, value] of previousCasebookTransactionEnvironment) {
+    if (value == null) delete process.env[key];
+    else process.env[key] = value;
+  }
   fs.rmSync(casebookOutputGuardRoot, { recursive: true, force: true });
+}
+
+const r15Init003BaseEvidenceRoles = [
+  'before_screenshot',
+  'action_receipt',
+  'after_screenshot',
+  'public_state_readback',
+  'cleanup_readback',
+].join(',');
+const r15Init003Case = normalizeCasebookContractCase(patchR13RecentCase({
+  '用例ID': 'BETA-INIT-003',
+  '用例类型': 'run_initialization',
+  '契约版本': 'qbot-core-beta/v2',
+  '自动化协议': 'core-beta-action-plan/v2',
+  '证据Schema版本': 'qbot-core-evidence/v2',
+  '流水线策略': 'serial',
+  '批次大小': 1,
+  '初始化策略': 'run_full_reset_then_case_clean',
+  '清理策略': 'clear task capability selection',
+  '风险域': 'functional,reliability',
+  '判定Oracle': 'public_state_machine',
+  '确定性': '是',
+  '重复策略': '每候选执行1次',
+  '必需Fixture': 'runtime:ready,account:authenticated',
+  '硬门禁': '是',
+  '版本范围': 'release/0.1',
+  '生产观测指标': 'skill reinstall readiness',
+  '证据角色': r15Init003BaseEvidenceRoles,
+  '证据要求': r15Init003BaseEvidenceRoles,
+  '精准断言JSON': JSON.stringify({
+    pass_rule: '全部硬断言通过。',
+    fail_rule: '产品 Oracle 失败。',
+    block_rule: '仅真实前置不可用时阻塞。',
+    hard_oracles: ['初始化完成。'],
+    machine_assertions: [{ path: 'evidence.complete', operator: 'equals', expected: true }],
+  }),
+}));
+assert.deepEqual(
+  r15Init003Case.evidence_roles,
+  [
+    ...r15Init003BaseEvidenceRoles.split(','),
+    'product_action_trace',
+    'skill_reinstall_readiness_verdict',
+    'initialization_continuation_surface',
+  ],
+  'r15 BETA-INIT-003 证据角色必须精确且不得混入文件名或叙述文本',
+);
+assert.equal(
+  validateCoreBetaCase(r15Init003Case).ok,
+  true,
+  validateCoreBetaCase(r15Init003Case).errors.join('\n'),
+);
+for (const role of [
+  'skill_reinstall_readiness_verdict',
+  'initialization_continuation_surface',
+]) {
+  const missingRole = structuredClone(r15Init003Case);
+  missingRole.evidence_roles = missingRole.evidence_roles.filter((item) => item !== role);
+  assert.match(
+    validateCoreBetaCase(missingRole).errors.join('\n'),
+    new RegExp(`evidence_roles 缺少 ${role}`),
+    `r15 BETA-INIT-003 缺少 ${role} 时必须 fail-closed`,
+  );
+}
+const mutateR15Init003ContractText = (mutate) => {
+  const candidate = structuredClone(r15Init003Case);
+  for (const field of ['scenario', 'steps', 'expected_result', 'success_criteria']) {
+    candidate[field] = mutate(String(candidate[field] || ''));
+  }
+  candidate.precise_assertions.hard_oracles = candidate.precise_assertions.hard_oracles
+    .map((oracle) => mutate(String(oracle || '')));
+  return candidate;
+};
+for (const [signal, mutate, expectedError] of [
+  ['非空 draftInstanceId', (text) => text.replace(/draftInstanceId/gu, 'draft handle'), '正式合同缺少非空 draftInstanceId'],
+  ['taskId=null', (text) => text.replace(/taskId\s*=\s*null/gu, 'taskId=unknown'), '正式合同缺少taskId=null'],
+  ['messageCount=0', (text) => text.replace(/messageCount\s*=\s*0/gu, 'messageCount=unknown'), '正式合同缺少messageCount=0'],
+  ['sendCount=0', (text) => text.replace(/sendCount\s*=\s*0/gu, 'sendCount=unknown'), '正式合同缺少sendCount=0'],
+  ['running=false', (text) => text.replace(/running\s*=\s*false/gu, 'running=unknown'), '正式合同缺少running=false'],
+  ['Skill/Connector/Expert 全空', (text) => text.replace(/Skill\s*\/\s*Connector\s*\/\s*Expert/gu, '三类能力'), '正式合同缺少Skill/Connector/Expert 全空'],
+  ['PNG 普通文件', (text) => text.replace(/普通文件/gu, '截图文件'), '正式合同缺少前后 PNG Case 内普通文件及 bytes/SHA 可重放'],
+  ['PNG 路径', (text) => text.replace(/路径/gu, '位置'), '正式合同缺少前后 PNG Case 内普通文件及 bytes/SHA 可重放'],
+  ['PNG bytes', (text) => text.replace(/bytes/giu, 'byte-count'), '正式合同缺少前后 PNG Case 内普通文件及 bytes/SHA 可重放'],
+  ['PNG SHA-256', (text) => text.replace(/SHA-?256/giu, 'digest'), '正式合同缺少前后 PNG Case 内普通文件及 bytes/SHA 可重放'],
+  ['PNG 可重放', (text) => text.replace(/可重放|重放/gu, '可复核'), '正式合同缺少前后 PNG Case 内普通文件及 bytes/SHA 可重放'],
+]) {
+  const invalidContract = mutateR15Init003ContractText(mutate);
+  assert.match(
+    validateCoreBetaCase(invalidContract).errors.join('\n'),
+    new RegExp(expectedError.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `r15 BETA-INIT-003 缺少 ${signal} 时必须 fail-closed`,
+  );
 }
 
 const r13GateIdsFixture = Array.from({ length: 70 }, (_, index) => `G3-${index + 1}`);
@@ -9918,13 +12968,13 @@ assert.match(
 );
 assert.match(
   productionGrayCasebookBuilder,
-  /await xlsx\.save\(outputFile\)[\s\S]*SpreadsheetFile\.importXlsx\(await FileBlob\.load\(outputFile\)\)[\s\S]*verifyWorkbook\(exportedWorkbook[\s\S]*publishCasebookAfterRuntimeAudit/,
-  'Casebook必须先保存、重新导入并通过验证，最后才以排他复制写入正式路径',
+  /await xlsx\.save\(outputFile\)[\s\S]*const auditedArtifact = stableRegularFileSnapshot\(outputFile[\s\S]*SpreadsheetFile\.importXlsx\(new FileBlob\([\s\S]*auditedArtifact\.bytes[\s\S]*verifyWorkbook\(exportedWorkbook[\s\S]*publishCasebookAfterRuntimeAudit/,
+  'Casebook必须先保存，以同一审核字节快照重新导入并通过验证，最后才以排他 rename 写入正式路径',
 );
 assert.match(productionGrayCasebookBuilder, /\['1329',[\s\S]*expectedFiles: \['\.gitlab-ci\.yml'\][\s\S]*CI-only[\s\S]*sha256:3410bb/, 'Casebook生成器必须把MR !1329绑定到显式CI-only静态合同审计');
 assert.match(productionGrayCasebookBuilder, /RECENT_MR_APPEND\.at\(-1\)\?\.commit !== PRODUCT_COMMIT/, 'Casebook生成器必须强制冻结增量MR终点等于最新产品设计基线');
 assert.match(productionGrayCasebookBuilder, /EXPECTED_PREVIOUS_MR_COUNT = 134[\s\S]*R13_INCREMENTAL_MR_ORDER = Object\.freeze\(\[[\s\S]*EXPECTED_INCREMENTAL_MR_COUNT = R13_INCREMENTAL_MR_ORDER\.length[\s\S]*EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT \+ EXPECTED_INCREMENTAL_MR_COUNT/, 'Casebook生成器必须继承r12的134个MR并从冻结增量顺序动态推导r13审计规模');
-assert.match(productionGrayCasebookBuilder, /R13_INCREMENTAL_MR_ORDER = Object\.freeze\(\[[\s\S]*'1556', '1549', '1557', '1559', '1561', '1560',[\s\S]*'1564', '1563', '1566', '1568', '1569', '1570', '1572'[\s\S]*\]\);/, 'Casebook生成器必须按intake first-parent顺序冻结36个增量MR并以!1572收尾');
+assert.match(productionGrayCasebookBuilder, /R13_INCREMENTAL_MR_ORDER = Object\.freeze\(\[[\s\S]*'1556', '1549', '1557', '1559', '1561', '1560',[\s\S]*'1564', '1563', '1566', '1568', '1569', '1570', '1572', '1573'[\s\S]*\]\);/, 'Casebook生成器必须按intake first-parent顺序冻结37个增量MR并以!1573收尾');
 assert.match(productionGrayCasebookBuilder, /\['1523', \['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019'\]\]/, 'Casebook生成器必须精确映射MR !1523且禁止启发式泛化');
 assert.match(productionGrayCasebookBuilder, /\['1522', \['MRSMOKE-ROUTE-001', 'BETA-CHAT-001', 'BETA-ROUTE-001', 'BETA-HOST-003'\]\]/, 'Casebook生成器必须精确映射MR !1522且禁止启发式泛化');
 assert.match(coreBetaProtocolSource, /MRSMOKE-WEB-001', 'qwork_mr_web_search_success'[\s\S]*web_search_quota_trace/, '协议必须注册四轮Web搜索专项证据角色');
@@ -9942,7 +12992,17 @@ assert.match(
   'Casebook生成器必须逐项锁定 r9 的21个静态合同审计MR且禁止冒充桌面E2E',
 );
 assert.match(productionGrayCasebookBuilder, /function sameFileSet\(expectedFiles, actualFiles\)[\s\S]*!sameFileSet\(staticAudit\.expectedFiles, mr\.files\)/, 'Casebook生成器必须按文件集合校验静态MR清单，不能因Git返回顺序漂移误报');
-assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加36条，合计170条');
+assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加37条，合计171条');
+assert.match(
+  productionGrayCasebookBuilder,
+  /\['1573', \{[\s\S]*?caseIds: \['SIT-MEM-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-MCP-001', 'BETA-MCP-002', 'BETA-HOST-003', 'BETA-INIT-001', 'BETA-ROUTE-001', 'MRSMOKE-ROUTE-001'\][\s\S]*?coverageStrength: '相邻回归\+源码合同'[\s\S]*?requiredSourceContractIds: \['deepbankv2-mr-1573-memory-session-profile-stability\/v1'\][\s\S]*?claim_scope=source_and_test_declarations[\s\S]*?test_execution_attested=false[\s\S]*?禁止把相邻主链通过冒充这些内部合同已执行或通过/,
+  'Casebook生成器必须将 MR !1573 绑定 Memory/Profile 相邻链并明确非执行态源码合同边界',
+);
+assert.match(
+  productionGrayCasebookBuilder,
+  /const mr1573 =[\s\S]*mr1573\[7\] !== '12条冒烟\+70条门禁'[\s\S]*MR !1573必须区分Memory\/Profile桌面相邻链与非执行态源码合同/,
+  'MR !1573 必须精确覆盖 G2/G3，并由专用断言拒绝映射或声明漂移',
+);
 assert.match(productionGrayCasebookBuilder, /\['1556', \{[\s\S]*caseIds: \['BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-HOST-003'\][\s\S]*用户消息和助手正文持续可见[\s\S]*同 task 收敛及重开保持/, 'Casebook生成器必须将MR !1556映射到会话消息保持、多轮、任务重开与宿主相邻回归');
 assert.match(productionGrayCasebookBuilder, /\['1549', \{[\s\S]*'MRSMOKE-SKILL-001'[\s\S]*'MRSMOKE-CHART-001'[\s\S]*'MRSMOKE-ROUTE-001'[\s\S]*'MRSMOKE-FAIL-001'[\s\S]*'BETA-MCP-001'[\s\S]*'BETA-MCP-002'[\s\S]*'BETA-SKILL-011'[\s\S]*'SIT-CONN-003'[\s\S]*'SIT-CONN-005'[\s\S]*'SIT-CONN-016'[\s\S]*'BETA-HOST-003'/, 'Casebook生成器必须将MR !1549映射到Skill、Chart、Route、Fail、MCP、Connector与Host真实相邻链路');
 assert.match(productionGrayCasebookBuilder, /\['1557', \{[\s\S]*?caseIds: \['BETA-TASK-002', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-HOST-003'\][\s\S]*?coverageStrength: '相邻回归\+源码合同'[\s\S]*?requiredSourceContractIds: \['deepbankv2-mr-1557-immediate-regenerate-projection\/v1'\][\s\S]*?真实桌面重新生成链[\s\S]*?立即读回[\s\S]*?running\/占位 assistant[\s\S]*?同一 task 收敛且重开保持[\s\S]*?即时占位\/重开语义[\s\S]*?claim_scope=source_and_test_declarations[\s\S]*?test_execution_attested=false[\s\S]*?不把源码声明冒充产品测试执行结果/, 'Casebook生成器必须将MR !1557绑定真实桌面重新生成链与非执行态源码合同边界');
@@ -11321,7 +14381,7 @@ try {
   if (automationReview.classification !== 'framework_issue') throw new Error('自动化错误不得冒充产品 Bug');
 
   const runtimeMaintenanceWithNormalCdpSkill = assessUserCenteredOutcome({
-    id: 'BETA-INIT-001',
+    id: 'BETA-CHAT-001',
     status: 'failed',
     result_category: 'bug',
     title: '运行时维护按钮真实点击后显示失败但工作台仍可用',

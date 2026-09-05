@@ -14,6 +14,7 @@ export const QWORK_MR1550_CLAUDE_SKILL_DESCRIPTION_ROUTING_CONTRACT_ID = 'deepba
 export const QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT_ID = 'deepbankv2-mr-1558-settings-model-name-dedup/v1';
 export const QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT_ID = 'deepbankv2-mr-1561-worker-envelope-limit/v1';
 export const QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT_ID = 'deepbankv2-mr-1560-turn-authority-readiness/v1';
+export const QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT_ID = 'deepbankv2-mr-1573-memory-session-profile-stability/v1';
 
 const HEX40 = /^[a-f0-9]{40}$/iu;
 const HEX64 = /^[a-f0-9]{64}$/iu;
@@ -966,6 +967,135 @@ export const QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT = deepFreeze({
   contract_sha256: sha256(stableJson(MR1560_CONTRACT_DEFINITION)),
 });
 
+const MR1573_ORGANIZATION_IDENTITY_PATH = 'electron/host-core/bridge/contracts/organization-identity.cjs';
+const MR1573_FEATURE_PATH = 'electron/host-core/auth/qwork-memory-feature.cjs';
+const MR1573_FEATURE_TEST_PATH = 'test/unit/auth/qwork-memory-feature.test.mjs';
+const MR1573_RUNTIME_TEST_PATH = 'test/unit/desktop/memory-augmentation-runtime.test.mjs';
+const MR1573_MCP_PATH = 'server/qbot-core/connectors/learning-fabric-mcp-bridge.mjs';
+const MR1573_MCP_TEST_PATH = 'test/unit/auth/personal-memory-client.test.mjs';
+const MR1573_BRIDGE_PATH = 'electron/host-core/bridge/preload/bridge-context.cjs';
+const MR1573_HOST_RUNTIME_PATH = 'electron/host-core/foundation/runtime-paths.cjs';
+const MR1573_STANDALONE_RUNTIME_PATH = 'runtime-paths.mjs';
+const MR1573_RUNTIME_TEST_CONTRACT_PATH = 'test/unit/runtime/runtime-paths.test.mjs';
+const MR1573_E2E_RUNTIME_TEST_PATH = 'test/e2e/support/claude-sdk-resilience.conformance.mjs';
+const MR1573_REAL_CHAIN_TEST_PATH = 'test/e2e/support/memory-augmentation-real-chain.test.mjs';
+
+const MR1573_INTEGRATION_BINDINGS = [
+  ['feature_refresh_preserves_verified_state', MR1573_FEATURE_PATH,
+    "    if (!isVerified(state)) Object.assign(state, { state: 'unavailable', enabled: false });"],
+  ['feature_test_declares_refresh_cache', MR1573_FEATURE_TEST_PATH,
+    "test('QworkMemoryFeature keeps the last verified gate when a background refresh fails', async () => {"],
+  ['session_feature_check_once', MR1573_RUNTIME_TEST_PATH, '    assert.equal(featureCalls, 1);'],
+  ['session_recall_policy_each_session', MR1573_RUNTIME_TEST_PATH, '    assert.equal(settingsCalls, 2);'],
+  ['session_mcp_preparation_each_session', MR1573_RUNTIME_TEST_PATH, '    assert.equal(mcpCalls, 2);'],
+  ['mcp_uses_native_url', MR1573_MCP_PATH, "import { URL } from 'node:url';"],
+  ['mcp_dual_host_contract', MR1573_MCP_TEST_PATH, "for (const host of ['standalone', 'teams360']) {"],
+  ['mcp_teams_native_url_probe', MR1573_MCP_TEST_PATH,
+    "    assert.equal(new URL('https://memory.example.test/mcp') instanceof URL, false);"],
+  ['mcp_recall_real_call', MR1573_MCP_TEST_PATH,
+    "  assert.deepEqual(await bridge.callTool('recall', { query: 'connection diagnostic' }), {"],
+  ['identity_direct_object_normalized', MR1573_ORGANIZATION_IDENTITY_PATH,
+    '  const direct = object(user.directSuperior);'],
+  ['identity_nested_superior_normalized', MR1573_ORGANIZATION_IDENTITY_PATH,
+    '  const superior = object(user.superior);'],
+  ['identity_direct_string_guard', MR1573_ORGANIZATION_IDENTITY_PATH,
+    "  const directText = typeof user.directSuperior === 'string' ? user.directSuperior : '';"],
+  ['identity_direct_superior_name_alias', MR1573_ORGANIZATION_IDENTITY_PATH,
+    '      user.directSuperiorName ||'],
+  ['identity_direct_superior_account_alias', MR1573_ORGANIZATION_IDENTITY_PATH,
+    '      user.directSuperiorUsername ||'],
+  ['identity_bridge_shared_helper_import', MR1573_BRIDGE_PATH,
+    "const { organizationIdentityFromAuthUser } = require('../contracts/organization-identity.cjs');"],
+  ['identity_bridge_shared_helper_use', MR1573_BRIDGE_PATH,
+    'const organizationIdentityForAuth = () => organizationIdentityFromAuthUser(currentAuth?.user);'],
+  ['runtime_host_disables_claude_mds', MR1573_HOST_RUNTIME_PATH,
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },"],
+  ['runtime_standalone_disables_claude_mds', MR1573_STANDALONE_RUNTIME_PATH,
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },"],
+  ['runtime_dual_path_test_declares_claude_mds', MR1573_RUNTIME_TEST_CONTRACT_PATH,
+    '  test(`#1491 [${implementation}] Claude query options always disable CLAUDE.md and Auto Memory`, () => {'],
+  ['runtime_dual_path_test_asserts_claude_mds', MR1573_RUNTIME_TEST_CONTRACT_PATH,
+    "    assert.equal(actual.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS, '1');"],
+  ['runtime_e2e_claude_md_file_sentinel', MR1573_E2E_RUNTIME_TEST_PATH,
+    "  const claudeMdFile = join(workspaceDir, 'CLAUDE.md');"],
+  ['runtime_e2e_claude_md_absent', MR1573_E2E_RUNTIME_TEST_PATH,
+    '    assert.equal(result.requestContainsClaudeMdSentinel, false);'],
+  ['runtime_e2e_claude_mds_env', MR1573_E2E_RUNTIME_TEST_PATH,
+    "        disableClaudeMdsEnv: options.env?.CLAUDE_CODE_DISABLE_CLAUDE_MDS,"],
+  ['runtime_real_chain_recall', MR1573_REAL_CHAIN_TEST_PATH,
+    "        arguments: { query: '通过云端记忆记录并召回用户偏好', limit: 8 },"],
+].map(([id, filePath, source]) => ({ id, path: filePath, addition: byteRecord(source) }));
+
+const MR1573_FORBIDDEN_FRAGMENTS = [
+  ['legacy_unconditional_refresh_hide', MR1573_FEATURE_PATH, 'line',
+    "    Object.assign(state, { state: 'unavailable', enabled: false });"],
+  ['legacy_bridge_direct_superior_string_coercion', MR1573_BRIDGE_PATH, 'line',
+    "  directSuperior: String(user.directSuperior || '').trim(),"],
+  ['legacy_host_auto_memory_only_env', MR1573_HOST_RUNTIME_PATH, 'line',
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },"],
+  ['legacy_standalone_auto_memory_only_env', MR1573_STANDALONE_RUNTIME_PATH, 'line',
+    "    env: { ...(options.env || process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },"],
+].map(([id, filePath, match, source]) => ({ id, path: filePath, match, value: byteRecord(source) }));
+
+const MR1573_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT_ID,
+  mr_iid: '1573',
+  state: 'merged',
+  target_branch: 'release/0.1',
+  merge_commit_sha: '6d482c9ccbceb74d4ebf81610d980e5fe15def6c',
+  changes_count: 22,
+  changed_paths: [
+    '.agent/context/_shared/references/memory-authority-boundary.md',
+    'docs/memory-augmentation-runtime.md',
+    'electron/host-core/agent/execution-worker-capabilities.cjs',
+    MR1573_FEATURE_PATH,
+    MR1573_ORGANIZATION_IDENTITY_PATH,
+    MR1573_BRIDGE_PATH,
+    MR1573_HOST_RUNTIME_PATH,
+    'electron/desktop-agent-host.cjs',
+    'scripts/ci/unit/node-unit-test-weights.json',
+    MR1573_MCP_PATH,
+    'server/qbot-core/engine/memory-runtime.mjs',
+    'server/qbot-core/tools/builtin-memory-augmentation-mcp.mjs',
+    MR1573_E2E_RUNTIME_TEST_PATH,
+    MR1573_REAL_CHAIN_TEST_PATH,
+    MR1573_MCP_TEST_PATH,
+    MR1573_FEATURE_TEST_PATH,
+    MR1573_RUNTIME_TEST_PATH,
+    'test/unit/electron/preload-organization-identity.test.mjs',
+    MR1573_RUNTIME_TEST_CONTRACT_PATH,
+    'test/unit/runtime/tool-exploration-runtime.test.mjs',
+    'test/unit/server/engine-prompt-composer.test.mjs',
+    MR1573_STANDALONE_RUNTIME_PATH,
+  ],
+  mr_diff: {
+    bytes: 43377,
+    sha256: 'dc1d7e0acf8f9001c70621b28c3ffbf83ba2a4b12d185a2e278ab6b2b0eb7394',
+  },
+  source_file: {
+    proof_mode: 'exact-new-file',
+    path: MR1573_ORGANIZATION_IDENTITY_PATH,
+    old_path: MR1573_ORGANIZATION_IDENTITY_PATH,
+    new_file: true,
+    renamed_file: false,
+    deleted_file: false,
+    change_bytes: 1976,
+    change_sha256: '20f920797bb31a63d6131a123c87b12f063e0c215fbf8327299279c5514cb0bc',
+    source_bytes: 1638,
+    source_sha256: '0f5cc6d693a27c89bbeee7be29a373f2b3a7c77dcaf900db3718e81567112779',
+    source_line_count: 50,
+  },
+  header_emissions: [],
+  integration_bindings: MR1573_INTEGRATION_BINDINGS,
+  forbidden_fragments: MR1573_FORBIDDEN_FRAGMENTS,
+};
+
+export const QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT = deepFreeze({
+  ...MR1573_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1573_CONTRACT_DEFINITION)),
+});
+
 export const QWORK_RELEASE_SOURCE_CONTRACTS = deepFreeze([
   QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT,
   QWORK_MR1544_CLAUDE_TURN_HEADER_BRANDING_CONTRACT,
@@ -977,6 +1107,7 @@ export const QWORK_RELEASE_SOURCE_CONTRACTS = deepFreeze([
   QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT,
   QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
   QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
+  QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
 ]);
 
 function byteRecordIsExactLine(record) {
