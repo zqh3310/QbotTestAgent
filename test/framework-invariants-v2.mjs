@@ -13000,8 +13000,8 @@ assert.match(
 );
 assert.match(
   productionGrayCasebookBuilder,
-  /const mr1573 =[\s\S]*mr1573\[7\] !== '12条冒烟\+70条门禁'[\s\S]*MR !1573必须区分Memory\/Profile桌面相邻链与非执行态源码合同/,
-  'MR !1573 必须精确覆盖 G2/G3，并由专用断言拒绝映射或声明漂移',
+  /const mr1573 =[\s\S]*mr1573\[7\] !== '12条冒烟\+70条门禁\+160条增量'[\s\S]*MR !1573必须区分Memory\/Profile桌面相邻链与非执行态源码合同/,
+  'MR !1573 必须精确覆盖 G2/G3/G4，并由专用断言拒绝映射或声明漂移',
 );
 assert.match(productionGrayCasebookBuilder, /\['1556', \{[\s\S]*caseIds: \['BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-HOST-003'\][\s\S]*用户消息和助手正文持续可见[\s\S]*同 task 收敛及重开保持/, 'Casebook生成器必须将MR !1556映射到会话消息保持、多轮、任务重开与宿主相邻回归');
 assert.match(productionGrayCasebookBuilder, /\['1549', \{[\s\S]*'MRSMOKE-SKILL-001'[\s\S]*'MRSMOKE-CHART-001'[\s\S]*'MRSMOKE-ROUTE-001'[\s\S]*'MRSMOKE-FAIL-001'[\s\S]*'BETA-MCP-001'[\s\S]*'BETA-MCP-002'[\s\S]*'BETA-SKILL-011'[\s\S]*'SIT-CONN-003'[\s\S]*'SIT-CONN-005'[\s\S]*'SIT-CONN-016'[\s\S]*'BETA-HOST-003'/, 'Casebook生成器必须将MR !1549映射到Skill、Chart、Route、Fail、MCP、Connector与Host真实相邻链路');

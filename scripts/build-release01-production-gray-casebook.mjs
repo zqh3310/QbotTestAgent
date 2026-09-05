@@ -3592,7 +3592,7 @@ async function main() {
   }
   const mr1573 = mrRows.find((row) => row[1] === '!1573');
   const mr1573Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1573').caseIds.join(',');
-  if (!mr1573 || mr1573[6] !== mr1573Expected || mr1573[7] !== '12条冒烟+70条门禁'
+  if (!mr1573 || mr1573[6] !== mr1573Expected || mr1573[7] !== '12条冒烟+70条门禁+160条增量'
     || mr1573[8] !== '相邻回归+源码合同'
     || !/记忆首会话\/跨会话连续性/.test(mr1573[10])
     || !/deepbankv2-mr-1573-memory-session-profile-stability\/v1/.test(mr1573[10])

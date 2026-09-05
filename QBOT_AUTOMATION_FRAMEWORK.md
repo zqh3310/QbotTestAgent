@@ -269,7 +269,9 @@ Casebook 生成器只能显式接收该新
 `!1573` 的桌面相邻映射固定同序为 `SIT-MEM-001`、`BETA-CHAT-001`、
 `BETA-CHAT-002`、`BETA-CHAT-009`、`BETA-SEC-002`、`BETA-MCP-001`、
 `BETA-MCP-002`、`BETA-HOST-003`、`BETA-INIT-001`、`BETA-ROUTE-001`、
-`MRSMOKE-ROUTE-001`；内部 Feature/Recall/MCP 跨 session cadence、直属上级 Profile
+`MRSMOKE-ROUTE-001`；其中 `MRSMOKE-ROUTE-001` 覆盖 G2，门禁 Case 覆盖 G3，
+`SIT-MEM-001` 作为全量增量覆盖 G4，因此覆盖层必须精确为
+`12条冒烟+70条门禁+160条增量`。内部 Feature/Recall/MCP 跨 session cadence、直属上级 Profile
 归一化、bridge/host/runtime 接线和本地记忆关闭只由
 `deepbankv2-mr-1573-memory-session-profile-stability/v1` 鉴证源码与测试声明，
 `claim_scope=source_and_test_declarations`、`test_execution_attested=false`，不得用桌面
