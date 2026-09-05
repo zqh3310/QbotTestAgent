@@ -1105,22 +1105,22 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
       errors.push(`${id} evidence_roles 缺少 web_search_quota_trace`);
     }
   }
+  const skillReinstallContractText = [
+    testCase?.scenario,
+    testCase?.steps,
+    testCase?.expected_result,
+    testCase?.success_criteria,
+    ...(Array.isArray(testCase?.precise_assertions?.hard_oracles)
+      ? testCase.precise_assertions.hard_oracles
+      : []),
+  ].map((value) => String(value || '')).join('\n');
   const declaresSkillReinstallReadinessContract = id === 'BETA-INIT-003' && (
-    evidenceRoles.has('skill_reinstall_readiness_verdict')
-    || evidenceRoles.has('initialization_continuation_surface')
-    || String(testCase?.oracle_type || '').split('+').includes('skill_reinstall_readiness')
+    /qbot-core-beta-skill-reinstall-product-action-trace\/v1|catalog_observations_(?:before|after)_action|send_count_(?:before|after|unchanged)/iu.test(skillReinstallContractText)
   );
   if (declaresSkillReinstallReadinessContract) {
-    const contractText = [
-      testCase?.scenario,
-      testCase?.steps,
-      testCase?.expected_result,
-      testCase?.success_criteria,
-      ...(Array.isArray(testCase?.precise_assertions?.hard_oracles)
-        ? testCase.precise_assertions.hard_oracles
-        : []),
-    ].map((value) => String(value || '')).join('\n');
+    const contractText = skillReinstallContractText;
     for (const role of [
+      'product_action_trace',
       'skill_reinstall_readiness_verdict',
       'initialization_continuation_surface',
     ]) {
@@ -1132,8 +1132,20 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
     for (const [signal, pattern] of [
       ['真实一键重装点击', /真实点击.{0,16}一键重装\s*Skill/iu],
       ['破坏性确认', /破坏性确认/iu],
+      ['专用产品动作 trace schema', /qbot-core-beta-skill-reinstall-product-action-trace\/v1/iu],
+      ['产品动作 trace Case 绑定', /case_id\s*=\s*BETA-INIT-003/iu],
+      ['产品动作 trace method 绑定', /method\s*=\s*skillsReinstall/iu],
+      ['产品动作 trace testid 绑定', /testid\s*=\s*assistant-skills-reinstall/iu],
+      ['产品动作 trace 唯一点击', /click_count\s*=\s*1/iu],
+      ['产品动作 trace 跨阶段时序', /before\s*ledger\s*ended_at\s*<=\s*action\s*dispatched_at\s*<=\s*after\s*ledger\s*started_at\s*<=\s*trace\s*captured_at/iu],
+      ['产品动作 trace 完整引用绑定', /catalog_observations_before_action[\s\S]*catalog_observations_after_action[\s\S]*terminal_outcome[\s\S]*continuation_surface/iu],
       ['完整 catalog 前后读回', /前后.{0,24}(?:完整\s*)?catalog|(?:完整\s*)?catalog.{0,24}前后/iu],
-      ['同签名三次稳定 idle', /同一\s*identity\/readiness\s*签名.{0,24}(?:连续)?三次.{0,16}(?:idle|稳定)|(?:连续)?三次.{0,24}同一\s*identity\/readiness\s*签名/iu],
+      ['动作前后独立 catalog ledger', /动作前、动作后两个独立\s*catalog\s*ledger/iu],
+      ['动作前后各三次同签名 idle', /各自至少三次连续同签名\s*(?:syncStatus=)?idle/iu],
+      ['ledger 样本时间窗口', /started_at\s*<=\s*observations\[\*\]\.captured_at\s*<=\s*ended_at/iu],
+      ['动作前 syncing 有界收敛', /动作前允许在有界窗口等待\s*syncing\s*收敛[\s\S]*单次\s*syncing\s*不能立即定性为证据失败/iu],
+      ['动作前后零读取与重试错误', /read_error_count\s*=\s*0[\s\S]*retry_error_count\s*=\s*0/iu],
+      ['前后 identity 非空唯一全等', /前后\s*installed\s*identity\s*集合必须非空、唯一且全等/iu],
       ['逐项 ready 与失败态排除', /每个已安装\s*Skill\s*ready=true[\s\S]*unready\/python_runtime_failed/iu],
       ['失败后新建任务恢复', /(?:成功或失败|无论.{0,12}成功或失败|专项\s*Oracle\s*成功或失败).{0,32}(?:点击)?【新建任务】.{0,24}恢复/iu],
       ['原始证据引用重放', /maintenance\/terminal\/catalog\/截图.{0,48}(?:bytes\/SHA\/schema\/Case\/method\/testid|bytes\/SHA)/iu],
@@ -1144,7 +1156,8 @@ export function validateCoreBetaCase(testCase, { fixtureRoot = '' } = {}) {
       ['非空 draftInstanceId', /(?:非空.{0,12}draftInstanceId|draftInstanceId.{0,12}非空)/iu],
       ['taskId=null', /taskId\s*=\s*null/iu],
       ['messageCount=0', /messageCount\s*=\s*0/iu],
-      ['sendCount=0', /sendCount\s*=\s*0/iu],
+      ['sendCount 前后可观测安全整数', /send_count_before[\s\S]*send_count_after[\s\S]*非负安全整数/iu],
+      ['sendCount 前后严格不变', /send_count_unchanged\s*=\s*true[\s\S]*(?:严格全等|前后严格不变)|(?:严格全等|前后严格不变)[\s\S]*send_count_unchanged\s*=\s*true/iu],
       ['running=false', /running\s*=\s*false/iu],
       ['Skill/Connector/Expert 全空', /Skill\s*\/\s*Connector\s*\/\s*Expert.{0,16}(?:全空|均为空|全部为空)/iu],
       [
@@ -3191,6 +3204,276 @@ function pathIsInsideDirectory(directory, candidate) {
   return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
+function validateSkillReinstallProductActionTracePayload(parsed, file, expectedCaseId, expectedCaseDir) {
+  const caseId = 'BETA-INIT-003';
+  const method = 'skillsReinstall';
+  const testid = 'assistant-skills-reinstall';
+  if (!protocolObject(parsed)
+    || parsed.schema_version !== 'qbot-core-beta-skill-reinstall-product-action-trace/v1'
+    || parsed.case_id !== caseId
+    || (String(expectedCaseId || '').trim() && parsed.case_id !== expectedCaseId)
+    || parsed.method !== method
+    || parsed.testid !== testid
+    || parsed.click_count !== 1
+    || !Number.isFinite(Date.parse(String(parsed.captured_at || '')))
+    || parsed.evidence_valid !== true
+    || typeof parsed.oracle_valid !== 'boolean'
+    || parsed.outcome !== (parsed.oracle_valid ? 'pass' : 'bug')) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_identity_invalid' };
+  }
+  const confirmation = parsed.destructive_confirmation;
+  if (!protocolObject(confirmation)
+    || confirmation.required !== true
+    || confirmation.confirmed !== true
+    || !String(confirmation.source || '').trim()
+    || !String(confirmation.message || '').trim()
+    || !String(confirmation.confirmation_label || '').trim()) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_confirmation_invalid' };
+  }
+
+  const resolvedTraceFile = path.resolve(file);
+  const caseDir = path.resolve(expectedCaseDir || path.dirname(resolvedTraceFile));
+  let realCaseDir;
+  let realTraceFile;
+  try {
+    const caseStats = fs.lstatSync(caseDir);
+    if (caseStats.isSymbolicLink() || !caseStats.isDirectory()) {
+      return { valid: false, error: 'skill_reinstall_product_action_trace_case_dir_invalid' };
+    }
+    realCaseDir = fs.realpathSync(caseDir);
+    realTraceFile = fs.realpathSync(resolvedTraceFile);
+  } catch {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_case_dir_unreadable' };
+  }
+  if (!pathIsInsideDirectory(caseDir, resolvedTraceFile)
+    || !pathIsInsideDirectory(realCaseDir, realTraceFile)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_outside_case' };
+  }
+
+  const seenRealpaths = new Set([realTraceFile]);
+  const readRecord = (record, label, { screenshot = false } = {}) => {
+    if (!protocolObject(record)
+      || !path.isAbsolute(String(record.path || ''))
+      || !Number.isSafeInteger(record.bytes)
+      || record.bytes <= 0
+      || !/^[a-f0-9]{64}$/iu.test(String(record.sha256 || ''))) {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_record_invalid` };
+    }
+    const resolved = path.resolve(record.path);
+    if (!pathIsInsideDirectory(caseDir, resolved)) {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_outside_case` };
+    }
+    let before;
+    let after;
+    let real;
+    let bytes;
+    try {
+      before = fs.lstatSync(resolved);
+      if (before.isSymbolicLink() || !before.isFile()) {
+        return { valid: false, error: `skill_reinstall_product_action_trace_${label}_not_regular_file` };
+      }
+      real = fs.realpathSync(resolved);
+      if (!pathIsInsideDirectory(realCaseDir, real)) {
+        return { valid: false, error: `skill_reinstall_product_action_trace_${label}_realpath_outside_case` };
+      }
+      if (seenRealpaths.has(real)) {
+        return { valid: false, error: `skill_reinstall_product_action_trace_${label}_file_reused` };
+      }
+      bytes = fs.readFileSync(resolved);
+      after = fs.lstatSync(resolved);
+    } catch {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_unreadable` };
+    }
+    if (before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs) {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_changed_during_read` };
+    }
+    if (bytes.length !== record.bytes
+      || bytes.length !== after.size
+      || (screenshot && bytes.length < 128)
+      || createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_integrity_invalid` };
+    }
+    seenRealpaths.add(real);
+    if (screenshot) return { valid: true, bytes };
+    try {
+      const payload = JSON.parse(bytes.toString('utf8'));
+      return protocolObject(payload)
+        ? { valid: true, bytes, payload }
+        : { valid: false, error: `skill_reinstall_product_action_trace_${label}_json_object_required` };
+    } catch {
+      return { valid: false, error: `skill_reinstall_product_action_trace_${label}_invalid_json` };
+    }
+  };
+
+  const references = [
+    ['action_observations', parsed.action_observations, {}],
+    ['catalog_observations_before_action', parsed.catalog_observations_before_action, {}],
+    ['catalog_observations_after_action', parsed.catalog_observations_after_action, {}],
+    ['terminal_observations', parsed.terminal_outcome?.observations, {}],
+    ['terminal_screenshot', parsed.terminal_outcome?.screenshot, { screenshot: true }],
+    ['continuation_surface', parsed.continuation_surface, {}],
+  ];
+  const payloads = {};
+  for (const [label, record, options] of references) {
+    const readback = readRecord(record, label, options);
+    if (!readback.valid) return readback;
+    if (readback.payload) payloads[label] = readback.payload;
+  }
+
+  const action = payloads.action_observations;
+  const attempts = Array.isArray(action?.attempts) ? action.attempts : [];
+  const actionConfirmation = attempts[0]?.confirmation;
+  if (action?.schema_version !== 'qbot-core-beta-initialization-action-evidence/v1'
+    || action?.case_id !== caseId
+    || action?.method !== method
+    || action?.testid !== testid
+    || action?.destructive !== true
+    || attempts.length !== 1
+    || attempts[0]?.testid !== testid
+    || attempts[0]?.action_observed !== true
+    || actionConfirmation?.accepted !== true
+    || String(actionConfirmation?.source || '') !== String(confirmation.source)
+    || String(actionConfirmation?.message || '') !== String(confirmation.message)
+    || String(actionConfirmation?.confirmation_label || '') !== String(confirmation.confirmation_label)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_action_binding_invalid' };
+  }
+
+  const validateLedger = (ledger, phase) => {
+    const observations = Array.isArray(ledger?.observations) ? ledger.observations : [];
+    const tail = observations.slice(-3);
+    const tailSignatures = tail.map((item) => String(item?.canonical_sha256 || ''));
+    const startedAtMs = Date.parse(String(ledger?.started_at || ''));
+    const endedAtMs = Date.parse(String(ledger?.ended_at || ''));
+    let lastCapturedAtMs = -1;
+    const observationTimesValid = observations.every((item) => {
+      const capturedAtMs = Date.parse(String(item?.captured_at || ''));
+      const valid = Number.isFinite(capturedAtMs)
+        && capturedAtMs >= startedAtMs
+        && capturedAtMs <= endedAtMs
+        && (lastCapturedAtMs < 0 || capturedAtMs >= lastCapturedAtMs);
+      lastCapturedAtMs = capturedAtMs;
+      return valid;
+    });
+    const zeroRetryErrors = observations.every((item) => (
+      Number(item?.retry_error_count) === 0
+      && Array.isArray(item?.renderer_capture_attempts)
+      && item.renderer_capture_attempts.length > 0
+      && item.renderer_capture_attempts.every((attempt) => attempt?.ok === true)
+    ));
+    return ledger?.schema_version === 'qbot-core-beta-skill-reinstall-catalog-observations/v2'
+      && ledger?.case_id === caseId
+      && ledger?.method === method
+      && ledger?.testid === testid
+      && ledger?.phase === phase
+      && (phase === 'before_action'
+        ? ledger?.action_evidence === null
+        : JSON.stringify(ledger?.action_evidence) === JSON.stringify(parsed.action_observations))
+      && Number.isFinite(startedAtMs)
+      && Number.isFinite(endedAtMs)
+      && startedAtMs <= endedAtMs
+      && observationTimesValid
+      && ledger?.ok === true
+      && ledger?.evidence_valid === true
+      && Number(ledger?.read_error_count) === 0
+      && Number(ledger?.retry_error_count) === 0
+      && Number(ledger?.idle_stable_observations) >= 3
+      && /^[a-f0-9]{64}$/iu.test(String(ledger?.stable_signature_sha256 || ''))
+      && observations.length >= 3
+      && observations.every((item) => item?.read_ok === true && Number(item?.read_error_count) === 0)
+      && zeroRetryErrors
+      && tail.length === 3
+      && tail.every((item) => item?.sync_status === 'idle')
+      && tailSignatures.every((signature) => signature === ledger.stable_signature_sha256);
+  };
+  const beforeLedger = payloads.catalog_observations_before_action;
+  const afterLedger = payloads.catalog_observations_after_action;
+  if (!validateLedger(beforeLedger, 'before_action')) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_before_ledger_invalid' };
+  }
+  if (!validateLedger(afterLedger, 'after_action')) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_after_ledger_invalid' };
+  }
+  const beforeEndedAtMs = Date.parse(String(beforeLedger.ended_at || ''));
+  const actionDispatchedAtMs = Date.parse(String(attempts[0]?.dispatched_at || ''));
+  const afterStartedAtMs = Date.parse(String(afterLedger.started_at || ''));
+  const traceCapturedAtMs = Date.parse(String(parsed.captured_at || ''));
+  if (![beforeEndedAtMs, actionDispatchedAtMs, afterStartedAtMs, traceCapturedAtMs]
+    .every(Number.isFinite)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_temporal_fields_invalid' };
+  }
+  if (!(beforeEndedAtMs <= actionDispatchedAtMs
+    && actionDispatchedAtMs <= afterStartedAtMs
+    && afterStartedAtMs <= traceCapturedAtMs)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_temporal_order_invalid' };
+  }
+
+  const installedIdentities = (catalog) => {
+    if (!protocolObject(catalog) || !Array.isArray(catalog.installed) || catalog.installed.length === 0) return null;
+    const identities = catalog.installed.map((skill) => {
+      const sourcePlatform = String(skill?.sourcePlatform || '').trim();
+      const namespace = String(skill?.namespace || '').trim();
+      const slug = String(skill?.slug || '').trim();
+      const version = String(
+        skill?.installedVersion
+        || skill?.version
+        || skill?.revision
+        || skill?.packageDigest
+        || skill?.fingerprint
+        || '',
+      ).trim();
+      const readiness = String(skill?.localReadiness?.status || '').trim();
+      return sourcePlatform && namespace && slug && version && readiness
+        ? [sourcePlatform, namespace, slug, version].join('/')
+        : '';
+    });
+    if (identities.some((identity) => !identity) || new Set(identities).size !== identities.length) return null;
+    return [...identities].sort();
+  };
+  const beforeIdentities = installedIdentities(beforeLedger.catalog);
+  const afterIdentities = installedIdentities(afterLedger.catalog);
+  if (!beforeIdentities
+    || !afterIdentities
+    || JSON.stringify(beforeIdentities) !== JSON.stringify(afterIdentities)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_installed_identity_mismatch' };
+  }
+
+  const terminal = payloads.terminal_observations;
+  if (terminal?.schema_version !== 'qbot-core-beta-runtime-maintenance-observations/v2'
+    || terminal?.case_id !== caseId
+    || terminal?.method !== method
+    || terminal?.testid !== testid
+    || !protocolObject(parsed.terminal_outcome)
+    || typeof parsed.terminal_outcome.ok !== 'boolean'
+    || !protocolObject(parsed.terminal_outcome.final)
+    || JSON.stringify(parsed.terminal_outcome.final) !== JSON.stringify(terminal.final)) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_terminal_binding_invalid' };
+  }
+
+  const surface = payloads.continuation_surface;
+  const sendCountBefore = surface?.send_count_before;
+  const sendCountAfter = surface?.send_count_after;
+  if (surface?.schema_version !== 'qbot-core-beta-initialization-continuation-surface/v1'
+    || surface?.case_id !== caseId
+    || surface?.method !== method
+    || surface?.testid !== testid
+    || surface?.valid !== true
+    || !Number.isSafeInteger(sendCountBefore)
+    || sendCountBefore < 0
+    || !Number.isSafeInteger(sendCountAfter)
+    || sendCountAfter < 0
+    || sendCountBefore !== sendCountAfter
+    || surface?.send_count_unchanged !== true
+    || surface?.continuation_state?.send_count_before !== sendCountBefore
+    || surface?.continuation_state?.send_count_after !== sendCountAfter
+    || surface?.continuation_state?.send_count_unchanged !== true) {
+    return { valid: false, error: 'skill_reinstall_product_action_trace_continuation_binding_invalid' };
+  }
+  return { valid: true };
+}
+
 function validateWebSearchQuotaTracePayload(parsed, file, expectedCaseId, expectedCaseDir) {
   const resolvedTraceFile = path.resolve(file);
   const caseDir = path.resolve(expectedCaseDir || path.dirname(resolvedTraceFile));
@@ -3525,7 +3808,7 @@ function validateTaskRegenerateTransitionPayload(parsed, file, expectedCaseId, e
 }
 
 export function validateEvidenceFile(role, file, { expectedCaseId = '', expectedCaseDir = '' } = {}) {
-  if (['web_search_quota_trace', 'expert_maintenance_task_trace', 'task_regenerate_transition', 'regenerate_placeholder_readback'].includes(role)) {
+  if (['product_action_trace', 'web_search_quota_trace', 'expert_maintenance_task_trace', 'task_regenerate_transition', 'regenerate_placeholder_readback'].includes(role)) {
     if (path.extname(file).toLowerCase() !== '.json') {
       return { valid: false, error: `${role}_json_required` };
     }
@@ -3621,6 +3904,18 @@ export function validateEvidenceFile(role, file, { expectedCaseId = '', expected
     if (role === 'web_search_quota_trace') {
       const quotaTrace = validateWebSearchQuotaTracePayload(parsed, file, expectedCaseId, expectedCaseDir);
       if (!quotaTrace.valid) return quotaTrace;
+    }
+    if (role === 'product_action_trace'
+      && (String(expectedCaseId || '').trim() === 'BETA-INIT-003'
+        || parsed?.case_id === 'BETA-INIT-003'
+        || parsed?.schema_version === 'qbot-core-beta-skill-reinstall-product-action-trace/v1')) {
+      const actionTrace = validateSkillReinstallProductActionTracePayload(
+        parsed,
+        file,
+        expectedCaseId,
+        expectedCaseDir,
+      );
+      if (!actionTrace.valid) return actionTrace;
     }
     if (role === 'expert_maintenance_task_trace') {
       const maintenanceTrace = validateExpertMaintenanceTaskTracePayload(

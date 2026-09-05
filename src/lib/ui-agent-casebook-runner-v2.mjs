@@ -2858,7 +2858,11 @@ function createCaseState({ testCase, caseDir, order, modelTier, options = {} }) 
     }
   }
   if (testCase.id === 'BETA-INIT-003') {
-    for (const role of ['skill_reinstall_readiness_verdict', 'initialization_continuation_surface']) {
+    for (const role of [
+      'skill_reinstall_readiness_verdict',
+      'initialization_continuation_surface',
+      'product_action_trace',
+    ]) {
       if (!evidenceRoles.includes(role)) evidenceRoles.push(role);
     }
   }
@@ -5343,7 +5347,9 @@ async function captureCoreBetaPublicState(page, testCase) {
         cwd: session?.cwd ?? state?.cwd ?? null,
         project_id: session?.projectId ?? state?.projectId ?? null,
         running: Boolean(state?.running),
-        send_count: state?.sendCount || 0,
+        send_count: Number.isSafeInteger(state?.sendCount) && state.sendCount >= 0
+          ? state.sendCount
+          : null,
         message_count: messages.length,
         messages,
       },
@@ -7094,13 +7100,8 @@ async function acceptCoreBetaV2MaintenanceConfirmation(page, action, {
   timeoutMs = 5000,
 } = {}) {
   const contract = coreBetaV2MaintenanceConfirmationContract(testId);
-  if (!contract) {
-    await action();
-    return { message: '', source: 'not-required', accepted: true, confirmation_label: '', screenshot: '' };
-  }
-
   let nativeResult = null;
-  const listener = async (dialog) => {
+  const listener = contract ? async (dialog) => {
     const message = dialog.message();
     const expected = contract.prompt.test(message);
     nativeResult = {
@@ -7112,9 +7113,12 @@ async function acceptCoreBetaV2MaintenanceConfirmation(page, action, {
     };
     if (expected) await dialog.accept().catch(() => dialog.dismiss().catch(() => {}));
     else await dialog.dismiss().catch(() => {});
-  };
-  page.once('dialog', listener);
+  } : null;
+  if (listener) page.once('dialog', listener);
   await action();
+  if (!contract) {
+    return { message: '', source: 'not-required', accepted: true, confirmation_label: '', screenshot: '' };
+  }
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (nativeResult) {
@@ -7159,7 +7163,7 @@ async function acceptCoreBetaV2MaintenanceConfirmation(page, action, {
           screenshot,
         };
       }
-      await confirmation.click({ force: true }).catch(async () => confirmation.evaluate((element) => element.click()));
+      await confirmation.click({ force: true });
       const closed = await dialog.waitFor({ state: 'hidden', timeout: 5000 }).then(() => true).catch(() => false);
       page.off('dialog', listener);
       return {
@@ -7201,7 +7205,11 @@ async function clickCoreBetaV2MaintenanceAction({
     navigationUrl = frame.url();
   };
   if (testId === 'assistant-sessions-purge') page.on('framenavigated', navigationListener);
-  const click = async () => button.click({ force: true }).catch(async () => button.evaluate((element) => element.click()));
+  let dispatchedAt = '';
+  const click = async () => {
+    dispatchedAt = new Date().toISOString();
+    await button.click({ force: true });
+  };
   let confirmation;
   try {
     confirmation = destructive
@@ -7253,6 +7261,7 @@ async function clickCoreBetaV2MaintenanceAction({
   return {
     ok: true,
     testid: testId,
+    dispatched_at: dispatchedAt,
     before_text: clip(beforeText, 1600),
     action_text: clip(actionText, 1600),
     confirmation,
@@ -8302,6 +8311,7 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
   caseId = 'BETA-INIT-003',
   method = 'skillsReinstall',
   testId = 'assistant-skills-reinstall',
+  phase = '',
   actionEvidence = null,
   timeoutMs = 60_000,
   pollMs = 1_000,
@@ -8312,6 +8322,7 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
   let idleStableObservations = 0;
   let stableSignatureSha256 = '';
   let readErrorCount = 0;
+  let retryErrorCount = 0;
   let catalog = null;
   let lastError = '';
   while (Date.now() < deadline) {
@@ -8349,7 +8360,7 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
       );
       catalog = evaluation.value;
       const failedCaptureAttempts = evaluation.attempts.filter((attempt) => attempt?.ok !== true).length;
-      readErrorCount += failedCaptureAttempts;
+      retryErrorCount += failedCaptureAttempts;
       const observation = coreBetaInitializationSkillCatalogObservation({
         catalog,
         previousSignatureSha256: stableSignatureSha256,
@@ -8374,7 +8385,8 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
         readiness_missing_count: summary.readiness_missing_indexes.length,
         unready_count: summary.unready_identities.length,
         idle_stable_observations: idleStableObservations,
-        read_error_count: failedCaptureAttempts,
+        read_error_count: 0,
+        retry_error_count: failedCaptureAttempts,
         error: '',
         renderer_capture_attempts: evaluation.attempts,
       });
@@ -8388,8 +8400,9 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
         ? error.core_beta_renderer_capture_attempts
         : [];
       const failedCaptureAttempts = rendererCaptureAttempts.filter((attempt) => attempt?.ok !== true).length;
-      const observationReadErrors = Math.max(1, failedCaptureAttempts);
+      const observationReadErrors = 1;
       readErrorCount += observationReadErrors;
+      retryErrorCount += failedCaptureAttempts;
       observations.push({
         captured_at: capturedAt,
         elapsed_ms: Date.now() - startedAt,
@@ -8401,6 +8414,7 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
         error: lastError,
         idle_stable_observations: 0,
         read_error_count: observationReadErrors,
+        retry_error_count: failedCaptureAttempts,
         renderer_capture_attempts: rendererCaptureAttempts,
       });
     }
@@ -8411,15 +8425,17 @@ async function waitForCoreBetaInitializationSkillCatalogIdle({
     case_id: caseId,
     method,
     testid: testId,
+    phase,
     action_evidence: actionEvidence,
-    ok: idleStableObservations >= 3 && readErrorCount === 0,
-    evidence_valid: readErrorCount === 0,
+    ok: idleStableObservations >= 3 && readErrorCount === 0 && retryErrorCount === 0,
+    evidence_valid: readErrorCount === 0 && retryErrorCount === 0,
     started_at: new Date(startedAt).toISOString(),
     ended_at: new Date().toISOString(),
     timeout_ms: Math.max(10_000, Math.min(Number(timeoutMs) || 60_000, 120_000)),
     idle_stable_observations: idleStableObservations,
     stable_signature_sha256: idleStableObservations >= 3 ? stableSignatureSha256 : '',
     read_error_count: readErrorCount,
+    retry_error_count: retryErrorCount,
     last_error: lastError,
     observations,
     catalog,
@@ -8430,6 +8446,8 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
   const actionIdentity = CORE_BETA_INITIALIZATION_ACTION_IDENTITIES[String(testCase?.id || '')];
   if (!actionIdentity) throw new Error(`不支持的初始化恢复 Case：${String(testCase?.id || '')}`);
   const beforeScreenshot = await shot(page, caseDir, 'initialization-continuation-surface-before').catch(() => '');
+  const beforeDraftState = await qbotE2EState(page);
+  const beforePublicState = await captureCoreBetaPublicState(page, testCase).catch(() => null);
   let error = '';
   try {
     await openNewTask(page, state);
@@ -8450,11 +8468,10 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     : { ok: false, reason: 'open_new_task_failed' };
   const cleanDraftIsolated = cleanDraftSurface.ok === true
     && cleanDraftState.available === true
-    && !cleanDraftState.activeId
+    && cleanDraftState.activeId === null
     && cleanDraftState.isDraft === true
     && Boolean(String(cleanDraftState.draftInstanceId || '').trim())
-    && Number(cleanDraftState.messageCount || 0) === 0
-    && Number(cleanDraftState.sendCount || 0) === 0
+    && cleanDraftState.messageCount === 0
     && cleanDraftState.running === false;
   const publicState = await captureCoreBetaPublicState(page, testCase).catch((caught) => {
     error ||= String(caught?.message || caught);
@@ -8471,9 +8488,22 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     publicState?.task
     && publicState.task.id === null
     && publicState.task.running === false
-    && Number(publicState.task.message_count) === 0
-    && Number(publicState.task.send_count) === 0,
+    && publicState.task.message_count === 0
+    && Array.isArray(publicState.task.messages)
+    && publicState.task.messages.length === 0,
   );
+  const sendCountSources = {
+    before_e2e: beforeDraftState?.sendCount,
+    before_public: beforePublicState?.task?.send_count,
+    after_e2e: cleanDraftState?.sendCount,
+    after_public: publicState?.task?.send_count,
+  };
+  const sendCountValues = Object.values(sendCountSources);
+  const sendCountsValid = sendCountValues.every(
+    (value) => Number.isSafeInteger(value) && value >= 0,
+  );
+  const sendCountUnchanged = sendCountsValid
+    && new Set(sendCountValues).size === 1;
   const publicSelectionsClean = Array.isArray(publicState?.skills?.selected)
     && publicState.skills.selected.length === 0
     && Array.isArray(publicState?.connectors?.selected)
@@ -8495,7 +8525,9 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     draft_instance_id: String(cleanDraftState?.draftInstanceId || '').trim(),
     task_id: publicState?.task?.id ?? null,
     message_count: Number(publicState?.task?.message_count),
-    send_count: Number(publicState?.task?.send_count),
+    send_count_before: sendCountSources.before_e2e,
+    send_count_after: sendCountSources.after_e2e,
+    send_count_unchanged: sendCountUnchanged,
     running: publicState?.task?.running,
     selected_skills: Array.isArray(publicState?.skills?.selected) ? publicState.skills.selected : null,
     selected_connectors: Array.isArray(publicState?.connectors?.selected) ? publicState.connectors.selected : null,
@@ -8507,6 +8539,7 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     && cleanDraftIsolated
     && capabilitiesReadable
     && publicTaskClean
+    && sendCountUnchanged
     && publicSelectionsClean
     && Number(publicState?.page?.body_text_length || 0) > 0
     && screenshotPairValid;
@@ -8525,6 +8558,12 @@ async function verifyCoreBetaInitializationContinuationSurface({ page, state, ca
     public_task_clean: publicTaskClean,
     public_selections_clean: publicSelectionsClean,
     public_state_readable: Number(publicState?.page?.body_text_length || 0) > 0,
+    send_count_before: sendCountSources.before_e2e,
+    send_count_after: sendCountSources.after_e2e,
+    send_count_unchanged: sendCountUnchanged,
+    send_count_sources: sendCountSources,
+    before_e2e_state: beforeDraftState,
+    before_public_state: beforePublicState,
     continuation_state: continuationState,
     before_screenshot: beforeScreenshotRecord,
     after_screenshot: afterScreenshotRecord,
@@ -8608,19 +8647,66 @@ async function executeCoreBetaInitializationCase(context) {
   };
   const maintenance = maintenanceByCase[testCase.id];
   if (maintenance) {
-    const before = await captureCoreBetaPublicState(page, testCase);
-    const beforePublicStateFile = writeCoreBetaInitializationPublicStateEvidence({
-      caseDir,
-      testCase,
-      maintenance,
-      phase: 'before-action',
-      publicState: before,
-    });
-    state.artifacts.initialization_before_public_state = beforePublicStateFile;
+    let before = testCase.id === 'BETA-INIT-003'
+      ? null
+      : await captureCoreBetaPublicState(page, testCase);
+    let beforePublicStateFile = before
+      ? writeCoreBetaInitializationPublicStateEvidence({
+        caseDir,
+        testCase,
+        maintenance,
+        phase: 'before-action',
+        publicState: before,
+      })
+      : '';
+    if (beforePublicStateFile) {
+      state.artifacts.initialization_before_public_state = beforePublicStateFile;
+    }
     const startedAt = Date.now();
     const opened = await openCoreBetaV2SystemSettings(page, state);
     if (!opened.ok) {
       throw new Error(`${maintenance.method} 无法进入系统设置：${opened.reason}`);
+    }
+    let skillCatalogBeforePoll = null;
+    let skillCatalogBeforeObservationsFile = '';
+    if (testCase.id === 'BETA-INIT-003') {
+      skillCatalogBeforePoll = await waitForCoreBetaInitializationSkillCatalogIdle({
+        page,
+        caseId: testCase.id,
+        method: maintenance.method,
+        testId: maintenance.testId,
+        phase: 'before_action',
+        actionEvidence: null,
+        timeoutMs: Math.max(30_000, Math.min(Number(timeoutMs) || 60_000, 120_000)),
+      });
+      skillCatalogBeforeObservationsFile = path.join(
+        caseDir,
+        'skill-reinstall-catalog-observations-before-action.json',
+      );
+      writeJsonFile(skillCatalogBeforeObservationsFile, skillCatalogBeforePoll);
+      state.artifacts.core_beta_skill_reinstall_catalog_observations_before_action =
+        skillCatalogBeforeObservationsFile;
+      if (skillCatalogBeforePoll.ok !== true) {
+        throw new Error(
+          `skillsReinstall 动作前 catalog 未在有界窗口内形成无读取错误的三次 idle 稳定签名：`
+          + `${skillCatalogBeforePoll.last_error || 'catalog_not_stable'}`,
+        );
+      }
+      before = await captureCoreBetaPublicState(page, testCase);
+      if (before?.skills) {
+        before = {
+          ...before,
+          skills: { ...before.skills, catalog: skillCatalogBeforePoll.catalog },
+        };
+      }
+      beforePublicStateFile = writeCoreBetaInitializationPublicStateEvidence({
+        caseDir,
+        testCase,
+        maintenance,
+        phase: 'before-action',
+        publicState: before,
+      });
+      state.artifacts.initialization_before_public_state = beforePublicStateFile;
     }
     const actionAttempts = [];
     if (maintenance.terminal === 'sessions-empty') {
@@ -8705,21 +8791,32 @@ async function executeCoreBetaInitializationCase(context) {
     page = terminal.page || runtime?.page || page;
     context.page = page;
     if (runtime) runtime.page = page;
-    const skillCatalogPoll = testCase.id === 'BETA-INIT-003'
+    const skillCatalogAfterPoll = testCase.id === 'BETA-INIT-003'
       ? await waitForCoreBetaInitializationSkillCatalogIdle({
         page,
         caseId: testCase.id,
         method: maintenance.method,
         testId: maintenance.testId,
+        phase: 'after_action',
         actionEvidence: actionEvidenceRecord,
         timeoutMs: Math.max(30_000, Math.min(Number(timeoutMs) || 60_000, 120_000)),
       })
       : null;
+    let skillCatalogAfterObservationsFile = '';
+    if (skillCatalogAfterPoll) {
+      skillCatalogAfterObservationsFile = path.join(
+        caseDir,
+        'skill-reinstall-catalog-observations-after-action.json',
+      );
+      writeJsonFile(skillCatalogAfterObservationsFile, skillCatalogAfterPoll);
+      state.artifacts.core_beta_skill_reinstall_catalog_observations_after_action =
+        skillCatalogAfterObservationsFile;
+    }
     let maintenanceAfter = await captureCoreBetaPublicState(page, testCase);
-    if (skillCatalogPoll?.catalog && maintenanceAfter?.skills) {
+    if (skillCatalogAfterPoll?.catalog && maintenanceAfter?.skills) {
       maintenanceAfter = {
         ...maintenanceAfter,
-        skills: { ...maintenanceAfter.skills, catalog: skillCatalogPoll.catalog },
+        skills: { ...maintenanceAfter.skills, catalog: skillCatalogAfterPoll.catalog },
       };
     }
     const afterPublicStateFile = writeCoreBetaInitializationPublicStateEvidence({
@@ -8735,10 +8832,10 @@ async function executeCoreBetaInitializationCase(context) {
     const skillReinstallVerdict = testCase.id === 'BETA-INIT-003'
       ? coreBetaInitializationSkillReinstallVerdict({
         caseId: testCase.id,
-        beforeCatalog: before?.skills?.catalog,
-        afterCatalog: skillCatalogPoll?.catalog || maintenanceAfter?.skills?.catalog,
-        afterIdleStableObservations: skillCatalogPoll?.idle_stable_observations || 0,
-        catalogObservations: skillCatalogPoll,
+        beforeCatalog: skillCatalogBeforePoll?.catalog || before?.skills?.catalog,
+        afterCatalog: skillCatalogAfterPoll?.catalog || maintenanceAfter?.skills?.catalog,
+        beforeCatalogObservations: skillCatalogBeforePoll,
+        afterCatalogObservations: skillCatalogAfterPoll,
       })
       : null;
     const specializedProductFailure = skillReinstallVerdict?.evidence_valid === true
@@ -8795,8 +8892,10 @@ async function executeCoreBetaInitializationCase(context) {
         terminalReadback: terminal.readback,
         afterReadback: after,
         continuationSurface,
-        productFailureObserved: specializedProductFailure,
-        productFailureSource: specializedProductFailure ? 'skill_reinstall_readiness_oracle' : '',
+        productFailureObserved,
+        productFailureSource: productTerminalFailure
+          ? 'maintenance_terminal'
+          : specializedProductFailure ? 'skill_reinstall_readiness_oracle' : '',
       });
       readback.initialization_continuation = state.initialization_continuation;
     }
@@ -8804,10 +8903,6 @@ async function executeCoreBetaInitializationCase(context) {
     state.artifacts.capability_execution_event = file;
     state.artifacts.core_beta_runtime_maintenance = file;
     if (skillReinstallVerdict) {
-      const catalogObservationsFile = path.join(caseDir, 'skill-reinstall-catalog-observations.json');
-      writeJsonFile(catalogObservationsFile, {
-        ...skillCatalogPoll,
-      });
       const skillVerdictFile = path.join(caseDir, 'skill-reinstall-readiness-verdict.json');
       writeJsonFile(skillVerdictFile, {
         ...skillReinstallVerdict,
@@ -8818,7 +8913,12 @@ async function executeCoreBetaInitializationCase(context) {
           before_public_state: coreBetaInitializationWrittenFileRecord(beforePublicStateFile),
           after_public_state: coreBetaInitializationWrittenFileRecord(afterPublicStateFile),
           terminal_observations: coreBetaInitializationWrittenFileRecord(terminal.observations_file),
-          catalog_observations: coreBetaInitializationWrittenFileRecord(catalogObservationsFile),
+          catalog_observations_before_action: coreBetaInitializationWrittenFileRecord(
+            skillCatalogBeforeObservationsFile,
+          ),
+          catalog_observations_after_action: coreBetaInitializationWrittenFileRecord(
+            skillCatalogAfterObservationsFile,
+          ),
           terminal_screenshot: coreBetaInitializationWrittenFileRecord(terminal.screenshot || ''),
           continuation_surface: coreBetaInitializationWrittenFileRecord(continuationSurface?.file || ''),
         },
@@ -8826,7 +8926,68 @@ async function executeCoreBetaInitializationCase(context) {
       state.skill_reinstall_readiness_verdict = skillReinstallVerdict;
       state.artifacts.skill_reinstall_readiness_verdict = skillVerdictFile;
       state.artifacts.core_beta_skill_reinstall_readiness_verdict = skillVerdictFile;
-      state.artifacts.core_beta_skill_reinstall_catalog_observations = catalogObservationsFile;
+      const productActionTraceCapturedAt = new Date().toISOString();
+      const skillReinstallTemporalChainValid = [
+        Date.parse(String(skillCatalogBeforePoll?.ended_at || '')),
+        Date.parse(String(actionAttempts[0]?.dispatched_at || '')),
+        Date.parse(String(skillCatalogAfterPoll?.started_at || '')),
+        Date.parse(productActionTraceCapturedAt),
+      ];
+      const productActionTraceTemporalValid = skillReinstallTemporalChainValid.every(Number.isFinite)
+        && skillReinstallTemporalChainValid[0] <= skillReinstallTemporalChainValid[1]
+        && skillReinstallTemporalChainValid[1] <= skillReinstallTemporalChainValid[2]
+        && skillReinstallTemporalChainValid[2] <= skillReinstallTemporalChainValid[3];
+      const productActionTraceEvidenceValid = skillReinstallVerdict.evidence_valid === true
+        && actionAttempts.length === 1
+        && clicked.action_observed === true
+        && clicked.confirmation?.accepted === true
+        && productActionTraceTemporalValid
+        && Boolean(coreBetaInitializationWrittenFileRecord(actionEvidenceFile))
+        && Boolean(coreBetaInitializationWrittenFileRecord(skillCatalogBeforeObservationsFile))
+        && Boolean(coreBetaInitializationWrittenFileRecord(skillCatalogAfterObservationsFile))
+        && Boolean(coreBetaInitializationWrittenFileRecord(terminal.observations_file))
+        && Boolean(coreBetaInitializationWrittenFileRecord(terminal.screenshot || ''))
+        && continuationSurface?.valid === true
+        && Boolean(coreBetaInitializationWrittenFileRecord(continuationSurface?.file || ''));
+      const productActionTraceOracleValid = productActionTraceEvidenceValid && overallOk;
+      const productActionTrace = {
+        schema_version: 'qbot-core-beta-skill-reinstall-product-action-trace/v1',
+        case_id: testCase.id,
+        method: maintenance.method,
+        testid: maintenance.testId,
+        captured_at: productActionTraceCapturedAt,
+        click_count: actionAttempts.length,
+        destructive_confirmation: {
+          required: maintenance.destructive === true,
+          confirmed: clicked.confirmation?.accepted === true,
+          source: String(clicked.confirmation?.source || ''),
+          message: String(clicked.confirmation?.message || ''),
+          confirmation_label: String(clicked.confirmation?.confirmation_label || ''),
+        },
+        action_observations: coreBetaInitializationWrittenFileRecord(actionEvidenceFile),
+        catalog_observations_before_action: coreBetaInitializationWrittenFileRecord(
+          skillCatalogBeforeObservationsFile,
+        ),
+        catalog_observations_after_action: coreBetaInitializationWrittenFileRecord(
+          skillCatalogAfterObservationsFile,
+        ),
+        terminal_outcome: {
+          ok: terminal.ok === true,
+          final: terminal.readback,
+          observations: coreBetaInitializationWrittenFileRecord(terminal.observations_file),
+          screenshot: coreBetaInitializationWrittenFileRecord(terminal.screenshot || ''),
+        },
+        continuation_surface: coreBetaInitializationWrittenFileRecord(continuationSurface?.file || ''),
+        evidence_valid: productActionTraceEvidenceValid,
+        oracle_valid: productActionTraceOracleValid,
+        outcome: productActionTraceEvidenceValid
+          ? productActionTraceOracleValid ? 'pass' : 'bug'
+          : 'automation_error',
+      };
+      const productActionTraceFile = path.join(caseDir, 'skill-reinstall-product-action-trace.json');
+      writeJsonFile(productActionTraceFile, productActionTrace);
+      state.artifacts.product_action_trace = productActionTraceFile;
+      state.artifacts.core_beta_product_action_trace = productActionTraceFile;
     }
     const terminalFailureCategory = clicked.action_observed !== true || specializedEvidenceFailure
       ? 'automation_error'
@@ -9408,12 +9569,210 @@ function coreBetaInitializationSkillCatalogSummary(catalog) {
   };
 }
 
+function coreBetaInitializationSkillCatalogLedgerReplay({
+  ledger,
+  phase,
+  caseId = 'BETA-INIT-003',
+  method = 'skillsReinstall',
+  testid = 'assistant-skills-reinstall',
+  finalCatalog = null,
+} = {}) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const prefix = phase === 'before_action' ? 'before_catalog' : 'after_catalog';
+  const canonicalEqual = (left, right) => (
+    JSON.stringify(canonicalCoreBetaInitializationValue(left))
+      === JSON.stringify(canonicalCoreBetaInitializationValue(right))
+  );
+  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) {
+    addReason(`${prefix}_observations_missing_or_invalid`);
+    return {
+      valid: false,
+      reasons,
+      stable_observations: 0,
+      stable_signature_sha256: '',
+      read_error_count: 0,
+      retry_error_count: 0,
+      catalog: null,
+    };
+  }
+  if (ledger.schema_version !== 'qbot-core-beta-skill-reinstall-catalog-observations/v2') {
+    addReason(`${prefix}_observations_schema_mismatch`);
+  }
+  if (String(ledger.case_id || '') !== caseId) addReason(`${prefix}_observations_case_id_mismatch`);
+  if (String(ledger.method || '') !== method) addReason(`${prefix}_observations_method_mismatch`);
+  if (String(ledger.testid || '') !== testid) addReason(`${prefix}_observations_testid_mismatch`);
+  if (String(ledger.phase || '') !== phase) addReason(`${prefix}_observations_phase_mismatch`);
+  const ledgerStartedAtMs = Date.parse(String(ledger.started_at || ''));
+  const ledgerEndedAtMs = Date.parse(String(ledger.ended_at || ''));
+  if (!Number.isFinite(ledgerStartedAtMs)
+    || !Number.isFinite(ledgerEndedAtMs)) {
+    addReason(`${prefix}_observations_time_invalid`);
+  } else if (ledgerEndedAtMs < ledgerStartedAtMs) {
+    addReason(`${prefix}_observations_time_order_invalid`);
+  }
+  if (!(Number(ledger.timeout_ms) >= 10_000 && Number(ledger.timeout_ms) <= 120_000)) {
+    addReason(`${prefix}_observations_timeout_invalid`);
+  }
+  if (phase === 'before_action') {
+    if (ledger.action_evidence !== null) addReason('before_catalog_action_evidence_must_be_null');
+  } else if (!ledger.action_evidence || typeof ledger.action_evidence !== 'object'
+    || Array.isArray(ledger.action_evidence)) {
+    addReason('after_catalog_action_evidence_missing');
+  }
+
+  const observations = Array.isArray(ledger.observations) ? ledger.observations : [];
+  if (!Array.isArray(ledger.observations) || observations.length < 3) {
+    addReason(`${prefix}_observations_insufficient`);
+  }
+  if (!Number.isSafeInteger(ledger.read_error_count) || ledger.read_error_count < 0) {
+    addReason(`${prefix}_read_error_count_invalid`);
+  }
+  if (!Number.isSafeInteger(ledger.retry_error_count) || ledger.retry_error_count < 0) {
+    addReason(`${prefix}_retry_error_count_invalid`);
+  }
+  let stableObservations = 0;
+  let stableSignatureSha256 = '';
+  let readErrorCount = 0;
+  let retryErrorCount = 0;
+  let lastSuccessfulRawCatalog = null;
+  let lastElapsedMs = -1;
+  let lastCapturedAtMs = -1;
+  for (const [index, observation] of observations.entries()) {
+    const observationPrefix = `${prefix}_observation_${index + 1}`;
+    if (!observation || typeof observation !== 'object' || Array.isArray(observation)) {
+      addReason(`${observationPrefix}_invalid`);
+      readErrorCount += 1;
+      stableObservations = 0;
+      stableSignatureSha256 = '';
+      continue;
+    }
+    const elapsedMs = Number(observation.elapsed_ms);
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs < lastElapsedMs) {
+      addReason(`${observationPrefix}_elapsed_invalid`);
+    } else {
+      lastElapsedMs = elapsedMs;
+    }
+    const capturedAtMs = Date.parse(String(observation.captured_at || ''));
+    if (!Number.isFinite(capturedAtMs)) {
+      addReason(`${observationPrefix}_captured_at_invalid`);
+    } else {
+      if (lastCapturedAtMs >= 0 && capturedAtMs < lastCapturedAtMs) {
+        addReason(`${observationPrefix}_captured_at_not_monotonic`);
+      }
+      if (Number.isFinite(ledgerStartedAtMs)
+        && Number.isFinite(ledgerEndedAtMs)
+        && (capturedAtMs < ledgerStartedAtMs || capturedAtMs > ledgerEndedAtMs)) {
+        addReason(`${observationPrefix}_captured_at_outside_ledger_window`);
+      }
+      lastCapturedAtMs = capturedAtMs;
+    }
+    const attempts = Array.isArray(observation.renderer_capture_attempts)
+      ? observation.renderer_capture_attempts
+      : [];
+    const attemptErrors = attempts.filter((attempt) => attempt?.ok !== true).length;
+    retryErrorCount += attemptErrors;
+    if (observation.read_ok !== true) {
+      readErrorCount += Math.max(1, Number(observation.read_error_count) || 0);
+      stableObservations = 0;
+      stableSignatureSha256 = '';
+      addReason(`${observationPrefix}_read_error`);
+      continue;
+    }
+    const soleAttempt = attempts[0];
+    const attemptShapeValid = attempts.length === 1
+      && soleAttempt?.attempt === 1
+      && soleAttempt?.ok === true
+      && soleAttempt?.transient === false
+      && Number.isFinite(Number(soleAttempt?.duration_ms))
+      && Number(soleAttempt.duration_ms) >= 0
+      && String(soleAttempt?.error || '') === '';
+    if (!attemptShapeValid || attemptErrors > 0 || String(observation.error || '')) {
+      addReason(`${observationPrefix}_renderer_retry_or_read_error`);
+    }
+    const replayed = coreBetaInitializationSkillCatalogObservation({
+      catalog: observation.raw_catalog,
+      previousSignatureSha256: stableSignatureSha256,
+      previousIdleStableObservations: stableObservations,
+    });
+    const summary = replayed.summary;
+    const derivedFieldsMatch = String(observation.sync_status || '') === summary.sync_status
+      && Number(observation.installed_count) === summary.installed_count
+      && Number(observation.identity_count) === summary.identities.length
+      && Number(observation.duplicate_count) === summary.duplicate_identities.length
+      && Number(observation.invalid_identity_count) === summary.invalid_identity_indexes.length
+      && Number(observation.readiness_missing_count) === summary.readiness_missing_indexes.length
+      && Number(observation.unready_count) === summary.unready_identities.length;
+    if (!canonicalEqual(observation.normalized_tuple, replayed.normalized_tuple)
+      || String(observation.canonical_sha256 || '') !== replayed.canonical_sha256
+      || Boolean(observation.same_signature_as_previous) !== replayed.same_signature_as_previous
+      || Number(observation.idle_stable_observations) !== replayed.idle_stable_observations
+      || Number(observation.read_error_count) !== 0
+      || Number(observation.retry_error_count) !== attemptErrors
+      || !derivedFieldsMatch) {
+      addReason(`${observationPrefix}_replay_mismatch`);
+    }
+    stableObservations = replayed.idle_stable_observations;
+    stableSignatureSha256 = replayed.next_signature_sha256;
+    lastSuccessfulRawCatalog = observation.raw_catalog;
+  }
+  const stableSha = stableObservations >= 3 ? stableSignatureSha256 : '';
+  const replayedOk = readErrorCount === 0
+    && retryErrorCount === 0
+    && stableObservations >= 3
+    && /^[a-f0-9]{64}$/i.test(stableSha);
+  if (readErrorCount > 0 || Number(ledger.read_error_count) > 0) {
+    addReason(`${prefix}_observation_read_error`);
+  }
+  if (Number(ledger.read_error_count) !== readErrorCount) {
+    addReason(`${prefix}_observation_read_error_count_mismatch`);
+  }
+  if (retryErrorCount > 0 || Number(ledger.retry_error_count) > 0) {
+    addReason(`${prefix}_observation_retry_error`);
+  }
+  if (Number(ledger.retry_error_count) !== retryErrorCount) {
+    addReason(`${prefix}_observation_retry_error_count_mismatch`);
+  }
+  if (Number(ledger.idle_stable_observations) !== stableObservations) {
+    addReason(`${prefix}_observation_stable_count_mismatch`);
+  }
+  if (String(ledger.stable_signature_sha256 || '') !== stableSha) {
+    addReason(`${prefix}_observation_stable_signature_mismatch`);
+  }
+  if (ledger.ok !== replayedOk
+    || ledger.evidence_valid !== (readErrorCount === 0 && retryErrorCount === 0)) {
+    addReason(`${prefix}_observation_summary_inconsistent`);
+  }
+  if (!replayedOk) addReason(`${prefix}_observation_signature_not_stable`);
+  if (!lastSuccessfulRawCatalog
+    || !canonicalEqual(ledger.catalog, lastSuccessfulRawCatalog)
+    || (finalCatalog != null && !canonicalEqual(finalCatalog, lastSuccessfulRawCatalog))) {
+    addReason(`${prefix}_observation_final_catalog_mismatch`);
+  }
+  const lastObservation = observations.at(-1);
+  const expectedLastError = lastObservation?.read_ok === true ? '' : String(lastObservation?.error || '');
+  if (String(ledger.last_error || '') !== expectedLastError) {
+    addReason(`${prefix}_observation_last_error_mismatch`);
+  }
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    stable_observations: stableObservations,
+    stable_signature_sha256: stableSha,
+    read_error_count: readErrorCount,
+    retry_error_count: retryErrorCount,
+    catalog: lastSuccessfulRawCatalog,
+  };
+}
+
 export function coreBetaInitializationSkillReinstallVerdict({
   caseId = 'BETA-INIT-003',
   beforeCatalog,
   afterCatalog,
-  afterIdleStableObservations = 0,
-  catalogObservations = null,
+  beforeCatalogObservations = null,
+  afterCatalogObservations = null,
 } = {}) {
   const before = coreBetaInitializationSkillCatalogSummary(beforeCatalog);
   const after = coreBetaInitializationSkillCatalogSummary(afterCatalog);
@@ -9424,9 +9783,6 @@ export function coreBetaInitializationSkillReinstallVerdict({
   if (caseId !== 'BETA-INIT-003') evidenceFailures.push('case_id_mismatch');
   if (!before.structure_valid) evidenceFailures.push('before_catalog_structure_invalid');
   if (!after.structure_valid) evidenceFailures.push('after_catalog_structure_invalid');
-  if (before.structure_valid && before.sync_status !== 'idle') {
-    evidenceFailures.push('before_catalog_not_idle');
-  }
   if (before.invalid_identity_indexes.length) evidenceFailures.push('before_identity_incomplete');
   if (after.invalid_identity_indexes.length) evidenceFailures.push('after_identity_incomplete');
   if (before.duplicate_identities.length) evidenceFailures.push('before_duplicate_identity');
@@ -9434,87 +9790,23 @@ export function coreBetaInitializationSkillReinstallVerdict({
   if (before.readiness_missing_indexes.length) evidenceFailures.push('before_readiness_missing');
   if (after.readiness_missing_indexes.length) evidenceFailures.push('after_readiness_missing');
 
-  const ledger = catalogObservations;
-  let replayedStableObservations = 0;
-  let replayedStableSignatureSha256 = '';
-  let replayedReadErrorCount = 0;
-  let lastSuccessfulRawCatalog = null;
-  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) {
-    addEvidenceFailure('catalog_observations_missing_or_invalid');
-  } else {
-    if (ledger.schema_version !== 'qbot-core-beta-skill-reinstall-catalog-observations/v2') {
-      addEvidenceFailure('catalog_observations_schema_mismatch');
-    }
-    if (String(ledger.case_id || '') !== caseId) addEvidenceFailure('catalog_observations_case_id_mismatch');
-    const observations = Array.isArray(ledger.observations) ? ledger.observations : [];
-    if (!Array.isArray(ledger.observations) || observations.length < 3) {
-      addEvidenceFailure('catalog_observations_insufficient');
-    }
-    for (const observation of observations) {
-      const attempts = Array.isArray(observation?.renderer_capture_attempts)
-        ? observation.renderer_capture_attempts
-        : [];
-      const attemptErrors = attempts.filter((attempt) => attempt?.ok !== true).length;
-      if (observation?.read_ok !== true) {
-        replayedReadErrorCount += Math.max(1, Number(observation?.read_error_count) || attemptErrors || 0);
-        replayedStableObservations = 0;
-        replayedStableSignatureSha256 = '';
-        continue;
-      }
-      replayedReadErrorCount += attemptErrors;
-      if (!attempts.length || attemptErrors > 0 || String(observation?.error || '')) {
-        addEvidenceFailure('catalog_observation_retry_or_read_error');
-      }
-      const replayed = coreBetaInitializationSkillCatalogObservation({
-        catalog: observation.raw_catalog,
-        previousSignatureSha256: replayedStableSignatureSha256,
-        previousIdleStableObservations: replayedStableObservations,
-      });
-      if (
-        JSON.stringify(observation.normalized_tuple) !== JSON.stringify(replayed.normalized_tuple)
-        || String(observation.canonical_sha256 || '') !== replayed.canonical_sha256
-        || Boolean(observation.same_signature_as_previous) !== replayed.same_signature_as_previous
-        || Number(observation.idle_stable_observations) !== replayed.idle_stable_observations
-      ) addEvidenceFailure('catalog_observation_replay_mismatch');
-      replayedStableObservations = replayed.idle_stable_observations;
-      replayedStableSignatureSha256 = replayed.next_signature_sha256;
-      lastSuccessfulRawCatalog = observation.raw_catalog;
-    }
-    if (replayedReadErrorCount > 0 || Number(ledger.read_error_count) > 0) {
-      addEvidenceFailure('catalog_observation_read_error');
-    }
-    if (Number(ledger.read_error_count) !== replayedReadErrorCount) {
-      addEvidenceFailure('catalog_observation_read_error_count_mismatch');
-    }
-    if (Number(ledger.idle_stable_observations) !== replayedStableObservations
-      || Number(afterIdleStableObservations) !== replayedStableObservations) {
-      addEvidenceFailure('catalog_observation_stable_count_mismatch');
-    }
-    const stableSignature = replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '';
-    if (String(ledger.stable_signature_sha256 || '') !== stableSignature) {
-      addEvidenceFailure('catalog_observation_stable_signature_mismatch');
-    }
-    const replayedOk = replayedReadErrorCount === 0
-      && replayedStableObservations >= 3
-      && /^[a-f0-9]{64}$/i.test(stableSignature);
-    if (ledger.ok !== replayedOk || ledger.evidence_valid !== (replayedReadErrorCount === 0)) {
-      addEvidenceFailure('catalog_observation_summary_inconsistent');
-    }
-    if (!replayedOk) addEvidenceFailure('catalog_observation_signature_not_stable');
-    if (
-      !lastSuccessfulRawCatalog
-      || JSON.stringify(canonicalCoreBetaInitializationValue(lastSuccessfulRawCatalog))
-        !== JSON.stringify(canonicalCoreBetaInitializationValue(afterCatalog))
-      || JSON.stringify(canonicalCoreBetaInitializationValue(ledger.catalog))
-        !== JSON.stringify(canonicalCoreBetaInitializationValue(afterCatalog))
-    ) addEvidenceFailure('catalog_observation_final_catalog_mismatch');
-  }
+  const beforeLedgerReplay = coreBetaInitializationSkillCatalogLedgerReplay({
+    ledger: beforeCatalogObservations,
+    phase: 'before_action',
+    caseId,
+    finalCatalog: beforeCatalog,
+  });
+  const afterLedgerReplay = coreBetaInitializationSkillCatalogLedgerReplay({
+    ledger: afterCatalogObservations,
+    phase: 'after_action',
+    caseId,
+    finalCatalog: afterCatalog,
+  });
+  beforeLedgerReplay.reasons.forEach(addEvidenceFailure);
+  afterLedgerReplay.reasons.forEach(addEvidenceFailure);
 
   const oracleFailures = [];
   if (after.structure_valid && after.sync_status !== 'idle') oracleFailures.push('after_catalog_not_idle');
-  if (after.structure_valid && Number(afterIdleStableObservations) < 3) {
-    addEvidenceFailure('after_catalog_idle_not_stable_three_times');
-  }
   const beforeSet = new Set(before.identities);
   const afterSet = new Set(after.identities);
   const missingAfter = before.identities.filter((identity) => !afterSet.has(identity));
@@ -9535,9 +9827,17 @@ export function coreBetaInitializationSkillReinstallVerdict({
     oracle_valid: oracleValid,
     outcome: evidenceValid ? (oracleValid ? 'pass' : 'bug') : 'automation_error',
     reason: evidenceFailures[0] || oracleFailures[0] || 'skill_reinstall_inventory_and_readiness_stable',
-    after_idle_stable_observations: Number(afterIdleStableObservations) || 0,
-    stable_signature_sha256: replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '',
-    catalog_read_error_count: replayedReadErrorCount,
+    before_idle_stable_observations: beforeLedgerReplay.stable_observations,
+    after_idle_stable_observations: afterLedgerReplay.stable_observations,
+    before_stable_signature_sha256: beforeLedgerReplay.stable_signature_sha256,
+    after_stable_signature_sha256: afterLedgerReplay.stable_signature_sha256,
+    stable_signature_sha256: afterLedgerReplay.stable_signature_sha256,
+    before_catalog_read_error_count: beforeLedgerReplay.read_error_count,
+    after_catalog_read_error_count: afterLedgerReplay.read_error_count,
+    before_catalog_retry_error_count: beforeLedgerReplay.retry_error_count,
+    after_catalog_retry_error_count: afterLedgerReplay.retry_error_count,
+    catalog_read_error_count: beforeLedgerReplay.read_error_count + afterLedgerReplay.read_error_count,
+    catalog_retry_error_count: beforeLedgerReplay.retry_error_count + afterLedgerReplay.retry_error_count,
     identity_set_equal: missingAfter.length === 0 && unexpectedAfter.length === 0,
     missing_after: missingAfter,
     unexpected_after: unexpectedAfter,
@@ -10096,6 +10396,10 @@ function coreBetaInitializationActionEvidenceVerdict(evidence, {
     }
     if (action.ok !== true) addReason(`${prefix}_not_ok`);
     if (String(action.testid || '') !== String(testid || '')) addReason(`${prefix}_testid_mismatch`);
+    if (String(caseId || '') === 'BETA-INIT-003'
+      && !Number.isFinite(Date.parse(String(action.dispatched_at || '')))) {
+      addReason(`${prefix}_dispatched_at_invalid`);
+    }
     if (action.action_observed !== true) addReason(`${prefix}_not_observed`);
     const source = String(action.action_observation_source || '');
     if (!['busy', 'explicit-completion-transition', 'causal-main-frame-reload'].includes(source)) {
@@ -10183,6 +10487,66 @@ function coreBetaInitializationPublicStateEvidenceVerdict(evidence, {
     reasons,
     reason: reasons.join(',') || `initialization_${phase}_public_state_evidence_valid`,
     public_state: publicState || null,
+  };
+}
+
+function coreBetaInitializationContinuationSendCountVerdict(surface = {}) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  const validCount = (value) => Number.isSafeInteger(value) && value >= 0;
+  const before = surface?.send_count_before;
+  const after = surface?.send_count_after;
+  if (!validCount(before)) addReason('send_count_before_invalid');
+  if (!validCount(after)) addReason('send_count_after_invalid');
+  if (surface?.send_count_unchanged !== true || before !== after) {
+    addReason('send_count_changed');
+  }
+  const sources = surface?.send_count_sources;
+  const expectedSourceNames = ['after_e2e', 'after_public', 'before_e2e', 'before_public'];
+  if (!sources || typeof sources !== 'object' || Array.isArray(sources)
+    || JSON.stringify(Object.keys(sources).sort()) !== JSON.stringify(expectedSourceNames)) {
+    addReason('send_count_sources_invalid');
+  } else {
+    const values = Object.values(sources);
+    if (!values.every(validCount)) addReason('send_count_source_value_invalid');
+    if (new Set(values).size !== 1
+      || sources.before_e2e !== before
+      || sources.before_public !== before
+      || sources.after_e2e !== after
+      || sources.after_public !== after) {
+      addReason('send_count_sources_mismatch');
+    }
+  }
+  const beforeE2E = surface?.before_e2e_state;
+  if (!beforeE2E || typeof beforeE2E !== 'object' || Array.isArray(beforeE2E)
+    || beforeE2E.available !== true || beforeE2E.sendCount !== before) {
+    addReason('send_count_before_e2e_binding_invalid');
+  }
+  const beforePublic = surface?.before_public_state;
+  if (!beforePublic || typeof beforePublic !== 'object' || Array.isArray(beforePublic)
+    || beforePublic.task?.send_count !== before) {
+    addReason('send_count_before_public_binding_invalid');
+  }
+  if (surface?.clean_draft_state?.sendCount !== after) {
+    addReason('send_count_after_e2e_binding_invalid');
+  }
+  if (surface?.public_state?.task?.send_count !== after) {
+    addReason('send_count_after_public_binding_invalid');
+  }
+  const continuationState = surface?.continuation_state;
+  if (!continuationState || typeof continuationState !== 'object' || Array.isArray(continuationState)
+    || continuationState.send_count_before !== before
+    || continuationState.send_count_after !== after
+    || continuationState.send_count_unchanged !== true) {
+    addReason('send_count_continuation_state_binding_invalid');
+  }
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    before,
+    after,
   };
 }
 
@@ -10443,6 +10807,10 @@ export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
   )) addReason('initialization_maintenance_success_terminal_replay_invalid');
 
   if (surfaceRequired && surface) {
+    const sendCountVerdict = coreBetaInitializationContinuationSendCountVerdict(surface);
+    for (const reason of sendCountVerdict.reasons) {
+      addReason(`initialization_continuation_${reason}`);
+    }
     for (const field of [
       'valid',
       'composer_ready',
@@ -10466,7 +10834,8 @@ export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
       || draft.isDraft !== true
       || !String(draft.draftInstanceId || '').trim()
       || draft.messageCount !== 0
-      || draft.sendCount !== 0
+      || !Number.isSafeInteger(draft.sendCount)
+      || draft.sendCount < 0
       || draft.running !== false
     ) addReason('initialization_continuation_clean_draft_invalid');
     if (surface.clean_draft_surface?.ok !== true) {
@@ -10481,7 +10850,8 @@ export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
       || publicState.task?.id !== null
       || publicState.task?.running !== false
       || publicState.task?.message_count !== 0
-      || publicState.task?.send_count !== 0
+      || !Number.isSafeInteger(publicState.task?.send_count)
+      || publicState.task.send_count < 0
       || !Array.isArray(publicState.task?.messages)
       || publicState.task.messages.length !== 0
       || !Array.isArray(publicState.skills?.selected)
@@ -10504,7 +10874,12 @@ export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
       || String(continuationState.draft_instance_id || '') !== String(draft?.draftInstanceId || '')
       || continuationState.task_id !== null
       || continuationState.message_count !== 0
-      || continuationState.send_count !== 0
+      || !Number.isSafeInteger(continuationState.send_count_before)
+      || continuationState.send_count_before < 0
+      || !Number.isSafeInteger(continuationState.send_count_after)
+      || continuationState.send_count_after < 0
+      || continuationState.send_count_before !== continuationState.send_count_after
+      || continuationState.send_count_unchanged !== true
       || continuationState.running !== false
       || !Array.isArray(continuationState.selected_skills)
       || continuationState.selected_skills.length !== 0
@@ -10567,14 +10942,17 @@ export function coreBetaInitializationContinuationEvidenceVerdict(result = {}, {
     addReason('initialization_success_unexpected_continuation_surface');
   }
 
+  const productFailureObserved = terminalFailure || specializedFailure;
   const replayedContinuation = continuationRequired
     ? coreBetaInitializationContinuation({
       testCase: { id },
       terminalReadback: terminalReplay.replayed_final,
-      afterReadback: afterPublicVerdict.public_state,
+      afterReadback: surface?.public_state,
       continuationSurface: surface,
-      productFailureObserved: specializedFailure,
-      productFailureSource: specializedFailure ? 'skill_reinstall_readiness_oracle' : '',
+      productFailureObserved,
+      productFailureSource: terminalFailure
+        ? 'maintenance_terminal'
+        : specializedFailure ? 'skill_reinstall_readiness_oracle' : '',
     })
     : null;
   if (continuationRequired) {
@@ -10711,7 +11089,8 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     'before_public_state',
     'after_public_state',
     'terminal_observations',
-    'catalog_observations',
+    'catalog_observations_before_action',
+    'catalog_observations_after_action',
     'terminal_screenshot',
     'continuation_surface',
   ];
@@ -10790,7 +11169,10 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
         before_public_state: 'initialization_before_public_state',
         after_public_state: 'initialization_after_public_state',
         terminal_observations: 'core_beta_runtime_maintenance_observations',
-        catalog_observations: 'core_beta_skill_reinstall_catalog_observations',
+        catalog_observations_before_action:
+          'core_beta_skill_reinstall_catalog_observations_before_action',
+        catalog_observations_after_action:
+          'core_beta_skill_reinstall_catalog_observations_after_action',
         terminal_screenshot: 'initialization_terminal_screenshot',
         continuation_surface: 'initialization_continuation_surface',
       };
@@ -10815,7 +11197,8 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
   const beforePublicStateEvidence = referencedPayloads.before_public_state;
   const afterPublicStateEvidence = referencedPayloads.after_public_state;
   const terminal = referencedPayloads.terminal_observations;
-  const catalogLedger = referencedPayloads.catalog_observations;
+  const beforeCatalogLedger = referencedPayloads.catalog_observations_before_action;
+  const afterCatalogLedger = referencedPayloads.catalog_observations_after_action;
   const continuationSurface = referencedPayloads.continuation_surface;
   const identityMatches = (payload, schemaVersion, label) => {
     if (!payload) return false;
@@ -10849,10 +11232,21 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     'skill_reinstall_terminal_observations',
   );
   identityMatches(
-    catalogLedger,
+    beforeCatalogLedger,
     'qbot-core-beta-skill-reinstall-catalog-observations/v2',
-    'skill_reinstall_catalog_observations',
+    'skill_reinstall_catalog_observations_before_action',
   );
+  identityMatches(
+    afterCatalogLedger,
+    'qbot-core-beta-skill-reinstall-catalog-observations/v2',
+    'skill_reinstall_catalog_observations_after_action',
+  );
+  if (String(beforeCatalogLedger?.phase || '') !== 'before_action') {
+    addReason('skill_reinstall_catalog_observations_before_action_phase_mismatch');
+  }
+  if (String(afterCatalogLedger?.phase || '') !== 'after_action') {
+    addReason('skill_reinstall_catalog_observations_after_action_phase_mismatch');
+  }
   identityMatches(
     continuationSurface,
     'qbot-core-beta-initialization-continuation-surface/v1',
@@ -10880,6 +11274,10 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
   for (const reason of afterPublicVerdict.reasons) addReason(`skill_reinstall_${reason}`);
 
   if (continuationSurface) {
+    const sendCountVerdict = coreBetaInitializationContinuationSendCountVerdict(continuationSurface);
+    for (const reason of sendCountVerdict.reasons) {
+      addReason(`skill_reinstall_continuation_${reason}`);
+    }
     for (const field of [
       'valid',
       'composer_ready',
@@ -10906,7 +11304,9 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
         addReason('skill_reinstall_continuation_draft_instance_id_missing');
       }
       if (cleanDraft.messageCount !== 0) addReason('skill_reinstall_continuation_message_count_nonzero');
-      if (cleanDraft.sendCount !== 0) addReason('skill_reinstall_continuation_send_count_nonzero');
+      if (!Number.isSafeInteger(cleanDraft.sendCount) || cleanDraft.sendCount < 0) {
+        addReason('skill_reinstall_continuation_send_count_invalid');
+      }
       if (cleanDraft.running !== false) addReason('skill_reinstall_continuation_running_not_false');
     }
     if (continuationSurface.clean_draft_surface?.ok !== true) {
@@ -10924,7 +11324,8 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
         publicState.task?.id !== null
         || publicState.task?.running !== false
         || publicState.task?.message_count !== 0
-        || publicState.task?.send_count !== 0
+        || !Number.isSafeInteger(publicState.task?.send_count)
+        || publicState.task.send_count < 0
         || !Array.isArray(publicState.task?.messages)
         || publicState.task.messages.length !== 0
       ) addReason('skill_reinstall_continuation_public_task_not_clean');
@@ -10958,7 +11359,14 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
       }
       if (continuationState.task_id !== null) addReason('skill_reinstall_continuation_state_task_id_not_null');
       if (continuationState.message_count !== 0) addReason('skill_reinstall_continuation_state_message_count_nonzero');
-      if (continuationState.send_count !== 0) addReason('skill_reinstall_continuation_state_send_count_nonzero');
+      if (!Number.isSafeInteger(continuationState.send_count_before)
+        || continuationState.send_count_before < 0
+        || !Number.isSafeInteger(continuationState.send_count_after)
+        || continuationState.send_count_after < 0
+        || continuationState.send_count_before !== continuationState.send_count_after
+        || continuationState.send_count_unchanged !== true) {
+        addReason('skill_reinstall_continuation_state_send_count_invalid');
+      }
       if (continuationState.running !== false) addReason('skill_reinstall_continuation_state_running_not_false');
       if (!Array.isArray(continuationState.selected_skills) || continuationState.selected_skills.length !== 0) {
         addReason('skill_reinstall_continuation_state_skill_selection_not_empty');
@@ -11061,6 +11469,8 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     testid: expectedTestId,
   });
   for (const reason of terminalReplay.reasons) addReason(`skill_reinstall_${reason}`);
+  let terminalProductReady = false;
+  let terminalProductFailed = false;
   if (terminal) {
     if (!referencedRecords.action_observations
       || !caseBoundFileRecord(
@@ -11074,29 +11484,44 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
       addReason('skill_reinstall_terminal_projection_mismatch');
     }
     const replayedFinal = terminalReplay.replayed_final;
-    if (terminalReplay.valid !== true
-      || terminalReplay.ready !== true
-      || replayedFinal?.ready !== true
-      || replayedFinal?.pending !== false
-      || replayedFinal?.failed !== false
-      || replayedFinal?.loaded !== true
-      || replayedFinal?.sdk_ready !== true
-      || replayedFinal?.button_enabled !== true
-      || replayedFinal?.capabilities_readable !== true
-      || replayedFinal?.page_readable !== true
-      || replayedFinal?.maintenance_region_visible !== true
-      || Number(replayedFinal?.stable_ready_observations) < 3) {
+    terminalProductReady = terminalReplay.valid === true
+      && terminalReplay.ready === true
+      && replayedFinal?.ready === true
+      && replayedFinal?.pending === false
+      && replayedFinal?.failed === false
+      && replayedFinal?.loaded === true
+      && replayedFinal?.sdk_ready === true
+      && replayedFinal?.button_enabled === true
+      && replayedFinal?.capabilities_readable === true
+      && replayedFinal?.page_readable === true
+      && replayedFinal?.maintenance_region_visible === true
+      && Number(replayedFinal?.stable_ready_observations) >= 3;
+    terminalProductFailed = terminalReplay.valid === true
+      && terminalReplay.ready === false
+      && replayedFinal?.ready === false
+      && replayedFinal?.pending === false
+      && replayedFinal?.failed === true
+      && replayedFinal?.loaded === true
+      && replayedFinal?.sdk_ready === true
+      && replayedFinal?.button_enabled === true
+      && replayedFinal?.capabilities_readable === true
+      && replayedFinal?.page_readable === true
+      && replayedFinal?.maintenance_region_visible === true;
+    if (!terminalProductReady && !terminalProductFailed) {
       addReason('skill_reinstall_terminal_readiness_replay_invalid');
     }
   }
-  if (catalogLedger) {
+  if (beforeCatalogLedger?.action_evidence !== null) {
+    addReason('skill_reinstall_before_catalog_action_evidence_must_be_null');
+  }
+  if (afterCatalogLedger) {
     if (!referencedRecords.action_observations
       || !caseBoundFileRecord(
         referencedRecords.action_observations.path,
-        catalogLedger.action_evidence,
+        afterCatalogLedger.action_evidence,
         'initialization_action_observation',
       )) {
-      addReason('skill_reinstall_catalog_action_evidence_binding_invalid');
+      addReason('skill_reinstall_after_catalog_action_evidence_binding_invalid');
     }
   }
 
@@ -11118,104 +11543,63 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     addReason('skill_reinstall_terminal_screenshot_artifact_binding_invalid');
   }
 
-  let replayedStableObservations = 0;
-  let replayedStableSignatureSha256 = '';
-  let replayedReadErrorCount = 0;
-  let lastSuccessfulRawCatalog = null;
-  const observations = Array.isArray(catalogLedger?.observations) ? catalogLedger.observations : [];
-  if (observations.length < 3) addReason('skill_reinstall_catalog_observations_insufficient');
-  observations.forEach((observation, index) => {
-    const prefix = `skill_reinstall_catalog_observation_${index + 1}`;
-    if (!observation || typeof observation !== 'object' || Array.isArray(observation)) {
-      addReason(`${prefix}_invalid`);
-      replayedStableObservations = 0;
-      replayedStableSignatureSha256 = '';
-      replayedReadErrorCount += 1;
-      return;
-    }
-    const attempts = Array.isArray(observation.renderer_capture_attempts)
-      ? observation.renderer_capture_attempts
-      : [];
-    const attemptErrors = attempts.filter((attempt) => attempt?.ok !== true).length;
-    if (observation.read_ok !== true) {
-      const expectedReadErrors = Math.max(1, attemptErrors);
-      replayedReadErrorCount += expectedReadErrors;
-      replayedStableObservations = 0;
-      replayedStableSignatureSha256 = '';
-      if (
-        observation.read_ok !== false
-        || observation.raw_catalog !== null
-        || observation.normalized_tuple !== null
-        || String(observation.canonical_sha256 || '')
-        || observation.same_signature_as_previous !== false
-        || Number(observation.idle_stable_observations) !== 0
-        || Number(observation.read_error_count) !== expectedReadErrors
-        || !String(observation.error || '').trim()
-      ) addReason(`${prefix}_read_error_fields_mismatch`);
-      return;
-    }
-    if (!attempts.length || attemptErrors > 0 || String(observation.error || '')) {
-      addReason(`${prefix}_capture_attempts_invalid`);
-    }
-    replayedReadErrorCount += attemptErrors;
-    const replayedObservation = coreBetaInitializationSkillCatalogObservation({
-      catalog: observation.raw_catalog,
-      previousSignatureSha256: replayedStableSignatureSha256,
-      previousIdleStableObservations: replayedStableObservations,
-    });
-    const summary = replayedObservation.summary;
-    const derivedFieldsMatch = (
-      String(observation.sync_status || '') === summary.sync_status
-      && Number(observation.installed_count) === summary.installed_count
-      && Number(observation.identity_count) === summary.identities.length
-      && Number(observation.duplicate_count) === summary.duplicate_identities.length
-      && Number(observation.invalid_identity_count) === summary.invalid_identity_indexes.length
-      && Number(observation.readiness_missing_count) === summary.readiness_missing_indexes.length
-      && Number(observation.unready_count) === summary.unready_identities.length
-    );
-    if (
-      !canonicalEqual(observation.normalized_tuple, replayedObservation.normalized_tuple)
-      || String(observation.canonical_sha256 || '') !== replayedObservation.canonical_sha256
-      || Boolean(observation.same_signature_as_previous) !== replayedObservation.same_signature_as_previous
-      || Number(observation.idle_stable_observations) !== replayedObservation.idle_stable_observations
-      || Number(observation.read_error_count) !== attemptErrors
-      || !derivedFieldsMatch
-    ) addReason(`${prefix}_replay_mismatch`);
-    replayedStableObservations = replayedObservation.idle_stable_observations;
-    replayedStableSignatureSha256 = replayedObservation.next_signature_sha256;
-    lastSuccessfulRawCatalog = observation.raw_catalog;
+  const beforeCatalogReplay = coreBetaInitializationSkillCatalogLedgerReplay({
+    ledger: beforeCatalogLedger,
+    phase: 'before_action',
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+    finalCatalog: beforePublicState?.skills?.catalog,
   });
-
-  const replayedStableSha = replayedStableObservations >= 3 ? replayedStableSignatureSha256 : '';
-  const replayedLedgerOk = replayedReadErrorCount === 0
-    && replayedStableObservations >= 3
-    && /^[a-f0-9]{64}$/i.test(replayedStableSha);
-  if (catalogLedger && (
-    Number(catalogLedger.read_error_count) !== replayedReadErrorCount
-    || Number(catalogLedger.idle_stable_observations) !== replayedStableObservations
-    || String(catalogLedger.stable_signature_sha256 || '') !== replayedStableSha
-    || catalogLedger.ok !== replayedLedgerOk
-    || catalogLedger.evidence_valid !== (replayedReadErrorCount === 0)
-    || !canonicalEqual(catalogLedger.catalog, lastSuccessfulRawCatalog)
-  )) addReason('skill_reinstall_catalog_ledger_replay_mismatch');
-  if (catalogLedger && observations.length) {
-    const lastObservation = observations.at(-1);
-    const expectedLastError = lastObservation?.read_ok === true ? '' : String(lastObservation?.error || '');
-    if (String(catalogLedger.last_error || '') !== expectedLastError) {
-      addReason('skill_reinstall_catalog_last_error_mismatch');
-    }
-  }
-  if (!canonicalEqual(afterPublicState?.skills?.catalog, lastSuccessfulRawCatalog)) {
-    addReason('skill_reinstall_after_public_state_catalog_mismatch');
-  }
+  const afterCatalogReplay = coreBetaInitializationSkillCatalogLedgerReplay({
+    ledger: afterCatalogLedger,
+    phase: 'after_action',
+    caseId: expectedCaseId,
+    method: expectedMethod,
+    testid: expectedTestId,
+    finalCatalog: afterPublicState?.skills?.catalog,
+  });
+  beforeCatalogReplay.reasons.forEach((reason) => addReason(`skill_reinstall_${reason}`));
+  afterCatalogReplay.reasons.forEach((reason) => addReason(`skill_reinstall_${reason}`));
 
   const replayedVerdict = coreBetaInitializationSkillReinstallVerdict({
     caseId: expectedCaseId,
-    beforeCatalog: beforePublicState?.skills?.catalog,
-    afterCatalog: lastSuccessfulRawCatalog,
-    afterIdleStableObservations: replayedStableObservations,
-    catalogObservations: catalogLedger,
+    beforeCatalog: beforeCatalogReplay.catalog,
+    afterCatalog: afterCatalogReplay.catalog,
+    beforeCatalogObservations: beforeCatalogLedger,
+    afterCatalogObservations: afterCatalogLedger,
   });
+  const combinedProductEvidenceValid = replayedVerdict.evidence_valid === true
+    && terminalReplay.valid === true
+    && (terminalProductReady || terminalProductFailed);
+  const combinedProductOracleValid = combinedProductEvidenceValid
+    && terminalProductReady
+    && replayedVerdict.oracle_valid === true;
+  if (maintenance?.oracle_valid !== combinedProductOracleValid
+    || maintenance?.valid !== combinedProductOracleValid) {
+    addReason('skill_reinstall_maintenance_combined_oracle_mismatch');
+  }
+  if (combinedProductEvidenceValid && !combinedProductOracleValid) {
+    const replayedContinuation = coreBetaInitializationContinuation({
+      testCase: { id: expectedCaseId },
+      terminalReadback: terminalReplay.replayed_final,
+      afterReadback: continuationSurface?.public_state,
+      continuationSurface,
+      productFailureObserved: true,
+      productFailureSource: terminalProductFailed
+        ? 'maintenance_terminal'
+        : 'skill_reinstall_readiness_oracle',
+    });
+    if (replayedContinuation?.safe !== true
+      || !canonicalEqual(maintenance?.initialization_continuation, replayedContinuation)
+      || !canonicalEqual(result?.initialization_continuation, replayedContinuation)) {
+      addReason('skill_reinstall_product_failure_continuation_not_safe');
+    }
+  } else if (combinedProductOracleValid
+    && (maintenance?.initialization_continuation != null
+      || result?.initialization_continuation != null)) {
+    addReason('skill_reinstall_success_unexpected_continuation');
+  }
   const verdictFields = [
     'schema_version',
     'case_id',
@@ -11225,9 +11609,17 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     'oracle_valid',
     'outcome',
     'reason',
+    'before_idle_stable_observations',
     'after_idle_stable_observations',
+    'before_stable_signature_sha256',
+    'after_stable_signature_sha256',
     'stable_signature_sha256',
+    'before_catalog_read_error_count',
+    'after_catalog_read_error_count',
+    'before_catalog_retry_error_count',
+    'after_catalog_retry_error_count',
     'catalog_read_error_count',
+    'catalog_retry_error_count',
     'identity_set_equal',
     'missing_after',
     'unexpected_after',
@@ -11254,7 +11646,14 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     ['before_public_state', 'initialization_before_public_state'],
     ['after_public_state', 'initialization_after_public_state'],
     ['terminal_observations', 'core_beta_runtime_maintenance_observations'],
-    ['catalog_observations', 'core_beta_skill_reinstall_catalog_observations'],
+    [
+      'catalog_observations_before_action',
+      'core_beta_skill_reinstall_catalog_observations_before_action',
+    ],
+    [
+      'catalog_observations_after_action',
+      'core_beta_skill_reinstall_catalog_observations_after_action',
+    ],
     ['continuation_surface', 'initialization_continuation_surface'],
   ]) {
     const referenced = referencedRecords[refName];
@@ -11264,7 +11663,10 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
       before_public_state: 'initialization_before_public_state',
       after_public_state: 'initialization_after_public_state',
       terminal_observations: 'core_beta_runtime_maintenance_observations',
-      catalog_observations: 'core_beta_skill_reinstall_catalog_observations',
+      catalog_observations_before_action:
+        'core_beta_skill_reinstall_catalog_observations_before_action',
+      catalog_observations_after_action:
+        'core_beta_skill_reinstall_catalog_observations_after_action',
       continuation_surface: 'initialization_continuation_surface',
     };
     const bound = referenced && caseBoundFileRecord(
@@ -11274,6 +11676,151 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     );
     if (!referenced || !bound || referenced.path !== bound.path) {
       addReason(`skill_reinstall_${refName}_artifact_binding_invalid`);
+    }
+  }
+
+  const productActionTraceArtifact = String(result?.artifacts?.product_action_trace || '').trim();
+  const coreProductActionTraceArtifact = String(
+    result?.artifacts?.core_beta_product_action_trace || '',
+  ).trim();
+  const productActionTraceRecord = caseBoundFileRecord(
+    productActionTraceArtifact,
+    null,
+    'product_action_trace',
+  );
+  if (!productActionTraceRecord
+    || !coreProductActionTraceArtifact
+    || path.resolve(coreProductActionTraceArtifact) !== productActionTraceRecord.path
+    || !caseBoundFileRecord(
+      coreProductActionTraceArtifact,
+      productActionTraceRecord,
+      'product_action_trace',
+    )) {
+    addReason('skill_reinstall_product_action_trace_artifact_binding_invalid');
+  }
+  const productActionTrace = parseJsonRecord(
+    productActionTraceRecord,
+    'skill_reinstall_product_action_trace_json_invalid',
+  );
+  let productActionTraceTemporalValid = false;
+  if (productActionTrace) {
+    if (productActionTrace.schema_version
+      !== 'qbot-core-beta-skill-reinstall-product-action-trace/v1') {
+      addReason('skill_reinstall_product_action_trace_schema_mismatch');
+    }
+    if (String(productActionTrace.case_id || '') !== expectedCaseId) {
+      addReason('skill_reinstall_product_action_trace_case_id_mismatch');
+    }
+    if (String(productActionTrace.method || '') !== expectedMethod) {
+      addReason('skill_reinstall_product_action_trace_method_mismatch');
+    }
+    if (String(productActionTrace.testid || '') !== expectedTestId) {
+      addReason('skill_reinstall_product_action_trace_testid_mismatch');
+    }
+    if (!Number.isFinite(Date.parse(String(productActionTrace.captured_at || '')))) {
+      addReason('skill_reinstall_product_action_trace_captured_at_invalid');
+    }
+    const temporalChain = [
+      Date.parse(String(beforeCatalogLedger?.ended_at || '')),
+      Date.parse(String(actionAttempts[0]?.dispatched_at || '')),
+      Date.parse(String(afterCatalogLedger?.started_at || '')),
+      Date.parse(String(productActionTrace.captured_at || '')),
+    ];
+    if (!temporalChain.every(Number.isFinite)) {
+      addReason('skill_reinstall_product_action_trace_temporal_fields_invalid');
+    } else {
+      productActionTraceTemporalValid = temporalChain[0] <= temporalChain[1]
+        && temporalChain[1] <= temporalChain[2]
+        && temporalChain[2] <= temporalChain[3];
+      if (!productActionTraceTemporalValid) {
+        addReason('skill_reinstall_product_action_trace_temporal_order_invalid');
+      }
+    }
+    if (productActionTrace.click_count !== 1 || actionAttempts.length !== 1) {
+      addReason('skill_reinstall_product_action_trace_click_count_invalid');
+    }
+    const expectedConfirmation = {
+      required: true,
+      confirmed: maintenanceAction?.confirmation?.accepted === true,
+      source: String(maintenanceAction?.confirmation?.source || ''),
+      message: String(maintenanceAction?.confirmation?.message || ''),
+      confirmation_label: String(maintenanceAction?.confirmation?.confirmation_label || ''),
+    };
+    if (!canonicalEqual(productActionTrace.destructive_confirmation, expectedConfirmation)
+      || expectedConfirmation.confirmed !== true) {
+      addReason('skill_reinstall_product_action_trace_confirmation_mismatch');
+    }
+    const traceRecordBindings = [
+      [
+        'action_observations',
+        productActionTrace.action_observations,
+        referencedRecords.action_observations,
+        'initialization_action_observation',
+      ],
+      [
+        'catalog_observations_before_action',
+        productActionTrace.catalog_observations_before_action,
+        referencedRecords.catalog_observations_before_action,
+        'core_beta_skill_reinstall_catalog_observations_before_action',
+      ],
+      [
+        'catalog_observations_after_action',
+        productActionTrace.catalog_observations_after_action,
+        referencedRecords.catalog_observations_after_action,
+        'core_beta_skill_reinstall_catalog_observations_after_action',
+      ],
+      [
+        'terminal_observations',
+        productActionTrace.terminal_outcome?.observations,
+        referencedRecords.terminal_observations,
+        'core_beta_runtime_maintenance_observations',
+      ],
+      [
+        'terminal_screenshot',
+        productActionTrace.terminal_outcome?.screenshot,
+        referencedRecords.terminal_screenshot,
+        'initialization_terminal_screenshot',
+      ],
+      [
+        'continuation_surface',
+        productActionTrace.continuation_surface,
+        referencedRecords.continuation_surface,
+        'initialization_continuation_surface',
+      ],
+    ];
+    for (const [name, declared, expected, role] of traceRecordBindings) {
+      if (!expected
+        || !caseBoundFileRecord(expected.path, declared, role)
+        || !canonicalEqual(declared, expected)) {
+        addReason(`skill_reinstall_product_action_trace_${name}_binding_invalid`);
+      }
+    }
+    if (productActionTrace.terminal_outcome?.ok !== (terminalReplay.ready === true)
+      || !canonicalEqual(productActionTrace.terminal_outcome?.final, terminalReplay.replayed_final)) {
+      addReason('skill_reinstall_product_action_trace_terminal_outcome_mismatch');
+    }
+    const expectedTraceEvidenceValid = combinedProductEvidenceValid
+      && actionAttempts.length === 1
+      && maintenanceAction?.action_observed === true
+      && maintenanceAction?.confirmation?.accepted === true
+      && productActionTraceTemporalValid
+      && Boolean(referencedRecords.action_observations)
+      && Boolean(referencedRecords.catalog_observations_before_action)
+      && Boolean(referencedRecords.catalog_observations_after_action)
+      && Boolean(referencedRecords.terminal_observations)
+      && Boolean(referencedRecords.terminal_screenshot)
+      && continuationSurface?.valid === true
+      && Boolean(referencedRecords.continuation_surface);
+    const expectedTraceOracleValid = expectedTraceEvidenceValid
+      && combinedProductOracleValid
+      && continuationSurface?.valid === true;
+    const expectedTraceOutcome = expectedTraceEvidenceValid
+      ? expectedTraceOracleValid ? 'pass' : 'bug'
+      : 'automation_error';
+    if (productActionTrace.evidence_valid !== expectedTraceEvidenceValid
+      || productActionTrace.oracle_valid !== expectedTraceOracleValid
+      || String(productActionTrace.outcome || '') !== expectedTraceOutcome) {
+      addReason('skill_reinstall_product_action_trace_verdict_mismatch');
     }
   }
 
@@ -11302,6 +11849,10 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     (item) => item?.role === 'initialization_terminal_screenshot',
   );
   const manifestTerminalScreenshotEvidence = manifestTerminalScreenshotRows[0];
+  const manifestProductActionTraceRows = manifestRows.filter(
+    (item) => item?.role === 'product_action_trace',
+  );
+  const manifestProductActionTraceEvidence = manifestProductActionTraceRows[0];
   const surfaceRecord = referencedRecords.continuation_surface;
   const independentManifestRoles = new Map([
     ['initialization_action_observation', referencedRecords.action_observations],
@@ -11333,15 +11884,18 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
     || manifestSurfaceRows.length !== 1
     || manifestMaintenanceRows.length !== 1
     || manifestTerminalScreenshotRows.length !== 1
+    || manifestProductActionTraceRows.length !== 1
     || !independentManifestBindingsValid
     || !manifestEvidence
     || !manifestSurfaceEvidence
     || !manifestMaintenanceEvidence
     || !manifestTerminalScreenshotEvidence
+    || !manifestProductActionTraceEvidence
     || !manifestRowValid(manifestEvidence)
     || !manifestRowValid(manifestSurfaceEvidence)
     || !manifestRowValid(manifestMaintenanceEvidence)
     || !manifestRowValid(manifestTerminalScreenshotEvidence)
+    || !manifestRowValid(manifestProductActionTraceEvidence)
     || !artifactRecord
     || !caseBoundFileRecord(
       artifactRecord.path,
@@ -11366,6 +11920,12 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
       manifestTerminalScreenshotEvidence,
       'initialization_terminal_screenshot',
     )
+    || !productActionTraceRecord
+    || !caseBoundFileRecord(
+      productActionTraceRecord.path,
+      manifestProductActionTraceEvidence,
+      'product_action_trace',
+    )
   ) addReason('skill_reinstall_manifest_binding_invalid');
   if (!result?.evidence_manifest || !manifest || !canonicalEqual(result.evidence_manifest, manifest)) {
     addReason('skill_reinstall_embedded_manifest_mismatch');
@@ -11373,11 +11933,12 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
 
   const rawStatus = String(result?.status || '');
   const rawCategory = String(result?.result_category || '');
-  if (replayedVerdict.evidence_valid === true && replayedVerdict.oracle_valid === true
+  const combinedEvidenceValid = combinedProductEvidenceValid && productActionTraceTemporalValid;
+  if (combinedEvidenceValid && combinedProductOracleValid
     && (rawStatus !== 'passed' || rawCategory !== 'pass')) {
     addReason('skill_reinstall_raw_result_mismatches_pass_verdict');
   }
-  if (replayedVerdict.evidence_valid === true && replayedVerdict.oracle_valid === false
+  if (combinedEvidenceValid && !combinedProductOracleValid
     && (rawStatus !== 'failed' || rawCategory !== 'bug')) {
     addReason('skill_reinstall_raw_result_mismatches_bug_verdict');
   }
@@ -11387,8 +11948,8 @@ export function coreBetaInitializationSkillReinstallEvidenceVerdict(result = {},
   return {
     applicable: true,
     valid: reasons.length === 0,
-    oracle_valid: replayedVerdict.oracle_valid === true,
-    outcome: replayedVerdict.outcome || '',
+    oracle_valid: combinedProductOracleValid,
+    outcome: combinedEvidenceValid ? (combinedProductOracleValid ? 'pass' : 'bug') : 'automation_error',
     reason: reasons.join(',') || String(data?.reason || 'skill_reinstall_evidence_valid'),
     reasons,
     file: artifactRecord?.path || '',

@@ -822,6 +822,22 @@ r15 已由生成器排他创建，独立验收和四层能力审计通过；本�
 `main == origin/main`、tracked clean，再用最终框架 commit 生成新的执行 intake；生成时的
 设计 intake、构建目录或能力审计本身不构成 runner 准入。
 
+下一版生成目标是
+`/Users/qifu/Documents/QbotTestAgent/PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r16.xlsx`，
+用于固化 `BETA-INIT-003` 的双 catalog ledger、产品动作 trace 与发送计数差分合同。当前
+r16 尚未正式生成、没有正式 SHA-256、没有独立验收，禁止用于 intake、pretest 或 runner。
+生成器指向 r16 不会自动替换本节 r15：只有完成新 release intake、四执行 Sheet 同步审计、
+渲染验收、排他正式发布，并在同一干净 pushed 基线中同步文档/invariant/状态机后，才能
+另行宣布 r16 为正式入口。
+过渡期协议校验在 `BETA-INIT-003` 声明任一 r16 新标记时立即启用完整 r16 合同；新标记
+精确限定为专用 action trace schema、before/after 双 ledger 任一引用，或
+`send_count_before`、`send_count_after`、`send_count_unchanged` 任一差分标记。通用
+`product_action_trace`、`skill_reinstall_readiness_verdict`、
+`initialization_continuation_surface` 角色和 `skill_reinstall_readiness` Oracle 在 r15 已
+存在，均不能单独作为版本开关。这只保证当前正式 r15 在切换前仍可审计。r16 生成器必须
+始终注入全部新标记，声明任一新标记后缺少其余任一项均 fail-closed，禁止用过渡兼容发布
+不完整 r16。
+
 核心生命线入口为 Sheet `核心生命线门禁`，固定 16 条：
 `BETA-INIT-001~004`、`BETA-CHAT-001/002/007`、`BETA-FILE-001`、
 `BETA-ART-001`、`BETA-TASK-008`、`BETA-HOST-003`、`BETA-SEC-002`、
@@ -1446,23 +1462,46 @@ Casebook、同一 Sheet、同一冻结身份和新不可变目录。不得把 14
   字段缺失、畸形、不一致或不可读都优先归为 `automation_error/framework_issue`。升级时
   必须保留原始产品失败候选，再追加 continuation failure；人工说明、manual/final override
   和其它快捷分类不得覆盖该门禁。
-- `BETA-INIT-003` 必须在真实点击与破坏性确认后，保存重装前后完整 Skill catalog、
-  catalog 稳定采样、维护终态和截图。前后安装 identity 集合必须非空、唯一且全等；重装后
-  `syncStatus=idle` 连续至少 3 次，所有已安装 Skill 必须为明确 ready，禁止
-  `installStatus=ok` 与 `unready/python_runtime_failed` 并存。专项 Oracle 无论成功还是形成
-  证据完整的产品失败，均须真实点击【新建任务】恢复工作台，独立生成
-  `qbot-core-beta-initialization-continuation-surface/v1`，并以唯一 manifest 角色
-  `initialization_continuation_surface` 证明同一 Case 的非空 `draftInstanceId`、
-  `taskId=null`、`messageCount=0`、`sendCount=0`、`running=false`、Skill/Connector 空数组、
-  Expert 为空；恢复前后两张互异 PNG 必须是 Case 内普通文件，并记录路径、bytes、SHA-256。
-  该角色不能由 `product_action_trace`、`skill_reinstall_readiness_verdict` 或通用 continuation
-  证据代替。可信复核必须从不可变可信 run root 实读 surface、verdict 及全部引用，逐级
-  `lstat` 拒绝符号链接、目录、Case/run root 越界和文件替换，再执行 readiness 与恢复态
-  Oracle，并逐字段比对 summary、失败集合、outcome、surface 和 manifest；仅有自洽
-  SHA/manifest 或自报 verdict 不足以通过。引用缺失、角色缺失/重复、空文件、越界、
-  schema/case/action/method/testid/确认/采样不匹配或重放漂移一律为 framework issue，且
-  不得被人工或 final override 绕过。r15 生成器必须把该合同同步写入 `核心生命线门禁`、
-  `生产灰度门禁Case`、`全量功能回归Case` 与 `证据与断言`；固定 G2 12 条不含本 Case。
+- `BETA-INIT-003` 必须先在动作前有界读取完整 Skill catalog；初始 `syncing` 可以等待收敛，
+  不能单次即判证据失败。动作前与真实点击/破坏性确认后的动作后阶段各自生成独立
+  `qbot-core-beta-skill-reinstall-catalog-observations/v2` ledger，phase 分别为
+  `before_action`、`after_action`。两者各须至少连续 3 次同签名 `syncStatus=idle`，顶层和
+  逐样本 `read_error_count=0`、`retry_error_count=0`；每份 ledger 必须满足
+  `started_at <= observations[*].captured_at <= ended_at` 且样本时间非递减；动作前
+  `action_evidence=null`，动作后必须精确绑定唯一动作文件。读取错误、renderer 重试、ABA
+  签名漂移、时间越界/倒序或样本不足均 fail-closed。
+- 前后 installed identity 集合必须非空、各自唯一且全等；identity 由
+  `sourcePlatform/namespace/slug/installedVersion|version|revision|packageDigest|fingerprint`
+  组成。字段缺失、重复、新增、丢失或集合不等均不得通过。真实动作和证据完整但出现
+  identity 增减，或任一 Skill 为 unready/python_runtime_failed、半安装、错误状态时记产品
+  Bug；所有已安装 Skill 均明确 ready 才满足产品 Oracle。
+- 必需 `product_action_trace` 角色采用
+  `qbot-core-beta-skill-reinstall-product-action-trace/v1`，精确绑定
+  `case_id=BETA-INIT-003`、`method=skillsReinstall`、`testid=assistant-skills-reinstall`、
+  `click_count=1` 与完整破坏性确认；唯一动作 attempt 必须在真实 `button.click()` 紧前固化
+  `dispatched_at`，并强制磁盘时序
+  `before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at`。
+  trace 以 Case 内普通文件的路径、bytes、SHA-256 引用
+  `action_observations`、`catalog_observations_before_action`、
+  `catalog_observations_after_action`、`terminal_outcome.observations`、
+  `terminal_outcome.screenshot` 和 `continuation_surface`。schema、Case、method、testid、
+  点击、确认、时序、引用或 SHA 任一漂移均为 framework issue。terminal 与 catalog Oracle
+  采用组合判定，二者均成功才可 pass；terminal 明确失败但 runtime/SDK/按钮/capabilities/
+  页面/维护区完整可读且磁盘 continuation 重放 `safe=true` 时保留可信 Bug，不能被 catalog
+  全绿或 raw pass 覆盖。该角色、
+  `skill_reinstall_readiness_verdict`、`initialization_continuation_surface` 三者均唯一且不可替代。
+- 专项 Oracle 无论成功还是形成证据完整的产品失败，均须真实点击【新建任务】恢复工作台。
+  surface 必须证明非空 `draftInstanceId`、`taskId=null`、`messageCount=0`、`running=false`、
+  Skill/Connector 空数组、Expert 为空，并保存互异的前后 PNG Case 内普通文件及路径、bytes、
+  SHA-256。历史累计发送数无需为零；必须记录 `send_count_before`、`send_count_after` 为非负
+  安全整数且严格全等，`send_count_unchanged=true`，并与四个 send count source、前后
+  e2e/public state 和 `continuation_state` 全等。缺失、负数、非安全整数或变化均 fail-closed。
+- 可信复核必须从不可变可信 run root 实读 trace、surface、verdict、双 ledger、终态和全部
+  引用，逐级 `lstat` 拒绝符号链接、目录、Case/run root 越界、角色/inode 复用和读取期间
+  替换，重放双 ledger、identity、动作/确认、发送守卫与恢复态 Oracle，并逐字段对账 manifest。
+  r16 生成器必须把合同同步写入 `核心生命线门禁`、`生产灰度门禁Case`、
+  `全量功能回归Case` 与 `证据与断言`；固定 G2 12 条不含本 Case。r16 正式生成并冻结 SHA
+  前，当前 r15 仍是唯一正式入口。
 - 产品 Bug 在证据完整且后续 Case 独立时继续；不得修改 deepbankV2。
 - 普通 prerequisite `blocked` 记录后继续独立 Case，不得覆盖更高优先级的
   `automation_error`。

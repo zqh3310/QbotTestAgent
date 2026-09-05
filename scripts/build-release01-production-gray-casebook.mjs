@@ -53,7 +53,7 @@ const PRODUCT_REF = 'origin/release/0.1';
 const PRODUCT_VERSION = '0.1.7';
 let MR_WINDOW_START = '';
 let MR_WINDOW_END = '';
-const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx';
+const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r16.xlsx';
 const FORMAL_OUTPUT = path.join(ROOT, 'PRD', OUTPUT_NAME);
 const PREVIOUS_CASEBOOK = path.join(ROOT, 'PRD', 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-03-r12.xlsx');
 const PREVIOUS_CASEBOOK_SHA256 = 'da9181fdc4e8d63ec5e9ed1bad231b4ffe78870b085d96598586070b97cf8c54';
@@ -654,7 +654,7 @@ export function assertExpectedProductCommit(expectedProductCommit, releaseHead) 
     throw new Error(`--expected-product-commit 必须是 40 位提交 SHA：${expected}`);
   }
   if (expected !== asString(releaseHead)) {
-    throw new Error(`r15 release intake HEAD 与 --expected-product-commit 不一致：expected=${expected} actual=${releaseHead}`);
+    throw new Error(`r16 release intake HEAD 与 --expected-product-commit 不一致：expected=${expected} actual=${releaseHead}`);
   }
   return expected;
 }
@@ -2079,24 +2079,27 @@ export function patchRecentCases(testCase) {
     next = withEvidenceRole(next, 'product_action_trace');
     next = withEvidenceRole(next, 'skill_reinstall_readiness_verdict');
     next = withEvidenceRole(next, 'initialization_continuation_surface');
-    next['测试场景'] = '真实点击一键重装 Skill 并完成破坏性确认；以前后完整 catalog、同一 identity/readiness 签名三次稳定 idle 和逐项 ready 证明运行层重建成功';
-    next['用户旅程'] = '设置 → 系统设置 → 一键重装 Skill → 破坏性确认 → 完整 catalog 前后对账 → 三次稳定终态 → 新建任务恢复';
-    next['前置条件'] = '固定发布身份与测试账号有效；无运行中任务；重装前可读取非空且 identity 唯一的完整 getSkillsCatalog()。release/0.1 的重装 Skill 只重建运行层，不得删除安装账本。';
-    next['测试数据'] = '每个已安装 Skill 以 sourcePlatform/namespace/slug/installedVersion|version|revision|packageDigest|fingerprint 组成 identity；readiness 必须包含 ready/installStatus/localReadiness/error，禁止只看安装数量或 catalog 顶层 ready。';
-    next['自动化执行步骤'] = '1. 在真实 UI 动作前读取完整 getSkillsCatalog()，保存所有 installed identity 与 readiness，要求集合非空、唯一且字段完整。\n2. 真实点击【一键重装 Skill】，捕获并接受与 skillsReinstall 严格绑定的破坏性确认；只允许一次产品点击。\n3. 以单次 getSkillsCatalog() 5 秒硬超时有界采样；只有同一 identity/readiness 签名连续三次 syncStatus=idle 才收敛。\n4. 对账前后 identity 集合逐项全等；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed、半安装或错误状态。\n5. 专项 Oracle 成功或失败后均真实点击【新建任务】恢复 continuation surface，写入 initialization-continuation-surface.json；必须读回非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空。\n6. 恢复前后 PNG 均须为 Case 内普通文件，并固化路径、bytes、SHA-256 供可信复核从磁盘重放。';
-    next['预期结果'] = '真实重装动作及破坏性确认可证明；安装账本 identity 前后完全一致；同一 identity/readiness 签名连续三次 idle；每个已安装 Skill 均处于明确 ready 终态；最终 continuation surface 具有非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false，且 Skill/Connector/Expert 全空。';
-    next['成功判定'] = 'action receipt 证明一次真实点击、匹配的破坏性确认和动作因果；前后完整 catalog 非空且 identity 唯一/全等；同一 identity/readiness 签名连续三次稳定 idle；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；专项 verdict 从原始 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重算为 pass；initialization-continuation-surface.json 中恢复态为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false、Skill/Connector/Expert 全空，前后 PNG 为 Case 内普通文件且路径、bytes、SHA-256 可重放。';
-    next['失败/阻塞判定'] = '真实产品动作完成且原始证据完整时，安装丢失/新增、任一 installed unready/python_runtime_failed/半安装/错误记 trusted_bug；catalog 调用超时、样本不足、签名漂移、恢复 surface 缺失或不干净、draftInstanceId 为空、task/message/send/running/能力选择残留、前后 PNG 非 Case 内普通文件、路径/bytes/SHA 漂移，或引用/schema/Case/method/testid 不一致均记 framework_issue；仅登录、权限、发布身份或服务真实不可用可记 trusted_blocked。';
+    next['测试场景'] = '真实点击一键重装 Skill 并完成破坏性确认；以动作前、动作后两个独立 catalog ledger、前后 installed identity 全等和逐项 ready 证明运行层重建终态';
+    next['用户旅程'] = '设置 → 系统设置 → 动作前稳定 catalog ledger → 一键重装 Skill → 破坏性确认 → 动作后稳定 catalog ledger → 新建任务恢复';
+    next['前置条件'] = '固定发布身份与测试账号有效；无运行中任务；重装前可在有界窗口读取非空、identity 唯一且 readiness 字段完整的 getSkillsCatalog()。动作前允许在有界窗口等待 syncing 收敛，单次 syncing 不能立即定性为证据失败。';
+    next['测试数据'] = '每个已安装 Skill 以 sourcePlatform/namespace/slug/installedVersion|version|revision|packageDigest|fingerprint 组成 identity；前后 installed identity 集合必须非空、唯一且全等。两个 ledger 均须 read_error_count=0、retry_error_count=0。';
+    next['自动化执行步骤'] = '1. 动作前有界读取完整 getSkillsCatalog()，形成 phase=before_action 的独立 catalog ledger；允许先从 syncing 收敛，但最终各自至少三次连续同签名 syncStatus=idle，且零读取错误、零重试错误；每份 ledger 满足 started_at <= observations[*].captured_at <= ended_at 且样本时间非递减。\n2. 真实点击【一键重装 Skill】，在唯一 button.click() 紧前固化 action attempt 的 dispatched_at，捕获并接受与 method=skillsReinstall、testid=assistant-skills-reinstall 严格绑定的破坏性确认；click_count=1。\n3. 动作后有界读取完整 getSkillsCatalog()，形成 phase=after_action 的独立 catalog ledger；同样要求各自至少三次连续同签名 syncStatus=idle，read_error_count=0、retry_error_count=0，且样本处于自身 ledger 时间窗口内并非递减。\n4. 对账前后 installed identity 集合必须非空、唯一且全等；每个已安装 Skill ready=true，且不存在 unready/python_runtime_failed、半安装或错误状态。\n5. 生成 qbot-core-beta-skill-reinstall-product-action-trace/v1，精确绑定 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1、破坏性确认、catalog_observations_before_action、catalog_observations_after_action、terminal_outcome 和 continuation_surface，并证明 before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at。\n6. 专项 Oracle 成功或失败后均真实点击【新建任务】恢复 continuation surface，写入 initialization-continuation-surface.json；必须读回非空 draftInstanceId、taskId=null、messageCount=0、running=false、Skill/Connector/Expert 全空，并记录 send_count_before、send_count_after 为可观测非负安全整数且严格全等，send_count_unchanged=true。terminal 与 catalog Oracle 组合判定，只有二者均成功才可 pass；terminal 明确失败但结构完整且 continuation safe=true 时保留 Bug。\n7. 恢复前后 PNG 均须为 Case 内普通文件，并固化路径、bytes、SHA-256 供可信复核从磁盘重放。';
+    next['预期结果'] = '真实重装动作与破坏性确认可证明；动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 idle 且无读取/重试/时序错误；before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at；前后 installed identity 集合必须非空、唯一且全等；terminal 与 catalog Oracle 均成功，所有已安装 Skill 均明确 ready；恢复 surface 的 send_count_before/send_count_after 均为非负安全整数、严格全等且 send_count_unchanged=true。';
+    next['成功判定'] = 'qbot-core-beta-skill-reinstall-product-action-trace/v1 证明 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1、匹配的破坏性确认，并按 catalog_observations_before_action、catalog_observations_after_action、terminal_outcome、continuation_surface 顺序绑定全部引用；动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 syncStatus=idle，read_error_count=0、retry_error_count=0，started_at <= observations[*].captured_at <= ended_at 且样本非递减；before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at；前后 installed identity 集合必须非空、唯一且全等；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；terminal 与 catalog Oracle 均成功，专项 verdict 从原始 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重算为 pass；恢复 surface 为非空 draftInstanceId、taskId=null、messageCount=0、running=false、Skill/Connector/Expert 全空，send_count_before 和 send_count_after 均为可观测非负安全整数且严格全等，send_count_unchanged=true；前后 PNG 是 Case 内普通文件且路径、bytes、SHA-256 可重放。';
+    next['失败/阻塞判定'] = '真实产品动作与原始证据完整时，identity 丢失/新增或任一 installed unready/python_runtime_failed/半安装/错误记 trusted_bug；缺任一前后 ledger、任一 ledger 少于三次同签名 idle、读取/重试错误、identity 空/重复/不等、专项 trace schema/Case/method/testid/点击/确认/引用漂移、恢复 surface 不干净、send count 不可观测/非安全整数/发生变化，或 PNG/引用 bytes/SHA 漂移均记 framework_issue；动作前单次 syncing 仅进入有界收敛等待，不得立即判证据失败；仅登录、权限、发布身份或服务真实不可用可记 trusted_blocked。';
     next['判定Oracle'] = 'public_state_machine+skill_reinstall_readiness+immutable_readback';
     next['动作计划JSON'] = json(actionPlan(id, 'run_initialization', next['自动化执行步骤']));
     next['精准断言JSON'] = json(assertions([
       '真实点击一键重装 Skill 且破坏性确认与 skillsReinstall 动作严格绑定，只允许一次产品点击',
-      '重装前后 catalog.installed identity 集合非空、唯一并逐项全等',
-      '同一 identity/readiness 签名连续三次 syncStatus=idle 后才允许收敛',
+      'qbot-core-beta-skill-reinstall-product-action-trace/v1 精确绑定 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1、破坏性确认、catalog_observations_before_action、catalog_observations_after_action、terminal_outcome、continuation_surface',
+      '动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 syncStatus=idle，read_error_count=0、retry_error_count=0',
+      'before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at',
+      '动作前允许在有界窗口等待 syncing 收敛，单次 syncing 不能立即定性为证据失败',
+      '前后 installed identity 集合必须非空、唯一且全等',
       '每个已安装 Skill ready=true，且不存在 unready/python_runtime_failed/半安装/错误状态',
       '原始 maintenance/terminal/catalog/截图引用均为本 Case 普通文件，bytes/SHA/schema/Case/method/testid 全等',
       '专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，并生成 initialization-continuation-surface.json 恢复文件',
-      '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空',
+      '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、running=false 且 Skill/Connector/Expert 全空；send_count_before、send_count_after 均为可观测非负安全整数并严格全等，send_count_unchanged=true，前后严格不变',
       '恢复前后 PNG 均为 Case 内普通文件，其路径、bytes、SHA-256 可重放',
     ], next['预期结果']));
   }
@@ -2858,7 +2861,7 @@ export function auditCasebookRuntimeScopes(scopes, { fixtureRoot = path.join(ROO
   ];
   const sheets = expectedScopes.map(([sheetName, expectedCount]) => {
     const sourceRows = scopes?.[sheetName];
-    if (!Array.isArray(sourceRows)) throw new Error(`r15 导出后能力审计缺少 Sheet：${sheetName}`);
+    if (!Array.isArray(sourceRows)) throw new Error(`r16 导出后能力审计缺少 Sheet：${sheetName}`);
     const cases = sourceRows.map(normalizeCasebookContractCase);
     const protocol = validateCoreBetaCasePlan(cases, { fixtureRoot });
     const rows = cases.map((testCase) => {
@@ -2925,7 +2928,7 @@ export function auditCasebookRuntimeScopes(scopes, { fixtureRoot = path.join(ROO
     }
     return errors.map((error) => `${sheet.sheet_name}:${error}`);
   });
-  if (failures.length) throw new Error(`r15 导出后完整协议与运行时能力审计失败：${failures.join('; ')}`);
+  if (failures.length) throw new Error(`r16 导出后完整协议与运行时能力审计失败：${failures.join('; ')}`);
   return {
     schema_version: 'qbot-release01-exported-runtime-audit/v1',
     ok: true,

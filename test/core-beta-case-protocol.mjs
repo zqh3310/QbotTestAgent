@@ -2352,31 +2352,65 @@ assert.equal(
   true,
   '历史冻结 Casebook 未声明专项角色时仍须可加载；runner 会在执行态强制追加并复核新证据',
 );
+const r15InitializedSkillReinstallCase = structuredClone(legacyInitializedSkillReinstallCase);
+r15InitializedSkillReinstallCase.evidence_roles.push(
+  'product_action_trace',
+  'skill_reinstall_readiness_verdict',
+  'initialization_continuation_surface',
+);
+r15InitializedSkillReinstallCase.oracle_type += '+skill_reinstall_readiness+immutable_readback';
+assert.equal(
+  validateCoreBetaCase(r15InitializedSkillReinstallCase).ok,
+  true,
+  'r15 已有的专项角色与 readiness Oracle 不能单独触发 r16 合同',
+);
+for (const [marker, declare] of [
+  ['trace schema', (candidate) => { candidate.steps += ' qbot-core-beta-skill-reinstall-product-action-trace/v1'; }],
+  ['before ledger', (candidate) => { candidate.steps += ' catalog_observations_before_action'; }],
+  ['after ledger', (candidate) => { candidate.steps += ' catalog_observations_after_action'; }],
+  ['send count before', (candidate) => { candidate.steps += ' send_count_before'; }],
+  ['send count after', (candidate) => { candidate.steps += ' send_count_after'; }],
+  ['send count unchanged', (candidate) => { candidate.steps += ' send_count_unchanged'; }],
+]) {
+  const partialR16Contract = structuredClone(legacyInitializedSkillReinstallCase);
+  declare(partialR16Contract);
+  const validation = validateCoreBetaCase(partialR16Contract);
+  assert.equal(validation.ok, false, `BETA-INIT-003 单独声明 r16 新标记 ${marker} 时不得回退 r15`);
+  assert.ok(
+    validation.errors.some((item) => item.includes('evidence_roles 缺少')),
+    `${marker}: ${validation.errors.join('\n')}`,
+  );
+}
 const initializedSkillReinstallCase = structuredClone(legacyInitializedSkillReinstallCase);
 initializedSkillReinstallCase.evidence_roles.push(
+  'product_action_trace',
   'skill_reinstall_readiness_verdict',
   'initialization_continuation_surface',
 );
 initializedSkillReinstallCase.oracle_type = 'public_state_machine+skill_reinstall_readiness+immutable_readback';
-initializedSkillReinstallCase.scenario = '真实点击一键重装 Skill 并完成破坏性确认；以前后完整 catalog、同一 identity/readiness 签名三次稳定 idle 和逐项 ready 证明运行层重建成功';
-initializedSkillReinstallCase.steps = '真实点击一键重装 Skill 并完成破坏性确认；读取重装前后完整 catalog；同一 identity/readiness 签名连续三次 idle；每个已安装 Skill ready=true，排除 unready/python_runtime_failed；成功或失败后点击【新建任务】恢复 continuation surface，并写入 initialization-continuation-surface.json 恢复文件；恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空；前后 PNG 均位于 Case 内普通文件，其路径、bytes、SHA-256 可重放；重放 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid。';
-initializedSkillReinstallCase.expected_result = '重装前后完整 catalog identity 全等，同一 identity/readiness 签名连续三次稳定 idle，每个已安装 Skill ready=true 且无失败态；专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，恢复后保持非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 和 Skill/Connector/Expert 全空。';
-initializedSkillReinstallCase.success_criteria = '真实点击一键重装 Skill、破坏性确认、前后完整 catalog、同一 identity/readiness 签名连续三次稳定 idle、每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重放一致；成功或失败后点击【新建任务】恢复 continuation surface；恢复 surface 为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false、Skill/Connector/Expert 全空；前后 PNG 是 Case 内普通文件且路径、bytes、SHA-256 可重放。';
+initializedSkillReinstallCase.scenario = '真实点击一键重装 Skill 并完成破坏性确认；读取前后完整 catalog，以动作前、动作后两个独立 catalog ledger 和前后 installed identity 集合全等证明终态';
+initializedSkillReinstallCase.steps = '动作前允许在有界窗口等待 syncing 收敛，单次 syncing 不能立即定性为证据失败；动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 syncStatus=idle，read_error_count=0、retry_error_count=0，且满足 started_at <= observations[*].captured_at <= ended_at；前后 installed identity 集合必须非空、唯一且全等；每个已安装 Skill ready=true，排除 unready/python_runtime_failed。生成 qbot-core-beta-skill-reinstall-product-action-trace/v1，绑定 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1、破坏性确认、catalog_observations_before_action、catalog_observations_after_action、terminal_outcome、continuation_surface，并证明 before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at。成功或失败后点击【新建任务】恢复 continuation surface，并写入 initialization-continuation-surface.json 恢复文件；恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、running=false 且 Skill/Connector/Expert 全空；send_count_before、send_count_after 均为可观测非负安全整数且严格全等，send_count_unchanged=true，前后严格不变；前后 PNG 均位于 Case 内普通文件，其路径、bytes、SHA-256 可重放；重放 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid。';
+initializedSkillReinstallCase.expected_result = '动作前、动作后两个独立 catalog ledger 均稳定且前后 installed identity 集合必须非空、唯一且全等，每个已安装 Skill ready=true 且无失败态；恢复后保持非空 draftInstanceId、taskId=null、messageCount=0、running=false 和 Skill/Connector/Expert 全空，send count 前后严格不变。';
+initializedSkillReinstallCase.success_criteria = '真实点击一键重装 Skill并完成破坏性确认；qbot-core-beta-skill-reinstall-product-action-trace/v1 的 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1，按 catalog_observations_before_action、catalog_observations_after_action、terminal_outcome、continuation_surface 绑定引用；动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 idle，read_error_count=0、retry_error_count=0，满足 started_at <= observations[*].captured_at <= ended_at；before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at；前后 installed identity 集合必须非空、唯一且全等；每个已安装 Skill ready=true 且不存在 unready/python_runtime_failed；maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 重放一致；成功或失败后点击【新建任务】恢复 continuation surface；恢复 surface 为非空 draftInstanceId、taskId=null、messageCount=0、running=false、Skill/Connector/Expert 全空，send_count_before/send_count_after 为非负安全整数且严格全等，send_count_unchanged=true，前后严格不变；前后 PNG 是 Case 内普通文件且路径、bytes、SHA-256 可重放。';
 initializedSkillReinstallCase.precise_assertions = {
   ...initializedSkillReinstallCase.precise_assertions,
   hard_oracles: [
     '真实点击一键重装 Skill 且破坏性确认严格绑定。',
-    '重装前后完整 catalog identity 集合非空、唯一并全等。',
-    '同一 identity/readiness 签名连续三次稳定 idle。',
+    'qbot-core-beta-skill-reinstall-product-action-trace/v1 精确绑定 case_id=BETA-INIT-003、method=skillsReinstall、testid=assistant-skills-reinstall、click_count=1、破坏性确认、catalog_observations_before_action、catalog_observations_after_action、terminal_outcome、continuation_surface。',
+    '动作前、动作后两个独立 catalog ledger 各自至少三次连续同签名 syncStatus=idle，read_error_count=0、retry_error_count=0。',
+    'started_at <= observations[*].captured_at <= ended_at；before ledger ended_at <= action dispatched_at <= after ledger started_at <= trace captured_at。',
+    '动作前允许在有界窗口等待 syncing 收敛，单次 syncing 不能立即定性为证据失败。',
+    '前后 installed identity 集合必须非空、唯一且全等。',
     '每个已安装 Skill ready=true，且不存在 unready/python_runtime_failed。',
     '原始 maintenance/terminal/catalog/截图 bytes/SHA/schema/Case/method/testid 均可重放。',
     '专项 Oracle 成功或失败后点击【新建任务】恢复 continuation surface，并生成 initialization-continuation-surface.json 恢复文件。',
-    '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、sendCount=0、running=false 且 Skill/Connector/Expert 全空。',
+    '恢复 surface 必须为非空 draftInstanceId、taskId=null、messageCount=0、running=false 且 Skill/Connector/Expert 全空；send_count_before、send_count_after 均为可观测非负安全整数并严格全等，send_count_unchanged=true，前后严格不变。',
     '恢复前后 PNG 均为 Case 内普通文件，其路径、bytes、SHA-256 可重放。',
   ],
 };
 
 for (const role of [
+  'product_action_trace',
   'skill_reinstall_readiness_verdict',
   'initialization_continuation_surface',
 ]) {
@@ -2386,6 +2420,36 @@ for (const role of [
     validateCoreBetaCase(missingRole).errors.join('\n'),
     new RegExp(`evidence_roles 缺少 ${role}`),
     `BETA-INIT-003 缺少 ${role} 时必须 fail-closed`,
+  );
+}
+
+for (const [signal, mutate, expectedError] of [
+  ['trace schema', (text) => text.replace(/qbot-core-beta-skill-reinstall-product-action-trace\/v1/gu, 'generic-action-trace/v1'), '正式合同缺少专用产品动作 trace schema'],
+  ['trace Case', (text) => text.replace(/case_id\s*=\s*BETA-INIT-003/gu, 'case_id=OTHER'), '正式合同缺少产品动作 trace Case 绑定'],
+  ['trace method', (text) => text.replace(/method\s*=\s*skillsReinstall/gu, 'method=unknown'), '正式合同缺少产品动作 trace method 绑定'],
+  ['trace testid', (text) => text.replace(/testid\s*=\s*assistant-skills-reinstall/gu, 'testid=unknown'), '正式合同缺少产品动作 trace testid 绑定'],
+  ['before ledger ref', (text) => text.replace(/catalog_observations_before_action/gu, 'catalog_before'), '正式合同缺少产品动作 trace 完整引用绑定'],
+  ['after ledger ref', (text) => text.replace(/catalog_observations_after_action/gu, 'catalog_after'), '正式合同缺少产品动作 trace 完整引用绑定'],
+  ['before/after ledgers', (text) => text.replace(/动作前、动作后两个独立\s*catalog\s*ledger/gu, '单一 catalog ledger'), '正式合同缺少动作前后独立 catalog ledger'],
+  ['ledger observation time', (text) => text.replace(/started_at\s*<=\s*observations\[\*\]\.captured_at\s*<=\s*ended_at/gu, 'ledger time unchecked'), '正式合同缺少ledger 样本时间窗口'],
+  ['cross evidence time', (text) => text.replace(/before\s*ledger\s*ended_at\s*<=\s*action\s*dispatched_at\s*<=\s*after\s*ledger\s*started_at\s*<=\s*trace\s*captured_at/gu, 'temporal chain unchecked'), '正式合同缺少产品动作 trace 跨阶段时序'],
+  ['stable samples', (text) => text.replace(/各自至少三次连续同签名\s*(?:syncStatus=)?idle/gu, '一次 idle'), '正式合同缺少动作前后各三次同签名 idle'],
+  ['read errors', (text) => text.replace(/read_error_count\s*=\s*0/gu, 'read_error_count=unknown'), '正式合同缺少动作前后零读取与重试错误'],
+  ['retry errors', (text) => text.replace(/retry_error_count\s*=\s*0/gu, 'retry_error_count=unknown'), '正式合同缺少动作前后零读取与重试错误'],
+  ['send before', (text) => text.replace(/send_count_before/gu, 'send_before'), '正式合同缺少sendCount 前后可观测安全整数'],
+  ['send after', (text) => text.replace(/send_count_after/gu, 'send_after'), '正式合同缺少sendCount 前后可观测安全整数'],
+  ['send unchanged', (text) => text.replace(/send_count_unchanged\s*=\s*true/gu, 'send_count_unchanged=unknown'), '正式合同缺少sendCount 前后严格不变'],
+]) {
+  const invalidContract = structuredClone(initializedSkillReinstallCase);
+  for (const field of ['scenario', 'steps', 'expected_result', 'success_criteria']) {
+    invalidContract[field] = mutate(String(invalidContract[field] || ''));
+  }
+  invalidContract.precise_assertions.hard_oracles = invalidContract.precise_assertions.hard_oracles
+    .map((oracle) => mutate(String(oracle || '')));
+  assert.match(
+    validateCoreBetaCase(invalidContract).errors.join('\n'),
+    new RegExp(expectedError.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `BETA-INIT-003 缺少 ${signal} 时必须 fail-closed`,
   );
 }
 
