@@ -1,10 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const QWORK_RELEASE_IDENTITY_READBACK_SCHEMA = 'qwork-release-identity-readback/v1';
 export const QWORK_UI_CODE_MANIFEST_SCHEMA = 'qwork-ui-code-manifest/v1';
+export const CLAUDE_SKILL_CALL_CANONICALIZATION_POLICY_SCHEMA =
+  'qbot-claude-skill-call-canonicalization-policy/v1';
+export const CLAUDE_SKILL_CALL_CANONICALIZATION_DISABLE_FLAG =
+  'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION';
 
 const OBSERVED_QWORK_IDENTITY_FIELDS = Object.freeze([
   'qwork_version',
@@ -17,6 +22,109 @@ const OBSERVED_QWORK_IDENTITY_FIELDS = Object.freeze([
 
 function text(value) {
   return String(value ?? '').trim();
+}
+
+function environmentFlagState(environment, name) {
+  if (!Object.prototype.hasOwnProperty.call(environment || {}, name)) return 'unset';
+  return String(environment[name]).trim() === '1' ? 'disabled' : 'not_disabled';
+}
+
+function singleLinePsValue(output) {
+  const value = String(output ?? '').replace(/\r?\n$/, '');
+  return value && !/[\r\n]/.test(value) ? value : '';
+}
+
+function processEnvironmentSuffix(commandOutput, commandWithEnvironmentOutput) {
+  const command = singleLinePsValue(commandOutput);
+  const commandWithEnvironment = singleLinePsValue(commandWithEnvironmentOutput);
+  if (!command || !commandWithEnvironment.startsWith(`${command} `)) return '';
+  const environmentSnapshot = commandWithEnvironment.slice(command.length + 1);
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(environmentSnapshot) ? environmentSnapshot : '';
+}
+
+function processEnvironmentValues(environmentSnapshot, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = [];
+  const pattern = new RegExp(`(?:^|\\s)${escaped}=([^\\s]*)`, 'g');
+  let match;
+  while ((match = pattern.exec(String(environmentSnapshot || ''))) !== null) matches.push(match[1]);
+  return matches;
+}
+
+/**
+ * Read only the canonicalization disable flag from the runner and managed host.
+ * Raw process output and errors never leave this function.
+ */
+export function inspectClaudeSkillCallCanonicalizationPolicy({
+  managedPid,
+  managedProcessVerified = false,
+  runnerEnvironment = process.env,
+  execFile = execFileSync,
+} = {}) {
+  const runnerState = environmentFlagState(
+    runnerEnvironment,
+    CLAUDE_SKILL_CALL_CANONICALIZATION_DISABLE_FLAG,
+  );
+  const pid = Number(managedPid);
+  let managedReadable = false;
+  let managedState = 'unknown';
+  let errorCode = '';
+
+  if (!managedProcessVerified) {
+    errorCode = 'managed_process_unverified';
+  } else if (!Number.isSafeInteger(pid) || pid <= 0) {
+    errorCode = 'managed_process_pid_invalid';
+  } else {
+    try {
+      const command = execFile(
+        '/bin/ps',
+        ['-ww', '-p', String(pid), '-o', 'command='],
+        { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+      );
+      const commandWithEnvironment = execFile(
+        '/bin/ps',
+        ['-E', '-ww', '-p', String(pid), '-o', 'command='],
+        { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+      );
+      const environmentSnapshot = processEnvironmentSuffix(command, commandWithEnvironment);
+      const managedMarkers = processEnvironmentValues(environmentSnapshot, 'DEEPBANK_E2E');
+      const flagValues = processEnvironmentValues(
+        environmentSnapshot,
+        CLAUDE_SKILL_CALL_CANONICALIZATION_DISABLE_FLAG,
+      );
+      if (!environmentSnapshot || managedMarkers.length !== 1 || managedMarkers[0] !== '1') {
+        errorCode = 'managed_process_environment_unreadable';
+      } else if (flagValues.length > 1) {
+        errorCode = 'managed_process_flag_ambiguous';
+      } else {
+        managedReadable = true;
+        managedState = flagValues.length === 0
+          ? 'unset'
+          : flagValues[0] === '1' ? 'disabled' : 'not_disabled';
+      }
+    } catch {
+      errorCode = 'managed_process_environment_unreadable';
+    }
+  }
+
+  if (runnerState === 'disabled') errorCode = 'runner_environment_disables_canonicalization';
+  else if (managedReadable && managedState === 'disabled') {
+    errorCode = 'managed_process_environment_disables_canonicalization';
+  }
+  const stableProjection = {
+    schema_version: CLAUDE_SKILL_CALL_CANONICALIZATION_POLICY_SCHEMA,
+    flag_name: CLAUDE_SKILL_CALL_CANONICALIZATION_DISABLE_FLAG,
+    runner: { readable: true, state: runnerState },
+    managed_process: { readable: managedReadable, state: managedState },
+    ok: !errorCode,
+    error_code: errorCode,
+  };
+  return {
+    ...stableProjection,
+    checked_at: new Date().toISOString(),
+    managed_process: { ...stableProjection.managed_process, pid: Number.isSafeInteger(pid) ? pid : null },
+    policy_sha256: createHash('sha256').update(JSON.stringify(stableProjection)).digest('hex'),
+  };
 }
 
 function shaFile(file, algorithm, encoding = 'hex') {

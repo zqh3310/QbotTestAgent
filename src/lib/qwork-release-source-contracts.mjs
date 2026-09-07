@@ -12,9 +12,15 @@ export const QWORK_MR1557_IMMEDIATE_REGENERATE_PROJECTION_CONTRACT_ID = 'deepban
 export const QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID = 'deepbankv2-mr-1540-memory-feature-profile/v1';
 export const QWORK_MR1550_CLAUDE_SKILL_DESCRIPTION_ROUTING_CONTRACT_ID = 'deepbankv2-mr-1550-claude-skill-description-routing/v1';
 export const QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT_ID = 'deepbankv2-mr-1558-settings-model-name-dedup/v1';
+export const QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT_ID = 'deepbankv2-mr-1595-obsolete-test-retirement/v1';
+export const QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT_ID = 'deepbankv2-mr-1590-qbot-expert-cloud-installation/v1';
+export const QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT_ID = 'deepbankv2-mr-1593-qbot-additive-response-compatibility/v1';
+export const QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT_ID = 'deepbankv2-mr-1596-anonymous-stable-runtime-discovery/v1';
+export const QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID = 'deepbankv2-mr-1597-worker-im-user-identity-forwarding/v1';
 export const QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT_ID = 'deepbankv2-mr-1561-worker-envelope-limit/v1';
 export const QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT_ID = 'deepbankv2-mr-1560-turn-authority-readiness/v1';
 export const QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT_ID = 'deepbankv2-mr-1573-memory-session-profile-stability/v1';
+export const QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT_ID = 'deepbankv2-mr-1579-claude-skill-call-canonicalization/v1';
 
 const HEX40 = /^[a-f0-9]{40}$/iu;
 const HEX64 = /^[a-f0-9]{64}$/iu;
@@ -756,6 +762,427 @@ export const QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT = deepFreeze({
   contract_sha256: sha256(stableJson(MR1558_CONTRACT_DEFINITION)),
 });
 
+const MR1595_CHANGED_PATHS = [
+  ".agent/docs.yaml",
+  ".agent/turn-context-residual-manifest.json",
+  "docs/qa/core-ux-test-cases.md",
+  "docs/ci-cd-operating-contract.md",
+  "scripts/ci/e2e/e2e-bug-derived-materials.test.mjs",
+  "scripts/ci/e2e/e2e-command-contract.test.mjs",
+  "scripts/ci/e2e/e2e-local-prerequisite-defer.test.mjs",
+  "scripts/ci/e2e/e2e-module-tags.test.mjs",
+  "scripts/ci/e2e/e2e-module.test.mjs",
+  "scripts/ci/e2e/e2e-modules-summary.mjs",
+  "scripts/ci/e2e/e2e-modules-summary.test.mjs",
+  "scripts/ci/e2e/e2e-prerequisites.test.mjs",
+  "scripts/ci/e2e/e2e-qbot-claude-document-processing.test.mjs",
+  "scripts/ci/e2e/e2e-release-mac.test.mjs",
+  "scripts/ci/e2e/e2e-release-target.test.mjs",
+  "scripts/ci/e2e/e2e-routing-contract.test.mjs",
+  "scripts/ci/e2e/e2e-source-release-proxy.test.mjs",
+  "scripts/ci/e2e/e2e-suite-closeout-matrix.test.mjs",
+  "scripts/ci/e2e/generate-e2e-child-pipeline.test.mjs",
+  "scripts/ci/policy/gitlab-ci.test.mjs",
+  "scripts/ci/policy/gitlab-settings-audit.test.mjs",
+  "scripts/ci/policy/lightweight-ci-context.test.mjs",
+  "scripts/ci/policy/lightweight-ci-verify.test.mjs",
+  "scripts/ci/policy/pipeline-policy-catalog.test.mjs",
+  "scripts/ci/policy/pipeline-policy.test.mjs",
+  "scripts/ci/policy/source-classification-projection.test.mjs",
+  "scripts/ci/unit/node-eval-tests.test.mjs",
+  "scripts/ci/unit/node-normal-plan.test.mjs",
+  "scripts/ci/unit/node-unit-affected.mjs",
+  "scripts/ci/unit/node-unit-affected.test.mjs",
+  "scripts/ci/unit/node-unit-evidence.test.mjs",
+  "scripts/ci/unit/node-unit-job-timing.test.mjs",
+  "scripts/ci/unit/node-unit-profile-history.test.mjs",
+  "scripts/ci/unit/node-unit-profile-reporter.test.mjs",
+  "scripts/ci/unit/node-unit-profile.test.mjs",
+  "scripts/ci/unit/node-unit-test-weights.json",
+  "scripts/ci/unit/node-unit-tests.mjs",
+  "scripts/ci/unit/node-unit-tests.test.mjs",
+  "scripts/ci/unit/unit-material-pin-mr.test.mjs",
+  "scripts/ci/unit/unit-material-registry.test.mjs",
+  "scripts/governance/architecture/checks/layout.test.mjs",
+  "scripts/governance/architecture/ratchet/function-identity.mjs",
+  "scripts/governance/architecture/ratchet/function-identity.test.mjs",
+  "scripts/governance/structure-check.mjs",
+  "scripts/governance/structure-check.test.mjs",
+  "scripts/migrations/1414-server-structure/test/server-structure-refactor.spec.mjs",
+  "scripts/migrations/1499-electron-structure/test/electron-structure-refactor.spec.mjs",
+  "scripts/migrations/1502/freeze-relocations.json",
+  "scripts/quality/web/web-crawl-v3-2-evaluate.mjs",
+  "scripts/quality/web/web-crawl-v3-evaluate.mjs",
+  "server/qbot-core/docs/qbot-vision-tools.md",
+  "test/ci/mr-gates/envelope.test.mjs",
+  "test/ci/mr-gates/evidence-auditor.test.mjs",
+  "test/ci/mr-gates/golden-1358.test.mjs",
+  "test/ci/mr-gates/open-mr-resolver.test.mjs",
+  "test/ci/mr-gates/pre-push-check.test.mjs",
+  "test/ci/mr-gates/receipt.test.mjs",
+  "test/ci/check-node-syntax.test.mjs",
+  "test/ci/delivery-preflight-consistency.test.mjs",
+  "test/ci/mr-delivery-preflight.test.mjs",
+  "test/ci/normal-plan.test.mjs",
+  "test/e2e/support/bug-derived-suite-materials.mjs",
+  "test/e2e/support/module-suites.mjs",
+  "test/e2e/support/module-suites.test.mjs",
+  "test/e2e/support/modules.mjs",
+  "test/e2e/bug-derived-materials.local.spec.mjs",
+  "test/e2e/bug-derived-materials.remote-dev.spec.mjs",
+  "test/e2e/local-real-issue-882.spec.mjs",
+  "test/e2e/remote-dev-local-only-assertions.spec.mjs",
+  "test/e2e/remote-dev.spec.mjs",
+  "test/unit/config/settings-ui-surface-contract.test.mjs",
+  "test/unit/connectors/connector-card-ui-entry.test.mjs",
+  "test/unit/connectors/connector-health-ui.test.mts",
+  "test/unit/core/font-family-contract.test.mjs",
+  "test/unit/core/issue-882-performance-assemble.test.mjs",
+  "test/unit/core/issue-882-performance-capture.test.mjs",
+  "test/unit/core/issue-882-performance-report.test.mjs",
+  "test/unit/core/quick-feedback-ui-copy.test.mjs",
+  "test/unit/core/searxng-issue-1371-experiment.test.mjs",
+  "test/unit/core/searxng-search-research-ledger.test.mjs",
+  "test/unit/core/searxng-v9-research-ledger.test.mjs",
+  "test/unit/core/skills-connectors-native-tip-guard.test.mjs",
+  "test/unit/core/theme-provider-light-lock.test.mjs",
+  "test/unit/core/uiux-draft-and-connector-state.test.mjs",
+  "test/unit/desktop/desktop-experience-regressions.test.mjs",
+  "test/unit/desktop/desktop-expert-runtime.test.mjs",
+  "test/unit/desktop/electron-host-architecture.test.mjs",
+  "test/unit/gitlab/gitlab-template-catalog.test.mjs",
+  "test/unit/projects/attachment-remove-layering.test.mjs",
+  "test/unit/projects/capabilities-nonblocking-route.test.mjs",
+  "test/unit/prompts/thinking-render-stability.test.mjs",
+  "test/unit/skills/expert-card-name-layout.test.mjs",
+  "test/unit/skills/expert-card-overflow-portal.test.mjs",
+  "test/unit/skills/expert-draft-history.test.mjs",
+  "test/unit/skills/expert-v2-legacy-bridge-removal.test.mjs",
+  "test/unit/skills/expert-v2-postgres-integration.test.mjs",
+  "test/unit/skills/skill-desc-preview-portal.test.mjs",
+  "test/unit/skills/skill-detail-metadata-rendering.test.mjs",
+  "test/unit/skills/skill-history-refresh-guard.test.mjs",
+  "test/unit/skills/skill-revert-ui-entry.test.mjs",
+  "test/unit/tools/electron-structure-refactor.test.mjs",
+  "test/unit/tools/server-structure-refactor.test.mjs",
+  "test/unit/ui/artifact-maximize-view-switch.test.mjs",
+  "test/unit/ui/composer-plus-submenu-scroll.test.mjs",
+  "test/unit/ui/preload-auth-reset-selector.test.mjs",
+  "test/unit/ui/sidebar-task-count-spaces-ready.test.mjs",
+  "test/unit/ui/sidebar-version-identity.test.mjs",
+  "test/unit/web/web-crawl-v3-10-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-10-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-11-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-11-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-12-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-12-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-13-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-13-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-13-public.test.mjs",
+  "test/unit/web/web-crawl-v3-14-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-14-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-14-public.test.mjs",
+  "test/unit/web/web-crawl-v3-15-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-15-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-15-public.test.mjs",
+  "test/unit/web/web-crawl-v3-16-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-16-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-16-public.test.mjs",
+  "test/unit/web/web-crawl-v3-17-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-17-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-17-public.test.mjs",
+  "test/unit/web/web-crawl-v3-18-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-18-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-18-public.test.mjs",
+  "test/unit/web/web-crawl-v3-19-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-19-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-19-public.test.mjs",
+  "test/unit/web/web-crawl-v3-2-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-2-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-2-promotion.test.mjs",
+  "test/unit/web/web-crawl-v3-20-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-20-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-20-public.test.mjs",
+  "test/unit/web/web-crawl-v3-21-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-21-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-21-public.test.mjs",
+  "test/unit/web/web-crawl-v3-22-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-22-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-22-public.test.mjs",
+  "test/unit/web/web-crawl-v3-23-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-23-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-23-public.test.mjs",
+  "test/unit/web/web-crawl-v3-24-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-24-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-24-public.test.mjs",
+  "test/unit/web/web-crawl-v3-25-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-25-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-25-public.test.mjs",
+  "test/unit/web/web-crawl-v3-26-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-26-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-26-public.test.mjs",
+  "test/unit/web/web-crawl-v3-27-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-27-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-27-public.test.mjs",
+  "test/unit/web/web-crawl-v3-28-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-28-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-28-public.test.mjs",
+  "test/unit/web/web-crawl-v3-3-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-3-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-4-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-4-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-5-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-5-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-6-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-6-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-7-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-7-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-8-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-8-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-9-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-9-evaluator.test.mjs",
+  "test/unit/web/web-crawl-v3-audit.test.mjs",
+  "test/unit/web/web-crawl-v3-evaluator.test.mjs",
+  "test/ci-policy-files.txt",
+  ".gitlab-ci.yml",
+  "package.json",
+  "playwright.config.mjs",
+];
+const MR1595_RETIRED_ASSERTION_IDS = [
+  'test_reads_model_group_source',
+  'test_declares_settings_name_dedup_contract',
+  'test_asserts_normalized_display_name',
+  'test_asserts_empty_and_duplicate_rejection',
+  'test_asserts_settings_dedupe_integration',
+];
+
+const MR1595_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_kind: 'assertion-retirement',
+  contract_id: QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT_ID,
+  mr_iid: '1595',
+  state: 'merged',
+  target_branch: 'release/0.1',
+  merge_commit_sha: '3b61267f74bb61b3053c970dd5c7b98d27683e6a',
+  changes_count: 184,
+  changed_paths: MR1595_CHANGED_PATHS,
+  mr_diff: {
+    bytes: 260186,
+    sha256: '867e9491a91485f3fba33bd9b3d53b04644f697a9d4a083a0239f87c33ec0852',
+  },
+  source_file: null,
+  retired_files: [{
+    path: MR1558_TEST_PATH,
+    old_path: MR1558_TEST_PATH,
+    new_path: MR1558_TEST_PATH,
+    new_file: false,
+    renamed_file: false,
+    deleted_file: true,
+  }],
+  header_emissions: [],
+  integration_bindings: [],
+  forbidden_fragments: [],
+  supersedes: [{
+    contract_id: QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT_ID,
+    disposition: 'retired',
+    current_assertions: MR1595_RETIRED_ASSERTION_IDS.map((id) => `integration_binding:${id}`),
+  }],
+};
+
+export const QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT = deepFreeze({
+  ...MR1595_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1595_CONTRACT_DEFINITION)),
+});
+
+const MR1590_SERVICE_PATH = 'server/control-plane/experts/qbot-expert-installation-service.mjs';
+const MR1590_CHANGED_PATHS = [
+  '.agent/context/_shared/references/expert-v2-model.md',
+  'scripts/ci/unit/node-normal-plan.mjs',
+  'scripts/ci/unit/node-normal-plan.test.mjs',
+  'scripts/ci/unit/node-unit-test-weights.json',
+  'server/control-plane/experts/index.mjs',
+  'server/control-plane/experts/qbot-expert-installation-client.mjs',
+  'server/control-plane/experts/qbot-expert-installation-contract.mjs',
+  'server/control-plane/experts/qbot-expert-installation-routes.mjs',
+  MR1590_SERVICE_PATH,
+  'server/control-plane/.architecture.yaml',
+  'server/control-plane/index.mjs',
+  'server/shared/experts/index.mjs',
+  'test/e2e/support/module-suites-qbot-cloud-install.mjs',
+  'test/e2e/support/module-suites-qbot-cloud-install.test.mjs',
+  'test/e2e/support/module-suites.mjs',
+  'test/unit/server/qbot-expert-installation-client.test.mjs',
+  'test/unit/server/qbot-expert-installation-routes.test.mjs',
+  '.env.example',
+];
+const MR1590_INTEGRATION_BINDINGS = [
+  ['service_reads_owner_release', MR1590_SERVICE_PATH, '        getRelease(owner, expert, release),'],
+  ['service_reads_release_version', MR1590_SERVICE_PATH, '      const version = versionId ? await getVersion(owner, expert, versionId) : null;'],
+  ['service_reads_direct_dependencies', MR1590_SERVICE_PATH, '      const directDependencies = await listDependencies(versionId);'],
+  ['service_exports_canonical_definition', MR1590_SERVICE_PATH, '      const exported = buildExpertDefinitionFromManifest(version.manifest, {'],
+  ['service_sends_exact_exported_bytes', MR1590_SERVICE_PATH, '        definition: exported.file.bytes,'],
+  ['client_refuses_redirects', 'server/control-plane/experts/qbot-expert-installation-client.mjs', "    redirect: 'manual',"],
+  ['client_forwards_current_bearer', 'server/control-plane/experts/qbot-expert-installation-client.mjs', '      Authorization: `Bearer ${qbotCurrentBearer(bearer)}`,'],
+  ['client_bounds_response_bytes', 'server/control-plane/experts/qbot-expert-installation-client.mjs', 'const MAX_RESPONSE_BYTES = 128 * 1024;'],
+  ['client_install_path', 'server/control-plane/experts/qbot-expert-installation-client.mjs', '    path: `/v1/qwork/expert-installations/${encodeURIComponent(sourceExpertId)}/releases/${encodeURIComponent(sourceReleaseId)}`,'],
+  ['client_status_path', 'server/control-plane/experts/qbot-expert-installation-client.mjs', '    path: `/v1/qwork/expert-installations/${encodeURIComponent(sourceExpertId)}`,'],
+  ['routes_install_endpoint', 'server/control-plane/experts/qbot-expert-installation-routes.mjs', "    '/api/experts/:expertId/releases/:releaseId/qbot-installation',"],
+  ['routes_status_endpoint', 'server/control-plane/experts/qbot-expert-installation-routes.mjs', "    '/api/experts/:expertId/qbot-installation',"],
+  ['test_exact_release_bytes', 'test/unit/server/qbot-expert-installation-routes.test.mjs', "test('installation service selects the owner Release and sends byte-equivalent canonical export on every retry', async () => {"],
+  ['test_foreign_owner_concealment', 'test/unit/server/qbot-expert-installation-routes.test.mjs', "test('installation service conceals foreign Expert ownership and performs no Qbot or persistence write', async () => {"],
+  ['test_request_credential_redaction', 'test/unit/server/qbot-expert-installation-routes.test.mjs', "test('Expert routes forward a non-enumerable request credential and preserve Qbot 201, 200, and typed 422 status', async () => {"],
+  ['test_fake_qbot_promotion_guard', 'test/e2e/support/module-suites-qbot-cloud-install.test.mjs', '  assert.match(suite.residualEvidence.promotionGuard, /does not claim a real Qbot/u);'],
+].map(([id, filePath, source]) => ({ id, path: filePath, addition: byteRecord(source) }));
+const MR1590_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT_ID,
+  mr_iid: '1590', state: 'merged', target_branch: 'release/0.1',
+  merge_commit_sha: 'a2870474ffda705c1535a22be76fcd70be62167c',
+  changes_count: 18, changed_paths: MR1590_CHANGED_PATHS,
+  mr_diff: { bytes: 70444, sha256: 'ba126a6dc8085a4ed41c05aebbf0852a16b33ca7b508aa37321dcc65d45c5ad5' },
+  source_file: {
+    proof_mode: 'exact-new-file', path: MR1590_SERVICE_PATH, old_path: MR1590_SERVICE_PATH,
+    new_file: true, renamed_file: false, deleted_file: false,
+    change_bytes: 3078, change_sha256: '84804aa813a426d600ace52576fb3cc75a150ba43556de9b26734cad1af5b8d1',
+    source_bytes: 2703, source_sha256: 'ac3e79d1414bd8a1f4c8615b5cbcf51cca47ff3f8db95c1b1b505bfe17dbdd73', source_line_count: 65,
+  },
+  header_emissions: [], integration_bindings: MR1590_INTEGRATION_BINDINGS, forbidden_fragments: [],
+};
+export const QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT = deepFreeze({
+  ...MR1590_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1590_CONTRACT_DEFINITION)),
+});
+
+const MR1593_CONTRACT_PATH = 'server/control-plane/experts/qbot-expert-installation-contract.mjs';
+const MR1593_CHANGED_PATHS = [
+  'scripts/ci/unit/node-unit-test-weights.json',
+  MR1593_CONTRACT_PATH,
+  'test/unit/server/qbot-expert-installation-client.test.mjs',
+];
+const MR1593_INTEGRATION_BINDINGS = [
+  ['warning_accepts_additive_fields', MR1593_CONTRACT_PATH, '  if (!warning) return null;'],
+  ['channel_accepts_additive_fields', MR1593_CONTRACT_PATH, '  if (!channel) return null;'],
+  ['test_additive_projection', 'test/unit/server/qbot-expert-installation-client.test.mjs', "test('status GET ignores additive response fields and projects only known safe fields', async () => {"],
+  ['test_additive_operation_id', 'test/unit/server/qbot-expert-installation-client.test.mjs', "        operationId: 'operation-added-by-qbot',"],
+  ['test_additive_fields_redacted', 'test/unit/server/qbot-expert-installation-client.test.mjs', '  assert.doesNotMatch(serialized, /operation-added-by-qbot|optional upstream explanation|generation/u);'],
+].map(([id, filePath, source]) => ({ id, path: filePath, addition: byteRecord(source) }));
+const MR1593_FORBIDDEN_FRAGMENTS = [
+  ['strict_installation_key_list', 'const INSTALLATION_KEYS = Object.freeze(['],
+  ['strict_problem_key_list', "const PROBLEM_KEYS = Object.freeze(['type', 'title', 'status', 'code', 'retryable', 'path']);"],
+  ['strict_exact_keys_helper', 'function exactKeys(value, keys) {'],
+  ['strict_warning_keys', "  if (!warning || !exactKeys(warning, ['code', 'path'])) return null;"],
+  ['strict_installation_keys', '  if (!input || !exactKeys(input, INSTALLATION_KEYS)) return null;'],
+  ['strict_channel_keys', "  if (!channel || !exactKeys(channel, ['readiness', 'route'])) return null;"],
+  ['strict_problem_keys', '  if (!input || !exactKeys(input, PROBLEM_KEYS)) return null;'],
+  ['tenant_id_required', '    isQbotOpaqueIdentifier(input.tenantId) &&'],
+  ['problem_type_required', "    typeof input.type === 'string' &&"],
+  ['problem_url_required', '    new URL(input.type);'],
+].map(([id, source]) => ({ id, path: MR1593_CONTRACT_PATH, match: 'line', value: byteRecord(source) }));
+const MR1593_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT_ID,
+  mr_iid: '1593', state: 'merged', target_branch: 'release/0.1',
+  merge_commit_sha: '44725752f4690cf56bb3747238335ba5878aaeb6',
+  changes_count: 3, changed_paths: MR1593_CHANGED_PATHS,
+  mr_diff: { bytes: 7918, sha256: 'fbff6a098426d5dbbc03f61c0752ee0d348a235e247c316996d229aa60bc7138' },
+  source_file: {
+    proof_mode: 'exact-added-lines', path: MR1593_CONTRACT_PATH, old_path: MR1593_CONTRACT_PATH,
+    new_file: false, renamed_file: false, deleted_file: false,
+    change_bytes: 4223, change_sha256: '6fb5fde3c40307fc0206b85bd598a5539a64d8673df65a27d03c4b039113926d',
+    source_bytes: 112, source_sha256: '68bde4da96f116a9ebf82ce5340cf5cf3f89d529dd23e5ab5c722ab27e9333db', source_line_count: 4,
+  },
+  header_emissions: [], integration_bindings: MR1593_INTEGRATION_BINDINGS, forbidden_fragments: MR1593_FORBIDDEN_FRAGMENTS,
+};
+export const QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT = deepFreeze({
+  ...MR1593_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1593_CONTRACT_DEFINITION)),
+});
+
+const MR1596_POLICY_PATH = 'server/control-plane/releases/runtime-release-policy.mjs';
+const MR1596_CHANGED_PATHS = [
+  'electron/host-core/auth/credential-lifecycle.cjs', 'electron/teams360-host-contract.md',
+  'server/control-plane/auth/direct-lingxi-bearer-routes.mjs', 'server/control-plane/docs/lingxi-resource-server-bearer-contract.md',
+  MR1596_POLICY_PATH, 'server/control-plane/index.mjs', 'test/e2e/support/module-suites.mjs',
+  'test/e2e/support/module-suites.test.mjs', 'test/unit/auth/lingxi-credential-manager.test.mjs',
+  'test/unit/core/direct-lingxi-bearer-auth.test.mjs', 'test/unit/runtime/runtime-release-policy.test.mjs',
+];
+const MR1596_INTEGRATION_BINDINGS = [
+  ['anonymous_assignment_declaration', MR1596_POLICY_PATH, 'function resolveAnonymousRuntimeReleaseAssignment({ catalog, policy = {} } = {}) {'],
+  ['anonymous_selects_stable', MR1596_POLICY_PATH, "    channel: 'stable',"],
+  ['anonymous_reason', MR1596_POLICY_PATH, "    reason: rollback ? 'rollback' : 'anonymous-default',"],
+  ['anonymous_assignment_dispatch', MR1596_POLICY_PATH, '  if (anonymous) return resolveAnonymousRuntimeReleaseAssignment({ catalog, policy });'],
+  ['desktop_anonymous_runtime_read', 'electron/host-core/auth/credential-lifecycle.cjs', "  return target.pathname === '/api/runtime-release' && [...target.searchParams.keys()].every((key) => ['deviceId', 'teamsVersion', 'bootstrapAbi', 'currentVersion'].includes(key));"],
+  ['optional_auth_route', 'server/control-plane/auth/direct-lingxi-bearer-routes.mjs', "  '/api/runtime-release',"],
+  ['optional_auth_mount', 'server/control-plane/index.mjs', 'mountDirectLingxiBearerManagementAuth(app, { requireAuth: auth.requireDirectLingxiBearerAuth, requireOptionalAuth: auth.requireOptionalDirectLingxiBearerAuth });'],
+  ['anonymous_identity_projection', 'server/control-plane/index.mjs', "        anonymous: req.auth?.kind !== 'direct-lingxi-bearer',"],
+  ['test_anonymous_stable', 'test/unit/runtime/runtime-release-policy.test.mjs', "test('anonymous release discovery selects stable current without identity or percentage targeting', () => {"],
+  ['test_optional_auth_states', 'test/unit/core/direct-lingxi-bearer-auth.test.mjs', "test('runtime release accepts anonymous or verified identity and rejects an invalid supplied bearer', async () => {"],
+].map(([id, filePath, source]) => ({ id, path: filePath, addition: byteRecord(source) }));
+const MR1596_FORBIDDEN_FRAGMENTS = [
+  ['old_anonymous_bootstrap_helper', 'electron/host-core/auth/credential-lifecycle.cjs', 'function isAnonymousBootstrapRead(method, path) {'],
+  ['old_anonymous_bootstrap_binding', 'electron/host-core/auth/credential-lifecycle.cjs', '    const anonymousBootstrapRead = isAnonymousBootstrapRead(normalizedMethod, normalizedPath);'],
+  ['old_auth_mount_without_optional', 'server/control-plane/index.mjs', 'mountDirectLingxiBearerManagementAuth(app, {'],
+].map(([id, filePath, source]) => ({ id, path: filePath, match: 'line', value: byteRecord(source) }));
+const MR1596_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT_ID,
+  mr_iid: '1596', state: 'merged', target_branch: 'release/0.1',
+  merge_commit_sha: 'ee363f4bb0549a4b0f7ebd88f63036fa8b1068df',
+  changes_count: 11, changed_paths: MR1596_CHANGED_PATHS,
+  mr_diff: { bytes: 28960, sha256: 'c909e06fdbc651aa6672b08ecfdd32490f413cf25866c8333df5b12c87d6d4ec' },
+  source_file: {
+    proof_mode: 'exact-added-lines', path: MR1596_POLICY_PATH, old_path: MR1596_POLICY_PATH,
+    new_file: false, renamed_file: false, deleted_file: false,
+    change_bytes: 2542, change_sha256: '2ccee231814756476b37820f37b99a159c96a2b48b846889d4ae98c020ddbb59',
+    source_bytes: 1422, source_sha256: 'bf5b4377e0e498008006f9ed9b2a95f5d674f5de1c0a015b91cbf8f9a14d3074', source_line_count: 25,
+  },
+  header_emissions: [], integration_bindings: MR1596_INTEGRATION_BINDINGS, forbidden_fragments: MR1596_FORBIDDEN_FRAGMENTS,
+};
+export const QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT = deepFreeze({
+  ...MR1596_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1596_CONTRACT_DEFINITION)),
+});
+
+const MR1597_ALLOWLIST_LINE = 'const WORKER_ENV_ALLOWLIST = /^(PATH|SystemRoot|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|LANG|LC_[A-Z_]+|IM_USER_(?:MDMCODE|EMAIL|DOMAINACCOUNT|PROFILE)|DEEPBANK_HOME|STRATA_HOME|DEEPBANK_SERVER|QBOT_CONTROL_PLANE_SERVER|QBOT_RELEASE_ENV|DEEPBANK_CLAUDE_CODE_EXECUTABLE|CLAUDE_CODE_EXECUTABLE|QBOT_RUNTIME_NODE_MODULES|QBOT_(?:PYTHON|NODE)_[A-Z0-9_]+)$/u;';
+const MR1597_OLD_ALLOWLIST_LINE = 'const WORKER_ENV_ALLOWLIST = /^(PATH|SystemRoot|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|LANG|LC_[A-Z_]+|DEEPBANK_HOME|STRATA_HOME|DEEPBANK_SERVER|QBOT_CONTROL_PLANE_SERVER|QBOT_RELEASE_ENV|DEEPBANK_CLAUDE_CODE_EXECUTABLE|CLAUDE_CODE_EXECUTABLE|QBOT_RUNTIME_NODE_MODULES|QBOT_(?:PYTHON|NODE)_[A-Z0-9_]+)$/u;';
+const MR1597_PRODUCT_PATHS = [
+  'electron/host-core/agent/execution-worker-launch-policy.cjs',
+  'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+  'electron/host-core/agent/execution-worker-supervisor.cjs',
+];
+const MR1597_TEST_PATH = 'test/unit/desktop/execution-worker-supervisor.test.mjs';
+const MR1597_CHANGED_PATHS = [...MR1597_PRODUCT_PATHS, MR1597_TEST_PATH];
+const MR1597_INTEGRATION_BINDINGS = [
+  ...MR1597_PRODUCT_PATHS.map((filePath, index) => ({ id: `worker_allowlist_${index + 1}`, path: filePath, addition: byteRecord(MR1597_ALLOWLIST_LINE) })),
+  ['test_worker_identity_allowlist', "test('worker process environment is allowlisted and excludes bearer/token material', () => {"],
+].map((entry) => Array.isArray(entry)
+  ? ({ id: entry[0], path: MR1597_TEST_PATH, addition: byteRecord(entry[1]) }) : entry);
+const MR1597_FORBIDDEN_FRAGMENTS = MR1597_PRODUCT_PATHS.flatMap((filePath, index) => [
+  { id: `old_worker_allowlist_${index + 1}`, path: filePath, match: 'line', value: byteRecord(MR1597_OLD_ALLOWLIST_LINE) },
+  ...['IM_USER_ACCESS_TOKEN', 'IM_QWORK_ACCESS_TOKEN', 'QBOT_LINGXI_ACCESS_TOKEN'].map((secret) => ({
+    id: `worker_secret_${index + 1}_${secret.toLowerCase()}`, path: filePath, match: 'substring', value: byteRecord(secret),
+  })),
+]);
+const MR1597_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID,
+  mr_iid: '1597', state: 'merged', target_branch: 'release/0.1',
+  merge_commit_sha: '8d5429066a4c374c23275f7d009a3c78060f4522',
+  changes_count: 4, changed_paths: MR1597_CHANGED_PATHS,
+  mr_diff: { bytes: 4970, sha256: '4a69a85325a545fcd5d9624399d2143c665f70f6af473c26a502f94558e5feaa' },
+  source_file: {
+    proof_mode: 'exact-added-lines', path: MR1597_PRODUCT_PATHS[0], old_path: MR1597_PRODUCT_PATHS[0],
+    new_file: false, renamed_file: false, deleted_file: false,
+    change_bytes: 1005, change_sha256: '51230640bfd6698e48108078687d5de1c2d9fc797a08dbe775fa5b94a1b60503',
+    source_bytes: 354, source_sha256: '3f33ef3ecb37e4f4ac3732e28a8cdaadb351e1059f2d54473a270e1c6217549e', source_line_count: 1,
+  },
+  header_emissions: [], integration_bindings: MR1597_INTEGRATION_BINDINGS, forbidden_fragments: MR1597_FORBIDDEN_FRAGMENTS,
+};
+export const QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT = deepFreeze({
+  ...MR1597_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1597_CONTRACT_DEFINITION)),
+});
+
 const MR1561_PROTOCOL_PATH = 'electron/host-core/agent/execution-worker-protocol.cjs';
 const MR1561_TEST_PATH = 'test/unit/desktop/execution-worker-supervisor.test.mjs';
 const MR1561_INTEGRATION_BINDINGS = [
@@ -1096,6 +1523,173 @@ export const QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT = deepFreeze
   contract_sha256: sha256(stableJson(MR1573_CONTRACT_DEFINITION)),
 });
 
+const MR1579_ENGINE_PATH = 'server/qbot-core/engine/engine.mjs';
+const MR1579_EXPERT_RUNTIME_PATH = 'server/qbot-core/experts/expert-v2-runtime.mjs';
+const MR1579_MEDIA_LOOPBACK_PATH = 'server/qbot-core/models/claude-media-compatibility-loopback.mjs';
+const MR1579_MEDIA_COMPATIBILITY_PATH = 'server/qbot-core/models/claude-media-compatibility.mjs';
+const MR1579_SKILL_COMPATIBILITY_PATH = 'server/qbot-core/models/claude-skill-call-compatibility.mjs';
+const MR1579_MEDIA_TEST_PATH = 'test/unit/server/claude-media-compatibility.test.mjs';
+const MR1579_SKILL_TEST_PATH = 'test/unit/server/claude-skill-call-compatibility.test.mjs';
+const MR1579_INVOCATION_NOTE_TEST_PATH = 'test/unit/skills/claude-skill-invocation-note.test.mjs';
+const MR1579_EXPERT_TEST_PATH = 'test/unit/skills/expert-v2-runtime-boundaries.test.mjs';
+const MR1579_PREFLIGHT_TEST_PATH = 'test/unit/skills/skillhub-engine-preflight.test.mjs';
+
+const MR1579_CHANGED_PATHS = [
+  'scripts/ci/unit/node-unit-test-weights.json',
+  MR1579_ENGINE_PATH,
+  MR1579_EXPERT_RUNTIME_PATH,
+  MR1579_MEDIA_LOOPBACK_PATH,
+  MR1579_MEDIA_COMPATIBILITY_PATH,
+  MR1579_SKILL_COMPATIBILITY_PATH,
+  'server/qbot-core/.architecture.yaml',
+  MR1579_MEDIA_TEST_PATH,
+  MR1579_SKILL_TEST_PATH,
+  MR1579_INVOCATION_NOTE_TEST_PATH,
+  MR1579_EXPERT_TEST_PATH,
+  MR1579_PREFLIGHT_TEST_PATH,
+];
+
+const MR1579_INTEGRATION_BINDINGS = [
+  ['alias_uses_invocation_name', MR1579_SKILL_COMPATIBILITY_PATH,
+    '    const canonicalName = compact(descriptor?.invocationName);'],
+  ['alias_maps_to_invocation_name', MR1579_SKILL_COMPATIBILITY_PATH,
+    '        aliases.set(alias, canonicalName);'],
+  ['canonical_name_is_not_rewritten', MR1579_SKILL_COMPATIBILITY_PATH,
+    '  if (canonicalizer.canonicalNames?.has(requestedName)) {'],
+  ['ambiguous_alias_fails_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "    return { input, changed: false, requestedName, canonicalName: '', reason: 'ambiguous' };"],
+  ['unknown_alias_fails_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "    return { input, changed: false, requestedName, canonicalName: '', reason: 'unknown' };"],
+  ['only_skill_name_is_rewritten', MR1579_SKILL_COMPATIBILITY_PATH,
+    '    input: { ...source, skill: canonicalName },'],
+  ['tool_use_outer_fields_are_preserved', MR1579_SKILL_COMPATIBILITY_PATH,
+    '  return result.changed ? { ...source, input: result.input } : block;'],
+  ['json_payload_rewriter_exported', MR1579_SKILL_COMPATIBILITY_PATH,
+    'export function rewriteClaudeProviderSkillResponsePayload(payload, canonicalizer) {'],
+  ['explicit_disable_is_fail_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "  if (compact(env?.QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION) === '1') return null;"],
+  ['malformed_sse_fails_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "    throw skillCallStreamError('claude_skill_call_stream_input_invalid');"],
+  ['oversized_sse_fails_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "      if (bytes > maxBufferedBytes) throw skillCallStreamError('claude_skill_call_stream_block_too_large');"],
+  ['sse_rewriter_exported', MR1579_SKILL_COMPATIBILITY_PATH,
+    'export async function* canonicalizeClaudeSkillSseStream(chunks, canonicalizer, {'],
+  ['incomplete_sse_fails_closed', MR1579_SKILL_COMPATIBILITY_PATH,
+    "  if (buffer.pending) throw skillCallStreamError('claude_skill_call_stream_block_incomplete');"],
+  ['loopback_stream_uses_sse_rewriter', MR1579_MEDIA_LOOPBACK_PATH,
+    '    ? canonicalizeClaudeSkillSseStream(response.body, canonicalizer, { onRewrite })'],
+  ['loopback_json_uses_payload_rewriter', MR1579_MEDIA_LOOPBACK_PATH,
+    '  const rewritten = rewriteClaudeProviderSkillResponsePayload(payload, canonicalizer);'],
+  ['loopback_selects_sse_path', MR1579_MEDIA_LOOPBACK_PATH,
+    "  if (contentType.includes('text/event-stream')) {"],
+  ['loopback_selects_json_path', MR1579_MEDIA_LOOPBACK_PATH,
+    '  return forwardJsonSkillResponse(response, res, { canonicalizer, onRewrite });'],
+  ['loopback_builds_turn_scoped_canonicalizer', MR1579_MEDIA_LOOPBACK_PATH,
+    '    ?? createClaudeSkillCallCanonicalizerFromPreflight(skillPreflight, env);'],
+  ['media_wrapper_loads_loopback', MR1579_MEDIA_COMPATIBILITY_PATH,
+    "  const loopback = await import('./claude-media-compatibility-loopback.mjs');"],
+  ['media_wrapper_injects_media_rewriter', MR1579_MEDIA_COMPATIBILITY_PATH,
+    '    rewritePayload: rewriteClaudeProviderMediaPayload,'],
+  ['engine_prompt_uses_invocation_note', MR1579_ENGINE_PATH,
+    '    skillSelectionNote: runtimeFamily === RUNTIME_FAMILY_CLAUDE ? claudeRuntimeSkillInvocationNoteOverride(s) : undefined,'],
+  ['engine_passes_skill_preflight_to_loopback', MR1579_ENGINE_PATH,
+    '      capabilities: claudeVisionCapabilityByModel, skillPreflight,'],
+  ['engine_inventory_limit_is_8000', MR1579_ENGINE_PATH,
+    'const AUTOMATIC_SKILL_INVENTORY_MAX_CHARS = 8000;'],
+  ['engine_failure_names_prefer_invocation_name', MR1579_ENGINE_PATH,
+    '    .map((item) => toolFailureText(item?.invocationName || item?.nativeSkillName || item?.runtimeName || item?.name, 160))'],
+  ['draft_expert_hides_durable_skill_identity', MR1579_EXPERT_RUNTIME_PATH,
+    '        ? `【草稿专家能力】\\n专家依赖的 ${skills.length} 个 Skill 已进入本轮物化选择；具体调用名与描述仅以本轮运行时提供的 Skill 清单为准。`'],
+  ['published_expert_hides_durable_skill_identity', MR1579_EXPERT_RUNTIME_PATH,
+    '            ? `【专家绑定技能】\\n专家依赖的 ${skills.length} 个 Skill 已进入本轮物化选择；具体调用名与描述仅以本轮运行时提供的 Skill 清单为准。`'],
+  ['test_declares_unique_alias_mapping', MR1579_SKILL_TEST_PATH,
+    "test('#1644 canonicalizer maps only current-turn unique aliases to registered invocation names', () => {"],
+  ['test_declares_ambiguous_and_unknown_fail_closed', MR1579_SKILL_TEST_PATH,
+    "test('#1644 canonicalizer fails closed for unknown and ambiguous aliases', () => {"],
+  ['test_declares_json_skill_only_rewrite', MR1579_SKILL_TEST_PATH,
+    "test('#1644 non-stream provider response rewrites only Skill input.skill', () => {"],
+  ['test_asserts_json_invocation_name', MR1579_SKILL_TEST_PATH,
+    "  assert.equal(result.payload.content[1].input.skill, 'qwork-runtime-skills:kb-query');"],
+  ['test_asserts_args_preserved', MR1579_SKILL_TEST_PATH,
+    "  assert.deepEqual(result.payload.content[1].input.args, { metric: 'gmv' });"],
+  ['test_asserts_text_block_preserved', MR1579_SKILL_TEST_PATH,
+    '  assert.strictEqual(result.payload.content[0], original.content[0]);'],
+  ['test_asserts_other_tool_preserved', MR1579_SKILL_TEST_PATH,
+    '  assert.strictEqual(result.payload.content[2], original.content[2]);'],
+  ['test_declares_fragmented_sse_rewrite', MR1579_SKILL_TEST_PATH,
+    "test('#1644 SSE buffers fragmented Skill input and emits canonical JSON before SDK validation', async () => {"],
+  ['test_declares_malformed_and_oversized_sse_fail_closed', MR1579_SKILL_TEST_PATH,
+    "test('#1644 malformed and oversized Skill SSE blocks fail closed', async () => {"],
+  ['test_declares_loopback_json_rewrite', MR1579_MEDIA_TEST_PATH,
+    "test('#1644 loopback canonicalizes provider Skill responses before SDK validation', async (t) => {"],
+  ['test_asserts_loopback_args_preserved', MR1579_MEDIA_TEST_PATH,
+    "  assert.deepEqual(payload.content[0].input.args, { metric: 'private-metric' });"],
+  ['test_declares_malformed_loopback_sse_close', MR1579_MEDIA_TEST_PATH,
+    "test('#1644 malformed Skill SSE closes the started response instead of hanging', async (t) => {"],
+  ['test_declares_expert_invocation_name_prompt', MR1579_INVOCATION_NOTE_TEST_PATH,
+    "test('#1644 Expert GPT prompt uses descriptor invocation names, not SkillHub durable ids', () => {"],
+  ['test_asserts_expert_durable_identity_hidden', MR1579_EXPERT_TEST_PATH,
+    '  assert.match(resolved.runtime.dependencyNote, /调用名与描述仅以本轮运行时提供的 Skill 清单为准/u);'],
+  ['test_asserts_inventory_limit_8000', MR1579_PREFLIGHT_TEST_PATH,
+    "  assert.ok(inventory.length <= 8000, '动态索引最多占用 8000 字符');"],
+].map(([id, filePath, source]) => ({ id, path: filePath, addition: byteRecord(source) }));
+
+const MR1579_FORBIDDEN_FRAGMENTS = [
+  ['engine_must_not_set_disable_flag', MR1579_ENGINE_PATH, 'substring',
+    'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION'],
+  ['architecture_must_not_set_disable_flag', 'server/qbot-core/.architecture.yaml', 'substring',
+    'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION'],
+  ['legacy_inventory_limit_4000', MR1579_ENGINE_PATH, 'line',
+    'const AUTOMATIC_SKILL_INVENTORY_MAX_CHARS = 4000;'],
+  ['legacy_failure_name_prefers_durable_identity', MR1579_ENGINE_PATH, 'line',
+    '    .map((item) => toolFailureText(item?.runtimeName || item?.name || item?.invocationName, 160))'],
+  ['legacy_claude_skill_selection_note_empty', MR1579_ENGINE_PATH, 'line',
+    "    skillSelectionNote: runtimeFamily === RUNTIME_FAMILY_CLAUDE ? '' : undefined,"],
+  ['expert_prompt_exposes_durable_identity', MR1579_EXPERT_RUNTIME_PATH, 'substring',
+    '${skill.runtimeName} (${skill.sourcePlatform})'],
+].map(([id, filePath, match, source]) => ({
+  id,
+  path: filePath,
+  match,
+  value: byteRecord(source),
+}));
+
+const MR1579_CONTRACT_DEFINITION = {
+  ...SOURCE_AND_TEST_DECLARATION,
+  contract_id: QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT_ID,
+  mr_iid: '1579',
+  state: 'merged',
+  target_branch: 'release/0.1',
+  merge_commit_sha: '7f9b520f41ed9ac34b9230f28df49a5fce678953',
+  changes_count: 12,
+  changed_paths: MR1579_CHANGED_PATHS,
+  mr_diff: {
+    bytes: 63270,
+    sha256: 'e250309ca8e588db87b9214def6b1acb25e54d8a4605d93ba651cf1c34ff8967',
+  },
+  source_file: {
+    proof_mode: 'exact-new-file',
+    path: MR1579_SKILL_COMPATIBILITY_PATH,
+    old_path: MR1579_SKILL_COMPATIBILITY_PATH,
+    new_file: true,
+    renamed_file: false,
+    deleted_file: false,
+    change_bytes: 10988,
+    change_sha256: '7d8a961c2685b018802df4197aee150db424e3f7da5661ae0bfce1101e5b80c6',
+    source_bytes: 10166,
+    source_sha256: '4bd61aab3e4ec870a9bee2a8ff954a0dca7795231bf51412b4e240fd4d644525',
+    source_line_count: 286,
+  },
+  header_emissions: [],
+  integration_bindings: MR1579_INTEGRATION_BINDINGS,
+  forbidden_fragments: MR1579_FORBIDDEN_FRAGMENTS,
+};
+
+export const QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT = deepFreeze({
+  ...MR1579_CONTRACT_DEFINITION,
+  contract_sha256: sha256(stableJson(MR1579_CONTRACT_DEFINITION)),
+});
+
 export const QWORK_RELEASE_SOURCE_CONTRACTS = deepFreeze([
   QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT,
   QWORK_MR1544_CLAUDE_TURN_HEADER_BRANDING_CONTRACT,
@@ -1105,9 +1699,15 @@ export const QWORK_RELEASE_SOURCE_CONTRACTS = deepFreeze([
   QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT,
   QWORK_MR1550_CLAUDE_SKILL_DESCRIPTION_ROUTING_CONTRACT,
   QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT,
+  QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT,
+  QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT,
+  QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT,
+  QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT,
+  QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
   QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
   QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
   QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
+  QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT,
 ]);
 
 function byteRecordIsExactLine(record) {
@@ -1155,6 +1755,54 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
   }
 }
 
+function isAssertionRetirementContract(contract) {
+  return text(contract?.contract_kind) === 'assertion-retirement';
+}
+
+function validateAssertionRetirementDefinition(contract, contractId) {
+  if (contract?.source_file !== null) {
+    throw new Error(`source_contract_retirement_source_file_invalid:${contractId}`);
+  }
+  for (const field of ['header_emissions', 'integration_bindings', 'forbidden_fragments']) {
+    if (!Array.isArray(contract?.[field]) || contract[field].length !== 0) {
+      throw new Error(`source_contract_retirement_${field}_invalid:${contractId}`);
+    }
+  }
+  const retiredFiles = Array.isArray(contract?.retired_files) ? contract.retired_files : [];
+  if (!retiredFiles.length
+    || new Set(retiredFiles.map((file) => text(file?.path))).size !== retiredFiles.length) {
+    throw new Error(`source_contract_retired_files_invalid:${contractId}`);
+  }
+  for (const retiredFile of retiredFiles) {
+    const filePath = text(retiredFile?.path);
+    if (!filePath.startsWith('test/')
+      || text(retiredFile?.old_path) !== filePath
+      || text(retiredFile?.new_path) !== filePath
+      || retiredFile?.new_file !== false
+      || retiredFile?.renamed_file !== false
+      || retiredFile?.deleted_file !== true) {
+      throw new Error(`source_contract_retired_file_invalid:${contractId}:${filePath || 'missing'}`);
+    }
+  }
+  const changedPaths = Array.isArray(contract?.changed_paths) ? contract.changed_paths.map(text) : [];
+  if (!Number.isSafeInteger(Number(contract?.changes_count))
+    || Number(contract.changes_count) <= 0
+    || changedPaths.length !== Number(contract.changes_count)
+    || changedPaths.some((filePath) => !filePath)
+    || new Set(changedPaths).size !== changedPaths.length
+    || retiredFiles.some((file) => !changedPaths.includes(file.path))) {
+    throw new Error(`source_contract_retirement_changed_paths_invalid:${contractId}`);
+  }
+  if (!Number.isSafeInteger(Number(contract?.mr_diff?.bytes))
+    || Number(contract.mr_diff.bytes) <= 0
+    || !HEX64.test(text(contract?.mr_diff?.sha256))) {
+    throw new Error(`source_contract_retirement_diff_invalid:${contractId}`);
+  }
+  if (!Array.isArray(contract?.supersedes) || contract.supersedes.length !== 1) {
+    throw new Error(`source_contract_retirement_successor_invalid:${contractId}`);
+  }
+}
+
 function validateSourceContractDefinition(contract) {
   const contractId = text(contract?.contract_id);
   if (!contractId) throw new Error('source_contract_id_missing');
@@ -1168,7 +1816,12 @@ function validateSourceContractDefinition(contract) {
   if (!HEX40.test(text(contract?.merge_commit_sha))) {
     throw new Error(`source_contract_merge_commit_invalid:${contractId}`);
   }
-  if (!['exact-new-file', 'exact-added-lines'].includes(text(contract?.source_file?.proof_mode))) {
+  if (text(contract?.contract_kind) && !isAssertionRetirementContract(contract)) {
+    throw new Error(`source_contract_kind_invalid:${contractId}`);
+  }
+  if (isAssertionRetirementContract(contract)) {
+    validateAssertionRetirementDefinition(contract, contractId);
+  } else if (!['exact-new-file', 'exact-added-lines'].includes(text(contract?.source_file?.proof_mode))) {
     throw new Error(`source_contract_proof_mode_invalid:${contractId}`);
   }
   validateCurrentReleaseOwnerScopes(contract, contractId);
@@ -1211,15 +1864,24 @@ export function resolveReleaseSourceContracts(contracts = QWORK_RELEASE_SOURCE_C
       const targetId = text(declaration?.contract_id);
       const assertions = Array.isArray(declaration?.current_assertions)
         ? declaration.current_assertions.map(text) : [];
+      const retirement = isAssertionRetirementContract(successor);
       if (!resolved.some((contract) => contract.contract_id === targetId) || targetId === successor.contract_id) {
         throw new Error(`source_contract_successor_target_invalid:${successor.contract_id}`);
       }
       const target = resolved.find((contract) => contract.contract_id === targetId);
-      if (!assertions.length || new Set(assertions).size !== assertions.length) {
+      if (!assertions.length || assertions.some((assertion) => !assertion)
+        || new Set(assertions).size !== assertions.length) {
         throw new Error(`source_contract_successor_assertions_invalid:${successor.contract_id}`);
+      }
+      if ((retirement && text(declaration?.disposition) !== 'retired')
+        || (!retirement && text(declaration?.disposition) === 'retired')) {
+        throw new Error(`source_contract_successor_disposition_invalid:${successor.contract_id}`);
       }
       for (const assertion of assertions) {
         if (assertion === 'header_emissions') {
+          if (retirement) {
+            throw new Error(`source_contract_retirement_assertion_invalid:${successor.contract_id}`);
+          }
           if (text(target?.source_file?.path) !== text(successor?.source_file?.path)) {
             throw new Error(`source_contract_successor_source_path_mismatch:${successor.contract_id}`);
           }
@@ -1229,8 +1891,23 @@ export function resolveReleaseSourceContracts(contracts = QWORK_RELEASE_SOURCE_C
           ? assertion.slice('integration_binding:'.length) : '';
         const targetBinding = target?.integration_bindings?.find((binding) => binding.id === bindingId);
         const successorBinding = successor?.integration_bindings?.find((binding) => binding.id === bindingId);
-        if (!bindingId || !targetBinding || !successorBinding) {
+        if (!bindingId || !targetBinding || (!retirement && !successorBinding)) {
           throw new Error(`source_contract_successor_assertions_invalid:${successor.contract_id}`);
+        }
+        if (retirement && !text(targetBinding?.path).startsWith('test/')) {
+          throw new Error(`source_contract_retirement_product_assertion:${successor.contract_id}:${bindingId}`);
+        }
+      }
+      if (retirement) {
+        const retiredPaths = new Set(successor.retired_files.map((file) => file.path));
+        const retiredTargetAssertions = target.integration_bindings
+          .filter((binding) => retiredPaths.has(binding.path))
+          .map((binding) => `integration_binding:${binding.id}`);
+        if (stableJson(assertions) !== stableJson(retiredTargetAssertions)
+          || retiredTargetAssertions.length === 0
+          || text(target?.source_file?.path) && retiredPaths.has(text(target.source_file.path))
+          || (target.forbidden_fragments || []).some((assertion) => retiredPaths.has(text(assertion?.path)))) {
+          throw new Error(`source_contract_retirement_scope_invalid:${successor.contract_id}`);
         }
       }
       if (successorByTarget.has(targetId)) throw new Error(`source_contract_successor_ambiguous:${targetId}`);
@@ -1286,6 +1963,27 @@ export function releaseSourceContractProtectedPaths(contract) {
   ].filter(Boolean))];
 }
 
+export function currentReleaseSourceContractProtectedPaths(contract, currentOwner = contract) {
+  const retirement = text(currentOwner?.contract_id) !== text(contract?.contract_id)
+    ? (Array.isArray(currentOwner?.supersedes) ? currentOwner.supersedes : [])
+      .find((declaration) => (
+        text(declaration?.contract_id) === text(contract?.contract_id)
+        && text(declaration?.disposition) === 'retired'
+      ))
+    : null;
+  const retiredPaths = new Set(retirement
+    ? (Array.isArray(currentOwner?.retired_files) ? currentOwner.retired_files : [])
+      .map((file) => text(file?.path))
+      .filter(Boolean)
+    : []);
+  return [...new Set([
+    ...releaseSourceContractProtectedPaths(contract),
+    ...(text(currentOwner?.contract_id) === text(contract?.contract_id)
+      ? []
+      : releaseSourceContractProtectedPaths(currentOwner)),
+  ].filter((filePath) => !retiredPaths.has(filePath)))];
+}
+
 export function releaseSourceContractTrigger(mr, contract) {
   const iidMatch = text(mr?.iid) === text(contract?.mr_iid);
   const mergeShaMatch = text(mr?.commit || mr?.merge_commit_sha) === text(contract?.merge_commit_sha);
@@ -1295,7 +1993,7 @@ export function releaseSourceContractTrigger(mr, contract) {
   const protectedPaths = new Set(releaseSourceContractProtectedPaths(contract));
   const matchingProtectedPaths = changedPaths.filter((file) => protectedPaths.has(file));
   return {
-    triggered: iidMatch || mergeShaMatch,
+    triggered: !isAssertionRetirementContract(contract) && (iidMatch || mergeShaMatch),
     iid_match: iidMatch,
     merge_sha_match: mergeShaMatch,
     protected_paths: [...new Set(matchingProtectedPaths)],
@@ -1521,10 +2219,7 @@ function observeForbiddenFragments(contract, sourceByPath, failures, prefix = 'f
 }
 
 function currentProtectedPaths(contract, headerContract) {
-  return [...new Set([
-    ...releaseSourceContractProtectedPaths(contract),
-    ...releaseSourceContractProtectedPaths(headerContract),
-  ])];
+  return currentReleaseSourceContractProtectedPaths(contract, headerContract);
 }
 
 function currentForbiddenAssertions(contract, headerContract) {
@@ -1552,15 +2247,52 @@ function currentAssertionOwner(contract, successor, lineage, assertion) {
   return { owner: successor, lineage };
 }
 
+function currentRetirementProjection(originBinding, successor) {
+  return {
+    disposition: 'retired',
+    contract_id: successor.contract_id,
+    contract_sha256: successor.contract_sha256,
+    mr_iid: successor.mr_iid,
+    merge_commit_sha: successor.merge_commit_sha,
+    target_branch: successor.target_branch,
+    path: originBinding.path,
+  };
+}
+
 function currentIntegrationBindingProjection(contract, successor, lineage) {
   return contract.integration_bindings.map((originBinding) => {
     const assertion = `integration_binding:${originBinding.id}`;
     const resolution = currentAssertionOwner(contract, successor, lineage, assertion);
+    const declaration = (Array.isArray(resolution.owner?.supersedes) ? resolution.owner.supersedes : [])
+      .find((item) => text(item?.contract_id) === text(contract?.contract_id));
+    const retired = resolution.owner.contract_id !== contract.contract_id
+      && text(declaration?.disposition) === 'retired'
+      && declaration.current_assertions.includes(assertion);
+    if (retired) {
+      return {
+        origin_binding_id: originBinding.id,
+        binding: originBinding,
+        retired: true,
+        retirement: currentRetirementProjection(originBinding, resolution.owner),
+        ...resolution,
+      };
+    }
     const binding = resolution.owner.contract_id === contract.contract_id
       ? originBinding
       : resolution.owner.integration_bindings.find((item) => item.id === originBinding.id);
-    return { origin_binding_id: originBinding.id, binding, ...resolution };
+    return { origin_binding_id: originBinding.id, binding, retired: false, ...resolution };
   });
+}
+
+function retiredCurrentIntegrationBinding(projection) {
+  return {
+    ...projection.binding,
+    addition_count: 0,
+    occurrence_count: 0,
+    retired: true,
+    retirement: projection.retirement,
+    verified: true,
+  };
 }
 
 function observeCurrentForbiddenFragments(contract, headerContract, sourceByPath, failures) {
@@ -1573,6 +2305,7 @@ function observeCurrentForbiddenFragments(contract, headerContract, sourceByPath
 }
 
 function expectedVerifiedAttestation(contract) {
+  const retirement = isAssertionRetirementContract(contract);
   const value = {
     schema_version: QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA,
     claim_scope: contract.claim_scope,
@@ -1592,10 +2325,17 @@ function expectedVerifiedAttestation(contract) {
       diff_bytes: contract.mr_diff.bytes,
       diff_sha256: contract.mr_diff.sha256,
     },
-    source_file: {
+    source_file: retirement ? null : {
       ...contract.source_file,
       source_line_count_observed: contract.source_file.source_line_count,
     },
+    ...(retirement ? {
+      retired_files: contract.retired_files.map((file) => ({
+        ...file,
+        change_count: 1,
+        verified: true,
+      })),
+    } : {}),
     headers: contract.header_emissions.map((header) => ({
       ...header,
       emission_count: 1,
@@ -1660,6 +2400,28 @@ function observedSourceFile(contract, changes, failures) {
   return { change, source, observed };
 }
 
+function observeRetiredFiles(contract, changes, failures) {
+  return contract.retired_files.map((expected) => {
+    const matches = changes.filter((change) => (
+      change.old_path === expected.path || change.new_path === expected.path
+    ));
+    const change = matches[0] || null;
+    let verified = matches.length === 1;
+    if (matches.length !== 1) failures.push(`retired_file_count:${expected.path}:${matches.length}`);
+    for (const field of ['old_path', 'new_path', 'new_file', 'renamed_file', 'deleted_file']) {
+      if (change?.[field] !== expected[field]) {
+        verified = false;
+        failures.push(`retired_file_${field}_mismatch:${expected.path}`);
+      }
+    }
+    return {
+      ...expected,
+      change_count: matches.length,
+      verified,
+    };
+  });
+}
+
 export function auditReleaseSourceContract({
   iid,
   state,
@@ -1684,9 +2446,13 @@ export function auditReleaseSourceContract({
   if (summary.diff_bytes !== contract.mr_diff.bytes) failures.push('mr_diff_bytes_mismatch');
   if (summary.diff_sha256 !== contract.mr_diff.sha256) failures.push('mr_diff_sha256_mismatch');
 
-  const sourceObservation = observedSourceFile(contract, normalizedChanges, failures);
+  const retirement = isAssertionRetirementContract(contract);
+  const sourceObservation = retirement
+    ? { source: '', observed: null }
+    : observedSourceFile(contract, normalizedChanges, failures);
+  const retiredFiles = retirement ? observeRetiredFiles(contract, normalizedChanges, failures) : [];
   const addedSourceByPath = new Map();
-  const requiredAddedPaths = [...new Set([
+  const requiredAddedPaths = retirement ? [] : [...new Set([
     text(contract?.source_file?.path),
     ...contract.integration_bindings.map((binding) => text(binding?.path)),
     ...(contract.forbidden_fragments || []).map((assertion) => text(assertion?.path)),
@@ -1753,6 +2519,7 @@ export function auditReleaseSourceContract({
       diff_sha256: summary.diff_sha256,
     },
     source_file: sourceObservation.observed,
+    ...(retirement ? { retired_files: retiredFiles } : {}),
     headers,
     integration_bindings: integrationBindings,
     forbidden_fragments: forbiddenFragments,
@@ -1910,7 +2677,8 @@ export function auditCurrentReleaseSourceContract({
     currentHeaderContract,
     normalizedHeaderLineage,
   );
-  const source = sourceByPath.get(headerResolution.owner.source_file.path) || '';
+  const headerSourcePath = text(headerResolution.owner?.source_file?.path);
+  const source = headerSourcePath ? (sourceByPath.get(headerSourcePath) || '') : '';
   const sourceLines = source.split('\n');
   const headers = headerResolution.owner.header_emissions.map((header) => {
     const emissionCount = sourceLines.filter((line) => line === header.emission.source).length;
@@ -1926,8 +2694,14 @@ export function auditCurrentReleaseSourceContract({
       verified,
     };
   });
-  const integrationBindings = integrationProjection.map(({ binding }) => (
-    observeCurrentIntegrationBinding(binding, sourceByPath.get(binding.path) || '', failures)
+  const integrationBindings = integrationProjection.map((projection) => (
+    projection.retired
+      ? retiredCurrentIntegrationBinding(projection)
+      : observeCurrentIntegrationBinding(
+        projection.binding,
+        sourceByPath.get(projection.binding.path) || '',
+        failures,
+      )
   ));
   const forbiddenFragments = observeCurrentForbiddenFragments(
     contract,
@@ -1986,15 +2760,29 @@ export function auditCurrentReleaseSourceContract({
         contract_sha256: text(headerResolution.owner?.contract_sha256),
         lineage: headerResolution.lineage,
       },
-      integration_bindings: integrationProjection.map(({ origin_binding_id: id, owner, lineage }) => ({
+      integration_bindings: integrationProjection.map(({
+        origin_binding_id: id,
+        owner,
+        lineage,
+        retired,
+        retirement,
+      }) => ({
         id,
         contract_id: owner.contract_id,
         contract_sha256: owner.contract_sha256,
         lineage,
+        ...(retired ? { retired: true, retirement } : {}),
       })),
     },
     trigger,
     protected_files: fileRows,
+    ...(isAssertionRetirementContract(contract) ? {
+      retired_files: contract.retired_files.map((file) => ({
+        ...file,
+        disposition: 'retired',
+        verified: true,
+      })),
+    } : {}),
     headers,
     integration_bindings: integrationBindings,
     forbidden_fragments: forbiddenFragments,
@@ -2112,11 +2900,18 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
       contract_sha256: headerOwner.owner.contract_sha256,
       lineage: headerOwner.lineage,
     },
-    integration_bindings: integrationProjection.map(({ origin_binding_id: id, owner, lineage }) => ({
+    integration_bindings: integrationProjection.map(({
+      origin_binding_id: id,
+      owner,
+      lineage,
+      retired,
+      retirement,
+    }) => ({
       id,
       contract_id: owner.contract_id,
       contract_sha256: owner.contract_sha256,
       lineage,
+      ...(retired ? { retired: true, retirement } : {}),
     })),
   };
   if (stableJson(attestation?.current_assertion_owners) !== stableJson(expectedAssertionOwners)) {
@@ -2154,6 +2949,19 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
     if (text(file?.error)) failures.push(`attestation_release_file_error:${filePath}`);
   }
 
+  if (isAssertionRetirementContract(contract)) {
+    const expectedRetiredFiles = contract.retired_files.map((file) => ({
+      ...file,
+      disposition: 'retired',
+      verified: true,
+    }));
+    if (stableJson(attestation?.retired_files) !== stableJson(expectedRetiredFiles)) {
+      failures.push('attestation_current_retired_files_mismatch');
+    }
+  } else if (attestation?.retired_files !== undefined) {
+    failures.push('attestation_current_retired_files_unexpected');
+  }
+
   const expectedHeaders = headerOwner.owner.header_emissions.map((header) => ({
     ...header,
     emission_count: 1,
@@ -2163,7 +2971,9 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   if (stableJson(attestation?.headers) !== stableJson(expectedHeaders)) failures.push('attestation_current_headers_mismatch');
   const observedBindings = Array.isArray(attestation?.integration_bindings)
     ? attestation.integration_bindings : [];
-  const expectedBindings = integrationProjection.map(({ binding }, index) => {
+  const expectedBindings = integrationProjection.map((projection, index) => {
+    if (projection.retired) return retiredCurrentIntegrationBinding(projection);
+    const { binding } = projection;
     const observedBinding = observedBindings[index];
     const occurrenceCount = Number(observedBinding?.occurrence_count);
     const scoped = Boolean(binding.current_release_scope);
@@ -2224,6 +3034,24 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   });
   if (originRows.length > 1) failures.push('attestation_origin_mr_duplicate');
   if (originRows.length === 1) {
+    if (isAssertionRetirementContract(contract)) {
+      const accountingRows = (Array.isArray(report?.commit_accounting) ? report.commit_accounting : [])
+        .filter((row) => (
+          text(row?.commit) === contract.merge_commit_sha || text(row?.mr_iid) === contract.mr_iid
+        ));
+      const expectedAccounting = {
+        commit: contract.merge_commit_sha,
+        parent_count: 2,
+        classification: 'merge_mr',
+        mr_iid: contract.mr_iid,
+        attribution_verified: true,
+        reason: '',
+      };
+      if (accountingRows.length !== 1
+        || stableJson(accountingRows[0]) !== stableJson(expectedAccounting)) {
+        failures.push('attestation_retirement_commit_accounting_mismatch');
+      }
+    }
     if (!attestation?.origin_change_attestation) failures.push('attestation_origin_change_missing');
     else {
       const originValidation = validateReleaseSourceContractAttestation(attestation.origin_change_attestation, {

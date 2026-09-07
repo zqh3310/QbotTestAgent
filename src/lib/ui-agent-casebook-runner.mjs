@@ -26796,6 +26796,14 @@ async function reconnectQbotRuntime({
           has_user: fixtureAuth.hasUser,
         };
       }
+      if (typeof options['release-identity-check-hook'] === 'function'
+        && reconnected?.releaseIdentityChecked !== true) {
+        await options['release-identity-check-hook']({
+          browser: nextBrowser,
+          page: nextPage,
+          phase: 'replacement-renderer',
+        });
+      }
       runtime.browser = nextBrowser;
       runtime.page = nextPage;
       if (state) {

@@ -211,6 +211,7 @@ const REQUIRED_QWORK_PRETEST_CHECK_IDS = Object.freeze([
   'teams_release_identity',
   'managed_live_session',
   'managed_session_process',
+  'qwork_claude_skill_call_canonicalization_enabled',
   'control_plane_identity',
   'qwork_control_plane_health',
   'qwork_backend_identity',
@@ -238,6 +239,24 @@ function stableValue(value) {
     );
   }
   return value;
+}
+
+function canonicalizationPolicySha256(policy = {}) {
+  const stableProjection = {
+    schema_version: policy?.schema_version,
+    flag_name: policy?.flag_name,
+    runner: {
+      readable: policy?.runner?.readable,
+      state: policy?.runner?.state,
+    },
+    managed_process: {
+      readable: policy?.managed_process?.readable,
+      state: policy?.managed_process?.state,
+    },
+    ok: policy?.ok,
+    error_code: policy?.error_code,
+  };
+  return createHash('sha256').update(JSON.stringify(stableProjection)).digest('hex');
 }
 
 function nonEmptyString(value) {
@@ -1255,6 +1274,28 @@ function pretestFailures(plan, stage, report = {}) {
   const runtimeReleaseStatus = report?.runtime?.qwork?.runtime_release_status;
   const artifactIdentity = report?.runtime?.qwork?.release_identity_readback;
   const artifactIdentityAssessment = report?.runtime?.qwork?.release_identity_assessment;
+  const canonicalizationPolicy = report?.runtime?.claude_skill_call_canonicalization_policy
+    || report?.runtime?.teams_inspection?.claude_skill_call_canonicalization_policy;
+  if (canonicalizationPolicy?.schema_version
+      !== 'qbot-claude-skill-call-canonicalization-policy/v1'
+    || canonicalizationPolicy?.flag_name
+      !== 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION'
+    || canonicalizationPolicy?.ok !== true
+    || canonicalizationPolicy?.error_code !== ''
+    || canonicalizationPolicy?.runner?.readable !== true
+    || !['unset', 'not_disabled'].includes(nonEmptyString(canonicalizationPolicy?.runner?.state))
+    || canonicalizationPolicy?.managed_process?.readable !== true
+    || !['unset', 'not_disabled'].includes(
+      nonEmptyString(canonicalizationPolicy?.managed_process?.state),
+    )
+    || finiteNumber(canonicalizationPolicy?.managed_process?.pid) <= 0
+    || finiteNumber(canonicalizationPolicy?.managed_process?.pid)
+      !== finiteNumber(report?.runtime?.session?.pid)
+    || !/^[a-f0-9]{64}$/i.test(nonEmptyString(canonicalizationPolicy?.policy_sha256))
+    || nonEmptyString(canonicalizationPolicy?.policy_sha256)
+      !== canonicalizationPolicySha256(canonicalizationPolicy)) {
+    failures.push('pretest_claude_skill_call_canonicalization_policy_invalid');
+  }
   if (publicCapabilities?.ok !== true || publicCapabilities?.value_type !== 'object') {
     failures.push('pretest_public_capabilities_not_readable');
   }
@@ -1953,6 +1994,45 @@ export function auditQworkStageCompletion({
     || nonEmptyString(item?.state_sha256) !== nonEmptyString(releaseObservation?.provenance?.state?.sha256)
     || nonEmptyString(item?.envelope_sha256) !== nonEmptyString(releaseObservation?.provenance?.envelope?.sha256))) {
     failures.push('run_release_observation_drift');
+  }
+  const canonicalizationPolicy = runMetadata?.claude_skill_call_canonicalization_policy;
+  const safePolicyStates = new Set(['unset', 'not_disabled']);
+  if (canonicalizationPolicy?.schema_version !== 'qbot-claude-skill-call-canonicalization-policy/v1'
+    || canonicalizationPolicy?.flag_name !== 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION'
+    || canonicalizationPolicy?.ok !== true
+    || canonicalizationPolicy?.error_code !== ''
+    || canonicalizationPolicy?.runner?.readable !== true
+    || !safePolicyStates.has(nonEmptyString(canonicalizationPolicy?.runner?.state))
+    || canonicalizationPolicy?.managed_process?.readable !== true
+    || !safePolicyStates.has(nonEmptyString(canonicalizationPolicy?.managed_process?.state))
+    || finiteNumber(canonicalizationPolicy?.managed_process?.pid) <= 0
+    || finiteNumber(canonicalizationPolicy?.managed_process?.pid) !== observedHostPids[0]
+    || !/^[a-f0-9]{64}$/i.test(nonEmptyString(canonicalizationPolicy?.policy_sha256))
+    || nonEmptyString(canonicalizationPolicy?.policy_sha256)
+      !== canonicalizationPolicySha256(canonicalizationPolicy)) {
+    failures.push('run_claude_skill_call_canonicalization_policy_invalid');
+  }
+  const canonicalizationPolicyChecks = Array.isArray(
+    runMetadata?.claude_skill_call_canonicalization_policy_checks,
+  ) ? runMetadata.claude_skill_call_canonicalization_policy_checks : [];
+  const canonicalizationPolicyPhases = new Set(
+    canonicalizationPolicyChecks.map((item) => nonEmptyString(item?.phase)),
+  );
+  if (!canonicalizationPolicyPhases.has('startup') || !canonicalizationPolicyPhases.has('run-final')) {
+    failures.push('run_claude_skill_call_canonicalization_policy_phases_incomplete');
+  }
+  if (canonicalizationPolicyChecks.length !== releaseObservationChecks.length
+    || canonicalizationPolicyChecks.some((item, index) => item?.ok !== true
+      || nonEmptyString(item?.phase) !== nonEmptyString(releaseObservationChecks[index]?.phase)
+      || !Number.isFinite(Date.parse(nonEmptyString(item?.observed_at)))
+      || nonEmptyString(item?.observed_at)
+        !== nonEmptyString(releaseObservationChecks[index]?.observed_at)
+      || nonEmptyString(item?.policy_sha256) !== nonEmptyString(canonicalizationPolicy?.policy_sha256)
+      || nonEmptyString(item?.runner_state) !== nonEmptyString(canonicalizationPolicy?.runner?.state)
+      || nonEmptyString(item?.managed_process_state)
+        !== nonEmptyString(canonicalizationPolicy?.managed_process?.state)
+      || finiteNumber(item?.managed_process_pid) !== observedHostPids[0])) {
+    failures.push('run_claude_skill_call_canonicalization_policy_drift');
   }
   const evidenceTree = (Array.isArray(externalArtifacts) ? externalArtifacts : [])
     .find((artifact) => artifact?.role === `${stage.id}.completion.evidence_tree`);

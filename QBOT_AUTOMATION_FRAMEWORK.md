@@ -203,6 +203,20 @@ loaded runtime `verified=true`、`updatePhase=idle`、`preparedRelease=null`。�
 `PASS_STAGE`。所有 `--production-gate true` 的 Teams 批次都必须显式携带匹配 READY 的
 `--control-plane-url`，不只限于 `BETA-*` Case。
 
+MR `!1579` 的 production-gate 还必须在 Case 0 前只读检查 runner 自身环境与已验证受管
+Teams PID 的真实进程环境，确认
+`QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION` 均不为精确值 `1`。受管 PID 无效、
+session/process 不匹配、纯 argv 与 `ps -E` 环境快照前缀不全等、任一快照失败或空输出、
+缺少唯一 `DEEPBANK_E2E=1` 受管标记、
+禁用开关重复或解析歧义，都必须以 `managed_process_environment_unreadable` 等稳定安全
+错误码 fail-closed；不得读取后继续猜测。报告、异常和日志只允许保存
+`unset | not_disabled | disabled | unknown`、可读布尔值、PID、阶段与策略 SHA，禁止保存
+完整环境、原始 flag 值、`ps` stdout/stderr 或异常原文。正式 Teams runner 必须把首个
+安全投影固化到 `run-metadata.json`，并在 `startup`、每次 `replacement-renderer` 和
+`run-final` 与发布身份观测同序追加策略检查；状态、SHA、阶段数或阶段顺序任一漂移都拒绝
+`PASS_STAGE`。G1-G4 的 replacement renderer 不得改变唯一受管 PID；若另有明确受管重启
+或 soak 合同允许切换 PID，则必须由该合同重新读取新 PID 环境，不能继承旧 PID 的结论。
+
 QWork 新增 MR 核心冒烟合同固定为以下 12 条有序 Case：
 `MRSMOKE-ACT-001`、`MRSMOKE-WEB-001`、`MRSMOKE-WEB-002`、
 `MRSMOKE-AUTH-001`、`MRSMOKE-AUTO-001`、`MRSMOKE-NAV-001`、
@@ -286,6 +300,29 @@ r16 尚未正式生成、尚无正式 SHA-256，也未完成独立验收，因�
 存在，均不能单独作为版本开关。这只保证当前正式 r15 在切换前仍可审计。r16 生成器必须
 始终注入全部新标记，声明任一新标记后缺少其余任一项均 fail-closed，禁止用过渡兼容发布
 不完整 r16。
+
+截至 2026-09-07 的 R16 准备态只读 GitLab API 诊断扫描已从 r12 设计基线稳定观测到
+`origin/release/0.1@7f9b520f41ed9ac34b9230f28df49a5fce678953`，first-parent 增量为 63 个、继承
+r12 后总数为 197 个，最后一个直接合入 MR 必须是 `!1579`。诊断输入为
+`outputs/20260907184442_release01-r15-to-latest-r16-diagnostic-intake_framework-de6afaf/release-intake.json`。
+该报告只证明 63 个 commit 的归因、changes 与当时已注册源码合同；它因
+`execution_runner_message_isolation_missing` 仍为 `BLOCKED`，不得用于生成正式 r16、pretest 或
+runner。其中 `!1592` 必须继续通过 blocking-risk v5 的九项 successor AST 合同；任一
+管理器、controller、取消、message、termination 或 desktop lease 链不成立都必须继续
+`NO_GO`。
+
+R16 的新增分类必须 fail-closed：`!1571` 和 `!1586` 只有在 IID、merge SHA、diff SHA 与
+各自精确 6 个 changed paths 全等时才是静态版本合同；`!1576`、`!1585`、`!1587`
+分别以 Web、Skill 全生命周期和成果全生命周期专项 Case 作为直接 E2E；`!1590`、
+`!1593`、`!1596`、`!1597` 和 `!1579` 只能标为“相邻回归+源码合同”。`!1579`
+固定绑定 `deepbankv2-mr-1579-claude-skill-call-canonicalization/v1`，必须鉴证 alias 到
+`invocationName`、JSON/SSE 规范化、仅改写 `Skill.input.skill`、unknown/ambiguous/malformed/
+oversized/incomplete 全部 fail-closed、loopback/engine/Expert 接线、12 个 changed paths 全等，且
+候选不得设置 `QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=1`。该合同仍固定
+`claim_scope=source_and_test_declarations`、`test_execution_attested=false`；`skill_execution_trace`
+只观测 SDK 处理后输入，不能证明 canonicalization 分支已直接执行。最终框架提交推送后
+必须重新执行权威 API 扫描；若 HEAD 或 MR 集合继续变化，本边界同步失效并继续更新，
+不得以时间窗口或这份诊断报告代替新的 first-parent 证明。
 
 Casebook 生成器只能显式接收普通文件 `--release-intake`、与文件实际字节重新计算值全等的
 `--release-intake-sha256`、同一 `--expected-product-commit` 和非空 `--out`；

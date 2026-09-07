@@ -145,6 +145,8 @@ assert.match(
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
 const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
+const teamsCasebookRunnerSource = fs.readFileSync(path.join(root, 'teams360-automation', 'lib', 'casebook-runner.mjs'), 'utf8');
+const qworkReleaseIdentitySource = fs.readFileSync(path.join(root, 'teams360-automation', 'lib', 'qwork-release-identity.mjs'), 'utf8');
 for (const [documentName, documentText] of [
   ['QBOT_AUTOMATION_FRAMEWORK.md', automationFramework],
   ['QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md', coreBetaOperatingGuide],
@@ -265,6 +267,26 @@ assert.match(
   runner,
   /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
   'legacy runner 必须在 summary 前执行 QWork 发布身份结束读回',
+);
+assert.match(
+  coreBetaPretestSource,
+  /inspectClaudeSkillCallCanonicalizationPolicy[\s\S]*qwork_claude_skill_call_canonicalization_enabled/,
+  'production-gate pretest 必须在 Case 0 前检查 !1579 canonicalization 禁用开关',
+);
+assert.match(
+  qworkReleaseIdentitySource,
+  /runner_environment_disables_canonicalization[\s\S]*managed_process_environment_disables_canonicalization/,
+  '!1579 门禁必须同时拒绝 runner 与受管 Teams PID 的精确禁用状态',
+);
+assert.match(
+  qworkReleaseIdentitySource,
+  /processEnvironmentSuffix[\s\S]*\['-ww', '-p',[\s\S]*\['-E', '-ww', '-p',[\s\S]*processEnvironmentSuffix\(command, commandWithEnvironment\)/,
+  '!1579 门禁必须分离纯 argv 与环境快照，禁止 argv 伪造受管环境标记',
+);
+assert.match(
+  teamsCasebookRunnerSource,
+  /persistRunMetadata[\s\S]*'startup'[\s\S]*phase \|\| 'runtime'[\s\S]*'replacement-renderer'/,
+  '正式 Teams runner 必须在 startup、replacement-renderer 和 run-final 重做安全策略观测',
 );
 const normalizedFixtureMarker = automationFixtureMarkerPattern('qa-node-runtime');
 assert.match('QA Node Runtime', normalizedFixtureMarker, 'legacy Fixture slug 应与空格展示名稳定匹配');

@@ -1308,7 +1308,7 @@ function supervisorExitAstContract(source) {
   const exitFailureHelper = topFunction(program, 'executionWorkerExitFailure');
   const onExit = creator ? localArrow(creator.body, 'onExit') : null;
   const api = creator ? returnedObject(creator) : null;
-  return Boolean(onExit
+  const legacyContract = Boolean(onExit
     && exactProtectedIdentifierParameters(rejectPendingHelper, ['error'])
     && exactProtectedIdentifierParameters(exitFailureHelper, ['code', 'signal'])
     && onExit.body?.type === 'BlockStatement'
@@ -1326,6 +1326,128 @@ function supervisorExitAstContract(source) {
       request: (value) => identifier(value, 'request'),
       stop: (value) => identifier(value, 'stop'),
     }));
+  if (legacyContract) return true;
+
+  if (!creator || !onExit
+    || !exactTopLevelRequireBinding(
+      program,
+      'executionWorkerExitFailure',
+      'executionWorkerExitFailure',
+      './execution-worker-process-lifecycle.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'executionWorkerTerminationCause',
+      'executionWorkerTerminationCause',
+      './execution-worker-process-lifecycle.cjs',
+    )
+    || !stableProgramIdentifiers(program, [
+      'executionWorkerExitFailure', 'executionWorkerTerminationCause',
+    ])) return false;
+
+  const pending = directDeclarator(creator.body, 'pending', 'const');
+  const rejectPending = localArrow(creator.body, 'rejectPending');
+  if (!pending || !construct(pending.declaration.init, 'Map', [])
+    || !rejectPending
+    || !exactProtectedIdentifierParameters(rejectPending, ['code', 'message'], [
+      'code', 'message', 'pending',
+    ])
+    || rejectPending.body?.type !== 'BlockStatement'
+    || rejectPending.body.body.length !== 2) return false;
+
+  const [rejectLoop, clearPending] = rejectPending.body.body;
+  const itemBinding = rejectLoop?.left?.type === 'VariableDeclaration'
+    && rejectLoop.left.kind === 'const'
+    && rejectLoop.left.declarations.length === 1
+    ? rejectLoop.left.declarations[0]
+    : null;
+  const rejectBody = rejectLoop?.body?.type === 'BlockStatement'
+    ? rejectLoop.body.body
+    : [];
+  const errorBinding = rejectBody[0]?.type === 'VariableDeclaration'
+    && rejectBody[0].kind === 'const'
+    && rejectBody[0].declarations.length === 1
+    ? rejectBody[0].declarations[0]
+    : null;
+  const codeAssignment = unwrap(rejectBody[1]?.expression);
+  if (rejectLoop?.type !== 'ForOfStatement'
+    || rejectLoop.await === true
+    || !itemBinding
+    || !identifier(itemBinding.id, 'item')
+    || !call(rejectLoop.right, ['pending', 'values'], [])
+    || rejectBody.length !== 3
+    || !errorBinding
+    || !identifier(errorBinding.id, 'error')
+    || !construct(errorBinding.init, 'Error', [(value) => identifier(value, 'message')])
+    || codeAssignment?.type !== 'AssignmentExpression'
+    || codeAssignment.operator !== '='
+    || !member(codeAssignment.left, ['error', 'code'])
+    || !identifier(codeAssignment.right, 'code')
+    || !directCallStatement(rejectBody[2], ['item', 'reject'], [
+      (value) => identifier(value, 'error'),
+    ])
+    || !directCallStatement(clearPending, ['pending', 'clear'], [])) return false;
+
+  if (!exactParameterList(onExit, [
+    (value) => identifier(value, 'exitedChild'),
+    (value) => objectPatternBindsExactly(value, ['exitCode', 'processError'], {
+      topLevelDefault: true,
+      propertyDefaults: {
+        exitCode: (entry) => literal(entry, null),
+        processError: (entry) => literal(entry, null),
+      },
+      requiredPropertyDefaults: ['exitCode', 'processError'],
+    }),
+  ])
+    || functionHasNestedBinding(onExit, [
+      'executionWorkerExitFailure', 'executionWorkerTerminationCause',
+      'exitCode', 'exitedChild', 'processError', 'rejectPending',
+      'terminationCause',
+    ], { allowedDirectBindings: ['terminationCause'] })
+    || functionHasIdentifierWrite(onExit, [
+      'executionWorkerExitFailure', 'executionWorkerTerminationCause',
+      'exitCode', 'exitedChild', 'processError', 'rejectPending',
+      'terminationCause',
+    ])) return false;
+
+  const childGuards = onExit.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && binary(
+      statement.test,
+      '!==',
+      (value) => identifier(value, 'child'),
+      (value) => identifier(value, 'exitedChild'),
+    )
+    && bareReturn(statement.consequent)
+  ));
+  const terminationCause = directDeclarator(onExit.body, 'terminationCause', 'const');
+  const typedRejects = onExit.body.body.filter((statement) => directCallStatement(
+    statement,
+    ['rejectPending'],
+    [(value) => {
+      value = unwrap(value);
+      return value?.type === 'SpreadElement'
+        && call(value.argument, ['executionWorkerExitFailure'], [
+          (entry) => identifier(entry, 'terminationCause'),
+        ]);
+    }],
+  ));
+  return childGuards.length === 1
+    && terminationCause
+    && call(terminationCause.declaration.init, ['executionWorkerTerminationCause'], [
+      (value) => exactObject(value, {
+        storedCause: (entry) => call(entry, ['terminationCauses', 'get'], [
+          (item) => identifier(item, 'exitedChild'),
+        ]),
+        processError: (entry) => identifier(entry, 'processError'),
+        intentionalStop: (entry) => identifier(entry, 'intentionalStop'),
+      }),
+    ])
+    && onExit.body.body.indexOf(childGuards[0])
+      < onExit.body.body.indexOf(terminationCause.statement)
+    && typedRejects.length === 1
+    && onExit.body.body.indexOf(terminationCause.statement)
+      < onExit.body.body.indexOf(typedRejects[0]);
 }
 
 function defaultRunnerFactory(constructor) {
@@ -1734,17 +1856,32 @@ function managerIsolationAstContract(source) {
 function managerPressureAstContract(source) {
   const program = parseProgram(source);
   const acquire = topFunction(program, 'acquireExecutionWorker');
-  if (!acquire) return false;
+  const waitForSlot = topFunction(program, 'waitForExecutionSlot');
+  if (!acquire || !waitForSlot
+    || functionHasNestedBinding(acquire, ['waitForExecutionSlot'])
+    || functionHasIdentifierWrite(acquire, ['waitForExecutionSlot'])) {
+    return false;
+  }
   const supervisor = directDeclarator(acquire.body, 'supervisor', 'const');
   if (!supervisor) return false;
   const waits = acquire.body.body.filter((statement) => {
-    const expression = unwrap(statement?.expression);
-    if (statement.type !== 'ExpressionStatement' || expression?.type !== 'AwaitExpression') return false;
+    let expression = null;
+    if (statement.type === 'ExpressionStatement') {
+      expression = unwrap(statement.expression);
+    } else if (statement.type === 'VariableDeclaration'
+      && statement.kind === 'const'
+      && statement.declarations.length === 1) {
+      expression = unwrap(statement.declarations[0].init);
+    }
+    if (expression?.type !== 'AwaitExpression') return false;
     const wait = unwrap(expression.argument);
-    return wait?.type === 'CallExpression'
+    return call(wait, ['waitForExecutionSlot'])
       && wait.arguments.length >= 2
       && identifier(wait.arguments[0], 'manager')
-      && identifier(wait.arguments[1], 'requestId');
+      && identifier(wait.arguments[1], 'requestId')
+      && (wait.arguments.length === 2
+        || (wait.arguments.length === 3
+          && member(wait.arguments[2], ['options', 'signal'])));
   });
   return waits.length === 1
     && acquire.body.body.indexOf(waits[0]) < acquire.body.body.indexOf(supervisor.statement);

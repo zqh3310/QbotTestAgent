@@ -71,6 +71,30 @@ Case 的接手状态、启动顺序和禁止事项。
   `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，才依次独立执行
   `1/12`、`1/70`、`1/160` 和 soak。
 
+- R16 当前仍是“准备态”，不是可执行的正式 Casebook。截至 2026-09-07 的只读 GitLab API
+  诊断扫描已稳定观测 `origin/release/0.1@7f9b520f41ed9ac34b9230f28df49a5fce678953`，
+  从 r12 设计基线共有 63 个 first-parent 增量 MR、197 个总 MR，并以 `!1579` 收尾。
+  诊断 intake 位于
+  `outputs/20260907184442_release01-r15-to-latest-r16-diagnostic-intake_framework-de6afaf/release-intake.json`；
+  其唯一稳定产品阻断 ID 为 `execution_runner_message_isolation_missing`，因此必须保持
+  `G0=NO_GO`，禁止生成正式 r16、禁止 pretest 和 runner。`!1592` 只有在 blocking-risk
+  v5 的 cancellation/controller/desktop/manager/manager_pressure/supervisor/supervisor_exit/
+  supervisor_message/termination 九项 AST 合同全为 true 时才能解锁。
+- R16 要求 `!1571`/`!1586` 只在 IID、merge SHA、diff SHA 和精确 6 路径全等时静态接受；
+  `!1576`/`!1585`/`!1587` 分别使用 Web、Skill 生命周期、成果生命周期直接 E2E；
+  `!1590`/`!1593`/`!1596`/`!1597`/`!1579` 均为“相邻回归+源码合同”。
+  `!1579` 使用 `deepbankv2-mr-1579-claude-skill-call-canonicalization/v1`，固定 alias 到
+  `invocationName`、JSON/SSE 规范化、仅改写 `Skill.input.skill`、unknown/ambiguous/malformed/
+  oversized/incomplete fail-closed、loopback/engine/Expert 接线、12 个 changed paths 全等，并要求
+  `QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION` 不得为 `1`。合同声明边界必须保持
+  `claim_scope=source_and_test_declarations`、`test_execution_attested=false`；现有
+  `skill_execution_trace` 不能单独证明 alias canonicalization 分支已执行。
+- 上述 63/197 只是修改框架前的已观测边界。框架全检、提交、推送且
+  `main == origin/main`/tracked clean 后，必须再做一次权威 API 扫描。若 release HEAD 变化，
+  继续扩充 R16 而不得复用这份诊断 intake。产品隔离阻断修复后，才能在新目录生成、
+  重算、检查 14 个 Sheet、渲染验收并发布正式 r16，然后再把两份规范与状态机的正式
+  入口从 r15 切换到新路径/SHA。
+
 - r15 生成输入已从 r12 基线使用 `--max-commits 500` 完成全量扫描；构建审计
   `casebook-build-audit.json` 的 `release_intake.execution_authorized=false` 仍然有效，
   只授权 Casebook 生成，不授权正式 pretest 或 runner；原始 `release-intake.json` 顶层不
@@ -960,6 +984,18 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 `startup + run-final` 观测，`release_observation_checks` 中任一 SHA 漂移或阶段缺失都
 拒绝 `PASS_STAGE`。所有 production-gate Teams 阶段，包括 `MRSMOKE-*`，都必须携带
 匹配 READY 的显式 `--control-plane-url`。
+
+MR `!1579` 增加独立运行态硬门禁：所有 Teams `production-gate` pretest 必须同时读取
+runner 环境与已验证受管 Teams PID 的真实进程环境，并确认
+`QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION` 均不为精确值 `1`。PID/session 无法
+确认、纯 argv 与 `ps -E` 环境快照前缀不全等、任一进程快照不可读、缺少唯一
+`DEEPBANK_E2E=1` 受管标记或 flag 重复/歧义时一律
+fail-closed。任何报告、日志和异常不得包含完整环境、原始 flag 值、`ps` stdout/stderr 或
+异常原文，只保存安全状态枚举、可读布尔值、PID、稳定错误码和策略 SHA。正式 runner 在
+`startup`、每次 `replacement-renderer`、`run-final` 必须与权威发布身份读回同序记录；
+缺阶段、状态/SHA 漂移或新受管 PID 不可读时，即使所有 Case raw/可信计数全绿也不得
+`PASS_STAGE`。G1-G4 的 replacement renderer 不得改变唯一受管 PID；只有另有明确受管
+重启或 soak 合同时才可切换 PID，并且必须重新读取新 PID 环境，不能继承旧 PID 的结论。
 
 新增 MR 核心冒烟入口：
 

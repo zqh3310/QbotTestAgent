@@ -9,7 +9,7 @@ import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
   auditCurrentReleaseSourceContract,
   auditKnownReleaseSourceContracts,
-  releaseSourceContractProtectedPaths,
+  currentReleaseSourceContractProtectedPaths,
   releaseSourceContractTrigger,
   resolveCurrentReleaseHeaderContract,
   resolveReleaseSourceContracts,
@@ -71,6 +71,41 @@ const MR1573_EXACT_IMPACT = Object.freeze({
   risk_domains: Object.freeze(['记忆/会话/Profile 稳定性']),
   required_stages: Object.freeze(['G1', 'G2', 'G3', 'G4']),
 });
+
+const MR1595_STATIC_RETIREMENT = Object.freeze({
+  mr_iid: '1595',
+  merge_commit_sha: '3b61267f74bb61b3053c970dd5c7b98d27683e6a',
+  diff_sha256: '867e9491a91485f3fba33bd9b3d53b04644f697a9d4a083a0239f87c33ec0852',
+  changed_path_count: 184,
+  regular_product_paths: Object.freeze(['package.json']),
+});
+
+const EXACT_STATIC_RELEASE_IMPACTS = new Map([
+  ['1571', Object.freeze({
+    merge_commit_sha: '4228e99aee9e2dd364eb7bc0013300791650ad9c',
+    diff_sha256: '4c4a8b7d99b43017a217796441f162cf081ee16a9898d66a0f57a672bc110e18',
+    changed_paths: Object.freeze([
+      '.deepbank-runtime/runtime-provision-seed/0.1.6/provision-manifest.json',
+      '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+      'deploy/helm/qbot/Chart.yaml',
+      'package-lock.json',
+      'package.json',
+      'teams360.host-sync.json',
+    ]),
+  })],
+  ['1586', Object.freeze({
+    merge_commit_sha: '4763f90e276f05c6147affdf4751de6e67d2da85',
+    diff_sha256: '6b3b4780d5737b3f57ced31e61365ee13950e9389e36e89c768292ae488f1c65',
+    changed_paths: Object.freeze([
+      '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+      '.deepbank-runtime/runtime-provision-seed/0.1.8/provision-manifest.json',
+      'deploy/helm/qbot/Chart.yaml',
+      'package-lock.json',
+      'package.json',
+      'teams360.host-sync.json',
+    ]),
+  })],
+]);
 
 function text(value) {
   return String(value ?? '').trim();
@@ -289,6 +324,7 @@ function staticDisposition(filePath) {
   const normalized = text(filePath).replaceAll('\\', '/');
   const basename = normalized.split('/').at(-1) || '';
   if (normalized === 'docker/desktop-win-builder/README.md') return 'Toolchain/test-only';
+  if (normalized === 'playwright.config.mjs') return 'Toolchain/test-only';
   if (basename === '.architecture.yaml' || basename === '.architecture.yml') return 'Repository-architecture-only';
   if (/^assets\/lib\/ui\/(?:[^/]+\/)*[^/]+\.md$/.test(normalized)) return 'Research/docs-only';
   if (/^\.codex\/(?:environments\/environment\.toml|hooks\.json)$/i.test(normalized)) return 'Codex-governance-only';
@@ -299,6 +335,7 @@ function staticDisposition(filePath) {
   if (/^dashboard\//i.test(normalized) || /dashboard-admin|dashboard-admin-routes/i.test(normalized)) return 'Dashboard-only';
   if (/^eval\//i.test(normalized)) return 'Eval-only';
   if (/^(?:docs?|research|benchmark|openspec)\//i.test(normalized)) return 'Research/docs-only';
+  if (/(?:^|\/)docs\/(?:[^/]+\/)*[^/]+\.(?:md|ya?ml)$/i.test(normalized)) return 'Research/docs-only';
   if (/^(?:server\/(?:[^/]+\/)*docs|dashboard\/docs)\//i.test(normalized)) return 'Research/docs-only';
   if (/^(?:test|tests|testcase|scripts|toolchain)\//i.test(normalized)) return 'Toolchain/test-only';
   if (/^deploy\/dashboard\//i.test(normalized)) return 'Dashboard-only';
@@ -315,12 +352,47 @@ function isKnownProductSourcePath(filePath) {
   return KNOWN_PRODUCT_PATHS.some((pattern) => pattern.test(normalized));
 }
 
-function exactReleaseImpact({ mrIid = '', mergeCommitSha = '' } = {}) {
-  if (text(mrIid) !== text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.mr_iid)
-    || text(mergeCommitSha) !== text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.merge_commit_sha)) {
-    return null;
+function exactReleaseImpact({
+  mrIid = '',
+  mergeCommitSha = '',
+  diffSha256 = '',
+  changedPaths = [],
+  regularProductPaths = [],
+} = {}) {
+  const iid = text(mrIid);
+  const exactStatic = EXACT_STATIC_RELEASE_IMPACTS.get(iid);
+  if (exactStatic) {
+    const verified = text(mergeCommitSha) === exactStatic.merge_commit_sha
+      && text(diffSha256) === exactStatic.diff_sha256
+      && stableJson([...changedPaths].sort()) === stableJson([...exactStatic.changed_paths].sort());
+    return {
+      case_ids: Object.freeze([]),
+      feature_domains: Object.freeze([]),
+      risk_domains: Object.freeze([]),
+      required_stages: Object.freeze(['G1']),
+      static_only: true,
+      verified,
+    };
   }
-  return MR1573_EXACT_IMPACT;
+  if (iid === MR1595_STATIC_RETIREMENT.mr_iid) {
+    const verified = text(mergeCommitSha) === MR1595_STATIC_RETIREMENT.merge_commit_sha
+      && text(diffSha256) === MR1595_STATIC_RETIREMENT.diff_sha256
+      && changedPaths.length === MR1595_STATIC_RETIREMENT.changed_path_count
+      && stableJson([...regularProductPaths].sort()) === stableJson(MR1595_STATIC_RETIREMENT.regular_product_paths);
+    return {
+      case_ids: Object.freeze([]),
+      feature_domains: Object.freeze([]),
+      risk_domains: Object.freeze([]),
+      required_stages: Object.freeze(['G1']),
+      static_only: true,
+      verified,
+    };
+  }
+  if (iid === text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.mr_iid)
+    && text(mergeCommitSha) === text(QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT.merge_commit_sha)) {
+    return MR1573_EXACT_IMPACT;
+  }
+  return null;
 }
 
 export function mapReleaseImpact({
@@ -332,10 +404,22 @@ export function mapReleaseImpact({
   availableCaseIds = [],
   mrIid = '',
   mergeCommitSha = '',
+  diffSha256 = '',
 } = {}) {
   const files = [...new Set(paths.map((item) => text(item)).filter(Boolean))];
-  const staticFiles = files.filter((file) => staticDisposition(file));
-  const productFiles = files.filter((file) => !staticDisposition(file));
+  const regularStaticFiles = files.filter((file) => staticDisposition(file));
+  const regularProductFiles = files.filter((file) => !staticDisposition(file));
+  const exactImpact = exactReleaseImpact({
+    mrIid,
+    mergeCommitSha,
+    diffSha256,
+    changedPaths: files,
+    regularProductPaths: regularProductFiles,
+  });
+  const exactStaticOnly = exactImpact?.static_only === true && exactImpact?.verified === true;
+  const exactStaticMismatch = exactImpact?.static_only === true && exactImpact?.verified !== true;
+  const staticFiles = exactStaticOnly ? files : regularStaticFiles;
+  const productFiles = exactStaticOnly ? [] : regularProductFiles;
   const knownProductFiles = productFiles.filter((file) => isKnownProductSourcePath(file));
   const unknownFiles = productFiles.filter((file) => !isKnownProductSourcePath(file));
   // Prefix paths with a slash so path rules also match when several paths are
@@ -347,7 +431,6 @@ export function mapReleaseImpact({
     ? `${branch} ${subject} ${body} ${searchableFiles.map((file) => `/${file}`).join(' ')} ${labels.join(' ')}`
     : '';
   const matchedRules = IMPACT_RULES.filter((candidate) => candidate.patterns.some((pattern) => pattern.test(searchText)));
-  const exactImpact = exactReleaseImpact({ mrIid, mergeCommitSha });
   const direct = new Set(exactImpact?.case_ids || matchedRules.flatMap((candidate) => candidate.case_ids));
   const available = new Set(availableCaseIds.map(text).filter(Boolean));
   const allDirect = [...direct];
@@ -357,6 +440,7 @@ export function mapReleaseImpact({
   // every changed source file. Unknown product paths stay blocking until a
   // path rule (or an explicit Casebook mapping) covers that exact path.
   const unmappedPaths = [
+    ...(exactStaticMismatch ? (regularProductFiles.length ? regularProductFiles : files) : []),
     ...unknownFiles,
     ...knownProductFiles.filter((file) => !IMPACT_RULES.some((candidate) => (
       candidate.patterns.some((pattern) => pattern.test(file))
@@ -385,7 +469,10 @@ export function mapReleaseImpact({
     in_scope_case_ids: exactImpact ? directAvailable : directAvailable.sort(),
     out_of_scope_case_ids: exactImpact ? outOfScope : outOfScope.sort(),
     unmapped_product_paths: [...new Set(unmappedPaths)].sort(),
-    static_dispositions: [...new Set(staticFiles.map((file) => ({ path: file, disposition: staticDisposition(file) })))],
+    static_dispositions: [...new Set(staticFiles.map((file) => ({
+      path: file,
+      disposition: staticDisposition(file) || (exactStaticOnly ? 'Toolchain/test-only' : ''),
+    })))],
     required_stages: [...requiredStages].filter(Boolean).sort(),
     mapping_status: unmappedPaths.length ? 'BLOCKED' : allDirect.length || staticFiles.length ? 'MAPPED' : 'UNKNOWN',
   };
@@ -558,8 +645,7 @@ function reconstructFirstParentChain({ compare, baselineCommit, releaseHead } = 
   return { ok: true, commits: reversed.reverse() };
 }
 
-function readCurrentReleaseContractFiles({ readGitLab, releaseHead, contracts, apiErrors }) {
-  const protectedPaths = [...new Set(contracts.flatMap(releaseSourceContractProtectedPaths))];
+function readCurrentReleaseContractFiles({ readGitLab, releaseHead, protectedPaths, apiErrors }) {
   return protectedPaths.map((filePath) => {
     const endpoint = `repository/files/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(releaseHead)}`;
     try {
@@ -896,7 +982,7 @@ function scanWithGitLabApi({
     const files = readCurrentReleaseContractFiles({
       readGitLab,
       releaseHead,
-      contracts: [contract, headerResolution.owner],
+      protectedPaths: currentReleaseSourceContractProtectedPaths(contract, headerResolution.owner),
       apiErrors,
     });
     const attestation = auditCurrentReleaseSourceContract({
@@ -1313,6 +1399,7 @@ function validateApiMergeRequestSemantics(report, sourceContracts = QWORK_RELEAS
       availableCaseIds,
       mrIid: iid,
       mergeCommitSha: text(mr?.merge_commit_sha),
+      diffSha256: text(mr?.diff_sha256),
     });
     if (stableJson(mr?.impact) !== stableJson(expectedImpact)) failures.push(`impact_mismatch:${prefix}`);
     const expectedSourceContractIds = effectiveSourceContracts
@@ -1537,6 +1624,7 @@ export function scanQworkReleaseIntake({
       availableCaseIds: ids,
       mrIid: metadata.iid,
       mergeCommitSha: metadata.merge_commit_sha,
+      diffSha256: commit.diff_sha256,
     });
     return {
       iid: metadata.iid,

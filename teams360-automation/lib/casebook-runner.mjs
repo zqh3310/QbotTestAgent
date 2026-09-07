@@ -22,6 +22,7 @@ import { summarizeRuntimeReleaseStatus } from './cdp-webview.mjs';
 import {
   assessQworkReleaseIdentity,
   assertStableQworkReleaseIdentity,
+  inspectClaudeSkillCallCanonicalizationPolicy,
   readQworkReleaseIdentity,
 } from './qwork-release-identity.mjs';
 import {
@@ -903,6 +904,7 @@ export function repairInterruptedTeamsProgress({ outDir, pass = 1 }) {
 
 export async function runTeamsCasebook(argv = process.argv.slice(2)) {
   const options = validateTeamsCasebookOptions(parseCasebookRunnerOptions(argv));
+  const productionGate = /^(?:1|true|yes)$/i.test(String(options['production-gate'] || ''));
   createNewManagedOutputDirectory({ outDir: options.out, outputRoot: TEAMS_OUTPUT_ROOT });
   const originalConnectOverCDP = chromium.connectOverCDP;
   const callerManagedCdp = Boolean(options.cdp);
@@ -943,6 +945,17 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
       pinManagedSessionControlPlane(options.session, runtimeIdentity.controlPlane);
       const persistRunMetadata = (identity = runtimeIdentity, phase = 'startup') => {
         const session = readSession(options.session);
+        const canonicalizationPolicy = productionGate
+          ? inspectClaudeSkillCallCanonicalizationPolicy({
+            managedPid: session?.pid,
+            managedProcessVerified: Boolean(session && processMatchesSession(session)),
+          })
+          : null;
+        if (canonicalizationPolicy && canonicalizationPolicy.ok !== true) {
+          throw new Error(
+            `Managed QWork Claude Skill call canonicalization policy blocked: ${canonicalizationPolicy.error_code}`,
+          );
+        }
         return writePinnedRunMetadata(options.out, buildTeamsRunMetadata({
           session,
           qworkUiUrl: identity.qworkUiUrl,
@@ -962,6 +975,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             qwork_release_manifest_sha256: options['qwork-release-manifest-sha256'] || process.env.QBOT_QWORK_RELEASE_MANIFEST_SHA256 || '',
           },
           qworkReleaseIdentityReadback: identity.releaseIdentityReadback,
+          claudeSkillCallCanonicalizationPolicy: canonicalizationPolicy,
           releaseObservationPhase: phase,
         }));
       };
@@ -1026,6 +1040,7 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
             cdpUrl: connection.cdpUrl,
             upstreamCdpUrl: connection.upstreamCdpUrl || '',
             rendererRemount,
+            releaseIdentityChecked: true,
           };
         };
       }

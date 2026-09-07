@@ -60,6 +60,23 @@ function sha256File(file) {
   return sha256Bytes(fs.readFileSync(file));
 }
 
+function canonicalizationPolicyFixture(pid = 4242) {
+  const stable = {
+    schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1',
+    flag_name: 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION',
+    runner: { readable: true, state: 'unset' },
+    managed_process: { readable: true, state: 'unset' },
+    ok: true,
+    error_code: '',
+  };
+  return {
+    ...stable,
+    checked_at: '2026-09-07T00:00:00.000Z',
+    managed_process: { ...stable.managed_process, pid },
+    policy_sha256: sha256Bytes(Buffer.from(JSON.stringify(stable))),
+  };
+}
+
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -259,7 +276,8 @@ function pretest(stageId, plan) {
     'casebook_exact_sheet_export', 'qwork_release_intake', 'case_count', 'case_id_unique',
     'scoped_execution_not_implicit', 'core_beta_protocol', 'release_identity_inputs',
     'fixture_controller_contract', 'teams_app', 'teams_release_identity', 'managed_live_session',
-    'managed_session_process', 'control_plane_identity', 'qwork_control_plane_health',
+    'managed_session_process', 'qwork_claude_skill_call_canonicalization_enabled',
+    'control_plane_identity', 'qwork_control_plane_health',
     'qwork_backend_identity', 'teams_cdp', 'qwork_target_logged_in', 'qwork_public_capabilities',
     'qwork_control_plane_identity', 'qwork_release_identity', 'qwork_runtime_release_status',
     'qwork_runtime_release_identity', 'qwork_runtime_update_activation_safe',
@@ -311,11 +329,12 @@ function pretest(stageId, plan) {
       observed_fingerprint: plan.release_identity_sha256,
     },
     runtime: {
+      claude_skill_call_canonicalization_policy: canonicalizationPolicyFixture(),
       teams: {
         version: plan.release_identity.teams_version,
         build: plan.release_identity.teams_build,
       },
-      session: { control_plane_origin: plan.release_identity.control_plane_origin },
+      session: { pid: 4242, control_plane_origin: plan.release_identity.control_plane_origin },
       teams_inspection: { public_capabilities: { ok: true, value_type: 'object' } },
       control_plane_health: {
         ok: true,
@@ -569,10 +588,25 @@ function makeCompletionArtifacts({
     },
     release_observation_checks: ['startup', 'run-final'].map((phase) => ({
       phase,
+      observed_at: phase === 'startup'
+        ? '2026-09-07T00:00:00.000Z'
+        : '2026-09-07T00:01:00.000Z',
       ok: true,
       observed_sha256: '3'.repeat(64),
       state_sha256: '4'.repeat(64),
       envelope_sha256: identity.qwork_release_manifest_sha256,
+    })),
+    claude_skill_call_canonicalization_policy: canonicalizationPolicyFixture(),
+    claude_skill_call_canonicalization_policy_checks: ['startup', 'run-final'].map((phase) => ({
+      phase,
+      observed_at: phase === 'startup'
+        ? '2026-09-07T00:00:00.000Z'
+        : '2026-09-07T00:01:00.000Z',
+      ok: true,
+      policy_sha256: canonicalizationPolicyFixture().policy_sha256,
+      runner_state: 'unset',
+      managed_process_state: 'unset',
+      managed_process_pid: 4242,
     })),
     sources: { framework: { commit: plan.framework.commit, dirty: false } },
     artifacts: { casebook_sha256: plan.casebook.sha256 },

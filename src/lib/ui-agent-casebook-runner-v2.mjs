@@ -7680,6 +7680,14 @@ async function reconnectCoreBetaV2Runtime({
         || await runtime.playwright.chromium.connectOverCDP(runtime.cdpUrl);
       const nextPage = reconnected?.page || await findQbotPage(nextBrowser);
       if (!nextPage) throw new Error('CDP 已恢复，但未找到 QWork 页面。');
+      if (typeof options['release-identity-check-hook'] === 'function'
+        && reconnected?.releaseIdentityChecked !== true) {
+        await options['release-identity-check-hook']({
+          browser: nextBrowser,
+          page: nextPage,
+          phase: 'replacement-renderer',
+        });
+      }
       if (reconnected?.cdpUrl) runtime.cdpUrl = reconnected.cdpUrl;
       nextPage.setDefaultTimeout(12000);
       nextPage.setDefaultNavigationTimeout(30000);
@@ -7712,6 +7720,13 @@ async function resolveCoreBetaV2MaintenancePage({ page, runtime, options, state,
     if (candidate.isClosed?.()) continue;
     const alive = await candidate.evaluate(() => Boolean(document?.documentElement)).then(() => true).catch(() => false);
     if (alive) {
+      if (candidate !== runtime?.page && typeof options['release-identity-check-hook'] === 'function') {
+        await options['release-identity-check-hook']({
+          browser: runtime?.browser,
+          page: candidate,
+          phase: 'replacement-renderer',
+        });
+      }
       if (runtime) runtime.page = candidate;
       return { ok: true, page: candidate, reconnected: false };
     }
@@ -42633,6 +42648,13 @@ async function restartQbotAndReconnect({ runtime, options, state, caseDir, label
           provider: fixtureAuth.provider,
           has_user: fixtureAuth.hasUser,
         };
+      }
+      if (typeof options['release-identity-check-hook'] === 'function') {
+        await options['release-identity-check-hook']({
+          browser: nextBrowser,
+          page: nextPage,
+          phase: 'replacement-renderer',
+        });
       }
       // Keep dialogs unowned at page scope; case-specific flows decide whether to
       // accept or dismiss each confirmation.

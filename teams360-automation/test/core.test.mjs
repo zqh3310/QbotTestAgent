@@ -40,6 +40,7 @@ import { managedQworkRuntimeActivationDecision } from '../lib/managed-qwork-ui.m
 import {
   assessQworkReleaseIdentity,
   assertStableQworkReleaseIdentity,
+  inspectClaudeSkillCallCanonicalizationPolicy,
   readQworkReleaseIdentity,
 } from '../lib/qwork-release-identity.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
@@ -2888,6 +2889,112 @@ test('run metadata pins bundle identity and rejects host drift on resume', () =>
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Claude Skill call canonicalization policy fails closed without leaking process environment', () => {
+  const secret = 'SENSITIVE_PROCESS_VALUE_7b9a';
+  const inspect = ({
+    runnerEnvironment = {},
+    argvSuffix = '',
+    processSuffix = '',
+    throws = false,
+    commandMismatch = false,
+  } = {}) => {
+    const commandLine = `/Applications/360Teams.app --managed ${argvSuffix}`.trim();
+    return inspectClaudeSkillCallCanonicalizationPolicy({
+      managedPid: 4242,
+      managedProcessVerified: true,
+      runnerEnvironment,
+      execFile: (command, args) => {
+        assert.equal(command, '/bin/ps');
+        if (throws) throw new Error(secret);
+        if (args[0] === '-ww') {
+          assert.deepEqual(args, ['-ww', '-p', '4242', '-o', 'command=']);
+          return commandLine;
+        }
+        assert.deepEqual(args, ['-E', '-ww', '-p', '4242', '-o', 'command=']);
+        const environmentCommand = commandMismatch ? `${commandLine} --drifted` : commandLine;
+        return `${environmentCommand} PATH=/qa/bin DEEPBANK_E2E=1 SECRET=${secret} ${processSuffix}`;
+      },
+    });
+  };
+
+  const enabled = inspect({
+    argvSuffix: 'DEEPBANK_E2E=1 QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=1',
+  });
+  assert.equal(enabled.ok, true);
+  assert.equal(enabled.runner.state, 'unset');
+  assert.equal(enabled.managed_process.state, 'unset');
+  assert.doesNotMatch(JSON.stringify(enabled), new RegExp(secret));
+
+  const nonOne = inspect({
+    runnerEnvironment: { QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION: secret },
+    processSuffix: `QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=${secret}`,
+  });
+  assert.equal(nonOne.ok, true);
+  assert.equal(nonOne.runner.state, 'not_disabled');
+  assert.equal(nonOne.managed_process.state, 'not_disabled');
+  assert.doesNotMatch(JSON.stringify(nonOne), new RegExp(secret));
+
+  const runnerDisabled = inspect({
+    runnerEnvironment: { QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION: ' 1 ' },
+  });
+  assert.equal(runnerDisabled.ok, false);
+  assert.equal(runnerDisabled.error_code, 'runner_environment_disables_canonicalization');
+
+  const managedDisabled = inspect({
+    processSuffix: 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=1',
+  });
+  assert.equal(managedDisabled.ok, false);
+  assert.equal(
+    managedDisabled.error_code,
+    'managed_process_environment_disables_canonicalization',
+  );
+
+  const unreadable = inspect({ throws: true });
+  assert.equal(unreadable.ok, false);
+  assert.equal(unreadable.error_code, 'managed_process_environment_unreadable');
+  assert.doesNotMatch(JSON.stringify(unreadable), new RegExp(secret));
+
+  const mismatchedSnapshots = inspect({ commandMismatch: true });
+  assert.equal(mismatchedSnapshots.ok, false);
+  assert.equal(mismatchedSnapshots.error_code, 'managed_process_environment_unreadable');
+});
+
+test('Claude Skill call canonicalization policy rejects unverified and ambiguous managed hosts', () => {
+  const unverified = inspectClaudeSkillCallCanonicalizationPolicy({
+    managedPid: 4242,
+    runnerEnvironment: {},
+    execFile: () => {
+      throw new Error('must not run');
+    },
+  });
+  assert.equal(unverified.ok, false);
+  assert.equal(unverified.error_code, 'managed_process_unverified');
+
+  const ambiguous = inspectClaudeSkillCallCanonicalizationPolicy({
+    managedPid: 4242,
+    managedProcessVerified: true,
+    runnerEnvironment: {},
+    execFile: (_command, args) => args[0] === '-ww'
+      ? '/Applications/360Teams.app DEEPBANK_E2E=1'
+      : '/Applications/360Teams.app DEEPBANK_E2E=1 DEEPBANK_E2E=1 '
+        + 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=0 '
+        + 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION=1',
+  });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.error_code, 'managed_process_flag_ambiguous');
+
+  const argvSpoofOnly = inspectClaudeSkillCallCanonicalizationPolicy({
+    managedPid: 4242,
+    managedProcessVerified: true,
+    runnerEnvironment: {},
+    execFile: (_command, args) => args[0] === '-ww'
+      ? '/Applications/360Teams.app DEEPBANK_E2E=1'
+      : '/Applications/360Teams.app DEEPBANK_E2E=1 PATH=/qa/bin',
+  });
+  assert.equal(argvSpoofOnly.ok, false);
+  assert.equal(argvSpoofOnly.error_code, 'managed_process_environment_unreadable');
 });
 
 test('release artifact fingerprints cover the Teams binary, QWork payload and Casebook contents', () => {

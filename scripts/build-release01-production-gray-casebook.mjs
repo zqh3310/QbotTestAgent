@@ -30,6 +30,7 @@ import {
   validateQworkReleaseIntake,
 } from '../src/lib/qwork-release-intake.mjs';
 import {
+  QWORK_RELEASE_BLOCKING_RISK_SCHEMA,
   QWORK_MR1552_EXECUTION_RUNNER_RISK_ID,
   QWORK_MR1552_FAILURE_IDS,
   QWORK_MR1552_MERGE_COMMIT_SHA,
@@ -50,7 +51,7 @@ const LEGACY_SUPPLEMENT_XLSX = path.join(ROOT, 'PRD', 'QBot系统SIT自动化测
 let PRODUCT_COMMIT = '';
 const PREVIOUS_CASEBOOK_PRODUCT_COMMIT = '4693c5bd57b1170bed530e7559f9dc93a0b4a492';
 const PRODUCT_REF = 'origin/release/0.1';
-const PRODUCT_VERSION = '0.1.7';
+const PRODUCT_VERSION = '0.1.9';
 let MR_WINDOW_START = '';
 let MR_WINDOW_END = '';
 const OUTPUT_NAME = 'QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r16.xlsx';
@@ -61,9 +62,24 @@ const EXPECTED_PREVIOUS_MR_COUNT = 134;
 const CORE_LIFELINE_CASE_IDS = QWORK_CORE_LIFELINE_CASE_IDS;
 const SMOKE_CASE_IDS = QWORK_MR_SMOKE_CASE_IDS;
 const CASEBOOK_DESIGN_MR1552_BLOCKER = 'release 阻断风险审计未通过，存在必须在 G0 修复的 P1 执行隔离缺陷';
-const CASEBOOK_DESIGN_MR1552_FAILURES = Object.freeze(QWORK_MR1552_FAILURE_IDS.map(
+const CASEBOOK_DESIGN_MR1552_FAILURE_IDS = Object.freeze([
+  'execution_runner_message_isolation_missing',
+]);
+const CASEBOOK_DESIGN_MR1552_FAILURES = Object.freeze(CASEBOOK_DESIGN_MR1552_FAILURE_IDS.map(
   (failureId) => `${QWORK_MR1552_EXECUTION_RUNNER_RISK_ID}:${failureId}`,
 ));
+const MR1592_MERGE_COMMIT_SHA = 'ba781e6dcd3534b7d6798a7ac5f16cd32d69ed3e';
+const MR1592_SUCCESSOR_AST_KEYS = Object.freeze([
+  'cancellation',
+  'controller',
+  'desktop',
+  'manager',
+  'manager_pressure',
+  'supervisor',
+  'supervisor_exit',
+  'supervisor_message',
+  'termination',
+]);
 const RELEASE_INTAKE_UNRESOLVED_KEYS = Object.freeze([
   'api_errors',
   'blocking_risk_failures',
@@ -73,16 +89,20 @@ const RELEASE_INTAKE_UNRESOLVED_KEYS = Object.freeze([
   'unattributed_direct_commits',
   'unverified_mr_metadata',
 ]);
-const R13_INCREMENTAL_MR_ORDER = Object.freeze([
+const R16_INCREMENTAL_MR_ORDER = Object.freeze([
   '1527', '1532', '1531', '1500', '1528', '1530', '1537', '1535',
   '1533', '1539', '1529', '1538', '1536', '1541', '1544', '1547', '1548', '1546',
   '1540', '1550', '1511', '1552', '1558', '1556', '1549', '1557', '1559', '1561', '1560',
   '1564', '1563', '1566', '1568', '1569', '1570', '1572', '1573',
+  '1571', '1574', '1575', '1577', '1580', '1581', '1576', '1583', '1582', '1584',
+  '1585', '1587', '1588', '1589', '1586', '1534', '1590', '1567', '1565', '1592',
+  '1593', '1596', '1595', '1597', '1594',
+  '1579',
 ]);
-const EXPECTED_INCREMENTAL_MR_COUNT = R13_INCREMENTAL_MR_ORDER.length;
+const EXPECTED_INCREMENTAL_MR_COUNT = R16_INCREMENTAL_MR_ORDER.length;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
 const COVERAGE_STRENGTHS = new Set(['直接E2E', '相邻回归+源码合同', '相邻回归', '静态合同']);
-const R13_INCREMENTAL_MR_CONTRACTS = new Map([
+const R16_INCREMENTAL_MR_CONTRACTS = new Map([
   ['1527', {
     caseIds: ['MRSMOKE-NAV-001', 'BETA-INIT-001', 'BETA-HOST-003', 'BETA-CHAT-007'],
     coverageStrength: '相邻回归',
@@ -294,14 +314,196 @@ const R13_INCREMENTAL_MR_CONTRACTS = new Map([
     requiredSourceContractIds: ['deepbankv2-mr-1573-memory-session-profile-stability/v1'],
     reason: '桌面 Case 只回归记忆首会话/跨会话连续性、Recall/MCP、组织身份与隐私边界、路由、宿主和初始化主链；deepbankv2-mr-1573-memory-session-profile-stability/v1 仅鉴证 Feature 已验证状态在后台刷新失败时保留、Feature/Recall/MCP 跨 session cadence、node:url 原生 URL、直属上级多形态归一化与统一 bridge helper，以及 standalone/teams360 两套 runtime 同时关闭 CLAUDE.md 和 auto memory 的源码行与测试声明存在，claim_scope=source_and_test_declarations、test_execution_attested=false；桌面 E2E 不直接证明缓存失败分支、URL 构造、Profile 归一化或本地记忆关闭，禁止把相邻主链通过冒充这些内部合同已执行或通过。',
   }],
+  ['1571', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '0.1.8 版本提升只在 IID、merge SHA、diff SHA、精确 6 个 changed paths 全等时作为静态合同接受；G0 仍独立读回实际安装制品身份，不新增桌面 Case，也不把版本元数据变更冒充功能 E2E。',
+  }],
+  ['1574', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004', 'MRSMOKE-SKILL-001', 'BETA-SKILL-001', 'BETA-ART-004', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003'],
+    coverageStrength: '相邻回归',
+    reason: 'Python materialization 改为托管 Node 并避免误启 Teams，使用完整初始化、Skill 安装、文档成果、宿主持续性和 Teams 本地执行链做相邻回归；桌面证据不冒充内部进程启动器与 Python 单元分支已被直接执行。',
+  }],
+  ['1575', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅变更 GitLab sprint policy；在 G0 保留 IID、merge SHA 与 changes 静态审计，不新增桌面 Case，也不冒充产品行为测试。',
+  }],
+  ['1577', {
+    caseIds: ['MRSMOKE-ACT-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-PERF-003', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+    reason: 'Composer context usage 恢复涉及活动流、首轮/多轮实时刷新、失败终态、turn-end 收敛、重开保持和宿主连续性；现有 Case 只回归可见主链，内部 normalization、fixture 与 worker lifecycle 只做源码审查。',
+  }],
+  ['1580', {
+    caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-005', 'BETA-EXPERT-007', 'BETA-EXPERT-008', 'BETA-EXPERT-009', 'BETA-EXPERT-010', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-002', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-009', 'SIT-EXPERT-013', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
+    coverageStrength: '相邻回归',
+    reason: 'ExpertLifecycleView 拆分覆盖依赖选择、Skill/MCP drawer、发布复核与 release dialog；完整专家创建、冲突、发布、调用、维护与可见性集合做相邻回归，不把组件拆分或单元测试声明冒充直接 E2E。',
+  }],
+  ['1581', {
+    caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-005', 'BETA-EXPERT-007', 'BETA-EXPERT-008', 'BETA-EXPERT-009', 'BETA-EXPERT-010', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-002', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-009', 'SIT-EXPERT-013', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
+    coverageStrength: '相邻回归',
+    reason: 'Expert v2 persistence 拆分涉及 draft、owner、publish operation、snapshot、release、viewer 和 transaction；完整专家生命周期集合回归真实持久化、发布、调用与重开主链，内部 store 与事务模块仅做源码审查。',
+  }],
+  ['1576', {
+    caseIds: ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'SIT-CONN-019'],
+    coverageStrength: '直接E2E',
+    reason: 'MRSMOKE-WEB-001、MRSMOKE-WEB-002 与 SIT-CONN-019 直接执行真实 Web provider 成功、四轮配额、SSRF 拒绝及独立质量链；直接 E2E 只证明这些用户合同，不把内部模块边界或全部实现分支冒充为已执行。',
+  }],
+  ['1583', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'Agent-readable repository docs、索引、治理脚本与文档图只做静态合同审计；electron/src 的 docs 资产不得因位于产品目录而误映射桌面 Case，产品源码扩展名仍 fail-closed。',
+  }],
+  ['1582', {
+    caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-005', 'BETA-EXPERT-007', 'BETA-EXPERT-008', 'BETA-EXPERT-009', 'BETA-EXPERT-010', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-002', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-009', 'SIT-EXPERT-013', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
+    coverageStrength: '相邻回归',
+    reason: 'Expert lifecycle service 拆分覆盖 draft skill assets、记录、值、MCPHub preflight、发布失败与 SkillHub publication；完整专家生命周期集合回归用户链，内部服务模块只做源码审查。',
+  }],
+  ['1584', {
+    caseIds: ['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-PERF-003', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+    reason: 'context usage 非阻塞重构跨 snapshot commit、writer fence、channel/protocol/routes、manager/supervisor/termination 与 engine finalization；活动、失败、路由、首轮/多轮、重开、长回复和宿主链回归可见连续性，内部 drain/release 另由 G0 blocking-risk 硬审计。',
+  }],
+  ['1585', {
+    caseIds: ['MRSMOKE-SKILL-001', 'BETA-INIT-003', 'BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004', 'BETA-SKILL-005', 'BETA-SKILL-006', 'BETA-SKILL-007', 'BETA-SKILL-008', 'BETA-SKILL-009', 'BETA-SKILL-010', 'BETA-SKILL-011', 'BETA-SKILL-012', 'BETA-SKILL-014', 'SIT-SKILL-001', 'SIT-SKILL-002', 'SIT-SKILL-003', 'SIT-SKILL-007', 'SIT-SKILL-013', 'SIT-SKILL-014', 'SIT-SKILL-016', 'SIT-SKILL-017', 'SIT-SKILL-025', 'SIT-SKILL-026', 'SIT-SKILL-030', 'SIT-SKILL-032', 'SIT-SKILL-SCOPE-001'],
+    coverageStrength: '直接E2E',
+    reason: '完整 Skill 初始化、市场、安装、更新、回滚、选择、执行、隔离、作用域与清理 Case 直接覆盖 Skill management 用户生命周期；直接 E2E 不把 route/service 内部拆分或未触达分支冒充为已执行。',
+  }],
+  ['1587', {
+    caseIds: ['MRSMOKE-ART-001', 'BETA-ART-001', 'BETA-ART-002', 'BETA-ART-003', 'BETA-ART-004', 'BETA-FILE-005', 'BETA-FILE-006', 'SIT-ART-001', 'SIT-ART-002', 'SIT-ART-013', 'SIT-ART-014', 'SIT-ART-015', 'SIT-ART-017', 'SIT-ART-021', 'SIT-ART-022', 'SIT-ART-024', 'SIT-ART-CONFIRM-001'],
+    coverageStrength: '直接E2E',
+    reason: '完整成果生成、任务隔离、快照、格式、内容、预览、确认与失败文件集合直接覆盖 artifact lifecycle 用户合同；直接 E2E 不把 snapshot store/cleanup、diff 或 turn lifecycle 内部实现分支冒充为已执行。',
+  }],
+  ['1588', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-INIT-003', 'BETA-INIT-004', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-FILE-001', 'BETA-ART-001', 'BETA-TASK-008', 'BETA-HOST-003', 'BETA-SEC-002', 'BETA-ROUTE-001', 'SIT-SKILL-007', 'SIT-HOME-002', 'SIT-CONN-016', 'MRSMOKE-SKILL-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-ROUTE-001'],
+    coverageStrength: '相邻回归',
+    reason: 'BridgeContext projection 拆分触及 catalog、readiness、session、expert、turn summary 与 connector capability；完整核心生命线加 Skill、授权和路由冒烟保守回归公开投影，不把内部模块拆分和缓存单测冒充直接桌面覆盖。',
+  }],
+  ['1589', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '源码大小预算、architecture ratchet 与 CI policy 属于仓库治理；仅保留精确 changes 静态审计，不新增桌面 Case。',
+  }],
+  ['1586', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '0.1.9 版本提升只在 IID、merge SHA、diff SHA、精确 6 个 changed paths 全等时作为静态合同接受；G0 仍独立读回实际安装制品身份，不新增桌面 Case，也不把版本元数据变更冒充功能 E2E。',
+  }],
+  ['1534', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'MR delivery 的 pre-create review gate、技能文档和 governance loader 只做静态合同审计，不进入桌面执行层。',
+  }],
+  ['1590', {
+    caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-002', 'BETA-EXPERT-003', 'BETA-EXPERT-004', 'BETA-EXPERT-005', 'BETA-EXPERT-007', 'BETA-EXPERT-008', 'BETA-EXPERT-009', 'BETA-EXPERT-010', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-002', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-009', 'SIT-EXPERT-013', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1590-qbot-expert-cloud-installation/v1'],
+    reason: '完整专家生命周期 Case 只回归 Qbot 专家云安装、查询、发布、调用和维护的用户表面；deepbankv2-mr-1590-qbot-expert-cloud-installation/v1 仅鉴证 client/contract/routes/service/control-plane 源码与测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false，不代表产品测试已执行或全部云端分支已通过。',
+  }],
+  ['1567', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'MR delivery local-first gate、CI stage 和治理脚本只做静态合同审计，不新增桌面 QWork Case。',
+  }],
+  ['1565', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'Electron 二进制内部 S3 镜像仅影响 CI delivery 配置；保留精确 changes 静态审计，不冒充已安装候选功能 E2E。',
+  }],
+  ['1592', {
+    caseIds: ['BETA-INIT-001', 'BETA-CHAT-001', 'BETA-CHAT-007', 'BETA-HOST-003', 'MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-CHAT-008', 'BETA-PERF-003', 'SIT-TEAMS-NEW-002', 'SIT-TEAMS-NEW-003'],
+    coverageStrength: '相邻回归',
+    reason: 'worker heartbeat 与 execution 隔离影响 controller/entry/supervisor/cancel/watchdog；初始化、基础/并发/失败/停止/长回复、路由及 Teams 宿主 Case 只做用户可见相邻回归。G0 必须由 blocking-risk v5 的 clean-exit、pressure-admission、message-isolation 及九项 successor AST 合同全部显式通过，任一失败直接 NO_GO 且禁止生成可执行 Casebook。',
+  }],
+  ['1593', {
+    caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-007', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1593-qbot-additive-response-compatibility/v1'],
+    reason: '专家创建、发布、维护与调用 Case 只回归 Qbot additive response 的用户兼容链；deepbankv2-mr-1593-qbot-additive-response-compatibility/v1 仅鉴证兼容解析源码与测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false；候选响应未实际携带新增字段时不得声称该分支已由桌面直接执行。',
+  }],
+  ['1596', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1596-anonymous-stable-runtime-discovery/v1'],
+    reason: 'G0 权威读回及初始化、宿主、Teams 重开、导航与入口 Case 只回归实际加载的稳定 runtime；deepbankv2-mr-1596-anonymous-stable-runtime-discovery/v1 仅鉴证匿名发现、credential lifecycle、Lingxi bearer route、release policy 与 control-plane 源码及测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false；已登录候选不能冒充匿名请求分支已直接执行。',
+  }],
+  ['1595', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '精确 IID/SHA/diff/184-path 证明的过时测试资产退役；仅在 !1558 的 current-release 合同继续逐行保留产品绑定且合法退休旧测试绑定时静态接受，不新增桌面 Case。',
+  }],
+  ['1597', {
+    caseIds: ['BETA-CHAT-001', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-003'],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1597-worker-im-user-identity-forwarding/v1'],
+    reason: '基础对话、组织上下文、安全、宿主和 Teams 本地执行 Case 只回归 IM 用户态连续性；deepbankv2-mr-1597-worker-im-user-identity-forwarding/v1 仅鉴证 execution worker identity envelope 的源码与测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false；现有桌面 Case 不直接暴露内部透传字段。',
+  }],
+  ['1594', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'package metadata-only 的 UI build 跳过策略仅属于 CI policy；保留精确 merge/changes 静态审计，不新增桌面 Case。',
+  }],
+  ['1579', {
+    caseIds: [
+      'MRSMOKE-SKILL-001',
+      'BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004',
+      'BETA-SKILL-005', 'BETA-SKILL-006', 'BETA-SKILL-007', 'BETA-SKILL-008',
+      'BETA-SKILL-009', 'BETA-SKILL-010', 'BETA-SKILL-011', 'BETA-SKILL-014',
+      'SIT-SKILL-007',
+      'BETA-EXPERT-004', 'BETA-EXPERT-007', 'BETA-EXPERT-010',
+      'BETA-ROUTE-001', 'BETA-HOST-003',
+    ],
+    coverageStrength: '相邻回归+源码合同',
+    requiredSourceContractIds: ['deepbankv2-mr-1579-claude-skill-call-canonicalization/v1'],
+    reason: 'Skill 安装、执行、任务隔离、Expert 依赖及路由/宿主 Case 只回归用户可见相邻链；deepbankv2-mr-1579-claude-skill-call-canonicalization/v1 仅鉴证 alias 到 invocationName、JSON/SSE 规范化、fail-closed 边界与 loopback/engine/Expert 接线的源码及测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false；现有 skill_execution_trace 仅观测 SDK 处理后输入，不得声称 alias canonicalization 分支已被桌面直接执行。',
+  }],
 ]);
 const DIRECT_E2E_MR_CASE_CONTRACTS = new Map([
   ['1523', ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019']],
   ['1568', ['SIT-TASK-EDIT-001', 'BETA-TASK-002', 'BETA-CHAT-007', 'BETA-TASK-008']],
+  ['1576', ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'SIT-CONN-019']],
+  ['1585', ['MRSMOKE-SKILL-001', 'BETA-INIT-003', 'BETA-SKILL-001', 'BETA-SKILL-002', 'BETA-SKILL-003', 'BETA-SKILL-004', 'BETA-SKILL-005', 'BETA-SKILL-006', 'BETA-SKILL-007', 'BETA-SKILL-008', 'BETA-SKILL-009', 'BETA-SKILL-010', 'BETA-SKILL-011', 'BETA-SKILL-012', 'BETA-SKILL-014', 'SIT-SKILL-001', 'SIT-SKILL-002', 'SIT-SKILL-003', 'SIT-SKILL-007', 'SIT-SKILL-013', 'SIT-SKILL-014', 'SIT-SKILL-016', 'SIT-SKILL-017', 'SIT-SKILL-025', 'SIT-SKILL-026', 'SIT-SKILL-030', 'SIT-SKILL-032', 'SIT-SKILL-SCOPE-001']],
+  ['1587', ['MRSMOKE-ART-001', 'BETA-ART-001', 'BETA-ART-002', 'BETA-ART-003', 'BETA-ART-004', 'BETA-FILE-005', 'BETA-FILE-006', 'SIT-ART-001', 'SIT-ART-002', 'SIT-ART-013', 'SIT-ART-014', 'SIT-ART-015', 'SIT-ART-017', 'SIT-ART-021', 'SIT-ART-022', 'SIT-ART-024', 'SIT-ART-CONFIRM-001']],
+]);
+const EXACT_STATIC_MR_CONTRACTS = new Map([
+  ['1571', {
+    mergeCommitSha: '4228e99aee9e2dd364eb7bc0013300791650ad9c',
+    diffSha256: '4c4a8b7d99b43017a217796441f162cf081ee16a9898d66a0f57a672bc110e18',
+    changedPaths: [
+      '.deepbank-runtime/runtime-provision-seed/0.1.6/provision-manifest.json',
+      '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+      'deploy/helm/qbot/Chart.yaml',
+      'package-lock.json',
+      'package.json',
+      'teams360.host-sync.json',
+    ],
+  }],
+  ['1586', {
+    mergeCommitSha: '4763f90e276f05c6147affdf4751de6e67d2da85',
+    diffSha256: '6b3b4780d5737b3f57ced31e61365ee13950e9389e36e89c768292ae488f1c65',
+    changedPaths: [
+      '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+      '.deepbank-runtime/runtime-provision-seed/0.1.8/provision-manifest.json',
+      'deploy/helm/qbot/Chart.yaml',
+      'package-lock.json',
+      'package.json',
+      'teams360.host-sync.json',
+    ],
+  }],
 ]);
 const REQUIRED_SOURCE_CONTRACTS_BY_MR = new Map([
   ['1522', ['deepbankv2-mr-1522-claude-turn-headers/v1']],
-  ...[...R13_INCREMENTAL_MR_CONTRACTS]
+  ...[...R16_INCREMENTAL_MR_CONTRACTS]
     .filter(([, contract]) => Array.isArray(contract.requiredSourceContractIds))
     .map(([iid, contract]) => [iid, [...contract.requiredSourceContractIds]]),
 ]);
@@ -1419,20 +1621,20 @@ export async function assertCasebookOutputAbsent(outputFile) {
   }
 }
 
-export function assertR13CasebookLayering({ gateIds, fullIds, regressionAddonIds, mrRows }) {
+export function assertR16CasebookLayering({ gateIds, fullIds, regressionAddonIds, mrRows }) {
   const gate = Array.isArray(gateIds) ? gateIds : [];
   const full = Array.isArray(fullIds) ? fullIds : [];
   const addons = Array.isArray(regressionAddonIds) ? regressionAddonIds : [];
   if (gate.length !== 70 || full.length !== 160
     || JSON.stringify(full.slice(0, 70)) !== JSON.stringify(gate)) {
-    throw new Error(`r13 分层数量或 G4 的 G3 前缀漂移：gate=${gate.length} full=${full.length}`);
+    throw new Error(`r16 分层数量或 G4 的 G3 前缀漂移：gate=${gate.length} full=${full.length}`);
   }
   if (gate.includes('BETA-TASK-002') || !full.includes('BETA-TASK-002')
     || full.includes('SIT-TASK-REGEN-001') || !addons.includes('BETA-TASK-002')) {
-    throw new Error('r13 分层漂移：G3 不得包含 BETA-TASK-002，G4 增量必须以 BETA-TASK-002 替换 SIT-TASK-REGEN-001');
+    throw new Error('r16 分层漂移：G3 不得包含 BETA-TASK-002，G4 增量必须以 BETA-TASK-002 替换 SIT-TASK-REGEN-001');
   }
   const mr1557 = (Array.isArray(mrRows) ? mrRows : []).find((row) => row?.[1] === '!1557');
-  const expectedCases = R13_INCREMENTAL_MR_CONTRACTS.get('1557').caseIds.join(',');
+  const expectedCases = R16_INCREMENTAL_MR_CONTRACTS.get('1557').caseIds.join(',');
   if (!mr1557 || mr1557[6] !== expectedCases || mr1557[7] !== '12条冒烟+70条门禁+160条增量') {
     throw new Error(`MR !1557 层级必须精确为“12条冒烟+70条门禁+160条增量”：${JSON.stringify(mr1557)}`);
   }
@@ -1582,10 +1784,10 @@ function appendMrSources(testCase, iids, separator = '; ') {
   return next;
 }
 
-function applyR13MrCoverage(testCase, separator = '; ') {
+function applyR16MrCoverage(testCase, separator = '; ') {
   const id = asString(testCase['用例ID']);
   let next = { ...testCase };
-  for (const [iid, contract] of R13_INCREMENTAL_MR_CONTRACTS) {
+  for (const [iid, contract] of R16_INCREMENTAL_MR_CONTRACTS) {
     if (!contract.caseIds.includes(id)) continue;
     next = appendMrSources(next, [iid], separator);
     if (contract.requiredSourceContractIds?.length) {
@@ -1731,7 +1933,7 @@ export function patchSmokeCase(testCase) {
       { turn: 4, label: '第四轮额度回归', prompt: '第4轮继续在同一任务使用内置 Web 搜索，查找 OpenAI 官方网站最近至少两条安全或可靠性更新。每条必须给出标题、发布日期、原始 HTTPS 链接和一句摘要。', oracle: '至少两条独立 OpenAI 官方结果，每条均包含标题、发布日期、原始 HTTPS 链接和一句摘要；第四个唯一 provider receipt 绑定同一 task，且没有固定三次上限或服务端拒绝。' },
     ]);
   }
-  next = applyR13MrCoverage(next);
+  next = applyR16MrCoverage(next);
   const planSteps = asString(next['执行步骤'] || next['自动化执行步骤']);
   next['动作计划JSON'] = json(actionPlan(id, asString(next['用例类型']) || 'conversation', planSteps));
   return dedupeCasebookSourceIds(next, '; ');
@@ -1797,7 +1999,7 @@ function patchFullFunctionRecentCase(testCase) {
       '助手正文无 SVG data URI、base64 或长编码泄漏',
     ], next['预期结果']));
   }
-  next = applyR13MrCoverage(next, ',');
+  next = applyR16MrCoverage(next, ',');
   return dedupeCasebookSourceIds(next, ',');
 }
 
@@ -2358,7 +2560,7 @@ export function patchRecentCases(testCase) {
   if (id === 'BETA-HOST-003') {
     next['来源ID'] = `${asString(next['来源ID'])},MR!1522`.replace(/^,/, '');
   }
-  next = applyR13MrCoverage(next, ',');
+  next = applyR16MrCoverage(next, ',');
   const planSteps = asString(next['自动化执行步骤'] || next['执行步骤']);
   if (planSteps) next['动作计划JSON'] = json(actionPlan(id, asString(next['用例类型']), planSteps));
   return dedupeCasebookSourceIds(next, ',');
@@ -2390,6 +2592,17 @@ function sameFileSet(expectedFiles, actualFiles) {
   return expected.size === expectedFiles.length
     && actual.size === actualFiles.length
     && [...expected].every((file) => actual.has(file));
+}
+
+export function validateExactStaticMrContract(mr, iid, contract = EXACT_STATIC_MR_CONTRACTS.get(String(iid))) {
+  if (!contract) return { ok: false, failures: ['exact_static_contract_missing'] };
+  const failures = [];
+  if (asString(mr?.iid) !== String(iid)) failures.push('iid_mismatch');
+  if (asString(mr?.merge_commit_sha || mr?.commit) !== contract.mergeCommitSha) failures.push('merge_commit_sha_mismatch');
+  if (asString(mr?.diff_sha256) !== contract.diffSha256) failures.push('diff_sha256_mismatch');
+  if (!sameFileSet(contract.changedPaths, mr?.changed_paths)) failures.push('changed_paths_mismatch');
+  if (Number(mr?.changed_paths?.length) !== contract.changedPaths.length) failures.push('changed_path_count_mismatch');
+  return { ok: failures.length === 0, failures };
 }
 
 async function previousCasebookMrRows() {
@@ -2540,10 +2753,10 @@ function validateCasebookDesignMr1552BlockedException(report) {
   rejectUnless(risk?.applicable === true && risk?.activation_source === 'gitlab-api-first-parent-ancestry'
     && risk?.status === 'BLOCKED' && risk?.verified === false, 'blocking_risk_status_mismatch');
   rejectUnless(sameOrderedValues(risk?.protected_paths, riskProtectedPaths), 'blocking_risk_protected_paths_mismatch');
-  rejectUnless(sameOrderedValues(risk?.failure_ids, [...QWORK_MR1552_FAILURE_IDS]), 'blocking_risk_failure_ids_mismatch');
+  rejectUnless(sameOrderedValues(risk?.failure_ids, [...CASEBOOK_DESIGN_MR1552_FAILURE_IDS]), 'blocking_risk_failure_ids_mismatch');
   rejectUnless(Array.isArray(risk?.evidence_failures) && risk.evidence_failures.length === 0, 'blocking_risk_evidence_failure');
   rejectUnless(sameOrderedValues((risk?.checks || []).map((check) => check?.id), [...QWORK_MR1552_FAILURE_IDS])
-    && risk.checks.every((check) => check?.passed === false
+    && risk.checks.every((check) => check?.passed === !CASEBOOK_DESIGN_MR1552_FAILURE_IDS.includes(check.id)
       && check?.observations && typeof check.observations === 'object'
       && Object.keys(check.observations).length > 0), 'blocking_risk_checks_mismatch');
   rejectUnless(sameOrderedValues((risk?.source_files || []).map((file) => file?.path), riskProtectedPaths)
@@ -2556,14 +2769,70 @@ function validateCasebookDesignMr1552BlockedException(report) {
   rejectUnless(Number(apiFreshness?.blocking_risk_count) === 1
     && Number(apiFreshness?.blocking_risk_applicable_count) === 1
     && Number(apiFreshness?.blocking_risk_verified_count) === 0
-    && Number(apiFreshness?.blocking_risk_failure_count) === QWORK_MR1552_FAILURE_IDS.length
+    && Number(apiFreshness?.blocking_risk_failure_count) === CASEBOOK_DESIGN_MR1552_FAILURE_IDS.length
     && apiFreshness?.blocking_risks_verified === false, 'freshness_blocking_risk_counts_mismatch');
   rejectUnless(Number(report?.summary?.blocking_risk_count) === 1
     && Number(report?.summary?.blocking_risk_applicable_count) === 1
     && Number(report?.summary?.blocking_risk_verified_count) === 0
-    && Number(report?.summary?.blocking_risk_failure_count) === QWORK_MR1552_FAILURE_IDS.length,
+    && Number(report?.summary?.blocking_risk_failure_count) === CASEBOOK_DESIGN_MR1552_FAILURE_IDS.length,
   'summary_blocking_risk_counts_mismatch');
   failures.push(...riskValidation.failures.map((failure) => `blocking_risk:${failure}`));
+  return { ok: failures.length === 0, failures };
+}
+
+export function validateMr1592BlockingRiskV5Ready(report) {
+  const failures = [];
+  const rejectUnless = (condition, failure) => {
+    if (!condition) failures.push(failure);
+  };
+  const mergeRequests = Array.isArray(report?.merge_requests) ? report.merge_requests : [];
+  const mr1592 = mergeRequests.filter((mr) => asString(mr?.iid) === '1592');
+  const risks = Array.isArray(report?.blocking_risks) ? report.blocking_risks : [];
+  const risk = risks[0];
+  const checks = Array.isArray(risk?.checks) ? risk.checks : [];
+  const messageIsolation = checks.find((check) => check?.id === 'execution_runner_message_isolation_missing');
+  const ast = messageIsolation?.observations?.successor_ast_contracts;
+  const apiFreshness = report?.policy?.api_freshness;
+  const unresolved = report?.unresolved;
+  const releaseHead = asString(report?.release?.head);
+
+  rejectUnless(mr1592.length === 1
+    && asString(mr1592[0]?.merge_commit_sha || mr1592[0]?.commit) === MR1592_MERGE_COMMIT_SHA,
+  'mr1592_merge_binding_mismatch');
+  rejectUnless(risks.length === 1 && risk?.schema_version === QWORK_RELEASE_BLOCKING_RISK_SCHEMA
+    && risk?.risk_id === QWORK_MR1552_EXECUTION_RUNNER_RISK_ID,
+  'blocking_risk_v5_identity_mismatch');
+  rejectUnless(risk?.release_head === releaseHead && risk?.applicable === true
+    && risk?.verified === true && risk?.status === 'VERIFIED',
+  'blocking_risk_v5_not_verified');
+  rejectUnless(Array.isArray(risk?.failure_ids) && risk.failure_ids.length === 0
+    && Array.isArray(risk?.evidence_failures) && risk.evidence_failures.length === 0,
+  'blocking_risk_v5_failures_not_empty');
+  rejectUnless(sameOrderedValues(checks.map((check) => check?.id), [...QWORK_MR1552_FAILURE_IDS])
+    && checks.every((check) => check?.passed === true),
+  'blocking_risk_v5_checks_not_all_passed');
+  rejectUnless(ast && typeof ast === 'object' && !Array.isArray(ast)
+    && sameOrderedValues(Object.keys(ast).filter((key) => key !== 'passed').sort(), [...MR1592_SUCCESSOR_AST_KEYS].sort())
+    && MR1592_SUCCESSOR_AST_KEYS.every((key) => ast[key] === true)
+    && ast.passed === true,
+  'blocking_risk_v5_successor_ast_not_all_passed');
+  rejectUnless(Number(apiFreshness?.blocking_risk_count) === 1
+    && Number(apiFreshness?.blocking_risk_applicable_count) === 1
+    && Number(apiFreshness?.blocking_risk_verified_count) === 1
+    && Number(apiFreshness?.blocking_risk_failure_count) === 0
+    && apiFreshness?.blocking_risks_verified === true,
+  'freshness_blocking_risk_v5_counts_mismatch');
+  rejectUnless(Number(report?.summary?.blocking_risk_count) === 1
+    && Number(report?.summary?.blocking_risk_applicable_count) === 1
+    && Number(report?.summary?.blocking_risk_verified_count) === 1
+    && Number(report?.summary?.blocking_risk_failure_count) === 0,
+  'summary_blocking_risk_v5_counts_mismatch');
+  rejectUnless(Array.isArray(unresolved?.blocking_risk_failures)
+    && unresolved.blocking_risk_failures.length === 0,
+  'unresolved_blocking_risk_v5_failures');
+  rejectUnless(Array.isArray(report?.blockers) && report.blockers.length === 0
+    && report?.decision === 'READY',
+  'mr1592_release_intake_not_ready');
   return { ok: failures.length === 0, failures };
 }
 
@@ -2573,7 +2842,22 @@ export function validateCasebookDesignReleaseIntake(report, validationOptions = 
     requireReady: true,
     requireFreshRef: true,
   });
-  if (readyValidation.ok) return { ok: true, acceptance: 'READY', failures: [] };
+  const includesMr1592 = Array.isArray(report?.merge_requests)
+    && report.merge_requests.some((mr) => asString(mr?.iid) === '1592');
+  const mr1592Validation = includesMr1592
+    ? validateMr1592BlockingRiskV5Ready(report)
+    : { ok: true, failures: [] };
+  if (readyValidation.ok && mr1592Validation.ok) return { ok: true, acceptance: 'READY', failures: [] };
+  if (includesMr1592) {
+    return {
+      ok: false,
+      acceptance: 'REJECTED',
+      failures: unique([
+        ...readyValidation.failures.map((failure) => `intake:${failure}`),
+        ...mr1592Validation.failures.map((failure) => `mr1592:${failure}`),
+      ]),
+    };
+  }
   const structuralValidation = validateQworkReleaseIntake(report, {
     ...validationOptions,
     requireReady: false,
@@ -2614,21 +2898,21 @@ async function loadReleaseIntake() {
   if (!/^[a-f0-9]{40}$/iu.test(releaseHead)
     || asString(report.policy?.api_freshness?.branch_head_before) !== releaseHead
     || asString(report.policy?.api_freshness?.branch_head_after) !== releaseHead) {
-    throw new Error('r13 release intake HEAD 必须由 GitLab API 扫描前后稳定读回');
+    throw new Error('r16 release intake HEAD 必须由 GitLab API 扫描前后稳定读回');
   }
   assertExpectedProductCommit(expectedProductCommit, releaseHead);
   if (Number(report.policy?.api_freshness?.first_parent_merge_count) !== EXPECTED_INCREMENTAL_MR_COUNT
     || report.merge_requests?.length !== EXPECTED_INCREMENTAL_MR_COUNT) {
-    throw new Error(`r13 增量直接 MR 必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}个，actual=${report.merge_requests?.length || 0}`);
+    throw new Error(`r16 增量直接 MR 必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}个，actual=${report.merge_requests?.length || 0}`);
   }
   const observedMrOrder = report.merge_requests.map((mr) => asString(mr.iid));
-  if (JSON.stringify(observedMrOrder) !== JSON.stringify(R13_INCREMENTAL_MR_ORDER)) {
-    throw new Error(`r13 增量 MR 顺序漂移：expected=${R13_INCREMENTAL_MR_ORDER.join(',')} actual=${observedMrOrder.join(',')}`);
+  if (JSON.stringify(observedMrOrder) !== JSON.stringify(R16_INCREMENTAL_MR_ORDER)) {
+    throw new Error(`r16 增量 MR 顺序漂移：expected=${R16_INCREMENTAL_MR_ORDER.join(',')} actual=${observedMrOrder.join(',')}`);
   }
-  const declaredMrOrder = [...R13_INCREMENTAL_MR_CONTRACTS.keys()];
-  if (R13_INCREMENTAL_MR_CONTRACTS.size !== EXPECTED_INCREMENTAL_MR_COUNT
-    || JSON.stringify(declaredMrOrder) !== JSON.stringify(R13_INCREMENTAL_MR_ORDER)) {
-    throw new Error(`r13 显式覆盖合同必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}项且顺序固定`);
+  const declaredMrOrder = [...R16_INCREMENTAL_MR_CONTRACTS.keys()];
+  if (R16_INCREMENTAL_MR_CONTRACTS.size !== EXPECTED_INCREMENTAL_MR_COUNT
+    || JSON.stringify(declaredMrOrder) !== JSON.stringify(R16_INCREMENTAL_MR_ORDER)) {
+    throw new Error(`r16 显式覆盖合同必须恰好${EXPECTED_INCREMENTAL_MR_COUNT}项且顺序固定`);
   }
   const sourceAttestations = Array.isArray(report.source_contracts) ? report.source_contracts : [];
   const expectedSourceContractIds = unique([...REQUIRED_SOURCE_CONTRACTS_BY_MR.values()].flat());
@@ -2636,31 +2920,31 @@ async function loadReleaseIntake() {
   if (observedSourceContractIds.length !== expectedSourceContractIds.length
     || new Set(observedSourceContractIds).size !== observedSourceContractIds.length
     || expectedSourceContractIds.some((contractId) => !observedSourceContractIds.includes(contractId))) {
-    throw new Error(`r13 source contract 集合必须精确为 ${expectedSourceContractIds.join(',')}`);
+    throw new Error(`r16 source contract 集合必须精确为 ${expectedSourceContractIds.join(',')}`);
   }
-  for (const [iid, contract] of R13_INCREMENTAL_MR_CONTRACTS) {
+  for (const [iid, contract] of R16_INCREMENTAL_MR_CONTRACTS) {
     if (!COVERAGE_STRENGTHS.has(contract.coverageStrength)) {
-      throw new Error(`r13 增量 MR !${iid} 覆盖强度非法：${contract.coverageStrength}`);
+      throw new Error(`r16 增量 MR !${iid} 覆盖强度非法：${contract.coverageStrength}`);
     }
     if (contract.coverageStrength === '静态合同'
       && (!contract.staticOnly || contract.caseIds.length !== 0 || contract.requiredSourceContractIds?.length)) {
-      throw new Error(`r13 增量 MR !${iid} 静态合同必须 staticOnly=true、caseIds=[] 且无源码合同绑定`);
+      throw new Error(`r16 增量 MR !${iid} 静态合同必须 staticOnly=true、caseIds=[] 且无源码合同绑定`);
     }
     if (contract.coverageStrength === '相邻回归+源码合同' && !contract.requiredSourceContractIds?.length) {
-      throw new Error(`r13 增量 MR !${iid} 相邻回归+源码合同缺少 requiredSourceContractIds`);
+      throw new Error(`r16 增量 MR !${iid} 相邻回归+源码合同缺少 requiredSourceContractIds`);
     }
     if (contract.coverageStrength === '相邻回归+源码合同'
       && (contract.staticOnly || contract.caseIds.length === 0)) {
-      throw new Error(`r13 增量 MR !${iid} 相邻回归+源码合同必须同时具备桌面相邻 Case`);
+      throw new Error(`r16 增量 MR !${iid} 相邻回归+源码合同必须同时具备桌面相邻 Case`);
     }
     if (contract.coverageStrength === '相邻回归'
       && (contract.staticOnly || contract.caseIds.length === 0 || contract.requiredSourceContractIds?.length)) {
-      throw new Error(`r13 增量 MR !${iid} 相邻回归必须具备桌面 Case 且不得冒充源码合同`);
+      throw new Error(`r16 增量 MR !${iid} 相邻回归必须具备桌面 Case 且不得冒充源码合同`);
     }
     if (contract.coverageStrength === '直接E2E') {
       const directCases = DIRECT_E2E_MR_CASE_CONTRACTS.get(iid);
       if (!directCases || JSON.stringify(directCases) !== JSON.stringify(contract.caseIds)) {
-        throw new Error(`r13 增量 MR !${iid} 直接E2E 未命中显式 MR→Case 白名单`);
+        throw new Error(`r16 增量 MR !${iid} 直接E2E 未命中显式 MR→Case 白名单`);
       }
     }
   }
@@ -2677,11 +2961,17 @@ async function loadReleaseIntake() {
   }
   for (const mr of report.merge_requests) {
     const iid = asString(mr.iid);
-    const contract = R13_INCREMENTAL_MR_CONTRACTS.get(iid);
-    if (!contract) throw new Error(`r13 增量 MR !${iid} 缺少显式映射合同`);
+    const contract = R16_INCREMENTAL_MR_CONTRACTS.get(iid);
+    if (!contract) throw new Error(`r16 增量 MR !${iid} 缺少显式映射合同`);
     const productPaths = Array.isArray(mr.impact?.product_paths) ? mr.impact.product_paths : [];
     if (Boolean(contract.staticOnly) !== (productPaths.length === 0)) {
-      throw new Error(`r13 增量 MR !${iid} 静态/产品分类漂移`);
+      throw new Error(`r16 增量 MR !${iid} 静态/产品分类漂移`);
+    }
+    if (EXACT_STATIC_MR_CONTRACTS.has(iid)) {
+      const exactStaticValidation = validateExactStaticMrContract(mr, iid);
+      if (!exactStaticValidation.ok) {
+        throw new Error(`r16 增量 MR !${iid} 精确静态合同漂移：${exactStaticValidation.failures.join(',')}`);
+      }
     }
     const sourceContractIds = Array.isArray(mr.source_contract_ids)
       ? mr.source_contract_ids.map(asString).filter(Boolean)
@@ -2689,7 +2979,7 @@ async function loadReleaseIntake() {
     const requiredSourceContractIds = contract.requiredSourceContractIds || [];
     if (new Set(sourceContractIds).size !== sourceContractIds.length
       || JSON.stringify(sourceContractIds) !== JSON.stringify(requiredSourceContractIds)) {
-      throw new Error(`r13 增量 MR !${iid} source_contract_ids 缺失或重复`);
+      throw new Error(`r16 增量 MR !${iid} source_contract_ids 缺失或重复`);
     }
   }
   const rows = report.merge_requests.map((mr) => ({
@@ -2723,8 +3013,8 @@ async function loadReleaseIntake() {
 }
 
 function mrMapping(mr) {
-  const r13Contract = R13_INCREMENTAL_MR_CONTRACTS.get(String(mr.mr || ''));
-  if (r13Contract) return [...r13Contract.caseIds];
+  const r16Contract = R16_INCREMENTAL_MR_CONTRACTS.get(String(mr.mr || ''));
+  if (r16Contract) return [...r16Contract.caseIds];
   if (String(mr.mr || '') === '1523') {
     return [...(RECENT_MR_CASE_MAPPING.get('1523') || [])];
   }
@@ -3385,8 +3675,8 @@ async function main() {
     }
   }
   const incrementalMrRows = RECENT_MR_APPEND.map((mr) => {
-    const r13Contract = R13_INCREMENTAL_MR_CONTRACTS.get(String(mr.mr || ''));
-    if (!r13Contract) throw new Error(`r13 增量 MR !${mr.mr} 缺少覆盖合同`);
+    const r16Contract = R16_INCREMENTAL_MR_CONTRACTS.get(String(mr.mr || ''));
+    if (!r16Contract) throw new Error(`r16 增量 MR !${mr.mr} 缺少覆盖合同`);
     const staticAudit = RECENT_MR_STATIC_AUDITS.get(String(mr.mr || '')) || mr.intakeStaticAudit;
     const mappings = (staticAudit ? [] : mrMapping(mr)).filter((id) => smokeIdSet.has(id) || gateIdSet.has(id) || fullIdSet.has(id));
     const area = mrArea(mr);
@@ -3414,9 +3704,9 @@ async function main() {
       mr.files.slice(0, 8).join('\n'),
       mappings.join(','),
       layers.join('+') || '静态合同审计',
-      r13Contract.coverageStrength,
+      r16Contract.coverageStrength,
       desktopRelevant ? '纳入当前框架可执行Case' : (staticAudit?.disposition || 'Dashboard/CI/设计/发布工程变更不冒充桌面QWork E2E'),
-      r13Contract.reason,
+      r16Contract.reason,
     ];
   });
   const previousMrRows = await previousCasebookMrRows();
@@ -3426,24 +3716,24 @@ async function main() {
     || new Set(mrRows.map((row) => asString(row[2]))).size !== EXPECTED_TOTAL_MR_COUNT) {
     throw new Error('完整 MR 审计链存在重复 IID 或 merge commit');
   }
-  assertR13CasebookLayering({
+  assertR16CasebookLayering({
     gateIds,
     fullIds,
     regressionAddonIds: regressionAddons.map((testCase) => asString(testCase['用例ID'])),
     mrRows,
   });
-  for (const [iid, contract] of R13_INCREMENTAL_MR_CONTRACTS) {
+  for (const [iid, contract] of R16_INCREMENTAL_MR_CONTRACTS) {
     const row = mrRows.find((item) => item[1] === `!${iid}`);
     const expectedCases = contract.caseIds.join(',');
     if (!row || row[6] !== expectedCases || row[8] !== contract.coverageStrength || row[10] !== contract.reason) {
-      throw new Error(`r13 MR !${iid} 映射或理由未精确采用显式合同：${JSON.stringify(row)}`);
+      throw new Error(`r16 MR !${iid} 映射或理由未精确采用显式合同：${JSON.stringify(row)}`);
     }
     if (contract.staticOnly) {
       if (row[7] !== '静态合同审计' || row[8] !== '静态合同' || !/不新增|不冒充/.test(row[9])) {
-        throw new Error(`r13 MR !${iid} 必须保持静态合同审计：${JSON.stringify(row)}`);
+        throw new Error(`r16 MR !${iid} 必须保持静态合同审计：${JSON.stringify(row)}`);
       }
     } else if (!row[7] || row[7] === '静态合同审计') {
-      throw new Error(`r13 产品 MR !${iid} 必须映射真实 Case 层级：${JSON.stringify(row)}`);
+      throw new Error(`r16 产品 MR !${iid} 必须映射真实 Case 层级：${JSON.stringify(row)}`);
     }
   }
   for (const iid of ['1459', '1462', '1463', '1464', '1468', '1469', '1454', '1458', '1473', '1461', '1475', '1460', '1477', '1474', '1496', '1498', '1485', '1506', '1497', '1514', '1524']) {
@@ -3480,21 +3770,21 @@ async function main() {
     throw new Error(`MR !1522必须区分Header源码静态审计与桌面连续性验证：${JSON.stringify(mr1522)}`);
   }
   const mr1511 = mrRows.find((row) => row[1] === '!1511');
-  const mr1511Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1511').caseIds.join(',');
+  const mr1511Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1511').caseIds.join(',');
   if (!mr1511 || mr1511[6] !== mr1511Expected || mr1511[7] !== '12条冒烟+70条门禁+160条增量'
     || !/已发布 Expert 进入上下文维护任务/.test(mr1511[10])
     || !/BETA-EXPERT-012 必须增强/.test(mr1511[10])) {
     throw new Error(`MR !1511必须精确映射专家维护任务的身份、任务、能力与重开链：${JSON.stringify(mr1511)}`);
   }
   const mr1552 = mrRows.find((row) => row[1] === '!1552');
-  const mr1552Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1552').caseIds.join(',');
+  const mr1552Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1552').caseIds.join(',');
   if (!mr1552 || mr1552[6] !== mr1552Expected || mr1552[7] !== '12条冒烟+70条门禁+160条增量'
     || !/controller heartbeat 隔离/.test(mr1552[10])
     || !/不得声称已直接证明 heartbeat 隔离/.test(mr1552[10])) {
     throw new Error(`MR !1552必须精确映射执行runner隔离、失败、并发与宿主稳定链：${JSON.stringify(mr1552)}`);
   }
   const mr1558 = mrRows.find((row) => row[1] === '!1558');
-  const mr1558Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1558').caseIds.join(',');
+  const mr1558Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1558').caseIds.join(',');
   if (!mr1558 || mr1558[6] !== mr1558Expected || mr1558[7] !== '12条冒烟+70条门禁'
     || mr1558[8] !== '相邻回归+源码合同'
     || !/trim\+大小写等价键去重/.test(mr1558[10])
@@ -3503,7 +3793,7 @@ async function main() {
     throw new Error(`MR !1558必须精确映射设置模型去重与Composer路由双表面：${JSON.stringify(mr1558)}`);
   }
   const mr1557 = mrRows.find((row) => row[1] === '!1557');
-  const mr1557Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1557').caseIds.join(',');
+  const mr1557Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1557').caseIds.join(',');
   if (!mr1557 || mr1557[6] !== mr1557Expected || mr1557[7] !== '12条冒烟+70条门禁+160条增量'
     || mr1557[8] !== '相邻回归+源码合同'
     || !/deepbankv2-mr-1557-immediate-regenerate-projection\/v1/.test(mr1557[10])
@@ -3514,7 +3804,7 @@ async function main() {
     throw new Error(`MR !1557必须区分真实桌面重新生成链与源码声明边界：${JSON.stringify(mr1557)}`);
   }
   const mr1561 = mrRows.find((row) => row[1] === '!1561');
-  const mr1561Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1561').caseIds.join(',');
+  const mr1561Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1561').caseIds.join(',');
   if (!mr1561 || mr1561[6] !== mr1561Expected || mr1561[7] !== '12条冒烟+70条门禁'
     || mr1561[8] !== '相邻回归+源码合同'
     || !/32 MiB/.test(mr1561[10])
@@ -3522,7 +3812,7 @@ async function main() {
     throw new Error(`MR !1561必须区分worker envelope源码静态合同与桌面连续性回归：${JSON.stringify(mr1561)}`);
   }
   const mr1560 = mrRows.find((row) => row[1] === '!1560');
-  const mr1560Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1560').caseIds.join(',');
+  const mr1560Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1560').caseIds.join(',');
   if (!mr1560 || mr1560[6] !== mr1560Expected || mr1560[7] !== '12条冒烟+70条门禁'
     || mr1560[8] !== '相邻回归+源码合同'
     || !/10 秒\/100 毫秒/.test(mr1560[10])
@@ -3531,7 +3821,7 @@ async function main() {
     throw new Error(`MR !1560必须区分turn authority readiness源码静态合同与桌面连续性回归：${JSON.stringify(mr1560)}`);
   }
   const mr1564 = mrRows.find((row) => row[1] === '!1564');
-  const mr1564Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1564').caseIds.join(',');
+  const mr1564Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1564').caseIds.join(',');
   if (!mr1564 || mr1564[6] !== mr1564Expected || mr1564[7] !== '12条冒烟+70条门禁'
     || mr1564[8] !== '相邻回归'
     || !/真实可见入口召唤专家构建师/.test(mr1564[10])
@@ -3540,7 +3830,7 @@ async function main() {
     throw new Error(`MR !1564必须映射专家构建师真实工具闭环并限制内部提示词声明：${JSON.stringify(mr1564)}`);
   }
   const mr1563 = mrRows.find((row) => row[1] === '!1563');
-  const mr1563Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1563').caseIds.join(',');
+  const mr1563Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1563').caseIds.join(',');
   if (!mr1563 || mr1563[6] !== mr1563Expected || mr1563[7] !== '12条冒烟+70条门禁'
     || mr1563[8] !== '相邻回归'
     || !/reasoning\.active/.test(mr1563[10])
@@ -3549,7 +3839,7 @@ async function main() {
     throw new Error(`MR !1563必须映射runtime-tail用户链并限制源码内部接线声明：${JSON.stringify(mr1563)}`);
   }
   const mr1566 = mrRows.find((row) => row[1] === '!1566');
-  const mr1566Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1566').caseIds.join(',');
+  const mr1566Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1566').caseIds.join(',');
   if (!mr1566 || mr1566[6] !== mr1566Expected || mr1566[7] !== '12条冒烟+70条门禁'
     || mr1566[8] !== '相邻回归'
     || !/ordinaryStallMs=300000/.test(mr1566[10])
@@ -3558,7 +3848,7 @@ async function main() {
     throw new Error(`MR !1566必须映射长时任务用户链并限制五分钟阈值声明：${JSON.stringify(mr1566)}`);
   }
   const mr1568 = mrRows.find((row) => row[1] === '!1568');
-  const mr1568Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1568').caseIds.join(',');
+  const mr1568Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1568').caseIds.join(',');
   if (!mr1568 || mr1568[6] !== mr1568Expected || mr1568[8] !== '直接E2E'
     || !/真实编辑已发送用户消息/.test(mr1568[10])
     || !/真实点击重新生成/.test(mr1568[10])
@@ -3567,7 +3857,7 @@ async function main() {
     throw new Error(`MR !1568必须精确映射编辑、重新生成与历史保持专项E2E：${JSON.stringify(mr1568)}`);
   }
   const mr1569 = mrRows.find((row) => row[1] === '!1569');
-  const mr1569Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1569').caseIds.join(',');
+  const mr1569Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1569').caseIds.join(',');
   if (!mr1569 || mr1569[6] !== mr1569Expected || mr1569[8] !== '相邻回归'
     || !/Composer 可用/.test(mr1569[10])
     || !/上下文窗口组件隐藏/.test(mr1569[10])
@@ -3576,7 +3866,7 @@ async function main() {
     throw new Error(`MR !1569必须精确映射Composer相邻链并限制隐藏组件声明：${JSON.stringify(mr1569)}`);
   }
   const mr1570 = mrRows.find((row) => row[1] === '!1570');
-  const mr1570Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1570').caseIds.join(',');
+  const mr1570Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1570').caseIds.join(',');
   if (!mr1570 || mr1570[6] !== mr1570Expected || mr1570[8] !== '相邻回归'
     || !/Claude 多轮/.test(mr1570[10])
     || !/turn-end/.test(mr1570[10])
@@ -3585,7 +3875,7 @@ async function main() {
     throw new Error(`MR !1570必须精确映射turn-end连续性并限制内部调度声明：${JSON.stringify(mr1570)}`);
   }
   const mr1572 = mrRows.find((row) => row[1] === '!1572');
-  const mr1572Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1572').caseIds.join(',');
+  const mr1572Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1572').caseIds.join(',');
   if (!mr1572 || mr1572[6] !== mr1572Expected || mr1572[8] !== '相邻回归'
     || !/runtime tail 可见状态/.test(mr1572[10])
     || !/tail copy、pulse 样式/.test(mr1572[10])
@@ -3594,7 +3884,7 @@ async function main() {
     throw new Error(`MR !1572必须精确映射runtime-tail文案与pulse相邻链并限制直接覆盖声明：${JSON.stringify(mr1572)}`);
   }
   const mr1573 = mrRows.find((row) => row[1] === '!1573');
-  const mr1573Expected = R13_INCREMENTAL_MR_CONTRACTS.get('1573').caseIds.join(',');
+  const mr1573Expected = R16_INCREMENTAL_MR_CONTRACTS.get('1573').caseIds.join(',');
   if (!mr1573 || mr1573[6] !== mr1573Expected || mr1573[7] !== '12条冒烟+70条门禁+160条增量'
     || mr1573[8] !== '相邻回归+源码合同'
     || !/记忆首会话\/跨会话连续性/.test(mr1573[10])

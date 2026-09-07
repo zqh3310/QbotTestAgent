@@ -58,6 +58,23 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function canonicalizationPolicyFixture(pid = 4242) {
+  const stableProjection = {
+    schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1',
+    flag_name: 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION',
+    runner: { readable: true, state: 'unset' },
+    managed_process: { readable: true, state: 'unset' },
+    ok: true,
+    error_code: '',
+  };
+  return {
+    ...stableProjection,
+    checked_at: '2026-09-07T00:00:00.000Z',
+    managed_process: { ...stableProjection.managed_process, pid },
+    policy_sha256: sha256(JSON.stringify(stableProjection)),
+  };
+}
+
 function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -301,6 +318,7 @@ function pretest(stageId, plan) {
     'teams_release_identity',
     'managed_live_session',
     'managed_session_process',
+    'qwork_claude_skill_call_canonicalization_enabled',
     'control_plane_identity',
     'qwork_control_plane_health',
     'qwork_backend_identity',
@@ -319,6 +337,7 @@ function pretest(stageId, plan) {
     'frozen_product_identity_hashes',
     'release_identity_observed_matches_expected',
   ];
+  const canonicalizationPolicy = canonicalizationPolicyFixture();
   return {
     schema_version: 'qbot-core-beta-pretest/v1',
     status: 'READY',
@@ -367,9 +386,13 @@ function pretest(stageId, plan) {
       observed_fingerprint: plan.release_identity_sha256,
     },
     runtime: {
+      claude_skill_call_canonicalization_policy: canonicalizationPolicy,
       teams: { version: plan.release_identity.teams_version, build: plan.release_identity.teams_build },
-      session: { control_plane_origin: plan.release_identity.control_plane_origin },
-      teams_inspection: { public_capabilities: { ok: true, value_type: 'object' } },
+      session: { pid: 4242, control_plane_origin: plan.release_identity.control_plane_origin },
+      teams_inspection: {
+        public_capabilities: { ok: true, value_type: 'object' },
+        claude_skill_call_canonicalization_policy: structuredClone(canonicalizationPolicy),
+      },
       control_plane_health: {
         ok: true,
         control_plane_origin: plan.release_identity.control_plane_origin,

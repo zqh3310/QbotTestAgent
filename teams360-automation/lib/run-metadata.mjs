@@ -38,6 +38,15 @@ const PINNED_FIELDS = [
   'release_observation.provenance.qbot_core_digest',
   'release_observation.provenance.desktop_agent_runtime.sha256',
   'release_observation.provenance.ui_code_manifest.sha256',
+  'claude_skill_call_canonicalization_policy.schema_version',
+  'claude_skill_call_canonicalization_policy.flag_name',
+  'claude_skill_call_canonicalization_policy.runner.readable',
+  'claude_skill_call_canonicalization_policy.runner.state',
+  'claude_skill_call_canonicalization_policy.managed_process.readable',
+  'claude_skill_call_canonicalization_policy.managed_process.state',
+  'claude_skill_call_canonicalization_policy.ok',
+  'claude_skill_call_canonicalization_policy.error_code',
+  'claude_skill_call_canonicalization_policy.policy_sha256',
   'model_tier',
   'timeout_ms',
 ];
@@ -126,6 +135,7 @@ export function buildTeamsRunMetadata({
   deepbankRoot = '',
   releaseInputs = {},
   qworkReleaseIdentityReadback = null,
+  claudeSkillCallCanonicalizationPolicy = null,
   releaseObservationPhase = 'startup',
   observedAt = new Date().toISOString(),
 } = {}) {
@@ -184,6 +194,20 @@ export function buildTeamsRunMetadata({
       envelope_sha256: String(qworkReleaseIdentityReadback.provenance?.envelope?.sha256 || ''),
       ok: qworkReleaseIdentityReadback.ok === true,
     }] : [],
+    claude_skill_call_canonicalization_policy: claudeSkillCallCanonicalizationPolicy
+      ? structuredClone(claudeSkillCallCanonicalizationPolicy)
+      : null,
+    claude_skill_call_canonicalization_policy_checks: claudeSkillCallCanonicalizationPolicy ? [{
+      phase: String(releaseObservationPhase || 'startup'),
+      observed_at: observedAt,
+      policy_sha256: String(claudeSkillCallCanonicalizationPolicy.policy_sha256 || ''),
+      ok: claudeSkillCallCanonicalizationPolicy.ok === true,
+      runner_state: String(claudeSkillCallCanonicalizationPolicy.runner?.state || ''),
+      managed_process_state: String(
+        claudeSkillCallCanonicalizationPolicy.managed_process?.state || '',
+      ),
+      managed_process_pid: Number(claudeSkillCallCanonicalizationPolicy.managed_process?.pid) || null,
+    }] : [],
     model_tier: String(modelTier || '').toUpperCase(),
     timeout_ms: Number(timeoutMs),
     profile: {
@@ -221,6 +245,10 @@ export function writePinnedRunMetadata(outDir, metadata) {
       release_observation_checks: [
         ...(existing.release_observation_checks || []),
         ...(metadata.release_observation_checks || []),
+      ],
+      claude_skill_call_canonicalization_policy_checks: [
+        ...(existing.claude_skill_call_canonicalization_policy_checks || []),
+        ...(metadata.claude_skill_call_canonicalization_policy_checks || []),
       ],
       observed_host_pids: [...new Set([
         ...(existing.observed_host_pids || []),

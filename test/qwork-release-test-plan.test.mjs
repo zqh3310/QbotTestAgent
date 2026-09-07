@@ -56,6 +56,23 @@ const evidenceFixtureRoot = fs.realpathSync(
 );
 test.after(() => fs.rmSync(evidenceFixtureRoot, { recursive: true, force: true }));
 
+function canonicalizationPolicyFixture(pid = 4242) {
+  const stable = {
+    schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1',
+    flag_name: 'QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION',
+    runner: { readable: true, state: 'unset' },
+    managed_process: { readable: true, state: 'unset' },
+    ok: true,
+    error_code: '',
+  };
+  return {
+    ...stable,
+    checked_at: '2026-09-07T00:00:00.000Z',
+    managed_process: { ...stable.managed_process, pid },
+    policy_sha256: crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex'),
+  };
+}
+
 test('release plan freezes the independently accepted r15 Casebook identity', () => {
   assert.equal(
     QWORK_RELEASE_CASEBOOK_BASENAME,
@@ -401,6 +418,7 @@ function pretest(stageId, sourcePlan = plan) {
       'teams_release_identity',
       'managed_live_session',
       'managed_session_process',
+      'qwork_claude_skill_call_canonicalization_enabled',
       'control_plane_identity',
       'qwork_control_plane_health',
       'qwork_backend_identity',
@@ -454,11 +472,13 @@ function pretest(stageId, sourcePlan = plan) {
       observed_fingerprint: sourcePlan.release_identity_sha256,
     },
     runtime: {
+      claude_skill_call_canonicalization_policy: canonicalizationPolicyFixture(),
       teams: {
         version: sourcePlan.release_identity.teams_version,
         build: sourcePlan.release_identity.teams_build,
       },
       session: {
+        pid: 4242,
         control_plane_origin: sourcePlan.release_identity.control_plane_origin,
       },
       teams_inspection: {
@@ -725,6 +745,7 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
       release_observation_checks: [
         {
           phase: 'startup',
+          observed_at: '2026-09-07T00:00:00.000Z',
           ok: true,
           observed_sha256: '3'.repeat(64),
           state_sha256: '4'.repeat(64),
@@ -732,10 +753,32 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
         },
         {
           phase: 'run-final',
+          observed_at: '2026-09-07T00:01:00.000Z',
           ok: true,
           observed_sha256: '3'.repeat(64),
           state_sha256: '4'.repeat(64),
           envelope_sha256: identity.qwork_release_manifest_sha256,
+        },
+      ],
+      claude_skill_call_canonicalization_policy: canonicalizationPolicyFixture(),
+      claude_skill_call_canonicalization_policy_checks: [
+        {
+          phase: 'startup',
+          observed_at: '2026-09-07T00:00:00.000Z',
+          ok: true,
+          policy_sha256: canonicalizationPolicyFixture().policy_sha256,
+          runner_state: 'unset',
+          managed_process_state: 'unset',
+          managed_process_pid: 4242,
+        },
+        {
+          phase: 'run-final',
+          observed_at: '2026-09-07T00:01:00.000Z',
+          ok: true,
+          policy_sha256: canonicalizationPolicyFixture().policy_sha256,
+          runner_state: 'unset',
+          managed_process_state: 'unset',
+          managed_process_pid: 4242,
         },
       ],
       sources: { framework: { commit: plan.framework.commit, dirty: false } },
@@ -1091,6 +1134,55 @@ test('READY rejects candidate update risk and identity drift', () => {
   assert.ok(audit.failures.includes('pretest_release_identity_fingerprint_mismatch'));
 });
 
+test('READY rejects missing, disabled or forged canonicalization policy evidence', () => {
+  const missing = pretest('G1');
+  delete missing.runtime.claude_skill_call_canonicalization_policy;
+  delete missing.runtime.teams_inspection.claude_skill_call_canonicalization_policy;
+  const missingAudit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: missing,
+  });
+  assert.equal(missingAudit.passed, false);
+  assert.ok(missingAudit.failures.includes(
+    'pretest_claude_skill_call_canonicalization_policy_invalid',
+  ));
+
+  const disabled = pretest('G1');
+  disabled.runtime.claude_skill_call_canonicalization_policy.runner.state = 'disabled';
+  disabled.runtime.claude_skill_call_canonicalization_policy.ok = false;
+  disabled.runtime.claude_skill_call_canonicalization_policy.error_code =
+    'runner_environment_disables_canonicalization';
+  disabled.runtime.claude_skill_call_canonicalization_policy.policy_sha256 = '8'.repeat(64);
+  const disabledAudit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: disabled,
+  });
+  assert.equal(disabledAudit.passed, false);
+  assert.ok(disabledAudit.failures.includes(
+    'pretest_claude_skill_call_canonicalization_policy_invalid',
+  ));
+
+  const pidDrifted = pretest('G1');
+  pidDrifted.runtime.claude_skill_call_canonicalization_policy.managed_process.pid = 4343;
+  const pidAudit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: pidDrifted,
+  });
+  assert.equal(pidAudit.passed, false);
+  assert.ok(pidAudit.failures.includes(
+    'pretest_claude_skill_call_canonicalization_policy_invalid',
+  ));
+});
+
 test('READY rejects command-line identity claims when authoritative artifacts drift', () => {
   const forged = pretest('G1');
   forged.runtime.qwork.release_identity_readback.observed.qwork_ui_git_commit = 'feedface';
@@ -1272,6 +1364,71 @@ test('completion requires stable authoritative identity at startup and run-final
   const driftAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...drifted });
   assert.equal(driftAudit.passed, false);
   assert.ok(driftAudit.failures.includes('run_release_observation_drift'));
+});
+
+test('completion requires enabled canonicalization policy at every release observation phase', () => {
+  const missingFinal = completionInputs('G1');
+  missingFinal.runMetadata.claude_skill_call_canonicalization_policy_checks.pop();
+  const missingAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...missingFinal });
+  assert.equal(missingAudit.passed, false);
+  assert.ok(missingAudit.failures.includes(
+    'run_claude_skill_call_canonicalization_policy_phases_incomplete',
+  ));
+  assert.ok(missingAudit.failures.includes('run_claude_skill_call_canonicalization_policy_drift'));
+
+  const disabled = completionInputs('G1');
+  disabled.runMetadata.claude_skill_call_canonicalization_policy.ok = false;
+  disabled.runMetadata.claude_skill_call_canonicalization_policy.runner.state = 'disabled';
+  disabled.runMetadata.claude_skill_call_canonicalization_policy.error_code =
+    'runner_environment_disables_canonicalization';
+  const disabledAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...disabled });
+  assert.equal(disabledAudit.passed, false);
+  assert.ok(disabledAudit.failures.includes('run_claude_skill_call_canonicalization_policy_invalid'));
+
+  const rehashedTamper = completionInputs('G1');
+  rehashedTamper.runMetadata.claude_skill_call_canonicalization_policy.runner.state =
+    'not_disabled';
+  rehashedTamper.runMetadata.claude_skill_call_canonicalization_policy.policy_sha256 =
+    '8'.repeat(64);
+  for (const check of rehashedTamper.runMetadata.claude_skill_call_canonicalization_policy_checks) {
+    check.runner_state = 'not_disabled';
+    check.policy_sha256 = '8'.repeat(64);
+  }
+  const rehashedTamperAudit = auditQworkStageCompletion({
+    plan,
+    stageId: 'G1',
+    ...rehashedTamper,
+  });
+  assert.equal(rehashedTamperAudit.passed, false);
+  assert.ok(rehashedTamperAudit.failures.includes(
+    'run_claude_skill_call_canonicalization_policy_invalid',
+  ));
+
+  const drifted = completionInputs('G1');
+  drifted.runMetadata.claude_skill_call_canonicalization_policy_checks[1].managed_process_state =
+    'not_disabled';
+  const driftAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...drifted });
+  assert.equal(driftAudit.passed, false);
+  assert.ok(driftAudit.failures.includes('run_claude_skill_call_canonicalization_policy_drift'));
+
+  const timestampDrifted = completionInputs('G1');
+  timestampDrifted.runMetadata.claude_skill_call_canonicalization_policy_checks[1].observed_at =
+    '2026-09-07T00:02:00.000Z';
+  const timestampAudit = auditQworkStageCompletion({
+    plan,
+    stageId: 'G1',
+    ...timestampDrifted,
+  });
+  assert.equal(timestampAudit.passed, false);
+  assert.ok(timestampAudit.failures.includes(
+    'run_claude_skill_call_canonicalization_policy_drift',
+  ));
+
+  const pidDrifted = completionInputs('G1');
+  pidDrifted.runMetadata.claude_skill_call_canonicalization_policy.managed_process.pid = 4343;
+  const pidAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...pidDrifted });
+  assert.equal(pidAudit.passed, false);
+  assert.ok(pidAudit.failures.includes('run_claude_skill_call_canonicalization_policy_invalid'));
 });
 
 test('completion rejects non-passing raw Case status or result category despite green aggregates', () => {

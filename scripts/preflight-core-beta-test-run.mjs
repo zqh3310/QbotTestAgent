@@ -37,6 +37,7 @@ import {
 import { assessRuntimeReleaseStatus } from '../teams360-automation/lib/cdp-webview.mjs';
 import {
   assessQworkReleaseIdentity,
+  inspectClaudeSkillCallCanonicalizationPolicy,
   readQworkReleaseIdentity,
 } from '../teams360-automation/lib/qwork-release-identity.mjs';
 import { inspectTeamsCdp } from '../teams360-automation/lib/targets.mjs';
@@ -751,8 +752,21 @@ async function main() {
     }
     if (sessionShapeOk) {
       addCheck('managed_live_session', true, `pid=${session.pid}; cdp=${session.cdp_url}`);
-      addCheck('managed_session_process', processMatchesSession(session),
-        processMatchesSession(session) ? `pid=${session.pid} matches session` : `stale or mismatched pid=${session.pid}`);
+      const managedSessionProcessMatches = processMatchesSession(session);
+      addCheck('managed_session_process', managedSessionProcessMatches,
+        managedSessionProcessMatches ? `pid=${session.pid} matches session` : `stale or mismatched pid=${session.pid}`);
+      if (productionGate) {
+        const canonicalizationPolicy = inspectClaudeSkillCallCanonicalizationPolicy({
+          managedPid: session.pid,
+          managedProcessVerified: managedSessionProcessMatches,
+        });
+        runtime.claude_skill_call_canonicalization_policy = canonicalizationPolicy;
+        addCheck(
+          'qwork_claude_skill_call_canonicalization_enabled',
+          canonicalizationPolicy.ok === true,
+          `runner=${canonicalizationPolicy.runner.state}; managed=${canonicalizationPolicy.managed_process.state}; error=${canonicalizationPolicy.error_code || '(none)'}`,
+        );
+      }
       const expectedOrigin = normalizeOrigin(options['expected-control-plane-origin'] || '');
       const actualOrigin = session?.control_plane_origin ? normalizeOrigin(session.control_plane_origin) : '';
       addCheck('control_plane_identity',
@@ -775,7 +789,7 @@ async function main() {
       addCheck('qwork_backend_identity',
         controlPlaneHealth.backend_identity_matches,
         `actual=${controlPlaneHealth.observed_backend_version || '(missing)'}; expected=${expectedBackendVersion || '(missing --backend-version)'}; fingerprint=${controlPlaneHealth.fingerprint || '(missing)'}`);
-      if (processMatchesSession(session)) {
+      if (managedSessionProcessMatches) {
         const cdpUrl = normalizeLoopbackUrl(session.cdp_url);
         const cdp = await fetchJson(`${cdpUrl}/json/version`, 5000);
         addCheck('teams_cdp', cdp.ok, cdp.ok
@@ -794,6 +808,10 @@ async function main() {
             probeRuntimeReleaseStatus: true,
           });
           runtime.teams_inspection = inspection;
+          if (runtime.claude_skill_call_canonicalization_policy) {
+            runtime.teams_inspection.claude_skill_call_canonicalization_policy =
+              runtime.claude_skill_call_canonicalization_policy;
+          }
           addCheck('qwork_target_logged_in',
             Boolean(inspection.qbot_target) && inspection.host_precondition?.status !== 'blocked',
             inspection.qbot_target

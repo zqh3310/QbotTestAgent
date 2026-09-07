@@ -22,18 +22,27 @@ import {
   QWORK_MR1557_IMMEDIATE_REGENERATE_PROJECTION_CONTRACT,
   QWORK_MR1550_CLAUDE_SKILL_DESCRIPTION_ROUTING_CONTRACT,
   QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT,
+  QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT,
+  QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT,
+  QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT,
+  QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT,
+  QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
   QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
   QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
   QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
+  QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT,
+  QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT_ID,
   QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT,
   QWORK_MR1544_CLAUDE_TURN_HEADER_BRANDING_CONTRACT,
   QWORK_MR1548_CALL_TOOL_BUDGET_CONTRACT,
   QWORK_RELEASE_SOURCE_CLAIM_SCOPE,
+  QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA,
   QWORK_RELEASE_SOURCE_CONTRACTS,
   QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA,
   QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED,
   auditCurrentReleaseSourceContract,
   auditReleaseSourceContract,
+  currentReleaseSourceContractProtectedPaths,
   normalizeGitLabChanges,
   reconstructGitLabAddedLinesSource,
   reconstructGitLabNewFileSource,
@@ -138,7 +147,12 @@ function fixtureRepo() {
   return { repo, baseline, releaseHead };
 }
 
-function currentReleaseFileFixtures(contracts, head) {
+function currentReleaseFileFixtures(contracts, head, {
+  ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
+    verified: true,
+    first_parent_complete: true,
+  }])),
+} = {}) {
   const linesByPath = new Map();
   const addLine = (filePath, line) => {
     if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
@@ -149,10 +163,6 @@ function currentReleaseFileFixtures(contracts, head) {
     if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     if (line) linesByPath.get(filePath).push(line);
   };
-  const ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
-    verified: true,
-    first_parent_complete: true,
-  }]));
   for (const contract of contracts) {
     const headerOwner = resolveCurrentReleaseHeaderContract(contract, {
       contracts,
@@ -162,10 +172,7 @@ function currentReleaseFileFixtures(contracts, head) {
       .find((item) => item.contract_id === contract.contract_id)?.current_assertions
       ?.filter((item) => item.startsWith('integration_binding:'))
       .map((item) => item.slice('integration_binding:'.length)) || []);
-    for (const filePath of releaseSourceContractProtectedPaths(contract)) {
-      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
-    }
-    for (const filePath of releaseSourceContractProtectedPaths(headerOwner)) {
+    for (const filePath of currentReleaseSourceContractProtectedPaths(contract, headerOwner)) {
       if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     }
     for (const header of headerOwner.header_emissions) {
@@ -550,6 +557,76 @@ function exactNewFileContractFixture(baseContract) {
       contract_sha256: sha256Text(stableJson(definition)),
     },
   };
+}
+
+function assertionRetirementContractFixture(baseContract) {
+  const retiredPaths = new Set(baseContract.retired_files.map((file) => file.path));
+  const changes = baseContract.changed_paths.map((filePath, index) => (
+    retiredPaths.has(filePath)
+      ? {
+        old_path: filePath,
+        new_path: filePath,
+        new_file: false,
+        renamed_file: false,
+        deleted_file: true,
+        diff: `@@ -1,1 +0,0 @@\n-obsolete assertion fixture ${index}\n`,
+      }
+      : {
+        old_path: filePath,
+        new_path: filePath,
+        new_file: false,
+        renamed_file: false,
+        deleted_file: false,
+        diff: `@@ -1,1 +1,1 @@\n-before fixture ${index}\n+after fixture ${index}\n`,
+      }
+  ));
+  const summary = summarizeGitLabChanges(changes);
+  const definition = {
+    ...structuredClone(baseContract),
+    mr_diff: { bytes: summary.diff_bytes, sha256: summary.diff_sha256 },
+  };
+  delete definition.contract_sha256;
+  return {
+    changes,
+    contract: {
+      ...definition,
+      contract_sha256: sha256Text(stableJson(definition)),
+    },
+  };
+}
+
+function expectedRetirementOriginAttestation(contract) {
+  const value = {
+    schema_version: QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA,
+    claim_scope: contract.claim_scope,
+    test_execution_attested: contract.test_execution_attested,
+    contract_id: contract.contract_id,
+    status: 'VERIFIED',
+    verified: true,
+    source: 'gitlab-api-changes',
+    contract_sha256: contract.contract_sha256,
+    mr: {
+      iid: contract.mr_iid,
+      state: contract.state,
+      target_branch: contract.target_branch,
+      merge_commit_sha: contract.merge_commit_sha,
+      changes_count: contract.changes_count,
+      changed_paths: [...contract.changed_paths],
+      diff_bytes: contract.mr_diff.bytes,
+      diff_sha256: contract.mr_diff.sha256,
+    },
+    source_file: null,
+    retired_files: contract.retired_files.map((file) => ({
+      ...file,
+      change_count: 1,
+      verified: true,
+    })),
+    headers: [],
+    integration_bindings: [],
+    forbidden_fragments: [],
+    failures: [],
+  };
+  return { ...value, attestation_sha256: sha256Text(stableJson(value)) };
 }
 
 function mr1561OriginChanges() {
@@ -1290,6 +1367,143 @@ test('MR !1558 source contract freezes settings model-name dedup declarations wi
   assert.equal(contract.integration_bindings.every((binding) => !binding.current_release_scope), true);
 });
 
+test('MR !1590, !1593, !1596, and !1597 source contracts freeze exact GitLab identities and source metrics', () => {
+  const rows = [
+    [QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT, '1590', 'a2870474ffda705c1535a22be76fcd70be62167c', 18, 70444, 'ba126a6dc8085a4ed41c05aebbf0852a16b33ca7b508aa37321dcc65d45c5ad5', 3078, '84804aa813a426d600ace52576fb3cc75a150ba43556de9b26734cad1af5b8d1', 2703, 'ac3e79d1414bd8a1f4c8615b5cbcf51cca47ff3f8db95c1b1b505bfe17dbdd73', 65],
+    [QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT, '1593', '44725752f4690cf56bb3747238335ba5878aaeb6', 3, 7918, 'fbff6a098426d5dbbc03f61c0752ee0d348a235e247c316996d229aa60bc7138', 4223, '6fb5fde3c40307fc0206b85bd598a5539a64d8673df65a27d03c4b039113926d', 112, '68bde4da96f116a9ebf82ce5340cf5cf3f89d529dd23e5ab5c722ab27e9333db', 4],
+    [QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT, '1596', 'ee363f4bb0549a4b0f7ebd88f63036fa8b1068df', 11, 28960, 'c909e06fdbc651aa6672b08ecfdd32490f413cf25866c8333df5b12c87d6d4ec', 2542, '2ccee231814756476b37820f37b99a159c96a2b48b846889d4ae98c020ddbb59', 1422, 'bf5b4377e0e498008006f9ed9b2a95f5d674f5de1c0a015b91cbf8f9a14d3074', 25],
+    [QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT, '1597', '8d5429066a4c374c23275f7d009a3c78060f4522', 4, 4970, '4a69a85325a545fcd5d9624399d2143c665f70f6af473c26a502f94558e5feaa', 1005, '51230640bfd6698e48108078687d5de1c2d9fc797a08dbe775fa5b94a1b60503', 354, '3f33ef3ecb37e4f4ac3732e28a8cdaadb351e1059f2d54473a270e1c6217549e', 1],
+  ];
+  for (const [contract, iid, merge, count, diffBytes, diffSha, changeBytes, changeSha, sourceBytes, sourceSha, lines] of rows) {
+    assert.equal(contract.mr_iid, iid);
+    assert.equal(contract.merge_commit_sha, merge);
+    assert.equal(contract.changes_count, count);
+    assert.equal(contract.changed_paths.length, count);
+    assert.deepEqual(contract.mr_diff, { bytes: diffBytes, sha256: diffSha });
+    assert.deepEqual(
+      [contract.source_file.change_bytes, contract.source_file.change_sha256],
+      [changeBytes, changeSha],
+    );
+    assert.deepEqual(
+      [contract.source_file.source_bytes, contract.source_file.source_sha256, contract.source_file.source_line_count],
+      [sourceBytes, sourceSha, lines],
+    );
+    assert.equal(contract.claim_scope, QWORK_RELEASE_SOURCE_CLAIM_SCOPE);
+    assert.equal(contract.test_execution_attested, false);
+  }
+});
+
+test('MR !1590, !1593, !1596, and !1597 current-release assertions fail closed on deletion, duplication, or forbidden restoration', () => {
+  const contracts = [
+    QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT,
+    QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT,
+    QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT,
+    QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
+  ];
+  const head = '9'.repeat(40);
+  const rewrite = (files, filePath, transform) => {
+    const copy = structuredClone(files);
+    const file = copy.find((item) => item.path === filePath);
+    assert.ok(file, filePath);
+    const source = Buffer.from(file.payload.content, 'base64').toString('utf8');
+    const updated = transform(source);
+    file.payload.content = Buffer.from(updated, 'utf8').toString('base64');
+    file.payload.size = Buffer.byteLength(updated, 'utf8');
+    file.payload.blob_id = gitBlobSha1(updated);
+    return copy;
+  };
+  for (const contract of contracts) {
+    const fixtureMap = currentReleaseFileFixtures([contract], head);
+    const baseFiles = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+    const audit = (files) => auditCurrentReleaseSourceContract({
+      releaseHead: head,
+      targetBranch: contract.target_branch,
+      originAncestry: {
+        source: 'gitlab-api-compare-first-parent', compare_from: contract.merge_commit_sha,
+        compare_to: head, compare_commit_count: 1, first_parent_complete: true, verified: true, reason: '',
+      },
+      files, mergeRequests: [], originAttestation: null, contract,
+    });
+    const verified = audit(baseFiles);
+    assert.equal(verified.verified, true, `${contract.contract_id}:${verified.failures.join(',')}`);
+    assert.deepEqual(verified.failures, [], contract.contract_id);
+
+    const binding = contract.integration_bindings[0];
+    for (const mode of ['delete', 'duplicate']) {
+      const drifted = rewrite(baseFiles, binding.path, (source) => mode === 'delete'
+        ? source.replace(`${binding.addition.source}\n`, '')
+        : `${source}${binding.addition.source}\n`);
+      const result = audit(drifted);
+      assert.equal(result.verified, false, `${contract.contract_id}:${mode}`);
+      assert.equal(result.failures.includes(`current_integration_binding_mismatch:${binding.id}`), true);
+    }
+    const forbidden = contract.forbidden_fragments?.[0];
+    if (forbidden) {
+      const restored = rewrite(baseFiles, forbidden.path, (source) => `${source}${forbidden.value.source}\n`);
+      const result = audit(restored);
+      assert.equal(result.verified, false, contract.contract_id);
+      assert.equal(result.failures.includes(`current_forbidden_fragment:${forbidden.id}`), true);
+    }
+  }
+});
+
+test('MR !1595 freezes the exact retirement of the obsolete !1558 test assertions', () => {
+  const contract = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  assert.equal(contract.contract_kind, 'assertion-retirement');
+  assert.equal(contract.merge_commit_sha, '3b61267f74bb61b3053c970dd5c7b98d27683e6a');
+  assert.equal(contract.contract_sha256, '90c13eee94603d6a53568bf35d8a1ab4d6623a1340e4079c133f6fd277cea5f6');
+  assert.equal(contract.changes_count, 184);
+  assert.equal(contract.changed_paths.length, 184);
+  assert.deepEqual(contract.mr_diff, {
+    bytes: 260186,
+    sha256: '867e9491a91485f3fba33bd9b3d53b04644f697a9d4a083a0239f87c33ec0852',
+  });
+  assert.equal(contract.source_file, null);
+  assert.deepEqual(contract.header_emissions, []);
+  assert.deepEqual(contract.integration_bindings, []);
+  assert.deepEqual(contract.forbidden_fragments, []);
+  assert.deepEqual(contract.retired_files, [{
+    path: 'test/unit/config/settings-ui-surface-contract.test.mjs',
+    old_path: 'test/unit/config/settings-ui-surface-contract.test.mjs',
+    new_path: 'test/unit/config/settings-ui-surface-contract.test.mjs',
+    new_file: false,
+    renamed_file: false,
+    deleted_file: true,
+  }]);
+  assert.deepEqual(contract.supersedes, [{
+    contract_id: QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT.contract_id,
+    disposition: 'retired',
+    current_assertions: [
+      'integration_binding:test_reads_model_group_source',
+      'integration_binding:test_declares_settings_name_dedup_contract',
+      'integration_binding:test_asserts_normalized_display_name',
+      'integration_binding:test_asserts_empty_and_duplicate_rejection',
+      'integration_binding:test_asserts_settings_dedupe_integration',
+    ],
+  }]);
+  const trigger = releaseSourceContractTrigger({
+    iid: contract.mr_iid,
+    commit: contract.merge_commit_sha,
+    changed_paths: contract.changed_paths,
+  }, contract);
+  assert.equal(trigger.iid_match, true);
+  assert.equal(trigger.merge_sha_match, true);
+  assert.equal(trigger.triggered, false);
+  assert.deepEqual(releaseSourceContractProtectedPaths(contract), []);
+  const protected1558 = releaseSourceContractProtectedPaths(QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT);
+  assert.equal(protected1558.includes('test/unit/config/settings-ui-surface-contract.test.mjs'), true);
+  assert.equal(protected1558.includes('src/AssistantConfig.tsx'), true);
+  assert.equal(protected1558.includes('src/composer-model-display-groups.ts'), true);
+  assert.deepEqual(releaseSourceContractTrigger({
+    iid: QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT.mr_iid,
+    commit: QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT.merge_commit_sha,
+    changed_paths: ['test/unit/config/settings-ui-surface-contract.test.mjs'],
+  }, QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT).protected_paths, [
+    'test/unit/config/settings-ui-surface-contract.test.mjs',
+  ]);
+  assert.doesNotThrow(() => resolveReleaseSourceContracts());
+});
+
 test('MR !1561 source contract freezes the shared 32 MiB worker envelope and its test declaration', () => {
   const contract = QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT;
   assert.equal(contract.contract_id, 'deepbankv2-mr-1561-worker-envelope-limit/v1');
@@ -1697,6 +1911,10 @@ test('new release source contracts audit synthetic equivalents and reject source
     QWORK_MR1546_REJECTED_REGENERATE_CONTRACT,
     QWORK_MR1550_CLAUDE_SKILL_DESCRIPTION_ROUTING_CONTRACT,
     QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT,
+    QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT,
+    QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT,
+    QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT,
+    QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
     QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT,
     QWORK_MR1560_TURN_AUTHORITY_READINESS_CONTRACT,
   ]) {
@@ -1779,16 +1997,33 @@ test('MR !1558 origin changes fail closed on helper, settings wiring, or test de
   }
 });
 
-test('MR !1558 current-release continuity requires every binding exactly once without owner-scope exceptions', () => {
+test('MR !1595 retires only the deleted !1558 test assertions while product bindings remain exact', () => {
   const contract = QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT;
+  const retirement = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  const contracts = [contract, retirement];
   const head = 'e'.repeat(40);
-  const fixtureMap = currentReleaseFileFixtures([contract], head);
+  const ancestryByContractId = new Map(contracts.map((item) => [item.contract_id, {
+    verified: true,
+    first_parent_complete: true,
+  }]));
+  const resolution = resolveCurrentReleaseHeaderContract(contract, {
+    contracts,
+    ancestryByContractId,
+  });
+  assert.equal(resolution.owner.contract_id, retirement.contract_id);
+  assert.deepEqual(resolution.lineage, [contract.contract_id, retirement.contract_id]);
+  assert.deepEqual(currentReleaseSourceContractProtectedPaths(contract, resolution.owner), [
+    'src/composer-model-display-groups.ts',
+    'src/AssistantConfig.tsx',
+  ]);
+
+  const fixtureMap = currentReleaseFileFixtures(contracts, head);
   const files = [...fixtureMap].map(([filePath, payload]) => ({
     path: filePath,
     requested_ref: head,
     payload,
   }));
-  const audit = (auditFiles) => auditCurrentReleaseSourceContract({
+  const audit = (auditFiles, owner = resolution.owner, lineage = resolution.lineage) => auditCurrentReleaseSourceContract({
     releaseHead: head,
     targetBranch: contract.target_branch,
     originAncestry: {
@@ -1804,10 +2039,32 @@ test('MR !1558 current-release continuity requires every binding exactly once wi
     mergeRequests: [],
     originAttestation: null,
     contract,
+    currentHeaderContract: owner,
+    currentHeaderLineage: lineage,
   });
-  assert.equal(audit(files).verified, true);
+  const verified = audit(files);
+  assert.equal(verified.verified, true);
+  const retiredBindings = verified.integration_bindings.filter((binding) => binding.retired === true);
+  assert.deepEqual(retiredBindings.map((binding) => binding.id), [
+    'test_reads_model_group_source',
+    'test_declares_settings_name_dedup_contract',
+    'test_asserts_normalized_display_name',
+    'test_asserts_empty_and_duplicate_rejection',
+    'test_asserts_settings_dedupe_integration',
+  ]);
+  assert.equal(retiredBindings.every((binding) => (
+    binding.verified === true
+      && binding.retirement.contract_id === retirement.contract_id
+      && binding.retirement.path === 'test/unit/config/settings-ui-surface-contract.test.mjs'
+  )), true);
+  assert.equal(
+    verified.protected_files.some((file) => file.path === 'test/unit/config/settings-ui-surface-contract.test.mjs'),
+    false,
+  );
 
-  for (const binding of contract.integration_bindings) {
+  const productBindings = contract.integration_bindings.filter((binding) => !binding.path.startsWith('test/'));
+  assert.equal(productBindings.length, 7);
+  for (const binding of productBindings) {
     const duplicatedFiles = structuredClone(files);
     const target = duplicatedFiles.find((file) => file.path === binding.path);
     assert.ok(target, binding.id);
@@ -1829,6 +2086,288 @@ test('MR !1558 current-release continuity requires every binding exactly once wi
       binding.id,
     );
   }
+
+  const removedFiles = structuredClone(files);
+  const removedBinding = productBindings.find((binding) => binding.id === 'settings_dedupes_before_grouping');
+  const removedTarget = removedFiles.find((file) => file.path === removedBinding.path);
+  const originalSource = Buffer.from(removedTarget.payload.content, 'base64').toString('utf8');
+  const sourceWithoutBinding = replaceRequired(
+    originalSource,
+    `${removedBinding.addition.source}\n`,
+    '',
+    removedBinding.id,
+  );
+  removedTarget.payload.content = Buffer.from(sourceWithoutBinding, 'utf8').toString('base64');
+  removedTarget.payload.size = Buffer.byteLength(sourceWithoutBinding, 'utf8');
+  removedTarget.payload.blob_id = gitBlobSha1(sourceWithoutBinding);
+  const removedAudit = audit(removedFiles);
+  assert.equal(removedAudit.verified, false);
+  assert.equal(
+    removedAudit.failures.includes(`current_integration_binding_mismatch:${removedBinding.id}`),
+    true,
+  );
+
+  const unprovenResolution = resolveCurrentReleaseHeaderContract(contract, {
+    contracts,
+    ancestryByContractId: new Map([
+      [contract.contract_id, { verified: true, first_parent_complete: true }],
+      [retirement.contract_id, { verified: false, first_parent_complete: false }],
+    ]),
+  });
+  assert.equal(unprovenResolution.owner.contract_id, contract.contract_id);
+  assert.deepEqual(currentReleaseSourceContractProtectedPaths(contract, unprovenResolution.owner), [
+    'src/composer-model-display-groups.ts',
+    'src/AssistantConfig.tsx',
+    'test/unit/config/settings-ui-surface-contract.test.mjs',
+  ]);
+  const unprovenAncestry = new Map([
+    [contract.contract_id, { verified: true, first_parent_complete: true }],
+    [retirement.contract_id, { verified: false, first_parent_complete: false }],
+  ]);
+  const unprovenFiles = [...currentReleaseFileFixtures(contracts, head, {
+    ancestryByContractId: unprovenAncestry,
+  })].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+  assert.equal(unprovenFiles.some((file) => (
+    file.path === 'test/unit/config/settings-ui-surface-contract.test.mjs'
+  )), true);
+  const unproven = audit(unprovenFiles, unprovenResolution.owner, unprovenResolution.lineage);
+  assert.equal(unproven.verified, true, JSON.stringify(unproven.failures));
+  const missingHistoricalTest = audit(
+    unprovenFiles.filter((file) => file.path !== 'test/unit/config/settings-ui-surface-contract.test.mjs'),
+    unprovenResolution.owner,
+    unprovenResolution.lineage,
+  );
+  assert.equal(missingHistoricalTest.verified, false);
+  assert.equal(
+    missingHistoricalTest.failures.includes('release_file:test/unit/config/settings-ui-surface-contract.test.mjs:count:0'),
+    true,
+  );
+});
+
+test('MR !1595 origin changes require the exact deleted path, flags, IID, and merge SHA', () => {
+  const fixture = assertionRetirementContractFixture(QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT);
+  const audit = (overrides = {}) => auditReleaseSourceContract({
+    iid: fixture.contract.mr_iid,
+    state: fixture.contract.state,
+    targetBranch: fixture.contract.target_branch,
+    mergeCommitSha: fixture.contract.merge_commit_sha,
+    changesCount: fixture.contract.changes_count,
+    changes: fixture.changes,
+    contract: fixture.contract,
+    ...overrides,
+  });
+  const verified = audit();
+  assert.equal(verified.verified, true);
+  assert.equal(validateReleaseSourceContractAttestation(verified, {
+    mr: {
+      iid: fixture.contract.mr_iid,
+      commit: fixture.contract.merge_commit_sha,
+      diff_sha256: fixture.contract.mr_diff.sha256,
+      diff_bytes: fixture.contract.mr_diff.bytes,
+      changed_paths: fixture.contract.changed_paths,
+    },
+    contract: fixture.contract,
+  }).ok, true);
+
+  const wrongIid = audit({ iid: '1594' });
+  assert.equal(wrongIid.failures.includes('mr_iid_mismatch'), true);
+  const wrongSha = audit({ mergeCommitSha: 'f'.repeat(40) });
+  assert.equal(wrongSha.failures.includes('mr_merge_commit_sha_mismatch'), true);
+
+  const wrongFlags = structuredClone(fixture.changes);
+  const deleted = wrongFlags.find((change) => change.deleted_file === true);
+  deleted.deleted_file = false;
+  const flagAudit = audit({ changes: wrongFlags });
+  assert.equal(
+    flagAudit.failures.includes(`retired_file_deleted_file_mismatch:${deleted.new_path}`),
+    true,
+  );
+
+  const wrongPath = structuredClone(fixture.changes);
+  const moved = wrongPath.find((change) => change.deleted_file === true);
+  moved.old_path = 'test/unit/config/other-obsolete-contract.test.mjs';
+  moved.new_path = moved.old_path;
+  const pathAudit = audit({ changes: wrongPath });
+  assert.equal(
+    pathAudit.failures.includes('retired_file_count:test/unit/config/settings-ui-surface-contract.test.mjs:0'),
+    true,
+  );
+});
+
+test('MR !1595 retirement definition cannot retire a product binding', () => {
+  const targetDefinition = {
+    ...structuredClone(QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT),
+    contract_id: 'fixture-mr-9558-settings-model-name-dedup/v1',
+    mr_iid: '9558',
+    merge_commit_sha: 'a'.repeat(40),
+  };
+  delete targetDefinition.contract_sha256;
+  const target = {
+    ...targetDefinition,
+    contract_sha256: sha256Text(stableJson(targetDefinition)),
+  };
+  const retirementDefinition = {
+    ...structuredClone(QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT),
+    contract_id: 'fixture-mr-9595-obsolete-test-retirement/v1',
+    mr_iid: '9595',
+    merge_commit_sha: 'b'.repeat(40),
+    supersedes: [{
+      contract_id: target.contract_id,
+      disposition: 'retired',
+      current_assertions: ['integration_binding:settings_dedupes_before_grouping'],
+    }],
+  };
+  delete retirementDefinition.contract_sha256;
+  const retirement = {
+    ...retirementDefinition,
+    contract_sha256: sha256Text(stableJson(retirementDefinition)),
+  };
+  assert.throws(
+    () => resolveReleaseSourceContracts([target, retirement]),
+    /source_contract_retirement_product_assertion/u,
+  );
+});
+
+test('MR !1595 current-release projection and in-range accounting are independently fail closed', () => {
+  const contract = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  const head = 'c'.repeat(40);
+  const originAttestation = expectedRetirementOriginAttestation(contract);
+  const mr = {
+    iid: contract.mr_iid,
+    commit: contract.merge_commit_sha,
+    diff_sha256: contract.mr_diff.sha256,
+    diff_bytes: contract.mr_diff.bytes,
+    changed_paths: contract.changed_paths,
+  };
+  const current = auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: contract.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: contract.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files: [],
+    mergeRequests: [mr],
+    originAttestation,
+    contract,
+  });
+  assert.equal(current.verified, true);
+  const report = {
+    release: { head },
+    merge_requests: [mr],
+    commit_accounting: [{
+      commit: contract.merge_commit_sha,
+      parent_count: 2,
+      classification: 'merge_mr',
+      mr_iid: contract.mr_iid,
+      attribution_verified: true,
+      reason: '',
+    }],
+    source_contracts: [current],
+  };
+  assert.equal(validateCurrentReleaseSourceContractAttestation(current, { report, contract }).ok, true);
+
+  const forgedAccounting = structuredClone(report);
+  forgedAccounting.commit_accounting[0].parent_count = 1;
+  const accountingValidation = validateCurrentReleaseSourceContractAttestation(current, {
+    report: forgedAccounting,
+    contract,
+  });
+  assert.equal(accountingValidation.ok, false);
+  assert.equal(accountingValidation.failures.includes('attestation_retirement_commit_accounting_mismatch'), true);
+
+  const wrongMr = structuredClone(report);
+  wrongMr.merge_requests[0].iid = '1594';
+  wrongMr.merge_requests[0].commit = 'd'.repeat(40);
+  const identityValidation = validateCurrentReleaseSourceContractAttestation(current, {
+    report: wrongMr,
+    contract,
+  });
+  assert.equal(identityValidation.ok, false);
+  assert.equal(identityValidation.failures.includes('attestation_trigger_projection_mismatch'), true);
+});
+
+test('MR !1595 retired-owner forgery remains blocked after the attestation hash is recomputed', () => {
+  const origin = QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT;
+  const retirement = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  const contracts = [origin, retirement];
+  const head = 'd'.repeat(40);
+  const ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
+    verified: true,
+    first_parent_complete: true,
+  }]));
+  const resolution = resolveCurrentReleaseHeaderContract(origin, { contracts, ancestryByContractId });
+  const fixtureMap = currentReleaseFileFixtures(contracts, head);
+  const files = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+  const originCurrent = auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: origin.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: origin.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 2,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files,
+    contract: origin,
+    currentHeaderContract: resolution.owner,
+    currentHeaderLineage: resolution.lineage,
+  });
+  const retirementCurrent = auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: retirement.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: retirement.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files: [],
+    contract: retirement,
+  });
+  assert.equal(originCurrent.verified, true);
+  assert.equal(retirementCurrent.verified, true);
+  const report = {
+    release: { head },
+    merge_requests: [],
+    commit_accounting: [],
+    source_contracts: [originCurrent, retirementCurrent],
+  };
+  assert.equal(validateCurrentReleaseSourceContractAttestation(originCurrent, {
+    report,
+    contract: origin,
+    contracts,
+  }).ok, true);
+
+  const forged = structuredClone(originCurrent);
+  const owner = forged.current_assertion_owners.integration_bindings
+    .find((item) => item.id === 'test_reads_model_group_source');
+  owner.contract_id = origin.contract_id;
+  owner.contract_sha256 = origin.contract_sha256;
+  owner.lineage = [origin.contract_id];
+  delete owner.retired;
+  delete owner.retirement;
+  delete forged.attestation_sha256;
+  forged.attestation_sha256 = sha256Text(stableJson(forged));
+  const forgedReport = { ...report, source_contracts: [forged, retirementCurrent] };
+  const validation = validateCurrentReleaseSourceContractAttestation(forged, {
+    report: forgedReport,
+    contract: origin,
+    contracts,
+  });
+  assert.equal(validation.ok, false);
+  assert.equal(validation.failures.includes('attestation_current_assertion_owners_mismatch'), true);
 });
 
 test('source contracts and attestations cannot claim that declared tests were executed', () => {
@@ -2358,26 +2897,35 @@ for (const nearHostSyncPath of [
   });
 }
 
-test('only the exact desktop Windows builder README is static', () => {
+test('desktop Windows builder documentation is static without hiding executable files', () => {
   const exact = mapReleaseImpact({
-    changedPaths: ['docker/desktop-win-builder/README.md'],
+    changedPaths: [
+      'docker/desktop-win-builder/README.md',
+      'docker/desktop-win-builder/docs/README.md',
+    ],
     subject: 'builder reference update',
     availableCaseIds: ['BETA-HOST-003'],
   });
   assert.deepEqual(exact.product_paths, []);
   assert.deepEqual(exact.unmapped_product_paths, []);
   assert.deepEqual(exact.direct_case_ids, []);
-  assert.deepEqual(exact.static_dispositions, [{
-    path: 'docker/desktop-win-builder/README.md',
-    disposition: 'Toolchain/test-only',
-  }]);
+  assert.deepEqual(exact.static_dispositions, [
+    {
+      path: 'docker/desktop-win-builder/README.md',
+      disposition: 'Toolchain/test-only',
+    },
+    {
+      path: 'docker/desktop-win-builder/docs/README.md',
+      disposition: 'Research/docs-only',
+    },
+  ]);
   assert.equal(exact.mapping_status, 'MAPPED');
 });
 
 for (const nearBuilderReadme of [
   'docker/desktop-win-builder/readme.md',
   'docker/desktop-win-builder/README.md.bak',
-  'docker/desktop-win-builder/docs/README.md',
+  'docker/desktop-win-builder/docs/runtime.ts',
   'docker/other/README.md',
 ]) {
   test(`near desktop Windows builder README stays fail-closed: ${nearBuilderReadme}`, () => {
@@ -3997,6 +4545,56 @@ test('GitLab API scan treats an explicit empty registry as all built-in source c
   assert.equal(report.source_contracts.every((item) => item.origin_change_attestation === null), true);
 });
 
+test('GitLab API scan retains the !1558 test file until !1595 ancestry is verified', () => {
+  const origin = QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT;
+  const retirement = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  const contracts = [origin, retirement];
+  const historicalFiles = currentReleaseFileFixtures([origin], origin.merge_commit_sha);
+  const historicalTestPath = 'test/unit/config/settings-ui-surface-contract.test.mjs';
+  const fixture = apiFixture({
+    head: origin.merge_commit_sha,
+    mrIid: Number(origin.mr_iid),
+    mergeCommitSha: origin.merge_commit_sha,
+    sourceContracts: contracts,
+    releaseFileOverrides: new Map([[historicalTestPath, historicalFiles.get(historicalTestPath)]]),
+  });
+  const requestedFiles = [];
+  const reader = (endpoint) => {
+    if (endpoint.startsWith('repository/compare?')) {
+      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
+      if (query.get('from') === retirement.merge_commit_sha
+        && query.get('to') === origin.merge_commit_sha) {
+        return { compare_timeout: false, commits: [] };
+      }
+    }
+    if (endpoint.startsWith('repository/files/')) {
+      const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
+      requestedFiles.push(decodeURIComponent(encodedPath));
+    }
+    return fixture.reader(endpoint);
+  };
+
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+    sourceContracts: contracts,
+  });
+  assert.equal(requestedFiles.filter((filePath) => filePath === historicalTestPath).length, 1);
+  const current = report.source_contracts.find((item) => item.contract_id === origin.contract_id);
+  assert.equal(current.protected_files.some((file) => file.path === historicalTestPath), true);
+  assert.equal(current.integration_bindings
+    .filter((binding) => binding.path === historicalTestPath)
+    .every((binding) => binding.verified === true), true);
+  assert.equal(current.current_assertion_owners.integration_bindings
+    .filter((binding) => binding.id.startsWith('test_'))
+    .every((binding) => binding.contract_id === origin.contract_id), true);
+});
+
 test('GitLab API scan fail-closes MR !1522 when protected source bytes do not match', () => {
   const contract = QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT;
   const fixture = apiFixture({
@@ -4302,4 +4900,285 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
   });
   assert.equal(missingRisks.ok, false);
   assert.equal(missingRisks.failures.some((failure) => failure.startsWith('release_intake_blocking_risk:')), true);
+});
+
+test('root Playwright config and nested documentation assets remain static without hiding product code', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: [
+      'playwright.config.mjs',
+      'electron/docs/README.md',
+      'src/docs/capabilities.yaml',
+      'src/docs/runtime.ts',
+    ],
+    subject: 'docs and test toolchain maintenance',
+  });
+
+  assert.deepEqual(mapped.static_dispositions, [
+    { path: 'playwright.config.mjs', disposition: 'Toolchain/test-only' },
+    { path: 'electron/docs/README.md', disposition: 'Research/docs-only' },
+    { path: 'src/docs/capabilities.yaml', disposition: 'Research/docs-only' },
+  ]);
+  assert.deepEqual(mapped.product_paths, ['src/docs/runtime.ts']);
+  assert.deepEqual(mapped.known_product_paths, ['src/docs/runtime.ts']);
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+});
+
+test('MR !1571 and !1586 version bumps are static-only only under their exact identities and six-path sets', () => {
+  const contracts = [
+    {
+      mrIid: '1571',
+      mergeCommitSha: '4228e99aee9e2dd364eb7bc0013300791650ad9c',
+      diffSha256: '4c4a8b7d99b43017a217796441f162cf081ee16a9898d66a0f57a672bc110e18',
+      changedPaths: [
+        '.deepbank-runtime/runtime-provision-seed/0.1.6/provision-manifest.json',
+        '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+        'deploy/helm/qbot/Chart.yaml',
+        'package-lock.json',
+        'package.json',
+        'teams360.host-sync.json',
+      ],
+    },
+    {
+      mrIid: '1586',
+      mergeCommitSha: '4763f90e276f05c6147affdf4751de6e67d2da85',
+      diffSha256: '6b3b4780d5737b3f57ced31e61365ee13950e9389e36e89c768292ae488f1c65',
+      changedPaths: [
+        '.deepbank-runtime/runtime-provision-seed/0.1.7/provision-manifest.json',
+        '.deepbank-runtime/runtime-provision-seed/0.1.8/provision-manifest.json',
+        'deploy/helm/qbot/Chart.yaml',
+        'package-lock.json',
+        'package.json',
+        'teams360.host-sync.json',
+      ],
+    },
+  ];
+
+  for (const contract of contracts) {
+    const exact = mapReleaseImpact(contract);
+    assert.deepEqual(exact.product_paths, [], `!${contract.mrIid}`);
+    assert.deepEqual(exact.direct_case_ids, [], `!${contract.mrIid}`);
+    assert.deepEqual(exact.required_stages, ['G1'], `!${contract.mrIid}`);
+    assert.deepEqual(exact.unmapped_product_paths, [], `!${contract.mrIid}`);
+    assert.equal(exact.mapping_status, 'MAPPED', `!${contract.mrIid}`);
+
+    for (const mutation of [
+      { mergeCommitSha: '0'.repeat(40) },
+      { diffSha256: '0'.repeat(64) },
+      { changedPaths: [...contract.changedPaths.slice(0, -1), 'package-extra.json'] },
+      { changedPaths: contract.changedPaths.slice(0, -1) },
+      { changedPaths: [...contract.changedPaths, 'README.md'] },
+    ]) {
+      const drifted = mapReleaseImpact({ ...contract, ...mutation });
+      assert.equal(drifted.mapping_status, 'BLOCKED', `!${contract.mrIid} ${JSON.stringify(mutation)}`);
+      assert.notEqual(drifted.unmapped_product_paths.length, 0, `!${contract.mrIid}`);
+    }
+  }
+});
+
+test('MR !1595 is static-only only under its exact retirement diff identity and path shape', () => {
+  const staticPaths = Array.from({ length: 182 }, (_, index) => `test/retired/fixture-${index}.test.mjs`);
+  const base = {
+    changedPaths: [...staticPaths, 'playwright.config.mjs', 'package.json'],
+    mrIid: '1595',
+    mergeCommitSha: '3b61267f74bb61b3053c970dd5c7b98d27683e6a',
+    diffSha256: '867e9491a91485f3fba33bd9b3d53b04644f697a9d4a083a0239f87c33ec0852',
+  };
+  const exact = mapReleaseImpact(base);
+  assert.deepEqual(exact.product_paths, []);
+  assert.deepEqual(exact.direct_case_ids, []);
+  assert.deepEqual(exact.required_stages, ['G1']);
+  assert.deepEqual(exact.unmapped_product_paths, []);
+  assert.equal(exact.mapping_status, 'MAPPED');
+
+  for (const candidate of [
+    { diffSha256: '0'.repeat(64) },
+    { changedPaths: [...staticPaths.slice(1), 'src/runtime.ts', 'playwright.config.mjs', 'package.json'] },
+  ]) {
+    const drifted = mapReleaseImpact({ ...base, ...candidate });
+    assert.notEqual(drifted.product_paths.length, 0);
+    assert.equal(drifted.mapping_status, 'BLOCKED');
+    assert.notEqual(drifted.unmapped_product_paths.length, 0);
+  }
+
+  const wrongIdentity = mapReleaseImpact({ ...base, mergeCommitSha: '0'.repeat(40) });
+  assert.deepEqual(wrongIdentity.product_paths, ['package.json']);
+  assert.equal(wrongIdentity.mapping_status, 'BLOCKED');
+  assert.notEqual(wrongIdentity.unmapped_product_paths.length, 0);
+});
+
+test('MR !1579 freezes Claude Skill call canonicalization source and test declarations without attesting execution', () => {
+  const contract = QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT;
+  assert.equal(
+    contract.contract_id,
+    QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT_ID,
+  );
+  assert.equal(contract.contract_sha256, '9f3bb225ae6a09d4eb053e1c00fd29a16ccd38df26de8e392a93929530ed6cdb');
+  assert.equal(contract.mr_iid, '1579');
+  assert.equal(contract.state, 'merged');
+  assert.equal(contract.target_branch, 'release/0.1');
+  assert.equal(contract.merge_commit_sha, '7f9b520f41ed9ac34b9230f28df49a5fce678953');
+  assert.equal(contract.changes_count, 12);
+  assert.deepEqual(contract.changed_paths, [
+    'scripts/ci/unit/node-unit-test-weights.json',
+    'server/qbot-core/engine/engine.mjs',
+    'server/qbot-core/experts/expert-v2-runtime.mjs',
+    'server/qbot-core/models/claude-media-compatibility-loopback.mjs',
+    'server/qbot-core/models/claude-media-compatibility.mjs',
+    'server/qbot-core/models/claude-skill-call-compatibility.mjs',
+    'server/qbot-core/.architecture.yaml',
+    'test/unit/server/claude-media-compatibility.test.mjs',
+    'test/unit/server/claude-skill-call-compatibility.test.mjs',
+    'test/unit/skills/claude-skill-invocation-note.test.mjs',
+    'test/unit/skills/expert-v2-runtime-boundaries.test.mjs',
+    'test/unit/skills/skillhub-engine-preflight.test.mjs',
+  ]);
+  assert.deepEqual(contract.mr_diff, {
+    bytes: 63270,
+    sha256: 'e250309ca8e588db87b9214def6b1acb25e54d8a4605d93ba651cf1c34ff8967',
+  });
+  assert.deepEqual(
+    [contract.source_file.change_bytes, contract.source_file.change_sha256],
+    [10988, '7d8a961c2685b018802df4197aee150db424e3f7da5661ae0bfce1101e5b80c6'],
+  );
+  assert.deepEqual(
+    [contract.source_file.source_bytes, contract.source_file.source_sha256, contract.source_file.source_line_count],
+    [10166, '4bd61aab3e4ec870a9bee2a8ff954a0dca7795231bf51412b4e240fd4d644525', 286],
+  );
+  assert.equal(contract.source_file.proof_mode, 'exact-new-file');
+  assert.equal(contract.claim_scope, QWORK_RELEASE_SOURCE_CLAIM_SCOPE);
+  assert.equal(contract.test_execution_attested, false);
+  assert.equal(QWORK_RELEASE_SOURCE_CONTRACTS.includes(contract), true);
+
+  const bindingIds = new Set(contract.integration_bindings.map((binding) => binding.id));
+  for (const id of [
+    'alias_uses_invocation_name',
+    'alias_maps_to_invocation_name',
+    'ambiguous_alias_fails_closed',
+    'unknown_alias_fails_closed',
+    'only_skill_name_is_rewritten',
+    'tool_use_outer_fields_are_preserved',
+    'json_payload_rewriter_exported',
+    'malformed_sse_fails_closed',
+    'oversized_sse_fails_closed',
+    'incomplete_sse_fails_closed',
+    'loopback_stream_uses_sse_rewriter',
+    'loopback_json_uses_payload_rewriter',
+    'engine_passes_skill_preflight_to_loopback',
+    'draft_expert_hides_durable_skill_identity',
+    'published_expert_hides_durable_skill_identity',
+    'test_asserts_args_preserved',
+    'test_asserts_other_tool_preserved',
+  ]) assert.equal(bindingIds.has(id), true, id);
+
+  assert.deepEqual(
+    contract.forbidden_fragments.slice(0, 2).map((assertion) => assertion.id),
+    ['engine_must_not_set_disable_flag', 'architecture_must_not_set_disable_flag'],
+  );
+});
+
+test('MR !1579 exact-new-file contract rejects source, binding, and path drift', () => {
+  const fixture = exactNewFileContractFixture(
+    QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT,
+  );
+  const verified = auditFixture(fixture);
+  assert.equal(verified.verified, true, verified.failures.join(','));
+  assert.deepEqual(verified.failures, []);
+
+  const sourceDrift = structuredClone(fixture.changes);
+  const sourceChange = sourceDrift.find((change) => (
+    change.new_path === fixture.contract.source_file.path
+  ));
+  const binding = fixture.contract.integration_bindings.find((item) => (
+    item.path === fixture.contract.source_file.path
+  ));
+  sourceChange.diff = sourceChange.diff.replace(
+    `+${binding.addition.source}`,
+    `+${binding.addition.source} // drift`,
+  );
+  const sourceAudit = auditFixture(fixture, { changes: sourceDrift });
+  assert.equal(sourceAudit.verified, false);
+  assert.equal(sourceAudit.failures.includes('mr_diff_sha256_mismatch'), true);
+  assert.equal(sourceAudit.failures.includes('source_source_sha256_mismatch'), true);
+  assert.equal(sourceAudit.failures.includes(`integration_binding_mismatch:${binding.id}`), true);
+
+  const pathDrift = structuredClone(fixture.changes);
+  pathDrift[0].new_path = `${pathDrift[0].new_path}.drift`;
+  const pathAudit = auditFixture(fixture, { changes: pathDrift });
+  assert.equal(pathAudit.verified, false);
+  assert.equal(pathAudit.failures.includes('mr_changed_paths_mismatch'), true);
+});
+
+test('MR !1579 current-release assertions fail closed on deletion, duplication, or forbidden restoration', () => {
+  const contract = QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT;
+  const head = '7'.repeat(40);
+  const fixtureMap = currentReleaseFileFixtures([contract], head);
+  const baseFiles = [...fixtureMap].map(([filePath, payload]) => ({
+    path: filePath,
+    requested_ref: head,
+    payload,
+  }));
+  const audit = (files) => auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: contract.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: contract.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files,
+    mergeRequests: [],
+    originAttestation: null,
+    contract,
+  });
+  const rewrite = (files, filePath, transform) => {
+    const copy = structuredClone(files);
+    const file = copy.find((item) => item.path === filePath);
+    assert.ok(file, filePath);
+    const source = Buffer.from(file.payload.content, 'base64').toString('utf8');
+    const updated = transform(source);
+    file.payload.content = Buffer.from(updated, 'utf8').toString('base64');
+    file.payload.size = Buffer.byteLength(updated, 'utf8');
+    file.payload.blob_id = gitBlobSha1(updated);
+    return copy;
+  };
+
+  const verified = audit(baseFiles);
+  assert.equal(verified.verified, true, verified.failures.join(','));
+  assert.deepEqual(verified.failures, []);
+  for (const binding of contract.integration_bindings) {
+    const deleted = audit(rewrite(baseFiles, binding.path, (source) => (
+      source.replace(`${binding.addition.source}\n`, '')
+    )));
+    assert.equal(deleted.verified, false, `delete:${binding.id}`);
+    assert.equal(
+      deleted.failures.includes(`current_integration_binding_mismatch:${binding.id}`),
+      true,
+      `delete:${binding.id}`,
+    );
+    const duplicated = audit(rewrite(baseFiles, binding.path, (source) => (
+      `${source}${binding.addition.source}\n`
+    )));
+    assert.equal(duplicated.verified, false, `duplicate:${binding.id}`);
+    assert.equal(
+      duplicated.failures.includes(`current_integration_binding_mismatch:${binding.id}`),
+      true,
+      `duplicate:${binding.id}`,
+    );
+  }
+  for (const forbidden of contract.forbidden_fragments) {
+    const restored = audit(rewrite(baseFiles, forbidden.path, (source) => (
+      `${source}${forbidden.value.source}\n`
+    )));
+    assert.equal(restored.verified, false, forbidden.id);
+    assert.equal(
+      restored.failures.includes(`current_forbidden_fragment:${forbidden.id}`),
+      true,
+      forbidden.id,
+    );
+  }
 });

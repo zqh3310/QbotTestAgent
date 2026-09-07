@@ -298,6 +298,37 @@ function createExecutionWorkerSupervisor() {
 }
 `;
 
+const helperSpreadSuccessorSupervisor = `
+const {
+  executionWorkerExitFailure,
+  executionWorkerTerminationCause,
+} = require('./execution-worker-process-lifecycle.cjs');
+function createExecutionWorkerSupervisor() {
+  const pending = new Map();
+  let child = createChild();
+  const terminationCauses = new WeakMap();
+  let intentionalStop = false;
+  const rejectPending = (code, message) => {
+    for (const item of pending.values()) {
+      const error = new Error(message);
+      error.code = code;
+      item.reject(error);
+    }
+    pending.clear();
+  };
+  const onMessage = () => {};
+  const request = () => {};
+  const stop = async () => {};
+  const onExit = (exitedChild, { exitCode = null, processError = null } = {}) => {
+    if (child !== exitedChild) return;
+    const terminationCause = executionWorkerTerminationCause({
+      storedCause: terminationCauses.get(exitedChild), processError, intentionalStop });
+    rejectPending(...executionWorkerExitFailure(terminationCause));
+  };
+  return Object.freeze({ onExit, onMessage, request, stop });
+}
+`;
+
 const successorCancellation = `
 async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
   const pending = supervisor.request(operation, identity, payload, options);
@@ -501,6 +532,11 @@ const currentReleaseSuccessorManager = delegatedSuccessorManager
     'drain: (settlement) => drainExecutionRecord(manager, requestId, record, settlement),',
     'drain: (settlement, options) => drainExecutionRecord(manager, requestId, record, settlement, options),',
   );
+
+const declaratorBoundPressureManager = successorManager.replace(
+  '  await waitForExecutionSlot(manager, requestId);',
+  '  const reserved = await waitForExecutionSlot(manager, requestId);',
+);
 
 const successorContextUsage = `
 const {
@@ -1266,6 +1302,79 @@ test('current release controller, manager drain options and destructured desktop
       lifecycle: true,
     },
   );
+});
+
+test('v5 accepts helper/spread exit and declarator-bound admission while detached drain stays blocked', () => {
+  const detachedCompletedDrain = successorContextUsageLease.replace(
+    '        await releaseExecutionWorkerLeaseAfterContextUsage(',
+    '        void releaseExecutionWorkerLeaseAfterContextUsage(',
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-supervisor.cjs', helperSpreadSuccessorSupervisor],
+    ['electron/host-core/agent/execution-worker-manager.cjs', declaratorBoundPressureManager],
+    ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
+    ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+    ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', detachedCompletedDrain],
+  ]));
+  assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]]);
+  assert.equal(risk.checks[0].passed, true);
+  assert.equal(risk.checks[1].passed, true);
+  assert.equal(risk.checks[2].passed, false);
+  assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.supervisor_exit, true);
+  assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.manager_pressure, true);
+  assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.desktop, false);
+  assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, false);
+});
+
+test('v5 helper/spread exit remains bound to the exact typed cause and pending rejection', () => {
+  const variants = [
+    helperSpreadSuccessorSupervisor.replace(
+      'executionWorkerExitFailure(terminationCause)',
+      'executionWorkerExitFailure(unrelatedCause)',
+    ),
+    helperSpreadSuccessorSupervisor.replace(
+      "require('./execution-worker-process-lifecycle.cjs')",
+      "require('./unrelated-process-lifecycle.cjs')",
+    ),
+    helperSpreadSuccessorSupervisor.replace('    pending.clear();', '    unrelated.clear();'),
+    helperSpreadSuccessorSupervisor.replace(
+      '    if (child !== exitedChild) return;',
+      '    if (false) return;',
+    ),
+  ];
+  for (const supervisor of variants) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-supervisor.cjs', supervisor],
+    ]));
+    assert.equal(risk.checks[0].passed, false);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[0]), true);
+  }
+});
+
+test('v5 declarator-bound pressure wait must stay awaited and precede supervisor allocation', () => {
+  const variants = [
+    declaratorBoundPressureManager.replace(
+      'const reserved = await waitForExecutionSlot(manager, requestId);',
+      'const reserved = waitForExecutionSlot(manager, requestId);',
+    ),
+    declaratorBoundPressureManager.replace(
+      `  const reserved = await waitForExecutionSlot(manager, requestId);
+  const supervisor = manager.supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });`,
+      `  const supervisor = manager.supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
+  const reserved = await waitForExecutionSlot(manager, requestId);`,
+    ),
+    declaratorBoundPressureManager.replace(
+      'waitForExecutionSlot(manager, requestId)',
+      'unrelatedWait(manager, requestId)',
+    ),
+  ];
+  for (const manager of variants) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', manager],
+    ]));
+    assert.equal(risk.checks[1].passed, false);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[1]), true);
+  }
 });
 
 test('v5 manager observes the assigned stop promise and forwards both drain arguments exactly', () => {
