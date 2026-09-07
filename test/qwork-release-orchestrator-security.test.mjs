@@ -11,10 +11,11 @@ import {
   QWORK_RELEASE_INTAKE_SCHEMA,
   QWORK_RELEASE_INTAKE_TOOL_VERSION,
   scanQworkReleaseIntake,
+  stableJson,
 } from '../src/lib/qwork-release-intake.mjs';
 import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
-  releaseSourceContractProtectedPaths,
+  currentReleaseSourceContractProtectedPaths,
   resolveCurrentReleaseHeaderContract,
 } from '../src/lib/qwork-release-source-contracts.mjs';
 import {
@@ -33,6 +34,7 @@ import {
   QWORK_RELEASE_TEST_STATE_SCHEMA,
   QWORK_RELEASE_TEST_STAGES,
 } from '../src/lib/qwork-release-test-plan.mjs';
+import { createQworkCapabilitiesReadbackFixture } from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const orchestrator = path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs');
@@ -87,6 +89,26 @@ function gitBlobSha1(source) {
   ])).digest('hex');
 }
 
+function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
+  const lines = [...sourceLines];
+  const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  ));
+  const ownerBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  );
+  const oversizedBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_rejects_payload_at_shared_limit',
+  );
+  if (ownerBinding?.path !== filePath || oversizedBinding?.path !== filePath) return lines;
+  const ownerIndex = lines.indexOf(ownerBinding.addition.source);
+  const oversizedIndex = lines.indexOf(oversizedBinding.addition.source);
+  if (ownerIndex < 0 || oversizedIndex <= ownerIndex) return lines;
+  lines.splice(oversizedIndex, 0, '  const oversizedEnvelopeFixture = {');
+  lines.splice(oversizedIndex + 2, 0, '  };', '  void oversizedEnvelopeFixture;', '});');
+  return lines;
+}
+
 function currentReleaseFileFixtures(contracts, head) {
   const linesByPath = new Map();
   const addLine = (filePath, line) => {
@@ -110,10 +132,7 @@ function currentReleaseFileFixtures(contracts, head) {
       .find((item) => item.contract_id === contract.contract_id)?.current_assertions
       ?.filter((item) => item.startsWith('integration_binding:'))
       .map((item) => item.slice('integration_binding:'.length)) || []);
-    for (const filePath of releaseSourceContractProtectedPaths(contract)) {
-      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
-    }
-    for (const filePath of releaseSourceContractProtectedPaths(headerOwner)) {
+    for (const filePath of currentReleaseSourceContractProtectedPaths(contract, headerOwner)) {
       if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     }
     for (const header of headerOwner.header_emissions) {
@@ -125,15 +144,45 @@ function currentReleaseFileFixtures(contracts, head) {
     ))) {
       addLine(binding.path, binding.addition?.source);
     }
+    const scopedOwnerGroups = new Map();
     for (const binding of contract.integration_bindings.filter((item) => item.current_release_scope)) {
-      appendLine(binding.path, binding.current_release_scope.owner_start.source);
-      for (const fragment of binding.current_release_scope.required_fragments) {
-        appendLine(binding.path, fragment.value.source);
+      const scope = binding.current_release_scope;
+      const key = `${binding.path}\0${scope.owner_start.source}`;
+      if (!scopedOwnerGroups.has(key)) {
+        scopedOwnerGroups.set(key, { path: binding.path, owner: scope.owner_start.source, scopes: [] });
       }
+      const group = scopedOwnerGroups.get(key);
+      if (!group.scopes.some((candidate) => stableJson(candidate) === stableJson(scope))) {
+        group.scopes.push(scope);
+      }
+    }
+    for (const group of scopedOwnerGroups.values()) {
+      appendLine(group.path, group.owner);
+      for (const scope of group.scopes.filter((item) => item.boundary === 'next-top-level-test-or-eof')) {
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+      }
+      const regionScopes = group.scopes
+        .filter((item) => item.boundary === 'anchored-line-region-within-next-top-level-test')
+        .sort((left, right) => Number(left.region_end.source.trim() === '});')
+          - Number(right.region_end.source.trim() === '});'));
+      const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
+        scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
+      ));
+      for (const scope of regionScopes) {
+        appendLine(group.path, scope.region_start.source);
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        appendLine(group.path, scope.region_end.source);
+        if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
+          appendLine(group.path, "    platform: 'darwin',");
+          appendLine(group.path, '  } ) ;');
+        }
+      }
+      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
-    const source = `${lines.join('\n')}\n`;
+    const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, lines, contracts);
+    const source = `${completedLines.join('\n')}\n`;
     return [filePath, {
       file_name: path.basename(filePath),
       file_path: filePath,
@@ -390,7 +439,7 @@ function pretest(stageId, plan) {
       teams: { version: plan.release_identity.teams_version, build: plan.release_identity.teams_build },
       session: { pid: 4242, control_plane_origin: plan.release_identity.control_plane_origin },
       teams_inspection: {
-        public_capabilities: { ok: true, value_type: 'object' },
+        public_capabilities: createQworkCapabilitiesReadbackFixture(),
         claude_skill_call_canonicalization_policy: structuredClone(canonicalizationPolicy),
       },
       control_plane_health: {

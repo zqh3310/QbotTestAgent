@@ -4,10 +4,11 @@ import path from 'node:path';
 import {
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
   scanQworkReleaseIntake,
+  stableJson,
 } from '../../src/lib/qwork-release-intake.mjs';
 import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
-  releaseSourceContractProtectedPaths,
+  currentReleaseSourceContractProtectedPaths,
   resolveCurrentReleaseHeaderContract,
 } from '../../src/lib/qwork-release-source-contracts.mjs';
 import {
@@ -30,7 +31,10 @@ import {
   QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
   qworkReleaseIdentityFingerprint,
 } from '../../src/lib/qwork-release-test-plan.mjs';
-import { createQworkSoakFixture } from './qwork-soak-fixture.mjs';
+import {
+  createQworkCapabilitiesReadbackFixture,
+  createQworkSoakFixture,
+} from './qwork-soak-fixture.mjs';
 
 const EVENT_SCHEMA = 'qbot-qwork-release-test-event/v2';
 const DIRECTORY_SHA256 = sha256Bytes(Buffer.from('directory'));
@@ -91,6 +95,26 @@ function gitBlobSha1(source) {
   ])).digest('hex');
 }
 
+function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
+  const lines = [...sourceLines];
+  const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  ));
+  const ownerBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  );
+  const oversizedBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_rejects_payload_at_shared_limit',
+  );
+  if (ownerBinding?.path !== filePath || oversizedBinding?.path !== filePath) return lines;
+  const ownerIndex = lines.indexOf(ownerBinding.addition.source);
+  const oversizedIndex = lines.indexOf(oversizedBinding.addition.source);
+  if (ownerIndex < 0 || oversizedIndex <= ownerIndex) return lines;
+  lines.splice(oversizedIndex, 0, '  const oversizedEnvelopeFixture = {');
+  lines.splice(oversizedIndex + 2, 0, '  };', '  void oversizedEnvelopeFixture;', '});');
+  return lines;
+}
+
 function currentReleaseFileFixtures(contracts, head) {
   const linesByPath = new Map();
   const addLine = (filePath, line) => {
@@ -114,10 +138,7 @@ function currentReleaseFileFixtures(contracts, head) {
       .find((item) => item.contract_id === contract.contract_id)?.current_assertions
       ?.filter((item) => item.startsWith('integration_binding:'))
       .map((item) => item.slice('integration_binding:'.length)) || []);
-    for (const filePath of releaseSourceContractProtectedPaths(contract)) {
-      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
-    }
-    for (const filePath of releaseSourceContractProtectedPaths(headerOwner)) {
+    for (const filePath of currentReleaseSourceContractProtectedPaths(contract, headerOwner)) {
       if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     }
     for (const header of headerOwner.header_emissions) {
@@ -127,15 +148,45 @@ function currentReleaseFileFixtures(contracts, head) {
     for (const binding of contract.integration_bindings.filter((item) => (
       !item.current_release_scope && !replacedBindingIds.has(item.id)
     ))) addLine(binding.path, binding.addition?.source);
+    const scopedOwnerGroups = new Map();
     for (const binding of contract.integration_bindings.filter((item) => item.current_release_scope)) {
-      appendLine(binding.path, binding.current_release_scope.owner_start.source);
-      for (const fragment of binding.current_release_scope.required_fragments) {
-        appendLine(binding.path, fragment.value.source);
+      const scope = binding.current_release_scope;
+      const key = `${binding.path}\0${scope.owner_start.source}`;
+      if (!scopedOwnerGroups.has(key)) {
+        scopedOwnerGroups.set(key, { path: binding.path, owner: scope.owner_start.source, scopes: [] });
       }
+      const group = scopedOwnerGroups.get(key);
+      if (!group.scopes.some((candidate) => stableJson(candidate) === stableJson(scope))) {
+        group.scopes.push(scope);
+      }
+    }
+    for (const group of scopedOwnerGroups.values()) {
+      appendLine(group.path, group.owner);
+      for (const scope of group.scopes.filter((item) => item.boundary === 'next-top-level-test-or-eof')) {
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+      }
+      const regionScopes = group.scopes
+        .filter((item) => item.boundary === 'anchored-line-region-within-next-top-level-test')
+        .sort((left, right) => Number(left.region_end.source.trim() === '});')
+          - Number(right.region_end.source.trim() === '});'));
+      const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
+        scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
+      ));
+      for (const scope of regionScopes) {
+        appendLine(group.path, scope.region_start.source);
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        appendLine(group.path, scope.region_end.source);
+        if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
+          appendLine(group.path, "    platform: 'darwin',");
+          appendLine(group.path, '  } ) ;');
+        }
+      }
+      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
-    const source = `${lines.join('\n')}\n`;
+    const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, lines, contracts);
+    const source = `${completedLines.join('\n')}\n`;
     return [filePath, {
       file_name: path.basename(filePath),
       file_path: filePath,
@@ -335,7 +386,7 @@ function pretest(stageId, plan) {
         build: plan.release_identity.teams_build,
       },
       session: { pid: 4242, control_plane_origin: plan.release_identity.control_plane_origin },
-      teams_inspection: { public_capabilities: { ok: true, value_type: 'object' } },
+      teams_inspection: { public_capabilities: createQworkCapabilitiesReadbackFixture() },
       control_plane_health: {
         ok: true,
         control_plane_origin: plan.release_identity.control_plane_origin,
@@ -566,6 +617,9 @@ function makeCompletionArtifacts({
       schema_version: 'qwork-release-identity-readback/v1',
       ok: true,
       observed_sha256: '3'.repeat(64),
+      capabilities_readback: createQworkCapabilitiesReadbackFixture(
+        Date.parse('2026-09-07T00:00:00.000Z'),
+      ),
       observed: {
         qwork_version: identity.qwork_version,
         prompt_policy_version: identity.prompt_policy_version,
@@ -591,6 +645,11 @@ function makeCompletionArtifacts({
       observed_at: phase === 'startup'
         ? '2026-09-07T00:00:00.000Z'
         : '2026-09-07T00:01:00.000Z',
+      capabilities_readback: createQworkCapabilitiesReadbackFixture(
+        Date.parse(phase === 'startup'
+          ? '2026-09-07T00:00:00.000Z'
+          : '2026-09-07T00:01:00.000Z'),
+      ),
       ok: true,
       observed_sha256: '3'.repeat(64),
       state_sha256: '4'.repeat(64),

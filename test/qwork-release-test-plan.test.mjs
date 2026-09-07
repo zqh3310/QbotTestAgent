@@ -15,7 +15,7 @@ import {
 } from '../src/lib/qwork-release-intake.mjs';
 import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
-  releaseSourceContractProtectedPaths,
+  currentReleaseSourceContractProtectedPaths,
   resolveCurrentReleaseHeaderContract,
 } from '../src/lib/qwork-release-source-contracts.mjs';
 import {
@@ -44,6 +44,7 @@ import {
   validateQworkReleaseControlState,
 } from '../src/lib/qwork-release-test-plan.mjs';
 import {
+  createQworkCapabilitiesReadbackFixture,
   createQworkSoakFixture,
   persistQworkSoakFixture,
   rewriteQworkSoakArtifact,
@@ -113,6 +114,34 @@ function gitBlobSha1(source) {
   ])).digest('hex');
 }
 
+function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
+  const lines = [...sourceLines];
+  const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  ));
+  const ownerBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  );
+  const oversizedBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_rejects_payload_at_shared_limit',
+  );
+  if (ownerBinding?.path !== filePath || oversizedBinding?.path !== filePath) return lines;
+
+  const ownerIndex = lines.indexOf(ownerBinding.addition.source);
+  const oversizedIndex = lines.indexOf(oversizedBinding.addition.source);
+  if (ownerIndex < 0 || oversizedIndex <= ownerIndex) return lines;
+
+  lines.splice(oversizedIndex, 0, '  const oversizedEnvelopeFixture = {');
+  lines.splice(
+    oversizedIndex + 2,
+    0,
+    '  };',
+    '  void oversizedEnvelopeFixture;',
+    '});',
+  );
+  return lines;
+}
+
 function currentReleaseFileFixtures(contracts, head) {
   const linesByPath = new Map();
   const addLine = (filePath, line) => {
@@ -137,10 +166,7 @@ function currentReleaseFileFixtures(contracts, head) {
       .find((item) => item.contract_id === contract.contract_id)?.current_assertions
       ?.filter((item) => item.startsWith('integration_binding:'))
       .map((item) => item.slice('integration_binding:'.length)) || []);
-    for (const filePath of releaseSourceContractProtectedPaths(contract)) {
-      if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
-    }
-    for (const filePath of releaseSourceContractProtectedPaths(headerOwner)) {
+    for (const filePath of currentReleaseSourceContractProtectedPaths(contract, headerOwner)) {
       if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     }
     for (const header of headerOwner.header_emissions) {
@@ -152,15 +178,45 @@ function currentReleaseFileFixtures(contracts, head) {
     ))) {
       addLine(binding.path, binding.addition?.source);
     }
+    const scopedOwnerGroups = new Map();
     for (const binding of contract.integration_bindings.filter((item) => item.current_release_scope)) {
-      appendLine(binding.path, binding.current_release_scope.owner_start.source);
-      for (const fragment of binding.current_release_scope.required_fragments) {
-        appendLine(binding.path, fragment.value.source);
+      const scope = binding.current_release_scope;
+      const key = `${binding.path}\0${scope.owner_start.source}`;
+      if (!scopedOwnerGroups.has(key)) {
+        scopedOwnerGroups.set(key, { path: binding.path, owner: scope.owner_start.source, scopes: [] });
       }
+      const group = scopedOwnerGroups.get(key);
+      if (!group.scopes.some((candidate) => stableJson(candidate) === stableJson(scope))) {
+        group.scopes.push(scope);
+      }
+    }
+    for (const group of scopedOwnerGroups.values()) {
+      appendLine(group.path, group.owner);
+      for (const scope of group.scopes.filter((item) => item.boundary === 'next-top-level-test-or-eof')) {
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+      }
+      const regionScopes = group.scopes
+        .filter((item) => item.boundary === 'anchored-line-region-within-next-top-level-test')
+        .sort((left, right) => Number(left.region_end.source.trim() === '});')
+          - Number(right.region_end.source.trim() === '});'));
+      const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
+        scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
+      ));
+      for (const scope of regionScopes) {
+        appendLine(group.path, scope.region_start.source);
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        appendLine(group.path, scope.region_end.source);
+        if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
+          appendLine(group.path, "    platform: 'darwin',");
+          appendLine(group.path, '  } ) ;');
+        }
+      }
+      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
-    const source = `${lines.join('\n')}\n`;
+    const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, lines, contracts);
+    const source = `${completedLines.join('\n')}\n`;
     return [filePath, {
       file_name: path.basename(filePath),
       file_path: filePath,
@@ -482,7 +538,7 @@ function pretest(stageId, sourcePlan = plan) {
         control_plane_origin: sourcePlan.release_identity.control_plane_origin,
       },
       teams_inspection: {
-        public_capabilities: { ok: true, value_type: 'object' },
+        public_capabilities: createQworkCapabilitiesReadbackFixture(),
       },
       control_plane_health: {
         ok: true,
@@ -731,6 +787,7 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
           qwork_release_manifest_sha256: identity.qwork_release_manifest_sha256,
         },
         consistency: { ok: true, errors: [] },
+        capabilities_readback: createQworkCapabilitiesReadbackFixture(),
         provenance: {
           state: { sha256: '4'.repeat(64) },
           envelope: { sha256: identity.qwork_release_manifest_sha256 },
@@ -750,6 +807,7 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
           observed_sha256: '3'.repeat(64),
           state_sha256: '4'.repeat(64),
           envelope_sha256: identity.qwork_release_manifest_sha256,
+          capabilities_readback: createQworkCapabilitiesReadbackFixture(),
         },
         {
           phase: 'run-final',
@@ -758,6 +816,7 @@ function completionInputs(stageId, trustedStatus = 'trusted_pass') {
           observed_sha256: '3'.repeat(64),
           state_sha256: '4'.repeat(64),
           envelope_sha256: identity.qwork_release_manifest_sha256,
+          capabilities_readback: createQworkCapabilitiesReadbackFixture(),
         },
       ],
       claude_skill_call_canonicalization_policy: canonicalizationPolicyFixture(),
@@ -1215,6 +1274,20 @@ test('READY rejects unhealthy SIT or backend fingerprint drift', () => {
   assert.ok(audit.failures.includes('pretest_backend_identity_mismatch'));
 });
 
+test('READY requires the complete stable three-phase capabilities probe ledger', () => {
+  const invalid = pretest('G1');
+  invalid.runtime.teams_inspection.public_capabilities.probe_ledger.splice(1, 1);
+  const audit = auditQworkStageReadiness({
+    ...releaseIntakeInputs(),
+    plan,
+    stageId: 'G1',
+    capabilityAudit: capability('G1'),
+    pretest: invalid,
+  });
+  assert.equal(audit.passed, false);
+  assert.ok(audit.failures.includes('pretest_public_capabilities_not_readable'));
+});
+
 test('READY rejects any Case ID order drift', () => {
   const driftedCapability = capability('G1');
   driftedCapability.cases.reverse();
@@ -1364,6 +1437,68 @@ test('completion requires stable authoritative identity at startup and run-final
   const driftAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...drifted });
   assert.equal(driftAudit.passed, false);
   assert.ok(driftAudit.failures.includes('run_release_observation_drift'));
+
+  const missingLedger = completionInputs('G1');
+  delete missingLedger.runMetadata.release_observation.capabilities_readback.probe_ledger;
+  const missingLedgerAudit = auditQworkStageCompletion({
+    plan,
+    stageId: 'G1',
+    ...missingLedger,
+  });
+  assert.equal(missingLedgerAudit.passed, false);
+  assert.ok(missingLedgerAudit.failures.includes(
+    'run_release_observation_capabilities_invalid',
+  ));
+
+  const capabilitiesDrifted = completionInputs('G1');
+  capabilitiesDrifted.runMetadata.release_observation_checks[1]
+    .capabilities_readback.probe_ledger[1].summary_signature_sha256 = 'f'.repeat(64);
+  const capabilitiesDriftAudit = auditQworkStageCompletion({
+    plan,
+    stageId: 'G1',
+    ...capabilitiesDrifted,
+  });
+  assert.equal(capabilitiesDriftAudit.passed, false);
+  assert.ok(capabilitiesDriftAudit.failures.includes(
+    'run_release_observation_capabilities_drift',
+  ));
+});
+
+test('completion rejects reordered, unknown, or non-chronological release observation phases', () => {
+  const reversed = completionInputs('G1');
+  reversed.runMetadata.release_observation_checks.reverse();
+  reversed.runMetadata.claude_skill_call_canonicalization_policy_checks.reverse();
+  const reversedAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...reversed });
+  assert.equal(reversedAudit.passed, false);
+  assert.ok(reversedAudit.failures.includes('run_release_observation_phase_order_invalid'));
+
+  const unknown = completionInputs('G1');
+  const releaseCheck = structuredClone(unknown.runMetadata.release_observation_checks[0]);
+  releaseCheck.phase = 'forged-runtime-phase';
+  releaseCheck.observed_at = '2026-09-07T00:00:30.000Z';
+  unknown.runMetadata.release_observation_checks.splice(1, 0, releaseCheck);
+  const policyCheck = structuredClone(
+    unknown.runMetadata.claude_skill_call_canonicalization_policy_checks[0],
+  );
+  policyCheck.phase = releaseCheck.phase;
+  policyCheck.observed_at = releaseCheck.observed_at;
+  unknown.runMetadata.claude_skill_call_canonicalization_policy_checks.splice(1, 0, policyCheck);
+  const unknownAudit = auditQworkStageCompletion({ plan, stageId: 'G1', ...unknown });
+  assert.equal(unknownAudit.passed, false);
+  assert.ok(unknownAudit.failures.includes('run_release_observation_phase_order_invalid'));
+
+  const nonChronological = completionInputs('G1');
+  nonChronological.runMetadata.release_observation_checks[1].observed_at =
+    '2026-09-06T23:59:59.000Z';
+  nonChronological.runMetadata.claude_skill_call_canonicalization_policy_checks[1].observed_at =
+    '2026-09-06T23:59:59.000Z';
+  const chronologyAudit = auditQworkStageCompletion({
+    plan,
+    stageId: 'G1',
+    ...nonChronological,
+  });
+  assert.equal(chronologyAudit.passed, false);
+  assert.ok(chronologyAudit.failures.includes('run_release_observation_phase_order_invalid'));
 });
 
 test('completion requires enabled canonicalization policy at every release observation phase', () => {

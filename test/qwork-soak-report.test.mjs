@@ -164,25 +164,46 @@ test('extra or reordered identity observations cannot be smuggled into the chain
   assert.ok(hasFailure(result, 'soak_identity_observation_set_invalid'));
 });
 
-test('identity capabilities attempt ledgers are disk-bound and fail closed on deletion or tampering', async (t) => {
+test('identity capabilities probe ledgers are disk-bound and fail closed on deletion or tampering', async (t) => {
   const mutations = [
     ['deleted', (fixture, observation, payload) => {
-      delete payload.capabilities_readback_attempts;
+      delete observation.capabilities_readback;
+      delete payload.capabilities_readback;
     }],
-    ['timeout-drift', (fixture, observation, payload) => {
-      observation.capabilities_readback_attempts[0].timeout_ms = 5_000;
-      payload.capabilities_readback_attempts[0].timeout_ms = 5_000;
+    ['phase-missing', (fixture, observation, payload) => {
+      observation.capabilities_readback.probe_ledger.pop();
+      payload.capabilities_readback.probe_ledger.pop();
     }],
-    ['failed-final-attempt', (fixture, observation, payload) => {
+    ['phase-reordered', (fixture, observation, payload) => {
       for (const target of [observation, payload]) {
-        target.capabilities_readback_attempts[0].ok = false;
-        target.capabilities_readback_attempts[0].value_type = '';
-        target.capabilities_readback_attempts[0].error = 'timed out';
+        target.capabilities_readback.probe_ledger.reverse();
       }
     }],
-    ['non-sequential-attempt', (fixture, observation, payload) => {
+    ['cold-timeout-over-budget', (fixture, observation, payload) => {
       for (const target of [observation, payload]) {
-        target.capabilities_readback_attempts[0].attempt = 2;
+        target.capabilities_readback.probe_ledger[0].renderer_timeout_ms = 15_001;
+      }
+    }],
+    ['stable-timeout-drift', (fixture, observation, payload) => {
+      for (const target of [observation, payload]) {
+        target.capabilities_readback.probe_ledger[1].renderer_timeout_ms = 1_999;
+      }
+    }],
+    ['failed-probe', (fixture, observation, payload) => {
+      for (const target of [observation, payload]) {
+        const probe = target.capabilities_readback.probe_ledger[2];
+        probe.ok = false;
+        probe.error = 'timed out';
+      }
+    }],
+    ['signature-drift', (fixture, observation, payload) => {
+      for (const target of [observation, payload]) {
+        target.capabilities_readback.probe_ledger[1].summary_signature_sha256 = 'f'.repeat(64);
+      }
+    }],
+    ['top-level-signature-drift', (fixture, observation, payload) => {
+      for (const target of [observation, payload]) {
+        target.capabilities_readback.summary_signature_sha256 = 'f'.repeat(64);
       }
     }],
   ];
@@ -201,11 +222,78 @@ test('identity capabilities attempt ledgers are disk-bound and fail closed on de
       const result = audit(fixture);
       assert.equal(result.passed, false);
       assert.ok(
-        hasFailure(result, 'soak_identity_capabilities_attempts_invalid'),
+        hasFailure(result, 'soak_identity_capabilities_readback_invalid'),
         result.failures.join(','),
       );
     });
   }
+
+  await t.test('legacy-attempts-cannot-replace-authoritative-ledger', (subtest) => {
+    const fixture = cleanupFixture(subtest, createQworkSoakFixture({
+      taskCount: 4,
+      policy: SMALL_SOAK_POLICY,
+    }));
+    const observation = fixture.report.identity_observations[0];
+    delete observation.capabilities_readback;
+    rewriteQworkSoakArtifact(
+      fixture,
+      observation.artifacts.identity_readback,
+      (payload) => { delete payload.capabilities_readback; },
+    );
+    const result = audit(fixture);
+    assert.equal(result.passed, false);
+    assert.ok(hasFailure(result, 'soak_identity_capabilities_readback_invalid'));
+  });
+
+  await t.test('legacy-attempts-cannot-replace-the-probe-ledger-projection', (subtest) => {
+    const fixture = cleanupFixture(subtest, createQworkSoakFixture({
+      taskCount: 4,
+      policy: SMALL_SOAK_POLICY,
+    }));
+    const observation = fixture.report.identity_observations[0];
+    const legacyAttempts = [{
+      attempt: 1,
+      timeout_ms: 2_000,
+      started_at: observation.observed_at,
+      ended_at: observation.observed_at,
+      duration_ms: 0,
+      ok: true,
+      value_type: 'object',
+      error: '',
+    }];
+    observation.capabilities_readback_attempts = structuredClone(legacyAttempts);
+    rewriteQworkSoakArtifact(
+      fixture,
+      observation.artifacts.identity_readback,
+      (payload) => {
+        payload.capabilities_readback_attempts = structuredClone(legacyAttempts);
+      },
+    );
+    const result = audit(fixture);
+    assert.equal(result.passed, false);
+    assert.ok(hasFailure(
+      result,
+      'soak_identity_capabilities_attempts_projection_mismatch',
+    ));
+  });
+
+  await t.test('observation-and-disk-artifact-must-match', (subtest) => {
+    const fixture = cleanupFixture(subtest, createQworkSoakFixture({
+      taskCount: 4,
+      policy: SMALL_SOAK_POLICY,
+    }));
+    const observation = fixture.report.identity_observations[0];
+    rewriteQworkSoakArtifact(
+      fixture,
+      observation.artifacts.identity_readback,
+      (payload) => {
+        payload.capabilities_readback.probe_ledger[0].duration_ms += 1;
+      },
+    );
+    const result = audit(fixture);
+    assert.equal(result.passed, false);
+    assert.ok(hasFailure(result, 'soak_identity_capabilities_readback_invalid'));
+  });
 });
 
 test('startup, run-final and restart observations must be fresh at their boundaries', async (t) => {

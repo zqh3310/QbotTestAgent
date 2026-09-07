@@ -8,6 +8,23 @@
 160 条全量正常功能回归、稳定性 soak，以及 QWork 日常回归 83 个顶层 / 144 个叶子
 Case 的接手状态、启动顺序和禁止事项。
 
+正式 G1-G4 批次禁止任何同目录恢复或跨批次继承参数，包括 `--resume`、
+`--resume-from`、`--impact-case`、`--impact-all` 和 `--teams-recovery-passes`。专用
+`--core-beta-cleanup-from` 仍只用于新目录精确清理冻结批次的 run-owned 残留，不继承结果、
+不计入门禁。shared runner 返回后必须
+在历史 repair 路径之前冻结退出；失败或不完整只能新 pretest、新不可变目录从 Case 1
+完整重跑。退出码只有在 `planned` 为正整数且
+`completed == planned == counts.total == counts.passed`、其它结果计数全为零时才能为 0。
+若已有 framework stop 后 `run-final` 身份读回再次失败，只能追加独立 secondary
+finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停止诊断。
+非 production 兼容运行若显式启用 Core Beta v2 `--resume`，每个保留 Case 仍必须递归
+重放真实 executed provenance、合同 SHA、磁盘 `case-result.json`、磁盘
+`evidence-manifest.json` 与嵌入 manifest
+结构化全等，以及每项证据的普通文件边界、实读 bytes/SHA-256 和语义；任一异常直接拒绝
+同目录恢复，不能静默从 Case 1 覆盖可疑证据。专用 `--core-beta-cleanup-from` 导入前还要
+独立验证源/目标 run metadata 的完整 capabilities baseline 与有序 phase checks，并要求
+两边 canonical signature 全等；缺失、乱序、无效或漂移时不得执行清理导入。
+
 ## 1. 当前状态
 
 - 基于框架 `e23ea8fde27eee318c89acb88b730f20f4e0ddb1`、正式 Casebook SHA
@@ -740,7 +757,11 @@ capability_execution_event`，`SIT-SKILL-SCOPE-001` 未执行。runner PID `6068
 失败继承为永久 `contextBridge` 不支持；最可信分类是长批次中的瞬态/stale renderer
 adapter 或 Playwright binding 状态。修复必须为首次绑定/探针失败保存完整 registry、
 owner、stack、属性描述符、binding report、probe/controller 事件和 error stack；只有
-关闭后没有其他活动 adapter 时允许一次 clean rebind。持久失败必须用
+三个暴露绑定、安装、逐方法 probe、状态检查和关闭均有 Node 硬截止时间，所有 renderer
+操作另有 renderer 内截止时间并清理 timer。关闭必须验证原始 agent、全局及六方法属性
+描述符、stack/owner、renderer bindings、Node registry 和 binding disposable 全部恢复；
+关闭错误不得吞掉，完成状态不明或任一残留都必须保留污染标记并禁止重绑。只有关闭成功且
+Node/renderer 双侧均无残留、没有其他活动 adapter 时允许一次 clean rebind。持久失败必须用
 `qbot-core-beta-renderer-adapter-framework-failure/v1` 完整材料化产品动作前的 N/A
 角色，并保留首个 exact `primary_failure`，禁止再被 action/manifest 汇总覆盖。完成
 invariant、双框架全检、提交推送、run-owned Skill 定向清理、新能力审计和精确 `.2
@@ -984,6 +1005,18 @@ preparedRelease=null`。CLI 值只表达期望，不能成为观测。正式 run
 `startup + run-final` 观测，`release_observation_checks` 中任一 SHA 漂移或阶段缺失都
 拒绝 `PASS_STAGE`。所有 production-gate Teams 阶段，包括 `MRSMOKE-*`，都必须携带
 匹配 READY 的显式 `--control-plane-url`。
+`release_observation` 和每个阶段 check 都必须保存各自完整的三阶段 capabilities ledger，
+并先由共享 validator 独立重放；阶段稳定性比较 canonical
+`summary_signature_sha256`，不比较必然变化的 `started_at/ended_at/duration_ms`，也不允许
+用顶层 `ok` 或删减后的尝试摘要代替完整证据。
+WebView target 缺失、CDP 连接失败或 `Runtime.enable` 失败必须作为 capabilities
+pre-probe setup failure 保存，明确 `probe_started=false` 且 `probe_ledger/attempts` 为空；
+成功证据必须显式 `probe_started=true` 且不得携带 `pre_probe_failure`，两种状态不得同时成立；
+只有真实派发 `Runtime.evaluate` 后的调用才允许产生 `cold_load/stable_read_*` ledger。
+磁盘 checks 的阶段顺序只能是 `startup`、零个或多个 `replacement-renderer`、
+`run-final`，`observed_at` 只能不减；未知、重复、倒序或结束后追加阶段全部拒绝。
+canonicalization policy checks 必须与 release checks 逐项同 phase、同时间，两组同步倒序也
+不能通过完成审计。
 
 MR `!1579` 增加独立运行态硬门禁：所有 Teams `production-gate` pretest 必须同时读取
 runner 环境与已验证受管 Teams PID 的真实进程环境，并确认
@@ -1396,11 +1429,15 @@ Teams/QWork/SIT 发布身份参数必须从当前受管宿主重新读取。只�
 授权 runner，任何 tracked dirty、身份漂移、旧 runner 或 Casebook 漂移都必须
 在 Case 0 前失败。
 
-Teams pretest 必须在精确 QWork WebView 上只读调用一次
-`window.agent.capabilities()`。报告中的 `qwork_public_capabilities` 只有在调用成功且
-返回结构化对象时才能通过；接口缺失、超时、非对象或 control-plane HTTP 4xx/5xx
-均必须得到 `BLOCKED`。页面已登录、Composer 可见、版本与 control plane identity
-匹配都不能替代该检查。
+Teams pretest 必须在精确 QWork WebView 上执行固定三阶段只读
+`window.agent.capabilities()`：`cold_load=15000ms`、`stable_read_1=2000ms`、
+`stable_read_2=2000ms`。三阶段均须返回非数组对象，并按值类型、排序后的 key 以及
+`selectedSkills`、`selectedConnectors`、`currentExpert` 三个字段的存在性计算规范签名；
+三次签名必须全等，最终值只允许取 `stable_read_2`。报告中的
+`qwork_public_capabilities` 只有在完整 `probe_ledger` 经共享校验器重放通过时才能通过；
+接口缺失、任一阶段超时、非对象、签名漂移或 control-plane HTTP 4xx/5xx 均必须得到
+`BLOCKED`。页面已登录、Composer 可见、版本与 control plane identity 匹配都不能替代
+该检查。
 
 同一 pretest 必须对冻结 control plane 无凭据只读调用 `GET /api/health/ready`。
 `qwork_control_plane_health` 只接受 HTTP 200、`ok/ready=true`、DB 与 auth 检查为 true、
@@ -1410,10 +1447,13 @@ Teams pretest 必须在精确 QWork WebView 上只读调用一次
 字段缺失、环境漂移或 backend fingerprint 漂移都必须在 Case 0 前 `BLOCKED`，不得由
 capabilities、登录态或命令行声明替代。
 
-正式 runner 的公开 capabilities 读回必须保持同一 fail-closed 语义：每次调用使用 2 秒
-单次超时，最多执行 3 次只读重试，并在公共状态证据中保存
-`capabilities_readback_attempts` 的逐次耗时与错误。全部尝试失败时不得继续发送、不得
-使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。清理阶段若当前统一 Composer
+两套正式 runner 的公开 capabilities 读回必须使用完全相同的三阶段合同和共享校验器：固定
+执行一次 `15000ms` 冷读与两次 `2000ms` 稳定读，三阶段分别受 renderer 内计时器和
+Node 外层硬超时约束，均返回非数组对象且规范签名全等，最终只采信
+`stable_read_2`。公共状态证据必须保存完整
+`qbot-qwork-capabilities-readback/v1` 和 `capabilities_readback_attempts/probe_ledger`，
+下游从磁盘重放全部阶段，不得只信顶层 `ok` 或兼容字段 `attempts`。任一阶段失败时不得
+继续发送、不得使用缓存或可见文案替代，也不得让悬挂 IPC 卡住串行批次。清理阶段若当前统一 Composer
 可见且 chip/专家头像已明确为空，可用发送前权威空态加可见空态完成交叉读回；QWork
 0.1.6-sit.8 的 legacy `setSkillsDisabled()` / `setConnectorsDisabled()` 兼容桥可合法返回
 `null`，但必须同时取得同一当前 draft 的 `agent.init()`、`__qbotE2E` 和统一 Composer
@@ -1421,6 +1461,12 @@ capabilities、登录态或命令行声明替代。
 Composer 可见但无法证明为空或存在残留，三次只读耗尽后允许一次受管 `openNewTask`
 恢复干净 Composer，只重新采集可见/E2E 状态，不得重复清理桥，也不把导航算作第四次
 capabilities 尝试。恢复后仍有残留或导航失败继续 fail-closed。
+Teams 适配层必须把 19 秒 renderer 阶段预算、20.5 秒 Node 探针预算、10 秒连接预算和
+15 秒 `Runtime.enable` 预算分别写入报告；`maximum_wall_clock_timeout_ms` 与兼容字段
+`total_timeout_ms` 必须为真实最大墙钟预算 45.5 秒，禁止把 19 秒写成整条链路总超时。
+共享 helper 在首个失败阶段立即停止，所以失败 ledger 是成功前缀加一个最终失败阶段，
+合法长度为 1 至 3；清理恢复必须按精确 phase/timeout 识别该真实前缀，不能等待或伪造
+三条全部失败。顶层 readback 与 attempts 不一致、乱序或阶段越界时继续 fail-closed。
 
 Teams pretest 还必须只读调用 `window.agent.runtimeReleaseStatus()`。报告仍要求
 顶层 release、兼容性内 runtime、WebView URL 与 `--expected-qwork-version` 全等；
@@ -1730,12 +1776,26 @@ receiver；动态属性名、动态 descriptor/source 或 spread 必须 fail-clo
 `onExit` 的 typed failure、acquisition 到 pressure admission 的可达
 调用链、同一 supervisor factory 的 `maxPendingRequests:1/maxRestarts:0`、同一 acquisition
 内的 request set/release delete+stop，以及 desktop 同函数同 `try/finally` 的 lease
-acquire/release 必须逐项成立。manager admission 的 awaited wait 必须早于 supervisor/record
+acquire/release 必须逐项成立。manager admission 的 awaited wait 无论是独立表达式还是绑定到
+唯一 `const` 结果，都必须早于 supervisor/record
 分配和 `executions.set` 建索引；completed drain 与 incomplete release 都必须 awaited，timeout
 必须规范化为有限正数。controller 的 runner factory 必须返回实际创建、随后绑定并使用的
 精确 Worker 对象，不能创建真实 Worker 后返回无关对象。controller 必须固定单 turn identity、
 双向 envelope 方向、
-message/error/exit 监听和 accept-before-forward 拒绝路径；request 取消必须 awaited 获取
+message/error/exit 监听和 accept-before-forward 拒绝路径；error/exit 监听可委托给同一
+controller 的专用方法，或在同一实际 runner 上内联调用 `this.finish(1)`，但不得缺失、终结
+其它对象或绑定无关 runner。admission、分配、索引、listener、guard、forward、lease return
+和 drain timeout 必须属于同一条可达直接控制流；任何更早无条件 `return`/`throw`、恒真终结、
+不可达 `try` 或 guard/forward 颠倒都必须阻断。除构造器/`initialize` 精确首次绑定外，
+`this.runner`、`this.authority`、`this.createRunner` 禁止赋值、`delete`、define/assign 或 Reflect
+改写；manager 的 enabled、并发/队列上限、`executions` 引用、factory/options 和 record
+supervisor 也不得改写。supervisor-message 的 `pending` 与 manager 的 `executions` 必须按
+receiver 追踪集合变异：覆盖 `const` 别名、静态计算属性、解构 mutator、
+`Map/Set.prototype.*.call/apply` 和 `Reflect.apply`，可写/动态别名 fail-closed，同时保留无关
+对象正控。acquisition 只允许合同中的单次 `set(requestId, record)`；inline release、
+`releaseExecutionRecord`、`drainExecutionRecord` 各只允许单次直接
+`delete(requestId)`，其它 `add/set/delete/clear` 均须阻断，成功主路径不得撤销索引。
+request 取消必须 awaited 获取
 pending，abort 用同一 cancel identity 调用 `supervisor.cancel(..., 'user-requested')`；
 `supervisor`、`identity`、`signal` 和 cancel identity 不得重绑，abort listener 必须在
 already-aborted 检查和 `return await pending` 前注册，禁止移至返回后的不可达代码。
@@ -1789,7 +1849,23 @@ current-release 持续性鉴证中的 integration binding 默认仍要求全文�
 三个 required fragment 必须各精确出现一次；全文件可因后续测试复用而出现多次，但报告
 必须同时保留全文件 `occurrence_count`、scope `owner_occurrence_count/occurrence_count` 和
 逐 required fragment 的 `occurrence_count`。删除、移入错误 test、复制 owner block、缺少
-URL/method/body 或对其它 binding 产生重复，均必须 `BLOCKED`。origin changes 鉴证继续
+URL/method/body 或对其它 binding 产生重复，均必须 `BLOCKED`。MR !1597 的 worker 环境
+测试使用同一唯一 owner 下互不重叠的 input 与 expected 双 region scope；父提交中已经存在的
+同名 test title 只承担 owner 边界，不能冒充本次 MR 新增声明。`IM_USER_MDMCODE`、
+`IM_USER_EMAIL`、`IM_USER_DOMAINACCOUNT`、`IM_USER_PROFILE` 四个身份字段必须在 input
+和 expected region 各精确一次，因此 origin changes 的 `expected_addition_count=2`、
+current-release 的 `expected_current_occurrence_count=2`，并逐 region 保存 required fragment
+计数。region start 的相对行号固定为 0，每个 required fragment 必须按合同顺序紧邻排列，
+其 `expected_line_index` 固定为从 1 开始的顺序号；current-release 观察和后续 attestation
+复核都必须与该确定性行号逐项全等，不能接受仅保持递增的整体平移或重算 SHA 后的伪造行号。
+两个 region 的 start/end anchor 各须 `occurrence_count=1`、`verified=true`，完整
+`owner_region_order` 必须严格保持 input start、input end、expected start、expected end，且
+`owner_region_ordered=true`；交换、交错、移区或复制任一完整 region 都必须 `BLOCKED`。
+`IM_USER_ACCESS_TOKEN` 的 input 声明仍须匹配冻结的精确整行；同时 current-release 全文件
+必须按 JavaScript object property key 语义精确计数为 1，expected region 也必须按同一 key
+语义作为 forbidden fragment 且精确为 0。不同缩进、不同值、表达式值、quoted/computed key
+或 shorthand 都不能绕过；token 进入 expected、离开 input、移到其它 owner 或产生额外副本
+均须 fail-closed。origin changes 鉴证继续
 要求每条新增声明精确出现一次，forbidden fragment 在两层鉴证中都必须精确为 0。
 
 扫描器对仓库重构保持显式路径白名单：`.gitlab/`、`scripts/`、`eval/`、`openspec/`、

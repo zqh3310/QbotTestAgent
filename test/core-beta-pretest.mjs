@@ -309,7 +309,9 @@ if (!/scoped_upstream_dependency_visibility/.test(pretestSource)
 }
 if (!/probePublicCapabilities:\s*true/.test(pretestSource)
   || !/qwork_public_capabilities/.test(pretestSource)
-  || !/publicCapabilities\?\.ok === true/.test(pretestSource)) {
+  || !/validateQworkCapabilitiesReadbackEvidence\(publicCapabilities\)/.test(pretestSource)
+  || !/publicCapabilitiesValidation\.valid/.test(pretestSource)
+  || !/publicCapabilities\.probe_ledger\.length/.test(pretestSource)) {
   throw new Error('Teams pretest must fail closed when public window.agent.capabilities is unreadable.');
 }
 if (!/\/api\/health\/ready/.test(pretestSource)

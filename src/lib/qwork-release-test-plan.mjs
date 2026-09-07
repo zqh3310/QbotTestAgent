@@ -10,6 +10,9 @@ import {
   validateEvidenceFile,
 } from './core-beta-case-protocol.mjs';
 import {
+  validateQworkCapabilitiesReadbackEvidence,
+} from './qwork-capabilities-readback.mjs';
+import {
   QWORK_SOAK_DEFAULT_POLICY,
   QWORK_SOAK_REPORT_SCHEMA,
   readAndAuditQworkSoakReport,
@@ -266,6 +269,28 @@ function nonEmptyString(value) {
 function finiteNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function runReleaseObservationSequenceValid(checks = []) {
+  if (!Array.isArray(checks) || checks.length < 2) return false;
+  const phases = checks.map((check) => nonEmptyString(check?.phase));
+  if (phases[0] !== 'startup'
+    || phases.at(-1) !== 'run-final'
+    || phases.slice(1, -1).some((phase) => phase !== 'replacement-renderer')) {
+    return false;
+  }
+  let previousObservedAt = Number.NaN;
+  for (const check of checks) {
+    const observedAtText = nonEmptyString(check?.observed_at);
+    const observedAt = Date.parse(observedAtText);
+    if (!Number.isFinite(observedAt)
+      || new Date(observedAt).toISOString() !== observedAtText
+      || (Number.isFinite(previousObservedAt) && observedAt < previousObservedAt)) {
+      return false;
+    }
+    previousObservedAt = observedAt;
+  }
+  return true;
 }
 
 function strictTrue(value) {
@@ -1296,7 +1321,7 @@ function pretestFailures(plan, stage, report = {}) {
       !== canonicalizationPolicySha256(canonicalizationPolicy)) {
     failures.push('pretest_claude_skill_call_canonicalization_policy_invalid');
   }
-  if (publicCapabilities?.ok !== true || publicCapabilities?.value_type !== 'object') {
+  if (!validateQworkCapabilitiesReadbackEvidence(publicCapabilities).valid) {
     failures.push('pretest_public_capabilities_not_readable');
   }
   if (controlPlaneHealth?.ok !== true
@@ -1967,6 +1992,11 @@ export function auditQworkStageCompletion({
       !== qworkReleaseIdentityFingerprint(expectedObservedQworkIdentity)) {
     failures.push('run_release_observation_invalid');
   }
+  if (!validateQworkCapabilitiesReadbackEvidence(
+    releaseObservation?.capabilities_readback,
+  ).valid) {
+    failures.push('run_release_observation_capabilities_invalid');
+  }
   const requiredReleaseProvenance = [
     releaseObservation?.provenance?.state?.sha256,
     releaseObservation?.provenance?.envelope?.sha256,
@@ -1989,11 +2019,21 @@ export function auditQworkStageCompletion({
   if (!releaseObservationPhases.has('startup') || !releaseObservationPhases.has('run-final')) {
     failures.push('run_release_observation_phases_incomplete');
   }
+  if (!runReleaseObservationSequenceValid(releaseObservationChecks)) {
+    failures.push('run_release_observation_phase_order_invalid');
+  }
   if (releaseObservationChecks.some((item) => item?.ok !== true
     || nonEmptyString(item?.observed_sha256) !== nonEmptyString(releaseObservation?.observed_sha256)
     || nonEmptyString(item?.state_sha256) !== nonEmptyString(releaseObservation?.provenance?.state?.sha256)
     || nonEmptyString(item?.envelope_sha256) !== nonEmptyString(releaseObservation?.provenance?.envelope?.sha256))) {
     failures.push('run_release_observation_drift');
+  }
+  if (releaseObservationChecks.some((item) => (
+    !validateQworkCapabilitiesReadbackEvidence(item?.capabilities_readback).valid
+    || nonEmptyString(item?.capabilities_readback?.summary_signature_sha256)
+      !== nonEmptyString(releaseObservation?.capabilities_readback?.summary_signature_sha256)
+  ))) {
+    failures.push('run_release_observation_capabilities_drift');
   }
   const canonicalizationPolicy = runMetadata?.claude_skill_call_canonicalization_policy;
   const safePolicyStates = new Set(['unset', 'not_disabled']);

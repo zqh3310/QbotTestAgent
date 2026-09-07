@@ -43,6 +43,11 @@ import {
   webSearchQuotaTraceVerdict,
 } from './qbot-web-runtime-evidence.mjs';
 import {
+  qworkCapabilitiesReadbackEvidence,
+  readStableQworkCapabilities,
+  validateQworkCapabilitiesReadbackEvidence,
+} from './qwork-capabilities-readback.mjs';
+import {
   buildTaskRegenerateActionReceipt,
   captureTaskRegenerateControlIdentity,
   captureTaskRegenerateProjection,
@@ -50,7 +55,6 @@ import {
   taskRegenerateTransitionEvidence,
 } from './task-regenerate-evidence.mjs';
 import {
-  coreBetaCapabilitiesReadbackWithRetry,
   coreBetaInitializationContinuationEvidenceVerdict,
   coreBetaInitializationContinuationVerdict,
   coreBetaInitializationSkillReinstallEvidenceVerdict,
@@ -66,9 +70,6 @@ const COMBO_REPLY_WAIT_MS = 180000;
 const ATTACHMENT_ARTIFACT_REPLY_WAIT_MS = 600000;
 const LONG_CONTEXT_REPLY_WAIT_MS = 600000;
 const MULTI_TURN_REPLY_WAIT_MS = 600000;
-const CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS = 2_000;
-const CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS = 3;
-const CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS = 150;
 const SKILLS_CATALOG_RENDERER_TIMEOUT_MS = 5_000;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
@@ -827,16 +828,28 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       }
     }
 
+    const primaryStop = readStoppedProgress(progressFile);
+    const finalizationDiagnostics = [];
     if (typeof options['release-identity-check-hook'] === 'function') {
-      await options['release-identity-check-hook']({
-        browser,
-        page,
-        phase: 'run-final',
-      });
+      try {
+        await options['release-identity-check-hook']({
+          browser,
+          page,
+          phase: 'run-final',
+        });
+      } catch (error) {
+        if (!primaryStop) throw error;
+        finalizationDiagnostics.push(writeSecondaryFinalizationDiagnostic({
+          outDir,
+          phase: 'run-final',
+          primaryStop,
+          error,
+        }));
+      }
     }
     const results = orderedCasebookResults(resultsByIndex);
     const summary = buildSummary({
-      status: statusFromResults(results),
+      status: primaryStop ? 'blocked' : statusFromResults(results),
       startedAt,
       outDir,
       casebook,
@@ -845,8 +858,17 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       cdpUrl,
       modelTier,
       results,
+      reason: primaryStop?.stop_reason || '',
       precheck,
     });
+    if (primaryStop) {
+      summary.stopped = true;
+      summary.stop_reason = primaryStop.stop_reason;
+      summary.stopped_case_id = String(primaryStop.current_case || '');
+    }
+    if (finalizationDiagnostics.length) {
+      summary.finalization_diagnostics = finalizationDiagnostics;
+    }
     writeRunArtifacts(outDir, summary);
     await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
     return summary;
@@ -1227,6 +1249,49 @@ function writeStoppedProgress({
       stop_reason: reason,
     },
   });
+}
+
+function readStoppedProgress(progressFile) {
+  if (!fs.existsSync(progressFile)) return null;
+  try {
+    const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+    return progress?.stopped === true && String(progress?.stop_reason || '').trim()
+      ? progress
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSecondaryFinalizationDiagnostic({
+  outDir,
+  phase,
+  primaryStop,
+  error,
+}) {
+  const directory = path.resolve(String(outDir || ''));
+  ensureDir(directory);
+  let sequence = 1;
+  let file = '';
+  do {
+    file = path.join(
+      directory,
+      `framework-finalization-diagnostic-${String(sequence).padStart(3, '0')}.json`,
+    );
+    sequence += 1;
+  } while (fs.existsSync(file));
+  const diagnostic = {
+    schema_version: 'qbot-framework-finalization-diagnostic/v1',
+    generated_at: new Date().toISOString(),
+    phase: String(phase || 'finalization'),
+    secondary: true,
+    primary_stop_preserved: true,
+    primary_stop_reason: String(primaryStop?.stop_reason || ''),
+    primary_stopped_case_id: String(primaryStop?.current_case || ''),
+    reason: String(error?.message || error || 'unknown finalization failure'),
+  };
+  writeJsonFile(file, diagnostic);
+  return { file, ...diagnostic };
 }
 
 function isCdpDisconnectedResult(result) {
@@ -4388,7 +4453,10 @@ async function finalizeCoreBetaCase(ctx) {
   ctx.page = ctx.runtime?.page || ctx.page;
   await ctx.page.keyboard.press('Escape').catch(() => {});
   await closeModal(ctx.page).catch(() => {});
-  const capabilitiesBefore = await currentCapabilities(ctx.page);
+  const capabilitiesBeforeReadback = await stableCapabilitiesReadback(ctx.page);
+  const capabilitiesBefore = capabilitiesBeforeReadback.ok
+    ? capabilitiesBeforeReadback.value
+    : null;
   const lifecycle = ctx.audit.case_type === 'run_initialization'
     || /_lifecycle$/.test(ctx.audit.case_type);
   let reset = true;
@@ -4404,21 +4472,45 @@ async function finalizeCoreBetaCase(ctx) {
       });
     }
   }
-  const capabilities = await currentCapabilities(ctx.page);
+  const capabilitiesReadback = await stableCapabilitiesReadback(ctx.page);
+  const capabilities = capabilitiesReadback.ok ? capabilitiesReadback.value : null;
+  const capabilitiesEvidence = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
   const task = await qbotE2EState(ctx.page);
+  const noExplicitSelection = (value) => value == null
+    || (Array.isArray(value) && value.length === 0);
+  const selectionStateReadable = Boolean(
+    capabilities
+    && Object.hasOwn(capabilities, 'selectedSkills')
+    && noExplicitSelection(capabilities.selectedSkills)
+    && Object.hasOwn(capabilities, 'selectedConnectors')
+    && noExplicitSelection(capabilities.selectedConnectors)
+    && (Object.hasOwn(capabilities, 'currentExpert') || Object.hasOwn(capabilities, 'expertIdentity'))
+    && (capabilities.currentExpert ?? capabilities.expertIdentity) == null
+  );
+  const publicStateAvailable = Boolean(
+    capabilitiesReadback.ok === true
+    && capabilities
+    && task?.available !== false
+  );
   const readback = {
-    source: 'final public capabilities + task state',
+    source: 'final stable public capabilities readback + task state',
     lifecycle_cleanup_required: lifecycle,
     reset,
+    capabilities_readback_ok: capabilitiesReadback.ok === true,
+    capabilities_readback: capabilitiesEvidence,
+    capabilities_readback_attempts: capabilitiesEvidence?.probe_ledger || [],
+    selection_state_readable: selectionStateReadable,
     selected_skills: capabilities?.selectedSkills || [],
     selected_connectors: capabilities?.selectedConnectors || [],
-    current_expert: capabilities?.currentExpert || null,
+    current_expert: capabilities?.currentExpert ?? capabilities?.expertIdentity ?? null,
     active_id: task?.activeId || '',
     running: Boolean(task?.running),
     message_count: Number(task?.messageCount || 0),
   };
   const clean = !lifecycle || (
     reset
+    && publicStateAvailable
+    && selectionStateReadable
     && readback.selected_skills.length === 0
     && readback.selected_connectors.length === 0
     && !coreBetaExpertIdentity(readback.current_expert)
@@ -4426,7 +4518,7 @@ async function finalizeCoreBetaCase(ctx) {
   );
   ctx.state.artifacts.core_beta_final_public_state = readback;
   setCoreBetaEvidence(ctx.state, 'public_state_readback', {
-    available: Boolean(capabilities && task?.available !== false),
+    available: publicStateAvailable,
     ...readback,
   });
   if (lifecycle) {
@@ -18634,7 +18726,7 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
     if (!await selectManualConnectorByKey(page, state, caseDir, connectorKey)) return;
     control.proxy.arm();
-    await page.evaluate(async () => window.agent.capabilities()).catch(() => null);
+    await currentCapabilities(page);
     await page.waitForTimeout(900);
     await page.keyboard.press('Escape').catch(() => {});
     await ensureComposerToolMenu(page, state, {
@@ -20848,7 +20940,8 @@ export function cleanSkillChipLabel(value) {
 }
 
 async function composerSkillSelectionSnapshot(page) {
-  return page.evaluate(async () => {
+  const capabilities = await currentCapabilities(page);
+  return page.evaluate(async (capabilities) => {
     const composer = document.querySelector('[data-testid="composer-input"]');
     const shell = document.querySelector('[data-testid="composer-shell"]')
       || composer?.parentElement
@@ -20859,14 +20952,6 @@ async function composerSkillSelectionSnapshot(page) {
       const style = globalThis.getComputedStyle(chip);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     });
-    let capabilities = null;
-    if (typeof globalThis.window?.agent?.capabilities === 'function') {
-      try {
-        capabilities = await globalThis.window.agent.capabilities();
-      } catch {
-        capabilities = null;
-      }
-    }
     const selectedSkills = Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [];
     const composerText = String(composer?.innerText || composer?.textContent || '');
     const composerHtml = String(composer?.innerHTML || '');
@@ -20883,7 +20968,7 @@ async function composerSkillSelectionSnapshot(page) {
       composerHtml,
       hasRawMarker: /\{\{\s*skill\s*:|⟦\s*skill\s*:|\[\[\s*skill\s*:/i.test(markerText),
     };
-  }).catch((error) => ({
+  }, capabilities).catch((error) => ({
     chipCount: 0,
     chipTexts: [],
     chipTestIds: [],
@@ -20898,7 +20983,8 @@ async function composerSkillSelectionSnapshot(page) {
 }
 
 async function composerConnectorSelectionSnapshot(page) {
-  return page.evaluate(async () => {
+  const capabilities = await currentCapabilities(page);
+  return page.evaluate(async (capabilities) => {
     const shell = document.querySelector('[data-testid="composer-shell"]')
       || document.querySelector('[data-testid="composer-input"]')?.parentElement
       || document.body;
@@ -20910,14 +20996,6 @@ async function composerConnectorSelectionSnapshot(page) {
       const style = globalThis.getComputedStyle(chip);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     });
-    let capabilities = null;
-    if (typeof globalThis.window?.agent?.capabilities === 'function') {
-      try {
-        capabilities = await globalThis.window.agent.capabilities();
-      } catch {
-        capabilities = null;
-      }
-    }
     const selectedConnectors = Array.isArray(capabilities?.selectedConnectors)
       ? capabilities.selectedConnectors
       : [];
@@ -20929,7 +21007,7 @@ async function composerConnectorSelectionSnapshot(page) {
       selectedConnectors,
       connectorRouting: capabilities?.connectorRouting || null,
     };
-  }).catch((error) => ({
+  }, capabilities).catch((error) => ({
     chipCount: 0,
     chipTexts: [],
     chipTestIds: [],
@@ -20957,36 +21035,43 @@ async function visibleComposerToolStateText(page, tool) {
 }
 
 async function currentCapabilities(page) {
-  const readOnce = async () => page.evaluate(async (timeoutMs) => {
-    const agent = globalThis.window?.agent;
-    if (typeof agent?.capabilities !== 'function') {
-      return { __error: 'missing bridge method capabilities' };
-    }
-    let timer = null;
-    try {
-      return await Promise.race([
-        Promise.resolve().then(() => agent.capabilities()),
-        new Promise((_, reject) => {
-          timer = window.setTimeout(
-            () => reject(new Error(`Core Beta capabilities readback timed out after ${timeoutMs}ms`)),
+  const readback = await stableCapabilitiesReadback(page);
+  return readback.ok ? readback.value : null;
+}
+
+async function stableCapabilitiesReadback(page) {
+  const readback = await readStableQworkCapabilities(({ phase, rendererTimeoutMs }) => page.evaluate(
+    async ({ phaseName, timeoutMs }) => {
+      const agent = globalThis.window?.agent;
+      if (typeof agent?.capabilities !== 'function') {
+        throw new Error('missing bridge method capabilities');
+      }
+      let timer = null;
+      try {
+        const rendererDeadline = new Promise((_, reject) => {
+          timer = globalThis.setTimeout(
+            () => reject(new Error(
+              `QWork capabilities ${phaseName} renderer timeout after ${timeoutMs}ms`,
+            )),
             timeoutMs,
           );
-        }),
-      ]);
-    } catch (error) {
-      return { __error: String(error?.message || error) };
-    } finally {
-      if (timer) window.clearTimeout(timer);
-    }
-  }, CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS).catch((error) => ({
-    __error: `capabilities evaluate failed: ${String(error?.message || error)}`,
-  }));
-  const readback = await coreBetaCapabilitiesReadbackWithRetry(readOnce, {
-    maxAttempts: CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS,
-    timeoutMs: CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS + 500,
-    retryDelayMs: CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS,
-  });
-  return readback.ok ? readback.value : null;
+        });
+        return await Promise.race([
+          Promise.resolve().then(() => agent.capabilities()),
+          rendererDeadline,
+        ]);
+      } finally {
+        if (timer !== null) globalThis.clearTimeout(timer);
+      }
+    },
+    { phaseName: phase, timeoutMs: rendererTimeoutMs },
+  ));
+  const validation = validateQworkCapabilitiesReadbackEvidence(readback);
+  return {
+    ...readback,
+    ok: readback.ok === true && validation.ok === true,
+    validation,
+  };
 }
 
 async function readSkillsCatalogWithRendererTimeout(page, query = '') {
@@ -22506,14 +22591,11 @@ async function waitForCredentialStability(page, timeoutMs = 30_000) {
   let consecutive = 0;
   let lastReason = '';
   while (Date.now() < deadline) {
-    const probe = await page.evaluate(async () => {
-      try {
-        const value = await window.agent?.capabilities?.();
-        return { ok: Boolean(value && typeof value === 'object'), reason: value ? '' : 'capabilities 为空' };
-      } catch (error) {
-        return { ok: false, reason: String(error?.message || error) };
-      }
-    }).catch((error) => ({ ok: false, reason: error.message }));
+    const value = await currentCapabilities(page);
+    const probe = {
+      ok: Boolean(value && typeof value === 'object'),
+      reason: value ? '' : 'capabilities 为空或稳定读回失败',
+    };
     if (probe.ok && !isTransientCredentialRotation(probe.reason)) consecutive += 1;
     else {
       consecutive = 0;

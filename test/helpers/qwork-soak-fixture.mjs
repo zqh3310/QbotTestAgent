@@ -12,6 +12,9 @@ import {
   QWORK_SOAK_TASK_SCHEMA,
   qworkSoakReleaseIdentityFingerprint,
 } from '../../src/lib/qwork-soak-report.mjs';
+import {
+  qworkCapabilitiesCanonicalSignature,
+} from '../../src/lib/qwork-capabilities-readback.mjs';
 
 export const TEST_RELEASE_IDENTITY = Object.freeze({
   teams_version: '5.6.8',
@@ -95,6 +98,7 @@ function identityReadback(observation, report) {
     context: observation.context,
     release_identity: report.release_identity,
     release_identity_sha256: report.release_identity_sha256,
+    capabilities_readback: structuredClone(observation.capabilities_readback),
     capabilities_readback_attempts: structuredClone(observation.capabilities_readback_attempts),
     runtime: {
       top_level_version: report.release_identity.qwork_version,
@@ -120,6 +124,55 @@ function identityReadback(observation, report) {
   };
 }
 
+export function createQworkCapabilitiesReadbackFixture(observedAt = Date.parse('2026-09-05T00:00:00.000Z')) {
+  const value = {
+    selectedSkills: [],
+    selectedConnectors: [],
+    currentExpert: null,
+  };
+  const keys = Object.keys(value).sort();
+  const selectionFields = {
+    selectedSkills: true,
+    selectedConnectors: true,
+    currentExpert: true,
+  };
+  const signature = qworkCapabilitiesCanonicalSignature(value);
+  const phases = [
+    ['cold_load', 15_000, 15_500],
+    ['stable_read_1', 2_000, 2_500],
+    ['stable_read_2', 2_000, 2_500],
+  ];
+  return {
+    schema: 'qbot-qwork-capabilities-readback/v1',
+    ok: true,
+    source: 'window.agent.capabilities',
+    probe_started: true,
+    error: '',
+    summary_signature_sha256: signature,
+    value_type: 'object',
+    keys,
+    selection_fields: selectionFields,
+    cold_load_timeout_ms: 15_000,
+    stable_read_timeout_ms: 2_000,
+    required_stable_readbacks: 2,
+    probe_ledger: phases.map(([phase, rendererTimeoutMs, nodeTimeoutMs], index) => ({
+      attempt: index + 1,
+      phase,
+      renderer_timeout_ms: rendererTimeoutMs,
+      node_timeout_ms: nodeTimeoutMs,
+      started_at: iso(observedAt - (3 - index) * 10),
+      ended_at: iso(observedAt - (3 - index) * 10 + 1),
+      duration_ms: 1,
+      ok: true,
+      error: '',
+      value_type: 'object',
+      keys: [...keys],
+      selection_fields: { ...selectionFields },
+      summary_signature_sha256: signature,
+    })),
+  };
+}
+
 function addIdentityObservation(report, root, {
   observationId,
   phase,
@@ -127,6 +180,7 @@ function addIdentityObservation(report, root, {
   observedAt,
   context,
 }) {
+  const capabilitiesReadback = createQworkCapabilitiesReadbackFixture(observedAt);
   const observation = {
     schema_version: QWORK_SOAK_IDENTITY_OBSERVATION_SCHEMA,
     observation_id: observationId,
@@ -135,16 +189,8 @@ function addIdentityObservation(report, root, {
     observed_at: iso(observedAt),
     context,
     release_identity_sha256: report.release_identity_sha256,
-    capabilities_readback_attempts: [{
-      attempt: 1,
-      timeout_ms: 2_000,
-      started_at: iso(observedAt - 1),
-      ended_at: iso(observedAt),
-      duration_ms: 1,
-      ok: true,
-      value_type: 'object',
-      error: '',
-    }],
+    capabilities_readback: capabilitiesReadback,
+    capabilities_readback_attempts: structuredClone(capabilitiesReadback.probe_ledger),
     evidence_valid: true,
     ok: true,
     artifacts: {},

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { validateQworkCapabilitiesReadbackEvidence } from '../../src/lib/qwork-capabilities-readback.mjs';
 
 export const QWORK_RELEASE_IDENTITY_READBACK_SCHEMA = 'qwork-release-identity-readback/v1';
 export const QWORK_UI_CODE_MANIFEST_SCHEMA = 'qwork-ui-code-manifest/v1';
@@ -547,6 +548,16 @@ export function assessQworkReleaseIdentity(readback, expected = {}) {
 }
 
 export function assertStableQworkReleaseIdentity(baseline, current, label = 'QWork release identity') {
+  const baselineCapabilities = validateQworkCapabilitiesReadbackEvidence(
+    baseline?.capabilities_readback,
+  );
+  const currentCapabilities = validateQworkCapabilitiesReadbackEvidence(
+    current?.capabilities_readback,
+  );
+  const capabilitiesStable = baselineCapabilities.valid
+    && currentCapabilities.valid
+    && baseline.capabilities_readback.summary_signature_sha256
+      === current.capabilities_readback.summary_signature_sha256;
   const left = JSON.stringify({
     observed: baseline?.observed || {},
     provenance: baseline?.provenance || {},
@@ -555,7 +566,7 @@ export function assertStableQworkReleaseIdentity(baseline, current, label = 'QWo
     observed: current?.observed || {},
     provenance: current?.provenance || {},
   });
-  if (baseline?.ok !== true || current?.ok !== true || left !== right) {
+  if (baseline?.ok !== true || current?.ok !== true || left !== right || !capabilitiesStable) {
     throw new Error(`${label} drift detected between authoritative readbacks.`);
   }
   return true;

@@ -20,6 +20,11 @@ import { qworkRuntimeBridgeSource, startCdpWebviewProxy } from './cdp-webview-pr
 import { buildTeamsRunMetadata, writePinnedRunMetadata } from './run-metadata.mjs';
 import { summarizeRuntimeReleaseStatus } from './cdp-webview.mjs';
 import {
+  qworkCapabilitiesReadbackEvidence,
+  readStableQworkCapabilities,
+  validateQworkCapabilitiesReadbackEvidence,
+} from '../../src/lib/qwork-capabilities-readback.mjs';
+import {
   assessQworkReleaseIdentity,
   assertStableQworkReleaseIdentity,
   inspectClaudeSkillCallCanonicalizationPolicy,
@@ -100,6 +105,19 @@ export function validateTeamsCasebookOptions(options) {
     if (!/^[a-f0-9]{64}$/i.test(String(options['feature-flags-hash']))
       || !/^[a-f0-9]{64}$/i.test(String(options['qwork-release-manifest-sha256']))) {
       throw new Error('Production Teams release hash assertions must be 64-character SHA-256 hex values.');
+    }
+    const recoveryOptions = [
+      'resume',
+      'resume-from',
+      'impact-case',
+      'impact-all',
+      'teams-recovery-passes',
+    ].filter((name) => Object.hasOwn(options, name));
+    if (recoveryOptions.length) {
+      throw new Error(
+        `Production Teams runs forbid recovery options: ${recoveryOptions.map((name) => `--${name}`).join(', ')}. `
+        + 'Freeze the current batch and start a complete rerun in a new immutable output directory.',
+      );
     }
   }
   if (productionGate && !String(options['control-plane-url'] || '').trim()) {
@@ -1062,6 +1080,12 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
         if (!handedToRunner) await browser.close().catch(() => {});
       }
 
+      // Production evidence is immutable once the shared runner returns. A
+      // failed or incomplete gate must be frozen and rerun from Case 1 in a
+      // new directory; the historical same-directory repair path is strictly
+      // limited to non-production compatibility runs.
+      if (productionGate) break;
+
       const repair = repairInterruptedTeamsProgress({ outDir: options.out, pass: recoveryPass + 1 });
       if (!repair.repaired) break;
       recoveryPass += 1;
@@ -1114,12 +1138,22 @@ export async function runTeamsCasebook(argv = process.argv.slice(2)) {
 export function teamsCasebookExitCode(summary = {}) {
   const counts = summary?.counts || {};
   const planned = Number(summary?.result_accounting?.planned);
-  const completed = Number(summary?.result_accounting?.completed ?? counts.total ?? 0);
-  const incomplete = Number.isFinite(planned) && planned > 0 && completed < planned;
-  const failed = Number(counts.failed || 0) > 0 || Number(counts.blocked || 0) > 0;
+  const completed = Number(summary?.result_accounting?.completed);
+  const total = Number(counts.total);
+  const passed = Number(counts.passed);
+  const completeAccounting = Number.isInteger(planned)
+    && planned > 0
+    && Number.isInteger(completed)
+    && completed === planned
+    && Number.isInteger(total)
+    && total === planned
+    && Number.isInteger(passed)
+    && passed === planned;
+  const failed = ['failed', 'blocked', 'needs_llm_review', 'other']
+    .some((name) => Number(counts[name] || 0) > 0);
   return summary?.status === 'passed'
     && summary?.stopped !== true
-    && !incomplete
+    && completeAccounting
     && !failed
     ? 0
     : 1;
@@ -1149,6 +1183,34 @@ function productionReleaseIdentityExpected(options = {}) {
 }
 
 async function observeQworkReleaseIdentity(page, qworkUiUrl) {
+  const capabilitiesReadback = await readStableQworkCapabilities(async ({
+    rendererTimeoutMs,
+    phase,
+  }) => page.evaluate(async ({ timeoutMs, readbackPhase }) => {
+    let rendererDeadline = null;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => {
+          if (typeof window.agent?.capabilities !== 'function') {
+            throw new Error('missing window.agent.capabilities');
+          }
+          return window.agent.capabilities();
+        }),
+        new Promise((_, reject) => {
+          rendererDeadline = setTimeout(
+            () => reject(new Error(
+              `QWork capabilities ${readbackPhase} timed out after ${timeoutMs}ms`,
+            )),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (rendererDeadline !== null) clearTimeout(rendererDeadline);
+    }
+  }, { timeoutMs: rendererTimeoutMs, readbackPhase: phase }));
+  const capabilitiesEvidence = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
+  const capabilitiesValidation = validateQworkCapabilitiesReadbackEvidence(capabilitiesEvidence);
   const rawRuntimeReleaseStatus = await page.evaluate(async () => Promise.race([
     Promise.resolve().then(() => {
       if (typeof window.agent?.runtimeReleaseStatus !== 'function') {
@@ -1161,10 +1223,28 @@ async function observeQworkReleaseIdentity(page, qworkUiUrl) {
       5000,
     )),
   ]));
-  return readQworkReleaseIdentity({
+  const releaseIdentity = readQworkReleaseIdentity({
     qworkUiUrl,
     runtimeReleaseStatus: summarizeRuntimeReleaseStatus(rawRuntimeReleaseStatus),
   });
+  if (!capabilitiesValidation.valid) {
+    releaseIdentity.ok = false;
+    releaseIdentity.consistency = {
+      ...(releaseIdentity.consistency || {}),
+      ok: false,
+      errors: [
+        ...(releaseIdentity.consistency?.errors || []),
+        {
+          id: 'capabilities_readback_invalid',
+          errors: capabilitiesValidation.errors,
+        },
+      ],
+    };
+  }
+  return {
+    ...releaseIdentity,
+    capabilities_readback: capabilitiesEvidence,
+  };
 }
 
 export async function configureTeamsFixtureRuntime(options, browser) {

@@ -202,6 +202,14 @@ loaded runtime `verified=true`、`updatePhase=idle`、`preparedRelease=null`。�
 `ok!=true` 或 SHA 漂移时，即使所有 Case raw passed、可信计数全绿，也不得
 `PASS_STAGE`。所有 `--production-gate true` 的 Teams 批次都必须显式携带匹配 READY 的
 `--control-plane-url`，不只限于 `BETA-*` Case。
+`release_observation` 和每个 `release_observation_checks[]` 项还必须各自保存完整且经共享
+校验器重放通过的 `qbot-qwork-capabilities-readback/v1`；阶段间只比较 canonical
+`summary_signature_sha256` 与固定结构合同，时间戳和耗时只作为各次真实探针账本保留，
+不得要求动态字段逐字节相等，也不得只保存或信任顶层 `ok`。
+`release_observation_checks[]` 的磁盘顺序只能是 `startup`、零个或多个
+`replacement-renderer`、`run-final`，且 `observed_at` 不得倒退；未知、重复、倒序或在
+`run-final` 后追加阶段均须拒绝。canonicalization policy checks 必须与该数组逐项同 phase、
+同时间，不能把两组一起倒序后绕过完成审计。
 
 MR `!1579` 的 production-gate 还必须在 Case 0 前只读检查 runner 自身环境与已验证受管
 Teams PID 的真实进程环境，确认
@@ -637,10 +645,15 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
 
    `core-beta:pretest` 只读检查 Git 分支/提交/tracked dirty、预检入口及其不变量测试是否已被 Git 跟踪、Casebook、协议、双框架测试、唯一 runner、宿主/session/CDP、QWork 登录目标、发布身份和逐 Case fixture 合同。Teams lane 的 control plane 必须同时核对受管 session 与 QWork renderer 实际读取的 `DEEPBANK_SERVER/QBOT_SERVER_URL`；只看启动参数或 session 声明不能通过。它不启动/重启 360Teams、不打开 QWork、不发送消息，也不生成 synthetic Case。只有报告结论为 `READY` 才允许启动真实 runner。
 
-   Teams lane 的 pretest 还必须对已识别的精确 QWork WebView 执行一次只读
-   `window.agent.capabilities()`，并把结构化投影和错误写入
-   `runtime.teams_inspection.public_capabilities`。只有调用成功且返回非数组对象时
-   `qwork_public_capabilities` 才可通过；接口缺失、超时、非对象、control-plane
+   Teams lane 的 pretest 还必须对已识别的精确 QWork WebView 执行固定三阶段只读
+   `window.agent.capabilities()`：`cold_load=15000ms`、`stable_read_1=2000ms`、
+   `stable_read_2=2000ms`。每阶段同时设置 renderer 内计时器和 Node 外层硬超时，三次
+   均须返回非数组对象；按 `value_type`、排序后的 `keys` 以及 `selectedSkills`、
+   `selectedConnectors`、`currentExpert` 三个字段的存在性计算的 canonical SHA-256 必须
+   三次全等，成功值只取 `stable_read_2`。完整 `probe_ledger`、顶层投影和错误写入
+   `runtime.teams_inspection.public_capabilities`，并由共享纯校验器重放，不能只信顶层
+   `ok`。只有该合同完整成立时 `qwork_public_capabilities` 才可通过；接口缺失、任一阶段
+   超时、非对象、结构漂移、control-plane
    HTTP 4xx/5xx（包括 `invalid_launch_mode`）均必须在 Case 0 前令 pretest
    `BLOCKED`。可见 Composer、登录态和正确 release URL 不能替代该公开状态门禁，
    禁止在 capabilities 不可读时仍返回 `READY`。
@@ -652,9 +665,22 @@ Case-aware Oracle：回复精确包含独立标记 `A_ALLOWED` 且不包含
    并与冻结 `--backend-version` 全等；`qwork_backend_identity` 不通过时同样在 Case 0
    前 `BLOCKED`。页面登录、capabilities 可读或调用者传入的 backend 字符串都不能替代
    这一真实健康与身份读回。
-   正式 runner 内部的每次公开 capabilities 读回同样必须采用 2 秒单次超时、最多 3 次
-   只读重试；最终状态证据保存 `capabilities_readback_attempts`（含耗时和错误），
-   全部失败仍按不可读处理，绝不能让悬挂 IPC 阻塞串行批次或被缓存/可见文案替代。
+   两套正式 runner 内部的每次公开 capabilities 读回必须使用完全相同的三阶段合同和共享
+   校验器；最终状态证据保存 `qbot-qwork-capabilities-readback/v1` 与完整
+   `capabilities_readback_attempts/probe_ledger`。冷读、任一稳定读、object 校验、三次
+   canonical 签名或 `stable_read_2` 终值任一失败都按不可读处理，绝不能让悬挂 IPC 阻塞
+   串行批次，或由缓存、可见文案、一次偶然成功替代。三阶段回调中只允许重复公开只读
+   `capabilities()`；不得把 `setExpert`、`recordRecent`、fixture、清理桥或其它写动作放入
+   重试范围。Teams 适配层必须分别报告 `total_renderer_timeout_ms=19000`、
+   `total_node_probe_timeout_ms=20500`、`connect_timeout_ms=10000` 和
+   `runtime_enable_timeout_ms=15000`，并将 `maximum_wall_clock_timeout_ms` 与兼容字段
+   `total_timeout_ms` 均固定为真实最大墙钟预算 `45500`；禁止用 19 秒 renderer 预算冒充
+   完整 CDP 链路总预算。
+   WebView target 缺失、CDP 连接失败或 `Runtime.enable` 失败发生在真实 capabilities
+   探针之前，必须记录独立 pre-probe setup failure、`probe_started=false` 与空
+   `probe_ledger/attempts`；成功证据必须显式 `probe_started=true` 且不得携带
+   `pre_probe_failure`，两种状态不得同时成立。只有已派发 `Runtime.evaluate` 的调用才可生成
+   `cold_load/stable_read_*` ledger，禁止用三阶段 helper 伪造尚未发生的探针。
 
    同一 Teams pretest 还必须只读调用公开 `window.agent.runtimeReleaseStatus()`，并将
    安全结构化投影写入 `runtime.teams_inspection.runtime_release_status`。顶层
@@ -1120,9 +1146,16 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   不能让残留弹窗把已有产品结论覆盖成清理 `automation_error`。
 - Core Beta v2 根 runner 和 360Teams 截图保护器的 Playwright 截图、fallback CDP session 创建、`Page.captureScreenshot` 和 session `detach` 清理必须分别受硬超时约束。截图已经成功固化时，清理期 `detach` 超时只能写入 runner 日志并继续返回截图，禁止让无界清理等待卡在 Case 0；截图本身超时或缺少有效图像数据仍按证据失败 fail-closed。
 - Core Beta v2 根 runner 的正式截图必须先写入 Case 目录外的隔离临时文件，只有非空图像完整返回后才写入最终证据路径，防止已经超时但尚未取消的 Playwright promise 迟到覆盖有效截图。全页 `page.screenshot` 与其新建 CDP session fallback 同时出现非 target-closed 瞬态失败时，只允许等待一个短有界间隔，再用 `fullPage=false/captureBeyondViewport=false` 和新的 CDP session 重试一次；重试成功形成正常截图证据，重试仍失败才抛出包含两次主路径/fallback 原因的 framework error。`Target closed`、`Session closed` 或宿主/renderer 失效不得用截图重试掩盖。
-- `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。停止 Case 不得计入 completed，但必须以 `non_executed_diagnostic` 进入二次复核结构化结果、`framework_issue` 统计和 `框架修复清单.md`；不得因可信复核只遍历 completed 结果而错误报告“框架问题数为 0”。待激活更新等批次级身份风险若发生在 `compound` 叶子，叶子必须在自身诊断落盘后立即中断后续叶子，并将同一 `batch_stop_reason` 传播到父 Case；根 runner 必须移除刚加入进度的停止父 Case，再生成批次停止诊断，禁止继续下一个父 Case。360Teams 包装器对 stopped、非 passed 或计划未完成的 summary 必须返回非零退出码，不能只看已完成结果中的 `failed/blocked` 计数。
-- Core Beta 清理证据必须证明清理桥动作全部成功且技能、连接器、专家选择明确为空。优先使用 `agent.capabilities` 读回；Teams 中该 IPC 被超时保护器中止时，必须在不重复执行清理动作的前提下最多执行三次有界只读尝试，并把每次成功/错误写入 `capabilities_readback_attempts`。任一次读回得到权威空态即可继续；全部尝试失败且当前页面没有可见输入区时，框架必须通过受管 `openNewTask` 导航到干净 composer 表面，只重新采集可见状态和 E2E 状态，不得再次调用任一清理桥或把导航算作第四次 capabilities 尝试。此时允许组合使用首次精确为空的禁用桥回执、输入区无能力 chip、`__qbotE2E.state/currentSession` 的空专家身份和无专家头像作为独立交叉读回，并在 `cleanup_surface_recovery`、`pre_navigation_selection_readbacks` 和导航后截图中保存证据；旧版分离控件还必须明确显示“禁用”，新版统一“+”菜单必须有可见输入区。全部读回超时、恢复导航失败、只有动作返回值、缺少可见状态或任一来源仍有残留时必须保持 `cleanup_readback.valid=false`，不得把未知状态当作清理完成。
-- 当前页面已经是可见统一“+”菜单 Composer 且 Skill/Connector chip 与专家头像均明确为空时，三次 `agent.capabilities` 只读均超时不触发导航；此时只有同一 Case 的发送前 `core_beta_composer_control_reset.isolation_readback` 已权威证明 Skill、Connector、Expert 全部为空、三个清理桥均成功，才允许以 `pre_cleanup_and_visible_ui` 作为清理交叉读回继续。若 Composer 可见但 chip/头像字段缺失、不可证明为空或存在任一残留，能力读回三次耗尽后必须通过一次受管 `openNewTask` 恢复可见空 Composer，再只读采集可见状态和 E2E 状态；不得重复清理桥或把导航算作第四次 capabilities 尝试。恢复后仍有残留、恢复失败或少于三次受管只读尝试仍须 fail-closed。
+- `framework-stop-diagnostic.json` 必须传播到最终 summary：`status` 不得为 `passed`，`stopped=true`，并保留 `planned/completed/unexecuted`、停止原因与停止 Case。停止 Case 不得计入 completed，但必须以 `non_executed_diagnostic` 进入二次复核结构化结果、`framework_issue` 统计和 `框架修复清单.md`；不得因可信复核只遍历 completed 结果而错误报告“框架问题数为 0”。待激活更新等批次级身份风险若发生在 `compound` 叶子，叶子必须在自身诊断落盘后立即中断后续叶子，并将同一 `batch_stop_reason` 传播到父 Case；根 runner 必须移除刚加入进度的停止父 Case，再生成批次停止诊断，禁止继续下一个父 Case。结束身份读回或其它 finalization 失败发生在已有 framework stop 之后时，原停止 Case、reason、progress 和 `framework-stop-diagnostic.json` 均不可覆盖；只能另写带 `secondary=true` 的 finalization diagnostic，并让最终 summary 继续以原停止为主结论。360Teams 包装器对 stopped、非 passed 或核算不完整的 summary 必须返回非零退出码；`result_accounting.planned` 必须是正整数，且 `completed == planned == counts.total == counts.passed`、其它结果计数均为零，缺少 `planned`、空结果或部分 passed 一律非零退出。
+- 所有 `--production-gate true` 批次都禁止 `--resume`、`--resume-from`、`--impact-case`、`--impact-all` 和 `--teams-recovery-passes`。shared runner 一旦返回，无论成功、失败或不完整，360Teams 包装器都必须在 `repairInterruptedTeamsProgress()` 之前直接退出并冻结该目录；失败后只能完成自愈、重新 pretest，并在新的不可变目录从 Case 1 完整重跑。历史 repair/同目录 resume 仅兼容非 production 旧协议，不能进入任何 G1-G4 发布证据。`--core-beta-cleanup-from` 仍按本手册后文的专用合同在新目录精确清理残留，不继承 Case 结果，也不能计入发布门禁，因此不属于本条结果恢复禁令。
+- 非 production 兼容路径若显式使用 Core Beta v2 `--resume`，也不能只按 progress 中的 Case ID、Sheet 和行号跳过旧 Case。每个待保留结果必须为 `execution_provenance=executed`、`inherited=false`、`synthetic=false`、`case_execution_recorded=true`，合同 SHA 与本轮 Case 精确一致；框架必须从同一 run root 重新读取普通非符号链接的 `case-result.json`、`evidence-manifest.json` 和全部证据文件，验证嵌入值与磁盘结构化全等、manifest 完整、角色同序、路径不越界以及实读 bytes/SHA-256/语义均成立。compound 子 Case 必须递归执行同一校验。任一 progress 核算、provenance、合同、文件、manifest 或 SHA 异常都必须拒绝同目录恢复，禁止回到 Case 1 后覆盖可疑证据。
+- Core Beta 清理证据必须证明清理桥动作全部成功且技能、连接器、专家选择明确为空。清理桥只允许执行一次，随后单独使用统一 `cold_load/stable_read_1/stable_read_2` 三阶段 `agent.capabilities` 读回，并把完整 `qbot-qwork-capabilities-readback/v1` ledger 写入 `capabilities_readback_attempts`；禁止把任一清理桥放进读回回调。只有三次 object 与 canonical 签名全部稳定，且 `stable_read_2` 明确为空态，才可作为直接权威读回；单次成功不能提前返回。合同失败且当前页面没有可见输入区时，框架必须通过受管 `openNewTask` 导航到干净 composer 表面，只重新采集可见状态和 E2E 状态，不得再次调用任一清理桥或把导航算作额外 capabilities 阶段。此时允许组合使用首次精确为空的禁用桥回执、输入区无能力 chip、`__qbotE2E.state/currentSession` 的空专家身份和无专家头像作为独立交叉读回，并在 `cleanup_surface_recovery`、`pre_navigation_selection_readbacks` 和导航后截图中保存证据；旧版分离控件还必须明确显示“禁用”，新版统一“+”菜单必须有可见输入区。三阶段合同失败、恢复导航失败、只有动作返回值、缺少可见状态或任一来源仍有残留时必须保持 `cleanup_readback.valid=false`，不得把未知状态当作清理完成。
+- `--core-beta-cleanup-from` 在导入冻结账本前还必须独立重放源批次与当前清理批次 `run-metadata.json` 中的 `release_observation.capabilities_readback` 及按 `startup -> replacement-renderer* -> run-final?` 排列的 phase checks；baseline 和每个 check 都必须是完整有效的 `qbot-qwork-capabilities-readback/v1`，`ok=true`、时间非递减且 canonical summary signature 全程一致。新旧批次 signature 也必须全等；缺失 observation、空 checks、无效 ledger、阶段/时间倒序或 signature 漂移均不得授权清理导入，即使其它发布身份字段看似相同。
+- 三阶段 helper 采用 fail-fast：失败 ledger 是零个或多个成功前缀加一个最终失败阶段，因此
+  可能只有 `cold_load` 一条，也可能止于任一 stable read。清理恢复必须识别这类真实的
+  1 至 3 条有界前缀及精确 phase/timeout，禁止要求或伪造“三条全部失败”后才导航；账本
+  乱序、超出固定阶段、顶层 readback 与 attempts 不一致时仍须 fail-closed。
+- 当前页面已经是可见统一“+”菜单 Composer 且 Skill/Connector chip 与专家头像均明确为空时，三阶段 `agent.capabilities` 合同失败不触发导航；此时只有同一 Case 的发送前 `core_beta_composer_control_reset.isolation_readback` 已权威证明 Skill、Connector、Expert 全部为空、三个清理桥均成功，才允许以 `pre_cleanup_and_visible_ui` 作为清理交叉读回继续。若 Composer 可见但 chip/头像字段缺失、不可证明为空或存在任一残留，读回合同失败后必须通过一次受管 `openNewTask` 恢复可见空 Composer，再只读采集可见状态和 E2E 状态；不得重复清理桥或追加第四个 capabilities 阶段。恢复后仍有残留或恢复失败仍须 fail-closed。
 - 清理终态还必须有界读取公开 `agent.init()`，只保留当前 active/draft context 的最小能力字段并与 `__qbotE2E.state.activeId/isDraft` 精确绑定。当 `agent.capabilities` 超时且没有可用的发送前权威空态时，只有 `agent.init()` 对同一当前 context 明确返回 `skills/connectors/expert` 三者均为 `null` 或空数组、三个清理桥均成功、当前统一 Composer 可见且无 Skill/Connector chip 与专家头像，才允许以 `agent.init_context_and_visible_ui` 继续。`agent.init()` 超时、active/draft 绑定不一致、任一字段省略、任一可见残留或清理桥失败仍须 fail-closed；不得读取其他会话空态替代当前任务。
 - 新版统一“+”菜单通过公共能力桥隔离 Case 前置技能或连接器状态时，优先使用 `agent.capabilities` 中 `selectedSkills`、`selectedConnectors` 或 `connectorRouting.mode` 的明确读回；若当前 QWork capabilities 省略对应字段，明确返回空数组仍可确认禁用态。QWork 0.1.6-sit.8 的 legacy `setSkillsDisabled()` / `setConnectorsDisabled()` 兼容桥可合法返回 `null`，但不得单独放行；只有同一当前 draft 的 `agent.init()` 明确绑定且 `skills`、`connectors`、`expert` 均为空，`__qbotE2E` 状态明确为空、统一 Composer 可见且无 Skill/Connector chip 与专家头像，同时所有已调用清理桥无错误时，才可通过交叉读回确认。桥返回 `undefined`、非数组、调用失败、上下文绑定不一致或任一空态缺失仍必须 fail-closed；自动态只接受 capabilities 或对应 `set*Auto()` 的明确 `null`。
 - 新版统一“+”菜单的手动 Skill/Connector 选择必须执行真实可见 UI 动作：优先通过 `composer-plus-section-skill` 或 `composer-plus-section-connector` 定位入口，始终选取最新可见 Portal，并依次支持 hover、click、`ArrowRight`、`Enter` 回退路径。完整开启流程允许最多三次有界重试，每次重试前必须关闭残留 Portal 和工作空间菜单；三次仍不可见时必须保存截图、尝试次数和明确的 `automation_error`，禁止静默返回 `false` 后由同级能力操作覆盖失败现场。可见 Portal 内没有 mode/option，但搜索/列表与 `.composer-plus-empty` 明确可见时，属于合法的空库存表面，不得误判为子菜单未打开；需要选择具体 Skill/Connector 的 Case 必须以空任务、空选择、零消息、发送计数不变、空态截图和 Case 绑定 prerequisite 补齐 N/A manifest，记可信 `blocked` 后继续独立 Case。旧版若存在 `composer-skill-mode-manual` 或 `composer-connector-mode-manual`，必须真实点击并以 radio/公开状态确认；rc.100 式直接列表没有独立 manual 控件，打开列表只证明表面可操作，不能要求点击具体能力前 routing 已经是 manual。runner 必须点击稳定 `composer-*-option-*`，再由 `selectedSkills/selectedConnectors` 读回同一 identity 才算选择完成。控件未定位、点击未派发或公开字段不可读属于 `automation_error`；点击已派发但产品未进入期望状态属于证据完整的产品 Bug。`BETA-MCP-002` 必须对 5 个固定样本逐项保存 Case 绑定、序号、key、点击后的瞬时 `selectedConnectors`、稍后的公开持久化读回、前后 task/capabilities、工具清单、健康状态、可见状态、唯一截图及 SHA，并始终生成、注册 `capability_selection` 与 `capability_execution_event`。精确 connector 点击后未选中、瞬时读回选中但稍后的公开读回再次为空，或第 N 个样本的手动模式控件已真实点击但产品仍读回 auto/未选中，只要当前样本同时证明任务为空、未运行、消息数为 0、send count 未变化且两阶段公开状态完整，仍属于一份有效的结构化产品负向收据，循环必须继续固化剩余样本。5 份收据齐全时，任一 connector 或模式 Oracle 失败必须写为 `valid=true/evidence_valid=true/oracle_valid=false` 的产品 Bug；只有收据数量、唯一 key/序号、控件定位、点击派发、瞬时或持久化读回、任务零变更守卫、截图/SHA 或公开结构字段缺失时才可令证据无效并按 framework issue 停止。样本循环内禁止提前 `return` 丢失专项 artifact，也不得以诊断占位文件代替。
@@ -1174,9 +1207,15 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
 - stateful renderer adapter 的绑定或六条生命周期探针首次失败时，框架必须先保存
   binding report、每条 probe 结果与 controller 事件、Node registry、renderer
   control stack/owner、agent 与方法属性描述符、精确错误 message/stack，再关闭本次
-  adapter。只有关闭后 Node registry 为空、确认没有其他 Case adapter 正在活动时，
-  才允许执行一次清理后的全新 binding/reprobe；最多两次，禁止循环重试或在其他活动
-  adapter 上执行破坏性清理。第二次仍失败或关闭后仍有活动 adapter 时必须在产品动作前
+  adapter。三个 `exposeFunction`、adapter 安装、逐条生命周期 probe、renderer 状态检查和
+  close 必须各自受 Node 外层硬超时约束；安装、逐条 probe、状态检查和 close 还必须在
+  renderer 内设置独立截止时间并在 `finally` 清理 timer。close 只有在同一个原始
+  `agent`、全局属性描述符、六条原始方法及其属性描述符全部恢复，renderer stack/owner/
+  bindings 与 Node registry/binding disposable 完全一致后才算成功；关闭错误不得吞掉。
+  暴露操作完成状态不明、close 超时/恢复失败或任一残留必须保留污染标记，禁止继续重绑。
+  只有关闭成功后 Node registry、renderer stack/owner/wrapper/binding resources 全部为空、
+  确认没有其他 Case adapter 正在活动时，才允许执行一次清理后的全新 binding/reprobe；
+  最多两次，禁止循环重试或在其他活动 adapter 上执行破坏性清理。第二次仍失败或关闭后仍有活动 adapter 时必须在产品动作前
   fail-closed。`qbot-teams-skill-fixture-adapter/v2` 必须保留全部尝试；若最终失败，
   `qbot-core-beta-renderer-adapter-framework-failure/v1` 必须把未发生的 task/prompt/reply/
   capability 角色严格标为 N/A，使 framework-failure 取证完整，同时当前 Case 记录为
@@ -1198,7 +1237,7 @@ capabilities、workbench、顶层/loaded/compatibility runtime 全部为冻结�
   安装点击。轮询超时必须把诊断写回 `skill-fixture-catalog-lookups.json` 并归类为
   `automation_error`，不得生成伪造的产品失败或继续派发第二次安装。
 - `BETA-SKILL-014` 每个不可变批次必须从 Case 目录派生唯一、合法的 `qa-meeting-minutes-<digest>` fixture slug，并把该精确名称写入每一轮真实 prompt；不得复用固定 `meeting-minutes`、覆盖已有用户 Skill，或把前序冻结批次的残留当成本轮产物。创建入口选择证据必须同时包含发送前 exact `skillhub:global/skill-creator-qwork`、每轮发送后的同一 taskId 快照、实际 prompts 和发送后终态。产品 QWork home 必须优先从当前冻结的 versioned `file://.../ui/<version>/index.html` 推导；Teams 为受管重启/控制面 fixture 注入的 `--qbot-home` 不能覆盖该产品 release home，只有非 file UI 无法推导时才允许回退。产物必须独立读回该产品 QWork home 下 `.claude/skills/<slug>/SKILL.md` 与 `.agents/skills/<slug>/SKILL.md`，校验普通文件、非符号链接、frontmatter name、`agent_created: true`、非空 description、字节数和一致 SHA；同时证明内部 creator 未混入普通市场库存。证据结构完整与业务 Oracle 必须分开：双投影缺失或产品未创建时，专项文件仍应 `valid=true/evidence_valid=true/oracle_valid=false` 并形成可继续批次的产品 Bug；只有路径/读回/task-bound 证据本身缺失才属于 framework issue。证据固化后，清理阶段只能删除基线中不存在且精确匹配本轮唯一 slug 的两个投影目录，以及 QWork home 内 Claude project memory 下文件名、正文均精确绑定该 slug 的新增非符号链接记忆文件，并保存 `skill-creator-fixture-cleanup.json`；任一预存、越界、符号链接、删除失败或残留都必须以 `automation_error` fail-closed。
-- `BETA-EXPERT-001` 必须先通过真实【新建任务】进入 `taskId=null/messageCount=0` 的干净草稿，再按 `display.label` 搜索目标专家，执行一次 `recordRecent` 与 `setExpert`，发送 Casebook 冻结的确定性短提示并生成本 Case 自己的新 taskId。新 taskId 必须非空且不等于进入本 Case 前观察到的上游 taskId；expertId/versionId/releaseId 必须在选择读回、发送后任务、`setExpert` 回执和最近召唤中一致。`recordRecent` 与 `setExpert` 是一次性状态变更，必须与后续只读公开 `window.agent.capabilities()` 分离；`expertLifecycle` 只承载专家目录/草稿生命周期方法，不得假设或调用 `expertLifecycle.capabilities()`。Teams IPC 首次超时时，只允许对 capabilities 最多执行三次有界重试并保存逐次账本；不得重复召唤、重复写最近列表或重复设置专家。首次失败后恢复成功必须继续完成当前 Case；三次读回均失败且没有独立公开状态可验证精确专家 identity 时，才按 framework issue fail-closed。发布记录读回必须始终写 `valid=true/evidence_valid=true` 表示结构化取证完成，并用 `oracle_valid` 表示可见ID/计数是否严格等于 `owned=true` 集合；产品列表为空或计数错误属于证据完整的产品 Bug，不得把 `product_state_diff` 标成 manifest invalid。
+- `BETA-EXPERT-001` 必须先通过真实【新建任务】进入 `taskId=null/messageCount=0` 的干净草稿，再按 `display.label` 搜索目标专家，执行一次 `recordRecent` 与 `setExpert`，发送 Casebook 冻结的确定性短提示并生成本 Case 自己的新 taskId。新 taskId 必须非空且不等于进入本 Case 前观察到的上游 taskId；expertId/versionId/releaseId 必须在选择读回、发送后任务、`setExpert` 回执和最近召唤中一致。`recordRecent` 与 `setExpert` 是一次性状态变更，必须与后续只读公开 `window.agent.capabilities()` 分离；`expertLifecycle` 只承载专家目录/草稿生命周期方法，不得假设或调用 `expertLifecycle.capabilities()`。一次写动作完成后只允许执行统一的三阶段 capabilities 读回并保存完整 ledger；不得重复召唤、重复写最近列表或重复设置专家。三阶段任一失败且没有独立公开状态可验证精确专家 identity 时，才按 framework issue fail-closed。发布记录读回必须始终写 `valid=true/evidence_valid=true` 表示结构化取证完成，并用 `oracle_valid` 表示可见ID/计数是否严格等于 `owned=true` 集合；产品列表为空或计数错误属于证据完整的产品 Bug，不得把 `product_state_diff` 标成 manifest invalid。
 - `SIT-EXPERT-022` 必须在专家首轮发送前、点击通用助手后分别保存公开 `capabilities.currentExpert` 读回，并把专家选择/清空映射为 `capability_selection`。切换成功时，两轮 prompt、各自非空 taskId、完整回复终态和切换回执必须映射为 `capability_execution_event`；产品 Oracle 另外要求两轮 taskId 相同。若两轮 taskId 均非空但不一致，证据仍必须写 `valid=true/evidence_valid=true/oracle_valid=false` 并记产品 Bug；任一 taskId 缺失才属于 task 绑定证据不完整。入口缺失或点击失败时，必须显式记录第二轮未执行及其原因，不得伪造 prompt/回复。入口缺失、入口点击失败、点击后 Composer 不可用、公开专家身份未清空或回复仍泄漏旧专家身份时，证据结构完整则同样记产品 Bug；只有 capabilities 读回、task 绑定、回复终态或证据文件本身缺失时才允许以 framework issue fail-closed。legacy 与 v2 runner 必须共享这一合同，禁止把已完成的专家切换产品路径因缺少证据角色误停在 compound 中。
 - `BETA-EXPERT-002/003` 必须把 Expert Builder 业务 Oracle 与证据有效性分开。产品没有创建本轮 owner-isolated ExpertDraft、复用历史草稿/历史 staged Skill、没有调用所需 authoring tool 或只在回复中声称完成时，仍须保存绑定当前 task 的 baseline/after draft inventory、复用 identity、完整 reply records、tool trace、dependency/content/path 负向读回；这些专项文件必须为 `valid=true/evidence_valid=true/oracle_valid=false`，Case 记产品 Bug并继续后续独立 Case。只有 baseline/after inventory、当前 task 绑定、回复终态或结构化 tool trace 本身缺失/越界时，才允许令证据无效并按 framework issue fail-closed。产品失败不得通过 `valid=false` 或提前 return 造成 `expert_draft_lifecycle`、`expert_dependency_graph`、`artifact_path_sha256`、`content_readback` manifest 缺失。
 - `BETA-EXPERT-003` 切换 Codex runtime 时，若产品桥精确返回“没有匹配协议的 LLM connection”，或因当前 Claude 会话已固定而返回错误码 `model_runtime_family_pinned`/文案“已固定本会话的模型，不能切换执行方式”，框架必须在调用 `setExpert` 和发送前捕获公开 connection view、错误码/文案、前后任务/runtime/专家/草稿快照及截图。只有目标 Codex connection 确实不存在、任务未创建消息、send count 未变化、runtime/专家/草稿均未变更时，才能生成 `qbot-core-beta-runtime-prerequisite/v1` 并记为普通 `blocked`；本 Case 不可能产生的 Expert Builder、能力选择/执行和 task/prompt/reply 角色可由该文件显式标为 `not_applicable`，manifest 仍须完整并继续后续独立 Case。未知错误、目标 connection 实际存在、connection view 缺失、已发生发送/专家选择/草稿变化或 blocker 文件校验失败一律保持 `automation_error` 并进入框架自愈闭环。
@@ -1732,12 +1771,28 @@ descriptor/source 或 spread 时必须 fail-closed。对无关对象执行同类
 `rejectPending(executionWorkerExitFailure(...))` 嵌套调用；pressure 必须从 acquisition
 实现沿真实调用链到达 admission `if`，并在同一 supervisor factory 调用中固定
 `maxPendingRequests: 1`、`maxRestarts: 0`；request set 与其 `release` 闭包的 delete/stop
-必须属于同一 acquisition。manager admission 的 awaited wait 必须早于 supervisor/record
+必须属于同一 acquisition。manager admission 的 awaited wait 无论是独立表达式还是绑定到
+唯一 `const` 结果，都必须早于 supervisor/record
 分配和 `executions.set` 建索引；completed drain 与 incomplete release 都必须 awaited，且
 timeout 必须规范化为有限正数。controller 的 runner factory 必须返回实际创建、随后绑定并
 用于消息转发的精确 Worker 对象，不能只创建真实 Worker 后返回无关对象。controller 还必须
 严格固定单 turn identity、双向
-`validateEnvelope` 方向、message/error/exit 监听和 accept-before-forward 拒绝路径；request
+`validateEnvelope` 方向、message/error/exit 监听和 accept-before-forward 拒绝路径；error/exit
+监听既可委托给同一 controller 的专用方法，也可在同一实际 runner 上内联调用
+`this.finish(1)`，但缺失监听、终结其它对象或只监听无关 runner 均须拒绝。request
+上述 admission、分配、建索引、listener、guard、forward、lease return 和 drain timeout
+必须位于同一条可达的直接控制流；任何更早的无条件 `return`/`throw`、恒真终结分支、不可达
+`try` 语句或 guard/forward 次序颠倒都必须 fail-closed。除构造器和 `initialize` 合同精确允许的
+首次绑定外，controller 的 `this.runner`、`this.authority`、`this.createRunner` 禁止再次赋值、
+`delete`、`Object.defineProperty/defineProperties/assign` 或 `Reflect.set/deleteProperty`。
+manager 的 `enabled`、并发/队列上限、`executions` 容器引用、supervisor factory/options 与
+record supervisor 同样不可改写。对 supervisor-message `pending` 与 manager
+`executions` 的集合变异审计必须解析 receiver `const` 别名、静态计算属性、解构出的
+mutator，以及 `Map/Set.prototype` 的 `call/apply` 和 `Reflect.apply` 间接调用；动态或可写
+别名必须 fail-closed，无关 receiver 的同类调用不得误阻断。manager acquisition 只允许精确
+一次 `executions.set(requestId, record)`；inline release、`releaseExecutionRecord` 与
+`drainExecutionRecord` 各自只允许精确一次直接 `executions.delete(requestId)`，其它
+`add/set/delete/clear` 一律拒绝，尤其不能在成功主路径撤销刚建立的索引。request
 取消必须 awaited 获取 pending，abort 使用同一 `cancelIdentity` 调用
 `supervisor.cancel(..., 'user-requested')`；`supervisor`、`identity`、`signal` 与
 `cancelIdentity` 在该闭包内禁止重绑，abort listener 必须在 already-aborted 检查和
@@ -1806,7 +1861,23 @@ current-release 持续性鉴证中的 integration binding 默认仍要求全文�
 三个 required fragment 必须各精确出现一次；全文件可因后续测试复用而出现多次，但报告
 必须同时保留全文件 `occurrence_count`、scope `owner_occurrence_count/occurrence_count` 和
 逐 required fragment 的 `occurrence_count`。删除、移入错误 test、复制 owner block、缺少
-URL/method/body 或对其它 binding 产生重复，均必须 `BLOCKED`。origin changes 鉴证继续
+URL/method/body 或对其它 binding 产生重复，均必须 `BLOCKED`。MR !1597 的 worker 环境
+测试使用同一唯一 owner 下互不重叠的 input 与 expected 双 region scope；父提交中已经存在的
+同名 test title 只承担 owner 边界，不能冒充本次 MR 新增声明。`IM_USER_MDMCODE`、
+`IM_USER_EMAIL`、`IM_USER_DOMAINACCOUNT`、`IM_USER_PROFILE` 四个身份字段必须在 input
+和 expected region 各精确一次，因此 origin changes 的 `expected_addition_count=2`、
+current-release 的 `expected_current_occurrence_count=2`，并逐 region 保存 required fragment
+计数。region start 的相对行号固定为 0，每个 required fragment 必须按合同顺序紧邻排列，
+其 `expected_line_index` 固定为从 1 开始的顺序号；current-release 观察和后续 attestation
+复核都必须与该确定性行号逐项全等，不能接受仅保持递增的整体平移或重算 SHA 后的伪造行号。
+两个 region 的 start/end anchor 各须 `occurrence_count=1`、`verified=true`，完整
+`owner_region_order` 必须严格保持 input start、input end、expected start、expected end，且
+`owner_region_ordered=true`；交换、交错、移区或复制任一完整 region 都必须 `BLOCKED`。
+`IM_USER_ACCESS_TOKEN` 的 input 声明仍须匹配冻结的精确整行；同时 current-release 全文件
+必须按 JavaScript object property key 语义精确计数为 1，expected region 也必须按同一 key
+语义作为 forbidden fragment 且精确为 0。不同缩进、不同值、表达式值、quoted/computed key
+或 shorthand 都不能绕过；token 进入 expected、离开 input、移到其它 owner 或产生额外副本
+均须 fail-closed。origin changes 鉴证继续
 要求每条新增声明精确出现一次，forbidden fragment 在两层鉴证中都必须精确为 0。
 
 路径分类采用显式白名单：`.gitlab/`、`scripts/`、`eval/`、`openspec/`、`schemas/`、

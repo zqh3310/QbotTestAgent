@@ -519,9 +519,13 @@ const currentReleaseSuccessorManager = delegatedSuccessorManager
 }`,
     `function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
   manager.executions.delete(requestId);
+  const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1;
   record.finalizationPromise = Promise.race([
     Promise.resolve(settlement),
-    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    new Promise((resolve) => setTimeout(resolve, boundedTimeout)),
   ]).then(() => {
     return stopExecutionRecord(manager, requestId, record);
   });
@@ -1131,6 +1135,131 @@ test('MR !1559 release delete and stop must not be hidden in conditional express
     assert.equal(risk.status, 'BLOCKED', replacement);
     assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, replacement);
   }
+});
+
+test('MR !1559 pending mutation audit rejects aliases and Map/Set prototype dispatch', () => {
+  const anchor = '  const item = pending.get(message.requestId);';
+  const variants = [
+    `const pendingAlias = pending;
+  pendingAlias.clear();`,
+    `const pendingAlias = pending;
+  pendingAlias.delete(message.requestId);`,
+    `const { clear: clearPending } = pending;
+  clearPending.call(pending);`,
+    `const pendingAlias = pending;
+  pendingAlias['clear']();`,
+    'Map.prototype.clear.call(pending);',
+    'Set.prototype.clear.call(pending);',
+    'Reflect.apply(Map.prototype.clear, pending, []);',
+  ];
+  for (const mutation of variants) {
+    const messageSource = replaceRequired(
+      successorSupervisorMessage,
+      anchor,
+      `${anchor}\n  ${mutation}`,
+      mutation,
+    );
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-supervisor-message.cjs', messageSource],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', mutation);
+    assert.equal(
+      risk.checks.at(-1).observations.successor_ast_contracts.supervisor_message,
+      false,
+      mutation,
+    );
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, mutation);
+  }
+});
+
+test('MR !1559 manager executions mutation audit rejects every non-contract mutation path', () => {
+  const acquisitionAnchor = '  manager.executions.set(requestId, record);';
+  const acquisitionMutations = [
+    `const executionsAlias = manager.executions;
+  executionsAlias.clear();`,
+    `const executionsAlias = manager.executions;
+  executionsAlias.delete(requestId);`,
+    `const { clear: clearExecutions } = manager.executions;
+  clearExecutions.call(manager.executions);`,
+    `const executionsAlias = manager.executions;
+  executionsAlias['clear']();`,
+    'Map.prototype.clear.call(manager.executions);',
+    'Set.prototype.clear.apply(manager.executions, []);',
+    'Reflect.apply(Map.prototype.clear, manager.executions, []);',
+    'Map.prototype.set.call(manager.executions, requestId, unrelatedRecord);',
+  ];
+  const variants = acquisitionMutations.map((mutation) => replaceRequired(
+    currentReleaseSuccessorManager,
+    acquisitionAnchor,
+    `${acquisitionAnchor}\n  ${mutation}`,
+    mutation,
+  ));
+  variants.push(
+    replaceRequired(
+      successorManager,
+      '    manager.executions.delete(requestId);',
+      `    manager.executions.delete(requestId);
+    const executionsAlias = manager.executions;
+    executionsAlias.clear();`,
+      'inline release alias clear',
+    ),
+    replaceRequired(
+      currentReleaseSuccessorManager,
+      `function releaseExecutionRecord(manager, requestId, record) {
+  if (record.released) return record.stopPromise;
+  record.released = true;
+  manager.executions.delete(requestId);`,
+      `function releaseExecutionRecord(manager, requestId, record) {
+  if (record.released) return record.stopPromise;
+  record.released = true;
+  manager.executions.delete(requestId);
+  Map.prototype.clear.call(manager.executions);`,
+      'release helper prototype clear',
+    ),
+    replaceRequired(
+      currentReleaseSuccessorManager,
+      `function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
+  manager.executions.delete(requestId);`,
+      `function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
+  manager.executions.delete(requestId);
+  Reflect.apply(Map.prototype.clear, manager.executions, []);`,
+      'drain helper Reflect.apply clear',
+    ),
+  );
+  for (const managerSource of variants) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', managerSource],
+    ]));
+    assert.equal(risk.status, 'BLOCKED');
+    assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.manager, false);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+  }
+});
+
+test('MR !1559 collection mutation audit ignores unrelated receivers', () => {
+  const managerSource = replaceRequired(
+    currentReleaseSuccessorManager,
+    '  manager.executions.set(requestId, record);',
+    `  manager.executions.set(requestId, record);
+  const unrelatedExecutions = new Map();
+  unrelatedExecutions.clear();`,
+    'unrelated manager collection',
+  );
+  const messageAnchor = '  const item = pending.get(message.requestId);';
+  const messageSource = replaceRequired(
+    successorSupervisorMessage,
+    messageAnchor,
+    `${messageAnchor}
+  const unrelatedPending = new Map();
+  unrelatedPending.clear();`,
+    'unrelated pending collection',
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', managerSource],
+    ['electron/host-core/agent/execution-worker-supervisor-message.cjs', messageSource],
+  ]));
+  assert.equal(risk.status, 'VERIFIED');
+  assert.deepEqual(risk.failure_ids, []);
 });
 
 test('MR !1559 release promises must be awaited or returned through every delegated layer', () => {

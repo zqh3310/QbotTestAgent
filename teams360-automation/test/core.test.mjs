@@ -72,6 +72,7 @@ import {
   validateLiveCasebookSession,
   validateTeamsCasebookOptions,
 } from '../lib/casebook-runner.mjs';
+import { createQworkCapabilitiesReadbackFixture } from '../../test/helpers/qwork-soak-fixture.mjs';
 import {
   automationFixtureMarkerPattern,
   cleanSkillChipLabel,
@@ -85,6 +86,7 @@ import {
   selectTrustedActionScreenshot,
   unifiedConnectorModeApplied,
   workModeSelectionVerdict,
+  writeSecondaryFinalizationDiagnostic,
 } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import {
   applyFailureOutcome,
@@ -581,6 +583,7 @@ test('authoritative QWork release identity cross-checks runtime, OTA state, enve
     });
     const qworkUiUrl = pathToFileURL(path.join(uiDir, 'index.html')).href;
     const readback = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    readback.capabilities_readback = createQworkCapabilitiesReadbackFixture();
     assert.equal(readback.ok, true, JSON.stringify(readback.consistency.errors));
     assert.equal(readback.observed.qwork_version, version);
     assert.equal(readback.observed.qwork_ui_git_commit, 'deadbeef');
@@ -594,7 +597,15 @@ test('authoritative QWork release identity cross-checks runtime, OTA state, enve
       qwork_ui_git_commit: 'badc0de',
     }).ok, false);
     const second = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    second.capabilities_readback = createQworkCapabilitiesReadbackFixture();
     assert.equal(assertStableQworkReleaseIdentity(readback, second), true);
+
+    const capabilitiesDrift = structuredClone(second);
+    capabilitiesDrift.capabilities_readback.summary_signature_sha256 = 'f'.repeat(64);
+    assert.throws(
+      () => assertStableQworkReleaseIdentity(readback, capabilitiesDrift),
+      /drift detected/,
+    );
 
     const stateFile = path.join(stateDir, 'state.json');
     const originalState = fs.readFileSync(stateFile, 'utf8');
@@ -668,6 +679,7 @@ test('authoritative QWork release identity cross-checks runtime, OTA state, enve
 
     fs.writeFileSync(path.join(uiDir, 'assets', 'late.js'), 'export const drift = true;');
     const drifted = readQworkReleaseIdentity({ qworkUiUrl, runtimeReleaseStatus: runtime });
+    drifted.capabilities_readback = createQworkCapabilitiesReadbackFixture();
     assert.throws(() => assertStableQworkReleaseIdentity(readback, drifted), /drift detected/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -923,6 +935,19 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     productionCoreBetaOptions['control-plane-url'],
     'https://deepbank-control-uat.example.test',
   );
+  for (const [name, value] of [
+    ['resume', 'true'],
+    ['resume-from', 'teams360-automation/output/frozen-production-run'],
+    ['impact-case', 'BETA-INIT-001'],
+    ['impact-all', 'true'],
+    ['teams-recovery-passes', '0'],
+  ]) {
+    assert.throws(
+      () => validateTeamsCasebookOptions({ ...productionCoreBetaOptions, [name]: value }),
+      new RegExp(`forbid recovery options: .*--${name}`),
+      `production gate must reject explicit --${name}`,
+    );
+  }
   const previousNativeImeCommand = process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND;
   delete process.env.QBOT_CORE_BETA_NATIVE_IME_COMMAND;
   try {
@@ -1315,7 +1340,8 @@ test('Teams stateful SkillHub fixture handles dependencies and materialization w
   );
 });
 
-function contextBridgeLikeRendererPage({ replaceableAgent = true } = {}) {
+function contextBridgeLikeRendererPage({ replaceableAgent = true, freezeAgent = true } = {}) {
+  const disposedBindings = [];
   const context = vm.createContext({
     clearTimeout,
     console,
@@ -1323,14 +1349,15 @@ function contextBridgeLikeRendererPage({ replaceableAgent = true } = {}) {
     structuredClone,
   });
   vm.runInContext(`
-    const originalAgent = Object.freeze({
+    const agentMethods = {
       getSkillsCatalog: async () => ({ installed: [], market: [{ slug: 'real-sit-skill' }] }),
       installSkill: async () => ({ ok: true, source: 'real-sit' }),
       uninstallSkill: async () => ({ ok: true, source: 'real-sit' }),
       updateSkill: async () => ({ ok: true, source: 'real-sit' }),
       revertSkill: async () => ({ ok: true, source: 'real-sit' }),
       reconcileSkills: async () => ({ ok: true, source: 'real-sit' }),
-    });
+    };
+    const originalAgent = ${freezeAgent ? 'Object.freeze(agentMethods)' : 'agentMethods'};
     Object.defineProperty(globalThis, 'agent', {
       value: originalAgent,
       configurable: ${replaceableAgent ? 'true' : 'false'},
@@ -1341,12 +1368,19 @@ function contextBridgeLikeRendererPage({ replaceableAgent = true } = {}) {
   `, context);
   return {
     __context: context,
+    __disposedBindings: disposedBindings,
     async exposeFunction(name, callback) {
       Object.defineProperty(context, name, {
         value: callback,
         configurable: true,
         writable: true,
       });
+      return {
+        async dispose() {
+          disposedBindings.push(name);
+          if (context[name] === callback) delete context[name];
+        },
+      };
     },
     async evaluate(callback, argument) {
       context.__evaluateArgument = argument;
@@ -1415,11 +1449,55 @@ test('Core Beta v2 renderer adapter replaces a frozen contextBridge-like agent w
     await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent),
     false,
   );
-  await adapter.close();
+  const closeReport = await adapter.close();
+  assert.equal(closeReport.ok, true);
+  assert.equal(closeReport.renderer.agent_restored, true);
+  assert.equal(closeReport.renderer.global_agent_descriptor_restored, true);
+  assert.ok(Object.values(closeReport.renderer.method_descriptors_restored).every(Boolean));
   assert.equal(
     await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent),
     true,
   );
+  assert.equal((await inspectRendererControlAdapterState(page)).node_binding_resource_count, 0);
+  assert.equal(page.__disposedBindings.length, 3);
+});
+
+test('Core Beta v2 renderer adapter restores all direct method descriptors before releasing Node bindings', async () => {
+  const page = contextBridgeLikeRendererPage({ freezeAgent: false });
+  const beforeDescriptors = await page.evaluate(() => Object.fromEntries(
+    ['getSkillsCatalog', 'installSkill', 'uninstallSkill', 'updateSkill', 'revertSkill', 'reconcileSkills']
+      .map((name) => {
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis.agent, name);
+        return [name, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          writable: descriptor.writable,
+        }];
+      }),
+  ));
+  const adapter = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: true, result: { ok: true } }),
+  });
+  assert.equal(adapter.bindingReport.strategy, 'direct-method');
+  const report = await adapter.close();
+  assert.equal(report.ok, true);
+  assert.ok(Object.values(report.renderer.method_descriptors_restored).every(Boolean));
+  const afterDescriptors = await page.evaluate(() => Object.fromEntries(
+    ['getSkillsCatalog', 'installSkill', 'uninstallSkill', 'updateSkill', 'revertSkill', 'reconcileSkills']
+      .map((name) => {
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis.agent, name);
+        return [name, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          writable: descriptor.writable,
+        }];
+      }),
+  ));
+  assert.deepEqual(afterDescriptors, beforeDescriptors);
+  assert.equal(await page.evaluate(() => globalThis.agent === globalThis.__testOriginalAgent), true);
 });
 
 test('Core Beta v2 renderer adapter fails closed when neither methods nor the global agent can be replaced', async () => {
@@ -1526,6 +1604,144 @@ test('Core Beta v2 renderer adapter does not clean-rebind over another active Ca
   assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 1);
   await existing.close();
   assert.equal((await inspectRendererControlAdapterState(page)).node_registry_count, 0);
+});
+
+test('Core Beta v2 renderer adapter transfers primary bindings when adapters close out of order', async () => {
+  const page = contextBridgeLikeRendererPage();
+  const firstEvents = [];
+  const secondEvents = [];
+  const first = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async (call) => {
+      firstEvents.push(call.name);
+      return { handled: true, result: { ok: true } };
+    },
+  });
+  const second = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async (call) => {
+      secondEvents.push(call.name);
+      return { handled: true, result: { ok: true } };
+    },
+  });
+  const firstClose = await first.close();
+  assert.equal(firstClose.ok, true);
+  let inspection = await inspectRendererControlAdapterState(page);
+  assert.equal(inspection.node_registry_count, 1);
+  assert.equal(inspection.node_binding_resource_count, 2);
+  const probe = await second.probe([{ name: 'getSkillsCatalog', args: ['__probe__'] }]);
+  assert.equal(probe.ok, true);
+  assert.deepEqual(firstEvents, []);
+  assert.deepEqual(secondEvents, ['getSkillsCatalog']);
+  const secondClose = await second.close();
+  assert.equal(secondClose.ok, true);
+  inspection = await inspectRendererControlAdapterState(page);
+  assert.equal(inspection.node_registry_count, 0);
+  assert.equal(inspection.node_binding_resource_count, 0);
+  assert.equal(page.__disposedBindings.length, 6);
+});
+
+test('Core Beta v2 renderer adapter bounds every lifecycle probe in the renderer and Node process', async () => {
+  const page = contextBridgeLikeRendererPage();
+  const adapter = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async (call) => {
+      if (call.name === 'installSkill') return new Promise(() => {});
+      return { handled: true, result: { ok: true } };
+    },
+    timeouts: {
+      probeRendererTimeoutMs: 20,
+      probeNodeTimeoutMs: 80,
+    },
+  });
+  const startedAt = Date.now();
+  const probe = await adapter.probe(skillLifecycleProbeCalls());
+  assert.equal(probe.ok, false);
+  assert.equal(probe.results.length, 2);
+  assert.match(probe.results[1].error, /probe installSkill renderer timeout after 20ms/);
+  assert.ok(Date.now() - startedAt < 500);
+  await adapter.close();
+});
+
+test('Core Beta v2 renderer adapter preserves a failed close as pollution and forbids rebind', async () => {
+  const page = contextBridgeLikeRendererPage();
+  const adapter = await installCoreBetaV2RendererControlAdapter({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: true, result: { ok: true } }),
+  });
+  await page.evaluate(() => {
+    const current = globalThis.agent;
+    Object.defineProperty(globalThis, 'agent', {
+      value: current,
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  });
+  await assert.rejects(adapter.close(), /renderer_agent_restore_failed/);
+  const polluted = await inspectRendererControlAdapterState(page);
+  assert.equal(polluted.node_registry_count, 1);
+  assert.equal(polluted.node_registry[0].close_failed, true);
+
+  const verified = await installRendererControlAdapterWithRecovery({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: true, result: { ok: true } }),
+    probeCalls: skillLifecycleProbeCalls(),
+    maxAttempts: 2,
+  });
+  assert.equal(verified.ok, false);
+  assert.equal(verified.attempts.length, 1);
+  assert.match(verified.reason, /polluted before bind: node_registry_close_failed/);
+});
+
+test('Core Beta v2 renderer adapter refuses orphaned renderer markers before first bind', async () => {
+  const page = contextBridgeLikeRendererPage();
+  await page.evaluate(() => {
+    globalThis.__qbotAutomationControlId = 'orphan';
+    globalThis.__qbotAutomationControlStack = ['orphan'];
+    globalThis.__qbotAutomationAgentOriginalsOwner = 'orphan';
+  });
+  const verified = await installRendererControlAdapterWithRecovery({
+    page,
+    rules: skillLifecycleRendererRules(),
+    initiallyArmed: true,
+    handler: async () => ({ handled: true, result: { ok: true } }),
+    probeCalls: skillLifecycleProbeCalls(),
+    maxAttempts: 2,
+  });
+  assert.equal(verified.ok, false);
+  assert.equal(verified.attempts.length, 1);
+  assert.match(verified.reason, /polluted before bind/);
+  assert.ok(verified.attempts[0].before_assessment.errors.includes('renderer_stack_node_registry_mismatch'));
+});
+
+test('Core Beta v2 renderer adapter puts a Node hard deadline around exposed bindings', async () => {
+  const page = contextBridgeLikeRendererPage();
+  page.exposeFunction = async () => new Promise(() => {});
+  const startedAt = Date.now();
+  await assert.rejects(
+    installCoreBetaV2RendererControlAdapter({
+      page,
+      rules: skillLifecycleRendererRules(),
+      initiallyArmed: true,
+      timeouts: { exposeNodeTimeoutMs: 20 },
+    }),
+    /expose .* Node hard timeout after 20ms/,
+  );
+  assert.ok(Date.now() - startedAt < 500);
+  const inspection = await inspectRendererControlAdapterState(page);
+  assert.equal(inspection.node_registry_count, 1);
+  assert.equal(inspection.node_registry[0].close_failed, true);
 });
 
 test('Core Beta v2 exact early automation failure is not overwritten by generic manifest reporting', () => {
@@ -2303,6 +2519,12 @@ test('managed Teams Casebook recovery rebuilds its CDP proxy after a host relaun
   assert.match(source, /let connection = await resolveTeamsCasebookConnection/);
   assert.match(source, /connection = await resolveTeamsCasebookConnection\(\{ \.\.\.options, cdp: undefined \}\)/);
   assert.match(source, /process\.exit\(teamsCasebookExitCode\(summary\)\)/);
+  const productionFreeze = source.indexOf('if (productionGate) break;');
+  const repair = source.indexOf('const repair = repairInterruptedTeamsProgress', productionFreeze);
+  assert.ok(
+    productionFreeze >= 0 && repair > productionFreeze,
+    'production gate must freeze before the non-production same-directory repair path',
+  );
 });
 
 test('managed Teams Casebook exits nonzero for a stopped or incomplete summary', () => {
@@ -2324,6 +2546,53 @@ test('managed Teams Casebook exits nonzero for a stopped or incomplete summary',
     counts: { total: 55, passed: 55, failed: 0, blocked: 0 },
     result_accounting: { planned: 55, completed: 55 },
   }), 0);
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: false,
+    counts: { total: 0, passed: 0, failed: 0, blocked: 0 },
+  }), 1, 'missing planned accounting must fail closed');
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: false,
+    counts: { total: 1, passed: 1, failed: 0, blocked: 0 },
+    result_accounting: { planned: 2, completed: 2 },
+  }), 1, 'counts.total must equal planned even when completed claims success');
+  assert.equal(teamsCasebookExitCode({
+    status: 'passed',
+    stopped: false,
+    counts: { total: 2, passed: 1, failed: 0, blocked: 0, other: 1 },
+    result_accounting: { planned: 2, completed: 2 },
+  }), 1, 'every planned result must be an explicit pass');
+});
+
+test('legacy finalization diagnostics never overwrite the primary stopped progress', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-finalization-stop-'));
+  const progressFile = path.join(outDir, 'automation-progress.json');
+  const primary = {
+    stopped: true,
+    stop_reason: 'primary framework stop',
+    current_case: 'BETA-CHAT-001',
+    completed: 3,
+    total: 16,
+    results: [],
+  };
+  fs.writeFileSync(progressFile, `${JSON.stringify(primary, null, 2)}\n`);
+  const before = fs.readFileSync(progressFile);
+  try {
+    const diagnostic = writeSecondaryFinalizationDiagnostic({
+      outDir,
+      phase: 'run-final',
+      primaryStop: primary,
+      error: new Error('final identity readback failed'),
+    });
+    assert.deepEqual(fs.readFileSync(progressFile), before);
+    assert.equal(diagnostic.secondary, true);
+    assert.equal(diagnostic.primary_stop_reason, primary.stop_reason);
+    assert.equal(diagnostic.primary_stopped_case_id, primary.current_case);
+    assert.equal(JSON.parse(fs.readFileSync(diagnostic.file, 'utf8')).reason, 'final identity readback failed');
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 test('managed Teams replacement reconnect waits for QWork without relaunching the host', () => {
@@ -2885,6 +3154,214 @@ test('run metadata pins bundle identity and rejects host drift on resume', () =>
     assert.throws(
       () => writePinnedRunMetadata(root, { ...metadata, host: { ...metadata.host, build: 'wrong' } }),
       /identity drift.*host\.build/i,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('run metadata persists and validates every QWork capabilities observation ledger', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-run-capabilities-'));
+  const capabilities = createQworkCapabilitiesReadbackFixture();
+  const metadata = {
+    schema_version: 2,
+    captured_at: '2026-09-08T00:00:00.000Z',
+    last_observed_at: '2026-09-08T00:00:00.000Z',
+    host: { product: '360Teams', version: '5.6.7', build: '2119083191', app_path: '/Applications/360Teams.app' },
+    qwork: { version: '0.1.9-sit.1', url: 'file:///Users/test/.deepbank-sit/ui/0.1.9-sit.1/index.html' },
+    control_plane: { origin: 'https://sit.example.test' },
+    release_observation: {
+      capabilities_readback: structuredClone(capabilities),
+    },
+    release_observation_checks: [{
+      phase: 'startup',
+      observed_at: '2026-09-08T00:00:00.000Z',
+      capabilities_readback: structuredClone(capabilities),
+    }],
+    model_tier: 'M3',
+    timeout_ms: 600000,
+    observed_host_pids: [4242],
+    selected_case_ids: ['BETA-INIT-001'],
+  };
+  try {
+    const written = writePinnedRunMetadata(root, metadata);
+    assert.deepEqual(
+      written.metadata.release_observation_checks[0].capabilities_readback,
+      capabilities,
+    );
+
+    const sequenceRoot = path.join(root, 'ordered-sequence');
+    writePinnedRunMetadata(sequenceRoot, metadata);
+    const observationFragment = (phase, observedAt) => ({
+      ...metadata,
+      last_observed_at: observedAt,
+      release_observation_checks: [{
+        phase,
+        observed_at: observedAt,
+        capabilities_readback: structuredClone(capabilities),
+      }],
+    });
+    writePinnedRunMetadata(
+      sequenceRoot,
+      observationFragment('replacement-renderer', '2026-09-08T00:01:00.000Z'),
+    );
+    writePinnedRunMetadata(
+      sequenceRoot,
+      observationFragment('run-final', '2026-09-08T00:02:00.000Z'),
+    );
+    const ordered = JSON.parse(
+      fs.readFileSync(path.join(sequenceRoot, 'run-metadata.json'), 'utf8'),
+    );
+    assert.deepEqual(
+      ordered.release_observation_checks.map((check) => check.phase),
+      ['startup', 'replacement-renderer', 'run-final'],
+    );
+    assert.throws(
+      () => writePinnedRunMetadata(
+        sequenceRoot,
+        observationFragment('replacement-renderer', '2026-09-08T00:03:00.000Z'),
+      ),
+      /phases must be startup/i,
+    );
+    assert.throws(
+      () => writePinnedRunMetadata(
+        path.join(root, 'invalid-initial-phase'),
+        observationFragment('run-final', '2026-09-08T00:00:00.000Z'),
+      ),
+      /phases must be startup/i,
+    );
+
+    const chronologyRoot = path.join(root, 'chronology');
+    writePinnedRunMetadata(chronologyRoot, metadata);
+    assert.throws(
+      () => writePinnedRunMetadata(
+        chronologyRoot,
+        observationFragment('run-final', '2026-09-07T23:59:59.000Z'),
+      ),
+      /not chronological/i,
+    );
+
+    const tampered = structuredClone(metadata);
+    tampered.release_observation_checks[0].capabilities_readback.probe_ledger.pop();
+    assert.throws(
+      () => writePinnedRunMetadata(root, tampered),
+      /invalid QWork capabilities evidence/,
+    );
+
+    const missingChecks = structuredClone(metadata);
+    missingChecks.release_observation_checks = [];
+    assert.throws(
+      () => writePinnedRunMetadata(root, missingChecks),
+      /requires capabilities checks/,
+    );
+
+    const emptyObservation = structuredClone(metadata);
+    emptyObservation.release_observation = null;
+    emptyObservation.release_observation_checks = [];
+    emptyObservation.claude_skill_call_canonicalization_policy = null;
+    emptyObservation.claude_skill_call_canonicalization_policy_checks = [];
+    assert.doesNotThrow(() => writePinnedRunMetadata(
+      path.join(root, 'empty-observation-compatible'),
+      emptyObservation,
+    ));
+    const omittedObservation = structuredClone(emptyObservation);
+    delete omittedObservation.release_observation;
+    delete omittedObservation.release_observation_checks;
+    delete omittedObservation.claude_skill_call_canonicalization_policy;
+    delete omittedObservation.claude_skill_call_canonicalization_policy_checks;
+    assert.doesNotThrow(() => writePinnedRunMetadata(
+      path.join(root, 'omitted-observation-compatible'),
+      omittedObservation,
+    ));
+
+    for (const [field, value, expected] of [
+      ['release_observation_checks', {}, /release observation checks must be an array/i],
+      ['claude_skill_call_canonicalization_policy_checks', 'forged', /policy checks must be an array/i],
+    ]) {
+      const malformed = structuredClone(metadata);
+      malformed[field] = value;
+      assert.throws(
+        () => writePinnedRunMetadata(path.join(root, `non-array-${field}`), malformed),
+        expected,
+      );
+    }
+
+    const phaseTimes = [
+      ['startup', '2026-09-08T00:00:00.000Z'],
+      ['replacement-renderer', '2026-09-08T00:01:00.000Z'],
+      ['run-final', '2026-09-08T00:02:00.000Z'],
+    ];
+    const releaseChecks = phaseTimes.map(([phase, observedAt]) => ({
+      phase,
+      observed_at: observedAt,
+      capabilities_readback: structuredClone(capabilities),
+    }));
+    const policyChecks = phaseTimes.map(([phase, observedAt]) => ({
+      phase,
+      observed_at: observedAt,
+      policy_sha256: 'a'.repeat(64),
+      ok: true,
+    }));
+    const deletedObservationVariants = [
+      {
+        name: 'retained-release-checks',
+        releaseChecks,
+        policy: null,
+        policyChecks: [],
+      },
+      {
+        name: 'reversed-release-checks',
+        releaseChecks: [...releaseChecks].reverse(),
+        policy: null,
+        policyChecks: [],
+      },
+      {
+        name: 'synchronously-reversed-release-and-policy-checks',
+        releaseChecks: [...releaseChecks].reverse(),
+        policy: { schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1' },
+        policyChecks: [...policyChecks].reverse(),
+      },
+    ];
+    for (const variant of deletedObservationVariants) {
+      const residual = {
+        ...structuredClone(metadata),
+        release_observation: null,
+        release_observation_checks: structuredClone(variant.releaseChecks),
+        claude_skill_call_canonicalization_policy: structuredClone(variant.policy),
+        claude_skill_call_canonicalization_policy_checks: structuredClone(variant.policyChecks),
+      };
+      assert.throws(
+        () => writePinnedRunMetadata(path.join(root, variant.name), residual),
+        /Run metadata/i,
+      );
+    }
+
+    const resumeRoot = path.join(root, 'resume-tamper');
+    writePinnedRunMetadata(resumeRoot, metadata);
+    const resumeFile = path.join(resumeRoot, 'run-metadata.json');
+    const resumeTampered = JSON.parse(fs.readFileSync(resumeFile, 'utf8'));
+    resumeTampered.release_observation_checks[0].capabilities_readback.probe_ledger.pop();
+    fs.writeFileSync(resumeFile, `${JSON.stringify(resumeTampered, null, 2)}\n`);
+    assert.throws(
+      () => writePinnedRunMetadata(resumeRoot, {
+        ...metadata,
+        last_observed_at: '2026-09-08T00:01:00.000Z',
+      }),
+      /check 1 has invalid QWork capabilities evidence/,
+    );
+
+    const baselineRoot = path.join(root, 'baseline-tamper');
+    writePinnedRunMetadata(baselineRoot, metadata);
+    const baselineFile = path.join(baselineRoot, 'run-metadata.json');
+    const baselineTampered = JSON.parse(fs.readFileSync(baselineFile, 'utf8'));
+    baselineTampered.release_observation.capabilities_readback.probe_ledger.pop();
+    fs.writeFileSync(baselineFile, `${JSON.stringify(baselineTampered, null, 2)}\n`);
+    assert.throws(
+      () => writePinnedRunMetadata(baselineRoot, {
+        ...metadata,
+        last_observed_at: '2026-09-08T00:01:00.000Z',
+      }),
+      /release observation has invalid QWork capabilities evidence/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

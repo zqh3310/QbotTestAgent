@@ -167,19 +167,24 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*移入错误 test[\s\S]*复制 owner block[\s\S]*origin changes 鉴证继续[\s\S]*精确出现一次[\s\S]*forbidden fragment[\s\S]*精确为 0/,
-    `${documentName} 必须锁定 MR1540 owner scope，且其它 current-release/origin/forbidden 断言保持严格`,
+    /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*MR !1597[\s\S]*input[\s\S]*expected[\s\S]*owner_region_order[\s\S]*IM_USER_ACCESS_TOKEN[\s\S]*forbidden[\s\S]*origin changes 鉴证继续[\s\S]*精确出现一次[\s\S]*forbidden fragment[\s\S]*精确为 0/,
+    `${documentName} 必须锁定 MR1540 owner scope 与 MR1597 双 region scope，并保持 origin/forbidden 断言严格`,
   );
 }
 assert.match(
   qworkReleaseSourceContractsSource,
-  /CURRENT_RELEASE_SCOPED_BINDINGS[\s\S]*QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body/,
-  'current-release owner scope 白名单必须只由 MR1540 合同显式声明',
+  /CURRENT_RELEASE_SCOPED_BINDINGS[\s\S]*QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID[\s\S]*test_worker_identity_mdmcode_expected[\s\S]*test_worker_access_token_input_only/,
+  'current-release scope 白名单必须只显式声明 MR1540 owner scope 与 MR1597 region scope',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /if \(!scope\)[\s\S]*occurrenceCount === 1[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every/,
-  'current-release continuity 必须保持默认唯一，并以唯一顶层 test owner scope 收紧 MR1540 例外',
+  /if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1/,
+  'current-release continuity 必须保持默认精确计数，并以唯一顶层 test owner 收紧 scope 例外',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /CURRENT_RELEASE_REGION_SCOPE_BOUNDARY[\s\S]*regionStartIndexes[\s\S]*regionEndIndexes[\s\S]*ownerRegionOrder[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentsOrdered[\s\S]*forbiddenFragments[\s\S]*fileOccurrenceVerified/,
+  'MR1597 region scope 必须验证唯一边界、全局顺序、相对行号、forbidden fragment 与全文计数',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -188,8 +193,8 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /const integrationBindings = contract\.integration_bindings\.map[\s\S]*additionCount === 1[\s\S]*integration_binding_mismatch/,
-  'origin changes integration binding 必须继续精确唯一',
+  /const integrationBindings = contract\.integration_bindings\.map[\s\S]*additionCount === Number\(binding\.expected_addition_count \?\? 1\)[\s\S]*integration_binding_mismatch/,
+  'origin changes integration binding 必须继续按冻结 expected_addition_count 精确计数',
 );
 assert.match(
   coreBetaPretestSource,

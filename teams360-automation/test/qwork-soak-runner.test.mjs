@@ -9,6 +9,9 @@ import {
   qworkSoakReleaseIdentityFingerprint,
   readAndAuditQworkSoakReport,
 } from '../../src/lib/qwork-soak-report.mjs';
+import {
+  createQworkCapabilitiesReadbackFixture,
+} from '../../test/helpers/qwork-soak-fixture.mjs';
 import { runQworkSoak } from '../lib/qwork-soak-runner.mjs';
 
 const RELEASE_IDENTITY = Object.freeze({
@@ -62,22 +65,15 @@ function createFakeAdapter({
       return structuredClone(context);
     },
     async readIdentity() {
+      const capabilitiesReadback = createQworkCapabilitiesReadbackFixture(clock);
       return {
         evidence_valid: true,
         ok: true,
         observed_at: tick(20),
         context: structuredClone(context),
         release_identity: structuredClone(RELEASE_IDENTITY),
-        capabilities_readback_attempts: [{
-          attempt: 1,
-          timeout_ms: 2_000,
-          started_at: tick(1),
-          ended_at: tick(1),
-          duration_ms: 1,
-          ok: true,
-          value_type: 'object',
-          error: '',
-        }],
+        capabilities_readback: capabilitiesReadback,
+        capabilities_readback_attempts: structuredClone(capabilitiesReadback.probe_ledger),
         runtime: {
           top_level_version: RELEASE_IDENTITY.qwork_version,
           loaded_version: RELEASE_IDENTITY.qwork_version,
@@ -245,12 +241,24 @@ test('G5 runner materializes 100 serial tasks and three full managed restarts ac
   assert.equal(result.audit.observed.restart_count, 3);
   const report = JSON.parse(fs.readFileSync(result.report_path, 'utf8'));
   const startup = report.identity_observations.find((item) => item.observation_id === 'startup');
-  assert.equal(startup.capabilities_readback_attempts.length, 1);
-  assert.equal(startup.capabilities_readback_attempts[0].timeout_ms, 2_000);
+  assert.equal(startup.capabilities_readback.probe_ledger.length, 3);
+  assert.deepEqual(
+    startup.capabilities_readback.probe_ledger.map((item) => item.phase),
+    ['cold_load', 'stable_read_1', 'stable_read_2'],
+  );
+  assert.equal(startup.capabilities_readback_attempts.length, 3);
+  assert.deepEqual(
+    startup.capabilities_readback_attempts,
+    startup.capabilities_readback.probe_ledger,
+  );
   const identityArtifact = report.external_artifacts.find((item) => (
     item.artifact_id === startup.artifacts.identity_readback
   ));
   const identityPayload = JSON.parse(fs.readFileSync(identityArtifact.path, 'utf8'));
+  assert.deepEqual(
+    identityPayload.capabilities_readback,
+    startup.capabilities_readback,
+  );
   assert.deepEqual(
     identityPayload.capabilities_readback_attempts,
     startup.capabilities_readback_attempts,
@@ -342,6 +350,27 @@ test('G5 runner fails closed without a report when strict send confirmation is a
   );
   assert.equal(fs.existsSync(path.join(outDir, 'soak-report.json')), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(outDir, 'soak-checkpoint.json'))).report_generated, false);
+});
+
+test('G5 runner rejects legacy attempts when the authoritative probe ledger is missing', async () => {
+  const outDir = output('capabilities-ledger-missing');
+  const adapter = createFakeAdapter();
+  const readIdentity = adapter.readIdentity.bind(adapter);
+  adapter.readIdentity = async (...args) => {
+    const readback = await readIdentity(...args);
+    delete readback.capabilities_readback;
+    return readback;
+  };
+  await assert.rejects(
+    runQworkSoak({
+      adapter,
+      outDir,
+      releaseIdentity: RELEASE_IDENTITY,
+      frameworkCommit: FRAMEWORK_COMMIT,
+    }),
+    /authoritative capabilities probe ledger is missing or invalid/,
+  );
+  assert.equal(fs.existsSync(path.join(outDir, 'soak-report.json')), false);
 });
 
 test('G5 runner fails closed when a managed restart does not replace every context field', async () => {

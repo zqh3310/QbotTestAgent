@@ -12,6 +12,9 @@ import {
   qworkSoakReleaseIdentityFingerprint,
   readAndAuditQworkSoakReport,
 } from '../../src/lib/qwork-soak-report.mjs';
+import {
+  validateQworkCapabilitiesReadbackEvidence,
+} from '../../src/lib/qwork-capabilities-readback.mjs';
 import { createNewManagedOutputDirectory } from './managed-runner-lock.mjs';
 
 const IDENTITY_FIELDS = Object.freeze([
@@ -112,24 +115,8 @@ function assertIdentityReadback(readback, expectedIdentity, fingerprint, context
   const observedContext = assertContext(readback.context, `${label} identity readback`);
   if (!same(observedContext, context)) throw new Error(`${label} identity context does not match the active host.`);
   assertIdentity(readback.release_identity, expectedIdentity, fingerprint, label);
-  const capabilitiesAttempts = readback.capabilities_readback_attempts;
-  if (!Array.isArray(capabilitiesAttempts) || capabilitiesAttempts.length < 1
-    || capabilitiesAttempts.length > 3
-    || capabilitiesAttempts.some((attempt, index) => (
-      attempt?.attempt !== index + 1
-      || attempt?.timeout_ms !== 2_000
-      || !isIso(attempt?.started_at)
-      || !isIso(attempt?.ended_at)
-      || !Number.isSafeInteger(attempt?.duration_ms)
-      || attempt.duration_ms < 0
-      || typeof attempt?.ok !== 'boolean'
-      || typeof attempt?.error !== 'string'
-      || (attempt.ok === true && (attempt.value_type !== 'object' || attempt.error !== ''))
-      || (attempt.ok === false && (attempt.value_type !== '' || !attempt.error))
-    ))
-    || capabilitiesAttempts.at(-1)?.ok !== true
-    || capabilitiesAttempts.slice(0, -1).some((attempt) => attempt.ok !== false)) {
-    throw new Error(`${label} capabilities attempts ledger is missing or invalid.`);
+  if (!validateQworkCapabilitiesReadbackEvidence(readback.capabilities_readback).valid) {
+    throw new Error(`${label} authoritative capabilities probe ledger is missing or invalid.`);
   }
   const runtime = readback.runtime || {};
   if (runtime.top_level_version !== expectedIdentity.qwork_version
@@ -536,6 +523,7 @@ export async function runQworkSoak({
       observed_at: observedAt,
       context,
       release_identity_sha256: releaseIdentitySha256,
+      capabilities_readback: structuredClone(readback.capabilities_readback),
       capabilities_readback_attempts: structuredClone(
         readback.capabilities_readback_attempts || [],
       ),
@@ -553,6 +541,7 @@ export async function runQworkSoak({
       context,
       release_identity: checked.normalizedIdentity,
       release_identity_sha256: releaseIdentitySha256,
+      capabilities_readback: structuredClone(observation.capabilities_readback),
       capabilities_readback_attempts: structuredClone(observation.capabilities_readback_attempts),
       runtime: readback.runtime,
       control_plane_health: readback.control_plane_health,

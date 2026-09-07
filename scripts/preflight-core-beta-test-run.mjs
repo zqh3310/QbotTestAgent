@@ -19,6 +19,9 @@ import {
   qworkReleaseIdentityFingerprint,
 } from '../src/lib/qwork-release-test-plan.mjs';
 import {
+  validateQworkCapabilitiesReadbackEvidence,
+} from '../src/lib/qwork-capabilities-readback.mjs';
+import {
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
   QWORK_RELEASE_INTAKE_SCHEMA,
   QWORK_RELEASE_INTAKE_TOOL_VERSION,
@@ -818,10 +821,12 @@ async function main() {
               ? `target=${inspection.qbot_target.url || inspection.qbot_target.title || 'identified'}`
               : inspection.host_precondition?.reason || 'No ready QWork/QBot target');
           const publicCapabilities = inspection.public_capabilities;
-          addCheck('qwork_public_capabilities', publicCapabilities?.ok === true,
-            publicCapabilities?.ok
-              ? `source=${publicCapabilities.source}; keys=${publicCapabilities.keys.join(',')}`
-              : publicCapabilities?.error || 'window.agent.capabilities was not probed');
+          const publicCapabilitiesValidation =
+            validateQworkCapabilitiesReadbackEvidence(publicCapabilities);
+          addCheck('qwork_public_capabilities', publicCapabilitiesValidation.valid,
+            publicCapabilitiesValidation.valid
+              ? `source=${publicCapabilities.source}; keys=${publicCapabilities.keys.join(',')}; probes=${publicCapabilities.probe_ledger.length}; signature=${publicCapabilities.summary_signature_sha256}`
+              : `errors=${publicCapabilitiesValidation.errors.join(',')}; probe_error=${publicCapabilities?.error || 'window.agent.capabilities was not probed'}`);
           const actualQworkOrigin = normalizeOrigin(
             inspection.qbot_target?.control_plane_origin || '',
           );

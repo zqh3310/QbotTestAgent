@@ -147,6 +147,34 @@ function fixtureRepo() {
   return { repo, baseline, releaseHead };
 }
 
+function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
+  const lines = [...sourceLines];
+  const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  ));
+  const ownerBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
+  );
+  const oversizedBinding = envelopeContract?.integration_bindings?.find(
+    (binding) => binding.id === 'test_rejects_payload_at_shared_limit',
+  );
+  if (ownerBinding?.path !== filePath || oversizedBinding?.path !== filePath) return lines;
+
+  const ownerIndex = lines.indexOf(ownerBinding.addition.source);
+  const oversizedIndex = lines.indexOf(oversizedBinding.addition.source);
+  if (ownerIndex < 0 || oversizedIndex <= ownerIndex) return lines;
+
+  lines.splice(oversizedIndex, 0, '  const oversizedEnvelopeFixture = {');
+  lines.splice(
+    oversizedIndex + 2,
+    0,
+    '  };',
+    '  void oversizedEnvelopeFixture;',
+    '});',
+  );
+  return lines;
+}
+
 function currentReleaseFileFixtures(contracts, head, {
   ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
     verified: true,
@@ -184,15 +212,45 @@ function currentReleaseFileFixtures(contracts, head, {
     ))) {
       addLine(binding.path, binding.addition?.source);
     }
+    const scopedOwnerGroups = new Map();
     for (const binding of contract.integration_bindings.filter((item) => item.current_release_scope)) {
-      appendLine(binding.path, binding.current_release_scope.owner_start.source);
-      for (const fragment of binding.current_release_scope.required_fragments) {
-        appendLine(binding.path, fragment.value.source);
+      const scope = binding.current_release_scope;
+      const key = `${binding.path}\0${scope.owner_start.source}`;
+      if (!scopedOwnerGroups.has(key)) {
+        scopedOwnerGroups.set(key, { path: binding.path, owner: scope.owner_start.source, scopes: [] });
       }
+      const group = scopedOwnerGroups.get(key);
+      if (!group.scopes.some((candidate) => stableJson(candidate) === stableJson(scope))) {
+        group.scopes.push(scope);
+      }
+    }
+    for (const group of scopedOwnerGroups.values()) {
+      appendLine(group.path, group.owner);
+      for (const scope of group.scopes.filter((item) => item.boundary === 'next-top-level-test-or-eof')) {
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+      }
+      const regionScopes = group.scopes
+        .filter((item) => item.boundary === 'anchored-line-region-within-next-top-level-test')
+        .sort((left, right) => Number(left.region_end.source.trim() === '});')
+          - Number(right.region_end.source.trim() === '});'));
+      const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
+        scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
+      ));
+      for (const scope of regionScopes) {
+        appendLine(group.path, scope.region_start.source);
+        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        appendLine(group.path, scope.region_end.source);
+        if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
+          appendLine(group.path, "    platform: 'darwin',");
+          appendLine(group.path, '  } ) ;');
+        }
+      }
+      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
-    const source = `${lines.join('\n')}\n`;
+    const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, lines, contracts);
+    const source = `${completedLines.join('\n')}\n`;
     return [filePath, {
       file_name: path.basename(filePath),
       file_path: filePath,
@@ -448,7 +506,12 @@ function exactAddedLinesContractFixture(baseContract) {
     add(baseContract.source_file.path, header.value_definition?.source);
     add(baseContract.source_file.path, header.emission?.source);
   }
-  for (const binding of baseContract.integration_bindings) add(binding.path, binding.addition.source);
+  for (const binding of baseContract.integration_bindings) {
+    const lines = additionsByPath.get(binding.path) || [];
+    const expectedCount = Number(binding.expected_addition_count ?? 1);
+    for (let index = 0; index < expectedCount; index += 1) lines.push(binding.addition.source);
+    additionsByPath.set(binding.path, lines);
+  }
   while ((additionsByPath.get(baseContract.source_file.path) || []).length < baseContract.source_file.source_line_count) {
     add(baseContract.source_file.path, `const fixturePadding${additionsByPath.get(baseContract.source_file.path).length} = true;`);
   }
@@ -504,7 +567,12 @@ function exactNewFileContractFixture(baseContract) {
     add(baseContract.source_file.path, header.value_definition?.source);
     add(baseContract.source_file.path, header.emission?.source);
   }
-  for (const binding of baseContract.integration_bindings) add(binding.path, binding.addition.source);
+  for (const binding of baseContract.integration_bindings) {
+    const lines = additionsByPath.get(binding.path) || [];
+    const expectedCount = Number(binding.expected_addition_count ?? 1);
+    for (let index = 0; index < expectedCount; index += 1) lines.push(binding.addition.source);
+    additionsByPath.set(binding.path, lines);
+  }
   while ((additionsByPath.get(baseContract.source_file.path) || []).length < baseContract.source_file.source_line_count) {
     add(baseContract.source_file.path, `const fixturePadding${additionsByPath.get(baseContract.source_file.path).length} = true;`);
   }
@@ -847,7 +915,7 @@ function verifiedAttestation(contract) {
     })),
     integration_bindings: contract.integration_bindings.map((binding) => ({
       ...binding,
-      addition_count: 1,
+      addition_count: Number(binding.expected_addition_count ?? 1),
       verified: true,
     })),
     forbidden_fragments: (contract.forbidden_fragments || []).map((assertion) => ({
@@ -1445,6 +1513,407 @@ test('MR !1590, !1593, !1596, and !1597 current-release assertions fail closed o
       assert.equal(result.failures.includes(`current_forbidden_fragment:${forbidden.id}`), true);
     }
   }
+});
+
+test('MR !1597 binds duplicated identity additions to exact input and expected regions without forwarding access tokens', () => {
+  const contract = QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT;
+  const identityBindings = contract.integration_bindings.filter((binding) => (
+    binding.expected_addition_count === 2
+  ));
+  const tokenBinding = contract.integration_bindings.find((binding) => (
+    binding.id === 'test_worker_access_token_input_only'
+  ));
+  assert.equal(identityBindings.length, 4);
+  assert.ok(tokenBinding);
+  assert.equal(identityBindings.every((binding) => (
+    binding.expected_current_occurrence_count === 2
+    && binding.current_release_scope.boundary === 'anchored-line-region-within-next-top-level-test'
+    && binding.current_release_scope.forbidden_fragments.length === 1
+  )), true);
+  assert.deepEqual(
+    [tokenBinding.expected_addition_count, tokenBinding.expected_current_occurrence_count],
+    [1, 1],
+  );
+  assert.equal(tokenBinding.current_release_match.match, 'js-property-key');
+  assert.equal(tokenBinding.current_release_match.value.source, 'IM_USER_ACCESS_TOKEN');
+  assert.equal(identityBindings.every((binding) => (
+    binding.current_release_scope.forbidden_fragments[0].match === 'js-property-key'
+    && binding.current_release_scope.forbidden_fragments[0].value.source === 'IM_USER_ACCESS_TOKEN'
+  )), true);
+
+  const originFixture = exactAddedLinesContractFixture(contract);
+  const originSource = reconstructGitLabAddedLinesSource(
+    originFixture.changes.find((change) => change.new_path === tokenBinding.path),
+  );
+  const ownerLine = tokenBinding.current_release_scope.owner_start.source;
+  assert.equal(originSource.split('\n').filter((line) => line === ownerLine).length, 0);
+  const origin = auditFixture(originFixture);
+  assert.equal(origin.verified, true, origin.failures.join(','));
+  for (const binding of identityBindings) {
+    assert.equal(origin.integration_bindings.find((item) => item.id === binding.id)?.addition_count, 2);
+  }
+  assert.equal(origin.integration_bindings.find((item) => item.id === tokenBinding.id)?.addition_count, 1);
+
+  const removeOneOriginIdentity = structuredClone(originFixture);
+  const originTestChange = removeOneOriginIdentity.changes.find((change) => change.new_path === tokenBinding.path);
+  originTestChange.diff = originTestChange.diff.replace(`+${identityBindings[0].addition.source}\n`, '');
+  const missingOriginIdentity = auditFixture(removeOneOriginIdentity);
+  assert.equal(missingOriginIdentity.verified, false);
+  assert.equal(
+    missingOriginIdentity.failures.includes(`integration_binding_mismatch:${identityBindings[0].id}`),
+    true,
+  );
+  const mutateOriginTestDiff = (transform) => {
+    const copy = structuredClone(originFixture);
+    const change = copy.changes.find((item) => item.new_path === tokenBinding.path);
+    change.diff = transform(change.diff);
+    return auditFixture(copy);
+  };
+  const extraOriginIdentity = mutateOriginTestDiff((diff) => diff.replace(
+    `+${identityBindings[0].addition.source}\n`,
+    `+${identityBindings[0].addition.source}\n+${identityBindings[0].addition.source}\n`,
+  ));
+  assert.equal(extraOriginIdentity.verified, false);
+  assert.equal(extraOriginIdentity.failures.includes(
+    `integration_binding_mismatch:${identityBindings[0].id}`,
+  ), true);
+  const missingOriginToken = mutateOriginTestDiff((diff) => diff.replace(`+${tokenBinding.addition.source}\n`, ''));
+  assert.equal(missingOriginToken.verified, false);
+  assert.equal(missingOriginToken.failures.includes(`integration_binding_mismatch:${tokenBinding.id}`), true);
+  const repeatedOriginToken = mutateOriginTestDiff((diff) => diff.replace(
+    `+${tokenBinding.addition.source}\n`,
+    `+${tokenBinding.addition.source}\n+${tokenBinding.addition.source}\n`,
+  ));
+  assert.equal(repeatedOriginToken.verified, false);
+  assert.equal(repeatedOriginToken.failures.includes(`integration_binding_mismatch:${tokenBinding.id}`), true);
+
+  const head = '7'.repeat(40);
+  const fixtureMap = currentReleaseFileFixtures([contract], head);
+  const files = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+  const rewrite = (transform) => {
+    const copy = structuredClone(files);
+    const file = copy.find((item) => item.path === tokenBinding.path);
+    const source = Buffer.from(file.payload.content, 'base64').toString('utf8');
+    const updated = transform(source);
+    file.payload.content = Buffer.from(updated, 'utf8').toString('base64');
+    file.payload.size = Buffer.byteLength(updated, 'utf8');
+    file.payload.blob_id = gitBlobSha1(updated);
+    return copy;
+  };
+  const audit = (auditFiles) => auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: contract.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: contract.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files: auditFiles,
+    mergeRequests: [],
+    originAttestation: null,
+    contract,
+  });
+  const verified = audit(files);
+  assert.equal(verified.verified, true, verified.failures.join(','));
+  for (const binding of identityBindings) {
+    const observation = verified.integration_bindings.find((item) => item.id === binding.id);
+    assert.equal(observation.occurrence_count, 2, binding.id);
+    assert.equal(observation.scope_observation.region_start_occurrence_count, 1, binding.id);
+    assert.equal(observation.scope_observation.region_end_occurrence_count, 1, binding.id);
+    assert.equal(observation.scope_observation.region_ordered, true, binding.id);
+    assert.equal(observation.scope_observation.owner_region_ordered, true, binding.id);
+    assert.equal(observation.scope_observation.occurrence_count, 1, binding.id);
+    assert.equal(observation.scope_observation.required_fragments_ordered, true, binding.id);
+    assert.deepEqual(
+      observation.scope_observation.required_fragments.map((fragment) => fragment.line_index),
+      [1, 2, 3, 4],
+      binding.id,
+    );
+    assert.equal(observation.scope_observation.forbidden_fragments[0].occurrence_count, 0, binding.id);
+  }
+
+  const identityBinding = identityBindings[0];
+  const identityLine = identityBinding.addition.source;
+  const inputScope = tokenBinding.current_release_scope;
+  const expectedScope = identityBinding.current_release_scope;
+  const regionSource = (scope) => `${scope.region_start.source}\n${scope.required_fragments
+    .map((fragment) => fragment.value.source).join('\n')}\n${scope.region_end.source}\n`;
+  const inputRegion = regionSource(inputScope);
+  const expectedRegion = regionSource(expectedScope);
+  const inputRegionCompletion = "    platform: 'darwin',\n  } ) ;\n";
+
+  const missingOwner = audit(rewrite((source) => source.replace(`${ownerLine}\n`, '')));
+  assert.equal(missingOwner.verified, false);
+  assert.equal(missingOwner.failures.includes(
+    `current_integration_binding_scope_owner_mismatch:${identityBinding.id}`,
+  ), true);
+
+  for (const { label, binding, scope } of [
+    { label: 'input', binding: tokenBinding, scope: inputScope },
+    { label: 'expected', binding: identityBinding, scope: expectedScope },
+  ]) {
+    for (const [kind, field, failureSuffix] of [
+      ['start', 'region_start', 'region_start_mismatch'],
+      ['end', 'region_end', 'region_end_mismatch'],
+    ]) {
+      const anchor = scope[field].source;
+      const missingAnchor = audit(rewrite((source) => source.replace(`${anchor}\n`, '')));
+      assert.equal(missingAnchor.verified, false, `${label} ${kind} missing`);
+      assert.equal(missingAnchor.failures.includes(
+        `current_integration_binding_scope_${failureSuffix}:${binding.id}`,
+      ), true, `${label} ${kind} missing`);
+      const repeatedAnchor = audit(rewrite((source) => source.replace(`${anchor}\n`, `${anchor}\n${anchor}\n`)));
+      assert.equal(repeatedAnchor.verified, false, `${label} ${kind} repeated`);
+      assert.equal(repeatedAnchor.failures.includes(
+        `current_integration_binding_scope_${failureSuffix}:${binding.id}`,
+      ), true, `${label} ${kind} repeated`);
+    }
+  }
+
+  const movedOutOfInput = audit(rewrite((source) => (
+    `${source.replace(`${identityLine}\n`, '')}test('unrelated identity copy', () => {\n${identityLine}\n});\n`
+  )));
+  assert.equal(movedOutOfInput.verified, false);
+  assert.equal(movedOutOfInput.failures.includes(
+    `current_integration_binding_scope_required_fragment_mismatch:${tokenBinding.id}:${identityBinding.id}_input`,
+  ), true);
+
+  const expectedStart = identityBinding.current_release_scope.region_start.source;
+  const movedOutOfExpected = audit(rewrite((source) => {
+    const marker = `${expectedStart}\n`;
+    const markerIndex = source.indexOf(marker);
+    const prefix = source.slice(0, markerIndex + marker.length);
+    const suffix = source.slice(markerIndex + marker.length).replace(`${identityLine}\n`, '');
+    return `${prefix}${suffix}test('unrelated expected copy', () => {\n${identityLine}\n});\n`;
+  }));
+  assert.equal(movedOutOfExpected.verified, false);
+  assert.equal(movedOutOfExpected.failures.includes(
+    `current_integration_binding_scope_required_fragment_mismatch:${identityBinding.id}:${identityBinding.id}`,
+  ), true);
+
+  const duplicatedRequiredFragment = audit(rewrite((source) => source.replace(
+    expectedRegion,
+    expectedRegion.replace(`${identityLine}\n`, `${identityLine}\n${identityLine}\n`),
+  )));
+  assert.equal(duplicatedRequiredFragment.verified, false);
+  assert.equal(duplicatedRequiredFragment.failures.includes(
+    `current_integration_binding_scope_required_fragment_mismatch:${identityBinding.id}:${identityBinding.id}`,
+  ), true);
+
+  const reversedRegion = audit(rewrite((source) => source.replace(expectedRegion, (
+    `${expectedScope.region_end.source}\n${expectedScope.required_fragments
+      .map((fragment) => fragment.value.source).join('\n')}\n${expectedScope.region_start.source}\n`
+  ))));
+  assert.equal(reversedRegion.verified, false);
+  assert.equal(reversedRegion.failures.includes(
+    `current_integration_binding_scope_region_order_mismatch:${identityBinding.id}`,
+  ), true);
+
+  const [firstExpectedFragment, secondExpectedFragment] = expectedScope.required_fragments;
+  const reorderedRequiredFragments = audit(rewrite((source) => source.replace(
+    expectedRegion,
+    expectedRegion.replace(
+      `${firstExpectedFragment.value.source}\n${secondExpectedFragment.value.source}\n`,
+      `${secondExpectedFragment.value.source}\n${firstExpectedFragment.value.source}\n`,
+    ),
+  )));
+  assert.equal(reorderedRequiredFragments.verified, false);
+  assert.equal(reorderedRequiredFragments.failures.includes(
+    `current_integration_binding_scope_required_fragment_order_mismatch:${identityBinding.id}`,
+  ), true);
+
+  const exchangedRegions = audit(rewrite((source) => source.replace(
+    `${inputRegion}${inputRegionCompletion}${expectedRegion}`,
+    `${expectedRegion}${inputRegion}${inputRegionCompletion}`,
+  )));
+  const exchangedObservation = exchangedRegions.integration_bindings.find((item) => item.id === identityBinding.id);
+  assert.equal(exchangedRegions.verified, false);
+  assert.equal(exchangedObservation.scope_observation.region_ordered, true);
+  assert.equal(exchangedObservation.scope_observation.owner_region_ordered, false);
+  assert.equal(exchangedRegions.failures.includes(
+    `current_integration_binding_scope_region_sequence_mismatch:${identityBinding.id}`,
+  ), true);
+
+  const interleavedRegions = audit(rewrite((source) => source.replace(
+    `${inputRegion}${inputRegionCompletion}${expectedRegion}`,
+    `${inputScope.region_start.source}\n${inputScope.required_fragments.map((fragment) => fragment.value.source).join('\n')}\n`
+      + `${expectedScope.region_start.source}\n${expectedScope.required_fragments.map((fragment) => fragment.value.source).join('\n')}\n`
+      + `${inputScope.region_end.source}\n${inputRegionCompletion}${expectedScope.region_end.source}\n`,
+  )));
+  assert.equal(interleavedRegions.verified, false);
+  assert.equal(interleavedRegions.failures.includes(
+    `current_integration_binding_scope_region_sequence_mismatch:${identityBinding.id}`,
+  ), true);
+
+  const duplicatedCompleteRegion = audit(rewrite((source) => source.replace(inputRegion, `${inputRegion}${inputRegion}`)));
+  assert.equal(duplicatedCompleteRegion.verified, false);
+  assert.equal(duplicatedCompleteRegion.failures.includes(
+    `current_integration_binding_scope_region_sequence_mismatch:${tokenBinding.id}`,
+  ), true);
+
+  const tokenLine = tokenBinding.addition.source;
+  const tokenMovedIntoExpected = audit(rewrite((source) => source
+    .replace(`${tokenLine}\n`, '')
+    .replace(`${expectedStart}\n`, `${expectedStart}\n${tokenLine}\n`)));
+  assert.equal(tokenMovedIntoExpected.verified, false);
+  assert.equal(tokenMovedIntoExpected.failures.includes(
+    `current_integration_binding_scope_forbidden_fragment_mismatch:${identityBinding.id}:access_token_expected_forbidden`,
+  ), true);
+
+  for (const alternateTokenProperty of [
+    "      IM_USER_ACCESS_TOKEN: 'different-secret',",
+    '    IM_USER_ACCESS_TOKEN: tokenFromExpression,',
+    "    'IM_USER_ACCESS_TOKEN': tokenFromQuotedKey,",
+    "    ['IM_USER_ACCESS_TOKEN']: tokenFromComputedKey,",
+    '    IM_USER_ACCESS_TOKEN,',
+    '    IM_USER_ACCESS_TOKEN /* comment between key and colon */: tokenAfterComment,',
+    '    IM_USER_ACCESS_TOKEN\n    : tokenAfterLineBreak,',
+    "    ['IM_USER_ACCESS_TOKEN' /* computed comment */]: tokenFromCommentedComputedKey,",
+    '    IM_USER_ACCESS_TOKEN /* shorthand comment */,',
+  ]) {
+    const alternateTokenInExpected = audit(rewrite((source) => source.replace(
+      `${expectedStart}\n`,
+      `${expectedStart}\n${alternateTokenProperty}\n`,
+    )));
+    assert.equal(alternateTokenInExpected.verified, false, alternateTokenProperty);
+    assert.equal(alternateTokenInExpected.failures.includes(
+      `current_integration_binding_scope_forbidden_fragment_mismatch:${identityBinding.id}:access_token_expected_forbidden`,
+    ), true, alternateTokenProperty);
+    assert.equal(alternateTokenInExpected.failures.includes(
+      `current_integration_binding_mismatch:${tokenBinding.id}`,
+    ), true, alternateTokenProperty);
+  }
+
+  const alternateTokenOutsideOwner = audit(rewrite((source) => (
+    `${source}test('unrelated token copy', () => {\n  const leaked = { IM_USER_ACCESS_TOKEN: tokenFromElsewhere };\n});\n`
+  )));
+  assert.equal(alternateTokenOutsideOwner.verified, false);
+  assert.equal(alternateTokenOutsideOwner.failures.includes(
+    `current_integration_binding_mismatch:${tokenBinding.id}`,
+  ), true);
+
+  for (const harmlessTokenText of [
+    "    harmlessComment: true, // IM_USER_ACCESS_TOKEN: fake",
+    "    harmlessString: 'IM_USER_ACCESS_TOKEN: fake',",
+    '    harmlessTemplate: `IM_USER_ACCESS_TOKEN: fake`,',
+    '    harmlessPattern: /IM_USER_ACCESS_TOKEN\\s*:/u,',
+  ]) {
+    const harmlessTextInExpected = audit(rewrite((source) => (
+      `${source}test('unrelated token-like text', () => {\n  const harmless = {\n${harmlessTokenText}\n  };\n});\n`
+    )));
+    assert.equal(harmlessTextInExpected.verified, true, harmlessTokenText);
+  }
+
+  const malformedExpectedJavaScript = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `${expectedStart}\n    broken: ),\n`,
+  )));
+  assert.equal(malformedExpectedJavaScript.verified, false);
+  assert.equal(malformedExpectedJavaScript.failures.includes(
+    `current_integration_binding_scope_forbidden_fragment_mismatch:${identityBinding.id}:access_token_expected_forbidden`,
+  ), true);
+
+  const missingCurrentToken = audit(rewrite((source) => source.replace(`${tokenLine}\n`, '')));
+  assert.equal(missingCurrentToken.verified, false);
+  assert.equal(missingCurrentToken.failures.includes(
+    `current_integration_binding_scope_required_fragment_mismatch:${tokenBinding.id}:access_token_input`,
+  ), true);
+  const repeatedCurrentToken = audit(rewrite((source) => source.replace(
+    `${tokenLine}\n`,
+    `${tokenLine}\n${tokenLine}\n`,
+  )));
+  assert.equal(repeatedCurrentToken.verified, false);
+  assert.equal(repeatedCurrentToken.failures.includes(
+    `current_integration_binding_scope_required_fragment_mismatch:${tokenBinding.id}:access_token_input`,
+  ), true);
+
+  const extraIdentityCopy = audit(rewrite((source) => (
+    `${source}test('unrelated extra identity copy', () => {\n${identityLine}\n});\n`
+  )));
+  assert.equal(extraIdentityCopy.verified, false);
+  assert.equal(extraIdentityCopy.failures.includes(`current_integration_binding_mismatch:${identityBinding.id}`), true);
+
+  const duplicatedOwner = audit(rewrite((source) => `${source}${source}`));
+  assert.equal(duplicatedOwner.verified, false);
+  assert.equal(duplicatedOwner.failures.includes(
+    `current_integration_binding_scope_owner_mismatch:${identityBinding.id}`,
+  ), true);
+
+  const validateAttestation = (candidate) => validateCurrentReleaseSourceContractAttestation(candidate, {
+    report: { release: { head }, merge_requests: [], source_contracts: [candidate] },
+    contract,
+    contracts: [contract],
+  });
+  const verifiedValidation = validateAttestation(verified);
+  assert.equal(verifiedValidation.ok, true, verifiedValidation.failures.join(','));
+  const assertForgedAttestationRejected = (label, mutate, expectedFailure) => {
+    const forged = structuredClone(verified);
+    const forgedBinding = forged.integration_bindings.find((item) => item.id === identityBinding.id);
+    mutate(forgedBinding);
+    delete forged.attestation_sha256;
+    forged.attestation_sha256 = sha256Text(stableJson(forged));
+    const validation = validateAttestation(forged);
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.includes(expectedFailure), true, `${label}: ${validation.failures.join(',')}`);
+  };
+  assertForgedAttestationRejected('whole-file occurrence count', (binding) => {
+    binding.addition_count = 3;
+    binding.occurrence_count = 3;
+  }, `attestation_current_integration_binding_count:${identityBinding.id}`);
+  assertForgedAttestationRejected('owner count', (binding) => {
+    binding.scope_observation.owner_occurrence_count = 2;
+  }, `attestation_current_integration_binding_scope_owner:${identityBinding.id}`);
+  assertForgedAttestationRejected('region start count', (binding) => {
+    binding.scope_observation.region_start_occurrence_count = 2;
+  }, `attestation_current_integration_binding_scope_region_start:${identityBinding.id}`);
+  assertForgedAttestationRejected('region end count', (binding) => {
+    binding.scope_observation.region_end_occurrence_count = 0;
+  }, `attestation_current_integration_binding_scope_region_end:${identityBinding.id}`);
+  assertForgedAttestationRejected('local region order', (binding) => {
+    binding.scope_observation.region_ordered = false;
+  }, `attestation_current_integration_binding_scope_region_order:${identityBinding.id}`);
+  assertForgedAttestationRejected('owner region anchor count', (binding) => {
+    binding.scope_observation.owner_region_order[0].occurrence_count = 2;
+  }, `attestation_current_integration_binding_scope_region_sequence:${identityBinding.id}`);
+  assertForgedAttestationRejected('owner region anchor verification', (binding) => {
+    binding.scope_observation.owner_region_order[0].verified = false;
+  }, `attestation_current_integration_binding_scope_region_sequence:${identityBinding.id}`);
+  assertForgedAttestationRejected('owner region array order', (binding) => {
+    const order = binding.scope_observation.owner_region_order;
+    [order[0], order[1]] = [order[1], order[0]];
+  }, `attestation_current_integration_binding_scope_region_sequence:${identityBinding.id}`);
+  assertForgedAttestationRejected('owner region ordered flag', (binding) => {
+    binding.scope_observation.owner_region_ordered = false;
+  }, `attestation_current_integration_binding_scope_region_sequence:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragment count', (binding) => {
+    binding.scope_observation.required_fragments[0].occurrence_count = 2;
+  }, `attestation_current_integration_binding_scope_fragment:${identityBinding.id}:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragment verification', (binding) => {
+    binding.scope_observation.required_fragments[0].verified = false;
+  }, `attestation_current_integration_binding_scope_fragment:${identityBinding.id}:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragment unsafe line index', (binding) => {
+    binding.scope_observation.required_fragments[0].line_index = -1;
+  }, `attestation_current_integration_binding_scope_fragment:${identityBinding.id}:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragment coherently shifted line indexes', (binding) => {
+    for (const fragment of binding.scope_observation.required_fragments) fragment.line_index += 1000;
+  }, `attestation_current_integration_binding_scope_fragment:${identityBinding.id}:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragment line order', (binding) => {
+    const fragments = binding.scope_observation.required_fragments;
+    [fragments[0].line_index, fragments[1].line_index] = [fragments[1].line_index, fragments[0].line_index];
+  }, `attestation_current_integration_binding_scope_fragment_order:${identityBinding.id}`);
+  assertForgedAttestationRejected('required fragments ordered flag', (binding) => {
+    binding.scope_observation.required_fragments_ordered = false;
+  }, `attestation_current_integration_binding_scope_fragment_order:${identityBinding.id}`);
+  assertForgedAttestationRejected('forbidden fragment count', (binding) => {
+    binding.scope_observation.forbidden_fragments[0].occurrence_count = 1;
+  }, `attestation_current_integration_binding_scope_forbidden_fragment:${identityBinding.id}:access_token_expected_forbidden`);
+  assertForgedAttestationRejected('forbidden fragment verification', (binding) => {
+    binding.scope_observation.forbidden_fragments[0].verified = false;
+  }, `attestation_current_integration_binding_scope_forbidden_fragment:${identityBinding.id}:access_token_expected_forbidden`);
 });
 
 test('MR !1595 freezes the exact retirement of the obsolete !1558 test assertions', () => {

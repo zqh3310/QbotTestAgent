@@ -40,6 +40,10 @@ import {
   waitForStagedQbotServer,
 } from './teams-profile-qbot-config.mjs';
 import { runQworkSoak } from './qwork-soak-runner.mjs';
+import {
+  qworkCapabilitiesReadbackEvidence,
+  validateQworkCapabilitiesReadbackEvidence,
+} from '../../src/lib/qwork-capabilities-readback.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TEAMS_ROOT = path.resolve(HERE, '..');
@@ -788,6 +792,10 @@ export function createTeamsQworkSoakAdapter({ sessionFile, releaseIdentity }) {
         runtimeReleaseStatus: runtime,
       });
       const qworkAssessment = assessQworkReleaseIdentity(qworkReadback, releaseIdentity);
+      const capabilitiesReadback = qworkCapabilitiesReadbackEvidence(capabilities);
+      const capabilitiesValidation = validateQworkCapabilitiesReadbackEvidence(
+        capabilitiesReadback,
+      );
       const observed = {
         teams_version: hostBundle.version,
         teams_build: hostBundle.build,
@@ -826,14 +834,17 @@ export function createTeamsQworkSoakAdapter({ sessionFile, releaseIdentity }) {
         ok: identityMatches
           && qworkAssessment.ok === true
           && runtimeReady
-          && capabilities.ok === true
+          && capabilitiesValidation.valid
           && surface.authenticated === true
           && surface.workbench_ready === true
           && healthReady,
         observed_at: surface.observed_at,
         context: structuredClone(context),
         release_identity: observed,
-        capabilities_readback_attempts: structuredClone(capabilities.attempts || []),
+        capabilities_readback: capabilitiesReadback,
+        capabilities_readback_attempts: structuredClone(
+          capabilitiesReadback?.probe_ledger || [],
+        ),
         runtime: {
           top_level_version: runtime.version,
           loaded_version: runtime.loaded_runtime?.version || '',
@@ -841,7 +852,7 @@ export function createTeamsQworkSoakAdapter({ sessionFile, releaseIdentity }) {
           loaded_verified: runtime.loaded_runtime?.verified === true,
           update_phase: runtime.update_phase,
           prepared_release: runtime.prepared_release,
-          capabilities_readable: capabilities.ok === true,
+          capabilities_readable: capabilitiesValidation.valid,
           capabilities_type: capabilities.value_type,
           workbench_ready: surface.workbench_ready === true,
           authenticated: surface.authenticated === true,
@@ -859,7 +870,7 @@ export function createTeamsQworkSoakAdapter({ sessionFile, releaseIdentity }) {
           qwork: qworkReadback,
           qwork_assessment: qworkAssessment,
           runtime,
-          capabilities,
+          capabilities: capabilitiesReadback,
           control_plane_binding: controlPlaneBinding,
           host_bundle: hostBundle,
           health: healthResponse,

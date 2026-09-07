@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parse } from 'acorn';
 
 export const QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-source-contract/v1';
 export const QWORK_RELEASE_SOURCE_CLAIM_SCOPE = 'source_and_test_declarations';
@@ -25,10 +26,18 @@ export const QWORK_MR1579_CLAUDE_SKILL_CALL_CANONICALIZATION_CONTRACT_ID = 'deep
 const HEX40 = /^[a-f0-9]{40}$/iu;
 const HEX64 = /^[a-f0-9]{64}$/iu;
 const CURRENT_RELEASE_OWNER_SCOPE_BOUNDARY = 'next-top-level-test-or-eof';
+const CURRENT_RELEASE_REGION_SCOPE_BOUNDARY = 'anchored-line-region-within-next-top-level-test';
 const CURRENT_RELEASE_SCOPED_BINDINGS = new Map([
   [QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID, new Set([
     'feature_check_body_absent_test',
     'test_profile_report_exact_body',
+  ])],
+  [QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID, new Set([
+    'test_worker_identity_mdmcode_expected',
+    'test_worker_identity_email_expected',
+    'test_worker_identity_domain_account_expected',
+    'test_worker_identity_profile_expected',
+    'test_worker_access_token_input_only',
   ])],
 ]);
 const SOURCE_AND_TEST_DECLARATION = Object.freeze({
@@ -85,6 +94,35 @@ function currentReleaseOwnerScope(ownerStart, requiredFragments) {
     required_fragments: requiredFragments.map(([id, source]) => ({
       id,
       match: 'line',
+      value: byteRecord(source),
+    })),
+  };
+}
+
+function currentReleaseRegionScope({
+  ownerStart,
+  regionStart,
+  regionEnd,
+  ownerRegionOrder,
+  requiredFragments,
+  forbiddenFragments = [],
+}) {
+  return {
+    schema_version: QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA,
+    boundary: CURRENT_RELEASE_REGION_SCOPE_BOUNDARY,
+    owner_start: byteRecord(ownerStart),
+    region_start: byteRecord(regionStart),
+    region_end: byteRecord(regionEnd),
+    owner_region_order: ownerRegionOrder.map((source) => byteRecord(source)),
+    required_fragments: requiredFragments.map(([id, source], index) => ({
+      id,
+      match: 'line',
+      value: byteRecord(source),
+      expected_line_index: index + 1,
+    })),
+    forbidden_fragments: forbiddenFragments.map(([id, source, match = 'line']) => ({
+      id,
+      match,
       value: byteRecord(source),
     })),
   };
@@ -1152,11 +1190,63 @@ const MR1597_PRODUCT_PATHS = [
 ];
 const MR1597_TEST_PATH = 'test/unit/desktop/execution-worker-supervisor.test.mjs';
 const MR1597_CHANGED_PATHS = [...MR1597_PRODUCT_PATHS, MR1597_TEST_PATH];
+const MR1597_TEST_OWNER = "test('worker process environment is allowlisted and excludes bearer/token material', () => {";
+const MR1597_IDENTITY_LINES = [
+  ['test_worker_identity_mdmcode_expected', "    IM_USER_MDMCODE: 'mdm-user',"],
+  ['test_worker_identity_email_expected', "    IM_USER_EMAIL: 'user@example.test',"],
+  ['test_worker_identity_domain_account_expected', "    IM_USER_DOMAINACCOUNT: 'EXAMPLE\\\\user',"],
+  ['test_worker_identity_profile_expected', "    IM_USER_PROFILE: '{\"displayName\":\"Worker User\"}',"],
+];
+const MR1597_ACCESS_TOKEN_INPUT_LINE = "    IM_USER_ACCESS_TOKEN: 'im-user-secret',";
+const MR1597_ACCESS_TOKEN_KEY = 'IM_USER_ACCESS_TOKEN';
+const MR1597_INPUT_REGION_START = '  const env = workerEnvironment({';
+const MR1597_INPUT_REGION_END = '  }, {';
+const MR1597_EXPECTED_REGION_START = '  assert.deepEqual(env, {';
+const MR1597_EXPECTED_REGION_END = '  });';
+const MR1597_OWNER_REGION_ORDER = [
+  MR1597_INPUT_REGION_START,
+  MR1597_INPUT_REGION_END,
+  MR1597_EXPECTED_REGION_START,
+  MR1597_EXPECTED_REGION_END,
+];
+const MR1597_INPUT_SCOPE = currentReleaseRegionScope({
+  ownerStart: MR1597_TEST_OWNER,
+  regionStart: MR1597_INPUT_REGION_START,
+  regionEnd: MR1597_INPUT_REGION_END,
+  ownerRegionOrder: MR1597_OWNER_REGION_ORDER,
+  requiredFragments: [
+    ...MR1597_IDENTITY_LINES.map(([id, source]) => [`${id}_input`, source]),
+    ['access_token_input', MR1597_ACCESS_TOKEN_INPUT_LINE],
+  ],
+});
+const MR1597_EXPECTED_SCOPE = currentReleaseRegionScope({
+  ownerStart: MR1597_TEST_OWNER,
+  regionStart: MR1597_EXPECTED_REGION_START,
+  regionEnd: MR1597_EXPECTED_REGION_END,
+  ownerRegionOrder: MR1597_OWNER_REGION_ORDER,
+  requiredFragments: MR1597_IDENTITY_LINES,
+  forbiddenFragments: [['access_token_expected_forbidden', MR1597_ACCESS_TOKEN_KEY, 'js-property-key']],
+});
 const MR1597_INTEGRATION_BINDINGS = [
   ...MR1597_PRODUCT_PATHS.map((filePath, index) => ({ id: `worker_allowlist_${index + 1}`, path: filePath, addition: byteRecord(MR1597_ALLOWLIST_LINE) })),
-  ['test_worker_identity_allowlist', "test('worker process environment is allowlisted and excludes bearer/token material', () => {"],
-].map((entry) => Array.isArray(entry)
-  ? ({ id: entry[0], path: MR1597_TEST_PATH, addition: byteRecord(entry[1]) }) : entry);
+  ...MR1597_IDENTITY_LINES.map(([id, source]) => ({
+    id,
+    path: MR1597_TEST_PATH,
+    addition: byteRecord(source),
+    expected_addition_count: 2,
+    expected_current_occurrence_count: 2,
+    current_release_scope: MR1597_EXPECTED_SCOPE,
+  })),
+  {
+    id: 'test_worker_access_token_input_only',
+    path: MR1597_TEST_PATH,
+    addition: byteRecord(MR1597_ACCESS_TOKEN_INPUT_LINE),
+    expected_addition_count: 1,
+    expected_current_occurrence_count: 1,
+    current_release_match: { match: 'js-property-key', value: byteRecord(MR1597_ACCESS_TOKEN_KEY) },
+    current_release_scope: MR1597_INPUT_SCOPE,
+  },
+];
 const MR1597_FORBIDDEN_FRAGMENTS = MR1597_PRODUCT_PATHS.flatMap((filePath, index) => [
   { id: `old_worker_allowlist_${index + 1}`, path: filePath, match: 'line', value: byteRecord(MR1597_OLD_ALLOWLIST_LINE) },
   ...['IM_USER_ACCESS_TOKEN', 'IM_QWORK_ACCESS_TOKEN', 'QBOT_LINGXI_ACCESS_TOKEN'].map((secret) => ({
@@ -1720,6 +1810,14 @@ function byteRecordIsExactLine(record) {
 
 function validateCurrentReleaseOwnerScopes(contract, contractId) {
   const bindings = Array.isArray(contract?.integration_bindings) ? contract.integration_bindings : [];
+  for (const binding of bindings) {
+    for (const field of ['expected_addition_count', 'expected_current_occurrence_count']) {
+      if (binding?.[field] !== undefined
+        && (!Number.isSafeInteger(Number(binding[field])) || Number(binding[field]) < 1)) {
+        throw new Error(`source_contract_binding_expected_count_invalid:${contractId}:${binding.id}:${field}`);
+      }
+    }
+  }
   const expectedIds = [...(CURRENT_RELEASE_SCOPED_BINDINGS.get(contractId) || [])];
   const observedIds = bindings
     .filter((binding) => binding?.current_release_scope)
@@ -1729,8 +1827,10 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
   }
   for (const binding of bindings.filter((item) => item?.current_release_scope)) {
     const scope = binding.current_release_scope;
+    const ownerScoped = scope.boundary === CURRENT_RELEASE_OWNER_SCOPE_BOUNDARY;
+    const regionScoped = scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY;
     if (scope.schema_version !== QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA
-      || scope.boundary !== CURRENT_RELEASE_OWNER_SCOPE_BOUNDARY) {
+      || (!ownerScoped && !regionScoped)) {
       throw new Error(`source_contract_current_release_scope_contract_invalid:${contractId}:${binding.id}`);
     }
     if (!byteRecordIsExactLine(scope.owner_start) || !/^test\('/u.test(scope.owner_start.source)) {
@@ -1743,14 +1843,83 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
         !text(fragment?.id)
         || fragment?.match !== 'line'
         || !byteRecordIsExactLine(fragment?.value)
+        || (regionScoped && (
+          !Number.isSafeInteger(fragment?.expected_line_index)
+          || fragment.expected_line_index < 1
+        ))
       ))) {
       throw new Error(`source_contract_current_release_scope_fragments_invalid:${contractId}:${binding.id}`);
+    }
+    if (regionScoped && fragments.some((fragment, index) => fragment.expected_line_index !== index + 1)) {
+      throw new Error(`source_contract_current_release_scope_fragment_positions_invalid:${contractId}:${binding.id}`);
+    }
+    const forbiddenFragments = Array.isArray(scope.forbidden_fragments)
+      ? scope.forbidden_fragments : [];
+    if (new Set(forbiddenFragments.map((fragment) => text(fragment?.id))).size !== forbiddenFragments.length
+      || forbiddenFragments.some((fragment) => (
+        !text(fragment?.id)
+        || !['line', 'js-property-key'].includes(fragment?.match)
+        || !byteRecordIsExactLine(fragment?.value)
+      ))
+      || new Set([...fragments, ...forbiddenFragments].map((fragment) => text(fragment?.id))).size
+        !== fragments.length + forbiddenFragments.length) {
+      throw new Error(`source_contract_current_release_scope_forbidden_fragments_invalid:${contractId}:${binding.id}`);
+    }
+    if (ownerScoped && (scope.region_start !== undefined
+      || scope.region_end !== undefined
+      || scope.forbidden_fragments !== undefined)) {
+      throw new Error(`source_contract_current_release_scope_contract_invalid:${contractId}:${binding.id}`);
+    }
+    if (regionScoped && (
+      !byteRecordIsExactLine(scope.region_start)
+      || !byteRecordIsExactLine(scope.region_end)
+      || scope.region_start.source === scope.region_end.source
+    )) {
+      throw new Error(`source_contract_current_release_scope_region_invalid:${contractId}:${binding.id}`);
+    }
+    if (regionScoped) {
+      const ownerRegionOrder = Array.isArray(scope.owner_region_order) ? scope.owner_region_order : [];
+      const sources = ownerRegionOrder.map((record) => String(record?.source ?? ''));
+      const startIndex = sources.indexOf(scope.region_start.source);
+      const endIndex = sources.indexOf(scope.region_end.source);
+      if (ownerRegionOrder.length < 2
+        || ownerRegionOrder.some((record) => !byteRecordIsExactLine(record))
+        || new Set(sources).size !== sources.length
+        || startIndex < 0
+        || endIndex <= startIndex) {
+        throw new Error(`source_contract_current_release_scope_region_order_invalid:${contractId}:${binding.id}`);
+      }
     }
     const bindingFragmentCount = fragments.filter((fragment) => (
       fragment.value.source === binding.addition.source
     )).length;
     if (bindingFragmentCount !== 1) {
       throw new Error(`source_contract_current_release_scope_binding_missing:${contractId}:${binding.id}`);
+    }
+    if (binding.current_release_match !== undefined
+      && (binding.current_release_match?.match !== 'js-property-key'
+        || !byteRecordIsExactLine(binding.current_release_match?.value))) {
+      throw new Error(`source_contract_current_release_match_invalid:${contractId}:${binding.id}`);
+    }
+  }
+  const regionGroups = new Map();
+  for (const binding of bindings.filter((item) => (
+    item?.current_release_scope?.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY
+  ))) {
+    const scope = binding.current_release_scope;
+    const key = `${text(binding.path)}\0${scope.owner_start.source}`;
+    if (!regionGroups.has(key)) regionGroups.set(key, []);
+    regionGroups.get(key).push(scope);
+  }
+  for (const scopes of regionGroups.values()) {
+    const orders = new Set(scopes.map((scope) => stableJson(scope.owner_region_order)));
+    const declaredBoundaries = [...new Set(scopes.flatMap((scope) => (
+      [scope.region_start.source, scope.region_end.source]
+    )))];
+    const orderedBoundaries = scopes[0].owner_region_order.map((record) => record.source);
+    if (orders.size !== 1
+      || stableJson([...declaredBoundaries].sort()) !== stableJson([...orderedBoundaries].sort())) {
+      throw new Error(`source_contract_current_release_scope_region_set_invalid:${contractId}`);
     }
   }
 }
@@ -2131,6 +2300,43 @@ function fragmentOccurrenceCount(source, assertion) {
   if (text(assertion?.match) === 'line') {
     return String(source || '').split('\n').filter((line) => line === needle).length;
   }
+  if (text(assertion?.match) === 'js-property-key') {
+    let program;
+    try {
+      program = parse(String(source || ''), {
+        allowHashBang: true,
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      });
+    } catch {
+      // A forbidden-key check must never turn malformed JavaScript into zero matches.
+      return -1;
+    }
+    let count = 0;
+    const visit = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'Property') {
+        const key = node.key;
+        const staticKey = key?.type === 'Identifier' && !node.computed
+          ? key.name
+          : key?.type === 'Literal' && typeof key.value === 'string'
+            ? key.value
+            : key?.type === 'TemplateLiteral'
+              && key.expressions?.length === 0
+              && key.quasis?.length === 1
+              ? key.quasis[0].value.cooked
+              : null;
+        if (staticKey === needle) count += 1;
+      }
+      for (const [key, value] of Object.entries(node)) {
+        if (['end', 'loc', 'range', 'start', 'type'].includes(key)) continue;
+        if (Array.isArray(value)) value.forEach(visit);
+        else if (value && typeof value.type === 'string') visit(value);
+      }
+    };
+    visit(program);
+    return count;
+  }
   if (text(assertion?.match) !== 'substring') throw new Error('forbidden_fragment_match_invalid');
   let count = 0;
   let cursor = 0;
@@ -2149,10 +2355,13 @@ function exactLineOccurrenceCount(source, line) {
 }
 
 function observeCurrentIntegrationBinding(binding, source, failures) {
-  const occurrenceCount = exactLineOccurrenceCount(source, binding.addition.source);
+  const occurrenceCount = binding.current_release_match
+    ? fragmentOccurrenceCount(source, binding.current_release_match)
+    : exactLineOccurrenceCount(source, binding.addition.source);
+  const expectedCurrentOccurrenceCount = Number(binding.expected_current_occurrence_count ?? 1);
   const scope = binding.current_release_scope;
   if (!scope) {
-    const verified = occurrenceCount === 1;
+    const verified = occurrenceCount === expectedCurrentOccurrenceCount;
     if (!verified) failures.push(`current_integration_binding_mismatch:${binding.id}`);
     return {
       ...binding,
@@ -2174,15 +2383,99 @@ function observeCurrentIntegrationBinding(binding, source, failures) {
     const endIndex = nextOwnerOffset < 0 ? lines.length : ownerIndex + 1 + nextOwnerOffset;
     ownerLines = lines.slice(ownerIndex, endIndex);
   }
-  const ownerSource = ownerLines.join('\n');
-  const scopedOccurrenceCount = exactLineOccurrenceCount(ownerSource, binding.addition.source);
-  const requiredFragments = scope.required_fragments.map((fragment) => {
-    const requiredOccurrenceCount = exactLineOccurrenceCount(ownerSource, fragment.value.source);
-    const verified = requiredOccurrenceCount === 1;
+  let scopedLines = ownerLines;
+  let regionStartOccurrenceCount = null;
+  let regionEndOccurrenceCount = null;
+  let regionOrdered = null;
+  let ownerRegionOrder = null;
+  let ownerRegionOrdered = null;
+  if (scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY) {
+    const regionStartIndexes = [];
+    const regionEndIndexes = [];
+    for (let index = 0; index < ownerLines.length; index += 1) {
+      if (ownerLines[index] === scope.region_start.source) regionStartIndexes.push(index);
+      if (ownerLines[index] === scope.region_end.source) regionEndIndexes.push(index);
+    }
+    regionStartOccurrenceCount = regionStartIndexes.length;
+    regionEndOccurrenceCount = regionEndIndexes.length;
+    regionOrdered = regionStartIndexes.length === 1
+      && regionEndIndexes.length === 1
+      && regionStartIndexes[0] < regionEndIndexes[0];
+    if (regionStartOccurrenceCount !== 1) {
+      failures.push(`current_integration_binding_scope_region_start_mismatch:${binding.id}`);
+    }
+    if (regionEndOccurrenceCount !== 1) {
+      failures.push(`current_integration_binding_scope_region_end_mismatch:${binding.id}`);
+    }
+    if (!regionOrdered) failures.push(`current_integration_binding_scope_region_order_mismatch:${binding.id}`);
+    const ownerRegionIndexes = scope.owner_region_order.map((record) => {
+      const indexes = [];
+      for (let index = 0; index < ownerLines.length; index += 1) {
+        if (ownerLines[index] === record.source) indexes.push(index);
+      }
+      return { ...record, indexes };
+    });
+    ownerRegionOrder = ownerRegionIndexes.map(({ indexes, ...record }, index) => {
+      const verified = indexes.length === 1;
+      if (!verified) {
+        failures.push(`current_integration_binding_scope_owner_region_anchor_mismatch:${binding.id}:${index}`);
+      }
+      return { ...record, occurrence_count: indexes.length, verified };
+    });
+    ownerRegionOrdered = ownerRegionIndexes.every(({ indexes }) => indexes.length === 1)
+      && ownerRegionIndexes.every(({ indexes }, index) => (
+        index === 0 || ownerRegionIndexes[index - 1].indexes[0] < indexes[0]
+      ));
+    if (!ownerRegionOrdered) {
+      failures.push(`current_integration_binding_scope_owner_region_order_mismatch:${binding.id}`);
+      failures.push(`current_integration_binding_scope_region_sequence_mismatch:${binding.id}`);
+    }
+    scopedLines = regionOrdered
+      ? ownerLines.slice(regionStartIndexes[0], regionEndIndexes[0] + 1)
+      : [];
+  }
+  const scopedSource = scopedLines.join('\n');
+  const scopedOccurrenceCount = exactLineOccurrenceCount(scopedSource, binding.addition.source);
+  const requiredFragmentIndexes = scope.required_fragments.map((fragment) => {
+    const indexes = [];
+    for (let index = 0; index < scopedLines.length; index += 1) {
+      if (scopedLines[index] === fragment.value.source) indexes.push(index);
+    }
+    return { fragment, indexes };
+  });
+  const requiredFragments = requiredFragmentIndexes.map(({ fragment, indexes }) => {
+    const requiredOccurrenceCount = indexes.length;
+    const expectedLineIndex = fragment.expected_line_index;
+    const verified = requiredOccurrenceCount === 1
+      && (scope.boundary !== CURRENT_RELEASE_REGION_SCOPE_BOUNDARY || indexes[0] === expectedLineIndex);
     if (!verified) {
       failures.push(`current_integration_binding_scope_required_fragment_mismatch:${binding.id}:${fragment.id}`);
     }
-    return { ...fragment, occurrence_count: requiredOccurrenceCount, verified };
+    return {
+      ...fragment,
+      occurrence_count: requiredOccurrenceCount,
+      ...(scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY ? {
+        line_index: indexes.length === 1 ? indexes[0] : null,
+      } : {}),
+      verified,
+    };
+  });
+  const requiredFragmentsOrdered = scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY
+    ? requiredFragmentIndexes.every(({ indexes }) => indexes.length === 1)
+      && requiredFragmentIndexes.every(({ indexes }, index) => (
+        index === 0 || requiredFragmentIndexes[index - 1].indexes[0] < indexes[0]
+      ))
+    : null;
+  if (scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY && !requiredFragmentsOrdered) {
+    failures.push(`current_integration_binding_scope_required_fragment_order_mismatch:${binding.id}`);
+  }
+  const forbiddenFragments = (scope.forbidden_fragments || []).map((fragment) => {
+    const forbiddenOccurrenceCount = fragmentOccurrenceCount(scopedSource, fragment);
+    const verified = forbiddenOccurrenceCount === 0;
+    if (!verified) {
+      failures.push(`current_integration_binding_scope_forbidden_fragment_mismatch:${binding.id}:${fragment.id}`);
+    }
+    return { ...fragment, occurrence_count: forbiddenOccurrenceCount, verified };
   });
   if (ownerIndexes.length !== 1) {
     failures.push(`current_integration_binding_scope_owner_mismatch:${binding.id}`);
@@ -2191,9 +2484,20 @@ function observeCurrentIntegrationBinding(binding, source, failures) {
     failures.push(`current_integration_binding_scope_occurrence_mismatch:${binding.id}`);
   }
   const scopeVerified = ownerIndexes.length === 1
+    && (scope.boundary !== CURRENT_RELEASE_REGION_SCOPE_BOUNDARY
+      || (regionStartOccurrenceCount === 1
+        && regionEndOccurrenceCount === 1
+        && regionOrdered
+        && ownerRegionOrdered))
     && scopedOccurrenceCount === 1
-    && requiredFragments.every((fragment) => fragment.verified);
-  const verified = occurrenceCount >= 1 && scopeVerified;
+    && requiredFragments.every((fragment) => fragment.verified)
+    && (scope.boundary !== CURRENT_RELEASE_REGION_SCOPE_BOUNDARY || requiredFragmentsOrdered)
+    && forbiddenFragments.every((fragment) => fragment.verified);
+  const fileOccurrenceVerified = scope.boundary === CURRENT_RELEASE_OWNER_SCOPE_BOUNDARY
+    && binding.expected_current_occurrence_count === undefined
+    ? occurrenceCount >= 1
+    : occurrenceCount === expectedCurrentOccurrenceCount;
+  const verified = fileOccurrenceVerified && scopeVerified;
   if (!verified) failures.push(`current_integration_binding_mismatch:${binding.id}`);
   return {
     ...binding,
@@ -2201,8 +2505,19 @@ function observeCurrentIntegrationBinding(binding, source, failures) {
     occurrence_count: occurrenceCount,
     scope_observation: {
       owner_occurrence_count: ownerIndexes.length,
+      ...(scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY ? {
+        region_start_occurrence_count: regionStartOccurrenceCount,
+        region_end_occurrence_count: regionEndOccurrenceCount,
+        region_ordered: regionOrdered,
+        owner_region_order: ownerRegionOrder,
+        owner_region_ordered: ownerRegionOrdered,
+      } : {}),
       occurrence_count: scopedOccurrenceCount,
       required_fragments: requiredFragments,
+      ...(scope.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY ? {
+        required_fragments_ordered: requiredFragmentsOrdered,
+        forbidden_fragments: forbiddenFragments,
+      } : {}),
       verified: scopeVerified,
     },
     verified,
@@ -2344,7 +2659,7 @@ function expectedVerifiedAttestation(contract) {
     })),
     integration_bindings: contract.integration_bindings.map((binding) => ({
       ...binding,
-      addition_count: 1,
+      addition_count: Number(binding.expected_addition_count ?? 1),
       verified: true,
     })),
     forbidden_fragments: (contract.forbidden_fragments || []).map((assertion) => ({
@@ -2494,7 +2809,7 @@ export function auditReleaseSourceContract({
   const integrationBindings = contract.integration_bindings.map((binding) => {
     const additionCount = (addedSourceByPath.get(binding.path) || '')
       .split('\n').filter((line) => line === binding.addition.source).length;
-    const verified = additionCount === 1;
+    const verified = additionCount === Number(binding.expected_addition_count ?? 1);
     if (!verified) failures.push(`integration_binding_mismatch:${binding.id}`);
     return { ...binding, addition_count: additionCount, verified };
   });
@@ -2977,13 +3292,20 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
     const observedBinding = observedBindings[index];
     const occurrenceCount = Number(observedBinding?.occurrence_count);
     const scoped = Boolean(binding.current_release_scope);
-    if (!Number.isSafeInteger(occurrenceCount) || occurrenceCount < 1 || (!scoped && occurrenceCount !== 1)) {
+    const ownerScoped = binding.current_release_scope?.boundary === CURRENT_RELEASE_OWNER_SCOPE_BOUNDARY;
+    const regionScoped = binding.current_release_scope?.boundary === CURRENT_RELEASE_REGION_SCOPE_BOUNDARY;
+    const expectedCurrentOccurrenceCount = Number(binding.expected_current_occurrence_count ?? 1);
+    const occurrenceCountValid = Number.isSafeInteger(occurrenceCount)
+      && (ownerScoped && binding.expected_current_occurrence_count === undefined
+        ? occurrenceCount >= 1
+        : occurrenceCount === expectedCurrentOccurrenceCount);
+    if (!occurrenceCountValid) {
       failures.push(`attestation_current_integration_binding_count:${binding.id}`);
     }
     const expected = {
       ...binding,
-      addition_count: scoped ? occurrenceCount : 1,
-      occurrence_count: scoped ? occurrenceCount : 1,
+      addition_count: occurrenceCount,
+      occurrence_count: occurrenceCount,
       verified: true,
     };
     if (!scoped) return expected;
@@ -2994,23 +3316,98 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
     if (Number(scopeObservation?.occurrence_count) !== 1) {
       failures.push(`attestation_current_integration_binding_scope_occurrence:${binding.id}`);
     }
+    if (regionScoped) {
+      if (Number(scopeObservation?.region_start_occurrence_count) !== 1) {
+        failures.push(`attestation_current_integration_binding_scope_region_start:${binding.id}`);
+      }
+      if (Number(scopeObservation?.region_end_occurrence_count) !== 1) {
+        failures.push(`attestation_current_integration_binding_scope_region_end:${binding.id}`);
+      }
+      if (scopeObservation?.region_ordered !== true) {
+        failures.push(`attestation_current_integration_binding_scope_region_order:${binding.id}`);
+      }
+      const expectedOwnerRegionOrder = binding.current_release_scope.owner_region_order.map((record) => ({
+        ...record,
+        occurrence_count: 1,
+        verified: true,
+      }));
+      if (stableJson(scopeObservation?.owner_region_order) !== stableJson(expectedOwnerRegionOrder)
+        || scopeObservation?.owner_region_ordered !== true) {
+        failures.push(`attestation_current_integration_binding_scope_region_sequence:${binding.id}`);
+      }
+    }
     const observedFragments = Array.isArray(scopeObservation?.required_fragments)
       ? scopeObservation.required_fragments : [];
+    const expectedRequiredFragments = [];
+    const requiredFragmentLineIndexes = [];
     for (const [fragmentIndex, fragment] of binding.current_release_scope.required_fragments.entries()) {
-      if (Number(observedFragments[fragmentIndex]?.occurrence_count) !== 1) {
+      const observedFragment = observedFragments[fragmentIndex];
+      const expectedLineIndex = fragment.expected_line_index;
+      const lineIndexValid = !regionScoped || (
+        Number.isSafeInteger(observedFragment?.line_index)
+        && observedFragment.line_index === expectedLineIndex
+      );
+      const observedStatic = structuredClone(observedFragment || {});
+      delete observedStatic.line_index;
+      if (stableJson(observedStatic) !== stableJson({
+        ...fragment,
+        occurrence_count: 1,
+        verified: true,
+      }) || !lineIndexValid) {
         failures.push(`attestation_current_integration_binding_scope_fragment:${binding.id}:${fragment.id}`);
+      }
+      if (regionScoped) {
+        requiredFragmentLineIndexes.push(lineIndexValid ? observedFragment.line_index : null);
+      }
+      expectedRequiredFragments.push({
+        ...fragment,
+        occurrence_count: 1,
+        ...(regionScoped ? { line_index: expectedLineIndex } : {}),
+        verified: true,
+      });
+    }
+    if (regionScoped) {
+      const fragmentsOrdered = requiredFragmentLineIndexes.every((lineIndex) => lineIndex !== null)
+        && requiredFragmentLineIndexes.every((lineIndex, index) => (
+          index === 0 || requiredFragmentLineIndexes[index - 1] < lineIndex
+        ));
+      if (scopeObservation?.required_fragments_ordered !== true || !fragmentsOrdered) {
+        failures.push(`attestation_current_integration_binding_scope_fragment_order:${binding.id}`);
+      }
+    }
+    const observedForbiddenFragments = Array.isArray(scopeObservation?.forbidden_fragments)
+      ? scopeObservation.forbidden_fragments : [];
+    for (const [fragmentIndex, fragment] of (binding.current_release_scope.forbidden_fragments || []).entries()) {
+      if (Number(observedForbiddenFragments[fragmentIndex]?.occurrence_count) !== 0
+        || observedForbiddenFragments[fragmentIndex]?.verified !== true) {
+        failures.push(`attestation_current_integration_binding_scope_forbidden_fragment:${binding.id}:${fragment.id}`);
       }
     }
     return {
       ...expected,
       scope_observation: {
         owner_occurrence_count: 1,
+        ...(regionScoped ? {
+          region_start_occurrence_count: 1,
+          region_end_occurrence_count: 1,
+          region_ordered: true,
+          owner_region_order: binding.current_release_scope.owner_region_order.map((record) => ({
+            ...record,
+            occurrence_count: 1,
+            verified: true,
+          })),
+          owner_region_ordered: true,
+        } : {}),
         occurrence_count: 1,
-        required_fragments: binding.current_release_scope.required_fragments.map((fragment) => ({
-          ...fragment,
-          occurrence_count: 1,
-          verified: true,
-        })),
+        required_fragments: expectedRequiredFragments,
+        ...(regionScoped ? {
+          required_fragments_ordered: true,
+          forbidden_fragments: (binding.current_release_scope.forbidden_fragments || []).map((fragment) => ({
+            ...fragment,
+            occurrence_count: 0,
+            verified: true,
+          })),
+        } : {}),
         verified: true,
       },
     };

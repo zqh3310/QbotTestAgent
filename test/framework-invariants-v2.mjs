@@ -44,7 +44,6 @@ import {
   coreBetaAttachmentRejectionMatrixVerdict,
   coreBetaAttachmentRejectionProbeVerdict,
   coreBetaCleanupCapabilitiesNeedsRetry,
-  coreBetaCapabilitiesReadbackWithRetry,
   coreBetaCleanupReadbackNeedsComposerRecovery,
   coreBetaCleanupReadbackVerdict,
   coreBetaCleanupReleaseMigrationVerdict,
@@ -206,6 +205,11 @@ import {
   sendReceiptRecordEvidenceValid,
   workspaceRejectedSendReceiptEvidence,
 } from '../src/lib/qbot-workspace-error-evidence.mjs';
+import {
+  qworkCapabilitiesReadbackEvidence,
+  readStableQworkCapabilities,
+} from '../src/lib/qwork-capabilities-readback.mjs';
+import { createQworkCapabilitiesReadbackFixture } from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runner = [
@@ -220,6 +224,14 @@ const qworkReleaseTestPlanPolicySource = fs.readFileSync(path.join(root, 'src', 
 const attachmentAdapter = fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-ui-attachments.mjs'), 'utf8');
 const taskRegenerateEvidenceSource = fs.readFileSync(path.join(root, 'src', 'lib', 'task-regenerate-evidence.mjs'), 'utf8');
 const coreBetaProtocolSourceForTaskRegenerate = fs.readFileSync(path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'), 'utf8');
+const qworkCapabilitiesReadbackSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-capabilities-readback.mjs'),
+  'utf8',
+);
+const teamsCdpWebviewSource = fs.readFileSync(
+  path.join(root, 'teams360-automation', 'lib', 'cdp-webview.mjs'),
+  'utf8',
+);
 for (const [name, source] of [['v2', runner], ['legacy', legacyRunner]]) {
   assert.match(
     source,
@@ -252,6 +264,58 @@ assert.match(
   /typeof options\['release-identity-check-hook'\] === 'function'[\s\S]*phase: 'run-final'/,
   'verified legacy 阶段不得绕过 QWork 发布身份结束读回',
 );
+const productionFreezeIndex = teamsCasebookRunner.indexOf('if (productionGate) break;');
+const historicalRepairIndex = teamsCasebookRunner.indexOf(
+  'const repair = repairInterruptedTeamsProgress',
+  productionFreezeIndex,
+);
+assert.ok(
+  productionFreezeIndex >= 0 && historicalRepairIndex > productionFreezeIndex,
+  'production-gate 必须在任何同目录 repair/resume 之前冻结并退出',
+);
+assert.match(
+  teamsCasebookRunner,
+  /if \(productionGate\) \{[\s\S]*const recoveryOptions = \[[\s\S]*'resume'[\s\S]*'resume-from'[\s\S]*'teams-recovery-passes'[\s\S]*Production Teams runs forbid recovery options/,
+  'production-gate 必须在启动前拒绝同目录恢复和跨批次结果 lineage 参数',
+);
+const teamsExitCodeSource = teamsCasebookRunner.slice(
+  teamsCasebookRunner.indexOf('export function teamsCasebookExitCode'),
+  teamsCasebookRunner.indexOf('function productionReleaseIdentityExpected'),
+);
+assert.match(
+  teamsExitCodeSource,
+  /Number\.isInteger\(planned\)[\s\S]*planned > 0[\s\S]*completed === planned[\s\S]*total === planned[\s\S]*passed === planned/,
+  'Teams 退出码必须要求 planned 为正整数且 planned/completed/counts.total/passed 完整全等',
+);
+const legacyFinalizationSource = legacyRunner.slice(
+  legacyRunner.indexOf('const primaryStop = readStoppedProgress(progressFile);'),
+  legacyRunner.indexOf('writeRunArtifacts(outDir, summary);', legacyRunner.indexOf('const primaryStop = readStoppedProgress(progressFile);')),
+);
+assert.match(
+  legacyFinalizationSource,
+  /try \{[\s\S]*phase: 'run-final'[\s\S]*if \(!primaryStop\) throw error;[\s\S]*writeSecondaryFinalizationDiagnostic[\s\S]*status: primaryStop \? 'blocked'[\s\S]*reason: primaryStop\?\.stop_reason/,
+  'legacy run-final 读回失败必须保留既有停止根因，只追加独立收尾诊断',
+);
+assert.doesNotMatch(
+  legacyFinalizationSource,
+  /writeStoppedProgress/,
+  '已有 primary stop 后的 legacy run-final 失败不得重写停止进度',
+);
+assert.match(
+  runner,
+  /loadCoreBetaV2ResumeProgress[\s\S]*execution_provenance_invalid[\s\S]*case_result_disk_mismatch[\s\S]*manifest_disk_mismatch[\s\S]*sha256_mismatch/,
+  'Core Beta v2 同目录恢复必须重放 provenance、磁盘结果、manifest 与证据 SHA',
+);
+assert.match(
+  runner,
+  /recordCoreBetaFinalizationFailure[\s\S]*if \(!frameworkStop\)[\s\S]*writeCoreBetaSecondaryFinalizationDiagnostic[\s\S]*secondary_finalization_diagnostics/,
+  'Core Beta v2 run-final 失败不得覆盖已经存在的 primary framework stop',
+);
+assert.match(
+  runner,
+  /validateCoreBetaCleanupMetadataCapabilities[\s\S]*release_observation_checks[\s\S]*summary_signature_sha256[\s\S]*capabilities 合同不一致/,
+  'Core Beta 定向清理必须独立校验源和目标 run metadata 的 capabilities 账本',
+);
 assert.match(
   qworkReleaseIdentity,
   /QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION[\s\S]*inspectClaudeSkillCallCanonicalizationPolicy[\s\S]*\/bin\/ps[\s\S]*managed_process_environment_unreadable[\s\S]*policy_sha256/,
@@ -278,6 +342,21 @@ assert.match(
   teamsRunMetadata,
   /claude_skill_call_canonicalization_policy[\s\S]*claude_skill_call_canonicalization_policy_checks[\s\S]*release_observation_checks/,
   'run metadata 必须固化 !1579 策略基线并追加逐阶段安全观测',
+);
+assert.match(
+  teamsCasebookRunner,
+  /observeQworkReleaseIdentity[\s\S]*readStableQworkCapabilities[\s\S]*qworkCapabilitiesReadbackEvidence[\s\S]*capabilities_readback/,
+  'Teams 正式 runner 的每次发布身份观测必须附带共享三阶段 capabilities 完整证据',
+);
+assert.match(
+  teamsRunMetadata,
+  /validateQworkCapabilitiesReadbackEvidence[\s\S]*release_observation_checks[\s\S]*capabilities_readback: structuredClone/,
+  'run metadata 必须校验 capabilities ledger 并在每个 release observation check 完整保存',
+);
+assert.match(
+  qworkReleaseIdentity,
+  /assertStableQworkReleaseIdentity[\s\S]*validateQworkCapabilitiesReadbackEvidence[\s\S]*summary_signature_sha256/,
+  '发布身份稳定断言必须验证两份 capabilities 证据并比较 canonical 签名',
 );
 assert.match(
   qworkReleaseTestPlanPolicySource,
@@ -573,6 +652,10 @@ const qworkReleaseSourceContractsSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
   'utf8',
 );
+const qworkReleaseIntakeTestSource = fs.readFileSync(
+  path.join(root, 'test', 'qwork-release-intake.test.mjs'),
+  'utf8',
+);
 const qworkReleaseBlockingRiskAstSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-blocking-risk-ast.mjs'),
   'utf8',
@@ -702,6 +785,21 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
+    /同一条可达[\s\S]{0,30}直接控制流[\s\S]{0,120}无条件 `return`\/`throw`[\s\S]{0,80}恒真终结[\s\S]{0,120}guard\/forward[\s\S]{0,40}(?:颠倒|次序颠倒)/,
+    `${documentName} 必须固定关键执行步骤的可达直线控制流与 guard-before-forward`,
+  );
+  assert.match(
+    documentText,
+    /`this\.runner`[\s\S]{0,60}`this\.authority`[\s\S]{0,60}`this\.createRunner`[\s\S]{0,260}manager[\s\S]{0,100}enabled[\s\S]{0,180}`executions`[\s\S]{0,160}(?:factory\/options|supervisor factory\/options)/,
+    `${documentName} 必须禁止 controller/manager 关键绑定改写`,
+  );
+  assert.match(
+    documentText,
+    /`pending`[\s\S]{0,100}manager[\s\S]{0,60}`executions`[\s\S]{0,180}`const` 别名[\s\S]{0,100}静态计算属性[\s\S]{0,100}解构[\s\S]{0,140}Map\/Set\.prototype[\s\S]{0,80}call\/apply[\s\S]{0,80}Reflect\.apply[\s\S]{0,260}acquisition[\s\S]{0,160}`(?:executions\.)?set\(requestId, record\)`[\s\S]{0,160}inline release[\s\S]{0,100}`releaseExecutionRecord`[\s\S]{0,100}`drainExecutionRecord`[\s\S]{0,180}`(?:executions\.)?delete\(requestId\)`[\s\S]{0,120}`add\/set\/delete\/clear`/,
+    `${documentName} 必须固定 protected collection alias/prototype 防绕过与精确变异白名单`,
+  );
+  assert.match(
+    documentText,
     /qbot-release-intake\/1\.6\.2[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
     `${documentName} 必须明确旧 intake tool 不可复用`,
   );
@@ -723,29 +821,49 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*移入错误 test[\s\S]*复制 owner block[\s\S]*origin changes 鉴证继续[\s\S]*精确出现一次[\s\S]*forbidden fragment[\s\S]*精确为 0/,
-    `${documentName} 必须锁定 MR1540 owner scope，且其它 current-release/origin/forbidden 断言保持严格`,
+    /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*MR !1597[\s\S]*input[\s\S]*expected[\s\S]*expected_addition_count=2[\s\S]*expected_current_occurrence_count=2[\s\S]*IM_USER_ACCESS_TOKEN[\s\S]*forbidden[\s\S]*origin changes 鉴证继续[\s\S]*forbidden fragment[\s\S]*精确为 0/,
+    `${documentName} 必须锁定 MR1540 owner scope 与 MR1597 双 region scope，并保持 origin/forbidden 断言严格`,
+  );
+  assert.match(
+    documentText,
+    /region start 的相对行号固定为 0[\s\S]*expected_line_index[\s\S]*确定性行号[\s\S]*整体平移[\s\S]*JavaScript object property key[\s\S]*不同缩进[\s\S]*表达式值[\s\S]*quoted\/computed key[\s\S]*shorthand/,
+    `${documentName} 必须固化 MR1597 相对行号重放与 token property-key 语义`,
   );
 }
 assert.match(
   qworkReleaseSourceContractsSource,
-  /CURRENT_RELEASE_SCOPED_BINDINGS[\s\S]*QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body/,
-  'current-release owner scope 白名单必须只由 MR1540 合同显式声明',
+  /CURRENT_RELEASE_SCOPED_BINDINGS[\s\S]*QWORK_MR1540_MEMORY_FEATURE_PROFILE_CONTRACT_ID[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID[\s\S]*test_worker_identity_mdmcode_expected[\s\S]*test_worker_access_token_input_only/,
+  'current-release scope 白名单必须只显式声明 MR1540 owner scope 与 MR1597 region scope',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /if \(!scope\)[\s\S]*occurrenceCount === 1[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every/,
-  'current-release continuity 必须保持默认唯一，并以唯一顶层 test owner scope 收紧 MR1540 例外',
+  /current_release_match[\s\S]*fragmentOccurrenceCount\(source, binding\.current_release_match\)[\s\S]*expectedCurrentOccurrenceCount[\s\S]*if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*regionStartOccurrenceCount[\s\S]*regionEndOccurrenceCount[\s\S]*regionOrdered[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentIndexes[\s\S]*expectedLineIndex[\s\S]*indexes\[0\] === expectedLineIndex[\s\S]*requiredFragmentsOrdered[\s\S]*current_integration_binding_scope_required_fragment_order_mismatch[\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every[\s\S]*forbiddenFragments\.every/,
+  'current-release continuity 必须保持 key 级全文件计数、双 region 整体顺序和 required fragment 确定性相对位置',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /addition_count: occurrenceCount[\s\S]*occurrence_count: occurrenceCount[\s\S]*owner_occurrence_count: ownerIndexes\.length[\s\S]*required_fragments: requiredFragments/,
-  'current-release attestation 必须同时保留全文件与 owner scope 计数',
+  /addition_count: occurrenceCount[\s\S]*occurrence_count: occurrenceCount[\s\S]*owner_occurrence_count: ownerIndexes\.length[\s\S]*region_start_occurrence_count[\s\S]*region_end_occurrence_count[\s\S]*region_ordered[\s\S]*owner_region_order: ownerRegionOrder[\s\S]*owner_region_ordered: ownerRegionOrdered[\s\S]*required_fragments: requiredFragments[\s\S]*required_fragments_ordered: requiredFragmentsOrdered[\s\S]*forbidden_fragments: forbiddenFragments/,
+  'current-release attestation 必须保留全文件、owner、双 region、required 顺序与 forbidden 观察',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /const integrationBindings = contract\.integration_bindings\.map[\s\S]*additionCount === 1[\s\S]*integration_binding_mismatch/,
-  'origin changes integration binding 必须继续精确唯一',
+  /expectedOwnerRegionOrder[\s\S]*owner_region_order[\s\S]*owner_region_ordered[\s\S]*attestation_current_integration_binding_scope_region_sequence[\s\S]*expectedLineIndex = fragment\.expected_line_index[\s\S]*observedFragment\.line_index === expectedLineIndex[\s\S]*line_index: expectedLineIndex[\s\S]*requiredFragmentLineIndexes[\s\S]*attestation_current_integration_binding_scope_fragment_order[\s\S]*required_fragments_ordered: true/,
+  'current-release attestation validator 必须按合同精确重放双 region anchor 与 required fragment 相对行号',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /MR1597_ACCESS_TOKEN_KEY = 'IM_USER_ACCESS_TOKEN'[\s\S]*access_token_expected_forbidden[\s\S]*js-property-key[\s\S]*current_release_match:[\s\S]*js-property-key[\s\S]*fragmentOccurrenceCount\(scopedSource, fragment\)/,
+  'MR1597 必须按 JS property key 在 expected region 禁止 token，并按全文件 key 计数拒绝额外副本',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /interleavedRegions[\s\S]*alternateTokenProperty[\s\S]*different-secret[\s\S]*tokenFromExpression[\s\S]*tokenFromQuotedKey[\s\S]*tokenFromComputedKey[\s\S]*alternateTokenOutsideOwner[\s\S]*coherently shifted line indexes/,
+  'MR1597 回归必须覆盖 region 交错、token 改值/表达式/缩进/quoted/computed/全文件额外副本及伪造相对行号',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /const integrationBindings = contract\.integration_bindings\.map[\s\S]*additionCount === Number\(binding\.expected_addition_count \?\? 1\)[\s\S]*integration_binding_mismatch/,
+  'origin changes integration binding 必须按合同保持精确声明计数',
 );
 assert.match(
   coreBetaPretestSource,
@@ -1161,7 +1279,7 @@ const casebookDesignVerifiedOriginAttestation = (contract) => {
     })),
     integration_bindings: contract.integration_bindings.map((binding) => ({
       ...binding,
-      addition_count: 1,
+      addition_count: Number(binding.expected_addition_count ?? 1),
       verified: true,
     })),
     forbidden_fragments: (contract.forbidden_fragments || []).map((assertion) => ({
@@ -1364,10 +1482,14 @@ function releaseExecutionRecord(manager, requestId, record) {
   return stopExecutionRecord(manager, requestId, record);
 }
 function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
+  const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1;
   manager.executions.delete(requestId);
   record.finalizationPromise = Promise.race([
     Promise.resolve(settlement),
-    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    new Promise((resolve) => setTimeout(resolve, boundedTimeout)),
   ]).then(() => {
     return stopExecutionRecord(manager, requestId, record);
   });
@@ -1680,6 +1802,127 @@ assert.deepEqual(validSuccessorAst, {
   termination: true,
   passed: true,
 }, 'v5 AST 测试夹具必须形成且保留完整九项语义闭环');
+const typedSequenceViolationAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-supervisor-message.cjs') return source;
+    return source.replace(
+      "    const error = new Error('execution worker emitted a non-monotonic event sequence');",
+      `    const error = new Error('execution worker emitted a non-monotonic event sequence');
+    error.code = 'execution_worker_sequence_violation';`,
+    );
+  }),
+);
+assert.equal(
+  typedSequenceViolationAst.supervisor_message,
+  true,
+  'supervisor-message AST 必须接受 sequence violation 的精确 typed error code',
+);
+const wrongTypedSequenceViolationAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-supervisor-message.cjs') return source;
+    return source.replace(
+      "    const error = new Error('execution worker emitted a non-monotonic event sequence');",
+      `    const error = new Error('execution worker emitted a non-monotonic event sequence');
+    error.code = 'execution_worker_unrelated_failure';`,
+    );
+  }),
+);
+assert.equal(
+  wrongTypedSequenceViolationAst.supervisor_message,
+  false,
+  'supervisor-message AST 必须拒绝错误或漂移的 sequence violation error code',
+);
+const inlineControllerLifecycleAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-controller.cjs') return source;
+    return source
+      .replace(`  onRunnerError(error) {
+    this.finish(error ? 1 : 0);
+  }
+  onRunnerExit(code) {
+    this.finish(code === 0 ? 0 : 1);
+  }
+`, '')
+      .replace(
+        "    this.runner.on('error', (error) => this.onRunnerError(error));",
+        "    this.runner.once('error', () => this.finish(1));",
+      )
+      .replace(
+        "    this.runner.on('exit', (code) => this.onRunnerExit(code));",
+        "    this.runner.once('exit', () => this.finish(1));",
+      );
+  }),
+);
+assert.equal(
+  inlineControllerLifecycleAst.controller,
+  true,
+  'controller AST 必须接受同一实际 runner 上内联且 fail-closed 的 error/exit 生命周期监听',
+);
+const detachedInlineControllerErrorAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-controller.cjs') return source;
+    return source
+      .replace(`  onRunnerError(error) {
+    this.finish(error ? 1 : 0);
+  }
+  onRunnerExit(code) {
+    this.finish(code === 0 ? 0 : 1);
+  }
+`, '')
+      .replace(
+        "    this.runner.on('error', (error) => this.onRunnerError(error));",
+        "    this.runner.once('error', () => unrelatedController.finish(1));",
+      )
+      .replace(
+        "    this.runner.on('exit', (code) => this.onRunnerExit(code));",
+        "    this.runner.once('exit', () => this.finish(1));",
+      );
+  }),
+);
+assert.equal(
+  detachedInlineControllerErrorAst.controller,
+  false,
+  'controller AST 必须拒绝没有终结当前 controller 的内联 runner error 监听',
+);
+const declaredManagerAdmissionAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-manager.cjs') return source;
+    return source.replace(
+      '  await waitForExecutionSlot(manager, requestId, options.signal);',
+      `  const reserved = await waitForExecutionSlot(manager, requestId, options.signal);
+  if (!reserved) throw managerError('execution_worker_not_reserved', 'slot was not reserved');`,
+    );
+  }),
+);
+assert.equal(
+  declaredManagerAdmissionAst.manager,
+  true,
+  'manager isolation AST 必须接受 supervisor 分配前的 const awaited admission 结果',
+);
+assert.equal(
+  declaredManagerAdmissionAst.manager_pressure,
+  true,
+  'manager pressure AST 必须接受 supervisor 分配前的 const awaited admission 结果',
+);
+const unawaitedDeclaredManagerAdmissionAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-manager.cjs') return source;
+    return source.replace(
+      '  await waitForExecutionSlot(manager, requestId, options.signal);',
+      '  const reserved = waitForExecutionSlot(manager, requestId, options.signal);',
+    );
+  }),
+);
+assert.equal(
+  unawaitedDeclaredManagerAdmissionAst.manager,
+  false,
+  'manager isolation AST 必须拒绝未 await 的变量声明式 admission',
+);
+assert.equal(
+  unawaitedDeclaredManagerAdmissionAst.manager_pressure,
+  false,
+  'manager pressure AST 必须拒绝未 await 的变量声明式 admission',
+);
 const casebookDesignAstMutation = (targetPath, search, replacement, label) => (filePath, source) => {
   if (filePath !== targetPath) return source;
   assert.equal(source.includes(search), true, `${label}: 正向夹具必须包含目标源码片段`);
@@ -1792,6 +2035,43 @@ const infiniteContextTimeoutAst = auditCasebookDesignSuccessorAstContracts(caseb
 ));
 assert.equal(infiniteContextTimeoutAst.desktop, false, 'AST 门禁必须拒绝 context release 无限 timeout');
 assert.equal(infiniteContextTimeoutAst.passed, false, 'context 无限 timeout 必须阻断整体证明');
+const unsafeManagerTimeoutMutationCases = [
+  ['const boundedTimeout = Infinity;', 'manager drain 无限 timeout'],
+  ['const boundedTimeout = NaN;', 'manager drain NaN timeout'],
+  ['const boundedTimeout = Math.max(1, Number(timeoutMs) || 1);', 'manager drain 未证明有限 timeout'],
+];
+for (const [replacement, label] of unsafeManagerTimeoutMutationCases) {
+  const ast = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+    casebookDesignAstMutation(
+      'electron/host-core/agent/execution-worker-manager.cjs',
+      `const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1;`,
+      replacement,
+      label,
+    ),
+  ));
+  assert.equal(ast.manager, false, `${label}: AST 门禁必须拒绝不安全 timeout`);
+  assert.equal(ast.passed, false, `${label}: 不安全 timeout 必须阻断整体证明`);
+}
+const managerTimeoutOutsideRaceAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap(casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-manager.cjs',
+    'record.finalizationPromise = Promise.race([',
+    'record.finalizationPromise = Promise.resolve([',
+    'manager timeout 未进入 Promise.race',
+  )),
+);
+assert.equal(
+  managerTimeoutOutsideRaceAst.manager,
+  false,
+  'AST 门禁必须要求 manager timeout 进入真实 Promise.race',
+);
+assert.equal(
+  managerTimeoutOutsideRaceAst.passed,
+  false,
+  'manager timeout 未进入 Promise.race 必须阻断整体证明',
+);
 const unawaitedCompletedDrainAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
@@ -1911,6 +2191,249 @@ const destructuredCompletedWriteAst = auditCasebookDesignSuccessorAstContracts(c
 ));
 assert.equal(destructuredCompletedWriteAst.desktop, false, 'AST 门禁必须拒绝 ObjectPattern 强制 completed');
 assert.equal(destructuredCompletedWriteAst.passed, false, 'completed 解构写入必须阻断整体证明');
+const reachableTryControllerAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-controller.cjs') return source;
+    return source
+      .replace(
+        `    this.authority = message;
+    this.runner = this.createRunner();
+    this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+    this.runner.on('error', (error) => this.onRunnerError(error));
+    this.runner.on('exit', (code) => this.onRunnerExit(code));
+    return true;`,
+        `    this.authority = message;
+    try {
+      this.runner = this.createRunner();
+      this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+      this.runner.on('error', (error) => this.onRunnerError(error));
+      this.runner.on('exit', (code) => this.onRunnerExit(code));
+      return true;
+    } catch { this.finish(1); return false; }`,
+      )
+      .replace(
+        `    if (!message || !this.acceptMessage(message)) return;
+    this.runner.postMessage(message);`,
+        `    if (!message || !this.acceptMessage(message)) return;
+    try { this.runner.postMessage(message); } catch { this.finish(1); }`,
+      );
+  }),
+);
+assert.equal(
+  reachableTryControllerAst.controller,
+  true,
+  'controller AST 必须接受同一可达 try 内的 runner 初始化、监听和 fail-closed 转发',
+);
+const readonlyDesktopSupervisorAliasAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap(casebookDesignAstMutation(
+    'electron/host-core/agent/desktop-host-context.cjs',
+    '    await executionWorkerLease.supervisor.request();',
+    '    const workerSupervisor = executionWorkerLease.supervisor;\n    await workerSupervisor.request();',
+    'desktop supervisor 只读 const alias',
+  )),
+);
+assert.equal(
+  readonlyDesktopSupervisorAliasAst.desktop,
+  true,
+  'desktop AST 必须接受受保护成员的只读 const alias',
+);
+assert.equal(
+  readonlyDesktopSupervisorAliasAst.passed,
+  true,
+  '只读 const alias 不得误阻断整体证明',
+);
+const unreachableTryListenerControllerAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap((filePath, source) => {
+    if (filePath !== 'electron/host-core/agent/execution-worker-controller.cjs') return source;
+    return source.replace(
+      `    this.runner = this.createRunner();
+    this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+    this.runner.on('error', (error) => this.onRunnerError(error));
+    this.runner.on('exit', (code) => this.onRunnerExit(code));
+    return true;`,
+      `    try {
+      this.runner = this.createRunner();
+      if (1) return true;
+      this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+      this.runner.on('error', (error) => this.onRunnerError(error));
+      this.runner.on('exit', (code) => this.onRunnerExit(code));
+      return true;
+    } catch { this.finish(1); return false; }`,
+    );
+  }),
+);
+assert.equal(
+  unreachableTryListenerControllerAst.controller,
+  false,
+  'controller AST 必须拒绝 try 内恒真提前 return 后的不可达 listener',
+);
+assert.equal(
+  unreachableTryListenerControllerAst.passed,
+  false,
+  'try 内不可达 listener 必须阻断整体证明',
+);
+const controllerForwardReachabilityCases = [
+  [
+    '    this.parentPort.postMessage(message);',
+    '    return;\n    this.parentPort.postMessage(message);',
+    'runner→host forward 位于普通 return 后',
+  ],
+  [
+    '    this.parentPort.postMessage(message);',
+    '    try { return; } finally {}\n    this.parentPort.postMessage(message);',
+    'runner→host forward 位于必然 return 的 try/finally 后',
+  ],
+  [
+    '    this.runner.postMessage(message);',
+    '    try { return; } finally {}\n    this.runner.postMessage(message);',
+    'host→runner forward 位于必然 return 的 try/finally 后',
+  ],
+];
+for (const [search, replacement, label] of controllerForwardReachabilityCases) {
+  const ast = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+    casebookDesignAstMutation(
+      'electron/host-core/agent/execution-worker-controller.cjs',
+      search,
+      replacement,
+      label,
+    ),
+  ));
+  assert.equal(ast.controller, false, `${label}: AST 门禁必须拒绝不可达 forward`);
+  assert.equal(ast.passed, false, `${label}: 不可达 forward 必须阻断整体证明`);
+}
+const caughtThrowBeforeHostForwardAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap(casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner.postMessage(message);',
+    "    try { throw new Error('recovered'); } catch {}\n    this.runner.postMessage(message);",
+    '可由 catch 恢复的 throw',
+  )),
+);
+assert.equal(
+  caughtThrowBeforeHostForwardAst.controller,
+  true,
+  'controller AST 不得把可由 catch 恢复的 throw 误判成必然中断',
+);
+assert.equal(
+  caughtThrowBeforeHostForwardAst.passed,
+  true,
+  '可恢复的 try/catch 不得误阻断整体证明',
+);
+const reachableControlFlowMutationCases = [
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.authority = message;\n    this.runner = this.createRunner();',
+    '    this.authority = message;\n    return false;\n    this.runner = this.createRunner();',
+    'controller 提前 return 令 runner 初始化不可达'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.authority = message;\n    this.runner = this.createRunner();',
+    '    this.authority = message;\n    if (true) return false;\n    this.runner = this.createRunner();',
+    'controller 恒真终结令 runner 初始化不可达'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    "    if (!message || !this.acceptMessage(message)) return;\n    this.runner.postMessage(message);",
+    "    this.runner.postMessage(message);\n    if (!message || !this.acceptMessage(message)) return;",
+    'controller forward 位于 accept guard 前'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    "    if (!message || !this.acceptMessage(message)) return;\n    this.runner.postMessage(message);",
+    "    if (!message || !this.acceptMessage(message)) return;\n    return;\n    this.runner.postMessage(message);",
+    'controller guard 后 forward 不可达'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    '    this.runner = this.createRunner();\n    this.runner = this.parentPort;',
+    'controller runner 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    '    this.runner = this.createRunner();\n    delete this.runner;',
+    'controller runner 删除'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    '    this.runner = this.createRunner();\n    Object.assign(this, { runner: this.parentPort });',
+    'controller runner Object.assign 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    "    this.runner = this.createRunner();\n    Object.defineProperty(this, 'runner', { value: this.parentPort });",
+    'controller runner defineProperty 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    "    this.runner = this.createRunner();\n    Reflect.set(this, 'runner', this.parentPort);",
+    'controller runner Reflect.set 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    "    this.runner = this.createRunner();\n    Reflect.deleteProperty(this, 'runner');",
+    'controller runner Reflect.deleteProperty 删除'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    '    this.runner = this.createRunner();\n    const controllerAlias = this;\n    controllerAlias.runner = this.parentPort;',
+    'controller receiver alias 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.runner = this.createRunner();',
+    '    this.runner = this.createRunner();\n    this[dynamicControllerKey] = this.parentPort;',
+    'controller 动态成员改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.authority = message;\n    this.runner = this.createRunner();',
+    '    this.authority = message;\n    this.authority = null;\n    this.runner = this.createRunner();',
+    'controller authority 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    '    this.authority = message;\n    this.runner = this.createRunner();',
+    '    this.authority = message;\n    this.createRunner = () => this.parentPort;\n    this.runner = this.createRunner();',
+    'controller runner factory 改绑'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    "    this.runner.on('exit', (code) => this.onRunnerExit(code));\n    return true;",
+    "    this.runner.on('exit', (code) => this.onRunnerExit(code));",
+    'controller 初始化缺少成功返回'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const requestId = validateAcquisition(manager, identity);\n  await waitForExecutionSlot(manager, requestId, options.signal);',
+    '  const requestId = validateAcquisition(manager, identity);\n  return null;\n  await waitForExecutionSlot(manager, requestId, options.signal);',
+    'manager admission 位于提前 return 后'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const requestId = validateAcquisition(manager, identity);\n  await waitForExecutionSlot(manager, requestId, options.signal);',
+    "  const requestId = validateAcquisition(manager, identity);\n  throw managerError('dead', 'dead');\n  await waitForExecutionSlot(manager, requestId, options.signal);",
+    'manager admission 位于提前 throw 后'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  return executionWorkerLease(manager, requestId, record);',
+    '  return null;',
+    'manager 未返回绑定同一 record 的 lease'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  manager.executions.set(requestId, record);\n  return executionWorkerLease(manager, requestId, record);',
+    '  manager.executions.set(requestId, record);\n  manager.executions.delete(requestId);\n  return executionWorkerLease(manager, requestId, record);',
+    'manager 成功主路径撤销 execution index'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  manager.executions.set(requestId, record);\n  return executionWorkerLease(manager, requestId, record);',
+    '  manager.executions.set(requestId, record);\n  const managerAlias = manager;\n  managerAlias.executions = new Map();\n  return executionWorkerLease(manager, requestId, record);',
+    'manager receiver alias 改写 execution index'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  manager.executions.set(requestId, record);\n  return executionWorkerLease(manager, requestId, record);',
+    "  manager.executions.set(requestId, record);\n  Object.assign(manager, { executions: new Map() });\n  return executionWorkerLease(manager, requestId, record);",
+    'manager Object.assign 改写 execution index'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  manager.executions.set(requestId, record);\n  return executionWorkerLease(manager, requestId, record);',
+    "  manager.executions.set(requestId, record);\n  Reflect.set(manager, 'executions', new Map());\n  return executionWorkerLease(manager, requestId, record);",
+    'manager Reflect.set 改写 execution index'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  manager.executions.set(requestId, record);\n  return executionWorkerLease(manager, requestId, record);',
+    '  manager.executions.set(requestId, record);\n  manager[dynamicManagerKey] = new Map();\n  return executionWorkerLease(manager, requestId, record);',
+    'manager 动态成员改写'],
+  ['manager_pressure', 'electron/host-core/agent/execution-worker-manager.cjs',
+    `function waitForExecutionSlot(manager, requestId, signal) {
+  if (manager.executions.size >= manager.maxConcurrentExecutions) {
+    return Promise.reject(managerError('execution_worker_pressure_admission_closed', 'queue full'));
+  }
+  return Promise.resolve(true);
+}`,
+    `function waitForExecutionSlot(manager, requestId, signal) {
+  return Promise.resolve(true);
+}`,
+    'manager pressure admission 空实现'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    'function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {',
+    'function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {\n  return Promise.resolve(false);',
+    'manager drain timeout 位于不可达路径'],
+];
+for (const [contract, path, search, replacement, label] of reachableControlFlowMutationCases) {
+  const mutation = casebookDesignAstMutation(path, search, replacement, label);
+  const ast = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(mutation));
+  assert.equal(ast[contract], false, `${label}: 可达控制流 AST 子合同必须失败`);
+  assert.equal(ast.passed, false, `${label}: 聚合 AST 合同必须失败`);
+}
 const exactBindingMutationCases = [
   ['cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs',
     'const clear = () =>', 'const clear = (deadline = unrelatedTimer) =>', 'clear 参数遮蔽 deadline'],
@@ -2022,13 +2545,24 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
   };
   const addScopedGroup = (filePath, binding) => {
     const scope = binding.current_release_scope;
-    const group = [
-      scope.owner_start.source,
-      ...scope.required_fragments.map((fragment) => fragment.value.source),
-      binding.addition.source,
-    ].filter((line, index, lines) => line && lines.indexOf(line) === index);
     const groups = scopedGroupsByPath.get(filePath) || [];
-    if (!groups.some((candidate) => candidate.join('\n') === group.join('\n'))) groups.push(group);
+    let group = groups.find((candidate) => candidate.owner === scope.owner_start.source);
+    if (!group) {
+      group = { owner: scope.owner_start.source, owner_lines: [], region_scopes: [] };
+      groups.push(group);
+    }
+    if (scope.boundary === 'anchored-line-region-within-next-top-level-test') {
+      if (!group.region_scopes.some((candidate) => JSON.stringify(candidate) === JSON.stringify(scope))) {
+        group.region_scopes.push(scope);
+      }
+    } else {
+      for (const line of [
+        ...scope.required_fragments.map((fragment) => fragment.value.source),
+        binding.addition.source,
+      ]) {
+        if (line && !group.owner_lines.includes(line)) group.owner_lines.push(line);
+      }
+    }
     scopedGroupsByPath.set(filePath, groups);
   };
 
@@ -2064,12 +2598,68 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
     }
   }
 
+  const renderScopedGroup = (group) => {
+    const regionScopes = [...group.region_scopes].sort((left, right) => {
+      const startIndex = (scope) => scope.owner_region_order.findIndex((record) => (
+        record.source === scope.region_start.source
+      ));
+      return startIndex(left) - startIndex(right);
+    });
+    const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
+      scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
+    ));
+    const lines = [group.owner, ...group.owner_lines];
+    for (const scope of regionScopes) {
+      lines.push(
+        scope.region_start.source,
+        ...scope.required_fragments.map((fragment) => fragment.value.source),
+        scope.region_end.source,
+      );
+      if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
+        lines.push("    platform: 'darwin',", '  } ) ;');
+      }
+    }
+    if (requiresJavaScriptPropertyAst) lines.push('});');
+    return lines;
+  };
+
+  const completeCurrentReleaseJavaScriptFixture = (filePath, sourceLines) => {
+    const lines = [...sourceLines];
+    const envelopeContract = casebookDesignSourceContracts.find((contract) => (
+      contract.integration_bindings?.some((binding) => (
+        binding.id === 'test_declares_shared_32_mib_envelope_limit'
+      ))
+    ));
+    const ownerBinding = envelopeContract?.integration_bindings?.find((binding) => (
+      binding.id === 'test_declares_shared_32_mib_envelope_limit'
+    ));
+    const oversizedBinding = envelopeContract?.integration_bindings?.find((binding) => (
+      binding.id === 'test_rejects_payload_at_shared_limit'
+    ));
+    if (ownerBinding?.path !== filePath || oversizedBinding?.path !== filePath) return lines;
+
+    const ownerIndex = lines.indexOf(ownerBinding.addition.source);
+    const oversizedIndex = lines.indexOf(oversizedBinding.addition.source);
+    if (ownerIndex < 0 || oversizedIndex <= ownerIndex) return lines;
+
+    lines.splice(oversizedIndex, 0, '  const oversizedEnvelopeFixture = {');
+    lines.splice(
+      oversizedIndex + 2,
+      0,
+      '  };',
+      '  void oversizedEnvelopeFixture;',
+      '});',
+    );
+    return lines;
+  };
+
   const sourceFile = (filePath) => {
     const sourceLines = [
       ...(linesByPath.get(filePath) || []),
-      ...(scopedGroupsByPath.get(filePath) || []).flat(),
+      ...(scopedGroupsByPath.get(filePath) || []).flatMap(renderScopedGroup),
     ];
-    const source = `${sourceLines.length ? sourceLines.join('\n') : '// current release fixture'}\n`;
+    const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, sourceLines);
+    const source = `${completedLines.length ? completedLines.join('\n') : '// current release fixture'}\n`;
     const bytes = Buffer.from(source, 'utf8');
     return {
       path: filePath,
@@ -5533,57 +6123,57 @@ assert.equal(
   false,
   '明确的 capabilities 空态不得重复读取或扩大清理副作用',
 );
-let expertCapabilitiesReadCount = 0;
-const expertCapabilitiesRecovered = await coreBetaCapabilitiesReadbackWithRetry(async () => {
-  expertCapabilitiesReadCount += 1;
-  if (expertCapabilitiesReadCount === 1) {
-    throw new Error('Teams QWork capabilities timed out after 5000ms');
-  }
-  return { currentExpert: { id: 'expert-qa-001' } };
-}, {
-  maxAttempts: 3,
-  timeoutMs: 100,
-  retryDelayMs: 0,
-  delay: async () => {},
-});
-assert.equal(expertCapabilitiesRecovered.ok, true, 'Expert capabilities 首次超时后必须通过受管只读重试恢复');
-assert.equal(expertCapabilitiesReadCount, 2, 'Expert capabilities 恢复不得重复执行状态变更，只应重试只读接口');
-assert.deepEqual(
-  expertCapabilitiesRecovered.attempts.map((attempt) => ({ ok: attempt.ok, error: attempt.error })),
-  [
-    { ok: false, error: 'Teams QWork capabilities timed out after 5000ms' },
-    { ok: true, error: '' },
-  ],
-  'Expert capabilities 重试账本必须保留首次超时和随后成功',
-);
-let hangingCapabilitiesReadCount = 0;
-const hangingCapabilitiesRecovered = await coreBetaCapabilitiesReadbackWithRetry(async () => {
-  hangingCapabilitiesReadCount += 1;
-  if (hangingCapabilitiesReadCount === 1) return new Promise(() => {});
-  return { selectedSkills: null, selectedConnectors: null, currentExpert: null };
-}, {
-  maxAttempts: 3,
-  timeoutMs: 20,
-  retryDelayMs: 0,
-  delay: async () => {},
-});
-assert.equal(
-  hangingCapabilitiesRecovered.ok,
-  true,
-  '公开 capabilities IPC 永不 resolve 时，框架必须在有界超时后只读重试并恢复',
-);
-assert.equal(hangingCapabilitiesReadCount, 2, '公开 capabilities 挂起恢复不得重复执行任何写操作');
-assert.equal(hangingCapabilitiesRecovered.attempts[0].ok, false, '挂起的首次 capabilities 读回必须记为失败尝试');
-assert.equal(hangingCapabilitiesRecovered.attempts[1].ok, true, '第二次 capabilities 只读重试应保留成功账本');
 assert.match(
-  runner,
-  /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*coreBetaCapabilitiesReadbackWithRetry[\s\S]*capabilities_readback_attempts/,
-  'BETA-EXPERT-001 必须把一次性 setExpert 与可重试 capabilities 读回分离并保存账本',
+  qworkCapabilitiesReadbackSource,
+  /cold_load[\s\S]*QWORK_CAPABILITIES_COLD_LOAD_TIMEOUT_MS[\s\S]*stable_read_1[\s\S]*QWORK_CAPABILITIES_STABLE_READ_TIMEOUT_MS[\s\S]*stable_read_2/,
+  'capabilities 统一读回必须固定为一次 15000ms cold_load 和两次 2000ms stable read',
 );
 assert.match(
+  qworkCapabilitiesReadbackSource,
+  /value_type[\s\S]*Object\.keys\(value\)\.sort\(\)[\s\S]*selectedSkills[\s\S]*selectedConnectors[\s\S]*currentExpert[\s\S]*summary_signature_sha256[\s\S]*probe_ledger/,
+  'capabilities 必须以类型、排序 keys 和三个 selection 字段存在性形成稳定签名并保存完整 ledger',
+);
+assert.match(
+  qworkCapabilitiesReadbackSource,
+  /qworkCapabilitiesPreProbeFailure[\s\S]*probe_started: false[\s\S]*pre_probe_failure[\s\S]*probe_ledger: probeLedger/,
+  'capabilities 前置失败必须明确 probe_started=false 并保留空 probe ledger',
+);
+assert.match(
+  qworkCapabilitiesReadbackSource,
+  /validateQworkCapabilitiesReadbackEvidence[\s\S]*probe_started !== true[\s\S]*probe_not_started[\s\S]*Object\.hasOwn\(object, 'pre_probe_failure'\)[\s\S]*pre_probe_failure_present/,
+  'capabilities 成功证据必须证明 probe 已启动，且不得同时携带 pre-probe failure',
+);
+assert.match(
+  teamsCdpWebviewSource,
+  /target_discovery[\s\S]*qwork_target_unavailable[\s\S]*cdpSetupStage === 'runtime_enable'[\s\S]*runtime_enable_failed[\s\S]*cdp_connect_failed/,
+  'Teams CDP target、连接和 Runtime.enable 前置失败必须使用独立 pre-probe 证据',
+);
+assert.doesNotMatch(
+  teamsCdpWebviewSource,
+  /!targetRef\?\.webSocketDebuggerUrl\)[\s\S]{0,200}readStableQworkCapabilities/,
+  'target 缺失不得调用三阶段 helper 伪造 cold_load ledger',
+);
+for (const [name, source] of [['v2', runner], ['legacy', legacyRunner]]) {
+  assert.match(
+    source,
+    /readStableQworkCapabilities[\s\S]*stableCapabilitiesReadback[\s\S]*rendererDeadline[\s\S]*Promise\.race[\s\S]*finally[\s\S]*clearTimeout/,
+    `${name} runner 必须使用共享三阶段 helper，并在 renderer finally 中清理计时器`,
+  );
+  assert.match(
+    source,
+    /stableCapabilitiesReadback\(page\)[\s\S]*validateQworkCapabilitiesReadbackEvidence\(readback\)[\s\S]*readback\.ok === true && validation\.ok === true/,
+    `${name} runner 必须重放完整 capabilities probe_ledger，不能只信共享 helper 顶层 ok`,
+  );
+}
+assert.match(
   runner,
-  /const \[capabilities, experts, drafts\] = await Promise\.all\(\[\s*window\.agent\.capabilities\(\),\s*lifecycle\.list\(\),\s*lifecycle\.listDrafts\(\)/,
-  'Expert lifecycle 初始化必须读取公开 window.agent.capabilities，不得假设 lifecycle.capabilities 存在',
+  /BETA-EXPERT-001[\s\S]*set_expert_result[\s\S]*stableCapabilitiesReadback\(page\)[\s\S]*capabilities_readback[\s\S]*capabilities_readback_attempts/,
+  'BETA-EXPERT-001 必须把 recordRecent/setExpert 一次性写动作与三阶段只读 capabilities 分离并保存 ledger',
+);
+assert.match(
+  runner,
+  /capabilities_readback_attempts: capabilitiesReadback\.probe_ledger/,
+  'Expert lifecycle 的断言与 trace 必须保存共享三阶段 probe_ledger，不能读取不存在的 attempts 兼容字段',
 );
 assert.doesNotMatch(
   runner,
@@ -5602,13 +6192,49 @@ assert.match(
 );
 assert.match(
   runner,
-  /CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS[\s\S]*currentCapabilities[\s\S]*Promise\.race[\s\S]*coreBetaCapabilitiesReadbackWithRetry/,
-  'Core Beta v2 所有公开 capabilities 读回必须使用有界 Promise.race 与只读重试，禁止挂死串行批次',
+  /async function currentCapabilities\(page\)[\s\S]*stableCapabilitiesReadback\(page\)[\s\S]*readStableQworkCapabilities[\s\S]*validateQworkCapabilitiesReadbackEvidence\(readback\)[\s\S]*readback\.ok === true && validation\.ok === true/,
+  'Core Beta v2 所有公开 capabilities 读回必须使用共享 cold-load/stable-read 合同并重放完整 probe ledger',
+);
+const betaInit005Start = runner.indexOf("if (testCase.id === 'BETA-INIT-005')");
+const betaInit005Source = runner.slice(
+  betaInit005Start,
+  runner.indexOf('await executeUiCase({ page, state, testCase, caseDir, selectors });', betaInit005Start),
+);
+assert.match(
+  betaInit005Source,
+  /beforeCapabilitiesReadback = await stableCapabilitiesReadback\(page\)[\s\S]*duringCapabilitiesReadback = await stableCapabilitiesReadback\(page\)[\s\S]*probe_ledger/,
+  'BETA-INIT-005 故障注入前后都必须使用共享三阶段 capabilities 读回并保留 ledger',
+);
+assert.doesNotMatch(
+  betaInit005Source,
+  /window\.agent\.capabilities\s*\(/,
+  'BETA-INIT-005 不得绕过共享 helper 直接调用 window.agent.capabilities',
 );
 assert.match(
   runner,
-  /capabilitiesReadbackAttempts[\s\S]*Core Beta capabilities readback timed out[\s\S]*capabilities_readback_attempts/,
-  'Core Beta v2 最终公共状态证据必须保留 capabilities 读回尝试与超时诊断',
+  /capabilities_readback: qworkCapabilitiesReadbackEvidence\(capabilitiesReadback\)[\s\S]*capabilities_readback_attempts: capabilitiesReadback\.probe_ledger/,
+  'Core Beta v2 最终公共状态证据必须保留 capabilities 三阶段读回 ledger 与超时诊断',
+);
+const legacyFinalizationStart = legacyRunner.indexOf('async function finalizeCoreBetaCase(ctx)');
+const legacyFinalization = legacyRunner.slice(
+  legacyFinalizationStart,
+  legacyRunner.indexOf('async function executeCoreBetaCommand', legacyFinalizationStart),
+);
+assert.ok(legacyFinalizationStart >= 0, 'legacy runner 必须保留 Core Beta 最终公共状态收尾');
+assert.match(
+  legacyFinalization,
+  /capabilitiesReadback = await stableCapabilitiesReadback\(ctx\.page\)[\s\S]*qworkCapabilitiesReadbackEvidence\(capabilitiesReadback\)[\s\S]*capabilities_readback_attempts: capabilitiesEvidence\?\.probe_ledger \|\| \[\]/,
+  'legacy runner 最终公共状态必须保存共享三阶段 capabilities evidence 与完整 probe ledger',
+);
+assert.match(
+  legacyFinalization,
+  /publicStateAvailable[\s\S]*capabilitiesReadback\.ok === true[\s\S]*selectionStateReadable[\s\S]*const clean = !lifecycle \|\| \([\s\S]*publicStateAvailable[\s\S]*selectionStateReadable/,
+  'legacy runner 不得把 capabilities 不可读或选择字段缺失折算为空态并误判清理通过',
+);
+assert.doesNotMatch(
+  legacyFinalization,
+  /const capabilities = await currentCapabilities\(ctx\.page\)/,
+  'legacy runner 最终公共状态不得丢弃共享 capabilities 读回 ledger',
 );
 assert.match(
   runner,
@@ -5686,20 +6312,63 @@ assert.match(
   /ownedProjection\.valid = true[\s\S]*ownedProjection\.evidence_valid = true[\s\S]*ownedProjection\.oracle_valid = ownedProjectionOracleValid/,
   '发布记录业务Oracle失败不得把结构完整的product_state_diff标成无效证据',
 );
+const cleanupFailedReadback = qworkCapabilitiesReadbackEvidence(
+  await readStableQworkCapabilities(async () => {
+    throw new Error('Teams QWork capabilities timed out after 15000ms');
+  }),
+);
 const cleanupMarketTimeout = {
   capability_cleanup_required: true,
-  capabilities_after: { __error: 'Teams QWork capabilities timed out after 5000ms' },
-  capabilities_readback_attempts: [1, 2, 3].map((attempt) => ({
-    attempt,
-    ok: false,
-    error: 'Teams QWork capabilities timed out after 5000ms',
-  })),
+  capabilities_after: { __error: 'Teams QWork capabilities timed out after 15000ms' },
+  capabilities_readback: cleanupFailedReadback,
+  capabilities_readback_attempts: cleanupFailedReadback.probe_ledger,
   composer_surface_available: false,
 };
+assert.equal(cleanupMarketTimeout.capabilities_readback_attempts.length, 1);
+assert.equal(cleanupMarketTimeout.capabilities_readback_attempts[0].phase, 'cold_load');
 assert.equal(
   coreBetaCleanupReadbackNeedsComposerRecovery(cleanupMarketTimeout),
   true,
-  'Skill 市场无 composer 且三次 capabilities 读回都超时时，必须导航到干净输入区恢复只读交叉取证',
+  'Skill 市场无 composer 且共享三阶段读回首阶段 fail-fast 时，必须导航到干净输入区恢复只读交叉取证',
+);
+let cleanupStableReadCalls = 0;
+const cleanupStableReadFailure = qworkCapabilitiesReadbackEvidence(
+  await readStableQworkCapabilities(async () => {
+    cleanupStableReadCalls += 1;
+    if (cleanupStableReadCalls === 2) {
+      throw new Error('Teams QWork capabilities stable_read_1 timed out after 2000ms');
+    }
+    return {
+      selectedSkills: [],
+      selectedConnectors: [],
+      currentExpert: null,
+    };
+  }),
+);
+assert.deepEqual(
+  cleanupStableReadFailure.probe_ledger.map((entry) => [entry.phase, entry.ok]),
+  [['cold_load', true], ['stable_read_1', false]],
+  '共享 helper 的中间阶段失败必须保留成功前缀和末项失败的 fail-fast ledger',
+);
+assert.equal(
+  coreBetaCleanupReadbackNeedsComposerRecovery({
+    ...cleanupMarketTimeout,
+    capabilities_readback: cleanupStableReadFailure,
+    capabilities_readback_attempts: cleanupStableReadFailure.probe_ledger,
+  }),
+  true,
+  '共享三阶段读回在 stable_read_1 fail-fast 时也必须进入受管输入区恢复',
+);
+assert.equal(
+  coreBetaCleanupReadbackNeedsComposerRecovery({
+    ...cleanupMarketTimeout,
+    capabilities_readback_attempts: [{
+      ...cleanupMarketTimeout.capabilities_readback_attempts[0],
+      phase: 'forged_phase',
+    }],
+  }),
+  false,
+  '清理恢复不得接受伪造或乱序的 capabilities 失败阶段',
 );
 assert.equal(
   coreBetaCleanupReadbackNeedsComposerRecovery({
@@ -5784,12 +6453,9 @@ assert.equal(
 );
 const cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer = {
   ...cleanupBase,
-  capabilities_after: { __error: 'Core Beta cleanup capabilities timed out after 6500ms' },
-  capabilities_readback_attempts: [1, 2, 3].map((attempt) => ({
-    attempt,
-    ok: false,
-    error: 'Core Beta cleanup capabilities timed out after 6500ms',
-  })),
+  capabilities_after: { __error: 'Core Beta cleanup capabilities timed out after 15000ms' },
+  capabilities_readback: cleanupFailedReadback,
+  capabilities_readback_attempts: cleanupFailedReadback.probe_ledger,
   composer_surface_available: true,
   pre_cleanup_selection_readback: {
     ok: true,
@@ -5893,7 +6559,7 @@ assert.equal(
 assert.equal(
   coreBetaCleanupReadbackVerdict(cleanupCapabilitiesTimedOutOnVisibleUnifiedComposer).selection_source,
   'pre_cleanup_and_visible_ui',
-  '三次 capabilities 超时后，发送前权威空态、成功清理桥和当前统一 Composer 可见空态应形成交叉读回',
+  'capabilities 三阶段合同 fail-fast 后，发送前权威空态、成功清理桥和当前统一 Composer 可见空态应形成交叉读回',
 );
 assert.equal(
   coreBetaCleanupReadbackVerdict({
@@ -7094,6 +7760,10 @@ try {
   const driftOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-drift');
   const migrationOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-release-migration');
   const wrongCaseOut = path.join(runOwnedSkillCleanupRoot, 'cleanup-wrong-case');
+  const missingCapabilitiesOut = path.join(
+    runOwnedSkillCleanupRoot,
+    'cleanup-missing-capabilities',
+  );
   const casebook = path.join(runOwnedSkillCleanupRoot, 'casebook.xlsx');
   for (const directory of [
     sourceOut,
@@ -7104,11 +7774,13 @@ try {
     driftOut,
     migrationOut,
     wrongCaseOut,
+    missingCapabilitiesOut,
   ]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   fs.writeFileSync(casebook, 'immutable-casebook');
   const casebookSha256 = createHash('sha256').update(fs.readFileSync(casebook)).digest('hex');
+  const cleanupCapabilitiesReadback = createQworkCapabilitiesReadbackFixture();
   const releaseMetadata = {
     host: { product: '360Teams', version: '5.2.38', build: '2119080433', app_path: '/Applications/360Teams.app' },
     qwork: { version: '0.0.29', url: 'file:///Users/qa/.deepbank-uat/ui/0.0.29/index.html' },
@@ -7133,6 +7805,16 @@ try {
       mode: 'live',
       alias: '/Users/qa/managed-live-profile',
     },
+    release_observation: {
+      ok: true,
+      capabilities_readback: structuredClone(cleanupCapabilitiesReadback),
+    },
+    release_observation_checks: [{
+      phase: 'startup',
+      observed_at: '2026-09-05T00:00:00.000Z',
+      ok: true,
+      capabilities_readback: structuredClone(cleanupCapabilitiesReadback),
+    }],
   };
   const migratedReleaseMetadata = {
     ...releaseMetadata,
@@ -7165,6 +7847,13 @@ try {
   });
   writeJsonFile(path.join(migrationOut, 'run-metadata.json'), migratedReleaseMetadata);
   writeJsonFile(path.join(wrongCaseOut, 'run-metadata.json'), releaseMetadata);
+  const metadataWithoutCapabilities = structuredClone(releaseMetadata);
+  delete metadataWithoutCapabilities.release_observation;
+  delete metadataWithoutCapabilities.release_observation_checks;
+  writeJsonFile(
+    path.join(missingCapabilitiesOut, 'run-metadata.json'),
+    metadataWithoutCapabilities,
+  );
   writeJsonFile(path.join(sourceOut, 'core-beta-suite-ledger.json'), {
     schema_version: 1,
     skills: {
@@ -7235,6 +7924,16 @@ try {
     fs.readFileSync(path.join(currentOut, 'core-beta-suite-ledger.json'), 'utf8'),
     fs.readFileSync(path.join(sourceOut, 'core-beta-suite-ledger.json'), 'utf8'),
     '清理批次必须原样导入冻结 suite ledger，不能改写目标 identity',
+  );
+  assert.throws(
+    () => seedCoreBetaRunOwnedSkillCleanupLedger({
+      sourceOut,
+      currentOut: missingCapabilitiesOut,
+      casebook,
+      selectedCases: cleanupCase,
+    }),
+    /缺少发布身份 observation/,
+    '定向清理不得用缺少 capabilities observation 的目标 run metadata 旁路身份门禁',
   );
   const compoundSourceResults = sourceResults.map((result) => {
     const sourceCaseDir = result.case_dir;
@@ -7416,8 +8115,8 @@ assert.match(
 );
 assert.match(
   runner,
-  /capabilitiesReadbackAttempts[\s\S]*attempt <= 3[\s\S]*coreBetaCleanupCapabilitiesNeedsRetry\(snapshot\.capabilities_after\)[\s\S]*window\.agent\.capabilities\(\)[\s\S]*capabilities_readback_attempts/,
-  '清理读回在 capabilities 传输超时后必须执行最多三次有界只读尝试并保存尝试账本',
+  /captureCleanupSelectionReadbacks[\s\S]*stableCapabilitiesReadback\(page\)[\s\S]*qworkCapabilitiesReadbackEvidence\(capabilitiesReadback\)[\s\S]*capabilities_readback_attempts = snapshot\.capabilities_readback\?\.probe_ledger/,
+  '清理读回必须使用统一 cold-load/stable-read 合同并保存完整 probe ledger',
 );
 assert.match(
   runner,
@@ -11154,6 +11853,10 @@ const skillHubRestartSource = runner.slice(
   runner.indexOf('async function restartWithSkillHubFault'),
   runner.indexOf('async function restoreNormalQbotAfterFault'),
 );
+const rendererAdapterSource = runner.slice(
+  runner.indexOf('export async function installRendererControlAdapter'),
+  runner.indexOf('async function captureConfirmDuringWithAction'),
+);
 const boundedSkillCatalogReadSource = runner.slice(
   runner.indexOf('async function readCoreBetaSkillCatalog'),
   runner.indexOf('async function waitForCoreBetaSkillIdentitiesAbsent'),
@@ -11235,6 +11938,26 @@ assert.match(
   runner,
   /installRendererControlAdapterWithRecovery[\s\S]*Math\.min\(2[\s\S]*inspectRendererControlAdapterState[\s\S]*node_registry_count === 0[\s\S]*retry_eligible/,
   'Teams renderer adapter 首次瞬态失败只能在没有其他活动 adapter 时执行一次 clean rebind',
+);
+assert.match(
+  rendererAdapterSource,
+  /withRendererControlNodeHardTimeout[\s\S]*page\.exposeFunction[\s\S]*install renderer timeout[\s\S]*close renderer timeout[\s\S]*probe .* renderer timeout/,
+  'Teams renderer adapter 的 expose/install/逐方法 probe/close 必须同时具备 renderer 与 Node 硬超时',
+);
+assert.match(
+  rendererAdapterSource,
+  /OriginalMethodDescriptors[\s\S]*method_descriptors_restored[\s\S]*global_agent_descriptor_restored[\s\S]*node_binding_resource_control_ids/,
+  'Teams renderer adapter 关闭必须复核原始 agent、六方法描述符、renderer bindings 与 Node binding resources',
+);
+assert.match(
+  rendererAdapterSource,
+  /before_assessment[\s\S]*polluted before bind[\s\S]*close_error === null[\s\S]*after_assessment\.ok === true/,
+  'Teams renderer adapter 只有在 Node/renderer 生命周期均干净且 close 成功时才允许第二次绑定',
+);
+assert.doesNotMatch(
+  skillHubRestartSource,
+  /adapter\.close\(\)\.catch\(\(\) => \{\}\)/,
+  'Teams Skill adapter 清理失败不得被吞掉，否则会在污染 renderer 上继续下一 Case',
 );
 assert.match(
   runner,
@@ -14141,6 +14864,16 @@ const r9IncrementalMrIids = [
 ];
 const r9IncrementalMrSequence = new RegExp(r9IncrementalMrIids.map((iid) => `!${iid}`).join('[\\s\\S]*'));
 for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
+  assert.match(
+    documentText,
+    /Core Beta v2 `--resume`[\s\S]*case-result\.json[\s\S]*evidence-manifest\.json[\s\S]*bytes\/SHA-256[\s\S]*(?:拒绝|禁止)[\s\S]*同目录恢复/,
+    '两份规范必须冻结 v2 恢复的 provenance 与磁盘证据重放合同',
+  );
+  assert.match(
+    documentText,
+    /core-beta-cleanup-from[\s\S]*capabilities[\s\S]*(?:phase checks|phase)[\s\S]*(?:signature|canonical)[\s\S]*(?:缺失|漂移)[\s\S]*(?:不得|禁止)/,
+    '两份规范必须冻结专用清理来源 capabilities 门禁',
+  );
   assert.match(documentText, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx/, '两份规范必须冻结16/12/70/160分层Casebook路径');
   assert.match(
     documentText,

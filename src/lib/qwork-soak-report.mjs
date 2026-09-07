@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  validateQworkCapabilitiesReadbackEvidence,
+} from './qwork-capabilities-readback.mjs';
 
 export const QWORK_SOAK_REPORT_SCHEMA = 'qbot-qwork-soak-report/v1';
 export const QWORK_SOAK_REPORT_AUDIT_SCHEMA = 'qbot-qwork-soak-report-audit/v1';
@@ -87,25 +90,6 @@ function isoTime(value) {
   const raw = text(value);
   const timestamp = Date.parse(raw);
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === raw ? timestamp : Number.NaN;
-}
-
-function capabilitiesAttemptsValid(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 3) return false;
-  return value.every((attempt, index) => {
-    const startedAt = isoTime(attempt?.started_at);
-    const endedAt = isoTime(attempt?.ended_at);
-    const succeeded = attempt?.ok === true;
-    return attempt?.attempt === index + 1
-      && attempt?.timeout_ms === 2_000
-      && Number.isFinite(startedAt)
-      && Number.isFinite(endedAt)
-      && endedAt >= startedAt
-      && isNonNegativeInteger(attempt?.duration_ms)
-      && typeof attempt?.error === 'string'
-      && (succeeded
-        ? attempt?.value_type === 'object' && attempt.error === '' && index === value.length - 1
-        : attempt?.value_type === '' && Boolean(text(attempt.error)) && index < value.length - 1);
-  });
 }
 
 function pathInside(candidate, root) {
@@ -346,10 +330,21 @@ function validateIdentityReadback(payload, observation, report, expectedFingerpr
     || qworkSoakReleaseIdentityFingerprint(identity) !== expectedFingerprint) {
     addFailure(failures, 'soak_identity_readback_binding_invalid', owner);
   }
-  if (!capabilitiesAttemptsValid(payload?.capabilities_readback_attempts)
-    || stableJson(payload?.capabilities_readback_attempts)
-      !== stableJson(observation?.capabilities_readback_attempts)) {
-    addFailure(failures, 'soak_identity_capabilities_attempts_invalid', owner);
+  const payloadCapabilities = payload?.capabilities_readback;
+  const observationCapabilities = observation?.capabilities_readback;
+  if (!validateQworkCapabilitiesReadbackEvidence(payloadCapabilities).valid
+    || !validateQworkCapabilitiesReadbackEvidence(observationCapabilities).valid
+    || stableJson(payloadCapabilities) !== stableJson(observationCapabilities)) {
+    addFailure(failures, 'soak_identity_capabilities_readback_invalid', owner);
+  }
+  const payloadAttempts = payload?.capabilities_readback_attempts;
+  const observationAttempts = observation?.capabilities_readback_attempts;
+  if (!Array.isArray(payloadAttempts)
+    || !Array.isArray(observationAttempts)
+    || stableJson(payloadAttempts) !== stableJson(payloadCapabilities?.probe_ledger)
+    || stableJson(observationAttempts) !== stableJson(observationCapabilities?.probe_ledger)
+    || stableJson(payloadAttempts) !== stableJson(observationAttempts)) {
+    addFailure(failures, 'soak_identity_capabilities_attempts_projection_mismatch', owner);
   }
   if (runtime?.top_level_version !== identity?.qwork_version
     || runtime?.loaded_version !== identity?.qwork_version
@@ -387,8 +382,10 @@ function validateIdentityObservations({ report, artifacts, referenced, expectedF
       || text(observation?.release_identity_sha256) !== expectedFingerprint) {
       addFailure(failures, 'soak_identity_observation_invalid', id || 'missing');
     }
-    if (!capabilitiesAttemptsValid(observation?.capabilities_readback_attempts)) {
-      addFailure(failures, 'soak_identity_capabilities_attempts_invalid', id || 'missing');
+    if (!validateQworkCapabilitiesReadbackEvidence(
+      observation?.capabilities_readback,
+    ).valid) {
+      addFailure(failures, 'soak_identity_capabilities_readback_invalid', id || 'missing');
     }
     exactArtifactRoles(observation, ['identity_readback'], failures, `identity:${id}`);
     const payload = artifactPayload({

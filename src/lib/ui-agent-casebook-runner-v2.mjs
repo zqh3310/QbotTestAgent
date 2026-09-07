@@ -22,6 +22,12 @@ import {
   webSearchQuotaTraceVerdict,
 } from './qbot-web-runtime-evidence.mjs';
 import {
+  QWORK_CAPABILITIES_READBACK_PHASES,
+  qworkCapabilitiesReadbackEvidence,
+  readStableQworkCapabilities,
+  validateQworkCapabilitiesReadbackEvidence,
+} from './qwork-capabilities-readback.mjs';
+import {
   uploadAttachmentsInComposer,
   uploadAttachmentsViaVisiblePicker,
 } from './qbot-ui-attachments.mjs';
@@ -54,6 +60,7 @@ import {
   isCoreBetaCase,
   validateCoreBetaCasePlan,
   validateCoreBetaScopedSelection,
+  validateEvidenceFile,
   validateReplyCompletionPayload,
 } from './core-beta-case-protocol.mjs';
 
@@ -72,12 +79,6 @@ const CORE_BETA_SCREENSHOT_PRIMARY_HARD_TIMEOUT_MS = 41_000;
 const CORE_BETA_SCREENSHOT_SESSION_TIMEOUT_MS = 5_000;
 const CORE_BETA_SCREENSHOT_CAPTURE_TIMEOUT_MS = 15_000;
 const CORE_BETA_SCREENSHOT_DETACH_TIMEOUT_MS = 5_000;
-// capabilities() is a read-only IPC call, but a renderer refresh can leave its
-// promise pending. Keep every read bounded so a stale bridge cannot stall a
-// serial batch; retries remain read-only and never repeat the preceding action.
-const CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS = 2_000;
-const CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS = 3;
-const CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS = 150;
 const AUTH_BROWSER_CANDIDATES = [
   process.env.DEEPBANK_E2E_BROWSER_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -1215,7 +1216,11 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
       await writeResultExcel({ python, root, casebook, outDir, summary, resultExcel });
       return summary;
     }
-    const resume = loadResumeProgress(progressFile, selectedCases, options.resume === true || options.resume === 'true');
+    const resume = loadCoreBetaV2ResumeProgress(
+      progressFile,
+      selectedCases,
+      options.resume === true || options.resume === 'true',
+    );
     const results = resume.results;
     let frameworkStop = null;
     for (let index = resume.startIndex; index < selectedCases.length; index += 1) {
@@ -1385,15 +1390,13 @@ export async function runUiAgentCasebookCommand({ options = {}, root = process.c
           phase: 'run-final',
         });
       } catch (error) {
-        frameworkStop = stopRemainderWithoutSynthetic({
+        frameworkStop = recordCoreBetaFinalizationFailure({
+          frameworkStop,
           outDir,
           selectedCases,
-          startIndex: Math.min(results.length, selectedCases.length),
           results,
           progressFile,
-          status: 'blocked',
-          resultCategory: 'automation_error',
-          reason: `QWork 发布身份结束复核失败：${error?.message || error}`,
+          error,
         });
       }
     }
@@ -2355,22 +2358,373 @@ async function runParallelUiAgentCasebook({
   return summary;
 }
 
-function loadResumeProgress(progressFile, selectedCases, enabled) {
+const CORE_BETA_RESUME_MAX_FILE_BYTES = 64 * 1024 * 1024;
+
+function coreBetaResumeCanonicalEqual(left, right) {
+  return JSON.stringify(canonicalCoreBetaInitializationValue(left))
+    === JSON.stringify(canonicalCoreBetaInitializationValue(right));
+}
+
+function coreBetaResumeExpectedEvidenceRoles(testCase = {}) {
+  const roles = Array.isArray(testCase.evidence_roles) ? [...testCase.evidence_roles] : [];
+  if (CORE_BETA_INITIALIZATION_CASE_IDS.has(String(testCase?.id || ''))) {
+    for (const role of CORE_BETA_INITIALIZATION_DISK_EVIDENCE_ROLES) {
+      if (!roles.includes(role)) roles.push(role);
+    }
+  }
+  if (String(testCase?.id || '') === 'BETA-INIT-003') {
+    for (const role of [
+      'skill_reinstall_readiness_verdict',
+      'initialization_continuation_surface',
+      'product_action_trace',
+    ]) {
+      if (!roles.includes(role)) roles.push(role);
+    }
+  }
+  return roles;
+}
+
+function coreBetaResumeReadBoundFile(file, { caseDir, runRoot }) {
+  const resolvedFile = path.resolve(String(file || ''));
+  const resolvedCaseDir = path.resolve(String(caseDir || ''));
+  const resolvedRunRoot = path.resolve(String(runRoot || ''));
+  const relative = path.relative(resolvedCaseDir, resolvedFile);
+  if (
+    !file
+    || !relative
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+    || !coreBetaDirectoryChainWithoutSymlinks(resolvedRunRoot, path.dirname(resolvedFile))
+  ) return null;
+  try {
+    const before = fs.lstatSync(resolvedFile, { bigint: true });
+    if (
+      before.isSymbolicLink()
+      || !before.isFile()
+      || before.nlink !== 1n
+      || before.size <= 0n
+      || before.size > BigInt(CORE_BETA_RESUME_MAX_FILE_BYTES)
+      || !coreBetaOwnedAndNotSharedWritable(before)
+    ) return null;
+    const flags = fs.constants.O_RDONLY
+      | (fs.constants.O_NOFOLLOW || 0)
+      | (fs.constants.O_CLOEXEC || 0);
+    const fd = fs.openSync(resolvedFile, flags);
+    let bytes;
+    let descriptorBefore;
+    let descriptorAfter;
+    try {
+      descriptorBefore = fs.fstatSync(fd, { bigint: true });
+      if (!coreBetaSameStatIdentity(before, descriptorBefore)) return null;
+      bytes = fs.readFileSync(fd);
+      descriptorAfter = fs.fstatSync(fd, { bigint: true });
+      if (
+        BigInt(bytes.length) !== descriptorBefore.size
+        || !coreBetaSameStatIdentity(descriptorBefore, descriptorAfter)
+      ) return null;
+    } finally {
+      fs.closeSync(fd);
+    }
+    const after = fs.lstatSync(resolvedFile, { bigint: true });
+    if (!coreBetaSameStatIdentity(descriptorAfter, after)) return null;
+    const realCaseDir = fs.realpathSync(resolvedCaseDir);
+    const realFile = fs.realpathSync(resolvedFile);
+    const realRelative = path.relative(realCaseDir, realFile);
+    if (
+      !realRelative
+      || realRelative === '..'
+      || realRelative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(realRelative)
+    ) return null;
+    return {
+      path: resolvedFile,
+      bytes,
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function coreBetaResumeParseJson(record) {
+  if (!record?.bytes) return null;
+  try {
+    const parsed = JSON.parse(record.bytes.toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateCoreBetaV2ResumeResultAtPath({
+  result,
+  testCase,
+  expectedOrder,
+  expectedCaseDir,
+  runRoot,
+}) {
+  const caseId = String(testCase?.id || 'unknown');
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) reasons.push(reason);
+  };
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return { ok: false, case_id: caseId, reasons: ['result_missing_or_invalid'] };
+  }
+  if (String(result.id || '') !== caseId) addReason('case_id_mismatch');
+  if (String(result.sheet || '') !== String(testCase?.sheet || '')) addReason('case_sheet_mismatch');
+  if (String(result.row_number || '') !== String(testCase?.row_number || '')) {
+    addReason('case_row_number_mismatch');
+  }
+  if (String(result.order ?? '') !== String(expectedOrder)) addReason('case_order_mismatch');
+  if (String(result.case_dir || '') === ''
+    || path.resolve(String(result.case_dir || '')) !== path.resolve(expectedCaseDir)) {
+    addReason('case_dir_identity_mismatch');
+  }
+  if (
+    result.execution_provenance !== 'executed'
+    || result.synthetic !== false
+    || result.inherited !== false
+    || result.case_execution_recorded !== true
+  ) addReason('execution_provenance_invalid');
+  if (
+    result.execution_completion?.status !== 'recorded'
+    || result.execution_completion?.evidence_complete !== true
+  ) addReason('execution_completion_invalid');
+  if (!['passed', 'failed', 'blocked'].includes(String(result.status || ''))) {
+    addReason('result_status_invalid');
+  }
+
+  const expectedContractSha256 = coreBetaCaseContractSha256(testCase);
+  if (String(result.contract_sha256 || '') !== expectedContractSha256) {
+    addReason('contract_sha256_mismatch');
+  }
+  for (const field of [
+    'case_type',
+    'contract_version',
+    'automation_protocol',
+    'evidence_schema_version',
+    'pipeline_policy',
+    'initialization_policy',
+    'cleanup_policy',
+  ]) {
+    if (String(result[field] || '') !== String(testCase?.[field] || '')) {
+      addReason(`contract_${field}_mismatch`);
+    }
+  }
+  if (Number(result.batch_size || 1) !== Number(testCase?.batch_size || 1)) {
+    addReason('contract_batch_size_mismatch');
+  }
+  for (const field of ['action_plan', 'conversation_turns', 'precise_assertions']) {
+    if (!coreBetaResumeCanonicalEqual(result[field] ?? null, testCase?.[field] ?? null)) {
+      addReason(`contract_${field}_mismatch`);
+    }
+  }
+  const expectedEvidenceRoles = coreBetaResumeExpectedEvidenceRoles(testCase);
+  if (!coreBetaResumeCanonicalEqual(result.evidence_roles, expectedEvidenceRoles)) {
+    addReason('contract_evidence_roles_mismatch');
+  }
+
+  const resolvedCaseDir = path.resolve(expectedCaseDir);
+  const resolvedRunRoot = path.resolve(runRoot);
+  if (!coreBetaDirectoryChainWithoutSymlinks(resolvedRunRoot, resolvedCaseDir)) {
+    addReason('case_directory_chain_invalid');
+  }
+  const resultFile = path.join(resolvedCaseDir, 'case-result.json');
+  const resultRecord = coreBetaResumeReadBoundFile(resultFile, {
+    caseDir: resolvedCaseDir,
+    runRoot: resolvedRunRoot,
+  });
+  const diskResult = coreBetaResumeParseJson(resultRecord);
+  if (!diskResult) addReason('case_result_disk_unreadable');
+  else if (!coreBetaResumeCanonicalEqual(diskResult, result)) addReason('case_result_disk_mismatch');
+
+  const manifestFile = path.join(resolvedCaseDir, 'evidence-manifest.json');
+  if (path.resolve(String(result?.artifacts?.evidence_manifest || '')) !== manifestFile) {
+    addReason('manifest_path_mismatch');
+  }
+  const manifestRecord = coreBetaResumeReadBoundFile(manifestFile, {
+    caseDir: resolvedCaseDir,
+    runRoot: resolvedRunRoot,
+  });
+  const manifest = coreBetaResumeParseJson(manifestRecord);
+  if (!manifest) addReason('manifest_disk_unreadable');
+  if (manifest && !coreBetaResumeCanonicalEqual(manifest, result.evidence_manifest)) {
+    addReason('manifest_disk_mismatch');
+  }
+  if (
+    manifest?.schema_version !== 'qbot-core-evidence/v2'
+    || String(manifest?.case_id || '') !== caseId
+    || manifest?.complete !== true
+    || !Array.isArray(manifest?.missing_roles)
+    || manifest.missing_roles.length !== 0
+    || !Array.isArray(manifest?.invalid_roles)
+    || manifest.invalid_roles.length !== 0
+    || !Array.isArray(manifest?.not_applicable_roles)
+  ) addReason('manifest_contract_invalid');
+
+  const evidence = Array.isArray(manifest?.evidence) ? manifest.evidence : [];
+  const evidenceRoles = evidence.map((item) => String(item?.role || ''));
+  if (
+    evidence.length === 0
+    || new Set(evidenceRoles).size !== evidenceRoles.length
+    || !coreBetaResumeCanonicalEqual(evidenceRoles, expectedEvidenceRoles)
+  ) addReason('manifest_evidence_roles_invalid');
+  const expectedNotApplicable = evidence
+    .filter((item) => item?.not_applicable === true)
+    .map((item) => ({
+      role: item.role,
+      source: item.source,
+      reason: item.reason,
+      path: item.path,
+      sha256: item.sha256,
+    }));
+  if (manifest && !coreBetaResumeCanonicalEqual(
+    manifest.not_applicable_roles,
+    expectedNotApplicable,
+  )) addReason('manifest_not_applicable_roles_mismatch');
+
+  const evidencePathOwners = new Map();
+  for (const [evidenceIndex, item] of evidence.entries()) {
+    const role = String(item?.role || '');
+    if (
+      item?.valid !== true
+      || item?.missing !== false
+      || !Number.isSafeInteger(item?.bytes)
+      || item.bytes <= 0
+      || !/^[a-f0-9]{64}$/i.test(String(item?.sha256 || ''))
+      || String(item?.validation_error || '') !== ''
+    ) {
+      addReason(`evidence_${evidenceIndex + 1}_declaration_invalid`);
+      continue;
+    }
+    const resolvedEvidencePath = path.resolve(String(item.path || ''));
+    if (resolvedEvidencePath === resultFile || resolvedEvidencePath === manifestFile) {
+      addReason(`evidence_${evidenceIndex + 1}_reserved_path_reuse`);
+      continue;
+    }
+    const prior = evidencePathOwners.get(resolvedEvidencePath);
+    if (prior && (prior.notApplicable !== true || item.not_applicable !== true)) {
+      addReason(`evidence_${evidenceIndex + 1}_path_reuse`);
+    } else if (!prior) {
+      evidencePathOwners.set(resolvedEvidencePath, {
+        role,
+        notApplicable: item.not_applicable === true,
+      });
+    }
+    const record = coreBetaResumeReadBoundFile(resolvedEvidencePath, {
+      caseDir: resolvedCaseDir,
+      runRoot: resolvedRunRoot,
+    });
+    if (!record) {
+      addReason(`evidence_${evidenceIndex + 1}_file_invalid`);
+      continue;
+    }
+    if (record.size !== item.bytes) addReason(`evidence_${evidenceIndex + 1}_bytes_mismatch`);
+    if (record.sha256 !== String(item.sha256).toLowerCase()) {
+      addReason(`evidence_${evidenceIndex + 1}_sha256_mismatch`);
+    }
+    try {
+      const semantic = validateEvidenceFile(role, resolvedEvidencePath, {
+        expectedCaseId: caseId,
+        expectedCaseDir: resolvedCaseDir,
+      });
+      if (!semantic.valid) addReason(`evidence_${evidenceIndex + 1}_semantic_invalid`);
+    } catch {
+      addReason(`evidence_${evidenceIndex + 1}_semantic_unreadable`);
+    }
+  }
+
+  const completionBlock = coreBetaCompletionBlockReason(testCase, result);
+  if (completionBlock) addReason('completion_gate_rejected');
+
+  const expectedSubcases = Array.isArray(testCase?.compound_subcases)
+    ? testCase.compound_subcases
+    : [];
+  const observedSubcases = Array.isArray(result.subcase_results) ? result.subcase_results : [];
+  if (observedSubcases.length !== expectedSubcases.length) {
+    addReason('compound_subcase_count_mismatch');
+  } else {
+    for (const [subcaseIndex, subcase] of expectedSubcases.entries()) {
+      const subcaseDir = path.join(
+        resolvedCaseDir,
+        'subcases',
+        `${String(subcaseIndex + 1).padStart(3, '0')}-${subcase.id}-${slugify(subcase.scenario)}`,
+      );
+      const nested = validateCoreBetaV2ResumeResultAtPath({
+        result: observedSubcases[subcaseIndex],
+        testCase: subcase,
+        expectedOrder: `${expectedOrder}.${subcaseIndex + 1}`,
+        expectedCaseDir: subcaseDir,
+        runRoot: resolvedRunRoot,
+      });
+      for (const reason of nested.reasons) addReason(`subcase_${subcaseIndex + 1}:${reason}`);
+    }
+  }
+  return {
+    ok: reasons.length === 0,
+    case_id: caseId,
+    reasons,
+    case_result_sha256: resultRecord?.sha256 || '',
+    evidence_manifest_sha256: manifestRecord?.sha256 || '',
+  };
+}
+
+export function validateCoreBetaV2ResumeResult({
+  result,
+  testCase,
+  index = 0,
+  runRoot,
+} = {}) {
+  const expectedCaseDir = path.join(
+    path.resolve(String(runRoot || '')),
+    'cases',
+    `${String(index + 1).padStart(3, '0')}-${testCase?.id || 'unknown'}-${slugify(testCase?.scenario)}`,
+  );
+  return validateCoreBetaV2ResumeResultAtPath({
+    result,
+    testCase,
+    expectedOrder: index + 1,
+    expectedCaseDir,
+    runRoot,
+  });
+}
+
+export function loadCoreBetaV2ResumeProgress(progressFile, selectedCases, enabled) {
   if (!enabled || !fs.existsSync(progressFile)) return { results: [], startIndex: 0 };
   try {
     const progress = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
     const existing = Array.isArray(progress.results) ? progress.results : [];
-    const aligned = existing.every((result, index) => {
+    if (
+      !Number.isInteger(progress.completed)
+      || progress.completed !== existing.length
+      || !Number.isInteger(progress.total)
+      || progress.total !== selectedCases.length
+      || existing.length > selectedCases.length
+    ) {
+      throw new Error('progress_accounting_invalid');
+    }
+    const runRoot = path.dirname(path.resolve(progressFile));
+    for (const [index, result] of existing.entries()) {
       const expected = selectedCases[index];
-      return expected
-        && result?.id === expected.id
-        && String(result?.sheet || '') === String(expected.sheet || '')
-        && String(result?.row_number || '') === String(expected.row_number || '');
-    });
-    if (!aligned) return { results: [], startIndex: 0 };
-    return { results: existing, startIndex: Math.min(existing.length, selectedCases.length) };
-  } catch {
-    return { results: [], startIndex: 0 };
+      if (!expected) throw new Error(`unexpected_result_${index + 1}`);
+      const validation = validateCoreBetaV2ResumeResult({
+        result,
+        testCase: expected,
+        index,
+        runRoot,
+      });
+      if (!validation.ok) {
+        throw new Error(
+          `Case ${expected.id} resume evidence invalid: ${validation.reasons.join(',')}`,
+        );
+      }
+    }
+    return { results: existing, startIndex: existing.length };
+  } catch (error) {
+    throw new Error(`Core Beta v2 拒绝不可信同目录恢复：${error?.message || error}`);
   }
 }
 
@@ -2419,6 +2773,73 @@ export function stopRemainderWithoutSynthetic({
     results,
   });
   return diagnostic;
+}
+
+export function writeCoreBetaSecondaryFinalizationDiagnostic({
+  outDir,
+  primaryStop,
+  error,
+}) {
+  const directory = path.resolve(String(outDir || ''));
+  ensureDir(directory);
+  let sequence = 1;
+  let file = '';
+  do {
+    file = path.join(
+      directory,
+      `framework-finalization-diagnostic-${String(sequence).padStart(3, '0')}.json`,
+    );
+    sequence += 1;
+  } while (fs.existsSync(file));
+  const diagnostic = {
+    schema_version: 'qbot-framework-finalization-diagnostic/v1',
+    generated_at: new Date().toISOString(),
+    phase: 'run-final',
+    secondary: true,
+    primary_stop_preserved: true,
+    primary_stop_reason: String(primaryStop?.reason || ''),
+    primary_stopped_case_id: String(primaryStop?.stopped_case_id || ''),
+    reason: String(error?.message || error || 'unknown finalization failure'),
+  };
+  writeJsonFile(file, diagnostic);
+  return { file, ...diagnostic };
+}
+
+export function recordCoreBetaFinalizationFailure({
+  frameworkStop,
+  outDir,
+  selectedCases,
+  results,
+  progressFile,
+  error,
+}) {
+  const reason = `QWork 发布身份结束复核失败：${error?.message || error}`;
+  if (!frameworkStop) {
+    return stopRemainderWithoutSynthetic({
+      outDir,
+      selectedCases,
+      startIndex: Math.min(results.length, selectedCases.length),
+      results,
+      progressFile,
+      status: 'blocked',
+      resultCategory: 'automation_error',
+      reason,
+    });
+  }
+  const secondary = writeCoreBetaSecondaryFinalizationDiagnostic({
+    outDir,
+    primaryStop: frameworkStop,
+    error,
+  });
+  return {
+    ...frameworkStop,
+    secondary_finalization_diagnostics: [
+      ...(Array.isArray(frameworkStop.secondary_finalization_diagnostics)
+        ? frameworkStop.secondary_finalization_diagnostics
+        : []),
+      secondary,
+    ],
+  };
 }
 
 function persistCaseResult(result) {
@@ -5266,7 +5687,9 @@ export async function coreBetaRendererEvaluationWithRetry(evaluate, {
 
 async function captureCoreBetaPublicState(page, testCase) {
   const evaluation = await coreBetaRendererEvaluationWithRetry(
-    () => page.evaluate(async ({ caseId, caseType }) => {
+    async () => {
+      const capabilitiesReadback = await stableCapabilitiesReadback(page);
+      const snapshot = await page.evaluate(async ({ caseId, caseType, capabilities }) => {
     const agent = window.agent || {};
     const e2e = window.__qbotE2E || null;
     const state = e2e?.state?.() || null;
@@ -5296,21 +5719,6 @@ async function captureCoreBetaPublicState(page, testCase) {
       }
     };
     const session = await call(e2e?.currentSession?.bind(e2e));
-    const capabilitiesReadbackAttempts = [];
-    let capabilities = null;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const startedAt = Date.now();
-      capabilities = await callBounded(agent.capabilities?.bind(agent), 2000, 'capabilities');
-      const ok = Boolean(capabilities && typeof capabilities === 'object' && !capabilities.__error);
-      capabilitiesReadbackAttempts.push({
-        attempt,
-        ok,
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        error: String(capabilities?.__error || ''),
-      });
-      if (ok) break;
-      if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, 150 * attempt));
-    }
     const connectionView = await call(e2e?.getConnectionView?.bind(e2e));
     const skillsCatalog = await callBounded(
       agent.getSkillsCatalog?.bind(agent),
@@ -5360,7 +5768,6 @@ async function captureCoreBetaPublicState(page, testCase) {
         last_stat_present: Boolean(state?.lastStat),
       },
       capabilities,
-      capabilities_readback_attempts: capabilitiesReadbackAttempts,
       connection_view: connectionView,
       skills: {
         selected: selectedSkills,
@@ -5378,7 +5785,17 @@ async function captureCoreBetaPublicState(page, testCase) {
         testids: Array.from(document.querySelectorAll('[data-testid]')).map((node) => node.getAttribute('data-testid')).filter(Boolean),
       },
     };
-    }, { caseId: testCase.id, caseType: testCase.case_type }),
+      }, {
+        caseId: testCase.id,
+        caseType: testCase.case_type,
+        capabilities: capabilitiesReadback.value,
+      });
+      return {
+        ...snapshot,
+        capabilities_readback: qworkCapabilitiesReadbackEvidence(capabilitiesReadback),
+        capabilities_readback_attempts: capabilitiesReadback.probe_ledger,
+      };
+    },
     {
       maxAttempts: 3,
       retryDelayMs: 150,
@@ -5747,58 +6164,6 @@ export function coreBetaCleanupCapabilitiesNeedsRetry(value) {
   return !value || typeof value !== 'object' || Boolean(value.__error);
 }
 
-export async function coreBetaCapabilitiesReadbackWithRetry(readCapabilities, {
-  maxAttempts = 3,
-  timeoutMs = 7_000,
-  retryDelayMs = 250,
-  delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-} = {}) {
-  const boundedAttempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
-  const boundedTimeoutMs = Math.max(1, Number(timeoutMs) || 7_000);
-  const boundedRetryDelayMs = Math.max(0, Number(retryDelayMs) || 0);
-  const attempts = [];
-  let value = null;
-
-  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
-    const startedAt = new Date().toISOString();
-    const startedAtMs = Date.now();
-    let timeoutHandle = null;
-    try {
-      if (typeof readCapabilities !== 'function') {
-        throw new Error('missing capabilities read function');
-      }
-      value = await Promise.race([
-        Promise.resolve().then(() => readCapabilities(attempt)),
-        new Promise((_, reject) => {
-          timeoutHandle = setTimeout(
-            () => reject(new Error(`Core Beta capabilities readback timed out after ${boundedTimeoutMs}ms`)),
-            boundedTimeoutMs,
-          );
-        }),
-      ]);
-    } catch (error) {
-      value = { __error: String(error?.message || error) };
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-    }
-    const ok = !coreBetaCleanupCapabilitiesNeedsRetry(value);
-    attempts.push({
-      attempt,
-      started_at: startedAt,
-      ended_at: new Date().toISOString(),
-      duration_ms: Math.max(0, Date.now() - startedAtMs),
-      ok,
-      error: String(value?.__error || ''),
-    });
-    if (ok) return { ok: true, value, attempts };
-    if (attempt < boundedAttempts && boundedRetryDelayMs > 0) {
-      await delay(boundedRetryDelayMs * attempt);
-    }
-  }
-
-  return { ok: false, value, attempts };
-}
-
 export function coreBetaExpertSummonTaskVerdict({
   selected = {},
   upstreamState = {},
@@ -5876,12 +6241,35 @@ function cleanupVisibleComposerIsEmpty(snapshot = {}) {
   );
 }
 
-export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
+function cleanupCapabilitiesReadbackFailedBoundedly(snapshot = {}) {
+  const readback = snapshot.capabilities_readback;
   const attempts = Array.isArray(snapshot.capabilities_readback_attempts)
     ? snapshot.capabilities_readback_attempts
     : [];
+  if (readback?.schema !== 'qbot-qwork-capabilities-readback/v1'
+    || readback?.ok !== false
+    || !String(readback?.error || '').trim()
+    || !Array.isArray(readback?.probe_ledger)
+    || JSON.stringify(readback.probe_ledger) !== JSON.stringify(attempts)
+    || attempts.length < 1
+    || attempts.length > QWORK_CAPABILITIES_READBACK_PHASES.length) {
+    return false;
+  }
+  return attempts.every((attempt, index) => {
+    const expected = QWORK_CAPABILITIES_READBACK_PHASES[index];
+    const finalAttempt = index === attempts.length - 1;
+    return attempt?.attempt === index + 1
+      && attempt?.phase === expected.phase
+      && attempt?.renderer_timeout_ms === expected.rendererTimeoutMs
+      && attempt?.node_timeout_ms === expected.nodeTimeoutMs
+      && (finalAttempt ? attempt?.ok === false : attempt?.ok === true)
+      && (finalAttempt ? Boolean(String(attempt?.error || '').trim()) : attempt?.error === '');
+  });
+}
+
+export function coreBetaCleanupReadbackNeedsComposerRecovery(snapshot = {}) {
   return snapshot.capability_cleanup_required === true
-    && attempts.length >= 3
+    && cleanupCapabilitiesReadbackFailedBoundedly(snapshot)
     && coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after)
     && !cleanupVisibleComposerIsEmpty(snapshot);
 }
@@ -5934,9 +6322,7 @@ export function coreBetaCleanupReadbackVerdict(snapshot = {}) {
   );
   const currentUnifiedComposerVisiblyEmpty = cleanupVisibleComposerIsEmpty(snapshot);
   const boundedCapabilitiesExhausted = Boolean(
-    Array.isArray(snapshot.capabilities_readback_attempts)
-    && snapshot.capabilities_readback_attempts.length === 3
-    && snapshot.capabilities_readback_attempts.every((attempt) => attempt?.ok === false)
+    cleanupCapabilitiesReadbackFailedBoundedly(snapshot)
     && coreBetaCleanupCapabilitiesNeedsRetry(capabilities)
   );
   const preCleanupAndVisibleUiCleared = Boolean(
@@ -5983,7 +6369,10 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
   readCapabilities = true,
   capabilitiesTimeoutMs = 6_500,
 } = {}) {
-  return page.evaluate(async ({ cleanupBridgeResults, shouldReadCapabilities, timeoutMs }) => {
+  const capabilitiesReadback = readCapabilities
+    ? await stableCapabilitiesReadback(page)
+    : null;
+  const snapshot = await page.evaluate(async ({ cleanupBridgeResults, capabilities, timeoutMs }) => {
     const e2e = window.__qbotE2E || window.__deepbankE2E || null;
     const call = async (fn) => {
       if (typeof fn !== 'function') return null;
@@ -6025,13 +6414,10 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
         current_expert: expertKey ? object?.[expertKey] ?? null : null,
       };
     };
-    const [e2eState, session, init, capabilities] = await Promise.all([
+    const [e2eState, session, init] = await Promise.all([
       call(e2e?.state?.bind(e2e)),
       call(e2e?.currentSession?.bind(e2e)),
       callBounded(window.agent?.init?.bind(window.agent)),
-      shouldReadCapabilities
-        ? callBounded(window.agent?.capabilities?.bind(window.agent))
-        : null,
     ]);
     const compactInitContext = (payload, e2ePayload) => {
       const initObject = payload && typeof payload === 'object' && !payload.__error ? payload : null;
@@ -6162,9 +6548,13 @@ async function captureCleanupSelectionReadbacks(page, bridgeResults, {
     };
   }, {
     cleanupBridgeResults: bridgeResults,
-    shouldReadCapabilities: readCapabilities,
+    capabilities: capabilitiesReadback?.value || null,
     timeoutMs: capabilitiesTimeoutMs,
   });
+  if (capabilitiesReadback) {
+    snapshot.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
+  }
+  return snapshot;
 }
 
 async function writeCleanupReadback({ page, state, testCase, caseDir }) {
@@ -6237,43 +6627,7 @@ async function writeCleanupReadback({ page, state, testCase, caseDir }) {
   snapshot.pre_cleanup_selection_readback = structuredClone(
     state.artifacts.core_beta_composer_control_reset?.isolation_readback || null,
   );
-  const capabilitiesReadbackAttempts = [{
-    attempt: 1,
-    ok: !coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after),
-    error: String(snapshot.capabilities_after?.__error || ''),
-  }];
-  for (let attempt = 2;
-    snapshot.capability_cleanup_required
-      && attempt <= 3
-      && coreBetaCleanupCapabilitiesNeedsRetry(snapshot.capabilities_after);
-    attempt += 1) {
-    await page.waitForTimeout(250 * (attempt - 1));
-    const capabilities = await page.evaluate(async ({ timeoutMs }) => {
-      if (typeof window.agent?.capabilities !== 'function') {
-        return { __error: 'missing bridge method capabilities' };
-      }
-      try {
-        return await Promise.race([
-          Promise.resolve().then(() => window.agent.capabilities()),
-          new Promise((_, reject) => window.setTimeout(
-            () => reject(new Error(`Core Beta cleanup capabilities timed out after ${timeoutMs}ms`)),
-            timeoutMs,
-          )),
-        ]);
-      } catch (error) {
-        return { __error: String(error?.message || error) };
-      }
-    }, { timeoutMs: 6_500 }).catch((error) => ({
-      __error: `cleanup capabilities evaluate failed: ${String(error?.message || error)}`,
-    }));
-    snapshot.capabilities_after = capabilities;
-    capabilitiesReadbackAttempts.push({
-      attempt,
-      ok: !coreBetaCleanupCapabilitiesNeedsRetry(capabilities),
-      error: String(capabilities?.__error || ''),
-    });
-  }
-  snapshot.capabilities_readback_attempts = capabilitiesReadbackAttempts;
+  snapshot.capabilities_readback_attempts = snapshot.capabilities_readback?.probe_ledger || [];
   if (coreBetaCleanupReadbackNeedsComposerRecovery(snapshot)) {
     const previousReadbacks = snapshot.selection_readbacks;
     const previousUrl = snapshot.url;
@@ -7811,13 +8165,13 @@ async function waitForCoreBetaV2MaintenanceTerminal({
       const text = await maintenanceRegion.innerText({ timeout: 2000 }).catch(() => '');
       const button = activePage.locator(`[data-testid="${maintenance.testId}"]`).first();
       const buttonEnabled = await button.isEnabled({ timeout: 800 }).catch(() => false);
+      const capabilitiesReadback = await stableCapabilitiesReadback(activePage);
       const runtimeData = await activePage.evaluate(async () => {
         const withTimeout = async (promise, label) => await Promise.race([
           promise,
           new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), 5000)),
         ]);
         let sdkStatuses = [];
-        let capabilities = null;
         let sessions = null;
         try {
           sdkStatuses = typeof window.agent?.runtimeStatus === 'function'
@@ -7827,21 +8181,16 @@ async function waitForCoreBetaV2MaintenanceTerminal({
           sdkStatuses = [{ family: 'readback', phase: 'error', error: String(error?.message || error) }];
         }
         try {
-          capabilities = typeof window.agent?.capabilities === 'function'
-            ? await withTimeout(window.agent.capabilities(), 'capabilities')
-            : null;
-        } catch (error) {
-          capabilities = { __error: String(error?.message || error) };
-        }
-        try {
           sessions = typeof window.agent?.listSessions === 'function'
             ? await withTimeout(window.agent.listSessions(), 'listSessions')
             : null;
         } catch (error) {
           sessions = { __error: String(error?.message || error) };
         }
-        return { sdkStatuses, capabilities, sessions };
+        return { sdkStatuses, sessions };
       });
+      runtimeData.capabilities = capabilitiesReadback.value;
+      runtimeData.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
       const capabilitiesReadable = Boolean(
         runtimeData.capabilities
         && typeof runtimeData.capabilities === 'object'
@@ -9084,10 +9433,25 @@ async function executeCoreBetaInitializationCase(context) {
   if (testCase.id === 'BETA-INIT-005') {
     const scenario = coreBetaScenarioSpec(testCase);
     await openNewTask(page, state);
+    const file = path.join(caseDir, 'connection-view-snapshot.json');
+    const beforeCapabilitiesReadback = await stableCapabilitiesReadback(page);
     const before = await page.evaluate(async () => ({
       before: await window.__qbotE2E?.getConnectionView?.(),
-      capabilities: await window.agent.capabilities(),
     }));
+    before.capabilities = beforeCapabilitiesReadback.value;
+    before.capabilities_readback = qworkCapabilitiesReadbackEvidence(beforeCapabilitiesReadback);
+    before.capabilities_readback_attempts = beforeCapabilitiesReadback.probe_ledger;
+    if (!beforeCapabilitiesReadback.ok) {
+      writeJsonFile(file, {
+        valid: false,
+        stage: 'before_fault_injection',
+        before,
+      });
+      state.artifacts.connection_view_snapshot = file;
+      throw new Error(
+        `BETA-INIT-005 capabilities readback failed before fault injection: ${beforeCapabilitiesReadback.error}`,
+      );
+    }
     const injected = await invokeCoreBetaFixtureControl({
       options,
       testCase,
@@ -9098,15 +9462,18 @@ async function executeCoreBetaInitializationCase(context) {
         fault: 'warming_or_empty_remote_catalog',
       },
     });
+    const duringCapabilitiesReadback = await stableCapabilitiesReadback(page);
     const during = await page.evaluate(async () => ({
       connection_view: await window.__qbotE2E?.getConnectionView?.(),
-      capabilities: await window.agent.capabilities(),
     }));
-    const file = path.join(caseDir, 'connection-view-snapshot.json');
+    during.capabilities = duringCapabilitiesReadback.value;
+    during.capabilities_readback = qworkCapabilitiesReadbackEvidence(duringCapabilitiesReadback);
+    during.capabilities_readback_attempts = duringCapabilitiesReadback.probe_ledger;
     const sameSelection = JSON.stringify(before.before?.runtimeOptions?.selected || null)
       === JSON.stringify(during.connection_view?.runtimeOptions?.selected || null);
     writeJsonFile(file, {
-      valid: nonEmptyObject(before.before) && sameSelection,
+      valid: nonEmptyObject(before.before) && beforeCapabilitiesReadback.ok
+        && duringCapabilitiesReadback.ok && sameSelection,
       before,
       injected,
       during,
@@ -9118,6 +9485,11 @@ async function executeCoreBetaInitializationCase(context) {
       during: during.connection_view?.diagnostics || during.connection_view,
       injected,
     };
+    if (!duringCapabilitiesReadback.ok) {
+      throw new Error(
+        `BETA-INIT-005 capabilities readback failed during fault injection: ${duringCapabilitiesReadback.error}`,
+      );
+    }
     await executeConversationTurns({ page, state, testCase, caseDir, timeoutMs });
     const after = await captureCoreBetaPublicState(page, testCase);
     recordAssertion(
@@ -9179,6 +9551,75 @@ function coreBetaCleanupReleaseIdentity(metadata = {}) {
       qwork_release_manifest_sha256: String(metadata.release_inputs?.qwork_release_manifest_sha256 || ''),
     },
     model_tier: String(metadata.model_tier || ''),
+  };
+}
+
+export function validateCoreBetaCleanupMetadataCapabilities(metadata = {}, label = 'cleanup') {
+  const observation = metadata?.release_observation;
+  if (!observation || typeof observation !== 'object' || Array.isArray(observation)) {
+    throw new Error(`${label} run metadata 缺少发布身份 observation。`);
+  }
+  if (observation.ok !== true) {
+    throw new Error(`${label} run metadata 发布身份 observation 未通过。`);
+  }
+  const baseline = validateQworkCapabilitiesReadbackEvidence(
+    observation.capabilities_readback,
+  );
+  if (!baseline.valid) {
+    throw new Error(
+      `${label} run metadata capabilities baseline 无效：${baseline.errors.join(',')}`,
+    );
+  }
+  const baselineSignature = String(
+    observation.capabilities_readback?.summary_signature_sha256 || '',
+  );
+  const checks = Array.isArray(metadata?.release_observation_checks)
+    ? metadata.release_observation_checks
+    : [];
+  if (checks.length === 0) {
+    throw new Error(`${label} run metadata 缺少 capabilities phase checks。`);
+  }
+  const phases = checks.map((check) => String(check?.phase || ''));
+  if (
+    phases[0] !== 'startup'
+    || phases.slice(1, -1).some((phase) => phase !== 'replacement-renderer')
+    || (phases.length > 1
+      && !['replacement-renderer', 'run-final'].includes(phases.at(-1)))
+  ) {
+    throw new Error(`${label} run metadata capabilities phase 顺序无效。`);
+  }
+  let previousObservedAt = Number.NaN;
+  for (const [index, check] of checks.entries()) {
+    if (check?.ok !== true) {
+      throw new Error(`${label} run metadata capabilities check ${index + 1} 未通过。`);
+    }
+    const observedAt = Date.parse(String(check?.observed_at || ''));
+    if (
+      !Number.isFinite(observedAt)
+      || new Date(observedAt).toISOString() !== String(check?.observed_at || '')
+      || (Number.isFinite(previousObservedAt) && observedAt < previousObservedAt)
+    ) {
+      throw new Error(`${label} run metadata capabilities check ${index + 1} 时间无效或倒序。`);
+    }
+    previousObservedAt = observedAt;
+    const validation = validateQworkCapabilitiesReadbackEvidence(
+      check?.capabilities_readback,
+    );
+    if (!validation.valid) {
+      throw new Error(
+        `${label} run metadata capabilities check ${index + 1} 无效：`
+        + validation.errors.join(','),
+      );
+    }
+    if (String(check.capabilities_readback.summary_signature_sha256 || '') !== baselineSignature) {
+      throw new Error(`${label} run metadata capabilities check ${index + 1} 发生漂移。`);
+    }
+  }
+  return {
+    valid: true,
+    summary_signature_sha256: baselineSignature,
+    phases,
+    check_count: checks.length,
   };
 }
 
@@ -9246,6 +9687,21 @@ export function coreBetaCleanupReleaseMigrationVerdict(sourceMetadata = {}, curr
     'qwork_install_metadata_sha256',
     'casebook_sha256',
   ];
+  let sourceCapabilities = null;
+  let currentCapabilities = null;
+  try {
+    sourceCapabilities = validateCoreBetaCleanupMetadataCapabilities(
+      sourceMetadata,
+      'source cleanup',
+    );
+    currentCapabilities = validateCoreBetaCleanupMetadataCapabilities(
+      currentMetadata,
+      'current cleanup',
+    );
+  } catch {
+    sourceCapabilities = null;
+    currentCapabilities = null;
+  }
   const checks = {
     identity_changed: JSON.stringify(sourceIdentity) !== JSON.stringify(currentIdentity),
     host_product_same: sourceIdentity.host?.product === '360Teams'
@@ -9270,6 +9726,13 @@ export function coreBetaCleanupReleaseMigrationVerdict(sourceMetadata = {}, curr
       /^[a-f0-9]{64}$/i.test(String(sourceIdentity.artifacts?.[field] || ''))
       && /^[a-f0-9]{64}$/i.test(String(currentIdentity.artifacts?.[field] || ''))
     )),
+    capabilities_evidence_valid: Boolean(sourceCapabilities && currentCapabilities),
+    capabilities_contract_same: Boolean(
+      sourceCapabilities
+      && currentCapabilities
+      && sourceCapabilities.summary_signature_sha256
+        === currentCapabilities.summary_signature_sha256,
+    ),
   };
   return {
     schema_version: 'qbot-core-beta-cleanup-release-migration/v1',
@@ -9376,6 +9839,18 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
 
   const sourceMetadata = JSON.parse(fs.readFileSync(sourceMetadataFile, 'utf8'));
   const currentMetadata = JSON.parse(fs.readFileSync(currentMetadataFile, 'utf8'));
+  const sourceCapabilities = validateCoreBetaCleanupMetadataCapabilities(
+    sourceMetadata,
+    '清理源',
+  );
+  const currentCapabilities = validateCoreBetaCleanupMetadataCapabilities(
+    currentMetadata,
+    '当前清理批次',
+  );
+  if (sourceCapabilities.summary_signature_sha256
+    !== currentCapabilities.summary_signature_sha256) {
+    throw new Error('清理源与当前清理批次 capabilities 合同不一致。');
+  }
   const casebookFile = fs.realpathSync(path.resolve(String(casebook || '')));
   const casebookSha256 = createHash('sha256').update(fs.readFileSync(casebookFile)).digest('hex');
   if (
@@ -9447,6 +9922,14 @@ export function seedCoreBetaRunOwnedSkillCleanupLedger({
     source_release_identity_sha256: sha256Text(JSON.stringify(sourceIdentity)),
     current_release_identity_sha256: sha256Text(JSON.stringify(currentIdentity)),
     release_migration: releaseMigration,
+    capabilities_evidence: {
+      valid: true,
+      summary_signature_sha256: currentCapabilities.summary_signature_sha256,
+      source_phases: sourceCapabilities.phases,
+      current_phases: currentCapabilities.phases,
+      source_check_count: sourceCapabilities.check_count,
+      current_check_count: currentCapabilities.check_count,
+    },
     selected_identities: selectedIdentities,
     baseline_overlap: baselineOverlap,
     install_attempts_sha256: prerequisite.receipts_sha256,
@@ -14767,15 +15250,13 @@ function coreBetaExpertMaintenanceDraft(draft = {}) {
 }
 
 async function captureCoreBetaExpertMaintenanceState(page) {
-  return page.evaluate(async () => {
+  const capabilitiesReadback = await stableCapabilitiesReadback(page);
+  const snapshot = await page.evaluate(async (capabilities) => {
     const e2e = window.__qbotE2E || window.__deepbankE2E;
-    const [raw, current, capabilities] = await Promise.all([
+    const [raw, current] = await Promise.all([
       typeof e2e?.state === 'function' ? Promise.resolve(e2e.state()).catch(() => null) : null,
       typeof e2e?.currentSession === 'function'
         ? Promise.resolve(e2e.currentSession()).catch(() => null)
-        : null,
-      typeof window.agent?.capabilities === 'function'
-        ? window.agent.capabilities().catch(() => null)
         : null,
     ]);
     const view = raw?.expertAuthoringView || current?.expertAuthoringView || null;
@@ -14827,7 +15308,11 @@ async function captureCoreBetaExpertMaintenanceState(page) {
         welcome_text: text('[data-testid="expert-maintenance-welcome"]'),
       },
     };
-  });
+  }, capabilitiesReadback.value);
+  return {
+    ...snapshot,
+    capabilities_readback: qworkCapabilitiesReadbackEvidence(capabilitiesReadback),
+  };
 }
 
 function coreBetaExpertMaintenanceToolTrace(session, taskId) {
@@ -14994,26 +15479,24 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
   await page.locator('[data-testid="nav-experts"]').click({ timeout: 15_000 });
   await returnFromExpertBuilderIfNeeded(page, state);
   await expectVisibleCoreLocator(page, '[data-testid="experts-view"]', 'Expert v2 专家中心');
+  const capabilitiesReadback = await stableCapabilitiesReadback(page);
   const bridge = await page.evaluate(async () => {
     const lifecycle = window.agent?.expertLifecycle;
     if (!lifecycle) return { available: false };
-    if (typeof window.agent?.capabilities !== 'function') {
-      return { available: false, error: 'missing window.agent.capabilities' };
-    }
-    const [capabilities, experts, drafts] = await Promise.all([
-      window.agent.capabilities(),
+    const [experts, drafts] = await Promise.all([
       lifecycle.list(),
       lifecycle.listDrafts(),
     ]);
     return {
       available: true,
       methods: Object.keys(lifecycle),
-      capabilities,
       experts,
       drafts,
     };
   });
-  if (!bridge.available) throw new Error('Expert v2 bridge unavailable');
+  bridge.capabilities = capabilitiesReadback.value;
+  bridge.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
+  if (!bridge.available || !capabilitiesReadback.ok) throw new Error('Expert v2 bridge unavailable');
   const identityFile = path.join(caseDir, 'expert-identity.json');
   writeJsonFile(identityFile, { valid: true, ...bridge });
   state.artifacts.expert_identity_snapshot = identityFile;
@@ -15362,16 +15845,16 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         require_published_skillhub_env_config_materialization: true,
       },
     });
+    const capabilitiesReadback = await stableCapabilitiesReadback(page);
     const result = await page.evaluate(async (id) => {
       const lifecycle = window.agent.expertLifecycle;
       const validation = await lifecycle.validateDraft(id);
       const debug = await lifecycle.debug(id);
       const after = await lifecycle.getDraft(id);
-      const capabilities = typeof window.agent?.capabilities === 'function'
-        ? await window.agent.capabilities()
-        : { __error: 'missing window.agent.capabilities' };
-      return { validation, debug, after, mcp_authoring: capabilities.mcpAuthoring };
+      return { validation, debug, after };
     }, draftId);
+    result.mcp_authoring = capabilitiesReadback.value?.mcpAuthoring;
+    result.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
     const policyValid = Boolean(
       policy.ok
       && policy.staged_expert_skill?.secret_like_rejected === true
@@ -16877,30 +17360,12 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
       const setExpertResult = await window.agent.setExpert(expertId);
       return { item, recent, set_expert_result: setExpertResult };
     }, selected.id);
-    const capabilitiesReadback = await coreBetaCapabilitiesReadbackWithRetry(
-      () => page.evaluate(async () => {
-        if (typeof window.agent?.capabilities !== 'function') {
-          return { __error: 'missing bridge method capabilities' };
-        }
-        try {
-          return await window.agent.capabilities();
-        } catch (error) {
-          return { __error: String(error?.message || error) };
-        }
-      }).catch((error) => ({
-        __error: `expert capabilities evaluate failed: ${String(error?.message || error)}`,
-      })),
-      {
-        maxAttempts: 3,
-        timeoutMs: 7_000,
-        retryDelayMs: 250,
-        delay: (ms) => page.waitForTimeout(ms),
-      },
-    );
+    const capabilitiesReadback = await stableCapabilitiesReadback(page);
     const selection = await captureCoreBetaPublicState(page, testCase);
     detail.capabilities = capabilitiesReadback.value;
     detail.capabilities_readback_ok = capabilitiesReadback.ok;
-    detail.capabilities_readback_attempts = capabilitiesReadback.attempts;
+    detail.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
+    detail.capabilities_readback_attempts = capabilitiesReadback.probe_ledger;
     const selectedExpertId = String(selected.id || '');
     const publicExpert = selection.expert;
     const publicExpertId = String(
@@ -16977,7 +17442,7 @@ async function executeCoreBetaExpertCase({ page, state, testCase, caseDir, timeo
         selected_expert_id: selectedExpertId,
         public_expert_id: publicExpertId,
         capabilities_expert_id: capabilitiesExpertId,
-        capabilities_readback_attempts: capabilitiesReadback.attempts,
+        capabilities_readback_attempts: capabilitiesReadback.probe_ledger,
       }),
       expertSelectionReadbackOk ? '' : 'automation_error',
     );
@@ -22928,23 +23393,24 @@ export function coreBetaConnectorCatalogEvidenceValid(catalog) {
 }
 
 async function captureCoreBetaConnectorCatalog(page) {
+  const capabilitiesReadback = await stableCapabilitiesReadback(page);
   const snapshot = await page.evaluate(async () => {
     const catalog = await window.agent?.getConnectorCatalog?.({ forceRefresh: true }).catch((error) => ({ __error: String(error?.message || error) }));
     const health = await window.agent?.getConnectorHealth?.().catch(() => []);
-    const capabilities = await window.agent?.capabilities?.().catch(() => null);
     return {
       captured_at: new Date().toISOString(),
       catalog,
       health,
-      capabilities,
     };
   });
-  return normalizeCoreBetaConnectorCatalogSnapshot({
+  const normalized = normalizeCoreBetaConnectorCatalogSnapshot({
     catalog: snapshot.catalog,
     health: snapshot.health,
-    capabilities: snapshot.capabilities,
+    capabilities: capabilitiesReadback.value,
     capturedAt: snapshot.captured_at,
   });
+  normalized.capabilities_readback = qworkCapabilitiesReadbackEvidence(capabilitiesReadback);
+  return normalized;
 }
 
 export function chooseCoreBetaConnectors(items, count, { seed = '' } = {}) {
@@ -29888,8 +30354,10 @@ async function restartWithSkillHubFault({
       }
       const adapter = verified.adapter;
       const combinedCleanup = async () => {
-        await adapter.close().catch(() => {});
-        if (cleanup) await cleanup().catch(() => {});
+        let firstError = null;
+        try { await adapter.close(); } catch (error) { firstError = error; }
+        try { if (cleanup) await cleanup(); } catch (error) { firstError ||= error; }
+        if (firstError) throw firstError;
       };
       return {
         ok: true,
@@ -29924,8 +30392,10 @@ async function restartWithSkillHubFault({
       }],
     });
     const combinedCleanup = async () => {
-      await adapter.close().catch(() => {});
-      if (cleanup) await cleanup().catch(() => {});
+      let firstError = null;
+      try { await adapter.close(); } catch (error) { firstError = error; }
+      try { if (cleanup) await cleanup(); } catch (error) { firstError ||= error; }
+      if (firstError) throw firstError;
     };
     state.artifacts.teams360_skillhub_fault_adapter = { status, marketError };
     return { ok: true, page, cleanup: combinedCleanup, rendererAdapter: true };
@@ -29954,14 +30424,19 @@ async function restartWithSkillHubFault({
 
 async function restoreNormalQbotAfterFault({ state, caseDir, options, runtime, cleanup }) {
   if (options['renderer-control-adapter'] === 'teams360') {
-    if (cleanup) await cleanup().catch(() => {});
+    let cleanupError = null;
+    try { if (cleanup) await cleanup(); } catch (error) { cleanupError = error; }
     recordAssertion(
       state,
       '故障注入后环境恢复',
       'SkillHub 异常场景结束后必须停用 Teams 专用渲染层适配器并继续使用正式服务。',
-      true,
-      'Teams 专用适配器已停用，360Teams 和本地 QBot 均未重启。',
+      cleanupError === null,
+      cleanupError
+        ? `Teams 专用适配器关闭失败：${cleanupError?.message || String(cleanupError)}`
+        : 'Teams 专用适配器已停用，360Teams 和本地 QBot 均未重启。',
+      cleanupError ? 'automation_error' : '',
     );
+    if (cleanupError) throw cleanupError;
     return;
   }
   const restored = await restartQbotAndReconnect({ runtime, options, state, caseDir, label: '恢复正常 SkillHub 配置' });
@@ -33234,7 +33709,7 @@ async function executeSitConnectorUnhealthySelectedState({ page, state, caseDir,
     if (!await resetComposerControls(page, state, caseDir, { skillMode: 'disabled', connectorMode: 'disabled' })) return;
     if (!await selectManualConnectorByKey(page, state, caseDir, connectorKey)) return;
     control.proxy.arm();
-    await page.evaluate(async () => window.agent.capabilities()).catch(() => null);
+    await currentCapabilities(page);
     await page.waitForTimeout(900);
     await page.keyboard.press('Escape').catch(() => {});
     await ensureComposerToolMenu(page, state, {
@@ -36100,7 +36575,8 @@ function cleanSkillChipLabel(value) {
 }
 
 async function composerSkillSelectionSnapshot(page) {
-  return page.evaluate(async () => {
+  const capabilities = await currentCapabilities(page);
+  return page.evaluate(async (capabilities) => {
     const composer = document.querySelector('[data-testid="composer-input"]');
     const shell = document.querySelector('[data-testid="composer-shell"]')
       || composer?.parentElement
@@ -36111,14 +36587,6 @@ async function composerSkillSelectionSnapshot(page) {
       const style = globalThis.getComputedStyle(chip);
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     });
-    let capabilities = null;
-    if (typeof globalThis.window?.agent?.capabilities === 'function') {
-      try {
-        capabilities = await globalThis.window.agent.capabilities();
-      } catch {
-        capabilities = null;
-      }
-    }
     const selectedSkills = Array.isArray(capabilities?.selectedSkills) ? capabilities.selectedSkills : [];
     const composerText = String(composer?.innerText || composer?.textContent || '');
     const composerHtml = String(composer?.innerHTML || '');
@@ -36135,7 +36603,7 @@ async function composerSkillSelectionSnapshot(page) {
       composerHtml,
       hasRawMarker: /\{\{\s*skill\s*:|⟦\s*skill\s*:|\[\[\s*skill\s*:/i.test(markerText),
     };
-  }).catch((error) => ({
+  }, capabilities).catch((error) => ({
     chipCount: 0,
     chipTexts: [],
     chipTestIds: [],
@@ -36167,36 +36635,43 @@ async function visibleComposerToolStateText(page, tool) {
 }
 
 async function currentCapabilities(page) {
-  const readOnce = async () => page.evaluate(async (timeoutMs) => {
-    const agent = globalThis.window?.agent;
-    if (typeof agent?.capabilities !== 'function') {
-      return { __error: 'missing bridge method capabilities' };
-    }
-    let timer = null;
-    try {
-      return await Promise.race([
-        Promise.resolve().then(() => agent.capabilities()),
-        new Promise((_, reject) => {
-          timer = window.setTimeout(
-            () => reject(new Error(`Core Beta capabilities readback timed out after ${timeoutMs}ms`)),
+  const readback = await stableCapabilitiesReadback(page);
+  return readback.ok ? readback.value : null;
+}
+
+async function stableCapabilitiesReadback(page) {
+  const readback = await readStableQworkCapabilities(({ phase, rendererTimeoutMs }) => page.evaluate(
+    async ({ phaseName, timeoutMs }) => {
+      const agent = globalThis.window?.agent;
+      if (typeof agent?.capabilities !== 'function') {
+        throw new Error('missing bridge method capabilities');
+      }
+      let timer = null;
+      try {
+        const rendererDeadline = new Promise((_, reject) => {
+          timer = globalThis.setTimeout(
+            () => reject(new Error(
+              `QWork capabilities ${phaseName} renderer timeout after ${timeoutMs}ms`,
+            )),
             timeoutMs,
           );
-        }),
-      ]);
-    } catch (error) {
-      return { __error: String(error?.message || error) };
-    } finally {
-      if (timer) window.clearTimeout(timer);
-    }
-  }, CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS).catch((error) => ({
-    __error: `capabilities evaluate failed: ${String(error?.message || error)}`,
-  }));
-  const readback = await coreBetaCapabilitiesReadbackWithRetry(readOnce, {
-    maxAttempts: CORE_BETA_PUBLIC_CAPABILITIES_MAX_ATTEMPTS,
-    timeoutMs: CORE_BETA_PUBLIC_CAPABILITIES_TIMEOUT_MS + 500,
-    retryDelayMs: CORE_BETA_PUBLIC_CAPABILITIES_RETRY_DELAY_MS,
-  });
-  return readback.ok ? readback.value : null;
+        });
+        return await Promise.race([
+          Promise.resolve().then(() => agent.capabilities()),
+          rendererDeadline,
+        ]);
+      } finally {
+        if (timer !== null) globalThis.clearTimeout(timer);
+      }
+    },
+    { phaseName: phase, timeoutMs: rendererTimeoutMs },
+  ));
+  const validation = validateQworkCapabilitiesReadbackEvidence(readback);
+  return {
+    ...readback,
+    ok: readback.ok === true && validation.ok === true,
+    validation,
+  };
 }
 
 async function unifiedComposerPlusAvailable(page) {
@@ -38802,14 +39277,11 @@ async function waitForCredentialStability(page, timeoutMs = 30_000) {
   let consecutive = 0;
   let lastReason = '';
   while (Date.now() < deadline) {
-    const probe = await page.evaluate(async () => {
-      try {
-        const value = await window.agent?.capabilities?.();
-        return { ok: Boolean(value && typeof value === 'object'), reason: value ? '' : 'capabilities 为空' };
-      } catch (error) {
-        return { ok: false, reason: String(error?.message || error) };
-      }
-    }).catch((error) => ({ ok: false, reason: error.message }));
+    const value = await currentCapabilities(page);
+    const probe = {
+      ok: Boolean(value && typeof value === 'object'),
+      reason: value ? '' : 'capabilities 为空或稳定读回失败',
+    };
     if (probe.ok && !isTransientCredentialRotation(probe.reason)) consecutive += 1;
     else {
       consecutive = 0;
@@ -41175,14 +41647,24 @@ async function restoreControlPlaneHttpControl(control, { options, runtime, state
   if (!control?.ok || control.restored) return;
   control.restored = true;
   if (control.rendererAdapter) {
-    await control.proxy.close().catch(() => {});
+    let closeReport = null;
+    let closeError = null;
+    try {
+      closeReport = await control.proxy.close();
+    } catch (error) {
+      closeError = error;
+    }
     recordAssertion(
       state,
       '控制面故障注入后环境恢复',
       '故障场景结束后必须停用 360Teams 渲染层测试适配器，并继续使用正式控制面。',
-      true,
-      `已停用 Teams 专用适配器，正式控制面保持 ${control.upstreamUrl}`,
+      closeReport?.ok === true && closeError === null,
+      closeError
+        ? `Teams 专用适配器关闭失败：${closeError?.message || String(closeError)}`
+        : `已停用 Teams 专用适配器，正式控制面保持 ${control.upstreamUrl}`,
+      closeError ? 'automation_error' : '',
     );
+    if (closeError) throw closeError;
     return;
   }
   const command = electronControlPlaneRestartCommand({ options, runtime, controlPlaneUrl: control.upstreamUrl });
@@ -41204,14 +41686,133 @@ async function restoreControlPlaneHttpControl(control, { options, runtime, state
   );
 }
 
+const RENDERER_CONTROL_EXPOSE_NODE_TIMEOUT_MS = 5_000;
+const RENDERER_CONTROL_INSTALL_RENDERER_TIMEOUT_MS = 5_000;
+const RENDERER_CONTROL_INSTALL_NODE_TIMEOUT_MS = 5_500;
+const RENDERER_CONTROL_PROBE_RENDERER_TIMEOUT_MS = 5_000;
+const RENDERER_CONTROL_PROBE_NODE_TIMEOUT_MS = 5_500;
+const RENDERER_CONTROL_CLOSE_RENDERER_TIMEOUT_MS = 5_000;
+const RENDERER_CONTROL_CLOSE_NODE_TIMEOUT_MS = 5_500;
+const RENDERER_CONTROL_INSPECT_RENDERER_TIMEOUT_MS = 3_000;
+const RENDERER_CONTROL_INSPECT_NODE_TIMEOUT_MS = 3_500;
+
 let rendererControlSequence = 0;
+
+function rendererControlTimeoutPolicy(overrides = {}) {
+  const positive = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : fallback;
+  };
+  return {
+    exposeNodeTimeoutMs: positive(overrides.exposeNodeTimeoutMs, RENDERER_CONTROL_EXPOSE_NODE_TIMEOUT_MS),
+    installRendererTimeoutMs: positive(overrides.installRendererTimeoutMs, RENDERER_CONTROL_INSTALL_RENDERER_TIMEOUT_MS),
+    installNodeTimeoutMs: positive(overrides.installNodeTimeoutMs, RENDERER_CONTROL_INSTALL_NODE_TIMEOUT_MS),
+    probeRendererTimeoutMs: positive(overrides.probeRendererTimeoutMs, RENDERER_CONTROL_PROBE_RENDERER_TIMEOUT_MS),
+    probeNodeTimeoutMs: positive(overrides.probeNodeTimeoutMs, RENDERER_CONTROL_PROBE_NODE_TIMEOUT_MS),
+    closeRendererTimeoutMs: positive(overrides.closeRendererTimeoutMs, RENDERER_CONTROL_CLOSE_RENDERER_TIMEOUT_MS),
+    closeNodeTimeoutMs: positive(overrides.closeNodeTimeoutMs, RENDERER_CONTROL_CLOSE_NODE_TIMEOUT_MS),
+    inspectRendererTimeoutMs: positive(overrides.inspectRendererTimeoutMs, RENDERER_CONTROL_INSPECT_RENDERER_TIMEOUT_MS),
+    inspectNodeTimeoutMs: positive(overrides.inspectNodeTimeoutMs, RENDERER_CONTROL_INSPECT_NODE_TIMEOUT_MS),
+  };
+}
+
+async function withRendererControlNodeHardTimeout(operation, timeoutMs, label) {
+  let timer = null;
+  try {
+    const task = Promise.resolve().then(operation);
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`${label} Node hard timeout after ${timeoutMs}ms`);
+        error.code = 'renderer_control_node_timeout';
+        reject(error);
+      }, timeoutMs);
+    });
+    return await Promise.race([task, deadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+function rendererControlAdapterStateAssessment(inspection) {
+  const errors = [];
+  const nodeRegistry = Array.isArray(inspection?.node_registry) ? inspection.node_registry : [];
+  const nodeIds = nodeRegistry.map((item) => String(item?.control_id || ''));
+  const renderer = inspection?.renderer && typeof inspection.renderer === 'object'
+    ? inspection.renderer
+    : {};
+  const stack = Array.isArray(renderer.control_stack) ? renderer.control_stack.map(String) : [];
+  const exposed = Array.isArray(renderer.exposed_binding_names)
+    ? renderer.exposed_binding_names.map(String)
+    : [];
+  const markerNames = Array.isArray(renderer.automation_marker_names)
+    ? renderer.automation_marker_names.map(String)
+    : [];
+  const wrappedMethods = Object.entries(renderer.agent_method_descriptors || {})
+    .filter(([, descriptor]) => descriptor?.wrapped === true)
+    .map(([name]) => name);
+  const resourceIds = Array.isArray(inspection?.node_binding_resource_control_ids)
+    ? inspection.node_binding_resource_control_ids.map(String)
+    : [];
+  if (renderer.inspection_error) errors.push('renderer_inspection_failed');
+  if (nodeIds.some((id) => !id)) errors.push('node_registry_id_invalid');
+  if (nodeRegistry.some((item) => item?.close_failed === true)) errors.push('node_registry_close_failed');
+  if (JSON.stringify(stack) !== JSON.stringify(nodeIds)) errors.push('renderer_stack_node_registry_mismatch');
+  if (nodeIds.length === 0) {
+    if (String(renderer.control_id || '')) errors.push('renderer_control_id_residual');
+    if (String(renderer.originals_owner || '')) errors.push('renderer_originals_owner_residual');
+    if (String(renderer.binding_strategy || '')) errors.push('renderer_binding_strategy_residual');
+    if (renderer.primary_bindings !== null && renderer.primary_bindings !== undefined) {
+      errors.push('renderer_primary_bindings_residual');
+    }
+    if (exposed.length > 0) errors.push('renderer_exposed_bindings_residual');
+    if (markerNames.length > 0) errors.push('renderer_automation_markers_residual');
+    if (wrappedMethods.length > 0) errors.push('renderer_wrapped_methods_residual');
+    if (resourceIds.length > 0) errors.push('node_binding_resources_residual');
+  } else {
+    if (String(renderer.control_id || '') !== nodeIds.at(-1)) errors.push('renderer_control_id_mismatch');
+    if (String(renderer.originals_owner || '') !== nodeIds[0]) errors.push('renderer_originals_owner_mismatch');
+    if (!String(renderer.binding_strategy || '')) errors.push('renderer_binding_strategy_missing');
+    const primaryBindings = renderer.primary_bindings && typeof renderer.primary_bindings === 'object'
+      ? Object.values(renderer.primary_bindings).map(String)
+      : [];
+    if (primaryBindings.length !== 3 || primaryBindings.some((name) => !exposed.includes(name))) {
+      errors.push('renderer_primary_bindings_missing');
+    }
+    if (nodeIds.some((id) => !resourceIds.includes(id))) errors.push('node_binding_resources_missing');
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    node_control_ids: nodeIds,
+    renderer_control_ids: stack,
+    wrapped_methods: wrappedMethods,
+    exposed_binding_names: exposed,
+    automation_marker_names: markerNames,
+    node_binding_resource_control_ids: resourceIds,
+  };
+}
 
 export async function installRendererControlAdapter({
   page,
   rules = [],
   initiallyArmed = false,
   handler = null,
+  timeouts = {},
 }) {
+  const timeoutPolicy = rendererControlTimeoutPolicy(timeouts);
+  const beforeInspection = await inspectRendererControlAdapterState(page, {
+    rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+    nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+  });
+  const beforeAssessment = rendererControlAdapterStateAssessment(beforeInspection);
+  if (!beforeAssessment.ok) {
+    const error = new Error(
+      `renderer control adapter refused polluted lifecycle state: ${beforeAssessment.errors.join(',')}`,
+    );
+    error.lifecycleInspection = beforeInspection;
+    error.lifecycleAssessment = beforeAssessment;
+    throw error;
+  }
   const id = `teams360-control-${process.pid}-${Date.now()}-${++rendererControlSequence}`;
   const bindingToken = id.replace(/[^a-zA-Z0-9_]/g, '_');
   const bindingNames = {
@@ -41223,30 +41824,87 @@ export async function installRendererControlAdapter({
     const registry = new Map();
     Object.defineProperty(page, '__qbotRendererControlRegistry', { value: registry, configurable: true });
   }
+  if (!page.__qbotRendererControlBindingResources) {
+    const resources = new Map();
+    Object.defineProperty(page, '__qbotRendererControlBindingResources', { value: resources, configurable: true });
+  }
   const registry = page.__qbotRendererControlRegistry;
-  await page.exposeFunction(bindingNames.get, (controlId) => {
-    const entry = registry.get(String(controlId));
-    return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
-  });
-  await page.exposeFunction(bindingNames.hit, (controlId, hit) => {
-    const entry = registry.get(String(controlId));
-    if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
-    return Boolean(entry);
-  });
-  await page.exposeFunction(bindingNames.invoke, async (controlId, call) => {
-    const entry = registry.get(String(controlId));
-    if (!entry?.handler) return { handled: false };
-    try {
-      return await entry.handler(call);
-    } catch (error) {
-      return { handled: true, error: error?.message || String(error) };
-    }
-  });
+  const bindingResources = page.__qbotRendererControlBindingResources;
   const state = { armed: Boolean(initiallyArmed), hits: [], installedAt: Date.now() };
   const serializedRules = rules.map((rule) => ({ ...rule }));
+  const exposedDisposables = [];
+  const expose = async (name, callback) => {
+    const disposable = await withRendererControlNodeHardTimeout(
+      () => page.exposeFunction(name, callback),
+      timeoutPolicy.exposeNodeTimeoutMs,
+      `renderer control adapter expose ${name}`,
+    );
+    exposedDisposables.push({ name, disposable });
+  };
+  try {
+    await expose(bindingNames.get, (controlId) => {
+      const entry = registry.get(String(controlId));
+      return entry ? { armed: entry.state.armed, rules: entry.rules } : null;
+    });
+    await expose(bindingNames.hit, (controlId, hit) => {
+      const entry = registry.get(String(controlId));
+      if (entry) entry.state.hits.push({ ...hit, at: Date.now() });
+      return Boolean(entry);
+    });
+    await expose(bindingNames.invoke, async (controlId, call) => {
+      const entry = registry.get(String(controlId));
+      if (!entry?.handler) return { handled: false };
+      try {
+        return await entry.handler(call);
+      } catch (error) {
+        return { handled: true, error: error?.message || String(error) };
+      }
+    });
+  } catch (error) {
+    const cleanupErrors = [];
+    for (const item of [...exposedDisposables].reverse()) {
+      if (typeof item?.disposable?.dispose !== 'function') continue;
+      try {
+        await withRendererControlNodeHardTimeout(
+          () => item.disposable.dispose(),
+          timeoutPolicy.closeNodeTimeoutMs,
+          `renderer control adapter failed expose dispose ${item.name}`,
+        );
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError?.message || String(cleanupError));
+      }
+    }
+    const exposureCompletionUncertain = error?.code === 'renderer_control_node_timeout';
+    if (cleanupErrors.length > 0 || exposureCompletionUncertain) {
+      state.close_failed = true;
+      registry.set(id, { state, rules: serializedRules, handler });
+      bindingResources.set(id, {
+        binding_names: { ...bindingNames },
+        disposables: exposedDisposables,
+      });
+      error.expose_cleanup_errors = cleanupErrors;
+      error.expose_completion_uncertain = exposureCompletionUncertain;
+    } else if (bindingResources.size === 0) {
+      delete page.__qbotRendererControlBindingResources;
+    }
+    error.controlId ||= id;
+    throw error;
+  }
   registry.set(id, { state, rules: serializedRules, handler });
+  bindingResources.set(id, {
+    binding_names: { ...bindingNames },
+    disposables: exposedDisposables,
+  });
   const liveControlIds = [...registry.keys()];
-  const bindingReport = await page.evaluate(({ controlId, bindings, liveIds, configuredRules }) => {
+  let closed = false;
+  let closingPromise = null;
+  let bindingReport;
+  try {
+    bindingReport = await withRendererControlNodeHardTimeout(
+    () => page.evaluate(async ({ controlId, bindings, liveIds, configuredRules, rendererTimeoutMs }) => {
+    let rendererTimer = null;
+    try {
+      const installOperation = Promise.resolve().then(() => {
     const root = globalThis;
     const methodRoutes = {
       capabilities: { method: 'GET', path: '/api/capabilities' },
@@ -41387,6 +42045,7 @@ export async function installRendererControlAdapter({
       restoreOriginalAgentSurface();
       delete root.__qbotAutomationAgentOriginals;
       delete root.__qbotAutomationAgentOriginalValues;
+      delete root.__qbotAutomationAgentOriginalMethodDescriptors;
       delete root.__qbotAutomationAgentOriginalObject;
       delete root.__qbotAutomationAgentOriginalDescriptor;
       delete root.__qbotAutomationAgentBindingStrategy;
@@ -41397,6 +42056,7 @@ export async function installRendererControlAdapter({
       const originalDescriptor = Object.getOwnPropertyDescriptor(root, 'agent');
       root.__qbotAutomationAgentOriginals = {};
       root.__qbotAutomationAgentOriginalValues = {};
+      root.__qbotAutomationAgentOriginalMethodDescriptors = {};
       root.__qbotAutomationAgentOriginalObject = originalAgent;
       root.__qbotAutomationAgentOriginalDescriptor = originalDescriptor;
       root.__qbotAutomationAgentOriginalsOwner = controlId;
@@ -41408,6 +42068,10 @@ export async function installRendererControlAdapter({
         const original = originalValue.bind(root.agent);
         root.__qbotAutomationAgentOriginals[name] = original;
         root.__qbotAutomationAgentOriginalValues[name] = originalValue;
+        root.__qbotAutomationAgentOriginalMethodDescriptors[name] = {
+          own: Object.prototype.hasOwnProperty.call(root.agent, name),
+          descriptor: Object.getOwnPropertyDescriptor(root.agent, name) || null,
+        };
         const wrapped = async (...args) => {
           const path = name === 'getConnectorCatalog' && args[0]?.forceRefresh
             ? `${route.path}?refresh=force`
@@ -41559,132 +42223,436 @@ export async function installRendererControlAdapter({
         has_setter: typeof descriptor.set === 'function',
       } : null,
     };
+      });
+      const rendererDeadline = new Promise((_, reject) => {
+        rendererTimer = globalThis.setTimeout(
+          () => reject(new Error(
+            `renderer control adapter install renderer timeout after ${rendererTimeoutMs}ms`,
+          )),
+          rendererTimeoutMs,
+        );
+      });
+      return await Promise.race([installOperation, rendererDeadline]);
+    } finally {
+      if (rendererTimer !== null) globalThis.clearTimeout(rendererTimer);
+    }
   }, {
-    controlId: id,
-    bindings: bindingNames,
-    liveIds: liveControlIds,
-    configuredRules: serializedRules,
-  });
+      controlId: id,
+      bindings: bindingNames,
+      liveIds: liveControlIds,
+      configuredRules: serializedRules,
+      rendererTimeoutMs: timeoutPolicy.installRendererTimeoutMs,
+    }),
+    timeoutPolicy.installNodeTimeoutMs,
+    'renderer control adapter install',
+    );
+  } catch (error) {
+    try {
+      error.install_cleanup = await close();
+    } catch (cleanupError) {
+      error.install_cleanup_error = rendererAdapterErrorDiagnostic(cleanupError);
+    }
+    error.controlId ||= id;
+    throw error;
+  }
 
-  const close = async () => {
-    state.armed = false;
-    registry.delete(id);
-    const remainingControlIds = [...registry.keys()];
-    await page.evaluate(({ controlId, bindings, remainingIds }) => {
-      const root = globalThis;
-      const remaining = (Array.isArray(root.__qbotAutomationControlStack)
-        ? root.__qbotAutomationControlStack
-        : []).filter((item) => item !== controlId && remainingIds.includes(item));
-      root.__qbotAutomationControlStack = remaining;
-      root.__qbotAutomationControlId = remaining.at(-1) || '';
-      if (remaining.length) {
-        root.__qbotAutomationAgentOriginalsOwner = remaining[0];
-      } else if (root.agent) {
-        const originalAgent = root.__qbotAutomationAgentOriginalObject;
-        const originalDescriptor = root.__qbotAutomationAgentOriginalDescriptor;
-        const strategy = String(root.__qbotAutomationAgentBindingStrategy || '');
-        let restoredFacade = false;
-        if (strategy === 'facade' && originalAgent) {
-          if (originalDescriptor?.configurable) {
+  async function close() {
+    if (closed) return { ok: true, already_closed: true };
+    if (closingPromise) return closingPromise;
+    closingPromise = (async () => {
+      state.armed = false;
+      const activeControlIds = [...registry.keys()];
+      const remainingControlIds = activeControlIds.filter((controlId) => controlId !== id);
+      const remainingBindingNames = [...bindingResources.entries()]
+        .filter(([controlId]) => remainingControlIds.includes(controlId))
+        .flatMap(([, resource]) => Object.values(resource?.binding_names || {}).map(String));
+      const allBindingNames = [...bindingResources.values()]
+        .flatMap((resource) => Object.values(resource?.binding_names || {}).map(String));
+      let rendererCloseReport;
+      try {
+        rendererCloseReport = await withRendererControlNodeHardTimeout(
+          () => page.evaluate(async ({
+            controlId,
+            bindings,
+            activeIds,
+            remainingIds,
+            remainingBindings,
+            allBindings,
+            rendererTimeoutMs,
+          }) => {
+            let rendererTimer = null;
             try {
-              Object.defineProperty(root, 'agent', originalDescriptor);
-              restoredFacade = root.agent === originalAgent;
-            } catch {}
+              const closeOperation = Promise.resolve().then(() => {
+                const root = globalThis;
+                const sameArray = (left, right) => (
+                  Array.isArray(left)
+                  && Array.isArray(right)
+                  && left.length === right.length
+                  && left.every((item, index) => String(item) === String(right[index]))
+                );
+                const sameDescriptor = (left, right) => {
+                  if (!left || !right) return left === right;
+                  return left.configurable === right.configurable
+                    && left.enumerable === right.enumerable
+                    && left.writable === right.writable
+                    && left.get === right.get
+                    && left.set === right.set
+                    && left.value === right.value;
+                };
+                const stackBefore = Array.isArray(root.__qbotAutomationControlStack)
+                  ? root.__qbotAutomationControlStack.map(String)
+                  : [];
+                if (!sameArray(stackBefore, activeIds)) {
+                  return {
+                    ok: false,
+                    reason: 'renderer_stack_changed_before_close',
+                    stack_before: stackBefore,
+                    expected_stack_before: activeIds,
+                  };
+                }
+                const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
+                const primaryBindingNames = Object.values(primaryBindings).map(String);
+                const ownBindingNames = Object.values(bindings).map(String);
+                const ownBindingsArePrimary = ownBindingNames.length > 0
+                  && ownBindingNames.every((name) => primaryBindingNames.includes(name));
+                const originalAgent = root.__qbotAutomationAgentOriginalObject;
+                const originalDescriptor = root.__qbotAutomationAgentOriginalDescriptor;
+                const originalValues = root.__qbotAutomationAgentOriginalValues || {};
+                const originalMethodDescriptors = root.__qbotAutomationAgentOriginalMethodDescriptors || {};
+                const strategy = String(root.__qbotAutomationAgentBindingStrategy || '');
+                let agentRestored = remainingIds.length > 0;
+                let descriptorRestored = remainingIds.length > 0;
+                const methodsRestored = {};
+                if (remainingIds.length > 0) {
+                  root.__qbotAutomationControlStack = [...remainingIds];
+                  root.__qbotAutomationControlId = remainingIds.at(-1) || '';
+                  root.__qbotAutomationAgentOriginalsOwner = remainingIds[0];
+                  for (const name of Object.keys(originalValues)) {
+                    methodsRestored[name] = root.agent?.[name]?.__qbotAutomationRendererControlWrapper === true;
+                  }
+                } else if (root.agent) {
+                  if (strategy === 'facade' && originalAgent) {
+                    if (originalDescriptor?.configurable) {
+                      try { Object.defineProperty(root, 'agent', originalDescriptor); } catch {}
+                    }
+                    if (root.agent !== originalAgent) {
+                      try { root.agent = originalAgent; } catch {}
+                    }
+                  }
+                  for (const [name, original] of Object.entries(originalValues)) {
+                    const saved = originalMethodDescriptors[name] || {};
+                    const currentMethodDescriptor = Object.getOwnPropertyDescriptor(root.agent, name) || null;
+                    const alreadyRestored = root.agent?.[name] === original
+                      && (saved.own === false
+                        ? currentMethodDescriptor === null
+                        : sameDescriptor(currentMethodDescriptor, saved.descriptor));
+                    if (alreadyRestored) continue;
+                    if (saved.own === false) {
+                      try { delete root.agent[name]; } catch {}
+                    } else if (saved.descriptor?.configurable) {
+                      try { Object.defineProperty(root.agent, name, saved.descriptor); } catch {}
+                    } else {
+                      try { root.agent[name] = original; } catch {}
+                    }
+                  }
+                  agentRestored = root.agent === originalAgent;
+                  const currentDescriptor = Object.getOwnPropertyDescriptor(root, 'agent');
+                  descriptorRestored = sameDescriptor(currentDescriptor, originalDescriptor);
+                  for (const [name, original] of Object.entries(originalValues)) {
+                    const saved = originalMethodDescriptors[name] || {};
+                    const currentMethodDescriptor = Object.getOwnPropertyDescriptor(root.agent, name) || null;
+                    methodsRestored[name] = root.agent?.[name] === original
+                      && (saved.own === false
+                        ? currentMethodDescriptor === null
+                        : sameDescriptor(currentMethodDescriptor, saved.descriptor));
+                  }
+                  if (!agentRestored || !descriptorRestored || Object.values(methodsRestored).some((value) => value !== true)) {
+                    return {
+                      ok: false,
+                      reason: 'renderer_agent_restore_failed',
+                      strategy,
+                      agent_restored: agentRestored,
+                      global_agent_descriptor_restored: descriptorRestored,
+                      method_descriptors_restored: methodsRestored,
+                    };
+                  }
+                  for (const binding of allBindings) {
+                    try { delete root[binding]; } catch {}
+                  }
+                  delete root.__qbotAutomationAgentOriginals;
+                  delete root.__qbotAutomationAgentOriginalValues;
+                  delete root.__qbotAutomationAgentOriginalMethodDescriptors;
+                  delete root.__qbotAutomationAgentOriginalObject;
+                  delete root.__qbotAutomationAgentOriginalDescriptor;
+                  delete root.__qbotAutomationAgentBindingStrategy;
+                  delete root.__qbotAutomationAgentOriginalsOwner;
+                  delete root.__qbotAutomationControlId;
+                  delete root.__qbotAutomationControlStack;
+                  delete root.__qbotAutomationControlPrimaryBindings;
+                }
+                if (remainingIds.length > 0 && !ownBindingsArePrimary) {
+                  for (const binding of ownBindingNames) {
+                    try { delete root[binding]; } catch {}
+                  }
+                }
+                const exposedAfter = Object.getOwnPropertyNames(root)
+                  .filter((name) => name.startsWith('__qbotAutomationControl'))
+                  .sort();
+                const expectedExposed = remainingIds.length > 0
+                  ? Array.from(new Set([
+                    '__qbotAutomationControlId',
+                    '__qbotAutomationControlPrimaryBindings',
+                    '__qbotAutomationControlStack',
+                    ...primaryBindingNames,
+                    ...remainingBindings,
+                  ])).sort()
+                  : [];
+                const stackAfter = Array.isArray(root.__qbotAutomationControlStack)
+                  ? root.__qbotAutomationControlStack.map(String)
+                  : [];
+                const stateRestored = remainingIds.length > 0
+                  ? sameArray(stackAfter, remainingIds)
+                    && String(root.__qbotAutomationControlId || '') === String(remainingIds.at(-1) || '')
+                    && String(root.__qbotAutomationAgentOriginalsOwner || '') === String(remainingIds[0] || '')
+                  : stackAfter.length === 0
+                    && !Object.prototype.hasOwnProperty.call(root, '__qbotAutomationControlId')
+                    && !Object.prototype.hasOwnProperty.call(root, '__qbotAutomationAgentOriginalsOwner')
+                    && !Object.prototype.hasOwnProperty.call(root, '__qbotAutomationAgentBindingStrategy');
+                const exposedBindingsRestored = sameArray(exposedAfter, expectedExposed);
+                return {
+                  ok: stateRestored && exposedBindingsRestored
+                    && agentRestored && descriptorRestored
+                    && Object.values(methodsRestored).every((value) => value === true),
+                  reason: stateRestored
+                    ? (exposedBindingsRestored ? '' : 'renderer_binding_cleanup_failed')
+                    : 'renderer_lifecycle_cleanup_failed',
+                  remaining_control_ids: [...remainingIds],
+                  stack_after: stackAfter,
+                  agent_restored: agentRestored,
+                  global_agent_descriptor_restored: descriptorRestored,
+                  method_descriptors_restored: methodsRestored,
+                  own_bindings_are_primary: ownBindingsArePrimary,
+                  exposed_binding_names_after: exposedAfter,
+                  expected_exposed_binding_names_after: expectedExposed,
+                };
+              });
+              const rendererDeadline = new Promise((_, reject) => {
+                rendererTimer = globalThis.setTimeout(
+                  () => reject(new Error(
+                    `renderer control adapter close renderer timeout after ${rendererTimeoutMs}ms`,
+                  )),
+                  rendererTimeoutMs,
+                );
+              });
+              return await Promise.race([closeOperation, rendererDeadline]);
+            } finally {
+              if (rendererTimer !== null) globalThis.clearTimeout(rendererTimer);
+            }
+          }, {
+            controlId: id,
+            bindings: bindingNames,
+            activeIds: activeControlIds,
+            remainingIds: remainingControlIds,
+            remainingBindings: remainingBindingNames,
+            allBindings: allBindingNames,
+            rendererTimeoutMs: timeoutPolicy.closeRendererTimeoutMs,
+          }),
+          timeoutPolicy.closeNodeTimeoutMs,
+          'renderer control adapter close',
+        );
+        if (rendererCloseReport?.ok !== true) {
+          const error = new Error(
+            `renderer control adapter close validation failed: ${rendererCloseReport?.reason || 'unknown'}`,
+          );
+          error.closeReport = rendererCloseReport;
+          throw error;
+        }
+
+        const resourcesToDispose = remainingControlIds.length === 0
+          ? [...bindingResources.entries()]
+          : rendererCloseReport.own_bindings_are_primary
+            ? []
+            : [[id, bindingResources.get(id)]];
+        for (const [resourceControlId, resource] of resourcesToDispose) {
+          for (const item of resource?.disposables || []) {
+            if (typeof item?.disposable?.dispose !== 'function') continue;
+            await withRendererControlNodeHardTimeout(
+              () => item.disposable.dispose(),
+              timeoutPolicy.closeNodeTimeoutMs,
+              `renderer control adapter dispose ${item.name}`,
+            );
           }
-          if (!restoredFacade) {
+          bindingResources.delete(resourceControlId);
+        }
+        registry.delete(id);
+        if (bindingResources.size === 0) {
+          delete page.__qbotRendererControlBindingResources;
+        }
+        const afterInspection = await inspectRendererControlAdapterState(page, {
+          rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+          nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+        });
+        const afterAssessment = rendererControlAdapterStateAssessment(afterInspection);
+        if (!afterAssessment.ok) {
+          state.close_failed = true;
+          registry.set(id, { state, rules: serializedRules, handler });
+          const error = new Error(
+            `renderer control adapter close left polluted lifecycle state: ${afterAssessment.errors.join(',')}`,
+          );
+          error.closeReport = rendererCloseReport;
+          error.lifecycleInspection = afterInspection;
+          error.lifecycleAssessment = afterAssessment;
+          throw error;
+        }
+        closed = true;
+        return {
+          ok: true,
+          already_closed: false,
+          renderer: rendererCloseReport,
+          lifecycle_inspection: afterInspection,
+          lifecycle_assessment: afterAssessment,
+        };
+      } catch (error) {
+        state.close_failed = true;
+        error.controlId ||= id;
+        error.closeReport ||= rendererCloseReport || null;
+        throw error;
+      }
+    })();
+    try {
+      return await closingPromise;
+    } finally {
+      if (!closed) closingPromise = null;
+    }
+  }
+
+  const probe = async (calls = []) => {
+    const items = Array.isArray(calls) ? calls : [];
+    const results = [];
+    for (const item of items) {
+      const name = String(item?.name || '');
+      try {
+        const result = await withRendererControlNodeHardTimeout(
+          () => page.evaluate(async ({ call, rendererTimeoutMs }) => {
+            const methodName = String(call?.name || '');
+            const args = Array.isArray(call?.args) ? call.args : [];
+            if (typeof globalThis.agent?.[methodName] !== 'function') {
+              return { name: methodName, ok: false, error: 'method_missing' };
+            }
+            let rendererTimer = null;
             try {
-              root.agent = originalAgent;
-              restoredFacade = root.agent === originalAgent;
-            } catch {}
-          }
-        }
-        if (!restoredFacade) {
-          for (const [name, original] of Object.entries(root.__qbotAutomationAgentOriginalValues || {})) {
-            try { root.agent[name] = original; } catch {}
-          }
-        }
-        const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
-        for (const binding of Object.values(primaryBindings)) {
-          try { delete root[binding]; } catch {}
-        }
-        delete root.__qbotAutomationAgentOriginals;
-        delete root.__qbotAutomationAgentOriginalValues;
-        delete root.__qbotAutomationAgentOriginalObject;
-        delete root.__qbotAutomationAgentOriginalDescriptor;
-        delete root.__qbotAutomationAgentBindingStrategy;
-        delete root.__qbotAutomationAgentOriginalsOwner;
-        delete root.__qbotAutomationControlStack;
-        delete root.__qbotAutomationControlPrimaryBindings;
+              const rendererDeadline = new Promise((_, reject) => {
+                rendererTimer = globalThis.setTimeout(
+                  () => reject(new Error(
+                    `renderer control adapter probe ${methodName} renderer timeout after ${rendererTimeoutMs}ms`,
+                  )),
+                  rendererTimeoutMs,
+                );
+              });
+              const value = await Promise.race([
+                Promise.resolve().then(() => globalThis.agent[methodName](...args)),
+                rendererDeadline,
+              ]);
+              return {
+                name: methodName,
+                ok: true,
+                result_type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+              };
+            } catch (error) {
+              return { name: methodName, ok: false, error: error?.message || String(error) };
+            } finally {
+              if (rendererTimer !== null) globalThis.clearTimeout(rendererTimer);
+            }
+          }, { call: item, rendererTimeoutMs: timeoutPolicy.probeRendererTimeoutMs }),
+          timeoutPolicy.probeNodeTimeoutMs,
+          `renderer control adapter probe ${name}`,
+        );
+        results.push(result);
+        if (!result.ok) break;
+      } catch (error) {
+        results.push({ name, ok: false, error: error?.message || String(error) });
+        break;
       }
-      const primaryBindings = root.__qbotAutomationControlPrimaryBindings || {};
-      for (const binding of Object.values(bindings)) {
-        if (remaining.length && Object.values(primaryBindings).includes(binding)) continue;
-        try { delete root[binding]; } catch {}
-      }
-    }, { controlId: id, bindings: bindingNames, remainingIds: remainingControlIds }).catch(() => {});
+    }
+    return {
+      ok: results.length === items.length && results.every((item) => item.ok),
+      results,
+    };
   };
   const adapter = {
     state,
     bindingReport,
     arm(value = true) { state.armed = Boolean(value); },
-    probe: async (calls = []) => page.evaluate(async (items) => {
-      const results = [];
-      for (const item of items) {
-        const name = String(item?.name || '');
-        const args = Array.isArray(item?.args) ? item.args : [];
-        if (typeof globalThis.agent?.[name] !== 'function') {
-          results.push({ name, ok: false, error: 'method_missing' });
-          continue;
-        }
-        try {
-          const value = await globalThis.agent[name](...args);
-          results.push({
-            name,
-            ok: true,
-            result_type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
-          });
-        } catch (error) {
-          results.push({ name, ok: false, error: error?.message || String(error) });
-        }
-      }
-      return { ok: results.length === items.length && results.every((item) => item.ok), results };
-    }, calls),
+    probe,
     close,
   };
+  const installedInspection = await inspectRendererControlAdapterState(page, {
+    rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+    nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+  });
+  const installedAssessment = rendererControlAdapterStateAssessment(installedInspection);
+  bindingReport.lifecycle_inspection = installedInspection;
+  bindingReport.lifecycle_assessment = installedAssessment;
+  bindingReport.ok = bindingReport.ok === true && installedAssessment.ok === true;
   if (!bindingReport.ok) {
-    await close();
+    let closeFailure = null;
+    try {
+      await close();
+    } catch (error) {
+      closeFailure = rendererAdapterErrorDiagnostic(error);
+    }
     const error = new Error(
-      `renderer control adapter did not intercept required window.agent methods: ${bindingReport.missing_methods.join(',') || 'none'}; strategy=${bindingReport.strategy}`,
+      installedAssessment.ok
+        ? `renderer control adapter did not intercept required window.agent methods: ${bindingReport.missing_methods.join(',') || 'none'}; strategy=${bindingReport.strategy}`
+        : `renderer control adapter lifecycle verification failed: ${installedAssessment.errors.join(',')}`,
     );
     error.bindingReport = bindingReport;
     error.controlId = id;
+    error.closeFailure = closeFailure;
     throw error;
   }
   return adapter;
 }
 
-export async function inspectRendererControlAdapterState(page) {
+export async function inspectRendererControlAdapterState(page, {
+  rendererTimeoutMs = RENDERER_CONTROL_INSPECT_RENDERER_TIMEOUT_MS,
+  nodeTimeoutMs = RENDERER_CONTROL_INSPECT_NODE_TIMEOUT_MS,
+} = {}) {
   const registry = page?.__qbotRendererControlRegistry;
   const nodeRegistry = registry instanceof Map
     ? [...registry.entries()].map(([controlId, entry]) => ({
       control_id: String(controlId),
       armed: entry?.state?.armed === true,
+      close_failed: entry?.state?.close_failed === true,
       installed_at: Number(entry?.state?.installedAt || 0),
       rule_ids: Array.isArray(entry?.rules) ? entry.rules.map((item) => String(item?.id || '')) : [],
     }))
     : [];
-  const renderer = await page.evaluate(() => {
+  const bindingResources = page?.__qbotRendererControlBindingResources;
+  const nodeBindingResourceControlIds = bindingResources instanceof Map
+    ? [...bindingResources.keys()].map(String)
+    : [];
+  const renderer = await withRendererControlNodeHardTimeout(
+    () => page.evaluate(async ({ timeoutMs }) => {
+    let rendererTimer = null;
+    try {
+      const inspectOperation = Promise.resolve().then(() => {
     const root = globalThis;
-    const lifecycleMethods = [
+    const agentMethods = [
+      'capabilities',
+      'getExpertsCatalog',
       'getSkillsCatalog',
+      'getConnectorCatalog',
       'installSkill',
       'uninstallSkill',
       'updateSkill',
       'revertSkill',
       'reconcileSkills',
+      'submitFeedbackIssueIntake',
+      'send',
     ];
     const descriptor = Object.getOwnPropertyDescriptor(root, 'agent');
-    const methodDescriptors = Object.fromEntries(lifecycleMethods.map((name) => {
+    const methodDescriptors = Object.fromEntries(agentMethods.map((name) => {
       const methodDescriptor = root.agent
         ? Object.getOwnPropertyDescriptor(root.agent, name)
         : null;
@@ -41711,6 +42679,12 @@ export async function inspectRendererControlAdapterState(page) {
       exposed_binding_names: Object.getOwnPropertyNames(root)
         .filter((name) => name.startsWith('__qbotAutomationControl'))
         .sort(),
+      automation_marker_names: Object.getOwnPropertyNames(root)
+        .filter((name) => (
+          name.startsWith('__qbotAutomationControl')
+          || name.startsWith('__qbotAutomationAgent')
+        ))
+        .sort(),
       agent_frozen: Object.isFrozen(root.agent),
       agent_extensible: Object.isExtensible(root.agent),
       global_agent_descriptor: descriptor ? {
@@ -41720,15 +42694,33 @@ export async function inspectRendererControlAdapterState(page) {
         has_getter: typeof descriptor.get === 'function',
         has_setter: typeof descriptor.set === 'function',
       } : null,
-      lifecycle_method_descriptors: methodDescriptors,
+      agent_method_descriptors: methodDescriptors,
     };
-  }).catch((error) => ({
+      });
+      const rendererDeadline = new Promise((_, reject) => {
+        rendererTimer = globalThis.setTimeout(
+          () => reject(new Error(
+            `renderer control adapter inspection renderer timeout after ${timeoutMs}ms`,
+          )),
+          timeoutMs,
+        );
+      });
+      return await Promise.race([inspectOperation, rendererDeadline]);
+    } finally {
+      if (rendererTimer !== null) globalThis.clearTimeout(rendererTimer);
+    }
+  }, { timeoutMs: rendererTimeoutMs }),
+    nodeTimeoutMs,
+    'renderer control adapter inspection',
+  ).catch((error) => ({
     inspection_error: error?.message || String(error),
   }));
   return {
     captured_at: new Date().toISOString(),
     node_registry_count: nodeRegistry.length,
     node_registry: nodeRegistry,
+    node_binding_resource_count: nodeBindingResourceControlIds.length,
+    node_binding_resource_control_ids: nodeBindingResourceControlIds,
     renderer,
   };
 }
@@ -41751,24 +42743,45 @@ export async function installRendererControlAdapterWithRecovery({
   readProbeEvents = () => [],
   clearProbeEvents = () => {},
   maxAttempts = 2,
+  timeouts = {},
 }) {
+  const timeoutPolicy = rendererControlTimeoutPolicy(timeouts);
   const boundedAttempts = Math.max(1, Math.min(2, Number(maxAttempts) || 1));
   const expectedProbeNames = probeCalls.map((item) => String(item?.name || ''));
   const attempts = [];
+  let firstFailureReason = '';
   let lastReason = 'renderer control adapter verification did not run';
   for (let attemptNumber = 1; attemptNumber <= boundedAttempts; attemptNumber += 1) {
     await Promise.resolve(clearProbeEvents()).catch(() => {});
     const attempt = {
       attempt: attemptNumber,
       started_at: new Date().toISOString(),
-      before: await inspectRendererControlAdapterState(page),
+      before: await inspectRendererControlAdapterState(page, {
+        rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+        nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+      }),
+      before_assessment: null,
       binding_report: null,
       lifecycle_probe: null,
       controller_events: [],
       lifecycle_bound: false,
+      probe_completion_uncertain: false,
+      close_report: null,
+      close_error: null,
       error: null,
       retry_eligible: false,
     };
+    attempt.before_assessment = rendererControlAdapterStateAssessment(attempt.before);
+    if (!attempt.before_assessment.ok) {
+      lastReason = `renderer adapter lifecycle state is polluted before bind: ${attempt.before_assessment.errors.join(',')}`;
+      firstFailureReason ||= lastReason;
+      attempt.error = { message: lastReason, stack: '', control_id: '', binding_report: null };
+      attempt.after = attempt.before;
+      attempt.after_assessment = attempt.before_assessment;
+      attempt.ended_at = new Date().toISOString();
+      attempts.push(attempt);
+      break;
+    }
     let adapter = null;
     try {
       adapter = await installRendererControlAdapter({
@@ -41776,6 +42789,7 @@ export async function installRendererControlAdapterWithRecovery({
         rules,
         initiallyArmed,
         handler,
+        timeouts: timeoutPolicy,
       });
       attempt.binding_report = adapter.bindingReport;
       attempt.lifecycle_probe = await adapter.probe(probeCalls).catch((error) => ({
@@ -41783,6 +42797,10 @@ export async function installRendererControlAdapterWithRecovery({
         results: [],
         error: error?.message || String(error),
       }));
+      attempt.probe_completion_uncertain = Boolean(
+        attempt.lifecycle_probe?.results?.some((item) => /(?:renderer|Node).*timeout/i.test(String(item?.error || '')))
+        || /(?:renderer|Node).*timeout/i.test(String(attempt.lifecycle_probe?.error || '')),
+      );
       const controllerEvents = await Promise.resolve(readProbeEvents()).catch((error) => [{
         name: '__controller_event_read_failed__',
         error: error?.message || String(error),
@@ -41796,7 +42814,16 @@ export async function installRendererControlAdapterWithRecovery({
         && expectedProbeNames.every((name, index) => observedProbeNames[index] === name);
       if (attempt.lifecycle_bound) {
         attempt.ended_at = new Date().toISOString();
-        attempt.after = await inspectRendererControlAdapterState(page);
+        attempt.after = await inspectRendererControlAdapterState(page, {
+          rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+          nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+        });
+        attempt.after_assessment = rendererControlAdapterStateAssessment(attempt.after);
+        if (!attempt.after_assessment.ok) {
+          throw new Error(
+            `renderer adapter lifecycle state is inconsistent after bind: ${attempt.after_assessment.errors.join(',')}`,
+          );
+        }
         attempts.push(attempt);
         await Promise.resolve(clearProbeEvents()).catch(() => {});
         return {
@@ -41809,24 +42836,41 @@ export async function installRendererControlAdapterWithRecovery({
         };
       }
       lastReason = `renderer adapter lifecycle probe did not reach controller in order: expected=${expectedProbeNames.join(',')}; observed=${observedProbeNames.join(',') || 'none'}; probe=${JSON.stringify(attempt.lifecycle_probe)}`;
+      firstFailureReason ||= lastReason;
       attempt.error = { message: lastReason, stack: '', control_id: '', binding_report: adapter.bindingReport };
     } catch (error) {
       attempt.error = rendererAdapterErrorDiagnostic(error);
       attempt.binding_report ||= error?.bindingReport || null;
       lastReason = attempt.error.message;
+      firstFailureReason ||= lastReason;
     }
-    if (adapter) await adapter.close().catch(() => {});
+    if (adapter) {
+      try {
+        attempt.close_report = await adapter.close();
+      } catch (error) {
+        attempt.close_error = rendererAdapterErrorDiagnostic(error);
+        lastReason = `${firstFailureReason}; renderer adapter close failed: ${attempt.close_error.message}`;
+      }
+    }
     await Promise.resolve(clearProbeEvents()).catch(() => {});
-    attempt.after = await inspectRendererControlAdapterState(page);
+    attempt.after = await inspectRendererControlAdapterState(page, {
+      rendererTimeoutMs: timeoutPolicy.inspectRendererTimeoutMs,
+      nodeTimeoutMs: timeoutPolicy.inspectNodeTimeoutMs,
+    });
+    attempt.after_assessment = rendererControlAdapterStateAssessment(attempt.after);
     attempt.ended_at = new Date().toISOString();
     attempt.retry_eligible = attemptNumber < boundedAttempts
-      && attempt.after.node_registry_count === 0;
+      && attempt.close_error === null
+      && attempt.probe_completion_uncertain === false
+      && attempt.after.node_registry_count === 0
+      && attempt.after_assessment.ok === true;
     attempts.push(attempt);
     if (!attempt.retry_eligible) break;
   }
   return {
     ok: false,
-    reason: lastReason,
+    reason: firstFailureReason || lastReason,
+    terminal_reason: lastReason,
     attempts,
     recovered: false,
     expected_probe_names: expectedProbeNames,

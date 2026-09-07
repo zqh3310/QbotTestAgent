@@ -412,32 +412,247 @@ function staticMemberPath(node) {
   return [];
 }
 
-function assignmentMemberPaths(target, paths = []) {
+function staticMemberPathWithAliases(node, aliases = new Map()) {
+  node = unwrap(node);
+  if (node?.type === 'Identifier') return aliases.get(node.name) || [node.name];
+  if (node?.type === 'ThisExpression') return ['this'];
+  if (node?.type !== 'MemberExpression') return [];
+  const left = staticMemberPathWithAliases(node.object, aliases);
+  if (!left.length) return [];
+  if (!node.computed && node.property?.type === 'Identifier') return [...left, node.property.name];
+  if (node.computed && node.property?.type === 'Literal'
+    && ['string', 'number'].includes(typeof node.property.value)) {
+    return [...left, String(node.property.value)];
+  }
+  return [];
+}
+
+function assignmentMemberPaths(target, paths = [], aliases = new Map()) {
   target = unwrap(target);
   if (!target) return paths;
   if (target.type === 'MemberExpression') {
-    const member = staticMemberPath(target);
+    const member = staticMemberPathWithAliases(target, aliases);
     if (member.length) paths.push(member);
   } else if (target.type === 'AssignmentPattern') {
-    assignmentMemberPaths(target.left, paths);
+    assignmentMemberPaths(target.left, paths, aliases);
   } else if (target.type === 'RestElement') {
-    assignmentMemberPaths(target.argument, paths);
+    assignmentMemberPaths(target.argument, paths, aliases);
   } else if (target.type === 'ObjectPattern') {
     for (const property of target.properties) {
-      assignmentMemberPaths(property.value || property.argument, paths);
+      assignmentMemberPaths(property.value || property.argument, paths, aliases);
     }
   } else if (target.type === 'ArrayPattern') {
-    for (const element of target.elements) assignmentMemberPaths(element, paths);
+    for (const element of target.elements) assignmentMemberPaths(element, paths, aliases);
   }
   return paths;
 }
 
+function dynamicMemberMayTouchProtectedPath(target, protectedPaths, aliases = new Map()) {
+  target = unwrap(target);
+  if (!target) return false;
+  if (target.type === 'MemberExpression') {
+    if (target.computed && !['Literal'].includes(unwrap(target.property)?.type)) {
+      const receiver = staticMemberPathWithAliases(target.object, aliases);
+      if (receiver.length && pathOverlapsProtectedPath(receiver, protectedPaths)) return true;
+    }
+    return dynamicMemberMayTouchProtectedPath(target.object, protectedPaths, aliases);
+  }
+  if (target.type === 'AssignmentPattern') {
+    return dynamicMemberMayTouchProtectedPath(target.left, protectedPaths, aliases);
+  }
+  if (target.type === 'RestElement') {
+    return dynamicMemberMayTouchProtectedPath(target.argument, protectedPaths, aliases);
+  }
+  if (target.type === 'ObjectPattern') {
+    return target.properties.some((property) => dynamicMemberMayTouchProtectedPath(
+      property.value || property.argument,
+      protectedPaths,
+      aliases,
+    ));
+  }
+  if (target.type === 'ArrayPattern') {
+    return target.elements.some((element) => dynamicMemberMayTouchProtectedPath(
+      element,
+      protectedPaths,
+      aliases,
+    ));
+  }
+  return false;
+}
+
+function pathOverlapsProtectedPath(actual, protectedPaths) {
+  return actual.length > 0 && protectedPaths.some((expected) => {
+    const commonLength = Math.min(actual.length, expected.length);
+    return actual.slice(0, commonLength).every((part, index) => part === expected[index]);
+  });
+}
+
+function bindProtectedAliasPattern(
+  pattern,
+  sourcePath,
+  protectedPaths,
+  state,
+  { dynamic = false, readonly = true } = {},
+) {
+  pattern = unwrap(pattern);
+  if (!pattern || !sourcePath.length) return false;
+  if (pattern.type === 'Identifier') {
+    if (!pathOverlapsProtectedPath(sourcePath, protectedPaths)) return false;
+    if (!readonly || dynamic) state.unsafe = true;
+    else state.aliases.set(pattern.name, sourcePath);
+    return true;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    return bindProtectedAliasPattern(
+      pattern.left, sourcePath, protectedPaths, state, { dynamic, readonly },
+    );
+  }
+  if (pattern.type === 'RestElement') {
+    if (pathOverlapsProtectedPath(sourcePath, protectedPaths)) state.unsafe = true;
+    return state.unsafe;
+  }
+  if (pattern.type === 'ArrayPattern') {
+    let touched = false;
+    pattern.elements.forEach((element, index) => {
+      if (element && bindProtectedAliasPattern(
+        element,
+        dynamic ? sourcePath : [...sourcePath, String(index)],
+        protectedPaths,
+        state,
+        { dynamic, readonly },
+      )) touched = true;
+    });
+    return touched;
+  }
+  if (pattern.type !== 'ObjectPattern') return false;
+  let touched = false;
+  for (const property of pattern.properties) {
+    if (property.type === 'RestElement') {
+      if (pathOverlapsProtectedPath(sourcePath, protectedPaths)) {
+        state.unsafe = true;
+        touched = true;
+      }
+      continue;
+    }
+    if (property.type !== 'Property' || property.computed) {
+      if (pathOverlapsProtectedPath(sourcePath, protectedPaths)) {
+        state.unsafe = true;
+        touched = true;
+      }
+      continue;
+    }
+    const name = propertyName(property);
+    if (name && bindProtectedAliasPattern(
+      property.value,
+      dynamic ? sourcePath : [...sourcePath, name],
+      protectedPaths,
+      state,
+      { dynamic, readonly },
+    )) touched = true;
+  }
+  return touched;
+}
+
+function protectedAliasSource(node, aliases = new Map()) {
+  node = unwrap(node);
+  const path = staticMemberPathWithAliases(node, aliases);
+  if (path.length) return { dynamic: false, path };
+  let current = node;
+  while (current?.type === 'MemberExpression') {
+    if (current.computed) {
+      const receiver = staticMemberPathWithAliases(current.object, aliases);
+      if (receiver.length) return { dynamic: true, path: receiver };
+    }
+    current = unwrap(current.object);
+  }
+  return null;
+}
+
+function protectedReceiverAliasState(functionNode, protectedPaths) {
+  const state = { aliases: new Map(), unsafe: false };
+  const declarations = [];
+  visit(functionNode?.body, (node, parent) => {
+    if (node.type === 'VariableDeclarator' && node.init) declarations.push({ node, parent });
+  });
+  for (let pass = 0; pass <= declarations.length; pass += 1) {
+    const before = state.aliases.size;
+    for (const { node, parent } of declarations) {
+      const source = protectedAliasSource(node.init, state.aliases);
+      if (!source) continue;
+      bindProtectedAliasPattern(node.id, source.path, protectedPaths, state, {
+        dynamic: source.dynamic,
+        readonly: parent?.type === 'VariableDeclaration' && parent.kind === 'const',
+      });
+    }
+    if (state.aliases.size === before) break;
+  }
+  visit(functionNode?.body, (node, parent) => {
+    if (node.type === 'AssignmentExpression') {
+      const source = protectedAliasSource(node.right, state.aliases);
+      if (source) bindProtectedAliasPattern(
+        node.left,
+        source.path,
+        protectedPaths,
+        state,
+        { dynamic: source.dynamic, readonly: false },
+      );
+    }
+    if (node.type === 'AssignmentPattern' && parent?.type !== 'VariableDeclarator') {
+      const source = protectedAliasSource(node.right, state.aliases);
+      if (source) bindProtectedAliasPattern(
+        node.left,
+        source.path,
+        protectedPaths,
+        state,
+        { dynamic: source.dynamic, readonly: false },
+      );
+    }
+  });
+  return state;
+}
+
+function targetUsesProtectedAlias(target, aliases) {
+  const aliasNames = new Set(aliases.keys());
+  return patternNames(target).some((name) => aliasNames.has(name))
+    || assignmentMemberPaths(target).some((path) => aliasNames.has(path[0]));
+}
+
+function functionHasProtectedAliasMutation(functionNode, protectedPaths) {
+  const state = protectedReceiverAliasState(functionNode, protectedPaths);
+  if (state.unsafe) return true;
+  const aliasNames = new Set(state.aliases.keys());
+  let found = false;
+  visit(functionNode?.body, (node) => {
+    if (found) return;
+    const writeTarget = node.type === 'AssignmentExpression' ? node.left
+      : node.type === 'UpdateExpression' ? node.argument
+        : ['ForInStatement', 'ForOfStatement'].includes(node.type) ? node.left
+          : node.type === 'UnaryExpression' && node.operator === 'delete' ? node.argument
+            : null;
+    if (writeTarget && targetUsesProtectedAlias(writeTarget, state.aliases)) {
+      found = true;
+      return;
+    }
+    if (node.type !== 'CallExpression' || ![
+      'Object.assign', 'Object.defineProperties', 'Object.defineProperty',
+      'Reflect.deleteProperty', 'Reflect.set',
+    ].includes(staticMemberPath(node.callee).join('.'))) return;
+    const receiver = staticMemberPath(node.arguments[0]);
+    if (receiver.length && aliasNames.has(receiver[0])) found = true;
+  });
+  return found;
+}
+
 function functionHasMemberWrite(functionNode, protectedPaths) {
+  const aliasState = protectedReceiverAliasState(functionNode, protectedPaths);
+  if (aliasState.unsafe) return true;
+  const { aliases } = aliasState;
   const matchesPath = (actual) => (
     protectedPaths.some((expected) => actual.length >= expected.length
       && expected.every((part, index) => actual[index] === part))
   );
-  const matches = (target) => assignmentMemberPaths(target).some(matchesPath);
+  const matches = (target) => assignmentMemberPaths(target, [], aliases).some(matchesPath)
+    || dynamicMemberMayTouchProtectedPath(target, protectedPaths, aliases);
   const literalPropertyName = (node) => {
     node = unwrap(node);
     return node?.type === 'Literal'
@@ -448,7 +663,7 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
   const reflectiveWriteMatches = (node) => {
     if (node.type !== 'CallExpression') return false;
     const callee = staticMemberPath(node.callee).join('.');
-    const receiver = staticMemberPath(node.arguments[0]);
+    const receiver = staticMemberPathWithAliases(node.arguments[0], aliases);
     if (!receiver.length) return false;
     if (['Object.defineProperty', 'Reflect.set', 'Reflect.deleteProperty'].includes(callee)) {
       const property = literalPropertyName(node.arguments[1]);
@@ -498,6 +713,12 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
   let found = false;
   visit(functionNode?.body, (node) => {
     if (found) return;
+    const writeTarget = node.type === 'AssignmentExpression' ? node.left
+      : node.type === 'UpdateExpression' ? node.argument
+        : ['ForInStatement', 'ForOfStatement'].includes(node.type) ? node.left
+          : node.type === 'UnaryExpression' && node.operator === 'delete' ? node.argument
+            : null;
+    if (writeTarget && targetUsesProtectedAlias(writeTarget, aliases)) found = true;
     if (node.type === 'AssignmentExpression' && matches(node.left)) found = true;
     if (node.type === 'UpdateExpression' && matches(node.argument)) found = true;
     if (['ForInStatement', 'ForOfStatement'].includes(node.type) && matches(node.left)) found = true;
@@ -506,6 +727,87 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
     if (reflectiveWriteMatches(node)) found = true;
   });
   return found;
+}
+
+function protectedCollectionMutationCalls(functionNode, protectedPath, methods) {
+  const aliasState = protectedReceiverAliasState(functionNode, [protectedPath]);
+  if (aliasState.unsafe) return [{ method: 'unknown', node: null }];
+  const { aliases } = aliasState;
+  const methodSet = new Set(methods);
+  const exactPath = (actual, expected) => actual.length === expected.length
+    && expected.every((part, index) => actual[index] === part);
+  const protectedMethod = (node) => {
+    const path = staticMemberPathWithAliases(node, aliases);
+    return path.length === protectedPath.length + 1
+      && exactPath(path.slice(0, -1), protectedPath)
+      && methodSet.has(path.at(-1))
+      ? path.at(-1)
+      : '';
+  };
+  const protectedReceiver = (node) => exactPath(
+    staticMemberPathWithAliases(node, aliases),
+    protectedPath,
+  );
+  const collectionPrototypeMethod = (node) => {
+    const path = staticMemberPath(node);
+    return path.length === 3
+      && ['Map', 'Set'].includes(path[0])
+      && path[1] === 'prototype'
+      && methodSet.has(path[2])
+      ? path[2]
+      : '';
+  };
+  const mutations = [];
+  visit(functionNode?.body, (node) => {
+    if (node.type !== 'CallExpression') return;
+    const callee = unwrap(node.callee);
+    const directMethod = protectedMethod(callee);
+    if (directMethod) {
+      mutations.push({ method: directMethod, node });
+      return;
+    }
+    if (callee?.type === 'MemberExpression' && callee.computed
+      && protectedReceiver(callee.object)) {
+      mutations.push({ method: 'unknown', node });
+      return;
+    }
+    const calleePath = staticMemberPathWithAliases(callee, aliases);
+    if (['call', 'apply'].includes(calleePath.at(-1))) {
+      const target = unwrap(callee.object);
+      const method = protectedMethod(target) || collectionPrototypeMethod(target);
+      if (method && protectedReceiver(node.arguments[0])) {
+        mutations.push({ method, node });
+        return;
+      }
+    }
+    if (exactPath(calleePath, ['Reflect', 'apply'])) {
+      const method = protectedMethod(node.arguments[0])
+        || collectionPrototypeMethod(node.arguments[0]);
+      if (method && protectedReceiver(node.arguments[1])) {
+        mutations.push({ method, node });
+      }
+    }
+  });
+  return mutations;
+}
+
+function countMemberWrites(functionNode, protectedPath) {
+  const reflectiveCalls = new Set([
+    'Object.assign', 'Object.defineProperties', 'Object.defineProperty',
+    'Reflect.deleteProperty', 'Reflect.set',
+  ]);
+  let count = 0;
+  visit(functionNode?.body, (node) => {
+    const directWrite = node.type === 'AssignmentExpression'
+      || node.type === 'UpdateExpression'
+      || ['ForInStatement', 'ForOfStatement'].includes(node.type)
+      || (node.type === 'UnaryExpression' && node.operator === 'delete');
+    const reflectiveWrite = node.type === 'CallExpression'
+      && reflectiveCalls.has(staticMemberPath(node.callee).join('.'));
+    if ((directWrite || reflectiveWrite)
+      && functionHasMemberWrite({ body: node }, [protectedPath])) count += 1;
+  });
+  return count;
 }
 
 function exactTopLevelRequireBinding(program, localName, requiredName, modulePath) {
@@ -1023,18 +1325,43 @@ function supervisorMessageAstContract(source) {
   const sequenceBody = sequence[0].consequent.body;
   const error = sequenceBody[0]?.type === 'VariableDeclaration'
     ? sequenceBody[0].declarations.find((declaration) => identifier(declaration.id, 'error')) : null;
-  if (sequenceBody.length !== 5 || !error || !construct(error.init, 'Error')
-    || !directCallStatement(sequenceBody[1], ['pending', 'delete'], [
+  const codeAssignment = unwrap(sequenceBody[1]?.expression);
+  const hasTypedCode = sequenceBody.length === 6
+    && sequenceBody[1]?.type === 'ExpressionStatement'
+    && codeAssignment?.type === 'AssignmentExpression'
+    && codeAssignment.operator === '='
+    && member(codeAssignment.left, ['error', 'code'])
+    && literal(codeAssignment.right, 'execution_worker_sequence_violation');
+  const actionOffset = hasTypedCode ? 1 : 0;
+  const expectedDeleteStatement = sequenceBody[1 + actionOffset];
+  const expectedDeleteCall = unwrap(expectedDeleteStatement?.expression);
+  const eventPendingMutations = protectedCollectionMutationCalls(
+    event,
+    ['pending'],
+    ['clear', 'delete'],
+  );
+  const observerPendingMutations = protectedCollectionMutationCalls(
+    observer,
+    ['pending'],
+    ['clear', 'delete'],
+  );
+  if (![5, 6].includes(sequenceBody.length) || (sequenceBody.length === 6 && !hasTypedCode)
+    || !error || !construct(error.init, 'Error')
+    || !directCallStatement(expectedDeleteStatement, ['pending', 'delete'], [
       (value) => member(value, ['message', 'requestId']),
     ])
-    || !directCallStatement(sequenceBody[2], ['item', 'reject'], [
+    || eventPendingMutations.length !== 1
+    || eventPendingMutations[0].method !== 'delete'
+    || eventPendingMutations[0].node !== expectedDeleteCall
+    || observerPendingMutations.length !== 0
+    || !directCallStatement(sequenceBody[2 + actionOffset], ['item', 'reject'], [
       (value) => identifier(value, 'error'),
     ])
-    || !directCallStatement(sequenceBody[3], ['terminateChild'], [
+    || !directCallStatement(sequenceBody[3 + actionOffset], ['terminateChild'], [
       (value) => identifier(value, 'child'),
       (value) => literal(value, 'sequence-violation'),
     ])
-    || !bareReturn(sequenceBody[4])) return false;
+    || !bareReturn(sequenceBody[4 + actionOffset])) return false;
   const dispatches = event.body.body.filter((statement) => directCallStatement(
     statement,
     ['dispatchExecutionEvent'],
@@ -1479,6 +1806,126 @@ function decodedMessageBinding(method, direction) {
   ]));
 }
 
+function constantBoolean(node) {
+  node = unwrap(node);
+  if (node?.type === 'Literal') return Boolean(node.value);
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) {
+    return Boolean(node.quasis[0]?.value?.cooked);
+  }
+  if (['ArrayExpression', 'ArrowFunctionExpression', 'ClassExpression', 'FunctionExpression',
+    'NewExpression', 'ObjectExpression'].includes(node?.type)) return true;
+  if (node?.type === 'UnaryExpression' && node.operator === '!') {
+    const value = constantBoolean(node.argument);
+    return value === null ? null : !value;
+  }
+  if (node?.type === 'UnaryExpression' && node.operator === 'void') return false;
+  if (node?.type === 'SequenceExpression' && node.expressions.length > 0) {
+    return constantBoolean(node.expressions.at(-1));
+  }
+  return null;
+}
+
+function blockDefinitelyAbrupt(block) {
+  for (const statement of block?.body || []) {
+    if (statementDefinitelyAbrupt(statement)) return true;
+  }
+  return false;
+}
+
+function statementDefinitelyAbrupt(statement) {
+  if (!statement) return false;
+  if (['ReturnStatement', 'ThrowStatement'].includes(statement.type)) return true;
+  if (statement.type === 'BlockStatement') return blockDefinitelyAbrupt(statement);
+  if (statement.type === 'TryStatement') {
+    if (statement.finalizer && blockDefinitelyAbrupt(statement.finalizer)) return true;
+    const tryAbrupt = blockDefinitelyAbrupt(statement.block);
+    if (!statement.handler) return tryAbrupt;
+    return tryAbrupt && blockDefinitelyAbrupt(statement.handler.body);
+  }
+  if (statement.type !== 'IfStatement') return false;
+  const condition = constantBoolean(statement.test);
+  if (condition === true) return statementDefinitelyAbrupt(statement.consequent);
+  if (condition === false) return statementDefinitelyAbrupt(statement.alternate);
+  return Boolean(statement.alternate)
+    && statementDefinitelyAbrupt(statement.consequent)
+    && statementDefinitelyAbrupt(statement.alternate);
+}
+
+function directStatementReachable(block, target) {
+  const statements = block?.body || [];
+  const index = statements.indexOf(target);
+  return index >= 0
+    && !statements.slice(0, index).some((statement) => statementDefinitelyAbrupt(statement));
+}
+
+function directStatementEntriesIncludingTryBlock(block) {
+  const entries = [];
+  for (const statement of block?.body || []) {
+    if (statement.type === 'TryStatement') {
+      for (const nested of statement.block?.body || []) {
+        entries.push({ statement: nested, block: statement.block, wrapper: statement });
+      }
+    } else {
+      entries.push({ statement, block, wrapper: null });
+    }
+  }
+  return entries;
+}
+
+function directEntryReachable(rootBlock, entry) {
+  if (!entry) return false;
+  if (!entry.wrapper) return entry.block === rootBlock
+    && directStatementReachable(rootBlock, entry.statement);
+  return directStatementReachable(rootBlock, entry.wrapper)
+    && directStatementReachable(entry.block, entry.statement);
+}
+
+function directEntriesOrdered(rootBlock, entries) {
+  if (!entries.length || entries.some((entry) => !directEntryReachable(rootBlock, entry))) return false;
+  const block = entries[0].block;
+  if (entries.some((entry) => entry.block !== block || entry.wrapper !== entries[0].wrapper)) return false;
+  const statements = block?.body || [];
+  return entries.every((entry, index) => (
+    index === 0 || statements.indexOf(entries[index - 1].statement) < statements.indexOf(entry.statement)
+  ));
+}
+
+function controllerTryFailsClosed(statement, { returnsFalse = false } = {}) {
+  if (!statement?.handler || statement.finalizer) return false;
+  const body = statement.handler.body;
+  const finishes = (body?.body || []).filter((candidate) => directCallStatement(
+    candidate, ['this', 'finish'], [(value) => literal(value, 1)],
+  ));
+  if (finishes.length !== 1 || !directStatementReachable(body, finishes[0])) return false;
+  if (!returnsFalse) return true;
+  const failures = (body?.body || []).filter((candidate) => exactReturn(
+    candidate, (value) => literal(value, false),
+  ));
+  return failures.length === 1
+    && directStatementReachable(body, failures[0])
+    && body.body.indexOf(finishes[0]) < body.body.indexOf(failures[0]);
+}
+
+function exactRunnerListener(statement, eventName, callbackMatcher) {
+  if (statement?.type !== 'ExpressionStatement') return false;
+  const expression = unwrap(statement.expression);
+  const callee = unwrap(expression?.callee);
+  return expression?.type === 'CallExpression'
+    && callee?.type === 'MemberExpression'
+    && !callee.computed
+    && ['on', 'once'].some((name) => identifier(callee.property, name))
+    && member(callee.object, ['this', 'runner'])
+    && expression.arguments.length === 2
+    && literal(expression.arguments[0], eventName)
+    && callbackMatcher(unwrap(expression.arguments[1]));
+}
+
+function inlineRunnerFailureHandler(callback) {
+  return callback?.type === 'ArrowFunctionExpression'
+    && exactIdentifierParameters(callback, [])
+    && arrowCallsExactly(callback, ['this', 'finish'], [(value) => literal(value, 1)]);
+}
+
 function controllerAstContract(source) {
   const program = parseProgram(source);
   const controller = topClass(program, 'ExecutionWorkerController');
@@ -1488,11 +1935,20 @@ function controllerAstContract(source) {
   const sameIdentityBinding = directDeclarator(program, 'sameIdentity', 'const');
   const sameIdentityFunction = unwrap(sameIdentityBinding?.declaration?.init);
   if (!controller || !authorityFields || !turnFields
+    || (topLevelBindingCount(program, 'Worker') > 0
+      && !exactTopLevelRequireBinding(program, 'Worker', 'Worker', 'node:worker_threads'))
+    || (topLevelBindingCount(program, 'validateEnvelope') > 0
+      && !exactTopLevelRequireBinding(
+        program,
+        'validateEnvelope',
+        'validateEnvelope',
+        './execution-worker-protocol.cjs',
+      ))
     || !stableProgramIdentifiers(program, [
       'AUTHORITY_FIELDS', 'ExecutionWorkerController', 'TURN_FIELDS', 'sameIdentity',
       'Worker', 'process', 'require', 'validateEnvelope',
     ], {
-      globals: ['Worker', 'process', 'require', 'validateEnvelope'],
+      globals: ['process', 'require'],
     })) return false;
   const constructor = classMethod(controller, 'constructor');
   const decode = classMethod(controller, 'decode');
@@ -1504,7 +1960,7 @@ function controllerAstContract(source) {
   const runnerError = classMethod(controller, 'onRunnerError');
   const runnerExit = classMethod(controller, 'onRunnerExit');
   if (!constructor || !decode || !finish || !initialize || !accept || !host || !runner
-    || !runnerError || !runnerExit || !startController
+    || !startController
     || sameIdentityFunction?.type !== 'ArrowFunctionExpression'
     || !exactProtectedIdentifierParameters(
       sameIdentityFunction, ['message', 'authority', 'fields'],
@@ -1550,8 +2006,8 @@ function controllerAstContract(source) {
     || !exactIdentifierParameters(accept, ['message'])
     || !exactIdentifierParameters(host, ['raw'])
     || !exactIdentifierParameters(runner, ['raw'])
-    || !exactIdentifierParameters(runnerError, ['error'])
-    || !exactIdentifierParameters(runnerExit, ['code'])
+    || (runnerError && !exactIdentifierParameters(runnerError, ['error']))
+    || (runnerExit && !exactIdentifierParameters(runnerExit, ['code']))
     || !exactIdentifierParameters(startController, ['options'])
     || !defaultRunnerFactory(constructor)
     || functionHasNestedBinding(constructor, ['createRunner', 'exit', 'parentPort'])
@@ -1568,15 +2024,33 @@ function controllerAstContract(source) {
     || functionHasIdentifierWrite(host, ['raw'])
     || functionHasNestedBinding(runner, ['raw'])
     || functionHasIdentifierWrite(runner, ['raw'])
-    || functionHasNestedBinding(runnerError, ['error'])
-    || functionHasIdentifierWrite(runnerError, ['error'])
-    || functionHasNestedBinding(runnerExit, ['code'])
-    || functionHasIdentifierWrite(runnerExit, ['code'])
+    || (runnerError && functionHasNestedBinding(runnerError, ['error']))
+    || (runnerError && functionHasIdentifierWrite(runnerError, ['error']))
+    || (runnerExit && functionHasNestedBinding(runnerExit, ['code']))
+    || (runnerExit && functionHasIdentifierWrite(runnerExit, ['code']))
     || functionHasNestedBinding(startController, ['options'])
     || functionHasIdentifierWrite(startController, ['options'])
     || startController.body.body.length !== 1
     || !exactReturn(startController.body.body[0], (value) => construct(
       value, 'ExecutionWorkerController', [(entry) => identifier(entry, 'options')],
+    ))) return false;
+  const controllerBindingPaths = [
+    ['this', 'authority'], ['this', 'createRunner'], ['this', 'runner'],
+  ];
+  const otherControllerMethods = (controller.body?.body || [])
+    .filter((method) => method.type === 'MethodDefinition'
+      && !['constructor', 'initialize'].includes(propertyName(method)))
+    .map((method) => method.value);
+  if (functionHasProtectedAliasMutation(constructor, controllerBindingPaths)
+    || functionHasProtectedAliasMutation(initialize, controllerBindingPaths)
+    || countMemberWrites(constructor, ['this', 'authority']) !== 1
+    || countMemberWrites(constructor, ['this', 'createRunner']) !== 1
+    || countMemberWrites(constructor, ['this', 'runner']) !== 1
+    || countMemberWrites(initialize, ['this', 'authority']) !== 1
+    || countMemberWrites(initialize, ['this', 'createRunner']) !== 0
+    || countMemberWrites(initialize, ['this', 'runner']) !== 1
+    || otherControllerMethods.some((method) => functionHasMemberWrite(
+      method, controllerBindingPaths,
     ))) return false;
   const decodeTry = decode.body.body.filter((statement) => statement.type === 'TryStatement');
   if (decodeTry.length !== 1 || decodeTry[0].block.body.length !== 1
@@ -1592,11 +2066,64 @@ function controllerAstContract(source) {
   ));
   const authorityAssignments = directAssignmentStatements(initialize.body, ['this', 'authority'])
     .filter((statement) => identifier(statement.expression.right, 'message'));
-  const runnerAssignments = directAssignmentStatements(initialize.body, ['this', 'runner'])
-    .filter((statement) => call(statement.expression.right, ['this', 'createRunner'], []));
+  const initializeEntries = directStatementEntriesIncludingTryBlock(initialize.body);
+  const runnerAssignments = initializeEntries.filter((entry) => (
+    entry.statement?.type === 'ExpressionStatement'
+      && unwrap(entry.statement.expression)?.type === 'AssignmentExpression'
+      && unwrap(entry.statement.expression).operator === '='
+      && member(unwrap(entry.statement.expression).left, ['this', 'runner'])
+  ))
+    .filter((entry) => call(entry.statement.expression.right, ['this', 'createRunner'], []));
   if (initializeGuard.length !== 1 || authorityAssignments.length !== 1 || runnerAssignments.length !== 1
-    || initialize.body.body.indexOf(initializeGuard[0]) >= initialize.body.body.indexOf(authorityAssignments[0])
-    || initialize.body.body.indexOf(authorityAssignments[0]) >= initialize.body.body.indexOf(runnerAssignments[0])) return false;
+    || !directStatementReachable(initialize.body, initializeGuard[0])
+    || !directStatementReachable(initialize.body, authorityAssignments[0])
+    || initialize.body.body.indexOf(initializeGuard[0])
+      >= initialize.body.body.indexOf(authorityAssignments[0])) return false;
+  const messageListeners = initializeEntries.filter((entry) => exactRunnerListener(
+    entry.statement,
+    'message',
+    (callback) => callback?.type === 'ArrowFunctionExpression'
+      && exactIdentifierParameters(callback, ['raw'])
+      && arrowCallsExactly(callback, ['this', 'onRunnerMessage'], [
+        (value) => identifier(value, 'raw'),
+      ]),
+  ));
+  const errorListeners = initializeEntries.filter((entry) => exactRunnerListener(
+    entry.statement,
+    'error',
+    (callback) => inlineRunnerFailureHandler(callback)
+      || (runnerError
+        && callback?.type === 'ArrowFunctionExpression'
+        && exactIdentifierParameters(callback, ['error'])
+        && arrowCallsExactly(callback, ['this', 'onRunnerError'], [
+          (value) => identifier(value, 'error'),
+        ])),
+  ));
+  const exitListeners = initializeEntries.filter((entry) => exactRunnerListener(
+    entry.statement,
+    'exit',
+    (callback) => inlineRunnerFailureHandler(callback)
+      || (runnerExit
+        && callback?.type === 'ArrowFunctionExpression'
+        && exactIdentifierParameters(callback, ['code'])
+        && arrowCallsExactly(callback, ['this', 'onRunnerExit'], [
+          (value) => identifier(value, 'code'),
+        ])),
+  ));
+  const initializeSuccesses = initializeEntries.filter((entry) => exactReturn(
+    entry.statement, (value) => literal(value, true),
+  ));
+  if (messageListeners.length !== 1 || errorListeners.length !== 1 || exitListeners.length !== 1
+    || initializeSuccesses.length !== 1
+    || !directEntriesOrdered(initialize.body, [
+      runnerAssignments[0], messageListeners[0], errorListeners[0], exitListeners[0],
+      initializeSuccesses[0],
+    ])) return false;
+  const initializeOuterStatement = runnerAssignments[0].wrapper || runnerAssignments[0].statement;
+  if (initialize.body.body.indexOf(authorityAssignments[0])
+      >= initialize.body.body.indexOf(initializeOuterStatement)
+    || (runnerAssignments[0].wrapper
+      && !controllerTryFailsClosed(runnerAssignments[0].wrapper, { returnsFalse: true }))) return false;
 
   const startBranches = accept.body.body.filter((statement) => (
     statement.type === 'IfStatement' && exactOperation(statement.test, '===', 'execution.start')
@@ -1664,10 +2191,15 @@ function controllerAstContract(source) {
     )
     && bareReturn(statement.consequent)
   ));
-  const hostForwards = host.body.body.filter((statement) => directCallStatement(
-    statement, ['this', 'runner', 'postMessage'], [(value) => identifier(value, 'message')],
+  const hostForwards = directStatementEntriesIncludingTryBlock(host.body).filter((entry) => directCallStatement(
+    entry.statement, ['this', 'runner', 'postMessage'], [(value) => identifier(value, 'message')],
   ));
-  if (hostGuard.length !== 1 || hostForwards.length !== 1) return false;
+  const hostForwardOuter = hostForwards[0]?.wrapper || hostForwards[0]?.statement;
+  if (hostGuard.length !== 1 || hostForwards.length !== 1
+    || !directStatementReachable(host.body, hostGuard[0])
+    || !directEntryReachable(host.body, hostForwards[0])
+    || host.body.body.indexOf(hostGuard[0]) >= host.body.body.indexOf(hostForwardOuter)
+    || (hostForwards[0].wrapper && !controllerTryFailsClosed(hostForwards[0].wrapper))) return false;
 
   const runnerAuthority = runner.body.body.filter((statement) => (
     statement.type === 'IfStatement'
@@ -1684,7 +2216,13 @@ function controllerAstContract(source) {
   ));
   if (runnerAuthority.length !== 1 || heartbeat.length !== 1 || ready.length !== 1
     || ready[0].alternate?.type !== 'IfStatement') return false;
-  if (!directCallStatement(ready[0].consequent, ['this', 'startHeartbeat'], [])) return false;
+  const startsHeartbeat = directCallStatement(ready[0].consequent, ['this', 'startHeartbeat'], [])
+    || (ready[0].consequent?.type === 'BlockStatement'
+      && ready[0].consequent.body.length === 1
+      && ready[0].consequent.body[0]?.type === 'IfStatement'
+      && exactNotCall(ready[0].consequent.body[0].test, ['this', 'startHeartbeat'], [])
+      && bareReturn(ready[0].consequent.body[0].consequent));
+  if (!startsHeartbeat) return false;
   const pressureGuard = ready[0].alternate;
   if (!logical(
     pressureGuard.test,
@@ -1699,27 +2237,177 @@ function controllerAstContract(source) {
   const runnerForwards = runner.body.body.filter((statement) => directCallStatement(
     statement, ['this', 'parentPort', 'postMessage'], [(value) => identifier(value, 'message')],
   ));
-  return runnerForwards.length === 1;
+  if (runnerForwards.length !== 1
+    || !directStatementReachable(runner.body, runnerAuthority[0])
+    || !directStatementReachable(runner.body, heartbeat[0])
+    || !directStatementReachable(runner.body, ready[0])
+    || !directStatementReachable(runner.body, runnerForwards[0])) return false;
+  const runnerStatements = runner.body.body;
+  return runnerStatements.indexOf(runnerAuthority[0]) < runnerStatements.indexOf(heartbeat[0])
+    && runnerStatements.indexOf(heartbeat[0]) < runnerStatements.indexOf(ready[0])
+    && runnerStatements.indexOf(ready[0]) < runnerStatements.indexOf(runnerForwards[0]);
 }
 
 function genuineTimeoutInFunction(functionNode, timeoutNames) {
-  let found = false;
-  visit(functionNode?.body, (node) => {
-    if (found || node.type !== 'NewExpression' || !identifier(node.callee, 'Promise')
-      || node.arguments.length !== 1) return;
-    const executor = unwrap(node.arguments[0]);
-    if (executor?.type !== 'ArrowFunctionExpression'
-      || !exactProtectedIdentifierParameters(executor, ['resolve'])) return;
-    const resolver = 'resolve';
-    visit(executor.body, (candidate) => {
-      if (candidate.type === 'CallExpression'
-        && call(candidate, ['setTimeout'])
-        && candidate.arguments.length === 2
-        && identifier(candidate.arguments[0], resolver)
-        && timeoutNames.some((name) => identifier(candidate.arguments[1], name))) found = true;
+  return (functionNode?.body?.body || []).some((statement) => {
+    if (!['ExpressionStatement', 'ReturnStatement', 'VariableDeclaration'].includes(statement.type)
+      || !directStatementReachable(
+      functionNode.body, statement,
+    )) return false;
+    let found = false;
+    visit(statement, (node) => {
+      if (found || !call(node, ['Promise', 'race']) || node.arguments.length !== 1) return;
+      const races = unwrap(node.arguments[0]);
+      if (races?.type !== 'ArrayExpression') return;
+      found = races.elements.some((element) => {
+        element = unwrap(element);
+        if (element?.type !== 'NewExpression' || !identifier(element.callee, 'Promise')
+          || element.arguments.length !== 1) return false;
+        const executor = unwrap(element.arguments[0]);
+        if (executor?.type !== 'ArrowFunctionExpression'
+          || executor.params.length !== 1
+          || !['resolve', 'resolveDeadline'].some((name) => (
+            exactProtectedIdentifierParameters(executor, [name])
+          ))) return false;
+        const resolver = executor.params[0].name;
+        return executor.body?.type === 'CallExpression'
+          && call(executor.body, ['setTimeout'])
+          && executor.body.arguments.length === 2
+          && identifier(executor.body.arguments[0], resolver)
+          && timeoutNames.some((name) => identifier(executor.body.arguments[1], name));
+      });
     });
+    return found;
   });
-  return found;
+}
+
+function finitePositiveTimeoutBinding(functionNode, {
+  boundedName = 'boundedTimeout',
+  fallback = 1,
+  requestedName = 'requestedTimeout',
+  sourceName = 'timeoutMs',
+} = {}) {
+  const requested = directDeclarator(functionNode?.body, requestedName, 'const');
+  const bounded = directDeclarator(functionNode?.body, boundedName, 'const');
+  if (!requested || !bounded
+    || !directStatementReachable(functionNode.body, requested.statement)
+    || !directStatementReachable(functionNode.body, bounded.statement)
+    || functionNode.body.body.indexOf(requested.statement)
+      >= functionNode.body.body.indexOf(bounded.statement)
+    || !call(requested.declaration.init, ['Number'], [
+      (value) => identifier(value, sourceName),
+    ])) return false;
+  const value = unwrap(bounded.declaration.init);
+  return value?.type === 'ConditionalExpression'
+    && call(value.test, ['Number', 'isFinite'], [
+      (entry) => identifier(entry, requestedName),
+    ])
+    && call(value.consequent, ['Math', 'max'], [
+      (entry) => literal(entry, 1),
+      (entry) => identifier(entry, requestedName),
+    ])
+    && literal(value.alternate, fallback)
+    && Number.isFinite(fallback)
+    && fallback > 0;
+}
+
+function managerPressureCondition(node) {
+  return binary(
+    node,
+    '>=',
+    (value) => member(value, ['manager', 'executions', 'size']),
+    (value) => member(value, ['manager', 'maxConcurrentExecutions']),
+  ) || binary(
+    node,
+    '>=',
+    (value) => member(value, ['manager', 'queue', 'length']),
+    (value) => member(value, ['manager', 'queueLimit']),
+  );
+}
+
+function managerPressureRejection(statement) {
+  if (statement?.type !== 'ReturnStatement') return false;
+  const rejection = unwrap(statement.argument);
+  if (!call(rejection, ['Promise', 'reject']) || rejection.arguments.length !== 1) return false;
+  const error = unwrap(rejection.arguments[0]);
+  return call(error, ['managerError'])
+    && [2, 3].includes(error.arguments.length)
+    && literal(error.arguments[0], 'execution_worker_pressure_admission_closed')
+    && error.arguments[1]?.type === 'Literal'
+    && typeof error.arguments[1].value === 'string'
+    && error.arguments[1].value.length > 0
+    && (error.arguments.length === 2 || literal(error.arguments[2], 'pending'));
+}
+
+function managerPressureBranch(waitForSlot) {
+  const branches = (waitForSlot?.body?.body || []).filter((statement) => (
+    statement.type === 'IfStatement'
+    && managerPressureCondition(statement.test)
+    && directStatementReachable(waitForSlot.body, statement)
+  ));
+  if (branches.length !== 1) return null;
+  const consequent = branches[0].consequent?.type === 'BlockStatement'
+    ? branches[0].consequent : { body: [branches[0].consequent] };
+  const rejections = (consequent.body || []).filter((statement) => (
+    managerPressureRejection(statement) && directStatementReachable(consequent, statement)
+  ));
+  return rejections.length === 1 ? branches[0] : null;
+}
+
+function directManagerSupervisorBinding(node) {
+  node = unwrap(node);
+  return call(node, ['manager', 'supervisorFactory'])
+    && node.arguments.length === 1
+    && unwrap(node.arguments[0])?.type === 'ObjectExpression';
+}
+
+function managerLeaseReturn(statement, { releaseFunction = null } = {}) {
+  if (statement?.type !== 'ReturnStatement') return false;
+  const value = unwrap(statement.argument);
+  if (call(value, ['executionWorkerLease'])
+    && [3, 4].includes(value.arguments.length)
+    && identifier(value.arguments[0], 'manager')
+    && identifier(value.arguments[1], 'requestId')
+    && identifier(value.arguments[2], 'record')
+    && (value.arguments.length === 3 || identifier(value.arguments[3], 'state'))) return true;
+  return Boolean(releaseFunction) && exactObject(value, {
+    supervisor: (entry) => identifier(entry, 'supervisor'),
+    release: (entry) => identifier(entry, 'release'),
+  });
+}
+
+function managerCreatorParametersValid(creator) {
+  if (exactIdentifierParameters(creator, [])
+    || exactIdentifierParameters(creator, ['manager'])) return true;
+  if (creator?.params.length !== 1) return false;
+  let parameter = unwrap(creator.params[0]);
+  if (parameter?.type !== 'AssignmentPattern' || !exactObject(parameter.right, {})) return false;
+  parameter = unwrap(parameter.left);
+  if (parameter?.type !== 'ObjectPattern' || parameter.properties.length !== 7) return false;
+  const rest = parameter.properties.filter((property) => property.type === 'RestElement');
+  const properties = parameter.properties.filter((property) => property.type === 'Property');
+  if (rest.length !== 1 || !identifier(rest[0].argument, 'supervisorOptions')
+    || properties.length !== 6) return false;
+  const expected = {
+    enabled: (value) => defaultedIdentifierParameter(value, 'enabled', (entry) => literal(entry, true)),
+    fork: (value) => identifier(value, 'fork'),
+    maxConcurrentExecutions: (value) => defaultedIdentifierParameter(
+      value, 'maxConcurrentExecutions', (entry) => literal(entry, 16),
+    ),
+    maxQueuedExecutions: (value) => defaultedIdentifierParameter(
+      value, 'maxQueuedExecutions', (entry) => literal(entry, 64),
+    ),
+    supervisorFactory: (value) => defaultedIdentifierParameter(
+      value, 'supervisorFactory', (entry) => identifier(entry, 'createExecutionWorkerSupervisor'),
+    ),
+    stripMainOwnedCapabilitiesForTest: (value) => defaultedIdentifierParameter(
+      value, 'stripMainOwnedCapabilitiesForTest', (entry) => literal(entry, false),
+    ),
+  };
+  return Object.entries(expected).every(([name, matcher]) => {
+    const matches = properties.filter((property) => propertyName(property) === name);
+    return matches.length === 1 && matcher(matches[0].value);
+  });
 }
 
 function managerIsolationAstContract(source) {
@@ -1735,8 +2423,7 @@ function managerIsolationAstContract(source) {
   const createLease = topFunction(program, 'executionWorkerLease');
   const createRecord = topFunction(program, 'createExecutionRecord');
   const createSupervisor = topFunction(program, 'createExecutionSupervisor');
-  const creatorParametersValid = exactIdentifierParameters(creator, [])
-    || exactIdentifierParameters(creator, ['manager']);
+  const creatorParametersValid = managerCreatorParametersValid(creator);
   const acquireParametersValid = exactParameterList(acquire, [
     (value) => identifier(value, 'manager'),
     (value) => identifier(value, 'operation') || identifier(value, 'authority'),
@@ -1748,7 +2435,12 @@ function managerIsolationAstContract(source) {
     || exactIdentifierParameters(waitForSlot, ['manager', 'requestId', 'signal']);
   if (!creator || !acquire || !waitForSlot || !creatorParametersValid
     || !acquireParametersValid || !waitParametersValid
-    || !exactProtectedIdentifierParameters(managerError, ['code', 'message'])
+    || !(exactProtectedIdentifierParameters(managerError, ['code', 'message'])
+      || exactParameterList(managerError, [
+        (value) => identifier(value, 'code'),
+        (value) => identifier(value, 'message'),
+        (value) => defaultedIdentifierParameter(value, 'pressure', (entry) => literal(entry, null)),
+      ]))
     || (validateAcquisition && !exactProtectedIdentifierParameters(
       validateAcquisition, ['manager', 'identity'],
     ))
@@ -1758,9 +2450,11 @@ function managerIsolationAstContract(source) {
     || (releaseRecord && !exactProtectedIdentifierParameters(
       releaseRecord, ['manager', 'requestId', 'record'],
     ))
-    || (createLease && !exactProtectedIdentifierParameters(
-      createLease, ['manager', 'requestId', 'record'],
-    ))
+    || (createLease
+      && !exactProtectedIdentifierParameters(createLease, ['manager', 'requestId', 'record'])
+      && !exactProtectedIdentifierParameters(
+        createLease, ['manager', 'requestId', 'record', 'state'],
+      ))
     || (createRecord && !exactProtectedIdentifierParameters(createRecord, ['supervisor']))
     || (createSupervisor && !exactProtectedIdentifierParameters(createSupervisor, ['manager']))
     || functionHasNestedBinding(waitForSlot, ['manager', 'requestId', 'signal'])
@@ -1781,10 +2475,12 @@ function managerIsolationAstContract(source) {
     ]);
     if (!drainParametersValid
       || functionHasNestedBinding(drainRecord, [
-        'manager', 'record', 'requestId', 'settlement', 'timeoutMs',
-      ])
+        'boundedTimeout', 'manager', 'Math', 'Number', 'record', 'requestId',
+        'requestedTimeout', 'settlement', 'timeoutMs',
+      ], { allowedDirectBindings: ['boundedTimeout', 'requestedTimeout'] })
       || functionHasIdentifierWrite(drainRecord, [
-        'manager', 'record', 'requestId', 'settlement', 'timeoutMs',
+        'boundedTimeout', 'manager', 'Math', 'Number', 'record', 'requestId',
+        'requestedTimeout', 'settlement', 'timeoutMs',
       ])) return false;
   }
   const helperNames = (program.body || [])
@@ -1795,14 +2491,31 @@ function managerIsolationAstContract(source) {
     creator, acquire, waitForSlot, managerError, validateAcquisition, stopRecord,
     releaseRecord, drainRecord, createLease, createRecord, createSupervisor,
   ].filter(Boolean);
-  const managerBuiltins = ['Error', 'Map', 'Object', 'Promise', 'String', 'setTimeout'];
+  const managerBuiltins = [
+    'Error', 'Map', 'Math', 'Number', 'Object', 'Promise', 'String', 'setTimeout',
+  ];
+  const managerCreatorOptions = [
+    'enabled', 'fork', 'maxConcurrentExecutions', 'maxQueuedExecutions',
+    'stripMainOwnedCapabilitiesForTest', 'supervisorFactory', 'supervisorOptions',
+  ];
   if (!stableProgramIdentifiers(program, [...helperNames, ...managerBuiltins], {
     globals: managerBuiltins,
   })
     || managerFunctions.some((functionNode) => functionHasMemberWrite(functionNode, [
-      ['manager'], ['record', 'supervisor'],
+      ['manager', 'concurrencyLimit'],
+      ['manager', 'enabled'],
+      ['manager', 'executions'],
+      ['manager', 'fork'],
+      ['manager', 'maxConcurrentExecutions'],
+      ['manager', 'maxQueuedExecutions'],
+      ['manager', 'queueLimit'],
+      ['manager', 'supervisorFactory'],
+      ['manager', 'supervisorOptions'],
+      ['record', 'supervisor'],
     ]))
     || functionHasNestedBinding(creator, helperNames)
+    || functionHasNestedBinding(creator, managerCreatorOptions)
+    || functionHasIdentifierWrite(creator, managerCreatorOptions)
     || functionHasNestedBinding(creator, ['manager'], {
       allowedDirectBindings: ['manager'],
     })
@@ -1820,18 +2533,51 @@ function managerIsolationAstContract(source) {
   const requestId = directDeclarator(acquire.body, 'requestId', 'const');
   const supervisor = directDeclarator(acquire.body, 'supervisor', 'const');
   const record = directDeclarator(acquire.body, 'record', 'const');
+  const helperSupervisorBinding = call(supervisor?.declaration?.init, ['createExecutionSupervisor'], [
+    (value) => identifier(value, 'manager'),
+  ]);
+  const helperRecordBinding = call(record?.declaration?.init, ['createExecutionRecord'], [
+    (value) => identifier(value, 'supervisor'),
+  ]);
+  const directSupervisorBinding = directManagerSupervisorBinding(supervisor?.declaration?.init);
+  const directRecordBinding = exactObject(record?.declaration?.init, {
+    supervisor: (value) => identifier(value, 'supervisor'),
+  });
   if (!requestId || !supervisor || !record
+    || !(call(requestId.declaration.init, ['validateAcquisition'], [
+      (value) => identifier(value, 'manager'),
+      (value) => identifier(value, 'identity'),
+    ]) || member(requestId.declaration.init, ['identity', 'requestId']))
+    || !(helperSupervisorBinding || directSupervisorBinding)
+    || !(helperRecordBinding || directRecordBinding)
+    || helperSupervisorBinding !== helperRecordBinding
     || countAssignments(acquire, (left) => patternNames(left).includes('requestId')) !== 0
     || countAssignments(acquire, (left) => patternNames(left).includes('supervisor')) !== 0
     || countAssignments(acquire, (left) => patternNames(left).includes('record')) !== 0) return false;
-  const admissionWaits = acquire.body.body.filter((statement) => {
-    const expression = unwrap(statement?.expression);
-    if (statement.type !== 'ExpressionStatement' || expression?.type !== 'AwaitExpression') return false;
-    const wait = unwrap(expression.argument);
-    return wait?.type === 'CallExpression'
+  const directAdmissionCalls = acquire.body.body.filter((statement) => {
+    let expression = null;
+    if (statement.type === 'ExpressionStatement') {
+      expression = unwrap(statement.expression);
+    } else if (statement.type === 'VariableDeclaration'
+      && statement.kind === 'const'
+      && statement.declarations.length === 1) {
+      expression = unwrap(statement.declarations[0].init);
+    }
+    if (expression?.type === 'AwaitExpression') expression = unwrap(expression.argument);
+    const wait = expression;
+    return call(wait, ['waitForExecutionSlot'])
       && wait.arguments.length >= 2
       && identifier(wait.arguments[0], 'manager')
-      && identifier(wait.arguments[1], 'requestId');
+      && identifier(wait.arguments[1], 'requestId')
+      && (wait.arguments.length === 2
+        || (wait.arguments.length === 3
+          && member(wait.arguments[2], ['options', 'signal'])));
+  });
+  const admissionWaits = directAdmissionCalls.filter((statement) => {
+    const expression = statement.type === 'ExpressionStatement'
+      ? unwrap(statement.expression)
+      : unwrap(statement.declarations[0].init);
+    return expression?.type === 'AwaitExpression';
   });
   const indexes = acquire.body.body.filter((statement) => directCallStatement(
     statement,
@@ -1841,15 +2587,97 @@ function managerIsolationAstContract(source) {
   const supervisorIndex = acquire.body.body.indexOf(supervisor.statement);
   const recordIndex = acquire.body.body.indexOf(record.statement);
   const indexIndex = indexes.length === 1 ? acquire.body.body.indexOf(indexes[0]) : -1;
-  if (supervisorIndex < 0 || recordIndex <= supervisorIndex || indexIndex <= recordIndex) return false;
+  const admissionIndex = admissionWaits.length === 1
+    ? acquire.body.body.indexOf(admissionWaits[0]) : -1;
+  if (supervisorIndex < 0 || recordIndex <= supervisorIndex || indexIndex <= recordIndex
+    || !directStatementReachable(acquire.body, supervisor.statement)
+    || !directStatementReachable(acquire.body, record.statement)
+    || !directStatementReachable(acquire.body, indexes[0])) return false;
+  if (directAdmissionCalls.length > 0 && (
+    directAdmissionCalls.length !== 1
+    || admissionWaits.length !== 1
+    || admissionIndex < 0
+    || admissionIndex >= supervisorIndex
+    || !directStatementReachable(acquire.body, admissionWaits[0])
+  )) return false;
+  const executionMutationMethods = ['add', 'clear', 'delete', 'set'];
+  const exactExecutionMutations = (functionNode, expected) => {
+    const actual = protectedCollectionMutationCalls(
+      functionNode,
+      ['manager', 'executions'],
+      executionMutationMethods,
+    );
+    return actual.length === expected.length && expected.every((entry) => actual.some(
+      (mutation) => mutation.method === entry.method && mutation.node === entry.node,
+    ));
+  };
+  const indexCall = unwrap(indexes[0].expression);
   const releases = directDeclarators(acquire.body, 'release');
   const releaseFunction = releases.length === 1 ? unwrap(releases[0].declaration.init) : null;
   if (releases.length > 1
     || (releases.length === 1 && releases[0].statement.kind !== 'const')
-    || (releaseFunction && !exactIdentifierParameters(releaseFunction, []))
+    || (releaseFunction && (releaseFunction.type !== 'ArrowFunctionExpression'
+      || releaseFunction.body?.type !== 'BlockStatement'
+      || !exactIdentifierParameters(releaseFunction, [])))
     || countAssignments(acquire, (left) => patternNames(left).includes('release')) !== 0) return false;
+  let releaseDeleteCall = null;
+  if (releaseFunction) {
+    const deletes = releaseFunction.body.body.filter((statement) => directCallStatement(
+      statement, ['manager', 'executions', 'delete'], [(value) => identifier(value, 'requestId')],
+    ));
+    const stops = releaseFunction.body.body.filter((statement) => (
+      directCallStatement(statement, ['supervisor', 'stop'], [], { await_: true })
+      || exactReturn(statement, (value) => call(value, ['supervisor', 'stop'], []))
+      || exactReturn(
+        statement,
+        (value) => call(value, ['supervisor', 'stop'], []),
+        { await_: true },
+      )
+    ));
+    let stopCallCount = 0;
+    visit(releaseFunction.body, (node) => {
+      if (call(node, ['supervisor', 'stop'], [])) stopCallCount += 1;
+    });
+    releaseDeleteCall = unwrap(deletes[0]?.expression);
+    if (deletes.length !== 1 || stops.length !== 1
+      || stopCallCount !== 1
+      || !directStatementReachable(releaseFunction.body, deletes[0])
+      || !directStatementReachable(releaseFunction.body, stops[0])
+      || releaseFunction.body.body.indexOf(deletes[0])
+        >= releaseFunction.body.body.indexOf(stops[0])
+      || !exactExecutionMutations(releaseFunction, [
+        { method: 'delete', node: releaseDeleteCall },
+      ])) return false;
+  }
+  const acquireMutations = [{ method: 'set', node: indexCall }];
+  if (releaseDeleteCall) acquireMutations.push({ method: 'delete', node: releaseDeleteCall });
+  if (!exactExecutionMutations(acquire, acquireMutations)) return false;
+  for (const helper of [releaseRecord, drainRecord].filter(Boolean)) {
+    const deletes = helper.body.body.filter((statement) => directCallStatement(
+      statement,
+      ['manager', 'executions', 'delete'],
+      [(value) => identifier(value, 'requestId')],
+    ));
+    const deleteCall = unwrap(deletes[0]?.expression);
+    if (deletes.length !== 1
+      || !directStatementReachable(helper.body, deletes[0])
+      || !exactExecutionMutations(helper, [{ method: 'delete', node: deleteCall }])) return false;
+  }
+  if (managerFunctions.some((functionNode) => (
+    functionNode !== acquire
+    && functionNode !== releaseRecord
+    && functionNode !== drainRecord
+    && !exactExecutionMutations(functionNode, [])
+  ))) return false;
+  const successReturns = directStatementEntriesIncludingTryBlock(acquire.body).filter((entry) => (
+    managerLeaseReturn(entry.statement, { releaseFunction })
+  ));
+  if (successReturns.length !== 1 || !directEntryReachable(acquire.body, successReturns[0])) return false;
+  const successOuter = successReturns[0].wrapper || successReturns[0].statement;
+  if (acquire.body.body.indexOf(indexes[0]) >= acquire.body.body.indexOf(successOuter)) return false;
   const drain = topFunction(program, 'drainExecutionRecord');
-  if (drain && !genuineTimeoutInFunction(drain, ['timeoutMs', 'boundedTimeout'])) return false;
+  if (drain && (!finitePositiveTimeoutBinding(drain)
+    || !genuineTimeoutInFunction(drain, ['boundedTimeout']))) return false;
   return true;
 }
 
@@ -1883,7 +2711,10 @@ function managerPressureAstContract(source) {
         || (wait.arguments.length === 3
           && member(wait.arguments[2], ['options', 'signal'])));
   });
-  return waits.length === 1
+  return Boolean(managerPressureBranch(waitForSlot))
+    && waits.length === 1
+    && directStatementReachable(acquire.body, waits[0])
+    && directStatementReachable(acquire.body, supervisor.statement)
     && acquire.body.body.indexOf(waits[0]) < acquire.body.body.indexOf(supervisor.statement);
 }
 

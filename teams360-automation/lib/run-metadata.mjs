@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { validatePinnedQworkUiUrl } from './config.mjs';
+import { validateQworkCapabilitiesReadbackEvidence } from '../../src/lib/qwork-capabilities-readback.mjs';
 
 const PINNED_FIELDS = [
   'host.product',
@@ -38,6 +39,8 @@ const PINNED_FIELDS = [
   'release_observation.provenance.qbot_core_digest',
   'release_observation.provenance.desktop_agent_runtime.sha256',
   'release_observation.provenance.ui_code_manifest.sha256',
+  'release_observation.capabilities_readback.schema',
+  'release_observation.capabilities_readback.summary_signature_sha256',
   'claude_skill_call_canonicalization_policy.schema_version',
   'claude_skill_call_canonicalization_policy.flag_name',
   'claude_skill_call_canonicalization_policy.runner.readable',
@@ -53,6 +56,144 @@ const PINNED_FIELDS = [
 
 function readPath(value, dotted) {
   return dotted.split('.').reduce((current, key) => current?.[key], value);
+}
+
+const RUN_METADATA_OBSERVATION_PHASES = new Set([
+  'startup',
+  'replacement-renderer',
+  'run-final',
+]);
+
+function strictIsoTimestamp(value) {
+  if (typeof value !== 'string' || !value) return Number.NaN;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
+    ? parsed
+    : Number.NaN;
+}
+
+function runMetadataChecks(metadata, field, label) {
+  if (!Object.hasOwn(metadata || {}, field) || metadata[field] === undefined) return [];
+  if (!Array.isArray(metadata[field])) {
+    throw new Error(`Run metadata ${label} must be an array when present.`);
+  }
+  return metadata[field];
+}
+
+function assertRunMetadataObservationSequence(metadata, { allowSinglePhaseFragment = false } = {}) {
+  const checks = runMetadataChecks(
+    metadata,
+    'release_observation_checks',
+    'release observation checks',
+  );
+  const policyChecks = runMetadataChecks(
+    metadata,
+    'claude_skill_call_canonicalization_policy_checks',
+    'canonicalization policy checks',
+  );
+  const policy = metadata?.claude_skill_call_canonicalization_policy;
+  if (policy == null && policyChecks.length > 0) {
+    throw new Error('Run metadata canonicalization policy checks require a policy observation.');
+  }
+  if (policy != null && policyChecks.length === 0) {
+    throw new Error('Run metadata canonicalization policy requires phase checks.');
+  }
+  if (checks.length === 0) {
+    if (policyChecks.length > 0) {
+      throw new Error(
+        'Run metadata canonicalization policy checks must align with release observation phases.',
+      );
+    }
+    return;
+  }
+  let previousObservedAt = Number.NaN;
+  for (const [index, check] of checks.entries()) {
+    const phase = String(check?.phase || '');
+    if (!RUN_METADATA_OBSERVATION_PHASES.has(phase)) {
+      throw new Error(`Run metadata release observation check ${index + 1} has invalid phase.`);
+    }
+    const observedAt = strictIsoTimestamp(check?.observed_at);
+    if (!Number.isFinite(observedAt)) {
+      throw new Error(`Run metadata release observation check ${index + 1} has invalid observed_at.`);
+    }
+    if (Number.isFinite(previousObservedAt) && observedAt < previousObservedAt) {
+      throw new Error('Run metadata release observation checks are not chronological.');
+    }
+    previousObservedAt = observedAt;
+  }
+  if (!(allowSinglePhaseFragment && checks.length === 1)) {
+    const phases = checks.map((check) => String(check.phase));
+    if (phases[0] !== 'startup'
+      || phases.slice(1, -1).some((phase) => phase !== 'replacement-renderer')
+      || (phases.length > 1
+        && !['replacement-renderer', 'run-final'].includes(phases.at(-1)))) {
+      throw new Error(
+        'Run metadata release observation phases must be startup, zero or more '
+        + 'replacement-renderer checks, then an optional final run-final check.',
+      );
+    }
+  }
+
+  if (policyChecks.length > 0
+    && (policyChecks.length !== checks.length
+      || policyChecks.some((check, index) => (
+        String(check?.phase || '') !== String(checks[index]?.phase || '')
+        || String(check?.observed_at || '') !== String(checks[index]?.observed_at || '')
+      )))) {
+    throw new Error(
+      'Run metadata canonicalization policy checks must align with release observation phases.',
+    );
+  }
+}
+
+function assertRunMetadataCapabilities(metadata, options = {}) {
+  assertRunMetadataObservationSequence(metadata, options);
+  const observation = metadata?.release_observation;
+  const checks = runMetadataChecks(
+    metadata,
+    'release_observation_checks',
+    'release observation checks',
+  );
+  const policyChecks = runMetadataChecks(
+    metadata,
+    'claude_skill_call_canonicalization_policy_checks',
+    'canonicalization policy checks',
+  );
+  if (observation == null) {
+    if (metadata?.claude_skill_call_canonicalization_policy != null
+      || checks.length > 0
+      || policyChecks.length > 0) {
+      throw new Error(
+        'Run metadata without a release observation cannot retain release or policy checks.',
+      );
+    }
+    return;
+  }
+  const baseline = validateQworkCapabilitiesReadbackEvidence(
+    observation.capabilities_readback,
+  );
+  if (!baseline.valid) {
+    throw new Error(
+      'Run metadata release observation has invalid QWork capabilities evidence: '
+      + baseline.errors.join(','),
+    );
+  }
+  const expectedSignature = observation.capabilities_readback.summary_signature_sha256;
+  if (checks.length === 0) {
+    throw new Error('Run metadata release observation requires capabilities checks.');
+  }
+  for (const [index, check] of checks.entries()) {
+    const validation = validateQworkCapabilitiesReadbackEvidence(check?.capabilities_readback);
+    if (!validation.valid) {
+      throw new Error(
+        `Run metadata release observation check ${index + 1} has invalid QWork capabilities evidence: `
+        + validation.errors.join(','),
+      );
+    }
+    if (check.capabilities_readback.summary_signature_sha256 !== expectedSignature) {
+      throw new Error(`Run metadata release observation check ${index + 1} capabilities drift detected.`);
+    }
+  }
 }
 
 export function sha256File(file) {
@@ -150,6 +291,17 @@ export function buildTeamsRunMetadata({
   if (qworkReleaseIdentityReadback && qworkReleaseIdentityReadback.ok !== true) {
     throw new Error('Run metadata rejects an invalid authoritative QWork release identity readback.');
   }
+  const capabilitiesValidation = qworkReleaseIdentityReadback
+    ? validateQworkCapabilitiesReadbackEvidence(
+      qworkReleaseIdentityReadback.capabilities_readback,
+    )
+    : null;
+  if (capabilitiesValidation && !capabilitiesValidation.valid) {
+    throw new Error(
+      'Run metadata rejects an invalid authoritative QWork capabilities readback: '
+      + capabilitiesValidation.errors.join(','),
+    );
+  }
   const observedRelease = qworkReleaseIdentityReadback?.observed || {};
   return {
     schema_version: 2,
@@ -192,6 +344,7 @@ export function buildTeamsRunMetadata({
       observed_sha256: String(qworkReleaseIdentityReadback.observed_sha256 || ''),
       state_sha256: String(qworkReleaseIdentityReadback.provenance?.state?.sha256 || ''),
       envelope_sha256: String(qworkReleaseIdentityReadback.provenance?.envelope?.sha256 || ''),
+      capabilities_readback: structuredClone(qworkReleaseIdentityReadback.capabilities_readback),
       ok: qworkReleaseIdentityReadback.ok === true,
     }] : [],
     claude_skill_call_canonicalization_policy: claudeSkillCallCanonicalizationPolicy
@@ -221,11 +374,16 @@ export function buildTeamsRunMetadata({
 
 export function writePinnedRunMetadata(outDir, metadata) {
   const directory = path.resolve(outDir);
-  fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, 'run-metadata.json');
+  const existingFile = fs.existsSync(file);
+  assertRunMetadataCapabilities(metadata, {
+    allowSinglePhaseFragment: existingFile,
+  });
+  fs.mkdirSync(directory, { recursive: true });
   let merged = metadata;
-  if (fs.existsSync(file)) {
+  if (existingFile) {
     const existing = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assertRunMetadataCapabilities(existing);
     for (const field of PINNED_FIELDS) {
       if (String(readPath(existing, field) ?? '') !== String(readPath(metadata, field) ?? '')) {
         throw new Error(
@@ -256,6 +414,7 @@ export function writePinnedRunMetadata(outDir, metadata) {
       ])],
     };
   }
+  assertRunMetadataCapabilities(merged);
   const temporary = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(temporary, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
