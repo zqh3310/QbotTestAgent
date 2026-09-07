@@ -1670,20 +1670,62 @@ Case：`SIT-MEM-001`、`BETA-CHAT-001`、`BETA-CHAT-002`、`BETA-CHAT-009`、
 即使同步重算 `content_sha256`，仍必须由语义重放或汇总一致性检查判为 `BLOCKED`。
 
 MR !1559 后继架构必须生成
-`qbot-qwork-release-blocking-risk-attestation/v4`：注释、模板、正则和普通字符串中的伪代码
-不能满足风险断言；`onExit` 的 typed failure、acquisition 到 pressure admission 的可达
+`qbot-qwork-release-blocking-risk-attestation/v5`，并与
+`qbot-release-intake/1.7.0` 绑定：注释、模板、正则和普通字符串中的伪代码
+不能满足风险断言。词法过滤后必须以固定 `acorn@8.15.0` 解析 Acorn ECMAScript AST，
+按真实函数/类/分支作用域验证控制流、值流和返回对象；解析失败、恒假路径、局部同名
+shadow/遮蔽、关键 identity/manager/child/lease rebind/重绑、错误 factory 返回、伪
+timeout/cleanup 或 manager/context 时序断裂必须 fail-closed，且任一词法或 AST 检查失败
+都不得生成 `VERIFIED`。遮蔽范围必须覆盖当前被审计函数自身和嵌套函数的参数；默认/解构
+参数、普通/复合/update/解构赋值均属于绑定或写入，禁止只匹配裸 Identifier。
+每个受保护函数、方法和回调（包括零参数回调）必须校验精确参数 schema；关键引用必须
+解析到该函数声明的预期参数或受保护外层声明。参数改名后遗留的同名未绑定引用、属性别名，
+以及嵌套 `FunctionDeclaration` 参数遮蔽都必须 `BLOCKED`。
+受保护 helper、factory、builtin、class 和身份常量在整个源文件 AST 中必须保持稳定，禁止
+普通/复合/update/解构/`for-in`/`for-of` 写入；受信任全局不得被顶层声明遮蔽。supervisor 的
+cancellation/termination/message helper、context wrapper 双 helper 与 desktop context helper
+必须通过唯一 `const` 解构绑定到精确 `require` 路径，context wrapper 和 implementation 还必须
+唯一、精确导出同名 helper。manager/context/desktop 的 manager factory/executions、
+`record.supervisor`、`supervisor.acquire`、context release 和 lease request/drain/release 等关键
+成员路径禁止点式或静态计算属性赋值、update、解构、循环写入和 `delete`，也禁止通过
+`Object.defineProperty/defineProperties/assign` 或 `Reflect.set/deleteProperty` 改写受保护
+receiver；动态属性名、动态 descriptor/source 或 spread 必须 fail-closed。对无关对象执行
+同类操作、无关 helper、无关属性只读和等价属性重排不得被误阻断。
+`onExit` 的 typed failure、acquisition 到 pressure admission 的可达
 调用链、同一 supervisor factory 的 `maxPendingRequests:1/maxRestarts:0`、同一 acquisition
 内的 request set/release delete+stop，以及 desktop 同函数同 `try/finally` 的 lease
-acquire/release 必须逐项成立。desktop 可直接 awaited release，也可使用受严格绑定的
+acquire/release 必须逐项成立。manager admission 的 awaited wait 必须早于 supervisor/record
+分配和 `executions.set` 建索引；completed drain 与 incomplete release 都必须 awaited，timeout
+必须规范化为有限正数。controller 的 runner factory 必须返回实际创建、随后绑定并使用的
+精确 Worker 对象，不能创建真实 Worker 后返回无关对象。controller 必须固定单 turn identity、
+双向 envelope 方向、
+message/error/exit 监听和 accept-before-forward 拒绝路径；request 取消必须 awaited 获取
+pending，abort 用同一 cancel identity 调用 `supervisor.cancel(..., 'user-requested')`；
+`supervisor`、`identity`、`signal` 和 cancel identity 不得重绑，abort listener 必须在
+already-aborted 检查和 `return await pending` 前注册，禁止移至返回后的不可达代码。
+deadline/cancel timeout 必须在同一 settlement 闭包中定向 terminate child，resolve/reject 同时清理
+两个 timer；supervisor-message 和 termination 必须把 identity/sequence、pending 终结、child
+终止与单航次清理绑定到真实可达分支；cleanup 必须和真实
+`new Promise(resolve => setTimeout(resolve, finiteTimeout))` 同处 `Promise.race`，伪 timer、
+未入 race 的 cleanup 或无限 timeout 一律阻断，且空 target guard 必须早于首次
+`target.pid`/flight 解引用。
+
+desktop 可直接 awaited release，也可使用受严格绑定的
 `createExecutionWorkerContextUsageLease` helper delegation：desktop 必须顶层引入
 `execution-worker-context-usage.cjs`，该 wrapper 再顶层引入
 `execution-worker-context-usage-lease.cjs`，两者唯一导出同名 helper，并由实现对完成 lease
-`drain(...)`、对未完成 lease awaited `release()`。v4 必须固定审计 9 个受保护源码文件，
-新增的两个路径精确为
-`electron/host-core/agent/execution-worker-context-usage.cjs` 与
-`electron/host-core/agent/execution-worker-context-usage-lease.cjs`。
-`qbot-release-intake/1.6.1` 及更旧 intake tool version、阻断风险 v2/v3 证明或任何错误作用域
-均必须 fail-closed，`BLOCKED` 并要求新 intake，不得通过重算报告 SHA 复用。
+awaited `drain(...)`、对未完成 lease awaited `release()`。desktop manager/supervisor/
+identity/signal 禁止重绑，acquire 必须精确透传 `{ signal }`；`completed` 只能从初始
+`false` 被唯一 `observeTerminal` 按真实 terminal outcome 更新；creator/release 参数、默认值
+或解构写入不能遮蔽 helper/completed，release 不能强制改写。
+`successor_ast_contracts` 九项任一
+为 `false` 时必须保持 `verified=false/status=BLOCKED`，不得生成 `VERIFIED`。
+v5 必须固定审计 13 个受保护源码文件，
+并在 v4 的 9 个文件上新增 `execution-worker-controller.cjs`、
+`execution-worker-cancellation.cjs`、`execution-worker-supervisor-message.cjs` 和
+`execution-worker-termination.cjs`。
+`qbot-release-intake/1.6.2` 及更旧 intake tool version、阻断风险 v2/v3/v4 证明或任何错误
+作用域/调用链/取消因果链均必须 fail-closed，`BLOCKED` 并要求新 intake，不得通过重算报告 SHA 复用。
 
 边界优先从上次已接受 intake HEAD 或 Casebook 设计基线 commit 到当前 release HEAD；只有
 祖先关系无法证明时才兜底最近 24 小时（日常窗口与上轮重叠 48 小时），每日回归至少回看

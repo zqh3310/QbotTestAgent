@@ -537,6 +537,11 @@ const qworkReleaseSourceContractsSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
   'utf8',
 );
+const qworkReleaseBlockingRiskAstSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-release-blocking-risk-ast.mjs'),
+  'utf8',
+);
+const rootPackageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const coreBetaProtocolSource = fs.readFileSync(path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'), 'utf8');
 const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
 const qworkReleaseOrchestrator = fs.readFileSync(path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs'), 'utf8');
@@ -544,6 +549,22 @@ assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-plan\/v2/);
 assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-state\/v2/);
 assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-integrity\/v2/);
 assert.match(qworkReleaseOrchestrator, /qbot-qwork-release-test-event\/v2/);
+assert.match(qworkReleaseBlockingRiskAstSource, /import \{ parse \} from 'acorn';/);
+assert.match(qworkReleaseBlockingRiskAstSource, /ecmaVersion: 'latest'[\s\S]*sourceType: 'script'/);
+assert.match(qworkReleaseBlockingRiskAstSource, /export function auditQworkSuccessorAstContracts/);
+assert.equal(rootPackageJson.dependencies?.acorn, '8.15.0', 'Acorn 必须固定精确版本，禁止范围依赖漂移');
+const astSyntaxCheck = 'node --check src/lib/qwork-release-blocking-risk-ast.mjs';
+const blockingRiskSyntaxCheck = 'node --check src/lib/qwork-release-blocking-risks.mjs';
+assert.equal(
+  rootPackageJson.scripts?.check?.split(' && ').filter((step) => step === astSyntaxCheck).length,
+  1,
+  'npm run check 必须精确包含一次 AST 审计模块语法检查',
+);
+assert.equal(
+  rootPackageJson.scripts.check.indexOf(astSyntaxCheck) < rootPackageJson.scripts.check.indexOf(blockingRiskSyntaxCheck),
+  true,
+  'AST 审计模块必须先于主 blocking-risk 模块执行语法检查',
+);
 assert.match(qworkReleaseOrchestrator, /\/usr\/bin\/lockf[\s\S]*QBOT_QWORK_CONTROL_LOCK_ROOT/);
 assert.match(qworkReleaseOrchestrator, /captureDirectoryGuard[\s\S]*assertDirectoryGuard/);
 assert.match(qworkReleaseOrchestrator, /\.staging-\$\{process\.pid\}[\s\S]*renameSync\(stagingRoot, files\.root\)/);
@@ -581,19 +602,79 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
-  assert.match(documentText, /qbot-release-intake\/1\.6\.2/, `${documentName} 必须固定当前 intake tool 1.6.2`);
-  assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v4/, `${documentName} 必须固定当前 blocking-risk v4`);
+  assert.match(documentText, /qbot-release-intake\/1\.7\.0/, `${documentName} 必须固定当前 intake tool 1.7.0`);
+  assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v5/, `${documentName} 必须固定当前 blocking-risk v5`);
   assert.match(
     documentText,
-    /qbot-release-intake\/1\.6\.1[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
+    /Acorn[\s\S]{0,240}AST[\s\S]{0,500}恒假[\s\S]{0,500}(?:shadow|遮蔽)[\s\S]{0,500}(?:rebind|重绑)[\s\S]{0,500}fail-closed/,
+    `${documentName} 必须明确词法与 AST 双层语义门禁及 fail-closed 规则`,
+  );
+  assert.match(
+    documentText,
+    /遮蔽[\s\S]{0,240}当前被审计函数自身[\s\S]{0,180}嵌套函数[\s\S]{0,180}(?:默认参数|默认\/解构)[\s\S]{0,160}解构赋值[\s\S]{0,180}(?:裸 Identifier|只匹配裸 Identifier)/,
+    `${documentName} 必须把自身参数和解构写入纳入 AST 绑定审计`,
+  );
+  assert.match(
+    documentText,
+    /manager admission[\s\S]{0,180}awaited wait[\s\S]{0,220}supervisor\/record[\s\S]{0,180}executions\.set/,
+    `${documentName} 必须固定 manager admission-before-allocation/index 时序`,
+  );
+  assert.match(
+    documentText,
+    /runner factory[\s\S]{0,240}精确 Worker 对象[\s\S]{0,180}返回无关对象/,
+    `${documentName} 必须固定 factory 返回实际使用对象的值流合同`,
+  );
+  assert.match(
+    documentText,
+    /new Promise\(resolve => setTimeout\(resolve, finiteTimeout\)\)[\s\S]{0,160}Promise\.race[\s\S]{0,240}(?:无限 timeout|无限 timeout 均不得通过)/,
+    `${documentName} 必须固定真实有限 timer 与 cleanup race 合同`,
+  );
+  assert.match(
+    documentText,
+    /(?:已完成|完成) lease[\s\S]{0,80}awaited[\s\S]{0,40}drain\([\s\S]{0,120}未完成 lease[\s\S]{0,80}awaited[\s\S]{0,40}release\(/,
+    `${documentName} 必须固定 completed drain 与 incomplete release 均 awaited`,
+  );
+  assert.match(
+    documentText,
+    /successor_ast_contracts[\s\S]{0,100}(?:任一|九项任一)[\s\S]{0,80}false[\s\S]{0,120}status=BLOCKED[\s\S]{0,100}不得生成 `VERIFIED`/,
+    `${documentName} 必须明确任一 AST 子合同失败即阻断主风险证明`,
+  );
+  assert.match(
+    documentText,
+    /abort listener[\s\S]{0,180}(?:already-aborted|already-aborted 检查)[\s\S]{0,120}return await pending[\s\S]{0,160}不可达/,
+    `${documentName} 必须固定 abort listener 的可达注册时序`,
+  );
+  assert.match(
+    documentText,
+    /空 target guard[\s\S]{0,100}(?:早于|之前)[\s\S]{0,100}target\.pid/,
+    `${documentName} 必须固定 termination 空 target guard 的先行顺序`,
+  );
+  assert.match(
+    documentText,
+    /(?:desktop 的 |desktop )manager\/supervisor\/[\s\S]{0,120}signal[\s\S]{0,160}acquire[\s\S]{0,100}\{ signal \}/,
+    `${documentName} 必须固定 desktop owner 与 signal 精确值流`,
+  );
+  assert.match(
+    documentText,
+    /completed[\s\S]{0,180}(?:唯一的 |唯一 )?observeTerminal[\s\S]{0,180}release[\s\S]{0,120}(?:强制改写|强制)/,
+    `${documentName} 必须固定 completed 的唯一真实写入者`,
+  );
+  assert.match(
+    documentText,
+    /关键[\s\S]{0,20}成员[\s\S]{0,10}路径[\s\S]{0,500}`delete`[\s\S]{0,180}Object\.defineProperty\/defineProperties\/assign[\s\S]{0,180}Reflect\.set\/deleteProperty[\s\S]{0,220}受保护[\s\S]{0,20}receiver[\s\S]{0,220}动态[\s\S]{0,160}fail-closed[\s\S]{0,220}无关对象/,
+    `${documentName} 必须固定直接、delete 和反射式成员篡改保护及无关对象控制组`,
+  );
+  assert.match(
+    documentText,
+    /qbot-release-intake\/1\.6\.2[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
     `${documentName} 必须明确旧 intake tool 不可复用`,
   );
   assert.match(
     documentText,
-    /createExecutionWorkerContextUsageLease[\s\S]{0,500}execution-worker-context-usage\.cjs[\s\S]{0,500}execution-worker-context-usage-lease\.cjs[\s\S]{0,500}9 个受保护源码文件/,
-    `${documentName} 必须固定 v4 helper delegation 和 9 个受保护文件`,
+    /createExecutionWorkerContextUsageLease[\s\S]{0,500}execution-worker-context-usage\.cjs[\s\S]{0,500}execution-worker-context-usage-lease\.cjs[\s\S]{0,500}v5[\s\S]{0,120}13 个受保护源码文件[\s\S]{0,500}execution-worker-controller\.cjs[\s\S]{0,500}execution-worker-cancellation\.cjs[\s\S]{0,500}execution-worker-supervisor-message\.cjs[\s\S]{0,500}execution-worker-termination\.cjs/,
+    `${documentName} 必须固定 v5 helper delegation、13 个受保护文件和新架构边界`,
   );
-  assert.match(documentText, /阻断风险 v2\/v3 证明[\s\S]{0,160}fail-closed/, `${documentName} 必须对旧 blocking-risk schema fail-closed`);
+  assert.match(documentText, /阻断风险 v2\/v3\/v4 证明[\s\S]{0,200}fail-closed/, `${documentName} 必须对旧 blocking-risk schema fail-closed`);
   assert.match(
     documentText,
     /v2[\s\S]*lockf[\s\S]*dev\/inode\/uid\/mode[\s\S]*staging[\s\S]*write-ahead transaction[\s\S]*remote-tracking ref/,
@@ -836,12 +917,15 @@ const {
   auditQworkReleaseBlockingRisk: auditCasebookDesignBlockingRisk,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-blocking-risks.mjs')).href);
 const {
+  auditQworkSuccessorAstContracts: auditCasebookDesignSuccessorAstContracts,
+} = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-blocking-risk-ast.mjs')).href);
+const {
   QWORK_RELEASE_INTAKE_TOOL_VERSION: casebookDesignIntakeToolVersion,
   mapReleaseImpact: mapCasebookDesignReleaseImpact,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-intake.mjs')).href);
-assert.equal(casebookDesignBlockingRiskSchema, 'qbot-qwork-release-blocking-risk-attestation/v4');
-assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.6.2');
-assert.equal(casebookDesignSuccessorPaths.length, 9, 'MR !1559 v4 必须精确审计 9 个受保护源码文件');
+assert.equal(casebookDesignBlockingRiskSchema, 'qbot-qwork-release-blocking-risk-attestation/v5');
+assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.7.0');
+assert.equal(casebookDesignSuccessorPaths.length, 13, 'MR !1559 v5 必须精确审计 13 个受保护源码文件');
 const casebookDesignStableValue = (value) => {
   if (Array.isArray(value)) return value.map(casebookDesignStableValue);
   if (value && typeof value === 'object') {
@@ -908,11 +992,125 @@ const casebookDesignRiskFailures = [
   'execution_runner_pressure_admission_disconnected',
   'execution_runner_message_isolation_missing',
 ];
-const casebookDesignBlockingRisk = ({ blocked, head }) => {
-  const successorEntrySource = blocked ? '// blocked successor entry fixture' : `
-require('./host-core/agent/execution-worker-entry.cjs');
+const casebookDesignBlockingRisk = ({ blocked, head, mutateSource = null }) => {
+  const successorEntrySource = `
+require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();
 `;
-  const successorManagerSource = blocked ? '// blocked successor manager fixture' : `
+  const successorControllerSource = `
+const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
+const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
+const sameIdentity = (message, authority, fields) => authority
+  && fields.every((field) => message[field] === authority[field]);
+class ExecutionWorkerController {
+  constructor({
+    parentPort = process.parentPort,
+    createRunner = () => new Worker(require.resolve('./execution-worker-entry.cjs')),
+    exit = (code) => process.exit(code),
+  } = {}) {
+    Object.assign(this, { parentPort, createRunner, exit, runner: null, authority: null, turn: null,
+      heartbeat: null, stopped: false });
+  }
+  finish(code) {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.exit(code);
+  }
+  decode(raw, direction) {
+    try { return validateEnvelope(raw, { direction }); }
+    catch { this.finish(1); return null; }
+  }
+  onRunnerMessage(raw) {
+    if (this.stopped) return;
+    const message = this.decode(raw, 'worker-to-host');
+    if (!message || !sameIdentity(message, this.authority, AUTHORITY_FIELDS)) return;
+    if (message.operation === 'worker.heartbeat') return;
+    if (message.operation === 'worker.ready') this.startHeartbeat();
+    else if (message.operation !== 'worker.pressure'
+      && !sameIdentity(message, this.turn, TURN_FIELDS)) return;
+    this.parentPort.postMessage(message);
+  }
+  onRunnerError(error) {
+    this.finish(error ? 1 : 0);
+  }
+  onRunnerExit(code) {
+    this.finish(code === 0 ? 0 : 1);
+  }
+  initialize(message) {
+    if (this.authority) return false;
+    this.authority = message;
+    this.runner = this.createRunner();
+    this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+    this.runner.on('error', (error) => this.onRunnerError(error));
+    this.runner.on('exit', (code) => this.onRunnerExit(code));
+    return true;
+  }
+  acceptMessage(message) {
+    if (message.operation === 'worker.initialize') return this.initialize(message);
+    if (!sameIdentity(message, this.authority, AUTHORITY_FIELDS)) return false;
+    if (message.operation === 'worker.shutdown') { this.finish(0); return false; }
+    if (message.operation === 'execution.start') {
+      if (this.turn) return false;
+      this.turn = message;
+      return true;
+    }
+    if (!sameIdentity(message, this.turn, TURN_FIELDS)) return false;
+    return message.operation === 'context-usage.refresh'
+      ? message.payload.executionRequestId === this.turn.requestId
+      : message.requestId === this.turn.requestId;
+  }
+  onHostMessage(raw) {
+    if (this.stopped) return;
+    const message = this.decode(raw, 'host-to-worker');
+    if (!message || !this.acceptMessage(message)) return;
+    this.runner.postMessage(message);
+  }
+}
+function startExecutionWorkerController(options) {
+  return new ExecutionWorkerController(options);
+}
+module.exports = { startExecutionWorkerController };
+`;
+  const successorCancellationSource = `
+async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
+  const pending = supervisor.request(operation, identity, payload, options);
+  const cancelIdentity = identity;
+  const onAbort = () => {
+    supervisor.cancel(cancelIdentity, 'user-requested');
+  };
+  if (!signal) return await pending;
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    return await pending;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+function createExecutionWorkerRequestSettlement({
+  child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
+}) {
+  let cancellationTimer = null;
+  const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
+  const deadline = setTimeout(() => {
+    clear();
+    onDeadline();
+    reject(new Error('execution worker request deadline exceeded'));
+    if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
+  }, deadlineMs + 1);
+  return {
+    armCancellation: () => {
+      if (cancellationTimer) return;
+      cancellationTimer = setTimeout(() => {
+        void terminateChild(child, 'cancel-timeout');
+      }, Math.max(1, cancellationTimeoutMs));
+    },
+    resolve: (value) => { clear(); resolve(value); },
+    reject: (error) => { clear(); reject(error); },
+  };
+}
+module.exports = { createExecutionWorkerRequestSettlement, requestExecutionWorkerTurn };
+`;
+  const successorManagerSource = `
 function managerError(code, message) {
   const error = new Error(message);
   error.code = code;
@@ -930,7 +1128,11 @@ function waitForExecutionSlot(manager, requestId, signal) {
   return Promise.resolve(true);
 }
 function stopExecutionRecord(manager, requestId, record) {
-  return Promise.resolve().then(() => record.supervisor.stop());
+  if (record.stopPromise) return record.stopPromise;
+  record.stopPromise = Promise.resolve()
+    .then(() => record.supervisor.stop())
+    .finally(() => manager.drainingExecutions.delete(requestId));
+  return record.stopPromise;
 }
 function releaseExecutionRecord(manager, requestId, record) {
   if (record.released) return record.stopPromise;
@@ -938,13 +1140,19 @@ function releaseExecutionRecord(manager, requestId, record) {
   manager.executions.delete(requestId);
   return stopExecutionRecord(manager, requestId, record);
 }
-function drainExecutionRecord(manager, requestId, record, settlement) {
+function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
   manager.executions.delete(requestId);
-  return Promise.resolve(settlement).then(() => stopExecutionRecord(manager, requestId, record));
+  record.finalizationPromise = Promise.race([
+    Promise.resolve(settlement),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]).then(() => {
+    return stopExecutionRecord(manager, requestId, record);
+  });
+  return record.finalizationPromise;
 }
 function executionWorkerLease(manager, requestId, record) {
   return Object.freeze({
-    drain: (settlement) => drainExecutionRecord(manager, requestId, record, settlement),
+    drain: (settlement, options) => drainExecutionRecord(manager, requestId, record, settlement, options),
     release: () => releaseExecutionRecord(manager, requestId, record),
     supervisor: record.supervisor,
   });
@@ -974,14 +1182,111 @@ function createExecutionWorkerManager() {
   });
 }
 `;
-  const successorSupervisorSource = blocked ? '// blocked successor supervisor fixture' : `
+  const successorSupervisorSource = `
+const { createExecutionWorkerRequestSettlement } = require('./execution-worker-cancellation.cjs');
+const { createExecutionWorkerTerminator } = require('./execution-worker-termination.cjs');
+const {
+  handleExecutionWorkerEventMessage,
+  handleExecutionWorkerObserverMessage,
+} = require('./execution-worker-supervisor-message.cjs');
 function rejectPending(error) { return error; }
 function executionWorkerExitFailure(code, signal) { return { code, signal }; }
-const onExit = (code, signal) => {
-  rejectPending(executionWorkerExitFailure(code, signal));
+function createExecutionWorkerSupervisor() {
+  const pending = new Map();
+  let child = createChild();
+  const terminateOwnedChild = createExecutionWorkerTerminator({
+    processId, processTreeKiller, cleanupGraceMs: 250,
+  });
+  const terminateChild = (target = child, reason = 'terminated') => {
+    return terminateOwnedChild(target, reason);
+  };
+  const onMessage = (message) => {
+    if (message.operation === 'execution.event') {
+      handleExecutionWorkerEventMessage(message, { pending, postBrokerResult, terminateChild, child });
+      return;
+    }
+    if (message.operation === 'execution.observer') {
+      handleExecutionWorkerObserverMessage(message, { pending });
+      return;
+    }
+    if (isExecutionWorkerTerminalOperation(message.operation)) {
+      const item = pending.get(message.requestId);
+      if (!item || !item.matches(message)) return;
+      pending.delete(message.requestId);
+      item.resolve(message);
+      return;
+    }
+  };
+  const request = (operation, requestId) => new Promise((resolveRequest, reject) => {
+    const settlement = createExecutionWorkerRequestSettlement({
+      child, operation, deadlineMs, cancellationTimeoutMs, terminateChild,
+      onDeadline: () => pending.delete(requestId), resolve: resolveRequest, reject,
+    });
+    pending.set(requestId, settlement);
+  });
+  const stop = async () => {
+    const stoppedChild = child;
+    await terminateChild(stoppedChild, 'stop');
+    if (child === stoppedChild) child = null;
+  };
+  const onExit = (code, signal) => {
+    rejectPending(executionWorkerExitFailure(code, signal));
+  };
+  return { onExit, onMessage, request, stop };
+}
+`;
+  const successorSupervisorMessageSource = `
+function isReservedExecutionWorkerObserverCallback() { return true; }
+function dispatchExecutionEvent() {}
+function handleExecutionWorkerEventMessage(message, {
+  pending, postBrokerResult, terminateChild, child,
+}) {
+  const item = pending.get(message.requestId);
+  if (!item || !item.matches(message)) return;
+  if (message.sequence <= item.lastSequence) {
+    const error = new Error('execution worker emitted a non-monotonic event sequence');
+    pending.delete(message.requestId);
+    item.reject(error);
+    terminateChild(child, 'sequence-violation');
+    return;
+  }
+  dispatchExecutionEvent(item, message, postBrokerResult);
+}
+function handleExecutionWorkerObserverMessage(message, { pending }) {
+  const item = pending.get(message.requestId);
+  if (!item || !item.matches(message)
+    || !isReservedExecutionWorkerObserverCallback(message.payload?.callback)) return;
+  item.onEvent?.(message);
+}
+module.exports = {
+  handleExecutionWorkerEventMessage,
+  handleExecutionWorkerObserverMessage,
 };
 `;
-  const successorDesktopHostSource = blocked ? '// blocked successor desktop host fixture' : `
+  const successorTerminationSource = `
+function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanupGraceMs = 250 } = {}) {
+  const flights = new WeakMap();
+  return (target, reason = 'terminated') => {
+    if (!target) return Promise.resolve(false);
+    const existing = flights.get(target);
+    if (existing) return existing;
+    const pid = processId(target.pid);
+    const cleanup = Promise.resolve().then(() => processTreeKiller(pid, { reason }));
+    const flight = Promise.race([
+      cleanup,
+      new Promise((resolve) => setTimeout(resolve, cleanupGraceMs)),
+    ]).then(() => {
+      target.kill?.();
+      return true;
+    });
+    flights.set(target, flight);
+    void flight.finally(() => flights.delete(target));
+    return flight;
+  };
+}
+module.exports = { createExecutionWorkerTerminator };
+`;
+  const successorDesktopHostSource = `
 const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
 async function runAgentInExecutionWorker(supervisor, identity, signal) {
   if (!supervisor || supervisor.enabled !== true) throw new Error('execution worker unavailable');
@@ -995,35 +1300,74 @@ async function runAgentInExecutionWorker(supervisor, identity, signal) {
   }
 }
 `;
-  const successorContextUsageSource = blocked ? '// blocked successor context usage fixture' : `
-const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage-lease.cjs');
-module.exports = { createExecutionWorkerContextUsageLease };
+  const successorContextUsageSource = `
+const {
+  createExecutionWorkerContextUsageLease,
+  releaseExecutionWorkerLeaseAfterContextUsage,
+} = require('./execution-worker-context-usage-lease.cjs');
+module.exports = {
+  createExecutionWorkerContextUsageLease,
+  releaseExecutionWorkerLeaseAfterContextUsage,
+};
 `;
-  const successorContextUsageLeaseSource = blocked ? '// blocked successor context usage lease fixture' : `
-function createExecutionWorkerContextUsageLease() {
-  const release = async (executionWorkerLease, completed = false) => {
-    if (!executionWorkerLease) return;
-    if (completed) {
-      executionWorkerLease.drain(Promise.resolve(), { timeoutMs: 1 });
-      return;
-    }
-    await executionWorkerLease.release();
-  };
-  return Object.freeze({ release });
+  const successorContextUsageLeaseSource = `
+function releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs = 1000 } = {}) {
+  const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1000;
+  if (typeof lease?.drain === 'function') {
+    return Promise.resolve(lease.drain(settlement, { timeoutMs: boundedTimeout })).then(
+      () => true,
+      () => false,
+    );
+  }
+  return Promise.resolve(false);
 }
-module.exports = { createExecutionWorkerContextUsageLease };
+function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {
+  let completed = false;
+  let settle;
+  const settlement = new Promise((resolve) => { settle = resolve; });
+  return Object.freeze({
+    observeTerminal: (payload) => { completed = payload?.outcome === 'completed'; },
+    release: async (executionWorkerLease) => {
+      if (!executionWorkerLease) return false;
+      if (completed) {
+        await releaseExecutionWorkerLeaseAfterContextUsage(
+          executionWorkerLease,
+          settlement,
+          { timeoutMs },
+        );
+        return true;
+    }
+      await executionWorkerLease.release?.();
+      return true;
+    },
+    settle,
+  });
+}
+module.exports = {
+  createExecutionWorkerContextUsageLease,
+  releaseExecutionWorkerLeaseAfterContextUsage,
+};
 `;
   const fileSource = (filePath) => {
+    if (blocked) return `// blocked successor release source: ${filePath}\n`;
     if (filePath === 'electron/execution-worker.cjs') return successorEntrySource;
+    if (filePath === 'electron/host-core/agent/execution-worker-controller.cjs') return successorControllerSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-cancellation.cjs') return successorCancellationSource;
     if (filePath === 'electron/host-core/agent/execution-worker-manager.cjs') return successorManagerSource;
     if (filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') return successorSupervisorSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-supervisor-message.cjs') return successorSupervisorMessageSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-termination.cjs') return successorTerminationSource;
     if (filePath === 'electron/host-core/agent/desktop-host-context.cjs') return successorDesktopHostSource;
     if (filePath === 'electron/host-core/agent/execution-worker-context-usage.cjs') return successorContextUsageSource;
     if (filePath === 'electron/host-core/agent/execution-worker-context-usage-lease.cjs') return successorContextUsageLeaseSource;
     return `// observed successor release source: ${filePath}\n`;
   };
   const files = casebookDesignSuccessorPaths.map((filePath) => {
-    const source = fileSource(filePath);
+    const originalSource = fileSource(filePath);
+    const source = mutateSource ? mutateSource(filePath, originalSource) : originalSource;
     const bytes = Buffer.from(source, 'utf8');
     return {
       path: filePath,
@@ -1081,6 +1425,351 @@ module.exports = { createExecutionWorkerContextUsageLease };
     files,
   });
 };
+const casebookDesignSuccessorSourceMap = (mutateSource = null) => {
+  const risk = casebookDesignBlockingRisk({
+    blocked: false,
+    head: casebookDesignMr1560Contract.merge_commit_sha,
+    mutateSource,
+  });
+  return new Map(risk.source_files.map((file) => [
+    file.path,
+    Buffer.from(file.content_base64, 'base64').toString('utf8'),
+  ]));
+};
+const validSuccessorAst = auditCasebookDesignSuccessorAstContracts(
+  casebookDesignSuccessorSourceMap(),
+);
+assert.deepEqual(validSuccessorAst, {
+  cancellation: true,
+  controller: true,
+  desktop: true,
+  manager: true,
+  manager_pressure: true,
+  supervisor: true,
+  supervisor_exit: true,
+  supervisor_message: true,
+  termination: true,
+  passed: true,
+}, 'v5 AST 测试夹具必须形成且保留完整九项语义闭环');
+const casebookDesignAstMutation = (targetPath, search, replacement, label) => (filePath, source) => {
+  if (filePath !== targetPath) return source;
+  assert.equal(source.includes(search), true, `${label}: 正向夹具必须包含目标源码片段`);
+  return source.replace(search, replacement);
+};
+const deadAbortMutation = casebookDesignAstMutation(
+  'electron/host-core/agent/execution-worker-cancellation.cjs',
+  'if (signal.aborted) onAbort();',
+  'if (false && signal.aborted) onAbort();',
+  '恒假 abort 路径',
+);
+const deadAbortAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  deadAbortMutation,
+));
+assert.equal(deadAbortAst.cancellation, false, 'AST 门禁必须拒绝恒假 abort 路径');
+assert.equal(deadAbortAst.passed, false, '任一 AST 合同失败必须阻断整体证明');
+const deadAbortRisk = casebookDesignBlockingRisk({
+  blocked: false,
+  head: casebookDesignMr1560Contract.merge_commit_sha,
+  mutateSource: deadAbortMutation,
+});
+const deadAbortIsolationCheck = deadAbortRisk.checks.find(
+  (check) => check.id === 'execution_runner_message_isolation_missing',
+);
+assert.equal(deadAbortRisk.status, 'BLOCKED', '恒假 abort 必须经完整 blocking-risk 主审计阻断 release');
+assert.equal(deadAbortRisk.verified, false, '恒假 abort 的完整 blocking-risk 主审计不得 VERIFIED');
+assert.deepEqual(
+  deadAbortRisk.failure_ids,
+  ['execution_runner_message_isolation_missing'],
+  '恒假 abort 必须生成稳定的执行隔离 failure ID',
+);
+assert.equal(
+  deadAbortIsolationCheck?.observations?.successor_ast_contracts?.cancellation,
+  false,
+  '完整 blocking-risk 主审计必须透传 cancellation AST 子合同失败',
+);
+const reboundIdentityAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  (filePath, source) => filePath === 'electron/host-core/agent/execution-worker-cancellation.cjs'
+    ? source.replace(
+      'const cancelIdentity = identity;',
+      'let cancelIdentity = identity;\n  cancelIdentity = unrelatedIdentity;',
+    )
+    : source,
+));
+assert.equal(reboundIdentityAst.cancellation, false, 'AST 门禁必须拒绝 cancel identity 值流重绑');
+const shadowedReleaseAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  (filePath, source) => filePath === 'electron/host-core/agent/execution-worker-context-usage-lease.cjs'
+    ? source.replace(
+      'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {',
+      'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {\n  const releaseExecutionWorkerLeaseAfterContextUsage = async () => false;',
+    )
+    : source,
+));
+assert.equal(shadowedReleaseAst.desktop, false, 'AST 门禁必须拒绝 context release helper 局部遮蔽');
+const wrongRunnerFactoryAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-controller.cjs',
+    "createRunner = () => new Worker(require.resolve('./execution-worker-entry.cjs'))",
+    "createRunner = () => { new Worker(require.resolve('./execution-worker-entry.cjs')); return unrelatedRunner; }",
+    '错误 Worker factory 返回',
+  ),
+));
+assert.equal(wrongRunnerFactoryAst.controller, false, 'AST 门禁必须拒绝创建真实 Worker 后返回无关对象');
+assert.equal(wrongRunnerFactoryAst.passed, false, '错误 Worker factory 返回必须阻断整体证明');
+const fakeTerminationTimerAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-termination.cjs',
+    'new Promise((resolve) => setTimeout(resolve, cleanupGraceMs))',
+    'Promise.resolve(cleanupGraceMs)',
+    '伪 termination timer',
+  ),
+));
+assert.equal(fakeTerminationTimerAst.termination, false, 'AST 门禁必须拒绝未调用 setTimeout 的伪超时 Promise');
+assert.equal(fakeTerminationTimerAst.passed, false, '伪 termination timer 必须阻断整体证明');
+const unracedCleanupAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-termination.cjs',
+    '      cleanup,',
+    '      void cleanup,',
+    'cleanup 未进入 Promise.race',
+  ),
+));
+assert.equal(unracedCleanupAst.termination, false, 'AST 门禁必须拒绝 cleanup 未进入 Promise.race');
+assert.equal(unracedCleanupAst.passed, false, 'cleanup 未入 race 必须阻断整体证明');
+const lateManagerAdmissionAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-manager.cjs',
+    `  await waitForExecutionSlot(manager, requestId, options.signal);
+  const supervisor = createExecutionSupervisor(manager);
+  const record = createExecutionRecord(supervisor);
+  manager.executions.set(requestId, record);`,
+    `  const supervisor = createExecutionSupervisor(manager);
+  const record = createExecutionRecord(supervisor);
+  manager.executions.set(requestId, record);
+  await waitForExecutionSlot(manager, requestId, options.signal);`,
+    'manager admission 后置',
+  ),
+));
+assert.equal(lateManagerAdmissionAst.manager_pressure, false, 'AST 门禁必须要求 manager admission 早于 supervisor 分配与 execution index');
+assert.equal(lateManagerAdmissionAst.passed, false, 'manager admission 时序断裂必须阻断整体证明');
+const infiniteContextTimeoutAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    `const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1000;`,
+    'const boundedTimeout = Infinity;',
+    'context timeout 无限值',
+  ),
+));
+assert.equal(infiniteContextTimeoutAst.desktop, false, 'AST 门禁必须拒绝 context release 无限 timeout');
+assert.equal(infiniteContextTimeoutAst.passed, false, 'context 无限 timeout 必须阻断整体证明');
+const unawaitedCompletedDrainAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    '        await releaseExecutionWorkerLeaseAfterContextUsage(',
+    '        releaseExecutionWorkerLeaseAfterContextUsage(',
+    'completed drain 未等待',
+  ),
+));
+assert.equal(unawaitedCompletedDrainAst.desktop, false, 'AST 门禁必须拒绝 completed drain 未 awaited');
+assert.equal(unawaitedCompletedDrainAst.passed, false, '未等待 completed drain 必须阻断整体证明');
+const reboundCancellationSupervisorAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-cancellation.cjs',
+    '  const cancelIdentity = identity;',
+    '  const cancelIdentity = identity;\n  supervisor = unrelatedSupervisor;',
+    'cancellation supervisor 重绑',
+  ),
+));
+assert.equal(reboundCancellationSupervisorAst.cancellation, false, 'AST 门禁必须拒绝 cancellation supervisor 重绑');
+assert.equal(reboundCancellationSupervisorAst.passed, false, 'cancellation supervisor 重绑必须阻断整体证明');
+const unreachableAbortListenerMutation = (filePath, source) => {
+  if (filePath !== 'electron/host-core/agent/execution-worker-cancellation.cjs') return source;
+  const listener = "  signal.addEventListener('abort', onAbort, { once: true });\n";
+  const finallyBlock = `  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+`;
+  assert.equal(source.includes(listener), true, 'abort listener 后置变异必须找到 listener');
+  assert.equal(source.includes(finallyBlock), true, 'abort listener 后置变异必须找到 finally');
+  return source.replace(listener, '').replace(finallyBlock, `${finallyBlock}${listener}`);
+};
+const unreachableAbortListenerAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  unreachableAbortListenerMutation,
+));
+assert.equal(unreachableAbortListenerAst.cancellation, false, 'AST 门禁必须拒绝 return await pending 后的不可达 abort listener');
+assert.equal(unreachableAbortListenerAst.passed, false, '不可达 abort listener 必须阻断整体证明');
+const lateTerminationTargetGuardMutation = (filePath, source) => {
+  if (filePath !== 'electron/host-core/agent/execution-worker-termination.cjs') return source;
+  const guard = '    if (!target) return Promise.resolve(false);\n';
+  const dereference = '    const pid = processId(target.pid);\n';
+  assert.equal(source.includes(guard), true, 'termination guard 后置变异必须找到 guard');
+  assert.equal(source.includes(dereference), true, 'termination guard 后置变异必须找到 target 解引用');
+  return source.replace(guard, '').replace(dereference, `${dereference}${guard}`);
+};
+const lateTerminationTargetGuardAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  lateTerminationTargetGuardMutation,
+));
+assert.equal(lateTerminationTargetGuardAst.termination, false, 'AST 门禁必须要求空 target guard 早于 target.pid 解引用');
+assert.equal(lateTerminationTargetGuardAst.passed, false, 'termination guard 后置必须阻断整体证明');
+const reboundDesktopSupervisorAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/desktop-host-context.cjs',
+    'async function runAgentInExecutionWorker(supervisor, identity, signal) {',
+    'async function runAgentInExecutionWorker(supervisor, identity, signal) {\n  supervisor = unrelatedPool;',
+    'desktop supervisor 重绑',
+  ),
+));
+assert.equal(reboundDesktopSupervisorAst.desktop, false, 'AST 门禁必须拒绝 desktop acquire owner 重绑');
+assert.equal(reboundDesktopSupervisorAst.passed, false, 'desktop acquire owner 重绑必须阻断整体证明');
+const wrongDesktopSignalAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/desktop-host-context.cjs',
+    "supervisor.acquire('execution.start', identity, { signal })",
+    "supervisor.acquire('execution.start', identity, { signal: unrelatedSignal })",
+    'desktop acquire 错误 signal',
+  ),
+));
+assert.equal(wrongDesktopSignalAst.desktop, false, 'AST 门禁必须要求 desktop acquire 精确透传原始 signal');
+assert.equal(wrongDesktopSignalAst.passed, false, 'desktop acquire 错误 signal 必须阻断整体证明');
+const forcedCompletedAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    '      if (!executionWorkerLease) return false;',
+    '      if (!executionWorkerLease) return false;\n      completed = true;',
+    'context release 强制 completed',
+  ),
+));
+assert.equal(forcedCompletedAst.desktop, false, 'AST 门禁必须拒绝 release 路径强制 completed=true');
+assert.equal(forcedCompletedAst.passed, false, '伪造 completed 状态必须阻断整体证明');
+const destructuredManagerWriteAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };',
+    '  const manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };\n  ({ manager } = { manager: unrelatedManager });',
+    'manager 解构写入',
+  ),
+));
+assert.equal(destructuredManagerWriteAst.manager, false, 'AST 门禁必须拒绝 manager ObjectPattern 解构写入');
+assert.equal(destructuredManagerWriteAst.passed, false, 'manager 解构写入必须阻断整体证明');
+const releaseParameterCompletedShadowAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    '    release: async (executionWorkerLease) => {',
+    '    release: async (executionWorkerLease, completed = true) => {',
+    'release 参数遮蔽 completed',
+  ),
+));
+assert.equal(releaseParameterCompletedShadowAst.desktop, false, 'AST 门禁必须拒绝 release 参数遮蔽 completed');
+assert.equal(releaseParameterCompletedShadowAst.passed, false, 'release 参数遮蔽 completed 必须阻断整体证明');
+const creatorParameterHelperShadowAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {',
+    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000, releaseExecutionWorkerLeaseAfterContextUsage = async () => false } = {}) {',
+    'creator 参数遮蔽 release helper',
+  ),
+));
+assert.equal(creatorParameterHelperShadowAst.desktop, false, 'AST 门禁必须拒绝 creator 自身参数遮蔽 release helper');
+assert.equal(creatorParameterHelperShadowAst.passed, false, 'creator 参数遮蔽 helper 必须阻断整体证明');
+const destructuredCompletedWriteAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
+  casebookDesignAstMutation(
+    'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    '      if (!executionWorkerLease) return false;',
+    '      if (!executionWorkerLease) return false;\n      ({ completed } = { completed: true });',
+    'completed 解构写入',
+  ),
+));
+assert.equal(destructuredCompletedWriteAst.desktop, false, 'AST 门禁必须拒绝 ObjectPattern 强制 completed');
+assert.equal(destructuredCompletedWriteAst.passed, false, 'completed 解构写入必须阻断整体证明');
+const exactBindingMutationCases = [
+  ['cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs',
+    'const clear = () =>', 'const clear = (deadline = unrelatedTimer) =>', 'clear 参数遮蔽 deadline'],
+  ['cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs',
+    'armCancellation: () =>', 'armCancellation: (cancellationTimer) =>', 'armCancellation 参数遮蔽 timer'],
+  ['cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs',
+    '  const pending = supervisor.request',
+    '  function unrelated(signal) { return signal; }\n  const pending = supervisor.request',
+    '嵌套 FunctionDeclaration 参数遮蔽 signal'],
+  ['supervisor_message', 'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+    'function handleExecutionWorkerEventMessage(message, {',
+    'function handleExecutionWorkerEventMessage(renamedMessage, {', 'event message 形参改名'],
+  ['supervisor_message', 'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+    '  pending, postBrokerResult, terminateChild, child,\n}) {',
+    '  pending, postBrokerResult, terminateChild, child,\n}, dispatchExecutionEvent = unrelatedDispatch) {',
+    'event 默认形参遮蔽 dispatch helper'],
+  ['supervisor_message', 'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+    'function handleExecutionWorkerObserverMessage(message, { pending })',
+    'function handleExecutionWorkerObserverMessage(renamedMessage, { pending })',
+    'observer message 形参改名'],
+  ['supervisor', 'electron/host-core/agent/execution-worker-supervisor.cjs',
+    'const onMessage = (message) =>', 'const onMessage = (renamedMessage) =>', 'onMessage 形参改名'],
+  ['supervisor', 'electron/host-core/agent/execution-worker-supervisor.cjs',
+    'const request = (operation, requestId) =>',
+    'const request = (renamedOperation, requestId) =>', 'request operation 形参改名'],
+  ['supervisor', 'electron/host-core/agent/execution-worker-supervisor.cjs',
+    'new Promise((resolveRequest, reject) =>',
+    'new Promise((renamedResolve, renamedReject) =>', 'Promise executor 形参改名'],
+  ['supervisor', 'electron/host-core/agent/execution-worker-supervisor.cjs',
+    "const terminateChild = (target = child, reason = 'terminated') =>",
+    "const terminateChild = (renamedTarget = child, reason = 'terminated') =>", 'terminate target 形参改名'],
+  ['supervisor', 'electron/host-core/agent/execution-worker-supervisor.cjs',
+    'const onExit = (code, signal) =>',
+    'const onExit = (renamedCode, renamedSignal) =>', 'onExit 形参改名'],
+  ['desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {})',
+    'function createExecutionWorkerContextUsageLease({ timeoutMs: renamedTimeoutMs = 1000 } = {})',
+    'context timeoutMs 解构别名'],
+  ['desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
+    'observeTerminal: (payload) =>', 'observeTerminal: (renamedPayload) =>',
+    'observeTerminal payload 形参改名'],
+  ['desktop', 'electron/host-core/agent/desktop-host-context.cjs',
+    'runAgentInExecutionWorker(supervisor, identity, signal)',
+    'runAgentInExecutionWorker(supervisor, renamedIdentity, signal)', 'desktop identity 形参改名'],
+  ['desktop', 'electron/host-core/agent/desktop-host-context.cjs',
+    'runAgentInExecutionWorker(supervisor, identity, signal)',
+    'runAgentInExecutionWorker(supervisor, identity, renamedSignal)', 'desktop signal 形参改名'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    'initialize(message) {', 'initialize(renamedMessage) {', 'controller initialize 形参改名'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    'onHostMessage(raw) {', 'onHostMessage(renamedRaw) {', 'controller host raw 形参改名'],
+  ['controller', 'electron/host-core/agent/execution-worker-controller.cjs',
+    'onRunnerMessage(raw) {', 'onRunnerMessage(renamedRaw) {', 'controller runner raw 形参改名'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const requestId = validateAcquisition(manager, identity);',
+    '  const requestId = validateAcquisition(manager, identity);\n  ({ requestId } = { requestId: unrelatedValue });',
+    'manager requestId ObjectPattern 写入'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const supervisor = createExecutionSupervisor(manager);',
+    '  const supervisor = createExecutionSupervisor(manager);\n  ({ supervisor } = { supervisor: unrelatedValue });',
+    'manager supervisor ObjectPattern 写入'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const record = createExecutionRecord(supervisor);',
+    '  const record = createExecutionRecord(supervisor);\n  ({ record } = { record: unrelatedValue });',
+    'manager record ObjectPattern 写入'],
+  ['manager', 'electron/host-core/agent/execution-worker-manager.cjs',
+    '  const requestId = validateAcquisition(manager, identity);',
+    '  const requestId = validateAcquisition(manager, identity);\n  [requestId] = [unrelatedValue];',
+    'manager requestId ArrayPattern 写入'],
+];
+for (const [contract, path, search, replacement, label] of exactBindingMutationCases) {
+  const mutation = casebookDesignAstMutation(path, search, replacement, label);
+  const ast = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(mutation));
+  assert.equal(ast[contract], false, `${label}: 精确 binding AST 子合同必须失败`);
+  assert.equal(ast.passed, false, `${label}: 聚合 AST 合同必须失败`);
+  const risk = casebookDesignBlockingRisk({
+    blocked: false,
+    head: casebookDesignMr1560Contract.merge_commit_sha,
+    mutateSource: mutation,
+  });
+  assert.equal(risk.status, 'BLOCKED', `${label}: 完整 blocking-risk 主审计必须阻断`);
+  assert.equal(risk.verified, false, `${label}: 完整 blocking-risk 主审计不得 VERIFIED`);
+  assert.deepEqual(
+    risk.failure_ids,
+    ['execution_runner_message_isolation_missing'],
+    `${label}: 必须保留稳定的执行隔离 failure ID`,
+  );
+}
 const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
   const ancestryByContractId = new Map(casebookDesignSourceContracts.map((contract) => [
     contract.contract_id,
@@ -1277,7 +1966,22 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
   assert.equal(risk.schema_version, casebookDesignBlockingRiskSchema, '测试夹具必须生成当前 blocking-risk schema');
   assert.equal(risk.architecture, 'per-turn-utility-process/v1', '测试夹具必须按 !1559 后继架构审计当前 release');
   assert.equal(risk.assertion_owner?.mr_iid, '1559', '测试夹具必须由 !1559 后继合同接管阻断风险断言');
-  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部九个受保护源码文件');
+  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部 13 个受保护源码文件');
+  if (!blocked) {
+    assert.deepEqual({
+      status: risk.status,
+      verified: risk.verified,
+      failure_ids: risk.failure_ids,
+      evidence_failures: risk.evidence_failures,
+      checks: risk.checks.map((check) => ({ id: check.id, passed: check.passed })),
+    }, {
+      status: 'VERIFIED',
+      verified: true,
+      failure_ids: [],
+      evidence_failures: [],
+      checks: casebookDesignRiskFailures.map((id) => ({ id, passed: true })),
+    }, '完整正向源码夹具必须经主 blocking-risk 审计得到 VERIFIED');
+  }
   const riskFailureIds = [...risk.failure_ids];
   const commitAccounting = mergeRequests.map((mr) => ({
     commit: mr.commit,
@@ -1379,6 +2083,9 @@ assertCasebookDesignIntakeRejected((report) => report.unresolved.unmapped_produc
 assertCasebookDesignIntakeRejected((report) => report.unresolved.api_errors.push('GitLab API timeout'), 'Casebook Builder 必须拒绝 API error');
 assertCasebookDesignIntakeRejected((report) => report.unresolved.source_contract_failures.push('contract:failure'), 'Casebook Builder 必须拒绝源码合同失败');
 assertCasebookDesignIntakeRejected((report) => { report.blocking_risks[0].source_files[0].error = 'read_failed'; }, 'Casebook Builder 必须拒绝 !1552 风险源码证据失败');
+assertCasebookDesignIntakeRejected((report) => {
+  report.blocking_risks[0].schema_version = 'qbot-qwork-release-blocking-risk-attestation/v4';
+}, 'Casebook Builder 必须拒绝重算 attestation/report SHA 的旧 blocking-risk v4');
 assertCasebookDesignIntakeRejected((report) => report.blocking_risks.push(structuredClone(report.blocking_risks[0])), 'Casebook Builder 必须拒绝多个 blocking risk');
 assertCasebookDesignIntakeRejected((report) => { report.policy.api_freshness.branch_head_after = 'e'.repeat(40); }, 'Casebook Builder 必须拒绝 branch HEAD 漂移');
 assertCasebookDesignIntakeRejected((report) => { report.policy.api_freshness.first_parent_complete = false; }, 'Casebook Builder 必须拒绝 compare first-parent 不完整');

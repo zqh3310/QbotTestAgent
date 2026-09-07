@@ -72,6 +72,11 @@ function gitBlobSha1(source) {
   ])).digest('hex');
 }
 
+function replaceRequired(source, search, replacement, label) {
+  assert.equal(source.includes(search), true, `${label}: mutation target missing`);
+  return source.replace(search, replacement);
+}
+
 test('GitLab token transport keeps TLS verification and freezes the destination', () => {
   const intakeSource = fs.readFileSync(
     new URL('../src/lib/qwork-release-intake.mjs', import.meta.url),
@@ -2600,7 +2605,7 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
     assert.equal(validateQworkReleaseIntake(report, { releaseRef: 'HEAD', releaseHead, frameworkCommit: 'a'.repeat(40) }).ok, true);
 
     const staleToolReport = structuredClone(report);
-    staleToolReport.tool.version = 'qbot-release-intake/1.6.1';
+    staleToolReport.tool.version = 'qbot-release-intake/1.6.2';
     const staleToolContent = structuredClone(staleToolReport);
     delete staleToolContent.integrity.content_sha256;
     staleToolReport.integrity.content_sha256 = sha256Text(stableJson(staleToolContent));
@@ -3534,7 +3539,79 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     mrIid: 1559,
   });
   const sources = new Map([
-    ['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-entry.cjs');\n"],
+    ['electron/execution-worker.cjs', `
+      require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();
+    `],
+    ['electron/host-core/agent/execution-worker-controller.cjs', `
+      const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
+      const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
+      const sameIdentity = (message, authority, fields) => authority
+        && fields.every((field) => message[field] === authority[field]);
+      class ExecutionWorkerController {
+        constructor({
+          parentPort = process.parentPort,
+          createRunner = () => new Worker(require.resolve('./execution-worker-entry.cjs')),
+          exit = (code) => process.exit(code),
+        } = {}) {
+          Object.assign(this, { parentPort, createRunner, exit, runner: null, authority: null,
+            turn: null, heartbeat: null, stopped: false });
+        }
+        finish(code) {
+          if (this.stopped) return;
+          this.stopped = true;
+          this.exit(code);
+        }
+        decode(raw, direction) {
+          try { return validateEnvelope(raw, { direction }); }
+          catch { this.finish(1); return null; }
+        }
+        onRunnerMessage(raw) {
+          if (this.stopped) return;
+          const message = this.decode(raw, 'worker-to-host');
+          if (!message || !sameIdentity(message, this.authority, AUTHORITY_FIELDS)) return;
+          if (message.operation === 'worker.heartbeat') return;
+          if (message.operation === 'worker.ready') this.startHeartbeat();
+          else if (message.operation !== 'worker.pressure'
+            && !sameIdentity(message, this.turn, TURN_FIELDS)) return;
+          this.parentPort.postMessage(message);
+        }
+        onRunnerError(error) { this.finish(error ? 1 : 0); }
+        onRunnerExit(code) { this.finish(code === 0 ? 0 : 1); }
+        initialize(message) {
+          if (this.authority) return false;
+          this.authority = message;
+          this.runner = this.createRunner();
+          this.runner.on('message', (raw) => this.onRunnerMessage(raw));
+          this.runner.on('error', (error) => this.onRunnerError(error));
+          this.runner.on('exit', (code) => this.onRunnerExit(code));
+          return true;
+        }
+        acceptMessage(message) {
+          if (message.operation === 'worker.initialize') return this.initialize(message);
+          if (!sameIdentity(message, this.authority, AUTHORITY_FIELDS)) return false;
+          if (message.operation === 'worker.shutdown') { this.finish(0); return false; }
+          if (message.operation === 'execution.start') {
+            if (this.turn) return false;
+            this.turn = message;
+            return true;
+          }
+          if (!sameIdentity(message, this.turn, TURN_FIELDS)) return false;
+          return message.operation === 'context-usage.refresh'
+            ? message.payload.executionRequestId === this.turn.requestId
+            : message.requestId === this.turn.requestId;
+        }
+        onHostMessage(raw) {
+          if (this.stopped) return;
+          const message = this.decode(raw, 'host-to-worker');
+          if (!message || !this.acceptMessage(message)) return;
+          this.runner.postMessage(message);
+        }
+      }
+      function startExecutionWorkerController(options) {
+        return new ExecutionWorkerController(options);
+      }
+      module.exports = { startExecutionWorkerController };
+    `],
     ['electron/host-core/agent/execution-worker-manager.cjs', `
       function managerError(code, message) {
         const error = new Error(message);
@@ -3564,9 +3641,148 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
       }
     `],
     ['electron/host-core/agent/execution-worker-supervisor.cjs', `
+      const { createExecutionWorkerRequestSettlement } = require('./execution-worker-cancellation.cjs');
+      const { createExecutionWorkerTerminator } = require('./execution-worker-termination.cjs');
+      const {
+        handleExecutionWorkerEventMessage,
+        handleExecutionWorkerObserverMessage,
+      } = require('./execution-worker-supervisor-message.cjs');
       function rejectPending(error) { return error; }
       function executionWorkerExitFailure(code, signal) { return { code, signal }; }
-      function onExit(code, signal) { rejectPending(executionWorkerExitFailure(code, signal)); }
+      function createExecutionWorkerSupervisor() {
+        const pending = new Map();
+        let child = createChild();
+        const terminateOwnedChild = createExecutionWorkerTerminator({
+          processId, processTreeKiller, cleanupGraceMs: 250,
+        });
+        const terminateChild = (target = child, reason = 'terminated') => {
+          return terminateOwnedChild(target, reason);
+        };
+        const onMessage = (message) => {
+          if (message.operation === 'execution.event') {
+            handleExecutionWorkerEventMessage(message, { pending, postBrokerResult, terminateChild, child });
+            return;
+          }
+          if (message.operation === 'execution.observer') {
+            handleExecutionWorkerObserverMessage(message, { pending });
+            return;
+          }
+          if (isExecutionWorkerTerminalOperation(message.operation)) {
+            const item = pending.get(message.requestId);
+            if (!item || !item.matches(message)) return;
+            pending.delete(message.requestId);
+            item.resolve(message);
+            return;
+          }
+        };
+        const request = (operation, requestId) => new Promise((resolveRequest, reject) => {
+          const settlement = createExecutionWorkerRequestSettlement({
+            child, operation, deadlineMs, cancellationTimeoutMs, terminateChild,
+            onDeadline: () => pending.delete(requestId), resolve: resolveRequest, reject,
+          });
+          pending.set(requestId, settlement);
+        });
+        const stop = async () => {
+          const stoppedChild = child;
+          await terminateChild(stoppedChild, 'stop');
+          if (child === stoppedChild) child = null;
+        };
+        const onExit = (code, signal) => {
+          rejectPending(executionWorkerExitFailure(code, signal));
+        };
+        return { onExit, onMessage, request, stop };
+      }
+    `],
+    ['electron/host-core/agent/execution-worker-cancellation.cjs', `
+      async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
+        const pending = supervisor.request(operation, identity, payload, options);
+        const cancelIdentity = identity;
+        const onAbort = () => {
+          supervisor.cancel(cancelIdentity, 'user-requested');
+        };
+        if (!signal) return await pending;
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+        try {
+          return await pending;
+        } finally {
+          signal.removeEventListener('abort', onAbort);
+        }
+      }
+      function createExecutionWorkerRequestSettlement({
+        child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
+      }) {
+        let cancellationTimer = null;
+        const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
+        const deadline = setTimeout(() => {
+          clear();
+          onDeadline();
+          reject(new Error('execution worker request deadline exceeded'));
+          if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
+        }, deadlineMs + 1);
+        return {
+          armCancellation: () => {
+            if (cancellationTimer) return;
+            cancellationTimer = setTimeout(() => {
+              void terminateChild(child, 'cancel-timeout');
+            }, Math.max(1, cancellationTimeoutMs));
+          },
+          resolve: (value) => { clear(); resolve(value); },
+          reject: (error) => { clear(); reject(error); },
+        };
+      }
+      module.exports = { createExecutionWorkerRequestSettlement, requestExecutionWorkerTurn };
+    `],
+    ['electron/host-core/agent/execution-worker-termination.cjs', `
+      function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanupGraceMs = 250 } = {}) {
+        const flights = new WeakMap();
+        return (target, reason = 'terminated') => {
+          if (!target) return Promise.resolve(false);
+          const existing = flights.get(target);
+          if (existing) return existing;
+          const pid = processId(target.pid);
+          const cleanup = Promise.resolve().then(() => processTreeKiller(pid, { reason }));
+          const flight = Promise.race([
+            cleanup,
+            new Promise((resolve) => setTimeout(resolve, cleanupGraceMs)),
+          ]).then(() => {
+            target.kill?.();
+            return true;
+          });
+          flights.set(target, flight);
+          void flight.finally(() => flights.delete(target));
+          return flight;
+        };
+      }
+      module.exports = { createExecutionWorkerTerminator };
+    `],
+    ['electron/host-core/agent/execution-worker-supervisor-message.cjs', `
+      function isReservedExecutionWorkerObserverCallback() { return true; }
+      function dispatchExecutionEvent() {}
+      function handleExecutionWorkerEventMessage(message, {
+        pending, postBrokerResult, terminateChild, child,
+      }) {
+        const item = pending.get(message.requestId);
+        if (!item || !item.matches(message)) return;
+        if (message.sequence <= item.lastSequence) {
+          const error = new Error('execution worker emitted a non-monotonic event sequence');
+          pending.delete(message.requestId);
+          item.reject(error);
+          terminateChild(child, 'sequence-violation');
+          return;
+        }
+        dispatchExecutionEvent(item, message, postBrokerResult);
+      }
+      function handleExecutionWorkerObserverMessage(message, { pending }) {
+        const item = pending.get(message.requestId);
+        if (!item || !item.matches(message)
+          || !isReservedExecutionWorkerObserverCallback(message.payload?.callback)) return;
+        item.onEvent?.(message);
+      }
+      module.exports = {
+        handleExecutionWorkerEventMessage,
+        handleExecutionWorkerObserverMessage,
+      };
     `],
     ['electron/host-core/agent/desktop-host-context.cjs', `
       async function runAgentInExecutionWorker(identity, signal) {
@@ -3625,7 +3841,7 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
           // This path is protected only by the blocking-risk contract in this fixture.
         }
         if (!inheritedFile) return riskFile;
-        const source = `${inheritedSource}${Buffer.from(riskFile.content, 'base64').toString('utf8')}`;
+        const source = `/* inherited source-contract fixture:\n${inheritedSource}\n*/\n${Buffer.from(riskFile.content, 'base64').toString('utf8')}`;
         return {
           ...inheritedFile,
           size: Buffer.byteLength(source, 'utf8'),
@@ -3652,6 +3868,44 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
   assert.equal(report.policy.api_freshness.blocking_risks_verified, true);
   const validation = validateQworkReleaseIntake(report, { requireFreshRef: true });
   assert.equal(validation.ok, true, validation.failures.join(','));
+
+  const cancellationPath = 'electron/host-core/agent/execution-worker-cancellation.cjs';
+  const cancellationFile = blockingRiskFiles.get(cancellationPath);
+  const cancellationSource = Buffer.from(cancellationFile.content, 'base64').toString('utf8');
+  const deadAbortSource = replaceRequired(
+    cancellationSource,
+    'if (signal.aborted) onAbort();',
+    'if (false && signal.aborted) onAbort();',
+    'intake dead abort guard',
+  );
+  blockingRiskFiles.set(cancellationPath, {
+    ...cancellationFile,
+    size: Buffer.byteLength(deadAbortSource, 'utf8'),
+    content: Buffer.from(deadAbortSource, 'utf8').toString('base64'),
+    blob_id: gitBlobSha1(deadAbortSource),
+  });
+  const blockedReport = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(blockedReport.decision, 'BLOCKED');
+  assert.equal(blockedReport.policy.api_freshness.blocking_risks_verified, false);
+  assert.equal(
+    blockedReport.blocking_risks[0].checks.at(-1)
+      .observations.successor_ast_contracts.cancellation,
+    false,
+  );
+  const blockedValidation = validateQworkReleaseIntake(blockedReport, {
+    requireFreshRef: true,
+    requireReady: false,
+  });
+  assert.equal(blockedValidation.ok, false);
+  assert.deepEqual(blockedValidation.failures, ['release_ref_not_freshly_verified']);
 });
 
 test('GitLab API scan binds a verified source contract into MR, summary, and freshness', () => {

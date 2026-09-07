@@ -1667,23 +1667,68 @@ MR `!1573` 只有在 `iid=1573` 且 `merge_commit_sha` 精确等于
 后，即使攻击者同步重算 `content_sha256`，也必须因语义重放或汇总不一致而 `BLOCKED`。
 
 MR !1559 后继架构的阻断风险证明固定使用
-`qbot-qwork-release-blocking-risk-attestation/v4`。审计器必须先词法剔除注释、模板和正则
-正文，并把普通字符串只作为真实调用参数/赋值值处理，禁止用注释或死字符串中的 token
-放行。clean-exit 必须在 `onExit` 函数体内形成
+`qbot-qwork-release-blocking-risk-attestation/v5`，并与
+`qbot-release-intake/1.7.0` 绑定。审计器必须先词法剔除注释、模板和正则正文，
+并把普通字符串只作为真实调用参数/赋值值处理，禁止用注释或死字符串中的 token
+放行；随后必须用固定版本 `acorn@8.15.0` 将每个受保护 CommonJS 文件解析为 Acorn
+ECMAScript AST，按函数/类/分支作用域重放控制流、值流和返回值。词法与 AST 是相互独立
+的双层门禁，解析失败、恒假分支、局部同名 shadow/遮蔽、关键 identity/manager/child/lease
+重绑、factory 返回错误对象、伪 timeout/cleanup 或 manager/context 时序不闭环均须
+fail-closed；遮蔽检查必须包含当前被审计函数自身参数以及嵌套函数参数，默认参数、解构参数、
+普通赋值、复合赋值、update 和解构赋值都必须纳入绑定/写入分析，不能只识别裸 Identifier。
+每个受保护函数、方法和回调（包括零参数回调）还必须校验精确参数 schema；关键引用必须
+解析到该函数声明的预期参数或受保护外层声明。仅保留同名未绑定引用、参数改名、属性别名，
+或用嵌套 `FunctionDeclaration` 参数遮蔽外层 binding，均必须 fail-closed。
+受保护 helper、factory、builtin、class 和身份常量还必须在整个源文件 AST 中保持稳定：
+禁止普通/复合/update/解构/`for-in`/`for-of` 写入；`Promise`、`Worker`、`WeakMap`、`Map`、
+`Math`、`Number`、`Error`、`setTimeout`、`clearTimeout`、`require` 和 `process` 等受信任全局
+不得被顶层声明遮蔽。supervisor 的 cancellation/termination/message helper、context wrapper
+双 helper 与 desktop context helper 必须由唯一 `const` 解构绑定到精确 `require` 路径；context
+wrapper 和 implementation 必须唯一、精确导出同名 helper。manager/context/desktop 的
+关键成员路径，包括 manager factory/executions、`record.supervisor`、`supervisor.acquire`、context release
+及 lease request/drain/release，均禁止点式或静态计算属性赋值、update、解构、循环写入和
+`delete`；也禁止通过 `Object.defineProperty/defineProperties/assign` 或
+`Reflect.set/deleteProperty` 改写受保护 receiver。对受保护 receiver 使用动态属性名、动态
+descriptor/source 或 spread 时必须 fail-closed。对无关对象执行同类操作、无关 helper 声明、
+无关属性只读和等价对象属性重排仍可保留，不能用过宽的全文件关键词禁令制造误阻断。
+任一层失败都不能生成 `VERIFIED`。clean-exit 必须在 `onExit` 函数体内形成
 `rejectPending(executionWorkerExitFailure(...))` 嵌套调用；pressure 必须从 acquisition
 实现沿真实调用链到达 admission `if`，并在同一 supervisor factory 调用中固定
 `maxPendingRequests: 1`、`maxRestarts: 0`；request set 与其 `release` 闭包的 delete/stop
-必须属于同一 acquisition。desktop host 还必须在同一函数的同一个 `try/finally` 中获取并
-释放同名 lease：可直接 `await lease.release()`，也可通过在 `try` 前唯一创建、在
-`finally` 中唯一 awaited 调用的 `createExecutionWorkerContextUsageLease` helper 委派释放。
-委派链必须由 desktop host 顶层真实 `require('./execution-worker-context-usage.cjs')`，
-wrapper 必须顶层真实 `require('./execution-worker-context-usage-lease.cjs')`，且两个模块均唯一导出
-`createExecutionWorkerContextUsageLease`；实现必须对已完成 lease 执行 `drain(...)`，对未完成
-lease 执行 awaited `release()`。v4 因此固定审计 9 个受保护源码文件，包括新纳入的
-`electron/host-core/agent/execution-worker-context-usage.cjs` 和
-`electron/host-core/agent/execution-worker-context-usage-lease.cjs`。
-`qbot-release-intake/1.6.1` 及更旧 intake tool version、阻断风险 v2/v3 证明或任一
-作用域/调用链断裂均必须 fail-closed，重新扫描并 `BLOCKED`；不得靠重算报告 SHA 复用。
+必须属于同一 acquisition。manager admission 的 awaited wait 必须早于 supervisor/record
+分配和 `executions.set` 建索引；completed drain 与 incomplete release 都必须 awaited，且
+timeout 必须规范化为有限正数。controller 的 runner factory 必须返回实际创建、随后绑定并
+用于消息转发的精确 Worker 对象，不能只创建真实 Worker 后返回无关对象。controller 还必须
+严格固定单 turn identity、双向
+`validateEnvelope` 方向、message/error/exit 监听和 accept-before-forward 拒绝路径；request
+取消必须 awaited 获取 pending，abort 使用同一 `cancelIdentity` 调用
+`supervisor.cancel(..., 'user-requested')`；`supervisor`、`identity`、`signal` 与
+`cancelIdentity` 在该闭包内禁止重绑，abort listener 必须在 already-aborted 检查和
+`return await pending` 之前注册，不能移到返回后的不可达位置。deadline/cancel timeout 必须在同一 settlement 闭包中
+定向 terminate child，resolve/reject 都必须清理两个 timer；supervisor-message 的 identity/
+sequence 拒绝、pending delete/reject/terminate 与 terminal resolve 必须同分支因果闭环，termination
+必须以同一 child 的单航次绑定直接 kill、process-tree kill 和清理；cleanup 必须与真实
+`new Promise(resolve => setTimeout(resolve, finiteTimeout))` 同处 `Promise.race`，伪 timer、
+未入 race 的 cleanup 或无限 timeout 均不得通过；空 target guard 必须早于任何
+`target.pid`/flight 解引用。
+
+desktop host 还必须在同一函数的同一个 `try/finally` 中获取并释放同名 lease：
+可直接 `await lease.release()`，也可通过在 `try` 前唯一创建、在 `finally` 中唯一
+awaited 调用的 `createExecutionWorkerContextUsageLease` helper 委派释放。委派链必须由
+desktop host 顶层真实 `require('./execution-worker-context-usage.cjs')`，wrapper 必须顶层真实
+`require('./execution-worker-context-usage-lease.cjs')`，且两个模块均唯一导出
+`createExecutionWorkerContextUsageLease`；实现必须对已完成 lease awaited 执行 `drain(...)`，
+对未完成 lease awaited 执行 `release()`。desktop 的 manager/supervisor/identity/signal 禁止
+重绑，acquire 第三个参数必须精确为 `{ signal }`；`completed` 必须初始化为 `false`，且只能
+由唯一的 `observeTerminal` 写入真实 terminal outcome；creator/release 的参数、默认值或
+解构写入不得遮蔽 helper/completed，release 路径不得强制改写。
+`successor_ast_contracts` 九个子项任一为 `false`
+时，主 blocking-risk 审计必须保持 `verified=false/status=BLOCKED`，不得生成 `VERIFIED`。
+v5 固定审计 13 个受保护源码文件，在 v4 的 9 个文件上新增
+`execution-worker-controller.cjs`、`execution-worker-cancellation.cjs`、
+`execution-worker-supervisor-message.cjs` 和 `execution-worker-termination.cjs`。
+`qbot-release-intake/1.6.2` 及更旧 intake tool version、阻断风险 v2/v3/v4 证明或任一
+作用域/调用链/取消因果链断裂均必须 fail-closed，重新扫描并 `BLOCKED`；不得靠重算报告 SHA 复用。
 
 正式扫描默认必须成功刷新 `release-ref`。Git fetch 的只读凭据与 GitLab API token 是两条
 独立链路：前者应由受管机器的短期只读 credential helper 提供，后者才通过本命令的 stdin
