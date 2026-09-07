@@ -26,7 +26,7 @@ import {
 } from './qwork-release-blocking-risks.mjs';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.6.1';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.6.2';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -48,6 +48,7 @@ const KNOWN_PRODUCT_PATHS = Object.freeze([
   /^resources\/builtin-skills\//i,
   /^db\/(?:migrations|migration-manifests)\//i,
   /^\.deepbank-runtime\//i,
+  /^teams360\.host-sync\.json$/,
   /^(?:model-vision-capability|runtime-family|runtime-paths|release-identity|chart-tool-result|connection-view|diagram-tool-result)\.(?:mjs|cjs|js|ts|tsx)$/i,
   /^package(?:-lock)?\.json$/i,
 ]);
@@ -286,7 +287,10 @@ const IMPACT_RULES = Object.freeze([
 
 function staticDisposition(filePath) {
   const normalized = text(filePath).replaceAll('\\', '/');
-  if (/^\.architecture\.ya?ml$/i.test(normalized)) return 'Repository-architecture-only';
+  const basename = normalized.split('/').at(-1) || '';
+  if (normalized === 'docker/desktop-win-builder/README.md') return 'Toolchain/test-only';
+  if (basename === '.architecture.yaml' || basename === '.architecture.yml') return 'Repository-architecture-only';
+  if (/^assets\/lib\/ui\/(?:[^/]+\/)*[^/]+\.md$/.test(normalized)) return 'Research/docs-only';
   if (/^\.codex\/(?:environments\/environment\.toml|hooks\.json)$/i.test(normalized)) return 'Codex-governance-only';
   if (/^(?:CONTEXT\.md)$/i.test(normalized)) return 'Agent-metadata-only';
   if (/^(?:\.agent|\.agents|\.claude)\//i.test(normalized)

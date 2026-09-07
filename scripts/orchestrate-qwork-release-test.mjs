@@ -9,7 +9,10 @@ import {
   createGitLabReadOnlyReader,
   QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST,
   QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_PROJECT,
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  QWORK_RELEASE_INTAKE_TOOL_VERSION,
 } from '../src/lib/qwork-release-intake.mjs';
+import { QWORK_RELEASE_BLOCKING_RISK_SCHEMA } from '../src/lib/qwork-release-blocking-risks.mjs';
 import { readStableQworkReleaseHead } from '../src/lib/qwork-release-ref-observation.mjs';
 import {
   applyQworkStageAudit,
@@ -83,6 +86,12 @@ Usage:
     --gitlab-token-stdin
 
   npm run qwork-release:orchestrate -- status --state-dir <control-directory> --gitlab-token-stdin
+
+当前 release intake 合同：
+  report schema: ${QWORK_RELEASE_INTAKE_SCHEMA}
+  tool version: ${QWORK_RELEASE_INTAKE_TOOL_VERSION}
+  blocking-risk schema: ${QWORK_RELEASE_BLOCKING_RISK_SCHEMA}
+  旧 intake tool version 或旧 blocking-risk schema 一律 fail-closed，必须重新扫描。
 
 编排器永远不使用 raw passed/failed 作为阶段准入。Casebook 阶段必须同时具备
 精确能力审计、精确 READY、完整真实执行、完整 evidence manifest、匹配的发布身份

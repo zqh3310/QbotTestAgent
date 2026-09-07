@@ -2319,6 +2319,160 @@ test('known product paths and generated metadata are classified without false un
   assert.equal(mapped.required_stages.includes('G3'), true);
 });
 
+test('teams360 host sync maps to the exact host lifecycle Cases and G1/G3 stages', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: ['teams360.host-sync.json'],
+    subject: 'synchronize the desktop host contract',
+    availableCaseIds: ['BETA-INIT-001', 'BETA-HOST-003', 'MRSMOKE-NAV-001'],
+  });
+  assert.deepEqual(mapped.static_paths, []);
+  assert.deepEqual(mapped.product_paths, ['teams360.host-sync.json']);
+  assert.deepEqual(mapped.known_product_paths, ['teams360.host-sync.json']);
+  assert.deepEqual(mapped.direct_case_ids, ['BETA-HOST-003', 'BETA-INIT-001']);
+  assert.deepEqual(mapped.in_scope_case_ids, ['BETA-HOST-003', 'BETA-INIT-001']);
+  assert.deepEqual(mapped.required_stages, ['G1', 'G3']);
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+});
+
+for (const nearHostSyncPath of [
+  'Teams360.host-sync.json',
+  'config/teams360.host-sync.json',
+  'teams360.host-sync.json.bak',
+]) {
+  test(`near host sync path stays fail-closed: ${nearHostSyncPath}`, () => {
+    const mapped = mapReleaseImpact({
+      changedPaths: [nearHostSyncPath],
+      subject: 'host runtime synchronization',
+      availableCaseIds: ['BETA-INIT-001', 'BETA-HOST-003'],
+    });
+    assert.deepEqual(mapped.known_product_paths, []);
+    assert.deepEqual(mapped.direct_case_ids, []);
+    assert.deepEqual(mapped.unmapped_product_paths, [nearHostSyncPath]);
+    assert.equal(mapped.mapping_status, 'BLOCKED');
+  });
+}
+
+test('only the exact desktop Windows builder README is static', () => {
+  const exact = mapReleaseImpact({
+    changedPaths: ['docker/desktop-win-builder/README.md'],
+    subject: 'builder reference update',
+    availableCaseIds: ['BETA-HOST-003'],
+  });
+  assert.deepEqual(exact.product_paths, []);
+  assert.deepEqual(exact.unmapped_product_paths, []);
+  assert.deepEqual(exact.direct_case_ids, []);
+  assert.deepEqual(exact.static_dispositions, [{
+    path: 'docker/desktop-win-builder/README.md',
+    disposition: 'Toolchain/test-only',
+  }]);
+  assert.equal(exact.mapping_status, 'MAPPED');
+});
+
+for (const nearBuilderReadme of [
+  'docker/desktop-win-builder/readme.md',
+  'docker/desktop-win-builder/README.md.bak',
+  'docker/desktop-win-builder/docs/README.md',
+  'docker/other/README.md',
+]) {
+  test(`near desktop Windows builder README stays fail-closed: ${nearBuilderReadme}`, () => {
+    const mapped = mapReleaseImpact({
+      changedPaths: [nearBuilderReadme],
+      subject: 'desktop runtime builder documentation',
+      availableCaseIds: ['BETA-HOST-003'],
+    });
+    assert.deepEqual(mapped.static_paths, []);
+    assert.deepEqual(mapped.known_product_paths, []);
+    assert.deepEqual(mapped.direct_case_ids, []);
+    assert.deepEqual(mapped.unmapped_product_paths, [nearBuilderReadme]);
+    assert.equal(mapped.mapping_status, 'BLOCKED');
+  });
+}
+
+test('UI Markdown references are static while UI code and assets remain product paths', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: [
+      'assets/lib/ui/README.md',
+      'assets/lib/ui/reference/runtime-contract.md',
+      'assets/lib/ui/app.js',
+      'assets/lib/ui/styles/app.css',
+      'assets/lib/ui/icons/agent.svg',
+      'assets/lib/ui/reference/runtime-contract.mdx',
+      'assets/lib/ui/reference/RUNTIME.MD',
+    ],
+    subject: 'UI reference and implementation update',
+    availableCaseIds: [
+      'MRSMOKE-ACT-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'MRSMOKE-AUTH-001',
+      'MRSMOKE-AUTO-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001',
+      'MRSMOKE-FAIL-001', 'MRSMOKE-ART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-CHART-001',
+    ],
+  });
+  assert.deepEqual(mapped.static_paths, [
+    'assets/lib/ui/README.md',
+    'assets/lib/ui/reference/runtime-contract.md',
+  ]);
+  assert.deepEqual(mapped.static_dispositions, [
+    { path: 'assets/lib/ui/README.md', disposition: 'Research/docs-only' },
+    { path: 'assets/lib/ui/reference/runtime-contract.md', disposition: 'Research/docs-only' },
+  ]);
+  assert.deepEqual(mapped.product_paths, [
+    'assets/lib/ui/app.js',
+    'assets/lib/ui/styles/app.css',
+    'assets/lib/ui/icons/agent.svg',
+    'assets/lib/ui/reference/runtime-contract.mdx',
+    'assets/lib/ui/reference/RUNTIME.MD',
+  ]);
+  assert.deepEqual(mapped.known_product_paths, mapped.product_paths);
+  assert.equal(mapped.in_scope_case_ids.length, 12);
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+});
+
+test('exact architecture basenames are static at every directory depth', () => {
+  const mapped = mapReleaseImpact({
+    changedPaths: [
+      '.architecture.yaml',
+      'config/.architecture.yml',
+      'deep/nested/metadata/.architecture.yaml',
+    ],
+    subject: 'repository metadata update',
+    availableCaseIds: ['BETA-INIT-001'],
+  });
+  assert.deepEqual(mapped.product_paths, []);
+  assert.deepEqual(mapped.unmapped_product_paths, []);
+  assert.deepEqual(mapped.static_dispositions, [
+    { path: '.architecture.yaml', disposition: 'Repository-architecture-only' },
+    { path: 'config/.architecture.yml', disposition: 'Repository-architecture-only' },
+    { path: 'deep/nested/metadata/.architecture.yaml', disposition: 'Repository-architecture-only' },
+  ]);
+  assert.deepEqual(mapped.direct_case_ids, []);
+  assert.equal(mapped.mapping_status, 'MAPPED');
+});
+
+for (const nearArchitecturePath of [
+  'architecture.yaml',
+  '.Architecture.yaml',
+  'config/.architecture.yaml.bak',
+  'config/.architecture.ymlx',
+  'config/.architecture.json',
+  'config/.architecture.yaml/child',
+]) {
+  test(`near architecture basename stays fail-closed: ${nearArchitecturePath}`, () => {
+    const mapped = mapReleaseImpact({
+      changedPaths: [nearArchitecturePath],
+      branch: 'feature/runtime-architecture',
+      subject: 'runtime architecture metadata',
+      labels: ['area/runtime'],
+      availableCaseIds: ['BETA-INIT-001', 'BETA-HOST-003'],
+    });
+    assert.deepEqual(mapped.static_paths, []);
+    assert.deepEqual(mapped.known_product_paths, []);
+    assert.deepEqual(mapped.direct_case_ids, []);
+    assert.deepEqual(mapped.unmapped_product_paths, [nearArchitecturePath]);
+    assert.equal(mapped.mapping_status, 'BLOCKED');
+  });
+}
+
 test('purely static changes do not become desktop E2E impact from branch wording', () => {
   const mapped = mapReleaseImpact({
     changedPaths: ['dashboard/src/app/App.tsx', 'docs/release-runtime.md', '.gitlab-ci.yml'],
@@ -2436,6 +2590,7 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
       now: new Date('2026-08-31T02:00:00Z'),
     });
     assert.equal(report.schema_version, QWORK_RELEASE_INTAKE_SCHEMA);
+    assert.equal(report.tool.version, QWORK_RELEASE_INTAKE_TOOL_VERSION);
     assert.equal(report.decision, 'READY', report.blockers.join('; '));
     assert.equal(report.scan_boundary.mode, 'commit_ancestry');
     assert.equal(report.scan_boundary.baseline_commit, baseline);
@@ -2443,6 +2598,20 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
     assert.equal(report.summary.direct_case_ids.includes('MRSMOKE-AUTO-001'), true);
     assert.equal(report.summary.dependency_case_ids.includes('BETA-TASK-008'), true);
     assert.equal(validateQworkReleaseIntake(report, { releaseRef: 'HEAD', releaseHead, frameworkCommit: 'a'.repeat(40) }).ok, true);
+
+    const staleToolReport = structuredClone(report);
+    staleToolReport.tool.version = 'qbot-release-intake/1.6.1';
+    const staleToolContent = structuredClone(staleToolReport);
+    delete staleToolContent.integrity.content_sha256;
+    staleToolReport.integrity.content_sha256 = sha256Text(stableJson(staleToolContent));
+    const staleToolValidation = validateQworkReleaseIntake(staleToolReport, {
+      releaseRef: 'HEAD',
+      releaseHead,
+      frameworkCommit: 'a'.repeat(40),
+    });
+    assert.equal(staleToolValidation.ok, false);
+    assert.equal(staleToolValidation.failures.includes('tool_version_mismatch'), true);
+    assert.equal(staleToolValidation.failures.includes('content_sha256_mismatch'), false);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

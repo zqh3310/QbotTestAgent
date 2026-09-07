@@ -556,6 +556,16 @@ for (const source of [qworkReleaseObservationCli, qworkReleaseIntakeCli, qworkRe
   assert.match(source, /token\.startsWith\('--gitlab-token-stdin='\)[\s\S]*无值布尔开关/);
   assert.match(source, /Unexpected positional argument/);
 }
+for (const [label, source] of [
+  ['release intake scanner', qworkReleaseIntakeCli],
+  ['release orchestrator', qworkReleaseOrchestrator],
+  ['Core Beta pretest', coreBetaPretestSource],
+]) {
+  assert.match(source, /report schema: \$\{QWORK_RELEASE_INTAKE_SCHEMA\}/, `${label} help 必须从当前 intake schema 常量输出合同`);
+  assert.match(source, /tool version: \$\{QWORK_RELEASE_INTAKE_TOOL_VERSION\}/, `${label} help 必须从当前 intake tool 常量输出合同`);
+  assert.match(source, /blocking-risk schema: \$\{QWORK_RELEASE_BLOCKING_RISK_SCHEMA\}/, `${label} help 必须从当前 blocking-risk schema 常量输出合同`);
+  assert.match(source, /旧 intake tool version 或旧 blocking-risk schema 一律 fail-closed，必须重新扫描/, `${label} help 必须明确旧合同 fail-closed`);
+}
 assert.match(qworkReleaseObservationSource, /fs\.existsSync\(root\)[\s\S]*must be new/);
 assert.match(qworkReleaseObservationSource, /captureDirectoryGuard\(path\.dirname\(root\)[\s\S]*assertDirectoryGuard\(rootGuard/);
 for (const [documentName, documentText] of [
@@ -571,6 +581,19 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
+  assert.match(documentText, /qbot-release-intake\/1\.6\.2/, `${documentName} 必须固定当前 intake tool 1.6.2`);
+  assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v4/, `${documentName} 必须固定当前 blocking-risk v4`);
+  assert.match(
+    documentText,
+    /qbot-release-intake\/1\.6\.1[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
+    `${documentName} 必须明确旧 intake tool 不可复用`,
+  );
+  assert.match(
+    documentText,
+    /createExecutionWorkerContextUsageLease[\s\S]{0,500}execution-worker-context-usage\.cjs[\s\S]{0,500}execution-worker-context-usage-lease\.cjs[\s\S]{0,500}9 个受保护源码文件/,
+    `${documentName} 必须固定 v4 helper delegation 和 9 个受保护文件`,
+  );
+  assert.match(documentText, /阻断风险 v2\/v3 证明[\s\S]{0,160}fail-closed/, `${documentName} 必须对旧 blocking-risk schema fail-closed`);
   assert.match(
     documentText,
     /v2[\s\S]*lockf[\s\S]*dev\/inode\/uid\/mode[\s\S]*staging[\s\S]*write-ahead transaction[\s\S]*remote-tracking ref/,
@@ -807,6 +830,7 @@ const {
   resolveCurrentReleaseHeaderContract: resolveCasebookDesignCurrentHeaderContract,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs')).href);
 const {
+  QWORK_RELEASE_BLOCKING_RISK_SCHEMA: casebookDesignBlockingRiskSchema,
   QWORK_MR1559_MERGE_COMMIT_SHA: casebookDesignSuccessorMerge,
   QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS: casebookDesignSuccessorPaths,
   auditQworkReleaseBlockingRisk: auditCasebookDesignBlockingRisk,
@@ -815,6 +839,9 @@ const {
   QWORK_RELEASE_INTAKE_TOOL_VERSION: casebookDesignIntakeToolVersion,
   mapReleaseImpact: mapCasebookDesignReleaseImpact,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-intake.mjs')).href);
+assert.equal(casebookDesignBlockingRiskSchema, 'qbot-qwork-release-blocking-risk-attestation/v4');
+assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.6.2');
+assert.equal(casebookDesignSuccessorPaths.length, 9, 'MR !1559 v4 必须精确审计 9 个受保护源码文件');
 const casebookDesignStableValue = (value) => {
   if (Array.isArray(value)) return value.map(casebookDesignStableValue);
   if (value && typeof value === 'object') {
@@ -886,22 +913,65 @@ const casebookDesignBlockingRisk = ({ blocked, head }) => {
 require('./host-core/agent/execution-worker-entry.cjs');
 `;
   const successorManagerSource = blocked ? '// blocked successor manager fixture' : `
-async function acquire(operation, identity) {
-  const requestId = identity.requestId;
-  if (executions.size >= maxConcurrentExecutions) {
-    const error = new Error('execution worker admission is closed');
-    error.code = 'execution_worker_pressure_admission_closed';
-    throw error;
+function managerError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+function validateAcquisition(manager, identity) {
+  const requestId = String(identity?.requestId || '').trim();
+  if (!requestId) throw managerError('execution_worker_identity_missing', 'requestId is required');
+  return requestId;
+}
+function waitForExecutionSlot(manager, requestId, signal) {
+  if (manager.executions.size >= manager.maxConcurrentExecutions) {
+    return Promise.reject(managerError('execution_worker_pressure_admission_closed', 'queue full'));
   }
-  const supervisor = supervisorFactory({ maxPendingRequests: 1, maxRestarts: 0 });
-  const record = { supervisor };
-  executions.set(requestId, record);
-  return {
-    release: async () => {
-      executions.delete(requestId);
-      await supervisor.stop();
-    },
-  };
+  return Promise.resolve(true);
+}
+function stopExecutionRecord(manager, requestId, record) {
+  return Promise.resolve().then(() => record.supervisor.stop());
+}
+function releaseExecutionRecord(manager, requestId, record) {
+  if (record.released) return record.stopPromise;
+  record.released = true;
+  manager.executions.delete(requestId);
+  return stopExecutionRecord(manager, requestId, record);
+}
+function drainExecutionRecord(manager, requestId, record, settlement) {
+  manager.executions.delete(requestId);
+  return Promise.resolve(settlement).then(() => stopExecutionRecord(manager, requestId, record));
+}
+function executionWorkerLease(manager, requestId, record) {
+  return Object.freeze({
+    drain: (settlement) => drainExecutionRecord(manager, requestId, record, settlement),
+    release: () => releaseExecutionRecord(manager, requestId, record),
+    supervisor: record.supervisor,
+  });
+}
+function createExecutionRecord(supervisor) {
+  return { released: false, stopPromise: null, supervisor };
+}
+function createExecutionSupervisor(manager) {
+  return manager.supervisorFactory({
+    ...manager.supervisorOptions,
+    maxPendingRequests: 1,
+    maxRestarts: 0,
+  });
+}
+async function acquireExecutionWorker(manager, authority, identity, options = {}) {
+  const requestId = validateAcquisition(manager, identity);
+  await waitForExecutionSlot(manager, requestId, options.signal);
+  const supervisor = createExecutionSupervisor(manager);
+  const record = createExecutionRecord(supervisor);
+  manager.executions.set(requestId, record);
+  return executionWorkerLease(manager, requestId, record);
+}
+function createExecutionWorkerManager() {
+  const manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };
+  return Object.freeze({
+    acquire: (authority, identity, options) => acquireExecutionWorker(manager, authority, identity, options),
+  });
 }
 `;
   const successorSupervisorSource = blocked ? '// blocked successor supervisor fixture' : `
@@ -912,22 +982,44 @@ const onExit = (code, signal) => {
 };
 `;
   const successorDesktopHostSource = blocked ? '// blocked successor desktop host fixture' : `
-async function runAgentInExecutionWorker(identity, signal) {
+const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
+async function runAgentInExecutionWorker(supervisor, identity, signal) {
+  if (!supervisor || supervisor.enabled !== true) throw new Error('execution worker unavailable');
   let executionWorkerLease = null;
+  const contextUsageLease = createExecutionWorkerContextUsageLease({ timeoutMs: 1000 });
   try {
-    executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
-    const supervisor = executionWorkerLease.supervisor;
-    await supervisor.request();
+    executionWorkerLease = await supervisor.acquire('execution.start', identity, { signal });
+    await executionWorkerLease.supervisor.request();
   } finally {
-    await executionWorkerLease?.release?.();
+    await contextUsageLease.release(executionWorkerLease);
   }
 }
+`;
+  const successorContextUsageSource = blocked ? '// blocked successor context usage fixture' : `
+const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage-lease.cjs');
+module.exports = { createExecutionWorkerContextUsageLease };
+`;
+  const successorContextUsageLeaseSource = blocked ? '// blocked successor context usage lease fixture' : `
+function createExecutionWorkerContextUsageLease() {
+  const release = async (executionWorkerLease, completed = false) => {
+    if (!executionWorkerLease) return;
+    if (completed) {
+      executionWorkerLease.drain(Promise.resolve(), { timeoutMs: 1 });
+      return;
+    }
+    await executionWorkerLease.release();
+  };
+  return Object.freeze({ release });
+}
+module.exports = { createExecutionWorkerContextUsageLease };
 `;
   const fileSource = (filePath) => {
     if (filePath === 'electron/execution-worker.cjs') return successorEntrySource;
     if (filePath === 'electron/host-core/agent/execution-worker-manager.cjs') return successorManagerSource;
     if (filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') return successorSupervisorSource;
     if (filePath === 'electron/host-core/agent/desktop-host-context.cjs') return successorDesktopHostSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-context-usage.cjs') return successorContextUsageSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-context-usage-lease.cjs') return successorContextUsageLeaseSource;
     return `// observed successor release source: ${filePath}\n`;
   };
   const files = casebookDesignSuccessorPaths.map((filePath) => {
@@ -1182,9 +1274,10 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
   assert.equal(sourceContractOriginCount, 1, '测试夹具必须真实包含 !1560 origin changes 鉴证');
   assert.equal(sourceContractOriginVerifiedCount, 1, '测试夹具的 !1560 origin changes 鉴证必须 VERIFIED');
   const risk = casebookDesignBlockingRisk({ blocked, head });
+  assert.equal(risk.schema_version, casebookDesignBlockingRiskSchema, '测试夹具必须生成当前 blocking-risk schema');
   assert.equal(risk.architecture, 'per-turn-utility-process/v1', '测试夹具必须按 !1559 后继架构审计当前 release');
   assert.equal(risk.assertion_owner?.mr_iid, '1559', '测试夹具必须由 !1559 后继合同接管阻断风险断言');
-  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部七个受保护源码文件');
+  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部九个受保护源码文件');
   const riskFailureIds = [...risk.failure_ids];
   const commitAccounting = mergeRequests.map((mr) => ({
     commit: mr.commit,
@@ -13078,7 +13171,7 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*37 个增量 MR[\s\S]*171 个总 MR/, '两份规范必须记录 !1573 后的 r15 正式设计边界');
   assert.match(documentText, /casebook-build-audit\.json[\s\S]*release_intake\.execution_authorized=false[\s\S]*原始 `release-intake\.json` 顶层\s*不\s*定义 `execution_authorized`/, '两份规范必须准确区分构建审计授权包装层与原始 intake 顶层字段');
   assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
-  assert.match(documentText, /qbot-release-intake\/1\.6\.1[\s\S]*iid=1573[\s\S]*6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*11 条[\s\S]*SIT-MEM-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*G1\/G2\/G3\/G4[\s\S]*错误 IID[\s\S]*错误 merge SHA[\s\S]*content_sha256[\s\S]*BLOCKED/, '两份规范必须冻结 !1573 双身份专用 impact、G4 覆盖和重哈希语义重放合同');
+  assert.match(documentText, /qbot-release-intake\/1\.6\.2[\s\S]*iid=1573[\s\S]*6d482c9ccbceb74d4ebf81610d980e5fe15def6c[\s\S]*11 条[\s\S]*SIT-MEM-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*G1\/G2\/G3\/G4[\s\S]*错误 IID[\s\S]*错误 merge SHA[\s\S]*content_sha256[\s\S]*BLOCKED/, '两份规范必须冻结 !1573 双身份专用 impact、G4 覆盖和重哈希语义重放合同');
   assert.match(documentText, /deepbankv2-mr-1573-memory-session-profile-stability\/v1[\s\S]*claim_scope=source_and_test_declarations[\s\S]*test_execution_attested=false[\s\S]*(?:不得|禁止).*冒充/, '两份规范必须区分 !1573 源码声明鉴证与桌面 E2E 结论');
   assert.match(documentText, r9IncrementalMrSequence, '两份规范必须完整同序列出 r9 的57个增量MR');
   assert.match(documentText, /!1516[\s\S]*MRSMOKE-FAIL-001[\s\S]*MRSMOKE-ROUTE-001[\s\S]*BETA-CHAT-005[\s\S]*BETA-PERF-003/, '两份规范必须固定MR !1516的四条精确覆盖映射');

@@ -188,6 +188,104 @@ async function runAgentInExecutionWorker(identity, signal) {
 }
 `;
 
+const delegatedSuccessorManager = `
+function managerError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+function validateAcquisition(manager, identity) {
+  const requestId = String(identity?.requestId || '').trim();
+  if (!requestId) throw managerError('execution_worker_identity_missing', 'requestId is required');
+  return requestId;
+}
+function waitForExecutionSlot(manager, requestId, signal) {
+  if (manager.executions.size >= manager.maxConcurrentExecutions) {
+    return Promise.reject(managerError('execution_worker_pressure_admission_closed', 'queue full'));
+  }
+  return Promise.resolve(true);
+}
+function stopExecutionRecord(manager, requestId, record) {
+  return Promise.resolve().then(() => record.supervisor.stop());
+}
+function releaseExecutionRecord(manager, requestId, record) {
+  if (record.released) return record.stopPromise;
+  record.released = true;
+  manager.executions.delete(requestId);
+  return stopExecutionRecord(manager, requestId, record);
+}
+function drainExecutionRecord(manager, requestId, record, settlement) {
+  manager.executions.delete(requestId);
+  return Promise.resolve(settlement).then(() => stopExecutionRecord(manager, requestId, record));
+}
+function executionWorkerLease(manager, requestId, record) {
+  return Object.freeze({
+    drain: (settlement) => drainExecutionRecord(manager, requestId, record, settlement),
+    release: () => releaseExecutionRecord(manager, requestId, record),
+    supervisor: record.supervisor,
+  });
+}
+function createExecutionRecord(supervisor) {
+  return { released: false, stopPromise: null, supervisor };
+}
+function createExecutionSupervisor(manager) {
+  return manager.supervisorFactory({
+    ...manager.supervisorOptions,
+    maxPendingRequests: 1,
+    maxRestarts: 0,
+  });
+}
+async function acquireExecutionWorker(manager, authority, identity, options = {}) {
+  const requestId = validateAcquisition(manager, identity);
+  await waitForExecutionSlot(manager, requestId, options.signal);
+  const supervisor = createExecutionSupervisor(manager);
+  const record = createExecutionRecord(supervisor);
+  manager.executions.set(requestId, record);
+  return executionWorkerLease(manager, requestId, record);
+}
+function createExecutionWorkerManager() {
+  const manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };
+  return Object.freeze({
+    acquire: (authority, identity, options) => acquireExecutionWorker(manager, authority, identity, options),
+  });
+}
+`;
+
+const successorContextUsage = `
+const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage-lease.cjs');
+module.exports = { createExecutionWorkerContextUsageLease };
+`;
+
+const successorContextUsageLease = `
+function createExecutionWorkerContextUsageLease() {
+  const release = async (executionWorkerLease, completed = false) => {
+    if (!executionWorkerLease) return;
+    if (completed) {
+      executionWorkerLease.drain(Promise.resolve(), { timeoutMs: 1 });
+      return;
+    }
+    await executionWorkerLease.release();
+  };
+  return Object.freeze({ release });
+}
+module.exports = { createExecutionWorkerContextUsageLease };
+`;
+
+const delegatedSuccessorDesktopHost = `
+const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
+async function runAgentInExecutionWorker(supervisor, identity, signal) {
+  if (!supervisor || supervisor.enabled !== true) throw new Error('execution worker unavailable');
+  let executionWorkerLease = null;
+  const contextUsageLease = createExecutionWorkerContextUsageLease({ timeoutMs: 1000 });
+  try {
+    executionWorkerLease = await supervisor.acquire('execution.start', identity, { signal });
+    await executionWorkerLease.supervisor.request();
+  } finally {
+    await contextUsageLease.release(executionWorkerLease);
+  }
+}
+`;
+
 function successorFiles(overrides = new Map()) {
   const byPath = new Map([
     ['electron/execution-worker.cjs', successorEntry],
@@ -200,6 +298,15 @@ function successorFiles(overrides = new Map()) {
     path: filePath,
     source: byPath.get(filePath) || `// observed current release source: ${filePath}\n`,
   }));
+}
+
+function successorRisk(overrides = new Map()) {
+  return auditQworkReleaseBlockingRisk({
+    releaseHead: QWORK_MR1559_MERGE_COMMIT_SHA,
+    originAncestry: ancestry(QWORK_MR1559_MERGE_COMMIT_SHA),
+    successorAncestry: successorAncestry(),
+    files: successorFiles(overrides),
+  });
 }
 
 function rehashRisk(risk) {
@@ -434,6 +541,343 @@ test('MR !1559 acquire and release tokens in different try/finally scopes do not
     ])),
   });
   assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]]);
+});
+
+test('MR !1559 manager audit binds the acquire implementation exported by createExecutionWorkerManager', () => {
+  const managerWithUnexportedDecoy = `${successorManager.replace(
+    'function createExecutionWorkerManager(manager) {\n  return { acquire: (operation, identity, options) => acquireExecutionWorker(manager, operation, identity, options) };\n}',
+    `async function acquireReturnedByManager(manager, operation, identity, options) {
+      return { release: async () => {}, supervisor: null };
+    }
+    function createExecutionWorkerManager(manager) {
+      return { acquire: (operation, identity, options) => acquireReturnedByManager(manager, operation, identity, options) };
+    }`,
+  )}`;
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', managerWithUnexportedDecoy],
+  ]));
+  assert.equal(risk.status, 'BLOCKED');
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[1]), true);
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+});
+
+test('MR !1559 acquire delegation must directly return the helper with its captured manager', () => {
+  const acquireDelegate = 'acquire: (operation, identity, options) => acquireExecutionWorker(manager, operation, identity, options)';
+  for (const replacement of [
+    'acquire: (operation, identity, options) => acquireExecutionWorker(unrelatedManager, operation, identity, options)',
+    'acquire: (operation, identity, options) => enabled && acquireExecutionWorker(manager, operation, identity, options)',
+    'acquire: (operation, identity, options) => enabled ? acquireExecutionWorker(manager, operation, identity, options) : null',
+    `acquire: (operation, identity, options) => {
+      switch (mode) {
+        case 'enabled': return acquireExecutionWorker(manager, operation, identity, options);
+        default: return null;
+      }
+    }`,
+  ]) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', successorManager.replace(
+        acquireDelegate,
+        replacement,
+      )],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', replacement);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, replacement);
+  }
+});
+
+test('MR !1559 request index must derive from the current acquisition identity', () => {
+  const wrongRequestIdManager = successorManager.replace(
+    'const requestId = identity.requestId;',
+    'const requestId = unrelatedIdentity.requestId;',
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', wrongRequestIdManager],
+  ]));
+  assert.equal(risk.status, 'BLOCKED');
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+});
+
+test('MR !1559 requestId derivation rejects mixed fallback sources', () => {
+  for (const expression of [
+    'otherRequestId || identity.requestId',
+    'identity.requestId || otherRequestId',
+  ]) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', successorManager.replace(
+        'identity.requestId',
+        expression,
+      )],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', expression);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, expression);
+  }
+});
+
+test('MR !1559 supervisor policy requires unique effective top-level values without later overrides', () => {
+  for (const policy of [
+    '{ maxPendingRequests: 9, nested: { maxPendingRequests: 1, maxRestarts: 0 }, maxRestarts: 8 }',
+    '{ maxPendingRequests: 1, maxRestarts: 0, ...unsafePolicyOverride }',
+    "{ maxPendingRequests: 1, maxRestarts: 0, ['maxPendingRequests']: 9 }",
+    '{ maxPendingRequests: 1, maxRestarts: 0, [dynamicPolicyKey]: 9 }',
+  ]) {
+    const wrongPolicyManager = successorManager.replace(
+      '{ maxPendingRequests: 1, maxRestarts: 0 }',
+      policy,
+    );
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', wrongPolicyManager],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', policy);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[1]), true, policy);
+  }
+});
+
+test('MR !1559 delete and stop in mutually exclusive release branches do not satisfy isolation', () => {
+  const mutuallyExclusiveRelease = successorManager.replace(
+    `const release = async () => {
+    manager.executions.delete(requestId);
+    await supervisor.stop();
+  };`,
+    `const release = async () => {
+      if (deleteOnly) manager.executions.delete(requestId);
+      else await supervisor.stop();
+    };`,
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', mutuallyExclusiveRelease],
+  ]));
+  assert.equal(risk.status, 'BLOCKED');
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+});
+
+test('MR !1559 release delete and stop must not be hidden in conditional expressions or switch cases', () => {
+  const releaseBody = `const release = async () => {
+    manager.executions.delete(requestId);
+    await supervisor.stop();
+  };`;
+  for (const replacement of [
+    `const release = async () => {
+      enabled && manager.executions.delete(requestId);
+      await supervisor.stop();
+    };`,
+    `const release = async () => {
+      enabled ? manager.executions.delete(requestId) : noOp();
+      await supervisor.stop();
+    };`,
+    `const release = async () => {
+      manager.executions.delete(requestId);
+      switch (mode) {
+        case 'stop': await supervisor.stop(); break;
+        default: break;
+      }
+    };`,
+  ]) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', successorManager.replace(
+        releaseBody,
+        replacement,
+      )],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', replacement);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, replacement);
+  }
+});
+
+test('MR !1559 release promises must be awaited or returned through every delegated layer', () => {
+  for (const source of [
+    successorManager.replace('await supervisor.stop();', 'supervisor.stop();'),
+    delegatedSuccessorManager.replace(
+      'return Promise.resolve().then(() => record.supervisor.stop());',
+      'record.supervisor.stop();\n  return Promise.resolve(false);',
+    ),
+    delegatedSuccessorManager.replace(
+      'return stopExecutionRecord(manager, requestId, record);',
+      'stopExecutionRecord(manager, requestId, record);\n  return Promise.resolve(false);',
+    ),
+    delegatedSuccessorManager.replace(
+      'release: () => releaseExecutionRecord(manager, requestId, record),',
+      'release: () => { releaseExecutionRecord(manager, requestId, record); },',
+    ),
+  ]) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', source],
+    ]));
+    assert.equal(risk.status, 'BLOCKED');
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+  }
+});
+
+test('MR !1559 stop promise cannot be hidden by callback, comma, or logical expressions', () => {
+  for (const replacement of [
+    'return runCallback(() => record.supervisor.stop());',
+    'return record.supervisor.stop(), Promise.resolve(false);',
+    'return record.supervisor.stop() && Promise.resolve(false);',
+    'return record.supervisor.stop() || Promise.resolve(false);',
+  ]) {
+    const source = delegatedSuccessorManager.replace(
+      'return Promise.resolve().then(() => record.supervisor.stop());',
+      replacement,
+    );
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', source],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', replacement);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, replacement);
+  }
+});
+
+test('MR !1559 creator manager binding must be unique and immutable before export', () => {
+  const parameterRebound = successorManager.replace(
+    'function createExecutionWorkerManager(manager) {\n  return',
+    'function createExecutionWorkerManager(manager) {\n  manager = unrelatedManager;\n  return',
+  );
+  const localRebound = delegatedSuccessorManager.replace(
+    'const manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };',
+    `let manager = { executions: new Map(), maxConcurrentExecutions: 16, supervisorOptions: {} };
+  manager = unrelatedManager;`,
+  );
+  for (const source of [parameterRebound, localRebound]) {
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', source],
+    ]));
+    assert.equal(risk.status, 'BLOCKED');
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+  }
+});
+
+test('MR !1559 requestId helper rejects bare returns and post-return derivation', () => {
+  for (const replacement of [
+    `if (skipIdentity) return;
+  return requestId;`,
+    `if (skipIdentity) return lateRequestId;
+  const lateRequestId = identity.requestId;
+  return requestId;`,
+  ]) {
+    const source = delegatedSuccessorManager.replace('return requestId;', replacement);
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', source],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', replacement);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, replacement);
+  }
+});
+
+test('MR !1559 drain delegation must forward its one public settlement exactly', () => {
+  const original = 'drain: (settlement) => drainExecutionRecord(manager, requestId, record, settlement),';
+  for (const delegateCall of [
+    'drainExecutionRecord(manager, requestId, record)',
+    'drainExecutionRecord(manager, requestId, record, Promise.resolve())',
+    'drainExecutionRecord(manager, requestId, settlement, record)',
+    'drainExecutionRecord(manager, requestId, record, settlement, extra)',
+  ]) {
+    const source = delegatedSuccessorManager.replace(
+      original,
+      `drain: (settlement) => ${delegateCall},`,
+    );
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', source],
+    ]));
+    assert.equal(risk.status, 'BLOCKED', delegateCall);
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true, delegateCall);
+  }
+});
+
+test('MR !1559 inline release may directly return the supervisor stop promise', () => {
+  const directReturnManager = successorManager.replace(
+    `const release = async () => {
+    manager.executions.delete(requestId);
+    await supervisor.stop();
+  };`,
+    `const release = () => {
+    manager.executions.delete(requestId);
+    return supervisor.stop();
+  };`,
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', directReturnManager],
+  ]));
+  assert.equal(risk.status, 'VERIFIED');
+  assert.deepEqual(risk.failure_ids, []);
+});
+
+test('MR !1559 desktop host cannot substitute an unrelated acquire/release pool', () => {
+  const unrelatedDesktopPool = successorDesktopHost.replace(
+    'executionWorkerManager.acquire',
+    'unrelatedPool.acquire',
+  );
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/desktop-host-context.cjs', unrelatedDesktopPool],
+  ]));
+  assert.equal(risk.status, 'BLOCKED');
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+});
+
+test('MR !1559 current helper delegation preserves manager and desktop lease ownership', () => {
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', delegatedSuccessorManager],
+    ['electron/host-core/agent/desktop-host-context.cjs', delegatedSuccessorDesktopHost],
+    ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+    ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
+  ]));
+  assert.equal(risk.status, 'VERIFIED');
+  assert.deepEqual(risk.failure_ids, []);
+});
+
+test('MR !1559 context helper and finally release require one closed ownership chain', () => {
+  const unboundWrapper = `
+const { createExecutionWorkerContextUsageLease: realHelper } = require('./execution-worker-context-usage-lease.cjs');
+const { createExecutionWorkerContextUsageLease } = require('./unrelated-context-usage-lease.cjs');
+module.exports = { createExecutionWorkerContextUsageLease };
+`;
+  const wrongReturnedRelease = successorContextUsageLease.replace(
+    'return Object.freeze({ release });',
+    'return Object.freeze({ release: unrelatedRelease });',
+  );
+  const wrongExport = successorContextUsageLease.replace(
+    'module.exports = { createExecutionWorkerContextUsageLease };',
+    'module.exports = { createExecutionWorkerContextUsageLease: unrelatedHelper };',
+  );
+  const conditionalDelegatedRelease = delegatedSuccessorDesktopHost.replace(
+    'await contextUsageLease.release(executionWorkerLease);',
+    'if (shouldRelease) await contextUsageLease.release(executionWorkerLease);',
+  );
+  const conditionalDirectRelease = successorDesktopHost.replace(
+    'await executionWorkerLease?.release?.();',
+    'if (shouldRelease) await executionWorkerLease?.release?.();',
+  );
+  for (const overrides of [
+    new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', delegatedSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', delegatedSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', unboundWrapper],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
+    ]),
+    new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', delegatedSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', delegatedSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', wrongReturnedRelease],
+    ]),
+    new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', delegatedSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', delegatedSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', wrongExport],
+    ]),
+    new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', delegatedSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', conditionalDelegatedRelease],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
+    ]),
+    new Map([
+      ['electron/host-core/agent/desktop-host-context.cjs', conditionalDirectRelease],
+    ]),
+  ]) {
+    const risk = successorRisk(overrides);
+    assert.equal(risk.status, 'BLOCKED');
+    assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
+  }
 });
 
 test('MR !1559 assertions fail closed when successor relationship is not proven', () => {

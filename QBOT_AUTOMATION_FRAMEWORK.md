@@ -1647,7 +1647,7 @@ merge”的 first-parent compare；后继架构切换点同样双向证明。只
 `VERIFIED_NOT_APPLICABLE`，正反向均不完整、API 错误或两边同时声称完整都必须保持
 `UNKNOWN/BLOCKED`。
 
-从 `qbot-release-intake/1.6.1` 起，intake 复核还必须按 first-parent 顺序逐条重放 MR
+从 `qbot-release-intake/1.6.2` 起，intake 复核还必须按 first-parent 顺序逐条重放 MR
 语义：MR IID/commit/parent/parent_count/merge 或 squash 归因必须与
 `commit_accounting` 一一绑定，元数据必须来自 `gitlab-api-changes` 且保持
 `state=merged`、目标分支正确。复核器必须用报告中冻结的 commit subject/body、source
@@ -1667,15 +1667,23 @@ MR `!1573` 只有在 `iid=1573` 且 `merge_commit_sha` 精确等于
 后，即使攻击者同步重算 `content_sha256`，也必须因语义重放或汇总不一致而 `BLOCKED`。
 
 MR !1559 后继架构的阻断风险证明固定使用
-`qbot-qwork-release-blocking-risk-attestation/v3`。审计器必须先词法剔除注释、模板和正则
+`qbot-qwork-release-blocking-risk-attestation/v4`。审计器必须先词法剔除注释、模板和正则
 正文，并把普通字符串只作为真实调用参数/赋值值处理，禁止用注释或死字符串中的 token
 放行。clean-exit 必须在 `onExit` 函数体内形成
 `rejectPending(executionWorkerExitFailure(...))` 嵌套调用；pressure 必须从 acquisition
 实现沿真实调用链到达 admission `if`，并在同一 supervisor factory 调用中固定
 `maxPendingRequests: 1`、`maxRestarts: 0`；request set 与其 `release` 闭包的 delete/stop
 必须属于同一 acquisition。desktop host 还必须在同一函数的同一个 `try/finally` 中获取并
-释放同名 lease，入口必须是顶层真实 `require(...)`。旧 v2 证明或任一作用域/调用链断裂
-均须重新扫描并 `BLOCKED`，不得靠重算报告 SHA 复用。
+释放同名 lease：可直接 `await lease.release()`，也可通过在 `try` 前唯一创建、在
+`finally` 中唯一 awaited 调用的 `createExecutionWorkerContextUsageLease` helper 委派释放。
+委派链必须由 desktop host 顶层真实 `require('./execution-worker-context-usage.cjs')`，
+wrapper 必须顶层真实 `require('./execution-worker-context-usage-lease.cjs')`，且两个模块均唯一导出
+`createExecutionWorkerContextUsageLease`；实现必须对已完成 lease 执行 `drain(...)`，对未完成
+lease 执行 awaited `release()`。v4 因此固定审计 9 个受保护源码文件，包括新纳入的
+`electron/host-core/agent/execution-worker-context-usage.cjs` 和
+`electron/host-core/agent/execution-worker-context-usage-lease.cjs`。
+`qbot-release-intake/1.6.1` 及更旧 intake tool version、阻断风险 v2/v3 证明或任一
+作用域/调用链断裂均必须 fail-closed，重新扫描并 `BLOCKED`；不得靠重算报告 SHA 复用。
 
 正式扫描默认必须成功刷新 `release-ref`。Git fetch 的只读凭据与 GitLab API token 是两条
 独立链路：前者应由受管机器的短期只读 credential helper 提供，后者才通过本命令的 stdin

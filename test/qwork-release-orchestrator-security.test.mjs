@@ -8,6 +8,8 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  QWORK_RELEASE_INTAKE_TOOL_VERSION,
   scanQworkReleaseIntake,
 } from '../src/lib/qwork-release-intake.mjs';
 import {
@@ -18,6 +20,7 @@ import {
 import {
   QWORK_MR1552_MERGE_COMMIT_SHA,
   QWORK_MR1559_MERGE_COMMIT_SHA,
+  QWORK_RELEASE_BLOCKING_RISK_SCHEMA,
 } from '../src/lib/qwork-release-blocking-risks.mjs';
 import {
   QWORK_RELEASE_CASEBOOK_BASENAME,
@@ -35,6 +38,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const orchestrator = path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs');
 const observationCli = path.join(root, 'scripts', 'observe-qwork-release-ref.mjs');
 const intakeCli = path.join(root, 'scripts', 'scan-qwork-release-intake.mjs');
+const pretestCli = path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs');
 const canonicalRemote = 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2.git';
 
 const identity = {
@@ -513,6 +517,28 @@ function preserveFile(file, mutation, assertion) {
     fs.writeFileSync(file, original);
   }
 }
+
+test('release CLI help pins the current intake and blocking-risk contracts', () => {
+  for (const [label, script, args] of [
+    ['release intake scanner', intakeCli, ['--help']],
+    ['release orchestrator', orchestrator, ['--help']],
+    ['Core Beta pretest', pretestCli, ['--help']],
+  ]) {
+    const result = spawnSync(process.execPath, [script, ...args], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `${label}: ${result.stderr || result.stdout}`);
+    assert.match(result.stdout, new RegExp(`report schema: ${QWORK_RELEASE_INTAKE_SCHEMA.replaceAll('/', '\\/')}`));
+    assert.match(result.stdout, new RegExp(`tool version: ${QWORK_RELEASE_INTAKE_TOOL_VERSION.replaceAll('/', '\\/')}`));
+    assert.match(result.stdout, new RegExp(`blocking-risk schema: ${QWORK_RELEASE_BLOCKING_RISK_SCHEMA.replaceAll('/', '\\/')}`));
+    assert.match(
+      result.stdout,
+      /旧 intake tool version 或旧 blocking-risk schema 一律 fail-closed，必须重新扫描。/,
+      `${label} 必须明确拒绝旧合同`,
+    );
+  }
+});
 
 test('GitLab token stdin option is an exact valueless flag for every release CLI', () => {
   const secret = 'must-not-appear-in-errors';

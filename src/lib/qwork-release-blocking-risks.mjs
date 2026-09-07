@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v3';
+export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v4';
 export const QWORK_MR1552_EXECUTION_RUNNER_RISK_ID = 'deepbankv2-mr-1552-execution-runner-isolation/v1';
 export const QWORK_MR1552_MERGE_COMMIT_SHA = '0720d31baf1d53bfd61e5428173d39b59472cdb7';
 export const QWORK_MR1559_EXECUTION_RUNNER_SUCCESSOR_ID = 'deepbankv2-mr-1559-per-turn-utility-process/v1';
@@ -21,6 +21,8 @@ export const QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS = Object.freeze([
   'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
   'electron/host-core/agent/desktop-host-context.cjs',
   'electron/host-core/agent/embed-execution-worker.cjs',
+  'electron/host-core/agent/execution-worker-context-usage.cjs',
+  'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
 ]);
 export const QWORK_RELEASE_BLOCKING_RISK_PROTECTED_PATHS = Object.freeze([
   ...new Set([...QWORK_MR1552_LEGACY_PROTECTED_PATHS, ...QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS]),
@@ -537,19 +539,477 @@ function callHasIdentifierArguments(tokens, call, expected) {
   });
 }
 
-function objectArgumentHasNumericProperty(tokens, call, property, expectedValue) {
+function identifierArguments(tokens, call) {
+  const ranges = splitCallArguments(tokens, call);
+  const values = [];
+  for (const [start, end] of ranges) {
+    if (end - start !== 1 || tokens[start]?.type !== 'identifier') return null;
+    values.push(tokens[start].value);
+  }
+  return values;
+}
+
+function assignedIdentifierForCall(tokens, call) {
+  let cursor = call.start - 1;
+  if (tokens[cursor]?.value === 'await' || tokens[cursor]?.value === 'void') cursor -= 1;
+  if (tokens[cursor]?.value !== '=' || tokens[cursor - 1]?.type !== 'identifier') return '';
+  return tokens[cursor - 1].value;
+}
+
+function callIsAwaited(tokens, call) {
+  return tokens[call.start - 1]?.value === 'await';
+}
+
+function callIsDirectlyReturned(tokens, call) {
+  return tokens[call.start - 1]?.value === 'return';
+}
+
+function identifierArgument(tokens, call, index) {
+  const range = splitCallArguments(tokens, call)[index];
+  return range && range[1] - range[0] === 1 && tokens[range[0]]?.type === 'identifier'
+    ? tokens[range[0]].value
+    : '';
+}
+
+function topLevelRanges(tokens, start, end) {
+  const ranges = [];
+  let rangeStart = start;
+  let roundDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let index = start; index < end; index += 1) {
+    const value = tokens[index]?.value;
+    if (value === '(') roundDepth += 1;
+    else if (value === ')') roundDepth -= 1;
+    else if (value === '{') braceDepth += 1;
+    else if (value === '}') braceDepth -= 1;
+    else if (value === '[') bracketDepth += 1;
+    else if (value === ']') bracketDepth -= 1;
+    else if (value === ',' && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+      if (rangeStart < index) ranges.push([rangeStart, index]);
+      rangeStart = index + 1;
+    }
+  }
+  if (rangeStart < end) ranges.push([rangeStart, end]);
+  return ranges;
+}
+
+function objectProperties(tokens, objectOpen, objectClose) {
+  if (tokens[objectOpen]?.value !== '{' || tokens[objectClose]?.value !== '}') return null;
+  const properties = [];
+  for (const [start, end] of topLevelRanges(tokens, objectOpen + 1, objectClose)) {
+    if (tokens[start]?.value === '...') {
+      properties.push({ spread: true, start, end, key: '', value_start: start + 1, value_end: end });
+      continue;
+    }
+    let colon = -1;
+    let roundDepth = 0;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    for (let index = start; index < end; index += 1) {
+      const value = tokens[index]?.value;
+      if (value === '(') roundDepth += 1;
+      else if (value === ')') roundDepth -= 1;
+      else if (value === '{') braceDepth += 1;
+      else if (value === '}') braceDepth -= 1;
+      else if (value === '[') bracketDepth += 1;
+      else if (value === ']') bracketDepth -= 1;
+      else if (value === ':' && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+        colon = index;
+        break;
+      }
+    }
+    const keyToken = tokens[start];
+    if (!keyToken || !['identifier', 'string'].includes(keyToken.type)) {
+      properties.push({ spread: false, start, end, key: '', value_start: end, value_end: end });
+      continue;
+    }
+    if (colon < 0) {
+      properties.push({ spread: false, start, end, key: keyToken.value, value_start: start, value_end: end });
+      continue;
+    }
+    properties.push({
+      spread: false,
+      start,
+      end,
+      key: keyToken.value,
+      value_start: colon + 1,
+      value_end: end,
+    });
+  }
+  return properties;
+}
+
+function uniqueEffectiveProperty(properties, key) {
+  const matches = properties.filter((property) => !property.spread && property.key === key);
+  if (matches.length !== 1) return null;
+  const [match] = matches;
+  if (properties.some((property) => property.spread && property.start > match.start)) return null;
+  return match;
+}
+
+function strictNumericPolicy(tokens, call) {
   const [first] = splitCallArguments(tokens, call);
-  if (!first || tokens[first[0]]?.value !== '{') return false;
+  if (!first || tokens[first[0]]?.value !== '{') return { one_pending: false, no_restarts: false, same_call: false };
   const objectClose = matchingTokenIndex(tokens, first[0], '{', '}', first[1]);
-  if (objectClose < 0) return false;
-  for (let index = first[0] + 1; index + 2 < objectClose; index += 1) {
-    if (tokens[index]?.type === 'identifier'
-      && tokens[index].value === property
-      && tokens[index + 1]?.value === ':'
-      && tokens[index + 2]?.type === 'number'
-      && Number(tokens[index + 2].value) === expectedValue) return true;
+  if (objectClose !== first[1] - 1) return { one_pending: false, no_restarts: false, same_call: false };
+  const properties = objectProperties(tokens, first[0], objectClose) || [];
+  const pending = uniqueEffectiveProperty(properties, 'maxPendingRequests');
+  const restarts = uniqueEffectiveProperty(properties, 'maxRestarts');
+  const hasTrailingComputedProperty = (property) => Boolean(property && properties.some((candidate) => (
+    candidate.start > property.start
+    && tokens[candidate.start]?.value === '['
+  )));
+  const onePending = Boolean(pending
+    && !hasTrailingComputedProperty(pending)
+    && pending.value_end - pending.value_start === 1
+    && tokens[pending.value_start]?.type === 'number'
+    && Number(tokens[pending.value_start].value) === 1);
+  const noRestarts = Boolean(restarts
+    && !hasTrailingComputedProperty(restarts)
+    && restarts.value_end - restarts.value_start === 1
+    && tokens[restarts.value_start]?.type === 'number'
+    && Number(tokens[restarts.value_start].value) === 0);
+  return { one_pending: onePending, no_restarts: noRestarts, same_call: onePending && noRestarts };
+}
+
+function simpleParameterNames(tokens, scope) {
+  let open = -1;
+  let close = -1;
+  if (scope.kind === 'arrow') {
+    const arrow = scope.body_open - 1;
+    if (tokens[arrow]?.value !== '=>') return [];
+    if (tokens[arrow - 1]?.value === ')') {
+      close = arrow - 1;
+      open = matchingOpenTokenIndex(tokens, close);
+    } else if (tokens[arrow - 1]?.type === 'identifier') {
+      return [tokens[arrow - 1].value];
+    }
+  } else if (tokens[scope.body_open - 1]?.value === ')') {
+    close = scope.body_open - 1;
+    open = matchingOpenTokenIndex(tokens, close);
+  }
+  if (open < 0 || close < 0) return [];
+  return topLevelRanges(tokens, open + 1, close).map(([start, end]) => (
+    tokens[start]?.type === 'identifier'
+      && (end - start === 1 || tokens[start + 1]?.value === '=')
+      ? tokens[start].value
+      : ''
+  ));
+}
+
+function expressionEnd(tokens, start, limit = tokens.length) {
+  let roundDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let index = start; index < limit; index += 1) {
+    const value = tokens[index]?.value;
+    if (value === '(') roundDepth += 1;
+    else if (value === ')') {
+      if (roundDepth === 0) return index;
+      roundDepth -= 1;
+    } else if (value === '{') braceDepth += 1;
+    else if (value === '}') {
+      if (braceDepth === 0) return index;
+      braceDepth -= 1;
+    } else if (value === '[') bracketDepth += 1;
+    else if (value === ']') bracketDepth -= 1;
+    else if ((value === ';' || value === ',')
+      && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) return index;
+  }
+  return limit;
+}
+
+function returnExpressionEnd(tokens, start, limit = tokens.length) {
+  let roundDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let index = start; index < limit; index += 1) {
+    const value = tokens[index]?.value;
+    if (value === '(') roundDepth += 1;
+    else if (value === ')') {
+      if (roundDepth === 0) return index;
+      roundDepth -= 1;
+    } else if (value === '{') braceDepth += 1;
+    else if (value === '}') {
+      if (braceDepth === 0) return index;
+      braceDepth -= 1;
+    } else if (value === '[') bracketDepth += 1;
+    else if (value === ']') bracketDepth -= 1;
+    else if (value === ';' && roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) return index;
+  }
+  return limit;
+}
+
+function assignmentExpression(tokens, variableName) {
+  const matches = [];
+  for (let index = 0; index + 2 < tokens.length; index += 1) {
+    if (tokens[index]?.type !== 'identifier' || tokens[index].value !== variableName
+      || tokens[index + 1]?.value !== '=') continue;
+    const end = expressionEnd(tokens, index + 2);
+    matches.push({
+      assignment_start: index,
+      declaration_kind: ['const', 'let', 'var'].includes(tokens[index - 1]?.value)
+        ? tokens[index - 1].value : '',
+      expression_start: index + 2,
+      expression_end: end,
+    });
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function rangeIsOnUnconditionalPath(tokens, start, end) {
+  return !conditionalBranchRanges(tokens).some(([branchStart, branchEnd]) => (
+    start >= branchStart && end <= branchEnd
+  ));
+}
+
+function rangeContainsMember(tokens, start, end, baseName, propertyName) {
+  for (let index = start; index + 2 < end; index += 1) {
+    if (tokens[index]?.type === 'identifier' && tokens[index].value === baseName
+      && ['.', '?.'].includes(tokens[index + 1]?.value)
+      && tokens[index + 2]?.type === 'identifier'
+      && tokens[index + 2].value === propertyName) return true;
   }
   return false;
+}
+
+function withoutWholeExpressionParentheses(tokens) {
+  let expression = tokens;
+  while (expression[0]?.value === '(') {
+    const close = matchingTokenIndex(expression, 0);
+    if (close !== expression.length - 1) break;
+    expression = expression.slice(1, -1);
+  }
+  return expression;
+}
+
+function expressionIsIdentityRequestId(tokens, identityName) {
+  const expression = withoutWholeExpressionParentheses(tokens);
+  const memberLength = expression[0]?.value === identityName
+    && ['.', '?.'].includes(expression[1]?.value)
+    && expression[2]?.value === 'requestId'
+    ? 3
+    : 0;
+  if (memberLength && expression.length === memberLength) return true;
+  if (memberLength
+    && expression.length === memberLength + 2
+    && ['||', '??'].includes(expression[memberLength]?.value)
+    && expression[memberLength + 1]?.type === 'string'
+    && expression[memberLength + 1].value === '') return true;
+
+  const stringCall = callAt(expression, 0);
+  if (!stringCall
+    || stringCall.path.length !== 1
+    || stringCall.path[0] !== 'String'
+    || expression[stringCall.close + 1]?.value !== '.'
+    || expression[stringCall.close + 2]?.value !== 'trim'
+    || expression[stringCall.close + 3]?.value !== '('
+    || expression[stringCall.close + 4]?.value !== ')'
+    || stringCall.close + 5 !== expression.length) return false;
+  const arguments_ = splitCallArguments(expression, stringCall);
+  return arguments_.length === 1
+    && expressionIsIdentityRequestId(
+      expression.slice(arguments_[0][0], arguments_[0][1]), identityName,
+    );
+}
+
+function uniqueScope(scopes, name, parent = undefined) {
+  const matches = scopes.filter((scope) => scope.name === name
+    && (parent === undefined || scope.parent === parent));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function scopeReachableTokens(tokens, scope, scopes) {
+  return reachableTokens(tokensOwnedByScope(tokens, scope, scopes));
+}
+
+function helperReturnsIdentityRequestId(tokens, scopes, helper, identityParameter) {
+  const owned = scopeReachableTokens(tokens, helper, scopes);
+  const returns = [];
+  for (let index = 0; index < owned.length; index += 1) {
+    if (owned[index]?.value !== 'return') continue;
+    const end = returnExpressionEnd(owned, index + 1);
+    returns.push([index, index + 1, end]);
+  }
+  if (!returns.length) return false;
+  return returns.every(([returnIndex, start, end]) => {
+    if (end <= start) return false;
+    if (expressionIsIdentityRequestId(owned.slice(start, end), identityParameter)) return true;
+    if (end - start !== 1 || owned[start]?.type !== 'identifier') return false;
+    const assignment = assignmentExpression(owned, owned[start].value);
+    return Boolean(assignment
+      && assignment.declaration_kind
+      && assignment.expression_end <= returnIndex
+      && rangeIsOnUnconditionalPath(
+        owned, assignment.assignment_start, assignment.expression_end,
+      )
+      && expressionIsIdentityRequestId(
+        owned.slice(assignment.expression_start, assignment.expression_end), identityParameter,
+      ));
+  });
+}
+
+function variableDerivesFromIdentityRequestId(
+  tokens, scopes, owned, variableName, identityName, beforeIndex = owned.length,
+) {
+  const assignment = assignmentExpression(owned, variableName);
+  if (!assignment
+    || !assignment.declaration_kind
+    || assignment.expression_end > beforeIndex
+    || !rangeIsOnUnconditionalPath(
+      owned, assignment.assignment_start, assignment.expression_end,
+    )) return false;
+  const expression = withoutWholeExpressionParentheses(
+    owned.slice(assignment.expression_start, assignment.expression_end),
+  );
+  if (expressionIsIdentityRequestId(expression, identityName)) return true;
+  const helperCalls = callsInTokens(expression).filter((call) => call.path.length === 1
+    && uniqueScope(scopes, call.path[0]));
+  if (helperCalls.length !== 1) return false;
+  const [call] = helperCalls;
+  if (call.start !== 0 || call.close !== expression.length - 1) return false;
+  const helper = uniqueScope(scopes, call.path[0]);
+  const helperParameters = simpleParameterNames(tokens, helper);
+  const identityIndex = splitCallArguments(expression, call)
+    .findIndex(([start, end]) => end - start === 1 && expression[start]?.value === identityName);
+  return identityIndex >= 0
+    && Boolean(helperParameters[identityIndex])
+    && helperReturnsIdentityRequestId(tokens, scopes, helper, helperParameters[identityIndex]);
+}
+
+function returnedObjectProperties(tokens, scope, scopes) {
+  const owned = scopeReachableTokens(tokens, scope, scopes);
+  const candidates = [];
+  for (let index = 0; index < owned.length; index += 1) {
+    if (owned[index]?.value !== 'return') continue;
+    let objectOpen = index + 1;
+    if (owned[objectOpen]?.value !== '{') {
+      const wrapperCall = callAt(owned, objectOpen);
+      if (!wrapperCall || !callPathEndsWith(wrapperCall, ['Object', 'freeze'])) continue;
+      const [first] = splitCallArguments(owned, wrapperCall);
+      if (!first || owned[first[0]]?.value !== '{') continue;
+      objectOpen = first[0];
+    }
+    const objectClose = matchingTokenIndex(owned, objectOpen, '{', '}');
+    if (objectClose < 0) continue;
+    candidates.push({
+      owned,
+      return_index: index,
+      object_open: objectOpen,
+      object_close: objectClose,
+      properties: objectProperties(owned, objectOpen, objectClose) || [],
+    });
+  }
+  return candidates;
+}
+
+function arrowDelegate(tokens, property, scopes) {
+  const value = tokens.slice(property.value_start, property.value_end);
+  const arrow = value.findIndex((token) => token.value === '=>');
+  if (arrow < 0) return null;
+  let publicParameters = [];
+  if (value[arrow - 1]?.value === ')') {
+    const open = matchingOpenTokenIndex(value, arrow - 1);
+    if (open < 0) return null;
+    publicParameters = topLevelRanges(value, open + 1, arrow - 1).map(([start, end]) => (
+      end - start === 1 && value[start]?.type === 'identifier' ? value[start].value : ''
+    ));
+  } else if (value[arrow - 1]?.type === 'identifier') {
+    publicParameters = [value[arrow - 1].value];
+  }
+  let expression = value.slice(arrow + 1);
+  if (expression[0]?.value === '{') {
+    const close = matchingTokenIndex(expression, 0, '{', '}');
+    if (close !== expression.length - 1) return null;
+    expression = expression.slice(1, close);
+    if (expression.at(-1)?.value === ';') expression = expression.slice(0, -1);
+    if (expression[0]?.value !== 'return') return null;
+    expression = expression.slice(1);
+  }
+  expression = withoutWholeExpressionParentheses(expression);
+  if (expression[0]?.value === 'await') expression = expression.slice(1);
+  const call = callAt(expression, 0);
+  if (!call
+    || call.close !== expression.length - 1
+    || call.path.length !== 1
+    || !uniqueScope(scopes, call.path[0])) return null;
+  return {
+    helper: uniqueScope(scopes, call.path[0]),
+    helper_name: call.path[0],
+    arguments: splitCallArguments(expression, call).map(([start, end]) => (
+      end - start === 1 && expression[start]?.type === 'identifier'
+        ? expression[start].value : ''
+    )),
+    public_parameters: publicParameters,
+  };
+}
+
+function creatorOwnsManagerBinding(tokens, creator, scopes, managerName, returnedObject) {
+  const assignmentOperators = new Set([
+    '=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '&&=', '||=', '??=', '++', '--',
+  ]);
+  const parameters = simpleParameterNames(tokens, creator);
+  const owned = scopeReachableTokens(tokens, creator, scopes);
+  const parameterBindings = parameters.filter((name) => name === managerName).length;
+  const localBindings = owned.flatMap((token, index) => (
+    token?.type === 'identifier'
+    && token.value === managerName
+    && owned[index + 1]?.value === '='
+    && ['const', 'let', 'var'].includes(owned[index - 1]?.value)
+      ? [{ index, kind: owned[index - 1].value }]
+      : []
+  ));
+  const writes = owned.flatMap((token, index) => {
+    if (token?.type !== 'identifier' || token.value !== managerName) return [];
+    if (assignmentOperators.has(owned[index + 1]?.value)
+      || ['++', '--'].includes(owned[index - 1]?.value)) return [index];
+    return [];
+  });
+  if (parameterBindings === 1 && localBindings.length === 0) return writes.length === 0;
+  if (parameterBindings !== 0 || localBindings.length !== 1) return false;
+  const [binding] = localBindings;
+  return binding.kind === 'const'
+    && binding.index < returnedObject.return_index
+    && rangeIsOnUnconditionalPath(owned, binding.index, binding.index + 2)
+    && writes.length === 1
+    && writes[0] === binding.index;
+}
+
+function exportedAcquireImplementation(tokens, scopes) {
+  const creator = uniqueScope(scopes, 'createExecutionWorkerManager');
+  if (!creator) return null;
+  const objects = returnedObjectProperties(tokens, creator, scopes).filter(({ properties }) => (
+    properties.some((property) => property.key === 'acquire')
+  ));
+  if (objects.length !== 1) return null;
+  const returnedObject = objects[0];
+  const { owned, properties } = returnedObject;
+  if (!rangeIsOnUnconditionalPath(
+    owned, returnedObject.return_index, returnedObject.object_close,
+  )) return null;
+  const acquire = uniqueEffectiveProperty(properties, 'acquire');
+  if (!acquire) return null;
+  const delegate = arrowDelegate(owned, acquire, scopes);
+  if (!delegate || !delegate.helper || delegate.public_parameters.length < 2) return null;
+  const helperParameters = simpleParameterNames(tokens, delegate.helper);
+  if (!helperParameters.length || helperParameters.length < delegate.arguments.length) return null;
+  if (delegate.arguments.length !== delegate.public_parameters.length + 1
+    || delegate.arguments.slice(1).join('\0') !== delegate.public_parameters.join('\0')) return null;
+  const managerArgument = delegate.arguments[0];
+  if (!managerArgument
+    || helperParameters[0] !== managerArgument
+    || !creatorOwnsManagerBinding(
+      tokens, creator, scopes, managerArgument, returnedObject,
+    )) return null;
+  const identityArgument = delegate.public_parameters[1];
+  const identityIndex = delegate.arguments.indexOf(identityArgument);
+  if (identityIndex < 0 || !helperParameters[0] || !helperParameters[identityIndex]) return null;
+  return {
+    acquisition: delegate.helper,
+    identity_name: helperParameters[identityIndex],
+    manager_name: helperParameters[0],
+  };
 }
 
 function pressureRejectionInIfBlock(tokens) {
@@ -591,77 +1051,365 @@ function pressureRejectionInIfBlock(tokens) {
   return false;
 }
 
-function reachableFunctionScopes(root, tokens, scopes) {
-  const byName = new Map();
-  for (const scope of scopes) {
-    if (!byName.has(scope.name)) byName.set(scope.name, []);
-    byName.get(scope.name).push(scope);
+function conditionalBranchRanges(tokens) {
+  const ranges = [];
+  const statementRange = (start) => {
+    if (tokens[start]?.value === '{') {
+      const close = matchingTokenIndex(tokens, start, '{', '}');
+      return close < 0 ? null : [start + 1, close, close + 1];
+    }
+    const end = expressionEnd(tokens, start);
+    return end <= start ? null : [start, end, Math.min(tokens.length, end + 1)];
+  };
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value !== 'if' || tokens[index + 1]?.value !== '(') continue;
+    const conditionClose = matchingTokenIndex(tokens, index + 1);
+    if (conditionClose < 0) continue;
+    const thenRange = statementRange(conditionClose + 1);
+    if (!thenRange) continue;
+    ranges.push([thenRange[0], thenRange[1]]);
+    if (tokens[thenRange[2]]?.value !== 'else') continue;
+    const elseRange = statementRange(thenRange[2] + 1);
+    if (elseRange) ranges.push([elseRange[0], elseRange[1]]);
   }
-  const reached = new Set([root]);
-  const queue = [root];
-  while (queue.length) {
-    const current = queue.shift();
-    const calledNames = new Set(callsInTokens(reachableTokens(tokensOwnedByScope(tokens, current, scopes)))
-      .map((call) => call.path.at(-1)));
-    for (const calledName of calledNames) {
-      for (const candidate of byName.get(calledName) || []) {
-        if (reached.has(candidate)) continue;
-        reached.add(candidate);
-        queue.push(candidate);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value === 'switch' && tokens[index + 1]?.value === '(') {
+      const conditionClose = matchingTokenIndex(tokens, index + 1);
+      const bodyOpen = conditionClose + 1;
+      const bodyClose = matchingTokenIndex(tokens, bodyOpen, '{', '}');
+      if (conditionClose >= 0 && bodyClose >= 0) ranges.push([bodyOpen + 1, bodyClose]);
+    }
+    if (tokens[index]?.value === '?') {
+      let roundDepth = 0;
+      let braceDepth = 0;
+      let bracketDepth = 0;
+      let nestedTernaries = 0;
+      let colon = -1;
+      for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+        const value = tokens[cursor]?.value;
+        if (value === '(') roundDepth += 1;
+        else if (value === ')') {
+          if (roundDepth === 0) break;
+          roundDepth -= 1;
+        } else if (value === '{') braceDepth += 1;
+        else if (value === '}') {
+          if (braceDepth === 0) break;
+          braceDepth -= 1;
+        } else if (value === '[') bracketDepth += 1;
+        else if (value === ']') {
+          if (bracketDepth === 0) break;
+          bracketDepth -= 1;
+        } else if (roundDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+          if (value === '?') nestedTernaries += 1;
+          else if (value === ':' && nestedTernaries === 0) {
+            colon = cursor;
+            break;
+          } else if (value === ':') nestedTernaries -= 1;
+          else if (value === ';') break;
+        }
+      }
+      if (colon >= 0) {
+        ranges.push([index + 1, colon]);
+        ranges.push([colon + 1, expressionEnd(tokens, colon + 1)]);
       }
     }
+    if (['&&', '||', '??'].includes(tokens[index]?.value)) {
+      ranges.push([index + 1, expressionEnd(tokens, index + 1)]);
+    }
   }
-  return [...reached];
+  return ranges;
+}
+
+function callIsOnUnconditionalPath(tokens, call) {
+  return !conditionalBranchRanges(tokens).some(([start, end]) => call.start >= start && call.close <= end);
+}
+
+function trimWholeExpressionParentheses(tokens, start, end) {
+  let expressionStart = start;
+  let expressionEnd_ = end;
+  while (tokens[expressionStart]?.value === '(') {
+    const close = matchingTokenIndex(tokens, expressionStart);
+    if (close !== expressionEnd_ - 1) break;
+    expressionStart += 1;
+    expressionEnd_ -= 1;
+  }
+  return [expressionStart, expressionEnd_];
+}
+
+function returnExpressionRanges(tokens) {
+  const ranges = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value !== 'return') continue;
+    ranges.push([index + 1, returnExpressionEnd(tokens, index + 1)]);
+  }
+  return ranges;
+}
+
+function expressionIsExactCall(tokens, start, end, call, { allowAwait = false } = {}) {
+  [start, end] = trimWholeExpressionParentheses(tokens, start, end);
+  if (allowAwait && tokens[start]?.value === 'await') {
+    start += 1;
+    [start, end] = trimWholeExpressionParentheses(tokens, start, end);
+  }
+  return call.start === start && call.close === end - 1;
+}
+
+function expressionArrowReturnsExactCall(tokens, start, end, call) {
+  let arrow = -1;
+  for (let index = start; index < end; index += 1) {
+    if (tokens[index]?.value !== '=>') continue;
+    if (arrow >= 0) return false;
+    arrow = index;
+  }
+  if (arrow < 0 || call.start <= arrow) return false;
+  let expressionStart = arrow + 1;
+  if (tokens[expressionStart]?.value === '{') return false;
+  [expressionStart, end] = trimWholeExpressionParentheses(tokens, expressionStart, end);
+  if (tokens[expressionStart]?.value === 'await') {
+    expressionStart += 1;
+    [expressionStart, end] = trimWholeExpressionParentheses(tokens, expressionStart, end);
+  }
+  return expressionIsExactCall(tokens, expressionStart, end, call);
+}
+
+function returnedPromiseThenObservesCall(tokens, call) {
+  for (const [rawStart, rawEnd] of returnExpressionRanges(tokens)) {
+    let [start, end] = trimWholeExpressionParentheses(tokens, rawStart, rawEnd);
+    const promiseResolve = callAt(tokens, start);
+    if (!promiseResolve
+      || promiseResolve.path.join('.') !== 'Promise.resolve'
+      || promiseResolve.close + 2 >= end
+      || tokens[promiseResolve.close + 1]?.value !== '.') continue;
+    const continuation = callAt(tokens, promiseResolve.close + 2);
+    if (!continuation
+      || !['then', 'finally'].includes(continuation.path.at(-1))
+      || continuation.close !== end - 1) continue;
+    const arguments_ = splitCallArguments(tokens, continuation);
+    if (arguments_.length !== 1) continue;
+    const [argument] = arguments_;
+    if (call.start < argument[0] || call.close >= argument[1]) continue;
+    if (expressionArrowReturnsExactCall(tokens, argument[0], argument[1], call)) return true;
+  }
+  return false;
+}
+
+function callIsInsideExpressionArrow(tokens, call) {
+  for (let index = 0; index < call.start; index += 1) {
+    if (tokens[index]?.value !== '=>' || tokens[index + 1]?.value === '{') continue;
+    const end = returnExpressionEnd(tokens, index + 1);
+    if (call.start > index && call.close < end) return true;
+  }
+  return false;
+}
+
+function callResultIsObserved(tokens, call) {
+  if (returnedPromiseThenObservesCall(tokens, call)) return true;
+  if (callIsInsideExpressionArrow(tokens, call)) return false;
+  if (callIsAwaited(tokens, call)) return true;
+  return returnExpressionRanges(tokens).some(([rawStart, rawEnd]) => {
+    const [start, end] = trimWholeExpressionParentheses(tokens, rawStart, rawEnd);
+    return expressionIsExactCall(tokens, start, end, call);
+  });
+}
+
+function directObjectAssignmentProperties(tokens, variableName) {
+  const matches = [];
+  for (let index = 0; index + 2 < tokens.length; index += 1) {
+    if (tokens[index]?.value !== variableName || tokens[index + 1]?.value !== '='
+      || tokens[index + 2]?.value !== '{') continue;
+    const close = matchingTokenIndex(tokens, index + 2, '{', '}');
+    if (close < 0) continue;
+    matches.push(objectProperties(tokens, index + 2, close) || []);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function propertyReferencesIdentifier(properties, key, identifier) {
+  const property = uniqueEffectiveProperty(properties || [], key);
+  return Boolean(property
+    && property.value_end - property.value_start === 1
+    && properties
+    && identifier
+    && property.value_start >= 0
+    && property.value_end >= 0
+    && property.tokens?.[property.value_start]?.value === identifier);
+}
+
+function returnedPropertyReferencesIdentifier(tokens, scope, scopes, key, identifier) {
+  const objects = returnedObjectProperties(tokens, scope, scopes).filter(({ properties }) => (
+    properties.some((property) => property.key === key)
+  ));
+  if (objects.length !== 1) return false;
+  const { owned, properties } = objects[0];
+  const property = uniqueEffectiveProperty(properties, key);
+  return Boolean(property
+    && property.value_end - property.value_start === 1
+    && owned[property.value_start]?.type === 'identifier'
+    && owned[property.value_start].value === identifier);
+}
+
+function recordBindsSupervisor(tokens, scopes, owned, calls, recordName, supervisorName) {
+  const direct = directObjectAssignmentProperties(owned, recordName);
+  if (direct) {
+    const property = uniqueEffectiveProperty(direct, 'supervisor');
+    if (property
+      && property.value_end - property.value_start === 1
+      && owned[property.value_start]?.value === supervisorName) return true;
+  }
+  const helperCalls = calls.filter((call) => call.path.length === 1
+    && assignedIdentifierForCall(owned, call) === recordName
+    && identifierArgument(owned, call, 0) === supervisorName);
+  if (helperCalls.length !== 1) return false;
+  const helper = uniqueScope(scopes, helperCalls[0].path[0]);
+  if (!helper) return false;
+  const helperParameters = simpleParameterNames(tokens, helper);
+  return Boolean(helperParameters[0]
+    && returnedPropertyReferencesIdentifier(tokens, helper, scopes, 'supervisor', helperParameters[0]));
+}
+
+function supervisorCandidates(tokens, scopes, owned, calls, managerName) {
+  const candidates = [];
+  for (const call of calls) {
+    const supervisorName = assignedIdentifierForCall(owned, call);
+    if (!supervisorName) continue;
+    if (call.path.length === 2 && call.path[0] === managerName && call.path[1] === 'supervisorFactory') {
+      candidates.push({ supervisor_name: supervisorName, policy: strictNumericPolicy(owned, call) });
+      continue;
+    }
+    if (call.path.length !== 1 || identifierArgument(owned, call, 0) !== managerName) continue;
+    const helper = uniqueScope(scopes, call.path[0]);
+    if (!helper) continue;
+    const helperParameters = simpleParameterNames(tokens, helper);
+    if (!helperParameters[0]) continue;
+    const helperTokens = scopeReachableTokens(tokens, helper, scopes);
+    const factoryCalls = callsInTokens(helperTokens).filter((factoryCall) => (
+      factoryCall.path.length === 2
+      && factoryCall.path[0] === helperParameters[0]
+      && factoryCall.path[1] === 'supervisorFactory'
+      && callIsDirectlyReturned(helperTokens, factoryCall)
+    ));
+    if (factoryCalls.length !== 1) continue;
+    candidates.push({
+      supervisor_name: supervisorName,
+      policy: strictNumericPolicy(helperTokens, factoryCalls[0]),
+    });
+  }
+  return candidates;
+}
+
+function stopHelperOwnsSupervisor(tokens, scopes, stopHelper, recordParameter) {
+  const stopTokens = scopeReachableTokens(tokens, stopHelper, scopes);
+  const stopCalls = callsInTokens(stopTokens).filter((call) => (
+    call.path.length === 3
+    && call.path[0] === recordParameter
+    && call.path[1] === 'supervisor'
+    && call.path[2] === 'stop'
+    && callResultIsObserved(stopTokens, call)
+    && callIsOnUnconditionalPath(stopTokens, call)
+  ));
+  return stopCalls.length === 1;
+}
+
+function recordReleaseScopeContract(tokens, scopes, scope) {
+  const parameters = simpleParameterNames(tokens, scope);
+  const [managerParameter, requestIdParameter, recordParameter] = parameters;
+  if (!managerParameter || !requestIdParameter || !recordParameter) return false;
+  const owned = scopeReachableTokens(tokens, scope, scopes);
+  const calls = callsInTokens(owned);
+  const deletes = calls.filter((call) => (
+    call.path.length === 3
+    && call.path[0] === managerParameter
+    && call.path[1] === 'executions'
+    && call.path[2] === 'delete'
+    && callHasIdentifierArguments(owned, call, [requestIdParameter])
+    && callIsOnUnconditionalPath(owned, call)
+  ));
+  const stops = calls.filter((call) => (
+    call.path.length === 1
+    && callHasIdentifierArguments(owned, call, [managerParameter, requestIdParameter, recordParameter])
+    && callResultIsObserved(owned, call)
+    && callIsOnUnconditionalPath(owned, call)
+    && uniqueScope(scopes, call.path[0])
+  ));
+  if (deletes.length !== 1 || stops.length !== 1 || deletes[0].start >= stops[0].start) return false;
+  const stopHelper = uniqueScope(scopes, stops[0].path[0]);
+  const stopParameters = simpleParameterNames(tokens, stopHelper);
+  return Boolean(stopParameters[2]
+    && stopHelperOwnsSupervisor(tokens, scopes, stopHelper, stopParameters[2]));
+}
+
+function delegatedLeaseReleaseContract(tokens, scopes, acquisitionTokens, managerName, requestIdName, recordName) {
+  const leaseCalls = callsInTokens(acquisitionTokens).filter((call) => (
+    call.path.length === 1
+    && call.path[0] === 'executionWorkerLease'
+    && callIsDirectlyReturned(acquisitionTokens, call)
+    && callHasIdentifierArguments(acquisitionTokens, call, [managerName, requestIdName, recordName])
+  ));
+  if (leaseCalls.length !== 1) return false;
+  const leaseScope = uniqueScope(scopes, 'executionWorkerLease');
+  if (!leaseScope) return false;
+  const leaseParameters = simpleParameterNames(tokens, leaseScope);
+  if (!leaseParameters[0] || !leaseParameters[1] || !leaseParameters[2]) return false;
+  const objects = returnedObjectProperties(tokens, leaseScope, scopes).filter(({ properties }) => (
+    properties.some((property) => property.key === 'release')
+  ));
+  if (objects.length !== 1) return false;
+  const { owned, properties } = objects[0];
+  const releaseProperty = uniqueEffectiveProperty(properties, 'release');
+  const releaseDelegate = releaseProperty ? arrowDelegate(owned, releaseProperty, scopes) : null;
+  if (!releaseDelegate
+    || releaseDelegate.public_parameters.length !== 0
+    || releaseDelegate.arguments.length !== 3
+    || releaseDelegate.arguments.join('\0') !== leaseParameters.slice(0, 3).join('\0')
+    || !recordReleaseScopeContract(tokens, scopes, releaseDelegate.helper)) return false;
+  const drainProperties = properties.filter((property) => property.key === 'drain');
+  if (!drainProperties.length) return true;
+  const drainProperty = uniqueEffectiveProperty(properties, 'drain');
+  const drainDelegate = drainProperty ? arrowDelegate(owned, drainProperty, scopes) : null;
+  return Boolean(drainDelegate
+    && drainDelegate.public_parameters.length === 1
+    && drainDelegate.public_parameters[0]
+    && drainDelegate.arguments.length === 4
+    && drainDelegate.arguments.slice(0, 3).join('\0') === leaseParameters.slice(0, 3).join('\0')
+    && drainDelegate.arguments[3] === drainDelegate.public_parameters[0]
+    && recordReleaseScopeContract(tokens, scopes, drainDelegate.helper));
+}
+
+function inlineLeaseReleaseContract(tokens, scopes, acquisition, acquisitionTokens, managerName, requestIdName, supervisorName) {
+  const objects = returnedObjectProperties(tokens, acquisition, scopes).filter(({ properties }) => (
+    properties.some((property) => property.key === 'release')
+  ));
+  if (objects.length !== 1) return false;
+  const releaseProperty = uniqueEffectiveProperty(objects[0].properties, 'release');
+  if (!releaseProperty
+    || releaseProperty.value_end - releaseProperty.value_start !== 1
+    || objects[0].owned[releaseProperty.value_start]?.value !== 'release') return false;
+  const releaseScope = uniqueScope(scopes, 'release', acquisition);
+  if (!releaseScope) return false;
+  const releaseTokens = scopeReachableTokens(tokens, releaseScope, scopes);
+  const calls = callsInTokens(releaseTokens);
+  const deletes = calls.filter((call) => (
+    call.path.length === 3
+    && call.path[0] === managerName
+    && call.path[1] === 'executions'
+    && call.path[2] === 'delete'
+    && callHasIdentifierArguments(releaseTokens, call, [requestIdName])
+    && callIsOnUnconditionalPath(releaseTokens, call)
+  ));
+  const stops = calls.filter((call) => (
+    call.path.length === 2
+    && call.path[0] === supervisorName
+    && call.path[1] === 'stop'
+    && callResultIsObserved(releaseTokens, call)
+    && callIsOnUnconditionalPath(releaseTokens, call)
+  ));
+  return deletes.length === 1 && stops.length === 1 && deletes[0].start < stops[0].start;
 }
 
 function managerSuccessorContract(source) {
   const tokens = tokenizeJavascriptForRiskAudit(source);
   const scopes = collectFunctionScopes(tokens);
-  const acquisitions = scopes.filter((scope) => /acquire/iu.test(scope.name));
-  for (const acquisition of acquisitions) {
-    const owned = reachableTokens(tokensOwnedByScope(tokens, acquisition, scopes));
-    const calls = callsInTokens(owned);
-    const supervisorCalls = calls.filter((call) => callPathEndsWith(call, ['supervisorFactory']));
-    const onePendingPerTurn = supervisorCalls.some((call) => (
-      objectArgumentHasNumericProperty(owned, call, 'maxPendingRequests', 1)
-    ));
-    const restartDisabled = supervisorCalls.some((call) => (
-      objectArgumentHasNumericProperty(owned, call, 'maxRestarts', 0)
-    ));
-    const supervisorPolicySameCall = supervisorCalls.some((call) => (
-      objectArgumentHasNumericProperty(owned, call, 'maxPendingRequests', 1)
-      && objectArgumentHasNumericProperty(owned, call, 'maxRestarts', 0)
-    ));
-    const requestIndexed = calls.some((call) => callPathEndsWith(call, ['executions', 'set'])
-      && callHasIdentifierArguments(owned, call, ['requestId', 'record']));
-    const releaseScope = scopes.find((scope) => scope.name === 'release'
-      && scope.parent === acquisition
-      && (() => {
-        const releaseTokens = reachableTokens(tokensOwnedByScope(tokens, scope, scopes));
-        const releaseCalls = callsInTokens(releaseTokens);
-        const deletesRequest = releaseCalls.some((call) => callPathEndsWith(call, ['executions', 'delete'])
-          && callHasIdentifierArguments(releaseTokens, call, ['requestId']));
-        const stopsSupervisor = releaseCalls.some((call) => callPathEndsWith(call, ['supervisor', 'stop'])
-          && releaseTokens[call.start - 1]?.value === 'await');
-        return deletesRequest && stopsSupervisor;
-      })());
-    const reachable = reachableFunctionScopes(acquisition, tokens, scopes);
-    const pressureAdmissionClosed = reachable.some((scope) => pressureRejectionInIfBlock(
-      reachableTokens(tokensOwnedByScope(tokens, scope, scopes)),
-    ));
-    if (supervisorCalls.length > 0 && requestIndexed && releaseScope) {
-      return {
-        pressure_admission_closed: pressureAdmissionClosed,
-        supervisor_created_per_acquire: true,
-        request_indexed: true,
-        request_released: true,
-        one_pending_per_turn: onePendingPerTurn,
-        restart_disabled: restartDisabled,
-        supervisor_policy_same_call: supervisorPolicySameCall,
-      };
-    }
-  }
-  return {
+  const empty = {
     pressure_admission_closed: false,
     supervisor_created_per_acquire: false,
     request_indexed: false,
@@ -669,6 +1417,64 @@ function managerSuccessorContract(source) {
     one_pending_per_turn: false,
     restart_disabled: false,
     supervisor_policy_same_call: false,
+  };
+  const exported = exportedAcquireImplementation(tokens, scopes);
+  if (!exported) return empty;
+  const { acquisition, identity_name: identityName, manager_name: managerName } = exported;
+  const owned = scopeReachableTokens(tokens, acquisition, scopes);
+  const calls = callsInTokens(owned);
+  const indexedCalls = calls.filter((call) => (
+    call.path.length === 3
+    && call.path[0] === managerName
+    && call.path[1] === 'executions'
+    && call.path[2] === 'set'
+    && identifierArgument(owned, call, 0)
+    && identifierArgument(owned, call, 1)
+  ));
+  if (indexedCalls.length !== 1) return empty;
+  const indexedCall = indexedCalls[0];
+  const requestIdName = identifierArgument(owned, indexedCall, 0);
+  const recordName = identifierArgument(owned, indexedCall, 1);
+  const requestIdDerived = variableDerivesFromIdentityRequestId(
+    tokens, scopes, owned, requestIdName, identityName, indexedCall.start,
+  );
+
+  const waits = calls.filter((call) => (
+    call.path.length === 1
+    && callHasIdentifierArguments(owned, call, [managerName, requestIdName])
+    && callIsAwaited(owned, call)
+    && uniqueScope(scopes, call.path[0])
+  ));
+  const pressureWaits = waits.filter((call) => {
+    const helper = uniqueScope(scopes, call.path[0]);
+    return pressureRejectionInIfBlock(scopeReachableTokens(tokens, helper, scopes));
+  });
+  const pressureAdmissionClosed = pressureRejectionInIfBlock(owned) || pressureWaits.length === 1;
+
+  const candidates = supervisorCandidates(tokens, scopes, owned, calls, managerName)
+    .filter((candidate) => recordBindsSupervisor(
+      tokens, scopes, owned, calls, recordName, candidate.supervisor_name,
+    ));
+  if (candidates.length !== 1) {
+    return { ...empty, pressure_admission_closed: pressureAdmissionClosed };
+  }
+  const [candidate] = candidates;
+  const recordBound = true;
+  const requestIndexed = requestIdDerived && recordBound;
+  const requestReleased = requestIndexed && (
+    inlineLeaseReleaseContract(
+      tokens, scopes, acquisition, owned, managerName, requestIdName, candidate.supervisor_name,
+    )
+    || delegatedLeaseReleaseContract(tokens, scopes, owned, managerName, requestIdName, recordName)
+  );
+  return {
+    pressure_admission_closed: pressureAdmissionClosed,
+    supervisor_created_per_acquire: true,
+    request_indexed: requestIndexed,
+    request_released: requestReleased,
+    one_pending_per_turn: candidate.policy.one_pending,
+    restart_disabled: candidate.policy.no_restarts,
+    supervisor_policy_same_call: candidate.policy.same_call,
   };
 }
 
@@ -690,7 +1496,7 @@ function supervisorExitContract(source) {
   return { rejects_pending: rejectsPending, typed_failure: typedFailure };
 }
 
-function topLevelRequireContract(source) {
+function topLevelRequirePathContract(source, requiredPath) {
   const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
   let braceDepth = 0;
   for (let index = 0; index < tokens.length; index += 1) {
@@ -702,9 +1508,13 @@ function topLevelRequireContract(source) {
     const [first] = splitCallArguments(tokens, call);
     if (first && first[1] - first[0] === 1
       && tokens[first[0]]?.type === 'string'
-      && tokens[first[0]].value === './host-core/agent/execution-worker-entry.cjs') return true;
+      && tokens[first[0]].value === requiredPath) return true;
   }
   return false;
+}
+
+function topLevelRequireContract(source) {
+  return topLevelRequirePathContract(source, './host-core/agent/execution-worker-entry.cjs');
 }
 
 function sharedWorkerRegistryIsAbsent(source) {
@@ -722,11 +1532,171 @@ function sharedWorkerRegistryIsAbsent(source) {
   return true;
 }
 
-function desktopLeaseContract(source) {
+function tokenBraceDepths(tokens) {
+  const depths = [];
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.value === '}') depth = Math.max(0, depth - 1);
+    depths[index] = depth;
+    if (tokens[index]?.value === '{') depth += 1;
+  }
+  return depths;
+}
+
+function topLevelDestructuredRequireBindings(source) {
+  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
+  const depths = tokenBraceDepths(tokens);
+  const bindings = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (depths[index] !== 0
+      || tokens[index]?.value !== 'const'
+      || tokens[index + 1]?.value !== '{') continue;
+    const objectClose = matchingTokenIndex(tokens, index + 1, '{', '}');
+    if (objectClose < 0 || tokens[objectClose + 1]?.value !== '=') continue;
+    const requireCall = callAt(tokens, objectClose + 2);
+    if (!requireCall
+      || requireCall.path.length !== 1
+      || requireCall.path[0] !== 'require'
+      || ![';', undefined].includes(tokens[requireCall.close + 1]?.value)) continue;
+    const arguments_ = splitCallArguments(tokens, requireCall);
+    if (arguments_.length !== 1) continue;
+    const [argument] = arguments_;
+    if (argument[1] - argument[0] !== 1 || tokens[argument[0]]?.type !== 'string') continue;
+    for (const property of objectProperties(tokens, index + 1, objectClose) || []) {
+      if (property.spread
+        || property.value_end - property.value_start !== 1
+        || tokens[property.value_start]?.type !== 'identifier') continue;
+      bindings.push({
+        imported: property.key,
+        local: tokens[property.value_start].value,
+        required_path: tokens[argument[0]].value,
+      });
+    }
+  }
+  return { tokens, depths, bindings };
+}
+
+function topLevelRequiredIdentifierBinding(source, requiredPath, identifier) {
+  const { tokens, depths, bindings } = topLevelDestructuredRequireBindings(source);
+  const localBindings = bindings.filter((binding) => binding.local === identifier);
+  if (localBindings.length !== 1
+    || localBindings[0].imported !== identifier
+    || localBindings[0].required_path !== requiredPath) return false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (depths[index] !== 0
+      || tokens[index]?.type !== 'identifier'
+      || tokens[index].value !== identifier) continue;
+    if (['const', 'let', 'var', 'function', 'class'].includes(tokens[index - 1]?.value)
+      || ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '&&=', '||=', '??=', '++', '--']
+        .includes(tokens[index + 1]?.value)
+      || ['++', '--'].includes(tokens[index - 1]?.value)) return false;
+  }
+  return true;
+}
+
+function moduleExportsOnlyIdentifier(source, identifier) {
+  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
+  const depths = tokenBraceDepths(tokens);
+  const exportsAssignments = [];
+  for (let index = 0; index + 4 < tokens.length; index += 1) {
+    if (depths[index] !== 0
+      || tokens[index]?.value !== 'module'
+      || tokens[index + 1]?.value !== '.'
+      || tokens[index + 2]?.value !== 'exports') continue;
+    exportsAssignments.push(index);
+  }
+  if (exportsAssignments.length !== 1) return false;
+  const [index] = exportsAssignments;
+  if (tokens[index + 3]?.value !== '=' || tokens[index + 4]?.value !== '{') return false;
+    const close = matchingTokenIndex(tokens, index + 4, '{', '}');
+  if (close < 0 || ![';', undefined].includes(tokens[close + 1]?.value)) return false;
+    const properties = objectProperties(tokens, index + 4, close) || [];
+  if (properties.length !== 1) return false;
+    const property = uniqueEffectiveProperty(properties, identifier);
+  return Boolean(property
+    && property.value_end - property.value_start === 1
+    && tokens[property.value_start]?.type === 'identifier'
+    && tokens[property.value_start].value === identifier);
+}
+
+function topLevelFunctionBinding(source, identifier) {
+  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
+  const depths = tokenBraceDepths(tokens);
+  const declarations = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (depths[index] !== 0 || tokens[index]?.value !== 'function') continue;
+    let nameIndex = index + 1;
+    if (tokens[nameIndex]?.value === '*') nameIndex += 1;
+    if (tokens[nameIndex]?.type === 'identifier' && tokens[nameIndex].value === identifier) {
+      declarations.push(nameIndex);
+    }
+  }
+  if (declarations.length !== 1) return false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (depths[index] !== 0
+      || tokens[index]?.type !== 'identifier'
+      || tokens[index].value !== identifier
+      || index === declarations[0]) continue;
+    if (['const', 'let', 'var', 'class'].includes(tokens[index - 1]?.value)
+      || ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '&&=', '||=', '??=', '++', '--']
+        .includes(tokens[index + 1]?.value)
+      || ['++', '--'].includes(tokens[index - 1]?.value)) return false;
+  }
+  return true;
+}
+
+function contextUsageLeaseHelperContract(sourceByPath) {
+  const wrapper = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage.cjs') || '';
+  const implementation = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage-lease.cjs') || '';
+  const helperName = 'createExecutionWorkerContextUsageLease';
+  if (!topLevelRequiredIdentifierBinding(
+    wrapper, './execution-worker-context-usage-lease.cjs', helperName,
+  )
+    || !moduleExportsOnlyIdentifier(wrapper, helperName)
+    || !topLevelFunctionBinding(implementation, helperName)
+    || !moduleExportsOnlyIdentifier(implementation, helperName)) return false;
+  const tokens = tokenizeJavascriptForRiskAudit(implementation);
+  const scopes = collectFunctionScopes(tokens);
+  const creator = uniqueScope(scopes, helperName);
+  if (!creator) return false;
+  const objects = returnedObjectProperties(tokens, creator, scopes).filter(({ properties }) => (
+    properties.some((property) => property.key === 'release')
+  ));
+  if (objects.length !== 1) return false;
+  const releaseProperty = uniqueEffectiveProperty(objects[0].properties, 'release');
+  if (!releaseProperty
+    || releaseProperty.value_end - releaseProperty.value_start !== 1
+    || objects[0].owned[releaseProperty.value_start]?.type !== 'identifier'
+    || objects[0].owned[releaseProperty.value_start].value !== 'release') return false;
+  const releaseScope = uniqueScope(scopes, 'release', creator);
+  if (!releaseScope) return false;
+  const [leaseParameter] = simpleParameterNames(tokens, releaseScope);
+  if (!leaseParameter) return false;
+  const releaseTokens = scopeReachableTokens(tokens, releaseScope, scopes);
+  const calls = callsInTokens(releaseTokens);
+  const drainsCompletedLease = calls.some((call) => (
+    call.path.length === 2
+    && call.path[0] === leaseParameter
+    && call.path[1] === 'drain'
+  ));
+  const releasesIncompleteLease = calls.some((call) => (
+    call.path.length === 2
+    && call.path[0] === leaseParameter
+    && call.path[1] === 'release'
+    && callIsAwaited(releaseTokens, call)
+  ));
+  return drainsCompletedLease && releasesIncompleteLease;
+}
+
+function desktopLeaseContract(sourceByPath) {
+  const source = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
   const tokens = tokenizeJavascriptForRiskAudit(source);
   const scopes = collectFunctionScopes(tokens);
+  let acquired = false;
   for (const scope of scopes) {
     const owned = reachableTokens(tokensOwnedByScope(tokens, scope, scopes));
+    const scopeParameters = simpleParameterNames(tokens, scope);
+    const scopeCalls = callsInTokens(owned);
     for (let index = 0; index < owned.length; index += 1) {
       if (owned[index].value !== 'try' || owned[index + 1]?.value !== '{') continue;
       const tryClose = matchingTokenIndex(owned, index + 1, '{', '}');
@@ -744,20 +1714,51 @@ function desktopLeaseContract(source) {
       const tryTokens = owned.slice(index + 2, tryClose);
       const finallyTokens = owned.slice(cursor + 2, finallyClose);
       const tryCalls = callsInTokens(tryTokens);
-      for (const acquireCall of tryCalls.filter((call) => callPathEndsWith(call, ['acquire']))) {
-        let assignment = acquireCall.start - 1;
-        while (assignment >= 0 && tryTokens[assignment].value !== ';' && tryTokens[assignment].value !== '=') assignment -= 1;
-        if (tryTokens[assignment]?.value !== '=' || tryTokens[assignment - 1]?.type !== 'identifier') continue;
-        const leaseName = tryTokens[assignment - 1].value;
-        if (tryTokens[assignment + 1]?.value !== 'await') continue;
-        const releaseCall = callsInTokens(finallyTokens).find((call) => call.path[0] === leaseName
-          && callPathEndsWith(call, ['release'])
-          && finallyTokens[call.start - 1]?.value === 'await');
-        if (releaseCall) return { acquired: true, released: true, same_try_finally_scope: true };
+      for (const acquireCall of tryCalls.filter((call) => (
+        call.path.length === 2
+        && call.path[1] === 'acquire'
+        && (call.path[0] === 'executionWorkerManager'
+          || (call.path[0] === 'supervisor' && scopeParameters.includes('supervisor')))
+        && callIsAwaited(tryTokens, call)
+      ))) {
+        const leaseName = assignedIdentifierForCall(tryTokens, acquireCall);
+        if (!leaseName) continue;
+        acquired = true;
+        const directRelease = callsInTokens(finallyTokens).find((call) => (
+          call.path.length === 2
+          && call.path[0] === leaseName
+          && call.path[1] === 'release'
+          && callIsAwaited(finallyTokens, call)
+          && callIsOnUnconditionalPath(finallyTokens, call)
+        ));
+        if (directRelease) return { acquired: true, released: true, same_try_finally_scope: true };
+
+        const delegatedReleases = callsInTokens(finallyTokens).filter((call) => (
+          call.path.length === 2
+          && call.path[1] === 'release'
+          && identifierArgument(finallyTokens, call, 0) === leaseName
+          && callIsAwaited(finallyTokens, call)
+          && callIsOnUnconditionalPath(finallyTokens, call)
+        ));
+        if (delegatedReleases.length !== 1) continue;
+        const contextLeaseName = delegatedReleases[0].path[0];
+        const setupCalls = scopeCalls.filter((call) => (
+          call.start < index
+          && call.path.length === 1
+          && call.path[0] === 'createExecutionWorkerContextUsageLease'
+          && assignedIdentifierForCall(owned, call) === contextLeaseName
+        ));
+        const wrapperBound = topLevelRequiredIdentifierBinding(
+          source, './execution-worker-context-usage.cjs',
+          'createExecutionWorkerContextUsageLease',
+        );
+        if (setupCalls.length === 1 && wrapperBound && contextUsageLeaseHelperContract(sourceByPath)) {
+          return { acquired: true, released: true, same_try_finally_scope: true };
+        }
       }
     }
   }
-  return { acquired: false, released: false, same_try_finally_scope: false };
+  return { acquired, released: false, same_try_finally_scope: false };
 }
 
 function verifiedFirstParentCompare(ancestry, compareFrom, compareTo) {
@@ -940,11 +1941,10 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
   const entry = sourceByPath.get('electron/execution-worker.cjs') || '';
   const manager = sourceByPath.get('electron/host-core/agent/execution-worker-manager.cjs') || '';
   const supervisor = sourceByPath.get('electron/host-core/agent/execution-worker-supervisor.cjs') || '';
-  const desktopHost = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
 
   const supervisorContract = supervisorExitContract(supervisor);
   const managerContract = managerSuccessorContract(manager);
-  const desktopContract = desktopLeaseContract(desktopHost);
+  const desktopContract = desktopLeaseContract(sourceByPath);
   const unsettledExitUsesTypedFailure = supervisorContract.typed_failure;
   const pressureAdmissionClosed = managerContract.pressure_admission_closed;
   const onePendingPerTurn = managerContract.one_pending_per_turn;

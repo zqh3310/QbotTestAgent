@@ -20,9 +20,12 @@ import {
 } from '../src/lib/qwork-release-test-plan.mjs';
 import {
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  QWORK_RELEASE_INTAKE_TOOL_VERSION,
   sha256File as sha256ReleaseIntakeFile,
   validateQworkReleaseIntake,
 } from '../src/lib/qwork-release-intake.mjs';
+import { QWORK_RELEASE_BLOCKING_RISK_SCHEMA } from '../src/lib/qwork-release-blocking-risks.mjs';
 import {
   processMatchesSession,
   readSession,
@@ -89,6 +92,12 @@ Controls:
   --scope-reason <text>          Required immutable exclusion reason
   --no-framework-checks          Skip npm checks only for diagnostics/tests;
                                   never use for a formal release run
+
+当前 release intake 合同：
+  report schema: ${QWORK_RELEASE_INTAKE_SCHEMA}
+  tool version: ${QWORK_RELEASE_INTAKE_TOOL_VERSION}
+  blocking-risk schema: ${QWORK_RELEASE_BLOCKING_RISK_SCHEMA}
+  旧 intake tool version 或旧 blocking-risk schema 一律 fail-closed，必须重新扫描。
 
 This command never starts a runner, launches/restarts 360Teams, opens QWork,
 sends a message, or writes synthetic Case results. READY is required for a

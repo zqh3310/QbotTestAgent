@@ -7,11 +7,14 @@ import {
   QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST,
   QWORK_RELEASE_INTAKE_DEFAULT_REF,
   QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_PROJECT,
+  QWORK_RELEASE_INTAKE_SCHEMA,
+  QWORK_RELEASE_INTAKE_TOOL_VERSION,
   scanQworkReleaseIntake,
   sha256File,
   validateQworkReleaseIntake,
   writeQworkReleaseIntake,
 } from '../src/lib/qwork-release-intake.mjs';
+import { QWORK_RELEASE_BLOCKING_RISK_SCHEMA } from '../src/lib/qwork-release-blocking-risks.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -41,6 +44,12 @@ Options:
   --window-hours <n>                日常兜底时间窗口（默认 24 小时）
   --fallback-days <n>               祖先不可证明时扩展窗口（默认 30 天）
   --max-commits <n>                 最大扫描 first-parent 提交数（默认 500）
+
+当前输出合同：
+  report schema: ${QWORK_RELEASE_INTAKE_SCHEMA}
+  tool version: ${QWORK_RELEASE_INTAKE_TOOL_VERSION}
+  blocking-risk schema: ${QWORK_RELEASE_BLOCKING_RISK_SCHEMA}
+  旧 intake tool version 或旧 blocking-risk schema 一律 fail-closed，必须重新扫描。
 
 正式流程必须在 G0/pretest 前生成本报告；BLOCKED 或未映射产品路径不得启动 runner。
 `;

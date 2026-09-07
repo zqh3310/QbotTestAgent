@@ -1652,7 +1652,7 @@ MR 风险生效点和后继架构切换点必须各做正向、反向两次 firs
 完整证据可判定当前 release 位于风险之前；两向均无法证明、请求失败、证据不完整或相互
 冲突时均为 `UNKNOWN/BLOCKED`，禁止按提交日期、标题或 SHA 字面顺序推断。
 
-从 `qbot-release-intake/1.6.1` 起，验证器必须再按 first-parent 顺序重放每个 MR 的
+从 `qbot-release-intake/1.6.2` 起，验证器必须再按 first-parent 顺序重放每个 MR 的
 IID、commit、parent、归因类型、merged/target 元数据，并从冻结的 commit 文本、source
 branch、labels、changed paths 和 Casebook Case ID 重新计算 impact、源码合同触发、直接
 Case、依赖闭包、required stages、静态/未知计数及 unresolved 集合。报告即使重算内容
@@ -1670,11 +1670,20 @@ Case：`SIT-MEM-001`、`BETA-CHAT-001`、`BETA-CHAT-002`、`BETA-CHAT-009`、
 即使同步重算 `content_sha256`，仍必须由语义重放或汇总一致性检查判为 `BLOCKED`。
 
 MR !1559 后继架构必须生成
-`qbot-qwork-release-blocking-risk-attestation/v3`：注释、模板、正则和普通字符串中的伪代码
+`qbot-qwork-release-blocking-risk-attestation/v4`：注释、模板、正则和普通字符串中的伪代码
 不能满足风险断言；`onExit` 的 typed failure、acquisition 到 pressure admission 的可达
 调用链、同一 supervisor factory 的 `maxPendingRequests:1/maxRestarts:0`、同一 acquisition
 内的 request set/release delete+stop，以及 desktop 同函数同 `try/finally` 的 lease
-acquire/release 必须逐项成立。旧 v2 或任何错误作用域均 `BLOCKED` 并要求新 intake。
+acquire/release 必须逐项成立。desktop 可直接 awaited release，也可使用受严格绑定的
+`createExecutionWorkerContextUsageLease` helper delegation：desktop 必须顶层引入
+`execution-worker-context-usage.cjs`，该 wrapper 再顶层引入
+`execution-worker-context-usage-lease.cjs`，两者唯一导出同名 helper，并由实现对完成 lease
+`drain(...)`、对未完成 lease awaited `release()`。v4 必须固定审计 9 个受保护源码文件，
+新增的两个路径精确为
+`electron/host-core/agent/execution-worker-context-usage.cjs` 与
+`electron/host-core/agent/execution-worker-context-usage-lease.cjs`。
+`qbot-release-intake/1.6.1` 及更旧 intake tool version、阻断风险 v2/v3 证明或任何错误作用域
+均必须 fail-closed，`BLOCKED` 并要求新 intake，不得通过重算报告 SHA 复用。
 
 边界优先从上次已接受 intake HEAD 或 Casebook 设计基线 commit 到当前 release HEAD；只有
 祖先关系无法证明时才兜底最近 24 小时（日常窗口与上轮重叠 48 小时），每日回归至少回看
