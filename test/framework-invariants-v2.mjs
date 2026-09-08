@@ -981,6 +981,11 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
+  /'title', 'author_name', 'author_email', 'committer_name', 'committer_email'[\s\S]*commit\.message !== undefined[\s\S]*typeof commit\.message !== 'string'[\s\S]*!commit\.message\.trim\(\)[\s\S]*message_invalid/,
+  'GitLab compare 必须保留原生 message 尾部换行并只拒绝非字符串或空白消息',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
   /MR1597_EXPECTED_REGION_END = '\}\);';[\s\S]*requiredFragmentLineIndexes: \[8, 9, 10, 11, 12\][\s\S]*requiredFragmentLineIndexes: \[9, 10, 11, 12\][\s\S]*regionEndInclusive: false/,
   'MR1597 必须冻结唯一 owner-close 排他终点及 input/expected 真实相对行号',
 );

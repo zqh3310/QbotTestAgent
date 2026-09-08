@@ -1883,6 +1883,8 @@ ID、同 commit/project 的 SHA 与 project ID、规范时间和固定项目 pip
 字段、类型漂移或只重算 raw/report SHA 均须阻断。relationship 固定使用
 `qbot-qwork-source-binding-successor-relationship/v2`；缺少
 任一 raw evidence、原始响应与投影不一致、from/to 换向或双向同时完整均须 `BLOCKED`。
+compare commit 的 `message` 字段一旦出现，必须是 trim 后非空的原生字符串，但必须保留 GitLab 原始尾部
+换行；不得把合法换行裁剪后再鉴证，也不得把空白消息放行。
 current-release 持续性鉴证使用独立且不兼容的
 `qbot-qwork-release-current-source-contract/v4`；origin-change 仍使用
 `qbot-qwork-release-source-contract/v1`。不得把含有完整 `protected_files` 字节的

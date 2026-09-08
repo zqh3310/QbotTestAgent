@@ -6977,12 +6977,16 @@ function validateGitLabFirstParentComparePayload(compare, { allowEmptyCommits = 
       failures.push(`${prefix}:short_id_invalid`);
     }
     for (const field of [
-      'title', 'message', 'author_name', 'author_email', 'committer_name', 'committer_email',
+      'title', 'author_name', 'author_email', 'committer_name', 'committer_email',
     ]) {
       if (commit[field] !== undefined
         && (typeof commit[field] !== 'string' || !commit[field].trim() || commit[field] !== commit[field].trim())) {
         failures.push(`${prefix}:${field}_invalid`);
       }
+    }
+    if (commit.message !== undefined
+      && (typeof commit.message !== 'string' || !commit.message.trim())) {
+      failures.push(`${prefix}:message_invalid`);
     }
     for (const field of ['created_at', 'authored_date', 'committed_date']) {
       if (commit[field] !== undefined && !isCanonicalIsoTimestamp(commit[field])) {

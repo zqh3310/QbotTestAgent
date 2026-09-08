@@ -305,6 +305,7 @@ test('GitLab first-parent compare reconstruction fails closed on malformed raw p
       compare_timeout: false,
       commits: [{
         ...validCommit,
+        message: 'Merge branch with native GitLab trailing newline\n\nDetailed body.\n',
         trailers: { 'Reviewed-by': 'QBot QA' },
         extended_trailers: { 'Signed-off-by': ['QBot QA'] },
         project_id: 1,
@@ -317,6 +318,28 @@ test('GitLab first-parent compare reconstruction fails closed on malformed raw p
   assert.equal(knownOptionalFields.ok, true, knownOptionalFields.reason);
 
   for (const [label, compare, expectedReason] of [
+    [
+      'blank commit message',
+      { compare_timeout: false, commits: [{ ...validCommit, message: ' \n\t' }] },
+      'compare_commit_invalid:0:message_invalid',
+    ],
+    ...[
+      ['empty commit message', ''],
+      ['null commit message', null],
+      ['numeric commit message', 1],
+      ['boolean commit message', false],
+      ['array commit message', ['message']],
+      ['object commit message', { value: 'message' }],
+    ].map(([label, message]) => [
+      label,
+      { compare_timeout: false, commits: [{ ...validCommit, message }] },
+      'compare_commit_invalid:0:message_invalid',
+    ]),
+    [
+      'title still rejects native trailing newline',
+      { compare_timeout: false, commits: [{ ...validCommit, title: 'Merge title\n' }] },
+      'compare_commit_invalid:0:title_invalid',
+    ],
     [
       'timeout boolean',
       { ...validCompare, compare_timeout: true },
@@ -7972,13 +7995,28 @@ test('GitLab API scan preserves the !1612 successor contract after it leaves the
     releaseFileOverrides: new Map([[lifecycleBinding.path, lifecyclePayload]]),
   });
   const calls = [];
+  const rawCompareResponses = new Map();
+  const readWithNativeMessage = (endpoint) => {
+    const value = fixture.reader(endpoint);
+    if (!endpoint.startsWith('repository/compare?') || !Array.isArray(value?.commits)) return value;
+    return {
+      ...value,
+      commits: value.commits.map((commit) => ({
+        ...commit,
+        message: `${commit.message || commit.title}\n\nNative GitLab body.\n`,
+      })),
+    };
+  };
   const trackedReader = (endpoint) => {
     calls.push(endpoint);
-    return fixture.reader(endpoint);
+    return readWithNativeMessage(endpoint);
   };
   trackedReader.readRaw = (endpoint) => {
     calls.push(endpoint);
-    return fixture.reader.readRaw(endpoint);
+    const value = readWithNativeMessage(endpoint);
+    const bytes = Buffer.from(JSON.stringify(value), 'utf8');
+    if (endpoint.startsWith('repository/compare?')) rawCompareResponses.set(endpoint, bytes);
+    return { bytes, value };
   };
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(),
@@ -8007,6 +8045,14 @@ test('GitLab API scan preserves the !1612 successor contract after it leaves the
   assert.equal(calls.includes(
     `repository/compare?from=${head}&to=${successor.merge_commit_sha}&straight=true`,
   ), true);
+  const descendantEndpoint = `repository/compare?from=${successor.merge_commit_sha}&to=${head}&straight=true`;
+  const descendantRaw = rawCompareResponses.get(descendantEndpoint);
+  const descendantEvidence = observation.descendant_ancestry.compare_evidence;
+  assert.ok(descendantRaw);
+  assert.equal(descendantEvidence.raw_response_base64, descendantRaw.toString('base64'));
+  assert.equal(descendantEvidence.raw_response_bytes, descendantRaw.length);
+  assert.equal(descendantEvidence.raw_response_sha256, createHash('sha256').update(descendantRaw).digest('hex'));
+  assert.equal(JSON.parse(descendantRaw.toString('utf8')).commits[0].message.endsWith('\n'), true);
   assert.equal(report.decision, 'READY', report.blockers.join('; '));
   assert.equal(validateQworkReleaseIntake(report, { requireFreshRef: true }).ok, true);
 
@@ -8223,6 +8269,153 @@ test('GitLab API scan retains the !1558 test file until !1595 ancestry is verifi
   assert.equal(current.current_assertion_owners.integration_bindings
     .filter((binding) => binding.id.startsWith('test_'))
     .every((binding) => binding.contract_id === origin.contract_id), true);
+});
+
+test('GitLab API scan applies !1595 retirement outside the incremental range with native compare message bytes', () => {
+  const origin = QWORK_MR1558_SETTINGS_MODEL_NAME_DEDUP_CONTRACT;
+  const retirement = QWORK_MR1595_OBSOLETE_TEST_RETIREMENT_CONTRACT;
+  const baseline = 'c'.repeat(40);
+  const head = 'd'.repeat(40);
+  const nativeMessage = 'Merge branch release follow-up\n\nPreserve GitLab message bytes.\n';
+  const fixture = apiFixture({
+    baseline,
+    head,
+    sourceContracts: QWORK_RELEASE_SOURCE_CONTRACTS,
+    compareCommits: [{
+      id: head,
+      parent_ids: [baseline, 'e'.repeat(40)],
+      title: 'Merge branch release follow-up',
+      message: nativeMessage,
+      committed_date: '2026-09-09T01:00:00Z',
+    }],
+  });
+  const requestedFiles = [];
+  const rawCompareResponses = new Map();
+  const readValue = (endpoint) => {
+    if (endpoint.startsWith('repository/compare?')) {
+      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
+      const from = query.get('from');
+      const to = query.get('to');
+      const ancestryCommit = (id, parentIds, title, message = `${title}\n`) => ({
+        id,
+        parent_ids: parentIds,
+        title,
+        message,
+        committed_date: '2026-09-09T00:00:00Z',
+      });
+      const retirementCommit = ancestryCommit(
+        retirement.merge_commit_sha,
+        [origin.merge_commit_sha, '1'.repeat(40)],
+        'Merge MR !1595 retirement',
+      );
+      const baselineCommit = ancestryCommit(
+        baseline,
+        [retirement.merge_commit_sha],
+        'Release baseline after MR !1595',
+      );
+      const headCommit = ancestryCommit(
+        head,
+        [baseline, '2'.repeat(40)],
+        'Merge branch release follow-up',
+        nativeMessage,
+      );
+      if (to === head && from === origin.merge_commit_sha) {
+        return { compare_timeout: false, commits: [retirementCommit, baselineCommit, headCommit] };
+      }
+      if (to === head && from === retirement.merge_commit_sha) {
+        return { compare_timeout: false, commits: [baselineCommit, headCommit] };
+      }
+    }
+    const value = fixture.reader(endpoint);
+    if (!endpoint.startsWith('repository/compare?') || !Array.isArray(value?.commits)) return value;
+    return {
+      ...value,
+      commits: value.commits.map((commit) => ({ ...commit, message: nativeMessage })),
+    };
+  };
+  const reader = (endpoint) => {
+    if (endpoint.startsWith('repository/files/')) {
+      const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
+      requestedFiles.push(decodeURIComponent(encodedPath));
+    }
+    const value = readValue(endpoint);
+    if (endpoint.startsWith('repository/compare?')) {
+      rawCompareResponses.set(endpoint, Buffer.from(JSON.stringify(value), 'utf8'));
+    }
+    return value;
+  };
+  reader.readRaw = (endpoint) => {
+    const value = reader(endpoint);
+    const bytes = Buffer.from(JSON.stringify(value), 'utf8');
+    return { bytes, value };
+  };
+
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'f'.repeat(40),
+    gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+    sourceContracts: QWORK_RELEASE_SOURCE_CONTRACTS,
+  });
+
+  const historicalTestPath = 'test/unit/config/settings-ui-surface-contract.test.mjs';
+  assert.equal(report.decision, 'READY', JSON.stringify({
+    blockers: report.blockers,
+    scan_boundary: report.scan_boundary,
+    api_freshness: report.policy.api_freshness,
+    unresolved: report.unresolved,
+    source_contracts: report.source_contracts.map((item) => ({
+      contract_id: item.contract_id,
+      status: item.status,
+      failures: item.failures,
+    })),
+  }));
+  assert.equal(report.scan_boundary.mode, 'commit_ancestry');
+  assert.equal(report.scan_boundary.ancestry_verified, true);
+  assert.equal(report.merge_requests.some((mr) => String(mr.iid) === retirement.mr_iid), false);
+  assert.equal(requestedFiles.includes(historicalTestPath), false);
+  assert.deepEqual(report.unresolved.api_errors, []);
+  assert.deepEqual(report.unresolved.source_contract_failures, []);
+
+  const current = report.source_contracts.find((item) => item.contract_id === origin.contract_id);
+  assert.ok(current);
+  assert.equal(current.status, 'VERIFIED');
+  assert.equal(current.protected_files.some((file) => file.path === historicalTestPath), false);
+  const retiredBindings = current.integration_bindings.filter((binding) => binding.retired === true);
+  assert.equal(retiredBindings.length, 5);
+  assert.equal(retiredBindings.every((binding) => (
+    binding.verified === true && binding.retirement.contract_id === retirement.contract_id
+  )), true);
+  const productBindings = current.integration_bindings.filter((binding) => binding.retired !== true);
+  assert.equal(productBindings.length, 7);
+  assert.equal(productBindings.every((binding) => binding.verified === true), true);
+  assert.equal(current.current_assertion_owners.integration_bindings
+    .filter((binding) => retiredBindings.some((retired) => retired.id === binding.id))
+    .every((binding) => binding.contract_id === retirement.contract_id), true);
+  assert.equal(current.current_assertion_owners.integration_bindings
+    .filter((binding) => productBindings.some((product) => product.id === binding.id))
+    .every((binding) => binding.contract_id === origin.contract_id), true);
+
+  const ancestryEndpoint = `repository/compare?from=${retirement.merge_commit_sha}&to=${head}&straight=true`;
+  const ancestryBytes = rawCompareResponses.get(ancestryEndpoint);
+  assert.ok(ancestryBytes, JSON.stringify([...rawCompareResponses.keys()]));
+  const replayed = JSON.parse(ancestryBytes.toString('utf8'));
+  assert.equal(replayed.commits.at(-1).message, nativeMessage);
+  assert.equal(ancestryBytes.equals(Buffer.from(JSON.stringify(replayed), 'utf8')), true);
+  const originEndpoint = `repository/compare?from=${origin.merge_commit_sha}&to=${head}&straight=true`;
+  const originReplay = JSON.parse(rawCompareResponses.get(originEndpoint).toString('utf8'));
+  assert.deepEqual(originReplay.commits.map((commit) => commit.id), [
+    retirement.merge_commit_sha,
+    baseline,
+    head,
+  ]);
+  assert.equal(validateQworkReleaseIntake(report, {
+    requireFreshRef: true,
+    sourceContracts: QWORK_RELEASE_SOURCE_CONTRACTS,
+  }).ok, true);
 });
 
 test('GitLab API scan fail-closes MR !1522 when protected source bytes do not match', () => {

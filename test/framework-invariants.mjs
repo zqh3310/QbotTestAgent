@@ -325,6 +325,11 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
+  /'title', 'author_name', 'author_email', 'committer_name', 'committer_email'[\s\S]*commit\.message !== undefined[\s\S]*typeof commit\.message !== 'string'[\s\S]*!commit\.message\.trim\(\)[\s\S]*message_invalid/,
+  'GitLab compare 必须保留原生 message 尾部换行并只拒绝非字符串或空白消息',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
   /CURRENT_RELEASE_REGION_SCOPE_BOUNDARY[\s\S]*regionStartIndexes[\s\S]*regionEndIndexes[\s\S]*ownerRegionOrder[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentsOrdered[\s\S]*forbiddenFragments[\s\S]*fileOccurrenceVerified/,
   'MR1597 region scope 必须验证唯一边界、全局顺序、相对行号、forbidden fragment 与全文计数',
 );
