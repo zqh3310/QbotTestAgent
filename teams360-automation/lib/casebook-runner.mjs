@@ -66,6 +66,44 @@ const RECOVERABLE_TEAMS_FRAMEWORK_PATTERNS = [
   /teams360-automation\/testfixtures\/skillhub-regression\/manifest\.json/i,
 ];
 
+export function casebookRunnerUsage() {
+  return `360Teams QWork Casebook runner
+
+Usage:
+  npm --prefix teams360-automation run casebook -- \\
+    --casebook <xlsx> --sheet <exact-name> --case <id[,id...]> \\
+    --out <new-directory> [options]
+
+Required execution options:
+  --casebook <xlsx>              Casebook path
+  --case <id[,id...]>            Ordered Case IDs
+  --out <new-directory>          New immutable directory under teams360-automation/output
+
+Common options:
+  --sheet <exact-name>           Exact visible Sheet name
+  --profile <name>               Case profile (default: mandatory)
+  --session <json>               Managed 360Teams live-session file
+  --cdp <loopback-url>           Caller-managed loopback CDP endpoint
+  --model-tier <tier>            Model tier, for example M3
+  --timeout-ms <ms>              Per-Case timeout
+  --fixtures <json>              Verified fixture catalog
+  --native-ime-command <command> Native IME controller required by matching READY pretest
+
+Production-gate options:
+  --production-gate true
+  --control-plane-url <origin>
+  --backend-version <id>
+  --prompt-policy-version <id>
+  --feature-flags-hash <sha256>
+  --qwork-ui-git-commit <commit>
+  --qwork-build-id <id>
+  --qwork-release-manifest-sha256 <sha256>
+
+Recovery options are forbidden for production-gate runs. Core Beta v2 is always serial;
+run the matching capability audit and exact READY pretest before invoking this runner.
+`;
+}
+
 export function parseCasebookRunnerOptions(argv = []) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -1384,6 +1422,11 @@ function shellArgument(value) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const argv = process.argv.slice(2);
+    const parsedOptions = parseCasebookRunnerOptions(argv);
+    if (parsedOptions.help) {
+      process.stdout.write(casebookRunnerUsage());
+      process.exit(0);
+    }
     const lock = executeUnderManagedRunnerLock({
       entrypoint: fileURLToPath(import.meta.url),
       argv,

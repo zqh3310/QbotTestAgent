@@ -14,6 +14,8 @@ import {
   releaseSourceContractTrigger,
   resolveCurrentReleaseHeaderContract,
   resolveReleaseSourceContracts,
+  validateCanonicalGitLabCommitMetadata,
+  validateCanonicalGitLabDiffChange,
   validateReleaseSourceContractsForReport,
 } from './qwork-release-source-contracts.mjs';
 import {
@@ -27,7 +29,7 @@ import {
 } from './qwork-release-blocking-risks.mjs';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.7.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.8.0';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -37,6 +39,8 @@ export const QWORK_RELEASE_INTAKE_OVERLAP_HOURS = 48;
 export const QWORK_RELEASE_INTAKE_FALLBACK_DAYS = 30;
 export const QWORK_RELEASE_INTAKE_MAX_COMMITS = 500;
 export const QWORK_RELEASE_INTAKE_MAX_MR_PAGES = 20;
+export const QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE = 100;
+export const QWORK_RELEASE_FILE_PROVENANCE_MAX_DIFF_PAGES = 100;
 
 const HEX40 = /^[a-f0-9]{40}$/i;
 const HEX64 = /^[a-f0-9]{64}$/i;
@@ -646,30 +650,149 @@ function reconstructFirstParentChain({ compare, baselineCommit, releaseHead } = 
   return { ok: true, commits: reversed.reverse() };
 }
 
-function readCurrentReleaseContractFiles({ readGitLab, releaseHead, protectedPaths, apiErrors }) {
+function readReleaseCommitDiff({ readGitLab, lastCommitId, commitDiffCache }) {
+  if (commitDiffCache.has(lastCommitId)) return commitDiffCache.get(lastCommitId);
+  const commitEndpoint = `repository/commits/${encodeURIComponent(lastCommitId)}`;
+  const diffEndpoint = `${commitEndpoint}/diff?per_page=${QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE}`;
+  const result = {
+    commitEndpoint,
+    diffEndpoint,
+    commitId: '',
+    commitRawResponse: {},
+    commitMetadata: { id: '' },
+    commitResponseSha256: '',
+    pages: [],
+    changes: [],
+    error: '',
+  };
+  try {
+    const metadata = structuredClone(readGitLab(commitEndpoint));
+    result.commitRawResponse = metadata;
+    result.commitResponseSha256 = sha256Text(stableJson(metadata));
+    const metadataValidation = validateCanonicalGitLabCommitMetadata(metadata, lastCommitId);
+    if (!metadataValidation.ok) {
+      throw new Error(`repository commit metadata 字段非法:${metadataValidation.failures.join(',')}`);
+    }
+    result.commitId = text(metadata.id);
+    result.commitMetadata = metadataValidation.projection;
+    const changePathPairs = new Set();
+    let complete = false;
+    for (let page = 1; page <= QWORK_RELEASE_FILE_PROVENANCE_MAX_DIFF_PAGES; page += 1) {
+      const endpoint = `${diffEndpoint}&page=${page}`;
+      const rows = readGitLab(endpoint);
+      if (!Array.isArray(rows)) throw new Error('repository commit diff 返回不是数组');
+      const rawResponse = structuredClone(rows);
+      const changes = rows.map((change) => {
+        const validation = validateCanonicalGitLabDiffChange(change);
+        if (!validation.ok || !validation.projection) {
+          throw new Error(`repository commit diff change 字段非法:${validation.failures.join(',')}`);
+        }
+        const projected = validation.projection;
+        const pathPair = stableJson([projected.old_path, projected.new_path]);
+        if (changePathPairs.has(pathPair)) {
+          throw new Error('repository commit diff 包含重复 change');
+        }
+        changePathPairs.add(pathPair);
+        return projected;
+      });
+      result.pages.push({
+        page,
+        endpoint,
+        item_count: rows.length,
+        raw_response: rawResponse,
+        changes,
+        response_sha256: sha256Text(stableJson(rawResponse)),
+      });
+      result.changes.push(...changes);
+      if (rows.length < QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete) throw new Error('repository commit diff 分页超过安全上限');
+  } catch (error) {
+    result.error = redact(error?.message || 'repository commit diff read failed');
+  }
+  commitDiffCache.set(lastCommitId, result);
+  return result;
+}
+
+function releaseFileProvenanceFromCommitDiff({
+  readGitLab,
+  filePath,
+  releaseHead,
+  payload,
+  commitDiffCache,
+}) {
+  const fileLastCommitId = text(payload?.last_commit_id);
+  const base = {
+    schema_version: QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: `repository/commits/${encodeURIComponent(fileLastCommitId)}`,
+    diff_endpoint: `repository/commits/${encodeURIComponent(fileLastCommitId)}/diff?per_page=${QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE}`,
+    path: filePath,
+    ref: releaseHead,
+    release_commit_id: text(payload?.commit_id),
+    file_last_commit_id: fileLastCommitId,
+    commit_id: '',
+    commit_raw_response: {},
+    commit_metadata: { id: '' },
+    commit_response_sha256: '',
+    diff_page_size: QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE,
+    diff_pages: [],
+    matched_change_count: 0,
+    matched_changes: [],
+    path_verified: false,
+    error: '',
+  };
+  if (!HEX40.test(fileLastCommitId)) {
+    return { ...base, error: 'repository file last_commit_id invalid' };
+  }
+  const observed = readReleaseCommitDiff({ readGitLab, lastCommitId: fileLastCommitId, commitDiffCache });
+  const matchedChanges = observed.changes.filter((change) => (
+    text(change?.old_path) === filePath || text(change?.new_path) === filePath
+  )).map((change) => ({
+    old_path: text(change?.old_path),
+    new_path: text(change?.new_path),
+    new_file: change?.new_file === true,
+    renamed_file: change?.renamed_file === true,
+    deleted_file: change?.deleted_file === true,
+  }));
+  const currentPathChange = matchedChanges.length === 1
+    && matchedChanges[0].new_path === filePath
+    && matchedChanges[0].deleted_file === false;
+  return {
+    ...base,
+    commit_endpoint: observed.commitEndpoint,
+    diff_endpoint: observed.diffEndpoint,
+    commit_id: observed.commitId,
+    commit_raw_response: observed.commitRawResponse,
+    commit_metadata: observed.commitMetadata,
+    commit_response_sha256: observed.commitResponseSha256,
+    diff_pages: observed.pages,
+    matched_change_count: matchedChanges.length,
+    matched_changes: matchedChanges,
+    path_verified: !observed.error && currentPathChange,
+    error: observed.error,
+  };
+}
+
+function readCurrentReleaseContractFiles({
+  readGitLab,
+  releaseHead,
+  protectedPaths,
+  apiErrors,
+  releaseFileCache,
+  commitDiffCache,
+}) {
   return protectedPaths.map((filePath) => {
     const endpoint = `repository/files/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(releaseHead)}`;
-    const historyEndpoint = `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(releaseHead)}&per_page=1`;
+    let payload;
     try {
-      const payload = readGitLab(endpoint);
-      const history = readGitLab(historyEndpoint);
-      if (!Array.isArray(history) || history.length !== 1 || !text(history[0]?.id)) {
-        throw new Error('repository file last_commit provenance missing');
-      }
-      return {
-        path: filePath,
-        requested_ref: releaseHead,
-        payload,
-        last_commit_provenance: {
-          schema_version: QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
-          source: 'gitlab-api-repository-commits',
-          endpoint: historyEndpoint,
-          path: filePath,
-          ref: releaseHead,
-          commit_id: text(payload?.commit_id),
-          last_commit_id: text(history[0]?.id),
-        },
-      };
+      payload = releaseFileCache.has(filePath)
+        ? releaseFileCache.get(filePath)
+        : readGitLab(endpoint);
+      releaseFileCache.set(filePath, payload);
     } catch (error) {
       const message = redact(error?.message || 'repository file read failed');
       apiErrors.push(`source contract current release file ${filePath}: ${message}`);
@@ -679,6 +802,23 @@ function readCurrentReleaseContractFiles({ readGitLab, releaseHead, protectedPat
         error: message,
       };
     }
+    const lastCommitProvenance = releaseFileProvenanceFromCommitDiff({
+      readGitLab,
+      filePath,
+      releaseHead,
+      payload,
+      commitDiffCache,
+    });
+    if (lastCommitProvenance.error) {
+      const provenanceError = `source contract current release file provenance ${filePath}: ${lastCommitProvenance.error}`;
+      if (!apiErrors.includes(provenanceError)) apiErrors.push(provenanceError);
+    }
+    return {
+      path: filePath,
+      requested_ref: releaseHead,
+      payload,
+      last_commit_provenance: lastCommitProvenance,
+    };
   });
 }
 
@@ -853,6 +993,8 @@ function scanWithGitLabApi({
   const branch = normalizeReleaseBranch(releaseRef);
   const encodedBranch = encodeURIComponent(branch);
   const apiErrors = [];
+  const releaseFileCache = new Map();
+  const commitDiffCache = new Map();
   let before = null;
   try {
     before = readGitLab(`repository/branches/${encodedBranch}`);
@@ -1000,6 +1142,8 @@ function scanWithGitLabApi({
       releaseHead,
       protectedPaths: currentReleaseSourceContractProtectedPaths(contract, headerResolution.owner),
       apiErrors,
+      releaseFileCache,
+      commitDiffCache,
     });
     const attestation = auditCurrentReleaseSourceContract({
       releaseHead,
@@ -1824,7 +1968,7 @@ export function scanQworkReleaseIntake({
 export function writeQworkReleaseIntake({ report, outDir } = {}) {
   const root = path.resolve(outDir || '');
   if (!root) throw new Error('release intake 输出目录不能为空');
-  if (fs.existsSync(root) && fs.readdirSync(root).length) throw new Error(`release intake 输出目录必须是新的不可变目录：${root}`);
+  if (fs.existsSync(root)) throw new Error(`release intake 输出目录必须在调用前不存在：${root}`);
   fs.mkdirSync(root, { recursive: true });
   const jsonFile = path.join(root, QWORK_RELEASE_INTAKE_REPORT);
   const markdownFile = path.join(root, 'release-intake.md');

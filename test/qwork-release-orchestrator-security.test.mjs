@@ -61,6 +61,77 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function releaseCommitMetadata(id) {
+  return {
+    id,
+    short_id: id.slice(0, 8),
+    created_at: '2026-09-08T01:02:03Z',
+    parent_ids: ['a'.repeat(40)],
+    title: 'Protected source update',
+    message: 'Protected source update',
+    author_name: 'QBot QA Fixture',
+    author_email: 'qbot-qa@example.invalid',
+    authored_date: '2026-09-08T01:02:03Z',
+    committer_name: 'QBot QA Fixture',
+    committer_email: 'qbot-qa@example.invalid',
+    committed_date: '2026-09-08T01:02:03Z',
+    trailers: {},
+    project_id: 1,
+    stats: { additions: 1, deletions: 0, total: 1 },
+    status: 'success',
+    last_pipeline: null,
+    web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/${id}`,
+  };
+}
+
+function releaseFileProvenance(filePath, head) {
+  const change = {
+    old_path: filePath,
+    new_path: filePath,
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+  };
+  const rawChange = {
+    ...change,
+    a_mode: '100644',
+    b_mode: '100644',
+    diff: '@@ -1 +1 @@\n-old\n+new',
+    generated_file: false,
+    collapsed: false,
+    too_large: false,
+  };
+  const diffEndpoint = `repository/commits/${head}/diff?per_page=100`;
+  const commitMetadata = releaseCommitMetadata(head);
+  return {
+    schema_version: 'qbot-qwork-release-file-provenance/v2',
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: `repository/commits/${head}`,
+    diff_endpoint: diffEndpoint,
+    path: filePath,
+    ref: head,
+    release_commit_id: head,
+    file_last_commit_id: head,
+    commit_id: head,
+    commit_raw_response: structuredClone(commitMetadata),
+    commit_metadata: commitMetadata,
+    commit_response_sha256: sha256(stableJson(commitMetadata)),
+    diff_page_size: 100,
+    diff_pages: [{
+      page: 1,
+      endpoint: `${diffEndpoint}&page=1`,
+      item_count: 1,
+      raw_response: [rawChange],
+      changes: [change],
+      response_sha256: sha256(stableJson([rawChange])),
+    }],
+    matched_change_count: 1,
+    matched_changes: [change],
+    path_verified: true,
+    error: '',
+  };
+}
+
 function canonicalizationPolicyFixture(pid = 4242) {
   const stableProjection = {
     schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1',
@@ -256,20 +327,14 @@ function currentReleaseFileFixtures(contracts, head) {
       blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
-      last_commit_provenance: {
-        schema_version: 'qbot-qwork-release-file-provenance/v1',
-        source: 'gitlab-api-repository-commits',
-        endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
-        path: filePath,
-        ref: head,
-        commit_id: head,
-        last_commit_id: head,
-      },
+      last_commit_provenance: releaseFileProvenance(filePath, head),
     }];
   }));
 }
 
-function makeReleaseIntake({ repository, frameworkCommit, releaseHead }) {
+function makeReleaseIntake({ repository, frameworkCommit, releaseHead, casebookPath, stageId = 'G1' }) {
+  const stage = QWORK_RELEASE_TEST_STAGES.find((item) => item.id === stageId);
+  if (!stage || stage.kind !== 'casebook') throw new Error(`invalid intake stage ${stageId}`);
   const releaseFiles = currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, releaseHead);
   const blockingRiskMerges = new Set([
     QWORK_MR1552_MERGE_COMMIT_SHA,
@@ -352,20 +417,26 @@ function makeReleaseIntake({ repository, frameworkCommit, releaseHead }) {
         }],
       };
     }
-    if (endpoint.startsWith('repository/commits?')) {
-      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
-      const filePath = query.get('path');
-      const refName = query.get('ref_name');
-      const payload = releaseFiles.get(filePath);
-      if (!payload || refName !== releaseHead) {
-        throw new Error(`missing release file history ${filePath}`);
-      }
-      return [{
-        id: payload.last_commit_id,
-        parent_ids: ['a'.repeat(40)],
-        committed_date: '2026-09-05T00:00:00Z',
-      }];
+    const commitDiff = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/diff\?per_page=100&page=(\d+)$/i);
+    if (commitDiff) {
+      const rows = [...releaseFiles.keys()].map((filePath) => ({
+        old_path: filePath,
+        new_path: filePath,
+        a_mode: '100644',
+        b_mode: '100644',
+        diff: '@@ -1 +1 @@\n-old\n+new',
+        new_file: false,
+        renamed_file: false,
+        deleted_file: false,
+        generated_file: false,
+        collapsed: false,
+        too_large: false,
+      }));
+      const page = Number(commitDiff[2]);
+      return rows.slice((page - 1) * 100, page * 100);
     }
+    const commitMetadata = endpoint.match(/^repository\/commits\/([a-f0-9]{40})$/i);
+    if (commitMetadata) return releaseCommitMetadata(commitMetadata[1]);
     if (endpoint.startsWith('repository/files/')) {
       const encoded = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
       const filePath = decodeURIComponent(encoded);
@@ -378,9 +449,9 @@ function makeReleaseIntake({ repository, frameworkCommit, releaseHead }) {
     repoRoot: repository,
     releaseRef: QWORK_RELEASE_INTAKE_DEFAULT_REF,
     baselineCommit: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
-    casebookPath: path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookPath,
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
-    sheet: '核心生命线门禁',
+    sheet: stage.sheet,
     frameworkCommit,
     gitlabReader,
     freshnessSource: 'gitlab-api',
@@ -481,9 +552,9 @@ function pretest(stageId, plan) {
     release_gate_eligible: true,
     blockers: [],
     release_intake: {
-      sha256: plan.release_intake.sha256,
-      content_sha256: plan.release_intake.content_sha256,
-      release_head: plan.release_intake.release_head,
+      sha256: plan.release_intakes[stageId].sha256,
+      content_sha256: plan.release_intakes[stageId].content_sha256,
+      release_head: plan.release_intakes[stageId].release_head,
     },
     checks: checkIds.map((id) => ({ id, status: 'passed', detail: 'security fixture' })),
     framework: {
@@ -615,7 +686,10 @@ function setupFixture() {
   const frameworkCommit = run('git', ['rev-parse', 'HEAD']).stdout.trim();
   const casebook = path.join(temporaryRoot, QWORK_RELEASE_CASEBOOK_BASENAME);
   const identityFile = path.join(temporaryRoot, 'release-identity.json');
-  const intakeFile = path.join(temporaryRoot, 'release-intake.json');
+  const intakeFiles = Object.fromEntries(['G1', 'G2', 'G3', 'G4'].map((stageId) => [
+    stageId,
+    path.join(temporaryRoot, `release-intake-${stageId.toLowerCase()}.json`),
+  ]));
   const observationFile = path.join(temporaryRoot, 'release-observation.json');
   const stateDir = path.join(temporaryRoot, 'control');
   fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebook);
@@ -624,11 +698,15 @@ function setupFixture() {
     captured_at: '2026-09-05T00:00:00.000Z',
     ...identity,
   });
-  writeJson(intakeFile, makeReleaseIntake({
-    repository: work,
-    frameworkCommit,
-    releaseHead: frameworkCommit,
-  }));
+  for (const stageId of ['G1', 'G2', 'G3', 'G4']) {
+    writeJson(intakeFiles[stageId], makeReleaseIntake({
+      repository: work,
+      frameworkCommit,
+      releaseHead: frameworkCommit,
+      casebookPath: casebook,
+      stageId,
+    }));
+  }
   writeJson(observationFile, {
     schema_version: QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
     observed_at: '2026-09-05T00:00:00.000Z',
@@ -642,7 +720,10 @@ function setupFixture() {
     '--state-dir', stateDir,
     '--casebook', casebook,
     '--release-identity', identityFile,
-    '--release-intake', intakeFile,
+    '--release-intake-g1', intakeFiles.G1,
+    '--release-intake-g2', intakeFiles.G2,
+    '--release-intake-g3', intakeFiles.G3,
+    '--release-intake-g4', intakeFiles.G4,
     '--expected-release-observation', observationFile,
     '--expected-release-ref', QWORK_RELEASE_INTAKE_DEFAULT_REF,
     '--expected-release-head', frameworkCommit,
@@ -654,7 +735,8 @@ function setupFixture() {
     stateDir,
     casebook,
     identityFile,
-    intakeFile,
+    intakeFile: intakeFiles.G1,
+    intakeFiles,
     observationFile,
     initArgs,
   };
@@ -722,6 +804,65 @@ test('GitLab token stdin option is an exact valueless flag for every release CLI
   }
 });
 
+test('orchestrator rejects legacy, unknown, and command-mismatched options without exposing values', () => {
+  const secret = 'unknown-option-value-must-not-appear';
+  for (const [index, args] of [
+    ['status', '--help', '--release-intake', secret],
+    ['status', '--help', `--random-unknown=${secret}`],
+    ['status', '--help', '--casebook', secret],
+  ].entries()) {
+    const rejected = spawnSync(process.execPath, [orchestrator, ...args], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    assert.notEqual(rejected.status, 0, `orchestrator must reject unknown option case ${index + 1}`);
+    assert.match(rejected.stderr, /Unknown command-line option/);
+    assert.doesNotMatch(`${rejected.stdout}\n${rejected.stderr}`, new RegExp(secret));
+  }
+});
+
+test('release scan and observation CLIs reject unsupported options before help or side effects', () => {
+  const secret = 'unsupported-option-secret-must-not-appear';
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-release-cli-options-'));
+  try {
+    for (const [label, script, rejectedOptions] of [
+      ['release intake scanner', intakeCli, [
+        [`--random-unknown=${secret}`],
+        ['--random-unknown', secret],
+        ['--release-intake', secret],
+        ['--state-dir', secret],
+      ]],
+      ['release observation', observationCli, [
+        [`--random-unknown=${secret}`],
+        ['--random-unknown', secret],
+        ['--release-intake', secret],
+        ['--casebook', secret],
+      ]],
+    ]) {
+      for (const [index, rejectedOption] of rejectedOptions.entries()) {
+        const output = path.join(temporaryRoot, `${path.basename(script)}-${index}`);
+        const rejected = spawnSync(process.execPath, [
+          script,
+          '--help',
+          '--gitlab-token-stdin',
+          '--out', output,
+          ...rejectedOption,
+        ], {
+          cwd: root,
+          encoding: 'utf8',
+          input: `${secret}\n`,
+        });
+        assert.notEqual(rejected.status, 0, `${label} must reject unsupported option case ${index + 1}`);
+        assert.match(rejected.stderr, /Unknown command-line option/);
+        assert.doesNotMatch(`${rejected.stdout}\n${rejected.stderr}`, new RegExp(secret));
+        assert.equal(fs.existsSync(output), false, `${label} must reject before output creation`);
+      }
+    }
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test('orchestrator rejects forged repositories, control-tree aliases, and immutable artifact drift', async () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.match(packageJson.scripts.check, /test\/qwork-release-orchestrator-security\.test\.mjs/);
@@ -779,7 +920,10 @@ test('orchestrator rejects forged repositories, control-tree aliases, and immuta
     assert.deepEqual(plan.source_artifacts.map((item) => [item.role, item.type]), [
       ['casebook', 'file'],
       ['release_identity', 'file'],
-      ['release_intake', 'file'],
+      ['release_intake_g1', 'file'],
+      ['release_intake_g2', 'file'],
+      ['release_intake_g3', 'file'],
+      ['release_intake_g4', 'file'],
       ['release_observation', 'file'],
     ]);
 
@@ -832,7 +976,9 @@ test('orchestrator rejects forged repositories, control-tree aliases, and immuta
     const legacySchema = cloneControl('legacy-schema');
     const legacyPlanPath = path.join(legacySchema, 'release-test-plan.json');
     const legacyPlan = JSON.parse(fs.readFileSync(legacyPlanPath));
-    legacyPlan.schema_version = 'qbot-qwork-release-test-plan/v1';
+    legacyPlan.schema_version = 'qbot-qwork-release-test-plan/v2';
+    legacyPlan.release_intake = legacyPlan.release_intakes.G1;
+    delete legacyPlan.release_intakes;
     writeJson(legacyPlanPath, legacyPlan);
     expectRejected(status(legacySchema), /plan_schema_mismatch|不支持的发布测试计划/);
 

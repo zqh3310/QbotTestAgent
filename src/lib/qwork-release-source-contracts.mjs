@@ -6,8 +6,10 @@ export const QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-source-c
 // current-release attestation contains complete protected-file bytes and an
 // independent file-history readback, so it has an intentionally incompatible
 // schema instead of silently widening v1.
-export const QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract/v2';
-export const QWORK_RELEASE_FILE_PROVENANCE_SCHEMA = 'qbot-qwork-release-file-provenance/v1';
+export const QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract/v3';
+export const QWORK_RELEASE_FILE_PROVENANCE_SCHEMA = 'qbot-qwork-release-file-provenance/v2';
+const QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE = 100;
+const QWORK_RELEASE_FILE_PROVENANCE_MAX_DIFF_PAGES = 100;
 export const QWORK_RELEASE_SOURCE_CLAIM_SCOPE = 'source_and_test_declarations';
 export const QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED = false;
 export const QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA = 'qbot-qwork-release-source-owner-scope/v1';
@@ -69,6 +71,205 @@ function stableJson(value) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+const GITLAB_COMMIT_WEB_URL_PREFIX = 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/';
+const GITLAB_COMMIT_METADATA_KEYS = Object.freeze([
+  'author_email', 'author_name', 'authored_date', 'committed_date', 'committer_email',
+  'committer_name', 'created_at', 'id', 'last_pipeline', 'message',
+  'parent_ids', 'project_id', 'short_id', 'stats', 'status', 'title', 'trailers', 'web_url',
+]);
+const GITLAB_PIPELINE_METADATA_KEYS = Object.freeze([
+  'created_at', 'id', 'iid', 'project_id', 'ref', 'sha', 'source', 'status',
+  'updated_at', 'web_url',
+]);
+const GITLAB_DIFF_REQUIRED_CHANGE_KEYS = Object.freeze([
+  'a_mode', 'b_mode', 'deleted_file', 'diff', 'new_file', 'new_path', 'old_path',
+  'renamed_file',
+]);
+const GITLAB_DIFF_OPTIONAL_CHANGE_KEYS = Object.freeze([
+  'collapsed', 'generated_file', 'too_large',
+]);
+const GITLAB_DIFF_ALLOWED_CHANGE_KEYS = new Set([
+  ...GITLAB_DIFF_REQUIRED_CHANGE_KEYS,
+  ...GITLAB_DIFF_OPTIONAL_CHANGE_KEYS,
+]);
+
+function isCanonicalIsoTimestamp(value) {
+  if (typeof value !== 'string' || value !== value.trim()) return false;
+  const match = value.match(
+    /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d{1,6})?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/u,
+  );
+  if (!match) return false;
+  const [, yearText, monthText, dayText, , , , zone] = match;
+  if ((zone.startsWith('+14:') || zone.startsWith('-14:')) && !zone.endsWith(':00')) return false;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  return calendar.getUTCFullYear() === year
+    && calendar.getUTCMonth() === month - 1
+    && calendar.getUTCDate() === day
+    && Number.isFinite(Date.parse(value));
+}
+
+export function validateCanonicalGitLabCommitMetadata(metadata, expectedId = '') {
+  const failures = [];
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return { ok: false, failures: ['metadata_not_object'], projection: null };
+  }
+  if (!objectHasExactKeys(metadata, GITLAB_COMMIT_METADATA_KEYS)) failures.push('fields_mismatch');
+  const id = metadata.id;
+  if (typeof id !== 'string' || !/^[a-f0-9]{40}$/u.test(id) || (expectedId && id !== expectedId)) {
+    failures.push('id_invalid');
+  }
+  if (typeof metadata.short_id !== 'string'
+    || !/^[a-f0-9]{8,12}$/u.test(metadata.short_id)
+    || (typeof id === 'string' && !id.startsWith(metadata.short_id))) {
+    failures.push('short_id_invalid');
+  }
+  if (!Array.isArray(metadata.parent_ids)
+    || metadata.parent_ids.some((parentId) => (
+      typeof parentId !== 'string' || !/^[a-f0-9]{40}$/u.test(parentId)
+    ))
+    || new Set(metadata.parent_ids).size !== metadata.parent_ids.length) {
+    failures.push('parent_ids_invalid');
+  }
+  for (const field of [
+    'title', 'author_name', 'author_email', 'committer_name', 'committer_email',
+  ]) {
+    if (typeof metadata[field] !== 'string'
+      || !metadata[field].trim()
+      || metadata[field] !== metadata[field].trim()) {
+      failures.push(`${field}_invalid`);
+    }
+  }
+  if (typeof metadata.message !== 'string' || !metadata.message.trim()) {
+    failures.push('message_invalid');
+  }
+  for (const field of ['created_at', 'authored_date', 'committed_date']) {
+    if (!isCanonicalIsoTimestamp(metadata[field])) failures.push(`${field}_invalid`);
+  }
+  if (!metadata.trailers || typeof metadata.trailers !== 'object' || Array.isArray(metadata.trailers)
+    || Object.entries(metadata.trailers).some(([key, value]) => (
+      !key.trim() || key !== key.trim() || typeof value !== 'string'
+    ))) {
+    failures.push('trailers_invalid');
+  }
+  if (!Number.isSafeInteger(metadata.project_id) || metadata.project_id <= 0) {
+    failures.push('project_id_invalid');
+  }
+  if (!objectHasExactKeys(metadata.stats, ['additions', 'deletions', 'total'])
+    || !['additions', 'deletions', 'total'].every((field) => (
+      Number.isSafeInteger(metadata.stats?.[field]) && metadata.stats[field] >= 0
+    ))
+    || metadata.stats.total !== metadata.stats.additions + metadata.stats.deletions) {
+    failures.push('stats_invalid');
+  }
+  if (metadata.status !== null
+    && (typeof metadata.status !== 'string'
+      || !metadata.status.trim()
+      || metadata.status !== metadata.status.trim())) {
+    failures.push('status_invalid');
+  }
+  if (metadata.last_pipeline !== null) {
+    const pipeline = metadata.last_pipeline;
+    if (!objectHasExactKeys(pipeline, GITLAB_PIPELINE_METADATA_KEYS)) {
+      failures.push('last_pipeline_fields_mismatch');
+    } else {
+      for (const field of ['id', 'iid', 'project_id']) {
+        if (!Number.isSafeInteger(pipeline[field]) || pipeline[field] <= 0) {
+          failures.push(`last_pipeline_${field}_invalid`);
+        }
+      }
+      for (const field of ['ref', 'source', 'status']) {
+        if (typeof pipeline[field] !== 'string'
+          || !pipeline[field].trim()
+          || pipeline[field] !== pipeline[field].trim()) {
+          failures.push(`last_pipeline_${field}_invalid`);
+        }
+      }
+      if (typeof pipeline.sha !== 'string' || !/^[a-f0-9]{40}$/u.test(pipeline.sha)) {
+        failures.push('last_pipeline_sha_invalid');
+      }
+      if (pipeline.project_id !== metadata.project_id) {
+        failures.push('last_pipeline_project_id_mismatch');
+      }
+      if (pipeline.sha !== metadata.id) failures.push('last_pipeline_sha_mismatch');
+      for (const field of ['created_at', 'updated_at']) {
+        if (!isCanonicalIsoTimestamp(pipeline[field])) {
+          failures.push(`last_pipeline_${field}_invalid`);
+        }
+      }
+      if (typeof pipeline.web_url !== 'string'
+        || pipeline.web_url
+          !== `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/pipelines/${pipeline.id}`) {
+        failures.push('last_pipeline_web_url_invalid');
+      }
+    }
+  }
+  if (typeof metadata.web_url !== 'string'
+    || metadata.web_url !== `${GITLAB_COMMIT_WEB_URL_PREFIX}${id}`) {
+    failures.push('web_url_invalid');
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+    projection: failures.length === 0 ? stableValue(metadata) : null,
+  };
+}
+
+export function validateCanonicalGitLabDiffChange(change) {
+  const failures = [];
+  if (!change || typeof change !== 'object' || Array.isArray(change)) {
+    return { ok: false, failures: ['change_not_object'], projection: null };
+  }
+  if (GITLAB_DIFF_REQUIRED_CHANGE_KEYS.some((field) => (
+    !Object.prototype.hasOwnProperty.call(change, field)
+  )) || Object.keys(change).some((field) => !GITLAB_DIFF_ALLOWED_CHANGE_KEYS.has(field))) {
+    failures.push('fields_mismatch');
+  }
+  if (typeof change.old_path !== 'string'
+    || typeof change.new_path !== 'string'
+    || !change.old_path.trim()
+    || !change.new_path.trim()
+    || change.old_path !== change.old_path.trim()
+    || change.new_path !== change.new_path.trim()) {
+    failures.push('path_invalid');
+  }
+  for (const field of ['new_file', 'renamed_file', 'deleted_file']) {
+    if (typeof change[field] !== 'boolean') failures.push(`${field}_invalid`);
+  }
+  for (const field of GITLAB_DIFF_OPTIONAL_CHANGE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(change, field) && typeof change[field] !== 'boolean') {
+      failures.push(`${field}_invalid`);
+    }
+  }
+  for (const field of ['a_mode', 'b_mode']) {
+    if (typeof change[field] !== 'string' || !/^(?:0|[0-7]{6})$/u.test(change[field])) {
+      failures.push(`${field}_invalid`);
+    }
+  }
+  if (typeof change.diff !== 'string') failures.push('diff_invalid');
+  if (change.collapsed === true || change.too_large === true) failures.push('diff_incomplete');
+  if (failures.length === 0) {
+    const enabledFlags = [change.new_file, change.renamed_file, change.deleted_file]
+      .filter((enabled) => enabled).length;
+    const pathChanged = change.old_path !== change.new_path;
+    if (enabledFlags > 1 || change.renamed_file !== pathChanged) failures.push('flags_conflict');
+  }
+  const projection = failures.some((failure) => [
+    'change_not_object', 'fields_mismatch', 'path_invalid', 'new_file_invalid',
+    'renamed_file_invalid', 'deleted_file_invalid', 'generated_file_invalid',
+    'collapsed_invalid', 'too_large_invalid', 'a_mode_invalid', 'b_mode_invalid', 'diff_invalid',
+  ].includes(failure)) ? null : {
+    old_path: change.old_path,
+    new_path: change.new_path,
+    new_file: change.new_file,
+    renamed_file: change.renamed_file,
+    deleted_file: change.deleted_file,
+  };
+  return { ok: failures.length === 0, failures, projection };
 }
 
 function gitBlobSha1(bytes) {
@@ -2402,6 +2603,20 @@ function staticJavaScriptPropertyName(property) {
   return null;
 }
 
+function staticallyResolvableJavaScriptPropertyName(property) {
+  if (property?.type !== 'Property') return null;
+  if (property.key?.type === 'Identifier' && !property.computed) return property.key.name;
+  if (property.key?.type === 'Literal' && typeof property.key.value === 'string') {
+    return property.key.value;
+  }
+  if (property.key?.type === 'TemplateLiteral'
+    && property.key.expressions?.length === 0
+    && property.key.quasis?.length === 1) {
+    return property.key.quasis[0].value.cooked;
+  }
+  return null;
+}
+
 function javaScriptPatternNames(pattern, names = []) {
   if (!pattern || typeof pattern !== 'object') return names;
   if (pattern.type === 'Identifier') names.push(pattern.name);
@@ -2641,17 +2856,7 @@ function observeMr1597TopLevelBindings(program) {
       && isExactImportMetaUrl(declaration.init.arguments[0])) {
       matchesByLocal.get('require').push(declaration);
     }
-    const properties = declaration.id?.type === 'ObjectPattern' ? declaration.id.properties : [];
-    if (properties.length === 1
-      && properties[0].type === 'Property'
-      && properties[0].computed === false
-      && properties[0].kind === 'init'
-      && properties[0].method === false
-      && properties[0].shorthand === true
-      && properties[0].key?.type === 'Identifier'
-      && properties[0].key.name === 'workerEnvironment'
-      && properties[0].value?.type === 'Identifier'
-      && properties[0].value.name === 'workerEnvironment'
+    if (objectPatternHasUniqueExactShorthandBinding(declaration.id, 'workerEnvironment')
       && isExactRequireCall(declaration.init, MR1597_TEST_FACADE_REQUIRE_PATH)) {
       matchesByLocal.get('workerEnvironment').push(declaration);
     }
@@ -2698,6 +2903,399 @@ function expressionAliasesAnyIdentifier(node, aliases) {
   return false;
 }
 
+const ALIASING_ASSIGNMENT_OPERATORS = new Set(['=', '&&=', '||=', '??=']);
+
+function bindProtectedAliasPattern(pattern, value, aliases, {
+  matchesAlias = (node) => expressionAliasesAnyIdentifier(node, aliases),
+} = {}) {
+  let added = false;
+  let indeterminate = false;
+  const addName = (name) => {
+    if (aliases.has(name)) return;
+    aliases.add(name);
+    added = true;
+  };
+  const taintPattern = (target) => {
+    javaScriptPatternNames(target).forEach(addName);
+  };
+  const carriesAliasValue = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    if (matchesAlias(expression)) return true;
+    if (expression.type === 'Identifier') return aliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return carriesAliasValue(expression.argument);
+    }
+    if (expression.type === 'AssignmentExpression') return carriesAliasValue(expression.right);
+    if (expression.type === 'SequenceExpression') return carriesAliasValue(expression.expressions?.at(-1));
+    if (expression.type === 'ConditionalExpression') {
+      return carriesAliasValue(expression.consequent) || carriesAliasValue(expression.alternate);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return carriesAliasValue(expression.left) || carriesAliasValue(expression.right);
+    }
+    if (expression.type === 'MemberExpression') return carriesAliasValue(expression.object);
+    if (expression.type === 'ArrayExpression') {
+      return expression.elements?.some((element) => carriesAliasValue(
+        element?.type === 'SpreadElement' ? element.argument : element,
+      )) || false;
+    }
+    if (expression.type === 'ObjectExpression') {
+      return expression.properties?.some((property) => carriesAliasValue(
+        property.type === 'SpreadElement' ? property.argument : property.value,
+      )) || false;
+    }
+    if (['CallExpression', 'NewExpression'].includes(expression.type)) {
+      const callee = unwrapJavaScriptChain(expression.callee);
+      return expression.arguments?.some((argument) => carriesAliasValue(
+        argument?.type === 'SpreadElement' ? argument.argument : argument,
+      )) || (callee?.type === 'MemberExpression' && carriesAliasValue(callee.object));
+    }
+    return false;
+  };
+  const carriesAlias = (expression) => matchesAlias(expression) || carriesAliasValue(expression);
+  const defaultsCarryAlias = (target) => {
+    let found = false;
+    visitJavaScriptAst(target, (node) => {
+      if (node.type === 'AssignmentPattern' && carriesAlias(node.right)) found = true;
+    });
+    return found;
+  };
+  const markIndeterminate = (target) => {
+    indeterminate = true;
+    taintPattern(target);
+  };
+  const bind = (target, source, protectedDescendant = false) => {
+    if (!target) return;
+    const directAlias = matchesAlias(source);
+    const sourceCarriesAlias = matchesAlias(source) || carriesAliasValue(source);
+    if (target.type === 'Identifier') {
+      if (protectedDescendant || sourceCarriesAlias) addName(target.name);
+      return;
+    }
+    if (target.type === 'MemberExpression') {
+      if (protectedDescendant || sourceCarriesAlias) markIndeterminate(target);
+      return;
+    }
+    if (target.type === 'AssignmentPattern') {
+      bind(target.left, source, protectedDescendant);
+      bind(target.left, target.right, protectedDescendant);
+      return;
+    }
+    if (target.type === 'RestElement') {
+      if (protectedDescendant || sourceCarriesAlias || defaultsCarryAlias(target)) {
+        markIndeterminate(target);
+      }
+      return;
+    }
+    if (target.type === 'ArrayPattern') {
+      if (protectedDescendant || directAlias) {
+        taintPattern(target);
+        return;
+      }
+      const patternCarriesAlias = defaultsCarryAlias(target);
+      if (source?.type !== 'ArrayExpression') {
+        if (sourceCarriesAlias || patternCarriesAlias) markIndeterminate(target);
+        return;
+      }
+      const sourceHasSpread = source.elements?.some((element) => element?.type === 'SpreadElement');
+      const shapeMismatch = sourceHasSpread || target.elements?.length !== source.elements?.length;
+      if (shapeMismatch && (sourceCarriesAlias || patternCarriesAlias)) markIndeterminate(target);
+      for (let index = 0; index < (target.elements?.length || 0); index += 1) {
+        const element = target.elements[index];
+        if (!element) continue;
+        const sourceElement = source.elements?.[index];
+        if (element.type === 'RestElement' || sourceElement?.type === 'SpreadElement') {
+          if (sourceCarriesAlias || patternCarriesAlias) markIndeterminate(element);
+          continue;
+        }
+        bind(element, sourceElement);
+      }
+      return;
+    }
+    if (target.type === 'ObjectPattern') {
+      if (protectedDescendant || directAlias) {
+        taintPattern(target);
+        return;
+      }
+      const patternCarriesAlias = defaultsCarryAlias(target);
+      if (source?.type !== 'ObjectExpression') {
+        if (sourceCarriesAlias || patternCarriesAlias) markIndeterminate(target);
+        return;
+      }
+      const sourceProperties = source.properties || [];
+      const sourceNames = sourceProperties.map(staticJavaScriptPropertyName);
+      const sourceShapeUncertain = sourceProperties.some((property, index) => (
+        property.type !== 'Property'
+          || property.kind !== 'init'
+          || property.method === true
+          || sourceNames[index] === null
+          || sourceNames.indexOf(sourceNames[index]) !== index
+      ));
+      if (sourceShapeUncertain && (sourceCarriesAlias || patternCarriesAlias)) {
+        markIndeterminate(target);
+      }
+      for (const property of target.properties || []) {
+        if (property.type === 'RestElement') {
+          if (sourceCarriesAlias || patternCarriesAlias) markIndeterminate(property);
+          continue;
+        }
+        const key = staticJavaScriptPropertyName(property);
+        if (key === null) {
+          if (sourceCarriesAlias || defaultsCarryAlias(property.value)) markIndeterminate(property.value);
+          continue;
+        }
+        const matches = sourceProperties.filter((candidate) => staticJavaScriptPropertyName(candidate) === key);
+        if (matches.length !== 1) {
+          if (sourceCarriesAlias || defaultsCarryAlias(property.value)) markIndeterminate(property.value);
+          bind(property.value, undefined);
+          continue;
+        }
+        bind(property.value, matches[0].value);
+      }
+    }
+  };
+  bind(pattern, value);
+  return { added, indeterminate };
+}
+
+function mergeAliasBindingResults(results) {
+  return results.reduce((merged, result) => ({
+    added: merged.added || result.added,
+    indeterminate: merged.indeterminate || result.indeterminate,
+  }), { added: false, indeterminate: false });
+}
+
+function bindForOfAliasPattern(pattern, iterable, aliases, options = {}) {
+  const source = unwrapJavaScriptChain(iterable);
+  if (source?.type !== 'ArrayExpression' || source.elements?.length === 0) {
+    return bindProtectedAliasPattern(pattern, source, aliases, options);
+  }
+  const results = source.elements.map((element) => {
+    if (element?.type !== 'SpreadElement') {
+      return bindProtectedAliasPattern(pattern, element, aliases, options);
+    }
+    const result = bindProtectedAliasPattern(pattern, element.argument, aliases, options);
+    return {
+      added: result.added,
+      indeterminate: result.indeterminate || result.added,
+    };
+  });
+  return mergeAliasBindingResults(results);
+}
+
+function bindAliasFlowNode(node, aliases, options = {}) {
+  if (node.type === 'VariableDeclarator') {
+    return bindProtectedAliasPattern(node.id, node.init, aliases, options);
+  }
+  if (node.type === 'AssignmentExpression' && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) {
+    return bindProtectedAliasPattern(node.left, node.right, aliases, options);
+  }
+  if (node.type === 'ForOfStatement') {
+    const target = node.left?.type === 'VariableDeclaration'
+      ? node.left.declarations?.[0]?.id : node.left;
+    return bindForOfAliasPattern(target, node.right, aliases, options);
+  }
+  return { added: false, indeterminate: false };
+}
+
+const BUILTIN_INDIRECT_WRITE_OPERATIONS = new Map([
+  ['Object', new Set(['assign', 'defineProperties', 'defineProperty', 'setPrototypeOf'])],
+  ['Reflect', new Set(['defineProperty', 'deleteProperty', 'set', 'setPrototypeOf'])],
+]);
+
+function expressionMatchesBuiltinOperation(node, family, operation, objectAliases, operationAliases) {
+  const expression = unwrapJavaScriptChain(node);
+  if (!expression) return false;
+  if (expression.type === 'Identifier') return operationAliases.has(expression.name);
+  if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+    return expressionMatchesBuiltinOperation(
+      expression.argument, family, operation, objectAliases, operationAliases,
+    );
+  }
+  if (expression.type === 'AssignmentExpression') {
+    return expressionMatchesBuiltinOperation(
+      expression.right, family, operation, objectAliases, operationAliases,
+    );
+  }
+  if (expression.type === 'SequenceExpression') {
+    return expressionMatchesBuiltinOperation(
+      expression.expressions?.at(-1), family, operation, objectAliases, operationAliases,
+    );
+  }
+  if (expression.type === 'ConditionalExpression') {
+    return expressionMatchesBuiltinOperation(
+      expression.consequent, family, operation, objectAliases, operationAliases,
+    ) || expressionMatchesBuiltinOperation(
+      expression.alternate, family, operation, objectAliases, operationAliases,
+    );
+  }
+  if (expression.type === 'LogicalExpression') {
+    return expressionMatchesBuiltinOperation(
+      expression.left, family, operation, objectAliases, operationAliases,
+    ) || expressionMatchesBuiltinOperation(
+      expression.right, family, operation, objectAliases, operationAliases,
+    );
+  }
+  if (expression.type === 'MemberExpression') {
+    const property = staticMemberExpressionPropertyName(expression);
+    return expressionAliasesAnyIdentifier(expression.object, objectAliases)
+      && (property === operation || property === null);
+  }
+  if (expression.type === 'CallExpression') {
+    const callee = unwrapJavaScriptChain(expression.callee);
+    return callee?.type === 'MemberExpression'
+      && staticMemberExpressionPropertyName(callee) === 'bind'
+      && expressionMatchesBuiltinOperation(
+        callee.object, family, operation, objectAliases, operationAliases,
+      );
+  }
+  return false;
+}
+
+function observeBuiltinIndirectWriteAliases(nodes) {
+  const objectAliases = new Map([...BUILTIN_INDIRECT_WRITE_OPERATIONS].map(([family]) => (
+    [family, new Set([family])]
+  )));
+  const operationAliases = new Map();
+  for (const [family, operations] of BUILTIN_INDIRECT_WRITE_OPERATIONS) {
+    for (const operation of operations) operationAliases.set(`${family}.${operation}`, new Set());
+  }
+  const addPatternNames = (pattern, aliases) => {
+    let added = false;
+    for (const name of javaScriptPatternNames(pattern)) {
+      if (aliases.has(name)) continue;
+      aliases.add(name);
+      added = true;
+    }
+    return added;
+  };
+  const bindObjectMemberPattern = (pattern, value, family) => {
+    const source = unwrapJavaScriptChain(value);
+    let added = false;
+    if (pattern?.type === 'AssignmentPattern') {
+      return bindObjectMemberPattern(pattern.left, source, family)
+        || bindObjectMemberPattern(pattern.left, pattern.right, family);
+    }
+    if (pattern?.type === 'ArrayPattern' && source?.type === 'ArrayExpression') {
+      pattern.elements?.forEach((element, index) => {
+        const sourceElement = source.elements?.[index];
+        added = bindObjectMemberPattern(
+          element,
+          sourceElement?.type === 'SpreadElement' ? sourceElement.argument : sourceElement,
+          family,
+        ) || added;
+      });
+      return added;
+    }
+    if (pattern?.type === 'ObjectPattern' && source?.type === 'ObjectExpression') {
+      for (const property of pattern.properties || []) {
+        if (property.type === 'RestElement') continue;
+        const key = staticJavaScriptPropertyName(property);
+        const match = source.properties?.find((candidate) => staticJavaScriptPropertyName(candidate) === key);
+        added = bindObjectMemberPattern(property.value, match?.value, family) || added;
+      }
+      return added;
+    }
+    if (pattern?.type !== 'ObjectPattern'
+      || !expressionAliasesAnyIdentifier(source, objectAliases.get(family))) return false;
+    for (const property of pattern.properties || []) {
+      const propertyName = property.type === 'RestElement' ? null : staticJavaScriptPropertyName(property);
+      const target = property.type === 'RestElement' ? property.argument : property.value;
+      const operations = propertyName !== null
+        && BUILTIN_INDIRECT_WRITE_OPERATIONS.get(family).has(propertyName)
+        ? [propertyName] : [...BUILTIN_INDIRECT_WRITE_OPERATIONS.get(family)];
+      for (const operation of operations) {
+        added = addPatternNames(target, operationAliases.get(`${family}.${operation}`)) || added;
+      }
+    }
+    return added;
+  };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      for (const [family, aliases] of objectAliases) {
+        const binding = bindAliasFlowNode(node, aliases);
+        changed = binding.added || changed;
+        if (node.type === 'VariableDeclarator') {
+          changed = bindObjectMemberPattern(node.id, node.init, family) || changed;
+        } else if (node.type === 'AssignmentExpression'
+          && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) {
+          changed = bindObjectMemberPattern(node.left, node.right, family) || changed;
+        } else if (node.type === 'ForOfStatement') {
+          const target = node.left?.type === 'VariableDeclaration'
+            ? node.left.declarations?.[0]?.id : node.left;
+          const iterable = unwrapJavaScriptChain(node.right);
+          const values = iterable?.type === 'ArrayExpression'
+            ? iterable.elements || [] : [iterable];
+          for (const value of values) {
+            changed = bindObjectMemberPattern(
+              target, value?.type === 'SpreadElement' ? value.argument : value, family,
+            ) || changed;
+          }
+        }
+        for (const operation of BUILTIN_INDIRECT_WRITE_OPERATIONS.get(family)) {
+          const aliasesForOperation = operationAliases.get(`${family}.${operation}`);
+          const operationBinding = bindAliasFlowNode(node, aliasesForOperation, {
+            matchesAlias: (value) => expressionMatchesBuiltinOperation(
+              value, family, operation, aliases, aliasesForOperation,
+            ),
+          });
+          changed = operationBinding.added || changed;
+        }
+      }
+    }
+  }
+  const resolve = (callee) => {
+    const matches = [];
+    for (const [family, operations] of BUILTIN_INDIRECT_WRITE_OPERATIONS) {
+      for (const operation of operations) {
+        if (expressionMatchesBuiltinOperation(
+          callee,
+          family,
+          operation,
+          objectAliases.get(family),
+          operationAliases.get(`${family}.${operation}`),
+        )) matches.push({ family, operation });
+      }
+    }
+    return matches;
+  };
+  const resolveInvocation = (node) => {
+    const callee = unwrapJavaScriptChain(node?.callee);
+    const invocation = callee?.type === 'MemberExpression'
+      && ['call', 'apply'].includes(staticMemberExpressionPropertyName(callee))
+      ? staticMemberExpressionPropertyName(callee) : 'direct';
+    const operations = resolve(invocation === 'direct' ? callee : callee.object);
+    if (operations.length === 0) {
+      return { operations, invocation, forwardedArguments: [], targetIndeterminate: false };
+    }
+    if (invocation === 'apply') {
+      const argumentList = unwrapJavaScriptChain(node.arguments?.[1]);
+      if (argumentList?.type !== 'ArrayExpression') {
+        return { operations, invocation, forwardedArguments: [], targetIndeterminate: true };
+      }
+      const forwardedArguments = argumentList.elements || [];
+      return {
+        operations,
+        invocation,
+        forwardedArguments,
+        targetIndeterminate: forwardedArguments[0]?.type === 'SpreadElement',
+      };
+    }
+    const forwardedArguments = invocation === 'call'
+      ? (node.arguments || []).slice(1) : (node.arguments || []);
+    return {
+      operations,
+      invocation,
+      forwardedArguments,
+      targetIndeterminate: forwardedArguments[0]?.type === 'SpreadElement',
+    };
+  };
+  return { objectAliases, operationAliases, resolve, resolveInvocation };
+}
+
 function observeProtectedBindingViolations(program, {
   protectedNames,
   allowedDeclarationNodes = new Set(),
@@ -2705,31 +3303,21 @@ function observeProtectedBindingViolations(program, {
   allowedIndirectNodes = new Set(),
 } = {}) {
   const aliases = new Set(protectedNames);
+  const violations = new Map();
+  const record = (node, kind) => violations.set(`${node?.start ?? -1}:${node?.end ?? -1}:${kind}`, kind);
   let changed = true;
   const nodes = [];
   visitJavaScriptAst(program, (node) => nodes.push(node));
+  const builtinWrites = observeBuiltinIndirectWriteAliases(nodes);
   while (changed) {
     changed = false;
     for (const node of nodes) {
-      if (node.type === 'VariableDeclarator'
-        && node.id?.type === 'Identifier'
-        && expressionAliasesAnyIdentifier(node.init, aliases)
-        && !aliases.has(node.id.name)) {
-        aliases.add(node.id.name);
-        changed = true;
-      }
-      if (node.type === 'AssignmentExpression'
-        && node.operator === '='
-        && node.left?.type === 'Identifier'
-        && expressionAliasesAnyIdentifier(node.right, aliases)
-        && !aliases.has(node.left.name)) {
-        aliases.add(node.left.name);
-        changed = true;
-      }
+      if (allowedDeclarationNodes.has(node) || allowedWriteNodes.has(node)) continue;
+      const binding = bindAliasFlowNode(node, aliases);
+      if (binding.added) changed = true;
+      if (binding.indeterminate) record(node, 'indeterminate-alias-pattern');
     }
   }
-  const violations = new Map();
-  const record = (node, kind) => violations.set(`${node?.start ?? -1}:${node?.end ?? -1}:${kind}`, kind);
   for (const { name, node } of javaScriptDeclarationRecords(program)) {
     if (protectedNames.has(name) && !allowedDeclarationNodes.has(node)) {
       record(node, 'duplicate-or-shadow-declaration');
@@ -2761,19 +3349,14 @@ function observeProtectedBindingViolations(program, {
       if (containsAliasMemberTarget(target, aliases)) record(node, 'member-write');
     }
     if (node.type === 'CallExpression') {
-      const callee = unwrapJavaScriptChain(node.callee);
-      const receiver = callee?.type === 'MemberExpression' ? unwrapJavaScriptChain(callee.object) : null;
-      const receiverName = receiver?.type === 'Identifier' ? receiver.name : null;
-      const operation = staticMemberExpressionPropertyName(callee);
-      const knownIndirectWrite = (receiverName === 'Object'
-        && ['assign', 'defineProperties', 'defineProperty', 'setPrototypeOf'].includes(operation))
-        || (receiverName === 'Reflect'
-          && ['defineProperty', 'deleteProperty', 'set', 'setPrototypeOf'].includes(operation));
-      const dynamicIndirectWrite = ['Object', 'Reflect'].includes(receiverName) && operation === null;
-      if ((knownIndirectWrite || dynamicIndirectWrite)
-        && expressionAliasesAnyIdentifier(node.arguments?.[0], aliases)
+      const invocation = builtinWrites.resolveInvocation(node);
+      const { operations } = invocation;
+      if (operations.length > 0
+        && (invocation.targetIndeterminate
+          || expressionAliasesAnyIdentifier(invocation.forwardedArguments[0], aliases))
         && !allowedIndirectNodes.has(node)) {
-        record(node, dynamicIndirectWrite ? 'dynamic-indirect-member-write' : 'indirect-member-write');
+        record(node, operations.length > 1
+          ? 'dynamic-indirect-member-write' : 'indirect-member-write');
       }
     }
   }
@@ -2781,14 +3364,20 @@ function observeProtectedBindingViolations(program, {
   return { count: violations.size, kinds };
 }
 
-function isModuleExportsMember(node) {
+function isModuleExportsMember(node, moduleAliases = new Set(['module'])) {
   const expression = unwrapJavaScriptChain(node);
   return expression?.type === 'MemberExpression'
-    && expression.computed === false
     && expression.object?.type === 'Identifier'
-    && expression.object.name === 'module'
-    && expression.property?.type === 'Identifier'
-    && expression.property.name === 'exports';
+    && moduleAliases.has(expression.object.name)
+    && staticMemberExpressionPropertyName(expression) === 'exports';
+}
+
+function isDynamicModuleMember(node, moduleAliases = new Set(['module'])) {
+  const expression = unwrapJavaScriptChain(node);
+  return expression?.type === 'MemberExpression'
+    && expression.object?.type === 'Identifier'
+    && moduleAliases.has(expression.object.name)
+    && staticMemberExpressionPropertyName(expression) === null;
 }
 
 function topLevelModuleExportsAssignments(program) {
@@ -2802,19 +3391,370 @@ function topLevelModuleExportsAssignments(program) {
 }
 
 function objectHasExactShorthandProperty(objectExpression, name) {
-  const matches = objectExpression?.type === 'ObjectExpression'
-    ? objectExpression.properties.filter((property) => (
+  if (objectExpression?.type !== 'ObjectExpression') return false;
+  if (objectExpression.properties.some((property) => (
+    property.type === 'SpreadElement'
+      || (property.type === 'Property'
+        && property.computed
+        && staticallyResolvableJavaScriptPropertyName(property) === null)
+  ))) return false;
+  const matches = objectExpression.properties.filter((property) => (
+    property.type === 'Property'
+      && staticallyResolvableJavaScriptPropertyName(property) === name
+  ));
+  return matches.length === 1
+    && matches[0].computed === false
+    && matches[0].kind === 'init'
+    && matches[0].method === false
+    && matches[0].shorthand === true
+    && matches[0].key?.type === 'Identifier'
+    && matches[0].key.name === name
+    && matches[0].value?.type === 'Identifier'
+    && matches[0].value.name === name;
+}
+
+function objectPatternHasUniqueExactShorthandBinding(pattern, name) {
+  if (pattern?.type !== 'ObjectPattern') return false;
+  if (pattern.properties.some((property) => (
+    property.type === 'RestElement'
+      || (property.type === 'Property'
+        && property.computed
+        && staticallyResolvableJavaScriptPropertyName(property) === null)
+  ))) return false;
+  const matches = pattern.properties.filter((property) => (
       property.type === 'Property'
-      && property.computed === false
-      && property.kind === 'init'
-      && property.method === false
-      && property.shorthand === true
-      && property.key?.type === 'Identifier'
-      && property.key.name === name
-      && property.value?.type === 'Identifier'
-      && property.value.name === name
-    )) : [];
-  return matches.length === 1;
+      && staticallyResolvableJavaScriptPropertyName(property) === name
+  ));
+  return matches.length === 1
+    && matches[0].computed === false
+    && matches[0].kind === 'init'
+    && matches[0].method === false
+    && matches[0].shorthand === true
+    && matches[0].key?.type === 'Identifier'
+    && matches[0].key.name === name
+    && matches[0].value?.type === 'Identifier'
+    && matches[0].value.name === name;
+}
+
+function exactStaticRequireSource(node) {
+  const expression = unwrapJavaScriptChain(node);
+  return expression?.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.callee?.type === 'Identifier'
+    && expression.callee.name === 'require'
+    && expression.arguments?.length === 1
+    && expression.arguments[0]?.type === 'Literal'
+    && typeof expression.arguments[0].value === 'string'
+    ? expression.arguments[0].value : null;
+}
+
+function isObjectAssignToExports(node) {
+  const call = unwrapJavaScriptChain(node);
+  const callee = unwrapJavaScriptChain(call?.callee);
+  return call?.type === 'CallExpression'
+    && call.optional !== true
+    && callee?.type === 'MemberExpression'
+    && callee.computed === false
+    && callee.object?.type === 'Identifier'
+    && callee.object.name === 'Object'
+    && callee.property?.type === 'Identifier'
+    && callee.property.name === 'assign'
+    && call.arguments?.[0]?.type === 'Identifier'
+    && call.arguments[0].name === 'exports';
+}
+
+function facadeForwardSources(call) {
+  if (!isObjectAssignToExports(call) || call.arguments.length < 2) return null;
+  const sources = call.arguments.slice(1).map(exactStaticRequireSource);
+  return sources.every((source) => typeof source === 'string') ? sources : null;
+}
+
+function expressionAliasesFacadeExports(node, aliases, moduleAliases = new Set(['module'])) {
+  const expression = unwrapJavaScriptChain(node);
+  if (!expression) return false;
+  if (isModuleExportsMember(expression, moduleAliases)) return true;
+  if (isDynamicModuleMember(expression, moduleAliases)) return true;
+  if (expression.type === 'Identifier') return aliases.has(expression.name);
+  if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+    return expressionAliasesFacadeExports(expression.argument, aliases, moduleAliases);
+  }
+  if (expression.type === 'AssignmentExpression') {
+    return expressionAliasesFacadeExports(expression.right, aliases, moduleAliases);
+  }
+  if (expression.type === 'SequenceExpression') {
+    return expressionAliasesFacadeExports(expression.expressions?.at(-1), aliases, moduleAliases);
+  }
+  if (expression.type === 'ConditionalExpression') {
+    return expressionAliasesFacadeExports(expression.consequent, aliases, moduleAliases)
+      || expressionAliasesFacadeExports(expression.alternate, aliases, moduleAliases);
+  }
+  if (expression.type === 'LogicalExpression') {
+    return expressionAliasesFacadeExports(expression.left, aliases, moduleAliases)
+      || expressionAliasesFacadeExports(expression.right, aliases, moduleAliases);
+  }
+  if (expression.type === 'MemberExpression') {
+    return expressionAliasesFacadeExports(expression.object, aliases, moduleAliases);
+  }
+  if (expression.type === 'ArrayExpression') {
+    return expression.elements?.some((element) => expressionAliasesFacadeExports(
+      element?.type === 'SpreadElement' ? element.argument : element,
+      aliases,
+      moduleAliases,
+    )) || false;
+  }
+  if (expression.type === 'ObjectExpression') {
+    return expression.properties?.some((property) => expressionAliasesFacadeExports(
+      property.type === 'SpreadElement' ? property.argument : property.value,
+      aliases,
+      moduleAliases,
+    )) || false;
+  }
+  if (expression.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.callee?.type === 'Identifier'
+    && expression.callee.name === 'Object'
+    && expression.arguments?.length === 1) {
+    return expressionAliasesFacadeExports(expression.arguments[0], aliases, moduleAliases);
+  }
+  return false;
+}
+
+function facadeExportMemberPath(member, aliases, moduleAliases) {
+  let cursor = unwrapJavaScriptChain(member);
+  const properties = [];
+  while (cursor?.type === 'MemberExpression') {
+    if (isModuleExportsMember(cursor, moduleAliases)) return properties;
+    if (isDynamicModuleMember(cursor, moduleAliases)) return [null, ...properties];
+    properties.unshift(staticMemberExpressionPropertyName(cursor));
+    cursor = unwrapJavaScriptChain(cursor.object);
+  }
+  if (cursor?.type !== 'Identifier' || !aliases.has(cursor.name)) return null;
+  return properties;
+}
+
+function facadeTargetViolationKind(target, aliases, moduleAliases) {
+  const expression = unwrapJavaScriptChain(target);
+  if (!expression || typeof expression !== 'object') return '';
+  if (expression.type === 'Identifier' && expression.name === 'exports') {
+    return 'exports-identifier-write';
+  }
+  if (expression.type === 'MemberExpression') {
+    const properties = facadeExportMemberPath(expression, aliases, moduleAliases);
+    if (!properties) return '';
+    if (properties.some((property) => property === null)) return 'dynamic-export-member-write';
+    if (properties.length === 0) return 'module-exports-replacement';
+    return properties.includes('workerEnvironment')
+      ? 'worker-environment-export-write' : 'export-member-write';
+  }
+  if (expression.type === 'RestElement') {
+    return facadeTargetViolationKind(expression.argument, aliases, moduleAliases);
+  }
+  if (expression.type === 'AssignmentPattern') {
+    return facadeTargetViolationKind(expression.left, aliases, moduleAliases);
+  }
+  if (expression.type === 'ArrayPattern') {
+    return expression.elements?.map((item) => (
+      facadeTargetViolationKind(item, aliases, moduleAliases)
+    )).find(Boolean) || '';
+  }
+  if (expression.type === 'ObjectPattern') {
+    return expression.properties?.map((property) => facadeTargetViolationKind(
+      property.type === 'RestElement' ? property.argument : property.value,
+      aliases,
+      moduleAliases,
+    )).find(Boolean) || '';
+  }
+  return '';
+}
+
+function bindFacadeExportsFromModulePattern(pattern, value, moduleAliases, exportAliases) {
+  const source = unwrapJavaScriptChain(value);
+  let added = false;
+  let indeterminate = false;
+  const addTarget = (target) => {
+    for (const name of javaScriptPatternNames(target)) {
+      if (exportAliases.has(name)) continue;
+      exportAliases.add(name);
+      added = true;
+    }
+  };
+  const bind = (target, currentSource) => {
+    const current = unwrapJavaScriptChain(currentSource);
+    if (!target) return;
+    if (target.type === 'AssignmentPattern') {
+      bind(target.left, current);
+      bind(target.left, target.right);
+      return;
+    }
+    if (target.type === 'ArrayPattern' && current?.type === 'ArrayExpression') {
+      target.elements?.forEach((element, index) => {
+        const currentElement = current.elements?.[index];
+        bind(element, currentElement?.type === 'SpreadElement' ? currentElement.argument : currentElement);
+      });
+      return;
+    }
+    if (target.type === 'ObjectPattern' && current?.type === 'ObjectExpression') {
+      for (const property of target.properties || []) {
+        if (property.type === 'RestElement') continue;
+        const key = staticJavaScriptPropertyName(property);
+        const matches = current.properties?.filter((candidate) => (
+          staticJavaScriptPropertyName(candidate) === key
+        )) || [];
+        if (matches.length === 1) bind(property.value, matches[0].value);
+      }
+      return;
+    }
+    if (target.type !== 'ObjectPattern'
+      || !expressionAliasesAnyIdentifier(current, moduleAliases)) return;
+    for (const property of target.properties || []) {
+      const targetPattern = property.type === 'RestElement' ? property.argument : property.value;
+      const propertyName = property.type === 'RestElement' ? null : staticJavaScriptPropertyName(property);
+      if (propertyName === 'exports') addTarget(targetPattern);
+      else if (propertyName === null) {
+        addTarget(targetPattern);
+        indeterminate = true;
+      }
+    }
+  };
+  bind(pattern, source);
+  return { added, indeterminate };
+}
+
+function observeMr1597FacadeViolations(program, facadeForwards) {
+  const protectedGlobals = observeProtectedBindingViolations(program, {
+    protectedNames: new Set(['Object', 'Reflect', 'require']),
+  });
+  const nodes = [];
+  visitJavaScriptAst(program, (node) => nodes.push(node));
+  const aliases = new Set(['exports']);
+  const moduleAliases = new Set(['module']);
+  const violations = new Map();
+  const record = (node, kind) => violations.set(`${node?.start ?? -1}:${node?.end ?? -1}:${kind}`, kind);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      const moduleBinding = bindAliasFlowNode(node, moduleAliases);
+      const exportBinding = bindAliasFlowNode(node, aliases, {
+        matchesAlias: (value) => expressionAliasesFacadeExports(value, aliases, moduleAliases),
+      });
+      changed = moduleBinding.added || exportBinding.added || changed;
+      if (exportBinding.indeterminate) record(node, 'indeterminate-export-alias-pattern');
+      const bindModulePattern = (target, value) => {
+        const result = bindFacadeExportsFromModulePattern(target, value, moduleAliases, aliases);
+        changed = result.added || changed;
+        if (result.indeterminate) record(node, 'indeterminate-export-alias-pattern');
+      };
+      if (node.type === 'VariableDeclarator') bindModulePattern(node.id, node.init);
+      else if (node.type === 'AssignmentExpression'
+        && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) bindModulePattern(node.left, node.right);
+      else if (node.type === 'ForOfStatement') {
+        const target = node.left?.type === 'VariableDeclaration'
+          ? node.left.declarations?.[0]?.id : node.left;
+        const iterable = unwrapJavaScriptChain(node.right);
+        if (iterable?.type === 'ArrayExpression') {
+          for (const element of iterable.elements || []) {
+            bindModulePattern(target, element?.type === 'SpreadElement' ? element.argument : element);
+          }
+        } else {
+          bindModulePattern(target, iterable);
+        }
+      }
+    }
+  }
+  const builtinWrites = observeBuiltinIndirectWriteAliases(nodes);
+  for (const { name, node } of javaScriptDeclarationRecords(program)) {
+    if (name === 'exports' || name === 'module') record(node, `${name}-shadow-declaration`);
+  }
+  const allowedFacadeCalls = facadeForwards.length === 1 ? new Set(facadeForwards) : new Set();
+  for (const node of nodes) {
+    if (node.type === 'AssignmentExpression') {
+      if (javaScriptPatternNames(node.left).includes('exports')) record(node, 'exports-identifier-write');
+      const kind = facadeTargetViolationKind(node.left, aliases, moduleAliases);
+      if (kind) record(node, kind);
+      if (isModuleExportsMember(node.left, moduleAliases)) record(node, 'module-exports-replacement');
+    } else if (node.type === 'UpdateExpression') {
+      if (node.argument?.type === 'Identifier' && node.argument.name === 'exports') {
+        record(node, 'exports-identifier-write');
+      }
+      const kind = facadeTargetViolationKind(node.argument, aliases, moduleAliases);
+      if (kind) record(node, kind);
+      if (isModuleExportsMember(node.argument, moduleAliases)) record(node, 'module-exports-replacement');
+    } else if (node.type === 'UnaryExpression' && node.operator === 'delete') {
+      if (node.argument?.type === 'Identifier' && node.argument.name === 'exports') {
+        record(node, 'exports-identifier-write');
+      }
+      const kind = facadeTargetViolationKind(node.argument, aliases, moduleAliases);
+      if (kind) record(node, kind);
+      if (isModuleExportsMember(node.argument, moduleAliases)) record(node, 'module-exports-replacement');
+    } else if (['ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const target = node.left?.type === 'VariableDeclaration' ? node.left.declarations?.[0]?.id : node.left;
+      if (javaScriptPatternNames(target).includes('exports')) record(node, 'exports-identifier-write');
+      const kind = facadeTargetViolationKind(target, aliases, moduleAliases);
+      if (kind) record(node, kind);
+    }
+    if (node.type !== 'CallExpression') continue;
+    if (isObjectAssignToExports(node)) {
+      if (!allowedFacadeCalls.has(node)) record(node, 'facade-object-assign-outside-contract');
+      continue;
+    }
+    const invocation = builtinWrites.resolveInvocation(node);
+    const { operations } = invocation;
+    if (operations.length === 0) continue;
+    if (invocation.targetIndeterminate) {
+      record(node, 'dynamic-indirect-export-write');
+      continue;
+    }
+    const operationArguments = invocation.forwardedArguments;
+    const targetsExports = expressionAliasesFacadeExports(operationArguments[0], aliases, moduleAliases);
+    const targetsModule = expressionAliasesAnyIdentifier(operationArguments[0], moduleAliases);
+    if (!targetsExports && !targetsModule) continue;
+    const operationNames = new Set(operations.map(({ operation }) => operation));
+    if (targetsExports && operationNames.has('assign')) {
+      record(node, 'facade-object-assign-outside-contract');
+      continue;
+    }
+    if (targetsExports && operationNames.has('setPrototypeOf')) {
+      record(node, 'export-prototype-write');
+      continue;
+    }
+    if (targetsModule && (operationNames.has('assign') || operationNames.has('setPrototypeOf'))) {
+      record(node, 'module-indirect-export-write');
+      continue;
+    }
+    if (operationNames.has('defineProperties')) {
+      const descriptors = operationArguments[1];
+      const properties = descriptors?.type === 'ObjectExpression' ? descriptors.properties || [] : [];
+      const names = properties.map(staticallyResolvableJavaScriptPropertyName);
+      if (descriptors?.type !== 'ObjectExpression'
+        || properties.some((property) => property.type !== 'Property')
+        || names.includes(null)) {
+        record(node, 'dynamic-indirect-export-write');
+      } else if (targetsExports || names.includes(targetsModule ? 'exports' : 'workerEnvironment')) {
+        record(node, 'worker-environment-indirect-export-write');
+      }
+      continue;
+    }
+    if ([...operationNames].some((operation) => (
+      ['defineProperty', 'set', 'deleteProperty'].includes(operation)
+    ))) {
+      const property = operationArguments[1];
+      const propertyName = property?.type === 'Literal' && typeof property.value === 'string'
+        ? property.value
+        : property?.type === 'TemplateLiteral'
+          && property.expressions?.length === 0
+          && property.quasis?.length === 1
+          ? property.quasis[0].value.cooked : null;
+      if (propertyName === null) record(node, 'dynamic-indirect-export-write');
+      else if (targetsExports || propertyName === (targetsModule ? 'exports' : 'workerEnvironment')) {
+        record(node, 'worker-environment-indirect-export-write');
+      }
+    }
+  }
+  return {
+    count: protectedGlobals.count + violations.size,
+    kinds: [...new Set([...protectedGlobals.kinds, ...violations.values()])].sort(),
+  };
 }
 
 function observeMr1597ExportChain(sourceByPath) {
@@ -2833,29 +3773,17 @@ function observeMr1597ExportChain(sourceByPath) {
   const lifecycle = programs.get(MR1597_LIFECYCLE_PATH);
   const facadeForwards = (facade?.body || []).flatMap((statement) => {
     const call = statement.type === 'ExpressionStatement' ? unwrapJavaScriptChain(statement.expression) : null;
-    const callee = unwrapJavaScriptChain(call?.callee);
-    return call?.type === 'CallExpression'
-      && call.optional !== true
-      && callee?.type === 'MemberExpression'
-      && callee.computed === false
-      && callee.object?.type === 'Identifier'
-      && callee.object.name === 'Object'
-      && callee.property?.name === 'assign'
-      && call.arguments?.length === 2
-      && call.arguments[0]?.type === 'Identifier'
-      && call.arguments[0].name === 'exports'
-      && isExactRequireCall(call.arguments[1], MR1597_FACADE_SUPERVISOR_REQUIRE_PATH) ? [call] : [];
+    const sources = facadeForwardSources(call);
+    return sources
+      && sources.filter((source) => source === MR1597_FACADE_SUPERVISOR_REQUIRE_PATH).length === 1
+      && sources.at(-1) === MR1597_FACADE_SUPERVISOR_REQUIRE_PATH
+      ? [call] : [];
   });
   const supervisorImports = [];
   for (const statement of supervisor?.body || []) {
     if (statement.type !== 'VariableDeclaration' || statement.kind !== 'const') continue;
     for (const declaration of statement.declarations || []) {
-      const matches = declaration.id?.type === 'ObjectPattern'
-        ? declaration.id.properties.filter((property) => (
-          property.type === 'Property' && property.computed === false && property.shorthand === true
-          && property.key?.name === 'workerEnvironment' && property.value?.name === 'workerEnvironment'
-        )) : [];
-      if (matches.length === 1
+      if (objectPatternHasUniqueExactShorthandBinding(declaration.id, 'workerEnvironment')
         && isExactRequireCall(declaration.init, MR1597_SUPERVISOR_LIFECYCLE_REQUIRE_PATH)) {
         supervisorImports.push(declaration);
       }
@@ -2893,7 +3821,6 @@ function observeMr1597ExportChain(sourceByPath) {
   }));
   const chainViolations = [];
   for (const [filePath, protectedNames, allowedDeclarations, allowedWrites, allowedIndirect] of [
-    [MR1597_FACADE_PATH, new Set(['Object', 'exports', 'require']), new Set(), new Set(), new Set(facadeForwards)],
     [MR1597_SUPERVISOR_PATH, new Set(['require', 'module', 'exports', 'workerEnvironment']),
       new Set(supervisorImports), new Set(supervisorExports), new Set()],
     [MR1597_LIFECYCLE_PATH, new Set(['module', 'exports', 'process', 'workerEnvironment']),
@@ -2915,6 +3842,13 @@ function observeMr1597ExportChain(sourceByPath) {
       kinds: observed.kinds.map((kind) => `${filePath}:${kind}`),
     });
   }
+  if (facade) {
+    const observed = observeMr1597FacadeViolations(facade, facadeForwards);
+    chainViolations.unshift({
+      count: observed.count,
+      kinds: observed.kinds.map((kind) => `${MR1597_FACADE_PATH}:${kind}`),
+    });
+  }
   const protectedBindingViolationCount = chainViolations.reduce((sum, item) => sum + item.count, 0);
   const protectedBindingViolationKinds = [...new Set(chainViolations.flatMap((item) => item.kinds))].sort();
   return {
@@ -2927,7 +3861,7 @@ function observeMr1597ExportChain(sourceByPath) {
   };
 }
 
-function observeMr1597DynamicCodeExecution(program, ownerCallback) {
+function observeMr1597DynamicCodeExecutionByName(program, ownerCallback) {
   const executionNodes = new Map();
   const record = (node, kind) => {
     const key = `${node?.start ?? -1}:${node?.end ?? -1}`;
@@ -2937,26 +3871,296 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
   const functionAliases = new Set(['Function']);
   const vmObjectAliases = new Set();
   const vmExecutionAliases = new Set();
+  const reflectApplyAliases = new Set();
+  const reflectConstructAliases = new Set();
+  const dynamicCallableAliases = new Set();
+  const vmOperations = new Set([
+    'Script', 'SourceTextModule', 'SyntheticModule', 'compileFunction',
+    'runInContext', 'runInNewContext', 'runInThisContext',
+  ]);
   const allNodes = [];
   visitJavaScriptAst(program, (node) => allNodes.push(node));
+  const valueSourcesByName = new Map();
+  const addValueSource = (name, value) => {
+    if (!name || !value) return;
+    if (!valueSourcesByName.has(name)) valueSourcesByName.set(name, []);
+    valueSourcesByName.get(name).push(value);
+  };
+  for (const node of allNodes) {
+    if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier') {
+      addValueSource(node.id.name, node.init);
+    } else if (node.type === 'AssignmentExpression'
+      && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)
+      && node.left?.type === 'Identifier') {
+      addValueSource(node.left.name, node.right);
+    }
+  }
+  const staticContainerMemberName = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (expression?.type !== 'MemberExpression') return null;
+    if (!expression.computed && expression.property?.type === 'Identifier') {
+      return expression.property.name;
+    }
+    if (expression.computed && expression.property?.type === 'Literal'
+      && ['string', 'number'].includes(typeof expression.property.value)) {
+      return String(expression.property.value);
+    }
+    if (expression.computed
+      && expression.property?.type === 'TemplateLiteral'
+      && expression.property.expressions?.length === 0
+      && expression.property.quasis?.length === 1) {
+      return expression.property.quasis[0].value.cooked;
+    }
+    return null;
+  };
+  const staticContainerPropertyName = (property) => {
+    if (property?.type !== 'Property') return null;
+    if (!property.computed && property.key?.type === 'Identifier') return property.key.name;
+    if (property.key?.type === 'Literal'
+      && ['string', 'number'].includes(typeof property.key.value)) {
+      return String(property.key.value);
+    }
+    if (property.computed
+      && property.key?.type === 'TemplateLiteral'
+      && property.key.expressions?.length === 0
+      && property.key.quasis?.length === 1) {
+      return property.key.quasis[0].value.cooked;
+    }
+    return null;
+  };
+  const immediateFunctionReturnValues = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (expression?.type !== 'CallExpression') return { recognized: false, values: [] };
+    const callee = unwrapJavaScriptChain(expression.callee);
+    if (!['ArrowFunctionExpression', 'FunctionExpression'].includes(callee?.type)) {
+      return { recognized: false, values: [] };
+    }
+    if (callee.body?.type !== 'BlockStatement') {
+      return { recognized: true, values: [callee.body] };
+    }
+    const values = [];
+    const visitReturns = (candidate) => {
+      if (!candidate || typeof candidate !== 'object') return;
+      if (candidate !== callee
+        && ['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(candidate.type)) {
+        return;
+      }
+      if (candidate.type === 'ReturnStatement') {
+        if (candidate.argument) values.push(candidate.argument);
+        return;
+      }
+      for (const [key, value] of Object.entries(candidate)) {
+        if (['end', 'loc', 'range', 'start', 'type'].includes(key)) continue;
+        if (Array.isArray(value)) value.forEach(visitReturns);
+        else if (value && typeof value.type === 'string') visitReturns(value);
+      }
+    };
+    visitReturns(callee.body);
+    return { recognized: true, values };
+  };
+  const bindTrackedForOfAliasPattern = (
+    pattern,
+    iterable,
+    aliases,
+    options = {},
+    seen = new Set(),
+  ) => {
+    const source = unwrapJavaScriptChain(iterable);
+    if (!source) return { added: false, indeterminate: false };
+    const seenKey = `${source.start ?? -1}:${source.end ?? -1}`;
+    if (seen.has(seenKey)) return { added: false, indeterminate: true };
+    const nextSeen = new Set(seen).add(seenKey);
+    if (source.type === 'Identifier' && valueSourcesByName.has(source.name)) {
+      return mergeAliasBindingResults(valueSourcesByName.get(source.name).map((value) => (
+        bindTrackedForOfAliasPattern(pattern, value, aliases, options, nextSeen)
+      )));
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(source.type)) {
+      return bindTrackedForOfAliasPattern(pattern, source.argument, aliases, options, nextSeen);
+    }
+    if (source.type === 'AssignmentExpression') {
+      return bindTrackedForOfAliasPattern(pattern, source.right, aliases, options, nextSeen);
+    }
+    if (source.type === 'SequenceExpression') {
+      return bindTrackedForOfAliasPattern(
+        pattern, source.expressions?.at(-1), aliases, options, nextSeen,
+      );
+    }
+    if (source.type === 'ConditionalExpression' || source.type === 'LogicalExpression') {
+      const values = source.type === 'ConditionalExpression'
+        ? [source.consequent, source.alternate] : [source.left, source.right];
+      return mergeAliasBindingResults(values.map((value) => (
+        bindTrackedForOfAliasPattern(pattern, value, aliases, options, nextSeen)
+      )));
+    }
+    if (source.type === 'CallExpression') {
+      const returned = immediateFunctionReturnValues(source);
+      if (returned.recognized) {
+        return mergeAliasBindingResults(returned.values.map((value) => (
+          bindTrackedForOfAliasPattern(pattern, value, aliases, options, nextSeen)
+        )));
+      }
+    }
+    return bindForOfAliasPattern(pattern, source, aliases, options);
+  };
+  const resolveContainerMemberValues = (containerNode, memberName, seen = new Set()) => {
+    const container = unwrapJavaScriptChain(containerNode);
+    if (!container) return { values: [], indeterminate: true };
+    const seenKey = `${container.start ?? -1}:${container.end ?? -1}:${memberName ?? '*'}`;
+    if (seen.has(seenKey)) return { values: [], indeterminate: true };
+    const nextSeen = new Set(seen).add(seenKey);
+    const merge = (rows) => ({
+      values: rows.flatMap((row) => row.values),
+      indeterminate: rows.some((row) => row.indeterminate),
+    });
+    if (container.type === 'Identifier') {
+      const sources = valueSourcesByName.get(container.name) || [];
+      if (sources.length === 0) return { values: [], indeterminate: true };
+      return merge(sources.map((source) => (
+        resolveContainerMemberValues(source, memberName, nextSeen)
+      )));
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(container.type)) {
+      return resolveContainerMemberValues(container.argument, memberName, nextSeen);
+    }
+    if (container.type === 'AssignmentExpression') {
+      return resolveContainerMemberValues(container.right, memberName, nextSeen);
+    }
+    if (container.type === 'SequenceExpression') {
+      return resolveContainerMemberValues(container.expressions?.at(-1), memberName, nextSeen);
+    }
+    if (container.type === 'ConditionalExpression') {
+      return merge([
+        resolveContainerMemberValues(container.consequent, memberName, nextSeen),
+        resolveContainerMemberValues(container.alternate, memberName, nextSeen),
+      ]);
+    }
+    if (container.type === 'LogicalExpression') {
+      return merge([
+        resolveContainerMemberValues(container.left, memberName, nextSeen),
+        resolveContainerMemberValues(container.right, memberName, nextSeen),
+      ]);
+    }
+    if (container.type === 'ObjectExpression') {
+      const rows = [];
+      let indeterminate = false;
+      for (const property of container.properties || []) {
+        if (property.type === 'SpreadElement') {
+          const spread = resolveContainerMemberValues(property.argument, memberName, nextSeen);
+          rows.push(spread);
+          indeterminate = indeterminate || spread.indeterminate;
+          continue;
+        }
+        const propertyName = staticContainerPropertyName(property);
+        if (propertyName === null) {
+          rows.push({ values: [property.value], indeterminate: true });
+          indeterminate = true;
+        } else if (memberName === null || propertyName === memberName) {
+          rows.push({ values: [property.value], indeterminate: false });
+        }
+      }
+      const merged = merge(rows);
+      return { values: merged.values, indeterminate: indeterminate || merged.indeterminate };
+    }
+    if (container.type === 'ArrayExpression') {
+      const elements = container.elements || [];
+      if (memberName !== null && /^\d+$/u.test(memberName)) {
+        const selected = elements[Number(memberName)];
+        if (!selected) return { values: [], indeterminate: false };
+        if (selected.type === 'SpreadElement') {
+          return { values: [selected.argument], indeterminate: true };
+        }
+        return { values: [selected], indeterminate: false };
+      }
+      return {
+        values: elements.filter(Boolean).map((element) => (
+          element.type === 'SpreadElement' ? element.argument : element
+        )),
+        indeterminate: memberName === null || elements.some((element) => element?.type === 'SpreadElement'),
+      };
+    }
+    if (container.type === 'MemberExpression') {
+      const nested = resolveContainerMemberValues(
+        container.object,
+        staticContainerMemberName(container),
+        nextSeen,
+      );
+      const rows = nested.values.map((value) => (
+        resolveContainerMemberValues(value, memberName, nextSeen)
+      ));
+      const merged = merge(rows);
+      return {
+        values: merged.values,
+        indeterminate: nested.indeterminate || merged.indeterminate,
+      };
+    }
+    if (container.type === 'CallExpression') {
+      const returned = immediateFunctionReturnValues(container);
+      if (returned.recognized) {
+        return merge(returned.values.map((value) => (
+          resolveContainerMemberValues(value, memberName, nextSeen)
+        )));
+      }
+      const callee = unwrapJavaScriptChain(container.callee);
+      if (container.optional !== true
+        && callee?.type === 'Identifier'
+        && callee.name === 'Object'
+        && container.arguments?.length === 1) {
+        return resolveContainerMemberValues(container.arguments[0], memberName, nextSeen);
+      }
+      if (container.optional !== true
+        && callee?.type === 'MemberExpression'
+        && callee.object?.type === 'Identifier'
+        && callee.object.name === 'Object'
+        && staticMemberExpressionPropertyName(callee) === 'assign') {
+        return merge((container.arguments || []).map((argument) => (
+          resolveContainerMemberValues(
+            argument?.type === 'SpreadElement' ? argument.argument : argument,
+            memberName,
+            nextSeen,
+          )
+        )));
+      }
+    }
+    return { values: [], indeterminate: true };
+  };
+  const resolveMemberValues = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (expression?.type !== 'MemberExpression') return { values: [], indeterminate: false };
+    return resolveContainerMemberValues(
+      expression.object,
+      staticContainerMemberName(expression),
+    );
+  };
   const isNodeVmSource = (node) => node?.type === 'Literal' && ['node:vm', 'vm'].includes(node.value);
+  const bindVmObjectPattern = (pattern) => {
+    for (const property of pattern?.properties || []) {
+      if (property.type === 'RestElement') {
+        javaScriptPatternNames(property.argument).forEach((name) => vmObjectAliases.add(name));
+        continue;
+      }
+      const propertyName = staticJavaScriptPropertyName(property);
+      if (propertyName === null || vmOperations.has(propertyName)) {
+        javaScriptPatternNames(property.value).forEach((name) => vmExecutionAliases.add(name));
+      }
+    }
+  };
   for (const node of allNodes) {
     if (node.type === 'ImportDeclaration' && isNodeVmSource(node.source)) {
-      record(node, 'node_vm_module');
       for (const specifier of node.specifiers || []) {
-        if (specifier.type === 'ImportSpecifier') vmExecutionAliases.add(specifier.local.name);
-        else vmObjectAliases.add(specifier.local.name);
+        if (specifier.type === 'ImportSpecifier') {
+          const imported = specifier.imported?.name || specifier.imported?.value;
+          if (vmOperations.has(imported)) vmExecutionAliases.add(specifier.local.name);
+        } else vmObjectAliases.add(specifier.local.name);
       }
     }
     if (node.type === 'VariableDeclarator' && isExactRequireCall(node.init, 'node:vm')) {
-      record(node.init, 'node_vm_module');
       if (node.id?.type === 'Identifier') vmObjectAliases.add(node.id.name);
-      else javaScriptPatternNames(node.id).forEach((name) => vmExecutionAliases.add(name));
+      else if (node.id?.type === 'ObjectPattern') bindVmObjectPattern(node.id);
     }
     if (node.type === 'VariableDeclarator' && isExactRequireCall(node.init, 'vm')) {
-      record(node.init, 'node_vm_module');
       if (node.id?.type === 'Identifier') vmObjectAliases.add(node.id.name);
-      else javaScriptPatternNames(node.id).forEach((name) => vmExecutionAliases.add(name));
+      else if (node.id?.type === 'ObjectPattern') bindVmObjectPattern(node.id);
     }
   }
   const expressionIsGlobalMember = (node, propertyName) => {
@@ -2968,10 +4172,188 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
   const expressionIsAlias = (node, aliases, globalName) => {
     const expression = unwrapJavaScriptChain(node);
     if (expression?.type === 'Identifier') return aliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression?.type)) {
+      return expressionIsAlias(expression.argument, aliases, globalName);
+    }
+    if (expression?.type === 'AssignmentExpression') {
+      return expressionIsAlias(expression.right, aliases, globalName);
+    }
     if (expression?.type === 'SequenceExpression') {
       return expressionIsAlias(expression.expressions?.at(-1), aliases, globalName);
     }
+    if (expression?.type === 'ConditionalExpression') {
+      return expressionIsAlias(expression.consequent, aliases, globalName)
+        || expressionIsAlias(expression.alternate, aliases, globalName);
+    }
+    if (expression?.type === 'LogicalExpression') {
+      return expressionIsAlias(expression.left, aliases, globalName)
+        || expressionIsAlias(expression.right, aliases, globalName);
+    }
+    if (expression?.type === 'MemberExpression') {
+      const resolved = resolveMemberValues(expression);
+      return expressionIsGlobalMember(expression, globalName)
+        || resolved.values.some((value) => expressionIsAlias(value, aliases, globalName));
+    }
+    if (expression?.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(expression.callee);
+      if (callee?.type === 'MemberExpression'
+        && staticMemberExpressionPropertyName(callee) === 'bind'
+        && expressionIsAlias(callee.object, aliases, globalName)) return true;
+      if (expression.optional !== true
+        && expression.callee?.type === 'Identifier'
+        && expression.callee.name === 'Object'
+        && expression.arguments?.length === 1) {
+        return expressionIsAlias(expression.arguments[0], aliases, globalName);
+      }
+      const returned = immediateFunctionReturnValues(expression);
+      if (returned.recognized) {
+        return returned.values.some((value) => expressionIsAlias(value, aliases, globalName));
+      }
+    }
     return expressionIsGlobalMember(expression, globalName);
+  };
+  const expressionIsVmObjectAlias = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    if (expression.type === 'Identifier') return vmObjectAliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionIsVmObjectAlias(expression.argument);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionIsVmObjectAlias(expression.right);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionIsVmObjectAlias(expression.expressions?.at(-1));
+    }
+    if (expression.type === 'ConditionalExpression') {
+      return expressionIsVmObjectAlias(expression.consequent)
+        || expressionIsVmObjectAlias(expression.alternate);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return expressionIsVmObjectAlias(expression.left)
+        || expressionIsVmObjectAlias(expression.right);
+    }
+    if (expression.type === 'ObjectExpression') {
+      return expression.properties?.some((property) => (
+        property.type === 'SpreadElement' && expressionIsVmObjectAlias(property.argument)
+      )) || false;
+    }
+    if (expression.type === 'MemberExpression') {
+      const resolved = resolveMemberValues(expression);
+      return resolved.values.some((value) => expressionIsVmObjectAlias(value));
+    }
+    if (expression.type === 'CallExpression'
+      && expression.optional !== true
+      && expression.callee?.type === 'Identifier'
+      && expression.callee.name === 'Object'
+      && expression.arguments?.length === 1) {
+      return expressionIsVmObjectAlias(expression.arguments[0]);
+    }
+    if (expression.type === 'CallExpression'
+      && expression.optional !== true
+      && expression.callee?.type === 'MemberExpression'
+      && expression.callee.computed === false
+      && expression.callee.object?.type === 'Identifier'
+      && expression.callee.object.name === 'Object'
+      && expression.callee.property?.type === 'Identifier'
+      && expression.callee.property.name === 'assign') {
+      return expression.arguments?.some((argument) => expressionIsVmObjectAlias(
+        argument?.type === 'SpreadElement' ? argument.argument : argument,
+      )) || false;
+    }
+    if (expression.type === 'CallExpression') {
+      const returned = immediateFunctionReturnValues(expression);
+      if (returned.recognized) {
+        return returned.values.some((value) => expressionIsVmObjectAlias(value));
+      }
+    }
+    return false;
+  };
+  const expressionIsVmExecution = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    if (expression.type === 'Identifier') return vmExecutionAliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionIsVmExecution(expression.argument);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionIsVmExecution(expression.right);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionIsVmExecution(expression.expressions?.at(-1));
+    }
+    if (expression.type === 'ConditionalExpression') {
+      return expressionIsVmExecution(expression.consequent)
+        || expressionIsVmExecution(expression.alternate);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return expressionIsVmExecution(expression.left)
+        || expressionIsVmExecution(expression.right);
+    }
+    if (expression.type === 'MemberExpression') {
+      const property = staticMemberExpressionPropertyName(expression);
+      return expressionIsVmObjectAlias(expression.object)
+        && (property === null || vmOperations.has(property));
+    }
+    if (expression.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(expression.callee);
+      if (callee?.type === 'MemberExpression'
+        && staticMemberExpressionPropertyName(callee) === 'bind'
+        && expressionIsVmExecution(callee.object)) return true;
+      const returned = immediateFunctionReturnValues(expression);
+      return returned.recognized
+        && returned.values.some((value) => expressionIsVmExecution(value));
+    }
+    return false;
+  };
+  const expressionIsReflectOperation = (node, operation) => {
+    const expression = unwrapJavaScriptChain(node);
+    const aliases = operation === 'apply' ? reflectApplyAliases : reflectConstructAliases;
+    if (expression?.type === 'Identifier') return aliases.has(expression.name);
+    if (expression?.type === 'SequenceExpression') {
+      return expressionIsReflectOperation(expression.expressions?.at(-1), operation);
+    }
+    if (expression?.type === 'MemberExpression') {
+      return expression.object?.type === 'Identifier'
+        && expression.object.name === 'Reflect'
+        && staticMemberExpressionPropertyName(expression) === operation;
+    }
+    if (expression?.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(expression.callee);
+      return callee?.type === 'MemberExpression'
+        && staticMemberExpressionPropertyName(callee) === 'bind'
+        && expressionIsReflectOperation(callee.object, operation);
+    }
+    return false;
+  };
+  const bindReflectAliasPattern = (pattern, value, operation) => {
+    const aliases = operation === 'apply' ? reflectApplyAliases : reflectConstructAliases;
+    if (pattern?.type === 'Identifier' && expressionIsReflectOperation(value, operation)) {
+      const added = !aliases.has(pattern.name);
+      aliases.add(pattern.name);
+      return added;
+    }
+    if (pattern?.type === 'AssignmentPattern') {
+      return bindReflectAliasPattern(pattern.left, value, operation)
+        || bindReflectAliasPattern(pattern.left, pattern.right, operation);
+    }
+    if (pattern?.type === 'ObjectPattern'
+      && value?.type === 'Identifier'
+      && value.name === 'Reflect') {
+      let added = false;
+      for (const property of pattern.properties || []) {
+        if (property.type !== 'Property'
+          || staticJavaScriptPropertyName(property) !== operation) continue;
+        for (const name of javaScriptPatternNames(property.value)) {
+          if (!aliases.has(name)) {
+            aliases.add(name);
+            added = true;
+          }
+        }
+      }
+      return added;
+    }
+    return false;
   };
   const bindAliasPattern = (pattern, value, aliases, globalName) => {
     if (pattern?.type === 'Identifier' && expressionIsAlias(value, aliases, globalName)) {
@@ -2980,7 +4362,8 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
       return added;
     }
     if (pattern?.type === 'AssignmentPattern') {
-      return bindAliasPattern(pattern.left, value || pattern.right, aliases, globalName);
+      return bindAliasPattern(pattern.left, value, aliases, globalName)
+        || bindAliasPattern(pattern.left, pattern.right, aliases, globalName);
     }
     if (pattern?.type === 'ArrayPattern' && value?.type === 'ArrayExpression') {
       let added = false;
@@ -3018,6 +4401,158 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
     }
     return false;
   };
+  const bindVmAliasPattern = (pattern, value) => {
+    if (pattern?.type === 'Identifier') {
+      let added = false;
+      if (expressionIsVmObjectAlias(value) && !vmObjectAliases.has(pattern.name)) {
+        vmObjectAliases.add(pattern.name);
+        added = true;
+      }
+      if (expressionIsVmExecution(value) && !vmExecutionAliases.has(pattern.name)) {
+        vmExecutionAliases.add(pattern.name);
+        added = true;
+      }
+      return added;
+    }
+    if (pattern?.type === 'AssignmentPattern') {
+      return bindVmAliasPattern(pattern.left, value)
+        || bindVmAliasPattern(pattern.left, pattern.right);
+    }
+    if (pattern?.type === 'ArrayPattern' && value?.type === 'ArrayExpression') {
+      let added = false;
+      pattern.elements.forEach((element, index) => {
+        added = bindVmAliasPattern(element, value.elements?.[index]) || added;
+      });
+      return added;
+    }
+    if (pattern?.type === 'ObjectPattern' && expressionIsVmObjectAlias(value)) {
+      let added = false;
+      for (const property of pattern.properties || []) {
+        if (property.type === 'RestElement') {
+          for (const name of javaScriptPatternNames(property.argument)) {
+            if (!vmObjectAliases.has(name)) {
+              vmObjectAliases.add(name);
+              added = true;
+            }
+          }
+          continue;
+        }
+        const propertyName = staticJavaScriptPropertyName(property);
+        if (propertyName !== null && !vmOperations.has(propertyName)) continue;
+        for (const name of javaScriptPatternNames(property.value)) {
+          if (!vmExecutionAliases.has(name)) {
+            vmExecutionAliases.add(name);
+            added = true;
+          }
+        }
+      }
+      return added;
+    }
+    return false;
+  };
+  const expressionHasTrackedContainerSource = (node, seen = new Set()) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    const seenKey = `${expression.start ?? -1}:${expression.end ?? -1}`;
+    if (seen.has(seenKey)) return false;
+    const nextSeen = new Set(seen).add(seenKey);
+    if (expression.type === 'Identifier') {
+      const sources = valueSourcesByName.get(expression.name) || [];
+      return sources.some((source) => expressionHasTrackedContainerSource(source, nextSeen));
+    }
+    if (['ObjectExpression', 'ArrayExpression'].includes(expression.type)) return true;
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionHasTrackedContainerSource(expression.argument, nextSeen);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionHasTrackedContainerSource(expression.right, nextSeen);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionHasTrackedContainerSource(expression.expressions?.at(-1), nextSeen);
+    }
+    if (expression.type === 'ConditionalExpression') {
+      return expressionHasTrackedContainerSource(expression.consequent, nextSeen)
+        || expressionHasTrackedContainerSource(expression.alternate, nextSeen);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return expressionHasTrackedContainerSource(expression.left, nextSeen)
+        || expressionHasTrackedContainerSource(expression.right, nextSeen);
+    }
+    if (expression.type === 'MemberExpression') {
+      return expressionHasTrackedContainerSource(expression.object, nextSeen);
+    }
+    if (expression.type === 'CallExpression') {
+      const returned = immediateFunctionReturnValues(expression);
+      return returned.recognized
+        && returned.values.some((value) => expressionHasTrackedContainerSource(value, nextSeen));
+    }
+    return false;
+  };
+  const expressionIsDynamicCallable = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    if (expression.type === 'Identifier') return dynamicCallableAliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionIsDynamicCallable(expression.argument);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionIsDynamicCallable(expression.right);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionIsDynamicCallable(expression.expressions?.at(-1));
+    }
+    if (expression.type === 'ConditionalExpression') {
+      return expressionIsDynamicCallable(expression.consequent)
+        || expressionIsDynamicCallable(expression.alternate);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return expressionIsDynamicCallable(expression.left)
+        || expressionIsDynamicCallable(expression.right);
+    }
+    if (expression.type === 'MemberExpression') {
+      const memberName = staticContainerMemberName(expression);
+      return memberName === null
+        || (expressionHasTrackedContainerSource(expression.object)
+          && resolveMemberValues(expression).indeterminate);
+    }
+    if (expression.type === 'CallExpression') {
+      const returned = immediateFunctionReturnValues(expression);
+      return returned.recognized
+        && returned.values.some((value) => expressionIsDynamicCallable(value));
+    }
+    return false;
+  };
+  const bindDynamicCallablePattern = (pattern, value) => {
+    if (pattern?.type === 'Identifier' && expressionIsDynamicCallable(value)) {
+      const added = !dynamicCallableAliases.has(pattern.name);
+      dynamicCallableAliases.add(pattern.name);
+      return added;
+    }
+    if (pattern?.type === 'AssignmentPattern') {
+      return bindDynamicCallablePattern(pattern.left, value)
+        || bindDynamicCallablePattern(pattern.left, pattern.right);
+    }
+    if (pattern?.type === 'ArrayPattern' && value?.type === 'ArrayExpression') {
+      let added = false;
+      pattern.elements.forEach((element, index) => {
+        added = bindDynamicCallablePattern(element, value.elements?.[index]) || added;
+      });
+      return added;
+    }
+    if (pattern?.type === 'ObjectPattern' && value?.type === 'ObjectExpression') {
+      let added = false;
+      pattern.properties.forEach((property) => {
+        if (property.type === 'RestElement') return;
+        const key = staticContainerPropertyName(property);
+        const sourceProperty = value.properties.find((candidate) => (
+          staticContainerPropertyName(candidate) === key
+        ));
+        added = bindDynamicCallablePattern(property.value, sourceProperty?.value) || added;
+      });
+      return added;
+    }
+    return false;
+  };
   let aliasesChanged = true;
   while (aliasesChanged) {
     aliasesChanged = false;
@@ -3025,21 +4560,64 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
       for (const [aliases, globalName] of [[evalAliases, 'eval'], [functionAliases, 'Function']]) {
         if (node.type === 'VariableDeclarator') {
           aliasesChanged = bindAliasPattern(node.id, node.init, aliases, globalName) || aliasesChanged;
-        } else if (node.type === 'AssignmentExpression' && node.operator === '=') {
+        } else if (node.type === 'AssignmentExpression'
+          && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) {
           aliasesChanged = bindAliasPattern(node.left, node.right, aliases, globalName) || aliasesChanged;
+        } else if (node.type === 'ForOfStatement') {
+          const target = node.left?.type === 'VariableDeclaration'
+            ? node.left.declarations?.[0]?.id : node.left;
+          aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, aliases, {
+            matchesAlias: (value) => expressionIsAlias(value, aliases, globalName),
+          }).added || aliasesChanged;
         }
+      }
+      if (node.type === 'VariableDeclarator') {
+        aliasesChanged = bindVmAliasPattern(node.id, node.init) || aliasesChanged;
+        aliasesChanged = bindReflectAliasPattern(node.id, node.init, 'apply') || aliasesChanged;
+        aliasesChanged = bindReflectAliasPattern(node.id, node.init, 'construct') || aliasesChanged;
+        aliasesChanged = bindDynamicCallablePattern(node.id, node.init) || aliasesChanged;
+      } else if (node.type === 'AssignmentExpression'
+        && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) {
+        aliasesChanged = bindVmAliasPattern(node.left, node.right) || aliasesChanged;
+        aliasesChanged = bindReflectAliasPattern(node.left, node.right, 'apply') || aliasesChanged;
+        aliasesChanged = bindReflectAliasPattern(node.left, node.right, 'construct') || aliasesChanged;
+        aliasesChanged = bindDynamicCallablePattern(node.left, node.right) || aliasesChanged;
+      } else if (node.type === 'ForOfStatement') {
+        const target = node.left?.type === 'VariableDeclaration'
+          ? node.left.declarations?.[0]?.id : node.left;
+        aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, vmObjectAliases, {
+          matchesAlias: expressionIsVmObjectAlias,
+        }).added || aliasesChanged;
+        aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, vmExecutionAliases, {
+          matchesAlias: expressionIsVmExecution,
+        }).added || aliasesChanged;
+        aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, reflectApplyAliases, {
+          matchesAlias: (value) => expressionIsReflectOperation(value, 'apply'),
+        }).added || aliasesChanged;
+        aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, reflectConstructAliases, {
+          matchesAlias: (value) => expressionIsReflectOperation(value, 'construct'),
+        }).added || aliasesChanged;
+        aliasesChanged = bindTrackedForOfAliasPattern(target, node.right, dynamicCallableAliases, {
+          matchesAlias: expressionIsDynamicCallable,
+        }).added || aliasesChanged;
       }
     }
   }
-  const ownerNodes = [];
-  if (ownerCallback) visitJavaScriptAst(ownerCallback.body, (node) => ownerNodes.push(node));
-  const vmOperations = new Set([
-    'Script', 'SourceTextModule', 'SyntheticModule', 'compileFunction',
-    'runInContext', 'runInNewContext', 'runInThisContext',
-  ]);
-  for (const node of ownerNodes) {
+  for (const node of allNodes) {
     if (node.type === 'ImportExpression') {
       record(node, 'dynamic_import');
+      continue;
+    }
+    if (node.type === 'TaggedTemplateExpression') {
+      if (expressionIsAlias(node.tag, evalAliases, 'eval')) record(node, 'eval_tagged_template');
+      else if (expressionIsAlias(node.tag, functionAliases, 'Function')) {
+        record(node, 'function_tagged_template');
+      } else if (expressionIsVmExecution(node.tag)) record(node, 'node_vm_execution');
+      else if (node.tag?.type === 'MemberExpression'
+        && node.tag.computed
+        && staticMemberExpressionPropertyName(node.tag) === null) {
+        record(node, 'dynamic_computed_tag');
+      }
       continue;
     }
     if (!['CallExpression', 'NewExpression'].includes(node.type)) continue;
@@ -3059,16 +4637,12 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
     } else if (['call', 'apply'].includes(property)
       && expressionIsAlias(calleeObject, functionAliases, 'Function')) {
       record(node, 'function_call_or_apply');
-    } else if (callee?.type === 'MemberExpression'
-      && callee.object?.type === 'Identifier'
-      && callee.object.name === 'Reflect'
-      && ['apply', 'construct'].includes(property)
+    } else if ((expressionIsReflectOperation(callee, 'apply')
+      || expressionIsReflectOperation(callee, 'construct'))
       && expressionIsAlias(node.arguments?.[0], evalAliases, 'eval')) {
       record(node, 'reflect_eval');
-    } else if (callee?.type === 'MemberExpression'
-      && callee.object?.type === 'Identifier'
-      && callee.object.name === 'Reflect'
-      && ['apply', 'construct'].includes(property)
+    } else if ((expressionIsReflectOperation(callee, 'apply')
+      || expressionIsReflectOperation(callee, 'construct'))
       && expressionIsAlias(node.arguments?.[0], functionAliases, 'Function')) {
       record(node, 'reflect_function_constructor');
     } else if (property === 'constructor' || (['call', 'apply'].includes(property)
@@ -3076,16 +4650,1170 @@ function observeMr1597DynamicCodeExecution(program, ownerCallback) {
       record(node, 'member_constructor');
     } else if (callee?.type === 'MemberExpression' && callee.computed && property === null) {
       record(node, 'dynamic_computed_callee');
-    } else if (callee?.type === 'Identifier' && vmExecutionAliases.has(callee.name)) {
+    } else if (expressionIsVmExecution(callee)) {
       record(node, 'node_vm_execution');
-    } else if (callee?.type === 'MemberExpression'
-      && vmObjectAliases.has(memberExpressionRootIdentifier(callee))
-      && vmOperations.has(property)) {
+    } else if (['call', 'apply'].includes(property)
+      && expressionIsVmExecution(calleeObject)) {
       record(node, 'node_vm_execution');
+    } else if ((expressionIsReflectOperation(callee, 'apply')
+      || expressionIsReflectOperation(callee, 'construct'))
+      && expressionIsVmExecution(node.arguments?.[0])) {
+      record(node, 'node_vm_execution');
+    } else if (expressionIsDynamicCallable(callee)) {
+      record(node, 'dynamic_computed_callee');
+    } else if (node.arguments?.some((argument) => (
+      expressionIsAlias(argument, evalAliases, 'eval')
+      || expressionIsAlias(argument, functionAliases, 'Function')
+    ))) {
+      record(node, 'dynamic_callable_escape');
+    } else if (node.arguments?.some((argument) => (
+      expressionIsVmExecution(argument) || expressionIsVmObjectAlias(argument)
+    ))) {
+      record(node, 'node_vm_escape');
     }
     if (isExactRequireCall(node, 'node:vm') || isExactRequireCall(node, 'vm')) {
       record(node, 'node_vm_module');
     }
+  }
+  const kinds = [...new Set(executionNodes.values())].sort();
+  return { count: executionNodes.size, kinds };
+}
+
+function createJavaScriptLexicalBindingIndex(program) {
+  let nextScopeId = 1;
+  let nextBindingId = 1;
+  const scopeByNode = new WeakMap();
+  const declarationBindingByNode = new WeakMap();
+  const scopes = [];
+  const bindings = [];
+  const createScope = (parent, kind, node) => {
+    const scope = {
+      id: nextScopeId,
+      parent,
+      kind,
+      node,
+      bindings: new Map(),
+    };
+    nextScopeId += 1;
+    scopes.push(scope);
+    return scope;
+  };
+  const rootScope = createScope(null, 'program', program);
+  const declareIdentifier = (identifier, scope, kind) => {
+    if (identifier?.type !== 'Identifier') return null;
+    let binding = scope.bindings.get(identifier.name);
+    if (!binding) {
+      binding = {
+        id: nextBindingId,
+        name: identifier.name,
+        scope,
+        kinds: new Set(),
+        declarations: [],
+      };
+      nextBindingId += 1;
+      scope.bindings.set(identifier.name, binding);
+      bindings.push(binding);
+    }
+    binding.declarations.push({ identifier, kind });
+    declarationBindingByNode.set(identifier, binding);
+    scopeByNode.set(identifier, scope);
+    return binding;
+  };
+  const declarePattern = (pattern, scope, kind) => {
+    if (!pattern || typeof pattern !== 'object') return;
+    scopeByNode.set(pattern, scope);
+    if (pattern.type === 'Identifier') {
+      declareIdentifier(pattern, scope, kind);
+      return;
+    }
+    if (pattern.type === 'RestElement') {
+      declarePattern(pattern.argument, scope, kind);
+      return;
+    }
+    if (pattern.type === 'AssignmentPattern') {
+      declarePattern(pattern.left, scope, kind);
+      return;
+    }
+    if (pattern.type === 'ArrayPattern') {
+      pattern.elements?.forEach((element) => declarePattern(element, scope, kind));
+      return;
+    }
+    if (pattern.type === 'ObjectPattern') {
+      for (const property of pattern.properties || []) {
+        scopeByNode.set(property, scope);
+        declarePattern(
+          property.type === 'RestElement' ? property.argument : property.value,
+          scope,
+          kind,
+        );
+      }
+    }
+  };
+  const nearestVarScope = (scope) => {
+    let cursor = scope;
+    while (cursor && !['function', 'program', 'static-block'].includes(cursor.kind)) {
+      cursor = cursor.parent;
+    }
+    return cursor || rootScope;
+  };
+  const visitPatternExpressions = (pattern, scope, walk) => {
+    if (!pattern || typeof pattern !== 'object') return;
+    scopeByNode.set(pattern, scope);
+    if (pattern.type === 'AssignmentPattern') {
+      visitPatternExpressions(pattern.left, scope, walk);
+      walk(pattern.right, scope);
+    } else if (pattern.type === 'RestElement') {
+      visitPatternExpressions(pattern.argument, scope, walk);
+    } else if (pattern.type === 'ArrayPattern') {
+      pattern.elements?.forEach((element) => visitPatternExpressions(element, scope, walk));
+    } else if (pattern.type === 'ObjectPattern') {
+      for (const property of pattern.properties || []) {
+        scopeByNode.set(property, scope);
+        if (property.computed) walk(property.key, scope);
+        visitPatternExpressions(
+          property.type === 'RestElement' ? property.argument : property.value,
+          scope,
+          walk,
+        );
+      }
+    }
+  };
+  const genericChildren = (node, scope, walk, omitted = new Set()) => {
+    for (const [key, value] of Object.entries(node)) {
+      if (['end', 'loc', 'range', 'raw', 'start', 'type'].includes(key) || omitted.has(key)) continue;
+      if (Array.isArray(value)) value.forEach((item) => walk(item, scope));
+      else walk(value, scope);
+    }
+  };
+  const walk = (node, scope) => {
+    if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
+    scopeByNode.set(node, scope);
+    if (node.type === 'Program') {
+      node.body?.forEach((statement) => walk(statement, scope));
+      return;
+    }
+    if (node.type === 'ImportDeclaration') {
+      for (const specifier of node.specifiers || []) {
+        scopeByNode.set(specifier, scope);
+        declareIdentifier(specifier.local, scope, 'import');
+      }
+      walk(node.source, scope);
+      return;
+    }
+    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+      if (node.type === 'FunctionDeclaration') declareIdentifier(node.id, scope, 'function');
+      const functionScope = createScope(scope, 'function', node);
+      if (node.type === 'FunctionExpression' && node.id) {
+        declareIdentifier(node.id, functionScope, 'function-name');
+      }
+      node.params?.forEach((parameter) => declarePattern(parameter, functionScope, 'parameter'));
+      // Parameter initializers run before the function body's var environment exists.
+      // Mirror the parameter/name bindings without exposing body var declarations to them.
+      const parameterInitializerScope = createScope(scope, 'parameter-initializer', node);
+      for (const binding of functionScope.bindings.values()) {
+        if ([...binding.kinds].some((kind) => ['function-name', 'parameter'].includes(kind))) {
+          parameterInitializerScope.bindings.set(binding.name, binding);
+        }
+      }
+      node.params?.forEach((parameter) => (
+        visitPatternExpressions(parameter, parameterInitializerScope, walk)
+      ));
+      walk(node.body, functionScope);
+      return;
+    }
+    if (node.type === 'BlockStatement') {
+      const blockScope = createScope(scope, 'block', node);
+      node.body?.forEach((statement) => walk(statement, blockScope));
+      return;
+    }
+    if (node.type === 'CatchClause') {
+      const catchScope = createScope(scope, 'catch', node);
+      declarePattern(node.param, catchScope, 'catch');
+      visitPatternExpressions(node.param, catchScope, walk);
+      walk(node.body, catchScope);
+      return;
+    }
+    if (node.type === 'SwitchStatement') {
+      walk(node.discriminant, scope);
+      const switchScope = createScope(scope, 'block', node);
+      node.cases?.forEach((switchCase) => walk(switchCase, switchScope));
+      return;
+    }
+    if (['ForStatement', 'ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const loopScope = createScope(scope, 'block', node);
+      genericChildren(node, loopScope, walk);
+      return;
+    }
+    if (node.type === 'StaticBlock') {
+      const staticBlockScope = createScope(scope, 'static-block', node);
+      node.body?.forEach((statement) => walk(statement, staticBlockScope));
+      return;
+    }
+    if (node.type === 'VariableDeclaration') {
+      const declarationScope = node.kind === 'var' ? nearestVarScope(scope) : scope;
+      for (const declaration of node.declarations || []) {
+        scopeByNode.set(declaration, scope);
+        declarePattern(declaration.id, declarationScope, node.kind);
+      }
+      for (const declaration of node.declarations || []) {
+        visitPatternExpressions(declaration.id, scope, walk);
+        walk(declaration.init, scope);
+      }
+      return;
+    }
+    if (node.type === 'ClassDeclaration') {
+      declareIdentifier(node.id, scope, 'class');
+      walk(node.superClass, scope);
+      walk(node.body, scope);
+      return;
+    }
+    if (node.type === 'ClassExpression') {
+      const classScope = createScope(scope, 'class', node);
+      if (node.id) declareIdentifier(node.id, classScope, 'class-name');
+      walk(node.superClass, classScope);
+      walk(node.body, classScope);
+      return;
+    }
+    genericChildren(node, scope, walk);
+  };
+  walk(program, rootScope);
+  const resolveIdentifier = (identifier) => {
+    if (identifier?.type !== 'Identifier') return null;
+    const declared = declarationBindingByNode.get(identifier);
+    if (declared) return declared;
+    let scope = scopeByNode.get(identifier) || rootScope;
+    while (scope) {
+      const binding = scope.bindings.get(identifier.name);
+      if (binding) return binding;
+      scope = scope.parent;
+    }
+    return null;
+  };
+  return {
+    bindings,
+    declarationBindingByNode,
+    rootScope,
+    scopeByNode,
+    scopes,
+    resolveIdentifier,
+    isDeclarationIdentifier: (identifier) => declarationBindingByNode.has(identifier),
+  };
+}
+
+function mr1597AstFingerprint(node) {
+  if (Array.isArray(node)) return node.map(mr1597AstFingerprint);
+  if (!node || typeof node !== 'object') return node;
+  return Object.fromEntries(Object.entries(node)
+    .filter(([key]) => !['end', 'loc', 'range', 'raw', 'start'].includes(key))
+    .map(([key, value]) => [key, mr1597AstFingerprint(value)]));
+}
+
+const MR1597_WORKER_ENTRY_HARNESS_SOURCE = [
+  "const workerEntryPath = resolve('electron/host-core/agent/execution-worker-entry.cjs');",
+  '',
+  'function workerEntryHarness(runAgent) {',
+  '  const parentPort = new EventEmitter();',
+  '  const sent = [];',
+  '  parentPort.postMessage = (message) => {',
+  '    sent.push(structuredClone(message));',
+  "    parentPort.emit('posted');",
+  '  };',
+  "  const runtimeEntry = '/qwork-test/context-usage-runtime.cjs';",
+  '  const entryRequire = createRequire(workerEntryPath);',
+  '  const processState = {',
+  '    parentPort,',
+  '    env: { QBOT_EXECUTION_WORKER_RUNTIME_ENTRY: runtimeEntry },',
+  '    memoryUsage: () => ({ rss: 1024 }),',
+  '    exitCode: null,',
+  '  };',
+  '  const module = { exports: {} };',
+  "  runInNewContext(readFileSync(workerEntryPath, 'utf8'), {",
+  '    AbortController,',
+  '    Buffer,',
+  '    clearInterval,',
+  '    clearTimeout,',
+  '    console,',
+  '    module,',
+  '    exports: module.exports,',
+  '    __dirname: dirname(workerEntryPath),',
+  '    __filename: workerEntryPath,',
+  '    process: processState,',
+  '    require: (specifier) => (',
+  '      specifier === runtimeEntry ? { eng: { runAgent } } : entryRequire(specifier)',
+  '    ),',
+  '    setInterval,',
+  '    setTimeout,',
+  '  }, { filename: workerEntryPath });',
+  '  const waitForOperation = async (operation, predicate = () => true) => {',
+  '    for (let attempt = 0; attempt < 20; attempt += 1) {',
+  '      const message = sent.find((candidate) => (',
+  '        candidate.operation === operation && predicate(candidate)',
+  '      ));',
+  '      if (message) return message;',
+  '      await new Promise((resolveWait) => setImmediate(resolveWait));',
+  '    }',
+  '    assert.fail(`worker did not emit ${operation}`);',
+  '  };',
+  '  return {',
+  '    processState,',
+  "    send: (message) => parentPort.emit('message', { data: message }),",
+  '    sent,',
+  '    waitForOperation,',
+  '  };',
+  '}',
+].join('\n');
+
+const MR1597_WORKER_ENTRY_HARNESS_AST = (() => {
+  const template = parse(MR1597_WORKER_ENTRY_HARNESS_SOURCE, {
+    allowHashBang: true,
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+  });
+  return {
+    path: mr1597AstFingerprint(template.body[0]),
+    harness: mr1597AstFingerprint(template.body[1]),
+  };
+})();
+
+function mr1597StaticMemberName(node) {
+  const expression = unwrapJavaScriptChain(node);
+  if (expression?.type !== 'MemberExpression') return null;
+  if (!expression.computed && expression.property?.type === 'Identifier') {
+    return expression.property.name;
+  }
+  if (expression.computed && expression.property?.type === 'Literal'
+    && ['string', 'number'].includes(typeof expression.property.value)) {
+    return String(expression.property.value);
+  }
+  if (expression.computed
+    && expression.property?.type === 'TemplateLiteral'
+    && expression.property.expressions?.length === 0
+    && expression.property.quasis?.length === 1) {
+    return expression.property.quasis[0].value.cooked;
+  }
+  return null;
+}
+
+function observeMr1597DynamicCodeExecution(program, ownerCallback) {
+  const K = Object.freeze({
+    dynamic: 'dynamic',
+    createRequire: 'create-require',
+    eval: 'eval',
+    function: 'function',
+    globalObject: 'global-object',
+    moduleLoader: 'module-loader',
+    object: 'object',
+    reflect: 'reflect',
+    reflectApply: 'reflect-apply',
+    reflectConstruct: 'reflect-construct',
+    reflectGet: 'reflect-get',
+    vmExecution: 'vm-execution',
+    vmModuleLoad: 'vm-module-load',
+    vmObject: 'vm-object',
+  });
+  const vmOperations = new Set([
+    'Script', 'SourceTextModule', 'SyntheticModule', 'compileFunction',
+    'runInContext', 'runInNewContext', 'runInThisContext',
+  ]);
+  const index = createJavaScriptLexicalBindingIndex(program);
+  const allNodes = [];
+  const parentByNode = new WeakMap();
+  visitJavaScriptAst(program, (node, parent) => {
+    allNodes.push(node);
+    if (parent) parentByNode.set(node, parent);
+  });
+  const isUnboundIdentifier = (node, name) => node?.type === 'Identifier'
+    && node.name === name
+    && index.resolveIdentifier(node) === null;
+  const isGlobalObject = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    return expression?.type === 'Identifier'
+      && ['global', 'globalThis', 'self', 'window'].includes(expression.name)
+      && index.resolveIdentifier(expression) === null;
+  };
+  const makeMemberSource = (object, propertyName) => ({
+    type: 'QbotStaticMemberSource',
+    object,
+    propertyName,
+    start: object?.start,
+    end: object?.end,
+  });
+  const valueSourcesByBinding = new Map();
+  const seedKindsByBinding = new Map();
+  const addSource = (binding, source) => {
+    if (!binding || !source) return;
+    if (!valueSourcesByBinding.has(binding)) valueSourcesByBinding.set(binding, []);
+    valueSourcesByBinding.get(binding).push(source);
+  };
+  const addSeed = (binding, kind) => {
+    if (!binding) return;
+    if (!seedKindsByBinding.has(binding)) seedKindsByBinding.set(binding, new Set());
+    seedKindsByBinding.get(binding).add(kind);
+  };
+  const bindPatternSource = (pattern, source) => {
+    if (!pattern || typeof pattern !== 'object') return;
+    if (pattern.type === 'Identifier') {
+      addSource(index.resolveIdentifier(pattern), source);
+      return;
+    }
+    if (pattern.type === 'AssignmentPattern') {
+      bindPatternSource(pattern.left, source);
+      bindPatternSource(pattern.left, pattern.right);
+      return;
+    }
+    if (pattern.type === 'RestElement') {
+      bindPatternSource(pattern.argument, makeMemberSource(source, null));
+      return;
+    }
+    if (pattern.type === 'ArrayPattern') {
+      pattern.elements?.forEach((element, position) => {
+        if (!element) return;
+        const value = source?.type === 'ArrayExpression'
+          ? source.elements?.[position]
+          : makeMemberSource(source, String(position));
+        bindPatternSource(element, value?.type === 'SpreadElement' ? value.argument : value);
+      });
+      return;
+    }
+    if (pattern.type === 'ObjectPattern') {
+      for (const property of pattern.properties || []) {
+        if (property.type === 'RestElement') {
+          bindPatternSource(property.argument, makeMemberSource(source, null));
+          continue;
+        }
+        const propertyName = staticallyResolvableJavaScriptPropertyName(property);
+        let value = makeMemberSource(source, propertyName);
+        if (source?.type === 'ObjectExpression' && propertyName !== null) {
+          const matches = (source.properties || []).filter((candidate) => (
+            staticallyResolvableJavaScriptPropertyName(candidate) === propertyName
+          ));
+          if (matches.length === 1) value = matches[0].value;
+        }
+        bindPatternSource(property.value, value);
+      }
+    }
+  };
+  for (const node of allNodes) {
+    if (node.type === 'ImportDeclaration'
+      && node.source?.type === 'Literal'
+      && node.source.value === 'node:module') {
+      for (const specifier of node.specifiers || []) {
+        if (specifier.type === 'ImportSpecifier'
+          && (specifier.imported?.name || specifier.imported?.value) === 'createRequire') {
+          addSeed(index.resolveIdentifier(specifier.local), K.createRequire);
+        }
+      }
+    } else if (node.type === 'ImportDeclaration'
+      && node.source?.type === 'Literal'
+      && ['node:vm', 'vm'].includes(node.source.value)) {
+      for (const specifier of node.specifiers || []) {
+        const binding = index.resolveIdentifier(specifier.local);
+        if (specifier.type !== 'ImportSpecifier') addSeed(binding, K.vmObject);
+        else if (vmOperations.has(specifier.imported?.name || specifier.imported?.value)) {
+          addSeed(binding, K.vmExecution);
+        }
+      }
+    } else if (node.type === 'FunctionDeclaration' && node.id) {
+      addSource(index.resolveIdentifier(node.id), node);
+    } else if (node.type === 'VariableDeclarator') {
+      bindPatternSource(node.id, node.init);
+    } else if (node.type === 'AssignmentExpression'
+      && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)) {
+      bindPatternSource(node.left, node.right);
+    } else if (node.type === 'ForOfStatement') {
+      const target = node.left?.type === 'VariableDeclaration'
+        ? node.left.declarations?.[0]?.id : node.left;
+      const iterable = unwrapJavaScriptChain(node.right);
+      if (iterable?.type === 'ArrayExpression') {
+        for (const element of iterable.elements || []) {
+          bindPatternSource(target, element?.type === 'SpreadElement' ? element.argument : element);
+        }
+      } else {
+        bindPatternSource(target, makeMemberSource(iterable, null));
+      }
+    }
+  }
+
+  const memberWrites = [];
+  const addMemberWrite = (object, propertyName, value, forwardObject = null) => {
+    if (object) memberWrites.push({ object, propertyName, value, forwardObject });
+  };
+  const isGlobalBuiltinMember = (node, family, operation) => {
+    const expression = unwrapJavaScriptChain(node);
+    return expression?.type === 'MemberExpression'
+      && isUnboundIdentifier(unwrapJavaScriptChain(expression.object), family)
+      && mr1597StaticMemberName(expression) === operation;
+  };
+  const exactDescriptorValue = (descriptor) => {
+    if (descriptor?.type !== 'ObjectExpression') return null;
+    const matches = descriptor.properties?.filter((property) => (
+      property.type === 'Property'
+      && staticallyResolvableJavaScriptPropertyName(property) === 'value'
+      && property.kind === 'init'
+      && property.method !== true
+    )) || [];
+    return matches.length === 1 ? matches[0].value : null;
+  };
+  for (const node of allNodes) {
+    if (node.type === 'AssignmentExpression'
+      && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)
+      && unwrapJavaScriptChain(node.left)?.type === 'MemberExpression') {
+      const target = unwrapJavaScriptChain(node.left);
+      addMemberWrite(target.object, mr1597StaticMemberName(target), node.right);
+    }
+    if (node.type !== 'CallExpression' || node.optional === true) continue;
+    const callee = unwrapJavaScriptChain(node.callee);
+    if (isGlobalBuiltinMember(callee, 'Object', 'defineProperty')
+      || isGlobalBuiltinMember(callee, 'Reflect', 'defineProperty')) {
+      const property = node.arguments?.[1];
+      const propertyName = property?.type === 'Literal'
+        && ['string', 'number'].includes(typeof property.value) ? String(property.value) : null;
+      addMemberWrite(node.arguments?.[0], propertyName, exactDescriptorValue(node.arguments?.[2]));
+    } else if (isGlobalBuiltinMember(callee, 'Object', 'defineProperties')) {
+      const descriptors = node.arguments?.[1];
+      if (descriptors?.type === 'ObjectExpression') {
+        for (const property of descriptors.properties || []) {
+          if (property.type !== 'Property') continue;
+          addMemberWrite(
+            node.arguments?.[0],
+            staticallyResolvableJavaScriptPropertyName(property),
+            exactDescriptorValue(property.value),
+          );
+        }
+      }
+    } else if (isGlobalBuiltinMember(callee, 'Reflect', 'set')) {
+      const property = node.arguments?.[1];
+      const propertyName = property?.type === 'Literal'
+        && ['string', 'number'].includes(typeof property.value) ? String(property.value) : null;
+      addMemberWrite(node.arguments?.[0], propertyName, node.arguments?.[2]);
+    } else if (isGlobalBuiltinMember(callee, 'Object', 'assign')) {
+      for (const source of (node.arguments || []).slice(1)) {
+        if (source?.type === 'ObjectExpression') {
+          for (const property of source.properties || []) {
+            if (property.type === 'SpreadElement') {
+              addMemberWrite(node.arguments?.[0], null, null, property.argument);
+            } else {
+              addMemberWrite(
+                node.arguments?.[0],
+                staticallyResolvableJavaScriptPropertyName(property),
+                property.value,
+              );
+            }
+          }
+        } else {
+          addMemberWrite(node.arguments?.[0], null, null, source);
+        }
+      }
+    }
+  }
+
+  const mergeRows = (rows) => ({
+    values: rows.flatMap((row) => row.values),
+    indeterminate: rows.some((row) => row.indeterminate),
+  });
+  const containerIdentitySet = (node, seenBindings = new Set(), seenNodes = new Set()) => {
+    const expression = unwrapJavaScriptChain(node);
+    const identities = new Set();
+    if (!expression || typeof expression !== 'object') return identities;
+    if (expression.type === 'QbotStaticMemberSource') {
+      return containerIdentitySet(expression.object, seenBindings, seenNodes);
+    }
+    const nodeKey = `${expression.start ?? -1}:${expression.end ?? -1}:${expression.type}`;
+    if (seenNodes.has(nodeKey)) return identities;
+    const nextNodes = new Set(seenNodes).add(nodeKey);
+    if (expression.type === 'Identifier') {
+      const binding = index.resolveIdentifier(expression);
+      if (!binding) return identities;
+      identities.add(`binding:${binding.id}`);
+      if (seenBindings.has(binding)) return identities;
+      const nextBindings = new Set(seenBindings).add(binding);
+      for (const source of valueSourcesByBinding.get(binding) || []) {
+        for (const identity of containerIdentitySet(source, nextBindings, nextNodes)) {
+          identities.add(identity);
+        }
+      }
+      return identities;
+    }
+    if (['ObjectExpression', 'ArrayExpression', 'FunctionExpression', 'ArrowFunctionExpression'].includes(expression.type)) {
+      identities.add(`node:${nodeKey}`);
+      return identities;
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return containerIdentitySet(expression.argument, seenBindings, nextNodes);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return containerIdentitySet(expression.right, seenBindings, nextNodes);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return containerIdentitySet(expression.expressions?.at(-1), seenBindings, nextNodes);
+    }
+    if (expression.type === 'ConditionalExpression' || expression.type === 'LogicalExpression') {
+      const branches = expression.type === 'ConditionalExpression'
+        ? [expression.consequent, expression.alternate] : [expression.left, expression.right];
+      for (const branch of branches) {
+        for (const identity of containerIdentitySet(branch, seenBindings, nextNodes)) identities.add(identity);
+      }
+      return identities;
+    }
+    if (expression.type === 'CallExpression'
+      && isUnboundIdentifier(expression.callee, 'Object')
+      && expression.arguments?.length === 1) {
+      return containerIdentitySet(expression.arguments[0], seenBindings, nextNodes);
+    }
+    return identities;
+  };
+  const mayAliasContainer = (left, right) => {
+    const leftIdentities = containerIdentitySet(left);
+    const rightIdentities = containerIdentitySet(right);
+    return [...leftIdentities].some((identity) => rightIdentities.has(identity));
+  };
+  const resolveContainerMemberValues = (containerNode, memberName, seen = new Set()) => {
+    const container = unwrapJavaScriptChain(containerNode);
+    if (!container) return { values: [], indeterminate: true };
+    if (container.type === 'QbotStaticMemberSource') {
+      const first = resolveContainerMemberValues(container.object, container.propertyName, seen);
+      const rows = first.values.map((value) => resolveContainerMemberValues(value, memberName, seen));
+      const merged = mergeRows(rows);
+      return { values: merged.values, indeterminate: first.indeterminate || merged.indeterminate };
+    }
+    const seenKey = `${container.start ?? -1}:${container.end ?? -1}:${container.type}:${memberName ?? '*'}`;
+    if (seen.has(seenKey)) return { values: [], indeterminate: true };
+    const nextSeen = new Set(seen).add(seenKey);
+    const rows = [];
+    let indeterminate = false;
+    const includeWrites = () => {
+      for (const write of memberWrites) {
+        if (!mayAliasContainer(container, write.object)) continue;
+        if (write.propertyName !== null && memberName !== null && write.propertyName !== memberName) continue;
+        if (write.forwardObject) {
+          rows.push(resolveContainerMemberValues(write.forwardObject, memberName, nextSeen));
+        } else if (write.value) {
+          rows.push({ values: [write.value], indeterminate: write.propertyName === null });
+        } else {
+          indeterminate = true;
+        }
+      }
+    };
+    if (container.type === 'Identifier') {
+      const binding = index.resolveIdentifier(container);
+      if (!binding) return { values: [], indeterminate: true };
+      for (const source of valueSourcesByBinding.get(binding) || []) {
+        rows.push(resolveContainerMemberValues(source, memberName, nextSeen));
+      }
+      includeWrites();
+      const merged = mergeRows(rows);
+      return {
+        values: merged.values,
+        indeterminate: indeterminate || merged.indeterminate
+          || ((valueSourcesByBinding.get(binding) || []).length === 0 && rows.length === 0),
+      };
+    }
+    if (container.type === 'ObjectExpression') {
+      for (const property of container.properties || []) {
+        if (property.type === 'SpreadElement') {
+          rows.push(resolveContainerMemberValues(property.argument, memberName, nextSeen));
+          continue;
+        }
+        const propertyName = staticallyResolvableJavaScriptPropertyName(property);
+        if (propertyName === null) {
+          rows.push({ values: [property.value], indeterminate: true });
+        } else if (memberName === null || propertyName === memberName) {
+          rows.push({ values: [property.value], indeterminate: false });
+        }
+      }
+      includeWrites();
+      const merged = mergeRows(rows);
+      return { values: merged.values, indeterminate: indeterminate || merged.indeterminate };
+    }
+    if (container.type === 'ArrayExpression') {
+      const elements = container.elements || [];
+      if (memberName !== null && /^\d+$/u.test(memberName)) {
+        const selected = elements[Number(memberName)];
+        if (selected) rows.push({
+          values: [selected.type === 'SpreadElement' ? selected.argument : selected],
+          indeterminate: selected.type === 'SpreadElement',
+        });
+      } else {
+        rows.push({
+          values: elements.filter(Boolean).map((element) => (
+            element.type === 'SpreadElement' ? element.argument : element
+          )),
+          indeterminate: memberName === null || elements.some((element) => element?.type === 'SpreadElement'),
+        });
+      }
+      includeWrites();
+      const merged = mergeRows(rows);
+      return { values: merged.values, indeterminate: indeterminate || merged.indeterminate };
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(container.type)) {
+      return resolveContainerMemberValues(container.argument, memberName, nextSeen);
+    }
+    if (container.type === 'AssignmentExpression') {
+      return resolveContainerMemberValues(container.right, memberName, nextSeen);
+    }
+    if (container.type === 'SequenceExpression') {
+      return resolveContainerMemberValues(container.expressions?.at(-1), memberName, nextSeen);
+    }
+    if (container.type === 'ConditionalExpression' || container.type === 'LogicalExpression') {
+      const branches = container.type === 'ConditionalExpression'
+        ? [container.consequent, container.alternate] : [container.left, container.right];
+      return mergeRows(branches.map((branch) => (
+        resolveContainerMemberValues(branch, memberName, nextSeen)
+      )));
+    }
+    if (container.type === 'MemberExpression') {
+      const first = resolveContainerMemberValues(
+        container.object,
+        mr1597StaticMemberName(container),
+        nextSeen,
+      );
+      const merged = mergeRows(first.values.map((value) => (
+        resolveContainerMemberValues(value, memberName, nextSeen)
+      )));
+      return { values: merged.values, indeterminate: first.indeterminate || merged.indeterminate };
+    }
+    if (container.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(container.callee);
+      if (isUnboundIdentifier(callee, 'Object') && container.arguments?.length === 1) {
+        return resolveContainerMemberValues(container.arguments[0], memberName, nextSeen);
+      }
+      if (isGlobalBuiltinMember(callee, 'Object', 'assign')) {
+        return mergeRows((container.arguments || []).map((argument) => (
+          resolveContainerMemberValues(
+            argument?.type === 'SpreadElement' ? argument.argument : argument,
+            memberName,
+            nextSeen,
+          )
+        )));
+      }
+    }
+    return { values: [], indeterminate: true };
+  };
+
+  const functionReturnValues = (functionNode) => {
+    if (functionNode?.type === 'ArrowFunctionExpression' && functionNode.body?.type !== 'BlockStatement') {
+      return [functionNode.body];
+    }
+    const values = [];
+    const visit = (node, root = false) => {
+      if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
+      if (!root && ['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(node.type)) return;
+      if (node.type === 'ReturnStatement') {
+        if (node.argument) values.push(node.argument);
+        return;
+      }
+      for (const [key, value] of Object.entries(node)) {
+        if (['end', 'loc', 'range', 'raw', 'start', 'type'].includes(key)) continue;
+        if (Array.isArray(value)) value.forEach((item) => visit(item));
+        else visit(value);
+      }
+    };
+    visit(functionNode, true);
+    return values;
+  };
+  const functionNodesForExpression = (node, seenBindings = new Set(), seenNodes = new Set()) => {
+    const expression = unwrapJavaScriptChain(node);
+    const functions = new Set();
+    if (!expression || typeof expression !== 'object') return functions;
+    if (expression.type === 'QbotStaticMemberSource') {
+      const resolved = resolveContainerMemberValues(expression.object, expression.propertyName);
+      for (const value of resolved.values) {
+        for (const fn of functionNodesForExpression(value, seenBindings, seenNodes)) functions.add(fn);
+      }
+      return functions;
+    }
+    const key = `${expression.start ?? -1}:${expression.end ?? -1}:${expression.type}`;
+    if (seenNodes.has(key)) return functions;
+    const nextNodes = new Set(seenNodes).add(key);
+    if (['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(expression.type)) {
+      functions.add(expression);
+      return functions;
+    }
+    if (expression.type === 'Identifier') {
+      const binding = index.resolveIdentifier(expression);
+      if (!binding || seenBindings.has(binding)) return functions;
+      const nextBindings = new Set(seenBindings).add(binding);
+      for (const source of valueSourcesByBinding.get(binding) || []) {
+        for (const fn of functionNodesForExpression(source, nextBindings, nextNodes)) functions.add(fn);
+      }
+      return functions;
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return functionNodesForExpression(expression.argument, seenBindings, nextNodes);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return functionNodesForExpression(expression.right, seenBindings, nextNodes);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return functionNodesForExpression(expression.expressions?.at(-1), seenBindings, nextNodes);
+    }
+    if (expression.type === 'ConditionalExpression' || expression.type === 'LogicalExpression') {
+      const branches = expression.type === 'ConditionalExpression'
+        ? [expression.consequent, expression.alternate] : [expression.left, expression.right];
+      for (const branch of branches) {
+        for (const fn of functionNodesForExpression(branch, seenBindings, nextNodes)) functions.add(fn);
+      }
+    }
+    if (expression.type === 'MemberExpression') {
+      const resolved = resolveContainerMemberValues(expression.object, mr1597StaticMemberName(expression));
+      for (const value of resolved.values) {
+        for (const fn of functionNodesForExpression(value, seenBindings, nextNodes)) functions.add(fn);
+      }
+    }
+    return functions;
+  };
+
+  const expressionKinds = (node, seenBindings = new Set(), seenNodes = new Set()) => {
+    const expression = unwrapJavaScriptChain(node);
+    const kinds = new Set();
+    if (!expression || typeof expression !== 'object') return kinds;
+    if (expression.type === 'QbotStaticMemberSource') {
+      const objectKinds = expressionKinds(expression.object, seenBindings, seenNodes);
+      if (objectKinds.has(K.globalObject) && expression.propertyName === 'eval') kinds.add(K.eval);
+      if (objectKinds.has(K.globalObject) && expression.propertyName === 'Function') kinds.add(K.function);
+      if (objectKinds.has(K.reflect) && expression.propertyName === 'apply') kinds.add(K.reflectApply);
+      if (objectKinds.has(K.reflect) && expression.propertyName === 'construct') kinds.add(K.reflectConstruct);
+      if (objectKinds.has(K.reflect) && expression.propertyName === 'get') kinds.add(K.reflectGet);
+      if (objectKinds.has(K.vmObject)
+        && (expression.propertyName === null || vmOperations.has(expression.propertyName))) {
+        kinds.add(K.vmExecution);
+      }
+      const resolved = resolveContainerMemberValues(expression.object, expression.propertyName);
+      for (const value of resolved.values) {
+        for (const kind of expressionKinds(value, seenBindings, seenNodes)) kinds.add(kind);
+      }
+      if (expression.propertyName === null) kinds.add(K.dynamic);
+      return kinds;
+    }
+    const key = `${expression.start ?? -1}:${expression.end ?? -1}:${expression.type}`;
+    if (seenNodes.has(key)) return kinds;
+    const nextNodes = new Set(seenNodes).add(key);
+    if (expression.type === 'Identifier') {
+      if (isUnboundIdentifier(expression, 'eval')) kinds.add(K.eval);
+      else if (isUnboundIdentifier(expression, 'Function')) kinds.add(K.function);
+      else if (isUnboundIdentifier(expression, 'Reflect')) kinds.add(K.reflect);
+      else if (isUnboundIdentifier(expression, 'Object')) kinds.add(K.object);
+      else if (isGlobalObject(expression)) kinds.add(K.globalObject);
+      const binding = index.resolveIdentifier(expression);
+      if (!binding || seenBindings.has(binding)) return kinds;
+      for (const kind of seedKindsByBinding.get(binding) || []) kinds.add(kind);
+      const nextBindings = new Set(seenBindings).add(binding);
+      for (const source of valueSourcesByBinding.get(binding) || []) {
+        for (const kind of expressionKinds(source, nextBindings, nextNodes)) kinds.add(kind);
+      }
+      return kinds;
+    }
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionKinds(expression.argument, seenBindings, nextNodes);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionKinds(expression.right, seenBindings, nextNodes);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionKinds(expression.expressions?.at(-1), seenBindings, nextNodes);
+    }
+    if (expression.type === 'ConditionalExpression' || expression.type === 'LogicalExpression') {
+      const branches = expression.type === 'ConditionalExpression'
+        ? [expression.consequent, expression.alternate] : [expression.left, expression.right];
+      for (const branch of branches) {
+        for (const kind of expressionKinds(branch, seenBindings, nextNodes)) kinds.add(kind);
+      }
+      return kinds;
+    }
+    if (expression.type === 'MemberExpression') {
+      const propertyName = mr1597StaticMemberName(expression);
+      const objectKinds = expressionKinds(expression.object, seenBindings, nextNodes);
+      if (objectKinds.has(K.globalObject) && propertyName === 'eval') kinds.add(K.eval);
+      if (objectKinds.has(K.globalObject) && propertyName === 'Function') kinds.add(K.function);
+      if (objectKinds.has(K.reflect) && propertyName === 'apply') kinds.add(K.reflectApply);
+      if (objectKinds.has(K.reflect) && propertyName === 'construct') kinds.add(K.reflectConstruct);
+      if (objectKinds.has(K.reflect) && propertyName === 'get') kinds.add(K.reflectGet);
+      if (objectKinds.has(K.vmObject) && (propertyName === null || vmOperations.has(propertyName))) {
+        kinds.add(K.vmExecution);
+      }
+      const resolved = resolveContainerMemberValues(expression.object, propertyName);
+      for (const value of resolved.values) {
+        for (const kind of expressionKinds(value, seenBindings, nextNodes)) kinds.add(kind);
+      }
+      if (propertyName === null) kinds.add(K.dynamic);
+      return kinds;
+    }
+    if (expression.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(expression.callee);
+      const propertyName = mr1597StaticMemberName(callee);
+      const calleeKinds = expressionKinds(callee, seenBindings, nextNodes);
+      const calleeObjectKinds = callee?.type === 'MemberExpression'
+        ? expressionKinds(callee.object, seenBindings, nextNodes) : new Set();
+      if (isExactRequireCall(expression, 'node:vm') || isExactRequireCall(expression, 'vm')) {
+        kinds.add(K.vmModuleLoad);
+        kinds.add(K.vmObject);
+        return kinds;
+      }
+      if (calleeKinds.has(K.createRequire)
+        && expression.arguments?.length === 1
+        && isExactImportMetaUrl(expression.arguments[0])) {
+        kinds.add(K.moduleLoader);
+      }
+      let moduleLoaderArguments = null;
+      if (calleeKinds.has(K.moduleLoader) && !['call', 'apply'].includes(propertyName)) {
+        moduleLoaderArguments = expression.arguments || [];
+      } else if (calleeObjectKinds.has(K.moduleLoader) && propertyName === 'call') {
+        moduleLoaderArguments = (expression.arguments || []).slice(1);
+      } else if (calleeObjectKinds.has(K.moduleLoader) && propertyName === 'apply') {
+        const forwarded = expression.arguments?.[1];
+        if (forwarded?.type === 'ArrayExpression'
+          && !forwarded.elements?.some((element) => element?.type === 'SpreadElement')) {
+          moduleLoaderArguments = forwarded.elements;
+        }
+      } else if ((calleeKinds.has(K.reflectApply) || calleeKinds.has(K.reflectConstruct))
+        && expressionKinds(expression.arguments?.[0], seenBindings, nextNodes).has(K.moduleLoader)) {
+        const forwarded = expression.arguments?.[2] || expression.arguments?.[1];
+        if (forwarded?.type === 'ArrayExpression'
+          && !forwarded.elements?.some((element) => element?.type === 'SpreadElement')) {
+          moduleLoaderArguments = forwarded.elements;
+        }
+      }
+      if (moduleLoaderArguments?.[0]?.type === 'Literal'
+        && ['node:vm', 'vm'].includes(moduleLoaderArguments[0].value)) {
+        kinds.add(K.vmModuleLoad);
+        kinds.add(K.vmObject);
+      }
+      if (callee?.type === 'MemberExpression' && propertyName === 'bind') {
+        for (const kind of calleeObjectKinds) kinds.add(kind);
+        return kinds;
+      }
+      if (calleeKinds.has(K.reflectGet)) {
+        const target = expression.arguments?.[0];
+        const property = expression.arguments?.[1];
+        const propertyName = property?.type === 'Literal'
+          && ['string', 'number'].includes(typeof property.value) ? String(property.value) : null;
+        if (propertyName === 'eval' && isGlobalObject(target)) kinds.add(K.eval);
+        else if (propertyName === 'Function' && isGlobalObject(target)) kinds.add(K.function);
+        else {
+          const resolved = resolveContainerMemberValues(target, propertyName);
+          for (const value of resolved.values) {
+            for (const kind of expressionKinds(value, seenBindings, nextNodes)) kinds.add(kind);
+          }
+          if (propertyName === null || resolved.indeterminate) kinds.add(K.dynamic);
+        }
+      }
+      if (isUnboundIdentifier(callee, 'Object') && expression.arguments?.length === 1) {
+        for (const kind of expressionKinds(expression.arguments[0], seenBindings, nextNodes)) kinds.add(kind);
+      }
+      if (isGlobalBuiltinMember(callee, 'Object', 'assign')) {
+        for (const argument of expression.arguments || []) {
+          for (const kind of expressionKinds(
+            argument?.type === 'SpreadElement' ? argument.argument : argument,
+            seenBindings,
+            nextNodes,
+          )) kinds.add(kind);
+        }
+      }
+      for (const fn of functionNodesForExpression(callee)) {
+        for (const returned of functionReturnValues(fn)) {
+          for (const kind of expressionKinds(returned, seenBindings, nextNodes)) kinds.add(kind);
+        }
+      }
+      return kinds;
+    }
+    if (expression.type === 'ObjectExpression') {
+      for (const property of expression.properties || []) {
+        if (property.type !== 'SpreadElement') continue;
+        const spreadKinds = expressionKinds(property.argument, seenBindings, nextNodes);
+        if (spreadKinds.has(K.vmObject)) kinds.add(K.vmObject);
+      }
+      return kinds;
+    }
+    return kinds;
+  };
+
+  const containsKinds = (node, wanted, seen = new Set()) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression || typeof expression !== 'object') return false;
+    const key = `${expression.start ?? -1}:${expression.end ?? -1}:${expression.type}`;
+    if (seen.has(key)) return false;
+    const nextSeen = new Set(seen).add(key);
+    if ([...expressionKinds(expression)].some((kind) => wanted.has(kind))) return true;
+    if (['ArrowFunctionExpression', 'FunctionExpression', 'FunctionDeclaration'].includes(expression.type)) {
+      return false;
+    }
+    for (const [field, value] of Object.entries(expression)) {
+      if (['end', 'key', 'loc', 'range', 'raw', 'start', 'type'].includes(field)) continue;
+      if (Array.isArray(value) && value.some((item) => containsKinds(item, wanted, nextSeen))) return true;
+      if (value && typeof value.type === 'string' && containsKinds(value, wanted, nextSeen)) return true;
+    }
+    return false;
+  };
+
+  const exactImports = new Map([
+    ['node:events', [['ImportSpecifier', 'EventEmitter', 'EventEmitter']]],
+    ['node:fs', [['ImportSpecifier', 'readFileSync', 'readFileSync']]],
+    ['node:path', [
+      ['ImportSpecifier', 'dirname', 'dirname'],
+      ['ImportSpecifier', 'resolve', 'resolve'],
+    ]],
+    ['node:vm', [['ImportSpecifier', 'runInNewContext', 'runInNewContext']]],
+  ]);
+  const importMatches = (statement, expected) => statement.type === 'ImportDeclaration'
+    && statement.specifiers?.length === expected.length
+    && statement.specifiers.every((specifier, position) => {
+      const [type, imported, local] = expected[position];
+      return specifier.type === type
+        && (specifier.imported?.name || specifier.imported?.value) === imported
+        && specifier.local?.name === local;
+    });
+  const observeHarness = () => {
+    const importStatements = new Map();
+    for (const [source, expected] of exactImports) {
+      const candidates = (program.body || []).filter((statement) => (
+        statement.type === 'ImportDeclaration' && statement.source?.value === source
+      ));
+      if (candidates.length !== 1 || !importMatches(candidates[0], expected)) return null;
+      importStatements.set(source, candidates[0]);
+    }
+    const pathDeclarations = (program.body || []).filter((statement) => (
+      stableJson(mr1597AstFingerprint(statement)) === stableJson(MR1597_WORKER_ENTRY_HARNESS_AST.path)
+    ));
+    const harnessDeclarations = (program.body || []).filter((statement) => (
+      stableJson(mr1597AstFingerprint(statement)) === stableJson(MR1597_WORKER_ENTRY_HARNESS_AST.harness)
+    ));
+    if (pathDeclarations.length !== 1 || harnessDeclarations.length !== 1) return null;
+    if (index.bindings.filter((binding) => binding.name === 'workerEntryPath').length !== 1
+      || index.bindings.filter((binding) => binding.name === 'workerEntryHarness').length !== 1) return null;
+    const vmImport = importStatements.get('node:vm');
+    const vmBinding = index.resolveIdentifier(vmImport.specifiers[0].local);
+    const harness = harnessDeclarations[0];
+    const harnessBinding = index.resolveIdentifier(harness.id);
+    const vmCalls = [];
+    visitJavaScriptAst(harness, (node) => {
+      if (node.type === 'CallExpression'
+        && node.callee?.type === 'Identifier'
+        && index.resolveIdentifier(node.callee) === vmBinding) vmCalls.push(node);
+    });
+    if (vmCalls.length !== 1) return null;
+    const vmReferences = allNodes.filter((node) => (
+      node.type === 'Identifier'
+      && !index.isDeclarationIdentifier(node)
+      && index.resolveIdentifier(node) === vmBinding
+    ));
+    if (vmReferences.length !== 1 || vmReferences[0] !== vmCalls[0].callee) return null;
+    const reachableFunctions = new Set();
+    const pending = [ownerCallback];
+    while (pending.length > 0) {
+      const fn = pending.pop();
+      if (!fn || reachableFunctions.has(fn)) continue;
+      reachableFunctions.add(fn);
+      let harnessReferenced = false;
+      visitJavaScriptAst(fn.body || fn, (node) => {
+        if (node.type === 'Identifier'
+          && !index.isDeclarationIdentifier(node)
+          && index.resolveIdentifier(node) === harnessBinding) harnessReferenced = true;
+        if (node.type !== 'CallExpression') return;
+        for (const target of functionNodesForExpression(node.callee)) {
+          if (!reachableFunctions.has(target)) pending.push(target);
+        }
+      });
+      if (harnessReferenced) return null;
+    }
+    return { allowedCall: vmCalls[0], vmBinding };
+  };
+  const harness = observeHarness();
+
+  const executionNodes = new Map();
+  const record = (node, kind) => {
+    const key = `${node?.start ?? -1}:${node?.end ?? -1}`;
+    if (!executionNodes.has(key)) executionNodes.set(key, kind);
+  };
+  const vmRequireNodes = [];
+  for (const node of allNodes) {
+    if (node.type === 'ImportExpression') {
+      record(node, 'dynamic_import');
+      continue;
+    }
+    if (node.type === 'VariableDeclarator') {
+      if (!(isExactRequireCall(node.init, 'node:vm') || isExactRequireCall(node.init, 'vm'))
+        && containsKinds(node.init, new Set([K.vmExecution, K.vmObject]))) {
+        record(node, 'node_vm_escape');
+      }
+    } else if (node.type === 'AssignmentExpression'
+      && containsKinds(node.right, new Set([K.vmExecution, K.vmObject]))) {
+      record(node, 'node_vm_escape');
+    } else if (node.type === 'ReturnStatement'
+      && containsKinds(node.argument, new Set([K.vmExecution, K.vmObject]))) {
+      record(node, 'node_vm_escape');
+    }
+    if (node.type === 'TaggedTemplateExpression') {
+      const tagKinds = expressionKinds(node.tag);
+      if (tagKinds.has(K.eval)) record(node, 'eval_tagged_template');
+      else if (tagKinds.has(K.function)) record(node, 'function_tagged_template');
+      else if (tagKinds.has(K.vmExecution)) record(node, 'node_vm_execution');
+      else if (unwrapJavaScriptChain(node.tag)?.type === 'MemberExpression'
+        && mr1597StaticMemberName(node.tag) === null) record(node, 'dynamic_computed_tag');
+      continue;
+    }
+    if (!['CallExpression', 'NewExpression'].includes(node.type)) continue;
+    if (isExactRequireCall(node, 'node:vm') || isExactRequireCall(node, 'vm')) {
+      vmRequireNodes.push(node);
+      continue;
+    }
+    const callee = unwrapJavaScriptChain(node.callee);
+    const property = mr1597StaticMemberName(callee);
+    const calleeObject = callee?.type === 'MemberExpression'
+      ? unwrapJavaScriptChain(callee.object) : null;
+    const calleeObjectKinds = expressionKinds(calleeObject);
+    const calleeKinds = expressionKinds(callee);
+    const callResultKinds = expressionKinds(node);
+    if (callResultKinds.has(K.vmModuleLoad)
+      && !calleeKinds.has(K.vmExecution)
+      && !calleeObjectKinds.has(K.vmExecution)) {
+      vmRequireNodes.push(node);
+      continue;
+    }
+    if (calleeKinds.has(K.eval)) {
+      record(node, isUnboundIdentifier(callee, 'eval') ? 'direct_eval' : 'indirect_eval');
+    } else if (calleeKinds.has(K.function)) {
+      record(node, 'function_constructor');
+    } else if (['call', 'apply'].includes(property) && calleeObjectKinds.has(K.eval)) {
+      record(node, 'eval_call_or_apply');
+    } else if (['call', 'apply'].includes(property) && calleeObjectKinds.has(K.function)) {
+      record(node, 'function_call_or_apply');
+    } else if ((calleeKinds.has(K.reflectApply) || calleeKinds.has(K.reflectConstruct))
+      && expressionKinds(node.arguments?.[0]).has(K.eval)) {
+      record(node, 'reflect_eval');
+    } else if ((calleeKinds.has(K.reflectApply) || calleeKinds.has(K.reflectConstruct))
+      && expressionKinds(node.arguments?.[0]).has(K.function)) {
+      record(node, 'reflect_function_constructor');
+    } else if (property === 'constructor'
+      || (['call', 'apply'].includes(property)
+        && mr1597StaticMemberName(calleeObject) === 'constructor')) {
+      record(node, 'member_constructor');
+    } else if (calleeKinds.has(K.vmExecution)
+      || (['call', 'apply'].includes(property) && calleeObjectKinds.has(K.vmExecution))) {
+      if (node !== harness?.allowedCall) record(node, 'node_vm_execution');
+    } else if (property === 'bind' && calleeObjectKinds.has(K.vmExecution)) {
+      record(node, 'node_vm_escape');
+    } else if (calleeKinds.has(K.dynamic)
+      || (callee?.type === 'MemberExpression' && callee.computed && property === null)) {
+      record(node, 'dynamic_computed_callee');
+    } else if ((calleeKinds.has(K.reflectApply) || calleeKinds.has(K.reflectConstruct))
+      && containsKinds(node.arguments?.[0], new Set([K.vmExecution, K.vmObject]))) {
+      record(node, 'node_vm_execution');
+    } else if ((node.arguments || []).some((argument) => (
+      containsKinds(argument?.type === 'SpreadElement' ? argument.argument : argument,
+        new Set([K.eval, K.function]))
+    ))) {
+      record(node, 'dynamic_callable_escape');
+    } else if ((node.arguments || []).some((argument) => (
+      containsKinds(argument?.type === 'SpreadElement' ? argument.argument : argument,
+        new Set([K.vmExecution, K.vmObject]))
+    ))) {
+      record(node, 'node_vm_escape');
+    }
+  }
+  if ([...executionNodes.values()].some((kind) => (
+    ['node_vm_execution', 'node_vm_escape'].includes(kind)
+  ))) {
+    vmRequireNodes.forEach((node) => record(node, 'node_vm_module'));
   }
   const kinds = [...new Set(executionNodes.values())].sort();
   return { count: executionNodes.size, kinds };
@@ -4079,22 +6807,31 @@ function strictUtf8Decode(bytes) {
 }
 
 function releaseFileProvenance({ file, expectedPath, releaseHead, payload } = {}) {
-  const expectedEndpoint = `repository/files/${encodeURIComponent(expectedPath)}?ref=${encodeURIComponent(releaseHead)}`;
   const supplied = file?.last_commit_provenance || payload?.last_commit_provenance;
   if (supplied && typeof supplied === 'object' && !Array.isArray(supplied)) {
     return supplied;
   }
-  // Direct callers/tests may provide a repository-files payload without the
-  // second history read.  Keep that path explicit and distinguish it from the
-  // scanner's independent repository/commits readback.
+  const lastCommitId = text(payload?.last_commit_id);
+  const commitEndpoint = `repository/commits/${encodeURIComponent(lastCommitId)}`;
   return {
     schema_version: QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
-    source: 'gitlab-api-repository-files',
-    endpoint: expectedEndpoint,
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: commitEndpoint,
+    diff_endpoint: `${commitEndpoint}/diff?per_page=${QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE}`,
     path: expectedPath,
     ref: releaseHead,
-    commit_id: text(payload?.commit_id),
-    last_commit_id: text(payload?.last_commit_id),
+    release_commit_id: text(payload?.commit_id),
+    file_last_commit_id: lastCommitId,
+    commit_id: '',
+    commit_raw_response: {},
+    commit_metadata: { id: '' },
+    commit_response_sha256: '',
+    diff_page_size: QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE,
+    diff_pages: [],
+    matched_change_count: 0,
+    matched_changes: [],
+    path_verified: false,
+    error: 'independent_commit_diff_missing',
   };
 }
 
@@ -4103,14 +6840,16 @@ function validateReleaseFileProvenance(provenance, {
   releaseHead,
   commitId,
   lastCommitId,
-  requireIndependent = true,
   failurePrefix,
 } = {}) {
   const failures = [];
-  const expectedFileEndpoint = `repository/files/${encodeURIComponent(expectedPath)}?ref=${encodeURIComponent(releaseHead)}`;
-  const expectedHistoryEndpoint = `repository/commits?path=${encodeURIComponent(expectedPath)}&ref_name=${encodeURIComponent(releaseHead)}&per_page=1`;
+  const expectedCommitEndpoint = `repository/commits/${encodeURIComponent(lastCommitId)}`;
+  const expectedDiffEndpoint = `${expectedCommitEndpoint}/diff?per_page=${QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE}`;
   if (!objectHasExactKeys(provenance, [
-    'schema_version', 'source', 'endpoint', 'path', 'ref', 'commit_id', 'last_commit_id',
+    'schema_version', 'source', 'commit_endpoint', 'diff_endpoint', 'path', 'ref',
+    'release_commit_id', 'file_last_commit_id', 'commit_id', 'commit_raw_response', 'commit_metadata',
+    'commit_response_sha256', 'diff_page_size',
+    'diff_pages', 'matched_change_count', 'matched_changes', 'path_verified', 'error',
   ])) {
     failures.push(`${failurePrefix}:fields_mismatch`);
     return failures;
@@ -4118,19 +6857,179 @@ function validateReleaseFileProvenance(provenance, {
   if (provenance.schema_version !== QWORK_RELEASE_FILE_PROVENANCE_SCHEMA) {
     failures.push(`${failurePrefix}:schema_mismatch`);
   }
-  if (!['gitlab-api-repository-files', 'gitlab-api-repository-commits'].includes(provenance.source)
-    || (requireIndependent && provenance.source !== 'gitlab-api-repository-commits')) {
+  if (provenance.source !== 'gitlab-api-repository-commit-diff') {
     failures.push(`${failurePrefix}:source_mismatch`);
   }
-  const expectedEndpoint = provenance.source === 'gitlab-api-repository-commits'
-    ? expectedHistoryEndpoint : expectedFileEndpoint;
-  if (provenance.endpoint !== expectedEndpoint) failures.push(`${failurePrefix}:endpoint_mismatch`);
+  if (provenance.commit_endpoint !== expectedCommitEndpoint) failures.push(`${failurePrefix}:commit_endpoint_mismatch`);
+  if (provenance.diff_endpoint !== expectedDiffEndpoint) failures.push(`${failurePrefix}:diff_endpoint_mismatch`);
   if (provenance.path !== expectedPath) failures.push(`${failurePrefix}:path_mismatch`);
   if (provenance.ref !== releaseHead) failures.push(`${failurePrefix}:ref_mismatch`);
-  if (provenance.commit_id !== commitId) failures.push(`${failurePrefix}:commit_id_mismatch`);
-  if (provenance.last_commit_id !== lastCommitId) failures.push(`${failurePrefix}:last_commit_id_mismatch`);
+  if (provenance.release_commit_id !== commitId) failures.push(`${failurePrefix}:release_commit_id_mismatch`);
+  if (provenance.file_last_commit_id !== lastCommitId) failures.push(`${failurePrefix}:file_last_commit_id_mismatch`);
+  if (provenance.commit_id !== lastCommitId) failures.push(`${failurePrefix}:commit_id_mismatch`);
+  const commitRawResponseValidation = validateCanonicalGitLabCommitMetadata(
+    provenance.commit_raw_response,
+    provenance.commit_id,
+  );
+  if (!commitRawResponseValidation.ok) {
+    failures.push(`${failurePrefix}:commit_raw_response_mismatch`);
+    for (const reason of commitRawResponseValidation.failures) {
+      failures.push(`${failurePrefix}:commit_raw_response_${reason}`);
+    }
+  }
+  const commitMetadataValidation = validateCanonicalGitLabCommitMetadata(
+    provenance.commit_metadata,
+    provenance.commit_id,
+  );
+  if (!commitMetadataValidation.ok) {
+    failures.push(`${failurePrefix}:commit_metadata_mismatch`);
+    for (const reason of commitMetadataValidation.failures) {
+      failures.push(`${failurePrefix}:commit_metadata_${reason}`);
+    }
+  }
+  if (!commitRawResponseValidation.projection
+    || stableJson(provenance.commit_metadata) !== stableJson(commitRawResponseValidation.projection)) {
+    failures.push(`${failurePrefix}:commit_metadata_projection_mismatch`);
+  }
+  if (!HEX64.test(String(provenance.commit_response_sha256 || ''))
+    || provenance.commit_response_sha256 !== sha256(stableJson(provenance.commit_raw_response))) {
+    failures.push(`${failurePrefix}:commit_response_sha256_mismatch`);
+  }
+  if (!HEX40.test(String(provenance.release_commit_id || ''))) {
+    failures.push(`${failurePrefix}:release_commit_id_invalid`);
+  }
+  if (!HEX40.test(String(provenance.file_last_commit_id || ''))) {
+    failures.push(`${failurePrefix}:file_last_commit_id_invalid`);
+  }
   if (!HEX40.test(String(provenance.commit_id || ''))) failures.push(`${failurePrefix}:commit_id_invalid`);
-  if (!HEX40.test(String(provenance.last_commit_id || ''))) failures.push(`${failurePrefix}:last_commit_id_invalid`);
+  if (provenance.diff_page_size !== QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE) {
+    failures.push(`${failurePrefix}:diff_page_size_mismatch`);
+  }
+  const pages = Array.isArray(provenance.diff_pages) ? provenance.diff_pages : [];
+  const changePathPairs = new Set();
+  if (!Array.isArray(provenance.diff_pages)
+    || pages.length === 0
+    || pages.length > QWORK_RELEASE_FILE_PROVENANCE_MAX_DIFF_PAGES) {
+    failures.push(`${failurePrefix}:diff_pages_invalid`);
+  }
+  pages.forEach((page, index) => {
+    const pageNumber = index + 1;
+    if (!objectHasExactKeys(page, [
+      'page', 'endpoint', 'item_count', 'raw_response', 'changes', 'response_sha256',
+    ])) {
+      failures.push(`${failurePrefix}:diff_page_fields_mismatch:${pageNumber}`);
+      return;
+    }
+    if (page.page !== pageNumber) failures.push(`${failurePrefix}:diff_page_sequence_mismatch:${pageNumber}`);
+    if (page.endpoint !== `${expectedDiffEndpoint}&page=${pageNumber}`) {
+      failures.push(`${failurePrefix}:diff_page_endpoint_mismatch:${pageNumber}`);
+    }
+    if (!Number.isSafeInteger(page.item_count)
+      || page.item_count < 0
+      || page.item_count > QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE) {
+      failures.push(`${failurePrefix}:diff_page_item_count_invalid:${pageNumber}`);
+    } else if (index < pages.length - 1
+      && page.item_count !== QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE) {
+      failures.push(`${failurePrefix}:diff_page_premature_short_page:${pageNumber}`);
+    } else if (index === pages.length - 1
+      && page.item_count >= QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE) {
+      failures.push(`${failurePrefix}:diff_page_termination_missing:${pageNumber}`);
+    }
+    if (!Array.isArray(page.raw_response) || page.raw_response.length !== page.item_count
+      || !Array.isArray(page.changes) || page.changes.length !== page.item_count) {
+      failures.push(`${failurePrefix}:diff_page_changes_mismatch:${pageNumber}`);
+    }
+    const projectedRawChanges = [];
+    for (const [changeIndex, rawChange] of (
+      Array.isArray(page.raw_response) ? page.raw_response : []
+    ).entries()) {
+      const validation = validateCanonicalGitLabDiffChange(rawChange);
+      for (const reason of validation.failures) {
+        const suffix = reason === 'diff_incomplete' ? 'diff_page_raw_incomplete'
+          : reason === 'flags_conflict' ? 'diff_page_change_flags_conflict'
+            : ['collapsed', 'generated_file', 'too_large'].some((field) => reason === `${field}_invalid`)
+              ? 'diff_page_raw_extension_invalid' : 'diff_page_raw_change_invalid';
+        failures.push(`${failurePrefix}:${suffix}:${pageNumber}:${changeIndex}:${reason}`);
+      }
+      if (validation.projection) projectedRawChanges.push(validation.projection);
+    }
+    if (stableJson(page.changes) !== stableJson(projectedRawChanges)) {
+      failures.push(`${failurePrefix}:diff_page_raw_projection_mismatch:${pageNumber}`);
+    }
+    for (const [changeIndex, change] of (Array.isArray(page.changes) ? page.changes : []).entries()) {
+      if (!objectHasExactKeys(change, [
+        'old_path', 'new_path', 'new_file', 'renamed_file', 'deleted_file',
+      ])) {
+        failures.push(`${failurePrefix}:diff_page_change_fields_mismatch:${pageNumber}:${changeIndex}`);
+      } else if (typeof change.old_path !== 'string'
+        || typeof change.new_path !== 'string'
+        || !change.old_path.trim()
+        || !change.new_path.trim()
+        || change.old_path !== change.old_path.trim()
+        || change.new_path !== change.new_path.trim()
+        || !['new_file', 'renamed_file', 'deleted_file'].every((field) => typeof change[field] === 'boolean')) {
+        failures.push(`${failurePrefix}:diff_page_change_invalid:${pageNumber}:${changeIndex}`);
+      } else {
+        const enabledFlags = [change.new_file, change.renamed_file, change.deleted_file]
+          .filter((enabled) => enabled).length;
+        const pathChanged = change.old_path !== change.new_path;
+        if (enabledFlags > 1 || change.renamed_file !== pathChanged) {
+          failures.push(`${failurePrefix}:diff_page_change_flags_conflict:${pageNumber}:${changeIndex}`);
+        }
+        const pathPair = stableJson([change.old_path, change.new_path]);
+        if (changePathPairs.has(pathPair)) {
+          failures.push(`${failurePrefix}:diff_page_change_duplicate:${pageNumber}:${changeIndex}`);
+        }
+        changePathPairs.add(pathPair);
+      }
+    }
+    if (!HEX64.test(String(page.response_sha256 || ''))
+      || page.response_sha256 !== sha256(stableJson(page.raw_response))) {
+      failures.push(`${failurePrefix}:diff_page_sha256_mismatch:${pageNumber}`);
+    }
+  });
+  const matchedChanges = Array.isArray(provenance.matched_changes) ? provenance.matched_changes : [];
+  if (!Array.isArray(provenance.matched_changes)) failures.push(`${failurePrefix}:matched_changes_invalid`);
+  matchedChanges.forEach((change, index) => {
+    if (!objectHasExactKeys(change, [
+      'old_path', 'new_path', 'new_file', 'renamed_file', 'deleted_file',
+    ])) {
+      failures.push(`${failurePrefix}:matched_change_fields_mismatch:${index}`);
+      return;
+    }
+    if (typeof change.old_path !== 'string'
+      || typeof change.new_path !== 'string'
+      || !change.old_path.trim()
+      || !change.new_path.trim()
+      || change.old_path !== change.old_path.trim()
+      || change.new_path !== change.new_path.trim()) {
+      failures.push(`${failurePrefix}:matched_change_path_invalid:${index}`);
+    }
+    if (change.old_path !== expectedPath && change.new_path !== expectedPath) {
+      failures.push(`${failurePrefix}:matched_change_path_mismatch:${index}`);
+    }
+    if (!['new_file', 'renamed_file', 'deleted_file'].every((field) => typeof change[field] === 'boolean')) {
+      failures.push(`${failurePrefix}:matched_change_flags_invalid:${index}`);
+    }
+  });
+  if (!Number.isSafeInteger(provenance.matched_change_count)
+    || provenance.matched_change_count !== matchedChanges.length
+    || provenance.matched_change_count !== 1) {
+    failures.push(`${failurePrefix}:matched_change_count_mismatch`);
+  }
+  const derivedMatches = pages.flatMap((page) => Array.isArray(page?.changes) ? page.changes : [])
+    .filter((change) => change?.old_path === expectedPath || change?.new_path === expectedPath);
+  if (stableJson(matchedChanges) !== stableJson(derivedMatches)) {
+    failures.push(`${failurePrefix}:matched_changes_projection_mismatch`);
+  }
+  const currentPathChange = matchedChanges.length === 1 ? matchedChanges[0] : null;
+  if (!currentPathChange
+    || currentPathChange.new_path !== expectedPath
+    || currentPathChange.deleted_file !== false) {
+    failures.push(`${failurePrefix}:matched_change_current_path_mismatch`);
+  }
+  if (provenance.path_verified !== true) failures.push(`${failurePrefix}:path_unverified`);
+  if (provenance.error !== '') failures.push(`${failurePrefix}:error_present`);
   return failures;
 }
 
@@ -4143,7 +7042,7 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
   const ref = text(payload?.ref);
   const requestedRef = text(file?.requested_ref);
   const encoding = text(payload?.encoding).toLowerCase();
-  const declaredSize = Number(payload?.size);
+  const declaredSize = payload?.size;
   const provenance = releaseFileProvenance({ file, expectedPath, releaseHead, payload });
   let bytes = Buffer.alloc(0);
   if (!error) {
@@ -4182,7 +7081,6 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
     releaseHead,
     commitId: text(payload?.commit_id),
     lastCommitId: text(payload?.last_commit_id),
-    requireIndependent: true,
     failurePrefix: `${prefix}:last_commit_provenance`,
   }));
   return {
@@ -4195,7 +7093,7 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
       commit_id: text(payload?.commit_id),
       last_commit_id: text(payload?.last_commit_id),
       encoding,
-      declared_size: Number.isFinite(declaredSize) ? declaredSize : null,
+      declared_size: Number.isSafeInteger(declaredSize) ? declaredSize : null,
       bytes: bytes.length,
       content_base64: bytes.length ? bytes.toString('base64') : '',
       sha256: bytes.length ? sha256(bytes) : '',
@@ -4227,6 +7125,10 @@ export function auditCurrentReleaseSourceContract({
   if (text(originAncestry?.compare_from) !== contract.merge_commit_sha) failures.push('origin_merge_compare_from_mismatch');
   if (text(originAncestry?.compare_to) !== normalizedHead) failures.push('origin_merge_compare_to_mismatch');
   if (originAncestry?.first_parent_complete !== true) failures.push('origin_merge_first_parent_incomplete');
+  if (!Number.isSafeInteger(originAncestry?.compare_commit_count)
+    || originAncestry.compare_commit_count < 0) {
+    failures.push('origin_merge_compare_count_invalid');
+  }
   if (!currentHeaderContract?.contract_id) failures.push('current_header_owner_missing');
   const normalizedHeaderLineage = Array.isArray(currentHeaderLineage)
     ? currentHeaderLineage.map(text).filter(Boolean) : [];
@@ -4341,7 +7243,8 @@ export function auditCurrentReleaseSourceContract({
         verified: originAncestry?.verified === true,
         compare_from: text(originAncestry?.compare_from),
         compare_to: text(originAncestry?.compare_to),
-        compare_commit_count: Number(originAncestry?.compare_commit_count) || 0,
+        compare_commit_count: Number.isSafeInteger(originAncestry?.compare_commit_count)
+          ? originAncestry.compare_commit_count : 0,
         first_parent_complete: originAncestry?.first_parent_complete === true,
         reason: text(originAncestry?.reason),
       },
@@ -4477,7 +7380,7 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   if (!['release-head-is-origin-merge', 'gitlab-api-compare-first-parent'].includes(text(ancestry?.source))) {
     failures.push('attestation_origin_ancestry_source_invalid');
   }
-  if (!Number.isSafeInteger(Number(ancestry?.compare_commit_count)) || Number(ancestry?.compare_commit_count) < 0) {
+  if (!Number.isSafeInteger(ancestry?.compare_commit_count) || ancestry.compare_commit_count < 0) {
     failures.push('attestation_origin_compare_count_invalid');
   }
   if (text(ancestry?.reason)) failures.push('attestation_origin_ancestry_reason_present');
@@ -4550,15 +7453,15 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
     if (!HEX40.test(text(file?.blob_id))) failures.push(`attestation_release_file_blob:${filePath}`);
     if (!HEX40.test(text(file?.last_commit_id))) failures.push(`attestation_release_file_last_commit:${filePath}`);
     if (text(file?.encoding).toLowerCase() !== 'base64') failures.push(`attestation_release_file_encoding:${filePath}`);
-    if (!Number.isSafeInteger(Number(file?.declared_size)) || Number(file?.declared_size) <= 0) {
+    if (!Number.isSafeInteger(file?.declared_size) || file.declared_size <= 0) {
       failures.push(`attestation_release_file_declared_size:${filePath}`);
     }
-    if (!Number.isSafeInteger(Number(file?.bytes)) || Number(file?.bytes) <= 0
-      || Number(file?.bytes) !== Number(file?.declared_size)) {
+    if (!Number.isSafeInteger(file?.bytes) || file.bytes <= 0
+      || file.bytes !== file.declared_size) {
       failures.push(`attestation_release_file_bytes:${filePath}`);
     }
     if (!HEX64.test(text(file?.sha256))) failures.push(`attestation_release_file_sha256:${filePath}`);
-    if (!Number.isSafeInteger(Number(file?.line_count)) || Number(file?.line_count) <= 0) {
+    if (!Number.isSafeInteger(file?.line_count) || file.line_count <= 0) {
       failures.push(`attestation_release_file_line_count:${filePath}`);
     }
     if (text(file?.error)) failures.push(`attestation_release_file_error:${filePath}`);
@@ -4573,16 +7476,60 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
       const bytes = strictBase64Decode(file?.content_base64);
       const source = strictUtf8Decode(bytes);
       replaySourceByPath.set(filePath, source);
-      if (bytes.length !== Number(file?.bytes)
-        || bytes.length !== Number(file?.declared_size)
+      if (bytes.length !== file?.bytes
+        || bytes.length !== file?.declared_size
         || sha256(bytes) !== text(file?.sha256).toLowerCase()
         || gitBlobSha1(bytes) !== text(file?.blob_id).toLowerCase()
-        || (source ? source.replace(/\n$/u, '').split('\n').length : 0) !== Number(file?.line_count)) {
+        || (source ? source.replace(/\n$/u, '').split('\n').length : 0) !== file?.line_count) {
         failures.push(`attestation_release_file_content_mismatch:${filePath}`);
       }
     } catch {
       failures.push(`attestation_release_file_content_invalid:${filePath}`);
     }
+  }
+
+  const replayFailures = [];
+  const replayHeaderSourcePath = text(headerOwner.owner?.source_file?.path);
+  const replayHeaderLines = (replaySourceByPath.get(replayHeaderSourcePath) || '').split('\n');
+  const replayedHeaders = headerOwner.owner.header_emissions.map((header) => {
+    const emissionCount = replayHeaderLines.filter((line) => line === header.emission.source).length;
+    const valueDefinitionCount = header.value_definition
+      ? replayHeaderLines.filter((line) => line === header.value_definition.source).length
+      : 0;
+    const verified = emissionCount === 1
+      && valueDefinitionCount === (header.value_definition ? 1 : 0);
+    if (!verified) replayFailures.push(`current_header_source_mismatch:${header.name}`);
+    return {
+      ...header,
+      emission_count: emissionCount,
+      value_definition_count: valueDefinitionCount,
+      verified,
+    };
+  });
+  const replayedBindings = integrationProjection.map((projection) => (
+    projection.retired
+      ? retiredCurrentIntegrationBinding(projection)
+      : observeCurrentIntegrationBinding(
+        projection.binding,
+        replaySourceByPath.get(projection.binding.path) || '',
+        replayFailures,
+      )
+  ));
+  const replayedForbiddenFragments = observeCurrentForbiddenFragments(
+    contract,
+    headerResolution.owner,
+    replaySourceByPath,
+    replayFailures,
+  );
+  if (replayFailures.length > 0) failures.push(...replayFailures.map((failure) => `attestation_replay:${failure}`));
+  if (stableJson(attestation?.headers) !== stableJson(replayedHeaders)) {
+    failures.push('attestation_current_headers_replay_mismatch');
+  }
+  if (stableJson(attestation?.integration_bindings) !== stableJson(replayedBindings)) {
+    failures.push('attestation_current_integration_bindings_replay_mismatch');
+  }
+  if (stableJson(attestation?.forbidden_fragments) !== stableJson(replayedForbiddenFragments)) {
+    failures.push('attestation_current_forbidden_fragments_replay_mismatch');
   }
 
   if (isAssertionRetirementContract(contract)) {

@@ -652,6 +652,10 @@ const qworkReleaseSourceContractsSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
   'utf8',
 );
+const qworkReleaseIntakeSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-release-intake.mjs'),
+  'utf8',
+);
 const qworkReleaseIntakeTestSource = fs.readFileSync(
   path.join(root, 'test', 'qwork-release-intake.test.mjs'),
   'utf8',
@@ -664,7 +668,7 @@ const rootPackageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json
 const coreBetaProtocolSource = fs.readFileSync(path.join(root, 'src', 'lib', 'core-beta-case-protocol.mjs'), 'utf8');
 const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
 const qworkReleaseOrchestrator = fs.readFileSync(path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs'), 'utf8');
-assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-plan\/v2/);
+assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-plan\/v3/);
 assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-state\/v2/);
 assert.match(qworkReleaseTestPlan, /qbot-qwork-release-test-integrity\/v2/);
 assert.match(qworkReleaseOrchestrator, /qbot-qwork-release-test-event\/v2/);
@@ -698,6 +702,26 @@ for (const source of [qworkReleaseObservationCli, qworkReleaseIntakeCli, qworkRe
 }
 for (const [label, source] of [
   ['release intake scanner', qworkReleaseIntakeCli],
+  ['release observation', qworkReleaseObservationCli],
+]) {
+  assert.match(
+    source,
+    /const CLI_OPTION_NAMES = Object\.freeze\(\[[\s\S]*const allowedOptionNames = new Set\(CLI_OPTION_NAMES\)[\s\S]*if \(!allowedOptionNames\.has\(name\)\) throw new Error\('Unknown command-line option'\)/,
+    `${label} 必须使用显式参数白名单并以稳定类别拒绝未知参数`,
+  );
+}
+assert.match(
+  qworkReleaseIntakeCli,
+  /const options = parseArgs\(process\.argv\.slice\(2\)\)[\s\S]*if \(options\.help\)[\s\S]*const token = readToken\(options\)[\s\S]*scanQworkReleaseIntake\([\s\S]*writeQworkReleaseIntake\(/,
+  'release intake scanner 必须在 help、stdin、扫描和输出创建前完成参数白名单校验',
+);
+assert.match(
+  qworkReleaseObservationCli,
+  /const options = parseArgs\(process\.argv\.slice\(2\)\)[\s\S]*if \(options\.help\)[\s\S]*const token = fs\.readFileSync\(0[\s\S]*canonicalDirectory\(options\.repo\)[\s\S]*createGitLabReadOnlyReader\([\s\S]*writeQworkReleaseRefObservation\(/,
+  'release observation 必须在 help、stdin、仓库/网络检查和输出创建前完成参数白名单校验',
+);
+for (const [label, source] of [
+  ['release intake scanner', qworkReleaseIntakeCli],
   ['release orchestrator', qworkReleaseOrchestrator],
   ['Core Beta pretest', coreBetaPretestSource],
 ]) {
@@ -712,6 +736,21 @@ for (const [documentName, documentText] of [
   ['QBOT_AUTOMATION_FRAMEWORK.md', automationFramework],
   ['QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md', coreBetaOperatingGuide],
 ]) {
+  assert.match(
+    documentText,
+    /--release-intake-g1[\s\S]*--release-intake-g2[\s\S]*--release-intake-g3[\s\S]*--release-intake-g4[\s\S]*G1-G4[\s\S]*Sheet[\s\S]*有序 Case ID[\s\S]*release ref[\s\S]*HEAD[\s\S]*仓库[\s\S]*设计基线/,
+    `${documentName} 必须冻结状态机四阶段独立 intake 的 CLI、范围和共同发布身份合同`,
+  );
+  assert.match(
+    documentText,
+    /plan [^\n]*`v3` schema[\s\S]*state\/integrity\/event [^\n]*`v2` schema[\s\S]*旧 plan v2[\s\S]*单 intake 控制树/,
+    `${documentName} 必须明确 plan v3 与其余 v2 schema，并拒绝旧单 intake 控制树`,
+  );
+  assert.match(
+    documentText,
+    /扫描器、独立观测器和编排器[\s\S]*显式参数白名单[\s\S]*历史单报告 `--release-intake`[\s\S]*未知参数[\s\S]*其它入口[\s\S]*返回 `--help`[\s\S]*读取 stdin[\s\S]*网络请求[\s\S]*创建任何输出\/控制目录[\s\S]*稳定类别[\s\S]*疑似 secret/,
+    `${documentName} 必须冻结全部 release CLI 的参数白名单、前置拒绝与脱敏合同`,
+  );
   const productionGatePretestExamples = [...documentText.matchAll(/```bash\s*\n([\s\S]*?)```/g)]
     .map((match) => match[1])
     .filter((block) => block.includes('npm run core-beta:pretest --') && block.includes('--production-gate true'));
@@ -721,7 +760,7 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
-  assert.match(documentText, /qbot-release-intake\/1\.7\.0/, `${documentName} 必须固定当前 intake tool 1.7.0`);
+  assert.match(documentText, /qbot-release-intake\/1\.8\.0/, `${documentName} 必须固定当前 intake tool 1.8.0`);
   assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v5/, `${documentName} 必须固定当前 blocking-risk v5`);
   assert.match(
     documentText,
@@ -846,8 +885,33 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /owner callback[\s\S]*动态执行零容忍[\s\S]*direct\/indirect\/optional\/global `eval`[\s\S]*Function[\s\S]*Reflect\.apply\/construct[\s\S]*constructor[\s\S]*动态 computed callee[\s\S]*node:vm[\s\S]*ImportExpression[\s\S]*dynamic_code_execution_count=0[\s\S]*dynamic_code_execution_kinds=\[\]/,
-    `${documentName} 必须冻结 MR1597 owner callback 动态执行零容忍和严格零值`,
+    /严格隔离的既有 worker entry 测试 harness[\s\S]*全文件[\s\S]*动态执行零容忍[\s\S]*direct\/indirect\/optional\/global `eval`[\s\S]*Function[\s\S]*Reflect\.apply\/construct[\s\S]*constructor[\s\S]*动态 computed callee[\s\S]*node:vm[\s\S]*ImportExpression[\s\S]*dynamic_code_execution_count=0[\s\S]*dynamic_code_execution_kinds=\[\]/,
+    `${documentName} 必须冻结 MR1597 严格 VM harness 例外及其余全文件动态执行零容忍`,
+  );
+  assert.match(
+    documentText,
+    /唯一 VM 例外[\s\S]*workerEntryHarness\(runAgent\)[\s\S]*workerEntryPath[\s\S]*execution-worker-entry\.cjs[\s\S]*runInNewContext[\s\S]*readFileSync\(workerEntryPath, 'utf8'\)[\s\S]*filename: workerEntryPath[\s\S]*owner callback[\s\S]*不可达[\s\S]*第二次调用[\s\S]*别名[\s\S]*\.bind\(\)[\s\S]*Reflect\.apply\/construct[\s\S]*容器复制\/取出[\s\S]*node_vm_execution[\s\S]*node_vm_escape/,
+    `${documentName} 必须锁定 MR1597 唯一 VM harness 的完整 AST 指纹、隔离和逃逸负例`,
+  );
+  assert.match(
+    documentText,
+    /qbot-release-intake\/1\.8\.0[\s\S]*qbot-qwork-release-current-source-contract\/v3[\s\S]*Repository Files API 返回的[\s\S]*last_commit_id[\s\S]*repository\/commits\/<last_commit_id>[\s\S]*diff\?per_page=100&page=N[\s\S]*qbot-qwork-release-file-provenance\/v2[\s\S]*old_path[\s\S]*new_path[\s\S]*repository\/commits\?path=[\s\S]*禁止/,
+    `${documentName} 必须冻结 intake 1.8、current v3 与 commit-diff provenance v2 合同`,
+  );
+  assert.match(
+    documentText,
+    /raw_response[\s\S]*diff[\s\S]*mode[\s\S]*generated_file\/collapsed\/too_large[\s\S]*commit metadata[\s\S]*short id[\s\S]*trailers[\s\S]*无首尾空白[\s\S]*old\/new 路径对[\s\S]*rename 路径语义/,
+    `${documentName} 必须冻结完整 GitLab 原始响应、canonical commit metadata 与严格路径/flags 语义`,
+  );
+  assert.match(
+    documentText,
+    /last_pipeline[\s\S]*project_id[\s\S]*commit `project_id`[\s\S]*`sha`[\s\S]*commit `id`[\s\S]*pipeline `id`[\s\S]*compare_commit_count[\s\S]*declared_size\/bytes\/line_count[\s\S]*原生安全整数[\s\S]*数字字符串[\s\S]*重算[\s\S]*SHA-256[\s\S]*阻断/,
+    `${documentName} 必须冻结 pipeline/commit 身份绑定与 v3 原生整数类型合同`,
+  );
+  assert.match(
+    documentText,
+    /facade[\s\S]*supervisor source[\s\S]*最后[\s\S]*module\.exports[\s\S]*解构别名[\s\S]*node:vm[\s\S]*\.bind\(\)[\s\S]*实际调用[\s\S]*阻断/,
+    `${documentName} 必须冻结 MR1597 facade 覆盖与 VM 派生执行别名保护`,
   );
   assert.match(
     documentText,
@@ -887,8 +951,43 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /function observeProtectedBindingViolations[\s\S]*javaScriptDeclarationRecords[\s\S]*duplicate-or-shadow-declaration[\s\S]*AssignmentExpression[\s\S]*identifier-write[\s\S]*member-write[\s\S]*UpdateExpression[\s\S]*UnaryExpression[\s\S]*delete[\s\S]*ForInStatement[\s\S]*ForOfStatement[\s\S]*Object[\s\S]*assign[\s\S]*defineProperties[\s\S]*defineProperty[\s\S]*Reflect[\s\S]*deleteProperty[\s\S]*dynamic-indirect-member-write/,
-  'MR1597 五绑定保护必须覆盖声明遮蔽、重绑、成员、循环及 Object/Reflect 间接写入',
+  /(?=[\s\S]*const BUILTIN_INDIRECT_WRITE_OPERATIONS = new Map\(\[[\s\S]*'Object'[\s\S]*assign[\s\S]*defineProperties[\s\S]*defineProperty[\s\S]*'Reflect'[\s\S]*deleteProperty)(?=[\s\S]*function observeBuiltinIndirectWriteAliases[\s\S]*resolveInvocation[\s\S]*'call'[\s\S]*'apply'[\s\S]*forwardedArguments[\s\S]*targetIndeterminate)(?=[\s\S]*function observeProtectedBindingViolations[\s\S]*javaScriptDeclarationRecords[\s\S]*duplicate-or-shadow-declaration[\s\S]*AssignmentExpression[\s\S]*identifier-write[\s\S]*member-write[\s\S]*UpdateExpression[\s\S]*UnaryExpression[\s\S]*delete[\s\S]*ForInStatement[\s\S]*ForOfStatement[\s\S]*builtinWrites\.resolveInvocation[\s\S]*targetIndeterminate[\s\S]*forwardedArguments\[0\][\s\S]*dynamic-indirect-member-write)/,
+  'MR1597 五绑定保护必须覆盖声明遮蔽、重绑、成员、循环以及 Object/Reflect call/apply 间接写入',
+);
+assert.doesNotMatch(
+  qworkReleaseIntakeSource,
+  /repository\/commits\?path=/,
+  '正式 intake 不得回退到可疑的 commits-by-path provenance',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake\/1\.8\.0'[\s\S]*readReleaseCommitDiff[\s\S]*repository\/commits\/\$\{encodeURIComponent\(lastCommitId\)\}[\s\S]*\/diff\?per_page=\$\{QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE\}[\s\S]*matched_change_count[\s\S]*path_verified/,
+  '正式 intake 必须从 Files last_commit_id 读取 commit metadata 与完整 diff 路径命中 provenance',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /validateCanonicalGitLabCommitMetadata[\s\S]*changePathPairs[\s\S]*rawResponse = structuredClone\(rows\)[\s\S]*raw_response: rawResponse[\s\S]*sha256Text\(stableJson\(rawResponse\)\)/,
+  '正式 intake 必须绑定 canonical commit metadata、完整原始 diff 页及路径对去重',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function validateCanonicalGitLabCommitMetadata[\s\S]*short_id[\s\S]*parent_ids[\s\S]*authored_date[\s\S]*committed_date[\s\S]*stats[\s\S]*last_pipeline[\s\S]*web_url[\s\S]*raw_response[\s\S]*diff_page_raw_projection_mismatch[\s\S]*diff_page_change_flags_conflict/,
+  'provenance verifier 必须重放完整 commit metadata、原始 diff 投影及 flags 语义',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /pipeline\.project_id !== metadata\.project_id[\s\S]*pipeline\.sha !== metadata\.id[\s\S]*pipelines\/\$\{pipeline\.id\}[\s\S]*Number\.isSafeInteger\(ancestry\?\.compare_commit_count\)[\s\S]*Number\.isSafeInteger\(file\?\.declared_size\)[\s\S]*Number\.isSafeInteger\(file\?\.bytes\)[\s\S]*Number\.isSafeInteger\(file\?\.line_count\)/,
+  'current-release v3 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /pipeline project identity[\s\S]*pipeline commit identity[\s\S]*pipeline URL identity[\s\S]*ancestry compare count numeric string[\s\S]*file declared size numeric string[\s\S]*file byte count numeric string[\s\S]*file line count numeric string/,
+  'intake 回归必须覆盖 pipeline 身份漂移与重算 hash 后的数值字符串攻击',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /(?=[\s\S]*hashes and preserves the complete raw diff page response)(?=[\s\S]*generated_file)(?=[\s\S]*collapsed)(?=[\s\S]*too_large)(?=[\s\S]*diff_page_sha256_mismatch)/,
+  '来源证明专项回归必须覆盖非投影 GitLab diff 字段及重哈希攻击',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -1156,6 +1255,8 @@ try {
 }
 const {
   QWORK_RELEASE_SOURCE_CONTRACTS: casebookDesignSourceContracts,
+  QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA: casebookDesignCurrentSourceContractSchema,
+  QWORK_RELEASE_FILE_PROVENANCE_SCHEMA: casebookDesignFileProvenanceSchema,
   QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT: casebookDesignMr1590Contract,
   QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT: casebookDesignMr1593Contract,
   QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT: casebookDesignMr1596Contract,
@@ -1184,7 +1285,9 @@ const {
   mapReleaseImpact: mapCasebookDesignReleaseImpact,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-intake.mjs')).href);
 assert.equal(casebookDesignBlockingRiskSchema, 'qbot-qwork-release-blocking-risk-attestation/v5');
-assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.7.0');
+assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.8.0');
+assert.equal(casebookDesignCurrentSourceContractSchema, 'qbot-qwork-release-current-source-contract/v3');
+assert.equal(casebookDesignFileProvenanceSchema, 'qbot-qwork-release-file-provenance/v2');
 assert.equal(casebookDesignSuccessorPaths.length, 13, 'MR !1559 v5 必须精确审计 13 个受保护源码文件');
 const r16SourceContractFixtures = [
   {
@@ -1308,16 +1411,55 @@ const r16ExactStaticMrFixtures = [
       'teams360.host-sync.json',
     ],
   },
+  {
+    iid: '1600',
+    merge_commit_sha: '610295245f8aad0dbf5bf5b6b421ff285c22349d',
+    diff_sha256: '7b5cd65ac8b2685d44fd46364253e8709cf8c5f344d4883757fd9d48548ab0fb',
+    changed_paths: [
+      '.agent/skills-src/mr-delivery/references/pre-review-gate.md',
+      '.agent/skills-src/mr-review/references/discussion-resolution.md',
+      '.agents/skills/mr-delivery/references/pre-review-gate.md',
+      '.agents/skills/mr-review/references/discussion-resolution.md',
+      '.claude/skills/mr-delivery/references/pre-review-gate.md',
+      '.claude/skills/mr-review/references/discussion-resolution.md',
+      '.gitlab/guides/ci-skeleton.md',
+      '.gitlab/guides/local-gates.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/normal-child-base.yml',
+      'docs/ci-cd-operating-contract.md',
+      'scripts/ci/policy/delivery-preflight-consistency.mjs',
+      'scripts/ci/policy/delivery-preflight-consistency.test.mjs',
+      'scripts/ci/policy/generate-policy-reference.mjs',
+      'scripts/ci/policy/lightweight-ci-verify.mjs',
+      'scripts/ci/policy/mr-delivery-test-contract.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'scripts/ci/policy/version-only.test.mjs',
+      'scripts/ci/unit/node-normal-plan.mjs',
+      'scripts/governance/gitlab/gitlab-review-approve.mjs',
+      'scripts/governance/gitlab/gitlab-review-approve.test.mjs',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
+    ],
+  },
 ];
 for (const fixture of r16ExactStaticMrFixtures) {
   assert.deepEqual(
     validateR16ExactStaticMrContract(fixture, fixture.iid),
     { ok: true, failures: [] },
-    `MR !${fixture.iid} 精确静态合同的 IID/merge/diff/六路径全等时必须通过`,
+    `MR !${fixture.iid} 精确静态合同的 IID/merge/diff/${fixture.changed_paths.length} 路径全等时必须通过`,
   );
   for (const [field, mutate, expectedFailure] of [
     ['IID', (candidate) => { candidate.iid = '9999'; }, 'iid_mismatch'],
     ['merge SHA', (candidate) => { candidate.merge_commit_sha = 'f'.repeat(40); }, 'merge_commit_sha_mismatch'],
+    ['missing merge SHA', (candidate) => { delete candidate.merge_commit_sha; }, 'merge_commit_sha_mismatch'],
+    ['empty merge SHA', (candidate) => { candidate.merge_commit_sha = ''; }, 'merge_commit_sha_mismatch'],
+    ['null merge SHA', (candidate) => { candidate.merge_commit_sha = null; }, 'merge_commit_sha_mismatch'],
+    ['undefined merge SHA', (candidate) => { candidate.merge_commit_sha = undefined; }, 'merge_commit_sha_mismatch'],
+    ['commit-only merge SHA', (candidate) => {
+      candidate.commit = candidate.merge_commit_sha;
+      delete candidate.merge_commit_sha;
+    }, 'merge_commit_sha_mismatch'],
     ['diff SHA', (candidate) => { candidate.diff_sha256 = 'f'.repeat(64); }, 'diff_sha256_mismatch'],
     ['changed paths', (candidate) => { candidate.changed_paths = candidate.changed_paths.slice(1); }, 'changed_paths_mismatch'],
   ]) {
@@ -2813,6 +2955,44 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
     const completedLines = completeCurrentReleaseJavaScriptFixture(filePath, sourceLines);
     const source = `${completedLines.length ? completedLines.join('\n') : '// current release fixture'}\n`;
     const bytes = Buffer.from(source, 'utf8');
+    const lastCommitId = createHash('sha1').update(`commit:${filePath}`).digest('hex');
+    const change = {
+      old_path: filePath,
+      new_path: filePath,
+      new_file: false,
+      renamed_file: false,
+      deleted_file: false,
+    };
+    const diffEndpoint = `repository/commits/${lastCommitId}/diff?per_page=100`;
+    const commitMetadata = {
+      id: lastCommitId,
+      short_id: lastCommitId.slice(0, 8),
+      created_at: '2026-09-08T01:02:03Z',
+      parent_ids: ['a'.repeat(40)],
+      title: 'Protected source update',
+      message: 'Protected source update',
+      author_name: 'QBot QA Fixture',
+      author_email: 'qbot-qa@example.invalid',
+      authored_date: '2026-09-08T01:02:03Z',
+      committer_name: 'QBot QA Fixture',
+      committer_email: 'qbot-qa@example.invalid',
+      committed_date: '2026-09-08T01:02:03Z',
+      trailers: {},
+      project_id: 1,
+      stats: { additions: 1, deletions: 0, total: 1 },
+      status: 'success',
+      last_pipeline: null,
+      web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/${lastCommitId}`,
+    };
+    const rawChange = {
+      ...change,
+      a_mode: '100644',
+      b_mode: '100644',
+      diff: '@@ -1 +1 @@\n-old\n+new',
+      generated_file: false,
+      collapsed: false,
+      too_large: false,
+    };
     return {
       path: filePath,
       requested_ref: head,
@@ -2821,15 +3001,33 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
         ref: head,
         commit_id: head,
         blob_id: casebookDesignGitBlobSha1(bytes),
-        last_commit_id: createHash('sha1').update(`commit:${filePath}`).digest('hex'),
+        last_commit_id: lastCommitId,
         last_commit_provenance: {
-          schema_version: 'qbot-qwork-release-file-provenance/v1',
-          source: 'gitlab-api-repository-commits',
-          endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
+          schema_version: 'qbot-qwork-release-file-provenance/v2',
+          source: 'gitlab-api-repository-commit-diff',
+          commit_endpoint: `repository/commits/${lastCommitId}`,
+          diff_endpoint: diffEndpoint,
           path: filePath,
           ref: head,
-          commit_id: head,
-          last_commit_id: createHash('sha1').update(`commit:${filePath}`).digest('hex'),
+          release_commit_id: head,
+          file_last_commit_id: lastCommitId,
+          commit_id: lastCommitId,
+          commit_raw_response: structuredClone(commitMetadata),
+          commit_metadata: commitMetadata,
+          commit_response_sha256: casebookDesignSha256(commitMetadata),
+          diff_page_size: 100,
+          diff_pages: [{
+            page: 1,
+            endpoint: `${diffEndpoint}&page=1`,
+            item_count: 1,
+            raw_response: [rawChange],
+            changes: [change],
+            response_sha256: casebookDesignSha256([rawChange]),
+          }],
+          matched_change_count: 1,
+          matched_changes: [change],
+          path_verified: true,
+          error: '',
         },
         encoding: 'base64',
         size: bytes.length,
@@ -3048,6 +3246,20 @@ const readyCasebookDesignIntake = validateCasebookDesignReleaseIntake(
   casebookDesignValidationOptions,
 );
 assert.deepEqual(readyCasebookDesignIntake, { ok: true, acceptance: 'READY', failures: [] }, 'Casebook Builder 必须正常接受完整 READY intake');
+const gitOnlyFreshCasebookDesignIntake = casebookDesignIntakeFixture({ blocked: false });
+gitOnlyFreshCasebookDesignIntake.policy.fetch_latest = true;
+gitOnlyFreshCasebookDesignIntake.policy.api_freshness.mode = 'git';
+sealCasebookDesignIntake(gitOnlyFreshCasebookDesignIntake);
+const gitOnlyFreshCasebookDesignValidation = validateCasebookDesignReleaseIntake(
+  gitOnlyFreshCasebookDesignIntake,
+  casebookDesignValidationOptions,
+);
+assert.equal(gitOnlyFreshCasebookDesignValidation.ok, false, 'Casebook Builder READY 路径必须拒绝仅 git fetch 的 freshness');
+assert.equal(
+  gitOnlyFreshCasebookDesignValidation.failures.includes('intake:gitlab_api_freshness_required'),
+  true,
+  'Casebook Builder READY 路径必须给出稳定的 GitLab API freshness 失败 ID',
+);
 const r16Mr1592ReadyFixture = casebookDesignIntakeFixture({ blocked: false });
 r16Mr1592ReadyFixture.merge_requests.push({
   iid: '1592',
@@ -3133,8 +3345,13 @@ assert.match(coreBetaPretestSource, /validateQworkReleaseIntake\(releaseIntake,[
 assert.match(qworkReleaseTestPlan, /validateQworkReleaseIntake\(releaseIntake,[\s\S]*requireReady: true,[\s\S]*requireFreshRef: true/, '正式发布状态机必须继续只接受 READY intake');
 assert.match(
   qworkReleaseTestPlan,
-  /(?=[\s\S]*nonEmptyString\(expectedReleaseRef\) !== QWORK_RELEASE_INTAKE_DEFAULT_REF)(?=[\s\S]*\^\[a-f0-9\]\{40\}\$\/i\.test\(nonEmptyString\(expectedReleaseHead\)\))(?=[\s\S]*if \(releaseIntake == null\)[\s\S]*release_intake_required)/,
-  '发布计划必须强制 release intake 并使用独立 ref/HEAD 观测校验',
+  /QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan\/v3'[\s\S]*QWORK_RELEASE_TEST_STATE_SCHEMA = 'qbot-qwork-release-test-state\/v2'[\s\S]*QWORK_RELEASE_TEST_INTEGRITY_SCHEMA = 'qbot-qwork-release-test-integrity\/v2'/,
+  '发布状态机必须使用 plan v3，并保持 state/integrity v2 的显式不兼容 schema',
+);
+assert.match(
+  qworkReleaseTestPlan,
+  /(?=[\s\S]*nonEmptyString\(expectedReleaseRef\) !== QWORK_RELEASE_INTAKE_DEFAULT_REF)(?=[\s\S]*\^\[a-f0-9\]\{40\}\$\/i\.test\(nonEmptyString\(expectedReleaseHead\)\))(?=[\s\S]*QWORK_RELEASE_INTAKE_STAGE_IDS)(?=[\s\S]*releaseIntakes\[stageId\])(?=[\s\S]*release_intake_required:\$\{stageId\})/,
+  '发布计划必须强制四阶段 release intake 并使用独立 ref/HEAD 观测校验',
 );
 assert.match(
   qworkReleaseTestPlan,
@@ -3143,18 +3360,18 @@ assert.match(
 );
 assert.match(
   qworkReleaseOrchestrator,
-  /required\(options, \[[\s\S]*'release-intake'[\s\S]*'expected-release-ref'[\s\S]*'expected-release-head'[\s\S]*\]\)[\s\S]*正式发布计划不能关闭 release intake 门禁[\s\S]*expectedReleaseRef: options\['expected-release-ref'\][\s\S]*expectedReleaseHead: options\['expected-release-head'\]/,
-  '编排 CLI 必须在创建控制状态前强制 intake 和独立 release ref/HEAD',
+  /required\(options, \[[\s\S]*'release-intake-g1'[\s\S]*'release-intake-g2'[\s\S]*'release-intake-g3'[\s\S]*'release-intake-g4'[\s\S]*'expected-release-ref'[\s\S]*'expected-release-head'[\s\S]*\]\)[\s\S]*正式发布计划不能关闭 release intake 门禁[\s\S]*expectedReleaseRef: options\['expected-release-ref'\][\s\S]*expectedReleaseHead: options\['expected-release-head'\]/,
+  '编排 CLI 必须在创建控制状态前强制四阶段 intake 和独立 release ref/HEAD',
 );
 assert.match(
   qworkReleaseOrchestrator,
-  /function validatePlanSourceArtifacts\(plan\)[\s\S]*snapshots\.set\(specification\.role, stableFileSnapshot\([\s\S]*const intakeSnapshot = snapshots\.get\('release_intake'\)[\s\S]*parseJsonSnapshot\(intakeSnapshot, 'release intake'\)[\s\S]*validateQworkReleaseIntakeBinding\(\{[\s\S]*reportSha256: intakeSnapshot\.sha256/,
-  '控制状态加载必须从同一稳定磁盘快照重读 intake、重算 SHA 并验证计划绑定',
+  /function validatePlanSourceArtifacts\(plan\)[\s\S]*snapshots\.set\(specification\.role, stableFileSnapshot\([\s\S]*RELEASE_INTAKE_STAGE_IDS[\s\S]*const intakeSnapshot = snapshots\.get\(role\)[\s\S]*parseJsonSnapshot\(intakeSnapshot[\s\S]*validateQworkReleaseIntakeBinding\(\{[\s\S]*stageId,[\s\S]*reportSha256: intakeSnapshot\.sha256/,
+  '控制状态加载必须按阶段从稳定磁盘快照重读 intake、重算 SHA 并验证计划绑定',
 );
 assert.match(
   qworkReleaseOrchestrator,
-  /function readiness\(options[\s\S]*loadControlState\([\s\S]*options\['state-dir'\][\s\S]*releaseIntake: sourceArtifacts\.releaseIntake[\s\S]*releaseIntakeSha256: sourceArtifacts\.snapshots\.get\('release_intake'\)\.sha256/,
-  'readiness 必须消费控制状态加载时重新验证的 intake 内容与文件 SHA',
+  /function readiness\(options[\s\S]*loadControlState\([\s\S]*options\['state-dir'\][\s\S]*releaseIntake: sourceArtifacts\.releaseIntakes\[stage\.id\][\s\S]*releaseIntakeSha256: sourceArtifacts\.snapshots[\s\S]*`release_intake_\$\{stage\.id\.toLowerCase\(\)\}`\)\.sha256/,
+  'readiness 必须消费控制状态加载时按阶段重新验证的 intake 内容与文件 SHA',
 );
 const skillHubFixtureManifest = JSON.parse(fs.readFileSync(path.join(root, 'testfixtures', 'skillhub-regression', 'manifest.json'), 'utf8'));
 const coreGateCasebook = JSON.parse(fs.readFileSync(
@@ -15053,8 +15270,8 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /r12[\s\S]*134 个[\s\S]*36 个[\s\S]*170 个/, '两份规范必须记录 r12 继承、r14 增量和170个MR总量');
   assert.match(
     documentText,
-    /7f9b520f41ed9ac34b9230f28df49a5fce678953[\s\S]*63 个[\s\S]*197 个[\s\S]*!1579/,
-    '两份规范必须记录 r16 的63个直接MR、197个总MR与!1579 first-parent收尾边界',
+    /db85ab857a8aff02a460239f88a0544aab06b63b[\s\S]*68 个[\s\S]*202 个[\s\S]*!1602/,
+    '两份规范必须记录 r16 的68个直接MR、202个总MR与!1602 first-parent收尾边界',
   );
   assert.match(documentText, /casebook-build-audit\.json[\s\S]*release_intake\.execution_authorized=false[\s\S]*原始 `release-intake\.json` 顶层\s*不\s*定义 `execution_authorized`/, '两份规范必须准确区分构建审计授权包装层与原始 intake 顶层字段');
   assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
@@ -15991,9 +16208,10 @@ assert.deepEqual(r16IncrementalMrOrder, [
   '1571', '1574', '1575', '1577', '1580', '1581', '1576', '1583', '1582', '1584',
   '1585', '1587', '1588', '1589', '1586', '1534', '1590', '1567', '1565', '1592',
   '1593', '1596', '1595', '1597', '1594', '1579',
-], 'Casebook生成器必须按 intake first-parent 顺序冻结63个增量MR并以!1579收尾');
-assert.equal(r16IncrementalMrOrder.length, 63, 'r16 必须精确包含63个直接合入MR');
-assert.equal(134 + r16IncrementalMrOrder.length, 197, 'r16 必须继承r12的134个MR并形成197个总MR');
+  '1604', '1603', '1598', '1600', '1602',
+], 'Casebook生成器必须按 intake first-parent 顺序冻结68个增量MR并以!1602收尾');
+assert.equal(r16IncrementalMrOrder.length, 68, 'r16 必须精确包含68个直接合入MR');
+assert.equal(134 + r16IncrementalMrOrder.length, 202, 'r16 必须继承r12的134个MR并形成202个总MR');
 assert.match(productionGrayCasebookBuilder, /\['1523', \['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019'\]\]/, 'Casebook生成器必须精确映射MR !1523且禁止启发式泛化');
 assert.match(productionGrayCasebookBuilder, /\['1522', \['MRSMOKE-ROUTE-001', 'BETA-CHAT-001', 'BETA-ROUTE-001', 'BETA-HOST-003'\]\]/, 'Casebook生成器必须精确映射MR !1522且禁止启发式泛化');
 assert.match(coreBetaProtocolSource, /MRSMOKE-WEB-001', 'qwork_mr_web_search_success'[\s\S]*web_search_quota_trace/, '协议必须注册四轮Web搜索专项证据角色');
@@ -16011,7 +16229,7 @@ assert.match(
   'Casebook生成器必须逐项锁定 r9 的21个静态合同审计MR且禁止冒充桌面E2E',
 );
 assert.match(productionGrayCasebookBuilder, /function sameFileSet\(expectedFiles, actualFiles\)[\s\S]*!sameFileSet\(staticAudit\.expectedFiles, mr\.files\)/, 'Casebook生成器必须按文件集合校验静态MR清单，不能因Git返回顺序漂移误报');
-assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加63条，合计197条');
+assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加68条，合计202条');
 assert.match(
   productionGrayCasebookBuilder,
   /\['1573', \{[\s\S]*?caseIds: \['SIT-MEM-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-MCP-001', 'BETA-MCP-002', 'BETA-HOST-003', 'BETA-INIT-001', 'BETA-ROUTE-001', 'MRSMOKE-ROUTE-001'\][\s\S]*?coverageStrength: '相邻回归\+源码合同'[\s\S]*?requiredSourceContractIds: \['deepbankv2-mr-1573-memory-session-profile-stability\/v1'\][\s\S]*?claim_scope=source_and_test_declarations[\s\S]*?test_execution_attested=false[\s\S]*?禁止把相邻主链通过冒充这些内部合同已执行或通过/,
@@ -16031,6 +16249,11 @@ assert.match(productionGrayCasebookBuilder, /\['1561', \{[\s\S]*caseIds: \['MRSM
 assert.match(productionGrayCasebookBuilder, /\['1560', \{[\s\S]*caseIds: \['MRSMOKE-ROUTE-001', 'MRSMOKE-FAIL-001', 'BETA-INIT-001', 'BETA-CHAT-001', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-ROUTE-001'\][\s\S]*deepbankv2-mr-1560-turn-authority-readiness\/v1[\s\S]*10 秒\/100 毫秒[\s\S]*不 refresh、不 re-accept[\s\S]*不声称桌面 E2E 已确定性制造冷模型权威竞争窗口/, 'Casebook生成器必须将MR !1560映射到运行时权威就绪、路由、失败恢复与任务连续性相邻回归，并限制冷模型竞争窗口声明');
 assert.match(productionGrayCasebookBuilder, /\['1564', \{[\s\S]*caseIds: \['BETA-EXPERT-012', 'BETA-EXPERT-005', 'BETA-MCP-001', 'BETA-MCP-002', 'MRSMOKE-ROUTE-001', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*additionalEntries[\s\S]*GitLab changes 静态审查[\s\S]*不把模型偶然识别工具或源码测试声明冒充桌面 E2E 直接证明/, 'Casebook生成器必须将MR !1564固定映射到专家维护、MCP、路由与宿主回归，并限制additionalEntries内部拼接声明范围');
 assert.match(productionGrayCasebookBuilder, /\['1563', \{[\s\S]*caseIds: \['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-PERF-003', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*reasoning\.active[\s\S]*runtime activity coalescer[\s\S]*worker-host 事件接线[\s\S]*不确定性模型输出不能冒充专用 runtime-tail fixture 或源码单元测试已执行/, 'Casebook生成器必须将MR !1563固定映射到活动、失败、停止、性能与宿主回归，并限制runtime-tail内部实现声明范围');
+assert.match(productionGrayCasebookBuilder, /\['1604', \{[\s\S]*caseIds: \['MRSMOKE-AUTO-001', 'MRSMOKE-ACT-001', 'BETA-TASK-008', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*自动化调度[\s\S]*session_experience/, 'Casebook生成器必须将MR !1604固定映射到自动化调度、活动、任务与宿主相邻回归');
+assert.match(productionGrayCasebookBuilder, /\['1603', \{[\s\S]*caseIds: \['MRSMOKE-SKILL-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-HOST-003', 'SIT-SKILL-007'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*session projection/, 'Casebook生成器必须将MR !1603固定映射到Skill、聊天、任务与宿主相邻回归');
+assert.match(productionGrayCasebookBuilder, /\['1598', \{[\s\S]*caseIds: \['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-PERF-003', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*上下文压缩/, 'Casebook生成器必须将MR !1598固定映射到上下文压缩相关活动、失败、聊天、任务、性能与宿主相邻回归');
+assert.match(productionGrayCasebookBuilder, /\['1600', \{[\s\S]*caseIds: \[\][\s\S]*staticOnly: true[\s\S]*coverageStrength: '静态合同'[\s\S]*24 条 changes/, 'Casebook生成器必须将MR !1600固定为零桌面Case的精确24路径静态合同');
+assert.match(productionGrayCasebookBuilder, /\['1602', \{[\s\S]*caseIds: \['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*首次启动/, 'Casebook生成器必须将MR !1602固定映射到初始化、宿主、Teams首启与导航入口相邻回归');
 assert.match(productionGrayCasebookBuilder, /\['1566', \{[\s\S]*caseIds: \['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-PERF-003', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*ordinaryStallMs=300000[\s\S]*不人为制造五分钟无语义进展[\s\S]*不把自然等待或单元测试声明冒充确定性桌面阈值验证/, 'Casebook生成器必须将MR !1566固定映射到长时任务、性能与宿主回归，并限制五分钟stall阈值声明范围');
 assert.match(productionGrayCasebookBuilder, /\['1568', \{[\s\S]*caseIds: \['SIT-TASK-EDIT-001', 'BETA-TASK-002', 'BETA-CHAT-007', 'BETA-TASK-008'\][\s\S]*coverageStrength: '直接E2E'[\s\S]*真实编辑已发送用户消息[\s\S]*真实点击重新生成[\s\S]*历史保持[\s\S]*不使用通用路径映射代替专项断言/, 'Casebook生成器必须将MR !1568精确绑定编辑、重新生成和历史保持专项E2E');
 assert.match(productionGrayCasebookBuilder, /DIRECT_E2E_MR_CASE_CONTRACTS = new Map\(\[[\s\S]*\['1568', \['SIT-TASK-EDIT-001', 'BETA-TASK-002', 'BETA-CHAT-007', 'BETA-TASK-008'\]\][\s\S]*\]\);/, 'MR !1568必须进入显式直接E2E白名单，禁止由通用路径启发式获得直接覆盖');

@@ -97,7 +97,7 @@ const R16_INCREMENTAL_MR_ORDER = Object.freeze([
   '1571', '1574', '1575', '1577', '1580', '1581', '1576', '1583', '1582', '1584',
   '1585', '1587', '1588', '1589', '1586', '1534', '1590', '1567', '1565', '1592',
   '1593', '1596', '1595', '1597', '1594',
-  '1579',
+  '1579', '1604', '1603', '1598', '1600', '1602',
 ]);
 const EXPECTED_INCREMENTAL_MR_COUNT = R16_INCREMENTAL_MR_ORDER.length;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
@@ -467,6 +467,32 @@ const R16_INCREMENTAL_MR_CONTRACTS = new Map([
     requiredSourceContractIds: ['deepbankv2-mr-1579-claude-skill-call-canonicalization/v1'],
     reason: 'Skill 安装、执行、任务隔离、Expert 依赖及路由/宿主 Case 只回归用户可见相邻链；deepbankv2-mr-1579-claude-skill-call-canonicalization/v1 仅鉴证 alias 到 invocationName、JSON/SSE 规范化、fail-closed 边界与 loopback/engine/Expert 接线的源码及测试声明，claim_scope=source_and_test_declarations、test_execution_attested=false；现有 skill_execution_trace 仅观测 SDK 处理后输入，不得声称 alias canonicalization 分支已被桌面直接执行。',
   }],
+  ['1604', {
+    caseIds: ['MRSMOKE-AUTO-001', 'MRSMOKE-ACT-001', 'BETA-TASK-008', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+    reason: '自动化调度、活动流、任务重开与宿主 Case 只回归自动化执行到会话体验主链的相邻行为；session_experience 自动化身份、数据库迁移与指标聚合仅做源码/测试资产静态审查，未作为桌面直接 E2E 结论，也没有产品测试执行回执。',
+  }],
+  ['1603', {
+    caseIds: ['MRSMOKE-SKILL-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-HOST-003', 'SIT-SKILL-007'],
+    coverageStrength: '相邻回归',
+    reason: 'Skill、基础/多轮聊天、任务重开与宿主 Case 只回归 session projection 重构后的用户可见连续性；projection 模块拆分与内部字段投影仅做源码/测试资产静态审查，未作为桌面直接 E2E 结论，也没有产品测试执行回执。',
+  }],
+  ['1598', {
+    caseIds: ['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-PERF-003', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+    reason: '活动、失败脱敏、基础/多轮/长回复、任务重开、性能与宿主 Case 只回归上下文压缩和四分类变化的用户可见相邻链；compaction lifecycle、context usage 协调与 worker 内部通道仅做源码/测试资产静态审查，未作为桌面直接 E2E 结论，也没有产品测试执行回执。',
+  }],
+  ['1600', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'MR pipeline、交付预检、治理脚本与 CI policy 变更仅属于静态交付合同；保留精确 IID、merge SHA、diff SHA 与 24 条 changes 审计，不新增桌面 Case，不计入 16/12/70/160，也没有 CI 执行回执。',
+  }],
+  ['1602', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'],
+    coverageStrength: '相邻回归',
+    reason: '初始化、宿主、Teams 首启/重开、导航与入口 Case 只回归首次启动直接运行服务端完整 release 的用户可见相邻链；bootstrap state、startup release 选择与 host sync 内部合同仅做源码/测试资产静态审查，未作为桌面直接 E2E 结论，也没有产品测试执行回执。',
+  }],
 ]);
 const DIRECT_E2E_MR_CASE_CONTRACTS = new Map([
   ['1523', ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019']],
@@ -498,6 +524,36 @@ const EXACT_STATIC_MR_CONTRACTS = new Map([
       'package-lock.json',
       'package.json',
       'teams360.host-sync.json',
+    ],
+  }],
+  ['1600', {
+    mergeCommitSha: '610295245f8aad0dbf5bf5b6b421ff285c22349d',
+    diffSha256: '7b5cd65ac8b2685d44fd46364253e8709cf8c5f344d4883757fd9d48548ab0fb',
+    changedPaths: [
+      '.agent/skills-src/mr-delivery/references/pre-review-gate.md',
+      '.agent/skills-src/mr-review/references/discussion-resolution.md',
+      '.agents/skills/mr-delivery/references/pre-review-gate.md',
+      '.agents/skills/mr-review/references/discussion-resolution.md',
+      '.claude/skills/mr-delivery/references/pre-review-gate.md',
+      '.claude/skills/mr-review/references/discussion-resolution.md',
+      '.gitlab/guides/ci-skeleton.md',
+      '.gitlab/guides/local-gates.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/normal-child-base.yml',
+      'docs/ci-cd-operating-contract.md',
+      'scripts/ci/policy/delivery-preflight-consistency.mjs',
+      'scripts/ci/policy/delivery-preflight-consistency.test.mjs',
+      'scripts/ci/policy/generate-policy-reference.mjs',
+      'scripts/ci/policy/lightweight-ci-verify.mjs',
+      'scripts/ci/policy/mr-delivery-test-contract.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'scripts/ci/policy/version-only.test.mjs',
+      'scripts/ci/unit/node-normal-plan.mjs',
+      'scripts/governance/gitlab/gitlab-review-approve.mjs',
+      'scripts/governance/gitlab/gitlab-review-approve.test.mjs',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
     ],
   }],
 ]);
@@ -2598,7 +2654,7 @@ export function validateExactStaticMrContract(mr, iid, contract = EXACT_STATIC_M
   if (!contract) return { ok: false, failures: ['exact_static_contract_missing'] };
   const failures = [];
   if (asString(mr?.iid) !== String(iid)) failures.push('iid_mismatch');
-  if (asString(mr?.merge_commit_sha || mr?.commit) !== contract.mergeCommitSha) failures.push('merge_commit_sha_mismatch');
+  if (asString(mr?.merge_commit_sha) !== contract.mergeCommitSha) failures.push('merge_commit_sha_mismatch');
   if (asString(mr?.diff_sha256) !== contract.diffSha256) failures.push('diff_sha256_mismatch');
   if (!sameFileSet(contract.changedPaths, mr?.changed_paths)) failures.push('changed_paths_mismatch');
   if (Number(mr?.changed_paths?.length) !== contract.changedPaths.length) failures.push('changed_path_count_mismatch');
@@ -2841,6 +2897,7 @@ export function validateCasebookDesignReleaseIntake(report, validationOptions = 
     ...validationOptions,
     requireReady: true,
     requireFreshRef: true,
+    requireGitLabApiFreshness: true,
   });
   const includesMr1592 = Array.isArray(report?.merge_requests)
     && report.merge_requests.some((mr) => asString(mr?.iid) === '1592');
@@ -2856,6 +2913,13 @@ export function validateCasebookDesignReleaseIntake(report, validationOptions = 
         ...readyValidation.failures.map((failure) => `intake:${failure}`),
         ...mr1592Validation.failures.map((failure) => `mr1592:${failure}`),
       ]),
+    };
+  }
+  if (report?.decision === 'READY') {
+    return {
+      ok: false,
+      acceptance: 'REJECTED',
+      failures: unique(readyValidation.failures.map((failure) => `intake:${failure}`)),
     };
   }
   const structuralValidation = validateQworkReleaseIntake(report, {

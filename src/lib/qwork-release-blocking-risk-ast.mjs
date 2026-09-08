@@ -1404,9 +1404,10 @@ function finitePositiveTimeoutExpression(node, sourceName, fallback) {
   node = unwrap(node);
   return node?.type === 'ConditionalExpression'
     && call(node.test, ['Number', 'isFinite'], [
-      (entry) => call(entry, ['Number'], [
-        (argument) => identifier(argument, sourceName),
-      ]),
+      (entry) => identifier(entry, sourceName)
+        || call(entry, ['Number'], [
+          (argument) => identifier(argument, sourceName),
+        ]),
     ])
     && call(node.consequent, ['Math', 'max'], [
       (entry) => literal(entry, 1),
@@ -4004,7 +4005,6 @@ function managerPressureAstContract(source) {
 function contextHelperAstContract(sourceByPath) {
   const wrapperSource = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage.cjs') || '';
   const implementationSource = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage-lease.cjs') || '';
-  if (!implementationSource.trim() || implementationSource.trimStart().startsWith('// observed')) return true;
   const wrapper = parseProgram(wrapperSource);
   const implementation = parseProgram(implementationSource);
   const creator = topFunction(implementation, 'createExecutionWorkerContextUsageLease');
@@ -4735,4 +4735,8 @@ export function auditQworkSuccessorAstContracts(sourceByPath) {
     termination: terminationAstContract(read('electron/host-core/agent/execution-worker-termination.cjs')),
   };
   return { ...result, passed: Object.values(result).every(Boolean) };
+}
+
+export function auditQworkSuccessorContextHelperAstContract(sourceByPath) {
+  return contextHelperAstContract(sourceByPath) || currentContextHelperAstContract(sourceByPath);
 }

@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
-import { auditQworkSuccessorAstContracts } from './qwork-release-blocking-risk-ast.mjs';
+import {
+  auditQworkSuccessorAstContracts,
+  auditQworkSuccessorContextHelperAstContract,
+} from './qwork-release-blocking-risk-ast.mjs';
 
 export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v5';
 export const QWORK_MR1552_EXECUTION_RUNNER_RISK_ID = 'deepbankv2-mr-1552-execution-runner-isolation/v1';
@@ -2277,7 +2280,9 @@ function executionWorkerSupervisorMessageContract(source) {
   return Boolean(eventSafe && observerSafe);
 }
 
-function supervisorLifecycleIsolationContract(sourceByPath) {
+function supervisorLifecycleIsolationContract(sourceByPath, {
+  cancellationAstContractPassed = null,
+} = {}) {
   const supervisor = sourceByPath.get('electron/host-core/agent/execution-worker-supervisor.cjs') || '';
   const cancellation = sourceByPath.get('electron/host-core/agent/execution-worker-cancellation.cjs') || '';
   const supervisorMessage = sourceByPath.get('electron/host-core/agent/execution-worker-supervisor-message.cjs') || '';
@@ -2291,7 +2296,9 @@ function supervisorLifecycleIsolationContract(sourceByPath) {
   ) && topLevelRequiredIdentifierBinding(
     supervisor, './execution-worker-supervisor-message.cjs', 'handleExecutionWorkerObserverMessage',
   );
-  const cancellationTerminates = cancellationTerminationContract(cancellation);
+  const cancellationTerminates = typeof cancellationAstContractPassed === 'boolean'
+    ? cancellationAstContractPassed
+    : cancellationTerminationContract(cancellation);
   const terminatorOwnsKill = executionWorkerTerminatorContract(termination);
   const supervisorMessageIsolated = executionWorkerSupervisorMessageContract(supervisorMessage);
 
@@ -3204,7 +3211,12 @@ function desktopLeaseContract(sourceByPath) {
           && callIsAwaited(finallyTokens, call)
           && callIsOnUnconditionalPath(finallyTokens, call)
         ));
-        if (directRelease) return { acquired: true, released: true, same_try_finally_scope: true };
+        if (directRelease) return {
+          acquired: true,
+          released: true,
+          same_try_finally_scope: true,
+          delegated_context_release: false,
+        };
 
         const delegatedReleases = callsInTokens(finallyTokens).filter((call) => (
           call.path.length === 2
@@ -3225,8 +3237,13 @@ function desktopLeaseContract(sourceByPath) {
           source, './execution-worker-context-usage.cjs',
           'createExecutionWorkerContextUsageLease',
         );
-        if (setupCalls.length === 1 && wrapperBound && contextUsageLeaseHelperContract(sourceByPath)) {
-          return { acquired: true, released: true, same_try_finally_scope: true };
+        if (setupCalls.length === 1 && wrapperBound) {
+          return {
+            acquired: true,
+            released: true,
+            same_try_finally_scope: true,
+            delegated_context_release: true,
+          };
         }
       }
     }
@@ -3418,8 +3435,13 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
   const supervisorContract = supervisorExitContract(supervisor);
   const managerContract = managerSuccessorContract(manager);
   const desktopContract = desktopLeaseContract(sourceByPath);
-  const lifecycleIsolation = supervisorLifecycleIsolationContract(sourceByPath);
   const astContracts = auditQworkSuccessorAstContracts(sourceByPath);
+  const contextHelperContract = desktopContract.delegated_context_release !== true
+    || (contextUsageLeaseHelperContract(sourceByPath)
+      && auditQworkSuccessorContextHelperAstContract(sourceByPath));
+  const lifecycleIsolation = supervisorLifecycleIsolationContract(sourceByPath, {
+    cancellationAstContractPassed: astContracts.cancellation,
+  });
   const unsettledExitUsesTypedFailure = supervisorContract.typed_failure
     && astContracts.supervisor_exit;
   const pressureAdmissionClosed = managerContract.pressure_admission_closed;
@@ -3437,7 +3459,9 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
   const requestReleased = managerContract.request_released && astContracts.manager;
   const leaseAcquired = desktopContract.acquired;
   const leaseReleased = desktopContract.released
-    && desktopContract.same_try_finally_scope
+    && desktopContract.same_try_finally_scope;
+  const desktopLeaseContractPassed = leaseReleased
+    && contextHelperContract
     && astContracts.desktop;
   const stableSingleTurnEntry = topLevelRequireContract(sourceByPath)
     && controllerStartExportContract(sourceByPath)
@@ -3447,7 +3471,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
     && requestIndexed
     && requestReleased
     && leaseAcquired
-    && leaseReleased
+    && desktopLeaseContractPassed
     && stableSingleTurnEntry
     && lifecycleIsolation.passed
     && astContracts.cancellation
@@ -3485,6 +3509,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
         desktop_host_acquires_execution_lease: leaseAcquired,
         desktop_host_releases_execution_lease: leaseReleased,
         desktop_host_lease_same_try_finally_scope: desktopContract.same_try_finally_scope,
+        desktop_context_helper_contract: contextHelperContract,
         stable_single_turn_entry: stableSingleTurnEntry,
         execution_worker_lifecycle_isolation: lifecycleIsolation.passed,
         execution_worker_lifecycle_checks: lifecycleIsolation,

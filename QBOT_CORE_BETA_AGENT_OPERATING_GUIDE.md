@@ -88,11 +88,11 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
   `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，才依次独立执行
   `1/12`、`1/70`、`1/160` 和 soak。
 
-- R16 当前仍是“准备态”，不是可执行的正式 Casebook。截至 2026-09-07 的只读 GitLab API
-  诊断扫描已稳定观测 `origin/release/0.1@7f9b520f41ed9ac34b9230f28df49a5fce678953`，
-  从 r12 设计基线共有 63 个 first-parent 增量 MR、197 个总 MR，并以 `!1579` 收尾。
+- R16 当前仍是“准备态”，不是可执行的正式 Casebook。截至 2026-09-08 的只读 GitLab API
+  诊断扫描已稳定观测 `origin/release/0.1@db85ab857a8aff02a460239f88a0544aab06b63b`，
+  从 r12 设计基线共有 68 个 first-parent 增量 MR、202 个总 MR，并以 `!1602` 收尾。
   诊断 intake 位于
-  `outputs/20260907184442_release01-r15-to-latest-r16-diagnostic-intake_framework-de6afaf/release-intake.json`；
+  `outputs/20260908121805_release01-r12-to-latest-r16-diagnostic-intake_framework-45a2392_casebook-8523a10/release-intake.json`；
   其唯一稳定产品阻断 ID 为 `execution_runner_message_isolation_missing`，因此必须保持
   `G0=NO_GO`，禁止生成正式 r16、禁止 pretest 和 runner。`!1592` 只有在 blocking-risk
   v5 的 cancellation/controller/desktop/manager/manager_pressure/supervisor/supervisor_exit/
@@ -106,7 +106,13 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
   `QBOT_DISABLE_CLAUDE_SKILL_CALL_CANONICALIZATION` 不得为 `1`。合同声明边界必须保持
   `claim_scope=source_and_test_declarations`、`test_execution_attested=false`；现有
   `skill_execution_trace` 不能单独证明 alias canonicalization 分支已执行。
-- 上述 63/197 只是修改框架前的已观测边界。框架全检、提交、推送且
+- 新增 `!1604` 映射自动化调度、活动、任务和宿主相邻回归；`!1603` 映射 Skill、聊天、
+  任务和宿主相邻回归；`!1598` 映射上下文压缩相关的活动、失败、聊天、任务、性能和宿主
+  相邻回归；`!1602` 映射初始化、宿主、Teams 首启及导航/入口相邻回归。`!1600` 只接受
+  merge SHA `610295245f8aad0dbf5bf5b6b421ff285c22349d`、diff SHA-256
+  `7b5cd65ac8b2685d44fd46364253e8709cf8c5f344d4883757fd9d48548ab0fb` 与精确 24 个
+  changed paths 的静态合同，不新增桌面 Case，也不冒充 CI 执行结果。
+- 上述 68/202 只是修改框架前的已观测边界。框架全检、提交、推送且
   `main == origin/main`/tracked clean 后，必须再做一次权威 API 扫描。若 release HEAD 变化，
   继续扩充 R16 而不得复用这份诊断 intake。产品隔离阻断修复后，才能在新目录生成、
   重算、检查 14 个 Sheet、渲染验收并发布正式 r16，然后再把两份规范与状态机的正式
@@ -913,8 +919,10 @@ G1-G4 每阶段都必须有独立能力审计、独立精确 `READY`、独立不
 固化到状态文件，禁止靠人工记忆跨阶段推进。
 
 状态机 `init` 只接受文件名与 SHA-256 都精确匹配本节 r15 合同的正式 Casebook，并且
-无条件要求 `--release-intake`、`--expected-release-ref origin/release/0.1` 和调用者独立
-观测的 40 位 `--expected-release-head`，以及与 intake 不同路径的普通文件
+无条件要求 `--release-intake-g1`、`--release-intake-g2`、
+`--release-intake-g3`、`--release-intake-g4` 四份独立 `READY` intake、
+`--expected-release-ref origin/release/0.1` 和调用者独立
+观测的 40 位 `--expected-release-head`，以及与全部四份 intake 不同路径的普通文件
 `--expected-release-observation <qbot-qwork-release-ref-observation/v1>`；该文件固化观测
 来源、时间、仓库、ref、HEAD 和文件 SHA，本地 Git 来源还必须只读 `rev-parse` 复核。
 私有仓库使用 `npm run qwork-release:observe` 从关闭回显 stdin 注入只读 token，对固定
@@ -923,7 +931,12 @@ deepbankV2 GitLab API 连续两次读取稳定 HEAD；后续状态机命令继�
 扫描器、独立观测器和状态机只接受单独出现一次的无值布尔开关
 `--gitlab-token-stdin`；内联值、后随值或重复开关必须在读取 stdin 前拒绝，且错误不得
 回显疑似 token。token 只能由关闭回显的标准输入提供。
-省略任一输入或显式传入
+扫描器、独立观测器和编排器都必须强制各自的显式参数白名单，编排器再按子命令收窄。
+历史单报告 `--release-intake`、任意未知参数、属于其它入口或其它子命令的参数，都必须在
+返回 `--help`、读取 stdin、发起网络请求、获取控制锁或创建任何输出/控制目录前
+fail-closed；错误只允许输出稳定类别，不得回显内联值、后随值或疑似 secret。
+四份 intake 必须分别精确绑定 G1-G4 对应 Sheet 和有序 Case ID，路径互异且 release ref、
+HEAD、仓库和设计基线全等。省略任一输入或显式传入
 `--require-release-intake false` 都必须在创建控制状态前拒绝。期望 ref/HEAD 禁止从待验证
 intake 自身取得；内容自洽但 ref/HEAD 陈旧、文件名错误、同名但 SHA 漂移、旧版工作簿或
 历史可选 intake 计划都不能进入正式状态机。
@@ -934,8 +947,9 @@ Casebook、协议、发布身份、capabilities、runtime release、待激活更
 关键检查。手工改顶层 `status=READY` 或只伪造身份 fingerprint 不构成有效准入。
 
 编排控制目录固定包含 `release-test-plan.json`、`release-test-state.json`、
-`release-test-integrity.json` 与 `events/*.json`，plan/state/integrity/event 均为明确不兼容的
-`v2` schema，旧 `v1` 控制树不得静默续跑。所有命令必须持有 macOS `lockf` 或同等级进程
+`release-test-integrity.json` 与 `events/*.json`，plan 为明确不兼容的 `v3` schema，
+state/integrity/event 为 `v2` schema；旧 plan v2、旧 v1 控制树及单 intake 控制树不得静默
+续跑。所有命令必须持有 macOS `lockf` 或同等级进程
 生命周期 advisory lock；遗留普通锁文件不能阻塞后续命令。控制目录和写入目录必须属于
 当前用户、禁止 group/other 写，并在耗时校验及每次写入前后核对 dev/inode/uid/mode。
 计划和状态使用独立 SHA-256 封印，
@@ -1753,7 +1767,7 @@ Case：`SIT-MEM-001`、`BETA-CHAT-001`、`BETA-CHAT-002`、`BETA-CHAT-009`、
 
 MR !1559 后继架构必须生成
 `qbot-qwork-release-blocking-risk-attestation/v5`，并与
-`qbot-release-intake/1.7.0` 绑定：注释、模板、正则和普通字符串中的伪代码
+`qbot-release-intake/1.8.0` 绑定：注释、模板、正则和普通字符串中的伪代码
 不能满足风险断言。词法过滤后必须以固定 `acorn@8.15.0` 解析 Acorn ECMAScript AST，
 按真实函数/类/分支作用域验证控制流、值流和返回对象；解析失败、恒假路径、局部同名
 shadow/遮蔽、关键 identity/manager/child/lease rebind/重绑、错误 factory 返回、伪
@@ -1809,17 +1823,18 @@ deadline/cancel timeout 必须在同一 settlement 闭包中定向 terminate chi
 desktop 可直接 awaited release，也可使用受严格绑定的
 `createExecutionWorkerContextUsageLease` helper delegation：desktop 必须顶层引入
 `execution-worker-context-usage.cjs`，该 wrapper 再顶层引入
-`execution-worker-context-usage-lease.cjs`，两者唯一导出同名 helper，并由实现对完成 lease
+`execution-worker-context-usage-lease.cjs`，两者唯一导出同名 helper。该委派链属于 v5 的
+13 个受保护源码文件合同；v5 在 v4 的 9 个文件上新增
+`execution-worker-controller.cjs`、`execution-worker-cancellation.cjs`、
+`execution-worker-supervisor-message.cjs` 和 `execution-worker-termination.cjs`。实现对完成 lease
 awaited `drain(...)`、对未完成 lease awaited `release()`。desktop manager/supervisor/
 identity/signal 禁止重绑，acquire 必须精确透传 `{ signal }`；`completed` 只能从初始
 `false` 被唯一 `observeTerminal` 按真实 terminal outcome 更新；creator/release 参数、默认值
-或解构写入不能遮蔽 helper/completed，release 不能强制改写。
+或解构写入不能遮蔽 helper/completed，release 不能强制改写。context helper AST 必须对
+GitLab API 返回的完整真实源码字节无条件执行；空文件、测试占位源码或 `// observed` 等
+起始注释都不能成为跳过 AST 合同的哨兵，合法注释之后的完整程序仍须接受同一严格验证。
 `successor_ast_contracts` 九项任一
 为 `false` 时必须保持 `verified=false/status=BLOCKED`，不得生成 `VERIFIED`。
-v5 必须固定审计 13 个受保护源码文件，
-并在 v4 的 9 个文件上新增 `execution-worker-controller.cjs`、
-`execution-worker-cancellation.cjs`、`execution-worker-supervisor-message.cjs` 和
-`execution-worker-termination.cjs`。
 `qbot-release-intake/1.6.2` 及更旧 intake tool version、阻断风险 v2/v3/v4 证明或任何错误
 作用域/调用链/取消因果链均必须 fail-closed，`BLOCKED` 并要求新 intake，不得通过重算报告 SHA 复用。
 
@@ -1842,15 +1857,42 @@ framework 不一致，均在 Case 0 前阻断。扫描不会自动修改或追�
 `origin_change_attestation`；目标 MR 不在本次增量范围时该字段必须为空，不得生成。
 两层鉴证均禁止复用历史 attestation、本地 checkout、Casebook 文案或 E2E 结果。
 current-release 持续性鉴证使用独立且不兼容的
-`qbot-qwork-release-current-source-contract/v2`；origin-change 仍使用
+`qbot-qwork-release-current-source-contract/v3`；origin-change 仍使用
 `qbot-qwork-release-source-contract/v1`。不得把含有完整 `protected_files` 字节的
 current-release 结果投影回 v1，也不得只重算 attestation SHA 伪造版本。current-release
 attestation 顶层和每个 protected file 都必须 exact-key；文件内容必须通过规范 Base64 与
-严格 UTF-8 round-trip。每个文件除 Repository Files API 元数据外，还必须通过只读
-`repository/commits?path=<path>&ref_name=<release>&per_page=1` 获取独立的文件最新提交，
-固化 `qbot-qwork-release-file-provenance/v1` 的 endpoint/path/ref/commit_id/last_commit_id，
-并要求其 `last_commit_id` 与文件元数据逐字一致。缺少 provenance、合法 SHA 改写、endpoint
-或字段漂移均在 G0 阻断；不得把文件级 `last_commit_id` 仅当作格式字段。
+严格 UTF-8 round-trip。每个文件必须以 Repository Files API 返回的
+`last_commit_id` 为唯一 provenance 锚点，再只读获取
+`repository/commits/<last_commit_id>` metadata，并完整分页读取
+`repository/commits/<last_commit_id>/diff?per_page=100&page=N`，直到少于 100 项的终止页。
+`qbot-qwork-release-file-provenance/v2` 必须固化 commit/diff endpoint、完整 canonical
+commit metadata 及 SHA-256、全部有序分页、每页完整 `raw_response` 及其 SHA-256，并从
+原始响应重新生成 exact-key 的五字段 change 投影；`diff`、mode、
+`generated_file/collapsed/too_large` 等非投影字段仍须保留并参与页哈希。
+原始 change 必须具备当前 GitLab 的 `old_path/new_path/a_mode/b_mode/diff` 与三个 flags 共
+8 个必需字段；仅允许额外出现上述三个已知布尔扩展字段，缺失必需字段或未知字段均阻断。
+commit metadata 至少必须包含并校验 id/short id/父提交、title/message、author/committer、authored/committed/
+created 时间、trailers 和规范项目 commit URL，删减后重算哈希仍须阻断。
+Commit 响应必须严格匹配当前 GitLab 的 18 字段响应面（包括 project、stats、status 和
+last pipeline）。非空 `last_pipeline` 的 `project_id` 必须与 commit `project_id` 全等、
+`sha` 必须与 commit `id` 全等，且 `web_url` 尾部必须精确绑定同一 pipeline `id`。
+提交 SHA 必须是规范小写十六进制，时间戳必须通过严格 ISO-8601 语法与
+真实日历校验，trailers 必须为字符串值；`collapsed=true`、
+`too_large=true` 或这些扩展字段类型异常均表示 diff 不完整，必须阻断。
+current-release v3 的 ancestry `compare_commit_count` 以及每个受保护文件的
+`declared_size/bytes/line_count` 必须保持原生安全整数；数字字符串即使内容相等且重算
+attestation SHA-256 也必须阻断，Files API 的字符串 `size` 同样不得在生成鉴证时被归一化放行。
+每条 diff 的
+`old_path/new_path` 必须为无首尾空白的非空字符串；相同 old/new 路径对即使 flags 不同也
+属于跨页重复，必须阻断。三个 change flag 必须保持原始布尔类型且与 rename 路径语义一致，
+禁止把缺失或字符串 flag 静默归一化为 `false`。完整 diff 还须重新投影
+至少一条 `old_path` 或
+`new_path` 精确命中目标文件的 change。投影必须恰好一条、`new_path` 仍精确等于当前
+目标路径且 `deleted_file=false`；重复命中、删除态或 rename-away 均必须阻断。验证器必须
+重放 identity、页序、终止条件、change flags、路径命中和投影；禁止继续调用
+`repository/commits?path=...`，禁止只信格式正确的
+`last_commit_id`、首个 diff 页或自报 `path_verified=true`。缺少 provenance、合法 SHA
+改写、endpoint、分页、路径命中或字段漂移均在 G0 阻断。
 current-release 持续性鉴证中的 integration binding 默认仍要求全文件
 `occurrence_count == 1`。唯一例外是 MR !1540 的 `feature_check_body_absent_test` 与
 `test_profile_report_exact_body`：两者必须携带不可变 owner scope，以精确的顶层
@@ -1904,20 +1946,48 @@ current-release Files API 实读的测试文件字节重新解析整份 module�
 `module.exports` 中以同一 shorthand binding 唯一导出；
 `electron/host-core/agent/execution-worker-process-lifecycle.cjs` 唯一顶层声明
 `function workerEnvironment(source = process.env, authority = {})`，并在 `module.exports`
-中以同一 shorthand binding 唯一导出。任一层缺失、重复、改道、假同名实现、导入与导出
+中以同一 shorthand binding 唯一导出；该导出对象不得通过重复普通/computed key 或 spread
+在 shorthand 后覆盖 `workerEnvironment`。任一层缺失、重复、改道、假同名实现、导入与导出
 不是同一 lexical binding，或 facade/supervisor/lifecycle 文件身份不匹配均须 fail-closed。
 
 五个测试绑定必须在全文件保持不可遮蔽、不可重绑且不可间接改写，不只检查 owner callback。
 import/变量/函数/类/catch/参数声明，默认值或解构参数，普通/复合/update/解构/循环赋值，
 静态或动态成员写入、`delete`，以及 `Object.defineProperty/defineProperties/assign`、
 `Reflect.set/deleteProperty` 等间接改写都必须计入
-`protected_binding_violation_count/protected_binding_violation_kinds`；正式鉴证只接受计数为 `0`
-且 kinds 为空数组。owner callback（含其全部嵌套函数和不可达分支）同时对动态执行零容忍：
+`protected_binding_violation_count/protected_binding_violation_kinds`；逻辑复合赋值、容器取值、
+循环取值以及 Object/Reflect 对象和写函数的别名也必须参与值流，正式鉴证只接受计数为 `0`
+且 kinds 为空数组。除下述严格隔离的既有 worker entry 测试 harness 外，全文件（包含 owner
+callback、其全部嵌套函数、不可达分支及 owner 外代码）对实际动态执行零容忍：
 direct/indirect/optional/global `eval`、`eval.call/apply`、`Function`/`new Function` 及其
 `call/apply`、`Reflect.apply/construct`、成员 `.constructor(...)`、动态 computed callee、
 `node:vm` 模块与执行 API、`ImportExpression`/动态 import，以及无法静态解析的动态 callee
-都必须被拒绝。报告必须精确为 `dynamic_code_execution_count=0`、
+都必须被拒绝。`eval`/`Function` 与派生执行值经 conditional、logical、assignment、sequence、
+await/yield 或解构默认值传播后仍须保持 taint，不得以表达式包装绕过。报告必须精确为
+`dynamic_code_execution_count=0`、
 `dynamic_code_execution_kinds=[]`；未知或新增动态执行形态不能按无风险默认放行。
+
+唯一 VM 例外必须同时满足完整 AST 指纹：Program 顶层唯一命名同步函数
+`workerEntryHarness(runAgent)`，唯一 `workerEntryPath` 精确解析
+`electron/host-core/agent/execution-worker-entry.cjs`，唯一 named import
+`runInNewContext` 来自 `node:vm`，并只在该 harness 内以唯一直接调用执行
+`readFileSync(workerEntryPath, 'utf8')`。sandbox 的属性集合、顺序、shorthand、闭包表达式及
+第三参数 `{ filename: workerEntryPath }` 必须与冻结的真实测试夹具 AST 完全一致；owner callback
+及其静态调用图必须不可达该 harness。`runInNewContext` 或 harness 的第二次调用、别名、
+`.bind()`、`Reflect.apply/construct`、容器复制/取出、参数/路径/编码/sandbox/filename 漂移，
+以及 VM 值被传参、返回或保存，均须恢复为 `node_vm_execution` 或 `node_vm_escape` 并阻断。
+该例外仅消除既有测试夹具的误报，不允许任何 `eval`、`Function`、动态 import 或其它 VM API。
+
+MR !1597 的 facade 可在唯一 `Object.assign(exports, ...)` 中聚合多个静态
+`require(...)` source，但 supervisor source 必须唯一且为最后一个 source，防止后续导出覆盖
+`workerEnvironment`。`exports`、`module.exports`、静态/动态计算属性及其直接或解构别名
+都属于受保护 receiver；`module` 自身的别名、容器/默认值/嵌套/赋值式解构别名和整体
+`module.exports` pattern 目标同样受保护；成员赋值、update、delete、循环写入及 Object/Reflect
+间接改写（包括 builtin 对象和写函数别名）均须 fail-closed；写函数的 `.call(...)`、
+`.apply(...)` 必须按实际转发参数定位 target，`.apply` 参数列表不可静态解析或 target 为
+spread 时同样 fail-closed。受保护 test binding 的数组/
+对象/默认值解构别名同样必须传播到成员写审计。`node:vm` 的 default/named-default/namespace/
+named import、对象 spread/Object.assign 复制、成员取值、对象/解构别名或 `.bind()` 派生
+执行值，只要在文件任意位置实际调用或构造就必须阻断；仅导入且从未执行时保持正控。
 
 current-release attestation 校验必须对上述 v2 观察执行确定性语义重放：重新读取并验证全部
 文件 blob、重新构建五绑定、导出链、全文件写入/遮蔽账本、owner callback 动态执行账本及
@@ -1941,12 +2011,15 @@ production-gate pretest 自身不可关闭 intake，且必须显式提供有效�
 `--release-intake-sha256`。它必须再次要求 GitLab API freshness，并将 intake 的规范
 release ref、Casebook 绝对路径、精确 Sheet 和有序 Case ID 与本次真实导出逐项全等比对；
 同一工作簿其它 Sheet、Case 重排、仅 `fetch_latest=true` 的本地 Git 报告或重算哈希后的
-替换报告都必须在 Case 0 前拒绝。状态机 `init` 同样无条件要求并封印 intake 路径、文件
-SHA 与内容身份，且不能通过 `--require-release-intake false` 关闭；调用者还必须另行提供固定
+替换报告都必须在 Case 0 前拒绝。状态机 `init` 同样无条件要求并分别封印
+`--release-intake-g1`、`--release-intake-g2`、`--release-intake-g3`、
+`--release-intake-g4` 四份报告的路径、文件 SHA 与内容身份，且不能通过
+`--require-release-intake false` 关闭；四份报告必须分别绑定对应阶段的 Sheet 和有序
+Case ID，路径互异且 release ref、HEAD、仓库和设计基线全等。调用者还必须另行提供固定
 `--expected-release-ref origin/release/0.1`、当前 40 位 `--expected-release-head` 与独立
 `--expected-release-observation` 普通文件，禁止由 intake 自证。空对象、非绝对路径、
-缺失/畸形文件 SHA、内容 SHA、ref 或 HEAD 的计划绑定
-均无效。每次 `readiness` 都从计划路径重新读取磁盘报告，强制校验非空 64 位报告文件 SHA、
+缺失/畸形文件 SHA、内容 SHA、ref 或 HEAD 的每阶段计划绑定
+均无效。每次 `readiness` 都从该阶段计划路径重新读取磁盘报告，强制校验非空 64 位报告文件 SHA、
 内容哈希、release HEAD、Casebook SHA、framework commit 和 `READY`；文件缺失、仅重排
 JSON、被替换或属于旧候选时均 fail-closed，且不得写事件或推进 revision，旧 intake 不能
 跨候选复用。

@@ -527,6 +527,43 @@ function createExecutionWorkerRequestSettlement({
 module.exports = { createExecutionWorkerRequestSettlement, requestExecutionWorkerTurn };
 `;
 
+const currentRequestSuccessorCancellation = replaceRequired(
+  successorCancellation,
+  `async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
+  const pending = supervisor.request(operation, identity, payload, options);
+  const cancelIdentity = identity;
+  const onAbort = () => {
+    supervisor.cancel(cancelIdentity, 'user-requested');
+  };
+  if (!signal) return await pending;
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    return await pending;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}`,
+  `async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
+  const cancelIdentity = identity && {
+    ...identity,
+    runtimeGeneration: Number(identity.runtimeGeneration),
+  };
+  const cancel = () => {
+    void supervisor.cancel(cancelIdentity, 'user-requested');
+  };
+  signal?.addEventListener?.('abort', cancel, { once: true });
+  try {
+    const pending = supervisor.request(operation, identity, payload, options);
+    if (signal?.aborted) cancel();
+    return await pending;
+  } finally {
+    signal?.removeEventListener?.('abort', cancel);
+  }
+}`,
+  'current optional-chain cancellation fixture',
+);
+
 const successorTermination = `
 function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanupGraceMs = 250 } = {}) {
   const flights = new WeakMap();
@@ -1893,6 +1930,7 @@ test('current release controller, manager drain options and destructured desktop
       acquire: risk.checks.at(-1).observations.desktop_host_acquires_execution_lease,
       finally_release: risk.checks.at(-1).observations.desktop_host_releases_execution_lease,
       same_try_finally: risk.checks.at(-1).observations.desktop_host_lease_same_try_finally_scope,
+      context_helper: risk.checks.at(-1).observations.desktop_context_helper_contract,
       entry: risk.checks.at(-1).observations.stable_single_turn_entry,
       lifecycle: risk.checks.at(-1).observations.execution_worker_lifecycle_isolation,
     },
@@ -1901,10 +1939,57 @@ test('current release controller, manager drain options and destructured desktop
       acquire: true,
       finally_release: true,
       same_try_finally: true,
+      context_helper: true,
       entry: true,
       lifecycle: true,
     },
   );
+});
+
+test('v5 attributes unsafe current-style context timeouts without denying awaited desktop release', () => {
+  const safeTimeout = `const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1000;`;
+  const unsafeTimeouts = [
+    'const requestedTimeout = Number(timeoutMs);\n  const boundedTimeout = Math.max(1, Number(timeoutMs) || 1000);',
+    'const requestedTimeout = Number(timeoutMs);\n  const boundedTimeout = Infinity;',
+  ];
+  for (const [index, unsafeTimeout] of unsafeTimeouts.entries()) {
+    const helper = replaceRequired(
+      successorContextUsageLease,
+      safeTimeout,
+      unsafeTimeout,
+      `unsafe current-style context timeout ${index}`,
+    );
+    const risk = successorRisk(new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', helper],
+    ]));
+    const observations = risk.checks.at(-1).observations;
+    assert.equal(risk.status, 'BLOCKED', `unsafe timeout ${index}`);
+    assert.equal(observations.desktop_host_releases_execution_lease, true, `unsafe timeout ${index}`);
+    assert.equal(observations.desktop_host_lease_same_try_finally_scope, true, `unsafe timeout ${index}`);
+    assert.equal(observations.desktop_context_helper_contract, false, `unsafe timeout ${index}`);
+    assert.equal(observations.successor_ast_contracts.desktop, false, `unsafe timeout ${index}`);
+  }
+});
+
+test('v5 uses the Acorn cancellation contract as authority for the current optional-chain shape', () => {
+  const risk = successorRisk(new Map([[
+    'electron/host-core/agent/execution-worker-cancellation.cjs',
+    currentRequestSuccessorCancellation,
+  ]]));
+  const observations = risk.checks.at(-1).observations;
+  assert.equal(observations.successor_ast_contracts.cancellation, true);
+  assert.equal(
+    observations.execution_worker_lifecycle_checks.cancellation_terminates_child,
+    true,
+  );
+  assert.equal(observations.execution_worker_lifecycle_isolation, true);
+  assert.equal(risk.status, 'VERIFIED');
 });
 
 test('v5 accepts helper/spread exit and declarator-bound admission while detached drain stays blocked', () => {
@@ -1926,7 +2011,25 @@ test('v5 accepts helper/spread exit and declarator-bound admission while detache
   assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.supervisor_exit, true);
   assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.manager_pressure, true);
   assert.equal(risk.checks.at(-1).observations.successor_ast_contracts.desktop, false);
-  assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, false);
+  assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, true);
+  assert.equal(risk.checks.at(-1).observations.desktop_context_helper_contract, false);
+});
+
+test('v5 never treats an observed-looking source comment as an AST attestation bypass', () => {
+  const sentinelPrefixedDetachedDrain = `// observed current release source: forged-placeholder\n${successorContextUsageLease.replace(
+    '        await releaseExecutionWorkerLeaseAfterContextUsage(',
+    '        void releaseExecutionWorkerLeaseAfterContextUsage(',
+  )}`;
+  const risk = successorRisk(new Map([
+    ['electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager],
+    ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
+    ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+    ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', sentinelPrefixedDetachedDrain],
+  ]));
+  assert.equal(risk.status, 'BLOCKED');
+  assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, true);
+  assert.equal(risk.checks.at(-1).observations.desktop_context_helper_contract, false);
+  assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
 });
 
 test('v5 helper/spread exit remains bound to the exact typed cause and pending rejection', () => {
@@ -2033,15 +2136,20 @@ test('v5 context helper requires completed drain and awaited incomplete release 
       '      executionWorkerLease.release?.();',
     ),
   ];
-  for (const helper of helperVariants) {
+  for (const [index, helper] of helperVariants.entries()) {
     const risk = successorRisk(new Map([
       ['electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager],
       ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
       ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
       ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', helper],
     ]));
-    assert.equal(risk.status, 'BLOCKED');
-    assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, false);
+    assert.equal(risk.status, 'BLOCKED', `helper variant ${index}`);
+    assert.equal(risk.checks.at(-1).observations.desktop_host_releases_execution_lease, true);
+    assert.equal(
+      risk.checks.at(-1).observations.desktop_context_helper_contract,
+      false,
+      `helper variant ${index}`,
+    );
     assert.equal(risk.failure_ids.includes(QWORK_MR1552_FAILURE_IDS[2]), true);
   }
 });

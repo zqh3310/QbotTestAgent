@@ -65,6 +65,77 @@ function sha256File(file) {
   return sha256Bytes(fs.readFileSync(file));
 }
 
+function releaseCommitMetadata(id) {
+  return {
+    id,
+    short_id: id.slice(0, 8),
+    created_at: '2026-09-08T01:02:03Z',
+    parent_ids: ['a'.repeat(40)],
+    title: 'Protected source update',
+    message: 'Protected source update',
+    author_name: 'QBot QA Fixture',
+    author_email: 'qbot-qa@example.invalid',
+    authored_date: '2026-09-08T01:02:03Z',
+    committer_name: 'QBot QA Fixture',
+    committer_email: 'qbot-qa@example.invalid',
+    committed_date: '2026-09-08T01:02:03Z',
+    trailers: {},
+    project_id: 1,
+    stats: { additions: 1, deletions: 0, total: 1 },
+    status: 'success',
+    last_pipeline: null,
+    web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/${id}`,
+  };
+}
+
+function releaseFileProvenance(filePath, head) {
+  const change = {
+    old_path: filePath,
+    new_path: filePath,
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+  };
+  const rawChange = {
+    ...change,
+    a_mode: '100644',
+    b_mode: '100644',
+    diff: '@@ -1 +1 @@\n-old\n+new',
+    generated_file: false,
+    collapsed: false,
+    too_large: false,
+  };
+  const diffEndpoint = `repository/commits/${head}/diff?per_page=100`;
+  const commitMetadata = releaseCommitMetadata(head);
+  return {
+    schema_version: 'qbot-qwork-release-file-provenance/v2',
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: `repository/commits/${head}`,
+    diff_endpoint: diffEndpoint,
+    path: filePath,
+    ref: head,
+    release_commit_id: head,
+    file_last_commit_id: head,
+    commit_id: head,
+    commit_raw_response: structuredClone(commitMetadata),
+    commit_metadata: commitMetadata,
+    commit_response_sha256: sha256Bytes(Buffer.from(stableJson(commitMetadata))),
+    diff_page_size: 100,
+    diff_pages: [{
+      page: 1,
+      endpoint: `${diffEndpoint}&page=1`,
+      item_count: 1,
+      raw_response: [rawChange],
+      changes: [change],
+      response_sha256: sha256Bytes(Buffer.from(stableJson([rawChange]))),
+    }],
+    matched_change_count: 1,
+    matched_changes: [change],
+    path_verified: true,
+    error: '',
+  };
+}
+
 function canonicalizationPolicyFixture(pid = 4242) {
   const stable = {
     schema_version: 'qbot-claude-skill-call-canonicalization-policy/v1',
@@ -258,20 +329,14 @@ function currentReleaseFileFixtures(contracts, head) {
       blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
-      last_commit_provenance: {
-        schema_version: 'qbot-qwork-release-file-provenance/v1',
-        source: 'gitlab-api-repository-commits',
-        endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
-        path: filePath,
-        ref: head,
-        commit_id: head,
-        last_commit_id: head,
-      },
+      last_commit_provenance: releaseFileProvenance(filePath, head),
     }];
   }));
 }
 
-function makeReleaseIntake(repositoryRoot, frameworkCommit) {
+function makeReleaseIntake(repositoryRoot, frameworkCommit, stageId) {
+  const stage = QWORK_RELEASE_TEST_STAGES.find((item) => item.id === stageId);
+  if (!stage || stage.kind !== 'casebook') throw new Error(`invalid intake stage ${stageId}`);
   const releaseHead = QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT;
   const releaseFiles = currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, releaseHead);
   const blockingRiskMerges = new Set([
@@ -328,20 +393,29 @@ function makeReleaseIntake(repositoryRoot, frameworkCommit) {
     }
     if (endpoint === `repository/commits/${releaseHead}/merge_requests`) return [fixtureMr];
     if (endpoint === `merge_requests/${fixtureMrIid}/changes`) return fixtureChanges;
-    if (endpoint.startsWith('repository/commits?')) {
-      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
-      const filePath = query.get('path');
-      const refName = query.get('ref_name');
-      const payload = releaseFiles.get(filePath);
-      if (!payload || refName !== releaseHead) {
-        throw new Error(`missing release file history fixture ${filePath}`);
-      }
-      return [{
-        id: payload.last_commit_id,
-        parent_ids: ['a'.repeat(40)],
-        committed_date: '2026-09-05T00:00:00.000Z',
-      }];
+    const commitDiff = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/diff\?per_page=100&page=(\d+)$/i);
+    if (commitDiff) {
+      const commitId = commitDiff[1];
+      const rows = [...releaseFiles.entries()]
+        .filter(([, payload]) => payload.last_commit_id === commitId)
+        .map(([filePath]) => ({
+          old_path: filePath,
+          new_path: filePath,
+          a_mode: '100644',
+          b_mode: '100644',
+          diff: '@@ -1 +1 @@\n-old\n+new',
+          new_file: false,
+          renamed_file: false,
+          deleted_file: false,
+          generated_file: false,
+          collapsed: false,
+          too_large: false,
+        }));
+      const page = Number(commitDiff[2]);
+      return rows.slice((page - 1) * 100, page * 100);
     }
+    const commitMetadata = endpoint.match(/^repository\/commits\/([a-f0-9]{40})$/i);
+    if (commitMetadata) return releaseCommitMetadata(commitMetadata[1]);
     if (endpoint.startsWith('repository/files/')) {
       const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
       const filePath = decodeURIComponent(encodedPath);
@@ -356,7 +430,7 @@ function makeReleaseIntake(repositoryRoot, frameworkCommit) {
     baselineCommit: releaseHead,
     casebookPath: path.join(repositoryRoot, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
-    sheet: '核心生命线门禁',
+    sheet: stage.sheet,
     frameworkCommit,
     gitlabReader,
     freshnessSource: 'gitlab-api',
@@ -428,9 +502,9 @@ function pretest(stageId, plan) {
     release_gate_eligible: true,
     blockers: [],
     release_intake: {
-      sha256: plan.release_intake.sha256,
-      content_sha256: plan.release_intake.content_sha256,
-      release_head: plan.release_intake.release_head,
+      sha256: plan.release_intakes[stageId].sha256,
+      content_sha256: plan.release_intakes[stageId].content_sha256,
+      release_head: plan.release_intakes[stageId].release_head,
     },
     checks: checks.map((id) => ({ id, status: 'passed', detail: 'test fixture' })),
     framework: { head: plan.framework.commit, origin_main: plan.framework.commit, tracked_dirty: '' },
@@ -842,17 +916,20 @@ function appendEvent(context, audit, phase, recordedAt) {
   return context.events.at(-1);
 }
 
-function createPlan({ repositoryRoot, sourceDir, releaseIntake, frameworkCommit }) {
+function createPlan({ repositoryRoot, sourceDir, releaseIntakes, frameworkCommit }) {
   const identityArtifact = writeJson(path.join(sourceDir, 'release-identity.json'), {
     schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
     captured_at: '2026-09-05T00:00:00.000Z',
     ...GRAY_GATE_FIXTURE_IDENTITY,
   });
-  const intakeArtifact = writeJson(path.join(sourceDir, 'release-intake.json'), releaseIntake);
+  const intakeArtifacts = Object.fromEntries(Object.entries(releaseIntakes).map(([stageId, report]) => [
+    stageId,
+    writeJson(path.join(sourceDir, `release-intake-${stageId.toLowerCase()}.json`), report),
+  ]));
   const releaseHeadObservation = {
     schema_version: QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
     observed_at: '2026-09-05T00:00:00.000Z',
-    repository: releaseIntake.release.repository,
+    repository: releaseIntakes.G1.release.repository,
     release_ref: QWORK_RELEASE_INTAKE_DEFAULT_REF,
     release_head: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
     source: 'gitlab-api',
@@ -868,9 +945,15 @@ function createPlan({ repositoryRoot, sourceDir, releaseIntake, frameworkCommit 
     releaseIdentity: GRAY_GATE_FIXTURE_IDENTITY,
     releaseIdentityPath: identityArtifact.path,
     releaseIdentitySha256: identityArtifact.sha256,
-    releaseIntake,
-    releaseIntakePath: intakeArtifact.path,
-    releaseIntakeSha256: intakeArtifact.sha256,
+    releaseIntakes,
+    releaseIntakePaths: Object.fromEntries(Object.entries(intakeArtifacts).map(([stageId, artifact]) => [
+      stageId,
+      artifact.path,
+    ])),
+    releaseIntakeSha256s: Object.fromEntries(Object.entries(intakeArtifacts).map(([stageId, artifact]) => [
+      stageId,
+      artifact.sha256,
+    ])),
     expectedReleaseRef: QWORK_RELEASE_INTAKE_DEFAULT_REF,
     expectedReleaseHead: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
     releaseHeadObservation,
@@ -882,7 +965,7 @@ function createPlan({ repositoryRoot, sourceDir, releaseIntake, frameworkCommit 
 function createControlTree({
   fixtureRoot,
   repositoryRoot,
-  releaseIntake,
+  releaseIntakes,
   frameworkCommit,
   index,
   targetStage,
@@ -897,7 +980,7 @@ function createControlTree({
   fs.mkdirSync(path.join(controlDir, 'events'), { recursive: true });
   fs.mkdirSync(sourceDir, { recursive: true });
   fs.mkdirSync(runRoot, { recursive: true });
-  const plan = createPlan({ repositoryRoot, sourceDir, releaseIntake, frameworkCommit });
+  const plan = createPlan({ repositoryRoot, sourceDir, releaseIntakes, frameworkCommit });
   const initialState = createQworkReleaseTestState(plan);
   const context = {
     plan,
@@ -922,8 +1005,8 @@ function createControlTree({
       expectedPrefixCaseIds: stageId === 'G4'
         ? context.state.stages.G3.admission.expected.case_ids
         : undefined,
-      releaseIntake,
-      releaseIntakeSha256: plan.release_intake.sha256,
+      releaseIntake: releaseIntakes[stageId],
+      releaseIntakeSha256: plan.release_intakes[stageId].sha256,
       externalArtifacts: readiness.artifacts,
       generatedAt: readinessAt,
     });
@@ -1011,11 +1094,14 @@ export function createQworkGrayGateFixture({
   const fixtureRoot = fs.realpathSync(root);
   const repository = fs.realpathSync(repositoryRoot);
   const frameworkCommit = 'b'.repeat(40);
-  const releaseIntake = makeReleaseIntake(repository, frameworkCommit);
+  const releaseIntakes = Object.fromEntries(['G1', 'G2', 'G3', 'G4'].map((stageId) => [
+    stageId,
+    makeReleaseIntake(repository, frameworkCommit, stageId),
+  ]));
   const trees = Array.from({ length: 5 }, (_, offset) => createControlTree({
     fixtureRoot,
     repositoryRoot: repository,
-    releaseIntake,
+    releaseIntakes,
     frameworkCommit,
     index: offset + 1,
     targetStage: offset === 4 ? 'G4' : 'G3',
@@ -1025,7 +1111,7 @@ export function createQworkGrayGateFixture({
   }));
   return {
     root: fixtureRoot,
-    releaseIntake,
+    releaseIntakes,
     frameworkCommit,
     trees,
     runs: trees.map((tree) => tree.run),

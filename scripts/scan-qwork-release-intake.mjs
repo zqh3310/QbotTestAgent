@@ -17,6 +17,30 @@ import {
 import { QWORK_RELEASE_BLOCKING_RISK_SCHEMA } from '../src/lib/qwork-release-blocking-risks.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CLI_OPTION_NAMES = Object.freeze([
+  'allow-unverified-mr',
+  'baseline-commit',
+  'case-ids',
+  'casebook',
+  'casebook-baseline-commit',
+  'fallback-days',
+  'fetch',
+  'framework-commit',
+  'freshness-source',
+  'gitlab-api-freshness',
+  'gitlab-host',
+  'gitlab-project',
+  'gitlab-token-stdin',
+  'help',
+  'max-commits',
+  'no-fetch',
+  'out',
+  'previous-intake',
+  'release-ref',
+  'repo',
+  'sheet',
+  'window-hours',
+]);
 
 function usage() {
   return `QWork release/0.1 只读 MR 与源码准入扫描器
@@ -57,12 +81,16 @@ Options:
 
 function parseArgs(argv) {
   const options = {};
+  const allowedOptionNames = new Set(CLI_OPTION_NAMES);
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token === '--help' || token === '-h') { options.help = true; continue; }
+    if (token === '-h') { options.help = true; continue; }
+    if (!token.startsWith('--')) throw new Error('Unexpected positional argument');
+    const [name, inline] = token.slice(2).split(/=(.*)/s, 2);
+    if (!allowedOptionNames.has(name)) throw new Error('Unknown command-line option');
+    if (token === '--help') { options.help = true; continue; }
     if (token === '--no-fetch') { options.fetch = false; continue; }
     if (token === '--fetch') { options.fetch = true; continue; }
-    if (!token.startsWith('--')) throw new Error('Unexpected positional argument');
     if (token === '--gitlab-token-stdin') {
       if (Object.hasOwn(options, 'gitlab-token-stdin')) {
         throw new Error('--gitlab-token-stdin 只能传入一次');
@@ -73,7 +101,6 @@ function parseArgs(argv) {
     if (token.startsWith('--gitlab-token-stdin=')) {
       throw new Error('--gitlab-token-stdin 必须作为无值布尔开关单独传入');
     }
-    const [name, inline] = token.slice(2).split(/=(.*)/s, 2);
     const value = inline == null ? argv[index + 1] : inline;
     if (value == null || String(value).startsWith('--')) { options[name] = true; continue; }
     options[name] = value;

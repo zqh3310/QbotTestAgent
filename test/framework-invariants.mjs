@@ -98,8 +98,20 @@ const qworkReleaseOrchestratorSource = fs.readFileSync(
   path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs'),
   'utf8',
 );
+const qworkReleaseObservationCliSource = fs.readFileSync(
+  path.join(root, 'scripts', 'observe-qwork-release-ref.mjs'),
+  'utf8',
+);
+const qworkReleaseIntakeCliSource = fs.readFileSync(
+  path.join(root, 'scripts', 'scan-qwork-release-intake.mjs'),
+  'utf8',
+);
 const qworkReleaseSourceContractsSource = fs.readFileSync(
   path.join(root, 'src', 'lib', 'qwork-release-source-contracts.mjs'),
+  'utf8',
+);
+const qworkReleaseIntakeSource = fs.readFileSync(
+  path.join(root, 'src', 'lib', 'qwork-release-intake.mjs'),
   'utf8',
 );
 const qworkReleaseIntakeTestSource = fs.readFileSync(
@@ -149,8 +161,29 @@ assert.match(
 const automationFramework = fs.readFileSync(path.join(root, 'QBOT_AUTOMATION_FRAMEWORK.md'), 'utf8');
 const coreBetaOperatingGuide = fs.readFileSync(path.join(root, 'QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md'), 'utf8');
 const coreBetaPretestSource = fs.readFileSync(path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'), 'utf8');
+const casebookBuilderSource = fs.readFileSync(path.join(root, 'scripts', 'build-release01-production-gray-casebook.mjs'), 'utf8');
 const teamsCasebookRunnerSource = fs.readFileSync(path.join(root, 'teams360-automation', 'lib', 'casebook-runner.mjs'), 'utf8');
 const qworkReleaseIdentitySource = fs.readFileSync(path.join(root, 'teams360-automation', 'lib', 'qwork-release-identity.mjs'), 'utf8');
+for (const [label, source] of [
+  ['release intake scanner', qworkReleaseIntakeCliSource],
+  ['release observation', qworkReleaseObservationCliSource],
+]) {
+  assert.match(
+    source,
+    /const CLI_OPTION_NAMES = Object\.freeze\(\[[\s\S]*const allowedOptionNames = new Set\(CLI_OPTION_NAMES\)[\s\S]*if \(!allowedOptionNames\.has\(name\)\) throw new Error\('Unknown command-line option'\)/,
+    `${label} 必须使用显式参数白名单并以稳定类别拒绝未知参数`,
+  );
+}
+assert.match(
+  qworkReleaseIntakeCliSource,
+  /const options = parseArgs\(process\.argv\.slice\(2\)\)[\s\S]*if \(options\.help\)[\s\S]*const token = readToken\(options\)[\s\S]*scanQworkReleaseIntake\([\s\S]*writeQworkReleaseIntake\(/,
+  'release intake scanner 必须在 help、stdin、扫描和输出创建前完成参数白名单校验',
+);
+assert.match(
+  qworkReleaseObservationCliSource,
+  /const options = parseArgs\(process\.argv\.slice\(2\)\)[\s\S]*if \(options\.help\)[\s\S]*const token = fs\.readFileSync\(0[\s\S]*canonicalDirectory\(options\.repo\)[\s\S]*createGitLabReadOnlyReader\([\s\S]*writeQworkReleaseRefObservation\(/,
+  'release observation 必须在 help、stdin、仓库/网络检查和输出创建前完成参数白名单校验',
+);
 for (const [documentName, documentText] of [
   ['QBOT_AUTOMATION_FRAMEWORK.md', automationFramework],
   ['QBOT_CORE_BETA_AGENT_OPERATING_GUIDE.md', coreBetaOperatingGuide],
@@ -164,6 +197,21 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
+  assert.match(
+    documentText,
+    /--release-intake-g1[\s\S]*--release-intake-g2[\s\S]*--release-intake-g3[\s\S]*--release-intake-g4[\s\S]*G1-G4[\s\S]*Sheet[\s\S]*有序 Case ID[\s\S]*release ref[\s\S]*HEAD[\s\S]*仓库[\s\S]*设计基线/,
+    `${documentName} 必须冻结状态机四阶段独立 intake 的 CLI、范围和共同发布身份合同`,
+  );
+  assert.match(
+    documentText,
+    /plan [^\n]*`v3` schema[\s\S]*state\/integrity\/event [^\n]*`v2` schema[\s\S]*旧 plan v2[\s\S]*单 intake 控制树/,
+    `${documentName} 必须明确 plan v3 与其余 v2 schema，并拒绝旧单 intake 控制树`,
+  );
+  assert.match(
+    documentText,
+    /扫描器、独立观测器和编排器[\s\S]*显式参数白名单[\s\S]*历史单报告 `--release-intake`[\s\S]*未知参数[\s\S]*其它入口[\s\S]*返回 `--help`[\s\S]*读取 stdin[\s\S]*网络请求[\s\S]*创建任何输出\/控制目录[\s\S]*稳定类别[\s\S]*疑似 secret/,
+    `${documentName} 必须冻结全部 release CLI 的参数白名单、前置拒绝与脱敏合同`,
+  );
   assert.match(
     documentText,
     /全部合同[\s\S]*current-release 持续性鉴证[\s\S]*当前 release HEAD[\s\S]*不能冒充本轮 MR changes 鉴证[\s\S]*origin_change_attestation[\s\S]*不在本次增量范围时该字段必须为空/,
@@ -191,13 +239,28 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /owner callback[\s\S]*动态执行零容忍[\s\S]*direct\/indirect\/optional\/global `eval`[\s\S]*Function[\s\S]*Reflect\.apply\/construct[\s\S]*constructor[\s\S]*动态 computed callee[\s\S]*node:vm[\s\S]*ImportExpression[\s\S]*dynamic_code_execution_count=0[\s\S]*dynamic_code_execution_kinds=\[\]/,
-    `${documentName} 必须冻结 MR1597 owner callback 动态执行零容忍和严格零值`,
+    /严格隔离的既有 worker entry 测试 harness[\s\S]*全文件[\s\S]*动态执行零容忍[\s\S]*direct\/indirect\/optional\/global `eval`[\s\S]*Function[\s\S]*Reflect\.apply\/construct[\s\S]*constructor[\s\S]*动态 computed callee[\s\S]*node:vm[\s\S]*ImportExpression[\s\S]*dynamic_code_execution_count=0[\s\S]*dynamic_code_execution_kinds=\[\]/,
+    `${documentName} 必须冻结 MR1597 严格 VM harness 例外及其余全文件动态执行零容忍`,
+  );
+  assert.match(
+    documentText,
+    /唯一 VM 例外[\s\S]*workerEntryHarness\(runAgent\)[\s\S]*workerEntryPath[\s\S]*execution-worker-entry\.cjs[\s\S]*runInNewContext[\s\S]*readFileSync\(workerEntryPath, 'utf8'\)[\s\S]*filename: workerEntryPath[\s\S]*owner callback[\s\S]*不可达[\s\S]*第二次调用[\s\S]*别名[\s\S]*\.bind\(\)[\s\S]*Reflect\.apply\/construct[\s\S]*容器复制\/取出[\s\S]*node_vm_execution[\s\S]*node_vm_escape/,
+    `${documentName} 必须锁定 MR1597 唯一 VM harness 的完整 AST 指纹、隔离和逃逸负例`,
   );
   assert.match(
     documentText,
     /current-release attestation 校验[\s\S]*确定性语义重放[\s\S]*重新读取并验证全部[\s\S]*文件 blob[\s\S]*五绑定[\s\S]*导出链[\s\S]*写入\/遮蔽账本[\s\S]*动态执行账本[\s\S]*逐字段结构化全等[\s\S]*重算[\s\S]*attestation 自身 SHA[\s\S]*不得放行/,
     `${documentName} 必须冻结 MR1597 attestation 字节重放及重哈希防篡改合同`,
+  );
+  assert.match(
+    documentText,
+    /raw_response[\s\S]*diff[\s\S]*mode[\s\S]*generated_file\/collapsed\/too_large[\s\S]*commit metadata[\s\S]*short id[\s\S]*trailers[\s\S]*无首尾空白[\s\S]*old\/new 路径对[\s\S]*rename 路径语义/,
+    `${documentName} 必须冻结完整 GitLab 原始响应、canonical commit metadata 与严格路径/flags 语义`,
+  );
+  assert.match(
+    documentText,
+    /last_pipeline[\s\S]*project_id[\s\S]*commit `project_id`[\s\S]*`sha`[\s\S]*commit `id`[\s\S]*pipeline `id`[\s\S]*compare_commit_count[\s\S]*declared_size\/bytes\/line_count[\s\S]*原生安全整数[\s\S]*数字字符串[\s\S]*重算[\s\S]*SHA-256[\s\S]*阻断/,
+    `${documentName} 必须冻结 pipeline/commit 身份绑定与 v3 原生整数类型合同`,
   );
 }
 assert.match(
@@ -237,8 +300,33 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /function observeProtectedBindingViolations[\s\S]*javaScriptDeclarationRecords[\s\S]*duplicate-or-shadow-declaration[\s\S]*AssignmentExpression[\s\S]*identifier-write[\s\S]*member-write[\s\S]*UpdateExpression[\s\S]*UnaryExpression[\s\S]*delete[\s\S]*ForInStatement[\s\S]*ForOfStatement[\s\S]*Object[\s\S]*assign[\s\S]*defineProperties[\s\S]*defineProperty[\s\S]*Reflect[\s\S]*deleteProperty[\s\S]*dynamic-indirect-member-write/,
-  'MR1597 五绑定保护必须覆盖声明遮蔽、重绑、成员、循环及 Object/Reflect 间接写入',
+  /(?=[\s\S]*const BUILTIN_INDIRECT_WRITE_OPERATIONS = new Map\(\[[\s\S]*'Object'[\s\S]*assign[\s\S]*defineProperties[\s\S]*defineProperty[\s\S]*'Reflect'[\s\S]*deleteProperty)(?=[\s\S]*function observeBuiltinIndirectWriteAliases[\s\S]*resolveInvocation[\s\S]*'call'[\s\S]*'apply'[\s\S]*forwardedArguments[\s\S]*targetIndeterminate)(?=[\s\S]*function observeProtectedBindingViolations[\s\S]*javaScriptDeclarationRecords[\s\S]*duplicate-or-shadow-declaration[\s\S]*AssignmentExpression[\s\S]*identifier-write[\s\S]*member-write[\s\S]*UpdateExpression[\s\S]*UnaryExpression[\s\S]*delete[\s\S]*ForInStatement[\s\S]*ForOfStatement[\s\S]*builtinWrites\.resolveInvocation[\s\S]*targetIndeterminate[\s\S]*forwardedArguments\[0\][\s\S]*dynamic-indirect-member-write)/,
+  'MR1597 五绑定保护必须覆盖声明遮蔽、重绑、成员、循环以及 Object/Reflect call/apply 间接写入',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /validateCanonicalGitLabCommitMetadata[\s\S]*changePathPairs[\s\S]*rawResponse = structuredClone\(rows\)[\s\S]*raw_response: rawResponse[\s\S]*sha256Text\(stableJson\(rawResponse\)\)/,
+  '正式 intake 必须绑定 canonical commit metadata、完整原始 diff 页及路径对去重',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function validateCanonicalGitLabCommitMetadata[\s\S]*short_id[\s\S]*parent_ids[\s\S]*authored_date[\s\S]*committed_date[\s\S]*stats[\s\S]*last_pipeline[\s\S]*web_url[\s\S]*raw_response[\s\S]*diff_page_raw_projection_mismatch[\s\S]*diff_page_change_flags_conflict/,
+  'provenance verifier 必须重放完整 commit metadata、原始 diff 投影及 flags 语义',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /pipeline\.project_id !== metadata\.project_id[\s\S]*pipeline\.sha !== metadata\.id[\s\S]*pipelines\/\$\{pipeline\.id\}[\s\S]*Number\.isSafeInteger\(ancestry\?\.compare_commit_count\)[\s\S]*Number\.isSafeInteger\(file\?\.declared_size\)[\s\S]*Number\.isSafeInteger\(file\?\.bytes\)[\s\S]*Number\.isSafeInteger\(file\?\.line_count\)/,
+  'current-release v3 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /pipeline project identity[\s\S]*pipeline commit identity[\s\S]*pipeline URL identity[\s\S]*ancestry compare count numeric string[\s\S]*file declared size numeric string[\s\S]*file byte count numeric string[\s\S]*file line count numeric string/,
+  'intake 回归必须覆盖 pipeline 身份漂移与重算 hash 后的数值字符串攻击',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /(?=[\s\S]*hashes and preserves the complete raw diff page response)(?=[\s\S]*generated_file)(?=[\s\S]*collapsed)(?=[\s\S]*too_large)(?=[\s\S]*diff_page_sha256_mismatch)/,
+  '来源证明专项回归必须覆盖非投影 GitLab diff 字段及重哈希攻击',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -301,14 +389,24 @@ assert.match(
   '正式 production-gate pretest 必须不可关闭 release intake，强制文件 SHA、GitLab API freshness 与精确 Casebook/Sheet/Case ID 绑定',
 );
 assert.match(
+  casebookBuilderSource,
+  /validateCasebookDesignReleaseIntake[\s\S]*requireReady: true,[\s\S]*requireFreshRef: true,[\s\S]*requireGitLabApiFreshness: true/,
+  '正式 Casebook Builder 的 READY 路径必须强制 GitLab API freshness',
+);
+assert.match(
+  qworkReleasePlanSource,
+  /QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan\/v3'[\s\S]*QWORK_RELEASE_TEST_STATE_SCHEMA = 'qbot-qwork-release-test-state\/v2'[\s\S]*QWORK_RELEASE_TEST_INTEGRITY_SCHEMA = 'qbot-qwork-release-test-integrity\/v2'/,
+  '发布状态机必须使用 plan v3，并保持 state/integrity v2 的显式不兼容 schema',
+);
+assert.match(
   qworkReleasePlanSource,
   /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15\.xlsx[\s\S]*8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a/,
   '发布状态机必须冻结 r15 Casebook 文件名和 SHA-256',
 );
 assert.match(
   qworkReleasePlanSource,
-  /(?=[\s\S]*nonEmptyString\(expectedReleaseRef\) !== QWORK_RELEASE_INTAKE_DEFAULT_REF)(?=[\s\S]*\^\[a-f0-9\]\{40\}\$\/i\.test\(nonEmptyString\(expectedReleaseHead\)\))(?=[\s\S]*if \(releaseIntake == null\)[\s\S]*release_intake_required)/,
-  '发布计划必须强制 release intake 并使用独立 ref/HEAD 观测校验',
+  /(?=[\s\S]*nonEmptyString\(expectedReleaseRef\) !== QWORK_RELEASE_INTAKE_DEFAULT_REF)(?=[\s\S]*\^\[a-f0-9\]\{40\}\$\/i\.test\(nonEmptyString\(expectedReleaseHead\)\))(?=[\s\S]*QWORK_RELEASE_INTAKE_STAGE_IDS)(?=[\s\S]*releaseIntakes\[stageId\])(?=[\s\S]*release_intake_required:\$\{stageId\})/,
+  '发布计划必须强制四阶段 release intake 并使用独立 ref/HEAD 观测校验',
 );
 assert.match(
   qworkReleasePlanSource,
@@ -317,13 +415,13 @@ assert.match(
 );
 assert.match(
   qworkReleaseOrchestratorSource,
-  /required\(options, \[[\s\S]*'release-intake'[\s\S]*'expected-release-ref'[\s\S]*'expected-release-head'[\s\S]*\]\)[\s\S]*正式发布计划不能关闭 release intake 门禁[\s\S]*expectedReleaseRef: options\['expected-release-ref'\][\s\S]*expectedReleaseHead: options\['expected-release-head'\]/,
-  '编排 CLI 必须在创建控制状态前强制 intake 和独立 release ref/HEAD',
+  /required\(options, \[[\s\S]*'release-intake-g1'[\s\S]*'release-intake-g2'[\s\S]*'release-intake-g3'[\s\S]*'release-intake-g4'[\s\S]*'expected-release-ref'[\s\S]*'expected-release-head'[\s\S]*\]\)[\s\S]*正式发布计划不能关闭 release intake 门禁[\s\S]*expectedReleaseRef: options\['expected-release-ref'\][\s\S]*expectedReleaseHead: options\['expected-release-head'\]/,
+  '编排 CLI 必须在创建控制状态前强制四阶段 intake 和独立 release ref/HEAD',
 );
 assert.match(
   qworkReleaseOrchestratorSource,
-  /function validatePlanSourceArtifacts\(plan\)[\s\S]*stableFileSnapshot\([\s\S]*parseJsonSnapshot\(intakeSnapshot[\s\S]*validateQworkReleaseIntakeBinding[\s\S]*function readiness\(options[\s\S]*releaseIntake: sourceArtifacts\.releaseIntake[\s\S]*snapshots\.get\('release_intake'\)\.sha256/,
-  'readiness 必须重读计划绑定的磁盘 intake 并重算文件 SHA',
+  /function validatePlanSourceArtifacts\(plan\)[\s\S]*RELEASE_INTAKE_STAGE_IDS[\s\S]*snapshots\.get\(role\)[\s\S]*parseJsonSnapshot\(intakeSnapshot[\s\S]*stageId,[\s\S]*reportSha256: intakeSnapshot\.sha256[\s\S]*function readiness\(options[\s\S]*releaseIntake: sourceArtifacts\.releaseIntakes\[stage\.id\][\s\S]*snapshots[\s\S]*`release_intake_\$\{stage\.id\.toLowerCase\(\)\}`\)\.sha256/,
+  'readiness 必须按阶段重读计划绑定的磁盘 intake 并重算文件 SHA',
 );
 assert.match(
   coreBetaProtocolSource,

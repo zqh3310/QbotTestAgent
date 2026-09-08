@@ -52,6 +52,7 @@ import {
 } from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const RELEASE_INTAKE_STAGE_IDS = Object.freeze(['G1', 'G2', 'G3', 'G4']);
 const orchestrator = path.join(root, 'scripts', 'orchestrate-qwork-release-test.mjs');
 const evidenceFixtureRoot = fs.realpathSync(
   fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-release-evidence-')),
@@ -292,17 +293,93 @@ function currentReleaseFileFixtures(contracts, head, {
       blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
+      last_commit_provenance: releaseFileProvenance(filePath, head),
     }];
   }));
 }
 
+function releaseCommitMetadata(id) {
+  return {
+    id,
+    short_id: id.slice(0, 8),
+    created_at: '2026-09-08T01:02:03Z',
+    parent_ids: ['a'.repeat(40)],
+    title: 'Protected source update',
+    message: 'Protected source update',
+    author_name: 'QBot QA Fixture',
+    author_email: 'qbot-qa@example.invalid',
+    authored_date: '2026-09-08T01:02:03Z',
+    committer_name: 'QBot QA Fixture',
+    committer_email: 'qbot-qa@example.invalid',
+    committed_date: '2026-09-08T01:02:03Z',
+    trailers: {},
+    project_id: 1,
+    stats: { additions: 1, deletions: 0, total: 1 },
+    status: 'success',
+    last_pipeline: null,
+    web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/${id}`,
+  };
+}
+
+function releaseFileProvenance(filePath, head) {
+  const change = {
+    old_path: filePath,
+    new_path: filePath,
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+  };
+  const rawChange = {
+    ...change,
+    a_mode: '100644',
+    b_mode: '100644',
+    diff: '@@ -1 +1 @@\n-old\n+new',
+    generated_file: false,
+    collapsed: false,
+    too_large: false,
+  };
+  const diffEndpoint = `repository/commits/${head}/diff?per_page=100`;
+  const commitMetadata = releaseCommitMetadata(head);
+  return {
+    schema_version: 'qbot-qwork-release-file-provenance/v2',
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: `repository/commits/${head}`,
+    diff_endpoint: diffEndpoint,
+    path: filePath,
+    ref: head,
+    release_commit_id: head,
+    file_last_commit_id: head,
+    commit_id: head,
+    commit_raw_response: structuredClone(commitMetadata),
+    commit_metadata: commitMetadata,
+    commit_response_sha256: crypto.createHash('sha256').update(stableJson(commitMetadata)).digest('hex'),
+    diff_page_size: 100,
+    diff_pages: [{
+      page: 1,
+      endpoint: `${diffEndpoint}&page=1`,
+      item_count: 1,
+      raw_response: [rawChange],
+      changes: [change],
+      response_sha256: crypto.createHash('sha256').update(stableJson([rawChange])).digest('hex'),
+    }],
+    matched_change_count: 1,
+    matched_changes: [change],
+    path_verified: true,
+    error: '',
+  };
+}
+
 function makeReleaseIntake({
   casebookSha256 = QWORK_RELEASE_CASEBOOK_SHA256,
+  casebookPath = path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
   frameworkCommit = 'b'.repeat(40),
   releaseHead = QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
   releaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF,
   repositoryPath = root,
+  stageId = 'G1',
 } = {}) {
+  const stage = QWORK_RELEASE_TEST_STAGES.find((item) => item.id === stageId);
+  if (!stage || stage.kind !== 'casebook') throw new Error(`invalid intake stage ${stageId}`);
   const releaseFiles = currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, releaseHead);
   const blockingRiskMerges = new Set([
     QWORK_MR1552_MERGE_COMMIT_SHA,
@@ -374,20 +451,29 @@ function makeReleaseIntake({
     }
     if (endpoint === `repository/commits/${releaseHead}/merge_requests`) return [fixtureMr];
     if (endpoint === `merge_requests/${fixtureMrIid}/changes`) return fixtureChanges;
-    if (endpoint.startsWith('repository/commits?')) {
-      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
-      const filePath = query.get('path');
-      const refName = query.get('ref_name');
-      const payload = releaseFiles.get(filePath);
-      if (!payload || refName !== releaseHead) {
-        throw new Error(`missing release file history fixture ${filePath}`);
-      }
-      return [{
-        id: payload.last_commit_id,
-        parent_ids: ['a'.repeat(40)],
-        committed_date: '2026-09-05T00:00:00.000Z',
-      }];
+    const commitDiff = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/diff\?per_page=100&page=(\d+)$/i);
+    if (commitDiff) {
+      const commitId = commitDiff[1];
+      const page = Number(commitDiff[2]);
+      const rows = [...releaseFiles.entries()]
+        .filter(([, payload]) => payload.last_commit_id === commitId)
+        .map(([filePath]) => ({
+          old_path: filePath,
+          new_path: filePath,
+          a_mode: '100644',
+          b_mode: '100644',
+          diff: '@@ -1 +1 @@\n-old\n+new',
+          new_file: false,
+          renamed_file: false,
+          deleted_file: false,
+          generated_file: false,
+          collapsed: false,
+          too_large: false,
+        }));
+      return rows.slice((page - 1) * 100, page * 100);
     }
+    const commitMetadata = endpoint.match(/^repository\/commits\/([a-f0-9]{40})$/i);
+    if (commitMetadata) return releaseCommitMetadata(commitMetadata[1]);
     if (endpoint.startsWith('repository/files/')) {
       const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
       const filePath = decodeURIComponent(encodedPath);
@@ -400,9 +486,9 @@ function makeReleaseIntake({
     repoRoot: repositoryPath,
     releaseRef,
     baselineCommit: QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
-    casebookPath: path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
+    casebookPath,
     casebookSha256,
-    sheet: '核心生命线门禁',
+    sheet: stage.sheet,
     frameworkCommit,
     gitlabReader,
     freshnessSource: 'gitlab-api',
@@ -411,7 +497,11 @@ function makeReleaseIntake({
   });
 }
 
-const releaseIntake = makeReleaseIntake();
+const releaseIntakes = Object.fromEntries(['G1', 'G2', 'G3', 'G4'].map((stageId) => [
+  stageId,
+  makeReleaseIntake({ stageId }),
+]));
+const releaseIntake = releaseIntakes.G1;
 const expectedReleaseRef = QWORK_RELEASE_INTAKE_DEFAULT_REF;
 const expectedReleaseHead = QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT;
 const releaseHeadObservation = {
@@ -435,9 +525,28 @@ const releaseIdentityArtifact = fixtureJsonArtifact('release-identity.json', {
   captured_at: '2026-09-05T00:00:00.000Z',
   ...identity,
 });
-const releaseIntakeArtifact = fixtureJsonArtifact('release-intake.json', releaseIntake);
+const releaseIntakeArtifacts = Object.fromEntries(Object.entries(releaseIntakes).map(([stageId, value]) => [
+  stageId,
+  fixtureJsonArtifact(`release-intake-${stageId.toLowerCase()}.json`, value),
+]));
 const releaseObservationArtifact = fixtureJsonArtifact('release-observation.json', releaseHeadObservation);
+const releaseIntakeArtifact = releaseIntakeArtifacts.G1;
 const releaseIntakeSha256 = releaseIntakeArtifact.sha256;
+const releaseIntakePaths = Object.fromEntries(Object.entries(releaseIntakeArtifacts).map(([stageId, artifact]) => [
+  stageId,
+  artifact.path,
+]));
+const releaseIntakeSha256s = Object.fromEntries(Object.entries(releaseIntakeArtifacts).map(([stageId, artifact]) => [
+  stageId,
+  artifact.sha256,
+]));
+function releaseIntakePlanInputs({
+  intakes = releaseIntakes,
+  paths = releaseIntakePaths,
+  sha256s = releaseIntakeSha256s,
+} = {}) {
+  return { releaseIntakes: intakes, releaseIntakePaths: paths, releaseIntakeSha256s: sha256s };
+}
 const plan = createQworkReleaseTestPlan({
   casebookPath: path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME),
   casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
@@ -445,9 +554,7 @@ const plan = createQworkReleaseTestPlan({
   releaseIdentity: identity,
   releaseIdentityPath: releaseIdentityArtifact.path,
   releaseIdentitySha256: releaseIdentityArtifact.sha256,
-  releaseIntake,
-  releaseIntakePath: releaseIntakeArtifact.path,
-  releaseIntakeSha256,
+  ...releaseIntakePlanInputs(),
   expectedReleaseRef,
   expectedReleaseHead,
   releaseHeadObservation,
@@ -455,10 +562,10 @@ const plan = createQworkReleaseTestPlan({
   releaseHeadObservationSha256: releaseObservationArtifact.sha256,
 });
 
-function releaseIntakeInputs(sourcePlan = plan, report = releaseIntake) {
+function releaseIntakeInputs(sourcePlan = plan, report = releaseIntake, stageId = 'G1') {
   return {
     releaseIntake: report,
-    releaseIntakeSha256: sourcePlan.release_intake.sha256,
+    releaseIntakeSha256: sourcePlan.release_intakes[stageId].sha256,
   };
 }
 
@@ -526,9 +633,9 @@ function pretest(stageId, sourcePlan = plan) {
     release_gate_eligible: true,
     blockers: [],
     release_intake: {
-      sha256: sourcePlan.release_intake.sha256,
-      content_sha256: sourcePlan.release_intake.content_sha256,
-      release_head: sourcePlan.release_intake.release_head,
+      sha256: sourcePlan.release_intakes[stageId].sha256,
+      content_sha256: sourcePlan.release_intakes[stageId].content_sha256,
+      release_head: sourcePlan.release_intakes[stageId].release_head,
     },
     checks: [
       'git_branch_main',
@@ -705,10 +812,10 @@ function readinessInputs(stageId, {
   capabilityAudit = capability(stageId),
   pretestReport = pretest(stageId),
   sourcePlan = plan,
-  intake = releaseIntake,
+  intake = releaseIntakes[stageId],
 } = {}) {
   return {
-    ...releaseIntakeInputs(sourcePlan, intake),
+    ...releaseIntakeInputs(sourcePlan, intake, stageId),
     plan: sourcePlan,
     stageId,
     capabilityAudit,
@@ -1004,9 +1111,7 @@ test('release plan rejects any non-canonical Casebook identity', () => {
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
-    releaseIntake,
-    releaseIntakePath: '/tmp/release-intake.json',
-    releaseIntakeSha256,
+    ...releaseIntakePlanInputs(),
     expectedReleaseRef,
     expectedReleaseHead,
   }), /casebook_basename_mismatch/);
@@ -1015,9 +1120,7 @@ test('release plan rejects any non-canonical Casebook identity', () => {
     casebookSha256: 'a'.repeat(64),
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
-    releaseIntake,
-    releaseIntakePath: '/tmp/release-intake.json',
-    releaseIntakeSha256,
+    ...releaseIntakePlanInputs(),
     expectedReleaseRef,
     expectedReleaseHead,
   }), /casebook_sha256_mismatch/);
@@ -1029,8 +1132,6 @@ test('release plan requires a READY intake bound to the Casebook and framework',
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
-    releaseIntakePath: '/tmp/release-intake.json',
-    releaseIntakeSha256,
     expectedReleaseRef,
     expectedReleaseHead,
     releaseHeadObservation,
@@ -1041,25 +1142,33 @@ test('release plan requires a READY intake bound to the Casebook and framework',
   assert.equal(ignoredRef, expectedReleaseRef);
   assert.equal(ignoredHead, expectedReleaseHead);
   assert.throws(
-    () => createQworkReleaseTestPlan({ ...withoutObservation, releaseIntake }),
+    () => createQworkReleaseTestPlan({ ...withoutObservation, ...releaseIntakePlanInputs() }),
     /expected_release_ref_invalid.*expected_release_head_invalid/,
   );
   assert.throws(() => createQworkReleaseTestPlan(base), /release_intake_required/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
-    releaseIntake: makeReleaseIntake({ casebookSha256: 'a'.repeat(64) }),
+    ...releaseIntakePlanInputs({
+      intakes: { ...releaseIntakes, G1: makeReleaseIntake({ casebookSha256: 'a'.repeat(64) }) },
+    }),
   }), /casebook_sha256_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
-    releaseIntake: makeReleaseIntake({ frameworkCommit: 'a'.repeat(40) }),
-  }), /release_intake_invalid:framework_commit_mismatch/);
+    ...releaseIntakePlanInputs({
+      intakes: { ...releaseIntakes, G1: makeReleaseIntake({ frameworkCommit: 'a'.repeat(40) }) },
+    }),
+  }), /release_intake_invalid:G1:.*framework_commit_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
-    releaseIntake: makeReleaseIntake({ releaseRef: 'origin/release/old' }),
+    ...releaseIntakePlanInputs({
+      intakes: { ...releaseIntakes, G1: makeReleaseIntake({ releaseRef: 'origin/release/old' }) },
+    }),
   }), /release_ref_mismatch/);
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
-    releaseIntake: makeReleaseIntake({ releaseHead: 'd'.repeat(40) }),
+    ...releaseIntakePlanInputs({
+      intakes: { ...releaseIntakes, G1: makeReleaseIntake({ releaseHead: 'd'.repeat(40) }) },
+    }),
   }), /release_head_mismatch/);
   const notReady = makeReleaseIntake();
   notReady.decision = 'BLOCKED';
@@ -1067,7 +1176,10 @@ test('release plan requires a READY intake bound to the Casebook and framework',
   const withoutHash = structuredClone(notReady);
   delete withoutHash.integrity.content_sha256;
   notReady.integrity.content_sha256 = crypto.createHash('sha256').update(stableJson(withoutHash)).digest('hex');
-  assert.throws(() => createQworkReleaseTestPlan({ ...base, releaseIntake: notReady }), /decision_BLOCKED/);
+  assert.throws(() => createQworkReleaseTestPlan({
+    ...base,
+    ...releaseIntakePlanInputs({ intakes: { ...releaseIntakes, G1: notReady } }),
+  }), /decision_BLOCKED/);
 });
 
 test('release plan requires an independently sourced release HEAD observation', () => {
@@ -1076,9 +1188,7 @@ test('release plan requires an independently sourced release HEAD observation', 
     casebookSha256: QWORK_RELEASE_CASEBOOK_SHA256,
     frameworkCommit: 'b'.repeat(40),
     releaseIdentity: identity,
-    releaseIntake,
-    releaseIntakePath: '/tmp/release-intake.json',
-    releaseIntakeSha256,
+    ...releaseIntakePlanInputs(),
     expectedReleaseRef,
     expectedReleaseHead,
   };
@@ -1092,7 +1202,7 @@ test('release plan requires an independently sourced release HEAD observation', 
   assert.throws(() => createQworkReleaseTestPlan({
     ...base,
     releaseHeadObservation,
-    releaseHeadObservationPath: base.releaseIntakePath,
+    releaseHeadObservationPath: releaseIntakePaths.G1,
     releaseHeadObservationSha256: 'e'.repeat(64),
   }), /release_head_observation_must_be_independent/);
   assert.throws(() => createQworkReleaseTestPlan({
@@ -1111,19 +1221,27 @@ test('release repository binding accepts canonical macOS /var aliases', (t) => {
       t.skip('当前平台没有需要归一化的临时目录别名');
       return;
     }
-    const canonicalIntake = makeReleaseIntake({ repositoryPath: canonicalRepository });
     const casebookPath = path.join(canonicalRepository, QWORK_RELEASE_CASEBOOK_BASENAME);
     const identityPath = path.join(canonicalRepository, 'release-identity.json');
-    const intakePath = path.join(canonicalRepository, 'release-intake.json');
     const observationPath = path.join(canonicalRepository, 'release-observation.json');
     const observation = { ...releaseHeadObservation, repository: temporaryRepository };
     fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebookPath);
+    const canonicalIntakes = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      stageId,
+      makeReleaseIntake({ repositoryPath: canonicalRepository, casebookPath, stageId }),
+    ]));
+    const intakePaths = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      stageId,
+      path.join(canonicalRepository, `release-intake-${stageId.toLowerCase()}.json`),
+    ]));
     fs.writeFileSync(identityPath, `${JSON.stringify({
       schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
       captured_at: '2026-09-05T00:00:00.000Z',
       ...identity,
     }, null, 2)}\n`);
-    fs.writeFileSync(intakePath, `${JSON.stringify(canonicalIntake, null, 2)}\n`);
+    for (const stageId of RELEASE_INTAKE_STAGE_IDS) {
+      fs.writeFileSync(intakePaths[stageId], `${JSON.stringify(canonicalIntakes[stageId], null, 2)}\n`);
+    }
     fs.writeFileSync(observationPath, `${JSON.stringify(observation, null, 2)}\n`);
     const artifactSha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     assert.doesNotThrow(() => createQworkReleaseTestPlan({
@@ -1133,9 +1251,12 @@ test('release repository binding accepts canonical macOS /var aliases', (t) => {
       releaseIdentity: identity,
       releaseIdentityPath: identityPath,
       releaseIdentitySha256: artifactSha256(identityPath),
-      releaseIntake: canonicalIntake,
-      releaseIntakePath: intakePath,
-      releaseIntakeSha256: artifactSha256(intakePath),
+      releaseIntakes: canonicalIntakes,
+      releaseIntakePaths: intakePaths,
+      releaseIntakeSha256s: Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+        stageId,
+        artifactSha256(intakePaths[stageId]),
+      ])),
       expectedReleaseRef,
       expectedReleaseHead,
       releaseHeadObservation: observation,
@@ -1149,7 +1270,9 @@ test('release repository binding accepts canonical macOS /var aliases', (t) => {
 
 test('release state and control integrity reject an unbound legacy plan', () => {
   const unboundPlan = structuredClone(plan);
-  unboundPlan.release_intake = null;
+  unboundPlan.schema_version = 'qbot-qwork-release-test-plan/v2';
+  unboundPlan.release_intake = unboundPlan.release_intakes.G1;
+  delete unboundPlan.release_intakes;
   unboundPlan.policy.release_intake_required = false;
   assert.throws(
     () => createQworkReleaseTestState(unboundPlan),
@@ -1169,33 +1292,33 @@ test('release state and control integrity reject malformed intake bindings', () 
   const scenarios = [
     {
       name: 'empty binding',
-      mutate: (candidate) => { candidate.release_intake = {}; },
-      failure: 'plan_release_intake_schema_mismatch',
+      mutate: (candidate) => { candidate.release_intakes.G1 = {}; },
+      failure: 'plan_release_intake_g1_schema_mismatch',
     },
     {
       name: 'missing absolute path',
-      mutate: (candidate) => { candidate.release_intake.path = ''; },
-      failure: 'plan_release_intake_path_invalid',
+      mutate: (candidate) => { candidate.release_intakes.G1.path = ''; },
+      failure: 'plan_release_intake_g1_path_invalid',
     },
     {
       name: 'missing artifact hash',
-      mutate: (candidate) => { candidate.release_intake.sha256 = ''; },
-      failure: 'plan_release_intake_artifact_sha256_invalid',
+      mutate: (candidate) => { candidate.release_intakes.G1.sha256 = ''; },
+      failure: 'plan_release_intake_g1_artifact_sha256_invalid',
     },
     {
       name: 'missing content hash',
-      mutate: (candidate) => { candidate.release_intake.content_sha256 = ''; },
-      failure: 'plan_release_intake_content_sha256_invalid',
+      mutate: (candidate) => { candidate.release_intakes.G1.content_sha256 = ''; },
+      failure: 'plan_release_intake_g1_content_sha256_invalid',
     },
     {
       name: 'non-canonical ref',
-      mutate: (candidate) => { candidate.release_intake.release_ref = 'origin/release/old'; },
-      failure: 'plan_release_intake_release_ref_invalid',
+      mutate: (candidate) => { candidate.release_intakes.G1.release_ref = 'origin/release/old'; },
+      failure: 'plan_release_intake_g1_release_ref_invalid',
     },
     {
       name: 'missing release HEAD',
-      mutate: (candidate) => { candidate.release_intake.release_head = ''; },
-      failure: 'plan_release_intake_release_head_invalid',
+      mutate: (candidate) => { candidate.release_intakes.G1.release_head = ''; },
+      failure: 'plan_release_intake_g1_release_head_invalid',
     },
   ];
   for (const scenario of scenarios) {
@@ -1216,6 +1339,7 @@ test('release intake binding requires an explicit exact artifact SHA', () => {
   for (const reportSha256 of [undefined, '', 'not-a-sha256']) {
     const binding = validateQworkReleaseIntakeBinding({
       plan,
+      stageId: 'G1',
       report: releaseIntake,
       reportSha256,
     });
@@ -2026,20 +2150,32 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
 
     const casebook = path.join(temporaryRoot, QWORK_RELEASE_CASEBOOK_BASENAME);
     const identityFile = path.join(temporaryRoot, 'release-identity.json');
-    const releaseIntakeFile = path.join(temporaryRoot, 'release-intake.json');
+    const releaseIntakeFiles = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      stageId,
+      path.join(temporaryRoot, `release-intake-${stageId.toLowerCase()}.json`),
+    ]));
     const releaseObservationFile = path.join(temporaryRoot, 'release-observation.json');
     const frameworkCommit = run('git', ['rev-parse', 'HEAD']).stdout.trim();
-    const currentReleaseIntake = makeReleaseIntake({
-      frameworkCommit,
-      releaseHead: frameworkCommit,
-      repositoryPath: work,
-    });
+    fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebook);
+    const currentReleaseIntakes = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      stageId,
+      makeReleaseIntake({
+        frameworkCommit,
+        releaseHead: frameworkCommit,
+        repositoryPath: work,
+        casebookPath: casebook,
+        stageId,
+      }),
+    ]));
+    const releaseIntakeArguments = RELEASE_INTAKE_STAGE_IDS.flatMap((stageId) => [
+      `--release-intake-${stageId.toLowerCase()}`,
+      releaseIntakeFiles[stageId],
+    ]);
     const expectedReleaseArguments = [
       '--expected-release-observation', releaseObservationFile,
       '--expected-release-ref', QWORK_RELEASE_INTAKE_DEFAULT_REF,
       '--expected-release-head', frameworkCommit,
     ];
-    fs.copyFileSync(path.join(root, 'PRD', QWORK_RELEASE_CASEBOOK_BASENAME), casebook);
     fs.writeFileSync(identityFile, `${JSON.stringify({
       schema_version: QWORK_RELEASE_IDENTITY_SCHEMA,
       captured_at: '2026-09-05T00:00:00.000Z',
@@ -2054,7 +2190,9 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       source: 'git-rev-parse-after-fetch',
     })}\n`);
 
-    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+    for (const stageId of RELEASE_INTAKE_STAGE_IDS) {
+      fs.writeFileSync(releaseIntakeFiles[stageId], `${JSON.stringify(currentReleaseIntakes[stageId])}\n`);
+    }
     const missingIntake = run(process.execPath, [
       orchestrator,
       'init',
@@ -2072,7 +2210,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       '--expected-release-observation', releaseObservationFile,
     ]);
     assert.notEqual(missingExpectedRelease.status, 0);
@@ -2088,7 +2226,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       '--require-release-intake', 'false',
       ...expectedReleaseArguments,
     ]);
@@ -2100,15 +2238,17 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       releaseHead: frameworkCommit,
       releaseRef: 'origin/release/old',
       repositoryPath: work,
+      casebookPath: casebook,
+      stageId: 'G1',
     });
-    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleRefIntake)}\n`);
+    fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(staleRefIntake)}\n`);
     const staleRefInit = run(process.execPath, [
       orchestrator,
       'init',
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       ...expectedReleaseArguments,
     ]);
     assert.notEqual(staleRefInit.status, 0);
@@ -2119,22 +2259,24 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       frameworkCommit,
       releaseHead: 'd'.repeat(40),
       repositoryPath: work,
+      casebookPath: casebook,
+      stageId: 'G1',
     });
-    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(staleHeadIntake)}\n`);
+    fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(staleHeadIntake)}\n`);
     const staleHeadInit = run(process.execPath, [
       orchestrator,
       'init',
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       ...expectedReleaseArguments,
     ]);
     assert.notEqual(staleHeadInit.status, 0);
     assert.match(staleHeadInit.stderr, /release_head_mismatch/);
     assert.equal(fs.existsSync(stateDir), false);
 
-    fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+    fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(currentReleaseIntakes.G1)}\n`);
     const linkedRepository = path.join(temporaryRoot, 'work-link');
     fs.symlinkSync(work, linkedRepository, 'dir');
     const originalObservation = JSON.parse(fs.readFileSync(releaseObservationFile, 'utf8'));
@@ -2148,7 +2290,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       ...expectedReleaseArguments,
     ]);
     assert.notEqual(symlinkedRepositoryInit.status, 0);
@@ -2162,7 +2304,7 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       '--state-dir', stateDir,
       '--casebook', casebook,
       '--release-identity', identityFile,
-      '--release-intake', releaseIntakeFile,
+      ...releaseIntakeArguments,
       ...expectedReleaseArguments,
     ]);
     assert.equal(initialized.status, 0, initialized.stderr);
@@ -2194,46 +2336,52 @@ test('orchestrator persists and verifies the forward event hash chain', () => {
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, pattern);
       assertControlStateUnchanged();
-      fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake)}\n`);
+      fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(currentReleaseIntakes.G1)}\n`);
     };
 
     expectReadinessRejection(
-      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+      () => fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(makeReleaseIntake({
         frameworkCommit,
         releaseHead: 'd'.repeat(40),
         repositoryPath: work,
+        casebookPath: casebook,
+        stageId: 'G1',
       }))}\n`),
       /release_intake_release_head_mismatch/,
     );
     expectReadinessRejection(
-      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+      () => fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(makeReleaseIntake({
         frameworkCommit,
         releaseHead: frameworkCommit,
         casebookSha256: 'a'.repeat(64),
         repositoryPath: work,
+        casebookPath: casebook,
+        stageId: 'G1',
       }))}\n`),
       /release_intake_casebook_sha256_mismatch/,
     );
     expectReadinessRejection(
-      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(makeReleaseIntake({
+      () => fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(makeReleaseIntake({
         frameworkCommit: 'a'.repeat(40),
         releaseHead: frameworkCommit,
         repositoryPath: work,
+        casebookPath: casebook,
+        stageId: 'G1',
       }))}\n`),
       /release_intake_framework_commit_mismatch/,
     );
     expectReadinessRejection(
-      () => fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(currentReleaseIntake, null, 2)}\n`),
+      () => fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(currentReleaseIntakes.G1, null, 2)}\n`),
       /release_intake_artifact_sha256_mismatch/,
     );
     expectReadinessRejection(() => {
-      const invalidContentHash = structuredClone(currentReleaseIntake);
+      const invalidContentHash = structuredClone(currentReleaseIntakes.G1);
       invalidContentHash.integrity.content_sha256 = '0'.repeat(64);
-      fs.writeFileSync(releaseIntakeFile, `${JSON.stringify(invalidContentHash)}\n`);
+      fs.writeFileSync(releaseIntakeFiles.G1, `${JSON.stringify(invalidContentHash)}\n`);
     }, /release_intake_content_hash_mismatch|release_intake_content_sha256_mismatch/);
     expectReadinessRejection(
-      () => fs.unlinkSync(releaseIntakeFile),
-      /计划绑定的 release intake 不存在/,
+      () => fs.unlinkSync(releaseIntakeFiles.G1),
+      /计划绑定的阶段 release intake 不存在/,
     );
 
     const originalCasebook = fs.readFileSync(casebook);

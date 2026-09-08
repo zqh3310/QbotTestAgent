@@ -51,6 +51,8 @@ import {
   resolveCurrentReleaseHeaderContract,
   resolveReleaseSourceContracts,
   summarizeGitLabChanges,
+  validateCanonicalGitLabCommitMetadata,
+  validateCanonicalGitLabDiffChange,
   validateCurrentReleaseSourceContractAttestation,
   validateReleaseSourceContractAttestation,
   validateReleaseSourceContractsForReport,
@@ -59,6 +61,7 @@ import {
   QWORK_RELEASE_CASEBOOK_BASENAME,
   QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT,
   QWORK_RELEASE_CASEBOOK_SHA256,
+  QWORK_RELEASE_TEST_STAGES,
   validateQworkReleaseIntakeBinding,
 } from '../src/lib/qwork-release-test-plan.mjs';
 import {
@@ -123,6 +126,190 @@ function gitLabFilePayload(filePath, source, head) {
   };
 }
 
+function gitLabCommitMetadata(id, overrides = {}) {
+  return {
+    id,
+    short_id: id.slice(0, 8),
+    created_at: '2026-09-08T01:02:03Z',
+    parent_ids: ['a'.repeat(40)],
+    title: 'Protected source update',
+    message: 'Protected source update',
+    author_name: 'QBot QA Fixture',
+    author_email: 'qbot-qa@example.invalid',
+    authored_date: '2026-09-08T01:02:03Z',
+    committer_name: 'QBot QA Fixture',
+    committer_email: 'qbot-qa@example.invalid',
+    committed_date: '2026-09-08T01:02:03Z',
+    trailers: {},
+    project_id: 1,
+    stats: { additions: 1, deletions: 0, total: 1 },
+    status: 'success',
+    last_pipeline: null,
+    web_url: `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/commit/${id}`,
+    ...overrides,
+  };
+}
+
+function gitLabDiffResponseChange(oldPath, newPath = oldPath, overrides = {}) {
+  return {
+    old_path: oldPath,
+    new_path: newPath,
+    a_mode: '100644',
+    b_mode: '100644',
+    diff: '@@ -1 +1 @@\n-old\n+new',
+    new_file: false,
+    renamed_file: oldPath !== newPath,
+    deleted_file: false,
+    generated_file: false,
+    collapsed: false,
+    too_large: false,
+    ...overrides,
+  };
+}
+
+test('GitLab provenance canonical projections require exact commit and diff response shapes', () => {
+  const commitId = 'a'.repeat(40);
+  const metadata = gitLabCommitMetadata(commitId);
+  assert.equal(Object.keys(metadata).length, 18);
+  const metadataValidation = validateCanonicalGitLabCommitMetadata(metadata, commitId);
+  assert.equal(metadataValidation.ok, true, metadataValidation.failures.join(','));
+  assert.deepEqual(metadataValidation.projection, JSON.parse(stableJson(metadata)));
+
+  for (const field of Object.keys(metadata)) {
+    const reduced = structuredClone(metadata);
+    delete reduced[field];
+    const validation = validateCanonicalGitLabCommitMetadata(reduced, commitId);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.includes('fields_mismatch'), true, field);
+    assert.equal(validation.projection, null, field);
+  }
+  for (const unknownField of ['extended_trailers', 'untrusted_extra']) {
+    const expanded = { ...metadata, [unknownField]: {} };
+    const validation = validateCanonicalGitLabCommitMetadata(expanded, commitId);
+    assert.equal(validation.ok, false, unknownField);
+    assert.equal(validation.failures.includes('fields_mismatch'), true, unknownField);
+    assert.equal(validation.projection, null, unknownField);
+  }
+  const canonicalPipeline = {
+    id: 101,
+    iid: 17,
+    project_id: metadata.project_id,
+    sha: commitId,
+    ref: 'release/0.1',
+    status: 'success',
+    source: 'push',
+    created_at: '2026-09-08T01:02:03Z',
+    updated_at: '2026-09-08T01:03:04Z',
+    web_url: 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/pipelines/101',
+  };
+  assert.equal(validateCanonicalGitLabCommitMetadata(
+    { ...metadata, last_pipeline: canonicalPipeline },
+    commitId,
+  ).ok, true);
+  for (const [label, mutation, expectedFailure] of [
+    ['pipeline project identity', { project_id: 999 }, 'last_pipeline_project_id_mismatch'],
+    ['pipeline commit identity', { sha: 'c'.repeat(40) }, 'last_pipeline_sha_mismatch'],
+    [
+      'pipeline URL identity',
+      { web_url: 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/pipelines/999' },
+      'last_pipeline_web_url_invalid',
+    ],
+  ]) {
+    const validation = validateCanonicalGitLabCommitMetadata({
+      ...metadata,
+      last_pipeline: { ...canonicalPipeline, ...mutation },
+    }, commitId);
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.includes(expectedFailure), true,
+      `${label}:${validation.failures.join(',')}`);
+    assert.equal(validation.projection, null, label);
+  }
+
+  const rawChange = gitLabDiffResponseChange('server/qbot-core/example.mjs');
+  const changeValidation = validateCanonicalGitLabDiffChange(rawChange);
+  assert.equal(changeValidation.ok, true, changeValidation.failures.join(','));
+  assert.deepEqual(changeValidation.projection, {
+    old_path: 'server/qbot-core/example.mjs',
+    new_path: 'server/qbot-core/example.mjs',
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+  });
+  assert.equal(Object.keys(rawChange).length, 11);
+  for (const field of [
+    'old_path', 'new_path', 'a_mode', 'b_mode', 'diff', 'new_file', 'renamed_file',
+    'deleted_file',
+  ]) {
+    const reduced = structuredClone(rawChange);
+    delete reduced[field];
+    const validation = validateCanonicalGitLabDiffChange(reduced);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.includes('fields_mismatch'), true, field);
+    assert.equal(validation.projection, null, field);
+  }
+  for (const field of ['generated_file', 'collapsed', 'too_large']) {
+    const reduced = structuredClone(rawChange);
+    delete reduced[field];
+    const validation = validateCanonicalGitLabDiffChange(reduced);
+    assert.equal(validation.ok, true, `${field}:${validation.failures.join(',')}`);
+    assert.deepEqual(validation.projection, changeValidation.projection, field);
+  }
+  const minimumChange = Object.fromEntries(Object.entries(rawChange).filter(([field]) => (
+    !['generated_file', 'collapsed', 'too_large'].includes(field)
+  )));
+  assert.equal(Object.keys(minimumChange).length, 8);
+  assert.equal(validateCanonicalGitLabDiffChange(minimumChange).ok, true);
+  for (const [label, change, expectedFailure] of [
+    ['unknown_field', { ...rawChange, untrusted_extra: false }, 'fields_mismatch'],
+    ['optional_flag_type', { ...rawChange, generated_file: 'false' }, 'generated_file_invalid'],
+    ['rename_path_conflict', { ...rawChange, renamed_file: true }, 'flags_conflict'],
+  ]) {
+    const validation = validateCanonicalGitLabDiffChange(change);
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.includes(expectedFailure), true, label);
+  }
+});
+
+function gitLabFileProvenance(filePath, head, lastCommitId = head) {
+  const diffEndpoint = `repository/commits/${lastCommitId}/diff?per_page=100`;
+  const change = {
+    old_path: filePath,
+    new_path: filePath,
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+  };
+  const rawChange = gitLabDiffResponseChange(filePath);
+  const commitMetadata = gitLabCommitMetadata(lastCommitId);
+  return {
+    schema_version: 'qbot-qwork-release-file-provenance/v2',
+    source: 'gitlab-api-repository-commit-diff',
+    commit_endpoint: `repository/commits/${lastCommitId}`,
+    diff_endpoint: diffEndpoint,
+    path: filePath,
+    ref: head,
+    release_commit_id: head,
+    file_last_commit_id: lastCommitId,
+    commit_id: lastCommitId,
+    commit_raw_response: structuredClone(commitMetadata),
+    commit_metadata: commitMetadata,
+    commit_response_sha256: sha256Text(stableJson(commitMetadata)),
+    diff_page_size: 100,
+    diff_pages: [{
+      page: 1,
+      endpoint: `${diffEndpoint}&page=1`,
+      item_count: 1,
+      raw_response: [rawChange],
+      changes: [change],
+      response_sha256: sha256Text(stableJson([rawChange])),
+    }],
+    matched_change_count: 1,
+    matched_changes: [change],
+    path_verified: true,
+    error: '',
+  };
+}
+
 function commit(repo, file, value, message) {
   fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
   fs.writeFileSync(path.join(repo, file), value);
@@ -157,17 +344,21 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
       "import assert from 'node:assert/strict';",
       "import { createRequire } from 'node:module';",
       "import test from 'node:test';",
+      "import vm from 'node:vm';",
       '',
       'const require = createRequire(import.meta.url);',
       'const {',
+      '  createExecutionWorkerSupervisor,',
       '  workerEnvironment,',
       "} = require('../../../electron/desktop-agent-host.cjs');",
+      'void createExecutionWorkerSupervisor;',
+      'void vm;',
       '',
       ...lines,
     ];
   } else if (mr1597 && filePath === 'electron/desktop-agent-host.cjs') {
     lines = [
-      "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+      "Object.assign(exports, require('./unrelated-a.cjs'), require('./host-core/agent/execution-worker-supervisor.cjs'));",
       ...lines,
     ];
   } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
@@ -321,15 +512,7 @@ function currentReleaseFileFixtures(contracts, head, {
       blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
-      last_commit_provenance: {
-        schema_version: 'qbot-qwork-release-file-provenance/v1',
-        source: 'gitlab-api-repository-commits',
-        endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
-        path: filePath,
-        ref: head,
-        commit_id: head,
-        last_commit_id: head,
-      },
+      last_commit_provenance: gitLabFileProvenance(filePath, head),
     }];
   }));
 }
@@ -399,18 +582,17 @@ function apiFixture({
         }],
       };
     }
-    if (endpoint.startsWith('repository/commits?')) {
-      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
-      const filePath = query.get('path');
-      const refName = query.get('ref_name');
-      const payload = releaseFiles.get(filePath);
-      if (!payload || refName !== head) throw new Error(`missing release file history fixture ${filePath}`);
-      return [{
-        id: payload.last_commit_id,
-        parent_ids: ['a'.repeat(40)],
-        committed_date: '2026-09-03T01:00:00Z',
-      }];
+    const commitDiffMatch = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/diff\?per_page=100&page=(\d+)$/i);
+    if (commitDiffMatch) {
+      const [, commitSha, pageText] = commitDiffMatch;
+      const page = Number(pageText);
+      const rows = [...releaseFiles.entries()]
+        .filter(([, payload]) => payload.last_commit_id === commitSha)
+        .map(([filePath]) => gitLabDiffResponseChange(filePath));
+      return rows.slice((page - 1) * 100, page * 100);
     }
+    const commitMetadataMatch = endpoint.match(/^repository\/commits\/([a-f0-9]{40})$/i);
+    if (commitMetadataMatch) return gitLabCommitMetadata(commitMetadataMatch[1]);
     const commitMrMatch = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/merge_requests$/i);
     if (commitMrMatch) {
       const commitSha = commitMrMatch[1];
@@ -2068,12 +2250,45 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     ['Reflect indirect require mutation', "  Reflect.set(require, 'compromised', true);"],
     ['Reflect.deleteProperty indirect test mutation', "  Reflect.deleteProperty(test, 'only');"],
     ['Object-wrapped protected mutation', "  Reflect.set(Object(assert), 'deepEqual', replacement);"],
+    ['array destructured assert alias', '  const [assertAlias] = [assert];\n  assertAlias.deepEqual = replacementDeepEqual;'],
+    ['object destructured require alias', "  const { authority: requireAlias } = { authority: require };\n  Reflect.set(requireAlias, 'compromised', true);"],
+    ['defaulted workerEnvironment alias', '  const [workerAlias = fallbackWorker] = [workerEnvironment];\n  workerAlias.compromised = true;'],
+    ['default-only assert alias', '  const [assertAlias = assert] = [];\n  assertAlias.deepEqual = replacementDeepEqual;'],
+    ['assigned array destructured assert alias', '  let assertAlias;\n  [assertAlias] = [assert];\n  assertAlias.deepEqual = replacementDeepEqual;'],
+    ['nested destructured require alias', "  const [{ authority: requireAlias }] = [{ authority: require }];\n  Reflect.set(requireAlias, 'compromised', true);"],
+    ['assigned object destructured workerEnvironment alias', '  let workerAlias;\n  ({ current: workerAlias } = { current: workerEnvironment });\n  workerAlias.compromised = true;'],
   ]) {
     const result = assertSemanticBypassRejected(label, (source) => source.replace(
       `${expectedStart}\n`, `${statement}\n${expectedStart}\n`,
     ), 'protected_binding_violation_count');
     assert.equal(result.current_release_semantics.protected_binding_violation_kinds.length > 0, true, label);
   }
+
+  for (const [label, statement] of [
+    ['computed object key', '  const { [dynamicAliasKey]: assertAlias } = { actual: assert };'],
+    ['array rest', '  const [...assertAliases] = [assert];'],
+    ['object rest', '  const { ...requireAliases } = { authority: require };'],
+    ['array source spread', '  const [assertAlias] = [...assertValues, assert];'],
+    ['dynamic object source key', '  const { actual: assertAlias } = { [dynamicSourceKey]: assert };'],
+    ['destructuring shape mismatch', '  const [firstAlias, missingAlias] = [assert];'],
+    ['member-expression assignment target', '  ({ actual: aliasHolder.assertAlias } = { actual: assert });'],
+  ]) {
+    const result = assertSemanticBypassRejected(label, (source) => source.replace(
+      `${expectedStart}\n`, `${statement}\n${expectedStart}\n`,
+    ), 'protected_binding_violation_count');
+    assert.equal(
+      result.current_release_semantics.protected_binding_violation_kinds.includes('indeterminate-alias-pattern'),
+      true,
+      `${label}:${result.current_release_semantics.protected_binding_violation_kinds.join(',')}`,
+    );
+  }
+
+  const harmlessDestructuring = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `  const [unrelatedArrayAlias] = [unrelatedObject];\n  const { value: unrelatedObjectAlias } = { value: anotherObject };\n  unrelatedArrayAlias.changed = true;\n  unrelatedObjectAlias.changed = true;\n${expectedStart}\n`,
+  )));
+  assert.equal(harmlessDestructuring.verified, true, harmlessDestructuring.failures.join(','));
+  assert.equal(harmlessDestructuring.current_release_semantics.protected_binding_violation_count, 0);
 
   const assertChainBypassRejected = (label, filePath, transform) => {
     const result = audit(rewritePath(filePath, transform));
@@ -2086,6 +2301,67 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assertChainBypassRejected('facade must forward the exact supervisor', 'electron/desktop-agent-host.cjs', (source) => (
     source.replace('./host-core/agent/execution-worker-supervisor.cjs', './host-core/agent/fake-supervisor.cjs')
   ));
+  assertChainBypassRejected('facade cannot forward the supervisor twice', 'electron/desktop-agent-host.cjs', (source) => (
+    source.replace(
+      "require('./host-core/agent/execution-worker-supervisor.cjs')",
+      "require('./host-core/agent/execution-worker-supervisor.cjs'), require('./host-core/agent/execution-worker-supervisor.cjs')",
+    )
+  ));
+  assertChainBypassRejected('facade supervisor must remain the final aggregation source', 'electron/desktop-agent-host.cjs', (source) => (
+    source.replace(
+      "require('./host-core/agent/execution-worker-supervisor.cjs'))",
+      "require('./host-core/agent/execution-worker-supervisor.cjs'), require('./later-source.cjs'))",
+    )
+  ));
+  assertChainBypassRejected('facade sources must remain static require calls', 'electron/desktop-agent-host.cjs', (source) => (
+    source.replace("require('./unrelated-a.cjs')", 'dynamicFacadeSource')
+  ));
+  assertChainBypassRejected('facade sources cannot use spread', 'electron/desktop-agent-host.cjs', (source) => (
+    source.replace("require('./unrelated-a.cjs')", '...dynamicFacadeSources')
+  ));
+  assertChainBypassRejected('facade cannot add a second export aggregation', 'electron/desktop-agent-host.cjs', (source) => (
+    `${source}Object.assign(exports, require('./another-source.cjs'));\n`
+  ));
+  assertChainBypassRejected('facade cannot overwrite workerEnvironment', 'electron/desktop-agent-host.cjs', (source) => (
+    `${source}exports.workerEnvironment = replacementWorkerEnvironment;\n`
+  ));
+  assertChainBypassRejected('facade cannot use a dynamic export write', 'electron/desktop-agent-host.cjs', (source) => (
+    `${source}exports[dynamicExportName] = replacementExport;\n`
+  ));
+  for (const [label, statement] of [
+    ['module.exports member assignment', 'module.exports.workerEnvironment = replacementWorkerEnvironment;'],
+    ['module.exports member update', 'module.exports.workerEnvironment++;'],
+    ['module.exports member deletion', 'delete module.exports.workerEnvironment;'],
+    ['module.exports dynamic member assignment', 'module.exports[dynamicExportName] = replacementExport;'],
+    ['computed module exports member assignment', "module['exports'].workerEnvironment = replacementWorkerEnvironment;"],
+    ['dynamic module export root assignment', 'module[dynamicModuleProperty].workerEnvironment = replacementWorkerEnvironment;'],
+    ['module.exports alias member assignment', 'const facadeAlias = module.exports; facadeAlias.workerEnvironment = replacementWorkerEnvironment;'],
+    ['destructured module.exports alias member assignment', 'const { exports: facadeAlias } = module; facadeAlias.workerEnvironment = replacementWorkerEnvironment;'],
+    ['module.exports alias dynamic member deletion', 'const facadeAlias = module.exports; delete facadeAlias[dynamicExportName];'],
+    ['Object.assign module.exports overwrite', 'Object.assign(module.exports, { workerEnvironment: replacementWorkerEnvironment });'],
+    ['Object.assign module.exports alias overwrite', 'const facadeAlias = module.exports; Object.assign(facadeAlias, { workerEnvironment: replacementWorkerEnvironment });'],
+    ['Object.defineProperty module.exports overwrite', "Object.defineProperty(module.exports, 'workerEnvironment', { value: replacementWorkerEnvironment });"],
+    ['Object.defineProperties module.exports overwrite', 'Object.defineProperties(module.exports, { workerEnvironment: { value: replacementWorkerEnvironment } });'],
+    ['Reflect.set module.exports overwrite', "Reflect.set(module.exports, 'workerEnvironment', replacementWorkerEnvironment);"],
+    ['Reflect.defineProperty module.exports overwrite', "Reflect.defineProperty(module.exports, 'workerEnvironment', { value: replacementWorkerEnvironment });"],
+    ['Reflect.deleteProperty module.exports overwrite', "Reflect.deleteProperty(module.exports, 'workerEnvironment');"],
+    ['Object.assign.call module.exports overwrite', 'Object.assign.call(null, module.exports, { workerEnvironment: replacementWorkerEnvironment });'],
+    ['Object.assign.apply module.exports overwrite', 'Object.assign.apply(null, [module.exports, { workerEnvironment: replacementWorkerEnvironment }]);'],
+    ['Object.assign alias.call module.exports overwrite', 'const assignAlias = Object.assign; assignAlias.call(null, module.exports, { workerEnvironment: replacementWorkerEnvironment });'],
+    ['Reflect.set.call module.exports overwrite', "Reflect.set.call(null, module.exports, 'workerEnvironment', replacementWorkerEnvironment);"],
+    ['Reflect.set alias.apply module.exports overwrite', "const setAlias = Reflect.set; setAlias.apply(null, [module.exports, 'workerEnvironment', replacementWorkerEnvironment]);"],
+    ['dynamic Object.assign.apply arguments', 'Object.assign.apply(null, dynamicWriteArguments);'],
+  ]) {
+    assertChainBypassRejected(label, 'electron/desktop-agent-host.cjs', (source) => (
+      `${source}${statement}\n`
+    ));
+  }
+  const harmlessFacadeIndirectWrites = audit(rewritePath(
+    'electron/desktop-agent-host.cjs',
+    (source) => `${source}Object.assign.call(null, unrelatedTarget, { observed: true });\n`
+      + "Reflect.set.apply(null, [unrelatedTarget, 'observed', true]);\n",
+  ));
+  assert.equal(harmlessFacadeIndirectWrites.verified, true, harmlessFacadeIndirectWrites.failures.join(','));
   assertChainBypassRejected(
     'supervisor must import the exact lifecycle workerEnvironment',
     'electron/host-core/agent/execution-worker-supervisor.cjs',
@@ -2131,11 +2407,59 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     ['dynamic computed callee', '  dynamicFns[dynamicName]();', 'dynamic_computed_callee'],
     ['dynamic import', "  import('./dynamic-test-module.mjs');", 'dynamic_import'],
     ['assigned eval alias', "  let execute; execute = eval; execute('1 + 1');", 'indirect_eval'],
+    ['logical-or assignment eval alias', "  let execute; execute ||= eval; execute('1 + 1');", 'indirect_eval'],
+    ['logical-and assignment eval alias', "  let execute = staticHelper; execute &&= eval; execute('1 + 1');", 'indirect_eval'],
+    ['nullish assignment eval alias', "  let execute = null; execute ??= eval; execute('1 + 1');", 'indirect_eval'],
+    ['assignment-expression eval', "  let execute; (execute = eval)('1 + 1');", 'indirect_eval'],
+    ['conditional eval', "  (true ? eval : staticHelper)('1 + 1');", 'indirect_eval'],
+    ['logical eval alias', "  const execute = false || eval; execute('1 + 1');", 'indirect_eval'],
+    ['awaited eval alias', "  async function executeLater() { const execute = await eval; execute('1 + 1'); }", 'indirect_eval'],
+    ['explicit undefined default eval alias', "  const [execute = eval] = [undefined]; execute('1 + 1');", 'indirect_eval'],
     ['destructured eval alias', "  const [execute] = [eval]; execute('1 + 1');", 'indirect_eval'],
+    ['object-container eval alias', "  const holder = { execute: eval }; const execute = holder.execute; execute('1 + 1');", 'indirect_eval'],
+    ['declared-function return eval alias', "  function obtainExecutor() { return eval; } const execute = obtainExecutor(); execute('1 + 1');", 'indirect_eval'],
+    ['post-declaration object member eval alias', "  const holder = {}; holder.execute = eval; const execute = holder.execute; execute('1 + 1');", 'indirect_eval'],
+    ['Reflect.get eval alias', "  const execute = Reflect.get(globalThis, 'eval'); execute('1 + 1');", 'indirect_eval'],
+    ['Object.defineProperty eval alias', "  const holder = {}; Object.defineProperty(holder, 'execute', { value: eval }); holder.execute('1 + 1');", 'indirect_eval'],
+    ['array-container eval alias', "  const holder = [eval]; const execute = holder[0]; execute('1 + 1');", 'indirect_eval'],
+    ['dynamic-container eval alias', "  const holder = { execute: eval }; const execute = holder[dynamicName]; execute('1 + 1');", 'indirect_eval'],
+    ['dynamic-container callable indeterminate', "  const holder = { safe: staticHelper }; const execute = holder[dynamicName]; execute('1 + 1');", 'dynamic_computed_callee'],
+    ['IIFE-return eval alias', "  const execute = (() => eval)(); execute('1 + 1');", 'indirect_eval'],
+    ['for-of eval alias', "  for (const execute of [eval]) execute('1 + 1');", 'indirect_eval'],
+    ['for-of named-container eval alias', "  const values = [eval]; for (const execute of values) execute('1 + 1');", 'indirect_eval'],
     ['globalThis destructured eval alias', "  const { eval: execute } = globalThis; execute('1 + 1');", 'indirect_eval'],
     ['assigned Function alias', "  let Constructor; Constructor = Function; new Constructor('return 1');", 'function_constructor'],
+    ['conditional Function constructor', "  new (true ? Function : StaticConstructor)('return 1');", 'function_constructor'],
+    ['logical Function alias', "  const Constructor = false || Function; new Constructor('return 1');", 'function_constructor'],
     ['globalThis destructured Function alias', "  const { Function: Constructor } = globalThis; new Constructor('return 1');", 'function_constructor'],
+    ['switch discriminant Function with case lexical shadow', "  switch (Function('return 1')()) { case 1: let Function; break; }", 'function_constructor'],
+    ['switch discriminant globalThis Function with case lexical shadow', "  switch (globalThis.Function('return 1')()) { case 1: let globalThis; break; }", 'function_constructor'],
+    ['function parameter initializer before body var environment', "  function invokeDefault(value = Function('return 1')()) { var Function; return value; } invokeDefault();", 'function_constructor'],
+    ['class static block lexical declaration does not escape block', "  class StaticLexicalScope { static { let Function; } static value = Function('return 1')(); }", 'function_constructor'],
+    ['class static block var declaration does not escape block', "  class StaticVarScope { static { var Function; } } Function('return 1')();", 'function_constructor'],
     ['node vm require', "  const vm = require('node:vm'); vm.runInNewContext('1 + 1');", 'node_vm_module'],
+    ['node vm require binding alias', "  const loadModule = require; const vmAlias = loadModule('node:vm'); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm createRequire-derived loader', "  const loadModule = createRequire(import.meta.url); const vmAlias = loadModule('node:vm'); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm loader call forwarding', "  const loadModule = require; const vmAlias = loadModule.call(null, 'node:vm'); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm loader apply forwarding', "  const loadModule = require; const vmAlias = loadModule.apply(null, ['node:vm']); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm loader Reflect.apply forwarding', "  const loadModule = require; const vmAlias = Reflect.apply(loadModule, null, ['node:vm']); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['switch discriminant vm execution with case lexical shadow', "  switch (vm.runInNewContext('1', {})) { case 1: let vm; break; }", 'node_vm_execution'],
+    ['owner uses top-level node vm alias', "  vm.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm member alias', "  const execute = vm.runInNewContext; execute('1 + 1');", 'node_vm_execution'],
+    ['node vm destructured member alias', "  const { runInNewContext: execute } = vm; execute('1 + 1');", 'node_vm_execution'],
+    ['node vm shorthand destructured member alias', "  const { runInNewContext } = vm; runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm bound member alias', "  const execute = vm.runInNewContext.bind(vm); execute('1 + 1');", 'node_vm_execution'],
+    ['node vm object alias member', "  const vmAlias = vm; const execute = vmAlias.runInNewContext; execute('1 + 1');", 'node_vm_execution'],
+    ['node vm object-container alias', "  const holder = { vm }; const alias = holder.vm; alias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['bound eval alias', "  const execute = eval.bind(null); execute('1 + 1');", 'indirect_eval'],
+    ['inline bound Function', "  Function.bind(null)('return 1');", 'function_constructor'],
+    ['eval passed through IIFE', "  ((execute) => execute('1 + 1'))(eval);", 'dynamic_callable_escape'],
+    ['Reflect apply alias', "  const invoke = Reflect.apply; invoke(eval, null, ['1 + 1']);", 'reflect_eval'],
+    ['Reflect construct destructured alias', "  const { construct: invoke } = Reflect; invoke(Function, ['return 1']);", 'reflect_function_constructor'],
+    ['node vm spread alias', "  const vmAlias = { ...vm }; vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['node vm Object.assign alias', "  const vmAlias = Object.assign({}, vm); vmAlias.runInNewContext('1 + 1');", 'node_vm_execution'],
+    ['eval tagged template', '  eval`1 + 1`;', 'eval_tagged_template'],
+    ['vm tagged template', '  vm.runInNewContext`1 + 1`;', 'node_vm_execution'],
   ];
   for (const [label, statement, expectedKind] of dynamicExecutionScenarios) {
     const result = assertSemanticBypassRejected(label, (source) => source.replace(
@@ -2149,10 +2473,215 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   }
   const harmlessStaticCalls = audit(rewrite((source) => source.replace(
     `${expectedStart}\n`,
-    `  staticHelper();\n  Object.assign(unrelatedObject, { observed: true });\n  void unrelatedObject.constructor;\n${expectedStart}\n`,
+    `  staticHelper();\n  const selectedStaticHelper = true ? staticHelper : alternateStaticHelper;\n  selectedStaticHelper();\n  Object.assign(unrelatedObject, { observed: true });\n  void unrelatedObject.constructor;\n${expectedStart}\n`,
   )));
   assert.equal(harmlessStaticCalls.verified, true, harmlessStaticCalls.failures.join(','));
   assert.equal(harmlessStaticCalls.current_release_semantics.dynamic_code_execution_count, 0);
+
+  const harmlessNamedClassHeritageShadow = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `  try {\n    void class Function extends Function('return 1')() {};\n  } catch {}\n${expectedStart}\n`,
+  )));
+  assert.equal(
+    harmlessNamedClassHeritageShadow.verified,
+    true,
+    harmlessNamedClassHeritageShadow.failures.join(','),
+  );
+  assert.equal(
+    harmlessNamedClassHeritageShadow.current_release_semantics.dynamic_code_execution_count,
+    0,
+  );
+
+  const harmlessContainerReads = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `  const holder = { safe: staticHelper, execute: eval, values: [alternateStaticHelper, eval] };\n  const safeObjectCall = holder.safe;\n  const safeArrayCall = holder.values[0];\n  safeObjectCall();\n  safeArrayCall();\n  void holder.execute;\n  void holder.values[1];\n${expectedStart}\n`,
+  )));
+  assert.equal(harmlessContainerReads.verified, true, harmlessContainerReads.failures.join(','));
+  assert.equal(harmlessContainerReads.current_release_semantics.dynamic_code_execution_count, 0);
+
+  const harmlessShadowedContainerBindings = audit(rewrite((source) => source.replace(
+    ownerLine,
+    `test('unrelated async result', async () => {\n  const settled = await unrelatedAsyncCall();\n  void settled;\n});\n`
+      + `test('unrelated array result', () => {\n  const settled = [];\n  settled.push('done');\n});\n`
+      + ownerLine,
+  )));
+  assert.equal(
+    harmlessShadowedContainerBindings.verified,
+    true,
+    harmlessShadowedContainerBindings.failures.join(','),
+  );
+  assert.equal(
+    harmlessShadowedContainerBindings.current_release_semantics.dynamic_code_execution_count,
+    0,
+  );
+
+  const topLevelDynamicExecution = audit(rewrite((source) => (
+    `eval('outside owner');\n${source}`
+  )));
+  assert.equal(topLevelDynamicExecution.verified, false);
+  assert.equal(
+    topLevelDynamicExecution.current_release_semantics.dynamic_code_execution_kinds.includes('direct_eval'),
+    true,
+  );
+
+  const unusedVmImport = audit(rewrite((source) => source.replace(
+    "import vm from 'node:vm';",
+    "import vm, { runInNewContext as unusedVmRunner } from 'node:vm';",
+  ).replace('void vm;', 'void vm;\nvoid unusedVmRunner;')));
+  assert.equal(unusedVmImport.verified, true, unusedVmImport.failures.join(','));
+  assert.equal(unusedVmImport.current_release_semantics.dynamic_code_execution_count, 0);
+
+  const workerEntryHarnessSource = [
+    "const workerEntryPath = resolve('electron/host-core/agent/execution-worker-entry.cjs');",
+    '',
+    'function workerEntryHarness(runAgent) {',
+    '  const parentPort = new EventEmitter();',
+    '  const sent = [];',
+    '  parentPort.postMessage = (message) => {',
+    '    sent.push(structuredClone(message));',
+    "    parentPort.emit('posted');",
+    '  };',
+    "  const runtimeEntry = '/qwork-test/context-usage-runtime.cjs';",
+    '  const entryRequire = createRequire(workerEntryPath);',
+    '  const processState = {',
+    '    parentPort,',
+    '    env: { QBOT_EXECUTION_WORKER_RUNTIME_ENTRY: runtimeEntry },',
+    '    memoryUsage: () => ({ rss: 1024 }),',
+    '    exitCode: null,',
+    '  };',
+    '  const module = { exports: {} };',
+    "  runInNewContext(readFileSync(workerEntryPath, 'utf8'), {",
+    '    AbortController,',
+    '    Buffer,',
+    '    clearInterval,',
+    '    clearTimeout,',
+    '    console,',
+    '    module,',
+    '    exports: module.exports,',
+    '    __dirname: dirname(workerEntryPath),',
+    '    __filename: workerEntryPath,',
+    '    process: processState,',
+    '    require: (specifier) => (',
+    '      specifier === runtimeEntry ? { eng: { runAgent } } : entryRequire(specifier)',
+    '    ),',
+    '    setInterval,',
+    '    setTimeout,',
+    '  }, { filename: workerEntryPath });',
+    '  const waitForOperation = async (operation, predicate = () => true) => {',
+    '    for (let attempt = 0; attempt < 20; attempt += 1) {',
+    '      const message = sent.find((candidate) => (',
+    '        candidate.operation === operation && predicate(candidate)',
+    '      ));',
+    '      if (message) return message;',
+    '      await new Promise((resolveWait) => setImmediate(resolveWait));',
+    '    }',
+    '    assert.fail(`worker did not emit ${operation}`);',
+    '  };',
+    '  return {',
+    '    processState,',
+    "    send: (message) => parentPort.emit('message', { data: message }),",
+    '    sent,',
+    '    waitForOperation,',
+    '  };',
+    '}',
+  ].join('\n');
+  const auditWorkerEntryHarness = (transform = (source) => source) => audit(rewrite((source) => (
+    transform(source
+      .replace(
+        "import vm from 'node:vm';",
+        "import { EventEmitter } from 'node:events';\n"
+          + "import { readFileSync } from 'node:fs';\n"
+          + "import { dirname, resolve } from 'node:path';\n"
+          + "import { runInNewContext } from 'node:vm';",
+      )
+      .replace('void vm;\n', '')
+      .replace(ownerLine, `${workerEntryHarnessSource}\n\n${ownerLine}`))
+  )));
+  const exactWorkerEntryHarness = auditWorkerEntryHarness();
+  assert.equal(exactWorkerEntryHarness.verified, true, exactWorkerEntryHarness.failures.join(','));
+  assert.equal(exactWorkerEntryHarness.current_release_semantics.dynamic_code_execution_count, 0);
+
+  const workerEntryHarnessDriftScenarios = [
+    [
+      'owner callback reaches workerEntryHarness',
+      (source) => source.replace(ownerLine, `${ownerLine}\n  workerEntryHarness(async () => ({ parts: [] }));`),
+    ],
+    [
+      'second runInNewContext invocation',
+      (source) => source.replace(ownerLine, `runInNewContext('1 + 1', {});\n${ownerLine}`),
+    ],
+    [
+      'runInNewContext alias',
+      (source) => source.replace(ownerLine, `const vmRunnerAlias = runInNewContext;\nvoid vmRunnerAlias;\n${ownerLine}`),
+    ],
+    [
+      'runInNewContext bind',
+      (source) => source.replace(ownerLine, `const boundVmRunner = runInNewContext.bind(null);\nvoid boundVmRunner;\n${ownerLine}`),
+    ],
+    [
+      'Reflect.apply runInNewContext',
+      (source) => source.replace(ownerLine, `Reflect.apply(runInNewContext, null, [\"1 + 1\", {}]);\n${ownerLine}`),
+    ],
+    [
+      'Reflect.construct runInNewContext',
+      (source) => source.replace(ownerLine, `Reflect.construct(runInNewContext, [\"1 + 1\", {}]);\n${ownerLine}`),
+    ],
+    [
+      'container copy and extraction of runInNewContext',
+      (source) => source.replace(
+        ownerLine,
+        `const vmRunners = { execute: runInNewContext };\nconst extractedVmRunner = vmRunners.execute;\nvoid extractedVmRunner;\n${ownerLine}`,
+      ),
+    ],
+    [
+      'workerEntryHarness parameter drift',
+      (source) => source.replace(
+        'function workerEntryHarness(runAgent) {',
+        'function workerEntryHarness(runAgent, untrustedRuntime) {',
+      ),
+    ],
+    [
+      'workerEntryPath drift',
+      (source) => source.replace(
+        "resolve('electron/host-core/agent/execution-worker-entry.cjs')",
+        "resolve('electron/host-core/agent/untrusted-worker-entry.cjs')",
+      ),
+    ],
+    [
+      'worker entry source encoding drift',
+      (source) => source.replace(
+        "readFileSync(workerEntryPath, 'utf8')",
+        "readFileSync(workerEntryPath, 'utf16le')",
+      ),
+    ],
+    [
+      'worker entry sandbox drift',
+      (source) => source.replace(
+        '    AbortController,\n    Buffer,',
+        '    AbortController,\n    eval,\n    Buffer,',
+      ),
+    ],
+    [
+      'worker entry filename drift',
+      (source) => source.replace(
+        '{ filename: workerEntryPath });',
+        "{ filename: '/untrusted/worker-entry.cjs' });",
+      ),
+    ],
+  ];
+  for (const [label, transform] of workerEntryHarnessDriftScenarios) {
+    const result = auditWorkerEntryHarness(transform);
+    assert.equal(result.verified, false, label);
+    assert.equal(result.current_release_semantics.verified, false, label);
+    assert.equal(result.current_release_semantics.dynamic_code_execution_count > 0, true, label);
+    assert.equal(
+      result.current_release_semantics.dynamic_code_execution_kinds.some((kind) => (
+        ['node_vm_execution', 'node_vm_escape'].includes(kind)
+      )),
+      true,
+      `${label}:${result.current_release_semantics.dynamic_code_execution_kinds.join(',')}`,
+    );
+  }
 
   for (const alternateTokenProperty of [
     "      IM_USER_ACCESS_TOKEN: 'different-secret',",
@@ -2240,6 +2769,140 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   });
   const verifiedValidation = validateAttestation(verified);
   assert.equal(verifiedValidation.ok, true, verifiedValidation.failures.join(','));
+
+  for (const field of [
+    'id', 'short_id', 'created_at', 'parent_ids', 'title', 'message', 'author_name', 'author_email',
+    'authored_date', 'committer_name', 'committer_email', 'committed_date', 'trailers',
+    'project_id', 'stats', 'status', 'last_pipeline', 'web_url',
+  ]) {
+    const forgedMetadata = structuredClone(verified);
+    const provenance = forgedMetadata.protected_files[0].last_commit_provenance;
+    delete provenance.commit_raw_response[field];
+    delete provenance.commit_metadata[field];
+    provenance.commit_response_sha256 = sha256Text(stableJson(provenance.commit_raw_response));
+    delete forgedMetadata.attestation_sha256;
+    forgedMetadata.attestation_sha256 = sha256Text(stableJson(forgedMetadata));
+    const validation = validateAttestation(forgedMetadata);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => failure.includes(':commit_metadata_')), true,
+      `${field}:${validation.failures.join(',')}`);
+  }
+
+  for (const [field, value] of [
+    ['title', 'Format-valid forged title'],
+    ['message', 'Format-valid forged message'],
+    ['author_name', 'Format-valid forged author'],
+  ]) {
+    const forgedProjection = structuredClone(verified);
+    const provenance = forgedProjection.protected_files[0].last_commit_provenance;
+    provenance.commit_metadata[field] = value;
+    provenance.commit_response_sha256 = sha256Text(stableJson(provenance.commit_metadata));
+    delete forgedProjection.attestation_sha256;
+    forgedProjection.attestation_sha256 = sha256Text(stableJson(forgedProjection));
+    const validation = validateAttestation(forgedProjection);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => (
+      failure.includes(':commit_metadata_projection_mismatch')
+        || failure.includes(':commit_response_sha256_mismatch')
+    )), true, `${field}:${validation.failures.join(',')}`);
+  }
+
+  for (const [field, value] of [
+    ['diff', '@@ -1 +1 @@\n-forged\n+replacement'],
+    ['a_mode', '100755'],
+    ['generated_file', true],
+    ['collapsed', true],
+    ['too_large', true],
+  ]) {
+    const forgedRawResponse = structuredClone(verified);
+    const page = forgedRawResponse.protected_files[0].last_commit_provenance.diff_pages[0];
+    page.raw_response[0][field] = value;
+    delete forgedRawResponse.attestation_sha256;
+    forgedRawResponse.attestation_sha256 = sha256Text(stableJson(forgedRawResponse));
+    const validation = validateAttestation(forgedRawResponse);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => failure.includes(':diff_page_sha256_mismatch:')), true,
+      `${field}:${validation.failures.join(',')}`);
+  }
+
+  for (const [field, value] of [
+    ['created_at', '2026-09-08 01:02:03Z'],
+    ['authored_date', '2026-02-30T01:02:03Z'],
+    ['committed_date', '2026-09-08T01:02:03+14:30'],
+    ['short_id', 'ABCDEF12'],
+    ['parent_ids', ['A'.repeat(40)]],
+    ['trailers', { Reviewed: 42 }],
+    ['stats', { additions: 1, deletions: 1, total: 1 }],
+    ['status', '   '],
+    ['last_pipeline', {}],
+  ]) {
+    const forgedMetadata = structuredClone(verified);
+    const provenance = forgedMetadata.protected_files[0].last_commit_provenance;
+    provenance.commit_raw_response[field] = structuredClone(value);
+    provenance.commit_metadata[field] = value;
+    provenance.commit_response_sha256 = sha256Text(stableJson(provenance.commit_raw_response));
+    delete forgedMetadata.attestation_sha256;
+    forgedMetadata.attestation_sha256 = sha256Text(stableJson(forgedMetadata));
+    const validation = validateAttestation(forgedMetadata);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => failure.includes(`:commit_metadata_${field}`)), true,
+      `${field}:${validation.failures.join(',')}`);
+  }
+
+  for (const field of ['collapsed', 'too_large']) {
+    const forgedIncompleteDiff = structuredClone(verified);
+    const page = forgedIncompleteDiff.protected_files[0].last_commit_provenance.diff_pages[0];
+    page.raw_response[0][field] = true;
+    page.response_sha256 = sha256Text(stableJson(page.raw_response));
+    delete forgedIncompleteDiff.attestation_sha256;
+    forgedIncompleteDiff.attestation_sha256 = sha256Text(stableJson(forgedIncompleteDiff));
+    const validation = validateAttestation(forgedIncompleteDiff);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => failure.includes(':diff_page_raw_incomplete:')), true,
+      `${field}:${validation.failures.join(',')}`);
+  }
+
+  for (const field of [
+    'old_path', 'new_path', 'a_mode', 'b_mode', 'diff', 'new_file', 'renamed_file',
+    'deleted_file',
+  ]) {
+    const forgedReducedDiff = structuredClone(verified);
+    const page = forgedReducedDiff.protected_files[0].last_commit_provenance.diff_pages[0];
+    delete page.raw_response[0][field];
+    page.response_sha256 = sha256Text(stableJson(page.raw_response));
+    delete forgedReducedDiff.attestation_sha256;
+    forgedReducedDiff.attestation_sha256 = sha256Text(stableJson(forgedReducedDiff));
+    const validation = validateAttestation(forgedReducedDiff);
+    assert.equal(validation.ok, false, field);
+    assert.equal(validation.failures.some((failure) => failure.includes(':diff_page_raw_change_invalid:')), true,
+      `${field}:${validation.failures.join(',')}`);
+  }
+  for (const field of ['generated_file', 'collapsed', 'too_large']) {
+    const reducedOptionalDiff = structuredClone(verified);
+    const page = reducedOptionalDiff.protected_files[0].last_commit_provenance.diff_pages[0];
+    delete page.raw_response[0][field];
+    page.response_sha256 = sha256Text(stableJson(page.raw_response));
+    delete reducedOptionalDiff.attestation_sha256;
+    reducedOptionalDiff.attestation_sha256 = sha256Text(stableJson(reducedOptionalDiff));
+    const validation = validateAttestation(reducedOptionalDiff);
+    assert.equal(validation.ok, true, `${field}:${validation.failures.join(',')}`);
+  }
+  for (const [label, mutate, expectedFailure] of [
+    ['unknown_field', (change) => { change.untrusted_extra = false; }, ':diff_page_raw_change_invalid:'],
+    ['optional_flag_type', (change) => { change.generated_file = 'false'; }, ':diff_page_raw_extension_invalid:'],
+    ['rename_path_conflict', (change) => { change.renamed_file = true; }, ':diff_page_change_flags_conflict:'],
+  ]) {
+    const forgedDiff = structuredClone(verified);
+    const page = forgedDiff.protected_files[0].last_commit_provenance.diff_pages[0];
+    mutate(page.raw_response[0]);
+    page.response_sha256 = sha256Text(stableJson(page.raw_response));
+    delete forgedDiff.attestation_sha256;
+    forgedDiff.attestation_sha256 = sha256Text(stableJson(forgedDiff));
+    const validation = validateAttestation(forgedDiff);
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.some((failure) => failure.includes(expectedFailure)), true,
+      `${label}:${validation.failures.join(',')}`);
+  }
   const forgedCurrentV1 = structuredClone(verified);
   forgedCurrentV1.schema_version = 'qbot-qwork-release-source-contract/v1';
   delete forgedCurrentV1.attestation_sha256;
@@ -2256,6 +2919,25 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assert.equal(forgedCurrentTopLevelValidation.ok, false);
   assert.equal(forgedCurrentTopLevelValidation.failures.includes('attestation_current_fields_mismatch'), true);
 
+  const forgedLegacyProvenance = structuredClone(verified);
+  const legacyFile = forgedLegacyProvenance.protected_files[0];
+  legacyFile.last_commit_provenance = {
+    schema_version: 'qbot-qwork-release-file-provenance/v1',
+    source: 'gitlab-api-repository-commits',
+    endpoint: `repository/commits?path=${encodeURIComponent(legacyFile.path)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
+    path: legacyFile.path,
+    ref: head,
+    commit_id: head,
+    last_commit_id: head,
+  };
+  delete forgedLegacyProvenance.attestation_sha256;
+  forgedLegacyProvenance.attestation_sha256 = sha256Text(stableJson(forgedLegacyProvenance));
+  const legacyProvenanceValidation = validateAttestation(forgedLegacyProvenance);
+  assert.equal(legacyProvenanceValidation.ok, false);
+  assert.equal(legacyProvenanceValidation.failures.includes(
+    `attestation_release_file_last_commit_provenance:${legacyFile.path}:fields_mismatch`,
+  ), true);
+
   const forgedLastCommit = structuredClone(verified);
   const forgedLastCommitFile = forgedLastCommit.protected_files[0];
   forgedLastCommitFile.last_commit_id = '8'.repeat(40);
@@ -2265,23 +2947,89 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assert.equal(forgedLastCommitValidation.ok, false);
   assert.equal(
     forgedLastCommitValidation.failures.includes(
-      `attestation_release_file_last_commit_provenance:${forgedLastCommitFile.path}:last_commit_id_mismatch`,
+      `attestation_release_file_last_commit_provenance:${forgedLastCommitFile.path}:file_last_commit_id_mismatch`,
     ),
     true,
   );
 
   const forgedProvenance = structuredClone(verified);
-  forgedProvenance.protected_files[0].last_commit_provenance.last_commit_id = '8'.repeat(40);
+  forgedProvenance.protected_files[0].last_commit_provenance.file_last_commit_id = '8'.repeat(40);
   delete forgedProvenance.attestation_sha256;
   forgedProvenance.attestation_sha256 = sha256Text(stableJson(forgedProvenance));
   const forgedProvenanceValidation = validateAttestation(forgedProvenance);
   assert.equal(forgedProvenanceValidation.ok, false);
   assert.equal(
     forgedProvenanceValidation.failures.includes(
-      `attestation_release_file_last_commit_provenance:${forgedProvenance.protected_files[0].path}:last_commit_id_mismatch`,
+      `attestation_release_file_last_commit_provenance:${forgedProvenance.protected_files[0].path}:file_last_commit_id_mismatch`,
     ),
     true,
   );
+
+  for (const scenario of [
+    {
+      name: 'duplicate current path changes',
+      mutate(provenance) {
+        const duplicate = { ...provenance.matched_changes[0], new_file: true };
+        provenance.diff_pages[0].raw_response.push(duplicate);
+        provenance.diff_pages[0].changes.push(duplicate);
+        provenance.diff_pages[0].item_count = provenance.diff_pages[0].changes.length;
+        provenance.diff_pages[0].response_sha256 = sha256Text(stableJson(provenance.diff_pages[0].raw_response));
+        provenance.matched_changes.push(duplicate);
+        provenance.matched_change_count = provenance.matched_changes.length;
+      },
+      failure: ':matched_change_count_mismatch',
+    },
+    {
+      name: 'deleted current path',
+      mutate(provenance) {
+        provenance.diff_pages[0].raw_response[0].deleted_file = true;
+        provenance.diff_pages[0].changes[0].deleted_file = true;
+        provenance.diff_pages[0].response_sha256 = sha256Text(stableJson(provenance.diff_pages[0].raw_response));
+        provenance.matched_changes[0].deleted_file = true;
+      },
+      failure: ':matched_change_current_path_mismatch',
+    },
+    {
+      name: 'rename away from current path',
+      mutate(provenance) {
+        provenance.diff_pages[0].raw_response[0].new_path = 'docs/renamed-away.mjs';
+        provenance.diff_pages[0].raw_response[0].renamed_file = true;
+        provenance.diff_pages[0].changes[0].new_path = 'docs/renamed-away.mjs';
+        provenance.diff_pages[0].changes[0].renamed_file = true;
+        provenance.diff_pages[0].response_sha256 = sha256Text(stableJson(provenance.diff_pages[0].raw_response));
+        provenance.matched_changes[0].new_path = 'docs/renamed-away.mjs';
+        provenance.matched_changes[0].renamed_file = true;
+      },
+      failure: ':matched_change_current_path_mismatch',
+    },
+  ]) {
+    const forgedTerminalChange = structuredClone(verified);
+    const file = forgedTerminalChange.protected_files[0];
+    scenario.mutate(file.last_commit_provenance);
+    delete forgedTerminalChange.attestation_sha256;
+    forgedTerminalChange.attestation_sha256 = sha256Text(stableJson(forgedTerminalChange));
+    const validation = validateAttestation(forgedTerminalChange);
+    assert.equal(validation.ok, false, scenario.name);
+    assert.equal(validation.failures.some((failure) => failure.includes(scenario.failure)), true,
+      `${scenario.name}:${validation.failures.join(',')}`);
+  }
+
+  for (const invalidPath of [42, {}, '   ', ' leading/path.mjs', 'trailing/path.mjs ']) {
+    const forgedPath = structuredClone(verified);
+    const provenance = forgedPath.protected_files[0].last_commit_provenance;
+    provenance.diff_pages[0].raw_response[0].old_path = invalidPath;
+    provenance.diff_pages[0].changes[0].old_path = invalidPath;
+    provenance.diff_pages[0].response_sha256 = sha256Text(stableJson(provenance.diff_pages[0].raw_response));
+    provenance.matched_changes[0].old_path = invalidPath;
+    delete forgedPath.attestation_sha256;
+    forgedPath.attestation_sha256 = sha256Text(stableJson(forgedPath));
+    const validation = validateAttestation(forgedPath);
+    assert.equal(validation.ok, false, stableJson(invalidPath));
+    assert.equal(validation.failures.some((failure) => (
+      failure.includes(':diff_page_raw_change_invalid:')
+        || failure.includes(':diff_page_change_invalid:')
+    )), true, `${stableJson(invalidPath)}:${validation.failures.join(',')}`);
+  }
 
   const forgedSemantics = structuredClone(verified);
   forgedSemantics.current_release_semantics.expected_object_shape.spread_count = 1;
@@ -2606,6 +3354,116 @@ test('MR !1561 origin changes verify exactly and fail closed on limit, equality,
   }
 });
 
+test('current-release validation replays header declarations from protected file bytes', () => {
+  const contract = QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT;
+  const head = 'd'.repeat(40);
+  const fixtureMap = currentReleaseFileFixtures([contract], head);
+  const files = [...fixtureMap].map(([filePath, payload]) => ({
+    path: filePath,
+    requested_ref: head,
+    payload,
+  }));
+  const verified = auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: contract.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: contract.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files,
+    mergeRequests: [],
+    originAttestation: null,
+    contract,
+  });
+  assert.equal(verified.verified, true, verified.failures.join(','));
+  for (const [label, mutate, expectedFailure] of [
+    [
+      'ancestry compare count numeric string',
+      (attestation) => { attestation.release.ancestry.compare_commit_count = '1'; },
+      'attestation_origin_compare_count_invalid',
+    ],
+    [
+      'file declared size numeric string',
+      (attestation) => { attestation.protected_files[0].declared_size = String(attestation.protected_files[0].declared_size); },
+      'attestation_release_file_declared_size',
+    ],
+    [
+      'file byte count numeric string',
+      (attestation) => { attestation.protected_files[0].bytes = String(attestation.protected_files[0].bytes); },
+      'attestation_release_file_bytes',
+    ],
+    [
+      'file line count numeric string',
+      (attestation) => { attestation.protected_files[0].line_count = String(attestation.protected_files[0].line_count); },
+      'attestation_release_file_line_count',
+    ],
+  ]) {
+    const stringlyTyped = structuredClone(verified);
+    mutate(stringlyTyped);
+    delete stringlyTyped.attestation_sha256;
+    stringlyTyped.attestation_sha256 = sha256Text(stableJson(stringlyTyped));
+    const validation = validateCurrentReleaseSourceContractAttestation(stringlyTyped, {
+      report: { release: { head }, merge_requests: [], source_contracts: [stringlyTyped] },
+      contract,
+      contracts: [contract],
+    });
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.some((failure) => failure.includes(expectedFailure)), true,
+      `${label}:${validation.failures.join(',')}`);
+  }
+  const stringSizedPayloadFiles = structuredClone(files);
+  stringSizedPayloadFiles[0].payload.size = String(stringSizedPayloadFiles[0].payload.size);
+  const stringSizedPayloadAudit = auditCurrentReleaseSourceContract({
+    releaseHead: head,
+    targetBranch: contract.target_branch,
+    originAncestry: {
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: contract.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      verified: true,
+      reason: '',
+    },
+    files: stringSizedPayloadFiles,
+    mergeRequests: [],
+    originAttestation: null,
+    contract,
+  });
+  assert.equal(stringSizedPayloadAudit.verified, false);
+  assert.equal(stringSizedPayloadAudit.failures.some((failure) => failure.endsWith(':size_invalid')), true,
+    stringSizedPayloadAudit.failures.join(','));
+  const forged = structuredClone(verified);
+  const header = contract.header_emissions[0];
+  const file = forged.protected_files.find((item) => item.path === contract.source_file.path);
+  assert.ok(file);
+  const source = Buffer.from(file.content_base64, 'base64').toString('utf8');
+  const rewritten = source.replace(`${header.emission.source}\n`, '');
+  assert.notEqual(rewritten, source);
+  const bytes = Buffer.from(rewritten, 'utf8');
+  file.content_base64 = bytes.toString('base64');
+  file.declared_size = bytes.length;
+  file.bytes = bytes.length;
+  file.sha256 = sha256Text(rewritten);
+  file.blob_id = gitBlobSha1(rewritten);
+  file.line_count = rewritten.replace(/\n$/u, '').split('\n').length;
+  delete forged.attestation_sha256;
+  forged.attestation_sha256 = sha256Text(stableJson(forged));
+  const validation = validateCurrentReleaseSourceContractAttestation(forged, {
+    report: { release: { head }, merge_requests: [], source_contracts: [forged] },
+    contract,
+    contracts: [contract],
+  });
+  assert.equal(validation.ok, false);
+  assert.equal(validation.failures.includes('attestation_current_headers_replay_mismatch'), true,
+    validation.failures.join(','));
+});
+
 test('MR !1561 current-release persistence verifies declarations and blocks removal or legacy restoration', () => {
   const contract = QWORK_MR1561_WORKER_ENVELOPE_LIMIT_CONTRACT;
   const head = 'e'.repeat(40);
@@ -2640,6 +3498,56 @@ test('MR !1561 current-release persistence verifies declarations and blocks remo
     contract,
     contracts: [contract],
   }).ok, true);
+
+  const forgeAttestedFile = (attestation, filePath, rewrite) => {
+    const forged = structuredClone(attestation);
+    const file = forged.protected_files.find((item) => item.path === filePath);
+    assert.ok(file, filePath);
+    const source = Buffer.from(file.content_base64, 'base64').toString('utf8');
+    const rewritten = rewrite(source);
+    assert.notEqual(rewritten, source, filePath);
+    const bytes = Buffer.from(rewritten, 'utf8');
+    file.content_base64 = bytes.toString('base64');
+    file.declared_size = bytes.length;
+    file.bytes = bytes.length;
+    file.sha256 = sha256Text(rewritten);
+    file.blob_id = gitBlobSha1(rewritten);
+    file.line_count = rewritten.replace(/\n$/u, '').split('\n').length;
+    delete forged.attestation_sha256;
+    forged.attestation_sha256 = sha256Text(stableJson(forged));
+    return forged;
+  };
+  const firstBinding = contract.integration_bindings[0];
+  const forgedBindingBytes = forgeAttestedFile(
+    verified,
+    firstBinding.path,
+    (source) => source.replace(`${firstBinding.addition.source}\n`, ''),
+  );
+  const forgedBindingValidation = validateCurrentReleaseSourceContractAttestation(forgedBindingBytes, {
+    report: { release: { head }, merge_requests: [], source_contracts: [forgedBindingBytes] },
+    contract,
+    contracts: [contract],
+  });
+  assert.equal(forgedBindingValidation.ok, false);
+  assert.equal(forgedBindingValidation.failures.includes(
+    'attestation_current_integration_bindings_replay_mismatch',
+  ), true, forgedBindingValidation.failures.join(','));
+
+  const firstForbidden = contract.forbidden_fragments[0];
+  const forgedForbiddenBytes = forgeAttestedFile(
+    verified,
+    firstForbidden.path,
+    (source) => `${source}${firstForbidden.value.source}\n`,
+  );
+  const forgedForbiddenValidation = validateCurrentReleaseSourceContractAttestation(forgedForbiddenBytes, {
+    report: { release: { head }, merge_requests: [], source_contracts: [forgedForbiddenBytes] },
+    contract,
+    contracts: [contract],
+  });
+  assert.equal(forgedForbiddenValidation.ok, false);
+  assert.equal(forgedForbiddenValidation.failures.includes(
+    'attestation_current_forbidden_fragments_replay_mismatch',
+  ), true, forgedForbiddenValidation.failures.join(','));
 
   const rewriteFile = (filePath, from, to) => {
     const drifted = structuredClone(files);
@@ -4437,6 +5345,264 @@ test('GitLab API current-release source rejects a blob id that is not bound to c
   );
 });
 
+test('GitLab API file provenance follows Files last_commit_id and never uses path history', () => {
+  const head = 'b'.repeat(40);
+  const lastCommitId = '9'.repeat(40);
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+  payload.last_commit_id = lastCommitId;
+  delete payload.last_commit_provenance;
+  const fixture = apiFixture({
+    head,
+    releaseFileOverrides: new Map([[targetPath, payload]]),
+  });
+  const calls = [];
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: (endpoint) => {
+      calls.push(endpoint);
+      return fixture.reader(endpoint);
+    },
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  assert.equal(calls.some((endpoint) => endpoint.startsWith('repository/commits?path=')), false);
+  assert.equal(calls.includes(`repository/commits/${lastCommitId}`), true);
+  assert.equal(calls.includes(`repository/commits/${lastCommitId}/diff?per_page=100&page=1`), true);
+  const observed = report.source_contracts.flatMap((item) => item.protected_files)
+    .find((file) => file.path === targetPath && file.last_commit_id === lastCommitId);
+  assert.equal(observed.last_commit_provenance.commit_id, lastCommitId);
+  assert.equal(observed.last_commit_provenance.path_verified, true);
+});
+
+test('GitLab API file provenance reads every commit diff page before matching a protected path', () => {
+  const head = 'b'.repeat(40);
+  const lastCommitId = '8'.repeat(40);
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+  payload.last_commit_id = lastCommitId;
+  delete payload.last_commit_provenance;
+  const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+  const reader = (endpoint) => {
+    const pageMatch = endpoint.match(new RegExp(`^repository/commits/${lastCommitId}/diff\\?per_page=100&page=(\\d+)$`, 'u'));
+    if (!pageMatch) return fixture.reader(endpoint);
+    if (pageMatch[1] === '1') {
+      return Array.from({ length: 100 }, (_, index) => (
+        gitLabDiffResponseChange(`docs/filler-${index}.md`)
+      ));
+    }
+    return pageMatch[1] === '2' ? [gitLabDiffResponseChange(targetPath)] : [];
+  };
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40), gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  const observed = report.source_contracts.flatMap((item) => item.protected_files)
+    .find((file) => file.path === targetPath && file.last_commit_id === lastCommitId);
+  assert.deepEqual(observed.last_commit_provenance.diff_pages.map((page) => page.item_count), [100, 1]);
+  assert.equal(observed.last_commit_provenance.matched_changes[0].new_path, targetPath);
+});
+
+test('GitLab API file provenance rejects repeated pages, malformed flags and non-current path changes', () => {
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const runScenario = ({ marker, pages, expectedDecision = 'BLOCKED' }) => {
+    const head = 'b'.repeat(40);
+    const lastCommitId = marker.repeat(40);
+    const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+    payload.last_commit_id = lastCommitId;
+    delete payload.last_commit_provenance;
+    const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+    const reader = (endpoint) => {
+      const match = endpoint.match(new RegExp(`^repository/commits/${lastCommitId}/diff\\?per_page=100&page=(\\d+)$`, 'u'));
+      if (match) return structuredClone(pages[Number(match[1]) - 1] || []);
+      return fixture.reader(endpoint);
+    };
+    const report = scanQworkReleaseIntake({
+      repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+      caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40), gitlabReader: reader,
+      freshnessSource: 'gitlab-api',
+    });
+    assert.equal(report.decision, expectedDecision, `${marker}:${report.blockers.join('; ')}`);
+    return report;
+  };
+  const ordinary = gitLabDiffResponseChange(targetPath);
+  const repeatedPage = [ordinary, ...Array.from({ length: 99 }, (_, index) => (
+    gitLabDiffResponseChange(`docs/filler-${index}.md`)
+  ))];
+  for (const scenario of [
+    { marker: '1', pages: [repeatedPage, repeatedPage, []] },
+    { marker: '2', pages: [[{ ...ordinary, new_file: 'false' }]] },
+    { marker: '3', pages: [[{
+      ...ordinary, new_path: 'docs/renamed-away.mjs', renamed_file: true,
+    }]] },
+    { marker: '4', pages: [[{ ...ordinary, deleted_file: true }]] },
+    { marker: '5', pages: [[ordinary, { ...ordinary, new_file: true }]] },
+    { marker: '7', pages: [[{ ...ordinary, old_path: 42 }]] },
+    { marker: '8', pages: [[{ ...ordinary, old_path: {} }]] },
+    { marker: '9', pages: [[{ ...ordinary, old_path: '   ' }]] },
+    { marker: 'a', pages: [[{ ...ordinary, old_path: ` ${targetPath}` }]] },
+    { marker: 'b', pages: [[{ ...ordinary, old_path: `${targetPath} ` }]] },
+    { marker: 'c', pages: [[{ ...ordinary, new_file: true, deleted_file: true }]] },
+    { marker: 'd', pages: [[{ ...ordinary, old_path: 'docs/renamed-from.mjs' }]] },
+    { marker: 'f', pages: [[{ ...ordinary, collapsed: true }]] },
+    { marker: '0', pages: [[{ ...ordinary, too_large: true }]] },
+  ]) {
+    runScenario(scenario);
+  }
+  runScenario({
+    marker: 'e',
+    pages: [repeatedPage, [{ ...ordinary, new_file: true }]],
+  });
+  runScenario({
+    marker: '6',
+    pages: [[{
+      ...ordinary, old_path: 'docs/renamed-into.mjs', renamed_file: true,
+    }]],
+    expectedDecision: 'READY',
+  });
+});
+
+test('GitLab API file provenance preserves complete canonical commit metadata', () => {
+  const head = 'b'.repeat(40);
+  const lastCommitId = '7'.repeat(40);
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+  payload.last_commit_id = lastCommitId;
+  delete payload.last_commit_provenance;
+  const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+  const metadata = gitLabCommitMetadata(lastCommitId, {
+    title: 'protected source update',
+    message: 'protected source update\n\nComplete canonical metadata fixture.\n',
+    parent_ids: ['6'.repeat(40)],
+    committed_date: '2026-09-08T01:02:03Z',
+  });
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40),
+    gitlabReader: (endpoint) => (
+      endpoint === `repository/commits/${lastCommitId}` ? metadata : fixture.reader(endpoint)
+    ),
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  const provenance = report.source_contracts.flatMap((item) => item.protected_files)
+    .find((file) => file.path === targetPath && file.last_commit_id === lastCommitId)
+    .last_commit_provenance;
+  assert.deepEqual(provenance.commit_raw_response, metadata);
+  assert.deepEqual(provenance.commit_metadata, JSON.parse(stableJson(metadata)));
+  assert.equal(provenance.commit_response_sha256, sha256Text(stableJson(provenance.commit_raw_response)));
+  assert.notEqual(provenance.commit_response_sha256, sha256Text(stableJson({ id: lastCommitId })));
+});
+
+test('GitLab API file provenance hashes and preserves the complete raw diff page response', () => {
+  const head = 'b'.repeat(40);
+  const lastCommitId = '4'.repeat(40);
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+  payload.last_commit_id = lastCommitId;
+  delete payload.last_commit_provenance;
+  const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+  const rawChange = {
+    old_path: targetPath,
+    new_path: targetPath,
+    a_mode: '100644',
+    b_mode: '100644',
+    new_file: false,
+    renamed_file: false,
+    deleted_file: false,
+    generated_file: false,
+    collapsed: false,
+    too_large: false,
+    diff: '@@ -1 +1 @@\n-old\n+new',
+  };
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40),
+    gitlabReader: (endpoint) => (
+      endpoint === `repository/commits/${lastCommitId}/diff?per_page=100&page=1`
+        ? [rawChange] : fixture.reader(endpoint)
+    ),
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  const page = report.source_contracts.flatMap((item) => item.protected_files)
+    .find((file) => file.path === targetPath && file.last_commit_id === lastCommitId)
+    .last_commit_provenance.diff_pages[0];
+  assert.deepEqual(page.raw_response, [rawChange]);
+  assert.equal(page.response_sha256, sha256Text(stableJson([rawChange])));
+  assert.notEqual(page.response_sha256, sha256Text(stableJson(page.changes)));
+  assert.deepEqual(Object.keys(page.changes[0]).sort(), [
+    'deleted_file', 'new_file', 'new_path', 'old_path', 'renamed_file',
+  ]);
+});
+
+test('GitLab API provenance failure preserves the Files payload and reports only provenance read failure', () => {
+  const head = 'b'.repeat(40);
+  const lastCommitId = '7'.repeat(40);
+  const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+  const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+  payload.last_commit_id = lastCommitId;
+  delete payload.last_commit_provenance;
+  const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+  const reader = (endpoint) => {
+    if (endpoint === `repository/commits/${lastCommitId}`) throw new Error('commit metadata unavailable');
+    return fixture.reader(endpoint);
+  };
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40), gitlabReader: reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.decision, 'BLOCKED');
+  assert.deepEqual(report.unresolved.api_errors.filter((error) => error.includes(targetPath)), [
+    `source contract current release file provenance ${targetPath}: commit metadata unavailable`,
+  ]);
+  const observed = report.source_contracts.flatMap((item) => item.protected_files)
+    .find((file) => file.path === targetPath && file.last_commit_id === lastCommitId);
+  assert.equal(observed.error, '');
+  assert.equal(observed.content_base64, payload.content);
+  assert.equal(observed.bytes, payload.size);
+  assert.equal(observed.sha256, sha256Text(Buffer.from(payload.content, 'base64').toString('utf8')));
+  assert.equal(observed.last_commit_provenance.path_verified, false);
+  assert.equal(observed.last_commit_provenance.error, 'commit metadata unavailable');
+});
+
+test('GitLab API file provenance blocks commit metadata drift and a diff without the protected path', () => {
+  for (const mode of ['metadata-drift', 'missing-path']) {
+    const head = 'b'.repeat(40);
+    const lastCommitId = mode === 'metadata-drift' ? '6'.repeat(40) : '5'.repeat(40);
+    const targetPath = QWORK_RELEASE_SOURCE_CONTRACTS[0].source_file.path;
+    const payload = structuredClone(currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head).get(targetPath));
+    payload.last_commit_id = lastCommitId;
+    delete payload.last_commit_provenance;
+    const fixture = apiFixture({ head, releaseFileOverrides: new Map([[targetPath, payload]]) });
+    const reader = (endpoint) => {
+      if (mode === 'metadata-drift' && endpoint === `repository/commits/${lastCommitId}`) {
+        return { id: '4'.repeat(40) };
+      }
+      if (mode === 'missing-path' && endpoint === `repository/commits/${lastCommitId}/diff?per_page=100&page=1`) {
+        return [];
+      }
+      return fixture.reader(endpoint);
+    };
+    const report = scanQworkReleaseIntake({
+      repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
+      caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40), gitlabReader: reader,
+      freshnessSource: 'gitlab-api',
+    });
+    assert.equal(report.decision, 'BLOCKED', mode);
+    assert.equal(report.unresolved.source_contract_failures.some((failure) => failure.includes(
+      mode === 'metadata-drift' ? ':commit_id_mismatch' : ':matched_change_count_mismatch',
+    )), true, mode);
+  }
+});
+
 test('GitLab API intake proves a release between MR !1552 and MR !1559 and audits legacy source', () => {
   const head = '7'.repeat(40);
   const fixture = apiFixture({ head });
@@ -5735,7 +6901,7 @@ test('intake output is immutable and content hash is validated', () => {
     assert.equal(fs.existsSync(files.json), true);
     assert.equal(validateQworkReleaseIntake(JSON.parse(fs.readFileSync(files.json, 'utf8')), { requireReady: false }).ok, true);
     assert.equal(validateQworkReleaseIntake(JSON.parse(fs.readFileSync(files.json, 'utf8')), { requireReady: false, requireFreshRef: true }).ok, false);
-    assert.throws(() => writeQworkReleaseIntake({ report, outDir: out }), /新的不可变目录/);
+    assert.throws(() => writeQworkReleaseIntake({ report, outDir: out }), /必须在调用前不存在/);
     assert.equal(typeof stableJson(report), 'string');
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
@@ -5841,26 +7007,42 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
     freshnessSource: 'gitlab-api',
   });
   assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  const releaseIntakes = Object.fromEntries(
+    QWORK_RELEASE_TEST_STAGES
+      .filter((stage) => ['G1', 'G2', 'G3', 'G4'].includes(stage.id))
+      .map((stage) => [stage.id, {
+        schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
+        path: `/tmp/release-intake-${stage.id.toLowerCase()}.json`,
+        sha256: 'f'.repeat(64),
+        content_sha256: report.integrity.content_sha256,
+        release_ref: report.release.ref,
+        release_head: report.release.head,
+        repository: report.release.repository,
+        baseline_commit: report.scan_boundary.baseline_commit,
+        required_stages: report.summary.required_stages,
+        sheet: stage.sheet,
+        case_ids: [...stage.expected_case_ids],
+      }]),
+  );
   const plan = {
     policy: { release_intake_required: true },
-    release_intake: {
-      schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
-      path: '/tmp/release-intake.json',
-      sha256: 'f'.repeat(64),
-      content_sha256: report.integrity.content_sha256,
-      release_ref: report.release.ref,
-      release_head: report.release.head,
-      repository: report.release.repository,
-      baseline_commit: report.scan_boundary.baseline_commit,
-      required_stages: report.summary.required_stages,
+    release_intakes: releaseIntakes,
+    casebook: {
+      path: report.casebook.path,
+      sha256: report.casebook.sha256,
     },
-    casebook: { sha256: report.casebook.sha256 },
     framework: { commit: report.framework.commit },
   };
-  const accepted = validateQworkReleaseIntakeBinding({ plan, report, reportSha256: 'f'.repeat(64) });
-  assert.equal(accepted.ok, true);
+  const accepted = validateQworkReleaseIntakeBinding({
+    plan,
+    stageId: 'G1',
+    report,
+    reportSha256: 'f'.repeat(64),
+  });
+  assert.equal(accepted.ok, true, accepted.failures.join(','));
   const drifted = validateQworkReleaseIntakeBinding({
     plan: { ...plan, framework: { commit: '0'.repeat(40) } },
+    stageId: 'G1',
     report,
     reportSha256: 'f'.repeat(64),
   });
@@ -5876,7 +7058,12 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
   const weakGit = structuredClone(report);
   delete weakGit.policy.api_freshness;
   weakGit.policy.fetch_latest = true;
-  const weak = validateQworkReleaseIntakeBinding({ plan, report: rehash(weakGit), reportSha256: 'f'.repeat(64) });
+  const weak = validateQworkReleaseIntakeBinding({
+    plan,
+    stageId: 'G1',
+    report: rehash(weakGit),
+    reportSha256: 'f'.repeat(64),
+  });
   assert.equal(weak.ok, false);
   assert.equal(weak.failures.includes('release_intake_gitlab_api_freshness_required'), true);
 
@@ -5888,6 +7075,7 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
   missingSourceContracts.summary.source_contract_current_verified_count = 0;
   const missingSources = validateQworkReleaseIntakeBinding({
     plan,
+    stageId: 'G1',
     report: rehash(missingSourceContracts),
     reportSha256: 'f'.repeat(64),
   });
@@ -5898,6 +7086,7 @@ test('a bound intake cannot cross release, Casebook, or framework identity', () 
   missingBlockingRisks.blocking_risks = [];
   const missingRisks = validateQworkReleaseIntakeBinding({
     plan,
+    stageId: 'G1',
     report: rehash(missingBlockingRisks),
     reportSha256: 'f'.repeat(64),
   });

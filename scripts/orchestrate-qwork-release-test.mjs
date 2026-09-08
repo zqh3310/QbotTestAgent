@@ -43,15 +43,56 @@ const CONTROL_ENTRY_NAMES = Object.freeze([
 const PLAN_EXTERNAL_ARTIFACT_ROLES = Object.freeze([
   'casebook',
   'release_identity',
-  'release_intake',
+  'release_intake_g1',
+  'release_intake_g2',
+  'release_intake_g3',
+  'release_intake_g4',
   'release_observation',
 ]);
+const RELEASE_INTAKE_STAGE_IDS = Object.freeze(['G1', 'G2', 'G3', 'G4']);
 const EVENT_FILENAME_PATTERN = /^(\d{4})-(G[1-5])-(readiness|completion)\.json$/;
 const EVENT_SCHEMA = 'qbot-qwork-release-test-event/v2';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const DIRECTORY_ENTRY_SHA256 = createHash('sha256').update('directory').digest('hex');
 const DEEPBANK_GITLAB_PROJECT = 'gitlab.daikuan.qihoo.net/songrongxin/deepbankv2';
 const TRANSACTION_SCHEMA = 'qbot-qwork-release-test-transaction/v2';
+const COMMON_CLI_OPTION_NAMES = Object.freeze([
+  'gitlab-token-stdin',
+  'help',
+]);
+const COMMAND_CLI_OPTION_NAMES = Object.freeze({
+  init: Object.freeze([
+    'casebook',
+    'expected-release-head',
+    'expected-release-observation',
+    'expected-release-ref',
+    'release-identity',
+    'release-intake-g1',
+    'release-intake-g2',
+    'release-intake-g3',
+    'release-intake-g4',
+    'require-release-intake',
+    'state-dir',
+  ]),
+  readiness: Object.freeze([
+    'capability-audit',
+    'pretest',
+    'stage',
+    'state-dir',
+  ]),
+  complete: Object.freeze([
+    'run-dir',
+    'stage',
+    'state-dir',
+  ]),
+  soak: Object.freeze([
+    'soak-report',
+    'state-dir',
+  ]),
+  status: Object.freeze([
+    'state-dir',
+  ]),
+});
 
 function usage() {
   return `QWork 发布测试阶段编排器
@@ -61,7 +102,10 @@ Usage:
     --state-dir <new-control-directory> \\
     --casebook <xlsx> \\
     --release-identity <release-identity.json> \\
-    --release-intake <release-intake.json> \\
+    --release-intake-g1 <G1-release-intake.json> \\
+    --release-intake-g2 <G2-release-intake.json> \\
+    --release-intake-g3 <G3-release-intake.json> \\
+    --release-intake-g4 <G4-release-intake.json> \\
     --expected-release-observation <release-ref-observation.json> \\
     --expected-release-ref origin/release/0.1 \\
     --expected-release-head <40-hex-release-head> \\
@@ -95,8 +139,9 @@ Usage:
 
 编排器永远不使用 raw passed/failed 作为阶段准入。Casebook 阶段必须同时具备
 精确能力审计、精确 READY、完整真实执行、完整 evidence manifest、匹配的发布身份
-以及 trusted_pass=N。正式计划必须绑定 release intake，并将其 release ref/HEAD 与调用者
-独立提供的当前观测值全等校验，同时证明报告文件 SHA、Casebook SHA 和 framework commit
+以及 trusted_pass=N。正式计划必须为 G1-G4 分别绑定精确 Sheet/Case 顺序的 release intake，
+并将四者共同的 release ref/HEAD 与调用者独立提供的当前观测值全等校验，同时证明报告文件
+SHA、Casebook SHA 和 framework commit
 全等。任何其他可信分类都会停止流水线，后续阶段保持 NOT_STARTED。
 私有 GitLab 环境使用 --gitlab-token-stdin；token 仅进入固定项目的 curl config stdin，
 不进入参数、环境、日志或 Git 配置。具备受管 Git credential helper 时仍可省略该参数。
@@ -106,9 +151,17 @@ Usage:
 function parseArgs(argv) {
   const [command = '', ...tokens] = argv;
   const options = {};
+  const allowedOptionNames = new Set([
+    ...COMMON_CLI_OPTION_NAMES,
+    ...(COMMAND_CLI_OPTION_NAMES[command] || []),
+  ]);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (!token.startsWith('--')) throw new Error('Unexpected positional argument');
+    const [name, inline] = token.slice(2).split(/=(.*)/s, 2);
+    if (!allowedOptionNames.has(name)) {
+      throw new Error('Unknown command-line option');
+    }
     if (token === '--gitlab-token-stdin') {
       if (Object.hasOwn(options, 'gitlab-token-stdin')) {
         throw new Error('--gitlab-token-stdin 只能传入一次');
@@ -119,7 +172,6 @@ function parseArgs(argv) {
     if (token.startsWith('--gitlab-token-stdin=')) {
       throw new Error('--gitlab-token-stdin 必须作为无值布尔开关单独传入');
     }
-    const [name, inline] = token.slice(2).split(/=(.*)/s, 2);
     const value = inline == null ? tokens[index + 1] : inline;
     if (value == null || String(value).startsWith('--')) {
       options[name] = true;
@@ -801,7 +853,11 @@ function planSourceArtifactSpecifications(plan) {
   return [
     { role: 'casebook', type: 'file', path: plan?.casebook?.path },
     { role: 'release_identity', type: 'file', path: plan?.source_artifacts?.[1]?.path },
-    { role: 'release_intake', type: 'file', path: plan?.release_intake?.path },
+    ...RELEASE_INTAKE_STAGE_IDS.map((stageId) => ({
+      role: `release_intake_${stageId.toLowerCase()}`,
+      type: 'file',
+      path: plan?.release_intakes?.[stageId]?.path,
+    })),
     { role: 'release_observation', type: 'file', path: plan?.release_head_observation?.path },
   ];
 }
@@ -809,7 +865,9 @@ function planSourceArtifactSpecifications(plan) {
 function planSourceMissingError(role, artifactPath) {
   if (role === 'casebook') return new Error(`Casebook 不存在：${artifactPath}`);
   if (role === 'release_identity') return new Error(`计划绑定的 release identity 不存在：${artifactPath}`);
-  if (role === 'release_intake') return new Error(`计划绑定的 release intake 不存在：${artifactPath}`);
+  if (role.startsWith('release_intake_')) {
+    return new Error(`计划绑定的阶段 release intake 不存在：${role}:${artifactPath}`);
+  }
   return new Error(`计划绑定的独立 release HEAD 观测不存在：${artifactPath}`);
 }
 
@@ -864,18 +922,25 @@ function validatePlanSourceArtifacts(plan) {
     throw new Error('release identity 制品与计划绑定身份不一致');
   }
 
-  const intakeSnapshot = snapshots.get('release_intake');
-  const releaseIntake = parseJsonSnapshot(intakeSnapshot, 'release intake');
-  const intakeBinding = validateQworkReleaseIntakeBinding({
-    plan,
-    report: releaseIntake,
-    reportSha256: intakeSnapshot.sha256,
-  });
-  if (!intakeBinding.ok) {
-    throw new Error(`release intake 绑定校验失败：${intakeBinding.failures.join('；')}`);
-  }
-  if (intakeSnapshot.sha256 !== nonEmpty(artifacts[2]?.sha256).toLowerCase()) {
-    throw new Error('release_intake_artifact_sha256_mismatch');
+  const releaseIntakes = {};
+  for (const stageId of RELEASE_INTAKE_STAGE_IDS) {
+    const role = `release_intake_${stageId.toLowerCase()}`;
+    const intakeSnapshot = snapshots.get(role);
+    const releaseIntake = parseJsonSnapshot(intakeSnapshot, `${stageId} release intake`);
+    const intakeBinding = validateQworkReleaseIntakeBinding({
+      plan,
+      stageId,
+      report: releaseIntake,
+      reportSha256: intakeSnapshot.sha256,
+    });
+    if (!intakeBinding.ok) {
+      throw new Error(`${stageId} release intake 绑定校验失败：${intakeBinding.failures.join('；')}`);
+    }
+    const descriptor = artifacts.find((artifact) => artifact?.role === role);
+    if (intakeSnapshot.sha256 !== nonEmpty(descriptor?.sha256).toLowerCase()) {
+      throw new Error(`${role}_artifact_sha256_mismatch`);
+    }
+    releaseIntakes[stageId] = releaseIntake;
   }
 
   const observationSnapshot = snapshots.get('release_observation');
@@ -888,14 +953,15 @@ function validatePlanSourceArtifacts(plan) {
   if (!observationBinding.ok) {
     throw new Error(`独立 release HEAD 观测绑定校验失败：${observationBinding.failures.join('；')}`);
   }
-  if (observationSnapshot.sha256 !== nonEmpty(artifacts[3]?.sha256).toLowerCase()) {
+  const observationDescriptor = artifacts.find((artifact) => artifact?.role === 'release_observation');
+  if (observationSnapshot.sha256 !== nonEmpty(observationDescriptor?.sha256).toLowerCase()) {
     throw new Error('release_observation_artifact_sha256_mismatch');
   }
   return {
     artifacts,
     snapshots,
     releaseIdentity,
-    releaseIntake,
+    releaseIntakes,
     releaseObservation,
   };
 }
@@ -963,8 +1029,9 @@ function rebuildStoredAudit({ event, plan, sourceArtifacts }) {
       expectedPrefixCaseIds: stageId === 'G4'
         ? event.state_before?.stages?.G3?.admission?.expected?.case_ids
         : undefined,
-      releaseIntake: sourceArtifacts.releaseIntake,
-      releaseIntakeSha256: sourceArtifacts.snapshots.get('release_intake').sha256,
+      releaseIntake: sourceArtifacts.releaseIntakes[stageId],
+      releaseIntakeSha256: sourceArtifacts.snapshots
+        .get(`release_intake_${stageId.toLowerCase()}`).sha256,
       externalArtifacts: event.audit.external_artifacts,
     });
   } else if (stageId !== 'G5') {
@@ -1052,6 +1119,9 @@ function loadControlState(stateDir, remoteVerification = {}) {
   const plan = readJson(files.plan, '发布测试计划');
   const state = readJson(files.state, '发布测试状态');
   const integrity = readJson(files.integrity, '发布测试完整性');
+  if (plan?.schema_version !== QWORK_RELEASE_TEST_PLAN_SCHEMA) {
+    throw new Error(`不支持的发布测试计划：plan_schema_mismatch:${plan?.schema_version || 'missing'}`);
+  }
   const sourceArtifacts = validatePlanSourceArtifacts(plan);
   const audit = validateQworkReleaseControlState({ plan, state, integrity });
   if (!audit.ok) {
@@ -1059,7 +1129,7 @@ function loadControlState(stateDir, remoteVerification = {}) {
   }
   verifyReleaseObservationRepository(
     sourceArtifacts.releaseObservation,
-    plan.release_intake.repository,
+    plan.release_intakes.G1.repository,
     remoteVerification,
   );
   const eventFailures = [];
@@ -1302,7 +1372,10 @@ function init(options, remoteVerification = {}) {
     'state-dir',
     'casebook',
     'release-identity',
-    'release-intake',
+    'release-intake-g1',
+    'release-intake-g2',
+    'release-intake-g3',
+    'release-intake-g4',
     'expected-release-observation',
     'expected-release-ref',
     'expected-release-head',
@@ -1322,7 +1395,13 @@ function init(options, remoteVerification = {}) {
     && !['1', 'true', 'yes'].includes(String(options['require-release-intake']).toLowerCase())) {
     throw new Error('正式发布计划不能关闭 release intake 门禁');
   }
-  const releaseIntakePath = assertPlainFile(options['release-intake'], 'release intake 报告');
+  const releaseIntakePaths = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+    stageId,
+    assertPlainFile(
+      options[`release-intake-${stageId.toLowerCase()}`],
+      `${stageId} release intake 报告`,
+    ),
+  ]));
   const releaseObservationPath = assertPlainFile(options['expected-release-observation'], '独立 release HEAD 观测');
   const releaseIdentityPath = assertPlainFile(options['release-identity'], 'release identity');
   const casebook = assertPlainFile(options.casebook, 'Casebook');
@@ -1334,11 +1413,17 @@ function init(options, remoteVerification = {}) {
     throw new Error(`正式计划要求 main==origin/main 且 tracked clean：branch=${branch} HEAD=${head} origin/main=${originMain} dirty=${Boolean(dirty)}`);
   }
   const identitySnapshot = readJsonSnapshot(releaseIdentityPath, 'release identity');
-  const intakeSnapshot = readJsonSnapshot(releaseIntakePath, 'release intake');
+  const intakeSnapshots = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+    stageId,
+    readJsonSnapshot(releaseIntakePaths[stageId], `${stageId} release intake`),
+  ]));
   const observationSnapshot = readJsonSnapshot(releaseObservationPath, '独立 release HEAD 观测');
   const casebookSnapshot = stableFileSnapshot(casebook, 'Casebook');
   const identity = identitySnapshot.value;
-  const releaseIntake = intakeSnapshot.value;
+  const releaseIntakes = Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+    stageId,
+    intakeSnapshots[stageId].value,
+  ]));
   const releaseHeadObservation = observationSnapshot.value;
   const releaseObservationValidation = validateQworkReleaseRefObservation({
     report: releaseHeadObservation,
@@ -1352,7 +1437,7 @@ function init(options, remoteVerification = {}) {
   }
   verifyReleaseObservationRepository(
     releaseHeadObservation,
-    releaseIntake?.release?.repository,
+    releaseIntakes.G1?.release?.repository,
     remoteVerification,
   );
   const plan = createQworkReleaseTestPlan({
@@ -1362,9 +1447,12 @@ function init(options, remoteVerification = {}) {
     releaseIdentity: identity,
     releaseIdentityPath,
     releaseIdentitySha256: identitySnapshot.sha256,
-    releaseIntake,
-    releaseIntakePath,
-    releaseIntakeSha256: intakeSnapshot.sha256,
+    releaseIntakes,
+    releaseIntakePaths,
+    releaseIntakeSha256s: Object.fromEntries(RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      stageId,
+      intakeSnapshots[stageId].sha256,
+    ])),
     expectedReleaseRef: options['expected-release-ref'],
     expectedReleaseHead: options['expected-release-head'],
     releaseHeadObservation,
@@ -1393,7 +1481,7 @@ function init(options, remoteVerification = {}) {
     }
     verifyReleaseObservationRepository(
       releaseHeadObservation,
-      releaseIntake?.release?.repository,
+      releaseIntakes.G1?.release?.repository,
       remoteVerification,
     );
     assertDirectoryGuard(parentGuard, '控制目录父目录');
@@ -1434,7 +1522,7 @@ function readiness(options, remoteVerification = {}) {
   }
   verifyReleaseObservationRepository(
     sourceArtifacts.releaseObservation,
-    plan.release_intake.repository,
+    plan.release_intakes.G1.repository,
     remoteVerification,
   );
   const externalArtifacts = [
@@ -1449,8 +1537,9 @@ function readiness(options, remoteVerification = {}) {
     expectedPrefixCaseIds: stage.id === 'G4'
       ? state?.stages?.G3?.admission?.expected?.case_ids
       : undefined,
-    releaseIntake: sourceArtifacts.releaseIntake,
-    releaseIntakeSha256: sourceArtifacts.snapshots.get('release_intake').sha256,
+    releaseIntake: sourceArtifacts.releaseIntakes[stage.id],
+    releaseIntakeSha256: sourceArtifacts.snapshots
+      .get(`release_intake_${stage.id.toLowerCase()}`).sha256,
     externalArtifacts,
   });
   audit = withExternalArtifacts(audit, externalArtifacts);

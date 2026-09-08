@@ -18,7 +18,7 @@ import {
   readAndAuditQworkSoakReport,
 } from './qwork-soak-report.mjs';
 
-export const QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan/v2';
+export const QWORK_RELEASE_TEST_PLAN_SCHEMA = 'qbot-qwork-release-test-plan/v3';
 export const QWORK_RELEASE_TEST_STATE_SCHEMA = 'qbot-qwork-release-test-state/v2';
 export const QWORK_RELEASE_TEST_INTEGRITY_SCHEMA = 'qbot-qwork-release-test-integrity/v2';
 export const QWORK_RELEASE_REF_OBSERVATION_SCHEMA = 'qbot-qwork-release-ref-observation/v1';
@@ -56,9 +56,14 @@ const QWORK_RELEASE_TEST_POLICY = Object.freeze({
 const QWORK_RELEASE_SOURCE_ARTIFACT_ROLES = Object.freeze([
   'casebook',
   'release_identity',
-  'release_intake',
+  'release_intake_g1',
+  'release_intake_g2',
+  'release_intake_g3',
+  'release_intake_g4',
   'release_observation',
 ]);
+
+const QWORK_RELEASE_INTAKE_STAGE_IDS = Object.freeze(['G1', 'G2', 'G3', 'G4']);
 
 export const QWORK_CORE_LIFELINE_CASE_IDS = Object.freeze([
   'BETA-INIT-001',
@@ -413,59 +418,102 @@ export function validateQworkReleaseRefObservation({
 
 function releaseIntakePlanBindingFailures(plan) {
   const failures = [];
-  const binding = plan?.release_intake;
+  const bindings = plan?.release_intakes;
   if (plan?.policy?.release_intake_required !== true) {
     failures.push('plan_release_intake_binding_required');
   }
-  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+  if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) {
     failures.push('plan_release_intake_binding_required');
     return [...new Set(failures)];
   }
-  if (!exactObjectKeys(binding, [
-    'schema_version',
-    'path',
-    'sha256',
-    'content_sha256',
-    'release_ref',
-    'release_head',
-    'repository',
-    'baseline_commit',
-    'required_stages',
-  ])) failures.push('plan_release_intake_fields_mismatch');
-  if (binding.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) {
-    failures.push('plan_release_intake_schema_mismatch');
+  if (!exactObjectKeys(bindings, QWORK_RELEASE_INTAKE_STAGE_IDS)) {
+    failures.push('plan_release_intake_stage_keys_mismatch');
   }
-  if (!path.isAbsolute(nonEmptyString(binding.path))) {
-    failures.push('plan_release_intake_path_invalid');
+  const canonicalPaths = [];
+  const reference = bindings.G1;
+  for (const stageId of QWORK_RELEASE_INTAKE_STAGE_IDS) {
+    const stage = qworkReleaseStage(stageId);
+    const binding = bindings[stageId];
+    const prefix = `plan_release_intake_${stageId.toLowerCase()}`;
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+      failures.push(`${prefix}_binding_required`);
+      continue;
+    }
+    if (!exactObjectKeys(binding, [
+      'schema_version',
+      'path',
+      'sha256',
+      'content_sha256',
+      'release_ref',
+      'release_head',
+      'repository',
+      'baseline_commit',
+      'required_stages',
+      'sheet',
+      'case_ids',
+    ])) failures.push(`${prefix}_fields_mismatch`);
+    if (binding.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) {
+      failures.push(`${prefix}_schema_mismatch`);
+    }
+    if (!path.isAbsolute(nonEmptyString(binding.path))) {
+      failures.push(`${prefix}_path_invalid`);
+    } else {
+      canonicalPaths.push(canonicalPath(binding.path));
+    }
+    if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(binding.sha256))) {
+      failures.push(`${prefix}_artifact_sha256_invalid`);
+    }
+    if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(binding.content_sha256))) {
+      failures.push(`${prefix}_content_sha256_invalid`);
+    }
+    if (nonEmptyString(binding.release_ref) !== QWORK_RELEASE_INTAKE_DEFAULT_REF) {
+      failures.push(`${prefix}_release_ref_invalid`);
+    }
+    if (!/^[a-f0-9]{40}$/i.test(nonEmptyString(binding.release_head))) {
+      failures.push(`${prefix}_release_head_invalid`);
+    }
+    if (!path.isAbsolute(nonEmptyString(binding.repository))) {
+      failures.push(`${prefix}_repository_invalid`);
+    }
+    if (nonEmptyString(binding.baseline_commit) !== QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT) {
+      failures.push(`${prefix}_baseline_commit_mismatch`);
+    }
+    if (!Array.isArray(binding.required_stages)
+      || binding.required_stages.some((candidate) => !/^G[1-5]$/.test(nonEmptyString(candidate)))
+      || new Set(binding.required_stages).size !== binding.required_stages.length) {
+      failures.push(`${prefix}_required_stages_invalid`);
+    }
+    if (nonEmptyString(binding.sheet) !== nonEmptyString(stage?.sheet)) {
+      failures.push(`${prefix}_sheet_mismatch`);
+    }
+    if (!stableEqual(binding.case_ids, stage?.expected_case_ids)) {
+      failures.push(`${prefix}_case_ids_mismatch`);
+    }
+    if (stageId !== 'G1' && reference && binding) {
+      if (nonEmptyString(binding.release_ref) !== nonEmptyString(reference.release_ref)) {
+        failures.push('plan_release_intake_release_ref_mismatch');
+      }
+      if (nonEmptyString(binding.release_head) !== nonEmptyString(reference.release_head)) {
+        failures.push('plan_release_intake_release_head_mismatch');
+      }
+      if (!sameCanonicalPath(binding.repository, reference.repository)) {
+        failures.push('plan_release_intake_repository_mismatch');
+      }
+      if (nonEmptyString(binding.baseline_commit) !== nonEmptyString(reference.baseline_commit)) {
+        failures.push('plan_release_intake_baseline_commit_mismatch');
+      }
+    }
   }
-  if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(binding.sha256))) {
-    failures.push('plan_release_intake_artifact_sha256_invalid');
-  }
-  if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(binding.content_sha256))) {
-    failures.push('plan_release_intake_content_sha256_invalid');
-  }
-  if (nonEmptyString(binding.release_ref) !== QWORK_RELEASE_INTAKE_DEFAULT_REF) {
-    failures.push('plan_release_intake_release_ref_invalid');
-  }
-  if (!/^[a-f0-9]{40}$/i.test(nonEmptyString(binding.release_head))) {
-    failures.push('plan_release_intake_release_head_invalid');
-  }
-  if (!path.isAbsolute(nonEmptyString(binding.repository))) {
-    failures.push('plan_release_intake_repository_invalid');
-  }
-  if (nonEmptyString(binding.baseline_commit) !== QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT) {
-    failures.push('plan_release_intake_baseline_commit_mismatch');
-  }
-  if (!Array.isArray(binding.required_stages)
-    || binding.required_stages.some((stageId) => !/^G[1-5]$/.test(nonEmptyString(stageId)))
-    || new Set(binding.required_stages).size !== binding.required_stages.length) {
-    failures.push('plan_release_intake_required_stages_invalid');
+  if (canonicalPaths.length !== QWORK_RELEASE_INTAKE_STAGE_IDS.length
+    || new Set(canonicalPaths).size !== QWORK_RELEASE_INTAKE_STAGE_IDS.length) {
+    failures.push('plan_release_intake_paths_not_unique');
   }
   return [...new Set(failures)];
 }
 
 function releaseHeadObservationPlanBindingFailures(plan) {
   const binding = plan?.release_head_observation;
+  const intakeBinding = plan?.release_intakes?.G1;
   const failures = [];
   if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
     return ['plan_release_head_observation_binding_required'];
@@ -484,14 +532,17 @@ function releaseHeadObservationPlanBindingFailures(plan) {
     report: binding,
     reportPath: binding.path,
     reportSha256: binding.sha256,
-    expectedReleaseRef: plan?.release_intake?.release_ref,
-    expectedReleaseHead: plan?.release_intake?.release_head,
+    expectedReleaseRef: intakeBinding?.release_ref,
+    expectedReleaseHead: intakeBinding?.release_head,
   });
   failures.push(...validation.failures.map((failure) => `plan_${failure}`));
-  if (path.resolve(nonEmptyString(binding.path)) === path.resolve(nonEmptyString(plan?.release_intake?.path))) {
+  if (QWORK_RELEASE_INTAKE_STAGE_IDS.some((stageId) => (
+    path.resolve(nonEmptyString(binding.path))
+      === path.resolve(nonEmptyString(plan?.release_intakes?.[stageId]?.path))
+  ))) {
     failures.push('plan_release_head_observation_must_be_independent');
   }
-  if (!sameCanonicalPath(binding.repository, plan?.release_intake?.repository)) {
+  if (!sameCanonicalPath(binding.repository, intakeBinding?.repository)) {
     failures.push('plan_release_observation_repository_mismatch');
   }
   return [...new Set(failures)];
@@ -621,7 +672,7 @@ export function validateCanonicalQworkReleaseTestPlan(plan) {
     'framework',
     'release_identity',
     'release_identity_sha256',
-    'release_intake',
+    'release_intakes',
     'release_head_observation',
     'source_artifacts',
     'policy',
@@ -661,10 +712,13 @@ export function validateCanonicalQworkReleaseTestPlan(plan) {
       path: nonEmptyString(plan?.casebook?.path),
       sha256: nonEmptyString(plan?.casebook?.sha256).toLowerCase(),
     },
-    release_intake: {
-      path: nonEmptyString(plan?.release_intake?.path),
-      sha256: nonEmptyString(plan?.release_intake?.sha256).toLowerCase(),
-    },
+    ...Object.fromEntries(QWORK_RELEASE_INTAKE_STAGE_IDS.map((stageId) => [
+      `release_intake_${stageId.toLowerCase()}`,
+      {
+        path: nonEmptyString(plan?.release_intakes?.[stageId]?.path),
+        sha256: nonEmptyString(plan?.release_intakes?.[stageId]?.sha256).toLowerCase(),
+      },
+    ])),
     release_observation: {
       path: nonEmptyString(plan?.release_head_observation?.path),
       sha256: nonEmptyString(plan?.release_head_observation?.sha256).toLowerCase(),
@@ -703,23 +757,27 @@ export function validateCanonicalQworkReleaseTestPlan(plan) {
     }
   }
 
-  const intakeSource = artifacts.get('release_intake');
-  if (intakeSource?.inspection?.ok) {
-    try {
-      const report = readJsonFile(intakeSource.inspection.realpath);
-      const binding = validateQworkReleaseIntakeBinding({
-        plan,
-        report,
-        reportSha256: sha256File(intakeSource.inspection.realpath),
-      });
-      failures.push(...binding.failures.map((failure) => `plan_source_${failure}`));
-      failures.push(...releaseIntakeBaselineFailures(report));
-      if (nonEmptyString(report?.scan_boundary?.baseline_commit)
-        !== nonEmptyString(plan?.release_intake?.baseline_commit)) {
-        failures.push('release_intake_plan_baseline_mismatch');
+  for (const stageId of QWORK_RELEASE_INTAKE_STAGE_IDS) {
+    const role = `release_intake_${stageId.toLowerCase()}`;
+    const intakeSource = artifacts.get(role);
+    if (intakeSource?.inspection?.ok) {
+      try {
+        const report = readJsonFile(intakeSource.inspection.realpath);
+        const binding = validateQworkReleaseIntakeBinding({
+          plan,
+          stageId,
+          report,
+          reportSha256: sha256File(intakeSource.inspection.realpath),
+        });
+        failures.push(...binding.failures.map((failure) => `plan_source_${stageId.toLowerCase()}_${failure}`));
+        failures.push(...releaseIntakeBaselineFailures(report));
+        if (nonEmptyString(report?.scan_boundary?.baseline_commit)
+          !== nonEmptyString(plan?.release_intakes?.[stageId]?.baseline_commit)) {
+          failures.push(`${role}_plan_baseline_mismatch`);
+        }
+      } catch {
+        failures.push(`${role}_artifact_unreadable`);
       }
-    } catch {
-      failures.push('release_intake_artifact_unreadable');
     }
   }
 
@@ -743,10 +801,17 @@ export function validateCanonicalQworkReleaseTestPlan(plan) {
     && nonEmptyString(casebookSource.inspection.realpath) !== nonEmptyString(plan?.casebook?.path)) {
     failures.push('plan_casebook_path_not_canonical');
   }
-  const repositoryInspection = inspectCanonicalArtifact(plan?.release_intake?.repository, 'directory-tree');
-  if (!repositoryInspection.ok) failures.push(`plan_release_repository_invalid:${repositoryInspection.reason}`);
-  else if (repositoryInspection.realpath !== nonEmptyString(plan?.release_intake?.repository)) {
-    failures.push('plan_release_repository_not_canonical');
+  for (const stageId of QWORK_RELEASE_INTAKE_STAGE_IDS) {
+    const repositoryInspection = inspectCanonicalArtifact(
+      plan?.release_intakes?.[stageId]?.repository,
+      'directory-tree',
+    );
+    if (!repositoryInspection.ok) {
+      failures.push(`plan_release_repository_invalid:${stageId}:${repositoryInspection.reason}`);
+    } else if (repositoryInspection.realpath
+      !== nonEmptyString(plan?.release_intakes?.[stageId]?.repository)) {
+      failures.push(`plan_release_repository_not_canonical:${stageId}`);
+    }
   }
 
   return {
@@ -764,9 +829,9 @@ export function createQworkReleaseTestPlan({
   releaseIdentity,
   releaseIdentityPath = '',
   releaseIdentitySha256 = '',
-  releaseIntake,
-  releaseIntakePath = '',
-  releaseIntakeSha256 = '',
+  releaseIntakes = {},
+  releaseIntakePaths = {},
+  releaseIntakeSha256s = {},
   expectedReleaseRef = '',
   expectedReleaseHead = '',
   releaseHeadObservation,
@@ -800,53 +865,84 @@ export function createQworkReleaseTestPlan({
   if (!releaseObservationValidation.ok) {
     errors.push(`release_head_observation_invalid:${releaseObservationValidation.failures.join(',')}`);
   }
-  if (path.resolve(nonEmptyString(releaseHeadObservationPath)) === path.resolve(nonEmptyString(releaseIntakePath))) {
+  const suppliedIntakePaths = QWORK_RELEASE_INTAKE_STAGE_IDS
+    .map((stageId) => nonEmptyString(releaseIntakePaths?.[stageId]))
+    .filter(Boolean);
+  if (suppliedIntakePaths.some((intakePath) => (
+    path.resolve(nonEmptyString(releaseHeadObservationPath)) === path.resolve(intakePath)
+  ))) {
     errors.push('release_head_observation_must_be_independent');
   }
   if (!identityAudit.ok) errors.push(`release_identity_missing:${identityAudit.missing_fields.join(',')}`);
   if (identityAudit.invalid_fields.length) {
     errors.push(`release_identity_invalid:${identityAudit.invalid_fields.join(',')}`);
   }
-  let intakeBinding = null;
-  if (releaseIntake == null) {
+  const intakeBindings = {};
+  if (!releaseIntakes || typeof releaseIntakes !== 'object' || Array.isArray(releaseIntakes)) {
     errors.push('release_intake_required');
   } else {
-    const intakeValidation = validateQworkReleaseIntake(releaseIntake, {
-      releaseRef: nonEmptyString(expectedReleaseRef),
-      releaseHead: nonEmptyString(expectedReleaseHead),
-      casebookSha256: nonEmptyString(casebookSha256),
-      frameworkCommit: nonEmptyString(frameworkCommit),
-      requireReady: true,
-      requireFreshRef: true,
-      requireGitLabApiFreshness: true,
-    });
-    if (!intakeValidation.ok) errors.push(`release_intake_invalid:${intakeValidation.failures.join(',')}`);
-    const baselineFailures = releaseIntakeBaselineFailures(releaseIntake);
-    if (baselineFailures.length) errors.push(`release_intake_invalid:${baselineFailures.join(',')}`);
-    if (!/^[a-f0-9]{64}$/i.test(nonEmptyString(releaseIntakeSha256))) {
-      errors.push('release_intake_sha256_invalid');
+    for (const stageId of QWORK_RELEASE_INTAKE_STAGE_IDS) {
+      const stage = qworkReleaseStage(stageId);
+      const releaseIntake = releaseIntakes[stageId];
+      const releaseIntakePath = nonEmptyString(releaseIntakePaths?.[stageId]);
+      const releaseIntakeSha256 = nonEmptyString(releaseIntakeSha256s?.[stageId]);
+      if (releaseIntake == null) {
+        errors.push(`release_intake_required:${stageId}`);
+        continue;
+      }
+      const intakeValidation = validateQworkReleaseIntake(releaseIntake, {
+        releaseRef: nonEmptyString(expectedReleaseRef),
+        releaseHead: nonEmptyString(expectedReleaseHead),
+        casebookPath: nonEmptyString(casebookPath),
+        sheet: stage.sheet,
+        caseIds: stage.expected_case_ids,
+        casebookSha256: nonEmptyString(casebookSha256),
+        frameworkCommit: nonEmptyString(frameworkCommit),
+        requireReady: true,
+        requireFreshRef: true,
+        requireGitLabApiFreshness: true,
+      });
+      if (!intakeValidation.ok) {
+        errors.push(`release_intake_invalid:${stageId}:${intakeValidation.failures.join(',')}`);
+      }
+      const baselineFailures = releaseIntakeBaselineFailures(releaseIntake);
+      if (baselineFailures.length) {
+        errors.push(`release_intake_invalid:${stageId}:${baselineFailures.join(',')}`);
+      }
+      if (!/^[a-f0-9]{64}$/i.test(releaseIntakeSha256)) {
+        errors.push(`release_intake_sha256_invalid:${stageId}`);
+      }
+      if (!path.isAbsolute(releaseIntakePath)) {
+        errors.push(`release_intake_path_invalid:${stageId}`);
+      }
+      if (releaseIntake?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) {
+        errors.push(`release_intake_schema_mismatch:${stageId}`);
+      }
+      intakeBindings[stageId] = {
+        schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
+        path: releaseIntakePath,
+        sha256: releaseIntakeSha256.toLowerCase(),
+        content_sha256: nonEmptyString(releaseIntake?.integrity?.content_sha256),
+        release_ref: nonEmptyString(releaseIntake?.release?.ref),
+        release_head: nonEmptyString(releaseIntake?.release?.head),
+        repository: nonEmptyString(releaseIntake?.release?.repository),
+        baseline_commit: nonEmptyString(releaseIntake?.scan_boundary?.baseline_commit),
+        required_stages: Array.isArray(releaseIntake?.summary?.required_stages)
+          ? [...releaseIntake.summary.required_stages] : [],
+        sheet: nonEmptyString(releaseIntake?.casebook?.sheet),
+        case_ids: Array.isArray(releaseIntake?.casebook?.available_case_ids)
+          ? [...releaseIntake.casebook.available_case_ids] : [],
+      };
     }
-    if (!path.isAbsolute(nonEmptyString(releaseIntakePath))) {
-      errors.push('release_intake_path_invalid');
-    }
-    if (releaseIntake?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) {
-      errors.push('release_intake_schema_mismatch');
-    }
-    intakeBinding = {
-      schema_version: QWORK_RELEASE_INTAKE_SCHEMA,
-      path: nonEmptyString(releaseIntakePath),
-      sha256: nonEmptyString(releaseIntakeSha256).toLowerCase(),
-      content_sha256: nonEmptyString(releaseIntake?.integrity?.content_sha256),
-      release_ref: nonEmptyString(releaseIntake?.release?.ref),
-      release_head: nonEmptyString(releaseIntake?.release?.head),
-      repository: nonEmptyString(releaseIntake?.release?.repository),
-      baseline_commit: nonEmptyString(releaseIntake?.scan_boundary?.baseline_commit),
-      required_stages: Array.isArray(releaseIntake?.summary?.required_stages)
-        ? [...releaseIntake.summary.required_stages] : [],
-    };
   }
-  if (intakeBinding
-    && !sameCanonicalPath(releaseHeadObservation?.repository, intakeBinding.repository)) {
+  if (suppliedIntakePaths.length !== QWORK_RELEASE_INTAKE_STAGE_IDS.length
+    || new Set(suppliedIntakePaths.map((value) => canonicalPath(value))).size
+      !== QWORK_RELEASE_INTAKE_STAGE_IDS.length) {
+    errors.push('release_intake_paths_not_unique');
+  }
+  const referenceBinding = intakeBindings.G1;
+  if (referenceBinding
+    && !sameCanonicalPath(releaseHeadObservation?.repository, referenceBinding.repository)) {
     errors.push('release_observation_repository_mismatch');
   }
   if (errors.length) throw new Error(`QWork 发布测试计划输入无效：${errors.join('；')}`);
@@ -860,7 +956,7 @@ export function createQworkReleaseTestPlan({
     framework: { commit: nonEmptyString(frameworkCommit).toLowerCase() },
     release_identity: identityAudit.identity,
     release_identity_sha256: identityAudit.fingerprint,
-    release_intake: intakeBinding,
+    release_intakes: intakeBindings,
     release_head_observation: {
       schema_version: QWORK_RELEASE_REF_OBSERVATION_SCHEMA,
       path: nonEmptyString(releaseHeadObservationPath),
@@ -884,12 +980,12 @@ export function createQworkReleaseTestPlan({
         sha256: nonEmptyString(releaseIdentitySha256).toLowerCase(),
         type: 'file',
       },
-      {
-        role: 'release_intake',
-        path: nonEmptyString(releaseIntakePath),
-        sha256: nonEmptyString(releaseIntakeSha256).toLowerCase(),
+      ...QWORK_RELEASE_INTAKE_STAGE_IDS.map((stageId) => ({
+        role: `release_intake_${stageId.toLowerCase()}`,
+        path: nonEmptyString(releaseIntakePaths?.[stageId]),
+        sha256: nonEmptyString(releaseIntakeSha256s?.[stageId]).toLowerCase(),
         type: 'file',
-      },
+      })),
       {
         role: 'release_observation',
         path: nonEmptyString(releaseHeadObservationPath),
@@ -1017,12 +1113,21 @@ export function validateQworkReleaseControlState({ plan, state, integrity } = {}
   };
 }
 
-export function validateQworkReleaseIntakeBinding({ plan, report, reportSha256 = '' } = {}) {
+export function validateQworkReleaseIntakeBinding({
+  plan,
+  stageId,
+  report,
+  reportSha256 = '',
+} = {}) {
   const failures = [];
-  const binding = plan?.release_intake;
+  const stage = qworkReleaseStage(stageId);
+  const binding = plan?.release_intakes?.[stageId];
   const planBindingFailures = releaseIntakePlanBindingFailures(plan);
   if (planBindingFailures.length) {
     return { ok: false, failures: planBindingFailures, required: true };
+  }
+  if (!stage || stage.kind !== 'casebook' || !QWORK_RELEASE_INTAKE_STAGE_IDS.includes(stageId)) {
+    return { ok: false, failures: ['release_intake_stage_invalid'], required: true };
   }
   if (report?.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) failures.push('release_intake_schema_mismatch');
   if (binding.schema_version !== QWORK_RELEASE_INTAKE_SCHEMA) failures.push('plan_release_intake_schema_mismatch');
@@ -1044,6 +1149,9 @@ export function validateQworkReleaseIntakeBinding({ plan, report, reportSha256 =
   const validation = validateQworkReleaseIntake(report, {
     releaseRef: binding.release_ref,
     releaseHead: binding.release_head,
+    casebookPath: plan?.casebook?.path,
+    sheet: stage.sheet,
+    caseIds: stage.expected_case_ids,
     casebookSha256: plan?.casebook?.sha256,
     frameworkCommit: plan?.framework?.commit,
     requireReady: true,
@@ -1069,7 +1177,7 @@ export function validateQworkReleaseRefObservationBinding({ plan, report, report
   if (nonEmptyString(reportSha256).toLowerCase() !== nonEmptyString(binding.sha256).toLowerCase()) {
     failures.push('release_observation_artifact_sha256_mismatch');
   }
-  if (!sameCanonicalPath(report?.repository, plan?.release_intake?.repository)) {
+  if (!sameCanonicalPath(report?.repository, plan?.release_intakes?.G1?.repository)) {
     failures.push('release_observation_repository_mismatch');
   }
   if (!sameCanonicalPath(report?.repository, binding?.repository)) {
@@ -1286,7 +1394,7 @@ function pretestFailures(plan, stage, report = {}) {
     const intakeCheck = checks.find((check) => check?.id === 'qwork_release_intake');
     if (intakeCheck?.status !== 'passed') failures.push('pretest_release_intake_check_missing_or_failed');
     const intake = report?.release_intake;
-    const binding = plan.release_intake || {};
+    const binding = plan?.release_intakes?.[stage.id] || {};
     if (intake?.sha256 !== binding.sha256
       || intake?.content_sha256 !== binding.content_sha256
       || intake?.release_head !== binding.release_head) {
@@ -1497,7 +1605,12 @@ export function auditQworkStageReadiness({
       [`${stage.id}.readiness.pretest`]: pretest,
     }),
   ];
-  const intakeBinding = validateQworkReleaseIntakeBinding({ plan, report: releaseIntake, reportSha256: releaseIntakeSha256 });
+  const intakeBinding = validateQworkReleaseIntakeBinding({
+    plan,
+    stageId: stage.id,
+    report: releaseIntake,
+    reportSha256: releaseIntakeSha256,
+  });
   failures.push(...intakeBinding.failures);
   const capabilityCaseIds = Array.isArray(capabilityAudit?.cases)
     ? capabilityAudit.cases.map((item) => nonEmptyString(item?.case_id))
@@ -1528,7 +1641,7 @@ export function auditQworkStageReadiness({
       casebook_sha256: plan.casebook.sha256,
       framework_commit: plan.framework.commit,
       release_identity_sha256: plan.release_identity_sha256,
-      release_intake: plan.release_intake || null,
+      release_intake: plan?.release_intakes?.[stage.id] || null,
       case_ids: capabilityCaseIds,
       case_contracts: contractSeal.case_contracts,
       case_contracts_sha256: contractSeal.case_contracts_sha256,
@@ -1596,7 +1709,7 @@ function readinessSealFailures(plan, stage, audit) {
     || expected?.casebook_sha256 !== plan.casebook.sha256
     || expected?.framework_commit !== plan.framework.commit
     || expected?.release_identity_sha256 !== plan.release_identity_sha256
-    || !stableEqual(expected?.release_intake, plan.release_intake)
+    || !stableEqual(expected?.release_intake, plan?.release_intakes?.[stage.id])
     || !stableEqual(expected?.case_ids, expectedIds)) {
     failures.push('readiness_expected_binding_mismatch');
   }
@@ -2230,7 +2343,9 @@ function replayCasebookAudit(plan, state, stage, audit, phase) {
   if (phase === 'readiness') {
     const capabilityArtifact = artifactByRole(artifacts, `${stage.id}.readiness.capability_audit`);
     const pretestArtifact = artifactByRole(artifacts, `${stage.id}.readiness.pretest`);
-    const intakeArtifact = plan.source_artifacts.find((artifact) => artifact.role === 'release_intake');
+    const intakeArtifact = plan.source_artifacts.find(
+      (artifact) => artifact.role === `release_intake_${stage.id.toLowerCase()}`,
+    );
     return auditQworkStageReadiness({
       plan,
       stageId: stage.id,

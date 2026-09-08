@@ -58,6 +58,7 @@ import {
 } from '../lib/teams-profile-qbot-config.mjs';
 import {
   configureTeamsFixtureRuntime,
+  casebookRunnerUsage,
   extendTeamsPreconnectDeadlineAfterRecovery,
   inspectManagedTeamsRestartCapability,
   installTeamsPageGuards,
@@ -1016,6 +1017,28 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
     'resume-from': 'teams360-automation/output/old-run',
     'impact-all': 'true',
   }), /cannot be combined/);
+});
+
+test('the Teams Casebook CLI help exits before validation, locking, and output creation', () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-teams-casebook-help-'));
+  const output = path.join(temporaryRoot, 'must-not-exist');
+  try {
+    const result = spawnSync(process.execPath, [
+      fileURLToPath(new URL('../lib/casebook-runner.mjs', import.meta.url)),
+      '--help',
+      '--out', output,
+    ], {
+      cwd: PROJECT_ROOT,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, casebookRunnerUsage());
+    assert.match(result.stdout, /Usage:/);
+    assert.match(result.stdout, /--production-gate true/);
+    assert.equal(fs.existsSync(output), false);
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test('Teams preconnect waits through a full managed-host QWork remount window', () => {
