@@ -760,7 +760,7 @@ for (const [documentName, documentText] of [
     assert.match(example, /^\s*--release-intake-sha256\s+\S+/m, `${documentName} 的每个正式 pretest 示例必须绑定 release intake 文件 SHA-256`);
     assert.match(example, /^\s*--require-release-intake\s+true\s*\\?\s*$/m, `${documentName} 的每个正式 pretest 示例必须显式强制 release intake`);
   }
-  assert.match(documentText, /qbot-release-intake\/1\.8\.0/, `${documentName} 必须固定当前 intake tool 1.8.0`);
+  assert.match(documentText, /qbot-release-intake\/1\.9\.0/, `${documentName} 必须固定当前 intake tool 1.9.0`);
   assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v5/, `${documentName} 必须固定当前 blocking-risk v5`);
   assert.match(
     documentText,
@@ -794,8 +794,8 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /successor_ast_contracts[\s\S]{0,100}(?:任一|九项任一)[\s\S]{0,80}false[\s\S]{0,120}status=BLOCKED[\s\S]{0,100}不得生成 `VERIFIED`/,
-    `${documentName} 必须明确任一 AST 子合同失败即阻断主风险证明`,
+    /successor_ast_contracts[\s\S]{0,120}12 (?:个子项|项)[\s\S]{0,80}`cancellation`[\s\S]{0,80}`controller`[\s\S]{0,80}`deadline`[\s\S]{0,80}`callback_settlement`[\s\S]{0,80}`event_flow`[\s\S]{0,80}`desktop`[\s\S]{0,80}`manager`[\s\S]{0,80}`manager_pressure`[\s\S]{0,80}`supervisor`[\s\S]{0,80}`supervisor_exit`[\s\S]{0,80}`supervisor_message`[\s\S]{0,80}`termination`[\s\S]{0,120}任一子项[\s\S]{0,80}false[\s\S]{0,120}status=BLOCKED[\s\S]{0,100}不得生成 `VERIFIED`/,
+    `${documentName} 必须精确列出 12 个 AST 子合同并明确任一失败即阻断主风险证明`,
   );
   assert.match(
     documentText,
@@ -839,13 +839,13 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /qbot-release-intake\/1\.6\.2[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
+    /qbot-release-intake\/1\.8\.0[\s\S]{0,240}更旧 intake tool version[\s\S]{0,240}fail-closed/,
     `${documentName} 必须明确旧 intake tool 不可复用`,
   );
   assert.match(
     documentText,
-    /createExecutionWorkerContextUsageLease[\s\S]{0,500}execution-worker-context-usage\.cjs[\s\S]{0,500}execution-worker-context-usage-lease\.cjs[\s\S]{0,500}v5[\s\S]{0,120}13 个受保护源码文件[\s\S]{0,500}execution-worker-controller\.cjs[\s\S]{0,500}execution-worker-cancellation\.cjs[\s\S]{0,500}execution-worker-supervisor-message\.cjs[\s\S]{0,500}execution-worker-termination\.cjs/,
-    `${documentName} 必须固定 v5 helper delegation、13 个受保护文件和新架构边界`,
+    /createExecutionWorkerContextUsageLease[\s\S]{0,500}execution-worker-context-usage\.cjs[\s\S]{0,500}execution-worker-context-usage-lease\.cjs[\s\S]{0,500}v5[\s\S]{0,120}16 个受保护源码文件[\s\S]{0,500}execution-worker-controller\.cjs[\s\S]{0,500}execution-worker-cancellation\.cjs[\s\S]{0,500}execution-worker-deadline\.cjs[\s\S]{0,500}execution-worker-callback-settlement\.cjs[\s\S]{0,500}execution-worker-event-flow\.cjs[\s\S]{0,500}execution-worker-supervisor-message\.cjs[\s\S]{0,500}execution-worker-termination\.cjs/,
+    `${documentName} 必须固定 v5 helper delegation、16 个受保护文件和新架构边界`,
   );
   assert.match(documentText, /阻断风险 v2\/v3\/v4 证明[\s\S]{0,200}fail-closed/, `${documentName} 必须对旧 blocking-risk schema fail-closed`);
   assert.match(
@@ -857,6 +857,16 @@ for (const [documentName, documentText] of [
     documentText,
     /全部合同[\s\S]*current-release 持续性鉴证[\s\S]*当前 release HEAD[\s\S]*不能冒充本轮 MR changes 鉴证[\s\S]*origin_change_attestation[\s\S]*不在本次增量范围时该字段必须为空/,
     `${documentName} 必须拆分全注册表 current-release 持续性鉴证与仅本轮 MR 的 origin changes 鉴证`,
+  );
+  assert.match(
+    documentText,
+    /MR !1597[\s\S]*后继 `!1612`[\s\S]*不在本轮增量 MR 范围[\s\S]*正向与反向 first-parent compare[\s\S]*仅正向完整成立[\s\S]*仅反向完整成立[\s\S]*双向冲突[\s\S]*binding attestation[\s\S]*离线验证器重放[\s\S]*IID、merge\/first-parent[\s\S]*diff[\s\S]*有序路径身份/,
+    `${documentName} 必须冻结 !1612 successor 跨增量双向 ancestry、attestation 重放与本轮身份复核合同`,
+  );
+  assert.match(
+    documentText,
+    /(?=[\s\S]*qbot-release-intake\/1\.9\.0)(?=[\s\S]*qbot-qwork-gitlab-first-parent-compare\/v1)(?=[\s\S]*Base64)(?=[\s\S]*UTF-8)(?=[\s\S]*JSON)(?=[\s\S]*字节数)(?=[\s\S]*SHA-256)(?=[\s\S]*endpoint)(?=[\s\S]*from\/to)(?=[\s\S]*原始 `commits`)(?=[\s\S]*不得信任报告自报的 ancestry)(?=[\s\S]*qbot-qwork-source-binding-successor-relationship\/v2)(?=[\s\S]*qbot-qwork-release-current-source-contract\/v4)/,
+    `${documentName} 必须冻结 intake 1.9、raw compare v1、relationship v2 与 current-release v4 的原始响应重放合同`,
   );
   assert.match(
     documentText,
@@ -872,6 +882,11 @@ for (const [documentName, documentText] of [
     documentText,
     /qbot-qwork-mr1597-worker-environment-test-semantics\/v2[\s\S]*五个唯一真实绑定[\s\S]*node:assert\/strict[\s\S]*node:module[\s\S]*node:test[\s\S]*createRequire\(import\.meta\.url\)[\s\S]*desktop-agent-host\.cjs[\s\S]*top_level_bindings/,
     `${documentName} 必须冻结 MR1597 v2 schema、五个真实 Program 顶层绑定及其公开投影`,
+  );
+  assert.match(
+    documentText,
+    /`RegExp`[\s\S]{0,120}`RegExp\.prototype\.test`[\s\S]{0,260}globalThis[\s\S]{0,260}`Object\/Reflect`[\s\S]{0,260}`Reflect\.apply`[\s\S]{0,220}`\.bind\(\)`[\s\S]{0,300}无关 receiver/,
+    `${documentName} 必须冻结 lifecycle RegExp builtin 篡改防护与只读正控`,
   );
   assert.match(
     documentText,
@@ -895,8 +910,8 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /qbot-release-intake\/1\.8\.0[\s\S]*qbot-qwork-release-current-source-contract\/v3[\s\S]*Repository Files API 返回的[\s\S]*last_commit_id[\s\S]*repository\/commits\/<last_commit_id>[\s\S]*diff\?per_page=100&page=N[\s\S]*qbot-qwork-release-file-provenance\/v2[\s\S]*old_path[\s\S]*new_path[\s\S]*repository\/commits\?path=[\s\S]*禁止/,
-    `${documentName} 必须冻结 intake 1.8、current v3 与 commit-diff provenance v2 合同`,
+    /qbot-release-intake\/1\.9\.0[\s\S]*qbot-qwork-release-current-source-contract\/v4[\s\S]*Repository Files API 返回的[\s\S]*last_commit_id[\s\S]*repository\/commits\/<last_commit_id>[\s\S]*diff\?per_page=100&page=N[\s\S]*qbot-qwork-release-file-provenance\/v2[\s\S]*old_path[\s\S]*new_path[\s\S]*repository\/commits\?path=[\s\S]*禁止/,
+    `${documentName} 必须冻结 intake 1.9、current v4 与 commit-diff provenance v2 合同`,
   );
   assert.match(
     documentText,
@@ -926,8 +941,43 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /current_release_match[\s\S]*fragmentOccurrenceCount\(source, binding\.current_release_match\)[\s\S]*expectedCurrentOccurrenceCount[\s\S]*if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*regionStartOccurrenceCount[\s\S]*regionEndOccurrenceCount[\s\S]*regionOrdered[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentIndexes[\s\S]*expectedLineIndex[\s\S]*indexes\[0\] === expectedLineIndex[\s\S]*requiredFragmentsOrdered[\s\S]*current_integration_binding_scope_required_fragment_order_mismatch[\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every[\s\S]*forbiddenFragments\.every/,
-  'current-release continuity 必须保持 key 级全文件计数、双 region 整体顺序和 required fragment 确定性相对位置',
+  /function currentReleaseSuccessorLineIsVerified[\s\S]*parent_count[\s\S]*metadata_verified[\s\S]*metadata_source[\s\S]*diff_bytes[\s\S]*diff_sha256[\s\S]*stableJson\(changedPaths\)[\s\S]*successor\.changed_paths/,
+  'current-release successor 必须绑定 MR 首父、元数据来源、diff 身份和完整有序路径',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function observeCurrentReleaseSuccessorRelationship[\s\S]*VERIFIED_SUCCESSOR[\s\S]*VERIFIED_PREDECESSOR[\s\S]*inRangeIdentityVerified[\s\S]*function currentIntegrationBindingOccurrence[\s\S]*successorObservation\.relationship === 'VERIFIED_SUCCESSOR'[\s\S]*function observeCurrentIntegrationBinding[\s\S]*expectedCurrentOccurrenceCount[\s\S]*if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*regionStartOccurrenceCount[\s\S]*regionEndOccurrenceCount[\s\S]*regionOrdered[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentIndexes[\s\S]*expectedLineIndex[\s\S]*indexes\[0\] === expectedLineIndex[\s\S]*requiredFragmentsOrdered[\s\S]*current_integration_binding_scope_required_fragment_order_mismatch[\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every[\s\S]*forbiddenFragments\.every/,
+  'current-release continuity 必须保持 successor 受控行、key 级全文件计数、双 region 整体顺序和 required fragment 确定性相对位置',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /currentReleaseSourceContractSuccessorBindings[\s\S]*successorAncestriesByContractId[\s\S]*verifyCurrentReleaseContractAncestry[\s\S]*verifyReleaseBeforeContractAncestry[\s\S]*successorAncestries: successorAncestriesByContractId/,
+  'release intake 必须为 current-release successor 独立读取双向 first-parent ancestry 并传入鉴证',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake\/1\.9\.0'[\s\S]*const reader = \(endpoint\) => execute\(endpoint\)\.value;[\s\S]*reader\.readRaw = \(endpoint\) => execute\(endpoint\)[\s\S]*function gitLabCompareEvidence[\s\S]*readGitLab\.readRaw\(endpoint\)[\s\S]*raw_response_encoding: 'base64'[\s\S]*raw_response_bytes: bytes\.length[\s\S]*raw_response_sha256: createHash\('sha256'\)/,
+  'release intake 1.9 必须保留 GitLab compare 原始字节并固化 Base64、bytes 与 SHA-256',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /function verifyCurrentReleaseContractAncestry[\s\S]*requireRawCompareEvidence[\s\S]*gitLabCompareEvidence\(\{ readGitLab, endpoint, compareFrom, compareTo: releaseHead \}\)[\s\S]*reconstructGitLabFirstParentChain\(\{[\s\S]*function verifyReleaseBeforeContractAncestry[\s\S]*gitLabCompareEvidence\(\{ readGitLab, endpoint, compareFrom: releaseHead, compareTo \}\)[\s\S]*reconstructGitLabFirstParentChain\(\{/,
+  'successor 双向 ancestry 必须从各自固定方向的 raw compare 重建 first-parent 链',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /successor_observation[\s\S]*observedBindings[\s\S]*successorAncestries[\s\S]*replayedBindings[\s\S]*attestation_current_integration_bindings_replay_mismatch/,
+  'current-release successor relationship 必须持久化在 binding attestation 并由离线验证器重放',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract\/v4'[\s\S]*QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA = 'qbot-qwork-gitlab-first-parent-compare\/v1'[\s\S]*QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA = 'qbot-qwork-source-binding-successor-relationship\/v2'/,
+  'current-release v4 必须固定 raw compare v1 与 successor relationship v2 schema',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function validateGitLabFirstParentCompareEvidence[\s\S]*objectHasExactKeys\(evidence, expectedKeys\)[\s\S]*strictBase64Decode[\s\S]*strictUtf8Decode[\s\S]*raw_response_bytes[\s\S]*sha256\(bytes\)[\s\S]*JSON\.parse\(source\)[\s\S]*function replayCurrentReleaseSuccessorAncestry[\s\S]*reconstructGitLabFirstParentChain\(\{[\s\S]*ancestry_projection_mismatch/,
+  '离线验证器必须严格重放 raw compare 的字段、编码、字节、哈希、JSON 与 first-parent 投影',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -961,7 +1011,7 @@ assert.doesNotMatch(
 );
 assert.match(
   qworkReleaseIntakeSource,
-  /QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake\/1\.8\.0'[\s\S]*readReleaseCommitDiff[\s\S]*repository\/commits\/\$\{encodeURIComponent\(lastCommitId\)\}[\s\S]*\/diff\?per_page=\$\{QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE\}[\s\S]*matched_change_count[\s\S]*path_verified/,
+  /QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake\/1\.9\.0'[\s\S]*readReleaseCommitDiff[\s\S]*repository\/commits\/\$\{encodeURIComponent\(lastCommitId\)\}[\s\S]*\/diff\?per_page=\$\{QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE\}[\s\S]*matched_change_count[\s\S]*path_verified/,
   '正式 intake 必须从 Files last_commit_id 读取 commit metadata 与完整 diff 路径命中 provenance',
 );
 assert.match(
@@ -977,7 +1027,7 @@ assert.match(
 assert.match(
   qworkReleaseSourceContractsSource,
   /pipeline\.project_id !== metadata\.project_id[\s\S]*pipeline\.sha !== metadata\.id[\s\S]*pipelines\/\$\{pipeline\.id\}[\s\S]*Number\.isSafeInteger\(ancestry\?\.compare_commit_count\)[\s\S]*Number\.isSafeInteger\(file\?\.declared_size\)[\s\S]*Number\.isSafeInteger\(file\?\.bytes\)[\s\S]*Number\.isSafeInteger\(file\?\.line_count\)/,
-  'current-release v3 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
+  'current-release v4 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
 );
 assert.match(
   qworkReleaseIntakeTestSource,
@@ -1099,6 +1149,7 @@ const {
   publishValidatedCasebookArtifact,
   prepareCasebookOutputDirectory,
   validateCasebookDesignReleaseIntake,
+  validateExactR16LatestMrMetadataContract,
   validateExactStaticMrContract: validateR16ExactStaticMrContract,
   validateMr1592BlockingRiskV5Ready,
 } = await import(pathToFileURL(
@@ -1256,6 +1307,8 @@ try {
 const {
   QWORK_RELEASE_SOURCE_CONTRACTS: casebookDesignSourceContracts,
   QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA: casebookDesignCurrentSourceContractSchema,
+  QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA: casebookDesignGitLabFirstParentCompareSchema,
+  QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA: casebookDesignSuccessorRelationshipSchema,
   QWORK_RELEASE_FILE_PROVENANCE_SCHEMA: casebookDesignFileProvenanceSchema,
   QWORK_MR1590_QBOT_EXPERT_CLOUD_INSTALLATION_CONTRACT: casebookDesignMr1590Contract,
   QWORK_MR1593_QBOT_ADDITIVE_RESPONSE_COMPATIBILITY_CONTRACT: casebookDesignMr1593Contract,
@@ -1285,10 +1338,12 @@ const {
   mapReleaseImpact: mapCasebookDesignReleaseImpact,
 } = await import(pathToFileURL(path.join(root, 'src', 'lib', 'qwork-release-intake.mjs')).href);
 assert.equal(casebookDesignBlockingRiskSchema, 'qbot-qwork-release-blocking-risk-attestation/v5');
-assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.8.0');
-assert.equal(casebookDesignCurrentSourceContractSchema, 'qbot-qwork-release-current-source-contract/v3');
+assert.equal(casebookDesignIntakeToolVersion, 'qbot-release-intake/1.9.0');
+assert.equal(casebookDesignCurrentSourceContractSchema, 'qbot-qwork-release-current-source-contract/v4');
+assert.equal(casebookDesignGitLabFirstParentCompareSchema, 'qbot-qwork-gitlab-first-parent-compare/v1');
+assert.equal(casebookDesignSuccessorRelationshipSchema, 'qbot-qwork-source-binding-successor-relationship/v2');
 assert.equal(casebookDesignFileProvenanceSchema, 'qbot-qwork-release-file-provenance/v2');
-assert.equal(casebookDesignSuccessorPaths.length, 13, 'MR !1559 v5 必须精确审计 13 个受保护源码文件');
+assert.equal(casebookDesignSuccessorPaths.length, 16, 'MR !1559 v5 必须精确审计 16 个受保护源码文件');
 const r16SourceContractFixtures = [
   {
     iid: '1590',
@@ -1384,6 +1439,268 @@ for (const fixture of r16SourceContractFixtures) {
     );
   }
 }
+const r16LatestMrMetadataFixtures = [
+  {
+    iid: '1605',
+    commit: '1eac89202f575694a74b9b88d62b9eac6333a8d4',
+    merge_commit_sha: '1eac89202f575694a74b9b88d62b9eac6333a8d4',
+    diff_sha256: '4b6b6a202a1d45fc763dd020ad001f3edee983cb044fd804fd0b3d8d570421dc',
+    changed_paths: [
+      'electron/host-core/bridge/contracts/runtime-host-port.cjs',
+      'electron/.architecture.yaml',
+      'server/qbot-core/runtime-adapters/runtime-adapter.mjs',
+      'server/qbot-core/.architecture.yaml',
+      'test/unit/server/runtime-adapter-golden-events.test.mjs',
+      'test/unit/server/tool-result-recovery.test.mjs',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1608',
+    commit: '681ac4a24938ceedd448d852a9935f652673f0a9',
+    merge_commit_sha: '681ac4a24938ceedd448d852a9935f652673f0a9',
+    diff_sha256: '4e9fa133428205fb125c9d7262b2a29abd2d82871f99ed956f87f20af386541c',
+    changed_paths: ['.gitlab-ci.yml'],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1599',
+    commit: '19fbc8b26b8e93d1ce5b2025032572afe2635b0d',
+    merge_commit_sha: '19fbc8b26b8e93d1ce5b2025032572afe2635b0d',
+    diff_sha256: '1854f34cdceec0ed6587eff5a72ab95d6287b0a49cc7d7d66c38bd27ea168ae1',
+    changed_paths: ['server/qbot-core/prompts/prompt-layers.mjs', 'test/unit/prompts/prompt-layers.test.mjs'],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1601',
+    commit: 'a038a6d0a018345c111f153f56681eac0d935eb1',
+    merge_commit_sha: 'a038a6d0a018345c111f153f56681eac0d935eb1',
+    diff_sha256: '92b31611bb4bafd2843564c2fada46131bd7f1615b6493f06bd4fcdb06e2ca72',
+    changed_paths: [
+      'dashboard/docs/qwork-dashboard.md',
+      'dashboard/e2e/dashboard.spec.ts',
+      'dashboard/server/app.ts',
+      'dashboard/server/dashboard-bff.test.ts',
+      'dashboard/shared/contracts.ts',
+      'dashboard/src/app/App.tsx',
+      'dashboard/src/i18n.tsx',
+      'docs/ota-architecture.md',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'server/control-plane/dashboard/dashboard-admin-routes.mjs',
+      'server/control-plane/dashboard/runtime-gray-admin-routes.mjs',
+      'server/control-plane/persistence/db.mjs',
+      'server/control-plane/releases/runtime-release-gray.mjs',
+      'server/control-plane/.architecture.yaml',
+      'server/control-plane/index.mjs',
+      'test/unit/server/runtime-release-gray.test.mjs',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1609',
+    commit: '9084d7371a055d99dc4fac951ceaa8afc6f7f47d',
+    merge_commit_sha: '9084d7371a055d99dc4fac951ceaa8afc6f7f47d',
+    diff_sha256: '24e141407e86fb988a7f22131a4845ed04c52374860e5b6e1af7a74565357d18',
+    changed_paths: [
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'test/unit/core/llm-platform-real-artifacts.test.mjs',
+      'test/unit/core/markdown-link-navigation.test.mjs',
+      'test/unit/core/native-confirm-dialog-regression.test.mjs',
+      'test/unit/core/packaged-app.test.mjs',
+      'test/unit/runtime/runtime-release-workbench.test.mjs',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1614',
+    commit: 'cfe1022d2d7d6844d6ec15a9b87534d289b8e13a',
+    merge_commit_sha: 'cfe1022d2d7d6844d6ec15a9b87534d289b8e13a',
+    diff_sha256: '5c114bd60ebd99b872ea351f021abaea959b3f52e72b73d0d8e306618628dae6',
+    changed_paths: ['deploy/helm/qwork-dashboard/templates/deployment.yaml', 'test/unit/ui/dashboard-k8s.test.mjs'],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1554',
+    commit: 'fb92870614093eaa16c84fa56ef0aceb7b5dccd3',
+    merge_commit_sha: 'fb92870614093eaa16c84fa56ef0aceb7b5dccd3',
+    diff_sha256: '331477115f3c495d00dde5696f9482749af6d9e4eeff68e223eaf530d73edd77',
+    changed_paths: [
+      '.agent/compiled/scripts/AGENTS.md',
+      '.agent/compiled/scripts/CLAUDE.md',
+      '.agent/context/scopes/scripts.yaml',
+      '.agent/skills-src/issue-intake/references/label-mapping-guide.md',
+      '.agents/skills/issue-intake/references/label-mapping-guide.md',
+      '.claude/skills/issue-intake/references/label-mapping-guide.md',
+      '.gitlab/guides/ci-skeleton.md',
+      '.gitlab/guides/labels.md',
+      '.gitlab/issue_templates/Bug.md',
+      '.gitlab/issue_templates/Chore.md',
+      '.gitlab/issue_templates/Default.md',
+      '.gitlab/issue_templates/Design.md',
+      '.gitlab/issue_templates/Documentation.md',
+      '.gitlab/issue_templates/Enhancement.md',
+      '.gitlab/issue_templates/ExternalDependency.md',
+      '.gitlab/issue_templates/Feature.md',
+      '.gitlab/issue_templates/Performance.md',
+      '.gitlab/issue_templates/Refactor.md',
+      '.gitlab/issue_templates/Release.md',
+      '.gitlab/issue_templates/Test.md',
+      '.gitlab/merge_request_templates/Bugfix.md',
+      '.gitlab/merge_request_templates/Chore.md',
+      '.gitlab/merge_request_templates/Default.md',
+      '.gitlab/merge_request_templates/Design.md',
+      '.gitlab/merge_request_templates/Documentation.md',
+      '.gitlab/merge_request_templates/Enhancement.md',
+      '.gitlab/merge_request_templates/Feature.md',
+      '.gitlab/merge_request_templates/Performance.md',
+      '.gitlab/merge_request_templates/Refactor.md',
+      '.gitlab/merge_request_templates/Release.md',
+      '.gitlab/merge_request_templates/Test.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/scripts/gitlab_labels.sh',
+      'scripts/ci/deploy/harbor-smoke.mjs',
+      'scripts/ci/deploy/harbor-smoke.test.mjs',
+      'scripts/ci/deploy/k8s-smoke.mjs',
+      'scripts/ci/deploy/k8s-smoke.test.mjs',
+      'scripts/ci/policy/ci-maintenance-regression.mjs',
+      'scripts/ci/policy/ci-maintenance-regression.test.mjs',
+      'scripts/ci/policy/lightweight-ci-verify.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'scripts/ci/unit/node-unit-job-timing.mjs',
+      'scripts/ci/unit/node-unit-profile-history.mjs',
+      'scripts/ci/unit/node-unit-profile-reporter.mjs',
+      'scripts/ci/unit/node-unit-profile.mjs',
+      'scripts/ci/unit/node-unit-skip-baseline.json',
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'scripts/ci/unit/node-unit-tests.mjs',
+      'scripts/ci/unit/unit-weight-fallback.mjs',
+      'scripts/ci/unit/unit-weight-fallback.test.mjs',
+      'scripts/generated/e2e-artifact-scan.bundle.mjs',
+      'scripts/governance/architecture/index.mjs',
+      'scripts/governance/architecture/migration-contract.mjs',
+      'scripts/governance/structure-check.mjs',
+      'scripts/governance/structure-check.test.mjs',
+      'scripts/lib/e2e-artifact-scan/pipeline-policy-report.mjs',
+      'scripts/migrations/1502/manifest.json',
+      'scripts/AGENTS.md',
+      'test/README.md',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
+      'package.json',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1607',
+    commit: '1a3cef149bec91184cf31abf5485dff2fdfca926',
+    merge_commit_sha: '1a3cef149bec91184cf31abf5485dff2fdfca926',
+    diff_sha256: '4b9e6d5463eb47cb3b32d4a377cdc06162b2750224ac87a66bd5450e6b5e73d9',
+    changed_paths: [
+      'scripts/governance/gitlab/check-lint.mjs',
+      'scripts/governance/gitlab/check-lint.test.mjs',
+      'scripts/governance/gitlab/gitlab-issue-create.mjs',
+      'scripts/governance/gitlab/gitlab-issue-create.test.mjs',
+      'scripts/governance/gitlab/local-status-publisher.mjs',
+      'scripts/governance/gitlab/mr-delivery-preflight.mjs',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'scripts/governance/gitlab/preflight-git.mjs',
+      'scripts/governance/gitlab/version-line-preflight.mjs',
+      'scripts/governance/hooks/hooks/pre-push',
+      'scripts/governance/hooks/install-hooks.test.mjs',
+      '.gitlab-ci.yml',
+      'package.json',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1612',
+    commit: '5b6cea43b26ec3cd2fa12b2c7a6df14341122680',
+    merge_commit_sha: '5b6cea43b26ec3cd2fa12b2c7a6df14341122680',
+    diff_sha256: '6aeaaea1a138cf6ffa2e571d1765d43cdb99194ed3fbb0db6b11a837647cc61d',
+    changed_paths: [
+      'electron/host-core/agent/desktop-host-context.cjs',
+      'electron/host-core/agent/execution-worker-cancellation.cjs',
+      'electron/host-core/agent/execution-worker-deadline.cjs',
+      'electron/host-core/agent/execution-worker-entry.cjs',
+      'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+      'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+      'electron/host-core/agent/execution-worker-supervisor.cjs',
+      'electron/host-core/bridge/contracts/chat-user-error-notice.cjs',
+      'electron/host-core/bridge/contracts/provider-failure-chat-code.cjs',
+      'server/qbot-core/engine/engine.mjs',
+      'server/qbot-core/engine/turn-cleanup.mjs',
+      'server/qbot-core/models/claude-media-compatibility-loopback.mjs',
+      'server/qbot-core/models/provider-first-output-deadline.mjs',
+      'src/chat-user-error.ts',
+      'test/e2e/support/core-ux-coverage-matrix.mjs',
+      'test/e2e/support/core-ux-coverage-matrix.test.mjs',
+      'test/e2e/support/module-suites-1614.mjs',
+      'test/e2e/support/module-suites-1614.test.mjs',
+      'test/e2e/support/module-suites.mjs',
+      'test/e2e/support/residual-suite-materials.mjs',
+      'test/e2e/support/residual-suite-materials.test.mjs',
+      'test/e2e/release-http.spec.mjs',
+      'test/unit/core/chat-user-error-notice.test.mjs',
+      'test/unit/desktop/execution-worker-cancel-deadline.test.mjs',
+      'test/unit/desktop/execution-worker-provider-transport.test.mjs',
+      'test/unit/desktop/execution-worker-supervisor.test.mjs',
+      'test/unit/server/claude-media-compatibility.test.mjs',
+      'test/unit/server/engine-stream-adapters.test.mjs',
+      'test/unit/server/provider-first-output-deadline.test.mjs',
+    ],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1616',
+    commit: '9b6bf7fe5b61ed6821a84bb7fc85c4cc1e3426dc',
+    merge_commit_sha: '9b6bf7fe5b61ed6821a84bb7fc85c4cc1e3426dc',
+    diff_sha256: '8ee2c90bdfec1fc4322e25b0d75443dc33353499fc740117839bb30eb5e57298',
+    changed_paths: ['scripts/bin/start-dev.mjs', 'scripts/.architecture.yaml', 'package.json'],
+    source_contract_ids: [],
+  },
+  {
+    iid: '1613',
+    commit: 'e3a5de6cf02845cecb80906a8d11a48caf5c2d1b',
+    merge_commit_sha: 'e3a5de6cf02845cecb80906a8d11a48caf5c2d1b',
+    diff_sha256: '0b7916e71e9122011caaf4f16cfac5b130691874881a51bbe3cb470a6ea86999',
+    changed_paths: [
+      'scripts/release/runtime/runtime-release-manifest.mjs',
+      'scripts/release/runtime/runtime-release-sdk-publish.mjs',
+      'test/unit/core/desktop-runtime-bundle-pin.test.mjs',
+      'test/unit/core/runtime-version-guard.test.mjs',
+      'test/unit/runtime/runtime-release-manifest.test.mjs',
+      '.gitlab-ci.yml',
+    ],
+    source_contract_ids: [],
+  },
+];
+for (const fixture of r16LatestMrMetadataFixtures) {
+  assert.deepEqual(
+    validateExactR16LatestMrMetadataContract(fixture, fixture.iid),
+    { ok: true, failures: [] },
+    `MR !${fixture.iid} 必须精确绑定 commit/merge/diff/${fixture.changed_paths.length} 条 paths 与空 source contract 集合`,
+  );
+  for (const [field, mutate, expectedFailure] of [
+    ['commit', (candidate) => { candidate.commit = 'f'.repeat(40); }, 'commit_mismatch'],
+    ['merge SHA', (candidate) => { candidate.merge_commit_sha = 'f'.repeat(40); }, 'merge_commit_sha_mismatch'],
+    ['diff SHA', (candidate) => { candidate.diff_sha256 = 'f'.repeat(64); }, 'diff_sha256_mismatch'],
+    ['changed path omission', (candidate) => { candidate.changed_paths = candidate.changed_paths.slice(1); }, 'changed_paths_mismatch'],
+    ['changed path order/set', (candidate) => {
+      candidate.changed_paths = candidate.changed_paths.length > 1
+        ? [...candidate.changed_paths].reverse()
+        : [...candidate.changed_paths, `${candidate.changed_paths[0]}.unexpected`];
+    }, 'changed_paths_mismatch'],
+    ['source contract injection', (candidate) => { candidate.source_contract_ids = ['forged/source-contract']; }, 'source_contract_ids_mismatch'],
+  ]) {
+    const candidate = structuredClone(fixture);
+    mutate(candidate);
+    const validation = validateExactR16LatestMrMetadataContract(candidate, fixture.iid);
+    assert.equal(validation.ok, false, `MR !${fixture.iid} ${field} 漂移必须 fail-closed`);
+    assert.equal(validation.failures.includes(expectedFailure), true, `MR !${fixture.iid} ${field} 漂移必须给出稳定失败 ID`);
+  }
+}
+const r16LatestStaticMrIds = new Set(['1608', '1609', '1614', '1554', '1607', '1616', '1613']);
 const r16ExactStaticMrFixtures = [
   {
     iid: '1571',
@@ -1442,6 +1759,7 @@ const r16ExactStaticMrFixtures = [
       '.gitlab-ci.yml',
     ],
   },
+  ...r16LatestMrMetadataFixtures.filter((fixture) => r16LatestStaticMrIds.has(fixture.iid)),
 ];
 for (const fixture of r16ExactStaticMrFixtures) {
   assert.deepEqual(
@@ -1480,6 +1798,27 @@ const casebookDesignStableValue = (value) => {
 const casebookDesignSha256 = (value) => createHash('sha256')
   .update(JSON.stringify(casebookDesignStableValue(value)))
   .digest('hex');
+const casebookDesignAncestryWithRawCompare = (ancestry, compare) => {
+  const bytes = Buffer.from(JSON.stringify(compare), 'utf8');
+  return {
+    ...ancestry,
+    compare_evidence: {
+      schema_version: casebookDesignGitLabFirstParentCompareSchema,
+      source: 'gitlab-api-read-only',
+      host: 'gitlab.daikuan.qihoo.net',
+      project: 'songrongxin/deepbankv2',
+      method: 'GET',
+      endpoint: `repository/compare?from=${ancestry.compare_from}&to=${ancestry.compare_to}&straight=true`,
+      compare_from: ancestry.compare_from,
+      compare_to: ancestry.compare_to,
+      straight: true,
+      raw_response_encoding: 'base64',
+      raw_response_base64: bytes.toString('base64'),
+      raw_response_bytes: bytes.length,
+      raw_response_sha256: createHash('sha256').update(bytes).digest('hex'),
+    },
+  };
+};
 const casebookDesignGitBlobSha1 = (bytes) => createHash('sha1')
   .update(`blob ${bytes.length}\0`, 'utf8')
   .update(bytes)
@@ -1574,6 +1913,380 @@ const casebookDesignBlockingRisk = ({ blocked, head, mutateSource = null }) => {
   const successorEntrySource = `
 require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();
 `;
+
+  const successorDeadlineV5 = `
+  const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');
+  const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+  function validateExecutionWorkerReply(raw, pending, now) {
+    const expired = pending.get(raw?.requestId);
+    const validationTime = expired?.deadlineExpired && expired.matches(raw)
+      && raw.deadlineAt === expired.deadlineAt ? expired.deadlineAt - 1 : now();
+    const message = validateEnvelope(raw, { direction: 'worker-to-host', now: validationTime });
+    if (expired?.deadlineExpired && expired.matches(message)) {
+      if (isExecutionWorkerTerminalOperation(message.operation)) {
+        clearTimeout(expired.cancelDeadline);
+        pending.delete(message.requestId);
+      }
+      return { ...message, operation: 'execution.expired' };
+    }
+    return message;
+  }
+  function settleExpiredExecutionWorkerReply(message, pending) {
+    const expired = pending.get(message.requestId);
+    if (!expired?.deadlineExpired || !expired.matches(message)) return false;
+    if (isExecutionWorkerTerminalOperation(message.operation)) {
+      clearTimeout(expired.cancelDeadline);
+      pending.delete(message.requestId);
+    }
+    return true;
+  }
+  function cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs }) {
+    const requestedGraceMs = Number(graceMs);
+    const boundedGraceMs = Number.isSafeInteger(requestedGraceMs) && requestedGraceMs > 0
+      ? Math.min(requestedGraceMs, 2147483647) : 1;
+    item.deadlineExpired = true;
+    item.cancelDeadline = setTimeout(() => {
+      if (pending.get(message.requestId) === item) terminateChild(child, 'request-deadline-timeout');
+    }, boundedGraceMs);
+    item.cancelDeadline.unref?.();
+    try {
+      child.postMessage(createEnvelope('execution.cancel', message,
+        { reason: 'execution_worker_deadline_exceeded' },
+        { deadlineMs: boundedGraceMs, now: now() }));
+    } catch {
+      terminateChild(child, 'request-deadline-timeout');
+    }
+  }
+  function scheduleExecutionWorkerDeadline({ message, pending, child, terminateChild, now, deadlineMs, graceMs }) {
+    const requestedDeadlineMs = Number(deadlineMs);
+    const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+      ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+    const timer = setTimeout(() => {
+      const item = pending.get(message.requestId);
+      if (!item) return;
+      const error = Object.assign(new Error('execution worker request deadline exceeded'), {
+        code: 'execution_worker_deadline_exceeded',
+      });
+      item.reject(error);
+      if (message.operation !== 'execution.start') {
+        pending.delete(message.requestId);
+        return;
+      }
+      cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs });
+    }, boundedDeadlineMs + 1);
+    timer.unref?.();
+    return timer;
+  }
+  function createExecutionWorkerDeadlineCallbacks({ operation, requestId, message, pending, child, terminateChild, now, graceMs }) {
+    const requestedCallbackGraceMs = Number(graceMs);
+    const boundedCallbackGraceMs = Number.isSafeInteger(requestedCallbackGraceMs)
+      && requestedCallbackGraceMs > 0
+      ? Math.min(requestedCallbackGraceMs, 2147483647) : 1;
+    return {
+      onDeadline: () => {
+        const item = pending.get(requestId);
+        if (operation !== 'execution.start') {
+          pending.delete(requestId);
+          return;
+        }
+        if (!item) return;
+        item.deadlineExpired = true;
+        item.deadlineAt = message.deadlineAt;
+        try {
+          child.postMessage(createEnvelope('execution.cancel', message,
+            { reason: 'execution_worker_deadline_exceeded' },
+            { deadlineMs: boundedCallbackGraceMs, now: now() }));
+        } catch {
+          return terminateChild(child, 'request-deadline-timeout');
+        }
+      },
+      onCancellationTimeout: () => {
+        if (pending.has(requestId)) return terminateChild(child, 'request-deadline-timeout');
+      },
+    };
+  }
+  module.exports = {
+    validateExecutionWorkerReply,
+    settleExpiredExecutionWorkerReply,
+    scheduleExecutionWorkerDeadline,
+    createExecutionWorkerDeadlineCallbacks,
+  };
+  `;
+
+  const successorCallbackSettlementV5 = `
+  const BEST_EFFORT_CALLBACKS = new Set([
+    'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+    'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+    'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onRaw', 'onRawDiagnostic',
+    'onCompactDiagnostic',
+  ]);
+  const IMMEDIATE_NON_BLOCKING_CALLBACKS = new Set([
+    'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+    'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+  ]);
+  const DEFERRED_OBSERVER_CALLBACKS = new Set([
+    'onRaw', 'onRawDiagnostic', 'onCompactDiagnostic',
+  ]);
+  const RESERVED_OBSERVER_CALLBACKS = new Set([
+    'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+    'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+    'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onCompactDiagnostic',
+    'onRaw', 'onRawDiagnostic',
+  ]);
+  const RAW_OBSERVER_CALLBACKS = new Set(['onRaw', 'onRawDiagnostic']);
+  function isBestEffortExecutionWorkerCallback(name) {
+    return BEST_EFFORT_CALLBACKS.has(String(name || ''));
+  }
+  function isImmediateNonBlockingExecutionWorkerCallback(name) {
+    return IMMEDIATE_NON_BLOCKING_CALLBACKS.has(String(name || ''));
+  }
+  function isReservedExecutionWorkerObserverCallback(name) {
+    return RESERVED_OBSERVER_CALLBACKS.has(String(name || ''));
+  }
+  function isRawExecutionWorkerObserverCallback(name) {
+    return RAW_OBSERVER_CALLBACKS.has(String(name || ''));
+  }
+  function reportBestEffortFailure(name) {
+    try {
+      console.warn('[execution-worker] best-effort callback failed', {
+        callback: String(name || '').slice(0, 80),
+        redacted: true,
+      });
+    } catch {}
+  }
+  function invokeCallback(callback, name, value) {
+    return Array.isArray(value) && name === 'onCriticalPathTiming'
+      ? callback(...value) : callback(value);
+  }
+  function settleExecutionWorkerCallback({ callbacks = {}, message = {}, settlements = [] } = {}) {
+    const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
+    const name = String(payload.callback || '');
+    if (!Object.hasOwn(callbacks, name) || typeof callbacks[name] !== 'function') return false;
+    const callback = callbacks[name];
+    const bestEffort = isBestEffortExecutionWorkerCallback(name);
+    const immediateObserver = isReservedExecutionWorkerObserverCallback(name);
+    const deferredObserver = DEFERRED_OBSERVER_CALLBACKS.has(name);
+    if (bestEffort && (!immediateObserver || deferredObserver)) {
+      setImmediate(() => {
+        let settlement;
+        try {
+          settlement = invokeCallback(callback, name, payload.value);
+        } catch {
+          reportBestEffortFailure(name);
+          return;
+        }
+        void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+      });
+      return true;
+    }
+    let settlement;
+    try {
+      settlement = invokeCallback(callback, name, payload.value);
+    } catch (error) {
+      if (!bestEffort) throw error;
+      reportBestEffortFailure(name);
+      return true;
+    }
+    if (immediateObserver || isImmediateNonBlockingExecutionWorkerCallback(name)) {
+      void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+    } else {
+      settlements.push(Promise.resolve(settlement));
+    }
+    return true;
+  }
+  module.exports = {
+    isBestEffortExecutionWorkerCallback,
+    isImmediateNonBlockingExecutionWorkerCallback,
+    isRawExecutionWorkerObserverCallback,
+    isReservedExecutionWorkerObserverCallback,
+    settleExecutionWorkerCallback,
+  };
+  `;
+
+  const successorEventFlowV5 = `
+  const DEFAULT_WINDOW_MS = 100;
+  const DEFAULT_MAX_KEYS = 128;
+  const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+  const { logExecutionWorkerCancellation, observeExecutionWorkerEvent } = require('./execution-worker-process-lifecycle.cjs');
+  function activityKey(fact) {
+    return \`\${String(fact?.scope || '')}\\u0000\${String(fact?.node || '')}\\u0000\${String(fact?.identity || '')}\`;
+  }
+  function isCoalescibleRuntimeActivity(fact) {
+    if (!fact || fact.edge !== 'progressed') return false;
+    if (fact.node === 'semantic_delta') return fact.contentKind === 'tool_input';
+    return (fact.node === 'tool_activity' || fact.node === 'hook_activity')
+      && (fact.progressClass === 'liveness' || fact.progressClass === 'advisory');
+  }
+  function isTerminalActivity(fact) {
+    return fact?.progressClass === 'terminal'
+      || fact?.node === 'runtime_terminal_received' || fact?.node === 'transport_lost';
+  }
+  class RuntimeActivityCoalescer {
+    constructor({ emit, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
+      windowMs = DEFAULT_WINDOW_MS, maxKeys = DEFAULT_MAX_KEYS } = {}) {
+      if (typeof emit !== 'function') throw new TypeError('runtime activity coalescer requires emit');
+      const requestedWindowMs = Number(windowMs);
+      const boundedWindowMs = Number.isSafeInteger(requestedWindowMs) && requestedWindowMs > 0
+        ? Math.min(requestedWindowMs, 2147483647) : 100;
+      const requestedMaxKeys = Number(maxKeys);
+      const boundedMaxKeys = Number.isSafeInteger(requestedMaxKeys) && requestedMaxKeys > 0
+        ? Math.min(requestedMaxKeys, 128) : 128;
+      this.emit = emit;
+      this.now = now;
+      this.schedule = schedule;
+      this.cancel = cancel;
+      this.windowMs = boundedWindowMs;
+      this.maxKeys = boundedMaxKeys;
+      this.entries = new Map();
+      this.closed = false;
+      this.lastEmittedSequence = -1;
+    }
+    emitFresh(fact) {
+      const sourceSequence = Number(fact?.sourceSequence);
+      if (Number.isSafeInteger(sourceSequence)) {
+        if (sourceSequence <= this.lastEmittedSequence) return;
+        this.lastEmittedSequence = sourceSequence;
+      }
+      this.emit(fact);
+    }
+    discard(key) {
+      const entry = this.entries.get(key);
+      if (!entry) return;
+      this.entries.delete(key);
+      if (!entry.timer) return;
+      try { this.cancel(entry.timer); } catch {}
+    }
+    clear() {
+      for (const key of this.entries.keys()) this.discard(key);
+    }
+    flush(key) {
+      if (this.closed) return;
+      const entry = this.entries.get(key);
+      if (!entry?.pending) return;
+      const value = entry.pending;
+      entry.pending = null;
+      entry.timer = null;
+      entry.lastSentAt = this.now();
+      this.emitFresh(value);
+    }
+    arm(key, entry, delay) {
+      const requestedDelay = Number(delay);
+      const boundedDelay = Number.isSafeInteger(requestedDelay) && requestedDelay > 0
+        ? Math.min(requestedDelay, 2147483647) : 1;
+      try {
+        entry.timer = this.schedule(() => this.flush(key), boundedDelay);
+        entry.timer?.unref?.();
+      } catch {
+        const value = entry.pending;
+        this.entries.delete(key);
+        if (value) this.emitFresh(value);
+      }
+    }
+    push(fact) {
+      if (this.closed || !fact) return;
+      const key = activityKey(fact);
+      if (!isCoalescibleRuntimeActivity(fact)) {
+        if (isTerminalActivity(fact)) this.clear();
+        else this.discard(key);
+        this.emitFresh(fact);
+        return;
+      }
+      let entry = this.entries.get(key);
+      const currentTime = this.now();
+      if (!entry) {
+        if (this.entries.size >= this.maxKeys) return;
+        entry = { lastSentAt: currentTime, pending: null, timer: null };
+        this.entries.set(key, entry);
+        this.emitFresh(fact);
+        return;
+      }
+      if (currentTime - entry.lastSentAt >= this.windowMs && !entry.timer) {
+        entry.lastSentAt = currentTime;
+        this.emitFresh(fact);
+        return;
+      }
+      entry.pending = fact;
+      if (!entry.timer) this.arm(key, entry,
+        Math.max(0, this.windowMs - (currentTime - entry.lastSentAt)));
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      this.clear();
+    }
+    pendingCount() {
+      let count = 0;
+      for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+      return count;
+    }
+  }
+  function createRuntimeActivityCoalescer(options) {
+    return new RuntimeActivityCoalescer(options);
+  }
+  function dispatchExecutionEvent(item, message, postBrokerResult) {
+    item.lastSequence = message.sequence;
+    try {
+      item.onEvent(message);
+    } finally {
+      postBrokerResult('stream.credit', message, { credit: 1 });
+    }
+  }
+  function routeExecutionWorkerResultMessage(message, {
+    pending, child, terminateChild, contextUsageRoutes, now, postBrokerResult, logger,
+  }) {
+    if (contextUsageRoutes.handle(message, pending, child, terminateChild)) return true;
+    if (message.operation === 'execution.event') {
+      const item = pending.get(message.requestId);
+      if (!item || !item.matches(message)) return true;
+      if (message.sequence <= item.lastSequence) {
+        const error = new Error('execution worker emitted a non-monotonic event sequence');
+        error.code = 'execution_worker_sequence_violation';
+        pending.delete(message.requestId);
+        item.reject(error);
+        terminateChild(child, 'sequence-violation');
+        return true;
+      }
+      observeExecutionWorkerEvent(item, message, now());
+      dispatchExecutionEvent(item, message, postBrokerResult);
+      return true;
+    }
+    if (!isExecutionWorkerTerminalOperation(message.operation)) return false;
+    const item = pending.get(message.requestId);
+    if (!item || !item.matches(message)) return true;
+    if (message.operation === 'execution.terminal')
+      logExecutionWorkerCancellation(logger, item, message, now());
+    pending.delete(message.requestId);
+    contextUsageRoutes.retain(message, item);
+    item.resolve(message);
+    return true;
+  }
+  module.exports = { dispatchExecutionEvent, routeExecutionWorkerResultMessage };
+  `;
+
+  const successorEventEntryV5 = `
+  const { createRuntimeActivityCoalescer } = require('./execution-worker-event-flow.cjs');
+  function createExecution() {
+    const runtimeActivity = createRuntimeActivityCoalescer({
+      emit: (value) => emit('onRuntimeActivity', value),
+    });
+    const callbacks = {
+      onRuntimeActivity: (value) => runtimeActivity.push(value),
+    };
+    return {
+      queueDepth: () => {
+        return runtimeActivity.pendingCount();
+      },
+      run: async () => {
+        try {
+          return true;
+        } finally {
+          runtimeActivity.close();
+        }
+      },
+    };
+  }
+  `;
+
   const successorControllerSource = `
 const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
 const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
@@ -1821,7 +2534,7 @@ function createExecutionWorkerSupervisor() {
 `;
   const successorSupervisorMessageSource = `
 function isReservedExecutionWorkerObserverCallback() { return true; }
-function dispatchExecutionEvent() {}
+const { dispatchExecutionEvent } = require('./execution-worker-event-flow.cjs');
 function handleExecutionWorkerEventMessage(message, {
   pending, postBrokerResult, terminateChild, child,
 }) {
@@ -1872,13 +2585,26 @@ module.exports = { createExecutionWorkerTerminator };
 `;
   const successorDesktopHostSource = `
 const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
+const { settleExecutionWorkerCallback } = require('./execution-worker-callback-settlement.cjs');
+const callbacks = {};
 async function runAgentInExecutionWorker(supervisor, identity, signal) {
   if (!supervisor || supervisor.enabled !== true) throw new Error('execution worker unavailable');
   let executionWorkerLease = null;
   const contextUsageLease = createExecutionWorkerContextUsageLease({ timeoutMs: 1000 });
   try {
+    const eventSettlements = [];
     executionWorkerLease = await supervisor.acquire('execution.start', identity, { signal });
-    await executionWorkerLease.supervisor.request();
+    const terminal = await requestExecutionWorkerTurn(
+      executionWorkerLease.supervisor, 'execution.start', identity, {}, {
+        onEvent: (message) => settleExecutionWorkerCallback({
+          callbacks,
+          message,
+          settlements: eventSettlements,
+        }),
+      }, signal,
+    );
+    contextUsageLease.observeTerminal(terminal.payload);
+    await Promise.all(eventSettlements);
   } finally {
     await contextUsageLease.release(executionWorkerLease);
   }
@@ -1948,6 +2674,10 @@ module.exports = {
     }
     if (filePath === 'electron/host-core/agent/execution-worker-manager.cjs') return successorManagerSource;
     if (filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') return successorSupervisorSource;
+    if (filePath === 'electron/host-core/agent/execution-worker-deadline.cjs') return successorDeadlineV5;
+    if (filePath === 'electron/host-core/agent/execution-worker-callback-settlement.cjs') return successorCallbackSettlementV5;
+    if (filePath === 'electron/host-core/agent/execution-worker-event-flow.cjs') return successorEventFlowV5;
+    if (filePath === 'electron/host-core/agent/execution-worker-entry.cjs') return successorEventEntryV5;
     if (filePath === 'electron/host-core/agent/execution-worker-supervisor-message.cjs') return successorSupervisorMessageSource;
     if (filePath === 'electron/host-core/agent/execution-worker-termination.cjs') return successorTerminationSource;
     if (filePath === 'electron/host-core/agent/desktop-host-context.cjs') return successorDesktopHostSource;
@@ -2032,6 +2762,9 @@ const validSuccessorAst = auditCasebookDesignSuccessorAstContracts(
 assert.deepEqual(validSuccessorAst, {
   cancellation: true,
   controller: true,
+  deadline: true,
+  callback_settlement: true,
+  event_flow: true,
   desktop: true,
   manager: true,
   manager_pressure: true,
@@ -2040,7 +2773,7 @@ assert.deepEqual(validSuccessorAst, {
   supervisor_message: true,
   termination: true,
   passed: true,
-}, 'v5 AST 测试夹具必须形成且保留完整九项语义闭环');
+}, 'v5 AST 测试夹具必须形成且保留完整十二项语义闭环');
 const typedSequenceViolationAst = auditCasebookDesignSuccessorAstContracts(
   casebookDesignSuccessorSourceMap((filePath, source) => {
     if (filePath !== 'electron/host-core/agent/execution-worker-supervisor-message.cjs') return source;
@@ -2466,8 +3199,11 @@ assert.equal(
 const readonlyDesktopSupervisorAliasAst = auditCasebookDesignSuccessorAstContracts(
   casebookDesignSuccessorSourceMap(casebookDesignAstMutation(
     'electron/host-core/agent/desktop-host-context.cjs',
-    '    await executionWorkerLease.supervisor.request();',
-    '    const workerSupervisor = executionWorkerLease.supervisor;\n    await workerSupervisor.request();',
+    `    const terminal = await requestExecutionWorkerTurn(
+      executionWorkerLease.supervisor, 'execution.start', identity, {}, {`,
+    `    const workerSupervisor = executionWorkerLease.supervisor;
+    const terminal = await requestExecutionWorkerTurn(
+      workerSupervisor, 'execution.start', identity, {}, {`,
     'desktop supervisor 只读 const alias',
   )),
 );
@@ -2774,6 +3510,44 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
       reason: '',
     },
   ]));
+  const successorAncestries = casebookDesignSourceContracts.flatMap((contract) => (
+    contract.integration_bindings
+      .filter((binding) => (
+        binding?.current_release_match?.match === 'line-or-verified-successor-line'
+        && binding.current_release_match.successor
+      ))
+      .map((binding) => {
+        const successor = binding.current_release_match.successor;
+        return {
+          binding_id: binding.id,
+          successor_mr_iid: successor.mr_iid,
+          successor_merge_commit_sha: successor.merge_commit_sha,
+          descendant_ancestry: casebookDesignAncestryWithRawCompare({
+            source: 'gitlab-api-compare-first-parent',
+            compare_from: successor.merge_commit_sha,
+            compare_to: head,
+            compare_commit_count: 1,
+            first_parent_complete: true,
+            query_completed: true,
+            verified: true,
+            reason: '',
+          }, {
+            compare_timeout: false,
+            commits: [{ id: head, parent_ids: [successor.merge_commit_sha] }],
+          }),
+          predecessor_ancestry: casebookDesignAncestryWithRawCompare({
+            source: 'gitlab-api-compare-first-parent',
+            compare_from: head,
+            compare_to: successor.merge_commit_sha,
+            compare_commit_count: 0,
+            first_parent_complete: false,
+            query_completed: true,
+            verified: false,
+            reason: `first_parent_commit_missing:${successor.merge_commit_sha}`,
+          }, { compare_timeout: false, commits: [] }),
+        };
+      })
+  ));
   const linesByPath = new Map();
   const scopedGroupsByPath = new Map();
   const addLine = (filePath, line) => {
@@ -2833,7 +3607,9 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
         : originBinding;
       assert.ok(binding, `测试夹具必须能解析源码合同 ${contract.contract_id} 的 ${assertion}`);
       if (binding.current_release_scope) addScopedGroup(binding.path, binding);
-      else addLine(binding.path, binding.addition.source);
+      else if (binding.current_release_match?.match === 'line-or-verified-successor-line') {
+        addLine(binding.path, binding.current_release_match.successor.line.source);
+      } else addLine(binding.path, binding.addition.source);
     }
   }
 
@@ -2881,17 +3657,26 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
         "import assert from 'node:assert/strict';",
         "import { createRequire } from 'node:module';",
         "import test from 'node:test';",
+        "import vm from 'node:vm';",
         '',
         'const require = createRequire(import.meta.url);',
         'const {',
+        '  createExecutionWorkerSupervisor,',
         '  workerEnvironment,',
         "} = require('../../../electron/desktop-agent-host.cjs');",
+        'void createExecutionWorkerSupervisor;',
+        'void vm;',
         '',
         ...lines,
       ];
     } else if (filePath === 'electron/desktop-agent-host.cjs') {
+      const explicitNamedExports = Array.from({ length: 122 }, (_, index) => (
+        `exports.unrelatedExport${index + 1} = implementation.unrelatedExport${index + 1};`
+      ));
       lines = [
-        "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+        "const implementation = require('./host-core/agent/desktop-host-context.cjs');",
+        ...explicitNamedExports,
+        "Object.assign(exports, require('./unrelated-a.cjs'), require('./host-core/agent/execution-worker-supervisor.cjs'));",
         ...lines,
       ];
     } else if (filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
@@ -2907,11 +3692,41 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
       ];
     } else if (filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
       lines = [
+        "const { isAbsolute } = require('node:path');",
+        'const {',
+        '  contextUsageWorkerFixtureEnvironment,',
+        "} = require('./execution-worker-context-usage.cjs');",
+        '',
         ...lines,
+        'function expertAuthoringWorkerFixtureEnvironment(source = {}) {',
+        "  if (source.DEEPBANK_E2E !== '1' || source.DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN !== '1') return {};",
+        '  return {',
+        "    DEEPBANK_E2E: '1',",
+        "    DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN: '1',",
+        "    ...(source.DEEPBANK_AGENT_MOCK === '1' ? { DEEPBANK_AGENT_MOCK: '1' } : {}),",
+        '  };',
+        '}',
+        '',
         'function workerEnvironment(source = process.env, authority = {}) {',
-        '  void source;',
-        '  void authority;',
-        '  return {};',
+        '  const env = {};',
+        '  for (const [key, value] of Object.entries(source || {})) {',
+        "    const name = String(key || '').trim();",
+        '    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;',
+        "    env[name] = String(value ?? '');",
+        '  }',
+        "  if (source?.DEEPBANK_E2E === '1') {",
+        "    const captureRoot = String(source?.DEEPBANK_E2E_RAW_CAPTURE_DIR || '').trim();",
+        "    if (captureRoot && captureRoot.length <= 4096 && !captureRoot.includes('\\0') && isAbsolute(captureRoot)) {",
+        '      env.DEEPBANK_E2E_RAW_CAPTURE_DIR = captureRoot;',
+        '    }',
+        '  }',
+        '  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+        '  Object.assign(env, expertAuthoringWorkerFixtureEnvironment(source));',
+        '  if (authority?.runtimeEntry) env.QBOT_EXECUTION_WORKER_RUNTIME_ENTRY = String(authority.runtimeEntry);',
+        '  if (authority?.runtimeHome) env.DEEPBANK_HOME = String(authority.runtimeHome);',
+        '  if (authority?.appRoot) env.QBOT_APP_ROOT = String(authority.appRoot);',
+        '  if (authority?.serverScope) env.DEEPBANK_SERVER = env.QBOT_CONTROL_PLANE_SERVER = String(authority.serverScope);',
+        '  return env;',
         '}',
         'module.exports = {',
         '  WORKER_ENV_ALLOWLIST,',
@@ -3045,6 +3860,7 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
       originAncestry: ancestryByContractId.get(contract.contract_id),
       files: protectedPaths.map(sourceFile),
       mergeRequests,
+      successorAncestries,
       originAttestation: contract.contract_id === casebookDesignMr1560Contract.contract_id
         ? casebookDesignVerifiedOriginAttestation(contract)
         : null,
@@ -3143,7 +3959,7 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
   assert.equal(risk.schema_version, casebookDesignBlockingRiskSchema, '测试夹具必须生成当前 blocking-risk schema');
   assert.equal(risk.architecture, 'per-turn-utility-process/v1', '测试夹具必须按 !1559 后继架构审计当前 release');
   assert.equal(risk.assertion_owner?.mr_iid, '1559', '测试夹具必须由 !1559 后继合同接管阻断风险断言');
-  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部 13 个受保护源码文件');
+  assert.deepEqual(risk.protected_paths, casebookDesignSuccessorPaths, '测试夹具必须覆盖 !1559 后继架构全部 16 个受保护源码文件');
   if (!blocked) {
     assert.deepEqual({
       status: risk.status,
@@ -3269,11 +4085,14 @@ r16Mr1592ReadyFixture.merge_requests.push({
 assert.deepEqual(
   validateMr1592BlockingRiskV5Ready(r16Mr1592ReadyFixture),
   { ok: true, failures: [] },
-  'MR !1592 只有在 blocking-risk v5 三项检查与九项 successor AST 合同全部通过时才可 READY',
+  'MR !1592 只有在 blocking-risk v5 三项检查与十二项 successor AST 合同全部通过时才可 READY',
 );
 const r16Mr1592AstKeys = [
   'cancellation',
   'controller',
+  'deadline',
+  'callback_settlement',
+  'event_flow',
   'desktop',
   'manager',
   'manager_pressure',
@@ -15270,8 +16089,18 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /r12[\s\S]*134 个[\s\S]*36 个[\s\S]*170 个/, '两份规范必须记录 r12 继承、r14 增量和170个MR总量');
   assert.match(
     documentText,
-    /db85ab857a8aff02a460239f88a0544aab06b63b[\s\S]*68 个[\s\S]*202 个[\s\S]*!1602/,
-    '两份规范必须记录 r16 的68个直接MR、202个总MR与!1602 first-parent收尾边界',
+    /e3a5de6cf02845cecb80906a8d11a48caf5c2d1b[\s\S]*79 个[\s\S]*213 个[\s\S]*!1613/,
+    '两份规范必须记录 r16 的79个直接MR、213个总MR与!1613 first-parent收尾边界',
+  );
+  assert.match(
+    documentText,
+    /!1605[\s\S]{0,80}!1608[\s\S]{0,80}!1599[\s\S]{0,80}!1601[\s\S]{0,80}!1609[\s\S]{0,80}!1614[\s\S]{0,80}!1554[\s\S]{0,80}!1607[\s\S]{0,80}!1612[\s\S]{0,80}!1616[\s\S]{0,80}!1613[\s\S]{0,300}!1605[\s\S]{0,80}!1599[\s\S]{0,80}!1601[\s\S]{0,80}!1612[\s\S]{0,120}相邻回归[\s\S]{0,300}!1608[\s\S]{0,80}!1609[\s\S]{0,80}!1614[\s\S]{0,80}!1554[\s\S]{0,80}!1607[\s\S]{0,80}!1616[\s\S]{0,80}!1613[\s\S]{0,120}静态合同/,
+    '两份规范必须完整同序记录 !1602 后新增的11个MR及其4项相邻回归、7项静态合同分类',
+  );
+  assert.match(
+    documentText,
+    /20260908195414_release01-r12-to-latest-r16-authoritative-intake_framework-73ac5e9_casebook-da9181f\/release-intake\.json[\s\S]{0,400}`BLOCKED`/,
+    '两份规范必须绑定最新79项权威 intake 并保留其 BLOCKED 结论',
   );
   assert.match(documentText, /casebook-build-audit\.json[\s\S]*release_intake\.execution_authorized=false[\s\S]*原始 `release-intake\.json` 顶层\s*不\s*定义 `execution_authorized`/, '两份规范必须准确区分构建审计授权包装层与原始 intake 顶层字段');
   assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
@@ -16209,9 +17038,10 @@ assert.deepEqual(r16IncrementalMrOrder, [
   '1585', '1587', '1588', '1589', '1586', '1534', '1590', '1567', '1565', '1592',
   '1593', '1596', '1595', '1597', '1594', '1579',
   '1604', '1603', '1598', '1600', '1602',
-], 'Casebook生成器必须按 intake first-parent 顺序冻结68个增量MR并以!1602收尾');
-assert.equal(r16IncrementalMrOrder.length, 68, 'r16 必须精确包含68个直接合入MR');
-assert.equal(134 + r16IncrementalMrOrder.length, 202, 'r16 必须继承r12的134个MR并形成202个总MR');
+  '1605', '1608', '1599', '1601', '1609', '1614', '1554', '1607', '1612', '1616', '1613',
+], 'Casebook生成器必须按权威 intake first-parent 顺序冻结79个增量MR并以!1613收尾');
+assert.equal(r16IncrementalMrOrder.length, 79, 'r16 必须精确包含79个直接合入MR');
+assert.equal(134 + r16IncrementalMrOrder.length, 213, 'r16 必须继承r12的134个MR并形成213个总MR');
 assert.match(productionGrayCasebookBuilder, /\['1523', \['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019'\]\]/, 'Casebook生成器必须精确映射MR !1523且禁止启发式泛化');
 assert.match(productionGrayCasebookBuilder, /\['1522', \['MRSMOKE-ROUTE-001', 'BETA-CHAT-001', 'BETA-ROUTE-001', 'BETA-HOST-003'\]\]/, 'Casebook生成器必须精确映射MR !1522且禁止启发式泛化');
 assert.match(coreBetaProtocolSource, /MRSMOKE-WEB-001', 'qwork_mr_web_search_success'[\s\S]*web_search_quota_trace/, '协议必须注册四轮Web搜索专项证据角色');
@@ -16229,7 +17059,7 @@ assert.match(
   'Casebook生成器必须逐项锁定 r9 的21个静态合同审计MR且禁止冒充桌面E2E',
 );
 assert.match(productionGrayCasebookBuilder, /function sameFileSet\(expectedFiles, actualFiles\)[\s\S]*!sameFileSet\(staticAudit\.expectedFiles, mr\.files\)/, 'Casebook生成器必须按文件集合校验静态MR清单，不能因Git返回顺序漂移误报');
-assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加68条，合计202条');
+assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加79条，合计213条');
 assert.match(
   productionGrayCasebookBuilder,
   /\['1573', \{[\s\S]*?caseIds: \['SIT-MEM-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-MCP-001', 'BETA-MCP-002', 'BETA-HOST-003', 'BETA-INIT-001', 'BETA-ROUTE-001', 'MRSMOKE-ROUTE-001'\][\s\S]*?coverageStrength: '相邻回归\+源码合同'[\s\S]*?requiredSourceContractIds: \['deepbankv2-mr-1573-memory-session-profile-stability\/v1'\][\s\S]*?claim_scope=source_and_test_declarations[\s\S]*?test_execution_attested=false[\s\S]*?禁止把相邻主链通过冒充这些内部合同已执行或通过/,
@@ -16254,6 +17084,72 @@ assert.match(productionGrayCasebookBuilder, /\['1603', \{[\s\S]*caseIds: \['MRSM
 assert.match(productionGrayCasebookBuilder, /\['1598', \{[\s\S]*caseIds: \['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-007', 'BETA-TASK-008', 'BETA-PERF-003', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*上下文压缩/, 'Casebook生成器必须将MR !1598固定映射到上下文压缩相关活动、失败、聊天、任务、性能与宿主相邻回归');
 assert.match(productionGrayCasebookBuilder, /\['1600', \{[\s\S]*caseIds: \[\][\s\S]*staticOnly: true[\s\S]*coverageStrength: '静态合同'[\s\S]*24 条 changes/, 'Casebook生成器必须将MR !1600固定为零桌面Case的精确24路径静态合同');
 assert.match(productionGrayCasebookBuilder, /\['1602', \{[\s\S]*caseIds: \['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*首次启动/, 'Casebook生成器必须将MR !1602固定映射到初始化、宿主、Teams首启与导航入口相邻回归');
+const r16LatestCoverageContracts = new Map([
+  ['1605', {
+    caseIds: ['BETA-INIT-001', 'BETA-HOST-003', 'BETA-CHAT-001', 'BETA-CHAT-002', 'MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'SIT-CONN-016'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1608', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1599', {
+    caseIds: ['MRSMOKE-AUTH-001', 'BETA-CHAT-001', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1601', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1609', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1614', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1554', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1607', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1612', {
+    caseIds: ['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-CHAT-007', 'BETA-CHAT-008', 'BETA-PERF-003', 'BETA-HOST-003', 'SIT-HITL-002', 'SIT-CONN-016'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1616', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1613', { caseIds: [], coverageStrength: '静态合同' }],
+]);
+for (const [iid, expected] of r16LatestCoverageContracts) {
+  const contractStart = productionGrayCasebookBuilder.indexOf(`  ['${iid}', {`);
+  const contractEnd = productionGrayCasebookBuilder.indexOf('\n  [\'', contractStart + 1);
+  const contractSource = productionGrayCasebookBuilder.slice(contractStart, contractEnd);
+  const exactCases = expected.caseIds.map((caseId) => `'${caseId}'`).join(', ');
+  assert.equal(contractStart >= 0 && contractEnd > contractStart, true, `MR !${iid} 必须存在显式 R16 覆盖合同`);
+  assert.equal(contractSource.includes(`caseIds: [${exactCases}]`), true, `MR !${iid} 必须保持精确有序 Case 映射`);
+  assert.equal(contractSource.includes(`coverageStrength: '${expected.coverageStrength}'`), true, `MR !${iid} 必须保持精确覆盖分类`);
+  assert.equal(
+    contractSource.includes('staticOnly: true'),
+    expected.coverageStrength === '静态合同',
+    `MR !${iid} 的静态合同标记必须与覆盖分类一致`,
+  );
+}
+const mr1612LatestCoverageSource = (() => {
+  const start = productionGrayCasebookBuilder.indexOf("  ['1612', {");
+  const end = productionGrayCasebookBuilder.indexOf("\n  ['1616', {", start + 1);
+  return productionGrayCasebookBuilder.slice(start, end);
+})();
+assert.match(
+  mr1612LatestCoverageSource,
+  /requiredBlockingRiskIds: \[QWORK_MR1552_EXECUTION_RUNNER_RISK_ID\][\s\S]*deepbankv2-mr-1552-execution-runner-isolation\/v1[\s\S]*blocking-risk v5[\s\S]*十二项 successor AST[\s\S]*不得以相邻 Case 伪绿/,
+  'MR !1612 必须由 execution-runner-isolation blocking-risk v5 的完整 VERIFIED 合同授权生成',
+);
+const mr1605LatestMetadataSource = (() => {
+  const start = productionGrayCasebookBuilder.indexOf("  ['1605', {", productionGrayCasebookBuilder.indexOf('const R16_LATEST_MR_METADATA_CONTRACTS'));
+  const end = productionGrayCasebookBuilder.indexOf("\n  ['1608', {", start + 1);
+  return productionGrayCasebookBuilder.slice(start, end);
+})();
+const mr1612LatestMetadataSource = (() => {
+  const start = productionGrayCasebookBuilder.indexOf("  ['1612', {", productionGrayCasebookBuilder.indexOf('const R16_LATEST_MR_METADATA_CONTRACTS'));
+  const end = productionGrayCasebookBuilder.indexOf("\n  ['1616', {", start + 1);
+  return productionGrayCasebookBuilder.slice(start, end);
+})();
+assert.doesNotMatch(mr1605LatestMetadataSource, /blockingRiskIds/, 'MR !1605 不得误继承 !1612 的 G0 blocking-risk 绑定');
+assert.match(mr1612LatestMetadataSource, /blockingRiskIds: \[QWORK_MR1552_EXECUTION_RUNNER_RISK_ID\]/, '最新 MR 元数据合同必须只为 !1612 声明 execution-runner-isolation 风险绑定');
+assert.match(
+  productionGrayCasebookBuilder,
+  /expectedBlockingRiskIds = R16_LATEST_MR_METADATA_CONTRACTS\.get\(iid\)\?\.blockingRiskIds \|\| \[\][\s\S]*sameOrderedValues\(contract\.requiredBlockingRiskIds \|\| \[\], expectedBlockingRiskIds\)[\s\S]*blocking-risk 绑定缺失或漂移[\s\S]*observedBlockingRisks\.length !== requiredBlockingRiskIds\.length[\s\S]*risk\?\.risk_id === riskId && risk\?\.applicable === true[\s\S]*risk\?\.verified === true && risk\?\.status === 'VERIFIED'[\s\S]*Array\.isArray\(risk\?\.failure_ids\) && risk\.failure_ids\.length === 0[\s\S]*G0 blocking-risk 未全部 VERIFIED/,
+  'R16 构建必须精确绑定并完整复核 !1612 的 G0 blocking-risk，不能只信覆盖文案或相邻 Case',
+);
 assert.match(productionGrayCasebookBuilder, /\['1566', \{[\s\S]*caseIds: \['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-005', 'BETA-PERF-003', 'BETA-HOST-003'\][\s\S]*coverageStrength: '相邻回归'[\s\S]*ordinaryStallMs=300000[\s\S]*不人为制造五分钟无语义进展[\s\S]*不把自然等待或单元测试声明冒充确定性桌面阈值验证/, 'Casebook生成器必须将MR !1566固定映射到长时任务、性能与宿主回归，并限制五分钟stall阈值声明范围');
 assert.match(productionGrayCasebookBuilder, /\['1568', \{[\s\S]*caseIds: \['SIT-TASK-EDIT-001', 'BETA-TASK-002', 'BETA-CHAT-007', 'BETA-TASK-008'\][\s\S]*coverageStrength: '直接E2E'[\s\S]*真实编辑已发送用户消息[\s\S]*真实点击重新生成[\s\S]*历史保持[\s\S]*不使用通用路径映射代替专项断言/, 'Casebook生成器必须将MR !1568精确绑定编辑、重新生成和历史保持专项E2E');
 assert.match(productionGrayCasebookBuilder, /DIRECT_E2E_MR_CASE_CONTRACTS = new Map\(\[[\s\S]*\['1568', \['SIT-TASK-EDIT-001', 'BETA-TASK-002', 'BETA-CHAT-007', 'BETA-TASK-008'\]\][\s\S]*\]\);/, 'MR !1568必须进入显式直接E2E白名单，禁止由通用路径启发式获得直接覆盖');

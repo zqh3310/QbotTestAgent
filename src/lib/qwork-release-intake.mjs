@@ -7,10 +7,13 @@ import { fileURLToPath } from 'node:url';
 import {
   QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
   QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
+  QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA,
   QWORK_RELEASE_SOURCE_CONTRACTS,
   auditCurrentReleaseSourceContract,
   auditKnownReleaseSourceContracts,
+  currentReleaseSourceContractSuccessorBindings,
   currentReleaseSourceContractProtectedPaths,
+  reconstructGitLabFirstParentChain,
   releaseSourceContractTrigger,
   resolveCurrentReleaseHeaderContract,
   resolveReleaseSourceContracts,
@@ -29,7 +32,7 @@ import {
 } from './qwork-release-blocking-risks.mjs';
 
 export const QWORK_RELEASE_INTAKE_SCHEMA = 'qbot-qwork-release-intake/v1';
-export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.8.0';
+export const QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake/1.9.0';
 export const QWORK_RELEASE_INTAKE_REPORT = 'release-intake.json';
 export const QWORK_RELEASE_INTAKE_DEFAULT_REF = 'origin/release/0.1';
 export const QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST = 'gitlab.daikuan.qihoo.net';
@@ -531,7 +534,7 @@ export function createGitLabReadOnlyReader({ host = QWORK_RELEASE_INTAKE_DEFAULT
   if (/[\r\n\0]/u.test(normalizedToken)) throw new Error('GitLab 只读 token 格式非法');
   const encodedProject = encodeURIComponent(normalizedProject);
   const base = `https://${normalizedHost}/api/v4/projects/${encodedProject}`;
-  return (endpoint) => {
+  const execute = (endpoint) => {
     const normalizedEndpoint = text(endpoint).replace(/^\//, '');
     if (!normalizedEndpoint
       || /[\r\n]/u.test(normalizedEndpoint)
@@ -542,16 +545,21 @@ export function createGitLabReadOnlyReader({ host = QWORK_RELEASE_INTAKE_DEFAULT
     try {
       const stdout = execFileSync(process.platform === 'win32' ? 'curl.exe' : 'curl', ['--config', '-'], {
         input: curlConfig(url, normalizedToken),
-        encoding: 'utf8',
         maxBuffer: 50 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      return JSON.parse(stdout);
+      const bytes = Buffer.from(stdout);
+      const source = bytes.toString('utf8');
+      if (!Buffer.from(source, 'utf8').equals(bytes)) throw new Error('GitLab API 响应不是合法 UTF-8');
+      return { bytes, value: JSON.parse(source) };
     } catch (error) {
       const stderr = redact(error.stderr || error.message || 'GitLab API 请求失败', normalizedToken);
       throw new Error(`GitLab 只读 API ${endpoint} 失败：${stderr}`);
     }
   };
+  const reader = (endpoint) => execute(endpoint).value;
+  reader.readRaw = (endpoint) => execute(endpoint);
+  return reader;
 }
 
 function mergeRequestMetadata({ commits, readGitLab, requireGitLabMetadata = true, targetBranch = 'release/0.1' } = {}) {
@@ -620,34 +628,6 @@ function apiBoundaryCandidates({ baselineCommit = '', previousIntake = null, cas
     },
     { commit: text(casebookBaselineCommit), source: 'casebook_design_baseline' },
   ].filter((candidate) => HEX40.test(candidate.commit));
-}
-
-function reconstructFirstParentChain({ compare, baselineCommit, releaseHead } = {}) {
-  if (baselineCommit === releaseHead) return { ok: true, commits: [] };
-  if (!compare || !Array.isArray(compare.commits)) {
-    return { ok: false, reason: 'compare_commits_missing', commits: [] };
-  }
-  if (compare.compare_timeout === true) {
-    return { ok: false, reason: 'compare_timeout', commits: [] };
-  }
-  const commitMap = new Map(compare.commits
-    .filter((item) => HEX40.test(text(item?.id)))
-    .map((item) => [text(item.id), item]));
-  const reversed = [];
-  const seen = new Set();
-  let cursor = releaseHead;
-  while (cursor !== baselineCommit) {
-    if (seen.has(cursor)) return { ok: false, reason: 'first_parent_cycle', commits: [] };
-    seen.add(cursor);
-    const row = commitMap.get(cursor);
-    if (!row) return { ok: false, reason: `first_parent_commit_missing:${cursor}`, commits: [] };
-    const parents = Array.isArray(row.parent_ids) ? row.parent_ids.map(text).filter(Boolean) : [];
-    if (!parents.length) return { ok: false, reason: `first_parent_missing:${cursor}`, commits: [] };
-    reversed.push(row);
-    cursor = parents[0];
-    if (!HEX40.test(cursor)) return { ok: false, reason: `first_parent_invalid:${row.id}`, commits: [] };
-  }
-  return { ok: true, commits: reversed.reverse() };
 }
 
 function readReleaseCommitDiff({ readGitLab, lastCommitId, commitDiffCache }) {
@@ -835,21 +815,64 @@ function readCurrentReleaseBlockingRiskFiles({ readGitLab, releaseHead, protecte
   });
 }
 
-function verifyCurrentReleaseContractAncestry({ readGitLab, releaseHead, contract, apiErrors }) {
+function gitLabCompareEvidence({ readGitLab, endpoint, compareFrom, compareTo }) {
+  if (typeof readGitLab?.readRaw !== 'function') throw new Error('gitlab_compare_raw_reader_unavailable');
+  const result = readGitLab.readRaw(endpoint);
+  if (!Buffer.isBuffer(result?.bytes)) throw new Error('gitlab_compare_raw_bytes_unavailable');
+  const bytes = Buffer.from(result.bytes);
+  const source = bytes.toString('utf8');
+  if (!Buffer.from(source, 'utf8').equals(bytes)) throw new Error('gitlab_compare_raw_utf8_invalid');
+  const compare = JSON.parse(source);
+  if (!compare || typeof compare !== 'object' || Array.isArray(compare)) {
+    throw new Error('gitlab_compare_raw_response_invalid');
+  }
+  if (result.value !== undefined && stableJson(result.value) !== stableJson(compare)) {
+    throw new Error('gitlab_compare_parsed_response_mismatch');
+  }
+  return {
+    compare,
+    evidence: {
+      schema_version: QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA,
+      source: 'gitlab-api-read-only',
+      host: QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_HOST,
+      project: QWORK_RELEASE_INTAKE_DEFAULT_GITLAB_PROJECT,
+      method: 'GET',
+      endpoint,
+      compare_from: compareFrom,
+      compare_to: compareTo,
+      straight: true,
+      raw_response_encoding: 'base64',
+      raw_response_base64: bytes.toString('base64'),
+      raw_response_bytes: bytes.length,
+      raw_response_sha256: createHash('sha256').update(bytes).digest('hex'),
+    },
+  };
+}
+
+function verifyCurrentReleaseContractAncestry({
+  readGitLab,
+  releaseHead,
+  contract,
+  apiErrors,
+  requireRawCompareEvidence = false,
+}) {
   const compareFrom = text(contract?.merge_commit_sha);
   const base = {
     compare_from: compareFrom,
     compare_to: releaseHead,
     compare_commit_count: 0,
     first_parent_complete: false,
+    query_completed: false,
     verified: false,
     reason: '',
+    ...(requireRawCompareEvidence ? { compare_evidence: null } : {}),
   };
-  if (compareFrom === releaseHead) {
+  if (compareFrom === releaseHead && !requireRawCompareEvidence) {
     return {
       ...base,
       source: 'release-head-is-origin-merge',
       first_parent_complete: true,
+      query_completed: true,
       verified: true,
     };
   }
@@ -857,8 +880,33 @@ function verifyCurrentReleaseContractAncestry({ readGitLab, releaseHead, contrac
     return { ...base, source: 'gitlab-api-compare-first-parent', reason: 'compare_identity_invalid' };
   }
   try {
-    const compare = readGitLab(`repository/compare?from=${compareFrom}&to=${releaseHead}&straight=true`);
-    const chain = reconstructFirstParentChain({
+    const endpoint = `repository/compare?from=${compareFrom}&to=${releaseHead}&straight=true`;
+    const raw = requireRawCompareEvidence
+      ? gitLabCompareEvidence({ readGitLab, endpoint, compareFrom, compareTo: releaseHead })
+      : { compare: readGitLab(endpoint), evidence: null };
+    const compare = raw.compare;
+    const comparePayloadValid = reconstructGitLabFirstParentChain({
+      compare,
+      baselineCommit: compareFrom,
+      releaseHead: compareFrom,
+    }).ok;
+    if (compareFrom === releaseHead) {
+      const identityVerified = comparePayloadValid
+        && compare?.compare_timeout === false
+        && Array.isArray(compare?.commits)
+        && compare.commits.length === 0;
+      return {
+        ...base,
+        source: 'release-head-is-origin-merge',
+        compare_commit_count: Array.isArray(compare?.commits) ? compare.commits.length : 0,
+        first_parent_complete: identityVerified,
+        query_completed: comparePayloadValid,
+        verified: identityVerified,
+        reason: identityVerified ? '' : 'compare_identity_response_invalid',
+        ...(requireRawCompareEvidence ? { compare_evidence: raw.evidence } : {}),
+      };
+    }
+    const chain = reconstructGitLabFirstParentChain({
       compare,
       baselineCommit: compareFrom,
       releaseHead,
@@ -868,8 +916,10 @@ function verifyCurrentReleaseContractAncestry({ readGitLab, releaseHead, contrac
       source: 'gitlab-api-compare-first-parent',
       compare_commit_count: Array.isArray(compare?.commits) ? compare.commits.length : 0,
       first_parent_complete: chain.ok,
+      query_completed: comparePayloadValid && compare?.compare_timeout === false,
       verified: chain.ok,
       reason: chain.ok ? '' : (chain.reason || 'origin_merge_ancestry_not_proven'),
+      ...(requireRawCompareEvidence ? { compare_evidence: raw.evidence } : {}),
     };
   } catch (error) {
     const message = redact(error?.message || 'source contract ancestry read failed');
@@ -878,7 +928,13 @@ function verifyCurrentReleaseContractAncestry({ readGitLab, releaseHead, contrac
   }
 }
 
-function verifyReleaseBeforeContractAncestry({ readGitLab, releaseHead, contract, apiErrors }) {
+function verifyReleaseBeforeContractAncestry({
+  readGitLab,
+  releaseHead,
+  contract,
+  apiErrors,
+  requireRawCompareEvidence = false,
+}) {
   const compareTo = text(contract?.merge_commit_sha);
   const base = {
     source: 'gitlab-api-compare-first-parent',
@@ -886,16 +942,42 @@ function verifyReleaseBeforeContractAncestry({ readGitLab, releaseHead, contract
     compare_to: compareTo,
     compare_commit_count: 0,
     first_parent_complete: false,
+    query_completed: false,
     verified: false,
     reason: '',
+    ...(requireRawCompareEvidence ? { compare_evidence: null } : {}),
   };
-  if (compareTo === releaseHead) return { ...base, reason: 'compare_identities_equal' };
+  if (compareTo === releaseHead && !requireRawCompareEvidence) {
+    return { ...base, query_completed: true, reason: 'compare_identities_equal' };
+  }
   if (!HEX40.test(compareTo) || !HEX40.test(releaseHead)) {
     return { ...base, reason: 'compare_identity_invalid' };
   }
   try {
-    const compare = readGitLab(`repository/compare?from=${releaseHead}&to=${compareTo}&straight=true`);
-    const chain = reconstructFirstParentChain({
+    const endpoint = `repository/compare?from=${releaseHead}&to=${compareTo}&straight=true`;
+    const raw = requireRawCompareEvidence
+      ? gitLabCompareEvidence({ readGitLab, endpoint, compareFrom: releaseHead, compareTo })
+      : { compare: readGitLab(endpoint), evidence: null };
+    const compare = raw.compare;
+    const comparePayloadValid = reconstructGitLabFirstParentChain({
+      compare,
+      baselineCommit: compareTo,
+      releaseHead: compareTo,
+    }).ok;
+    if (compareTo === releaseHead) {
+      const identityVerified = comparePayloadValid
+        && compare?.compare_timeout === false
+        && Array.isArray(compare?.commits)
+        && compare.commits.length === 0;
+      return {
+        ...base,
+        compare_commit_count: Array.isArray(compare?.commits) ? compare.commits.length : 0,
+        query_completed: comparePayloadValid,
+        reason: identityVerified ? 'compare_identities_equal' : 'compare_identity_response_invalid',
+        ...(requireRawCompareEvidence ? { compare_evidence: raw.evidence } : {}),
+      };
+    }
+    const chain = reconstructGitLabFirstParentChain({
       compare,
       baselineCommit: releaseHead,
       releaseHead: compareTo,
@@ -904,8 +986,10 @@ function verifyReleaseBeforeContractAncestry({ readGitLab, releaseHead, contract
       ...base,
       compare_commit_count: Array.isArray(compare?.commits) ? compare.commits.length : 0,
       first_parent_complete: chain.ok,
+      query_completed: comparePayloadValid && compare?.compare_timeout === false,
       verified: chain.ok,
       reason: chain.ok ? '' : (chain.reason || 'release_predecessor_ancestry_not_proven'),
+      ...(requireRawCompareEvidence ? { compare_evidence: raw.evidence } : {}),
     };
   } catch (error) {
     const message = redact(error?.message || 'reverse source contract ancestry read failed');
@@ -1011,7 +1095,11 @@ function scanWithGitLabApi({
     for (const candidate of candidates) {
       try {
         const response = readGitLab(`repository/compare?from=${candidate.commit}&to=${releaseHead}&straight=true`);
-        const attempt = reconstructFirstParentChain({ compare: response, baselineCommit: candidate.commit, releaseHead });
+        const attempt = reconstructGitLabFirstParentChain({
+          compare: response,
+          baselineCommit: candidate.commit,
+          releaseHead,
+        });
         compareAttempts.push({ baseline_commit: candidate.commit, source: candidate.source, ok: attempt.ok, reason: attempt.reason || '' });
         if (attempt.ok) {
           boundaryCandidate = candidate;
@@ -1117,7 +1205,17 @@ function scanWithGitLabApi({
   const sourceContractMergeRequests = scannedCommits.map((commit, index) => ({
     iid: text(metadata[index]?.iid),
     commit: text(commit?.commit),
+    parent: text(commit?.parent),
+    parent_count: commit?.parent_count,
+    metadata_verified: metadata[index]?.verified === true,
+    metadata_source: text(metadata[index]?.source),
+    state: text(metadata[index]?.state),
+    target_branch: text(metadata[index]?.target_branch),
+    attribution_kind: text(metadata[index]?.attribution_kind),
+    merge_commit_sha: text(metadata[index]?.merge_commit_sha),
     changed_paths: Array.isArray(commit?.paths) ? commit.paths : [],
+    diff_sha256: text(commit?.diff_sha256),
+    diff_bytes: commit?.diff_bytes,
   }));
   const ancestryByContractId = new Map(effectiveSourceContracts.map((contract) => [
     contract.contract_id,
@@ -1127,6 +1225,34 @@ function scanWithGitLabApi({
       contract,
       apiErrors,
     }),
+  ]));
+  const successorAncestriesByContractId = new Map(effectiveSourceContracts.map((contract) => [
+    contract.contract_id,
+    currentReleaseSourceContractSuccessorBindings(contract).map(({ binding_id: bindingId, successor }) => ({
+      binding_id: bindingId,
+      successor_mr_iid: successor.mr_iid,
+      successor_merge_commit_sha: successor.merge_commit_sha,
+      descendant_ancestry: verifyCurrentReleaseContractAncestry({
+        readGitLab,
+        releaseHead,
+        contract: {
+          contract_id: `${contract.contract_id}:${bindingId}:successor`,
+          merge_commit_sha: successor.merge_commit_sha,
+        },
+        apiErrors,
+        requireRawCompareEvidence: true,
+      }),
+      predecessor_ancestry: verifyReleaseBeforeContractAncestry({
+        readGitLab,
+        releaseHead,
+        contract: {
+          contract_id: `${contract.contract_id}:${bindingId}:successor`,
+          merge_commit_sha: successor.merge_commit_sha,
+        },
+        apiErrors,
+        requireRawCompareEvidence: true,
+      }),
+    })),
   ]));
   const sourceContractAttestations = effectiveSourceContracts.map((contract) => {
     const originAttestations = originSourceContractAttestations
@@ -1151,6 +1277,7 @@ function scanWithGitLabApi({
       originAncestry: ancestry,
       files,
       mergeRequests: sourceContractMergeRequests,
+      successorAncestries: successorAncestriesByContractId.get(contract.contract_id),
       originAttestation,
       contract,
       currentHeaderContract: headerResolution.owner,

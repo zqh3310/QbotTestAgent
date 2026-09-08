@@ -16,7 +16,10 @@ import {
   auditQworkReleaseBlockingRisk,
   validateQworkReleaseBlockingRisksForReport,
 } from '../src/lib/qwork-release-blocking-risks.mjs';
-import { auditQworkSuccessorAstContracts } from '../src/lib/qwork-release-blocking-risk-ast.mjs';
+import {
+  auditQworkSuccessorAstContracts,
+  programHasTrustedGlobalMutation,
+} from '../src/lib/qwork-release-blocking-risk-ast.mjs';
 import { sha256Text, stableJson, writeQworkReleaseIntake } from '../src/lib/qwork-release-intake.mjs';
 
 const CURRENT_RELEASE_HEAD = '90063782129701951edd90a9df8cf6145f1de425';
@@ -139,6 +142,379 @@ function successorAncestry(releaseHead = QWORK_MR1559_MERGE_COMMIT_SHA) {
 const successorEntry = `
 // Stable signed entry for one accepted QWork execution utilityProcess.
 require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();
+`;
+
+const successorDeadlineV5 = `
+const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');
+const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+function validateExecutionWorkerReply(raw, pending, now) {
+  const expired = pending.get(raw?.requestId);
+  const validationTime = expired?.deadlineExpired && expired.matches(raw)
+    && raw.deadlineAt === expired.deadlineAt ? expired.deadlineAt - 1 : now();
+  const message = validateEnvelope(raw, { direction: 'worker-to-host', now: validationTime });
+  if (expired?.deadlineExpired && expired.matches(message)) {
+    if (isExecutionWorkerTerminalOperation(message.operation)) {
+      clearTimeout(expired.cancelDeadline);
+      pending.delete(message.requestId);
+    }
+    return { ...message, operation: 'execution.expired' };
+  }
+  return message;
+}
+function settleExpiredExecutionWorkerReply(message, pending) {
+  const expired = pending.get(message.requestId);
+  if (!expired?.deadlineExpired || !expired.matches(message)) return false;
+  if (isExecutionWorkerTerminalOperation(message.operation)) {
+    clearTimeout(expired.cancelDeadline);
+    pending.delete(message.requestId);
+  }
+  return true;
+}
+function cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs }) {
+  const requestedGraceMs = Number(graceMs);
+  const boundedGraceMs = Number.isSafeInteger(requestedGraceMs) && requestedGraceMs > 0
+    ? Math.min(requestedGraceMs, 2147483647) : 1;
+  item.deadlineExpired = true;
+  item.cancelDeadline = setTimeout(() => {
+    if (pending.get(message.requestId) === item) terminateChild(child, 'request-deadline-timeout');
+  }, boundedGraceMs);
+  item.cancelDeadline.unref?.();
+  try {
+    child.postMessage(createEnvelope('execution.cancel', message,
+      { reason: 'execution_worker_deadline_exceeded' },
+      { deadlineMs: boundedGraceMs, now: now() }));
+  } catch {
+    terminateChild(child, 'request-deadline-timeout');
+  }
+}
+function scheduleExecutionWorkerDeadline({ message, pending, child, terminateChild, now, deadlineMs, graceMs }) {
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const timer = setTimeout(() => {
+    const item = pending.get(message.requestId);
+    if (!item) return;
+    const error = Object.assign(new Error('execution worker request deadline exceeded'), {
+      code: 'execution_worker_deadline_exceeded',
+    });
+    item.reject(error);
+    if (message.operation !== 'execution.start') {
+      pending.delete(message.requestId);
+      return;
+    }
+    cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs });
+  }, boundedDeadlineMs + 1);
+  timer.unref?.();
+  return timer;
+}
+function createExecutionWorkerDeadlineCallbacks({ operation, requestId, message, pending, child, terminateChild, now, graceMs }) {
+  const requestedCallbackGraceMs = Number(graceMs);
+  const boundedCallbackGraceMs = Number.isSafeInteger(requestedCallbackGraceMs)
+    && requestedCallbackGraceMs > 0
+    ? Math.min(requestedCallbackGraceMs, 2147483647) : 1;
+  return {
+    onDeadline: () => {
+      const item = pending.get(requestId);
+      if (operation !== 'execution.start') {
+        pending.delete(requestId);
+        return;
+      }
+      if (!item) return;
+      item.deadlineExpired = true;
+      item.deadlineAt = message.deadlineAt;
+      try {
+        child.postMessage(createEnvelope('execution.cancel', message,
+          { reason: 'execution_worker_deadline_exceeded' },
+          { deadlineMs: boundedCallbackGraceMs, now: now() }));
+      } catch {
+        return terminateChild(child, 'request-deadline-timeout');
+      }
+    },
+    onCancellationTimeout: () => {
+      if (pending.has(requestId)) return terminateChild(child, 'request-deadline-timeout');
+    },
+  };
+}
+module.exports = {
+  validateExecutionWorkerReply,
+  settleExpiredExecutionWorkerReply,
+  scheduleExecutionWorkerDeadline,
+  createExecutionWorkerDeadlineCallbacks,
+};
+`;
+
+const successorCallbackSettlementV5 = `
+const BEST_EFFORT_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+  'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onRaw', 'onRawDiagnostic',
+  'onCompactDiagnostic',
+]);
+const IMMEDIATE_NON_BLOCKING_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+]);
+const DEFERRED_OBSERVER_CALLBACKS = new Set([
+  'onRaw', 'onRawDiagnostic', 'onCompactDiagnostic',
+]);
+const RESERVED_OBSERVER_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+  'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onCompactDiagnostic',
+  'onRaw', 'onRawDiagnostic',
+]);
+const RAW_OBSERVER_CALLBACKS = new Set(['onRaw', 'onRawDiagnostic']);
+function isBestEffortExecutionWorkerCallback(name) {
+  return BEST_EFFORT_CALLBACKS.has(String(name || ''));
+}
+function isImmediateNonBlockingExecutionWorkerCallback(name) {
+  return IMMEDIATE_NON_BLOCKING_CALLBACKS.has(String(name || ''));
+}
+function isReservedExecutionWorkerObserverCallback(name) {
+  return RESERVED_OBSERVER_CALLBACKS.has(String(name || ''));
+}
+function isRawExecutionWorkerObserverCallback(name) {
+  return RAW_OBSERVER_CALLBACKS.has(String(name || ''));
+}
+function reportBestEffortFailure(name) {
+  try {
+    console.warn('[execution-worker] best-effort callback failed', {
+      callback: String(name || '').slice(0, 80),
+      redacted: true,
+    });
+  } catch {}
+}
+function invokeCallback(callback, name, value) {
+  return Array.isArray(value) && name === 'onCriticalPathTiming'
+    ? callback(...value) : callback(value);
+}
+function settleExecutionWorkerCallback({ callbacks = {}, message = {}, settlements = [] } = {}) {
+  const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
+  const name = String(payload.callback || '');
+  if (!Object.hasOwn(callbacks, name) || typeof callbacks[name] !== 'function') return false;
+  const callback = callbacks[name];
+  const bestEffort = isBestEffortExecutionWorkerCallback(name);
+  const immediateObserver = isReservedExecutionWorkerObserverCallback(name);
+  const deferredObserver = DEFERRED_OBSERVER_CALLBACKS.has(name);
+  if (bestEffort && (!immediateObserver || deferredObserver)) {
+    setImmediate(() => {
+      let settlement;
+      try {
+        settlement = invokeCallback(callback, name, payload.value);
+      } catch {
+        reportBestEffortFailure(name);
+        return;
+      }
+      void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+    });
+    return true;
+  }
+  let settlement;
+  try {
+    settlement = invokeCallback(callback, name, payload.value);
+  } catch (error) {
+    if (!bestEffort) throw error;
+    reportBestEffortFailure(name);
+    return true;
+  }
+  if (immediateObserver || isImmediateNonBlockingExecutionWorkerCallback(name)) {
+    void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+  } else {
+    settlements.push(Promise.resolve(settlement));
+  }
+  return true;
+}
+module.exports = {
+  isBestEffortExecutionWorkerCallback,
+  isImmediateNonBlockingExecutionWorkerCallback,
+  isRawExecutionWorkerObserverCallback,
+  isReservedExecutionWorkerObserverCallback,
+  settleExecutionWorkerCallback,
+};
+`;
+
+const successorEventFlowV5 = `
+const DEFAULT_WINDOW_MS = 100;
+const DEFAULT_MAX_KEYS = 128;
+const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+const { logExecutionWorkerCancellation, observeExecutionWorkerEvent } = require('./execution-worker-process-lifecycle.cjs');
+function activityKey(fact) {
+  return \`\${String(fact?.scope || '')}\\u0000\${String(fact?.node || '')}\\u0000\${String(fact?.identity || '')}\`;
+}
+function isCoalescibleRuntimeActivity(fact) {
+  if (!fact || fact.edge !== 'progressed') return false;
+  if (fact.node === 'semantic_delta') return fact.contentKind === 'tool_input';
+  return (fact.node === 'tool_activity' || fact.node === 'hook_activity')
+    && (fact.progressClass === 'liveness' || fact.progressClass === 'advisory');
+}
+function isTerminalActivity(fact) {
+  return fact?.progressClass === 'terminal'
+    || fact?.node === 'runtime_terminal_received' || fact?.node === 'transport_lost';
+}
+class RuntimeActivityCoalescer {
+  constructor({ emit, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
+    windowMs = DEFAULT_WINDOW_MS, maxKeys = DEFAULT_MAX_KEYS } = {}) {
+    if (typeof emit !== 'function') throw new TypeError('runtime activity coalescer requires emit');
+    const requestedWindowMs = Number(windowMs);
+    const boundedWindowMs = Number.isSafeInteger(requestedWindowMs) && requestedWindowMs > 0
+      ? Math.min(requestedWindowMs, 2147483647) : 100;
+    const requestedMaxKeys = Number(maxKeys);
+    const boundedMaxKeys = Number.isSafeInteger(requestedMaxKeys) && requestedMaxKeys > 0
+      ? Math.min(requestedMaxKeys, 128) : 128;
+    this.emit = emit;
+    this.now = now;
+    this.schedule = schedule;
+    this.cancel = cancel;
+    this.windowMs = boundedWindowMs;
+    this.maxKeys = boundedMaxKeys;
+    this.entries = new Map();
+    this.closed = false;
+    this.lastEmittedSequence = -1;
+  }
+  emitFresh(fact) {
+    const sourceSequence = Number(fact?.sourceSequence);
+    if (Number.isSafeInteger(sourceSequence)) {
+      if (sourceSequence <= this.lastEmittedSequence) return;
+      this.lastEmittedSequence = sourceSequence;
+    }
+    this.emit(fact);
+  }
+  discard(key) {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    if (!entry.timer) return;
+    try { this.cancel(entry.timer); } catch {}
+  }
+  clear() {
+    for (const key of this.entries.keys()) this.discard(key);
+  }
+  flush(key) {
+    if (this.closed) return;
+    const entry = this.entries.get(key);
+    if (!entry?.pending) return;
+    const value = entry.pending;
+    entry.pending = null;
+    entry.timer = null;
+    entry.lastSentAt = this.now();
+    this.emitFresh(value);
+  }
+  arm(key, entry, delay) {
+    const requestedDelay = Number(delay);
+    const boundedDelay = Number.isSafeInteger(requestedDelay) && requestedDelay > 0
+      ? Math.min(requestedDelay, 2147483647) : 1;
+    try {
+      entry.timer = this.schedule(() => this.flush(key), boundedDelay);
+      entry.timer?.unref?.();
+    } catch {
+      const value = entry.pending;
+      this.entries.delete(key);
+      if (value) this.emitFresh(value);
+    }
+  }
+  push(fact) {
+    if (this.closed || !fact) return;
+    const key = activityKey(fact);
+    if (!isCoalescibleRuntimeActivity(fact)) {
+      if (isTerminalActivity(fact)) this.clear();
+      else this.discard(key);
+      this.emitFresh(fact);
+      return;
+    }
+    let entry = this.entries.get(key);
+    const currentTime = this.now();
+    if (!entry) {
+      if (this.entries.size >= this.maxKeys) return;
+      entry = { lastSentAt: currentTime, pending: null, timer: null };
+      this.entries.set(key, entry);
+      this.emitFresh(fact);
+      return;
+    }
+    if (currentTime - entry.lastSentAt >= this.windowMs && !entry.timer) {
+      entry.lastSentAt = currentTime;
+      this.emitFresh(fact);
+      return;
+    }
+    entry.pending = fact;
+    if (!entry.timer) this.arm(key, entry,
+      Math.max(0, this.windowMs - (currentTime - entry.lastSentAt)));
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.clear();
+  }
+  pendingCount() {
+    let count = 0;
+    for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+    return count;
+  }
+}
+function createRuntimeActivityCoalescer(options) {
+  return new RuntimeActivityCoalescer(options);
+}
+function dispatchExecutionEvent(item, message, postBrokerResult) {
+  item.lastSequence = message.sequence;
+  try {
+    item.onEvent(message);
+  } finally {
+    postBrokerResult('stream.credit', message, { credit: 1 });
+  }
+}
+function routeExecutionWorkerResultMessage(message, {
+  pending, child, terminateChild, contextUsageRoutes, now, postBrokerResult, logger,
+}) {
+  if (contextUsageRoutes.handle(message, pending, child, terminateChild)) return true;
+  if (message.operation === 'execution.event') {
+    const item = pending.get(message.requestId);
+    if (!item || !item.matches(message)) return true;
+    if (message.sequence <= item.lastSequence) {
+      const error = new Error('execution worker emitted a non-monotonic event sequence');
+      error.code = 'execution_worker_sequence_violation';
+      pending.delete(message.requestId);
+      item.reject(error);
+      terminateChild(child, 'sequence-violation');
+      return true;
+    }
+    observeExecutionWorkerEvent(item, message, now());
+    dispatchExecutionEvent(item, message, postBrokerResult);
+    return true;
+  }
+  if (!isExecutionWorkerTerminalOperation(message.operation)) return false;
+  const item = pending.get(message.requestId);
+  if (!item || !item.matches(message)) return true;
+  if (message.operation === 'execution.terminal')
+    logExecutionWorkerCancellation(logger, item, message, now());
+  pending.delete(message.requestId);
+  contextUsageRoutes.retain(message, item);
+  item.resolve(message);
+  return true;
+}
+module.exports = { dispatchExecutionEvent, routeExecutionWorkerResultMessage };
+`;
+
+const successorEventEntryV5 = `
+const { createRuntimeActivityCoalescer } = require('./execution-worker-event-flow.cjs');
+function createExecution() {
+  const runtimeActivity = createRuntimeActivityCoalescer({
+    emit: (value) => emit('onRuntimeActivity', value),
+  });
+  const callbacks = {
+    onRuntimeActivity: (value) => runtimeActivity.push(value),
+  };
+  return {
+    queueDepth: () => {
+      return runtimeActivity.pendingCount();
+    },
+    run: async () => {
+      try {
+        return true;
+      } finally {
+        runtimeActivity.close();
+      }
+    },
+  };
+}
 `;
 
 const successorController = `
@@ -317,6 +693,7 @@ const successorSupervisorWithNow = successorSupervisor
 
 const currentShapeSuccessorSupervisor = `
 const { createExecutionWorkerRequestSettlement } = require('./execution-worker-cancellation.cjs');
+const { createExecutionWorkerDeadlineCallbacks } = require('./execution-worker-deadline.cjs');
 const { createExecutionWorkerTerminator } = require('./execution-worker-termination.cjs');
 const {
   handleExecutionWorkerEventMessage,
@@ -590,7 +967,7 @@ module.exports = { createExecutionWorkerTerminator };
 
 const successorSupervisorMessage = `
 function isReservedExecutionWorkerObserverCallback() { return true; }
-function dispatchExecutionEvent() {}
+const { dispatchExecutionEvent } = require('./execution-worker-event-flow.cjs');
 function handleExecutionWorkerEventMessage(message, {
   pending, postBrokerResult, terminateChild, child,
 }) {
@@ -618,12 +995,24 @@ module.exports = {
 `;
 
 const successorDesktopHost = `
+const { settleExecutionWorkerCallback } = require('./execution-worker-callback-settlement.cjs');
+const callbacks = {};
 async function runAgentInExecutionWorker(identity, signal) {
   let executionWorkerLease = null;
   try {
+    const eventSettlements = [];
     executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
     const supervisor = executionWorkerLease.supervisor;
-    await supervisor.request();
+    const terminal = await requestExecutionWorkerTurn(
+      supervisor, 'execution.start', identity, {}, {
+        onEvent: (message) => settleExecutionWorkerCallback({
+          callbacks,
+          message,
+          settlements: eventSettlements,
+        }),
+      }, signal,
+    );
+    await Promise.all(eventSettlements);
   } finally {
     await executionWorkerLease?.release?.();
   }
@@ -791,13 +1180,26 @@ module.exports = {
 
 const delegatedSuccessorDesktopHost = `
 const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
+const { settleExecutionWorkerCallback } = require('./execution-worker-callback-settlement.cjs');
+const callbacks = {};
 async function runAgentInExecutionWorker(supervisor, identity, signal) {
   if (!supervisor || supervisor.enabled !== true) throw new Error('execution worker unavailable');
   let executionWorkerLease = null;
   const contextUsageLease = createExecutionWorkerContextUsageLease({ timeoutMs: 1000 });
   try {
+    const eventSettlements = [];
     executionWorkerLease = await supervisor.acquire('execution.start', identity, { signal });
-    await executionWorkerLease.supervisor.request();
+    const terminal = await requestExecutionWorkerTurn(
+      executionWorkerLease.supervisor, 'execution.start', identity, {}, {
+        onEvent: (message) => settleExecutionWorkerCallback({
+          callbacks,
+          message,
+          settlements: eventSettlements,
+        }),
+      }, signal,
+    );
+    contextUsageLease.observeTerminal(terminal.payload);
+    await Promise.all(eventSettlements);
   } finally {
     await contextUsageLease.release(executionWorkerLease);
   }
@@ -806,6 +1208,7 @@ async function runAgentInExecutionWorker(supervisor, identity, signal) {
 
 const currentReleaseSuccessorDesktopHost = `
 const { createExecutionWorkerContextUsageLease } = require('./execution-worker-context-usage.cjs');
+const { settleExecutionWorkerCallback } = require('./execution-worker-callback-settlement.cjs');
 async function runAgentInExecutionWorker({
   supervisor,
   identity,
@@ -817,11 +1220,21 @@ async function runAgentInExecutionWorker({
     timeoutMs: contextUsageReleaseTimeoutMs,
   });
   try {
+    const eventSettlements = [];
     executionWorkerLease = await supervisor.acquire({ authority: true }, identity, {
       signal: callbacks.abortController?.signal,
     });
-    const terminal = await executionWorkerLease.supervisor.request();
+    const terminal = await requestExecutionWorkerTurn(
+      executionWorkerLease.supervisor, 'execution.start', identity, {}, {
+        onEvent: (message) => settleExecutionWorkerCallback({
+          callbacks,
+          message,
+          settlements: eventSettlements,
+        }),
+      }, callbacks.abortController?.signal,
+    );
     contextUsageLease.observeTerminal(terminal.payload);
+    await Promise.all(eventSettlements);
   } finally {
     await contextUsageLease.release(executionWorkerLease);
   }
@@ -833,6 +1246,10 @@ function successorFiles(overrides = new Map()) {
     ['electron/execution-worker.cjs', successorEntry],
     ['electron/host-core/agent/execution-worker-controller.cjs', successorController],
     ['electron/host-core/agent/execution-worker-cancellation.cjs', successorCancellation],
+    ['electron/host-core/agent/execution-worker-deadline.cjs', successorDeadlineV5],
+    ['electron/host-core/agent/execution-worker-callback-settlement.cjs', successorCallbackSettlementV5],
+    ['electron/host-core/agent/execution-worker-event-flow.cjs', successorEventFlowV5],
+    ['electron/host-core/agent/execution-worker-entry.cjs', successorEventEntryV5],
     ['electron/host-core/agent/execution-worker-manager.cjs', successorManager],
     ['electron/host-core/agent/execution-worker-supervisor.cjs', successorSupervisor],
     ['electron/host-core/agent/execution-worker-supervisor-message.cjs', successorSupervisorMessage],
@@ -1135,6 +1552,63 @@ test('v5 current supervisor shape preserves one identity-bound pending and child
     'electron/host-core/agent/execution-worker-supervisor.cjs', source,
   ]])).supervisor;
   assert.equal(supervisorContract(currentShapeSuccessorSupervisor), true);
+  const deadlineSpreadSupervisor = replaceRequired(
+    replaceRequired(
+      currentShapeSuccessorSupervisor,
+      '  cancellationTimeoutMs = 5_000,',
+      '  cancellationTimeoutMs = 5_000,\n  deadlineCancelGraceMs = 0,',
+      'deadline spread grace option',
+    ),
+    `        cancellationTimeoutMs,
+        terminateChild,
+        onDeadline: () => pending.delete(requestId),
+        resolve: resolveRequest,
+        reject,`,
+    `        cancellationTimeoutMs,
+        deadlineCancellationTimeoutMs: deadlineCancelGraceMs,
+        terminateChild,
+        ...createExecutionWorkerDeadlineCallbacks({
+          operation,
+          requestId,
+          message,
+          pending,
+          child,
+          terminateChild,
+          now,
+          graceMs: deadlineCancelGraceMs,
+        }),
+        resolve: resolveRequest,
+        reject,
+        now,`,
+    'deadline spread settlement',
+  );
+  assert.equal(supervisorContract(deadlineSpreadSupervisor), true);
+
+  const deadlineSpreadVariants = [
+    [
+      'deadline spread grace default drifts',
+      '  deadlineCancelGraceMs = 0,',
+      '  deadlineCancelGraceMs = 1,',
+    ],
+    [
+      'deadline spread callback requestId drifts',
+      '          requestId,',
+      '          requestId: unrelatedRequestId,',
+    ],
+    [
+      'deadline spread settlement gains an extra property',
+      '        now,\n      });',
+      '        now,\n        unexpected: true,\n      });',
+    ],
+  ];
+  for (const [label, search, replacement] of deadlineSpreadVariants) {
+    assert.equal(supervisorContract(replaceRequired(
+      deadlineSpreadSupervisor,
+      search,
+      replacement,
+      label,
+    )), false, label);
+  }
 
   const variants = [
     [
@@ -3451,7 +3925,7 @@ test('v5 public audit rejects every referenced-parameter rename and added-defaul
 
   assert.equal(successorRisk(baseline).status, 'VERIFIED');
   assert.equal(functionCount, 72);
-  assert.equal(mutations.length, 174);
+  assert.equal(mutations.length, 176);
   for (const mutation of mutations) {
     const overrides = new Map(baseline);
     overrides.set(mutation.filePath, mutation.source);
@@ -3636,9 +4110,9 @@ test('v5 public audit rejects every critical factory, helper, builtin and member
       '  contextUsageLease.release = unrelatedRelease;',
     ],
     [
-      'desktop lease request member rebind',
-      '    const terminal = await executionWorkerLease.supervisor.request();',
-      '    executionWorkerLease.supervisor.request = unrelatedRequest;',
+      'desktop turn request helper rebind',
+      '    const terminal = await requestExecutionWorkerTurn(',
+      '    requestExecutionWorkerTurn = unrelatedRequest;\n    const terminal = await requestExecutionWorkerTurn(',
     ],
   ]) {
     variants.push([label, 'desktop', contextFiles(
@@ -3895,4 +4369,285 @@ test('v5 public audit resolves lexical bindings and rejects reflective member ta
     'VERIFIED',
     'reflective writes to unrelated objects must remain allowed',
   );
+});
+
+test('v5 trusted globals reject member tampering and retain read-only calls', () => {
+  const paths = {
+    callback: 'electron/host-core/agent/execution-worker-callback-settlement.cjs',
+    deadline: 'electron/host-core/agent/execution-worker-deadline.cjs',
+    event: 'electron/host-core/agent/execution-worker-event-flow.cjs',
+  };
+  const prefixed = (prefix, source) => `${prefix}\n${source}`;
+  const variants = [
+    [
+      'deadline globalThis.setTimeout replacement',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        'globalThis.setTimeout = unrelatedSetTimeout;',
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline Number.isSafeInteger replacement',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        'Number.isSafeInteger = () => true;',
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'callback Promise.resolve replacement',
+      'callback_settlement',
+      new Map([[paths.callback, prefixed(
+        'Promise.resolve = unrelatedResolve;',
+        successorCallbackSettlementV5,
+      )]]),
+    ],
+    [
+      'event Map top-level shadow',
+      'event_flow',
+      new Map([[paths.event, prefixed(
+        'const Map = class UntrustedMap {};',
+        successorEventFlowV5,
+      )]]),
+    ],
+    [
+      'event Date and timer top-level shadows',
+      'event_flow',
+      new Map([[paths.event, prefixed(
+        'const Date = unrelatedDate, setTimeout = unrelatedSetTimeout, clearTimeout = unrelatedClearTimeout;',
+        successorEventFlowV5,
+      )]]),
+    ],
+    [
+      'deadline static computed Number member replacement',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "Number['isSafeInteger'] = () => true;",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline globalThis alias timer replacement',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        'const root = globalThis; root.setTimeout = unrelatedSetTimeout;',
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline Reflect.set mutates Number',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "Reflect.set(Number, 'isSafeInteger', () => true);",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'callback Object.defineProperty mutates Promise',
+      'callback_settlement',
+      new Map([[paths.callback, prefixed(
+        "Object.defineProperty(Promise, 'resolve', { value: unrelatedResolve });",
+        successorCallbackSettlementV5,
+      )]]),
+    ],
+    [
+      'deadline aliased Reflect.set mutates Number',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "const set = Reflect.set; set(Number, 'isSafeInteger', () => true);",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline Reflect.set.call mutates Number',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "Reflect.set.call(null, Number, 'isSafeInteger', () => true);",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline aliased Reflect.set.apply mutates Number',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "const set = Reflect.set; set.apply(null, [Number, 'isSafeInteger', () => true]);",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline Reflect.apply dispatches Reflect.set against Number',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        "Reflect.apply(Reflect.set, null, [Number, 'isSafeInteger', () => true]);",
+        successorDeadlineV5,
+      )]]),
+    ],
+    [
+      'deadline dynamic apply arguments fail closed',
+      'deadline',
+      new Map([[paths.deadline, prefixed(
+        'Reflect.set.apply(null, dynamicArguments);',
+        successorDeadlineV5,
+      )]]),
+    ],
+  ];
+
+  assert.equal(successorRisk().status, 'VERIFIED');
+  for (const [label, contract, overrides] of variants) {
+    const risk = successorRisk(overrides);
+    const ast = risk.checks.at(-1).observations.successor_ast_contracts;
+    assert.equal(risk.status, 'BLOCKED', label);
+    assert.equal(risk.verified, false, label);
+    assert.equal(ast[contract], false, `${label}: AST contract must fail`);
+  }
+
+  const readOnlyRisk = successorRisk(new Map([
+    [paths.deadline, prefixed('void Number.isSafeInteger(1);', successorDeadlineV5)],
+    [paths.callback, prefixed('void Promise.resolve(true);', successorCallbackSettlementV5)],
+    [paths.event, prefixed('void Date.now();', successorEventFlowV5)],
+  ]));
+  assert.equal(readOnlyRisk.status, 'VERIFIED');
+  assert.equal(readOnlyRisk.verified, true);
+});
+
+test('v5 trusted globals fail closed across wrapper, value-flow, binding, and meta-call dispatch', () => {
+  const deadlinePath = 'electron/host-core/agent/execution-worker-deadline.cjs';
+  const prefixed = (prefix) => new Map([[deadlinePath, `${prefix}\n${successorDeadlineV5}`]]);
+  const variants = [
+    [
+      'global object wrapper writer',
+      "globalThis.Object.defineProperty(Number, 'isSafeInteger', { value: () => true });",
+    ],
+    [
+      'dynamic computed writer',
+      "const writerName = 'defineProperty'; Object[writerName](Number, 'isSafeInteger', { value: () => true });",
+    ],
+    [
+      'conditional writer value flow',
+      "const chosenWriter = flag ? Object.defineProperty : Reflect.defineProperty; chosenWriter(Number, 'isSafeInteger', { value: () => true });",
+    ],
+    [
+      'object container and destructuring writer flow',
+      "const writerBox = { writer: Object.defineProperty }; const { writer: boxedWriter } = writerBox; boxedWriter(Number, 'isSafeInteger', { value: () => true });",
+    ],
+    [
+      'conditional protected receiver',
+      "Object.defineProperty(flag ? Number : unrelatedObject, 'isSafeInteger', { value: () => true });",
+    ],
+    [
+      'bound writer invocation',
+      "Object.defineProperty.bind(null, Number, 'isSafeInteger')({ value: () => true });",
+    ],
+    [
+      'recursive Reflect.apply.call dispatch',
+      "Reflect.apply.call(null, Reflect.set, null, [Number, 'isSafeInteger', () => true]);",
+    ],
+    [
+      'Reflect.construct writer dispatch',
+      "Reflect.construct(Object.defineProperty, [Number, 'isSafeInteger', { value: () => true }]);",
+    ],
+  ];
+
+  for (const [label, prefix] of variants) {
+    const risk = successorRisk(prefixed(prefix));
+    const ast = risk.checks.at(-1).observations.successor_ast_contracts;
+    assert.equal(risk.status, 'BLOCKED', label);
+    assert.equal(risk.verified, false, label);
+    assert.equal(ast.deadline, false, `${label}: deadline AST contract must fail`);
+  }
+
+  const safePrefixes = [
+    "globalThis.Object.defineProperty(unrelatedObject, 'x', { value: true });",
+    "const safeWriter = flag ? Object.defineProperty : Reflect.defineProperty; safeWriter(unrelatedObject, 'x', { value: true });",
+    "Reflect.apply.call(null, Object.getOwnPropertyDescriptor, null, [Number, 'isSafeInteger']);",
+    "Object.defineProperty.bind(null, unrelatedObject, 'x')({ value: true });",
+    "void Object.getOwnPropertyDescriptor(Number, 'isSafeInteger');",
+    'void Number.isSafeInteger(1);',
+  ];
+  for (const prefix of safePrefixes) {
+    const risk = successorRisk(prefixed(prefix));
+    assert.equal(risk.status, 'VERIFIED', prefix);
+    assert.equal(risk.verified, true, prefix);
+  }
+});
+
+test('trusted global mutation value flow pairs dangerous dispatch with unrelated-receiver controls', () => {
+  const trustedGlobals = ['Error', 'Math', 'Number', 'Object', 'clearTimeout', 'setTimeout'];
+  const mutates = (source) => programHasTrustedGlobalMutation(parse(source, {
+    ecmaVersion: 'latest',
+    sourceType: 'script',
+  }), trustedGlobals);
+  const pairs = [
+    [
+      'unknown computed writer',
+      "const writerName = getWriterName(); Object[writerName](Number, 'isSafeInteger', { value: () => true });",
+      "const writerName = getWriterName(); Object[writerName](unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'computed bind',
+      "Object.defineProperty['bind'](null, Number, 'isSafeInteger')({ value: () => true });",
+      "Object.defineProperty['bind'](null, unrelatedObject, 'x')({ value: true });",
+    ],
+    [
+      'nested Reflect apply',
+      "Reflect.apply.apply(null, [Object.defineProperty, null, [Number, 'isSafeInteger', { value: () => true }]]);",
+      "Reflect.apply.apply(null, [Object.defineProperty, null, [unrelatedObject, 'x', { value: true }]]);",
+    ],
+    [
+      'aliased Reflect apply',
+      "const dispatch = Reflect.apply; dispatch.apply(null, [Object.defineProperty, null, [Number, 'isSafeInteger', { value: () => true }]]);",
+      "const dispatch = Reflect.apply; dispatch.apply(null, [Object.defineProperty, null, [unrelatedObject, 'x', { value: true }]]);",
+    ],
+    [
+      'function parameter flow',
+      "function mutateWith(w, target) { w(target, 'isSafeInteger', { value: () => true }); } mutateWith(Object.defineProperty, Number);",
+      "function mutateWith(w, target) { w(target, 'x', { value: true }); } mutateWith(Object.defineProperty, unrelatedObject);",
+    ],
+    [
+      'function return flow',
+      "function selectWriter() { return Object.defineProperty; } selectWriter()(Number, 'isSafeInteger', { value: () => true });",
+      "function selectWriter() { return Object.defineProperty; } selectWriter()(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'member lhs writer flow',
+      "const writerBox = {}; writerBox.writer = Object.defineProperty; writerBox.writer(Number, 'isSafeInteger', { value: () => true });",
+      "const writerBox = {}; writerBox.writer = Object.defineProperty; writerBox.writer(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'computed container destructuring',
+      "const computedBox = { writer: Object.defineProperty }; const { [writerKey]: computedWriter } = computedBox; computedWriter(Number, 'isSafeInteger', { value: () => true });",
+      "const computedBox = { writer: Object.defineProperty }; const { [writerKey]: computedWriter } = computedBox; computedWriter(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'rest container destructuring',
+      "const restBox = { writer: Object.defineProperty }; const { ...restWriters } = restBox; restWriters.writer(Number, 'isSafeInteger', { value: () => true });",
+      "const restBox = { writer: Object.defineProperty }; const { ...restWriters } = restBox; restWriters.writer(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'var binding across block',
+      "{ var op = Object.defineProperty; } op(Number, 'isSafeInteger', { value: () => true });",
+      "{ var op = Object.defineProperty; } op(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'outer lexical binding assigned inside block',
+      "let op; { op = Object.defineProperty; } op(Number, 'isSafeInteger', { value: () => true });",
+      "let op; { op = Object.defineProperty; } op(unrelatedObject, 'x', { value: true });",
+    ],
+    [
+      'outer member assigned inside block',
+      "const box = {}; { box.writer = Object.defineProperty; } box.writer(Number, 'isSafeInteger', { value: () => true });",
+      "const box = {}; { box.writer = Object.defineProperty; } box.writer(unrelatedObject, 'x', { value: true });",
+    ],
+  ];
+  for (const [label, dangerous, unrelated] of pairs) {
+    assert.equal(mutates(dangerous), true, `${label}: protected receiver must fail closed`);
+    assert.equal(mutates(unrelated), false, `${label}: unrelated receiver must remain allowed`);
+  }
+  for (const source of [
+    "const descriptor = Object.getOwnPropertyDescriptor(Number, 'isSafeInteger'); Object.defineProperty(descriptor, 'x', { value: true });",
+    'Object.assign(globalThis, { unrelatedQbotAuditKey: true });',
+    "const op = Object.defineProperty; { const op = Object.getOwnPropertyDescriptor; void op(Number, 'isSafeInteger'); }",
+    "const box = {}; box.writer = Object.defineProperty; { const box = { writer: Object.getOwnPropertyDescriptor }; void box.writer(Number, 'isSafeInteger'); }",
+  ]) assert.equal(mutates(source), false, source);
 });

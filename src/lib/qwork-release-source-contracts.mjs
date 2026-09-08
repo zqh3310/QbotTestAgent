@@ -6,8 +6,10 @@ export const QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-source-c
 // current-release attestation contains complete protected-file bytes and an
 // independent file-history readback, so it has an intentionally incompatible
 // schema instead of silently widening v1.
-export const QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract/v3';
+export const QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract/v4';
 export const QWORK_RELEASE_FILE_PROVENANCE_SCHEMA = 'qbot-qwork-release-file-provenance/v2';
+export const QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA = 'qbot-qwork-gitlab-first-parent-compare/v1';
+export const QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA = 'qbot-qwork-source-binding-successor-relationship/v2';
 const QWORK_RELEASE_FILE_PROVENANCE_DIFF_PAGE_SIZE = 100;
 const QWORK_RELEASE_FILE_PROVENANCE_MAX_DIFF_PAGES = 100;
 export const QWORK_RELEASE_SOURCE_CLAIM_SCOPE = 'source_and_test_declarations';
@@ -94,6 +96,15 @@ const GITLAB_DIFF_ALLOWED_CHANGE_KEYS = new Set([
   ...GITLAB_DIFF_REQUIRED_CHANGE_KEYS,
   ...GITLAB_DIFF_OPTIONAL_CHANGE_KEYS,
 ]);
+// Repository compare responses expose the same commit metadata surface as
+// the commits API.  Only the graph fields are mandatory, while all other
+// fields are optional known GitLab fields.  The allowlist is closed so a raw
+// response cannot smuggle an unknown field into the ancestry resolver.
+const GITLAB_COMPARE_COMMIT_ALLOWED_KEYS = new Set([
+  ...GITLAB_COMMIT_METADATA_KEYS,
+  'extended_trailers',
+]);
+const LOWER_HEX40 = /^[a-f0-9]{40}$/u;
 
 function isCanonicalIsoTimestamp(value) {
   if (typeof value !== 'string' || value !== value.trim()) return false;
@@ -1395,6 +1406,7 @@ export const QWORK_MR1596_ANONYMOUS_STABLE_RUNTIME_DISCOVERY_CONTRACT = deepFree
 
 const MR1597_ALLOWLIST_LINE = 'const WORKER_ENV_ALLOWLIST = /^(PATH|SystemRoot|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|LANG|LC_[A-Z_]+|IM_USER_(?:MDMCODE|EMAIL|DOMAINACCOUNT|PROFILE)|DEEPBANK_HOME|STRATA_HOME|DEEPBANK_SERVER|QBOT_CONTROL_PLANE_SERVER|QBOT_RELEASE_ENV|DEEPBANK_CLAUDE_CODE_EXECUTABLE|CLAUDE_CODE_EXECUTABLE|QBOT_RUNTIME_NODE_MODULES|QBOT_(?:PYTHON|NODE)_[A-Z0-9_]+)$/u;';
 const MR1597_OLD_ALLOWLIST_LINE = 'const WORKER_ENV_ALLOWLIST = /^(PATH|SystemRoot|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|LANG|LC_[A-Z_]+|DEEPBANK_HOME|STRATA_HOME|DEEPBANK_SERVER|QBOT_CONTROL_PLANE_SERVER|QBOT_RELEASE_ENV|DEEPBANK_CLAUDE_CODE_EXECUTABLE|CLAUDE_CODE_EXECUTABLE|QBOT_RUNTIME_NODE_MODULES|QBOT_(?:PYTHON|NODE)_[A-Z0-9_]+)$/u;';
+const MR1597_LIFECYCLE_SUCCESSOR_ALLOWLIST_LINE = 'const WORKER_ENV_ALLOWLIST = /^(PATH|SystemRoot|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|TMPDIR|LANG|LC_[A-Z_]+|IM_USER_(?:MDMCODE|EMAIL|DOMAINACCOUNT|PROFILE)|DEEPBANK_HOME|STRATA_HOME|DEEPBANK_SERVER|QBOT_CONTROL_PLANE_SERVER|QBOT_RELEASE_ENV|DEEPBANK_CLAUDE_CODE_EXECUTABLE|CLAUDE_CODE_EXECUTABLE|QBOT_RUNTIME_NODE_MODULES|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|QBOT_(?:PYTHON|NODE)_[A-Z0-9_]+)$/u;';
 const MR1597_PRODUCT_PATHS = [
   'electron/host-core/agent/execution-worker-launch-policy.cjs',
   'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
@@ -1411,6 +1423,109 @@ const MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA = 'qbot-qwork-mr1597-worker-enviro
 const MR1597_TEST_FACADE_REQUIRE_PATH = '../../../electron/desktop-agent-host.cjs';
 const MR1597_FACADE_SUPERVISOR_REQUIRE_PATH = './host-core/agent/execution-worker-supervisor.cjs';
 const MR1597_SUPERVISOR_LIFECYCLE_REQUIRE_PATH = './execution-worker-process-lifecycle.cjs';
+const MR1597_LIFECYCLE_CONTEXT_USAGE_REQUIRE_PATH = './execution-worker-context-usage.cjs';
+const MR1597_LIFECYCLE_PATH_REQUIRE_PATH = 'node:path';
+const MR1597_WORKER_ENVIRONMENT_BASE_LINES = Object.freeze([
+  'function workerEnvironment(source = process.env, authority = {}) {',
+  '  const env = {};',
+  '  for (const [key, value] of Object.entries(source || {})) {',
+  "    const name = String(key || '').trim();",
+  '    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;',
+  "    env[name] = String(value ?? '');",
+  '  }',
+]);
+const MR1597_WORKER_ENVIRONMENT_CAPTURE_LINES = Object.freeze([
+  "  if (source?.DEEPBANK_E2E === '1') {",
+  "    const captureRoot = String(source?.DEEPBANK_E2E_RAW_CAPTURE_DIR || '').trim();",
+  "    if (captureRoot && captureRoot.length <= 4096 && !captureRoot.includes('\\0') && isAbsolute(captureRoot)) {",
+  '      env.DEEPBANK_E2E_RAW_CAPTURE_DIR = captureRoot;',
+  '    }',
+  '  }',
+]);
+const MR1597_WORKER_ENVIRONMENT_SUFFIX_LINES = Object.freeze([
+  '  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+  '  Object.assign(env, expertAuthoringWorkerFixtureEnvironment(source));',
+  '  if (authority?.runtimeEntry) env.QBOT_EXECUTION_WORKER_RUNTIME_ENTRY = String(authority.runtimeEntry);',
+  '  if (authority?.runtimeHome) env.DEEPBANK_HOME = String(authority.runtimeHome);',
+  '  if (authority?.appRoot) env.QBOT_APP_ROOT = String(authority.appRoot);',
+  '  if (authority?.serverScope) env.DEEPBANK_SERVER = env.QBOT_CONTROL_PLANE_SERVER = String(authority.serverScope);',
+  '  return env;',
+  '}',
+]);
+const MR1597_WORKER_ENVIRONMENT_AST_FINGERPRINTS = Object.freeze([
+  [...MR1597_WORKER_ENVIRONMENT_BASE_LINES, ...MR1597_WORKER_ENVIRONMENT_SUFFIX_LINES],
+  [
+    ...MR1597_WORKER_ENVIRONMENT_BASE_LINES,
+    ...MR1597_WORKER_ENVIRONMENT_CAPTURE_LINES,
+    ...MR1597_WORKER_ENVIRONMENT_SUFFIX_LINES,
+  ],
+].map((lines) => mr1597AstFingerprint(parse(lines.join('\n'), {
+  allowHashBang: true,
+  ecmaVersion: 'latest',
+  sourceType: 'script',
+}).body[0])));
+const MR1597_EXPERT_FIXTURE_HELPER_AST_FINGERPRINT = mr1597AstFingerprint(parse([
+  'function expertAuthoringWorkerFixtureEnvironment(source = {}) {',
+  "  if (source.DEEPBANK_E2E !== '1' || source.DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN !== '1') return {};",
+  '  return {',
+  "    DEEPBANK_E2E: '1',",
+  "    DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN: '1',",
+  "    ...(source.DEEPBANK_AGENT_MOCK === '1' ? { DEEPBANK_AGENT_MOCK: '1' } : {}),",
+  '  };',
+  '}',
+].join('\n'), {
+  allowHashBang: true,
+  ecmaVersion: 'latest',
+  sourceType: 'script',
+}).body[0]);
+const MR1597_LIFECYCLE_ALLOWLIST_SUCCESSOR = Object.freeze({
+  schema_version: 'qbot-qwork-source-binding-successor-line/v1',
+  mr_iid: '1612',
+  merge_commit_sha: '5b6cea43b26ec3cd2fa12b2c7a6df14341122680',
+  first_parent_sha: '1a3cef149bec91184cf31abf5485dff2fdfca926',
+  target_branch: 'release/0.1',
+  changed_path: MR1597_LIFECYCLE_PATH,
+  changed_paths: Object.freeze([
+    'electron/host-core/agent/desktop-host-context.cjs',
+    'electron/host-core/agent/execution-worker-cancellation.cjs',
+    'electron/host-core/agent/execution-worker-deadline.cjs',
+    'electron/host-core/agent/execution-worker-entry.cjs',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+    'electron/host-core/agent/execution-worker-supervisor.cjs',
+    'electron/host-core/bridge/contracts/chat-user-error-notice.cjs',
+    'electron/host-core/bridge/contracts/provider-failure-chat-code.cjs',
+    'server/qbot-core/engine/engine.mjs',
+    'server/qbot-core/engine/turn-cleanup.mjs',
+    'server/qbot-core/models/claude-media-compatibility-loopback.mjs',
+    'server/qbot-core/models/provider-first-output-deadline.mjs',
+    'src/chat-user-error.ts',
+    'test/e2e/support/core-ux-coverage-matrix.mjs',
+    'test/e2e/support/core-ux-coverage-matrix.test.mjs',
+    'test/e2e/support/module-suites-1614.mjs',
+    'test/e2e/support/module-suites-1614.test.mjs',
+    'test/e2e/support/module-suites.mjs',
+    'test/e2e/support/residual-suite-materials.mjs',
+    'test/e2e/support/residual-suite-materials.test.mjs',
+    'test/e2e/release-http.spec.mjs',
+    'test/unit/core/chat-user-error-notice.test.mjs',
+    'test/unit/desktop/execution-worker-cancel-deadline.test.mjs',
+    'test/unit/desktop/execution-worker-provider-transport.test.mjs',
+    'test/unit/desktop/execution-worker-supervisor.test.mjs',
+    'test/unit/server/claude-media-compatibility.test.mjs',
+    'test/unit/server/engine-stream-adapters.test.mjs',
+    'test/unit/server/provider-first-output-deadline.test.mjs',
+  ]),
+  metadata_source: 'gitlab-api-changes',
+  diff_bytes: 78622,
+  diff_sha256: '6aeaaea1a138cf6ffa2e571d1765d43cdb99194ed3fbb0db6b11a837647cc61d',
+  line: byteRecord(MR1597_LIFECYCLE_SUCCESSOR_ALLOWLIST_LINE),
+});
+const MR1597_LIFECYCLE_CURRENT_RELEASE_MATCH = Object.freeze({
+  match: 'line-or-verified-successor-line',
+  value: byteRecord(MR1597_ALLOWLIST_LINE),
+  successor: MR1597_LIFECYCLE_ALLOWLIST_SUCCESSOR,
+});
 const MR1597_TOP_LEVEL_BINDING_EXPECTATIONS = Object.freeze([
   Object.freeze({
     kind: 'import-default', source: 'node:assert/strict', imported: 'default', local: 'assert',
@@ -1502,7 +1617,14 @@ const MR1597_EXPECTED_SCOPE = currentReleaseRegionScope({
   forbiddenFragments: [['access_token_expected_forbidden', MR1597_ACCESS_TOKEN_KEY, 'js-property-key']],
 });
 const MR1597_INTEGRATION_BINDINGS = [
-  ...MR1597_PRODUCT_PATHS.map((filePath, index) => ({ id: `worker_allowlist_${index + 1}`, path: filePath, addition: byteRecord(MR1597_ALLOWLIST_LINE) })),
+  ...MR1597_PRODUCT_PATHS.map((filePath, index) => ({
+    id: `worker_allowlist_${index + 1}`,
+    path: filePath,
+    addition: byteRecord(MR1597_ALLOWLIST_LINE),
+    ...(filePath === MR1597_LIFECYCLE_PATH ? {
+      current_release_match: MR1597_LIFECYCLE_CURRENT_RELEASE_MATCH,
+    } : {}),
+  })),
   ...MR1597_IDENTITY_LINES.map(([id, source]) => ({
     id,
     path: MR1597_TEST_PATH,
@@ -2082,6 +2204,28 @@ function byteRecordIsExactLine(record) {
     && text(record?.sha256) === sha256(source);
 }
 
+function validateCurrentReleaseBindingMatch(binding, contractId) {
+  const match = binding?.current_release_match;
+  if (match === undefined) return;
+  if (binding?.current_release_scope) {
+    if (!objectHasExactKeys(match, ['match', 'value'])
+      || match.match !== 'js-property-key'
+      || !byteRecordIsExactLine(match.value)) {
+      throw new Error(`source_contract_current_release_match_invalid:${contractId}:${binding.id}`);
+    }
+    return;
+  }
+  const exactMr1597LifecycleSuccessor = contractId
+    === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID
+    && binding?.id === 'worker_allowlist_2'
+    && binding?.path === MR1597_LIFECYCLE_PATH
+    && stableJson(match) === stableJson(MR1597_LIFECYCLE_CURRENT_RELEASE_MATCH)
+    && match.value.source === binding.addition?.source;
+  if (!exactMr1597LifecycleSuccessor) {
+    throw new Error(`source_contract_current_release_match_invalid:${contractId}:${binding.id}`);
+  }
+}
+
 function validateCurrentReleaseOwnerScopes(contract, contractId) {
   const bindings = Array.isArray(contract?.integration_bindings) ? contract.integration_bindings : [];
   for (const binding of bindings) {
@@ -2091,6 +2235,7 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
         throw new Error(`source_contract_binding_expected_count_invalid:${contractId}:${binding.id}:${field}`);
       }
     }
+    validateCurrentReleaseBindingMatch(binding, contractId);
   }
   const expectedIds = [...(CURRENT_RELEASE_SCOPED_BINDINGS.get(contractId) || [])];
   const observedIds = bindings
@@ -2173,11 +2318,6 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
     )).length;
     if (bindingFragmentCount !== 1) {
       throw new Error(`source_contract_current_release_scope_binding_missing:${contractId}:${binding.id}`);
-    }
-    if (binding.current_release_match !== undefined
-      && (binding.current_release_match?.match !== 'js-property-key'
-        || !byteRecordIsExactLine(binding.current_release_match?.value))) {
-      throw new Error(`source_contract_current_release_match_invalid:${contractId}:${binding.id}`);
     }
   }
   const regionGroups = new Map();
@@ -2435,6 +2575,15 @@ export function currentReleaseSourceContractProtectedPaths(contract, currentOwne
     protectedPaths.push(MR1597_FACADE_PATH);
   }
   return protectedPaths;
+}
+
+export function currentReleaseSourceContractSuccessorBindings(contract) {
+  return (Array.isArray(contract?.integration_bindings) ? contract.integration_bindings : [])
+    .filter((binding) => binding?.current_release_match?.match === 'line-or-verified-successor-line')
+    .map((binding) => ({
+      binding_id: text(binding.id),
+      successor: structuredClone(binding.current_release_match.successor),
+    }));
 }
 
 export function releaseSourceContractTrigger(mr, contract) {
@@ -3516,6 +3665,9 @@ function expressionAliasesFacadeExports(node, aliases, moduleAliases = new Set([
     && expression.arguments?.length === 1) {
     return expressionAliasesFacadeExports(expression.arguments[0], aliases, moduleAliases);
   }
+  if (expression.type === 'CallExpression') {
+    return expressionAliasesFacadeExports(expression.callee, aliases, moduleAliases);
+  }
   return false;
 }
 
@@ -3528,6 +3680,7 @@ function facadeExportMemberPath(member, aliases, moduleAliases) {
     properties.unshift(staticMemberExpressionPropertyName(cursor));
     cursor = unwrapJavaScriptChain(cursor.object);
   }
+  if (expressionAliasesFacadeExports(cursor, aliases, moduleAliases)) return properties;
   if (cursor?.type !== 'Identifier' || !aliases.has(cursor.name)) return null;
   return properties;
 }
@@ -3565,6 +3718,51 @@ function facadeTargetViolationKind(target, aliases, moduleAliases) {
     )).find(Boolean) || '';
   }
   return '';
+}
+
+function facadeAssignmentValueEscapesProtectedReceiver(value) {
+  let escaped = false;
+  visitJavaScriptAst(value, (node, parent) => {
+    if (escaped) return;
+    if (node.type === 'ThisExpression') {
+      escaped = true;
+      return;
+    }
+    if (node.type === 'MemberExpression') {
+      const property = staticMemberExpressionPropertyName(node);
+      if (node.computed || property === 'workerEnvironment') escaped = true;
+      return;
+    }
+    if (node.type === 'Property'
+      && staticallyResolvableJavaScriptPropertyName(node) === 'workerEnvironment') {
+      escaped = true;
+      return;
+    }
+    if (node.type !== 'Identifier'
+      || !['arguments', 'exports', 'module', 'workerEnvironment'].includes(node.name)) return;
+    const staticMemberProperty = parent?.type === 'MemberExpression'
+      && parent.property === node
+      && parent.computed === false;
+    const staticObjectKey = parent?.type === 'Property'
+      && parent.key === node
+      && parent.computed === false
+      && parent.shorthand !== true;
+    if (!staticMemberProperty && !staticObjectKey) escaped = true;
+  });
+  return escaped;
+}
+
+function isAllowedFacadeNamedExportAssignment(node) {
+  const left = unwrapJavaScriptChain(node?.left);
+  return node?.type === 'AssignmentExpression'
+    && node.operator === '='
+    && left?.type === 'MemberExpression'
+    && left.computed === false
+    && left.object?.type === 'Identifier'
+    && left.object.name === 'exports'
+    && left.property?.type === 'Identifier'
+    && !['__proto__', 'constructor', 'prototype', 'workerEnvironment'].includes(left.property.name)
+    && !facadeAssignmentValueEscapesProtectedReceiver(node.right);
 }
 
 function bindFacadeExportsFromModulePattern(pattern, value, moduleAliases, exportAliases) {
@@ -3638,10 +3836,13 @@ function observeMr1597FacadeViolations(program, facadeForwards) {
       const exportBinding = bindAliasFlowNode(node, aliases, {
         matchesAlias: (value) => expressionAliasesFacadeExports(value, aliases, moduleAliases),
       });
+      if (moduleBinding.added) record(node, 'module-alias-created');
+      if (exportBinding.added) record(node, 'export-alias-created');
       changed = moduleBinding.added || exportBinding.added || changed;
       if (exportBinding.indeterminate) record(node, 'indeterminate-export-alias-pattern');
       const bindModulePattern = (target, value) => {
         const result = bindFacadeExportsFromModulePattern(target, value, moduleAliases, aliases);
+        if (result.added) record(node, 'export-alias-created');
         changed = result.added || changed;
         if (result.indeterminate) record(node, 'indeterminate-export-alias-pattern');
       };
@@ -3663,15 +3864,23 @@ function observeMr1597FacadeViolations(program, facadeForwards) {
     }
   }
   const builtinWrites = observeBuiltinIndirectWriteAliases(nodes);
+  const allowedNamedExportAssignments = new Set((program.body || [])
+    .filter((statement) => statement?.type === 'ExpressionStatement'
+      && isAllowedFacadeNamedExportAssignment(statement.expression))
+    .map((statement) => statement.expression));
   for (const { name, node } of javaScriptDeclarationRecords(program)) {
     if (name === 'exports' || name === 'module') record(node, `${name}-shadow-declaration`);
   }
   const allowedFacadeCalls = facadeForwards.length === 1 ? new Set(facadeForwards) : new Set();
   for (const node of nodes) {
+    if (node.type === 'ThisExpression') record(node, 'commonjs-this-reference');
+    if (node.type === 'Identifier' && node.name === 'arguments') {
+      record(node, 'commonjs-arguments-reference');
+    }
     if (node.type === 'AssignmentExpression') {
       if (javaScriptPatternNames(node.left).includes('exports')) record(node, 'exports-identifier-write');
       const kind = facadeTargetViolationKind(node.left, aliases, moduleAliases);
-      if (kind) record(node, kind);
+      if (kind && !allowedNamedExportAssignments.has(node)) record(node, kind);
       if (isModuleExportsMember(node.left, moduleAliases)) record(node, 'module-exports-replacement');
     } else if (node.type === 'UpdateExpression') {
       if (node.argument?.type === 'Identifier' && node.argument.name === 'exports') {
@@ -3754,6 +3963,378 @@ function observeMr1597FacadeViolations(program, facadeForwards) {
   return {
     count: protectedGlobals.count + violations.size,
     kinds: [...new Set([...protectedGlobals.kinds, ...violations.values()])].sort(),
+  };
+}
+
+function exactMr1597LifecycleAllowlistDeclarators(program) {
+  return (program?.body || []).flatMap((statement) => {
+    if (statement.type !== 'VariableDeclaration'
+      || statement.kind !== 'const'
+      || statement.declarations?.length !== 1) return [];
+    const [declaration] = statement.declarations;
+    const initializer = unwrapJavaScriptChain(declaration.init);
+    if (declaration.id?.type !== 'Identifier'
+      || declaration.id.name !== 'WORKER_ENV_ALLOWLIST'
+      || initializer?.type !== 'Literal'
+      || !initializer.regex
+      || typeof initializer.raw !== 'string') return [];
+    const sourceLine = `const WORKER_ENV_ALLOWLIST = ${initializer.raw};`;
+    return [MR1597_ALLOWLIST_LINE, MR1597_LIFECYCLE_SUCCESSOR_ALLOWLIST_LINE].includes(sourceLine)
+      ? [declaration] : [];
+  });
+}
+
+function mr1597LifecycleSourceEntriesCall(node) {
+  const expression = unwrapJavaScriptChain(node);
+  const callee = unwrapJavaScriptChain(expression?.callee);
+  const source = unwrapJavaScriptChain(expression?.arguments?.[0]);
+  return expression?.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.arguments?.length === 1
+    && callee?.type === 'MemberExpression'
+    && callee.computed === false
+    && callee.object?.type === 'Identifier'
+    && callee.object.name === 'Object'
+    && callee.property?.type === 'Identifier'
+    && callee.property.name === 'entries'
+    && source?.type === 'LogicalExpression'
+    && source.operator === '||'
+    && source.left?.type === 'Identifier'
+    && source.left.name === 'source'
+    && source.right?.type === 'ObjectExpression'
+    && source.right.properties?.length === 0;
+}
+
+function mr1597LifecycleNormalizedName(node) {
+  const expression = unwrapJavaScriptChain(node);
+  const callee = unwrapJavaScriptChain(expression?.callee);
+  const stringCall = unwrapJavaScriptChain(callee?.object);
+  const source = unwrapJavaScriptChain(stringCall?.arguments?.[0]);
+  return expression?.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.arguments?.length === 0
+    && callee?.type === 'MemberExpression'
+    && callee.computed === false
+    && callee.property?.type === 'Identifier'
+    && callee.property.name === 'trim'
+    && stringCall?.type === 'CallExpression'
+    && stringCall.optional !== true
+    && stringCall.callee?.type === 'Identifier'
+    && stringCall.callee.name === 'String'
+    && stringCall.arguments?.length === 1
+    && source?.type === 'LogicalExpression'
+    && source.operator === '||'
+    && source.left?.type === 'Identifier'
+    && source.left.name === 'key'
+    && source.right?.type === 'Literal'
+    && source.right.value === '';
+}
+
+function mr1597LifecycleAllowlistGuard(statement) {
+  const test = unwrapJavaScriptChain(statement?.test);
+  const call = unwrapJavaScriptChain(test?.argument);
+  const callee = unwrapJavaScriptChain(call?.callee);
+  return statement?.type === 'IfStatement'
+    && statement.alternate == null
+    && test?.type === 'UnaryExpression'
+    && test.operator === '!'
+    && test.prefix === true
+    && call?.type === 'CallExpression'
+    && call.optional !== true
+    && call.arguments?.length === 1
+    && call.arguments[0]?.type === 'Identifier'
+    && call.arguments[0].name === 'name'
+    && callee?.type === 'MemberExpression'
+    && callee.computed === false
+    && callee.object?.type === 'Identifier'
+    && callee.object.name === 'WORKER_ENV_ALLOWLIST'
+    && callee.property?.type === 'Identifier'
+    && callee.property.name === 'test'
+    && statement.consequent?.type === 'ContinueStatement'
+    && statement.consequent.label == null;
+}
+
+function mr1597LifecycleFilteredEnvWrite(statement) {
+  const assignment = unwrapJavaScriptChain(statement?.expression);
+  const target = unwrapJavaScriptChain(assignment?.left);
+  const value = unwrapJavaScriptChain(assignment?.right);
+  const source = unwrapJavaScriptChain(value?.arguments?.[0]);
+  return statement?.type === 'ExpressionStatement'
+    && assignment?.type === 'AssignmentExpression'
+    && assignment.operator === '='
+    && target?.type === 'MemberExpression'
+    && target.computed === true
+    && target.object?.type === 'Identifier'
+    && target.object.name === 'env'
+    && target.property?.type === 'Identifier'
+    && target.property.name === 'name'
+    && value?.type === 'CallExpression'
+    && value.optional !== true
+    && value.callee?.type === 'Identifier'
+    && value.callee.name === 'String'
+    && value.arguments?.length === 1
+    && source?.type === 'LogicalExpression'
+    && source.operator === '??'
+    && source.left?.type === 'Identifier'
+    && source.left.name === 'value'
+    && source.right?.type === 'Literal'
+    && source.right.value === '';
+}
+
+function mr1597LifecycleAllowlistFilterIsReachable(workerEnvironment) {
+  const fingerprint = stableJson(mr1597AstFingerprint(workerEnvironment));
+  return MR1597_WORKER_ENVIRONMENT_AST_FINGERPRINTS.some((expected) => (
+    fingerprint === stableJson(expected)
+  ));
+}
+
+function exactMr1597LifecycleTrustedHelperDeclarators(program) {
+  const declarations = {
+    isAbsolute: [],
+    contextUsageWorkerFixtureEnvironment: [],
+    expertAuthoringWorkerFixtureEnvironment: [],
+  };
+  for (const statement of program?.body || []) {
+    if (statement.type === 'VariableDeclaration'
+      && statement.kind === 'const'
+      && statement.declarations?.length === 1) {
+      const [declaration] = statement.declarations;
+      if (objectPatternHasUniqueExactShorthandBinding(declaration.id, 'isAbsolute')
+        && isExactRequireCall(declaration.init, MR1597_LIFECYCLE_PATH_REQUIRE_PATH)) {
+        declarations.isAbsolute.push(declaration);
+      }
+      if (objectPatternHasUniqueExactShorthandBinding(
+        declaration.id,
+        'contextUsageWorkerFixtureEnvironment',
+      ) && isExactRequireCall(declaration.init, MR1597_LIFECYCLE_CONTEXT_USAGE_REQUIRE_PATH)) {
+        declarations.contextUsageWorkerFixtureEnvironment.push(declaration);
+      }
+    }
+    if (statement.type === 'FunctionDeclaration'
+      && stableJson(mr1597AstFingerprint(statement))
+        === stableJson(MR1597_EXPERT_FIXTURE_HELPER_AST_FINGERPRINT)) {
+      declarations.expertAuthoringWorkerFixtureEnvironment.push(statement);
+    }
+  }
+  return declarations;
+}
+
+function mr1597DirectProtectedRootName(node, protectedNames, wrapperNames = new Set()) {
+  let current = unwrapJavaScriptChain(node);
+  const properties = [];
+  while (current?.type === 'MemberExpression') {
+    properties.unshift(staticMemberExpressionPropertyName(current));
+    current = unwrapJavaScriptChain(current.object);
+  }
+  if (current?.type !== 'Identifier') return '';
+  if (protectedNames.has(current.name)) return current.name;
+  return wrapperNames.has(current.name) && properties[0] && protectedNames.has(properties[0])
+    ? properties[0] : '';
+}
+
+function observeMr1597LifecycleBuiltinBindingViolations(program) {
+  const protectedNames = new Set(['Object', 'RegExp', 'String']);
+  const protectedAliases = new Set(['RegExp']);
+  const wrapperAliases = new Set(['global', 'globalThis', 'self', 'window']);
+  const violations = new Map();
+  const record = (node, kind) => violations.set(`${node?.start ?? -1}:${node?.end ?? -1}:${kind}`, kind);
+  const nodes = [];
+  visitJavaScriptAst(program, (node) => nodes.push(node));
+  const builtinWrites = observeBuiltinIndirectWriteAliases(nodes);
+  let aliasesChanged = true;
+  while (aliasesChanged) {
+    aliasesChanged = false;
+    for (const node of nodes) {
+      const aliasSource = node.type === 'VariableDeclarator'
+        ? unwrapJavaScriptChain(node.init)
+        : node.type === 'AssignmentExpression' && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)
+          ? unwrapJavaScriptChain(node.right) : null;
+      const aliasTarget = node.type === 'VariableDeclarator'
+        ? node.id
+        : node.type === 'AssignmentExpression' && ALIASING_ASSIGNMENT_OPERATORS.has(node.operator)
+          ? node.left : null;
+      const wrapperBinding = bindAliasFlowNode(node, wrapperAliases);
+      if (wrapperBinding.indeterminate) {
+        record(node, 'global-wrapper-alias-flow-indeterminate');
+      }
+      let protectedMemberAdded = false;
+      if (aliasTarget?.type === 'ObjectPattern'
+        && expressionAliasesAnyIdentifier(aliasSource, wrapperAliases)) {
+        for (const property of aliasTarget.properties || []) {
+          const propertyName = property.type === 'RestElement'
+            ? null : staticJavaScriptPropertyName(property);
+          if (propertyName !== null && !protectedNames.has(propertyName)) continue;
+          const target = property.type === 'RestElement' ? property.argument : property.value;
+          for (const name of javaScriptPatternNames(target)) {
+            if (protectedAliases.has(name)) continue;
+            protectedAliases.add(name);
+            protectedMemberAdded = true;
+          }
+          if (propertyName === null) record(property, 'global-wrapper-protected-member-indeterminate');
+        }
+      }
+      const protectedBinding = bindAliasFlowNode(node, protectedAliases, {
+        matchesAlias: (value) => Boolean(mr1597DirectProtectedRootName(
+          value,
+          protectedAliases,
+          wrapperAliases,
+        )),
+      });
+      aliasesChanged = wrapperBinding.added
+        || protectedMemberAdded
+        || protectedBinding.added
+        || aliasesChanged;
+      if (protectedBinding.indeterminate) {
+        record(node, 'builtin-alias-flow-indeterminate');
+      }
+    }
+  }
+  const reflectApplyAliases = new Set();
+  const expressionIsReflectApply = (node) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (!expression) return false;
+    if (expression.type === 'Identifier') return reflectApplyAliases.has(expression.name);
+    if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+      return expressionIsReflectApply(expression.argument);
+    }
+    if (expression.type === 'AssignmentExpression') {
+      return expressionIsReflectApply(expression.right);
+    }
+    if (expression.type === 'SequenceExpression') {
+      return expressionIsReflectApply(expression.expressions?.at(-1));
+    }
+    if (expression.type === 'ConditionalExpression') {
+      return expressionIsReflectApply(expression.consequent)
+        || expressionIsReflectApply(expression.alternate);
+    }
+    if (expression.type === 'LogicalExpression') {
+      return expressionIsReflectApply(expression.left)
+        || expressionIsReflectApply(expression.right);
+    }
+    if (expression.type !== 'MemberExpression'
+      || staticMemberExpressionPropertyName(expression) !== 'apply') return false;
+    const receiver = unwrapJavaScriptChain(expression.object);
+    if (receiver?.type === 'Identifier' && receiver.name === 'Reflect') return true;
+    return mr1597DirectProtectedRootName(receiver, new Set(['Reflect']), wrapperAliases) === 'Reflect';
+  };
+  let reflectAliasesChanged = true;
+  while (reflectAliasesChanged) {
+    reflectAliasesChanged = false;
+    for (const node of nodes) {
+      const binding = bindAliasFlowNode(node, reflectApplyAliases, {
+        matchesAlias: expressionIsReflectApply,
+      });
+      reflectAliasesChanged = binding.added || reflectAliasesChanged;
+      if (binding.indeterminate) record(node, 'reflect-apply-alias-flow-indeterminate');
+    }
+  }
+  const mutationInvocation = (node) => {
+    const standard = builtinWrites.resolveInvocation(node);
+    if (standard.operations.length > 0 || !expressionIsReflectApply(node?.callee)) return standard;
+    const operations = builtinWrites.resolve(node.arguments?.[0]);
+    if (operations.length === 0) return standard;
+    const argumentList = unwrapJavaScriptChain(node.arguments?.[2]);
+    if (argumentList?.type !== 'ArrayExpression') {
+      return { operations, invocation: 'reflect-apply', forwardedArguments: [], targetIndeterminate: true };
+    }
+    const forwardedArguments = argumentList.elements || [];
+    return {
+      operations,
+      invocation: 'reflect-apply',
+      forwardedArguments,
+      targetIndeterminate: forwardedArguments[0]?.type === 'SpreadElement',
+    };
+  };
+  for (const { name, node } of javaScriptDeclarationRecords(program)) {
+    if (protectedNames.has(name)) record(node, `${name}:duplicate-or-shadow-declaration`);
+  }
+  const protectedReceivers = new Set([...protectedNames, ...protectedAliases]);
+  for (const node of nodes) {
+    if (node.type === 'AssignmentExpression') {
+      if (javaScriptPatternNames(node.left).some((name) => protectedNames.has(name))) {
+        record(node, 'builtin-identifier-write');
+      }
+      const root = mr1597DirectProtectedRootName(node.left, protectedReceivers, wrapperAliases);
+      if (root) record(node, `${root}:member-write`);
+    } else if (node.type === 'UpdateExpression') {
+      const root = mr1597DirectProtectedRootName(node.argument, protectedReceivers, wrapperAliases);
+      if (root) record(node, `${root}:member-write`);
+    } else if (node.type === 'UnaryExpression' && node.operator === 'delete') {
+      const root = mr1597DirectProtectedRootName(node.argument, protectedReceivers, wrapperAliases);
+      if (root) record(node, `${root}:member-write`);
+    } else if (['ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const target = node.left?.type === 'VariableDeclaration'
+        ? node.left.declarations?.[0]?.id : node.left;
+      if (javaScriptPatternNames(target).some((name) => protectedNames.has(name))) {
+        record(node, 'builtin-identifier-write');
+      }
+    }
+    if (node.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(node.callee);
+      if (callee?.type === 'MemberExpression'
+        && staticMemberExpressionPropertyName(callee) === 'bind') {
+        const operations = builtinWrites.resolve(callee.object);
+        const boundArguments = (node.arguments || []).slice(1);
+        const boundRoot = mr1597DirectProtectedRootName(
+          boundArguments[0],
+          protectedReceivers,
+          wrapperAliases,
+        );
+        if (operations.length > 0
+          && (boundRoot || boundArguments[0]?.type === 'SpreadElement')) {
+          record(node, boundRoot
+            ? `${boundRoot}:bound-indirect-member-write`
+            : 'builtin-bound-indirect-write-indeterminate');
+        }
+      }
+      const invocation = mutationInvocation(node);
+      const root = mr1597DirectProtectedRootName(
+        invocation.forwardedArguments?.[0],
+        protectedReceivers,
+        wrapperAliases,
+      );
+      if (invocation.operations.length > 0 && (root || invocation.targetIndeterminate)) {
+        record(node, root ? `${root}:indirect-member-write` : 'builtin-indirect-write-indeterminate');
+      }
+    }
+  }
+  return { count: violations.size, kinds: [...new Set(violations.values())].sort() };
+}
+
+function observeMr1597LifecycleAllowlist(program, lifecycleDeclarations, lifecycleExports) {
+  const exactDeclarations = exactMr1597LifecycleAllowlistDeclarators(program);
+  const trustedHelpers = exactMr1597LifecycleTrustedHelperDeclarators(program);
+  const allowedDeclarations = new Set([
+    ...exactDeclarations,
+    ...Object.values(trustedHelpers).flat(),
+  ]);
+  const protectedBindings = observeProtectedBindingViolations(program, {
+    protectedNames: new Set([
+      'WORKER_ENV_ALLOWLIST',
+      'isAbsolute',
+      'contextUsageWorkerFixtureEnvironment',
+      'expertAuthoringWorkerFixtureEnvironment',
+    ]),
+    allowedDeclarationNodes: allowedDeclarations,
+    allowedWriteNodes: new Set(lifecycleExports),
+  });
+  const builtinBindings = observeMr1597LifecycleBuiltinBindingViolations(program);
+  const failures = [];
+  if (exactDeclarations.length !== 1) failures.push('lifecycle-allowlist-declaration-invalid');
+  for (const [name, declarations] of Object.entries(trustedHelpers)) {
+    if (declarations.length !== 1) failures.push(`lifecycle-trusted-helper-declaration-invalid:${name}`);
+  }
+  if (lifecycleDeclarations.length !== 1
+    || !mr1597LifecycleAllowlistFilterIsReachable(lifecycleDeclarations[0])) {
+    failures.push('lifecycle-allowlist-filter-path-invalid');
+  }
+  failures.push(...protectedBindings.kinds.map((kind) => `lifecycle-allowlist-binding:${kind}`));
+  failures.push(...builtinBindings.kinds.map((kind) => `lifecycle-builtin-binding:${kind}`));
+  return {
+    count: failures.length
+      + Math.max(0, protectedBindings.count - protectedBindings.kinds.length)
+      + Math.max(0, builtinBindings.count - builtinBindings.kinds.length),
+    kinds: [...new Set(failures)].sort(),
   };
 }
 
@@ -3847,6 +4428,17 @@ function observeMr1597ExportChain(sourceByPath) {
     chainViolations.unshift({
       count: observed.count,
       kinds: observed.kinds.map((kind) => `${MR1597_FACADE_PATH}:${kind}`),
+    });
+  }
+  if (lifecycle) {
+    const observed = observeMr1597LifecycleAllowlist(
+      lifecycle,
+      lifecycleDeclarations,
+      lifecycleExports,
+    );
+    chainViolations.push({
+      count: observed.count,
+      kinds: observed.kinds.map((kind) => `${MR1597_LIFECYCLE_PATH}:${kind}`),
     });
   }
   const protectedBindingViolationCount = chainViolations.reduce((sum, item) => sum + item.count, 0);
@@ -6264,10 +6856,487 @@ function exactLineOccurrenceCount(source, line) {
   return String(source || '').split('\n').filter((candidate) => candidate === line).length;
 }
 
-function observeCurrentIntegrationBinding(binding, source, failures) {
-  const occurrenceCount = binding.current_release_match
-    ? fragmentOccurrenceCount(source, binding.current_release_match)
-    : exactLineOccurrenceCount(source, binding.addition.source);
+function currentReleaseSuccessorLineIsVerified(successor, mergeRequests) {
+  const candidates = (Array.isArray(mergeRequests) ? mergeRequests : []).filter((row) => (
+    text(row?.iid) === successor.mr_iid
+      || text(row?.commit) === successor.merge_commit_sha
+      || text(row?.merge_commit_sha) === successor.merge_commit_sha
+  ));
+  if (candidates.length !== 1) return false;
+  const [row] = candidates;
+  const changedPaths = Array.isArray(row?.changed_paths) ? row.changed_paths.map(text) : [];
+  return text(row?.iid) === successor.mr_iid
+    && text(row?.commit) === successor.merge_commit_sha
+    && text(row?.merge_commit_sha) === successor.merge_commit_sha
+    && text(row?.parent) === successor.first_parent_sha
+    && Number.isSafeInteger(row?.parent_count)
+    && row.parent_count === 2
+    && row?.metadata_verified === true
+    && text(row?.metadata_source) === successor.metadata_source
+    && text(row?.state) === 'merged'
+    && text(row?.target_branch) === successor.target_branch
+    && text(row?.attribution_kind) === 'merge_mr'
+    && Number.isSafeInteger(row?.diff_bytes)
+    && row.diff_bytes === successor.diff_bytes
+    && text(row?.diff_sha256) === successor.diff_sha256
+    && stableJson(changedPaths) === stableJson(successor.changed_paths)
+    && new Set(changedPaths).size === changedPaths.length
+    && changedPaths.filter((filePath) => filePath === successor.changed_path).length === 1;
+}
+
+function currentReleaseSuccessorAncestryProjection(ancestry = {}) {
+  return {
+    source: text(ancestry?.source),
+    compare_from: text(ancestry?.compare_from),
+    compare_to: text(ancestry?.compare_to),
+    compare_commit_count: Number.isSafeInteger(ancestry?.compare_commit_count)
+      ? ancestry.compare_commit_count : null,
+    first_parent_complete: ancestry?.first_parent_complete === true,
+    query_completed: ancestry?.query_completed === true,
+    verified: ancestry?.verified === true,
+    reason: text(ancestry?.reason),
+  };
+}
+
+export function reconstructGitLabFirstParentChain({ compare, baselineCommit, releaseHead } = {}) {
+  const validation = validateGitLabFirstParentComparePayload(compare, {
+    // An empty compare is a valid, completed negative observation.  The chain
+    // walk below turns it into a precise missing-head result when identities
+    // differ; rejecting it here would erase that distinction during replay.
+    allowEmptyCommits: true,
+  });
+  if (!validation.ok) return { ok: false, reason: validation.failures[0], commits: [] };
+  if (compare.compare_timeout === true) {
+    return { ok: false, reason: 'compare_timeout', commits: [] };
+  }
+  if (baselineCommit === releaseHead) return { ok: true, commits: [] };
+  // Validation above rejects duplicate IDs before this map is built.  Keeping
+  // the map local to a validated payload prevents silent last-write-wins
+  // folding of a forged compare response.
+  const commitMap = new Map(compare.commits.map((item) => [item.id, item]));
+  const reversed = [];
+  const seen = new Set();
+  let cursor = releaseHead;
+  while (cursor !== baselineCommit) {
+    if (seen.has(cursor)) return { ok: false, reason: 'first_parent_cycle', commits: [] };
+    seen.add(cursor);
+    const row = commitMap.get(cursor);
+    if (!row) return { ok: false, reason: `first_parent_commit_missing:${cursor}`, commits: [] };
+    const parents = Array.isArray(row.parent_ids) ? row.parent_ids.map(text).filter(Boolean) : [];
+    if (!parents.length) return { ok: false, reason: `first_parent_missing:${cursor}`, commits: [] };
+    reversed.push(row);
+    cursor = parents[0];
+    if (!HEX40.test(cursor)) return { ok: false, reason: `first_parent_invalid:${row.id}`, commits: [] };
+  }
+  return { ok: true, commits: reversed.reverse() };
+}
+
+function validateGitLabFirstParentComparePayload(compare, { allowEmptyCommits = true } = {}) {
+  const failures = [];
+  if (!compare || typeof compare !== 'object' || Array.isArray(compare)) {
+    return { ok: false, failures: ['compare_response_not_object'] };
+  }
+  if (typeof compare.compare_timeout !== 'boolean') {
+    failures.push('compare_timeout_type_invalid');
+  }
+  if (!Array.isArray(compare.commits)) {
+    failures.push('compare_commits_missing');
+    return { ok: false, failures };
+  }
+  if (!allowEmptyCommits && compare.commits.length === 0) {
+    failures.push('compare_commits_empty');
+  }
+  const ids = new Set();
+  compare.commits.forEach((commit, index) => {
+    const prefix = `compare_commit_invalid:${index}`;
+    if (!commit || typeof commit !== 'object' || Array.isArray(commit)) {
+      failures.push(`${prefix}:not_object`);
+      return;
+    }
+    if (Object.keys(commit).some((key) => !GITLAB_COMPARE_COMMIT_ALLOWED_KEYS.has(key))) {
+      failures.push(`${prefix}:fields_mismatch`);
+    }
+    if (typeof commit.id !== 'string' || !LOWER_HEX40.test(commit.id)) {
+      failures.push(`${prefix}:id_invalid`);
+    } else if (ids.has(commit.id)) {
+      failures.push(`${prefix}:duplicate_id`);
+    } else {
+      ids.add(commit.id);
+    }
+    if (!Array.isArray(commit.parent_ids) || commit.parent_ids.length === 0
+      || commit.parent_ids.some((parentId) => typeof parentId !== 'string' || !LOWER_HEX40.test(parentId))
+      || new Set(commit.parent_ids).size !== commit.parent_ids.length) {
+      failures.push(`${prefix}:parent_ids_invalid`);
+    }
+    if (commit.short_id !== undefined && (
+      typeof commit.short_id !== 'string'
+      || !/^[a-f0-9]{8,12}$/u.test(commit.short_id)
+      || typeof commit.id !== 'string'
+      || !commit.id.startsWith(commit.short_id)
+    )) {
+      failures.push(`${prefix}:short_id_invalid`);
+    }
+    for (const field of [
+      'title', 'message', 'author_name', 'author_email', 'committer_name', 'committer_email',
+    ]) {
+      if (commit[field] !== undefined
+        && (typeof commit[field] !== 'string' || !commit[field].trim() || commit[field] !== commit[field].trim())) {
+        failures.push(`${prefix}:${field}_invalid`);
+      }
+    }
+    for (const field of ['created_at', 'authored_date', 'committed_date']) {
+      if (commit[field] !== undefined && !isCanonicalIsoTimestamp(commit[field])) {
+        failures.push(`${prefix}:${field}_invalid`);
+      }
+    }
+    if (commit.trailers !== undefined && (!commit.trailers
+      || typeof commit.trailers !== 'object' || Array.isArray(commit.trailers)
+      || Object.entries(commit.trailers).some(([key, value]) => (
+        !key.trim() || key !== key.trim() || typeof value !== 'string'
+      )))) {
+      failures.push(`${prefix}:trailers_invalid`);
+    }
+    if (commit.extended_trailers !== undefined && (!commit.extended_trailers
+      || typeof commit.extended_trailers !== 'object' || Array.isArray(commit.extended_trailers)
+      || Object.entries(commit.extended_trailers).some(([key, values]) => (
+        !key.trim()
+        || key !== key.trim()
+        || !Array.isArray(values)
+        || values.length === 0
+        || values.some((value) => typeof value !== 'string')
+      )))) {
+      failures.push(`${prefix}:extended_trailers_invalid`);
+    }
+    if (commit.web_url !== undefined && (typeof commit.web_url !== 'string'
+      || commit.web_url !== `${GITLAB_COMMIT_WEB_URL_PREFIX}${commit.id}`)) {
+      failures.push(`${prefix}:web_url_invalid`);
+    }
+    if (commit.project_id !== undefined
+      && (!Number.isSafeInteger(commit.project_id) || commit.project_id <= 0)) {
+      failures.push(`${prefix}:project_id_invalid`);
+    }
+    if (commit.stats !== undefined && (!commit.stats || typeof commit.stats !== 'object'
+      || Array.isArray(commit.stats)
+      || !objectHasExactKeys(commit.stats, ['additions', 'deletions', 'total'])
+      || !['additions', 'deletions', 'total'].every((field) => (
+        Number.isSafeInteger(commit.stats[field]) && commit.stats[field] >= 0
+      ))
+      || commit.stats.total !== commit.stats.additions + commit.stats.deletions)) {
+      failures.push(`${prefix}:stats_invalid`);
+    }
+    if (commit.status !== undefined && commit.status !== null
+      && (typeof commit.status !== 'string' || !commit.status.trim())) {
+      failures.push(`${prefix}:status_invalid`);
+    }
+    if (commit.last_pipeline !== undefined && commit.last_pipeline !== null) {
+      const pipeline = commit.last_pipeline;
+      if (!objectHasExactKeys(pipeline, GITLAB_PIPELINE_METADATA_KEYS)) {
+        failures.push(`${prefix}:last_pipeline_fields_mismatch`);
+      } else {
+        for (const field of ['id', 'iid', 'project_id']) {
+          if (!Number.isSafeInteger(pipeline[field]) || pipeline[field] <= 0) {
+            failures.push(`${prefix}:last_pipeline_${field}_invalid`);
+          }
+        }
+        for (const field of ['ref', 'source', 'status']) {
+          if (typeof pipeline[field] !== 'string'
+            || !pipeline[field].trim()
+            || pipeline[field] !== pipeline[field].trim()) {
+            failures.push(`${prefix}:last_pipeline_${field}_invalid`);
+          }
+        }
+        if (typeof pipeline.sha !== 'string' || !LOWER_HEX40.test(pipeline.sha)) {
+          failures.push(`${prefix}:last_pipeline_sha_invalid`);
+        }
+        if (pipeline.project_id !== commit.project_id) {
+          failures.push(`${prefix}:last_pipeline_project_id_mismatch`);
+        }
+        if (pipeline.sha !== commit.id) failures.push(`${prefix}:last_pipeline_sha_mismatch`);
+        for (const field of ['created_at', 'updated_at']) {
+          if (!isCanonicalIsoTimestamp(pipeline[field])) {
+            failures.push(`${prefix}:last_pipeline_${field}_invalid`);
+          }
+        }
+        if (typeof pipeline.web_url !== 'string'
+          || pipeline.web_url
+            !== `https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/pipelines/${pipeline.id}`) {
+          failures.push(`${prefix}:last_pipeline_web_url_invalid`);
+        }
+      }
+    }
+  });
+  return { ok: failures.length === 0, failures };
+}
+
+function validateGitLabFirstParentCompareEvidence(evidence, compareFrom, compareTo) {
+  const failures = [];
+  const endpoint = `repository/compare?from=${compareFrom}&to=${compareTo}&straight=true`;
+  const expectedKeys = [
+    'schema_version', 'source', 'host', 'project', 'method', 'endpoint', 'compare_from',
+    'compare_to', 'straight', 'raw_response_encoding', 'raw_response_base64',
+    'raw_response_bytes', 'raw_response_sha256',
+  ];
+  if (!objectHasExactKeys(evidence, expectedKeys)) failures.push('compare_evidence_fields_mismatch');
+  if (evidence?.schema_version !== QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA) {
+    failures.push('compare_evidence_schema_mismatch');
+  }
+  if (evidence?.source !== 'gitlab-api-read-only') failures.push('compare_evidence_source_mismatch');
+  if (evidence?.host !== 'gitlab.daikuan.qihoo.net') failures.push('compare_evidence_host_mismatch');
+  if (evidence?.project !== 'songrongxin/deepbankv2') failures.push('compare_evidence_project_mismatch');
+  if (evidence?.method !== 'GET') failures.push('compare_evidence_method_mismatch');
+  if (text(evidence?.endpoint) !== endpoint) failures.push('compare_evidence_endpoint_mismatch');
+  if (text(evidence?.compare_from) !== compareFrom) failures.push('compare_evidence_from_mismatch');
+  if (text(evidence?.compare_to) !== compareTo) failures.push('compare_evidence_to_mismatch');
+  if (evidence?.straight !== true) failures.push('compare_evidence_straight_mismatch');
+  if (evidence?.raw_response_encoding !== 'base64') failures.push('compare_evidence_encoding_mismatch');
+  let compare = null;
+  try {
+    const bytes = strictBase64Decode(evidence?.raw_response_base64);
+    const source = strictUtf8Decode(bytes);
+    if (!Number.isSafeInteger(evidence?.raw_response_bytes)
+      || evidence.raw_response_bytes <= 0
+      || evidence.raw_response_bytes !== bytes.length) {
+      failures.push('compare_evidence_bytes_mismatch');
+    }
+    if (!HEX64.test(text(evidence?.raw_response_sha256))
+      || sha256(bytes) !== text(evidence?.raw_response_sha256).toLowerCase()) {
+      failures.push('compare_evidence_sha256_mismatch');
+    }
+    compare = JSON.parse(source);
+    if (!compare || typeof compare !== 'object' || Array.isArray(compare)) {
+      failures.push('compare_evidence_response_invalid');
+      compare = null;
+    }
+  } catch {
+    failures.push('compare_evidence_raw_response_invalid');
+  }
+  if (compare) {
+    const payloadValidation = validateGitLabFirstParentComparePayload(compare, {
+      allowEmptyCommits: true,
+    });
+    failures.push(...payloadValidation.failures);
+  }
+  return { ok: failures.length === 0, failures, compare };
+}
+
+function replayCurrentReleaseSuccessorAncestry(ancestry, compareFrom, compareTo, { sameCommitPositive = false } = {}) {
+  const failures = [];
+  const expectedAncestryKeys = [
+    'source', 'compare_from', 'compare_to', 'compare_commit_count', 'first_parent_complete',
+    'query_completed', 'verified', 'reason', 'compare_evidence',
+  ];
+  if (!objectHasExactKeys(ancestry, expectedAncestryKeys)) failures.push('ancestry_fields_mismatch');
+  const evidence = ancestry?.compare_evidence;
+  const evidenceValidation = validateGitLabFirstParentCompareEvidence(evidence, compareFrom, compareTo);
+  failures.push(...evidenceValidation.failures);
+  const base = {
+    source: 'gitlab-api-compare-first-parent',
+    compare_from: compareFrom,
+    compare_to: compareTo,
+    compare_commit_count: 0,
+    first_parent_complete: false,
+    query_completed: false,
+    verified: false,
+    reason: 'compare_evidence_invalid',
+  };
+  let replayed = base;
+  if (evidenceValidation.ok) {
+    const compare = evidenceValidation.compare;
+    const compareCommitCount = Array.isArray(compare?.commits) ? compare.commits.length : 0;
+    const queryCompleted = validateGitLabFirstParentComparePayload(compare, {
+      allowEmptyCommits: true,
+    }).ok && compare?.compare_timeout === false;
+    if (compareFrom === compareTo) {
+      const emptyIdentityCompare = queryCompleted && compareCommitCount === 0;
+      replayed = sameCommitPositive
+        ? {
+          ...base,
+          source: 'release-head-is-origin-merge',
+          compare_commit_count: compareCommitCount,
+          first_parent_complete: emptyIdentityCompare,
+          query_completed: queryCompleted,
+          verified: emptyIdentityCompare,
+          reason: emptyIdentityCompare ? '' : 'compare_identity_response_invalid',
+        }
+        : {
+          ...base,
+          compare_commit_count: compareCommitCount,
+          query_completed: queryCompleted,
+          reason: emptyIdentityCompare ? 'compare_identities_equal' : 'compare_identity_response_invalid',
+        };
+    } else {
+      const chain = reconstructGitLabFirstParentChain({
+        compare,
+        baselineCommit: compareFrom,
+        releaseHead: compareTo,
+      });
+      replayed = {
+        ...base,
+        compare_commit_count: compareCommitCount,
+        first_parent_complete: chain.ok,
+        query_completed: queryCompleted,
+        verified: chain.ok,
+        reason: chain.ok ? '' : (chain.reason || 'first_parent_ancestry_not_proven'),
+      };
+    }
+  }
+  const provided = currentReleaseSuccessorAncestryProjection(ancestry);
+  if (stableJson(provided) !== stableJson(replayed)) failures.push('ancestry_projection_mismatch');
+  return {
+    ancestry: {
+      ...replayed,
+      compare_evidence: evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+        ? structuredClone(evidence) : null,
+    },
+    failures,
+  };
+}
+
+function currentReleaseSuccessorPositiveAncestry(ancestry, compareFrom, compareTo) {
+  const sameCommit = compareFrom === compareTo;
+  return ancestry?.query_completed === true
+    && ancestry?.verified === true
+    && ancestry?.first_parent_complete === true
+    && text(ancestry?.compare_from) === compareFrom
+    && text(ancestry?.compare_to) === compareTo
+    && Number.isSafeInteger(ancestry?.compare_commit_count)
+    && (sameCommit ? ancestry.compare_commit_count === 0 : ancestry.compare_commit_count > 0)
+    && text(ancestry?.source) === (sameCommit
+      ? 'release-head-is-origin-merge' : 'gitlab-api-compare-first-parent')
+    && !text(ancestry?.reason);
+}
+
+function currentReleaseSuccessorNegativeAncestry(ancestry, compareFrom, compareTo) {
+  return ancestry?.query_completed === true
+    && ancestry?.verified === false
+    && ancestry?.first_parent_complete === false
+    && text(ancestry?.source) === 'gitlab-api-compare-first-parent'
+    && text(ancestry?.compare_from) === compareFrom
+    && text(ancestry?.compare_to) === compareTo
+    && ancestry?.compare_commit_count === 0
+    && text(ancestry?.reason) === `first_parent_commit_missing:${compareTo}`;
+}
+
+function observeCurrentReleaseSuccessorRelationship(binding, releaseHead, mergeRequests, successorAncestries) {
+  const successor = binding.current_release_match.successor;
+  const matches = (Array.isArray(successorAncestries) ? successorAncestries : [])
+    .filter((item) => text(item?.binding_id) === text(binding.id));
+  const input = matches.length === 1 ? matches[0] : {};
+  const descendantReplay = replayCurrentReleaseSuccessorAncestry(
+    input?.descendant_ancestry,
+    successor.merge_commit_sha,
+    releaseHead,
+    { sameCommitPositive: true },
+  );
+  const predecessorReplay = replayCurrentReleaseSuccessorAncestry(
+    input?.predecessor_ancestry,
+    releaseHead,
+    successor.merge_commit_sha,
+  );
+  const descendantAncestry = descendantReplay.ancestry;
+  const predecessorAncestry = predecessorReplay.ancestry;
+  const evidenceFailures = [
+    ...descendantReplay.failures.map((failure) => `descendant:${failure}`),
+    ...predecessorReplay.failures.map((failure) => `predecessor:${failure}`),
+  ];
+  const identityVerified = matches.length === 1
+    && text(input?.successor_mr_iid) === successor.mr_iid
+    && text(input?.successor_merge_commit_sha) === successor.merge_commit_sha;
+  const descendantVerified = currentReleaseSuccessorPositiveAncestry(
+    descendantAncestry,
+    successor.merge_commit_sha,
+    releaseHead,
+  );
+  const predecessorVerified = releaseHead !== successor.merge_commit_sha
+    && currentReleaseSuccessorPositiveAncestry(
+      predecessorAncestry,
+      releaseHead,
+      successor.merge_commit_sha,
+    );
+  const descendantRejected = releaseHead === successor.merge_commit_sha
+    ? true
+    : currentReleaseSuccessorNegativeAncestry(
+      descendantAncestry,
+      successor.merge_commit_sha,
+      releaseHead,
+    );
+  const predecessorRejected = releaseHead === successor.merge_commit_sha
+    ? text(predecessorAncestry?.reason) === 'compare_identities_equal'
+      && predecessorAncestry?.query_completed === true
+      && predecessorAncestry?.verified === false
+      && predecessorAncestry?.first_parent_complete === false
+      && predecessorAncestry?.compare_commit_count === 0
+      && text(predecessorAncestry?.compare_from) === releaseHead
+      && text(predecessorAncestry?.compare_to) === successor.merge_commit_sha
+    : currentReleaseSuccessorNegativeAncestry(
+      predecessorAncestry,
+      releaseHead,
+      successor.merge_commit_sha,
+    );
+  let relationship = 'UNKNOWN';
+  if (descendantVerified && predecessorRejected) relationship = 'VERIFIED_SUCCESSOR';
+  else if (predecessorVerified && descendantRejected) relationship = 'VERIFIED_PREDECESSOR';
+
+  const inRangeCandidates = (Array.isArray(mergeRequests) ? mergeRequests : []).filter((row) => (
+    text(row?.iid) === successor.mr_iid
+      || text(row?.commit) === successor.merge_commit_sha
+      || text(row?.merge_commit_sha) === successor.merge_commit_sha
+  ));
+  const inRangeIdentityVerified = inRangeCandidates.length === 0
+    || currentReleaseSuccessorLineIsVerified(successor, mergeRequests);
+  const verified = identityVerified
+    && relationship !== 'UNKNOWN'
+    && inRangeIdentityVerified
+    && evidenceFailures.length === 0;
+  return {
+    schema_version: QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA,
+    binding_id: text(binding.id),
+    successor_mr_iid: text(input?.successor_mr_iid),
+    successor_merge_commit_sha: text(input?.successor_merge_commit_sha),
+    release_head: text(releaseHead),
+    relationship,
+    descendant_ancestry: descendantAncestry,
+    predecessor_ancestry: predecessorAncestry,
+    in_range_identity_count: inRangeCandidates.length,
+    in_range_identity_verified: inRangeIdentityVerified,
+    compare_evidence_verified: evidenceFailures.length === 0,
+    compare_evidence_failures: evidenceFailures,
+    verified,
+  };
+}
+
+function currentIntegrationBindingOccurrence(binding, source, {
+  releaseHead = '',
+  mergeRequests = [],
+  successorAncestries = [],
+} = {}) {
+  const match = binding.current_release_match;
+  if (!match) return { occurrenceCount: exactLineOccurrenceCount(source, binding.addition.source) };
+  if (match.match !== 'line-or-verified-successor-line') {
+    return { occurrenceCount: fragmentOccurrenceCount(source, match) };
+  }
+  const successorObservation = observeCurrentReleaseSuccessorRelationship(
+    binding,
+    text(releaseHead),
+    mergeRequests,
+    successorAncestries,
+  );
+  const baseCount = exactLineOccurrenceCount(source, match.value.source);
+  const successorCount = exactLineOccurrenceCount(source, match.successor.line.source);
+  return {
+    occurrenceCount: successorObservation.verified
+      ? (successorObservation.relationship === 'VERIFIED_SUCCESSOR' ? successorCount : baseCount)
+      : 0,
+    successorObservation,
+  };
+}
+
+function observeCurrentIntegrationBinding(binding, source, failures, options = {}) {
+  const { occurrenceCount, successorObservation } = currentIntegrationBindingOccurrence(
+    binding,
+    source,
+    options,
+  );
   const expectedCurrentOccurrenceCount = Number(binding.expected_current_occurrence_count ?? 1);
   const scope = binding.current_release_scope;
   if (!scope) {
@@ -6277,6 +7346,7 @@ function observeCurrentIntegrationBinding(binding, source, failures) {
       ...binding,
       addition_count: occurrenceCount,
       occurrence_count: occurrenceCount,
+      ...(successorObservation ? { successor_observation: successorObservation } : {}),
       verified,
     };
   }
@@ -7110,6 +8180,7 @@ export function auditCurrentReleaseSourceContract({
   originAncestry = {},
   files = [],
   mergeRequests = [],
+  successorAncestries = [],
   originAttestation = null,
   contract,
   currentHeaderContract = contract,
@@ -7188,6 +8259,7 @@ export function auditCurrentReleaseSourceContract({
         projection.binding,
         sourceByPath.get(projection.binding.path) || '',
         failures,
+        { releaseHead: normalizedHead, mergeRequests, successorAncestries },
       )
   ));
   const forbiddenFragments = observeCurrentForbiddenFragments(
@@ -7489,6 +8561,11 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   }
 
   const replayFailures = [];
+  const observedBindings = Array.isArray(attestation?.integration_bindings)
+    ? attestation.integration_bindings : [];
+  const successorAncestries = observedBindings
+    .map((binding) => binding?.successor_observation)
+    .filter((observation) => observation !== undefined);
   const replayHeaderSourcePath = text(headerOwner.owner?.source_file?.path);
   const replayHeaderLines = (replaySourceByPath.get(replayHeaderSourcePath) || '').split('\n');
   const replayedHeaders = headerOwner.owner.header_emissions.map((header) => {
@@ -7513,6 +8590,7 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
         projection.binding,
         replaySourceByPath.get(projection.binding.path) || '',
         replayFailures,
+        { releaseHead: reportHead, mergeRequests, successorAncestries },
       )
   ));
   const replayedForbiddenFragments = observeCurrentForbiddenFragments(
@@ -7552,8 +8630,6 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
     verified: true,
   }));
   if (stableJson(attestation?.headers) !== stableJson(expectedHeaders)) failures.push('attestation_current_headers_mismatch');
-  const observedBindings = Array.isArray(attestation?.integration_bindings)
-    ? attestation.integration_bindings : [];
   const expectedBindings = integrationProjection.map((projection, index) => {
     if (projection.retired) return retiredCurrentIntegrationBinding(projection);
     const { binding } = projection;
@@ -7574,6 +8650,9 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
       ...binding,
       addition_count: occurrenceCount,
       occurrence_count: occurrenceCount,
+      ...(replayedBindings[index]?.successor_observation ? {
+        successor_observation: replayedBindings[index].successor_observation,
+      } : {}),
       verified: true,
     };
     if (!scoped) return expected;

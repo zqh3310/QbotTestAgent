@@ -317,14 +317,17 @@ r16 尚未正式生成、尚无正式 SHA-256，也未完成独立验收，因�
 始终注入全部新标记，声明任一新标记后缺少其余任一项均 fail-closed，禁止用过渡兼容发布
 不完整 r16。
 
-截至 2026-09-08 的 R16 准备态只读 GitLab API 诊断扫描已从 r12 设计基线稳定观测到
-`origin/release/0.1@db85ab857a8aff02a460239f88a0544aab06b63b`，first-parent 增量为 68 个、继承
-r12 后总数为 202 个，最后一个直接合入 MR 必须是 `!1602`。诊断输入为
-`outputs/20260908121805_release01-r12-to-latest-r16-diagnostic-intake_framework-45a2392_casebook-8523a10/release-intake.json`。
-该报告只证明 68 个 commit 的归因、changes 与当时已注册源码合同；它因
-`execution_runner_message_isolation_missing` 仍为 `BLOCKED`，不得用于生成正式 r16、pretest 或
-runner。其中 `!1592` 必须继续通过 blocking-risk v5 的九项 successor AST 合同；任一
-管理器、controller、取消、message、termination 或 desktop lease 链不成立都必须继续
+截至 2026-09-08 的 R16 准备态只读 GitLab API 权威扫描已从 r12 设计基线稳定观测到
+`origin/release/0.1@e3a5de6cf02845cecb80906a8d11a48caf5c2d1b`，first-parent 增量为 79 个、继承
+r12 后总数为 213 个，最后一个直接合入 MR 必须是 `!1613`。权威输入为
+`outputs/20260908195414_release01-r12-to-latest-r16-authoritative-intake_framework-73ac5e9_casebook-da9181f/release-intake.json`。
+该报告只证明 79 个 commit 的归因、changes 与当时已注册源码合同；其顶层结论仍为
+`BLOCKED`，并记录 `!1597` current-release 源码合同未通过以及
+`execution_runner_message_isolation_missing` blocking-risk 未通过。因此它不得用于生成正式
+r16、pretest 或 runner。最新 `!1612` 必须显式绑定
+`deepbankv2-mr-1552-execution-runner-isolation/v1`；只有 blocking-risk v5 三项检查及全部
+successor AST 子合同均为 true 才能解锁，任一 manager、controller、cancellation、deadline、
+callback settlement、event flow、message、termination 或 desktop lease 链不成立都必须继续
 `NO_GO`。
 
 R16 的新增分类必须 fail-closed：`!1571` 和 `!1586` 只有在 IID、merge SHA、diff SHA 与
@@ -348,6 +351,14 @@ R16 还必须按上述 first-parent 顺序追加 `!1604`、`!1603`、`!1598`、`
 `610295245f8aad0dbf5bf5b6b421ff285c22349d`、diff SHA-256
 `7b5cd65ac8b2685d44fd46364253e8709cf8c5f344d4883757fd9d48548ab0fb` 和精确 24 个
 changed paths；不得新增桌面 Case 或把 CI/治理声明冒充测试执行结果。
+
+相对上述 `!1602` 边界，权威扫描继续按 first-parent 精确追加 11 个 MR：`!1605`、
+`!1608`、`!1599`、`!1601`、`!1609`、`!1614`、`!1554`、`!1607`、`!1612`、
+`!1616`、`!1613`。其中 `!1605`、`!1599`、`!1601`、`!1612` 使用显式相邻回归映射；
+`!1608`、`!1609`、`!1614`、`!1554`、`!1607`、`!1616`、`!1613` 仅使用精确静态合同。
+`!1612` 的相邻 Case 不能替代其 G0 blocking-risk v5 源码证明；新增集合的 IID、
+merge SHA、diff SHA、changed paths、源码合同和 blocking-risk 绑定任一漂移均须
+fail-closed。
 
 Casebook 生成器只能显式接收普通文件 `--release-intake`、与文件实际字节重新计算值全等的
 `--release-intake-sha256`、同一 `--expected-product-commit` 和非空 `--out`；
@@ -1761,7 +1772,7 @@ MR `!1573` 只有在 `iid=1573` 且 `merge_commit_sha` 精确等于
 
 MR !1559 后继架构的阻断风险证明固定使用
 `qbot-qwork-release-blocking-risk-attestation/v5`，并与
-`qbot-release-intake/1.8.0` 绑定。审计器必须先词法剔除注释、模板和正则正文，
+`qbot-release-intake/1.9.0` 绑定。审计器必须先词法剔除注释、模板和正则正文，
 并把普通字符串只作为真实调用参数/赋值值处理，禁止用注释或死字符串中的 token
 放行；随后必须用固定版本 `acorn@8.15.0` 将每个受保护 CommonJS 文件解析为 Acorn
 ECMAScript AST，按函数/类/分支作用域重放控制流、值流和返回值。词法与 AST 是相互独立
@@ -1826,19 +1837,23 @@ desktop host 还必须在同一函数的同一个 `try/finally` 中获取并释�
 awaited 调用的 `createExecutionWorkerContextUsageLease` helper 委派释放。委派链必须由
 desktop host 顶层真实 `require('./execution-worker-context-usage.cjs')`，wrapper 必须顶层真实
 `require('./execution-worker-context-usage-lease.cjs')`，且两个模块均唯一导出
-`createExecutionWorkerContextUsageLease`。该委派链属于 v5 的 13 个受保护源码文件合同；
-v5 在 v4 的 9 个文件上新增 `execution-worker-controller.cjs`、
-`execution-worker-cancellation.cjs`、`execution-worker-supervisor-message.cjs` 和
-`execution-worker-termination.cjs`。实现必须对已完成 lease awaited 执行 `drain(...)`，
+`createExecutionWorkerContextUsageLease`。该委派链属于 v5 当前的 16 个受保护源码文件合同；
+相对 v4 的 9 个文件，当前 v5 还纳入 `execution-worker-controller.cjs`、
+`execution-worker-cancellation.cjs`、`execution-worker-deadline.cjs`、
+`execution-worker-callback-settlement.cjs`、`execution-worker-event-flow.cjs`、
+`execution-worker-supervisor-message.cjs` 和 `execution-worker-termination.cjs`。实现必须对已完成 lease awaited 执行 `drain(...)`，
 对未完成 lease awaited 执行 `release()`。desktop 的 manager/supervisor/identity/signal 禁止
 重绑，acquire 第三个参数必须精确为 `{ signal }`；`completed` 必须初始化为 `false`，且只能
 由唯一的 `observeTerminal` 写入真实 terminal outcome；creator/release 的参数、默认值或
 解构写入不得遮蔽 helper/completed，release 路径不得强制改写。context helper AST 必须始终
 解析 GitLab API 返回的完整真实源码字节；空文件、测试占位源码或以 `// observed` 等注释
 开头的源码都不得跳过 AST 合同，合法注释后仍须对后续完整程序执行同一严格验证。
-`successor_ast_contracts` 九个子项任一为 `false`
+`successor_ast_contracts` 必须精确包含 12 个子项：`cancellation`、`controller`、
+`deadline`、`callback_settlement`、`event_flow`、`desktop`、`manager`、
+`manager_pressure`、`supervisor`、`supervisor_exit`、`supervisor_message`、
+`termination`。任一子项为 `false`
 时，主 blocking-risk 审计必须保持 `verified=false/status=BLOCKED`，不得生成 `VERIFIED`。
-`qbot-release-intake/1.6.2` 及更旧 intake tool version、阻断风险 v2/v3/v4 证明或任一
+`qbot-release-intake/1.8.0` 及更旧 intake tool version、阻断风险 v2/v3/v4 证明或任一
 作用域/调用链/取消因果链断裂均必须 fail-closed，重新扫描并 `BLOCKED`；不得靠重算报告 SHA 复用。
 
 正式扫描默认必须成功刷新 `release-ref`。Git fetch 的只读凭据与 GitLab API token 是两条
@@ -1872,8 +1887,24 @@ skill、automation 等已知关键词，也必须保留为未映射产品路径�
 只有目标 MR 位于本次增量范围时，才必须从本次只读 GitLab changes 原文重新生成并验证
 `origin_change_attestation`；目标 MR 不在本次增量范围时该字段必须为空，不得凭空生成。
 两层鉴证均不能复用 Casebook 文案、历史报告、本地 checkout 或桌面 E2E 结果。
+MR !1597 的 lifecycle allowlist 后继 `!1612` 即使不在本轮增量 MR 范围，也必须在每次
+current-release 扫描中独立执行正向与反向 first-parent compare：仅正向完整成立时接受
+`!1612` 新行，仅反向完整成立时接受 !1597 原行；缺失、不可读、双向冲突或关系未知均
+`BLOCKED`，关系观察必须写入 binding attestation 并由离线验证器重放，本轮若再次命中
+`!1612` 还必须继续精确核对 IID、merge/first-parent、GitLab changes、diff 和有序路径身份。
+双向 compare 必须各自保存 `qbot-qwork-gitlab-first-parent-compare/v1`：固定 GitLab
+host/project、`GET`、endpoint、from/to、`straight=true`，并保存原始响应的规范 Base64、
+原生字节数和 SHA-256。离线验证器必须严格重放 Base64、UTF-8、JSON、endpoint、方向、
+字节数和 SHA-256，再仅从原始 `commits` 重建 first-parent 链；不得信任报告自报的 ancestry
+投影。compare commit 只接受关闭的 GitLab 字段集合；可选 `extended_trailers` 必须是
+规范非空键到非空字符串数组值的对象，空数组、标量和混合类型均拒绝；可选非空
+`last_pipeline` 必须逐字段校验完整字段集合、正整数
+ID、同 commit/project 的 SHA 与 project ID、规范时间和固定项目 pipeline URL。删减、未知
+字段、类型漂移或只重算 raw/report SHA 均须阻断。relationship 固定使用
+`qbot-qwork-source-binding-successor-relationship/v2`；缺少
+任一 raw evidence、原始响应与投影不一致、from/to 换向或双向同时完整均须 `BLOCKED`。
 current-release 持续性鉴证使用独立且不兼容的
-`qbot-qwork-release-current-source-contract/v3`；origin-change 仍使用
+`qbot-qwork-release-current-source-contract/v4`；origin-change 仍使用
 `qbot-qwork-release-source-contract/v1`。不得把含有完整 `protected_files` 字节的
 current-release 结果投影回 v1，也不得只重算 attestation SHA 伪造版本。current-release
 attestation 顶层和每个 protected file 都必须 exact-key；文件内容必须通过规范 Base64 与
@@ -1895,7 +1926,10 @@ last pipeline）。非空 `last_pipeline` 的 `project_id` 必须与 commit `pro
 提交 SHA 必须是规范小写十六进制，时间戳必须通过严格 ISO-8601 语法与
 真实日历校验，trailers 必须为字符串值；`collapsed=true`、
 `too_large=true` 或这些扩展字段类型异常均表示 diff 不完整，必须阻断。
-current-release v3 的 ancestry `compare_commit_count` 以及每个受保护文件的
+旧 `qbot-qwork-source-binding-successor-relationship/v1`、
+`qbot-qwork-release-current-source-contract/v3` 和 `qbot-release-intake/1.8.0` 即使重算
+attestation 或报告内容 SHA 也必须拒绝。current-release v4 的 ancestry
+`compare_commit_count` 以及每个受保护文件的
 `declared_size/bytes/line_count` 必须保持原生安全整数；数字字符串即使内容相等且重算
 attestation SHA-256 也必须阻断，Files API 的字符串 `size` 同样不得在生成鉴证时被归一化放行。
 每条 diff 的 `old_path/new_path` 必须为无首尾空白的非空字符串；相同 old/new 路径对即使
@@ -1965,6 +1999,14 @@ current-release Files API 实读的测试文件字节重新解析整份 module�
 中以同一 shorthand binding 唯一导出；该导出对象不得通过重复普通/computed key 或 spread
 在 shorthand 后覆盖 `workerEnvironment`。任一层缺失、重复、改道、假同名实现、导入与导出
 不是同一 lexical binding，或 facade/supervisor/lifecycle 文件身份不匹配均须 fail-closed。
+
+`workerEnvironment` 的 allowlist 语义还依赖不可篡改的 JavaScript builtin。lifecycle 全文件
+必须把 `Object`、`String`、`RegExp` 及尤其 `RegExp.prototype.test` 作为受保护绑定和
+receiver；直接赋值、声明遮蔽、`global/globalThis/self/window` 包装别名、构造器或 prototype
+别名、容器与解构值流，以及 `Object/Reflect` 写方法、writer alias、`.call/.apply`、
+`Reflect.apply` 和预绑定 `.bind()` 对这些目标的间接改写都必须计入
+`protected_binding_violation_count/protected_binding_violation_kinds` 并 fail-closed。只读访问
+`RegExp.prototype.test` 或写入无关 receiver 必须保持正控，不能因扩大保护而误阻断。
 
 五个测试绑定必须在全文件保持不可遮蔽、不可重绑且不可间接改写，不只检查 owner callback。
 import/变量/函数/类/catch/参数声明，默认值或解构参数，普通/复合/update/解构/循环赋值，

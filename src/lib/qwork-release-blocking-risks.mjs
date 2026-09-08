@@ -22,6 +22,9 @@ export const QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS = Object.freeze([
   'electron/execution-worker.cjs',
   'electron/host-core/agent/execution-worker-controller.cjs',
   'electron/host-core/agent/execution-worker-cancellation.cjs',
+  'electron/host-core/agent/execution-worker-deadline.cjs',
+  'electron/host-core/agent/execution-worker-callback-settlement.cjs',
+  'electron/host-core/agent/execution-worker-event-flow.cjs',
   'electron/host-core/agent/execution-worker-entry.cjs',
   'electron/host-core/agent/execution-worker-manager.cjs',
   'electron/host-core/agent/execution-worker-supervisor.cjs',
@@ -3475,6 +3478,9 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
     && stableSingleTurnEntry
     && lifecycleIsolation.passed
     && astContracts.cancellation
+    && astContracts.deadline
+    && astContracts.callback_settlement
+    && astContracts.event_flow
     && astContracts.supervisor
     && astContracts.supervisor_message
     && astContracts.termination

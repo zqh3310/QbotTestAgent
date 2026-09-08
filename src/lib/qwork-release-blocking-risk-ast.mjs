@@ -445,7 +445,8 @@ function programHasNestedBinding(program, names) {
 function stableProgramIdentifiers(program, names, { globals = [] } = {}) {
   if (!program
     || functionHasIdentifierWrite(program, names)
-    || programHasNestedBinding(program, names)) return false;
+    || programHasNestedBinding(program, names)
+    || programHasTrustedGlobalMutation(program, globals)) return false;
   const globalSet = new Set(globals);
   return names.every((name) => {
     const count = topLevelBindingCount(program, name);
@@ -624,8 +625,12 @@ function protectedAliasSource(node, aliases = new Map()) {
   return null;
 }
 
-function protectedReceiverAliasState(functionNode, protectedPaths) {
+function protectedReceiverAliasState(functionNode, protectedPaths, {
+  allowDefaultAliases = false,
+  allowedReadonlyDynamicAliases = [],
+} = {}) {
   const state = { aliases: new Map(), unsafe: false };
+  const allowedReadonlyDynamicSet = new Set(allowedReadonlyDynamicAliases);
   const declarations = [];
   visit(functionNode?.body, (node, parent) => {
     if (node.type === 'VariableDeclarator' && node.init) declarations.push({ node, parent });
@@ -635,9 +640,13 @@ function protectedReceiverAliasState(functionNode, protectedPaths) {
     for (const { node, parent } of declarations) {
       const source = protectedAliasSource(node.init, state.aliases);
       if (!source) continue;
+      const readonly = parent?.type === 'VariableDeclaration' && parent.kind === 'const';
+      const allowedReadonlyDynamic = source.dynamic && readonly
+        && node.id?.type === 'Identifier'
+        && allowedReadonlyDynamicSet.has(node.id.name);
       bindProtectedAliasPattern(node.id, source.path, protectedPaths, state, {
-        dynamic: source.dynamic,
-        readonly: parent?.type === 'VariableDeclaration' && parent.kind === 'const',
+        dynamic: source.dynamic && !allowedReadonlyDynamic,
+        readonly,
       });
     }
     if (state.aliases.size === before) break;
@@ -660,7 +669,7 @@ function protectedReceiverAliasState(functionNode, protectedPaths) {
         source.path,
         protectedPaths,
         state,
-        { dynamic: source.dynamic, readonly: false },
+        { dynamic: source.dynamic, readonly: allowDefaultAliases && !source.dynamic },
       );
     }
   });
@@ -699,10 +708,33 @@ function functionHasProtectedAliasMutation(functionNode, protectedPaths) {
   return found;
 }
 
-function functionHasMemberWrite(functionNode, protectedPaths) {
-  const aliasState = protectedReceiverAliasState(functionNode, protectedPaths);
+function functionHasMemberWrite(functionNode, protectedPaths, options = {}) {
+  const aliasState = protectedReceiverAliasState(functionNode, protectedPaths, options);
   if (aliasState.unsafe) return true;
   const { aliases } = aliasState;
+  const reflectiveWriterPaths = [
+    ['Object', 'assign'],
+    ['Object', 'defineProperties'],
+    ['Object', 'defineProperty'],
+    ['Reflect', 'apply'],
+    ['Reflect', 'defineProperty'],
+    ['Reflect', 'deleteProperty'],
+    ['Reflect', 'set'],
+  ];
+  const reflectiveWriterState = protectedReceiverAliasState(
+    functionNode,
+    reflectiveWriterPaths,
+  );
+  if (reflectiveWriterState.unsafe) return true;
+  const reflectiveWriterAliases = reflectiveWriterState.aliases;
+  const directWriterNames = new Set([
+    'Object.assign',
+    'Object.defineProperties',
+    'Object.defineProperty',
+    'Reflect.defineProperty',
+    'Reflect.deleteProperty',
+    'Reflect.set',
+  ]);
   const matchesPath = (actual) => (
     protectedPaths.some((expected) => actual.length >= expected.length
       && expected.every((part, index) => actual[index] === part))
@@ -718,18 +750,53 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
   };
   const reflectiveWriteMatches = (node) => {
     if (node.type !== 'CallExpression') return false;
-    const callee = staticMemberPath(node.callee).join('.');
-    const receiver = staticMemberPathWithAliases(node.arguments[0], aliases);
+    const directCalleePath = staticMemberPathWithAliases(
+      node.callee,
+      reflectiveWriterAliases,
+    );
+    let callee = directCalleePath.join('.');
+    let forwardedArguments = node.arguments;
+    if (callee === 'Reflect.apply') {
+      const writer = staticMemberPathWithAliases(
+        node.arguments[0],
+        reflectiveWriterAliases,
+      ).join('.');
+      if (!directWriterNames.has(writer)) return false;
+      callee = writer;
+      const list = unwrap(node.arguments[2]);
+      if (list?.type !== 'ArrayExpression'
+        || list.elements.some((entry) => !entry || entry.type === 'SpreadElement')) return true;
+      forwardedArguments = list.elements;
+    } else if (['call', 'apply'].includes(directCalleePath.at(-1))) {
+      const writer = directCalleePath.slice(0, -1).join('.');
+      if (!directWriterNames.has(writer)) return false;
+      callee = writer;
+      if (directCalleePath.at(-1) === 'call') {
+        forwardedArguments = node.arguments.slice(1);
+      } else {
+        const list = unwrap(node.arguments[1]);
+        if (list?.type !== 'ArrayExpression'
+          || list.elements.some((entry) => !entry || entry.type === 'SpreadElement')) return true;
+        forwardedArguments = list.elements;
+      }
+    } else if (!directWriterNames.has(callee)) {
+      return false;
+    }
+    if (forwardedArguments.some((entry) => entry?.type === 'SpreadElement')) return true;
+    const receiver = staticMemberPathWithAliases(forwardedArguments[0], aliases);
     if (!receiver.length) return false;
-    if (['Object.defineProperty', 'Reflect.set', 'Reflect.deleteProperty'].includes(callee)) {
-      const property = literalPropertyName(node.arguments[1]);
+    if ([
+      'Object.defineProperty', 'Reflect.defineProperty', 'Reflect.set',
+      'Reflect.deleteProperty',
+    ].includes(callee)) {
+      const property = literalPropertyName(forwardedArguments[1]);
       return property ? matchesPath([...receiver, property]) : protectedPaths.some((expected) => (
         receiver.length <= expected.length
         && receiver.every((part, index) => expected[index] === part)
       ));
     }
     if (callee === 'Object.defineProperties') {
-      const descriptors = unwrap(node.arguments[1]);
+      const descriptors = unwrap(forwardedArguments[1]);
       if (descriptors?.type !== 'ObjectExpression') {
         return protectedPaths.some((expected) => receiver.every(
           (part, index) => expected[index] === part,
@@ -746,7 +813,7 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
       });
     }
     if (callee === 'Object.assign') {
-      return node.arguments.slice(1).some((source) => {
+      return forwardedArguments.slice(1).some((source) => {
         source = unwrap(source);
         if (source?.type !== 'ObjectExpression') {
           return protectedPaths.some((expected) => receiver.every(
@@ -783,6 +850,825 @@ function functionHasMemberWrite(functionNode, protectedPaths) {
     if (reflectiveWriteMatches(node)) found = true;
   });
   return found;
+}
+
+// Resolve trusted globals through the small amount of value flow that can turn a
+// direct builtin write into an indirect write.  This is deliberately local to the
+// blocking-risk audit: unknown values are only tainted when they originated from a
+// protected global or a builtin writer, so unrelated dynamic calls remain valid.
+function trustedGlobalMutationValueFlow(program, protectedPaths, protectedGlobals) {
+  const wrapperNames = new Set(['globalThis', 'global', 'self', 'window']);
+  const builtinWriters = new Set([
+    'Object.assign',
+    'Object.defineProperties',
+    'Object.defineProperty',
+    'Object.setPrototypeOf',
+    'Reflect.defineProperty',
+    'Reflect.deleteProperty',
+    'Reflect.set',
+    'Reflect.setPrototypeOf',
+  ]);
+  const unprotectedObjectResults = new Set([
+    'Object.getOwnPropertyDescriptor',
+    'Object.getOwnPropertyDescriptors',
+  ]);
+  const writerFamilies = new Set(['Object', 'Reflect']);
+  const parentByNode = new WeakMap();
+  visit(program, (node, parent) => {
+    if (parent) parentByNode.set(node, parent);
+  });
+  const lexicalScopeTypes = new Set([
+    'Program',
+    'BlockStatement',
+    'CatchClause',
+    'ClassBody',
+    'FunctionDeclaration',
+    'FunctionExpression',
+    'ArrowFunctionExpression',
+    'ForInStatement',
+    'ForOfStatement',
+    'ForStatement',
+    'SwitchStatement',
+    'StaticBlock',
+  ]);
+  const lexicalScopeFor = (node) => {
+    let current = parentByNode.get(node) || program;
+    while (current && !lexicalScopeTypes.has(current.type)) current = parentByNode.get(current);
+    return current || program;
+  };
+  const functionScopeFor = (node) => {
+    let current = parentByNode.get(node) || program;
+    while (current && ![
+      'Program',
+      'FunctionDeclaration',
+      'FunctionExpression',
+      'ArrowFunctionExpression',
+    ].includes(current.type)) current = parentByNode.get(current);
+    return current || program;
+  };
+  const visibleScopedEntries = (entries, useNode) => {
+    if (!entries?.length || !Number.isInteger(useNode?.start) || !Number.isInteger(useNode?.end)) {
+      return entries || [];
+    }
+    const visible = entries.filter(({ scope }) => !scope
+      || (!Number.isInteger(scope.start) || !Number.isInteger(scope.end))
+      || (scope.start <= useNode.start && useNode.end <= scope.end));
+    if (!visible.length) return [];
+    const span = Math.min(...visible.map(({ scope }) => (
+      Number.isInteger(scope?.start) && Number.isInteger(scope?.end)
+        ? scope.end - scope.start
+        : Number.MAX_SAFE_INTEGER
+    )));
+    return visible.filter(({ scope }) => (
+      Number.isInteger(scope?.start) && Number.isInteger(scope?.end)
+        ? scope.end - scope.start
+        : Number.MAX_SAFE_INTEGER
+    ) === span);
+  };
+  const bindings = new Map();
+  const memberBindings = new Map();
+  const functionBindings = new Map();
+  const visibleNameEntries = (name, useNode) => visibleScopedEntries([
+    ...(bindings.get(name) || []).map((entry) => ({ ...entry, kind: 'binding' })),
+    ...(functionBindings.get(name) || []).map((entry) => ({ ...entry, kind: 'function' })),
+  ], useNode);
+  const activeParameterValues = [];
+  const addBinding = (
+    name,
+    source,
+    selectors = [],
+    scope = program,
+    declaration = false,
+  ) => {
+    if (!name) return;
+    const list = bindings.get(name) || [];
+    list.push({ source, selectors, scope, declaration });
+    bindings.set(name, list);
+  };
+  const addMemberBinding = (path, source, scope = program) => {
+    if (!path?.length) return;
+    const key = path.join('.');
+    const list = memberBindings.get(key) || [];
+    list.push({ source, scope });
+    memberBindings.set(key, list);
+  };
+  const patternBindings = (
+    pattern,
+    source,
+    selectors = [],
+    seen = new Set(),
+    scope = program,
+    declaration = false,
+  ) => {
+    pattern = unwrap(pattern);
+    if (!pattern) return;
+    if (pattern.type === 'Identifier') {
+      addBinding(
+        pattern.name,
+        source,
+        selectors,
+        typeof scope === 'function' ? scope(pattern.name) : scope,
+        declaration,
+      );
+      return;
+    }
+    if (pattern.type === 'AssignmentPattern') {
+      patternBindings(pattern.left, source, selectors, seen, scope, declaration);
+      patternBindings(pattern.left, pattern.right, selectors, seen, scope, declaration);
+      return;
+    }
+    if (pattern.type === 'RestElement') {
+      const name = patternNames(pattern.argument)[0];
+      addBinding(
+        name,
+        source,
+        [...selectors, '@rest'],
+        typeof scope === 'function' ? scope(name) : scope,
+        declaration,
+      );
+      return;
+    }
+    if (pattern.type === 'ObjectPattern') {
+      for (const property of pattern.properties || []) {
+        if (property.type === 'RestElement') {
+          patternBindings(
+            property.argument,
+            source,
+            [...selectors, '@rest'],
+            seen,
+            scope,
+            declaration,
+          );
+          continue;
+        }
+        if (property.type !== 'Property' || property.computed) {
+          patternBindings(
+            property.value,
+            source,
+            [...selectors, '@computed'],
+            seen,
+            scope,
+            declaration,
+          );
+          continue;
+        }
+        const name = propertyName(property);
+        patternBindings(
+          property.value,
+          source,
+          [...selectors, name],
+          seen,
+          scope,
+          declaration,
+        );
+      }
+      return;
+    }
+    if (pattern.type === 'ArrayPattern') {
+      pattern.elements?.forEach((element, index) => {
+        if (element) patternBindings(
+          element,
+          source,
+          [...selectors, String(index)],
+          seen,
+          scope,
+          declaration,
+        );
+      });
+    }
+  };
+  const variableDeclarationScope = (node) => (
+    parentByNode.get(node)?.type === 'VariableDeclaration'
+      && parentByNode.get(node).kind === 'var'
+      ? functionScopeFor(node)
+      : lexicalScopeFor(node)
+  );
+  visit(program, (node) => {
+    if (node.type === 'VariableDeclarator') {
+      patternBindings(
+        node.id,
+        node.init || null,
+        [],
+        new Set(),
+        variableDeclarationScope(node),
+        true,
+      );
+    }
+    if (node.type === 'FunctionDeclaration' && node.id?.type === 'Identifier') {
+      const list = functionBindings.get(node.id.name) || [];
+      list.push({ node, scope: lexicalScopeFor(node) });
+      functionBindings.set(node.id.name, list);
+    }
+    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+      for (const parameter of node.params || []) {
+        patternBindings(parameter, null, [], new Set(), node, true);
+      }
+      if (node.type === 'FunctionExpression' && node.id?.type === 'Identifier') {
+        const list = functionBindings.get(node.id.name) || [];
+        list.push({ node, scope: node });
+        functionBindings.set(node.id.name, list);
+      }
+    }
+    if (node.type === 'CatchClause' && node.param) {
+      patternBindings(node.param, null, [], new Set(), node, true);
+    }
+  });
+  const assignmentScopeFor = (name, node) => {
+    const declarations = visibleScopedEntries([
+      ...(bindings.get(name) || []).filter((entry) => entry.declaration),
+      ...(functionBindings.get(name) || []),
+    ], node);
+    return declarations[0]?.scope || lexicalScopeFor(node);
+  };
+  visit(program, (node) => {
+    const scope = lexicalScopeFor(node);
+    if (node.type === 'AssignmentExpression' && ['=', '&&=', '||=', '??='].includes(node.operator)) {
+      patternBindings(
+        node.left,
+        node.right,
+        [],
+        new Set(),
+        (name) => assignmentScopeFor(name, node),
+      );
+      const path = staticMemberPath(node.left);
+      if (path.length) addMemberBinding(
+        path,
+        node.right,
+        path[0] === 'this' ? scope : assignmentScopeFor(path[0], node),
+      );
+    }
+    if (node.type === 'ForOfStatement') {
+      const target = node.left?.type === 'VariableDeclaration'
+        ? node.left.declarations?.[0]?.id : node.left;
+      const declaration = node.left?.type === 'VariableDeclaration';
+      const targetScope = declaration
+        ? node.left.kind === 'var' ? functionScopeFor(node) : node
+        : (name) => assignmentScopeFor(name, node);
+      patternBindings(target, node.right, [], new Set(), targetScope, declaration);
+    }
+  });
+
+  const emptyValue = () => ({ paths: [], containers: [], bounds: [], functions: [], unknown: false });
+  const unionValues = (values) => {
+    const result = emptyValue();
+    for (const value of values || []) {
+      if (!value) continue;
+      result.paths.push(...(value.paths || []));
+      result.containers.push(...(value.containers || []));
+      result.bounds.push(...(value.bounds || []));
+      result.functions.push(...(value.functions || []));
+      result.unknown ||= Boolean(value.unknown);
+    }
+    const pathKeys = new Set();
+    result.paths = result.paths.filter((path) => {
+      const key = path.join('.');
+      if (pathKeys.has(key)) return false;
+      pathKeys.add(key);
+      return true;
+    });
+    return result;
+  };
+  const pathValue = (path) => ({ paths: [path], containers: [], bounds: [], functions: [], unknown: false });
+  const unknownValue = () => ({ paths: [], containers: [], bounds: [], functions: [], unknown: true });
+  const unknownWriterValue = () => ({
+    paths: [['Object', '*'], ['Reflect', '*']],
+    containers: [], bounds: [], functions: [], unknown: true,
+  });
+  const canonicalPath = (path) => {
+    if (!Array.isArray(path) || !path.length) return [];
+    if (wrapperNames.has(path[0])) {
+      if (path.length === 1) return ['@global'];
+      return path.slice(1);
+    }
+    if (path[0] === '@global' && path.length > 1) return path.slice(1);
+    return path;
+  };
+  const normalizeValue = (value) => {
+    if (!value) return emptyValue();
+    return {
+      ...value,
+      paths: (value.paths || []).map(canonicalPath).filter((path) => path.length),
+    };
+  };
+  const staticPropertyNames = (node, resolving = new Set()) => {
+    node = unwrap(node);
+    if (!node) return { names: [], unknown: true };
+    if (node.type === 'Literal' && ['string', 'number'].includes(typeof node.value)) {
+      return { names: [String(node.value)], unknown: false };
+    }
+    if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
+      return { names: [node.quasis[0]?.value?.cooked || ''], unknown: false };
+    }
+    if (node.type === 'Identifier') {
+      if (resolving.has(node.name)) return { names: [], unknown: true };
+      const visible = visibleNameEntries(node.name, node);
+      const entries = visible.filter((entry) => entry.kind === 'binding');
+      if (!entries.length || visible.some((entry) => entry.kind === 'function')) {
+        return { names: [], unknown: true };
+      }
+      const results = entries.map((entry) => staticPropertyNames(
+        entry.source,
+        new Set([...resolving, node.name]),
+      ));
+      return {
+        names: [...new Set(results.flatMap((result) => result.names))],
+        unknown: results.some((result) => result.unknown),
+      };
+    }
+    if (node.type === 'ConditionalExpression' || node.type === 'LogicalExpression') {
+      const results = [
+        staticPropertyNames(node.consequent || node.left, resolving),
+        staticPropertyNames(node.alternate || node.right, resolving),
+      ];
+      return {
+        names: [...new Set(results.flatMap((result) => result.names))],
+        unknown: results.some((result) => result.unknown),
+      };
+    }
+    if (node.type === 'SequenceExpression') {
+      return staticPropertyNames(node.expressions.at(-1), resolving);
+    }
+    if (node.type === 'AssignmentExpression') return staticPropertyNames(node.right, resolving);
+    return { names: [], unknown: true };
+  };
+  const valueKey = (value) => {
+    if (!value) return '';
+    const paths = (value.paths || []).map((path) => path.join('.')).sort().join('|');
+    return `${paths};${value.unknown ? 'u' : ''}`;
+  };
+  const projectValue = (value, selectors, depth, resolving) => {
+    if (!selectors.length) return value;
+    let current = value;
+    for (const selector of selectors) {
+      if (!current) return emptyValue();
+      if (selector === '@rest') return current;
+      if (selector === '@computed') {
+        const entries = (current.containers || []).flatMap((container) => [...container.values()]);
+        const dynamicPaths = (current.paths || []).map((path) => canonicalPath([...path, '*']));
+        return normalizeValue(unionValues([
+          ...entries,
+          dynamicPaths.length
+            ? { paths: dynamicPaths, containers: [], bounds: [], functions: [], unknown: true }
+            : emptyValue(),
+          current.unknown ? unknownValue() : emptyValue(),
+        ]));
+      }
+      const projected = [];
+      for (const container of current.containers || []) {
+        const entry = container.get(selector);
+        if (entry) projected.push(entry);
+      }
+      const pathProjected = current.paths.map((path) => canonicalPath([...path, selector]));
+      current = unionValues([
+        projected.length ? unionValues(projected) : emptyValue(),
+        pathProjected.length ? { paths: pathProjected, containers: [], bounds: [], unknown: false } : emptyValue(),
+      ]);
+      if (current.paths.length === 0 && current.containers.length === 0 && current.bounds.length === 0) {
+        if (value.unknown) return unknownValue();
+      }
+    }
+    return current;
+  };
+  const resolving = new Set();
+  const resolve = (node, depth = 0) => {
+    node = unwrap(node);
+    if (!node || depth > 32) return emptyValue();
+    if (node.type === 'Identifier') {
+      for (let index = activeParameterValues.length - 1; index >= 0; index -= 1) {
+        if (activeParameterValues[index].has(node.name)) {
+          return normalizeValue(activeParameterValues[index].get(node.name));
+        }
+      }
+      if (resolving.has(node.name)) return pathValue([node.name]);
+      const visible = visibleNameEntries(node.name, node);
+      const entries = visible.filter((entry) => entry.kind === 'binding');
+      const functions = visible
+        .filter((entry) => entry.kind === 'function')
+        .map((entry) => entry.node);
+      if (entries.length || functions.length) {
+        resolving.add(node.name);
+        const values = [
+          ...(entries || []).map((entry) => projectValue(
+            resolve(entry.source, depth + 1), entry.selectors, depth + 1, resolving,
+          )),
+          functions.length
+            ? { paths: [], containers: [], bounds: [], functions, unknown: false }
+            : emptyValue(),
+        ];
+        resolving.delete(node.name);
+        return normalizeValue(unionValues(values));
+      }
+      return normalizeValue(pathValue([node.name]));
+    }
+    if (node.type === 'ThisExpression') return pathValue(['this']);
+    if (node.type === 'MemberExpression') {
+      const directPath = staticMemberPath(node);
+      const directKey = directPath.join('.');
+      const directMembers = (memberBindings.get(directKey) || [])
+        .map((entry) => ({ ...entry, kind: 'member' }));
+      const rootShadows = directPath[0]
+        ? [
+            ...(bindings.get(directPath[0]) || []),
+            ...(functionBindings.get(directPath[0]) || []),
+          ].map((entry) => ({ ...entry, kind: 'root' }))
+        : [];
+      const boundMembers = visibleScopedEntries(
+        [...directMembers, ...rootShadows],
+        node,
+      ).filter((entry) => entry.kind === 'member');
+      if (boundMembers?.length) {
+        return normalizeValue(unionValues(boundMembers.map(
+          (entry) => resolve(entry.source, depth + 1),
+        )));
+      }
+      const object = resolve(node.object, depth + 1);
+      const properties = node.computed
+        ? staticPropertyNames(node.property)
+        : { names: [node.property?.name].filter(Boolean), unknown: false };
+      if (!properties.names.length || properties.unknown) {
+        const relevantBase = object.paths.some((path) => (
+          path.length && (path[0] === '@global' || writerFamilies.has(path[0])
+            || protectedPaths.some((expected) => pathOverlapsProtectedPath(path, [expected])))
+        )) || object.unknown;
+        return relevantBase ? { ...unknownValue(), paths: object.paths } : emptyValue();
+      }
+      const values = [];
+      for (const property of properties.names) {
+        const projected = [];
+        for (const container of object.containers || []) {
+          const entry = container.get(property);
+          if (entry) projected.push(entry);
+        }
+        values.push(unionValues([
+          projected.length ? unionValues(projected) : emptyValue(),
+          {
+            paths: object.paths.map((path) => canonicalPath([...path, property])),
+            containers: [], bounds: [], functions: [], unknown: object.unknown,
+          },
+        ]));
+      }
+      return normalizeValue(unionValues(values));
+    }
+    if (node.type === 'ConditionalExpression' || node.type === 'LogicalExpression') {
+      return unionValues([
+        resolve(node.consequent || node.left, depth + 1),
+        resolve(node.alternate || node.right, depth + 1),
+      ]);
+    }
+    if (node.type === 'SequenceExpression') return resolve(node.expressions.at(-1), depth + 1);
+    if (node.type === 'AssignmentExpression') return resolve(node.right, depth + 1);
+    if (node.type === 'AwaitExpression' || node.type === 'YieldExpression') {
+      return resolve(node.argument, depth + 1);
+    }
+    if (node.type === 'ObjectExpression') {
+      const container = new Map();
+      let unknown = false;
+      for (const property of node.properties || []) {
+        if (property.type === 'SpreadElement') {
+          const spread = resolve(property.argument, depth + 1);
+          for (const source of spread.containers || []) {
+            for (const [key, value] of source.entries()) container.set(key, value);
+          }
+          unknown ||= spread.unknown || spread.paths.length > 0;
+          continue;
+        }
+        if (property.type !== 'Property') {
+          unknown = true;
+          continue;
+        }
+        const names = property.computed ? staticPropertyNames(property.key).names : [propertyName(property)];
+        if (!names.length || names.includes('')) {
+          unknown = true;
+          continue;
+        }
+        for (const name of names) container.set(name, resolve(property.value, depth + 1));
+      }
+      return { paths: [], containers: [container], bounds: [], unknown };
+    }
+    if (node.type === 'ArrayExpression') {
+      const container = new Map();
+      node.elements?.forEach((element, index) => {
+        if (element?.type === 'SpreadElement') container.set(String(index), unknownValue());
+        else if (element) container.set(String(index), resolve(element, depth + 1));
+      });
+      return { paths: [], containers: [container], bounds: [], unknown: false };
+    }
+    if (node.type === 'CallExpression') {
+      const callee = unwrap(node.callee);
+      const calleeProperties = callee?.type === 'MemberExpression'
+        ? (callee.computed
+          ? staticPropertyNames(callee.property)
+          : { names: [callee.property?.name].filter(Boolean), unknown: false })
+        : { names: [], unknown: false };
+      if (callee?.type === 'MemberExpression'
+        && calleeProperties.names.includes('bind')) {
+        return {
+          paths: [], containers: [],
+          bounds: [{ callee: resolve(callee.object, depth + 1), boundArgs: node.arguments.slice(1) }],
+          functions: [],
+          unknown: calleeProperties.unknown,
+        };
+      }
+      if (callee?.type === 'Identifier' && callee.name === 'Object' && node.arguments.length === 1) {
+        return resolve(node.arguments[0], depth + 1);
+      }
+      const calleeValue = resolve(callee, depth + 1);
+      const argumentValues = node.arguments.map((argument) => resolve(argument, depth + 1));
+      if (calleeValue.functions?.length) {
+        const returned = [];
+        for (const functionNode of calleeValue.functions) {
+          const params = functionNode.params || [];
+          const parameterValues = new Map(params.flatMap((parameter, index) => (
+            patternNames(parameter).map((name) => [name, node.arguments[index]])
+          )));
+          visit(functionNode.body, (entry) => {
+            if (entry.type !== 'ReturnStatement' || !entry.argument) return;
+            const argument = unwrap(entry.argument);
+            if (argument?.type === 'Identifier' && parameterValues.has(argument.name)) {
+              returned.push(resolve(parameterValues.get(argument.name), depth + 1));
+            } else {
+              returned.push(resolve(argument, depth + 1));
+            }
+          });
+        }
+        if (returned.length) return normalizeValue(unionValues(returned));
+      }
+      const calleeNames = (calleeValue.paths || []).map((path) => canonicalPath(path).join('.'));
+      if (!calleeValue.unknown && calleeNames.length
+        && calleeNames.every((name) => unprotectedObjectResults.has(name))) {
+        return emptyValue();
+      }
+      const carriesProtectedValue = calleeValue.unknown
+        || argumentValues.some((value) => value.unknown
+          || value.paths.some((path) => protectedPaths.some((expected) => (
+            pathOverlapsProtectedPath(canonicalPath(path), [expected])
+          ))));
+      return carriesProtectedValue ? unknownValue() : emptyValue();
+    }
+    if (node.type === 'NewExpression') return emptyValue();
+    return emptyValue();
+  };
+  const pathMatches = (path, expected) => {
+    const actual = canonicalPath(path);
+    if (!actual.length) return false;
+    if (actual[0] === '@global') return expected[0] === '@global';
+    const common = Math.min(actual.length, expected.length);
+    return actual.slice(0, common).every((part, index) => (
+      part === '*' || expected[index] === '*' || part === expected[index]
+    ));
+  };
+  const pathsMatchProtected = (paths, property = null) => {
+    for (const original of paths || []) {
+      const path = canonicalPath(original);
+      if (path[0] === '@global') {
+        if (property === null) return true;
+        if (protectedGlobals.includes(property)) return true;
+      }
+      if (protectedPaths.some((expected) => pathMatches(path, expected))) return true;
+      if (path.includes('*') && (path[0] === '@global' || writerFamilies.has(path[0]))) return true;
+    }
+    return false;
+  };
+  const valueMayBeProtected = (value, property = null) => (
+    Boolean(value?.unknown)
+      || pathsMatchProtected(value?.paths, property)
+  );
+  const receiverIsProtectedRoot = (value) => (value?.paths || []).some((path) => {
+    const canonical = canonicalPath(path);
+    return protectedPaths.some((expected) => (
+      canonical.length === expected.length
+        && canonical.every((part, index) => part === expected[index])
+    ));
+  });
+  const writerNamesFor = (value) => {
+    const names = new Set();
+    for (const path of value?.paths || []) {
+      const canonical = canonicalPath(path);
+      const key = canonical.join('.');
+      if (builtinWriters.has(key)) names.add(key);
+      if (canonical.length === 2 && writerFamilies.has(canonical[0]) && canonical[1] === '*') {
+        for (const writer of builtinWriters) if (writer.startsWith(`${canonical[0]}.`)) names.add(writer);
+        names.add(`${canonical[0]}.*`);
+      }
+    }
+    return names;
+  };
+  const invocationForms = (node, callable = resolve(node.callee), callDepth = 0) => {
+    const forms = [];
+    const add = (value, args, indeterminate = false, depth = 0) => {
+      if (depth > 12) {
+        forms.push({ writers: new Set(), args, indeterminate: true });
+        return;
+      }
+      const writers = writerNamesFor(value);
+      for (const bound of value?.bounds || []) {
+        add(bound.callee, [...(bound.boundArgs || []), ...args], indeterminate, depth + 1);
+      }
+      for (const path of value?.paths || []) {
+        const canonical = canonicalPath(path);
+        const suffix = canonical.at(-1);
+        if (suffix === 'call' || suffix === 'apply') {
+          const base = resolve({
+            type: 'MemberExpression', object: { type: 'Identifier', name: canonical.slice(0, -1).join('.') },
+            property: { type: 'Identifier', name: suffix }, computed: false,
+          });
+          // The synthetic lookup above is only a fallback for aliases; exact
+          // member expressions are decoded below using the original AST.
+          void base;
+        }
+      }
+      forms.push({ writers, args, indeterminate: indeterminate || Boolean(value?.unknown) });
+    };
+    const calleeNode = unwrap(node.callee);
+    const directCalleeName = canonicalPath(staticMemberPath(calleeNode)).join('.');
+    if (calleeNode?.type === 'MemberExpression'
+      && directCalleeName !== 'Reflect.apply'
+      && ['call', 'apply'].includes(calleeNode.computed
+        ? (calleeNode.property?.type === 'Literal' ? String(calleeNode.property.value) : '')
+        : calleeNode.property?.name)) {
+      const base = resolve(calleeNode.object);
+      const methodName = calleeNode.computed ? String(calleeNode.property.value) : calleeNode.property.name;
+      const forwarded = methodName === 'call'
+        ? node.arguments.slice(1) : null;
+      const baseNames = new Set((base.paths || []).map((path) => canonicalPath(path).join('.')));
+      const metaApply = baseNames.has('Reflect.apply');
+      const metaConstruct = baseNames.has('Reflect.construct');
+      if (metaApply || metaConstruct) {
+        let metaArgs = forwarded || [];
+        if (!forwarded) {
+          const list = unwrap(node.arguments[1]);
+          if (list?.type === 'ArrayExpression'
+            && !list.elements.some((entry) => !entry || entry.type === 'SpreadElement')) {
+            metaArgs = list.elements;
+          } else {
+            add(unknownWriterValue(), [], true);
+            return forms;
+          }
+        }
+        const target = metaArgs[0];
+        const list = metaArgs[metaApply ? 2 : 1];
+        if (!target) add(resolve(target), [], true);
+        else if (unwrap(list)?.type === 'ArrayExpression'
+          && !unwrap(list).elements.some((entry) => entry?.type === 'SpreadElement')) {
+          add(resolve(target), unwrap(list).elements);
+        } else add(resolve(target), [], true);
+      } else if (forwarded) add(base, forwarded);
+      else {
+        const list = unwrap(node.arguments[1]);
+        if (list?.type === 'ArrayExpression' && !list.elements.some((entry) => entry?.type === 'SpreadElement')) {
+          add(base, list.elements);
+        } else add(base, [], true);
+      }
+      return forms;
+    }
+    const dynamicBase = calleeNode?.type === 'MemberExpression' && calleeNode.computed
+      ? resolve(calleeNode.object) : null;
+    const dynamicNames = calleeNode?.type === 'MemberExpression' && calleeNode.computed
+      ? staticPropertyNames(calleeNode.property) : { names: [], unknown: false };
+    if (dynamicBase && dynamicNames.unknown && (dynamicBase.paths || []).some((path) => {
+      const canonical = canonicalPath(path);
+      return canonical.length === 1 && writerFamilies.has(canonical[0]);
+    })) {
+      add(unknownWriterValue(), node.arguments, true);
+      return forms;
+    }
+    const callablePaths = new Set((callable?.paths || []).map((path) => canonicalPath(path).join('.')));
+    if (callablePaths.has('Reflect.apply') || callablePaths.has('Reflect.construct')) {
+      const metaApply = callablePaths.has('Reflect.apply');
+      const target = node.arguments[0];
+      const list = unwrap(node.arguments[metaApply ? 2 : 1]);
+      if (list?.type === 'ArrayExpression'
+        && !list.elements.some((entry) => !entry || entry.type === 'SpreadElement')) {
+        add(resolve(target), list.elements);
+      } else add(unknownWriterValue(), [], true);
+      return forms;
+    }
+    const direct = canonicalPath(staticMemberPath(calleeNode));
+    if (directCalleeName === 'Reflect.apply') {
+      const target = node.arguments[0];
+      const list = unwrap(node.arguments[2]);
+      if (list?.type === 'ArrayExpression' && !list.elements.some((entry) => entry?.type === 'SpreadElement')) {
+        add(resolve(target), list.elements);
+      } else add(resolve(target), [], true);
+      return forms;
+    }
+    if (direct.join('.') === 'Reflect.construct') {
+      const target = node.arguments[0];
+      const list = unwrap(node.arguments[1]);
+      if (list?.type === 'ArrayExpression' && !list.elements.some((entry) => entry?.type === 'SpreadElement')) {
+        add(resolve(target), list.elements);
+      } else add(resolve(target), [], true);
+      return forms;
+    }
+    add(callable, node.arguments);
+    return forms;
+  };
+  const writerMutates = (writer, args, indeterminate) => {
+    if (!writer) return false;
+    if (indeterminate) {
+      const target = args[0];
+      return !target || valueMayBeProtected(resolve(target));
+    }
+    const name = writer;
+    if (name.endsWith('.*')) {
+      const target = args[0];
+      return !target || valueMayBeProtected(resolve(target));
+    }
+    const target = args[0];
+    if (!target) return true;
+    if (name.endsWith('setPrototypeOf')) return valueMayBeProtected(resolve(target));
+    if (name.endsWith('defineProperty') || name.endsWith('deleteProperty') || name.endsWith('.set')) {
+      const propertyNode = args[1];
+      const propertyNames = staticPropertyNames(propertyNode).names;
+      if (!propertyNames.length) return valueMayBeProtected(resolve(target));
+      return propertyNames.some((property) => valueMayBeProtected(resolve(target), property));
+    }
+    if (name.endsWith('defineProperties')) {
+      const receiver = resolve(target);
+      const descriptors = resolve(args[1]);
+      if (receiverIsProtectedRoot(receiver)) return true;
+      for (const property of descriptors?.containers || []) {
+        for (const key of property.keys()) if (valueMayBeProtected(receiver, key)) return true;
+      }
+      return descriptors?.unknown === true && valueMayBeProtected(receiver);
+    }
+    if (name.endsWith('assign')) {
+      const receiver = resolve(target);
+      if (receiverIsProtectedRoot(receiver)) return true;
+      for (const source of args.slice(1)) {
+        const sourceValue = resolve(source);
+        for (const container of sourceValue.containers || []) {
+          for (const key of container.keys()) if (valueMayBeProtected(receiver, key)) return true;
+        }
+        if (sourceValue.unknown && valueMayBeProtected(receiver)) return true;
+      }
+    }
+    return false;
+  };
+  let mutated = false;
+  const inspect = (root, callDepth = 0, activeFunctions = new Set()) => visit(root, (node) => {
+    if (mutated) return;
+    if (node.type === 'AssignmentExpression' || node.type === 'UpdateExpression'
+      || (node.type === 'UnaryExpression' && node.operator === 'delete')
+      || ['ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const target = node.type === 'ForInStatement' || node.type === 'ForOfStatement'
+        ? node.left?.type === 'VariableDeclaration' ? node.left.declarations?.[0]?.id : node.left
+        : node.left || node.argument;
+      if (target?.type === 'MemberExpression') {
+        const object = resolve(target.object);
+        const properties = target.computed ? staticPropertyNames(target.property) : {
+          names: [target.property?.name].filter(Boolean), unknown: false,
+        };
+        if (properties.unknown || !properties.names.length) mutated = valueMayBeProtected(object);
+        else mutated = properties.names.some((property) => valueMayBeProtected(object, property));
+      }
+      return;
+    }
+    if (node.type !== 'CallExpression' && node.type !== 'NewExpression') return;
+    for (const form of invocationForms(node)) {
+      for (const writer of form.writers || []) {
+        if (writerMutates(writer, form.args, form.indeterminate)) {
+          mutated = true;
+          return;
+        }
+      }
+    }
+    if (mutated || callDepth >= 12) return;
+    const callable = resolve(node.callee);
+    for (const functionNode of callable.functions || []) {
+      if (activeFunctions.has(functionNode)) continue;
+      const parameterValues = new Map();
+      for (let index = 0; index < (functionNode.params || []).length; index += 1) {
+        const argument = node.arguments[index];
+        const value = !argument || argument.type === 'SpreadElement'
+          ? unknownValue()
+          : resolve(argument);
+        for (const name of patternNames(functionNode.params[index])) parameterValues.set(name, value);
+      }
+      activeParameterValues.push(parameterValues);
+      try {
+        inspect(functionNode.body, callDepth + 1, new Set([...activeFunctions, functionNode]));
+      } finally {
+        activeParameterValues.pop();
+      }
+      if (mutated) return;
+    }
+  });
+  inspect(program);
+  return mutated;
+}
+
+export function programHasTrustedGlobalMutation(program, globals) {
+  const trustedGlobals = [...new Set((globals || []).filter((name) => (
+    typeof name === 'string' && name.length > 0
+  )))];
+  if (!trustedGlobals.length) return false;
+  const protectedPaths = trustedGlobals.flatMap((name) => [
+    [name],
+    ['globalThis', name],
+    ['global', name],
+  ]);
+  return trustedGlobalMutationValueFlow(program, protectedPaths, trustedGlobals);
 }
 
 function protectedCollectionMutationCalls(functionNode, protectedPath, methods) {
@@ -1396,7 +2282,7 @@ function currentTerminationDeadline(body) {
   const timeout = unwrap(assignment.right);
   return call(timeout, ['setTimeout'], [
     (entry) => identifier(entry, 'resolveDeadline'),
-    (entry) => finitePositiveTimeoutExpression(entry, 'cleanupGraceMs', 1),
+    (entry) => finiteBoundedTimeoutExpression(entry, 'cleanupGraceMs', { fallback: 1 }),
   ]);
 }
 
@@ -1418,6 +2304,1893 @@ function finitePositiveTimeoutExpression(node, sourceName, fallback) {
     ])
     && (typeof fallback === 'function' ? fallback(node.alternate) : literal(node.alternate, fallback))
     && (typeof fallback === 'function' || (Number.isFinite(fallback) && fallback > 0));
+}
+
+function finiteBoundedTimeoutExpression(node, sourceName, {
+  fallback = 1,
+  maximum = null,
+} = {}) {
+  node = unwrap(node);
+  if (!call(node, ['Math', 'min']) || node.arguments.length !== 2) return false;
+  const fallbackMatcher = typeof fallback === 'function'
+    ? fallback
+    : (entry) => literal(entry, fallback)
+      && Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 2_147_483_647;
+  const maximumMatcher = typeof maximum === 'function'
+    ? maximum
+    : (entry) => {
+      entry = unwrap(entry);
+      return entry?.type === 'Literal'
+        && typeof entry.value === 'number'
+        && Number.isSafeInteger(entry.value)
+        && entry.value > 0
+        && entry.value <= 2_147_483_647;
+    };
+  const lowerBoundedMatcher = (entry) => call(entry, ['Math', 'max'], [
+    (minimum) => literal(minimum, 1),
+    (candidate) => logical(
+      candidate,
+      '||',
+      (coerced) => call(coerced, ['Number'], [
+        (source) => identifier(source, sourceName),
+      ]),
+      fallbackMatcher,
+    ),
+  ]);
+  return (maximumMatcher(node.arguments[0]) && lowerBoundedMatcher(node.arguments[1]))
+    || (lowerBoundedMatcher(node.arguments[0]) && maximumMatcher(node.arguments[1]));
+}
+
+function deadlineExpiredIdentity(node, candidateName) {
+  return logical(
+    node,
+    '&&',
+    (left) => member(left, ['expired', 'deadlineExpired']),
+    (right) => call(right, ['expired', 'matches'], [
+      (value) => identifier(value, candidateName),
+    ]),
+  );
+}
+
+function safeTimerTimeoutBinding(functionNode, {
+  boundedName,
+  maximum,
+  requestedName,
+  sourceName,
+  fallback = 1,
+}) {
+  if (!Number.isSafeInteger(maximum) || maximum <= 0
+    || !Number.isSafeInteger(fallback) || fallback <= 0 || fallback > maximum
+    || functionHasNestedBinding(functionNode, [requestedName, boundedName], {
+      allowedDirectBindings: [requestedName, boundedName],
+    })
+    || functionHasIdentifierWrite(functionNode, [requestedName, boundedName])) return false;
+  const requested = directDeclarator(functionNode?.body, requestedName, 'const');
+  const bounded = directDeclarator(functionNode?.body, boundedName, 'const');
+  if (!requested || !bounded
+    || !call(requested.declaration.init, ['Number'], [
+      (value) => identifier(value, sourceName),
+    ])
+    || !directStatementsOrderedAndReachable(functionNode.body, [
+      requested.statement, bounded.statement,
+    ])) return false;
+  const value = unwrap(bounded.declaration.init);
+  if (value?.type !== 'ConditionalExpression'
+    || !logical(
+      value.test,
+      '&&',
+      (left) => call(left, ['Number', 'isSafeInteger'], [
+        (entry) => identifier(entry, requestedName),
+      ]),
+      (right) => binary(
+        right,
+        '>',
+        (entry) => identifier(entry, requestedName),
+        (entry) => literal(entry, 0),
+      ),
+    )
+    || !literal(value.alternate, fallback)) return false;
+  const boundedValue = unwrap(value.consequent);
+  if (!call(boundedValue, ['Math', 'min']) || boundedValue.arguments.length !== 2) return false;
+  const requestedMatcher = (entry) => identifier(entry, requestedName);
+  const maximumMatcher = (entry) => literal(entry, maximum);
+  return (requestedMatcher(boundedValue.arguments[0]) && maximumMatcher(boundedValue.arguments[1]))
+    || (maximumMatcher(boundedValue.arguments[0]) && requestedMatcher(boundedValue.arguments[1]));
+}
+
+function deadlineTerminalCleanup(statement) {
+  if (statement?.type !== 'IfStatement'
+    || !call(statement.test, ['isExecutionWorkerTerminalOperation'], [
+      (value) => member(value, ['message', 'operation']),
+    ])
+    || statement.consequent?.type !== 'BlockStatement'
+    || statement.consequent.body.length !== 2) return false;
+  return directCallStatement(statement.consequent.body[0], ['clearTimeout'], [
+    (value) => member(value, ['expired', 'cancelDeadline']),
+  ]) && directCallStatement(statement.consequent.body[1], ['pending', 'delete'], [
+    (value) => member(value, ['message', 'requestId']),
+  ]);
+}
+
+function deadlineAstContract(source) {
+  const program = parseProgram(source);
+  const validateReply = topFunction(program, 'validateExecutionWorkerReply');
+  const settleExpired = topFunction(program, 'settleExpiredExecutionWorkerReply');
+  const cancelExpired = topFunction(program, 'cancelExpiredExecution');
+  const schedule = topFunction(program, 'scheduleExecutionWorkerDeadline');
+  const createCallbacks = topFunction(program, 'createExecutionWorkerDeadlineCallbacks');
+  if (!validateReply || !settleExpired || !cancelExpired || !schedule || !createCallbacks
+    || !exactTopLevelRequireBinding(
+      program, 'createEnvelope', 'createEnvelope', './execution-worker-protocol.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program, 'validateEnvelope', 'validateEnvelope', './execution-worker-protocol.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'isExecutionWorkerTerminalOperation',
+      'isExecutionWorkerTerminalOperation',
+      './execution-worker-context-usage.cjs',
+    )
+    || !stableProgramIdentifiers(program, [
+      'Error', 'Math', 'Number', 'Object', 'clearTimeout', 'setTimeout',
+      'cancelExpiredExecution', 'createEnvelope', 'createExecutionWorkerDeadlineCallbacks',
+      'isExecutionWorkerTerminalOperation', 'scheduleExecutionWorkerDeadline',
+      'settleExpiredExecutionWorkerReply', 'validateEnvelope', 'validateExecutionWorkerReply',
+    ], { globals: ['Error', 'Math', 'Number', 'Object', 'clearTimeout', 'setTimeout'] })
+    || !exactIdentifierParameters(validateReply, ['raw', 'pending', 'now'])
+    || !exactIdentifierParameters(settleExpired, ['message', 'pending'])
+    || !exactParameterList(cancelExpired, [
+      (value) => objectPatternBindsExactly(value, [
+        'message', 'item', 'pending', 'child', 'terminateChild', 'now', 'graceMs',
+      ]),
+    ])
+    || !exactParameterList(schedule, [
+      (value) => objectPatternBindsExactly(value, [
+        'message', 'pending', 'child', 'terminateChild', 'now', 'deadlineMs', 'graceMs',
+      ]),
+    ])
+    || !exactParameterList(createCallbacks, [
+      (value) => objectPatternBindsExactly(value, [
+        'operation', 'requestId', 'message', 'pending', 'child', 'terminateChild', 'now',
+        'graceMs',
+      ]),
+    ])) return false;
+
+  const protectedByFunction = [
+    [validateReply, ['raw', 'pending', 'now', 'validateEnvelope',
+      'isExecutionWorkerTerminalOperation']],
+    [settleExpired, ['message', 'pending', 'isExecutionWorkerTerminalOperation']],
+    [cancelExpired, ['message', 'item', 'pending', 'child', 'terminateChild', 'now',
+      'graceMs', 'setTimeout', 'clearTimeout', 'createEnvelope', 'Math', 'Number']],
+    [schedule, ['message', 'pending', 'child', 'terminateChild', 'now', 'deadlineMs',
+      'graceMs', 'setTimeout', 'cancelExpiredExecution', 'Math', 'Number', 'Object', 'Error']],
+    [createCallbacks, ['operation', 'requestId', 'message', 'pending', 'child',
+      'terminateChild', 'now', 'graceMs', 'createEnvelope', 'Math']],
+  ];
+  if (protectedByFunction.some(([fn, names]) => (
+    functionHasNestedBinding(fn, names) || functionHasIdentifierWrite(fn, names)
+  ))) return false;
+  if (functionHasProtectedAliasMutation(validateReply, [
+    ['pending', 'get'], ['pending', 'delete'], ['expired', 'matches'],
+  ]) || functionHasProtectedAliasMutation(settleExpired, [
+    ['pending', 'get'], ['pending', 'delete'], ['expired', 'matches'],
+  ]) || functionHasProtectedAliasMutation(cancelExpired, [
+    ['pending', 'get'], ['terminateChild'], ['child', 'postMessage'],
+  ]) || functionHasProtectedAliasMutation(schedule, [
+    ['pending', 'get'], ['pending', 'delete'], ['item', 'reject'], ['terminateChild'],
+  ]) || functionHasProtectedAliasMutation(createCallbacks, [
+    ['pending', 'get'], ['pending', 'has'], ['pending', 'delete'],
+    ['child', 'postMessage'], ['terminateChild'],
+  ])) return false;
+
+  const expired = directDeclarator(validateReply.body, 'expired', 'const');
+  const validationTime = directDeclarator(validateReply.body, 'validationTime', 'const');
+  const validatedMessage = directDeclarator(validateReply.body, 'message', 'const');
+  const validateExpiredBranch = validateReply.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && deadlineExpiredIdentity(statement.test, 'message')
+    && statement.consequent?.type === 'BlockStatement'
+  ));
+  if (!expired || !call(expired.declaration.init, ['pending', 'get'], [
+    (value) => member(value, ['raw', 'requestId']),
+  ]) || !validationTime || !validatedMessage
+    || !call(validatedMessage.declaration.init, ['validateEnvelope'], [
+      (value) => identifier(value, 'raw'),
+      (value) => exactObject(value, {
+        direction: (entry) => literal(entry, 'worker-to-host'),
+        now: (entry) => identifier(entry, 'validationTime'),
+      }),
+    ])
+    || validateExpiredBranch.length !== 1) return false;
+  const validationChoice = unwrap(validationTime.declaration.init);
+  if (validationChoice?.type !== 'ConditionalExpression'
+    || !logical(
+      validationChoice.test,
+      '&&',
+      (left) => deadlineExpiredIdentity(left, 'raw'),
+      (right) => binary(
+        right,
+        '===',
+        (value) => member(value, ['raw', 'deadlineAt']),
+        (value) => member(value, ['expired', 'deadlineAt']),
+      ),
+    )
+    || !binary(
+      validationChoice.consequent,
+      '-',
+      (value) => member(value, ['expired', 'deadlineAt']),
+      (value) => literal(value, 1),
+    )
+    || !call(validationChoice.alternate, ['now'], [])) return false;
+  const validateBranchBody = validateExpiredBranch[0].consequent;
+  if (validateBranchBody.body.length !== 2
+    || !deadlineTerminalCleanup(validateBranchBody.body[0])
+    || !exactReturn(validateBranchBody.body[1], (value) => objectIncludesExactProperties(value, {
+      operation: (entry) => literal(entry, 'execution.expired'),
+    }, { allowedSpreads: [(entry) => identifier(entry, 'message')] }))
+    || !directStatementsOrderedAndReachable(validateReply.body, [
+      expired.statement, validationTime.statement, validatedMessage.statement,
+      validateExpiredBranch[0], validateReply.body.body.at(-1),
+    ])
+    || !exactReturn(validateReply.body.body.at(-1), (value) => identifier(value, 'message'))) {
+    return false;
+  }
+
+  const settledExpired = directDeclarator(settleExpired.body, 'expired', 'const');
+  const settleGuard = settleExpired.body.body[1];
+  const settleCleanup = settleExpired.body.body[2];
+  if (!settledExpired || !call(settledExpired.declaration.init, ['pending', 'get'], [
+    (value) => member(value, ['message', 'requestId']),
+  ]) || settleGuard?.type !== 'IfStatement'
+    || !logical(
+      settleGuard.test,
+      '||',
+      (left) => unary(left, '!', (value) => member(value, ['expired', 'deadlineExpired'])),
+      (right) => exactNotCall(right, ['expired', 'matches'], [
+        (value) => identifier(value, 'message'),
+      ]),
+    )
+    || !exactReturn(settleGuard.consequent, (value) => literal(value, false))
+    || !deadlineTerminalCleanup(settleCleanup)
+    || !exactReturn(settleExpired.body.body[3], (value) => literal(value, true))
+    || !directStatementsOrderedAndReachable(settleExpired.body, settleExpired.body.body)) {
+    return false;
+  }
+
+  if (!safeTimerTimeoutBinding(cancelExpired, {
+    sourceName: 'graceMs', requestedName: 'requestedGraceMs', boundedName: 'boundedGraceMs',
+    maximum: 2_147_483_647,
+  })) return false;
+  const expiredAssignments = directAssignmentStatements(cancelExpired.body, ['item', 'deadlineExpired']);
+  const cancellationAssignments = directAssignmentStatements(cancelExpired.body, ['item', 'cancelDeadline']);
+  const cancelUnrefs = cancelExpired.body.body.filter((statement) => directCallStatement(
+    statement, ['item', 'cancelDeadline', 'unref'], [],
+  ));
+  const cancelPost = cancelExpired.body.body.find((statement) => statement.type === 'TryStatement');
+  const cancelTimer = unwrap(cancellationAssignments[0]?.expression?.right);
+  const cancelTimerCallback = unwrap(cancelTimer?.arguments?.[0]);
+  const cancelTimerGuard = cancelTimerCallback?.body?.body?.[0];
+  if (expiredAssignments.length !== 1 || !literal(expiredAssignments[0].expression.right, true)
+    || cancellationAssignments.length !== 1
+    || !call(cancelTimer, ['setTimeout']) || cancelTimer.arguments.length !== 2
+    || !identifier(cancelTimer.arguments[1], 'boundedGraceMs')
+    || cancelTimerCallback?.type !== 'ArrowFunctionExpression'
+    || !exactProtectedIdentifierParameters(cancelTimerCallback, [])
+    || cancelTimerCallback.body?.type !== 'BlockStatement'
+    || cancelTimerCallback.body.body.length !== 1
+    || cancelTimerGuard?.type !== 'IfStatement'
+    || !binary(
+      cancelTimerGuard.test,
+      '===',
+      (value) => call(value, ['pending', 'get'], [
+        (entry) => member(entry, ['message', 'requestId']),
+      ]),
+      (value) => identifier(value, 'item'),
+    )
+    || !directCallStatement(cancelTimerGuard.consequent, ['terminateChild'], [
+      (value) => identifier(value, 'child'),
+      (value) => literal(value, 'request-deadline-timeout'),
+    ])
+    || cancelUnrefs.length !== 1 || !cancelPost
+    || cancelPost.block.body.length !== 1 || cancelPost.handler?.body?.body.length !== 1
+    || !directCallStatement(cancelPost.block.body[0], ['child', 'postMessage'], [
+      (value) => call(value, ['createEnvelope'], [
+        (entry) => literal(entry, 'execution.cancel'),
+        (entry) => identifier(entry, 'message'),
+        (entry) => exactObject(entry, {
+          reason: (item) => literal(item, 'execution_worker_deadline_exceeded'),
+        }),
+        (entry) => exactObject(entry, {
+          deadlineMs: (item) => identifier(item, 'boundedGraceMs'),
+          now: (item) => call(item, ['now'], []),
+        }),
+      ]),
+    ])
+    || !directCallStatement(cancelPost.handler.body.body[0], ['terminateChild'], [
+      (value) => identifier(value, 'child'),
+      (value) => literal(value, 'request-deadline-timeout'),
+    ])) return false;
+  const cancelOrdered = [
+    directDeclarator(cancelExpired.body, 'requestedGraceMs', 'const')?.statement,
+    directDeclarator(cancelExpired.body, 'boundedGraceMs', 'const')?.statement,
+    expiredAssignments[0], cancellationAssignments[0], cancelUnrefs[0], cancelPost,
+  ];
+  if (cancelOrdered.some((entry) => !entry)
+    || !directStatementsOrderedAndReachable(cancelExpired.body, cancelOrdered)) return false;
+
+  if (!safeTimerTimeoutBinding(schedule, {
+    sourceName: 'deadlineMs', requestedName: 'requestedDeadlineMs',
+    boundedName: 'boundedDeadlineMs', maximum: 2_147_483_646,
+  })) return false;
+  const timer = directDeclarator(schedule.body, 'timer', 'const');
+  const timerCall = unwrap(timer?.declaration?.init);
+  const timerCallback = unwrap(timerCall?.arguments?.[0]);
+  if (!timer || !call(timerCall, ['setTimeout']) || timerCall.arguments.length !== 2
+    || !binary(
+      timerCall.arguments[1],
+      '+',
+      (value) => identifier(value, 'boundedDeadlineMs'),
+      (value) => literal(value, 1),
+    )
+    || timerCallback?.type !== 'ArrowFunctionExpression'
+    || !exactProtectedIdentifierParameters(timerCallback, [])
+    || timerCallback.body?.type !== 'BlockStatement') return false;
+  const timerItem = directDeclarator(timerCallback.body, 'item', 'const');
+  const timerGuard = timerCallback.body.body[1];
+  const timerError = directDeclarator(timerCallback.body, 'error', 'const');
+  const timerRejects = timerCallback.body.body.filter((statement) => directCallStatement(
+    statement, ['item', 'reject'], [(value) => identifier(value, 'error')],
+  ));
+  const nonStart = timerCallback.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && binary(
+      statement.test,
+      '!==',
+      (value) => member(value, ['message', 'operation']),
+      (value) => literal(value, 'execution.start'),
+    )
+    && statement.consequent?.type === 'BlockStatement'
+    && statement.consequent.body.length === 2
+    && directCallStatement(statement.consequent.body[0], ['pending', 'delete'], [
+      (value) => member(value, ['message', 'requestId']),
+    ])
+    && bareReturn(statement.consequent.body[1])
+  ));
+  const startsCancellation = timerCallback.body.body.filter((statement) => directCallStatement(
+    statement, ['cancelExpiredExecution'], [
+      (value) => exactObject(value, {
+        message: (entry) => identifier(entry, 'message'),
+        item: (entry) => identifier(entry, 'item'),
+        pending: (entry) => identifier(entry, 'pending'),
+        child: (entry) => identifier(entry, 'child'),
+        terminateChild: (entry) => identifier(entry, 'terminateChild'),
+        now: (entry) => identifier(entry, 'now'),
+        graceMs: (entry) => identifier(entry, 'graceMs'),
+      }),
+    ],
+  ));
+  if (!timerItem || !call(timerItem.declaration.init, ['pending', 'get'], [
+    (value) => member(value, ['message', 'requestId']),
+  ]) || timerGuard?.type !== 'IfStatement'
+    || !unary(timerGuard.test, '!', (value) => identifier(value, 'item'))
+    || !bareReturn(timerGuard.consequent)
+    || !timerError || !executionDeadlineError(timerError.declaration.init)
+    || timerRejects.length !== 1 || nonStart.length !== 1 || startsCancellation.length !== 1
+    || !directStatementsOrderedAndReachable(timerCallback.body, [
+      timerItem.statement, timerGuard, timerError.statement, timerRejects[0],
+      nonStart[0], startsCancellation[0],
+    ])) return false;
+  const scheduleUnrefs = schedule.body.body.filter((statement) => directCallStatement(
+    statement, ['timer', 'unref'], [],
+  ));
+  const scheduleReturns = schedule.body.body.filter((statement) => exactReturn(
+    statement, (value) => identifier(value, 'timer'),
+  ));
+  if (scheduleUnrefs.length !== 1 || scheduleReturns.length !== 1
+    || !directStatementsOrderedAndReachable(schedule.body, [
+      directDeclarator(schedule.body, 'requestedDeadlineMs', 'const').statement,
+      directDeclarator(schedule.body, 'boundedDeadlineMs', 'const').statement,
+      timer.statement, scheduleUnrefs[0], scheduleReturns[0],
+    ])) return false;
+
+  if (!safeTimerTimeoutBinding(createCallbacks, {
+    sourceName: 'graceMs', requestedName: 'requestedCallbackGraceMs',
+    boundedName: 'boundedCallbackGraceMs', maximum: 2_147_483_647,
+  })) return false;
+  const callbacksObject = returnedObject(createCallbacks);
+  if (!callbacksObject || !exactObject(callbacksObject, {
+    onDeadline: (value) => {
+      value = unwrap(value);
+      if (value?.type !== 'ArrowFunctionExpression'
+        || !exactProtectedIdentifierParameters(value, [])
+        || value.body?.type !== 'BlockStatement') return false;
+      const item = directDeclarator(value.body, 'item', 'const');
+      const nonStartBranch = value.body.body[1];
+      const missing = value.body.body[2];
+      const writes = directAssignmentStatements(value.body, ['item', 'deadlineExpired']);
+      const deadlineWrites = directAssignmentStatements(value.body, ['item', 'deadlineAt']);
+      const attempt = value.body.body.find((statement) => statement.type === 'TryStatement');
+      return Boolean(item
+        && call(item.declaration.init, ['pending', 'get'], [
+          (entry) => identifier(entry, 'requestId'),
+        ])
+        && nonStartBranch?.type === 'IfStatement'
+        && binary(
+          nonStartBranch.test,
+          '!==',
+          (entry) => identifier(entry, 'operation'),
+          (entry) => literal(entry, 'execution.start'),
+        )
+        && nonStartBranch.consequent?.type === 'BlockStatement'
+        && nonStartBranch.consequent.body.length === 2
+        && directCallStatement(nonStartBranch.consequent.body[0], ['pending', 'delete'], [
+          (entry) => identifier(entry, 'requestId'),
+        ])
+        && bareReturn(nonStartBranch.consequent.body[1])
+        && missing?.type === 'IfStatement'
+        && unary(missing.test, '!', (entry) => identifier(entry, 'item'))
+        && bareReturn(missing.consequent)
+        && writes.length === 1 && literal(writes[0].expression.right, true)
+        && deadlineWrites.length === 1
+        && member(deadlineWrites[0].expression.right, ['message', 'deadlineAt'])
+        && attempt?.block?.body.length === 1
+        && attempt?.handler?.body?.body.length === 1
+        && directCallStatement(attempt.block.body[0], ['child', 'postMessage'], [
+          (entry) => call(entry, ['createEnvelope'], [
+            (itemEntry) => literal(itemEntry, 'execution.cancel'),
+            (itemEntry) => identifier(itemEntry, 'message'),
+            (itemEntry) => exactObject(itemEntry, {
+              reason: (reason) => literal(reason, 'execution_worker_deadline_exceeded'),
+            }),
+            (itemEntry) => exactObject(itemEntry, {
+              deadlineMs: (deadline) => identifier(deadline, 'boundedCallbackGraceMs'),
+              now: (nowCall) => call(nowCall, ['now'], []),
+            }),
+          ]),
+        ])
+        && exactReturn(attempt.handler.body.body[0], (entry) => call(entry, ['terminateChild'], [
+          (target) => identifier(target, 'child'),
+          (reason) => literal(reason, 'request-deadline-timeout'),
+        ]))
+        && directStatementsOrderedAndReachable(value.body, [
+          item.statement, nonStartBranch, missing, writes[0], deadlineWrites[0], attempt,
+        ]));
+    },
+    onCancellationTimeout: (value) => {
+      value = unwrap(value);
+      if (value?.type !== 'ArrowFunctionExpression'
+        || !exactProtectedIdentifierParameters(value, [])
+        || value.body?.type !== 'BlockStatement'
+        || value.body.body.length !== 1) return false;
+      const branch = value.body.body[0];
+      return branch?.type === 'IfStatement'
+        && call(branch.test, ['pending', 'has'], [(entry) => identifier(entry, 'requestId')])
+        && exactReturn(branch.consequent, (entry) => call(entry, ['terminateChild'], [
+          (target) => identifier(target, 'child'),
+          (reason) => literal(reason, 'request-deadline-timeout'),
+        ]));
+    },
+  })) return false;
+  const callbackMutations = protectedCollectionMutationCalls(
+    createCallbacks, ['pending'], ['add', 'clear', 'delete', 'set'],
+  );
+  return callbackMutations.length === 1 && callbackMutations[0].method === 'delete'
+    && topLevelModuleExportsIncludes(program, {
+      validateExecutionWorkerReply: (value) => identifier(value, 'validateExecutionWorkerReply'),
+      settleExpiredExecutionWorkerReply: (value) => identifier(
+        value, 'settleExpiredExecutionWorkerReply',
+      ),
+      scheduleExecutionWorkerDeadline: (value) => identifier(
+        value, 'scheduleExecutionWorkerDeadline',
+      ),
+      createExecutionWorkerDeadlineCallbacks: (value) => identifier(
+        value, 'createExecutionWorkerDeadlineCallbacks',
+      ),
+    });
+}
+
+function exactStringSetBinding(program, name, expectedValues) {
+  const binding = directDeclarator(program, name, 'const');
+  const value = unwrap(binding?.declaration?.init);
+  const entries = unwrap(value?.arguments?.[0]);
+  return Boolean(binding
+    && construct(value, 'Set')
+    && value.arguments.length === 1
+    && entries?.type === 'ArrayExpression'
+    && entries.elements.length === expectedValues.length
+    && expectedValues.every((expected, index) => literal(entries.elements[index], expected)));
+}
+
+function exactSetMembershipFunction(functionNode, setName) {
+  return exactProtectedIdentifierParameters(functionNode, ['name'], [
+    'name', setName, 'String',
+  ])
+    && functionNode.body?.body?.length === 1
+    && exactReturn(functionNode.body.body[0], (value) => call(value, [setName, 'has'], [
+      (entry) => call(entry, ['String'], [
+        (candidate) => logical(
+          candidate,
+          '||',
+          (left) => identifier(left, 'name'),
+          (right) => literal(right, ''),
+        ),
+      ]),
+    ]));
+}
+
+function callbackPromiseFailureSink(statement, settlementName = 'settlement') {
+  if (statement?.type !== 'ExpressionStatement') return false;
+  const expression = unwrap(statement.expression);
+  if (expression?.type !== 'UnaryExpression' || expression.operator !== 'void') return false;
+  return methodCall(
+    expression.argument,
+    'catch',
+    (receiver) => call(receiver, ['Promise', 'resolve'], [
+      (value) => identifier(value, settlementName),
+    ]),
+    [(callback) => exactProtectedIdentifierParameters(unwrap(callback), [], [
+      'name', 'reportBestEffortFailure',
+    ]) && arrowCallsExactly(callback, ['reportBestEffortFailure'], [
+      (value) => identifier(value, 'name'),
+    ])],
+  );
+}
+
+function callbackInvocationAssignment(statement) {
+  const expression = unwrap(statement?.expression);
+  return statement?.type === 'ExpressionStatement'
+    && expression?.type === 'AssignmentExpression'
+    && expression.operator === '='
+    && identifier(expression.left, 'settlement')
+    && call(expression.right, ['invokeCallback'], [
+      (value) => identifier(value, 'callback'),
+      (value) => identifier(value, 'name'),
+      (value) => member(value, ['payload', 'value']),
+    ]);
+}
+
+function callbackCatchClause(handler, { rethrow = false } = {}) {
+  const body = handler?.body;
+  if (!body || body.type !== 'BlockStatement') return false;
+  if (rethrow) {
+    const guard = body.body[0];
+    return identifier(handler.param, 'error')
+      && body.body.length === 3
+      && guard?.type === 'IfStatement'
+      && unary(guard.test, '!', (value) => identifier(value, 'bestEffort'))
+      && guard.consequent?.type === 'ThrowStatement'
+      && identifier(guard.consequent.argument, 'error')
+      && directCallStatement(body.body[1], ['reportBestEffortFailure'], [
+        (value) => identifier(value, 'name'),
+      ])
+      && exactReturn(body.body[2], (value) => literal(value, true));
+  }
+  return handler.param === null
+    && body.body.length === 2
+    && directCallStatement(body.body[0], ['reportBestEffortFailure'], [
+      (value) => identifier(value, 'name'),
+    ])
+    && bareReturn(body.body[1]);
+}
+
+function callbackSettlementAstContract(sourceByPath) {
+  const source = sourceByPath.get(
+    'electron/host-core/agent/execution-worker-callback-settlement.cjs',
+  ) || '';
+  const desktopSource = sourceByPath.get(
+    'electron/host-core/agent/desktop-host-context.cjs',
+  ) || '';
+  const program = parseProgram(source);
+  const desktopProgram = parseProgram(desktopSource);
+  const bestEffort = topFunction(program, 'isBestEffortExecutionWorkerCallback');
+  const immediate = topFunction(program, 'isImmediateNonBlockingExecutionWorkerCallback');
+  const reserved = topFunction(program, 'isReservedExecutionWorkerObserverCallback');
+  const raw = topFunction(program, 'isRawExecutionWorkerObserverCallback');
+  const reportFailure = topFunction(program, 'reportBestEffortFailure');
+  const invoke = topFunction(program, 'invokeCallback');
+  const settle = topFunction(program, 'settleExecutionWorkerCallback');
+  const reportFailureAttempt = reportFailure?.body?.body?.[0];
+  const callbackLists = {
+    BEST_EFFORT_CALLBACKS: [
+      'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+      'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+      'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onRaw', 'onRawDiagnostic',
+      'onCompactDiagnostic',
+    ],
+    IMMEDIATE_NON_BLOCKING_CALLBACKS: [
+      'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+      'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+    ],
+    DEFERRED_OBSERVER_CALLBACKS: ['onRaw', 'onRawDiagnostic', 'onCompactDiagnostic'],
+    RESERVED_OBSERVER_CALLBACKS: [
+      'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+      'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+      'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onCompactDiagnostic',
+      'onRaw', 'onRawDiagnostic',
+    ],
+    RAW_OBSERVER_CALLBACKS: ['onRaw', 'onRawDiagnostic'],
+  };
+  if (!bestEffort || !immediate || !reserved || !raw || !reportFailure || !invoke || !settle
+    || !Object.entries(callbackLists).every(([name, values]) => (
+      exactStringSetBinding(program, name, values)
+    ))
+    || !stableProgramIdentifiers(program, [
+      ...Object.keys(callbackLists), 'Array', 'console', 'Object', 'Promise', 'Set', 'String',
+      'isBestEffortExecutionWorkerCallback', 'isImmediateNonBlockingExecutionWorkerCallback',
+      'isRawExecutionWorkerObserverCallback', 'isReservedExecutionWorkerObserverCallback',
+      'invokeCallback', 'reportBestEffortFailure', 'setImmediate',
+      'settleExecutionWorkerCallback',
+    ], {
+      globals: ['Array', 'console', 'Object', 'Promise', 'Set', 'String', 'setImmediate'],
+    })
+    || !exactSetMembershipFunction(bestEffort, 'BEST_EFFORT_CALLBACKS')
+    || !exactSetMembershipFunction(immediate, 'IMMEDIATE_NON_BLOCKING_CALLBACKS')
+    || !exactSetMembershipFunction(reserved, 'RESERVED_OBSERVER_CALLBACKS')
+    || !exactSetMembershipFunction(raw, 'RAW_OBSERVER_CALLBACKS')
+    || !exactProtectedIdentifierParameters(reportFailure, ['name'], ['name', 'console', 'String'])
+    || functionHasMemberWrite({ body: program }, [['console', 'warn']])
+    || reportFailure.body?.body?.length !== 1
+    || reportFailureAttempt?.type !== 'TryStatement'
+    || reportFailureAttempt.finalizer
+    || reportFailureAttempt.block?.body?.length !== 1
+    || !directCallStatement(reportFailureAttempt.block.body[0], ['console', 'warn'], [
+      (value) => literal(value, '[execution-worker] best-effort callback failed'),
+      (value) => exactObject(value, {
+        callback: (entry) => methodCall(
+          entry,
+          'slice',
+          (receiver) => call(receiver, ['String'], [
+            (argument) => logical(
+              argument,
+              '||',
+              (left) => identifier(left, 'name'),
+              (right) => literal(right, ''),
+            ),
+          ]),
+          [(argument) => literal(argument, 0), (argument) => literal(argument, 80)],
+        ),
+        redacted: (entry) => literal(entry, true),
+      }),
+    ])
+    || reportFailureAttempt.handler?.param !== null
+    || reportFailureAttempt.handler?.body?.body?.length !== 0
+    || !exactIdentifierParameters(invoke, ['callback', 'name', 'value'])
+    || functionHasNestedBinding(invoke, ['callback', 'name', 'value', 'Array'])
+    || functionHasIdentifierWrite(invoke, ['callback', 'name', 'value', 'Array'])
+    || invoke.body?.body?.length !== 1) return false;
+  const invokeReturn = invoke.body.body[0];
+  const invokeChoice = unwrap(invokeReturn?.argument);
+  if (invokeReturn?.type !== 'ReturnStatement'
+    || invokeChoice?.type !== 'ConditionalExpression'
+    || !logical(
+      invokeChoice.test,
+      '&&',
+      (left) => call(left, ['Array', 'isArray'], [(entry) => identifier(entry, 'value')]),
+      (right) => binary(
+        right,
+        '===',
+        (entry) => identifier(entry, 'name'),
+        (entry) => literal(entry, 'onCriticalPathTiming'),
+      ),
+    )
+    || !call(invokeChoice.consequent, ['callback'], [
+      (entry) => unwrap(entry)?.type === 'SpreadElement'
+        && identifier(unwrap(entry).argument, 'value'),
+    ])
+    || !call(invokeChoice.alternate, ['callback'], [
+      (entry) => identifier(entry, 'value'),
+    ])) return false;
+
+  if (!exactParameterList(settle, [
+    (value) => objectPatternBindsExactly(value, ['callbacks', 'message', 'settlements'], {
+      topLevelDefault: true,
+      propertyDefaults: {
+        callbacks: (entry) => exactObject(entry, {}),
+        message: (entry) => exactObject(entry, {}),
+        settlements: (entry) => unwrap(entry)?.type === 'ArrayExpression'
+          && unwrap(entry).elements.length === 0,
+      },
+      requiredPropertyDefaults: ['callbacks', 'message', 'settlements'],
+    }),
+  ])) return false;
+  const protectedNames = [
+    'callbacks', 'message', 'settlements', 'Array', 'DEFERRED_OBSERVER_CALLBACKS',
+    'Object', 'Promise', 'setImmediate', 'isBestEffortExecutionWorkerCallback',
+    'isImmediateNonBlockingExecutionWorkerCallback',
+    'isReservedExecutionWorkerObserverCallback', 'invokeCallback', 'reportBestEffortFailure',
+  ];
+  if (functionHasNestedBinding(settle, protectedNames)
+    || functionHasIdentifierWrite(settle, protectedNames)
+    || functionHasMemberWrite(settle, [
+      ['callbacks'], ['message'], ['settlements'],
+    ], { allowedReadonlyDynamicAliases: ['callback'] })) return false;
+  const payload = directDeclarator(settle.body, 'payload', 'const');
+  const name = directDeclarator(settle.body, 'name', 'const');
+  const callback = directDeclarator(settle.body, 'callback', 'const');
+  const bestEffortBinding = directDeclarator(settle.body, 'bestEffort', 'const');
+  const immediateObserver = directDeclarator(settle.body, 'immediateObserver', 'const');
+  const deferredObserver = directDeclarator(settle.body, 'deferredObserver', 'const');
+  const settlement = directDeclarator(settle.body, 'settlement', 'let');
+  const guard = settle.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && logical(
+      statement.test,
+      '||',
+      (left) => exactNotCall(left, ['Object', 'hasOwn'], [
+        (entry) => identifier(entry, 'callbacks'),
+        (entry) => identifier(entry, 'name'),
+      ]),
+      (right) => binary(
+        right,
+        '!==',
+        (entry) => unary(entry, 'typeof', (value) => (
+          computedIdentifierMember(value, 'callbacks', 'name')
+        )),
+        (entry) => literal(entry, 'function'),
+      ),
+    )
+    && exactReturn(statement.consequent, (value) => literal(value, false))
+  ));
+  if (!payload || !name || !callback || !bestEffortBinding || !immediateObserver
+    || !deferredObserver || !settlement || settlement.declaration.init !== null
+    || guard.length !== 1) return false;
+  const payloadValue = unwrap(payload.declaration.init);
+  if (payloadValue?.type !== 'ConditionalExpression'
+    || !logical(
+      payloadValue.test,
+      '&&',
+      (left) => member(left, ['message', 'payload']),
+      (right) => binary(
+        right,
+        '===',
+        (entry) => unary(entry, 'typeof', (value) => member(value, ['message', 'payload'])),
+        (entry) => literal(entry, 'object'),
+      ),
+    )
+    || !member(payloadValue.consequent, ['message', 'payload'])
+    || !exactObject(payloadValue.alternate, {})
+    || !call(name.declaration.init, ['String'], [
+      (value) => logical(
+        value,
+        '||',
+        (left) => member(left, ['payload', 'callback']),
+        (right) => literal(right, ''),
+      ),
+    ])
+    || !computedIdentifierMember(callback.declaration.init, 'callbacks', 'name')
+    || !call(bestEffortBinding.declaration.init, ['isBestEffortExecutionWorkerCallback'], [
+      (value) => identifier(value, 'name'),
+    ])
+    || !call(immediateObserver.declaration.init, [
+      'isReservedExecutionWorkerObserverCallback',
+    ], [(value) => identifier(value, 'name')])
+    || !call(deferredObserver.declaration.init, ['DEFERRED_OBSERVER_CALLBACKS', 'has'], [
+      (value) => identifier(value, 'name'),
+    ])) return false;
+
+  const deferredBranch = settle.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && logical(
+      statement.test,
+      '&&',
+      (left) => identifier(left, 'bestEffort'),
+      (right) => logical(
+        right,
+        '||',
+        (entry) => unary(entry, '!', (value) => identifier(value, 'immediateObserver')),
+        (entry) => identifier(entry, 'deferredObserver'),
+      ),
+    )
+  ));
+  if (deferredBranch.length !== 1
+    || deferredBranch[0].consequent?.type !== 'BlockStatement'
+    || deferredBranch[0].consequent.body.length !== 2) return false;
+  const deferredStart = deferredBranch[0].consequent.body[0];
+  const deferredReturn = deferredBranch[0].consequent.body[1];
+  const deferredCall = unwrap(deferredStart?.expression);
+  const deferredCallback = unwrap(deferredCall?.arguments?.[0]);
+  if (deferredStart?.type !== 'ExpressionStatement'
+    || !call(deferredCall, ['setImmediate']) || deferredCall.arguments.length !== 1
+    || deferredCallback?.type !== 'ArrowFunctionExpression'
+    || !exactProtectedIdentifierParameters(deferredCallback, [], protectedNames)
+    || deferredCallback.body?.type !== 'BlockStatement'
+    || deferredCallback.body.body.length !== 3
+    || !exactReturn(deferredReturn, (value) => literal(value, true))) return false;
+  const deferredSettlement = directDeclarator(deferredCallback.body, 'settlement', 'let');
+  const deferredTry = deferredCallback.body.body[1];
+  if (!deferredSettlement || deferredSettlement.declaration.init !== null
+    || deferredTry?.type !== 'TryStatement' || deferredTry.finalizer
+    || deferredTry.block.body.length !== 1
+    || !callbackInvocationAssignment(deferredTry.block.body[0])
+    || !callbackCatchClause(deferredTry.handler)
+    || !callbackPromiseFailureSink(deferredCallback.body.body[2])) return false;
+
+  const mainTry = settle.body.body.filter((statement) => statement.type === 'TryStatement');
+  if (mainTry.length !== 1 || mainTry[0].finalizer
+    || mainTry[0].block.body.length !== 1
+    || !callbackInvocationAssignment(mainTry[0].block.body[0])
+    || !callbackCatchClause(mainTry[0].handler, { rethrow: true })) return false;
+  const immediateBranch = settle.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && logical(
+      statement.test,
+      '||',
+      (left) => identifier(left, 'immediateObserver'),
+      (right) => call(right, ['isImmediateNonBlockingExecutionWorkerCallback'], [
+        (value) => identifier(value, 'name'),
+      ]),
+    )
+  ));
+  if (immediateBranch.length !== 1
+    || immediateBranch[0].consequent?.type !== 'BlockStatement'
+    || immediateBranch[0].consequent.body.length !== 1
+    || !callbackPromiseFailureSink(immediateBranch[0].consequent.body[0])
+    || immediateBranch[0].alternate?.type !== 'BlockStatement'
+    || immediateBranch[0].alternate.body.length !== 1
+    || !directCallStatement(immediateBranch[0].alternate.body[0], ['settlements', 'push'], [
+      (value) => call(value, ['Promise', 'resolve'], [
+        (entry) => identifier(entry, 'settlement'),
+      ]),
+    ])) return false;
+  const settlementMutations = protectedCollectionMutationCalls(
+    settle, ['settlements'], ['add', 'clear', 'delete', 'pop', 'push', 'set', 'shift', 'splice'],
+  );
+  const finalReturn = settle.body.body.at(-1);
+  const callbackSetMutations = Object.keys(callbackLists).flatMap((setName) => (
+    protectedCollectionMutationCalls(
+      { body: program }, setName.split('.'), ['add', 'clear', 'delete'],
+    )
+  ));
+  const desktopRun = topFunction(desktopProgram, 'runAgentInExecutionWorker');
+  const desktopAttempts = (desktopRun?.body?.body || []).filter((statement) => (
+    statement.type === 'TryStatement' && statement.finalizer
+  ));
+  const desktopAttempt = desktopAttempts.length === 1 ? desktopAttempts[0] : null;
+  const eventSettlements = directDeclarator(desktopAttempt?.block, 'eventSettlements', 'const');
+  const terminal = directDeclarator(desktopAttempt?.block, 'terminal', 'const');
+  const allWaits = (desktopAttempt?.block?.body || []).filter((statement) => directCallStatement(
+    statement, ['Promise', 'all'], [(value) => identifier(value, 'eventSettlements')],
+    { await_: true },
+  ));
+  const terminalAwait = unwrap(terminal?.declaration?.init);
+  const requestCall = terminalAwait?.type === 'AwaitExpression'
+    ? unwrap(terminalAwait.argument) : null;
+  const eventOptions = unwrap(requestCall?.arguments?.[4]);
+  const eventProperty = uniqueObjectProperty(eventOptions, 'onEvent');
+  const onEvent = unwrap(eventProperty?.value);
+  const desktopSettlementMutations = protectedCollectionMutationCalls(
+    desktopRun,
+    ['eventSettlements'],
+    ['add', 'clear', 'delete', 'pop', 'push', 'set', 'shift', 'splice'],
+  );
+  const desktopIntegrationPassed = desktopRun && desktopAttempt && eventSettlements
+    && eventSettlements.declaration.init?.type === 'ArrayExpression'
+    && eventSettlements.declaration.init.elements.length === 0
+    && terminal && terminalAwait?.type === 'AwaitExpression'
+    && requestCall?.type === 'CallExpression'
+    && call(requestCall, ['requestExecutionWorkerTurn'])
+    && requestCall.arguments.length === 6
+    && eventOptions?.type === 'ObjectExpression' && eventProperty
+    && onEvent?.type === 'ArrowFunctionExpression'
+    && exactProtectedIdentifierParameters(onEvent, ['message'], [
+      'callbacks', 'eventSettlements', 'message', 'settleExecutionWorkerCallback',
+    ])
+    && arrowCallsExactly(onEvent, ['settleExecutionWorkerCallback'], [
+      (value) => exactObject(value, {
+        callbacks: (entry) => identifier(entry, 'callbacks'),
+        message: (entry) => identifier(entry, 'message'),
+        settlements: (entry) => identifier(entry, 'eventSettlements'),
+      }),
+    ])
+    && allWaits.length === 1
+    && directStatementsOrderedAndReachable(desktopAttempt.block, [
+      eventSettlements.statement, terminal.statement, allWaits[0],
+    ])
+    && exactTopLevelRequireBinding(
+      desktopProgram,
+      'settleExecutionWorkerCallback',
+      'settleExecutionWorkerCallback',
+      './execution-worker-callback-settlement.cjs',
+    )
+    && !functionHasNestedBinding(desktopRun, [
+      'settleExecutionWorkerCallback', 'callbacks', 'Promise',
+    ])
+    && !functionHasNestedBinding({ body: desktopAttempt.block }, [
+      'eventSettlements',
+    ], { allowedDirectBindings: ['eventSettlements'] })
+    && !functionHasIdentifierWrite(desktopRun, [
+      'settleExecutionWorkerCallback', 'callbacks', 'eventSettlements', 'Promise',
+    ])
+    && !functionHasMemberWrite(desktopRun, [['eventSettlements']])
+    && desktopSettlementMutations.length === 0;
+  return settle.body.body.length === 12
+    && settlementMutations.length === 1 && settlementMutations[0].method === 'push'
+    && callbackSetMutations.length === 0 && desktopIntegrationPassed
+    && exactReturn(finalReturn, (value) => literal(value, true))
+    && directStatementsOrderedAndReachable(settle.body, [
+      payload.statement, name.statement, guard[0], callback.statement,
+      bestEffortBinding.statement, immediateObserver.statement, deferredObserver.statement,
+      deferredBranch[0], settlement.statement, mainTry[0], immediateBranch[0], finalReturn,
+    ])
+    && topLevelModuleExportsIncludes(program, {
+      isBestEffortExecutionWorkerCallback: (value) => identifier(
+        value, 'isBestEffortExecutionWorkerCallback',
+      ),
+      isImmediateNonBlockingExecutionWorkerCallback: (value) => identifier(
+        value, 'isImmediateNonBlockingExecutionWorkerCallback',
+      ),
+      isRawExecutionWorkerObserverCallback: (value) => identifier(
+        value, 'isRawExecutionWorkerObserverCallback',
+      ),
+      isReservedExecutionWorkerObserverCallback: (value) => identifier(
+        value, 'isReservedExecutionWorkerObserverCallback',
+      ),
+      settleExecutionWorkerCallback: (value) => identifier(value, 'settleExecutionWorkerCallback'),
+    });
+}
+
+function eventFlowAstContract(sourceByPath) {
+  const source = sourceByPath.get('electron/host-core/agent/execution-worker-event-flow.cjs') || '';
+  const supervisorSource = sourceByPath.get(
+    'electron/host-core/agent/execution-worker-supervisor.cjs',
+  ) || '';
+  const supervisorMessageSource = sourceByPath.get(
+    'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+  ) || '';
+  const entrySource = sourceByPath.get(
+    'electron/host-core/agent/execution-worker-entry.cjs',
+  ) || '';
+  const program = parseProgram(source);
+  const supervisorProgram = parseProgram(supervisorSource);
+  const supervisorMessageProgram = parseProgram(supervisorMessageSource);
+  const entryProgram = parseProgram(entrySource);
+  const coalescer = topClass(program, 'RuntimeActivityCoalescer');
+  const activityKey = topFunction(program, 'activityKey');
+  const isCoalescible = topFunction(program, 'isCoalescibleRuntimeActivity');
+  const isTerminal = topFunction(program, 'isTerminalActivity');
+  const coalescerConstructor = classMethod(coalescer, 'constructor');
+  const coalescerEmitFresh = classMethod(coalescer, 'emitFresh');
+  const coalescerDiscard = classMethod(coalescer, 'discard');
+  const coalescerClear = classMethod(coalescer, 'clear');
+  const coalescerFlush = classMethod(coalescer, 'flush');
+  const coalescerArm = classMethod(coalescer, 'arm');
+  const coalescerPush = classMethod(coalescer, 'push');
+  const coalescerClose = classMethod(coalescer, 'close');
+  const coalescerPendingCount = classMethod(coalescer, 'pendingCount');
+  const dispatch = topFunction(program, 'dispatchExecutionEvent');
+  const route = topFunction(program, 'routeExecutionWorkerResultMessage');
+  const supervisorCreator = topFunction(supervisorProgram, 'createExecutionWorkerSupervisor');
+  const supervisorOnMessage = localArrow(supervisorCreator?.body, 'onMessage');
+  const supervisorEventHandler = topFunction(
+    supervisorMessageProgram, 'handleExecutionWorkerEventMessage',
+  );
+  const createExecution = topFunction(entryProgram, 'createExecution');
+  if (!coalescer || !activityKey || !isCoalescible || !isTerminal
+    || !coalescerConstructor || !coalescerEmitFresh || !coalescerDiscard || !coalescerClear
+    || !coalescerFlush || !coalescerArm || !coalescerPush || !coalescerClose
+    || !coalescerPendingCount
+    || !dispatch || !route || !supervisorCreator || !supervisorOnMessage
+    || !supervisorEventHandler || !createExecution
+    || !exactTopLevelRequireBinding(
+      program,
+      'isExecutionWorkerTerminalOperation',
+      'isExecutionWorkerTerminalOperation',
+      './execution-worker-context-usage.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'logExecutionWorkerCancellation',
+      'logExecutionWorkerCancellation',
+      './execution-worker-process-lifecycle.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'observeExecutionWorkerEvent',
+      'observeExecutionWorkerEvent',
+      './execution-worker-process-lifecycle.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      supervisorProgram,
+      'handleExecutionWorkerEventMessage',
+      'handleExecutionWorkerEventMessage',
+      './execution-worker-supervisor-message.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      supervisorMessageProgram,
+      'dispatchExecutionEvent',
+      'dispatchExecutionEvent',
+      './execution-worker-event-flow.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      entryProgram,
+      'createRuntimeActivityCoalescer',
+      'createRuntimeActivityCoalescer',
+      './execution-worker-event-flow.cjs',
+    )
+    || !stableProgramIdentifiers(program, [
+      'Date', 'Error', 'Map', 'clearTimeout', 'dispatchExecutionEvent',
+      'isExecutionWorkerTerminalOperation',
+      'logExecutionWorkerCancellation', 'observeExecutionWorkerEvent',
+      'routeExecutionWorkerResultMessage', 'RuntimeActivityCoalescer',
+      'activityKey', 'isCoalescibleRuntimeActivity', 'isTerminalActivity',
+      'Math', 'Number', 'setTimeout', 'String',
+    ], {
+      globals: [
+        'Date', 'Error', 'Map', 'Math', 'Number', 'String', 'clearTimeout', 'setTimeout',
+      ],
+    })
+    || !exactIdentifierParameters(dispatch, ['item', 'message', 'postBrokerResult'])
+    || !exactParameterList(route, [
+      (value) => identifier(value, 'message'),
+      (value) => objectPatternBindsExactly(value, [
+        'pending', 'child', 'terminateChild', 'contextUsageRoutes', 'now',
+        'postBrokerResult', 'logger',
+      ]),
+    ])
+    || functionHasNestedBinding(dispatch, ['item', 'message', 'postBrokerResult'])
+    || functionHasIdentifierWrite(dispatch, ['item', 'message', 'postBrokerResult'])
+    || functionHasNestedBinding(route, [
+      'message', 'pending', 'child', 'terminateChild', 'contextUsageRoutes', 'now',
+      'postBrokerResult', 'logger', 'Error', 'dispatchExecutionEvent',
+      'isExecutionWorkerTerminalOperation', 'logExecutionWorkerCancellation',
+      'observeExecutionWorkerEvent',
+    ])
+    || functionHasIdentifierWrite(route, [
+      'message', 'pending', 'child', 'terminateChild', 'contextUsageRoutes', 'now',
+      'postBrokerResult', 'logger', 'Error', 'dispatchExecutionEvent',
+      'isExecutionWorkerTerminalOperation', 'logExecutionWorkerCancellation',
+      'observeExecutionWorkerEvent',
+    ])) return false;
+
+  const activityKeyReturn = activityKey.body?.body?.[0];
+  const activityKeyValue = unwrap(activityKeyReturn?.argument);
+  const factStringField = (node, field) => call(node, ['String'], [
+    (value) => logical(
+      value,
+      '||',
+      (left) => member(left, ['fact', field]),
+      (right) => literal(right, ''),
+    ),
+  ]);
+  if (!exactIdentifierParameters(activityKey, ['fact'])
+    || activityKey.body?.body?.length !== 1
+    || activityKeyReturn?.type !== 'ReturnStatement'
+    || activityKeyValue?.type !== 'TemplateLiteral'
+    || activityKeyValue.expressions.length !== 3
+    || activityKeyValue.quasis.length !== 4
+    || activityKeyValue.quasis[0]?.value?.cooked !== ''
+    || activityKeyValue.quasis[1]?.value?.cooked !== '\u0000'
+    || activityKeyValue.quasis[2]?.value?.cooked !== '\u0000'
+    || activityKeyValue.quasis[3]?.value?.cooked !== ''
+    || !factStringField(activityKeyValue.expressions[0], 'scope')
+    || !factStringField(activityKeyValue.expressions[1], 'node')
+    || !factStringField(activityKeyValue.expressions[2], 'identity')
+    || functionHasNestedBinding(activityKey, ['fact', 'String'])
+    || functionHasIdentifierWrite(activityKey, ['fact', 'String'])) return false;
+
+  const coalescibleGuard = isCoalescible.body?.body?.[0];
+  const semanticDeltaBranch = isCoalescible.body?.body?.[1];
+  const coalescibleReturn = isCoalescible.body?.body?.[2];
+  if (!exactIdentifierParameters(isCoalescible, ['fact'])
+    || isCoalescible.body?.body?.length !== 3
+    || coalescibleGuard?.type !== 'IfStatement'
+    || !logical(
+      coalescibleGuard.test,
+      '||',
+      (left) => unary(left, '!', (value) => identifier(value, 'fact')),
+      (right) => binary(
+        right,
+        '!==',
+        (value) => member(value, ['fact', 'edge']),
+        (value) => literal(value, 'progressed'),
+      ),
+    )
+    || !exactReturn(coalescibleGuard.consequent, (value) => literal(value, false))
+    || semanticDeltaBranch?.type !== 'IfStatement'
+    || !binary(
+      semanticDeltaBranch.test,
+      '===',
+      (value) => member(value, ['fact', 'node']),
+      (value) => literal(value, 'semantic_delta'),
+    )
+    || !exactReturn(semanticDeltaBranch.consequent, (value) => binary(
+      value,
+      '===',
+      (left) => member(left, ['fact', 'contentKind']),
+      (right) => literal(right, 'tool_input'),
+    ))
+    || !exactReturn(coalescibleReturn, (value) => logical(
+      value,
+      '&&',
+      (left) => logical(
+        left,
+        '||',
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'node']),
+          (item) => literal(item, 'tool_activity'),
+        ),
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'node']),
+          (item) => literal(item, 'hook_activity'),
+        ),
+      ),
+      (right) => logical(
+        right,
+        '||',
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'progressClass']),
+          (item) => literal(item, 'liveness'),
+        ),
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'progressClass']),
+          (item) => literal(item, 'advisory'),
+        ),
+      ),
+    ))
+    || functionHasNestedBinding(isCoalescible, ['fact'])
+    || functionHasIdentifierWrite(isCoalescible, ['fact'])) return false;
+
+  const terminalActivityReturn = isTerminal.body?.body?.[0];
+  if (!exactIdentifierParameters(isTerminal, ['fact'])
+    || isTerminal.body?.body?.length !== 1
+    || !exactReturn(terminalActivityReturn, (value) => logical(
+      value,
+      '||',
+      (left) => logical(
+        left,
+        '||',
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'progressClass']),
+          (item) => literal(item, 'terminal'),
+        ),
+        (entry) => binary(
+          entry,
+          '===',
+          (item) => member(item, ['fact', 'node']),
+          (item) => literal(item, 'runtime_terminal_received'),
+        ),
+      ),
+      (right) => binary(
+        right,
+        '===',
+        (entry) => member(entry, ['fact', 'node']),
+        (entry) => literal(entry, 'transport_lost'),
+      ),
+    ))
+    || functionHasNestedBinding(isTerminal, ['fact'])
+    || functionHasIdentifierWrite(isTerminal, ['fact'])) return false;
+
+  const emitFreshSequence = directDeclarator(coalescerEmitFresh.body, 'sourceSequence', 'const');
+  const emitFreshGuard = coalescerEmitFresh.body?.body?.[1];
+  const emitFreshStaleGuard = emitFreshGuard?.consequent?.body?.[0];
+  const emitFreshSequenceWrites = directAssignmentStatements(
+    emitFreshGuard?.consequent, ['this', 'lastEmittedSequence'],
+  );
+  const emitFreshEmit = coalescerEmitFresh.body?.body?.[2];
+  if (!exactIdentifierParameters(coalescerEmitFresh, ['fact'])
+    || coalescerEmitFresh.body?.body?.length !== 3
+    || !emitFreshSequence
+    || !call(emitFreshSequence.declaration.init, ['Number'], [
+      (value) => member(value, ['fact', 'sourceSequence']),
+    ])
+    || emitFreshGuard?.type !== 'IfStatement'
+    || !call(emitFreshGuard.test, ['Number', 'isSafeInteger'], [
+      (value) => identifier(value, 'sourceSequence'),
+    ])
+    || emitFreshGuard.consequent?.type !== 'BlockStatement'
+    || emitFreshGuard.consequent.body.length !== 2
+    || emitFreshStaleGuard?.type !== 'IfStatement'
+    || !binary(
+      emitFreshStaleGuard.test,
+      '<=',
+      (value) => identifier(value, 'sourceSequence'),
+      (value) => member(value, ['this', 'lastEmittedSequence']),
+    )
+    || !bareReturn(emitFreshStaleGuard.consequent)
+    || emitFreshSequenceWrites.length !== 1
+    || !identifier(emitFreshSequenceWrites[0].expression.right, 'sourceSequence')
+    || countMemberWrites(coalescerEmitFresh, ['this', 'lastEmittedSequence']) !== 1
+    || countMemberWrites(coalescerEmitFresh, ['this', 'emit']) !== 0
+    || !directCallStatement(emitFreshEmit, ['this', 'emit'], [
+      (value) => identifier(value, 'fact'),
+    ])
+    || functionHasNestedBinding(coalescerEmitFresh, ['fact', 'sourceSequence', 'Number'], {
+      allowedDirectBindings: ['sourceSequence'],
+    })
+    || functionHasIdentifierWrite(coalescerEmitFresh, ['fact', 'sourceSequence', 'Number'])
+    || !directStatementsOrderedAndReachable(coalescerEmitFresh.body, [
+      emitFreshSequence.statement, emitFreshGuard, emitFreshEmit,
+    ])) return false;
+
+  if (!exactParameterList(coalescerConstructor, [
+    (value) => objectPatternBindsExactly(value, [
+      'emit', 'now', 'schedule', 'cancel', 'windowMs', 'maxKeys',
+    ], {
+      topLevelDefault: true,
+      propertyDefaults: {
+        now: (entry) => member(entry, ['Date', 'now']),
+        schedule: (entry) => identifier(entry, 'setTimeout'),
+        cancel: (entry) => identifier(entry, 'clearTimeout'),
+        windowMs: (entry) => identifier(entry, 'DEFAULT_WINDOW_MS'),
+        maxKeys: (entry) => identifier(entry, 'DEFAULT_MAX_KEYS'),
+      },
+      requiredPropertyDefaults: ['now', 'schedule', 'cancel', 'windowMs', 'maxKeys'],
+    }),
+  ])
+    || !exactIdentifierParameters(coalescerArm, ['key', 'entry', 'delay'])
+    || !exactIdentifierParameters(coalescerDiscard, ['key'])
+    || !exactIdentifierParameters(coalescerClear, [])
+    || !exactIdentifierParameters(coalescerFlush, ['key'])
+    || !exactIdentifierParameters(coalescerPush, ['fact'])
+    || !exactIdentifierParameters(coalescerClose, [])
+    || !exactIdentifierParameters(coalescerPendingCount, [])
+    || functionHasNestedBinding(coalescerConstructor, [
+      'emit', 'now', 'schedule', 'cancel', 'windowMs', 'maxKeys', 'Math', 'Number',
+    ])
+    || functionHasIdentifierWrite(coalescerConstructor, [
+      'emit', 'now', 'schedule', 'cancel', 'windowMs', 'maxKeys', 'Math', 'Number',
+    ])
+    || functionHasNestedBinding(coalescerArm, [
+      'key', 'entry', 'delay', 'Math', 'Number',
+    ])
+    || functionHasIdentifierWrite(coalescerArm, [
+      'key', 'entry', 'delay', 'Math', 'Number',
+    ])
+    || !safeTimerTimeoutBinding(coalescerConstructor, {
+      sourceName: 'windowMs', requestedName: 'requestedWindowMs',
+      boundedName: 'boundedWindowMs', maximum: 2_147_483_647, fallback: 100,
+    })
+    || !safeTimerTimeoutBinding(coalescerArm, {
+      sourceName: 'delay', requestedName: 'requestedDelay',
+      boundedName: 'boundedDelay', maximum: 2_147_483_647,
+    })
+    || !safeTimerTimeoutBinding(coalescerConstructor, {
+      sourceName: 'maxKeys', requestedName: 'requestedMaxKeys',
+      boundedName: 'boundedMaxKeys', maximum: 128, fallback: 128,
+    })) return false;
+  const windowAssignments = directAssignmentStatements(
+    coalescerConstructor.body, ['this', 'windowMs'],
+  );
+  const maxKeyAssignments = directAssignmentStatements(
+    coalescerConstructor.body, ['this', 'maxKeys'],
+  );
+  const armEntries = directStatementEntriesIncludingTryBlock(coalescerArm.body);
+  const timerAssignments = armEntries.filter((entry) => {
+    const expression = unwrap(entry.statement?.expression);
+    if (entry.statement?.type !== 'ExpressionStatement'
+      || expression?.type !== 'AssignmentExpression'
+      || expression.operator !== '='
+      || !member(expression.left, ['entry', 'timer'])) return false;
+    return call(expression.right, ['this', 'schedule'], [
+      (value) => exactProtectedIdentifierParameters(unwrap(value), [], ['key'])
+        && arrowCallsExactly(value, ['this', 'flush'], [
+          (argument) => identifier(argument, 'key'),
+        ]),
+      (value) => identifier(value, 'boundedDelay'),
+    ]);
+  });
+  const otherCoalescerMethods = (coalescer.body?.body || [])
+    .filter((method) => method.type === 'MethodDefinition'
+      && !['constructor'].includes(propertyName(method)))
+    .map((method) => method.value);
+  if (windowAssignments.length !== 1
+    || !identifier(windowAssignments[0].expression.right, 'boundedWindowMs')
+    || maxKeyAssignments.length !== 1
+    || !identifier(maxKeyAssignments[0].expression.right, 'boundedMaxKeys')
+    || timerAssignments.length !== 1
+    || !directEntryReachable(coalescerArm.body, timerAssignments[0])
+    || countMemberWrites(coalescerConstructor, ['this', 'windowMs']) !== 1
+    || countMemberWrites(coalescerConstructor, ['this', 'maxKeys']) !== 1
+    || otherCoalescerMethods.some((method) => functionHasMemberWrite(
+      method, [['this', 'windowMs'], ['this', 'maxKeys'], ['this', 'schedule']],
+    ))) return false;
+
+  const armAttempts = coalescerArm.body.body.filter((statement) => (
+    statement.type === 'TryStatement' && statement.handler
+  ));
+  const armAttempt = armAttempts.length === 1 ? armAttempts[0] : null;
+  const armFallbackValue = directDeclarator(armAttempt?.handler?.body, 'value', 'const');
+  const armDelete = armAttempt?.handler?.body?.body?.[1];
+  const armFallbackEmit = armAttempt?.handler?.body?.body?.[2];
+  const armEntryMutations = protectedCollectionMutationCalls(
+    coalescerArm, ['this', 'entries'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (coalescerArm.body.body.length !== 3
+    || armAttempts.length !== 1 || armAttempt.finalizer
+    || armAttempt.block.body.length !== 2
+    || !directCallStatement(armAttempt.block.body[1], ['entry', 'timer', 'unref'], [])
+    || armAttempt.handler.param !== null || armAttempt.handler.body.body.length !== 3
+    || !armFallbackValue || !member(armFallbackValue.declaration.init, ['entry', 'pending'])
+    || !directCallStatement(armDelete, ['this', 'entries', 'delete'], [
+      (value) => identifier(value, 'key'),
+    ])
+    || armFallbackEmit?.type !== 'IfStatement'
+    || !identifier(armFallbackEmit.test, 'value')
+    || !directCallStatement(armFallbackEmit.consequent, ['this', 'emitFresh'], [
+      (value) => identifier(value, 'value'),
+    ])
+    || armEntryMutations.length !== 1 || armEntryMutations[0].method !== 'delete'
+    || armEntryMutations[0].node !== unwrap(armDelete.expression)
+    || !directStatementsOrderedAndReachable(armAttempt.handler.body, [
+      armFallbackValue.statement, armDelete, armFallbackEmit,
+    ])) return false;
+
+  const discardEntry = directDeclarator(coalescerDiscard.body, 'entry', 'const');
+  const discardGuard = coalescerDiscard.body.body[1];
+  const discardDelete = coalescerDiscard.body.body[2];
+  const discardTimerGuard = coalescerDiscard.body.body[3];
+  const discardCancel = coalescerDiscard.body.body[4];
+  const discardEntryMutations = protectedCollectionMutationCalls(
+    coalescerDiscard, ['this', 'entries'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (coalescerDiscard.body.body.length !== 5
+    || !discardEntry || !call(discardEntry.declaration.init, ['this', 'entries', 'get'], [
+      (value) => identifier(value, 'key'),
+    ])
+    || discardGuard?.type !== 'IfStatement'
+    || !unary(discardGuard.test, '!', (value) => identifier(value, 'entry'))
+    || !bareReturn(discardGuard.consequent)
+    || !directCallStatement(discardDelete, ['this', 'entries', 'delete'], [
+      (value) => identifier(value, 'key'),
+    ])
+    || discardTimerGuard?.type !== 'IfStatement'
+    || !unary(discardTimerGuard.test, '!', (value) => member(value, ['entry', 'timer']))
+    || !bareReturn(discardTimerGuard.consequent)
+    || discardCancel?.type !== 'TryStatement'
+    || discardCancel.block.body.length !== 1
+    || !directCallStatement(discardCancel.block.body[0], ['this', 'cancel'], [
+      (value) => member(value, ['entry', 'timer']),
+    ])
+    || !discardCancel.handler || discardCancel.finalizer
+    || discardEntryMutations.length !== 1 || discardEntryMutations[0].method !== 'delete'
+    || discardEntryMutations[0].node !== unwrap(discardDelete.expression)
+    || !directStatementsOrderedAndReachable(
+      coalescerDiscard.body, coalescerDiscard.body.body,
+    )) return false;
+  const clearLoops = coalescerClear.body.body.filter((statement) => (
+    statement.type === 'ForOfStatement'
+    && statement.await === false
+    && statement.left?.type === 'VariableDeclaration'
+    && statement.left.kind === 'const'
+    && statement.left.declarations.length === 1
+    && identifier(statement.left.declarations[0].id, 'key')
+    && call(statement.right, ['this', 'entries', 'keys'], [])
+    && directCallStatement(statement.body, ['this', 'discard'], [
+      (value) => identifier(value, 'key'),
+    ])
+  ));
+  if (coalescerClear.body.body.length !== 1 || clearLoops.length !== 1) return false;
+
+  const flushClosed = coalescerFlush.body.body[0];
+  const flushEntry = directDeclarator(coalescerFlush.body, 'entry', 'const');
+  const flushMissing = coalescerFlush.body.body[2];
+  const flushValue = directDeclarator(coalescerFlush.body, 'value', 'const');
+  const flushPendingWrites = directAssignmentStatements(
+    coalescerFlush.body, ['entry', 'pending'],
+  );
+  const flushTimerWrites = directAssignmentStatements(
+    coalescerFlush.body, ['entry', 'timer'],
+  );
+  const flushLastSentWrites = directAssignmentStatements(
+    coalescerFlush.body, ['entry', 'lastSentAt'],
+  );
+  const flushEmits = coalescerFlush.body.body.filter((statement) => directCallStatement(
+    statement, ['this', 'emitFresh'], [(value) => identifier(value, 'value')],
+  ));
+  const flushEntryMutations = protectedCollectionMutationCalls(
+    coalescerFlush, ['this', 'entries'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (coalescerFlush.body.body.length !== 8
+    || flushClosed?.type !== 'IfStatement'
+    || !member(flushClosed.test, ['this', 'closed']) || !bareReturn(flushClosed.consequent)
+    || !flushEntry || !call(flushEntry.declaration.init, ['this', 'entries', 'get'], [
+      (value) => identifier(value, 'key'),
+    ])
+    || flushMissing?.type !== 'IfStatement'
+    || !unary(flushMissing.test, '!', (value) => member(value, ['entry', 'pending']))
+    || !bareReturn(flushMissing.consequent)
+    || !flushValue || !member(flushValue.declaration.init, ['entry', 'pending'])
+    || flushPendingWrites.length !== 1 || !literal(flushPendingWrites[0].expression.right, null)
+    || flushTimerWrites.length !== 1 || !literal(flushTimerWrites[0].expression.right, null)
+    || flushLastSentWrites.length !== 1
+    || !call(flushLastSentWrites[0].expression.right, ['this', 'now'], [])
+    || countMemberWrites(coalescerFlush, ['entry', 'pending']) !== 1
+    || countMemberWrites(coalescerFlush, ['entry', 'timer']) !== 1
+    || countMemberWrites(coalescerFlush, ['entry', 'lastSentAt']) !== 1
+    || flushEntryMutations.length !== 0 || flushEmits.length !== 1
+    || !directStatementsOrderedAndReachable(coalescerFlush.body, [
+      flushClosed, flushEntry.statement, flushMissing, flushValue.statement,
+      flushPendingWrites[0], flushTimerWrites[0], flushLastSentWrites[0], flushEmits[0],
+    ])) return false;
+
+  const closeGuard = coalescerClose.body.body[0];
+  const closeWrites = directAssignmentStatements(coalescerClose.body, ['this', 'closed']);
+  const closeClears = coalescerClose.body.body.filter((statement) => directCallStatement(
+    statement, ['this', 'clear'], [],
+  ));
+  if (coalescerClose.body.body.length !== 3
+    || closeGuard?.type !== 'IfStatement'
+    || !member(closeGuard.test, ['this', 'closed']) || !bareReturn(closeGuard.consequent)
+    || closeWrites.length !== 1 || !literal(closeWrites[0].expression.right, true)
+    || closeClears.length !== 1
+    || !directStatementsOrderedAndReachable(coalescerClose.body, [
+      closeGuard, closeWrites[0], closeClears[0],
+    ])) return false;
+  const nonCoalescible = coalescerPush.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && unary(statement.test, '!', (value) => call(value, ['isCoalescibleRuntimeActivity'], [
+      (entry) => identifier(entry, 'fact'),
+    ]))
+    && statement.consequent?.type === 'BlockStatement'
+  ));
+  if (nonCoalescible.length !== 1) return false;
+  const terminalClears = nonCoalescible[0].consequent.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && call(statement.test, ['isTerminalActivity'], [(value) => identifier(value, 'fact')])
+    && directCallStatement(statement.consequent, ['this', 'clear'], [])
+    && directCallStatement(statement.alternate, ['this', 'discard'], [
+      (value) => identifier(value, 'key'),
+    ])
+  ));
+  const nonCoalescibleEmits = nonCoalescible[0].consequent.body.filter((statement) => (
+    directCallStatement(statement, ['this', 'emitFresh'], [
+      (value) => identifier(value, 'fact'),
+    ])
+  ));
+  const nonCoalescibleReturn = nonCoalescible[0].consequent.body.at(-1);
+  if (nonCoalescible[0].consequent.body.length !== 3
+    || terminalClears.length !== 1 || nonCoalescibleEmits.length !== 1
+    || !bareReturn(nonCoalescibleReturn)
+    || !directStatementsOrderedAndReachable(nonCoalescible[0].consequent, [
+      terminalClears[0], nonCoalescibleEmits[0], nonCoalescibleReturn,
+    ])) return false;
+
+  const pushGuard = coalescerPush.body.body[0];
+  const pushKey = directDeclarator(coalescerPush.body, 'key', 'const');
+  const pushEntry = directDeclarator(coalescerPush.body, 'entry', 'let');
+  const pushCurrentTime = directDeclarator(coalescerPush.body, 'currentTime', 'const');
+  const newEntryBranch = coalescerPush.body.body[5];
+  const newEntryCapacityGuard = newEntryBranch?.consequent?.body?.[0];
+  const newEntryAssignment = unwrap(newEntryBranch?.consequent?.body?.[1]?.expression);
+  const newEntrySet = newEntryBranch?.consequent?.body?.[2];
+  const newEntryEmit = newEntryBranch?.consequent?.body?.[3];
+  const newEntryReturn = newEntryBranch?.consequent?.body?.[4];
+  const immediateWindowBranch = coalescerPush.body.body[6];
+  const immediateWindowWrite = unwrap(immediateWindowBranch?.consequent?.body?.[0]?.expression);
+  const immediateWindowEmit = immediateWindowBranch?.consequent?.body?.[1];
+  const immediateWindowReturn = immediateWindowBranch?.consequent?.body?.[2];
+  const pendingWriteStatement = coalescerPush.body.body[7];
+  const pendingWrite = unwrap(pendingWriteStatement?.expression);
+  const armGuard = coalescerPush.body.body[8];
+  const pushEntryMutations = protectedCollectionMutationCalls(
+    coalescerPush, ['this', 'entries'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (coalescerPush.body.body.length !== 9
+    || pushGuard?.type !== 'IfStatement'
+    || !logical(
+      pushGuard.test,
+      '||',
+      (value) => member(value, ['this', 'closed']),
+      (value) => unary(value, '!', (entry) => identifier(entry, 'fact')),
+    )
+    || !bareReturn(pushGuard.consequent)
+    || !pushKey || !call(pushKey.declaration.init, ['activityKey'], [
+      (value) => identifier(value, 'fact'),
+    ])
+    || !pushEntry || !call(pushEntry.declaration.init, ['this', 'entries', 'get'], [
+      (value) => identifier(value, 'key'),
+    ])
+    || !pushCurrentTime || !call(pushCurrentTime.declaration.init, ['this', 'now'], [])
+    || newEntryBranch?.type !== 'IfStatement'
+    || !unary(newEntryBranch.test, '!', (value) => identifier(value, 'entry'))
+    || newEntryBranch.consequent?.type !== 'BlockStatement'
+    || newEntryBranch.consequent.body.length !== 5
+    || newEntryCapacityGuard?.type !== 'IfStatement'
+    || !binary(
+      newEntryCapacityGuard.test,
+      '>=',
+      (value) => member(value, ['this', 'entries', 'size']),
+      (value) => member(value, ['this', 'maxKeys']),
+    )
+    || !bareReturn(newEntryCapacityGuard.consequent)
+    || newEntryAssignment?.type !== 'AssignmentExpression'
+    || newEntryAssignment.operator !== '=' || !identifier(newEntryAssignment.left, 'entry')
+    || !exactObject(newEntryAssignment.right, {
+      lastSentAt: (value) => identifier(value, 'currentTime'),
+      pending: (value) => literal(value, null),
+      timer: (value) => literal(value, null),
+    })
+    || !directCallStatement(newEntrySet, ['this', 'entries', 'set'], [
+      (value) => identifier(value, 'key'),
+      (value) => identifier(value, 'entry'),
+    ])
+    || !directCallStatement(newEntryEmit, ['this', 'emitFresh'], [
+      (value) => identifier(value, 'fact'),
+    ])
+    || !bareReturn(newEntryReturn)
+    || pushEntryMutations.length !== 1 || pushEntryMutations[0].method !== 'set'
+    || pushEntryMutations[0].node !== unwrap(newEntrySet.expression)
+    || immediateWindowBranch?.type !== 'IfStatement' || immediateWindowBranch.alternate
+    || !logical(
+      immediateWindowBranch.test,
+      '&&',
+      (value) => binary(
+        value,
+        '>=',
+        (left) => binary(
+          left,
+          '-',
+          (entry) => identifier(entry, 'currentTime'),
+          (entry) => member(entry, ['entry', 'lastSentAt']),
+        ),
+        (right) => member(right, ['this', 'windowMs']),
+      ),
+      (value) => unary(value, '!', (entry) => member(entry, ['entry', 'timer'])),
+    )
+    || immediateWindowBranch.consequent?.type !== 'BlockStatement'
+    || immediateWindowBranch.consequent.body.length !== 3
+    || immediateWindowWrite?.type !== 'AssignmentExpression'
+    || immediateWindowWrite.operator !== '='
+    || !member(immediateWindowWrite.left, ['entry', 'lastSentAt'])
+    || !identifier(immediateWindowWrite.right, 'currentTime')
+    || !directCallStatement(immediateWindowEmit, ['this', 'emitFresh'], [
+      (value) => identifier(value, 'fact'),
+    ])
+    || !bareReturn(immediateWindowReturn)
+    || pendingWrite?.type !== 'AssignmentExpression' || pendingWrite.operator !== '='
+    || !member(pendingWrite.left, ['entry', 'pending'])
+    || !identifier(pendingWrite.right, 'fact')
+    || armGuard?.type !== 'IfStatement' || armGuard.alternate
+    || !unary(armGuard.test, '!', (value) => member(value, ['entry', 'timer']))
+    || !directCallStatement(armGuard.consequent, ['this', 'arm'], [
+      (value) => identifier(value, 'key'),
+      (value) => identifier(value, 'entry'),
+      (value) => call(value, ['Math', 'max'], [
+        (entry) => literal(entry, 0),
+        (entry) => binary(
+          entry,
+          '-',
+          (left) => member(left, ['this', 'windowMs']),
+          (right) => binary(
+            right,
+            '-',
+            (candidate) => identifier(candidate, 'currentTime'),
+            (candidate) => member(candidate, ['entry', 'lastSentAt']),
+          ),
+        ),
+      ]),
+    ])
+    || countAssignments(coalescerPush, (target) => identifier(target, 'entry')) !== 1
+    || countMemberWrites(coalescerPush, ['entry', 'lastSentAt']) !== 1
+    || countMemberWrites(coalescerPush, ['entry', 'pending']) !== 1
+    || functionHasNestedBinding(coalescerPush, ['key', 'entry', 'currentTime'], {
+      allowedDirectBindings: ['key', 'entry', 'currentTime'],
+    })
+    || !directStatementsOrderedAndReachable(newEntryBranch.consequent, [
+      newEntryCapacityGuard, newEntryBranch.consequent.body[1], newEntrySet,
+      newEntryEmit, newEntryReturn,
+    ])
+    || !directStatementsOrderedAndReachable(coalescerPush.body, [
+      pushGuard, pushKey.statement, nonCoalescible[0], pushEntry.statement,
+      pushCurrentTime.statement, newEntryBranch, immediateWindowBranch,
+      pendingWriteStatement, armGuard,
+    ])) return false;
+
+  const pendingCountBinding = directDeclarator(coalescerPendingCount.body, 'count', 'let');
+  const pendingCountLoop = coalescerPendingCount.body.body[1];
+  const pendingCountReturn = coalescerPendingCount.body.body[2];
+  const pendingCountExpression = unwrap(pendingCountLoop?.body?.expression);
+  const pendingCountValue = unwrap(pendingCountExpression?.right);
+  const pendingCountEntryMutations = protectedCollectionMutationCalls(
+    coalescerPendingCount, ['this', 'entries'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (coalescerPendingCount.body.body.length !== 3
+    || !pendingCountBinding || !literal(pendingCountBinding.declaration.init, 0)
+    || pendingCountLoop?.type !== 'ForOfStatement' || pendingCountLoop.await !== false
+    || pendingCountLoop.left?.type !== 'VariableDeclaration'
+    || pendingCountLoop.left.kind !== 'const'
+    || pendingCountLoop.left.declarations.length !== 1
+    || !identifier(pendingCountLoop.left.declarations[0].id, 'entry')
+    || pendingCountLoop.left.declarations[0].init !== null
+    || !call(pendingCountLoop.right, ['this', 'entries', 'values'], [])
+    || pendingCountLoop.body?.type !== 'ExpressionStatement'
+    || pendingCountExpression?.type !== 'AssignmentExpression'
+    || pendingCountExpression.operator !== '+='
+    || !identifier(pendingCountExpression.left, 'count')
+    || pendingCountValue?.type !== 'ConditionalExpression'
+    || !member(pendingCountValue.test, ['entry', 'pending'])
+    || !literal(pendingCountValue.consequent, 1)
+    || !literal(pendingCountValue.alternate, 0)
+    || !exactReturn(pendingCountReturn, (value) => identifier(value, 'count'))
+    || countAssignments(
+      coalescerPendingCount, (target) => identifier(target, 'count'),
+    ) !== 1
+    || functionHasNestedBinding(coalescerPendingCount, ['count'], {
+      allowedDirectBindings: ['count'],
+    })
+    || functionHasMemberWrite(coalescerPendingCount, [['this', 'entries']])
+    || pendingCountEntryMutations.length !== 0
+    || !directStatementsOrderedAndReachable(coalescerPendingCount.body, [
+      pendingCountBinding.statement, pendingCountLoop, pendingCountReturn,
+    ])) return false;
+
+  const sequenceWrites = directAssignmentStatements(dispatch.body, ['item', 'lastSequence']);
+  const dispatchAttempts = dispatch.body.body.filter((statement) => statement.type === 'TryStatement');
+  if (sequenceWrites.length !== 1
+    || !member(sequenceWrites[0].expression.right, ['message', 'sequence'])
+    || countMemberWrites(dispatch, ['item', 'lastSequence']) !== 1
+    || dispatchAttempts.length !== 1 || dispatchAttempts[0].handler
+    || dispatchAttempts[0].block.body.length !== 1
+    || !directCallStatement(dispatchAttempts[0].block.body[0], ['item', 'onEvent'], [
+      (value) => identifier(value, 'message'),
+    ])
+    || dispatchAttempts[0].finalizer?.body.length !== 1
+    || !directCallStatement(dispatchAttempts[0].finalizer.body[0], ['postBrokerResult'], [
+      (value) => literal(value, 'stream.credit'),
+      (value) => identifier(value, 'message'),
+      (value) => exactObject(value, { credit: (entry) => literal(entry, 1) }),
+    ])
+    || !directStatementsOrderedAndReachable(dispatch.body, [
+      sequenceWrites[0], dispatchAttempts[0],
+    ])) return false;
+
+  if (functionHasProtectedAliasMutation(route, [
+    ['pending', 'get'], ['pending', 'delete'], ['item', 'matches'], ['item', 'reject'],
+    ['item', 'resolve'], ['contextUsageRoutes', 'handle'], ['contextUsageRoutes', 'retain'],
+  ])) return false;
+  const contextGuard = route.body.body[0];
+  const eventBranch = route.body.body[1];
+  if (contextGuard?.type !== 'IfStatement'
+    || !call(contextGuard.test, ['contextUsageRoutes', 'handle'], [
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'pending'),
+      (value) => identifier(value, 'child'),
+      (value) => identifier(value, 'terminateChild'),
+    ])
+    || !exactReturn(contextGuard.consequent, (value) => literal(value, true))
+    || eventBranch?.type !== 'IfStatement'
+    || !exactOperation(eventBranch.test, '===', 'execution.event')
+    || eventBranch.consequent?.type !== 'BlockStatement') return false;
+  const eventBody = eventBranch.consequent;
+  const eventItem = directDeclarator(eventBody, 'item', 'const');
+  const eventIdentity = eventBody.body[1];
+  const sequenceBranch = eventBody.body[2];
+  if (!eventItem || !call(eventItem.declaration.init, ['pending', 'get'], [
+    (value) => member(value, ['message', 'requestId']),
+  ]) || eventIdentity?.type !== 'IfStatement'
+    || !exactItemGuard(eventIdentity.test)
+    || !exactReturn(eventIdentity.consequent, (value) => literal(value, true))
+    || sequenceBranch?.type !== 'IfStatement'
+    || !binary(
+      sequenceBranch.test,
+      '<=',
+      (value) => member(value, ['message', 'sequence']),
+      (value) => member(value, ['item', 'lastSequence']),
+    )
+    || sequenceBranch.consequent?.type !== 'BlockStatement') return false;
+  const rejectionBody = sequenceBranch.consequent;
+  const sequenceError = directDeclarator(rejectionBody, 'error', 'const');
+  const sequenceCode = unwrap(rejectionBody.body[1]?.expression);
+  const sequenceDelete = rejectionBody.body[2];
+  const sequenceReject = rejectionBody.body[3];
+  const sequenceTerminate = rejectionBody.body[4];
+  const sequenceReturn = rejectionBody.body[5];
+  if (rejectionBody.body.length !== 6 || !sequenceError
+    || !construct(sequenceError.declaration.init, 'Error')
+    || sequenceCode?.type !== 'AssignmentExpression'
+    || sequenceCode.operator !== '=' || !member(sequenceCode.left, ['error', 'code'])
+    || !literal(sequenceCode.right, 'execution_worker_sequence_violation')
+    || !directCallStatement(sequenceDelete, ['pending', 'delete'], [
+      (value) => member(value, ['message', 'requestId']),
+    ])
+    || !directCallStatement(sequenceReject, ['item', 'reject'], [
+      (value) => identifier(value, 'error'),
+    ])
+    || !directCallStatement(sequenceTerminate, ['terminateChild'], [
+      (value) => identifier(value, 'child'),
+      (value) => literal(value, 'sequence-violation'),
+    ])
+    || !exactReturn(sequenceReturn, (value) => literal(value, true))
+    || !directStatementsOrderedAndReachable(rejectionBody, rejectionBody.body)) return false;
+  const observes = eventBody.body.filter((statement) => directCallStatement(
+    statement, ['observeExecutionWorkerEvent'], [
+      (value) => identifier(value, 'item'),
+      (value) => identifier(value, 'message'),
+      (value) => call(value, ['now'], []),
+    ],
+  ));
+  const forwards = eventBody.body.filter((statement) => directCallStatement(
+    statement, ['dispatchExecutionEvent'], [
+      (value) => identifier(value, 'item'),
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'postBrokerResult'),
+    ],
+  ));
+  const eventReturns = eventBody.body.filter((statement) => exactReturn(
+    statement, (value) => literal(value, true),
+  ));
+  if (observes.length !== 1 || forwards.length !== 1 || eventReturns.length !== 1
+    || !directStatementsOrderedAndReachable(eventBody, [
+      eventItem.statement, eventIdentity, sequenceBranch, observes[0], forwards[0], eventReturns[0],
+    ])) return false;
+
+  const terminalGuard = route.body.body[2];
+  const terminalItem = directDeclarator(route.body, 'item', 'const');
+  const terminalIdentity = route.body.body[4];
+  const cancellationLog = route.body.body[5];
+  const terminalDelete = route.body.body[6];
+  const retain = route.body.body[7];
+  const resolve = route.body.body[8];
+  const terminalReturn = route.body.body[9];
+  if (route.body.body.length !== 10
+    || terminalGuard?.type !== 'IfStatement'
+    || !exactNotCall(terminalGuard.test, ['isExecutionWorkerTerminalOperation'], [
+      (value) => member(value, ['message', 'operation']),
+    ])
+    || !exactReturn(terminalGuard.consequent, (value) => literal(value, false))
+    || !terminalItem || !call(terminalItem.declaration.init, ['pending', 'get'], [
+      (value) => member(value, ['message', 'requestId']),
+    ])
+    || terminalIdentity?.type !== 'IfStatement'
+    || !exactItemGuard(terminalIdentity.test)
+    || !exactReturn(terminalIdentity.consequent, (value) => literal(value, true))
+    || cancellationLog?.type !== 'IfStatement'
+    || !exactOperation(cancellationLog.test, '===', 'execution.terminal')
+    || !directCallStatement(cancellationLog.consequent, ['logExecutionWorkerCancellation'], [
+      (value) => identifier(value, 'logger'),
+      (value) => identifier(value, 'item'),
+      (value) => identifier(value, 'message'),
+      (value) => call(value, ['now'], []),
+    ])
+    || !directCallStatement(terminalDelete, ['pending', 'delete'], [
+      (value) => member(value, ['message', 'requestId']),
+    ])
+    || !directCallStatement(retain, ['contextUsageRoutes', 'retain'], [
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'item'),
+    ])
+    || !directCallStatement(resolve, ['item', 'resolve'], [
+      (value) => identifier(value, 'message'),
+    ])
+    || !exactReturn(terminalReturn, (value) => literal(value, true))
+    || !directStatementsOrderedAndReachable(route.body, route.body.body)) return false;
+  const pendingMutations = protectedCollectionMutationCalls(
+    route, ['pending'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (pendingMutations.length !== 2
+    || pendingMutations.some((entry) => entry.method !== 'delete')) return false;
+
+  if (functionHasNestedBinding(supervisorCreator, ['handleExecutionWorkerEventMessage'])
+    || functionHasIdentifierWrite(supervisorCreator, ['handleExecutionWorkerEventMessage'])
+    || functionHasNestedBinding(supervisorOnMessage, [
+      'message', 'handleExecutionWorkerEventMessage', 'pending', 'child', 'terminateChild',
+      'now', 'postBrokerResult',
+    ], { allowedDirectBindings: ['message'] })
+    || functionHasIdentifierWrite(supervisorOnMessage, [
+      'handleExecutionWorkerEventMessage', 'pending', 'child', 'terminateChild',
+      'now', 'postBrokerResult',
+    ])) return false;
+  const supervisorMessage = directDeclarator(supervisorOnMessage.body, 'message', 'let');
+  const supervisorDecodeAttempts = supervisorOnMessage.body?.body?.filter((statement) => (
+    statement.type === 'TryStatement' && statement.handler && !statement.finalizer
+  )) || [];
+  const supervisorMessageAssignments = supervisorDecodeAttempts.flatMap((statement) => (
+    directAssignmentStatements(statement.block, ['message'])
+  ));
+  const directMessageInput = exactIdentifierParameters(supervisorOnMessage, ['message'])
+    && !supervisorMessage && supervisorDecodeAttempts.length === 0
+    && countAssignments(supervisorOnMessage, (target) => identifier(target, 'message')) === 0;
+  const decodedMessageInput = exactIdentifierParameters(supervisorOnMessage, ['raw'])
+    && supervisorMessage?.declaration.init === null
+    && supervisorDecodeAttempts.length === 1 && supervisorMessageAssignments.length === 1
+    && countAssignments(supervisorOnMessage, (target) => identifier(target, 'message')) === 1
+    && call(supervisorMessageAssignments[0].expression.right, [
+      'validateExecutionWorkerReply',
+    ], [
+      (value) => identifier(value, 'raw'),
+      (value) => identifier(value, 'pending'),
+      (value) => identifier(value, 'now'),
+    ])
+    && directStatementReachable(
+      supervisorDecodeAttempts[0].block, supervisorMessageAssignments[0],
+    );
+  if (!directMessageInput && !decodedMessageInput) return false;
+  const eventForwards = supervisorOnMessage.body?.body?.filter((statement) => (
+    statement.type === 'IfStatement'
+    && exactOperation(statement.test, '===', 'execution.event')
+    && statement.consequent?.type === 'BlockStatement'
+    && statement.consequent.body.length === 2
+    && directCallStatement(statement.consequent.body[0], ['handleExecutionWorkerEventMessage'], [
+      (value) => identifier(value, 'message'),
+      (value) => objectIncludesExactProperties(value, {
+        pending: (entry) => identifier(entry, 'pending'),
+        child: (entry) => identifier(entry, 'child'),
+        terminateChild: (entry) => identifier(entry, 'terminateChild'),
+        postBrokerResult: (entry) => identifier(entry, 'postBrokerResult'),
+      }),
+    ])
+    && bareReturn(statement.consequent.body[1])
+  )) || [];
+  const messageDispatches = supervisorEventHandler.body?.body?.filter((statement) => (
+    directCallStatement(statement, ['dispatchExecutionEvent'], [
+      (value) => identifier(value, 'item'),
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'postBrokerResult'),
+    ])
+  )) || [];
+
+  const runtimeActivity = directDeclarator(createExecution.body, 'runtimeActivity', 'const');
+  const callbacks = directDeclarator(createExecution.body, 'callbacks', 'const');
+  const executionResult = returnedObject(createExecution);
+  const callbackProperty = uniqueObjectProperty(callbacks?.declaration?.init, 'onRuntimeActivity');
+  const queueDepthProperty = uniqueObjectProperty(executionResult, 'queueDepth');
+  const runProperty = uniqueObjectProperty(executionResult, 'run');
+  const callbackFunction = unwrap(callbackProperty?.value);
+  const queueDepthFunction = unwrap(queueDepthProperty?.value);
+  const runFunction = unwrap(runProperty?.value);
+  const runtimeCalls = { create: 0, push: 0, pending: 0, close: 0 };
+  visit(createExecution.body, (node) => {
+    if (call(node, ['createRuntimeActivityCoalescer'])) runtimeCalls.create += 1;
+    if (call(node, ['runtimeActivity', 'push'])) runtimeCalls.push += 1;
+    if (call(node, ['runtimeActivity', 'pendingCount'])) runtimeCalls.pending += 1;
+    if (call(node, ['runtimeActivity', 'close'])) runtimeCalls.close += 1;
+  });
+  const runAttempts = (runFunction?.body?.body || []).filter((statement) => (
+    statement.type === 'TryStatement' && statement.finalizer
+  ));
+  const closeStatements = runAttempts[0]?.finalizer?.body?.filter((statement) => (
+    directCallStatement(statement, ['runtimeActivity', 'close'], [])
+  )) || [];
+  const queueDepthReturns = (queueDepthFunction?.body?.body || []).filter((statement) => (
+    statement.type === 'ReturnStatement' && statement.argument
+  ));
+  let queueDepthPendingCalls = 0;
+  visit(queueDepthReturns[0]?.argument, (node) => {
+    if (call(node, ['runtimeActivity', 'pendingCount'], [])) queueDepthPendingCalls += 1;
+  });
+  return eventForwards.length === 1 && directStatementReachable(
+    supervisorOnMessage.body, eventForwards[0],
+  ) && messageDispatches.length === 1 && directStatementReachable(
+    supervisorEventHandler.body, messageDispatches[0],
+  ) && runtimeActivity
+    && call(runtimeActivity.declaration.init, ['createRuntimeActivityCoalescer'], [
+      (value) => exactObject(value, {
+        emit: (entry) => exactProtectedIdentifierParameters(unwrap(entry), ['value'])
+          && arrowCallsExactly(entry, ['emit'], [
+            (argument) => literal(argument, 'onRuntimeActivity'),
+            (argument) => identifier(argument, 'value'),
+          ]),
+      }),
+    ])
+    && callbackFunction?.type === 'ArrowFunctionExpression'
+    && exactProtectedIdentifierParameters(callbackFunction, ['value'])
+    && arrowCallsExactly(callbackFunction, ['runtimeActivity', 'push'], [
+      (value) => identifier(value, 'value'),
+    ])
+    && queueDepthFunction && queueDepthReturns.length === 1
+    && directStatementReachable(queueDepthFunction.body, queueDepthReturns[0])
+    && queueDepthPendingCalls === 1 && runFunction
+    && runtimeCalls.create === 1 && runtimeCalls.push === 1
+    && runtimeCalls.pending === 1 && runtimeCalls.close === 1
+    && runAttempts.length === 1 && closeStatements.length === 1
+    && directStatementReachable(runAttempts[0].finalizer, closeStatements[0])
+    && topLevelModuleExportsIncludes(program, {
+    dispatchExecutionEvent: (value) => identifier(value, 'dispatchExecutionEvent'),
+    routeExecutionWorkerResultMessage: (value) => identifier(
+      value, 'routeExecutionWorkerResultMessage',
+    ),
+  });
 }
 
 function currentTerminationAfterRace(callback) {
@@ -1906,8 +4679,12 @@ function supervisorAstContract(source) {
       'createExecutionWorkerRequestSettlement', 'pending', 'reject', 'requestId', 'resolveRequest',
     ])) return false;
   const settlement = directDeclarator(executor.body, 'settlement', 'const');
-  if (!settlement || !call(settlement.declaration.init, ['createExecutionWorkerRequestSettlement'], [
-    (value) => exactObject(value, {
+  const settlementCall = unwrap(settlement?.declaration?.init);
+  const settlementOptions = unwrap(settlementCall?.arguments?.[0]);
+  const legacySettlement = settlementCall?.type === 'CallExpression'
+    && call(settlementCall, ['createExecutionWorkerRequestSettlement'])
+    && settlementCall.arguments.length === 1
+    && exactObject(settlementOptions, {
       child: (entry) => identifier(entry, 'child'),
       operation: (entry) => identifier(entry, 'operation'),
       deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
@@ -1919,8 +4696,42 @@ function supervisorAstContract(source) {
         ]),
       resolve: (entry) => identifier(entry, 'resolveRequest'),
       reject: (entry) => identifier(entry, 'reject'),
-    })],
-  )) return false;
+    });
+  const deadlineSpreadSettlement = settlementCall?.type === 'CallExpression'
+    && call(settlementCall, ['createExecutionWorkerRequestSettlement'])
+    && settlementCall.arguments.length === 1
+    && settlementOptions?.properties?.length === 10
+    && exactTopLevelRequireBinding(
+      program,
+      'createExecutionWorkerDeadlineCallbacks',
+      'createExecutionWorkerDeadlineCallbacks',
+      './execution-worker-deadline.cjs',
+    )
+    && objectIncludesExactProperties(settlementOptions, {
+      child: (entry) => identifier(entry, 'child'),
+      operation: (entry) => identifier(entry, 'operation'),
+      deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
+      cancellationTimeoutMs: (entry) => identifier(entry, 'cancellationTimeoutMs'),
+      deadlineCancellationTimeoutMs: (entry) => identifier(entry, 'deadlineCancelGraceMs'),
+      terminateChild: (entry) => identifier(entry, 'terminateChild'),
+      resolve: (entry) => identifier(entry, 'resolveRequest'),
+      reject: (entry) => identifier(entry, 'reject'),
+      now: (entry) => identifier(entry, 'now'),
+    }, {
+      allowedSpreads: [(entry) => call(entry, ['createExecutionWorkerDeadlineCallbacks'], [
+        (value) => exactObject(value, {
+          operation: (item) => identifier(item, 'operation'),
+          requestId: (item) => identifier(item, 'requestId'),
+          message: (item) => identifier(item, 'message'),
+          pending: (item) => identifier(item, 'pending'),
+          child: (item) => identifier(item, 'child'),
+          terminateChild: (item) => identifier(item, 'terminateChild'),
+          now: (item) => identifier(item, 'now'),
+          graceMs: (item) => identifier(item, 'deadlineCancelGraceMs'),
+        }),
+      ])],
+    });
+  if (!settlement || (!legacySettlement && !deadlineSpreadSettlement)) return false;
   const pendingSets = executor.body.body.filter((statement) => directCallStatement(
     statement,
     ['pending', 'set'],
@@ -2026,6 +4837,12 @@ function currentSupervisorAstContract(source) {
     )
     || !exactTopLevelRequireBinding(
       program,
+      'createExecutionWorkerDeadlineCallbacks',
+      'createExecutionWorkerDeadlineCallbacks',
+      './execution-worker-deadline.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
       'createExecutionWorkerTerminator',
       'createExecutionWorkerTerminator',
       './execution-worker-termination.cjs',
@@ -2044,20 +4861,40 @@ function currentSupervisorAstContract(source) {
     )
     || !stableProgramIdentifiers(program, [
       'Date', 'Map', 'Object', 'Promise', 'WeakMap',
+      'createExecutionWorkerDeadlineCallbacks',
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerSupervisor',
       'createExecutionWorkerTerminator', 'handleExecutionWorkerEventMessage',
       'handleExecutionWorkerObserverMessage',
     ], { globals: ['Date', 'Map', 'Object', 'Promise', 'WeakMap'] })
     || functionHasNestedBinding(creator, [
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
+      'createExecutionWorkerDeadlineCallbacks',
       'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
-      'entry', 'fork', 'processTreeKiller', 'processTreeCleanupGraceMs',
+      'deadlineCancelGraceMs', 'entry', 'fork', 'processTreeKiller',
+      'processTreeCleanupGraceMs',
     ])
     || functionHasIdentifierWrite(creator, [
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
+      'createExecutionWorkerDeadlineCallbacks',
       'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
-      'entry', 'fork', 'processTreeKiller', 'processTreeCleanupGraceMs',
+      'deadlineCancelGraceMs', 'entry', 'fork', 'processTreeKiller',
+      'processTreeCleanupGraceMs',
     ])) return false;
+
+  const creatorOptions = unwrap(creator.params[0]);
+  const creatorOptionPattern = creatorOptions?.type === 'AssignmentPattern'
+    && exactObject(creatorOptions.right, {}) ? unwrap(creatorOptions.left) : null;
+  const deadlineCancelGraceProperties = creatorOptionPattern?.type === 'ObjectPattern'
+    ? creatorOptionPattern.properties.filter((property) => (
+      property.type === 'Property' && property.kind === 'init' && !property.computed
+      && propertyName(property) === 'deadlineCancelGraceMs'
+    )) : [];
+  const hasDeadlineCancelGraceOption = deadlineCancelGraceProperties.length === 1
+    && defaultedIdentifierParameter(
+      deadlineCancelGraceProperties[0].value,
+      'deadlineCancelGraceMs',
+      (fallback) => literal(fallback, 0),
+    );
 
   const pending = directDeclarator(creator.body, 'pending', 'const');
   const child = directDeclarator(creator.body, 'child', 'let');
@@ -2268,16 +5105,22 @@ function currentSupervisorAstContract(source) {
     || !exactIdentifierParameters(executor, ['resolveRequest', 'reject'])
     || executor.body?.type !== 'BlockStatement'
     || functionHasNestedBinding(executor, [
-      'child', 'createExecutionWorkerRequestSettlement', 'message', 'pending',
-      'reject', 'requestId', 'resolveRequest',
+      'child', 'createExecutionWorkerDeadlineCallbacks',
+      'createExecutionWorkerRequestSettlement', 'message', 'pending',
+      'deadlineCancelGraceMs', 'reject', 'requestId', 'resolveRequest',
     ], { allowedDirectBindings: ['settlement'] })
     || functionHasIdentifierWrite(executor, [
-      'child', 'createExecutionWorkerRequestSettlement', 'message', 'pending',
-      'reject', 'requestId', 'resolveRequest', 'settlement',
+      'child', 'createExecutionWorkerDeadlineCallbacks',
+      'createExecutionWorkerRequestSettlement', 'message', 'pending',
+      'deadlineCancelGraceMs', 'reject', 'requestId', 'resolveRequest', 'settlement',
     ])) return false;
   const settlement = directDeclarator(executor.body, 'settlement', 'const');
-  if (!settlement || !call(settlement.declaration.init, ['createExecutionWorkerRequestSettlement'], [
-    (value) => exactObject(value, {
+  const settlementCall = unwrap(settlement?.declaration?.init);
+  const settlementOptions = unwrap(settlementCall?.arguments?.[0]);
+  const legacySettlement = settlementCall?.type === 'CallExpression'
+    && call(settlementCall, ['createExecutionWorkerRequestSettlement'])
+    && settlementCall.arguments.length === 1
+    && exactObject(settlementOptions, {
       child: (entry) => identifier(entry, 'child'),
       operation: (entry) => identifier(entry, 'operation'),
       deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
@@ -2289,8 +5132,37 @@ function currentSupervisorAstContract(source) {
         ]),
       resolve: (entry) => identifier(entry, 'resolveRequest'),
       reject: (entry) => identifier(entry, 'reject'),
-    })],
-  )) return false;
+    });
+  const deadlineSpreadSettlement = hasDeadlineCancelGraceOption
+    && settlementCall?.type === 'CallExpression'
+    && call(settlementCall, ['createExecutionWorkerRequestSettlement'])
+    && settlementCall.arguments.length === 1
+    && settlementOptions?.properties?.length === 10
+    && objectIncludesExactProperties(settlementOptions, {
+      child: (entry) => identifier(entry, 'child'),
+      operation: (entry) => identifier(entry, 'operation'),
+      deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
+      cancellationTimeoutMs: (entry) => identifier(entry, 'cancellationTimeoutMs'),
+      deadlineCancellationTimeoutMs: (entry) => identifier(entry, 'deadlineCancelGraceMs'),
+      terminateChild: (entry) => identifier(entry, 'terminateChild'),
+      resolve: (entry) => identifier(entry, 'resolveRequest'),
+      reject: (entry) => identifier(entry, 'reject'),
+      now: (entry) => identifier(entry, 'now'),
+    }, {
+      allowedSpreads: [(entry) => call(entry, ['createExecutionWorkerDeadlineCallbacks'], [
+        (value) => exactObject(value, {
+          operation: (item) => identifier(item, 'operation'),
+          requestId: (item) => identifier(item, 'requestId'),
+          message: (item) => identifier(item, 'message'),
+          pending: (item) => identifier(item, 'pending'),
+          child: (item) => identifier(item, 'child'),
+          terminateChild: (item) => identifier(item, 'terminateChild'),
+          now: (item) => identifier(item, 'now'),
+          graceMs: (item) => identifier(item, 'deadlineCancelGraceMs'),
+        }),
+      ])],
+    });
+  if (!settlement || (!legacySettlement && !deadlineSpreadSettlement)) return false;
   const pendingSets = executor.body.body.filter((statement) => directCallStatement(
     statement,
     ['pending', 'set'],
@@ -2316,9 +5188,12 @@ function currentSupervisorAstContract(source) {
   const requestMutations = protectedCollectionMutationCalls(
     request, ['pending'], ['add', 'clear', 'delete', 'set'],
   );
-  if (pendingSets.length !== 1 || posts.length !== 1 || requestMutations.length !== 2
+  const expectedRequestMutationCount = deadlineSpreadSettlement ? 1 : 2;
+  if (pendingSets.length !== 1 || posts.length !== 1
+    || requestMutations.length !== expectedRequestMutationCount
     || requestMutations.filter((entry) => entry.method === 'set').length !== 1
-    || requestMutations.filter((entry) => entry.method === 'delete').length !== 1
+    || requestMutations.filter((entry) => entry.method === 'delete').length
+      !== (deadlineSpreadSettlement ? 0 : 1)
     || !directStatementsOrderedAndReachable(executor.body, [
       settlement.statement, pendingSets[0], posts[0],
     ])) {
@@ -3337,6 +6212,9 @@ function managerIsolationAstContract(source) {
   const createLease = topFunction(program, 'executionWorkerLease');
   const createRecord = topFunction(program, 'createExecutionRecord');
   const createSupervisor = topFunction(program, 'createExecutionSupervisor');
+  const executionSession = topFunction(program, 'executionSessionIdentity');
+  const sameSession = topFunction(program, 'sameExecutionSession');
+  const retireSession = topFunction(program, 'retireDrainingSession');
   const creatorParametersValid = managerCreatorParametersValid(creator);
   const acquireParametersValid = exactParameterList(acquire, [
     (value) => identifier(value, 'manager'),
@@ -3601,10 +6479,14 @@ function currentManagerIsolationAstContract(source) {
   const createLease = topFunction(program, 'executionWorkerLease');
   const createRecord = topFunction(program, 'createExecutionRecord');
   const createSupervisor = topFunction(program, 'createExecutionSupervisor');
+  const executionSession = topFunction(program, 'executionSessionIdentity');
+  const sameSession = topFunction(program, 'sameExecutionSession');
+  const retireSession = topFunction(program, 'retireDrainingSession');
   const protectedHelpers = [
     'acquireExecutionWorker', 'admitNextExecution', 'createExecutionRecord',
     'createExecutionSupervisor', 'createExecutionWorkerManager', 'drainExecutionRecord',
     'executionWorkerLease', 'releaseExecutionRecord', 'stopExecutionRecord',
+    'executionSessionIdentity', 'retireDrainingSession', 'sameExecutionSession',
     'validateAcquisition', 'waitForExecutionSlot',
   ];
   if (!creator || !acquire || !waitForSlot || !validateAcquisition || !stopRecord
@@ -3632,7 +6514,9 @@ function currentManagerIsolationAstContract(source) {
       }),
     ])
     || !exactProtectedIdentifierParameters(createLease, ['manager', 'requestId', 'record', 'state'])
-    || !exactProtectedIdentifierParameters(createRecord, ['supervisor'])
+    || !(exactProtectedIdentifierParameters(createRecord, ['supervisor'])
+      || (exactProtectedIdentifierParameters(createRecord, ['supervisor', 'authority', 'identity'])
+        && executionSession && sameSession && retireSession))
     || !exactProtectedIdentifierParameters(createSupervisor, ['manager'])
     || !stableProgramIdentifiers(program, [
       ...protectedHelpers, 'Error', 'Map', 'Math', 'Number', 'Object', 'Promise',
@@ -3683,14 +6567,29 @@ function currentManagerIsolationAstContract(source) {
   ));
   const recordObject = returnedObject(createRecord);
   const leaseObject = returnedObject(createLease);
-  if (supervisorReturn.length !== 1 || !recordObject || !exactObject(recordObject, {
+  const legacyRecordObject = recordObject && exactObject(recordObject, {
     supervisor: (value) => identifier(value, 'supervisor'),
     released: (value) => literal(value, false),
     holdsSlot: (value) => literal(value, false),
     resolveDrain: (value) => literal(value, null),
     finalizationPromise: (value) => literal(value, null),
     stopPromise: (value) => literal(value, null),
-  }) || !leaseObject || !exactObject(leaseObject, {
+  });
+  const sessionAwareRecordObject = recordObject && recordObject.properties.length === 7
+    && objectIncludesExactProperties(recordObject, {
+      supervisor: (value) => identifier(value, 'supervisor'),
+      sessionIdentity: (value) => call(value, ['executionSessionIdentity'], [
+        (entry) => identifier(entry, 'authority'),
+        (entry) => identifier(entry, 'identity'),
+      ]),
+      released: (value) => literal(value, false),
+      holdsSlot: (value) => literal(value, false),
+      resolveDrain: (value) => literal(value, null),
+      finalizationPromise: (value) => literal(value, null),
+      stopPromise: (value) => literal(value, null),
+    });
+  if (supervisorReturn.length !== 1 || (!legacyRecordObject && !sessionAwareRecordObject)
+    || !leaseObject || !exactObject(leaseObject, {
     drain: (value) => exactParameterList(unwrap(value), [
       (entry) => identifier(entry, 'settlement'),
       (entry) => identifier(entry, 'options'),
@@ -3825,17 +6724,7 @@ function currentManagerIsolationAstContract(source) {
     || !identifier(deadlineAssignment.left, 'timer')
     || !call(deadlineAssignment.right, ['setTimeout'], [
       (entry) => identifier(entry, 'resolveDeadline'),
-      (entry) => call(entry, ['Math', 'max'], [
-        (value) => literal(value, 1),
-        (value) => logical(
-          value,
-          '||',
-          (candidate) => call(candidate, ['Number'], [
-            (argument) => identifier(argument, 'timeoutMs'),
-          ]),
-          (candidate) => literal(candidate, 1),
-        ),
-      ]),
+      (entry) => finiteBoundedTimeoutExpression(entry, 'timeoutMs', { fallback: 1 }),
     ])
     || !boundedDelay
     || !directCallStatement(deadlineExecutor.body.body[1], ['timer', 'unref'], [])
@@ -3874,9 +6763,13 @@ function currentManagerIsolationAstContract(source) {
     || !supervisor || !call(supervisor.declaration.init, ['createExecutionSupervisor'], [
       (value) => identifier(value, 'manager'),
     ])
-    || !record || !call(record.declaration.init, ['createExecutionRecord'], [
+    || !record || !(call(record.declaration.init, ['createExecutionRecord'], [
       (value) => identifier(value, 'supervisor'),
-    ])
+    ]) || call(record.declaration.init, ['createExecutionRecord'], [
+      (value) => identifier(value, 'supervisor'),
+      (value) => identifier(value, 'authority'),
+      (value) => identifier(value, 'identity'),
+    ]))
     || indexes.length !== 1 || attempts.length !== 1) return false;
   const attempt = attempts[0];
   const state = directDeclarator(attempt.block, 'state', 'const');
@@ -4250,19 +7143,19 @@ function currentContextHelperAstContract(sourceByPath) {
       ['lease', 'drain'], ['lease', 'release'],
     ])) return false;
 
-  const requestedTimeout = directDeclarator(releaseAfterUsage.body, 'requestedTimeout', 'const');
   const bounded = directDeclarator(releaseAfterUsage.body, 'boundedTimeout', 'const');
-  if (!requestedTimeout || !bounded
-    || !call(requestedTimeout.declaration.init, ['Number'], [
-      (value) => identifier(value, 'timeoutMs'),
-    ])
-    || !directStatementsOrderedAndReachable(releaseAfterUsage.body, [
-      requestedTimeout.statement, bounded.statement,
-    ])
-    || !finitePositiveTimeoutExpression(
+  if (!bounded
+    || !finiteBoundedTimeoutExpression(
       bounded.declaration.init,
-      'requestedTimeout',
-      (entry) => identifier(entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS'),
+      'timeoutMs',
+      {
+        fallback: (entry) => identifier(
+          entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+        ),
+        maximum: (entry) => identifier(
+          entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+        ),
+      },
     )) return false;
   const drainBranches = releaseAfterUsage.body.body.filter((statement) => (
     statement.type === 'IfStatement'
@@ -4435,7 +7328,7 @@ function currentContextHelperAstContract(sourceByPath) {
       (value) => identifier(value, 'lease'),
       (value) => identifier(value, 'settlement'),
       (value) => exactObject(value, { timeoutMs: (entry) => identifier(entry, 'timeoutMs') }),
-    ], { void_: true })
+    ], { await_: true })
     || !exactReturn(completedBody[1], (value) => literal(value, true))) return false;
   const incompleteAttempts = releaseFunction.body.body.filter((statement) => (
     statement.type === 'TryStatement' && !statement.finalizer
@@ -4713,6 +7606,9 @@ export function auditQworkSuccessorAstContracts(sourceByPath) {
   const result = {
     cancellation: cancellationAstContract(read('electron/host-core/agent/execution-worker-cancellation.cjs')),
     controller: controllerAstContract(read('electron/host-core/agent/execution-worker-controller.cjs')),
+    deadline: deadlineAstContract(read('electron/host-core/agent/execution-worker-deadline.cjs')),
+    callback_settlement: callbackSettlementAstContract(sourceByPath),
+    event_flow: eventFlowAstContract(sourceByPath),
     desktop: desktopAstContract(sourceByPath) || currentDesktopAstContract(sourceByPath),
     manager: managerIsolationAstContract(
       read('electron/host-core/agent/execution-worker-manager.cjs'),

@@ -17,6 +17,7 @@ import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
   QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
   currentReleaseSourceContractProtectedPaths,
+  currentReleaseSourceContractSuccessorBindings,
   resolveCurrentReleaseHeaderContract,
 } from '../src/lib/qwork-release-source-contracts.mjs';
 import {
@@ -129,17 +130,26 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
       "import assert from 'node:assert/strict';",
       "import { createRequire } from 'node:module';",
       "import test from 'node:test';",
+      "import vm from 'node:vm';",
       '',
       'const require = createRequire(import.meta.url);',
       'const {',
+      '  createExecutionWorkerSupervisor,',
       '  workerEnvironment,',
       "} = require('../../../electron/desktop-agent-host.cjs');",
+      'void createExecutionWorkerSupervisor;',
+      'void vm;',
       '',
       ...lines,
     ];
   } else if (mr1597 && filePath === 'electron/desktop-agent-host.cjs') {
+    const explicitNamedExports = Array.from({ length: 122 }, (_, index) => (
+      `exports.unrelatedExport${index + 1} = implementation.unrelatedExport${index + 1};`
+    ));
     lines = [
-      "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+      "const implementation = require('./host-core/agent/desktop-host-context.cjs');",
+      ...explicitNamedExports,
+      "Object.assign(exports, require('./unrelated-a.cjs'), require('./host-core/agent/execution-worker-supervisor.cjs'));",
       ...lines,
     ];
   } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
@@ -155,11 +165,41 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
     ];
   } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
     lines = [
+      "const { isAbsolute } = require('node:path');",
+      'const {',
+      '  contextUsageWorkerFixtureEnvironment,',
+      "} = require('./execution-worker-context-usage.cjs');",
+      '',
       ...lines,
+      'function expertAuthoringWorkerFixtureEnvironment(source = {}) {',
+      "  if (source.DEEPBANK_E2E !== '1' || source.DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN !== '1') return {};",
+      '  return {',
+      "    DEEPBANK_E2E: '1',",
+      "    DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN: '1',",
+      "    ...(source.DEEPBANK_AGENT_MOCK === '1' ? { DEEPBANK_AGENT_MOCK: '1' } : {}),",
+      '  };',
+      '}',
+      '',
       'function workerEnvironment(source = process.env, authority = {}) {',
-      '  void source;',
-      '  void authority;',
-      '  return {};',
+      '  const env = {};',
+      '  for (const [key, value] of Object.entries(source || {})) {',
+      "    const name = String(key || '').trim();",
+      '    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;',
+      "    env[name] = String(value ?? '');",
+      '  }',
+      "  if (source?.DEEPBANK_E2E === '1') {",
+      "    const captureRoot = String(source?.DEEPBANK_E2E_RAW_CAPTURE_DIR || '').trim();",
+      "    if (captureRoot && captureRoot.length <= 4096 && !captureRoot.includes('\\0') && isAbsolute(captureRoot)) {",
+      '      env.DEEPBANK_E2E_RAW_CAPTURE_DIR = captureRoot;',
+      '    }',
+      '  }',
+      '  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+      '  Object.assign(env, expertAuthoringWorkerFixtureEnvironment(source));',
+      '  if (authority?.runtimeEntry) env.QBOT_EXECUTION_WORKER_RUNTIME_ENTRY = String(authority.runtimeEntry);',
+      '  if (authority?.runtimeHome) env.DEEPBANK_HOME = String(authority.runtimeHome);',
+      '  if (authority?.appRoot) env.QBOT_APP_ROOT = String(authority.appRoot);',
+      '  if (authority?.serverScope) env.DEEPBANK_SERVER = env.QBOT_CONTROL_PLANE_SERVER = String(authority.serverScope);',
+      '  return env;',
       '}',
       'module.exports = {',
       '  WORKER_ENV_ALLOWLIST,',
@@ -321,6 +361,13 @@ function releaseCommitMetadata(id) {
   };
 }
 
+function releaseCompareCommit(id, parentIds) {
+  return {
+    ...releaseCommitMetadata(id),
+    parent_ids: [...parentIds],
+  };
+}
+
 function releaseFileProvenance(filePath, head) {
   const change = {
     old_path: filePath,
@@ -385,6 +432,9 @@ function makeReleaseIntake({
     QWORK_MR1552_MERGE_COMMIT_SHA,
     QWORK_MR1559_MERGE_COMMIT_SHA,
   ]);
+  const sourceContractSuccessors = QWORK_RELEASE_SOURCE_CONTRACTS.flatMap((contract) => (
+    currentReleaseSourceContractSuccessorBindings(contract).map((item) => item.successor)
+  ));
   const fixtureMrIid = '999999';
   const fixtureMr = {
     iid: fixtureMrIid,
@@ -418,6 +468,19 @@ function makeReleaseIntake({
       const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
       const from = query.get('from');
       const to = query.get('to');
+      const successor = sourceContractSuccessors.find((candidate) => (
+        candidate.merge_commit_sha === from || candidate.merge_commit_sha === to
+      ));
+      if (successor && from === successor.merge_commit_sha && to === releaseHead) {
+        return { compare_timeout: false, commits: [] };
+      }
+      if (successor && from === releaseHead && to === successor.merge_commit_sha) {
+        if (from === to) return { compare_timeout: false, commits: [] };
+        return {
+          compare_timeout: false,
+          commits: [releaseCompareCommit(successor.merge_commit_sha, [releaseHead])],
+        };
+      }
       if (from === QWORK_RELEASE_CASEBOOK_DESIGN_BASELINE_COMMIT && to === releaseHead) {
         if (from === to) return { compare_timeout: false, commits: [] };
         return {
@@ -481,6 +544,13 @@ function makeReleaseIntake({
       return releaseFiles.get(filePath);
     }
     throw new Error(`unexpected endpoint ${endpoint}`);
+  };
+  gitlabReader.readRaw = (endpoint) => {
+    const value = gitlabReader(endpoint);
+    return {
+      bytes: Buffer.from(JSON.stringify(value), 'utf8'),
+      value: structuredClone(value),
+    };
   };
   return scanQworkReleaseIntake({
     repoRoot: repositoryPath,

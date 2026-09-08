@@ -219,6 +219,21 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
+    /MR !1597[\s\S]*后继 `!1612`[\s\S]*不在本轮增量 MR 范围[\s\S]*正向与反向 first-parent compare[\s\S]*仅正向完整成立[\s\S]*仅反向完整成立[\s\S]*双向冲突[\s\S]*binding attestation[\s\S]*离线验证器重放[\s\S]*IID、merge\/first-parent[\s\S]*diff[\s\S]*有序路径身份/,
+    `${documentName} 必须冻结 !1612 successor 跨增量双向 ancestry、attestation 重放与本轮身份复核合同`,
+  );
+  assert.match(
+    documentText,
+    /(?=[\s\S]*qbot-release-intake\/1\.9\.0)(?=[\s\S]*qbot-qwork-gitlab-first-parent-compare\/v1)(?=[\s\S]*Base64)(?=[\s\S]*UTF-8)(?=[\s\S]*JSON)(?=[\s\S]*字节数)(?=[\s\S]*SHA-256)(?=[\s\S]*endpoint)(?=[\s\S]*from\/to)(?=[\s\S]*原始 `commits`)(?=[\s\S]*不得信任报告自报的 ancestry)(?=[\s\S]*qbot-qwork-source-binding-successor-relationship\/v2)(?=[\s\S]*qbot-qwork-release-current-source-contract\/v4)/,
+    `${documentName} 必须冻结 intake 1.9、raw compare v1、relationship v2 与 current-release v4 的原始响应重放合同`,
+  );
+  assert.match(
+    documentText,
+    /`RegExp`[\s\S]{0,120}`RegExp\.prototype\.test`[\s\S]{0,260}globalThis[\s\S]{0,260}`Object\/Reflect`[\s\S]{0,260}`Reflect\.apply`[\s\S]{0,220}`\.bind\(\)`[\s\S]{0,300}无关 receiver/,
+    `${documentName} 必须冻结 lifecycle RegExp builtin 篡改防护与只读正控`,
+  );
+  assert.match(
+    documentText,
     /integration binding 默认仍要求全文件[\s\S]*occurrence_count == 1[\s\S]*MR !1540[\s\S]*feature_check_body_absent_test[\s\S]*test_profile_report_exact_body[\s\S]*下一个顶层 `test\(`[\s\S]*owner 必须唯一[\s\S]*URL、method、body[\s\S]*owner_occurrence_count\/occurrence_count[\s\S]*MR !1597[\s\S]*input[\s\S]*expected[\s\S]*owner_region_order[\s\S]*IM_USER_ACCESS_TOKEN[\s\S]*forbidden[\s\S]*origin changes 鉴证继续[\s\S]*精确出现一次[\s\S]*forbidden fragment[\s\S]*精确为 0/,
     `${documentName} 必须锁定 MR1540 owner scope 与 MR1597 双 region scope，并保持 origin/forbidden 断言严格`,
   );
@@ -270,8 +285,43 @@ assert.match(
 );
 assert.match(
   qworkReleaseSourceContractsSource,
-  /if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1/,
-  'current-release continuity 必须保持默认精确计数，并以唯一顶层 test owner 收紧 scope 例外',
+  /function currentReleaseSuccessorLineIsVerified[\s\S]*parent_count[\s\S]*metadata_verified[\s\S]*metadata_source[\s\S]*diff_bytes[\s\S]*diff_sha256[\s\S]*stableJson\(changedPaths\)[\s\S]*successor\.changed_paths/,
+  'current-release successor 必须绑定 MR 首父、元数据来源、diff 身份和完整有序路径',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function observeCurrentReleaseSuccessorRelationship[\s\S]*VERIFIED_SUCCESSOR[\s\S]*VERIFIED_PREDECESSOR[\s\S]*inRangeIdentityVerified[\s\S]*function currentIntegrationBindingOccurrence[\s\S]*successorObservation\.relationship === 'VERIFIED_SUCCESSOR'[\s\S]*function observeCurrentIntegrationBinding[\s\S]*expectedCurrentOccurrenceCount[\s\S]*if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*ownerIndexes\.length === 1/,
+  'current-release continuity 必须保持 successor 受控行、默认精确计数和唯一顶层 test owner scope',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /currentReleaseSourceContractSuccessorBindings[\s\S]*successorAncestriesByContractId[\s\S]*verifyCurrentReleaseContractAncestry[\s\S]*verifyReleaseBeforeContractAncestry[\s\S]*successorAncestries: successorAncestriesByContractId/,
+  'release intake 必须为 current-release successor 独立读取双向 first-parent ancestry 并传入鉴证',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /QWORK_RELEASE_INTAKE_TOOL_VERSION = 'qbot-release-intake\/1\.9\.0'[\s\S]*const reader = \(endpoint\) => execute\(endpoint\)\.value;[\s\S]*reader\.readRaw = \(endpoint\) => execute\(endpoint\)[\s\S]*function gitLabCompareEvidence[\s\S]*readGitLab\.readRaw\(endpoint\)[\s\S]*raw_response_encoding: 'base64'[\s\S]*raw_response_bytes: bytes\.length[\s\S]*raw_response_sha256: createHash\('sha256'\)/,
+  'release intake 1.9 必须保留 GitLab compare 原始字节并固化 Base64、bytes 与 SHA-256',
+);
+assert.match(
+  qworkReleaseIntakeSource,
+  /function verifyCurrentReleaseContractAncestry[\s\S]*requireRawCompareEvidence[\s\S]*gitLabCompareEvidence\(\{ readGitLab, endpoint, compareFrom, compareTo: releaseHead \}\)[\s\S]*reconstructGitLabFirstParentChain\(\{[\s\S]*function verifyReleaseBeforeContractAncestry[\s\S]*gitLabCompareEvidence\(\{ readGitLab, endpoint, compareFrom: releaseHead, compareTo \}\)[\s\S]*reconstructGitLabFirstParentChain\(\{/,
+  'successor 双向 ancestry 必须从各自固定方向的 raw compare 重建 first-parent 链',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /successor_observation[\s\S]*observedBindings[\s\S]*successorAncestries[\s\S]*replayedBindings[\s\S]*attestation_current_integration_bindings_replay_mismatch/,
+  'current-release successor relationship 必须持久化在 binding attestation 并由离线验证器重放',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract\/v4'[\s\S]*QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA = 'qbot-qwork-gitlab-first-parent-compare\/v1'[\s\S]*QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA = 'qbot-qwork-source-binding-successor-relationship\/v2'/,
+  'current-release v4 必须固定 raw compare v1 与 successor relationship v2 schema',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function validateGitLabFirstParentCompareEvidence[\s\S]*objectHasExactKeys\(evidence, expectedKeys\)[\s\S]*strictBase64Decode[\s\S]*strictUtf8Decode[\s\S]*raw_response_bytes[\s\S]*sha256\(bytes\)[\s\S]*JSON\.parse\(source\)[\s\S]*function replayCurrentReleaseSuccessorAncestry[\s\S]*reconstructGitLabFirstParentChain\(\{[\s\S]*ancestry_projection_mismatch/,
+  '离线验证器必须严格重放 raw compare 的字段、编码、字节、哈希、JSON 与 first-parent 投影',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -316,7 +366,7 @@ assert.match(
 assert.match(
   qworkReleaseSourceContractsSource,
   /pipeline\.project_id !== metadata\.project_id[\s\S]*pipeline\.sha !== metadata\.id[\s\S]*pipelines\/\$\{pipeline\.id\}[\s\S]*Number\.isSafeInteger\(ancestry\?\.compare_commit_count\)[\s\S]*Number\.isSafeInteger\(file\?\.declared_size\)[\s\S]*Number\.isSafeInteger\(file\?\.bytes\)[\s\S]*Number\.isSafeInteger\(file\?\.line_count\)/,
-  'current-release v3 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
+  'current-release v4 必须绑定 pipeline 身份并拒绝数值字符串类型绕过',
 );
 assert.match(
   qworkReleaseIntakeTestSource,

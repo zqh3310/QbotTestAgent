@@ -72,6 +72,9 @@ const MR1592_MERGE_COMMIT_SHA = 'ba781e6dcd3534b7d6798a7ac5f16cd32d69ed3e';
 const MR1592_SUCCESSOR_AST_KEYS = Object.freeze([
   'cancellation',
   'controller',
+  'deadline',
+  'callback_settlement',
+  'event_flow',
   'desktop',
   'manager',
   'manager_pressure',
@@ -98,6 +101,7 @@ const R16_INCREMENTAL_MR_ORDER = Object.freeze([
   '1585', '1587', '1588', '1589', '1586', '1534', '1590', '1567', '1565', '1592',
   '1593', '1596', '1595', '1597', '1594',
   '1579', '1604', '1603', '1598', '1600', '1602',
+  '1605', '1608', '1599', '1601', '1609', '1614', '1554', '1607', '1612', '1616', '1613',
 ]);
 const EXPECTED_INCREMENTAL_MR_COUNT = R16_INCREMENTAL_MR_ORDER.length;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
@@ -421,7 +425,7 @@ const R16_INCREMENTAL_MR_CONTRACTS = new Map([
   ['1592', {
     caseIds: ['BETA-INIT-001', 'BETA-CHAT-001', 'BETA-CHAT-007', 'BETA-HOST-003', 'MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-CHAT-008', 'BETA-PERF-003', 'SIT-TEAMS-NEW-002', 'SIT-TEAMS-NEW-003'],
     coverageStrength: '相邻回归',
-    reason: 'worker heartbeat 与 execution 隔离影响 controller/entry/supervisor/cancel/watchdog；初始化、基础/并发/失败/停止/长回复、路由及 Teams 宿主 Case 只做用户可见相邻回归。G0 必须由 blocking-risk v5 的 clean-exit、pressure-admission、message-isolation 及九项 successor AST 合同全部显式通过，任一失败直接 NO_GO 且禁止生成可执行 Casebook。',
+    reason: 'worker heartbeat 与 execution 隔离影响 controller/entry/supervisor/cancel/watchdog；初始化、基础/并发/失败/停止/长回复、路由及 Teams 宿主 Case 只做用户可见相邻回归。G0 必须由 blocking-risk v5 的 clean-exit、pressure-admission、message-isolation 及十二项 successor AST 合同全部显式通过，任一失败直接 NO_GO 且禁止生成可执行 Casebook。',
   }],
   ['1593', {
     caseIds: ['BETA-EXPERT-001', 'BETA-EXPERT-007', 'BETA-EXPERT-012', 'BETA-EXPERT-014', 'BETA-EXPERT-015', 'SIT-EXPERT-001', 'SIT-EXPERT-004', 'SIT-EXPERT-006', 'SIT-EXPERT-021', 'SIT-EXPERT-022'],
@@ -493,6 +497,294 @@ const R16_INCREMENTAL_MR_CONTRACTS = new Map([
     coverageStrength: '相邻回归',
     reason: '初始化、宿主、Teams 首启/重开、导航与入口 Case 只回归首次启动直接运行服务端完整 release 的用户可见相邻链；bootstrap state、startup release 选择与 host sync 内部合同仅做源码/测试资产静态审查，未作为桌面直接 E2E 结论，也没有产品测试执行回执。',
   }],
+  ['1605', {
+    caseIds: ['BETA-INIT-001', 'BETA-HOST-003', 'BETA-CHAT-001', 'BETA-CHAT-002', 'MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-ROUTE-001', 'SIT-CONN-016'],
+    coverageStrength: '相邻回归',
+    reason: 'RuntimeAdapter 与 host port 合同会影响运行时启动、宿主连续性、会话事件、活动/失败投影、路由和工具结果；现有 Case 只保守回归这些用户可见主链，不把 adapter 接口或 golden unit 声明冒充直接桌面 E2E。',
+  }],
+  ['1608', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'release bootstrap 的 npm fallback 仅修改 CI 配置；保留精确 IID、merge SHA、diff SHA 与唯一 changed path 静态审计，不新增桌面 Case。',
+  }],
+  ['1599', {
+    caseIds: ['MRSMOKE-AUTH-001', 'BETA-CHAT-001', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-HOST-003'],
+    coverageStrength: '相邻回归',
+    reason: '提示词层的安全估算器版本误报清理可影响组织上下文、安全脱敏、会话提示与宿主运行时；现有授权、基础对话、隐私和宿主 Case 只做用户可见相邻回归，不把单元测试声明冒充产品执行结果。',
+  }],
+  ['1601', {
+    caseIds: ['BETA-INIT-001', 'BETA-INIT-002', 'BETA-HOST-003', 'SIT-TEAMS-NEW-001', 'SIT-TEAMS-NEW-003', 'MRSMOKE-NAV-001', 'MRSMOKE-ENTRY-001'],
+    coverageStrength: '相邻回归',
+    reason: 'OTA 灰度发布主流程跨 dashboard、control plane、持久化与 runtime release；G0 权威身份读回及初始化、宿主、Teams 首启/重开、导航入口 Case 只做已安装候选的相邻回归，不冒充 Dashboard 管理操作或受保护发布链已被桌面 E2E 直接执行。',
+  }],
+  ['1609', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅删除无效 source-text/harness-helper 单元测试并同步 CI weight；保留精确 changes 静态审计，不新增桌面 Case。',
+  }],
+  ['1614', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅删除 qwork-dashboard Helm lifecycle hooks 并更新 Kubernetes 单元测试；属于部署工程静态合同，不新增桌面 QWork E2E。',
+  }],
+  ['1554', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '删除未使用的 CI profile/smoke jobs，并同步治理、模板、脚本与 package 入口；精确静态审计全部 changes，不把 package.json 入口调整泛化为产品桌面行为。',
+  }],
+  ['1607', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: 'MR delivery 本地/CI lint gate 一致性仅修改治理脚本、hook、CI 与 package 命令；精确静态审计全部 changes，不新增桌面 Case。',
+  }],
+  ['1612', {
+    caseIds: ['MRSMOKE-ACT-001', 'MRSMOKE-FAIL-001', 'BETA-CHAT-002', 'BETA-CHAT-005', 'BETA-CHAT-006', 'BETA-CHAT-007', 'BETA-CHAT-008', 'BETA-PERF-003', 'BETA-HOST-003', 'SIT-HITL-002', 'SIT-CONN-016'],
+    coverageStrength: '相邻回归',
+    requiredBlockingRiskIds: [QWORK_MR1552_EXECUTION_RUNNER_RISK_ID],
+    reason: 'Worker deadline 在用户交互后续期涉及 cancel/deadline/supervisor/message/termination、provider 首输出和用户错误投影；活动、失败、多轮、停止、重开、并发、长回复、HITL、工具与宿主 Case 只做用户可见相邻回归。G0 必须继续绑定 deepbankv2-mr-1552-execution-runner-isolation/v1 blocking-risk v5，三项检查及十二项 successor AST 任一失败都禁止生成可执行 r16，不得以相邻 Case 伪绿。',
+  }],
+  ['1616', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '将 npm start 锁定到 dev runtime 仅修改开发启动脚本、架构声明和 package 命令；不改变已安装 SIT 候选的桌面运行时，因此只做精确静态合同审计。',
+  }],
+  ['1613', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅补齐 Claude Agent SDK 升级守卫的 release 发布脚本、CI 与单元测试；保留精确 changes 静态审计，实际 SDK/制品身份仍由 G0 权威读回，不新增桌面 Case。',
+  }],
+]);
+const R16_LATEST_MR_METADATA_CONTRACTS = new Map([
+  ['1605', {
+    mergeCommitSha: '1eac89202f575694a74b9b88d62b9eac6333a8d4',
+    diffSha256: '4b6b6a202a1d45fc763dd020ad001f3edee983cb044fd804fd0b3d8d570421dc',
+    changedPaths: [
+      'electron/host-core/bridge/contracts/runtime-host-port.cjs',
+      'electron/.architecture.yaml',
+      'server/qbot-core/runtime-adapters/runtime-adapter.mjs',
+      'server/qbot-core/.architecture.yaml',
+      'test/unit/server/runtime-adapter-golden-events.test.mjs',
+      'test/unit/server/tool-result-recovery.test.mjs',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1608', {
+    mergeCommitSha: '681ac4a24938ceedd448d852a9935f652673f0a9',
+    diffSha256: '4e9fa133428205fb125c9d7262b2a29abd2d82871f99ed956f87f20af386541c',
+    changedPaths: ['.gitlab-ci.yml'],
+    sourceContractIds: [],
+  }],
+  ['1599', {
+    mergeCommitSha: '19fbc8b26b8e93d1ce5b2025032572afe2635b0d',
+    diffSha256: '1854f34cdceec0ed6587eff5a72ab95d6287b0a49cc7d7d66c38bd27ea168ae1',
+    changedPaths: [
+      'server/qbot-core/prompts/prompt-layers.mjs',
+      'test/unit/prompts/prompt-layers.test.mjs',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1601', {
+    mergeCommitSha: 'a038a6d0a018345c111f153f56681eac0d935eb1',
+    diffSha256: '92b31611bb4bafd2843564c2fada46131bd7f1615b6493f06bd4fcdb06e2ca72',
+    changedPaths: [
+      'dashboard/docs/qwork-dashboard.md',
+      'dashboard/e2e/dashboard.spec.ts',
+      'dashboard/server/app.ts',
+      'dashboard/server/dashboard-bff.test.ts',
+      'dashboard/shared/contracts.ts',
+      'dashboard/src/app/App.tsx',
+      'dashboard/src/i18n.tsx',
+      'docs/ota-architecture.md',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'server/control-plane/dashboard/dashboard-admin-routes.mjs',
+      'server/control-plane/dashboard/runtime-gray-admin-routes.mjs',
+      'server/control-plane/persistence/db.mjs',
+      'server/control-plane/releases/runtime-release-gray.mjs',
+      'server/control-plane/.architecture.yaml',
+      'server/control-plane/index.mjs',
+      'test/unit/server/runtime-release-gray.test.mjs',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1609', {
+    mergeCommitSha: '9084d7371a055d99dc4fac951ceaa8afc6f7f47d',
+    diffSha256: '24e141407e86fb988a7f22131a4845ed04c52374860e5b6e1af7a74565357d18',
+    changedPaths: [
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'test/unit/core/llm-platform-real-artifacts.test.mjs',
+      'test/unit/core/markdown-link-navigation.test.mjs',
+      'test/unit/core/native-confirm-dialog-regression.test.mjs',
+      'test/unit/core/packaged-app.test.mjs',
+      'test/unit/runtime/runtime-release-workbench.test.mjs',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1614', {
+    mergeCommitSha: 'cfe1022d2d7d6844d6ec15a9b87534d289b8e13a',
+    diffSha256: '5c114bd60ebd99b872ea351f021abaea959b3f52e72b73d0d8e306618628dae6',
+    changedPaths: [
+      'deploy/helm/qwork-dashboard/templates/deployment.yaml',
+      'test/unit/ui/dashboard-k8s.test.mjs',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1554', {
+    mergeCommitSha: 'fb92870614093eaa16c84fa56ef0aceb7b5dccd3',
+    diffSha256: '331477115f3c495d00dde5696f9482749af6d9e4eeff68e223eaf530d73edd77',
+    changedPaths: [
+      '.agent/compiled/scripts/AGENTS.md',
+      '.agent/compiled/scripts/CLAUDE.md',
+      '.agent/context/scopes/scripts.yaml',
+      '.agent/skills-src/issue-intake/references/label-mapping-guide.md',
+      '.agents/skills/issue-intake/references/label-mapping-guide.md',
+      '.claude/skills/issue-intake/references/label-mapping-guide.md',
+      '.gitlab/guides/ci-skeleton.md',
+      '.gitlab/guides/labels.md',
+      '.gitlab/issue_templates/Bug.md',
+      '.gitlab/issue_templates/Chore.md',
+      '.gitlab/issue_templates/Default.md',
+      '.gitlab/issue_templates/Design.md',
+      '.gitlab/issue_templates/Documentation.md',
+      '.gitlab/issue_templates/Enhancement.md',
+      '.gitlab/issue_templates/ExternalDependency.md',
+      '.gitlab/issue_templates/Feature.md',
+      '.gitlab/issue_templates/Performance.md',
+      '.gitlab/issue_templates/Refactor.md',
+      '.gitlab/issue_templates/Release.md',
+      '.gitlab/issue_templates/Test.md',
+      '.gitlab/merge_request_templates/Bugfix.md',
+      '.gitlab/merge_request_templates/Chore.md',
+      '.gitlab/merge_request_templates/Default.md',
+      '.gitlab/merge_request_templates/Design.md',
+      '.gitlab/merge_request_templates/Documentation.md',
+      '.gitlab/merge_request_templates/Enhancement.md',
+      '.gitlab/merge_request_templates/Feature.md',
+      '.gitlab/merge_request_templates/Performance.md',
+      '.gitlab/merge_request_templates/Refactor.md',
+      '.gitlab/merge_request_templates/Release.md',
+      '.gitlab/merge_request_templates/Test.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/scripts/gitlab_labels.sh',
+      'scripts/ci/deploy/harbor-smoke.mjs',
+      'scripts/ci/deploy/harbor-smoke.test.mjs',
+      'scripts/ci/deploy/k8s-smoke.mjs',
+      'scripts/ci/deploy/k8s-smoke.test.mjs',
+      'scripts/ci/policy/ci-maintenance-regression.mjs',
+      'scripts/ci/policy/ci-maintenance-regression.test.mjs',
+      'scripts/ci/policy/lightweight-ci-verify.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'scripts/ci/unit/node-unit-job-timing.mjs',
+      'scripts/ci/unit/node-unit-profile-history.mjs',
+      'scripts/ci/unit/node-unit-profile-reporter.mjs',
+      'scripts/ci/unit/node-unit-profile.mjs',
+      'scripts/ci/unit/node-unit-skip-baseline.json',
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'scripts/ci/unit/node-unit-tests.mjs',
+      'scripts/ci/unit/unit-weight-fallback.mjs',
+      'scripts/ci/unit/unit-weight-fallback.test.mjs',
+      'scripts/generated/e2e-artifact-scan.bundle.mjs',
+      'scripts/governance/architecture/index.mjs',
+      'scripts/governance/architecture/migration-contract.mjs',
+      'scripts/governance/structure-check.mjs',
+      'scripts/governance/structure-check.test.mjs',
+      'scripts/lib/e2e-artifact-scan/pipeline-policy-report.mjs',
+      'scripts/migrations/1502/manifest.json',
+      'scripts/AGENTS.md',
+      'test/README.md',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
+      'package.json',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1607', {
+    mergeCommitSha: '1a3cef149bec91184cf31abf5485dff2fdfca926',
+    diffSha256: '4b9e6d5463eb47cb3b32d4a377cdc06162b2750224ac87a66bd5450e6b5e73d9',
+    changedPaths: [
+      'scripts/governance/gitlab/check-lint.mjs',
+      'scripts/governance/gitlab/check-lint.test.mjs',
+      'scripts/governance/gitlab/gitlab-issue-create.mjs',
+      'scripts/governance/gitlab/gitlab-issue-create.test.mjs',
+      'scripts/governance/gitlab/local-status-publisher.mjs',
+      'scripts/governance/gitlab/mr-delivery-preflight.mjs',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'scripts/governance/gitlab/preflight-git.mjs',
+      'scripts/governance/gitlab/version-line-preflight.mjs',
+      'scripts/governance/hooks/hooks/pre-push',
+      'scripts/governance/hooks/install-hooks.test.mjs',
+      '.gitlab-ci.yml',
+      'package.json',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1612', {
+    mergeCommitSha: '5b6cea43b26ec3cd2fa12b2c7a6df14341122680',
+    diffSha256: '6aeaaea1a138cf6ffa2e571d1765d43cdb99194ed3fbb0db6b11a837647cc61d',
+    changedPaths: [
+      'electron/host-core/agent/desktop-host-context.cjs',
+      'electron/host-core/agent/execution-worker-cancellation.cjs',
+      'electron/host-core/agent/execution-worker-deadline.cjs',
+      'electron/host-core/agent/execution-worker-entry.cjs',
+      'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+      'electron/host-core/agent/execution-worker-supervisor-message.cjs',
+      'electron/host-core/agent/execution-worker-supervisor.cjs',
+      'electron/host-core/bridge/contracts/chat-user-error-notice.cjs',
+      'electron/host-core/bridge/contracts/provider-failure-chat-code.cjs',
+      'server/qbot-core/engine/engine.mjs',
+      'server/qbot-core/engine/turn-cleanup.mjs',
+      'server/qbot-core/models/claude-media-compatibility-loopback.mjs',
+      'server/qbot-core/models/provider-first-output-deadline.mjs',
+      'src/chat-user-error.ts',
+      'test/e2e/support/core-ux-coverage-matrix.mjs',
+      'test/e2e/support/core-ux-coverage-matrix.test.mjs',
+      'test/e2e/support/module-suites-1614.mjs',
+      'test/e2e/support/module-suites-1614.test.mjs',
+      'test/e2e/support/module-suites.mjs',
+      'test/e2e/support/residual-suite-materials.mjs',
+      'test/e2e/support/residual-suite-materials.test.mjs',
+      'test/e2e/release-http.spec.mjs',
+      'test/unit/core/chat-user-error-notice.test.mjs',
+      'test/unit/desktop/execution-worker-cancel-deadline.test.mjs',
+      'test/unit/desktop/execution-worker-provider-transport.test.mjs',
+      'test/unit/desktop/execution-worker-supervisor.test.mjs',
+      'test/unit/server/claude-media-compatibility.test.mjs',
+      'test/unit/server/engine-stream-adapters.test.mjs',
+      'test/unit/server/provider-first-output-deadline.test.mjs',
+    ],
+    sourceContractIds: [],
+    blockingRiskIds: [QWORK_MR1552_EXECUTION_RUNNER_RISK_ID],
+  }],
+  ['1616', {
+    mergeCommitSha: '9b6bf7fe5b61ed6821a84bb7fc85c4cc1e3426dc',
+    diffSha256: '8ee2c90bdfec1fc4322e25b0d75443dc33353499fc740117839bb30eb5e57298',
+    changedPaths: [
+      'scripts/bin/start-dev.mjs',
+      'scripts/.architecture.yaml',
+      'package.json',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1613', {
+    mergeCommitSha: 'e3a5de6cf02845cecb80906a8d11a48caf5c2d1b',
+    diffSha256: '0b7916e71e9122011caaf4f16cfac5b130691874881a51bbe3cb470a6ea86999',
+    changedPaths: [
+      'scripts/release/runtime/runtime-release-manifest.mjs',
+      'scripts/release/runtime/runtime-release-sdk-publish.mjs',
+      'test/unit/core/desktop-runtime-bundle-pin.test.mjs',
+      'test/unit/core/runtime-version-guard.test.mjs',
+      'test/unit/runtime/runtime-release-manifest.test.mjs',
+      '.gitlab-ci.yml',
+    ],
+    sourceContractIds: [],
+  }],
 ]);
 const DIRECT_E2E_MR_CASE_CONTRACTS = new Map([
   ['1523', ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019']],
@@ -556,6 +848,8 @@ const EXACT_STATIC_MR_CONTRACTS = new Map([
       '.gitlab-ci.yml',
     ],
   }],
+  ...['1608', '1609', '1614', '1554', '1607', '1616', '1613']
+    .map((iid) => [iid, R16_LATEST_MR_METADATA_CONTRACTS.get(iid)]),
 ]);
 const REQUIRED_SOURCE_CONTRACTS_BY_MR = new Map([
   ['1522', ['deepbankv2-mr-1522-claude-turn-headers/v1']],
@@ -2661,6 +2955,27 @@ export function validateExactStaticMrContract(mr, iid, contract = EXACT_STATIC_M
   return { ok: failures.length === 0, failures };
 }
 
+export function validateExactR16LatestMrMetadataContract(
+  mr,
+  iid,
+  contract = R16_LATEST_MR_METADATA_CONTRACTS.get(String(iid)),
+) {
+  if (!contract) return { ok: false, failures: ['latest_mr_metadata_contract_missing'] };
+  const failures = [];
+  const actualSourceContractIds = Array.isArray(mr?.source_contract_ids)
+    ? mr.source_contract_ids.map(asString)
+    : null;
+  if (asString(mr?.iid) !== String(iid)) failures.push('iid_mismatch');
+  if (asString(mr?.commit) !== contract.mergeCommitSha) failures.push('commit_mismatch');
+  if (asString(mr?.merge_commit_sha) !== contract.mergeCommitSha) failures.push('merge_commit_sha_mismatch');
+  if (asString(mr?.diff_sha256) !== contract.diffSha256) failures.push('diff_sha256_mismatch');
+  if (!sameOrderedValues(mr?.changed_paths, contract.changedPaths)) failures.push('changed_paths_mismatch');
+  if (!sameOrderedValues(actualSourceContractIds, contract.sourceContractIds)) {
+    failures.push('source_contract_ids_mismatch');
+  }
+  return { ok: failures.length === 0, failures };
+}
+
 async function previousCasebookMrRows() {
   const workbook = await SpreadsheetFile.importXlsx(await FileBlob.load(PREVIOUS_CASEBOOK));
   const values = workbook.worksheets.getItem('近2天MR覆盖').getUsedRange().values;
@@ -3011,6 +3326,10 @@ async function loadReleaseIntake() {
         throw new Error(`r16 增量 MR !${iid} 直接E2E 未命中显式 MR→Case 白名单`);
       }
     }
+    const expectedBlockingRiskIds = R16_LATEST_MR_METADATA_CONTRACTS.get(iid)?.blockingRiskIds || [];
+    if (!sameOrderedValues(contract.requiredBlockingRiskIds || [], expectedBlockingRiskIds)) {
+      throw new Error(`r16 增量 MR !${iid} blocking-risk 绑定缺失或漂移`);
+    }
   }
   for (const [iid, contractIds] of REQUIRED_SOURCE_CONTRACTS_BY_MR) {
     for (const contractId of contractIds) {
@@ -3028,8 +3347,15 @@ async function loadReleaseIntake() {
     const contract = R16_INCREMENTAL_MR_CONTRACTS.get(iid);
     if (!contract) throw new Error(`r16 增量 MR !${iid} 缺少显式映射合同`);
     const productPaths = Array.isArray(mr.impact?.product_paths) ? mr.impact.product_paths : [];
-    if (Boolean(contract.staticOnly) !== (productPaths.length === 0)) {
+    const exactStatic = EXACT_STATIC_MR_CONTRACTS.has(iid);
+    if (Boolean(contract.staticOnly) !== (productPaths.length === 0 || exactStatic)) {
       throw new Error(`r16 增量 MR !${iid} 静态/产品分类漂移`);
+    }
+    if (R16_LATEST_MR_METADATA_CONTRACTS.has(iid)) {
+      const metadataValidation = validateExactR16LatestMrMetadataContract(mr, iid);
+      if (!metadataValidation.ok) {
+        throw new Error(`r16 增量 MR !${iid} 权威元数据漂移：${metadataValidation.failures.join(',')}`);
+      }
     }
     if (EXACT_STATIC_MR_CONTRACTS.has(iid)) {
       const exactStaticValidation = validateExactStaticMrContract(mr, iid);
@@ -3044,6 +3370,18 @@ async function loadReleaseIntake() {
     if (new Set(sourceContractIds).size !== sourceContractIds.length
       || JSON.stringify(sourceContractIds) !== JSON.stringify(requiredSourceContractIds)) {
       throw new Error(`r16 增量 MR !${iid} source_contract_ids 缺失或重复`);
+    }
+    const requiredBlockingRiskIds = contract.requiredBlockingRiskIds || [];
+    const observedBlockingRisks = (report.blocking_risks || []).filter(
+      (risk) => requiredBlockingRiskIds.includes(asString(risk?.risk_id)),
+    );
+    if (observedBlockingRisks.length !== requiredBlockingRiskIds.length
+      || requiredBlockingRiskIds.some((riskId) => !observedBlockingRisks.some(
+        (risk) => risk?.risk_id === riskId && risk?.applicable === true
+          && risk?.verified === true && risk?.status === 'VERIFIED'
+          && Array.isArray(risk?.failure_ids) && risk.failure_ids.length === 0,
+      ))) {
+      throw new Error(`r16 增量 MR !${iid} G0 blocking-risk 未全部 VERIFIED`);
     }
   }
   const rows = report.merge_requests.map((mr) => ({

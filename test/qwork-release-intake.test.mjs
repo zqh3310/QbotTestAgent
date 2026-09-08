@@ -35,11 +35,14 @@ import {
   QWORK_MR1522_CLAUDE_TURN_HEADERS_CONTRACT,
   QWORK_MR1544_CLAUDE_TURN_HEADER_BRANDING_CONTRACT,
   QWORK_MR1548_CALL_TOOL_BUDGET_CONTRACT,
+  QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA,
+  QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA,
   QWORK_RELEASE_SOURCE_CLAIM_SCOPE,
   QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA,
   QWORK_RELEASE_SOURCE_CONTRACTS,
   QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA,
   QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED,
+  QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA,
   auditCurrentReleaseSourceContract,
   auditReleaseSourceContract,
   currentReleaseSourceContractProtectedPaths,
@@ -50,6 +53,7 @@ import {
   releaseSourceContractTrigger,
   resolveCurrentReleaseHeaderContract,
   resolveReleaseSourceContracts,
+  reconstructGitLabFirstParentChain,
   summarizeGitLabChanges,
   validateCanonicalGitLabCommitMetadata,
   validateCanonicalGitLabDiffChange,
@@ -270,6 +274,167 @@ test('GitLab provenance canonical projections require exact commit and diff resp
   }
 });
 
+test('GitLab first-parent compare reconstruction fails closed on malformed raw payloads', () => {
+  const baseline = 'a'.repeat(40);
+  const head = 'b'.repeat(40);
+  const validCommit = { id: head, parent_ids: [baseline] };
+  const validCompare = { compare_timeout: false, commits: [validCommit] };
+  const validPipeline = {
+    id: 101,
+    iid: 17,
+    project_id: 1,
+    sha: head,
+    ref: 'release/0.1',
+    status: 'success',
+    source: 'push',
+    created_at: '2026-09-08T01:02:03Z',
+    updated_at: '2026-09-08T01:03:04Z',
+    web_url: 'https://gitlab.daikuan.qihoo.net/songrongxin/deepbankv2/-/pipelines/101',
+  };
+
+  const reconstructed = reconstructGitLabFirstParentChain({
+    compare: validCompare,
+    baselineCommit: baseline,
+    releaseHead: head,
+  });
+  assert.equal(reconstructed.ok, true);
+  assert.deepEqual(reconstructed.commits, [validCommit]);
+
+  const knownOptionalFields = reconstructGitLabFirstParentChain({
+    compare: {
+      compare_timeout: false,
+      commits: [{
+        ...validCommit,
+        trailers: { 'Reviewed-by': 'QBot QA' },
+        extended_trailers: { 'Signed-off-by': ['QBot QA'] },
+        project_id: 1,
+        last_pipeline: validPipeline,
+      }],
+    },
+    baselineCommit: baseline,
+    releaseHead: head,
+  });
+  assert.equal(knownOptionalFields.ok, true, knownOptionalFields.reason);
+
+  for (const [label, compare, expectedReason] of [
+    [
+      'timeout boolean',
+      { ...validCompare, compare_timeout: true },
+      'compare_timeout',
+    ],
+    [
+      'timeout string',
+      { ...validCompare, compare_timeout: 'false' },
+      'compare_timeout_type_invalid',
+    ],
+    [
+      'non-identity empty commits',
+      { compare_timeout: false, commits: [] },
+      'first_parent_commit_missing:' + head,
+    ],
+    [
+      'unknown commit field',
+      { compare_timeout: false, commits: [{ ...validCommit, untrusted_extra: true }] },
+      'compare_commit_invalid:0:fields_mismatch',
+    ],
+    [
+      'extended trailers must be an object',
+      { compare_timeout: false, commits: [{ ...validCommit, extended_trailers: [] }] },
+      'compare_commit_invalid:0:extended_trailers_invalid',
+    ],
+    [
+      'extended trailer string-map is not the GitLab shape',
+      {
+        compare_timeout: false,
+        commits: [{ ...validCommit, extended_trailers: { 'Reviewed-by': 'QBot QA' } }],
+      },
+      'compare_commit_invalid:0:extended_trailers_invalid',
+    ],
+    [
+      'extended trailer arrays cannot be empty',
+      { compare_timeout: false, commits: [{ ...validCommit, extended_trailers: { 'Reviewed-by': [] } }] },
+      'compare_commit_invalid:0:extended_trailers_invalid',
+    ],
+    [
+      'extended trailer arrays contain only strings',
+      {
+        compare_timeout: false,
+        commits: [{ ...validCommit, extended_trailers: { 'Reviewed-by': ['QBot QA', 1] } }],
+      },
+      'compare_commit_invalid:0:extended_trailers_invalid',
+    ],
+    [
+      'last pipeline shape',
+      { compare_timeout: false, commits: [{ ...validCommit, last_pipeline: {} }] },
+      'compare_commit_invalid:0:last_pipeline_fields_mismatch',
+    ],
+    [
+      'last pipeline requires commit project identity',
+      { compare_timeout: false, commits: [{ ...validCommit, last_pipeline: validPipeline }] },
+      'compare_commit_invalid:0:last_pipeline_project_id_mismatch',
+    ],
+    [
+      'last pipeline commit identity',
+      {
+        compare_timeout: false,
+        commits: [{
+          ...validCommit,
+          project_id: 1,
+          last_pipeline: { ...validPipeline, sha: 'c'.repeat(40) },
+        }],
+      },
+      'compare_commit_invalid:0:last_pipeline_sha_mismatch',
+    ],
+    [
+      'duplicate commit id',
+      { compare_timeout: false, commits: [validCommit, { ...validCommit }] },
+      'compare_commit_invalid:1:duplicate_id',
+    ],
+    [
+      'missing parent ids',
+      { compare_timeout: false, commits: [{ id: head }] },
+      'compare_commit_invalid:0:parent_ids_invalid',
+    ],
+    [
+      'uppercase commit id',
+      { compare_timeout: false, commits: [{ id: head.toUpperCase(), parent_ids: [baseline] }] },
+      'compare_commit_invalid:0:id_invalid',
+    ],
+    [
+      'uppercase parent id',
+      { compare_timeout: false, commits: [{ id: head, parent_ids: [baseline.toUpperCase()] }] },
+      'compare_commit_invalid:0:parent_ids_invalid',
+    ],
+  ]) {
+    const result = reconstructGitLabFirstParentChain({
+      compare,
+      baselineCommit: baseline,
+      releaseHead: head,
+    });
+    assert.equal(result.ok, false, label);
+    assert.equal(result.reason, expectedReason, `${label}:${result.reason}`);
+    assert.deepEqual(result.commits, [], label);
+  }
+
+  const identity = reconstructGitLabFirstParentChain({
+    compare: { compare_timeout: false, commits: [] },
+    baselineCommit: baseline,
+    releaseHead: baseline,
+  });
+  assert.deepEqual(identity, { ok: true, commits: [] });
+
+  const identityTimeout = reconstructGitLabFirstParentChain({
+    compare: { compare_timeout: true, commits: [] },
+    baselineCommit: baseline,
+    releaseHead: baseline,
+  });
+  assert.deepEqual(identityTimeout, {
+    ok: false,
+    reason: 'compare_timeout',
+    commits: [],
+  });
+});
+
 function gitLabFileProvenance(filePath, head, lastCommitId = head) {
   const diffEndpoint = `repository/commits/${lastCommitId}/diff?per_page=100`;
   const change = {
@@ -357,7 +522,12 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
       ...lines,
     ];
   } else if (mr1597 && filePath === 'electron/desktop-agent-host.cjs') {
+    const explicitNamedExports = Array.from({ length: 122 }, (_, index) => (
+      `exports.unrelatedExport${index + 1} = implementation.unrelatedExport${index + 1};`
+    ));
     lines = [
+      "const implementation = require('./host-core/agent/desktop-host-context.cjs');",
+      ...explicitNamedExports,
       "Object.assign(exports, require('./unrelated-a.cjs'), require('./host-core/agent/execution-worker-supervisor.cjs'));",
       ...lines,
     ];
@@ -374,11 +544,41 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
     ];
   } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
     lines = [
+      "const { isAbsolute } = require('node:path');",
+      'const {',
+      '  contextUsageWorkerFixtureEnvironment,',
+      "} = require('./execution-worker-context-usage.cjs');",
+      '',
       ...lines,
+      'function expertAuthoringWorkerFixtureEnvironment(source = {}) {',
+      "  if (source.DEEPBANK_E2E !== '1' || source.DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN !== '1') return {};",
+      '  return {',
+      "    DEEPBANK_E2E: '1',",
+      "    DEEPBANK_E2E_EXPERT_AUTHORING_FULL_CHAIN: '1',",
+      "    ...(source.DEEPBANK_AGENT_MOCK === '1' ? { DEEPBANK_AGENT_MOCK: '1' } : {}),",
+      '  };',
+      '}',
+      '',
       'function workerEnvironment(source = process.env, authority = {}) {',
-      '  void source;',
-      '  void authority;',
-      '  return {};',
+      '  const env = {};',
+      '  for (const [key, value] of Object.entries(source || {})) {',
+      "    const name = String(key || '').trim();",
+      '    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;',
+      "    env[name] = String(value ?? '');",
+      '  }',
+      "  if (source?.DEEPBANK_E2E === '1') {",
+      "    const captureRoot = String(source?.DEEPBANK_E2E_RAW_CAPTURE_DIR || '').trim();",
+      "    if (captureRoot && captureRoot.length <= 4096 && !captureRoot.includes('\\0') && isAbsolute(captureRoot)) {",
+      '      env.DEEPBANK_E2E_RAW_CAPTURE_DIR = captureRoot;',
+      '    }',
+      '  }',
+      '  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+      '  Object.assign(env, expertAuthoringWorkerFixtureEnvironment(source));',
+      '  if (authority?.runtimeEntry) env.QBOT_EXECUTION_WORKER_RUNTIME_ENTRY = String(authority.runtimeEntry);',
+      '  if (authority?.runtimeHome) env.DEEPBANK_HOME = String(authority.runtimeHome);',
+      '  if (authority?.appRoot) env.QBOT_APP_ROOT = String(authority.appRoot);',
+      '  if (authority?.serverScope) env.DEEPBANK_SERVER = env.QBOT_CONTROL_PLANE_SERVER = String(authority.serverScope);',
+      '  return env;',
       '}',
       'module.exports = {',
       '  WORKER_ENV_ALLOWLIST,',
@@ -533,12 +733,18 @@ function apiFixture({
   sourceContracts = QWORK_RELEASE_SOURCE_CONTRACTS,
   releaseFileOverrides = new Map(),
   failContractAncestry = false,
+  successorRelationship = 'predecessor',
   compareCommits = null,
   commitMrRows = null,
   mrChangesByIid = null,
 } = {}) {
   let branchReads = 0;
   const releaseFiles = currentReleaseFileFixtures(sourceContracts, head);
+  const sourceContractSuccessors = sourceContracts.flatMap((contract) => (
+    (Array.isArray(contract?.integration_bindings) ? contract.integration_bindings : [])
+      .map((binding) => binding?.current_release_match?.successor)
+      .filter(Boolean)
+  ));
   for (const [filePath, payload] of releaseFileOverrides) releaseFiles.set(filePath, payload);
   const reader = (endpoint) => {
     if (endpoint.startsWith('repository/branches/')) {
@@ -550,6 +756,36 @@ function apiFixture({
       const from = query.get('from');
       const to = query.get('to');
       const isContractAncestry = sourceContracts.some((contract) => contract.merge_commit_sha === from);
+      const successor = sourceContractSuccessors.find((candidate) => (
+        candidate.merge_commit_sha === from || candidate.merge_commit_sha === to
+      ));
+      if (successor && from === successor.merge_commit_sha && to === head) {
+        if (head === successor.merge_commit_sha) return { compare_timeout: false, commits: [] };
+        if (successorRelationship !== 'successor') return { compare_timeout: false, commits: [] };
+        return {
+          compare_timeout: false,
+          commits: [{
+            id: head,
+            parent_ids: [successor.merge_commit_sha],
+            title: 'Synthetic successor history fixture',
+            message: 'Synthetic successor history fixture',
+            committed_date: '2026-09-08T01:00:00Z',
+          }],
+        };
+      }
+      if (successor && from === head && to === successor.merge_commit_sha) {
+        if (successorRelationship === 'successor') return { compare_timeout: false, commits: [] };
+        return {
+          compare_timeout: false,
+          commits: [{
+            id: successor.merge_commit_sha,
+            parent_ids: [head],
+            title: 'Synthetic predecessor history fixture',
+            message: 'Synthetic predecessor history fixture',
+            committed_date: '2026-09-08T01:00:00Z',
+          }],
+        };
+      }
       if (isContractAncestry && failContractAncestry) return { compare_timeout: false, commits: [] };
       if (from === baseline && to === head && Array.isArray(compareCommits)) {
         return { compare_timeout: false, commits: omitHeadFromCompare ? [] : compareCommits };
@@ -640,6 +876,10 @@ function apiFixture({
     }
     throw new Error(`unexpected endpoint ${endpoint}`);
   };
+  reader.readRaw = (endpoint) => {
+    const value = reader(endpoint);
+    return { bytes: Buffer.from(JSON.stringify(value), 'utf8'), value };
+  };
   return { baseline, head, reader };
 }
 
@@ -648,6 +888,28 @@ function byteRecord(source) {
     source,
     bytes: Buffer.byteLength(source, 'utf8'),
     sha256: sha256Text(source),
+  };
+}
+
+function ancestryWithRawCompare(ancestry, compare) {
+  const bytes = Buffer.from(JSON.stringify(compare), 'utf8');
+  return {
+    ...ancestry,
+    compare_evidence: {
+      schema_version: QWORK_GITLAB_FIRST_PARENT_COMPARE_SCHEMA,
+      source: 'gitlab-api-read-only',
+      host: 'gitlab.daikuan.qihoo.net',
+      project: 'songrongxin/deepbankv2',
+      method: 'GET',
+      endpoint: `repository/compare?from=${ancestry.compare_from}&to=${ancestry.compare_to}&straight=true`,
+      compare_from: ancestry.compare_from,
+      compare_to: ancestry.compare_to,
+      straight: true,
+      raw_response_encoding: 'base64',
+      raw_response_base64: bytes.toString('base64'),
+      raw_response_bytes: bytes.length,
+      raw_response_sha256: createHash('sha256').update(bytes).digest('hex'),
+    },
   };
 }
 
@@ -1746,6 +2008,28 @@ test('MR !1590, !1593, !1596, and !1597 current-release assertions fail closed o
   for (const contract of contracts) {
     const fixtureMap = currentReleaseFileFixtures([contract], head);
     const baseFiles = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+    const successorBinding = contract.integration_bindings.find((binding) => (
+      binding?.current_release_match?.match === 'line-or-verified-successor-line'
+    ));
+    const successor = successorBinding?.current_release_match?.successor;
+    const successorAncestries = successor ? [{
+      binding_id: successorBinding.id,
+      successor_mr_iid: successor.mr_iid,
+      successor_merge_commit_sha: successor.merge_commit_sha,
+      descendant_ancestry: ancestryWithRawCompare({
+        source: 'gitlab-api-compare-first-parent', compare_from: successor.merge_commit_sha,
+        compare_to: head, compare_commit_count: 0, first_parent_complete: false,
+        query_completed: true, verified: false, reason: `first_parent_commit_missing:${head}`,
+      }, { compare_timeout: false, commits: [] }),
+      predecessor_ancestry: ancestryWithRawCompare({
+        source: 'gitlab-api-compare-first-parent', compare_from: head,
+        compare_to: successor.merge_commit_sha, compare_commit_count: 1, first_parent_complete: true,
+        query_completed: true, verified: true, reason: '',
+      }, {
+        compare_timeout: false,
+        commits: [{ id: successor.merge_commit_sha, parent_ids: [head] }],
+      }),
+    }] : [];
     const audit = (files) => auditCurrentReleaseSourceContract({
       releaseHead: head,
       targetBranch: contract.target_branch,
@@ -1753,7 +2037,7 @@ test('MR !1590, !1593, !1596, and !1597 current-release assertions fail closed o
         source: 'gitlab-api-compare-first-parent', compare_from: contract.merge_commit_sha,
         compare_to: head, compare_commit_count: 1, first_parent_complete: true, verified: true, reason: '',
       },
-      files, mergeRequests: [], originAttestation: null, contract,
+      files, mergeRequests: [], successorAncestries, originAttestation: null, contract,
     });
     const verified = audit(baseFiles);
     assert.equal(verified.verified, true, `${contract.contract_id}:${verified.failures.join(',')}`);
@@ -1786,8 +2070,12 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   const tokenBinding = contract.integration_bindings.find((binding) => (
     binding.id === 'test_worker_access_token_input_only'
   ));
+  const lifecycleAllowlistBinding = contract.integration_bindings.find((binding) => (
+    binding.id === 'worker_allowlist_2'
+  ));
   assert.equal(identityBindings.length, 4);
   assert.ok(tokenBinding);
+  assert.ok(lifecycleAllowlistBinding);
   const identityBinding = identityBindings[0];
   const inputScope = tokenBinding.current_release_scope;
   const expectedScope = identityBinding.current_release_scope;
@@ -1802,6 +2090,29 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   );
   assert.equal(tokenBinding.current_release_match.match, 'js-property-key');
   assert.equal(tokenBinding.current_release_match.value.source, 'IM_USER_ACCESS_TOKEN');
+  assert.equal(
+    lifecycleAllowlistBinding.current_release_match.match,
+    'line-or-verified-successor-line',
+  );
+  assert.equal(lifecycleAllowlistBinding.current_release_match.value.source, lifecycleAllowlistBinding.addition.source);
+  assert.deepEqual(
+    {
+      schema_version: lifecycleAllowlistBinding.current_release_match.successor.schema_version,
+      mr_iid: lifecycleAllowlistBinding.current_release_match.successor.mr_iid,
+      merge_commit_sha: lifecycleAllowlistBinding.current_release_match.successor.merge_commit_sha,
+      first_parent_sha: lifecycleAllowlistBinding.current_release_match.successor.first_parent_sha,
+      changed_path: lifecycleAllowlistBinding.current_release_match.successor.changed_path,
+      metadata_source: lifecycleAllowlistBinding.current_release_match.successor.metadata_source,
+    },
+    {
+      schema_version: 'qbot-qwork-source-binding-successor-line/v1',
+      mr_iid: '1612',
+      merge_commit_sha: '5b6cea43b26ec3cd2fa12b2c7a6df14341122680',
+      first_parent_sha: '1a3cef149bec91184cf31abf5485dff2fdfca926',
+      changed_path: 'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+      metadata_source: 'gitlab-api-changes',
+    },
+  );
   assert.equal(identityBindings.every((binding) => (
     binding.current_release_scope.forbidden_fragments[0].match === 'js-property-key'
     && binding.current_release_scope.forbidden_fragments[0].value.source === 'IM_USER_ACCESS_TOKEN'
@@ -1833,6 +2144,32 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assertInvalidScopeDefinition('region end policy must be boolean', (scope) => {
     scope.region_end_inclusive = 'false';
   }, /source_contract_current_release_scope_region_invalid/u);
+  const assertInvalidLifecycleMatchDefinition = (label, mutate) => {
+    const invalid = structuredClone(contract);
+    const binding = invalid.integration_bindings.find((item) => item.id === lifecycleAllowlistBinding.id);
+    mutate(binding.current_release_match);
+    delete invalid.contract_sha256;
+    invalid.contract_sha256 = sha256Text(stableJson(invalid));
+    assert.throws(
+      () => resolveReleaseSourceContracts([invalid]),
+      /source_contract_current_release_match_invalid/u,
+      label,
+    );
+  };
+  assertInvalidLifecycleMatchDefinition('successor identity cannot drift', (match) => {
+    match.successor.mr_iid = '1613';
+  });
+  assertInvalidLifecycleMatchDefinition('successor line cannot claim a third allowlist candidate', (match) => {
+    match.successor.line.source = match.successor.line.source.replace(
+      '|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|',
+      '|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|DEEPBANK_UNOWNED_ENV|',
+    );
+    match.successor.line.bytes = Buffer.byteLength(match.successor.line.source, 'utf8');
+    match.successor.line.sha256 = sha256Text(match.successor.line.source);
+  });
+  assertInvalidLifecycleMatchDefinition('successor diff bytes remain a native integer', (match) => {
+    match.successor.diff_bytes = String(match.successor.diff_bytes);
+  });
 
   const originFixture = exactAddedLinesContractFixture(contract);
   const originSource = reconstructGitLabAddedLinesSource(
@@ -1882,7 +2219,7 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
 
   const head = '7'.repeat(40);
   const fixtureMap = currentReleaseFileFixtures([contract], head);
-  const files = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
+  let files = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
   const fixtureSource = Buffer.from(
     files.find((item) => item.path === tokenBinding.path).payload.content,
     'base64',
@@ -1907,7 +2244,89 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     if (index >= 0) lines.splice(index, 1, ...replacements);
     return lines.join('\n');
   };
-  const audit = (auditFiles) => auditCurrentReleaseSourceContract({
+  const lifecycleSuccessor = lifecycleAllowlistBinding.current_release_match.successor;
+  const verifiedLifecycleSuccessorMr = {
+    iid: lifecycleSuccessor.mr_iid,
+    commit: lifecycleSuccessor.merge_commit_sha,
+    merge_commit_sha: lifecycleSuccessor.merge_commit_sha,
+    parent: lifecycleSuccessor.first_parent_sha,
+    parent_count: 2,
+    metadata_verified: true,
+    metadata_source: lifecycleSuccessor.metadata_source,
+    state: 'merged',
+    target_branch: lifecycleSuccessor.target_branch,
+    attribution_kind: 'merge_mr',
+    diff_bytes: lifecycleSuccessor.diff_bytes,
+    diff_sha256: lifecycleSuccessor.diff_sha256,
+    changed_paths: [...lifecycleSuccessor.changed_paths],
+  };
+  const verifiedSuccessorAncestries = [{
+    binding_id: lifecycleAllowlistBinding.id,
+    successor_mr_iid: lifecycleSuccessor.mr_iid,
+    successor_merge_commit_sha: lifecycleSuccessor.merge_commit_sha,
+    descendant_ancestry: ancestryWithRawCompare({
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: lifecycleSuccessor.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      query_completed: true,
+      verified: true,
+      reason: '',
+    }, {
+      compare_timeout: false,
+      commits: [{ id: head, parent_ids: [lifecycleSuccessor.merge_commit_sha] }],
+    }),
+    predecessor_ancestry: ancestryWithRawCompare({
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: head,
+      compare_to: lifecycleSuccessor.merge_commit_sha,
+      compare_commit_count: 0,
+      first_parent_complete: false,
+      query_completed: true,
+      verified: false,
+      reason: `first_parent_commit_missing:${lifecycleSuccessor.merge_commit_sha}`,
+    }, { compare_timeout: false, commits: [] }),
+  }];
+  const verifiedPredecessorAncestries = [{
+    binding_id: lifecycleAllowlistBinding.id,
+    successor_mr_iid: lifecycleSuccessor.mr_iid,
+    successor_merge_commit_sha: lifecycleSuccessor.merge_commit_sha,
+    descendant_ancestry: ancestryWithRawCompare({
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: lifecycleSuccessor.merge_commit_sha,
+      compare_to: head,
+      compare_commit_count: 0,
+      first_parent_complete: false,
+      query_completed: true,
+      verified: false,
+      reason: `first_parent_commit_missing:${head}`,
+    }, { compare_timeout: false, commits: [] }),
+    predecessor_ancestry: ancestryWithRawCompare({
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: head,
+      compare_to: lifecycleSuccessor.merge_commit_sha,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      query_completed: true,
+      verified: true,
+      reason: '',
+    }, {
+      compare_timeout: false,
+      commits: [{ id: lifecycleSuccessor.merge_commit_sha, parent_ids: [head] }],
+    }),
+  }];
+  files = rewritePath(lifecycleAllowlistBinding.path, (source) => replaceRequired(
+    source,
+    lifecycleAllowlistBinding.addition.source,
+    lifecycleSuccessor.line.source,
+    'MR !1612 lifecycle allowlist successor fixture',
+  ));
+  const audit = (
+    auditFiles,
+    mergeRequests = [verifiedLifecycleSuccessorMr],
+    successorAncestries = verifiedSuccessorAncestries,
+  ) => auditCurrentReleaseSourceContract({
     releaseHead: head,
     targetBranch: contract.target_branch,
     originAncestry: {
@@ -1920,12 +2339,17 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
       reason: '',
     },
     files: auditFiles,
-    mergeRequests: [],
+    mergeRequests,
+    successorAncestries,
     originAttestation: null,
     contract,
   });
   const verified = audit(files);
-  assert.equal(verified.verified, true, verified.failures.join(','));
+  assert.equal(
+    verified.verified,
+    true,
+    `${verified.failures.join(',')}:${JSON.stringify(verified.current_release_semantics?.worker_environment_export_chain)}`,
+  );
   assert.equal(verified.current_release_semantics.javascript_parse_verified, true);
   assert.equal(
     verified.current_release_semantics.schema_version,
@@ -1970,6 +2394,206 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assert.equal(verified.current_release_semantics.env_mutation_count, 0);
   assert.equal(verified.current_release_semantics.env_escape_count, 0);
   assert.equal(verified.current_release_semantics.verified, true);
+  const latestFacadeSource = Buffer.from(
+    files.find((item) => item.path === 'electron/desktop-agent-host.cjs').payload.content,
+    'base64',
+  ).toString('utf8');
+  assert.equal(
+    latestFacadeSource.split('\n').filter((line) => /^exports\.unrelatedExport\d+ = /u.test(line)).length,
+    122,
+  );
+  assert.equal(
+    verified.current_release_semantics.worker_environment_export_chain.protected_binding_violation_count,
+    0,
+  );
+
+  const assertLifecycleAllowlistRejected = (label, result) => {
+    assert.equal(result.verified, false, label);
+    assert.equal(result.failures.includes(
+      `current_integration_binding_mismatch:${lifecycleAllowlistBinding.id}`,
+    ), true, `${label}:${result.failures.join(',')}`);
+  };
+  const successorOutsideIncrement = audit(files, []);
+  assert.equal(successorOutsideIncrement.verified, true, successorOutsideIncrement.failures.join(','));
+  assert.equal(
+    successorOutsideIncrement.integration_bindings.find(
+      (binding) => binding.id === lifecycleAllowlistBinding.id,
+    )?.successor_observation?.relationship,
+    'VERIFIED_SUCCESSOR',
+  );
+  assertLifecycleAllowlistRejected(
+    'the !1612 lifecycle line requires independent first-parent ancestry',
+    audit(files, [], []),
+  );
+  for (const [label, field, value] of [
+    ['metadata verification', 'metadata_verified', false],
+    ['merge identity', 'merge_commit_sha', '6'.repeat(40)],
+    ['first-parent identity', 'parent', '6'.repeat(40)],
+    ['first-parent merge shape', 'parent_count', 1],
+    ['GitLab changes source', 'metadata_source', 'local-git'],
+    ['diff identity', 'diff_sha256', '6'.repeat(64)],
+    ['native diff byte count', 'diff_bytes', String(lifecycleSuccessor.diff_bytes)],
+    ['changed path ownership', 'changed_paths', ['electron/host-core/agent/unrelated.cjs']],
+  ]) {
+    assertLifecycleAllowlistRejected(
+      `the !1612 lifecycle line rejects wrong ${label}`,
+      audit(files, [{ ...verifiedLifecycleSuccessorMr, [field]: value }]),
+    );
+  }
+  const originalLifecycleFiles = rewritePath(lifecycleAllowlistBinding.path, (source) => replaceRequired(
+    source,
+    lifecycleSuccessor.line.source,
+    lifecycleAllowlistBinding.addition.source,
+    'original MR !1597 lifecycle allowlist fixture',
+  ));
+  const originalLifecycle = audit(originalLifecycleFiles, [], verifiedPredecessorAncestries);
+  assert.equal(originalLifecycle.verified, true, originalLifecycle.failures.join(','));
+  assertLifecycleAllowlistRejected(
+    'a predecessor release cannot claim the !1612 successor line',
+    audit(files, [], verifiedPredecessorAncestries),
+  );
+  assertLifecycleAllowlistRejected(
+    'a successor release cannot claim the original !1597 line',
+    audit(originalLifecycleFiles, [], verifiedSuccessorAncestries),
+  );
+  const conflictingAncestries = structuredClone(verifiedSuccessorAncestries);
+  conflictingAncestries[0].predecessor_ancestry = {
+    ...verifiedPredecessorAncestries[0].predecessor_ancestry,
+  };
+  assertLifecycleAllowlistRejected(
+    'conflicting bidirectional first-parent ancestry stays blocked',
+    audit(files, [], conflictingAncestries),
+  );
+  const driftedSuccessorIdentity = structuredClone(verifiedSuccessorAncestries);
+  driftedSuccessorIdentity[0].successor_mr_iid = '1613';
+  assertLifecycleAllowlistRejected(
+    'the independently observed successor identity cannot drift',
+    audit(files, [], driftedSuccessorIdentity),
+  );
+  const incompleteReverseAncestry = structuredClone(verifiedSuccessorAncestries);
+  incompleteReverseAncestry[0].predecessor_ancestry.query_completed = false;
+  assertLifecycleAllowlistRejected(
+    'an unreadable reverse ancestry query stays blocked',
+    audit(files, [], incompleteReverseAncestry),
+  );
+
+  const unknownLifecycleAllowlist = audit(rewritePath(lifecycleAllowlistBinding.path, (source) => (
+    replaceRequired(
+      source,
+      '|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|QBOT_(?:PYTHON|NODE)',
+      '|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|DEEPBANK_UNOWNED_ENV|QBOT_(?:PYTHON|NODE)',
+      'unknown lifecycle allowlist candidate',
+    )
+  )));
+  assertLifecycleAllowlistRejected('a third lifecycle allowlist candidate is not owned by MR !1597', unknownLifecycleAllowlist);
+  const supervisorAllowlistBinding = contract.integration_bindings.find((binding) => binding.id === 'worker_allowlist_3');
+  const widenedSupervisorAllowlist = audit(rewritePath(supervisorAllowlistBinding.path, (source) => (
+    replaceRequired(
+      source,
+      '|QBOT_RUNTIME_NODE_MODULES|QBOT_(?:PYTHON|NODE)',
+      '|QBOT_RUNTIME_NODE_MODULES|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|QBOT_(?:PYTHON|NODE)',
+      'supervisor allowlist must remain MR !1597 exact line',
+    )
+  )));
+  assert.equal(widenedSupervisorAllowlist.verified, false);
+  assert.equal(widenedSupervisorAllowlist.failures.includes(
+    `current_integration_binding_mismatch:${supervisorAllowlistBinding.id}`,
+  ), true);
+  for (const [label, injectedSource] of [
+    ['direct RegExp prototype test replacement', 'RegExp.prototype.test = () => true;'],
+    [
+      'aliased RegExp prototype test replacement',
+      'const regexPrototypeAlias = RegExp.prototype; regexPrototypeAlias.test = () => true;',
+    ],
+    [
+      'container-flowed RegExp prototype Reflect replacement',
+      "const regexHolder = { prototype: RegExp.prototype }; const { prototype: flowedRegexPrototype } = regexHolder; Reflect.set(flowedRegexPrototype, 'test', () => true);",
+    ],
+    [
+      'Object defineProperty RegExp prototype replacement',
+      "Object.defineProperty(RegExp.prototype, 'test', { value: () => true });",
+    ],
+    [
+      'aliased Reflect set through global RegExp replacement',
+      "const replaceRegexMember = Reflect.set; replaceRegexMember(globalThis.RegExp.prototype, 'test', () => true);",
+    ],
+    [
+      'global wrapper alias Object assign RegExp prototype replacement',
+      'const lifecycleGlobal = globalThis; Object.assign(lifecycleGlobal.RegExp.prototype, { test: () => true });',
+    ],
+    [
+      'global wrapper destructured RegExp alias replacement',
+      'const { RegExp: R } = globalThis; R.prototype.test = () => true;',
+    ],
+    [
+      'container-flowed global wrapper destructuring replacement',
+      "const box = { g: globalThis }; const { g } = box; Object.defineProperty(g.RegExp.prototype, 'test', { value: () => true });",
+    ],
+    [
+      'Reflect apply dispatches a RegExp prototype replacement',
+      "Reflect.apply(Reflect.set, null, [RegExp.prototype, 'test', () => true]);",
+    ],
+    [
+      'bound Object writer captures the RegExp prototype',
+      "Object.defineProperty.bind(null, RegExp.prototype, 'test')({ value: () => true });",
+    ],
+  ]) {
+    const mutated = audit(rewritePath(
+      lifecycleAllowlistBinding.path,
+      (source) => `${injectedSource}\n${source}`,
+    ));
+    assert.equal(mutated.verified, false, label);
+    assert.equal(
+      mutated.current_release_semantics.worker_environment_export_chain
+        .protected_binding_violation_count > 0,
+      true,
+      label,
+    );
+    assert.equal(
+      mutated.current_release_semantics.worker_environment_export_chain
+        .protected_binding_violation_kinds.some((kind) => (
+          kind.includes('lifecycle-builtin-binding:')
+        )),
+      true,
+      label,
+    );
+  }
+  for (const [label, injectedSource] of [
+    [
+      'read-only RegExp prototype inspection',
+      "const nativeRegexTest = RegExp.prototype.test; nativeRegexTest.call(/safe/u, 'safe'); Object.getOwnPropertyDescriptor(RegExp.prototype, 'test');",
+    ],
+    [
+      'unrelated receiver reflective writes',
+      "const unrelatedRegexLike = {}; Object.defineProperty(unrelatedRegexLike, 'test', { value: () => true }); Reflect.set(unrelatedRegexLike, 'lastIndex', 0);",
+    ],
+    [
+      'global wrapper container keeps unrelated receiver writes harmless',
+      "const wrapperBox = { g: globalThis, receiver: {} }; const { receiver } = wrapperBox; Object.defineProperty(receiver, 'test', { value: () => true }); Reflect.set(receiver, 'lastIndex', 0);",
+    ],
+  ]) {
+    const readOnly = audit(rewritePath(
+      lifecycleAllowlistBinding.path,
+      (source) => `${injectedSource}\n${source}`,
+    ));
+    assert.equal(readOnly.verified, true, `${label}:${readOnly.failures.join(',')}`);
+    assert.equal(
+      readOnly.current_release_semantics.worker_environment_export_chain
+        .protected_binding_violation_count,
+      0,
+      label,
+    );
+  }
+  for (const tokenName of ['IM_USER_ACCESS_TOKEN', 'IM_QWORK_ACCESS_TOKEN', 'QBOT_LINGXI_ACCESS_TOKEN']) {
+    const leakedToken = audit(rewritePath(lifecycleAllowlistBinding.path, (source) => replaceRequired(
+      source,
+      '|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|QBOT_(?:PYTHON|NODE)',
+      `|DEEPBANK_PROVIDER_FIRST_OUTPUT_TIMEOUT_MS|${tokenName}|QBOT_(?:PYTHON|NODE)`,
+      `${tokenName} lifecycle allowlist leak`,
+    )));
+    assertLifecycleAllowlistRejected(`${tokenName} cannot enter the lifecycle allowlist`, leakedToken);
+    assert.equal(leakedToken.failures.some((failure) => failure.startsWith('current_forbidden_fragment:')), true);
+  }
   for (const binding of identityBindings) {
     const observation = verified.integration_bindings.find((item) => item.id === binding.id);
     assert.equal(observation.occurrence_count, 2, binding.id);
@@ -2329,6 +2953,28 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     `${source}exports[dynamicExportName] = replacementExport;\n`
   ));
   for (const [label, statement] of [
+    ['computed static exports member assignment', "exports['unrelatedExport'] = implementation.unrelatedExport;"],
+    ['nested ordinary exports assignment', 'if (false) { exports.unrelatedExport = implementation.unrelatedExport; }'],
+    ['nested exports member assignment', 'exports.unrelatedExport.compromised = true;'],
+    ['compound exports member assignment', 'exports.unrelatedExport += replacementExport;'],
+    ['exports member update', 'exports.unrelatedExport++;'],
+    ['exports member deletion', 'delete exports.unrelatedExport;'],
+    ['reserved exports prototype assignment', 'exports.__proto__ = replacementPrototype;'],
+    ['exports root alias creation', 'const directExportsAlias = exports; void directExportsAlias;'],
+    ['exports member alias creation', 'const exportedValueAlias = exports.unrelatedExport; void exportedValueAlias;'],
+    ['module root alias creation', 'const directModuleAlias = module; void directModuleAlias;'],
+    ['destructured module exports alias creation', 'const { exports: escapedExportsAlias } = module; void escapedExportsAlias;'],
+    ['exports value cannot leak exports', 'exports.unrelatedExport = exports;'],
+    ['exports value cannot leak module.exports', 'exports.unrelatedExport = module.exports;'],
+    ['exports value cannot alias workerEnvironment', 'exports.unrelatedExport = implementation.workerEnvironment;'],
+    ['named export RHS cannot contain ThisExpression', 'exports.leak = function () { return this; };'],
+    ['named export function cannot return facade through this', 'exports.leak = function () { return this; }; exports.leak().workerEnvironment = replacementWorkerEnvironment;'],
+    ['named export callable return cannot become a facade write receiver', 'exports.leak = Object.prototype.valueOf; exports.leak().workerEnvironment = replacementWorkerEnvironment;'],
+    ['CommonJS wrapper arguments cannot leak the exports receiver', 'exports.leak = arguments; exports.leak.at(0).workerEnvironment = replacementWorkerEnvironment;'],
+    ['CommonJS wrapper arguments cannot directly mutate exports', 'arguments[0].workerEnvironment = replacementWorkerEnvironment;'],
+    ['CommonJS top-level this cannot mutate exports', 'this.workerEnvironment = replacementWorkerEnvironment;'],
+    ['Object.defineProperty unrelated exports write', "Object.defineProperty(exports, 'unrelatedExport', { value: true });"],
+    ['Reflect.set unrelated exports write', "Reflect.set(exports, 'unrelatedExport', true);"],
     ['module.exports member assignment', 'module.exports.workerEnvironment = replacementWorkerEnvironment;'],
     ['module.exports member update', 'module.exports.workerEnvironment++;'],
     ['module.exports member deletion', 'delete module.exports.workerEnvironment;'],
@@ -2356,6 +3002,30 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
       `${source}${statement}\n`
     ));
   }
+  const allowlistDecoyWithLooseLiveBinding = audit(rewritePath(
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace(
+      lifecycleSuccessor.line.source,
+      `if (false) {\n${lifecycleSuccessor.line.source}\n  void WORKER_ENV_ALLOWLIST;\n}\nconst WORKER_ENV_ALLOWLIST = /.*/u;`,
+    ),
+  ));
+  assert.equal(
+    allowlistDecoyWithLooseLiveBinding.integration_bindings.find(
+      (binding) => binding.id === lifecycleAllowlistBinding.id,
+    )?.verified,
+    true,
+    '精确行诱饵会满足旧行计数，因此必须由 lexical AST 合同独立阻断',
+  );
+  assert.equal(allowlistDecoyWithLooseLiveBinding.verified, false);
+  assert.equal(
+    allowlistDecoyWithLooseLiveBinding.current_release_semantics
+      .worker_environment_export_chain.protected_binding_violation_kinds.some((kind) => (
+        kind.includes('lifecycle-allowlist-declaration-invalid')
+          || kind.includes('lifecycle-allowlist-binding:duplicate-or-shadow-declaration')
+      )),
+    true,
+    allowlistDecoyWithLooseLiveBinding.failures.join(','),
+  );
   const harmlessFacadeIndirectWrites = audit(rewritePath(
     'electron/desktop-agent-host.cjs',
     (source) => `${source}Object.assign.call(null, unrelatedTarget, { observed: true });\n`
@@ -2388,7 +3058,28 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assertChainBypassRejected(
     'lifecycle workerEnvironment cannot be rebound',
     'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
-    (source) => source.replace('  void source;', '  workerEnvironment = replacement;\n  void source;'),
+    (source) => source.replace('  const env = {};', '  workerEnvironment = replacement;\n  const env = {};'),
+  );
+  assertChainBypassRejected(
+    'lifecycle allowlist guard cannot be bypassed by an earlier unconditional continue',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace(
+      "    const name = String(key || '').trim();\n    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;",
+      "    const name = String(key || '').trim();\n    continue;\n    if (!WORKER_ENV_ALLOWLIST.test(name)) continue;",
+    ),
+  );
+  assertChainBypassRejected(
+    'lifecycle cannot restore unfiltered source entries after the allowlist loop',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace(
+      '  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+      '  Object.assign(env, source);\n  Object.assign(env, contextUsageWorkerFixtureEnvironment(source));',
+    ),
+  );
+  assertChainBypassRejected(
+    'lifecycle cannot shadow Object to disable the allowlist iteration',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => `const Object = { entries: () => [] };\n${source}`,
   );
 
   const dynamicExecutionScenarios = [
@@ -2763,12 +3454,26 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   ), true);
 
   const validateAttestation = (candidate) => validateCurrentReleaseSourceContractAttestation(candidate, {
-    report: { release: { head }, merge_requests: [], source_contracts: [candidate] },
+    report: { release: { head }, merge_requests: [verifiedLifecycleSuccessorMr], source_contracts: [candidate] },
     contract,
     contracts: [contract],
   });
   const verifiedValidation = validateAttestation(verified);
   assert.equal(verifiedValidation.ok, true, verifiedValidation.failures.join(','));
+
+  const forgedSuccessorAncestry = structuredClone(verified);
+  const forgedSuccessorBinding = forgedSuccessorAncestry.integration_bindings.find(
+    (binding) => binding.id === lifecycleAllowlistBinding.id,
+  );
+  delete forgedSuccessorBinding.successor_observation.predecessor_ancestry.query_completed;
+  delete forgedSuccessorAncestry.attestation_sha256;
+  forgedSuccessorAncestry.attestation_sha256 = sha256Text(stableJson(forgedSuccessorAncestry));
+  const forgedSuccessorValidation = validateAttestation(forgedSuccessorAncestry);
+  assert.equal(forgedSuccessorValidation.ok, false);
+  assert.equal(forgedSuccessorValidation.failures.some((failure) => (
+    failure.includes('attestation_current_integration_bindings')
+      || failure.includes('attestation_replay:current_integration_binding_mismatch')
+  )), true, forgedSuccessorValidation.failures.join(','));
 
   for (const field of [
     'id', 'short_id', 'created_at', 'parent_ids', 'title', 'message', 'author_name', 'author_email',
@@ -5056,7 +5761,7 @@ test('release intake uses commit ancestry and binds verified MR metadata', () =>
     assert.equal(validateQworkReleaseIntake(report, { releaseRef: 'HEAD', releaseHead, frameworkCommit: 'a'.repeat(40) }).ok, true);
 
     const staleToolReport = structuredClone(report);
-    staleToolReport.tool.version = 'qbot-release-intake/1.6.2';
+    staleToolReport.tool.version = 'qbot-release-intake/1.8.0';
     const staleToolContent = structuredClone(staleToolReport);
     delete staleToolContent.integrity.content_sha256;
     staleToolReport.integrity.content_sha256 = sha256Text(stableJson(staleToolContent));
@@ -5357,16 +6062,21 @@ test('GitLab API file provenance follows Files last_commit_id and never uses pat
     releaseFileOverrides: new Map([[targetPath, payload]]),
   });
   const calls = [];
+  const trackedReader = (endpoint) => {
+    calls.push(endpoint);
+    return fixture.reader(endpoint);
+  };
+  trackedReader.readRaw = (endpoint) => {
+    calls.push(endpoint);
+    return fixture.reader.readRaw(endpoint);
+  };
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(),
     releaseRef: 'origin/release/0.1',
     baselineCommit: fixture.baseline,
     caseIds: ['BETA-INIT-001'],
     frameworkCommit: 'd'.repeat(40),
-    gitlabReader: (endpoint) => {
-      calls.push(endpoint);
-      return fixture.reader(endpoint);
-    },
+    gitlabReader: trackedReader,
     freshnessSource: 'gitlab-api',
   });
   assert.equal(report.decision, 'READY', report.blockers.join('; '));
@@ -5397,6 +6107,10 @@ test('GitLab API file provenance reads every commit diff page before matching a 
     }
     return pageMatch[1] === '2' ? [gitLabDiffResponseChange(targetPath)] : [];
   };
+  reader.readRaw = (endpoint) => {
+    const value = reader(endpoint);
+    return { bytes: Buffer.from(JSON.stringify(value), 'utf8'), value };
+  };
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
     caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40), gitlabReader: reader,
@@ -5422,6 +6136,10 @@ test('GitLab API file provenance rejects repeated pages, malformed flags and non
       const match = endpoint.match(new RegExp(`^repository/commits/${lastCommitId}/diff\\?per_page=100&page=(\\d+)$`, 'u'));
       if (match) return structuredClone(pages[Number(match[1]) - 1] || []);
       return fixture.reader(endpoint);
+    };
+    reader.readRaw = (endpoint) => {
+      const value = reader(endpoint);
+      return { bytes: Buffer.from(JSON.stringify(value), 'utf8'), value };
     };
     const report = scanQworkReleaseIntake({
       repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
@@ -5482,12 +6200,14 @@ test('GitLab API file provenance preserves complete canonical commit metadata', 
     parent_ids: ['6'.repeat(40)],
     committed_date: '2026-09-08T01:02:03Z',
   });
+  const reader = (endpoint) => (
+    endpoint === `repository/commits/${lastCommitId}` ? metadata : fixture.reader(endpoint)
+  );
+  reader.readRaw = (endpoint) => fixture.reader.readRaw(endpoint);
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
     caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40),
-    gitlabReader: (endpoint) => (
-      endpoint === `repository/commits/${lastCommitId}` ? metadata : fixture.reader(endpoint)
-    ),
+    gitlabReader: reader,
     freshnessSource: 'gitlab-api',
   });
   assert.equal(report.decision, 'READY', report.blockers.join('; '));
@@ -5521,13 +6241,15 @@ test('GitLab API file provenance hashes and preserves the complete raw diff page
     too_large: false,
     diff: '@@ -1 +1 @@\n-old\n+new',
   };
+  const reader = (endpoint) => (
+    endpoint === `repository/commits/${lastCommitId}/diff?per_page=100&page=1`
+      ? [rawChange] : fixture.reader(endpoint)
+  );
+  reader.readRaw = (endpoint) => fixture.reader.readRaw(endpoint);
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(), releaseRef: 'origin/release/0.1', baselineCommit: fixture.baseline,
     caseIds: ['BETA-INIT-001'], frameworkCommit: 'd'.repeat(40),
-    gitlabReader: (endpoint) => (
-      endpoint === `repository/commits/${lastCommitId}/diff?per_page=100&page=1`
-        ? [rawChange] : fixture.reader(endpoint)
-    ),
+    gitlabReader: reader,
     freshnessSource: 'gitlab-api',
   });
   assert.equal(report.decision, 'READY', report.blockers.join('; '));
@@ -5702,6 +6424,10 @@ const onMessage = (raw) => {
       }
     }
     return fixture.reader(endpoint);
+  };
+  reader.readRaw = (endpoint) => {
+    const value = reader(endpoint);
+    return { bytes: Buffer.from(JSON.stringify(value), 'utf8'), value };
   };
   const report = scanQworkReleaseIntake({
     repoRoot: process.cwd(),
@@ -6241,6 +6967,379 @@ test('MR !1573 impact replay rejects removed memory coverage or G4 after related
   }
 });
 
+const successorDeadlineV5 = `
+const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');
+const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+function validateExecutionWorkerReply(raw, pending, now) {
+  const expired = pending.get(raw?.requestId);
+  const validationTime = expired?.deadlineExpired && expired.matches(raw)
+    && raw.deadlineAt === expired.deadlineAt ? expired.deadlineAt - 1 : now();
+  const message = validateEnvelope(raw, { direction: 'worker-to-host', now: validationTime });
+  if (expired?.deadlineExpired && expired.matches(message)) {
+    if (isExecutionWorkerTerminalOperation(message.operation)) {
+      clearTimeout(expired.cancelDeadline);
+      pending.delete(message.requestId);
+    }
+    return { ...message, operation: 'execution.expired' };
+  }
+  return message;
+}
+function settleExpiredExecutionWorkerReply(message, pending) {
+  const expired = pending.get(message.requestId);
+  if (!expired?.deadlineExpired || !expired.matches(message)) return false;
+  if (isExecutionWorkerTerminalOperation(message.operation)) {
+    clearTimeout(expired.cancelDeadline);
+    pending.delete(message.requestId);
+  }
+  return true;
+}
+function cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs }) {
+  const requestedGraceMs = Number(graceMs);
+  const boundedGraceMs = Number.isSafeInteger(requestedGraceMs) && requestedGraceMs > 0
+    ? Math.min(requestedGraceMs, 2147483647) : 1;
+  item.deadlineExpired = true;
+  item.cancelDeadline = setTimeout(() => {
+    if (pending.get(message.requestId) === item) terminateChild(child, 'request-deadline-timeout');
+  }, boundedGraceMs);
+  item.cancelDeadline.unref?.();
+  try {
+    child.postMessage(createEnvelope('execution.cancel', message,
+      { reason: 'execution_worker_deadline_exceeded' },
+      { deadlineMs: boundedGraceMs, now: now() }));
+  } catch {
+    terminateChild(child, 'request-deadline-timeout');
+  }
+}
+function scheduleExecutionWorkerDeadline({ message, pending, child, terminateChild, now, deadlineMs, graceMs }) {
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const timer = setTimeout(() => {
+    const item = pending.get(message.requestId);
+    if (!item) return;
+    const error = Object.assign(new Error('execution worker request deadline exceeded'), {
+      code: 'execution_worker_deadline_exceeded',
+    });
+    item.reject(error);
+    if (message.operation !== 'execution.start') {
+      pending.delete(message.requestId);
+      return;
+    }
+    cancelExpiredExecution({ message, item, pending, child, terminateChild, now, graceMs });
+  }, boundedDeadlineMs + 1);
+  timer.unref?.();
+  return timer;
+}
+function createExecutionWorkerDeadlineCallbacks({ operation, requestId, message, pending, child, terminateChild, now, graceMs }) {
+  const requestedCallbackGraceMs = Number(graceMs);
+  const boundedCallbackGraceMs = Number.isSafeInteger(requestedCallbackGraceMs)
+    && requestedCallbackGraceMs > 0
+    ? Math.min(requestedCallbackGraceMs, 2147483647) : 1;
+  return {
+    onDeadline: () => {
+      const item = pending.get(requestId);
+      if (operation !== 'execution.start') {
+        pending.delete(requestId);
+        return;
+      }
+      if (!item) return;
+      item.deadlineExpired = true;
+      item.deadlineAt = message.deadlineAt;
+      try {
+        child.postMessage(createEnvelope('execution.cancel', message,
+          { reason: 'execution_worker_deadline_exceeded' },
+          { deadlineMs: boundedCallbackGraceMs, now: now() }));
+      } catch {
+        return terminateChild(child, 'request-deadline-timeout');
+      }
+    },
+    onCancellationTimeout: () => {
+      if (pending.has(requestId)) return terminateChild(child, 'request-deadline-timeout');
+    },
+  };
+}
+module.exports = {
+  validateExecutionWorkerReply,
+  settleExpiredExecutionWorkerReply,
+  scheduleExecutionWorkerDeadline,
+  createExecutionWorkerDeadlineCallbacks,
+};
+`;
+
+const successorCallbackSettlementV5 = `
+const BEST_EFFORT_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+  'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onRaw', 'onRawDiagnostic',
+  'onCompactDiagnostic',
+]);
+const IMMEDIATE_NON_BLOCKING_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+]);
+const DEFERRED_OBSERVER_CALLBACKS = new Set([
+  'onRaw', 'onRawDiagnostic', 'onCompactDiagnostic',
+]);
+const RESERVED_OBSERVER_CALLBACKS = new Set([
+  'onExecutionPhase', 'onCriticalPathTiming', 'onProviderReceiptHash',
+  'onContextUsageSnapshot', 'onModelGatewayDiagnostic', 'onProviderDiagnostic',
+  'onNativeSessionCreated', 'onToolFailureDiagnostic', 'onCompactDiagnostic',
+  'onRaw', 'onRawDiagnostic',
+]);
+const RAW_OBSERVER_CALLBACKS = new Set(['onRaw', 'onRawDiagnostic']);
+function isBestEffortExecutionWorkerCallback(name) {
+  return BEST_EFFORT_CALLBACKS.has(String(name || ''));
+}
+function isImmediateNonBlockingExecutionWorkerCallback(name) {
+  return IMMEDIATE_NON_BLOCKING_CALLBACKS.has(String(name || ''));
+}
+function isReservedExecutionWorkerObserverCallback(name) {
+  return RESERVED_OBSERVER_CALLBACKS.has(String(name || ''));
+}
+function isRawExecutionWorkerObserverCallback(name) {
+  return RAW_OBSERVER_CALLBACKS.has(String(name || ''));
+}
+function reportBestEffortFailure(name) {
+  try {
+    console.warn('[execution-worker] best-effort callback failed', {
+      callback: String(name || '').slice(0, 80),
+      redacted: true,
+    });
+  } catch {}
+}
+function invokeCallback(callback, name, value) {
+  return Array.isArray(value) && name === 'onCriticalPathTiming'
+    ? callback(...value) : callback(value);
+}
+function settleExecutionWorkerCallback({ callbacks = {}, message = {}, settlements = [] } = {}) {
+  const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
+  const name = String(payload.callback || '');
+  if (!Object.hasOwn(callbacks, name) || typeof callbacks[name] !== 'function') return false;
+  const callback = callbacks[name];
+  const bestEffort = isBestEffortExecutionWorkerCallback(name);
+  const immediateObserver = isReservedExecutionWorkerObserverCallback(name);
+  const deferredObserver = DEFERRED_OBSERVER_CALLBACKS.has(name);
+  if (bestEffort && (!immediateObserver || deferredObserver)) {
+    setImmediate(() => {
+      let settlement;
+      try {
+        settlement = invokeCallback(callback, name, payload.value);
+      } catch {
+        reportBestEffortFailure(name);
+        return;
+      }
+      void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+    });
+    return true;
+  }
+  let settlement;
+  try {
+    settlement = invokeCallback(callback, name, payload.value);
+  } catch (error) {
+    if (!bestEffort) throw error;
+    reportBestEffortFailure(name);
+    return true;
+  }
+  if (immediateObserver || isImmediateNonBlockingExecutionWorkerCallback(name)) {
+    void Promise.resolve(settlement).catch(() => reportBestEffortFailure(name));
+  } else {
+    settlements.push(Promise.resolve(settlement));
+  }
+  return true;
+}
+module.exports = {
+  isBestEffortExecutionWorkerCallback,
+  isImmediateNonBlockingExecutionWorkerCallback,
+  isRawExecutionWorkerObserverCallback,
+  isReservedExecutionWorkerObserverCallback,
+  settleExecutionWorkerCallback,
+};
+`;
+
+const successorEventFlowV5 = `
+const DEFAULT_WINDOW_MS = 100;
+const DEFAULT_MAX_KEYS = 128;
+const { isExecutionWorkerTerminalOperation } = require('./execution-worker-context-usage.cjs');
+const { logExecutionWorkerCancellation, observeExecutionWorkerEvent } = require('./execution-worker-process-lifecycle.cjs');
+function activityKey(fact) {
+  return \`\${String(fact?.scope || '')}\\u0000\${String(fact?.node || '')}\\u0000\${String(fact?.identity || '')}\`;
+}
+function isCoalescibleRuntimeActivity(fact) {
+  if (!fact || fact.edge !== 'progressed') return false;
+  if (fact.node === 'semantic_delta') return fact.contentKind === 'tool_input';
+  return (fact.node === 'tool_activity' || fact.node === 'hook_activity')
+    && (fact.progressClass === 'liveness' || fact.progressClass === 'advisory');
+}
+function isTerminalActivity(fact) {
+  return fact?.progressClass === 'terminal'
+    || fact?.node === 'runtime_terminal_received' || fact?.node === 'transport_lost';
+}
+class RuntimeActivityCoalescer {
+  constructor({ emit, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
+    windowMs = DEFAULT_WINDOW_MS, maxKeys = DEFAULT_MAX_KEYS } = {}) {
+    if (typeof emit !== 'function') throw new TypeError('runtime activity coalescer requires emit');
+    const requestedWindowMs = Number(windowMs);
+    const boundedWindowMs = Number.isSafeInteger(requestedWindowMs) && requestedWindowMs > 0
+      ? Math.min(requestedWindowMs, 2147483647) : 100;
+    const requestedMaxKeys = Number(maxKeys);
+    const boundedMaxKeys = Number.isSafeInteger(requestedMaxKeys) && requestedMaxKeys > 0
+      ? Math.min(requestedMaxKeys, 128) : 128;
+    this.emit = emit;
+    this.now = now;
+    this.schedule = schedule;
+    this.cancel = cancel;
+    this.windowMs = boundedWindowMs;
+    this.maxKeys = boundedMaxKeys;
+    this.entries = new Map();
+    this.closed = false;
+    this.lastEmittedSequence = -1;
+  }
+  emitFresh(fact) {
+    const sourceSequence = Number(fact?.sourceSequence);
+    if (Number.isSafeInteger(sourceSequence)) {
+      if (sourceSequence <= this.lastEmittedSequence) return;
+      this.lastEmittedSequence = sourceSequence;
+    }
+    this.emit(fact);
+  }
+  discard(key) {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    if (!entry.timer) return;
+    try { this.cancel(entry.timer); } catch {}
+  }
+  clear() {
+    for (const key of this.entries.keys()) this.discard(key);
+  }
+  flush(key) {
+    if (this.closed) return;
+    const entry = this.entries.get(key);
+    if (!entry?.pending) return;
+    const value = entry.pending;
+    entry.pending = null;
+    entry.timer = null;
+    entry.lastSentAt = this.now();
+    this.emitFresh(value);
+  }
+  arm(key, entry, delay) {
+    const requestedDelay = Number(delay);
+    const boundedDelay = Number.isSafeInteger(requestedDelay) && requestedDelay > 0
+      ? Math.min(requestedDelay, 2147483647) : 1;
+    try {
+      entry.timer = this.schedule(() => this.flush(key), boundedDelay);
+      entry.timer?.unref?.();
+    } catch {
+      const value = entry.pending;
+      this.entries.delete(key);
+      if (value) this.emitFresh(value);
+    }
+  }
+  push(fact) {
+    if (this.closed || !fact) return;
+    const key = activityKey(fact);
+    if (!isCoalescibleRuntimeActivity(fact)) {
+      if (isTerminalActivity(fact)) this.clear();
+      else this.discard(key);
+      this.emitFresh(fact);
+      return;
+    }
+    let entry = this.entries.get(key);
+    const currentTime = this.now();
+    if (!entry) {
+      if (this.entries.size >= this.maxKeys) return;
+      entry = { lastSentAt: currentTime, pending: null, timer: null };
+      this.entries.set(key, entry);
+      this.emitFresh(fact);
+      return;
+    }
+    if (currentTime - entry.lastSentAt >= this.windowMs && !entry.timer) {
+      entry.lastSentAt = currentTime;
+      this.emitFresh(fact);
+      return;
+    }
+    entry.pending = fact;
+    if (!entry.timer) this.arm(key, entry,
+      Math.max(0, this.windowMs - (currentTime - entry.lastSentAt)));
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.clear();
+  }
+  pendingCount() {
+    let count = 0;
+    for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+    return count;
+  }
+}
+function createRuntimeActivityCoalescer(options) {
+  return new RuntimeActivityCoalescer(options);
+}
+function dispatchExecutionEvent(item, message, postBrokerResult) {
+  item.lastSequence = message.sequence;
+  try {
+    item.onEvent(message);
+  } finally {
+    postBrokerResult('stream.credit', message, { credit: 1 });
+  }
+}
+function routeExecutionWorkerResultMessage(message, {
+  pending, child, terminateChild, contextUsageRoutes, now, postBrokerResult, logger,
+}) {
+  if (contextUsageRoutes.handle(message, pending, child, terminateChild)) return true;
+  if (message.operation === 'execution.event') {
+    const item = pending.get(message.requestId);
+    if (!item || !item.matches(message)) return true;
+    if (message.sequence <= item.lastSequence) {
+      const error = new Error('execution worker emitted a non-monotonic event sequence');
+      error.code = 'execution_worker_sequence_violation';
+      pending.delete(message.requestId);
+      item.reject(error);
+      terminateChild(child, 'sequence-violation');
+      return true;
+    }
+    observeExecutionWorkerEvent(item, message, now());
+    dispatchExecutionEvent(item, message, postBrokerResult);
+    return true;
+  }
+  if (!isExecutionWorkerTerminalOperation(message.operation)) return false;
+  const item = pending.get(message.requestId);
+  if (!item || !item.matches(message)) return true;
+  if (message.operation === 'execution.terminal')
+    logExecutionWorkerCancellation(logger, item, message, now());
+  pending.delete(message.requestId);
+  contextUsageRoutes.retain(message, item);
+  item.resolve(message);
+  return true;
+}
+module.exports = { dispatchExecutionEvent, routeExecutionWorkerResultMessage };
+`;
+
+const successorEventEntryV5 = `
+const { createRuntimeActivityCoalescer } = require('./execution-worker-event-flow.cjs');
+function createExecution() {
+  const runtimeActivity = createRuntimeActivityCoalescer({
+    emit: (value) => emit('onRuntimeActivity', value),
+  });
+  const callbacks = {
+    onRuntimeActivity: (value) => runtimeActivity.push(value),
+  };
+  return {
+    queueDepth: () => {
+      return runtimeActivity.pendingCount();
+    },
+    run: async () => {
+      try {
+        return true;
+      } finally {
+        runtimeActivity.close();
+      }
+    },
+  };
+}
+`;
+
 test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven MR !1559 architecture', () => {
   const fixture = apiFixture({
     head: QWORK_MR1559_MERGE_COMMIT_SHA,
@@ -6444,6 +7543,10 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
       }
       module.exports = { createExecutionWorkerRequestSettlement, requestExecutionWorkerTurn };
     `],
+    ['electron/host-core/agent/execution-worker-deadline.cjs', successorDeadlineV5],
+    ['electron/host-core/agent/execution-worker-callback-settlement.cjs', successorCallbackSettlementV5],
+    ['electron/host-core/agent/execution-worker-event-flow.cjs', successorEventFlowV5],
+    ['electron/host-core/agent/execution-worker-entry.cjs', successorEventEntryV5],
     ['electron/host-core/agent/execution-worker-termination.cjs', `
       function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanupGraceMs = 250 } = {}) {
         const flights = new WeakMap();
@@ -6469,7 +7572,7 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     `],
     ['electron/host-core/agent/execution-worker-supervisor-message.cjs', `
       function isReservedExecutionWorkerObserverCallback() { return true; }
-      function dispatchExecutionEvent() {}
+      const { dispatchExecutionEvent } = require('./execution-worker-event-flow.cjs');
       function handleExecutionWorkerEventMessage(message, {
         pending, postBrokerResult, terminateChild, child,
       }) {
@@ -6496,12 +7599,24 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
       };
     `],
     ['electron/host-core/agent/desktop-host-context.cjs', `
+      const { settleExecutionWorkerCallback } = require('./execution-worker-callback-settlement.cjs');
+      const callbacks = {};
       async function runAgentInExecutionWorker(identity, signal) {
         let executionWorkerLease = null;
         try {
+          const eventSettlements = [];
           executionWorkerLease = await executionWorkerManager.acquire('execution.start', identity, { signal });
           const supervisor = executionWorkerLease.supervisor;
-          await supervisor.request();
+          const terminal = await requestExecutionWorkerTurn(
+            supervisor, 'execution.start', identity, {}, {
+              onEvent: (message) => settleExecutionWorkerCallback({
+                callbacks,
+                message,
+                settlements: eventSettlements,
+              }),
+            }, signal,
+          );
+          await Promise.all(eventSettlements);
         } finally {
           await executionWorkerLease?.release?.();
         }
@@ -6569,7 +7684,11 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     }
     return fixture.reader(endpoint);
   };
-  const report = scanQworkReleaseIntake({
+  reader.readRaw = (endpoint) => {
+    const value = reader(endpoint);
+    return { bytes: Buffer.from(JSON.stringify(value), 'utf8'), value };
+  };
+  const scanFixture = () => scanQworkReleaseIntake({
     repoRoot: process.cwd(),
     releaseRef: 'origin/release/0.1',
     baselineCommit: fixture.baseline,
@@ -6578,6 +7697,7 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     gitlabReader: reader,
     freshnessSource: 'gitlab-api',
   });
+  const report = scanFixture();
   const risk = report.blocking_risks[0];
   assert.equal(risk.architecture, 'per-turn-utility-process/v1');
   assert.equal(risk.assertion_owner.contract_id, QWORK_MR1559_EXECUTION_RUNNER_SUCCESSOR_ID);
@@ -6585,6 +7705,179 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
   assert.equal(report.policy.api_freshness.blocking_risks_verified, true);
   const validation = validateQworkReleaseIntake(report, { requireFreshRef: true });
   assert.equal(validation.ok, true, validation.failures.join(','));
+
+  const assertSuccessorMutationBlocked = ({ contract, filePath, search, replacement, label }) => {
+    const originalFile = blockingRiskFiles.get(filePath);
+    const originalSource = Buffer.from(originalFile.content, 'base64').toString('utf8');
+    const mutatedSource = replaceRequired(originalSource, search, replacement, label);
+    blockingRiskFiles.set(filePath, {
+      ...originalFile,
+      size: Buffer.byteLength(mutatedSource, 'utf8'),
+      content: Buffer.from(mutatedSource, 'utf8').toString('base64'),
+      blob_id: gitBlobSha1(mutatedSource),
+    });
+    try {
+      const mutatedReport = scanFixture();
+      const mutatedRisk = mutatedReport.blocking_risks[0];
+      assert.equal(mutatedReport.decision, 'BLOCKED', label);
+      assert.equal(mutatedRisk.status, 'BLOCKED', label);
+      assert.equal(
+        mutatedRisk.checks.at(-1).observations.successor_ast_contracts[contract],
+        false,
+        label,
+      );
+    } finally {
+      blockingRiskFiles.set(filePath, originalFile);
+    }
+  };
+  const callbackPath = 'electron/host-core/agent/execution-worker-callback-settlement.cjs';
+  const eventPath = 'electron/host-core/agent/execution-worker-event-flow.cjs';
+  const successorMutations = [
+    {
+      contract: 'deadline',
+      filePath: 'electron/host-core/agent/execution-worker-deadline.cjs',
+      search: 'Math.min(requestedDeadlineMs, 2147483646)',
+      replacement: 'Math.min(requestedDeadlineMs, 2147483647)',
+      label: 'deadline timer may not consume the cancellation grace ceiling',
+    },
+    {
+      contract: 'callback_settlement',
+      filePath: callbackPath,
+      search: `  try {
+    console.warn('[execution-worker] best-effort callback failed', {
+      callback: String(name || '').slice(0, 80),
+      redacted: true,
+    });
+  } catch {}`,
+      replacement: `  console.warn('[execution-worker] best-effort callback failed', {
+    callback: String(name || '').slice(0, 80),
+    redacted: true,
+  });`,
+      label: 'callback reporter must isolate a throwing log sink',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    const value = entry.pending;\n    entry.pending = null;',
+      replacement: '    this.entries.clear();\n    const value = entry.pending;\n    entry.pending = null;',
+      label: 'event flush may not clear the protected entry ledger',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    const value = entry.pending;\n    entry.pending = null;',
+      replacement: '    const entriesAlias = this.entries;\n    entriesAlias.clear();\n    const value = entry.pending;\n    entry.pending = null;',
+      label: 'event flush may not clear the protected entry ledger through an alias',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '      this.entries.set(key, entry);\n      this.emitFresh(fact);',
+      replacement: "      this.entries.set(key, entry);\n      this.entries.set('injected', {});\n      this.emitFresh(fact);",
+      label: 'event push may not write an extra entry',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '      if (this.entries.size >= this.maxKeys) return;',
+      replacement: '      if (false) return;',
+      label: 'event key-capacity guard must stay reachable',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    entry.pending = fact;',
+      replacement: '    entry.pending = null;',
+      label: 'event delay path must retain the current fact',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    if (!entry.timer) this.arm(key, entry,',
+      replacement: '    if (false) this.arm(key, entry,',
+      label: 'event arm guard must stay tied to the timer state',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    if (!entry.timer) this.arm(key, entry,',
+      replacement: '    if (!entry.timer) this.emitFresh(',
+      label: 'event delay path must call arm rather than an unrelated sink',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '    if (currentTime - entry.lastSentAt >= this.windowMs && !entry.timer) {',
+      replacement: '    if (false) {',
+      label: 'event immediate-window guard must remain reachable and exact',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: `  pendingCount() {
+    let count = 0;
+    for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+    return count;
+  }`,
+      replacement: `  pendingCount() {
+    return 0;
+  }`,
+      label: 'pendingCount may not be a constant',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: `  pendingCount() {
+    let count = 0;
+    for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+    return count;
+  }`,
+      replacement: `  pendingCount() {
+    return this.entries.size;
+  }`,
+      label: 'pendingCount must count pending facts rather than keys',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: `  pendingCount() {
+    let count = 0;
+    for (const entry of this.entries.values()) count += entry.pending ? 1 : 0;
+    return count;
+  }`,
+      replacement: '  unrelatedCount() { return 0; }',
+      label: 'pendingCount may not be removed',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: "String(fact?.identity || '')",
+      replacement: "String('')",
+      label: 'activity key must retain the stable identity component',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: "if (!fact || fact.edge !== 'progressed') return false;",
+      replacement: 'if (!fact) return false;',
+      label: 'coalescing must remain restricted to progressed activity',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: " || fact?.node === 'transport_lost'",
+      replacement: '',
+      label: 'transport loss must remain a terminal activity',
+    },
+    {
+      contract: 'event_flow',
+      filePath: eventPath,
+      search: '      this.lastEmittedSequence = sourceSequence;',
+      replacement: '      void sourceSequence;',
+      label: 'fresh emission must advance the monotonic sequence fence',
+    },
+  ];
+  for (const mutation of successorMutations) assertSuccessorMutationBlocked(mutation);
 
   const cancellationPath = 'electron/host-core/agent/execution-worker-cancellation.cjs';
   const cancellationFile = blockingRiskFiles.get(cancellationPath);
@@ -6601,15 +7894,7 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     content: Buffer.from(deadAbortSource, 'utf8').toString('base64'),
     blob_id: gitBlobSha1(deadAbortSource),
   });
-  const blockedReport = scanQworkReleaseIntake({
-    repoRoot: process.cwd(),
-    releaseRef: 'origin/release/0.1',
-    baselineCommit: fixture.baseline,
-    caseIds: ['BETA-INIT-001'],
-    frameworkCommit: 'd'.repeat(40),
-    gitlabReader: reader,
-    freshnessSource: 'gitlab-api',
-  });
+  const blockedReport = scanFixture();
   assert.equal(blockedReport.decision, 'BLOCKED');
   assert.equal(blockedReport.policy.api_freshness.blocking_risks_verified, false);
   assert.equal(
@@ -6662,6 +7947,182 @@ test('GitLab API scan binds a verified source contract into MR, summary, and fre
     requireFreshRef: true,
     sourceContracts: [...QWORK_RELEASE_SOURCE_CONTRACTS, sourceFixture.contract],
   }).ok, true);
+});
+
+test('GitLab API scan preserves the !1612 successor contract after it leaves the incremental MR range', () => {
+  const contract = QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT;
+  const lifecycleBinding = contract.integration_bindings.find((binding) => binding.id === 'worker_allowlist_2');
+  const successor = lifecycleBinding.current_release_match.successor;
+  const head = 'b'.repeat(40);
+  const releaseFiles = currentReleaseFileFixtures(QWORK_RELEASE_SOURCE_CONTRACTS, head);
+  const lifecyclePayload = structuredClone(releaseFiles.get(lifecycleBinding.path));
+  const originalSource = Buffer.from(lifecyclePayload.content, 'base64').toString('utf8');
+  const successorSource = replaceRequired(
+    originalSource,
+    lifecycleBinding.addition.source,
+    successor.line.source,
+    'cross-increment !1612 successor source',
+  );
+  lifecyclePayload.content = Buffer.from(successorSource, 'utf8').toString('base64');
+  lifecyclePayload.size = Buffer.byteLength(successorSource, 'utf8');
+  lifecyclePayload.blob_id = gitBlobSha1(successorSource);
+  const fixture = apiFixture({
+    head,
+    successorRelationship: 'successor',
+    releaseFileOverrides: new Map([[lifecycleBinding.path, lifecyclePayload]]),
+  });
+  const calls = [];
+  const trackedReader = (endpoint) => {
+    calls.push(endpoint);
+    return fixture.reader(endpoint);
+  };
+  trackedReader.readRaw = (endpoint) => {
+    calls.push(endpoint);
+    return fixture.reader.readRaw(endpoint);
+  };
+  const report = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: fixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: trackedReader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(report.merge_requests.some((mr) => String(mr.iid) === successor.mr_iid), false);
+  const attestation = report.source_contracts.find((item) => item.contract_id === contract.contract_id);
+  const observation = attestation.integration_bindings.find(
+    (binding) => binding.id === lifecycleBinding.id,
+  ).successor_observation;
+  assert.equal(observation.relationship, 'VERIFIED_SUCCESSOR');
+  assert.equal(observation.schema_version, QWORK_SOURCE_BINDING_SUCCESSOR_RELATIONSHIP_SCHEMA);
+  assert.equal(observation.compare_evidence_verified, true);
+  assert.deepEqual(observation.compare_evidence_failures, []);
+  assert.equal(attestation.schema_version, QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA);
+  assert.equal(observation.in_range_identity_count, 0);
+  assert.equal(observation.verified, true);
+  assert.equal(calls.includes(
+    `repository/compare?from=${successor.merge_commit_sha}&to=${head}&straight=true`,
+  ), true);
+  assert.equal(calls.includes(
+    `repository/compare?from=${head}&to=${successor.merge_commit_sha}&straight=true`,
+  ), true);
+  assert.equal(report.decision, 'READY', report.blockers.join('; '));
+  assert.equal(validateQworkReleaseIntake(report, { requireFreshRef: true }).ok, true);
+
+  const rehashAttestationAndReport = (candidate) => {
+    const candidateAttestation = candidate.source_contracts.find(
+      (item) => item.contract_id === contract.contract_id,
+    );
+    delete candidateAttestation.attestation_sha256;
+    candidateAttestation.attestation_sha256 = sha256Text(stableJson(candidateAttestation));
+    delete candidate.integrity.content_sha256;
+    candidate.integrity.content_sha256 = sha256Text(stableJson(candidate));
+    return candidateAttestation;
+  };
+  const assertOfflineTamperBlocked = (label, baseReport, mutate) => {
+    const candidate = structuredClone(baseReport);
+    const candidateAttestation = candidate.source_contracts.find(
+      (item) => item.contract_id === contract.contract_id,
+    );
+    const candidateBinding = candidateAttestation.integration_bindings.find(
+      (binding) => binding.id === lifecycleBinding.id,
+    );
+    mutate(candidateBinding.successor_observation, candidateAttestation, candidate);
+    rehashAttestationAndReport(candidate);
+    const directValidation = validateCurrentReleaseSourceContractAttestation(candidateAttestation, {
+      report: candidate,
+      contract,
+      contracts: QWORK_RELEASE_SOURCE_CONTRACTS,
+    });
+    const sourceValidation = validateReleaseSourceContractsForReport(candidate);
+    const intakeValidation = validateQworkReleaseIntake(candidate, { requireFreshRef: true });
+    assert.equal(directValidation.ok, false, `${label}:direct`);
+    assert.equal(sourceValidation.ok, false, `${label}:source-report`);
+    assert.equal(intakeValidation.ok, false, `${label}:intake`);
+    assert.equal(intakeValidation.failures.includes('content_sha256_mismatch'), false, label);
+  };
+
+  const predecessorFixture = apiFixture({ head, successorRelationship: 'predecessor' });
+  const predecessorReport = scanQworkReleaseIntake({
+    repoRoot: process.cwd(),
+    releaseRef: 'origin/release/0.1',
+    baselineCommit: predecessorFixture.baseline,
+    caseIds: ['BETA-INIT-001'],
+    frameworkCommit: 'd'.repeat(40),
+    gitlabReader: predecessorFixture.reader,
+    freshnessSource: 'gitlab-api',
+  });
+  assert.equal(predecessorReport.decision, 'READY', predecessorReport.blockers.join('; '));
+  assertOfflineTamperBlocked('predecessor raw cannot be relabeled as successor', predecessorReport, (forged) => {
+    Object.assign(forged.descendant_ancestry, {
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      query_completed: true,
+      verified: true,
+      reason: '',
+    });
+    Object.assign(forged.predecessor_ancestry, {
+      compare_commit_count: 0,
+      first_parent_complete: false,
+      query_completed: true,
+      verified: false,
+      reason: `first_parent_commit_missing:${successor.merge_commit_sha}`,
+    });
+    forged.relationship = 'VERIFIED_SUCCESSOR';
+    forged.verified = true;
+  });
+
+  for (const [label, mutate] of [
+    ['missing raw compare evidence', (forged) => {
+      delete forged.descendant_ancestry.compare_evidence;
+    }],
+    ['compare endpoint rewrite', (forged) => {
+      forged.descendant_ancestry.compare_evidence.endpoint += '&page=2';
+    }],
+    ['compare raw Base64 rewrite', (forged) => {
+      forged.descendant_ancestry.compare_evidence.raw_response_base64 = '***';
+    }],
+    ['compare raw byte count rewrite', (forged) => {
+      forged.descendant_ancestry.compare_evidence.raw_response_bytes += 1;
+    }],
+    ['compare raw SHA rewrite', (forged) => {
+      forged.descendant_ancestry.compare_evidence.raw_response_sha256 = '0'.repeat(64);
+    }],
+    ['compare direction rewrite', (forged) => {
+      const evidence = forged.descendant_ancestry.compare_evidence;
+      [evidence.compare_from, evidence.compare_to] = [evidence.compare_to, evidence.compare_from];
+      evidence.endpoint = `repository/compare?from=${evidence.compare_from}&to=${evidence.compare_to}&straight=true`;
+    }],
+    ['legacy successor relationship v1', (forged) => {
+      forged.schema_version = 'qbot-qwork-source-binding-successor-relationship/v1';
+    }],
+    ['legacy current-release attestation v3', (_forged, candidateAttestation) => {
+      candidateAttestation.schema_version = 'qbot-qwork-release-current-source-contract/v3';
+    }],
+  ]) {
+    assertOfflineTamperBlocked(label, report, mutate);
+  }
+
+  assertOfflineTamperBlocked('both compare directions cannot be complete', report, (forged) => {
+    forged.predecessor_ancestry = ancestryWithRawCompare({
+      source: 'gitlab-api-compare-first-parent',
+      compare_from: head,
+      compare_to: successor.merge_commit_sha,
+      compare_commit_count: 1,
+      first_parent_complete: true,
+      query_completed: true,
+      verified: true,
+      reason: '',
+    }, {
+      compare_timeout: false,
+      commits: [{ id: successor.merge_commit_sha, parent_ids: [head] }],
+    });
+    forged.relationship = 'UNKNOWN';
+    forged.compare_evidence_verified = true;
+    forged.compare_evidence_failures = [];
+    forged.verified = false;
+  });
 });
 
 test('GitLab API scan binds a source contract by exact merge SHA when IID is wrong', () => {
