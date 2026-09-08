@@ -15,6 +15,7 @@ import {
 } from '../src/lib/qwork-release-intake.mjs';
 import {
   QWORK_RELEASE_SOURCE_CONTRACTS,
+  QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT,
   currentReleaseSourceContractProtectedPaths,
   resolveCurrentReleaseHeaderContract,
 } from '../src/lib/qwork-release-source-contracts.mjs';
@@ -115,7 +116,56 @@ function gitBlobSha1(source) {
 }
 
 function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
-  const lines = [...sourceLines];
+  let lines = [...sourceLines];
+  const mr1597 = contracts.find((contract) => (
+    contract.contract_id === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT.contract_id
+  ));
+  // The MR1597 semantic contract observes a real facade -> supervisor -> lifecycle
+  // export chain in addition to the line-level additions. Keep the fixture
+  // executable and parseable so the semantic readback exercises that chain.
+  if (mr1597 && filePath === 'test/unit/desktop/execution-worker-supervisor.test.mjs') {
+    lines = [
+      "import assert from 'node:assert/strict';",
+      "import { createRequire } from 'node:module';",
+      "import test from 'node:test';",
+      '',
+      'const require = createRequire(import.meta.url);',
+      'const {',
+      '  workerEnvironment,',
+      "} = require('../../../electron/desktop-agent-host.cjs');",
+      '',
+      ...lines,
+    ];
+  } else if (mr1597 && filePath === 'electron/desktop-agent-host.cjs') {
+    lines = [
+      "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+      ...lines,
+    ];
+  } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
+    lines = [
+      'const {',
+      '  workerEnvironment,',
+      "} = require('./execution-worker-process-lifecycle.cjs');",
+      ...lines,
+      'module.exports = {',
+      '  WORKER_ENV_ALLOWLIST,',
+      '  workerEnvironment,',
+      '};',
+    ];
+  } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
+    lines = [
+      ...lines,
+      'function workerEnvironment(source = process.env, authority = {}) {',
+      '  void source;',
+      '  void authority;',
+      '  return {};',
+      '}',
+      'module.exports = {',
+      '  WORKER_ENV_ALLOWLIST,',
+      '  workerEnvironment,',
+      '};',
+    ];
+  }
   const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
     (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
   ));
@@ -142,7 +192,12 @@ function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contract
   return lines;
 }
 
-function currentReleaseFileFixtures(contracts, head) {
+function currentReleaseFileFixtures(contracts, head, {
+  ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
+    verified: true,
+    first_parent_complete: true,
+  }])),
+} = {}) {
   const linesByPath = new Map();
   const addLine = (filePath, line) => {
     if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
@@ -153,10 +208,6 @@ function currentReleaseFileFixtures(contracts, head) {
     if (!linesByPath.has(filePath)) linesByPath.set(filePath, []);
     if (line) linesByPath.get(filePath).push(line);
   };
-  const ancestryByContractId = new Map(contracts.map((contract) => [contract.contract_id, {
-    verified: true,
-    first_parent_complete: true,
-  }]));
   for (const contract of contracts) {
     const headerOwner = resolveCurrentReleaseHeaderContract(contract, {
       contracts,
@@ -202,16 +253,30 @@ function currentReleaseFileFixtures(contracts, head) {
       const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
         scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
       ));
-      for (const scope of regionScopes) {
+      for (const [scopeIndex, scope] of regionScopes.entries()) {
         appendLine(group.path, scope.region_start.source);
-        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        let nextLineIndex = 1;
+        for (const fragment of scope.required_fragments) {
+          while (nextLineIndex < fragment.expected_line_index) {
+            appendLine(group.path, `    QBOT_SCOPE_FIXTURE_${scopeIndex}_${nextLineIndex}: true,`);
+            nextLineIndex += 1;
+          }
+          appendLine(group.path, fragment.value.source);
+          nextLineIndex += 1;
+        }
+        if (requiresJavaScriptPropertyAst && scope.region_end_inclusive === false) {
+          appendLine(group.path, '  });');
+        }
         appendLine(group.path, scope.region_end.source);
         if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
           appendLine(group.path, "    platform: 'darwin',");
-          appendLine(group.path, '  } ) ;');
+          appendLine(group.path, '  });');
         }
       }
-      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
+      if (requiresJavaScriptPropertyAst
+        && !regionScopes.some((scope) => scope.region_end.source === '});')) {
+        appendLine(group.path, '});');
+      }
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
@@ -309,6 +374,20 @@ function makeReleaseIntake({
     }
     if (endpoint === `repository/commits/${releaseHead}/merge_requests`) return [fixtureMr];
     if (endpoint === `merge_requests/${fixtureMrIid}/changes`) return fixtureChanges;
+    if (endpoint.startsWith('repository/commits?')) {
+      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
+      const filePath = query.get('path');
+      const refName = query.get('ref_name');
+      const payload = releaseFiles.get(filePath);
+      if (!payload || refName !== releaseHead) {
+        throw new Error(`missing release file history fixture ${filePath}`);
+      }
+      return [{
+        id: payload.last_commit_id,
+        parent_ids: ['a'.repeat(40)],
+        committed_date: '2026-09-05T00:00:00.000Z',
+      }];
+    }
     if (endpoint.startsWith('repository/files/')) {
       const encodedPath = endpoint.slice('repository/files/'.length, endpoint.indexOf('?'));
       const filePath = decodeURIComponent(encodedPath);

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   QWORK_MR1573_MEMORY_SESSION_PROFILE_STABILITY_CONTRACT,
+  QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
   QWORK_RELEASE_SOURCE_CONTRACTS,
   auditCurrentReleaseSourceContract,
   auditKnownReleaseSourceContracts,
@@ -648,11 +649,26 @@ function reconstructFirstParentChain({ compare, baselineCommit, releaseHead } = 
 function readCurrentReleaseContractFiles({ readGitLab, releaseHead, protectedPaths, apiErrors }) {
   return protectedPaths.map((filePath) => {
     const endpoint = `repository/files/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(releaseHead)}`;
+    const historyEndpoint = `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(releaseHead)}&per_page=1`;
     try {
+      const payload = readGitLab(endpoint);
+      const history = readGitLab(historyEndpoint);
+      if (!Array.isArray(history) || history.length !== 1 || !text(history[0]?.id)) {
+        throw new Error('repository file last_commit provenance missing');
+      }
       return {
         path: filePath,
         requested_ref: releaseHead,
-        payload: readGitLab(endpoint),
+        payload,
+        last_commit_provenance: {
+          schema_version: QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
+          source: 'gitlab-api-repository-commits',
+          endpoint: historyEndpoint,
+          path: filePath,
+          ref: releaseHead,
+          commit_id: text(payload?.commit_id),
+          last_commit_id: text(history[0]?.id),
+        },
       };
     } catch (error) {
       const message = redact(error?.message || 'repository file read failed');

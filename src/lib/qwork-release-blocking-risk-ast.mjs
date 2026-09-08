@@ -201,6 +201,34 @@ function propertyName(property) {
   return '';
 }
 
+function uniqueObjectProperty(node, name) {
+  node = unwrap(node);
+  if (node?.type !== 'ObjectExpression') return null;
+  const matches = node.properties.filter((property) => (
+    property.type === 'Property'
+    && property.kind === 'init'
+    && !property.computed
+    && propertyName(property) === name
+  ));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function objectIncludesExactProperties(node, expected, { allowedSpreads = [] } = {}) {
+  node = unwrap(node);
+  if (node?.type !== 'ObjectExpression') return false;
+  const spreads = node.properties.filter((property) => property.type === 'SpreadElement');
+  if (spreads.length !== allowedSpreads.length
+    || !spreads.every((spread, index) => allowedSpreads[index](spread.argument))) return false;
+  if (node.properties.some((property) => (
+    property.type !== 'SpreadElement'
+    && (property.type !== 'Property' || property.kind !== 'init' || property.computed)
+  ))) return false;
+  return Object.entries(expected).every(([name, matcher]) => {
+    const property = uniqueObjectProperty(node, name);
+    return Boolean(property && matcher(property.value, property));
+  });
+}
+
 function exactObject(node, expected) {
   node = unwrap(node);
   if (node?.type !== 'ObjectExpression' || node.properties.some((item) => item.type !== 'Property')) return false;
@@ -284,6 +312,34 @@ function objectPatternBindsExactly(parameter, expectedNames, {
       && identifier(value.left, name)
       && Object.hasOwn(propertyDefaults, name)
       && propertyDefaults[name](unwrap(value.right));
+  });
+}
+
+function objectPatternIncludesExactBindings(parameter, expected, {
+  topLevelDefault = false,
+} = {}) {
+  parameter = unwrap(parameter);
+  if (topLevelDefault) {
+    if (parameter?.type !== 'AssignmentPattern' || !exactObject(parameter.right, {})) return false;
+    parameter = unwrap(parameter.left);
+  } else if (parameter?.type === 'AssignmentPattern') {
+    return false;
+  }
+  if (parameter?.type !== 'ObjectPattern'
+    || parameter.properties.some((property) => (
+      property.type !== 'Property' || property.computed || property.kind !== 'init'
+    ))) return false;
+  const names = parameter.properties.map((property) => propertyName(property));
+  if (names.some((name) => !name) || new Set(names).size !== names.length) return false;
+  if (parameter.properties.some((property) => {
+    const name = propertyName(property);
+    const value = unwrap(property.value);
+    return !(identifier(value, name)
+      || (value?.type === 'AssignmentPattern' && identifier(value.left, name)));
+  })) return false;
+  return Object.entries(expected).every(([name, matcher]) => {
+    const matches = parameter.properties.filter((property) => propertyName(property) === name);
+    return matches.length === 1 && matcher(unwrap(matches[0].value), matches[0]);
   });
 }
 
@@ -757,6 +813,20 @@ function protectedCollectionMutationCalls(functionNode, protectedPath, methods) 
       ? path[2]
       : '';
   };
+  const boundCollectionMutation = (node) => {
+    node = unwrap(node);
+    if (node?.type !== 'CallExpression') return '';
+    const bindCall = unwrap(node.callee);
+    if (bindCall?.type !== 'CallExpression') return '';
+    const bindCallee = unwrap(bindCall.callee);
+    if (bindCallee?.type !== 'MemberExpression'
+      || bindCallee.computed
+      || !identifier(bindCallee.property, 'bind')
+      || bindCall.arguments.length < 1) return '';
+    const target = unwrap(bindCallee.object);
+    const method = protectedMethod(target) || collectionPrototypeMethod(target);
+    return method && protectedReceiver(bindCall.arguments[0]) ? method : '';
+  };
   const mutations = [];
   visit(functionNode?.body, (node) => {
     if (node.type !== 'CallExpression') return;
@@ -786,6 +856,11 @@ function protectedCollectionMutationCalls(functionNode, protectedPath, methods) 
       if (method && protectedReceiver(node.arguments[1])) {
         mutations.push({ method, node });
       }
+      return;
+    }
+    const boundMethod = boundCollectionMutation(node);
+    if (boundMethod) {
+      mutations.push({ method: boundMethod, node });
     }
   });
   return mutations;
@@ -833,8 +908,34 @@ function exactTopLevelRequireBinding(program, localName, requiredName, modulePat
 
 function exactTopLevelModuleExports(program, expected) {
   const assignments = directAssignmentStatements(program, ['module', 'exports']);
-  return assignments.length === 1
+  return topLevelCommonJsBindingsStable(program)
+    && assignments.length === 1
     && exactObject(assignments[0].expression.right, expected);
+}
+
+function topLevelModuleExportsIncludes(program, expected) {
+  const assignments = directAssignmentStatements(program, ['module', 'exports']);
+  return topLevelCommonJsBindingsStable(program)
+    && assignments.length === 1
+    && objectIncludesExactProperties(assignments[0].expression.right, expected);
+}
+
+function topLevelCommonJsBindingsStable(program) {
+  if (!program || topLevelBindingCount(program, 'module') > 0
+    || topLevelBindingCount(program, 'exports') > 0
+    || functionHasIdentifierWrite(program, ['module', 'exports'])
+    || programHasNestedBinding(program, ['module', 'exports'])) return false;
+  let changed = false;
+  visit(program, (node) => {
+    if (changed || node.type !== 'CallExpression') return;
+    const path = staticMemberPath(node.callee);
+    if (path.join('.') === 'Object.defineProperty'
+      || path.join('.') === 'Object.defineProperties') {
+      const receiver = staticMemberPath(node.arguments[0]).join('.');
+      if (receiver === 'module' || receiver === 'exports') changed = true;
+    }
+  });
+  return !changed;
 }
 
 function functionHasOwnParameterBinding(functionNode, protectedNames) {
@@ -910,19 +1011,21 @@ function exactOperation(node, operator, value) {
   );
 }
 
-function cancellationAstContract(source) {
-  const program = parseProgram(source);
-  const request = topFunction(program, 'requestExecutionWorkerTurn');
-  const settlement = topFunction(program, 'createExecutionWorkerRequestSettlement');
-  if (!request || !settlement
-    || !stableProgramIdentifiers(program, [
-      'Error', 'Math', 'Promise', 'clearTimeout', 'createExecutionWorkerRequestSettlement',
-      'requestExecutionWorkerTurn', 'setTimeout',
-    ], { globals: ['Error', 'Math', 'Promise', 'clearTimeout', 'setTimeout'] })
-    || !exactIdentifierParameters(request, [
-      'supervisor', 'operation', 'identity', 'payload', 'options', 'signal',
-    ])) return false;
+function executionDeadlineError(node) {
+  node = unwrap(node);
+  if (construct(node, 'Error')) return true;
+  return call(node, ['Object', 'assign'], [
+    (entry) => construct(entry, 'Error'),
+    (entry) => exactObject(entry, {
+      code: (value) => literal(value, 'execution_worker_deadline_exceeded'),
+    }),
+  ]);
+}
 
+function legacyCancellationRequestAstContract(request) {
+  if (!exactIdentifierParameters(request, [
+    'supervisor', 'operation', 'identity', 'payload', 'options', 'signal',
+  ])) return false;
   const pending = directDeclarator(request.body, 'pending', 'const');
   const cancelIdentity = directDeclarator(request.body, 'cancelIdentity', 'const');
   const onAbort = directDeclarator(request.body, 'onAbort', 'const');
@@ -986,11 +1089,117 @@ function cancellationAstContract(source) {
   if (noSignal.length !== 1 || addListener.length !== 1
     || alreadyAborted.length !== 1 || guardedWait.length !== 1) return false;
   const requestBody = request.body.body;
-  if (requestBody.indexOf(pending.statement) >= requestBody.indexOf(addListener[0])
-    || requestBody.indexOf(onAbort.statement) >= requestBody.indexOf(addListener[0])
-    || requestBody.indexOf(noSignal[0]) >= requestBody.indexOf(addListener[0])
-    || requestBody.indexOf(addListener[0]) >= requestBody.indexOf(alreadyAborted[0])
-    || requestBody.indexOf(alreadyAborted[0]) >= requestBody.indexOf(guardedWait[0])) return false;
+  if (!directStatementsOrderedAndReachable(request.body, [
+    pending.statement,
+    onAbort.statement,
+    noSignal[0],
+    addListener[0],
+    alreadyAborted[0],
+    guardedWait[0],
+  ])) return false;
+  return true;
+}
+
+function normalizedCancellationIdentity(node) {
+  node = unwrap(node);
+  if (node?.type !== 'LogicalExpression' || node.operator !== '&&'
+    || !identifier(node.left, 'identity')) return false;
+  const value = unwrap(node.right);
+  if (value?.type !== 'ObjectExpression' || value.properties.length !== 2) return false;
+  const [spread, generation] = value.properties;
+  return spread?.type === 'SpreadElement'
+    && identifier(spread.argument, 'identity')
+    && generation?.type === 'Property'
+    && generation.kind === 'init'
+    && !generation.computed
+    && propertyName(generation) === 'runtimeGeneration'
+    && call(generation.value, ['Number'], [
+      (entry) => member(entry, ['identity', 'runtimeGeneration']),
+    ]);
+}
+
+function currentCancellationRequestAstContract(request) {
+  const body = request?.body;
+  if (body?.type !== 'BlockStatement'
+    || !exactIdentifierParameters(request, [
+      'supervisor', 'operation', 'identity', 'payload', 'options', 'signal',
+    ])
+    || functionHasNestedBinding(request, [
+      'identity', 'operation', 'options', 'payload', 'signal', 'supervisor',
+    ])
+    || functionHasIdentifierWrite(request, [
+      'cancel', 'cancelIdentity', 'identity', 'operation', 'options', 'payload',
+      'pending', 'signal', 'supervisor',
+    ])) return false;
+  const cancelIdentity = directDeclarator(body, 'cancelIdentity', 'const');
+  const cancel = directDeclarator(body, 'cancel', 'const');
+  const attempts = body.body.filter((statement) => (
+    statement.type === 'TryStatement' && !statement.handler && statement.finalizer
+  ));
+  if (!cancelIdentity || !normalizedCancellationIdentity(cancelIdentity.declaration.init)
+    || !cancel || attempts.length !== 1) return false;
+  const cancelFunction = unwrap(cancel.declaration.init);
+  if (cancelFunction?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(cancelFunction, [])
+    || cancelFunction.body?.type !== 'BlockStatement'
+    || cancelFunction.body.body.length !== 1
+    || !directCallStatement(cancelFunction.body.body[0], ['supervisor', 'cancel'], [
+      (entry) => identifier(entry, 'cancelIdentity'),
+      (entry) => literal(entry, 'user-requested'),
+    ], { void_: true })) return false;
+  const listenerAdds = body.body.filter((statement) => directCallStatement(
+    statement,
+    ['signal', 'addEventListener'],
+    [
+      (entry) => literal(entry, 'abort'),
+      (entry) => identifier(entry, 'cancel'),
+      (entry) => exactObject(entry, { once: (value) => literal(value, true) }),
+    ],
+  ));
+  const [attempt] = attempts;
+  const pending = directDeclarator(attempt.block, 'pending', 'const');
+  const aborted = attempt.block.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && !statement.alternate
+    && member(statement.test, ['signal', 'aborted'])
+    && directCallStatement(statement.consequent, ['cancel'], [])
+  ));
+  const returns = attempt.block.body.filter((statement) => exactReturn(
+    statement, (entry) => identifier(entry, 'pending'), { await_: true },
+  ));
+  const removes = attempt.finalizer.body.filter((statement) => directCallStatement(
+    statement,
+    ['signal', 'removeEventListener'],
+    [(entry) => literal(entry, 'abort'), (entry) => identifier(entry, 'cancel')],
+  ));
+  if (!pending || !call(pending.declaration.init, ['supervisor', 'request'], [
+    (entry) => identifier(entry, 'operation'),
+    (entry) => identifier(entry, 'identity'),
+    (entry) => identifier(entry, 'payload'),
+    (entry) => identifier(entry, 'options'),
+  ]) || listenerAdds.length !== 1 || aborted.length !== 1
+    || returns.length !== 1 || removes.length !== 1
+    || !directStatementsOrderedAndReachable(attempt.block, [
+      pending.statement, aborted[0], returns[0],
+    ])
+    || !directStatementReachable(attempt.finalizer, removes[0])) return false;
+  const outer = body.body;
+  return directStatementsOrderedAndReachable(body, [
+    cancelIdentity.statement, cancel.statement, listenerAdds[0], attempt,
+  ]);
+}
+
+function cancellationAstContract(source) {
+  const program = parseProgram(source);
+  const request = topFunction(program, 'requestExecutionWorkerTurn');
+  const settlement = topFunction(program, 'createExecutionWorkerRequestSettlement');
+  if (!request || !settlement
+    || !stableProgramIdentifiers(program, [
+      'Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout',
+      'createExecutionWorkerRequestSettlement', 'requestExecutionWorkerTurn', 'setTimeout',
+    ], { globals: ['Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout', 'setTimeout'] })
+    || !(legacyCancellationRequestAstContract(request)
+      || currentCancellationRequestAstContract(request))) return false;
 
   const settlementParameter = settlement.params.length === 1 ? settlement.params[0] : null;
   const expectedParameters = [
@@ -1041,7 +1250,7 @@ function cancellationAstContract(source) {
   if (deadlineBody.length !== 4
     || !directCallStatement(deadlineBody[0], ['clear'], [])
     || !directCallStatement(deadlineBody[1], ['onDeadline'], [])
-    || !directCallStatement(deadlineBody[2], ['reject'], [(value) => construct(value, 'Error')])
+    || !directCallStatement(deadlineBody[2], ['reject'], [(value) => executionDeadlineError(value)])
     || deadlineBody[3]?.type !== 'IfStatement'
     || !binary(
       deadlineBody[3].test, '===',
@@ -1060,11 +1269,12 @@ function cancellationAstContract(source) {
       if (value?.type !== 'ArrowFunctionExpression'
         || !exactIdentifierParameters(value, [])
         || value.body?.type !== 'BlockStatement') return false;
-      const [guard, assignment] = value.body.body;
-      if (value.body.body.length !== 2
+      const [guard, assignment, unref] = value.body.body;
+      if (![2, 3].includes(value.body.body.length)
         || guard?.type !== 'IfStatement'
         || !identifier(guard.test, 'cancellationTimer')
         || !bareReturn(guard.consequent)) return false;
+      if (unref && !directCallStatement(unref, ['cancellationTimer', 'unref'], [])) return false;
       const expression = unwrap(assignment?.expression);
       if (assignment?.type !== 'ExpressionStatement'
         || expression?.type !== 'AssignmentExpression'
@@ -1134,13 +1344,110 @@ function graceTimerPromise(node, timeoutName) {
   ]);
 }
 
+function currentTerminationCleanup(node) {
+  node = unwrap(node);
+  if (node?.type !== 'ConditionalExpression'
+    || !logical(
+      node.test,
+      '&&',
+      (entry) => identifier(entry, 'pid'),
+      (entry) => binary(
+        entry,
+        '===',
+        (value) => unary(value, 'typeof', (target) => identifier(target, 'processTreeKiller')),
+        (value) => literal(value, 'function'),
+      ),
+    )
+    || !call(node.alternate, ['Promise', 'resolve'], [(entry) => literal(entry, false)])) return false;
+  return methodCall(
+    node.consequent,
+    'catch',
+    (caught) => methodCall(
+      caught,
+      'then',
+      (resolved) => call(resolved, ['Promise', 'resolve'], []),
+      [(callback) => exactIdentifierParameters(unwrap(callback), [])
+        && arrowCallsExactly(callback, ['processTreeKiller'], [
+          (entry) => identifier(entry, 'pid'),
+          (entry) => exactObject(entry, { reason: (value) => identifier(value, 'reason') }),
+        ])],
+    ),
+    [(callback) => exactIdentifierParameters(unwrap(callback), [])
+      && unwrap(callback)?.type === 'ArrowFunctionExpression'
+      && literal(unwrap(callback).body, false)],
+  );
+}
+
+function currentTerminationDeadline(body) {
+  const timer = directDeclarator(body, 'timer', 'let');
+  const deadline = directDeclarator(body, 'deadline', 'const');
+  if (!timer || !literal(timer.declaration.init, null) || !deadline
+    || !construct(deadline.declaration.init, 'Promise')
+    || deadline.declaration.init.arguments.length !== 1) return false;
+  const executor = unwrap(deadline.declaration.init.arguments[0]);
+  if (executor?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(executor, ['resolveDeadline'])
+    || executor.body?.type !== 'BlockStatement'
+    || executor.body.body.length !== 1) return false;
+  const assignment = unwrap(executor.body.body[0]?.expression);
+  if (assignment?.type !== 'AssignmentExpression'
+    || assignment.operator !== '='
+    || !identifier(assignment.left, 'timer')) return false;
+  const timeout = unwrap(assignment.right);
+  return call(timeout, ['setTimeout'], [
+    (entry) => identifier(entry, 'resolveDeadline'),
+    (entry) => finitePositiveTimeoutExpression(entry, 'cleanupGraceMs', 1),
+  ]);
+}
+
+function finitePositiveTimeoutExpression(node, sourceName, fallback) {
+  node = unwrap(node);
+  return node?.type === 'ConditionalExpression'
+    && call(node.test, ['Number', 'isFinite'], [
+      (entry) => call(entry, ['Number'], [
+        (argument) => identifier(argument, sourceName),
+      ]),
+    ])
+    && call(node.consequent, ['Math', 'max'], [
+      (entry) => literal(entry, 1),
+      (entry) => identifier(entry, sourceName)
+        || call(entry, ['Number'], [
+          (argument) => identifier(argument, sourceName),
+        ]),
+    ])
+    && (typeof fallback === 'function' ? fallback(node.alternate) : literal(node.alternate, fallback))
+    && (typeof fallback === 'function' || (Number.isFinite(fallback) && fallback > 0));
+}
+
+function currentTerminationAfterRace(callback) {
+  callback = unwrap(callback);
+  if (callback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(callback, [])
+    || callback.body?.type !== 'BlockStatement'
+    || callback.body.body.length !== 3) return false;
+  const [clear, kill, result] = callback.body.body;
+  if (clear?.type !== 'IfStatement'
+    || !identifier(clear.test, 'timer')
+    || !directCallStatement(clear.consequent, ['clearTimeout'], [
+      (entry) => identifier(entry, 'timer'),
+    ])
+    || kill?.type !== 'TryStatement'
+    || kill.handler?.body?.body.length !== 0
+    || kill.finalizer
+    || kill.block.body.length !== 1
+    || !directCallStatement(kill.block.body[0], ['target', 'kill'], [])
+    || !exactReturn(result, (entry) => literal(entry, true))) return false;
+  return true;
+}
+
 function terminationAstContract(source) {
   const program = parseProgram(source);
   const creator = topFunction(program, 'createExecutionWorkerTerminator');
   if (!creator || creator.params.length !== 1
     || !stableProgramIdentifiers(program, [
-      'Promise', 'WeakMap', 'createExecutionWorkerTerminator', 'setTimeout',
-    ], { globals: ['Promise', 'WeakMap', 'setTimeout'] })) return false;
+      'Math', 'Number', 'Promise', 'WeakMap', 'clearTimeout',
+      'createExecutionWorkerTerminator', 'setTimeout',
+    ], { globals: ['Math', 'Number', 'Promise', 'WeakMap', 'clearTimeout', 'setTimeout'] })) return false;
   if (!objectPatternBindsExactly(creator.params[0], [
     'cleanupGraceMs', 'processId', 'processTreeKiller',
   ], {
@@ -1151,10 +1458,12 @@ function terminationAstContract(source) {
     requiredPropertyDefaults: ['cleanupGraceMs'],
   })
     || functionHasNestedBinding(creator, [
-      'cleanupGraceMs', 'processId', 'processTreeKiller', 'Promise', 'setTimeout', 'WeakMap',
+      'cleanupGraceMs', 'processId', 'processTreeKiller', 'Math', 'Number', 'Promise',
+      'clearTimeout', 'setTimeout', 'WeakMap',
     ])
     || functionHasIdentifierWrite(creator, [
-      'cleanupGraceMs', 'processId', 'processTreeKiller', 'Promise', 'setTimeout', 'WeakMap',
+      'cleanupGraceMs', 'processId', 'processTreeKiller', 'Math', 'Number', 'Promise',
+      'clearTimeout', 'setTimeout', 'WeakMap',
     ])
     || functionHasMemberWrite(creator, [['flights']])) return false;
   const flights = directDeclarator(creator.body, 'flights', 'const');
@@ -1171,12 +1480,12 @@ function terminationAstContract(source) {
     ])
     || terminator.body?.type !== 'BlockStatement'
     || functionHasNestedBinding(terminator, [
-      'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Promise',
-      'reason', 'setTimeout', 'target', 'WeakMap',
+      'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Math', 'Number',
+      'Promise', 'clearTimeout', 'reason', 'setTimeout', 'target', 'WeakMap',
     ])
     || functionHasIdentifierWrite(terminator, [
-      'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Promise',
-      'reason', 'setTimeout', 'target', 'WeakMap',
+      'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Math', 'Number',
+      'Promise', 'clearTimeout', 'reason', 'setTimeout', 'target', 'WeakMap',
     ])) return false;
   const body = terminator.body;
   const targetGuard = body.body.filter((statement) => (
@@ -1201,16 +1510,13 @@ function terminationAstContract(source) {
     || !call(pid.declaration.init, ['processId'], [
       (value) => member(value, ['target', 'pid']),
     ]) || !cleanup || !flight) return false;
-  const targetGuardIndex = body.body.indexOf(targetGuard[0]);
-  const existingIndex = body.body.indexOf(existing.statement);
-  const existingGuardIndex = body.body.indexOf(existingGuard[0]);
-  const pidIndex = body.body.indexOf(pid.statement);
-  if (targetGuardIndex < 0 || targetGuardIndex >= existingIndex
-    || existingIndex >= existingGuardIndex || existingGuardIndex >= pidIndex) return false;
+  if (!directStatementsOrderedAndReachable(body, [
+    targetGuard[0], existing.statement, existingGuard[0], pid.statement,
+  ])) return false;
 
   const cleanupChain = unwrap(cleanup.declaration.init);
-  if (cleanupChain?.type !== 'CallExpression'
-    || !methodCall(
+  const legacyCleanup = cleanupChain?.type === 'CallExpression'
+    && methodCall(
       cleanupChain,
       'then',
       (receiver) => call(receiver, ['Promise', 'resolve'], []),
@@ -1220,8 +1526,8 @@ function terminationAstContract(source) {
           (value) => exactObject(value, { reason: (entry) => identifier(entry, 'reason') }),
         ])],
     )
-    || cleanupChain.arguments.length !== 1
-  ) return false;
+    && cleanupChain.arguments.length === 1;
+  if (!legacyCleanup && !currentTerminationCleanup(cleanupChain)) return false;
 
   const flightChain = unwrap(flight.declaration.init);
   if (flightChain?.type !== 'CallExpression'
@@ -1237,14 +1543,17 @@ function terminationAstContract(source) {
     || race.arguments[0]?.type !== 'ArrayExpression'
     || race.arguments[0].elements.length !== 2
     || !identifier(race.arguments[0].elements[0], 'cleanup')
-    || !graceTimerPromise(race.arguments[0].elements[1], 'cleanupGraceMs')) return false;
+    || !(graceTimerPromise(race.arguments[0].elements[1], 'cleanupGraceMs')
+      || (identifier(race.arguments[0].elements[1], 'deadline')
+        && currentTerminationDeadline(body)))) return false;
   const afterRace = unwrap(flightChain.arguments[0]);
-  if (afterRace?.type !== 'ArrowFunctionExpression'
-    || !exactIdentifierParameters(afterRace, [])
-    || afterRace.body?.type !== 'BlockStatement'
-    || afterRace.body.body.length !== 2
-    || !directCallStatement(afterRace.body.body[0], ['target', 'kill'], [])
-    || !exactReturn(afterRace.body.body[1], (value) => literal(value, true))) return false;
+  const legacyAfterRace = afterRace?.type === 'ArrowFunctionExpression'
+    && exactIdentifierParameters(afterRace, [])
+    && afterRace.body?.type === 'BlockStatement'
+    && afterRace.body.body.length === 2
+    && directCallStatement(afterRace.body.body[0], ['target', 'kill'], [])
+    && exactReturn(afterRace.body.body[1], (value) => literal(value, true));
+  if (!legacyAfterRace && !currentTerminationAfterRace(afterRace)) return false;
 
   const sets = body.body.filter((statement) => directCallStatement(statement, ['flights', 'set'], [
     (value) => identifier(value, 'target'),
@@ -1266,8 +1575,7 @@ function terminationAstContract(source) {
     statement, (value) => identifier(value, 'flight'),
   ));
   return sets.length === 1 && finalizers.length === 1 && finalReturns.length === 1
-    && body.body.indexOf(sets[0]) < body.body.indexOf(finalizers[0])
-    && body.body.indexOf(finalizers[0]) < body.body.indexOf(finalReturns[0]);
+    && directStatementsOrderedAndReachable(body, [sets[0], finalizers[0], finalReturns[0]]);
 }
 
 function supervisorMessageAstContract(source) {
@@ -1394,7 +1702,13 @@ function supervisorMessageAstContract(source) {
       (value) => member(value, ['message', 'requestId']),
     ])
     && observerGuard.length === 1
-    && observerEvents.length === 1;
+    && observerEvents.length === 1
+    && directStatementsOrderedAndReachable(event.body, [
+      item.statement, guard[0], sequence[0], dispatches[0],
+    ])
+    && directStatementsOrderedAndReachable(observer.body, [
+      observerItem.statement, observerGuard[0], observerEvents[0],
+    ]);
 }
 
 function localArrow(block, name) {
@@ -1574,6 +1888,9 @@ function supervisorAstContract(source) {
       (value) => identifier(value, 'message'),
     ])
     || !bareReturn(terminal.body[4])) return false;
+  if (!directStatementsOrderedAndReachable(onMessage.body, [
+    eventBranches[0], observerBranches[0], terminalBranches[0],
+  ])) return false;
 
   if (request.body?.type !== 'NewExpression'
     || !identifier(request.body.callee, 'Promise')
@@ -1608,7 +1925,10 @@ function supervisorAstContract(source) {
     ['pending', 'set'],
     [(value) => identifier(value, 'requestId'), (value) => identifier(value, 'settlement')],
   ));
-  if (pendingSets.length !== 1) return false;
+  if (pendingSets.length !== 1
+    || !directStatementsOrderedAndReachable(executor.body, [settlement.statement, pendingSets[0]])) {
+    return false;
+  }
 
   if (stop.body?.type !== 'BlockStatement') return false;
   const stoppedChild = directDeclarator(stop.body, 'stoppedChild', 'const');
@@ -1618,7 +1938,8 @@ function supervisorAstContract(source) {
     [(value) => identifier(value, 'stoppedChild'), (value) => literal(value, 'stop')],
     { await_: true },
   ));
-  if (!stoppedChild || !identifier(stoppedChild.declaration.init, 'child') || stopCalls.length !== 1) return false;
+  if (!stoppedChild || !identifier(stoppedChild.declaration.init, 'child') || stopCalls.length !== 1
+    || !directStatementsOrderedAndReachable(stop.body, [stoppedChild.statement, stopCalls[0]])) return false;
   const api = returnedObject(creator);
   return Boolean(api && exactObject(api, {
     onExit: (value) => identifier(value, 'onExit'),
@@ -1626,6 +1947,469 @@ function supervisorAstContract(source) {
     request: (value) => identifier(value, 'request'),
     stop: (value) => identifier(value, 'stop'),
   }));
+}
+
+function currentSupervisorIdentityMatcher(node) {
+  node = unwrap(node);
+  if (node?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(node, ['candidate'])) return false;
+  const terms = [];
+  const collect = (entry) => {
+    entry = unwrap(entry);
+    if (entry?.type === 'LogicalExpression' && entry.operator === '&&') {
+      collect(entry.left);
+      collect(entry.right);
+    } else {
+      terms.push(entry);
+    }
+  };
+  collect(node.body);
+  const fields = [
+    'principalId', 'serverScope', 'runtimeGeneration',
+    'ownershipGeneration', 'sessionId', 'turnId',
+  ];
+  return terms.length === fields.length && fields.every((field) => (
+    terms.filter((term) => binary(
+      term,
+      '===',
+      (left) => member(left, ['candidate', field]),
+      (right) => member(right, ['message', field]),
+    )).length === 1
+  ));
+}
+
+function currentSupervisorAstContract(source) {
+  const program = parseProgram(source);
+  const creator = topFunction(program, 'createExecutionWorkerSupervisor');
+  if (!creator || !exactParameterList(creator, [
+    (value) => objectPatternIncludesExactBindings(value, {
+      enabled: (entry) => defaultedIdentifierParameter(
+        entry, 'enabled', (fallback) => literal(fallback, true),
+      ),
+      fork: (entry) => identifier(entry, 'fork'),
+      entry: (entry) => defaultedIdentifierParameter(
+        entry, 'entry', (fallback) => identifier(fallback, 'DEFAULT_ENTRY'),
+      ),
+      now: (entry) => defaultedIdentifierParameter(
+        entry, 'now', (fallback) => member(fallback, ['Date', 'now']),
+      ),
+      cancellationTimeoutMs: (entry) => defaultedIdentifierParameter(
+        entry, 'cancellationTimeoutMs', (fallback) => literal(fallback, 5_000),
+      ),
+      maxPendingRequests: (entry) => defaultedIdentifierParameter(
+        entry, 'maxPendingRequests', (fallback) => literal(fallback, 32),
+      ),
+      maxRestarts: (entry) => defaultedIdentifierParameter(
+        entry, 'maxRestarts', (fallback) => literal(fallback, 2),
+      ),
+      onInteractionRequest: (entry) => identifier(entry, 'onInteractionRequest'),
+      onCapabilityRequest: (entry) => identifier(entry, 'onCapabilityRequest'),
+      stripMainOwnedCapabilitiesForTest: (entry) => defaultedIdentifierParameter(
+        entry, 'stripMainOwnedCapabilitiesForTest', (fallback) => literal(fallback, false),
+      ),
+      processTreeKiller: (entry) => defaultedIdentifierParameter(
+        entry,
+        'processTreeKiller',
+        (fallback) => identifier(fallback, 'killExecutionWorkerProcessTree'),
+      ),
+      processTreeCleanupGraceMs: (entry) => defaultedIdentifierParameter(
+        entry, 'processTreeCleanupGraceMs', (fallback) => literal(fallback, 250),
+      ),
+    }, { topLevelDefault: true }),
+  ])
+    || !exactTopLevelRequireBinding(
+      program,
+      'createExecutionWorkerRequestSettlement',
+      'createExecutionWorkerRequestSettlement',
+      './execution-worker-cancellation.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'createExecutionWorkerTerminator',
+      'createExecutionWorkerTerminator',
+      './execution-worker-termination.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'handleExecutionWorkerEventMessage',
+      'handleExecutionWorkerEventMessage',
+      './execution-worker-supervisor-message.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'handleExecutionWorkerObserverMessage',
+      'handleExecutionWorkerObserverMessage',
+      './execution-worker-supervisor-message.cjs',
+    )
+    || !stableProgramIdentifiers(program, [
+      'Date', 'Map', 'Object', 'Promise', 'WeakMap',
+      'createExecutionWorkerRequestSettlement', 'createExecutionWorkerSupervisor',
+      'createExecutionWorkerTerminator', 'handleExecutionWorkerEventMessage',
+      'handleExecutionWorkerObserverMessage',
+    ], { globals: ['Date', 'Map', 'Object', 'Promise', 'WeakMap'] })
+    || functionHasNestedBinding(creator, [
+      'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
+      'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
+      'entry', 'fork', 'processTreeKiller', 'processTreeCleanupGraceMs',
+    ])
+    || functionHasIdentifierWrite(creator, [
+      'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
+      'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
+      'entry', 'fork', 'processTreeKiller', 'processTreeCleanupGraceMs',
+    ])) return false;
+
+  const pending = directDeclarator(creator.body, 'pending', 'const');
+  const child = directDeclarator(creator.body, 'child', 'let');
+  const terminationCauses = directDeclarator(creator.body, 'terminationCauses', 'const');
+  const terminateOwnedChild = directDeclarator(creator.body, 'terminateOwnedChild', 'const');
+  const terminateChild = localArrow(creator.body, 'terminateChild');
+  const onMessage = localArrow(creator.body, 'onMessage');
+  const onExit = localArrow(creator.body, 'onExit');
+  const start = localArrow(creator.body, 'start');
+  const request = localArrow(creator.body, 'request');
+  const stop = localArrow(creator.body, 'stop');
+  if (!pending || !construct(pending.declaration.init, 'Map', [])
+    || !child || !literal(child.declaration.init, null)
+    || !terminationCauses || !construct(terminationCauses.declaration.init, 'WeakMap', [])
+    || !terminateOwnedChild || !call(
+      terminateOwnedChild.declaration.init,
+      ['createExecutionWorkerTerminator'],
+      [(value) => exactObject(value, {
+        processId: (entry) => identifier(entry, 'processId'),
+        processTreeKiller: (entry) => identifier(entry, 'processTreeKiller'),
+        cleanupGraceMs: (entry) => identifier(entry, 'processTreeCleanupGraceMs'),
+      })],
+    )
+    || !terminateChild || !onMessage || !onExit || !start || !request || !stop
+    || !exactParameterList(terminateChild, [
+      (value) => defaultedIdentifierParameter(value, 'target', (fallback) => identifier(fallback, 'child')),
+      (value) => defaultedIdentifierParameter(
+        value, 'reason', (fallback) => literal(fallback, 'terminated'),
+      ),
+    ])
+    || terminateChild.body?.type !== 'BlockStatement'
+    || terminateChild.body.body.length !== 2
+    || terminateChild.body.body[0]?.type !== 'IfStatement'
+    || !identifier(terminateChild.body.body[0].test, 'target')
+    || !directCallStatement(
+      terminateChild.body.body[0].consequent,
+      ['terminationCauses', 'set'],
+      [(value) => identifier(value, 'target'), (value) => identifier(value, 'reason')],
+    )
+    || !exactReturn(terminateChild.body.body[1], (value) => call(
+      value,
+      ['terminateOwnedChild'],
+      [(entry) => identifier(entry, 'target'), (entry) => identifier(entry, 'reason')],
+    ))) return false;
+
+  if (!exactIdentifierParameters(onMessage, ['raw'])
+    || onMessage.body?.type !== 'BlockStatement'
+    || functionHasNestedBinding(onMessage, [
+      'child', 'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
+      'message', 'onMessage', 'pending', 'raw', 'terminateChild',
+    ], { allowedDirectBindings: ['message'] })
+    || functionHasIdentifierWrite(onMessage, [
+      'child', 'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
+      'onMessage', 'pending', 'raw', 'terminateChild',
+    ])
+    || countAssignments(onMessage, (left) => identifier(left, 'message')) !== 1) return false;
+  const decodeAttempts = onMessage.body.body.filter((statement) => (
+    statement.type === 'TryStatement' && statement.handler && !statement.finalizer
+  ));
+  const message = directDeclarator(onMessage.body, 'message', 'let');
+  if (!message || message.declaration.init !== null || decodeAttempts.length !== 1) return false;
+  const decoded = directAssignmentStatements(decodeAttempts[0].block, ['message']);
+  if (decoded.length !== 1 || !call(decoded[0].expression.right, ['validateEnvelope'], [
+    (value) => identifier(value, 'raw'),
+    (value) => exactObject(value, {
+      direction: (entry) => literal(entry, 'worker-to-host'),
+      now: (entry) => call(entry, ['now'], []),
+    }),
+  ]) || !directStatementReachable(decodeAttempts[0].block, decoded[0])) return false;
+  const ownershipGuards = onMessage.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && binary(
+      statement.test,
+      '!==',
+      (left) => member(left, ['message', 'ownershipGeneration']),
+      (right) => identifier(right, 'ownershipGeneration'),
+    )
+    && bareReturn(statement.consequent)
+  ));
+  const eventBranches = onMessage.body.body.filter((statement) => exactSupervisorHandlerBranch(
+    statement, 'execution.event', 'handleExecutionWorkerEventMessage', {
+      pending: (value) => identifier(value, 'pending'),
+      postBrokerResult: (value) => identifier(value, 'postBrokerResult'),
+      terminateChild: (value) => identifier(value, 'terminateChild'),
+      child: (value) => identifier(value, 'child'),
+      now: (value) => identifier(value, 'now'),
+    },
+  ));
+  const observerBranches = onMessage.body.body.filter((statement) => exactSupervisorHandlerBranch(
+    statement, 'execution.observer', 'handleExecutionWorkerObserverMessage', {
+      pending: (value) => identifier(value, 'pending'),
+      now: (value) => identifier(value, 'now'),
+    },
+  ));
+  const terminalBranches = onMessage.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && call(statement.test, ['isExecutionWorkerTerminalOperation'], [
+      (value) => member(value, ['message', 'operation']),
+    ])
+    && statement.consequent?.type === 'BlockStatement'
+  ));
+  if (ownershipGuards.length !== 1 || eventBranches.length !== 1
+    || observerBranches.length !== 1 || terminalBranches.length !== 1
+    || !directStatementsOrderedAndReachable(onMessage.body, [
+      message.statement, decodeAttempts[0], ownershipGuards[0], eventBranches[0],
+      observerBranches[0], terminalBranches[0],
+    ])) return false;
+  const terminal = terminalBranches[0].consequent;
+  const terminalItem = directDeclarator(terminal, 'item', 'const');
+  if (!terminalItem || !call(terminalItem.declaration.init, ['pending', 'get'], [
+    (value) => member(value, ['message', 'requestId']),
+  ]) || terminal.body.length !== 7
+    || terminal.body[1]?.type !== 'IfStatement'
+    || !exactItemGuard(terminal.body[1].test)
+    || !bareReturn(terminal.body[1].consequent)
+    || !directCallStatement(terminal.body[2], ['pending', 'delete'], [
+      (value) => member(value, ['message', 'requestId']),
+    ])
+    || !directCallStatement(terminal.body[3], ['logExecutionWorkerCancellation'], [
+      (value) => identifier(value, 'logger'),
+      (value) => identifier(value, 'item'),
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'now'),
+    ])
+    || !directCallStatement(terminal.body[4], ['contextUsageRoutes', 'retain'], [
+      (value) => identifier(value, 'message'),
+      (value) => identifier(value, 'item'),
+    ])
+    || !directCallStatement(terminal.body[5], ['item', 'resolve'], [
+      (value) => identifier(value, 'message'),
+    ])
+    || !bareReturn(terminal.body[6])) return false;
+  const onMessageMutations = protectedCollectionMutationCalls(
+    onMessage, ['pending'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (onMessageMutations.length !== 1 || onMessageMutations[0].method !== 'delete'
+    || onMessageMutations[0].node !== unwrap(terminal.body[2].expression)) return false;
+
+  const requestOptions = unwrap(request.params?.[3]);
+  const requestOptionPattern = requestOptions?.type === 'AssignmentPattern'
+    && exactObject(requestOptions.right, {}) ? unwrap(requestOptions.left) : null;
+  const requestOptionProperties = requestOptionPattern?.type === 'ObjectPattern'
+    ? requestOptionPattern.properties : [];
+  const requestOption = (name, matcher) => {
+    const matches = requestOptionProperties.filter((property) => (
+      property.type === 'Property' && property.kind === 'init' && !property.computed
+      && propertyName(property) === name
+    ));
+    return matches.length === 1 && matcher(unwrap(matches[0].value));
+  };
+  if (!exactParameterList(request, [
+    (value) => identifier(value, 'operation'),
+    (value) => identifier(value, 'identity'),
+    (value) => identifier(value, 'payload'),
+    () => true,
+  ])
+    || requestOptionProperties.length !== 5
+    || requestOptionProperties.some((property) => (
+      property.type !== 'Property' || property.kind !== 'init' || property.computed
+    ))
+    || !requestOption('onEvent', (value) => identifier(value, 'onEvent'))
+    || !requestOption('onContextUsage', (value) => identifier(value, 'onContextUsage'))
+    || !requestOption('onInteractionRequest', (value) => identifier(
+      value, 'requestInteractionHandler',
+    ))
+    || !requestOption('onCapabilityRequest', (value) => identifier(
+      value, 'requestCapabilityHandler',
+    ))
+    || !requestOption('deadlineMs', (value) => defaultedIdentifierParameter(
+      value, 'deadlineMs', (fallback) => literal(fallback, 30_000),
+    ))
+    || functionHasNestedBinding(request, [
+      'identity', 'operation', 'payload', 'requestCapabilityHandler',
+      'requestInteractionHandler',
+    ])
+    || functionHasIdentifierWrite(request, [
+      'identity', 'operation', 'payload', 'requestCapabilityHandler',
+      'requestInteractionHandler',
+    ])) return false;
+  const requestId = directDeclarator(request.body, 'requestId', 'const');
+  const requestMessage = directDeclarator(request.body, 'message', 'const');
+  if (!requestId || !logical(
+    requestId.declaration.init,
+    '||',
+    (left) => member(left, ['identity', 'requestId']),
+    (right) => call(right, ['randomUUID'], []),
+  ) || !requestMessage || !call(requestMessage.declaration.init, ['createEnvelope'], [
+    (value) => identifier(value, 'operation'),
+    (value) => unwrap(value)?.properties?.length === 3
+      && objectIncludesExactProperties(value, {
+        requestId: (entry) => identifier(entry, 'requestId'),
+        ownershipGeneration: (entry) => identifier(entry, 'ownershipGeneration'),
+      }, { allowedSpreads: [(entry) => identifier(entry, 'identity')] }),
+    (value) => identifier(value, 'payload'),
+    (value) => exactObject(value, {
+      deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
+      now: (entry) => call(entry, ['now'], []),
+    }),
+  ])) return false;
+  const promiseReturns = request.body.body.filter((statement) => (
+    statement.type === 'ReturnStatement'
+    && construct(statement.argument, 'Promise')
+    && statement.argument.arguments.length === 1
+  ));
+  if (promiseReturns.length !== 1) return false;
+  const executor = unwrap(promiseReturns[0].argument.arguments[0]);
+  if (executor?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(executor, ['resolveRequest', 'reject'])
+    || executor.body?.type !== 'BlockStatement'
+    || functionHasNestedBinding(executor, [
+      'child', 'createExecutionWorkerRequestSettlement', 'message', 'pending',
+      'reject', 'requestId', 'resolveRequest',
+    ], { allowedDirectBindings: ['settlement'] })
+    || functionHasIdentifierWrite(executor, [
+      'child', 'createExecutionWorkerRequestSettlement', 'message', 'pending',
+      'reject', 'requestId', 'resolveRequest', 'settlement',
+    ])) return false;
+  const settlement = directDeclarator(executor.body, 'settlement', 'const');
+  if (!settlement || !call(settlement.declaration.init, ['createExecutionWorkerRequestSettlement'], [
+    (value) => exactObject(value, {
+      child: (entry) => identifier(entry, 'child'),
+      operation: (entry) => identifier(entry, 'operation'),
+      deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
+      cancellationTimeoutMs: (entry) => identifier(entry, 'cancellationTimeoutMs'),
+      terminateChild: (entry) => identifier(entry, 'terminateChild'),
+      onDeadline: (entry) => exactIdentifierParameters(unwrap(entry), [])
+        && arrowCallsExactly(entry, ['pending', 'delete'], [
+          (argument) => identifier(argument, 'requestId'),
+        ]),
+      resolve: (entry) => identifier(entry, 'resolveRequest'),
+      reject: (entry) => identifier(entry, 'reject'),
+    })],
+  )) return false;
+  const pendingSets = executor.body.body.filter((statement) => directCallStatement(
+    statement,
+    ['pending', 'set'],
+    [
+      (value) => identifier(value, 'requestId'),
+      (value) => unwrap(value)?.properties?.length === 8
+        && objectIncludesExactProperties(value, {
+          lastSequence: (entry) => unary(entry, '-', (value) => literal(value, 1)),
+          lastContextUsageSequence: (entry) => unary(
+            entry, '-', (value) => literal(value, 1),
+          ),
+          onEvent: (entry) => identifier(entry, 'onEvent'),
+          onContextUsage: (entry) => identifier(entry, 'onContextUsage'),
+          onInteractionRequest: (entry) => identifier(entry, 'requestInteractionHandler'),
+          onCapabilityRequest: (entry) => identifier(entry, 'requestCapabilityHandler'),
+          matches: currentSupervisorIdentityMatcher,
+        }, { allowedSpreads: [(entry) => identifier(entry, 'settlement')] }),
+    ],
+  ));
+  const posts = executor.body.body.filter((statement) => directCallStatement(
+    statement, ['child', 'postMessage'], [(value) => identifier(value, 'message')],
+  ));
+  const requestMutations = protectedCollectionMutationCalls(
+    request, ['pending'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (pendingSets.length !== 1 || posts.length !== 1 || requestMutations.length !== 2
+    || requestMutations.filter((entry) => entry.method === 'set').length !== 1
+    || requestMutations.filter((entry) => entry.method === 'delete').length !== 1
+    || !directStatementsOrderedAndReachable(executor.body, [
+      settlement.statement, pendingSets[0], posts[0],
+    ])) {
+    return false;
+  }
+
+  if (!exactIdentifierParameters(start, ['authority']) || start.async !== true
+    || !exactIdentifierParameters(stop, []) || stop.async !== true) return false;
+  const childAssignments = directAssignmentStatements(start.body, ['child']);
+  const spawnedChild = directDeclarator(start.body, 'spawnedChild', 'const');
+  if (childAssignments.length !== 1 || !call(childAssignments[0].expression.right, ['fork'], [
+    (value) => identifier(value, 'entry'),
+    (value) => value?.type === 'ArrayExpression' && value.elements.length === 0,
+    (value) => exactObject(value, {
+      serviceName: (entry) => literal(entry, 'QWork Execution Worker'),
+      stdio: (entry) => literal(entry, 'pipe'),
+      env: (entry) => call(entry, ['workerEnvironment'], [
+        (argument) => member(argument, ['process', 'env']),
+        (argument) => identifier(argument, 'authority'),
+      ]),
+    }),
+  ]) || !spawnedChild || !identifier(spawnedChild.declaration.init, 'child')) return false;
+  const messageListeners = start.body.body.filter((statement) => directCallStatement(
+    statement, ['child', 'on'], [
+      (value) => literal(value, 'message'),
+      (value) => identifier(value, 'onMessage'),
+    ],
+  ));
+  const exitListeners = start.body.body.filter((statement) => directCallStatement(
+    statement, ['child', 'once'], [
+      (value) => literal(value, 'exit'),
+      (value) => exactIdentifierParameters(unwrap(value), ['exitCode'])
+        && arrowCallsExactly(value, ['onExit'], [
+          (entry) => identifier(entry, 'spawnedChild'),
+          (entry) => exactObject(entry, { exitCode: (item) => identifier(item, 'exitCode') }),
+        ]),
+    ],
+  ));
+  const errorListeners = start.body.body.filter((statement) => directCallStatement(
+    statement, ['child', 'once'], [
+      (value) => literal(value, 'error'),
+      (value) => exactIdentifierParameters(unwrap(value), ['processError'])
+        && arrowCallsExactly(value, ['onExit'], [
+          (entry) => identifier(entry, 'spawnedChild'),
+          (entry) => exactObject(entry, {
+            processError: (item) => identifier(item, 'processError'),
+          }),
+        ]),
+    ],
+  ));
+  if (messageListeners.length !== 1 || exitListeners.length !== 1 || errorListeners.length !== 1
+    || !directStatementsOrderedAndReachable(start.body, [
+      childAssignments[0], spawnedChild.statement, messageListeners[0],
+      exitListeners[0], errorListeners[0],
+    ])) {
+    return false;
+  }
+
+  const stoppedChild = directDeclarator(stop.body, 'stoppedChild', 'const');
+  const stopCalls = stop.body.body.filter((statement) => directCallStatement(
+    statement,
+    ['terminateChild'],
+    [(value) => identifier(value, 'stoppedChild'), (value) => literal(value, 'stop')],
+    { await_: true },
+  ));
+  const clearStoppedChild = stop.body.body.filter((statement) => {
+    if (statement.type !== 'IfStatement'
+      || !binary(
+        statement.test,
+        '===',
+        (left) => identifier(left, 'child'),
+        (right) => identifier(right, 'stoppedChild'),
+      )) return false;
+    const assignment = unwrap(statement.consequent?.expression);
+    return statement.consequent?.type === 'ExpressionStatement'
+      && assignment?.type === 'AssignmentExpression'
+      && assignment.operator === '='
+      && identifier(assignment.left, 'child')
+      && literal(assignment.right, null);
+  });
+  const api = returnedObject(creator);
+  return Boolean(stoppedChild && identifier(stoppedChild.declaration.init, 'child')
+    && stopCalls.length === 1 && clearStoppedChild.length === 1
+    && directStatementsOrderedAndReachable(stop.body, [
+      stoppedChild.statement, stopCalls[0], clearStoppedChild[0],
+    ])
+    && api && objectIncludesExactProperties(api, {
+      enabled: (value) => literal(value, true),
+      request: (value) => identifier(value, 'request'),
+      start: (value) => identifier(value, 'start'),
+      stop: (value) => identifier(value, 'stop'),
+    }));
 }
 
 function supervisorExitAstContract(source) {
@@ -1770,11 +2554,10 @@ function supervisorExitAstContract(source) {
         intentionalStop: (entry) => identifier(entry, 'intentionalStop'),
       }),
     ])
-    && onExit.body.body.indexOf(childGuards[0])
-      < onExit.body.body.indexOf(terminationCause.statement)
     && typedRejects.length === 1
-    && onExit.body.body.indexOf(terminationCause.statement)
-      < onExit.body.body.indexOf(typedRejects[0]);
+    && directStatementsOrderedAndReachable(onExit.body, [
+      childGuards[0], terminationCause.statement, typedRejects[0],
+    ]);
 }
 
 function defaultRunnerFactory(constructor) {
@@ -1796,6 +2579,38 @@ function executionRunnerFactoryExpression(value) {
       (entry) => literal(entry, './execution-worker-entry.cjs'),
     ]),
   ]);
+}
+
+function controllerInitialStateContract(constructor) {
+  let valid = false;
+  visit(constructor?.body, (node) => {
+    if (valid || node.type !== 'CallExpression' || !call(node, ['Object', 'assign'])) return;
+    if (node.arguments.length !== 2 || !member(node.arguments[0], ['this'])) return;
+    const state = unwrap(node.arguments[1]);
+    if (state?.type !== 'ObjectExpression') return;
+    const expected = {
+      parentPort: (value) => identifier(value, 'parentPort'),
+      createRunner: (value) => identifier(value, 'createRunner'),
+      exit: (value) => identifier(value, 'exit'),
+      runner: (value) => literal(value, null),
+      authority: (value) => literal(value, null),
+      turn: (value) => literal(value, null),
+      heartbeat: (value) => literal(value, null),
+      stopped: (value) => literal(value, false),
+    };
+    valid = objectIncludesExactProperties(state, expected)
+      && state.properties.length === Object.keys(expected).length;
+  });
+  return valid;
+}
+
+function functionFreezesProtectedReceiver(functionNode, receiverPath) {
+  let found = false;
+  visit(functionNode?.body, (node) => {
+    if (found || node.type !== 'CallExpression' || !call(node, ['Object', 'freeze'])) return;
+    found = node.arguments.length === 1 && member(node.arguments[0], receiverPath);
+  });
+  return found;
 }
 
 function decodedMessageBinding(method, direction) {
@@ -1822,7 +2637,91 @@ function constantBoolean(node) {
   if (node?.type === 'SequenceExpression' && node.expressions.length > 0) {
     return constantBoolean(node.expressions.at(-1));
   }
+  if (node?.type === 'BinaryExpression'
+    && ['===', '!==', '<', '<=', '>', '>='].includes(node.operator)) {
+    const primitive = (candidate) => {
+      candidate = unwrap(candidate);
+      if (candidate?.type === 'Literal'
+        && (candidate.value === null
+          || ['boolean', 'bigint', 'number', 'string'].includes(typeof candidate.value))) {
+        return { known: true, value: candidate.value };
+      }
+      if (candidate?.type === 'TemplateLiteral' && candidate.expressions.length === 0) {
+        return { known: true, value: candidate.quasis[0]?.value?.cooked || '' };
+      }
+      return null;
+    };
+    const left = primitive(node.left);
+    const right = primitive(node.right);
+    if (left && right) {
+      switch (node.operator) {
+        case '===': return left.value === right.value;
+        case '!==': return left.value !== right.value;
+        case '<': return left.value < right.value;
+        case '<=': return left.value <= right.value;
+        case '>': return left.value > right.value;
+        case '>=': return left.value >= right.value;
+        default: break;
+      }
+    }
+  }
+  if (node?.type === 'LogicalExpression') {
+    const left = constantBoolean(node.left);
+    const right = constantBoolean(node.right);
+    if (node.operator === '||') {
+      if (left === true || right === true) return true;
+      if (left === false) return right;
+      if (right === false) return left;
+    }
+    if (node.operator === '&&') {
+      if (left === false || right === false) return false;
+      if (left === true) return right;
+      if (right === true) return left;
+    }
+    return null;
+  }
+  if (node?.type === 'ConditionalExpression') {
+    const condition = constantBoolean(node.test);
+    if (condition === true) return constantBoolean(node.consequent);
+    if (condition === false) return constantBoolean(node.alternate);
+    const consequent = constantBoolean(node.consequent);
+    const alternate = constantBoolean(node.alternate);
+    return consequent !== null && consequent === alternate ? consequent : null;
+  }
   return null;
+}
+
+function containsEscapingBreak(node) {
+  let found = false;
+  const scan = (candidate, root = false) => {
+    if (found) return;
+    if (!candidate) return;
+    if (!root && ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(candidate.type)) {
+      return;
+    }
+    if (candidate.type === 'BreakStatement') {
+      found = true;
+      return;
+    }
+    for (const child of childNodes(candidate)) scan(child);
+  };
+  scan(node, true);
+  return found;
+}
+
+function switchDefinitelyAbrupt(statement) {
+  if (statement.type !== 'SwitchStatement'
+    || !(statement.cases || []).some((entry) => entry.test === null)
+    || containsEscapingBreak(statement.cases)) return false;
+  const cases = statement.cases || [];
+  let suffixAbrupt = false;
+  for (let index = cases.length - 1; index >= 0; index -= 1) {
+    const consequent = cases[index].consequent || [];
+    const ownAbrupt = consequent.length > 0 && blockDefinitelyAbrupt({ body: consequent });
+    suffixAbrupt = ownAbrupt || suffixAbrupt;
+    if (!suffixAbrupt) return false;
+  }
+  return suffixAbrupt;
 }
 
 function blockDefinitelyAbrupt(block) {
@@ -1836,11 +2735,18 @@ function statementDefinitelyAbrupt(statement) {
   if (!statement) return false;
   if (['ReturnStatement', 'ThrowStatement'].includes(statement.type)) return true;
   if (statement.type === 'BlockStatement') return blockDefinitelyAbrupt(statement);
+  if (statement.type === 'LabeledStatement') return statementDefinitelyAbrupt(statement.body);
   if (statement.type === 'TryStatement') {
     if (statement.finalizer && blockDefinitelyAbrupt(statement.finalizer)) return true;
     const tryAbrupt = blockDefinitelyAbrupt(statement.block);
     if (!statement.handler) return tryAbrupt;
     return tryAbrupt && blockDefinitelyAbrupt(statement.handler.body);
+  }
+  if (statement.type === 'SwitchStatement') return switchDefinitelyAbrupt(statement);
+  if (['WhileStatement', 'DoWhileStatement', 'ForStatement'].includes(statement.type)) {
+    const condition = statement.type === 'ForStatement' && !statement.test
+      ? true : constantBoolean(statement.test);
+    return condition === true && !containsEscapingBreak(statement.body);
   }
   if (statement.type !== 'IfStatement') return false;
   const condition = constantBoolean(statement.test);
@@ -1849,6 +2755,15 @@ function statementDefinitelyAbrupt(statement) {
   return Boolean(statement.alternate)
     && statementDefinitelyAbrupt(statement.consequent)
     && statementDefinitelyAbrupt(statement.alternate);
+}
+
+function directStatementsOrderedAndReachable(block, statements) {
+  if (!block || !Array.isArray(statements) || !statements.length) return false;
+  const body = block.body || [];
+  const indices = statements.map((statement) => body.indexOf(statement));
+  return indices.every((index, position) => index >= 0
+    && directStatementReachable(block, statements[position])
+    && (position === 0 || indices[position - 1] < index));
 }
 
 function directStatementReachable(block, target) {
@@ -1902,8 +2817,7 @@ function controllerTryFailsClosed(statement, { returnsFalse = false } = {}) {
     candidate, (value) => literal(value, false),
   ));
   return failures.length === 1
-    && directStatementReachable(body, failures[0])
-    && body.body.indexOf(finishes[0]) < body.body.indexOf(failures[0]);
+    && directStatementsOrderedAndReachable(body, [finishes[0], failures[0]]);
 }
 
 function exactRunnerListener(statement, eventName, callbackMatcher) {
@@ -1935,15 +2849,14 @@ function controllerAstContract(source) {
   const sameIdentityBinding = directDeclarator(program, 'sameIdentity', 'const');
   const sameIdentityFunction = unwrap(sameIdentityBinding?.declaration?.init);
   if (!controller || !authorityFields || !turnFields
-    || (topLevelBindingCount(program, 'Worker') > 0
-      && !exactTopLevelRequireBinding(program, 'Worker', 'Worker', 'node:worker_threads'))
-    || (topLevelBindingCount(program, 'validateEnvelope') > 0
-      && !exactTopLevelRequireBinding(
-        program,
-        'validateEnvelope',
-        'validateEnvelope',
-        './execution-worker-protocol.cjs',
-      ))
+    || !topLevelCommonJsBindingsStable(program)
+    || !exactTopLevelRequireBinding(program, 'Worker', 'Worker', 'node:worker_threads')
+    || !exactTopLevelRequireBinding(
+      program,
+      'validateEnvelope',
+      'validateEnvelope',
+      './execution-worker-protocol.cjs',
+    )
     || !stableProgramIdentifiers(program, [
       'AUTHORITY_FIELDS', 'ExecutionWorkerController', 'TURN_FIELDS', 'sameIdentity',
       'Worker', 'process', 'require', 'validateEnvelope',
@@ -2049,6 +2962,9 @@ function controllerAstContract(source) {
     || countMemberWrites(initialize, ['this', 'authority']) !== 1
     || countMemberWrites(initialize, ['this', 'createRunner']) !== 0
     || countMemberWrites(initialize, ['this', 'runner']) !== 1
+    || !controllerInitialStateContract(constructor)
+    || functionFreezesProtectedReceiver(constructor, ['this'])
+    || functionFreezesProtectedReceiver(initialize, ['this'])
     || otherControllerMethods.some((method) => functionHasMemberWrite(
       method, controllerBindingPaths,
     ))) return false;
@@ -2075,10 +2991,9 @@ function controllerAstContract(source) {
   ))
     .filter((entry) => call(entry.statement.expression.right, ['this', 'createRunner'], []));
   if (initializeGuard.length !== 1 || authorityAssignments.length !== 1 || runnerAssignments.length !== 1
-    || !directStatementReachable(initialize.body, initializeGuard[0])
-    || !directStatementReachable(initialize.body, authorityAssignments[0])
-    || initialize.body.body.indexOf(initializeGuard[0])
-      >= initialize.body.body.indexOf(authorityAssignments[0])) return false;
+    || !directStatementsOrderedAndReachable(initialize.body, [
+      initializeGuard[0], authorityAssignments[0],
+    ])) return false;
   const messageListeners = initializeEntries.filter((entry) => exactRunnerListener(
     entry.statement,
     'message',
@@ -2120,9 +3035,9 @@ function controllerAstContract(source) {
       initializeSuccesses[0],
     ])) return false;
   const initializeOuterStatement = runnerAssignments[0].wrapper || runnerAssignments[0].statement;
-  if (initialize.body.body.indexOf(authorityAssignments[0])
-      >= initialize.body.body.indexOf(initializeOuterStatement)
-    || (runnerAssignments[0].wrapper
+  if (!directStatementsOrderedAndReachable(initialize.body, [
+    authorityAssignments[0], initializeOuterStatement,
+  ]) || (runnerAssignments[0].wrapper
       && !controllerTryFailsClosed(runnerAssignments[0].wrapper, { returnsFalse: true }))) return false;
 
   const startBranches = accept.body.body.filter((statement) => (
@@ -2198,7 +3113,7 @@ function controllerAstContract(source) {
   if (hostGuard.length !== 1 || hostForwards.length !== 1
     || !directStatementReachable(host.body, hostGuard[0])
     || !directEntryReachable(host.body, hostForwards[0])
-    || host.body.body.indexOf(hostGuard[0]) >= host.body.body.indexOf(hostForwardOuter)
+    || !directStatementsOrderedAndReachable(host.body, [hostGuard[0], hostForwardOuter])
     || (hostForwards[0].wrapper && !controllerTryFailsClosed(hostForwards[0].wrapper))) return false;
 
   const runnerAuthority = runner.body.body.filter((statement) => (
@@ -2242,10 +3157,9 @@ function controllerAstContract(source) {
     || !directStatementReachable(runner.body, heartbeat[0])
     || !directStatementReachable(runner.body, ready[0])
     || !directStatementReachable(runner.body, runnerForwards[0])) return false;
-  const runnerStatements = runner.body.body;
-  return runnerStatements.indexOf(runnerAuthority[0]) < runnerStatements.indexOf(heartbeat[0])
-    && runnerStatements.indexOf(heartbeat[0]) < runnerStatements.indexOf(ready[0])
-    && runnerStatements.indexOf(ready[0]) < runnerStatements.indexOf(runnerForwards[0]);
+  return directStatementsOrderedAndReachable(runner.body, [
+    runnerAuthority[0], heartbeat[0], ready[0], runnerForwards[0],
+  ]);
 }
 
 function genuineTimeoutInFunction(functionNode, timeoutNames) {
@@ -2290,10 +3204,9 @@ function finitePositiveTimeoutBinding(functionNode, {
   const requested = directDeclarator(functionNode?.body, requestedName, 'const');
   const bounded = directDeclarator(functionNode?.body, boundedName, 'const');
   if (!requested || !bounded
-    || !directStatementReachable(functionNode.body, requested.statement)
-    || !directStatementReachable(functionNode.body, bounded.statement)
-    || functionNode.body.body.indexOf(requested.statement)
-      >= functionNode.body.body.indexOf(bounded.statement)
+    || !directStatementsOrderedAndReachable(functionNode.body, [
+      requested.statement, bounded.statement,
+    ])
     || !call(requested.declaration.init, ['Number'], [
       (value) => identifier(value, sourceName),
     ])) return false;
@@ -2584,21 +3497,16 @@ function managerIsolationAstContract(source) {
     ['manager', 'executions', 'set'],
     [(value) => identifier(value, 'requestId'), (value) => identifier(value, 'record')],
   ));
-  const supervisorIndex = acquire.body.body.indexOf(supervisor.statement);
-  const recordIndex = acquire.body.body.indexOf(record.statement);
-  const indexIndex = indexes.length === 1 ? acquire.body.body.indexOf(indexes[0]) : -1;
-  const admissionIndex = admissionWaits.length === 1
-    ? acquire.body.body.indexOf(admissionWaits[0]) : -1;
-  if (supervisorIndex < 0 || recordIndex <= supervisorIndex || indexIndex <= recordIndex
-    || !directStatementReachable(acquire.body, supervisor.statement)
-    || !directStatementReachable(acquire.body, record.statement)
-    || !directStatementReachable(acquire.body, indexes[0])) return false;
+  if (indexes.length !== 1
+    || !directStatementsOrderedAndReachable(acquire.body, [
+      supervisor.statement, record.statement, indexes[0],
+    ])) return false;
   if (directAdmissionCalls.length > 0 && (
     directAdmissionCalls.length !== 1
     || admissionWaits.length !== 1
-    || admissionIndex < 0
-    || admissionIndex >= supervisorIndex
-    || !directStatementReachable(acquire.body, admissionWaits[0])
+    || !directStatementsOrderedAndReachable(acquire.body, [
+      admissionWaits[0], supervisor.statement,
+    ])
   )) return false;
   const executionMutationMethods = ['add', 'clear', 'delete', 'set'];
   const exactExecutionMutations = (functionNode, expected) => {
@@ -2643,8 +3551,7 @@ function managerIsolationAstContract(source) {
       || stopCallCount !== 1
       || !directStatementReachable(releaseFunction.body, deletes[0])
       || !directStatementReachable(releaseFunction.body, stops[0])
-      || releaseFunction.body.body.indexOf(deletes[0])
-        >= releaseFunction.body.body.indexOf(stops[0])
+      || !directStatementsOrderedAndReachable(releaseFunction.body, [deletes[0], stops[0]])
       || !exactExecutionMutations(releaseFunction, [
         { method: 'delete', node: releaseDeleteCall },
       ])) return false;
@@ -2674,11 +3581,389 @@ function managerIsolationAstContract(source) {
   ));
   if (successReturns.length !== 1 || !directEntryReachable(acquire.body, successReturns[0])) return false;
   const successOuter = successReturns[0].wrapper || successReturns[0].statement;
-  if (acquire.body.body.indexOf(indexes[0]) >= acquire.body.body.indexOf(successOuter)) return false;
+  if (!directStatementsOrderedAndReachable(acquire.body, [indexes[0], successOuter])) return false;
   const drain = topFunction(program, 'drainExecutionRecord');
   if (drain && (!finitePositiveTimeoutBinding(drain)
     || !genuineTimeoutInFunction(drain, ['boundedTimeout']))) return false;
   return true;
+}
+
+function currentManagerIsolationAstContract(source) {
+  const program = parseProgram(source);
+  const creator = topFunction(program, 'createExecutionWorkerManager');
+  const acquire = topFunction(program, 'acquireExecutionWorker');
+  const waitForSlot = topFunction(program, 'waitForExecutionSlot');
+  const validateAcquisition = topFunction(program, 'validateAcquisition');
+  const stopRecord = topFunction(program, 'stopExecutionRecord');
+  const releaseRecord = topFunction(program, 'releaseExecutionRecord');
+  const drainRecord = topFunction(program, 'drainExecutionRecord');
+  const createLease = topFunction(program, 'executionWorkerLease');
+  const createRecord = topFunction(program, 'createExecutionRecord');
+  const createSupervisor = topFunction(program, 'createExecutionSupervisor');
+  const protectedHelpers = [
+    'acquireExecutionWorker', 'admitNextExecution', 'createExecutionRecord',
+    'createExecutionSupervisor', 'createExecutionWorkerManager', 'drainExecutionRecord',
+    'executionWorkerLease', 'releaseExecutionRecord', 'stopExecutionRecord',
+    'validateAcquisition', 'waitForExecutionSlot',
+  ];
+  if (!creator || !acquire || !waitForSlot || !validateAcquisition || !stopRecord
+    || !releaseRecord || !drainRecord || !createLease || !createRecord || !createSupervisor
+    || !managerCreatorParametersValid(creator)
+    || !exactParameterList(acquire, [
+      (value) => identifier(value, 'manager'),
+      (value) => identifier(value, 'authority'),
+      (value) => identifier(value, 'identity'),
+      (value) => defaultedIdentifierParameter(value, 'options', (entry) => exactObject(entry, {})),
+    ])
+    || !exactIdentifierParameters(waitForSlot, ['manager', 'requestId', 'signal'])
+    || !exactProtectedIdentifierParameters(validateAcquisition, ['manager', 'identity'])
+    || !exactProtectedIdentifierParameters(stopRecord, ['manager', 'requestId', 'record'])
+    || !exactProtectedIdentifierParameters(releaseRecord, ['manager', 'requestId', 'record'])
+    || !exactParameterList(drainRecord, [
+      (value) => identifier(value, 'manager'),
+      (value) => identifier(value, 'requestId'),
+      (value) => identifier(value, 'record'),
+      (value) => identifier(value, 'settlement'),
+      (value) => objectPatternBindsExactly(value, ['timeoutMs'], {
+        topLevelDefault: true,
+        propertyDefaults: { timeoutMs: (entry) => literal(entry, 1) },
+        requiredPropertyDefaults: ['timeoutMs'],
+      }),
+    ])
+    || !exactProtectedIdentifierParameters(createLease, ['manager', 'requestId', 'record', 'state'])
+    || !exactProtectedIdentifierParameters(createRecord, ['supervisor'])
+    || !exactProtectedIdentifierParameters(createSupervisor, ['manager'])
+    || !stableProgramIdentifiers(program, [
+      ...protectedHelpers, 'Error', 'Map', 'Math', 'Number', 'Object', 'Promise',
+      'Set', 'String', 'clearTimeout', 'setTimeout',
+    ], {
+      globals: ['Error', 'Map', 'Math', 'Number', 'Object', 'Promise', 'Set',
+        'String', 'clearTimeout', 'setTimeout'],
+    })
+    || functionHasMemberWrite(program, [
+      ['manager', 'executions'], ['manager', 'supervisorFactory'],
+      ['manager', 'supervisorOptions'], ['record', 'supervisor'],
+    ])) return false;
+
+  const validatedRequestId = directDeclarator(validateAcquisition.body, 'requestId', 'const');
+  const validatedReturns = validateAcquisition.body.body.filter((statement) => exactReturn(
+    statement, (value) => identifier(value, 'requestId'),
+  ));
+  if (!validatedRequestId || !methodCall(
+    validatedRequestId.declaration.init,
+    'trim',
+    (receiver) => call(receiver, ['String'], [
+      (value) => logical(
+        value,
+        '||',
+        (left) => member(left, ['identity', 'requestId']),
+        (right) => literal(right, ''),
+      ),
+    ]),
+    [],
+  ) || validatedReturns.length !== 1) return false;
+
+  const supervisorReturn = createSupervisor.body.body.filter((statement) => exactReturn(
+    statement,
+    (value) => call(value, ['manager', 'supervisorFactory'])
+      && value.arguments.length === 1
+      && unwrap(value.arguments[0])?.properties?.length === 6
+      && objectIncludesExactProperties(value.arguments[0], {
+        enabled: (entry) => literal(entry, true),
+        fork: (entry) => member(entry, ['manager', 'fork']),
+        maxPendingRequests: (entry) => literal(entry, 1),
+        maxRestarts: (entry) => literal(entry, 0),
+        stripMainOwnedCapabilitiesForTest: (entry) => member(
+          entry, ['manager', 'stripMainOwnedCapabilitiesForTest'],
+        ),
+      }, {
+        allowedSpreads: [(entry) => member(entry, ['manager', 'supervisorOptions'])],
+      }),
+  ));
+  const recordObject = returnedObject(createRecord);
+  const leaseObject = returnedObject(createLease);
+  if (supervisorReturn.length !== 1 || !recordObject || !exactObject(recordObject, {
+    supervisor: (value) => identifier(value, 'supervisor'),
+    released: (value) => literal(value, false),
+    holdsSlot: (value) => literal(value, false),
+    resolveDrain: (value) => literal(value, null),
+    finalizationPromise: (value) => literal(value, null),
+    stopPromise: (value) => literal(value, null),
+  }) || !leaseObject || !exactObject(leaseObject, {
+    drain: (value) => exactParameterList(unwrap(value), [
+      (entry) => identifier(entry, 'settlement'),
+      (entry) => identifier(entry, 'options'),
+    ]) && arrowCallsExactly(value, ['drainExecutionRecord'], [
+      (entry) => identifier(entry, 'manager'),
+      (entry) => identifier(entry, 'requestId'),
+      (entry) => identifier(entry, 'record'),
+      (entry) => identifier(entry, 'settlement'),
+      (entry) => identifier(entry, 'options'),
+    ]),
+    release: (value) => exactIdentifierParameters(unwrap(value), [])
+      && arrowCallsExactly(value, ['releaseExecutionRecord'], [
+        (entry) => identifier(entry, 'manager'),
+        (entry) => identifier(entry, 'requestId'),
+        (entry) => identifier(entry, 'record'),
+      ]),
+    state: (value) => identifier(value, 'state'),
+    supervisor: (value) => member(value, ['record', 'supervisor']),
+  })) return false;
+
+  const stopAssignments = directAssignmentStatements(stopRecord.body, ['record', 'stopPromise']);
+  const stopGuard = stopRecord.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && member(statement.test, ['record', 'stopPromise'])
+    && exactReturn(statement.consequent, (value) => member(value, ['record', 'stopPromise']))
+  ));
+  const stopReturns = stopRecord.body.body.filter((statement) => exactReturn(
+    statement, (value) => member(value, ['record', 'stopPromise']),
+  ));
+  const stopChain = unwrap(stopAssignments[0]?.expression?.right);
+  const stopChainValid = methodCall(
+    stopChain,
+    'finally',
+    (receiver) => methodCall(
+      receiver,
+      'then',
+      (base) => call(base, ['Promise', 'resolve'], []),
+      [(callback) => exactIdentifierParameters(unwrap(callback), [])
+        && arrowCallsExactly(callback, ['record', 'supervisor', 'stop'], [])],
+    ),
+    [(callback) => {
+      callback = unwrap(callback);
+      if (callback?.type !== 'ArrowFunctionExpression'
+        || !exactIdentifierParameters(callback, [])
+        || callback.body?.type !== 'BlockStatement'
+        || callback.body.body.length !== 2
+        || !directCallStatement(callback.body.body[0], ['manager', 'drainingExecutions', 'delete'], [
+          (entry) => identifier(entry, 'requestId'),
+        ])) return false;
+      const admit = callback.body.body[1];
+      return admit?.type === 'IfStatement'
+        && unary(admit.test, '!', (entry) => member(entry, ['manager', 'stopping']))
+        && directCallStatement(admit.consequent, ['admitNextExecution'], [
+          (entry) => identifier(entry, 'manager'),
+        ]);
+    }],
+  );
+  if (stopGuard.length !== 1 || stopAssignments.length !== 1 || stopReturns.length !== 1
+    || !stopChainValid
+    || !directStatementsOrderedAndReachable(stopRecord.body, [
+      stopGuard[0], stopAssignments[0], stopReturns.at(-1),
+    ])) {
+    return false;
+  }
+
+  const releaseDeletes = releaseRecord.body.body.filter((statement) => directCallStatement(
+    statement, ['manager', 'executions', 'delete'], [(value) => identifier(value, 'requestId')],
+  ));
+  const releaseStops = releaseRecord.body.body.filter((statement) => exactReturn(
+    statement, (value) => call(value, ['stopExecutionRecord'], [
+      (entry) => identifier(entry, 'manager'),
+      (entry) => identifier(entry, 'requestId'),
+      (entry) => identifier(entry, 'record'),
+    ]),
+  ));
+  if (releaseDeletes.length !== 1 || releaseStops.length !== 1
+    || !directStatementsOrderedAndReachable(releaseRecord.body, [
+      releaseDeletes[0], releaseStops[0],
+    ])) return false;
+
+  const deadline = directDeclarator(drainRecord.body, 'deadline', 'const');
+  const deadlineExecutor = unwrap(deadline?.declaration?.init?.arguments?.[0]);
+  const deadlineAssignment = unwrap(deadlineExecutor?.body?.body?.[0]?.expression);
+  const boundedDelay = unwrap(deadlineAssignment?.right)?.arguments?.[1];
+  const drainDeletes = drainRecord.body.body.filter((statement) => directCallStatement(
+    statement, ['manager', 'executions', 'delete'], [(value) => identifier(value, 'requestId')],
+  ));
+  const finalizationAssignments = directAssignmentStatements(
+    drainRecord.body, ['record', 'finalizationPromise'],
+  );
+  const finalizationChain = unwrap(finalizationAssignments[0]?.expression?.right);
+  const finalizationValid = methodCall(
+    finalizationChain,
+    'then',
+    (receiver) => call(receiver, ['Promise', 'race'])
+      && receiver.arguments.length === 1
+      && receiver.arguments[0]?.type === 'ArrayExpression'
+      && receiver.arguments[0].elements.length === 3
+      && methodCall(
+        receiver.arguments[0].elements[0],
+        'catch',
+        (entry) => call(entry, ['Promise', 'resolve'], [
+          (value) => identifier(value, 'settlement'),
+        ]),
+        [(callback) => exactIdentifierParameters(unwrap(callback), [])
+          && unwrap(callback)?.body?.type === 'BlockStatement'
+          && unwrap(callback).body.body.length === 0],
+      )
+      && identifier(receiver.arguments[0].elements[1], 'deadline')
+      && identifier(receiver.arguments[0].elements[2], 'preempted'),
+    [(callback) => {
+      callback = unwrap(callback);
+      if (callback?.type !== 'ArrowFunctionExpression'
+        || !exactIdentifierParameters(callback, [])
+        || callback.body?.type !== 'BlockStatement') return false;
+      const returns = callback.body.body.filter((statement) => exactReturn(
+        statement, (value) => call(value, ['stopExecutionRecord'], [
+          (entry) => identifier(entry, 'manager'),
+          (entry) => identifier(entry, 'requestId'),
+          (entry) => identifier(entry, 'record'),
+        ]),
+      ));
+      return returns.length === 1 && directStatementReachable(callback.body, returns[0]);
+    }],
+  );
+  if (!deadline || !construct(deadline.declaration.init, 'Promise')
+    || deadlineExecutor?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(deadlineExecutor, ['resolveDeadline'])
+    || deadlineExecutor.body?.type !== 'BlockStatement'
+    || deadlineExecutor.body.body.length !== 2
+    || deadlineAssignment?.type !== 'AssignmentExpression'
+    || !identifier(deadlineAssignment.left, 'timer')
+    || !call(deadlineAssignment.right, ['setTimeout'], [
+      (entry) => identifier(entry, 'resolveDeadline'),
+      (entry) => call(entry, ['Math', 'max'], [
+        (value) => literal(value, 1),
+        (value) => logical(
+          value,
+          '||',
+          (candidate) => call(candidate, ['Number'], [
+            (argument) => identifier(argument, 'timeoutMs'),
+          ]),
+          (candidate) => literal(candidate, 1),
+        ),
+      ]),
+    ])
+    || !boundedDelay
+    || !directCallStatement(deadlineExecutor.body.body[1], ['timer', 'unref'], [])
+    || drainDeletes.length !== 1 || finalizationAssignments.length !== 1
+    || !finalizationValid) return false;
+  const drainReturns = drainRecord.body.body.filter((statement) => exactReturn(
+    statement, (value) => member(value, ['record', 'finalizationPromise']),
+  ));
+  if (drainReturns.length < 1
+    || !directStatementsOrderedAndReachable(drainRecord.body, [
+      drainDeletes[0], finalizationAssignments[0], drainReturns.at(-1),
+    ])) return false;
+
+  const requestId = directDeclarator(acquire.body, 'requestId', 'const');
+  const reserved = directDeclarator(acquire.body, 'reserved', 'const');
+  const supervisor = directDeclarator(acquire.body, 'supervisor', 'const');
+  const record = directDeclarator(acquire.body, 'record', 'const');
+  const indexes = acquire.body.body.filter((statement) => directCallStatement(
+    statement, ['manager', 'executions', 'set'], [
+      (value) => identifier(value, 'requestId'),
+      (value) => identifier(value, 'record'),
+    ],
+  ));
+  const attempts = acquire.body.body.filter((statement) => (
+    statement.type === 'TryStatement' && statement.handler && !statement.finalizer
+  ));
+  if (!requestId || !call(requestId.declaration.init, ['validateAcquisition'], [
+    (value) => identifier(value, 'manager'),
+    (value) => identifier(value, 'identity'),
+  ]) || !reserved || reserved.declaration.init?.type !== 'AwaitExpression'
+    || !call(reserved.declaration.init.argument, ['waitForExecutionSlot'], [
+      (value) => identifier(value, 'manager'),
+      (value) => identifier(value, 'requestId'),
+      (value) => member(value, ['options', 'signal']),
+    ])
+    || !supervisor || !call(supervisor.declaration.init, ['createExecutionSupervisor'], [
+      (value) => identifier(value, 'manager'),
+    ])
+    || !record || !call(record.declaration.init, ['createExecutionRecord'], [
+      (value) => identifier(value, 'supervisor'),
+    ])
+    || indexes.length !== 1 || attempts.length !== 1) return false;
+  const attempt = attempts[0];
+  const state = directDeclarator(attempt.block, 'state', 'const');
+  const success = attempt.block.body.filter((statement) => exactReturn(
+    statement, (value) => call(value, ['executionWorkerLease'], [
+      (entry) => identifier(entry, 'manager'),
+      (entry) => identifier(entry, 'requestId'),
+      (entry) => identifier(entry, 'record'),
+      (entry) => identifier(entry, 'state'),
+    ]),
+  ));
+  const failureDeletes = attempt.handler.body.body.filter((statement) => directCallStatement(
+    statement, ['manager', 'executions', 'delete'], [(value) => identifier(value, 'requestId')],
+  ));
+  const failureStops = attempt.handler.body.body.filter((statement) => {
+    let value = unwrap(statement?.expression);
+    if (statement?.type !== 'ExpressionStatement' || value?.type !== 'AwaitExpression') return false;
+    value = unwrap(value.argument);
+    return methodCall(value, 'catch', (receiver) => call(receiver, ['supervisor', 'stop'], []), [
+      (callback) => exactIdentifierParameters(unwrap(callback), [])
+        && unwrap(callback)?.body?.type === 'BlockStatement'
+        && unwrap(callback).body.body.length === 0,
+    ]);
+  });
+  const rethrows = attempt.handler.body.body.filter((statement) => (
+    statement.type === 'ThrowStatement' && identifier(statement.argument, 'error')
+  ));
+  const acquireMutations = protectedCollectionMutationCalls(
+    acquire, ['manager', 'executions'], ['add', 'clear', 'delete', 'set'],
+  );
+  if (!state || state.declaration.init?.type !== 'AwaitExpression'
+    || !call(state.declaration.init.argument, ['supervisor', 'start'], [
+      (value) => identifier(value, 'authority'),
+    ])
+    || success.length !== 1 || failureDeletes.length !== 1
+    || failureStops.length !== 1 || rethrows.length !== 1
+    || acquireMutations.length !== 2
+    || acquireMutations.filter((entry) => entry.method === 'set').length !== 1
+    || acquireMutations.filter((entry) => entry.method === 'delete').length !== 1
+    || !directStatementsOrderedAndReachable(acquire.body, [
+      reserved.statement, supervisor.statement, record.statement, indexes[0], attempt,
+    ])
+    || !directStatementsOrderedAndReachable(attempt.handler.body, [
+      failureDeletes[0], failureStops[0], rethrows[0],
+    ])) return false;
+
+  const releaseMutations = protectedCollectionMutationCalls(
+    releaseRecord, ['manager', 'executions'], ['add', 'clear', 'delete', 'set'],
+  );
+  const drainMutations = protectedCollectionMutationCalls(
+    drainRecord, ['manager', 'executions'], ['add', 'clear', 'delete', 'set'],
+  );
+  const manager = directDeclarator(creator.body, 'manager', 'const');
+  const managerStop = localArrow(creator.body, 'stop');
+  const managerApi = returnedObject(creator);
+  if (!manager || !objectIncludesExactProperties(manager.declaration.init, {
+    executions: (value) => construct(value, 'Map', []),
+    supervisorFactory: (value) => identifier(value, 'supervisorFactory'),
+    supervisorOptions: (value) => identifier(value, 'supervisorOptions'),
+  }) || !managerStop || !exactIdentifierParameters(managerStop, []) || managerStop.async !== true
+    || !managerApi || !objectIncludesExactProperties(managerApi, {
+      acquire: (value) => exactIdentifierParameters(unwrap(value), ['authority', 'identity', 'options'])
+        && arrowCallsExactly(value, ['acquireExecutionWorker'], [
+          (entry) => identifier(entry, 'manager'),
+          (entry) => identifier(entry, 'authority'),
+          (entry) => identifier(entry, 'identity'),
+          (entry) => identifier(entry, 'options'),
+        ]),
+      stop: (value) => identifier(value, 'stop'),
+    })
+    || releaseMutations.length !== 1 || releaseMutations[0].method !== 'delete'
+    || drainMutations.length !== 1 || drainMutations[0].method !== 'delete') return false;
+  const stopClears = managerStop.body.body.filter((statement) => directCallStatement(
+    statement, ['manager', 'executions', 'clear'], [],
+  ));
+  let awaitedStopRecords = 0;
+  visit(managerStop.body, (node) => {
+    if (node.type === 'AwaitExpression' && call(node.argument, ['stopExecutionRecord'], [
+      (entry) => identifier(entry, 'manager'),
+      (entry) => identifier(entry, 'requestId'),
+      (entry) => identifier(entry, 'record'),
+    ])) awaitedStopRecords += 1;
+  });
+  const managerStopMutations = protectedCollectionMutationCalls(
+    managerStop, ['manager', 'executions'], ['add', 'clear', 'delete', 'set'],
+  );
+  return stopClears.length === 1 && awaitedStopRecords === 1
+    && managerStopMutations.length === 1 && managerStopMutations[0].method === 'clear';
 }
 
 function managerPressureAstContract(source) {
@@ -2713,9 +3998,7 @@ function managerPressureAstContract(source) {
   });
   return Boolean(managerPressureBranch(waitForSlot))
     && waits.length === 1
-    && directStatementReachable(acquire.body, waits[0])
-    && directStatementReachable(acquire.body, supervisor.statement)
-    && acquire.body.body.indexOf(waits[0]) < acquire.body.body.indexOf(supervisor.statement);
+    && directStatementsOrderedAndReachable(acquire.body, [waits[0], supervisor.statement]);
 }
 
 function contextHelperAstContract(sourceByPath) {
@@ -2882,6 +4165,293 @@ function contextHelperAstContract(sourceByPath) {
   return incompleteReleases.length === 1;
 }
 
+function currentContextHelperAstContract(sourceByPath) {
+  const wrapperSource = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage.cjs') || '';
+  const implementationSource = sourceByPath.get('electron/host-core/agent/execution-worker-context-usage-lease.cjs') || '';
+  const wrapper = parseProgram(wrapperSource);
+  const implementation = parseProgram(implementationSource);
+  const creator = topFunction(implementation, 'createExecutionWorkerContextUsageLease');
+  const releaseAfterUsage = topFunction(
+    implementation, 'releaseExecutionWorkerLeaseAfterContextUsage',
+  );
+  const timeout = directDeclarator(
+    implementation, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'const',
+  );
+  const helperExports = {
+    createExecutionWorkerContextUsageLease: (value) => identifier(
+      value, 'createExecutionWorkerContextUsageLease',
+    ),
+    releaseExecutionWorkerLeaseAfterContextUsage: (value) => identifier(
+      value, 'releaseExecutionWorkerLeaseAfterContextUsage',
+    ),
+  };
+  if (!wrapper || !implementation || !creator || !releaseAfterUsage || !timeout
+    || !literal(timeout.declaration.init, 11_000)
+    || !exactTopLevelRequireBinding(
+      wrapper,
+      'createExecutionWorkerContextUsageLease',
+      'createExecutionWorkerContextUsageLease',
+      './execution-worker-context-usage-lease.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      wrapper,
+      'releaseExecutionWorkerLeaseAfterContextUsage',
+      'releaseExecutionWorkerLeaseAfterContextUsage',
+      './execution-worker-context-usage-lease.cjs',
+    )
+    || !topLevelModuleExportsIncludes(wrapper, helperExports)
+    || !topLevelModuleExportsIncludes(implementation, helperExports)
+    || !stableProgramIdentifiers(implementation, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'Math', 'Number', 'Promise',
+      'clearTimeout', 'createExecutionWorkerContextUsageLease',
+      'releaseExecutionWorkerLeaseAfterContextUsage', 'setTimeout',
+    ], { globals: ['Math', 'Number', 'Promise', 'clearTimeout', 'setTimeout'] })
+    || !exactParameterList(releaseAfterUsage, [
+      (value) => identifier(value, 'lease'),
+      (value) => identifier(value, 'settlement'),
+      (value) => objectPatternBindsExactly(value, ['timeoutMs'], {
+        topLevelDefault: true,
+        propertyDefaults: {
+          timeoutMs: (entry) => identifier(
+            entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+          ),
+        },
+        requiredPropertyDefaults: ['timeoutMs'],
+      }),
+    ])
+    || !exactParameterList(creator, [
+      (value) => objectPatternBindsExactly(value, ['timeoutMs'], {
+        topLevelDefault: true,
+        propertyDefaults: {
+          timeoutMs: (entry) => identifier(
+            entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+          ),
+        },
+        requiredPropertyDefaults: ['timeoutMs'],
+      }),
+    ])
+    || functionHasNestedBinding(releaseAfterUsage, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'lease', 'Math', 'Number',
+      'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage', 'settlement', 'timeoutMs',
+    ])
+    || functionHasIdentifierWrite(releaseAfterUsage, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'lease', 'Math', 'Number',
+      'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage', 'settlement', 'timeoutMs',
+    ])
+    || functionHasNestedBinding(creator, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'completed',
+      'releaseExecutionWorkerLeaseAfterContextUsage', 'timeoutMs',
+    ], { allowedDirectBindings: ['completed'] })
+    || functionHasIdentifierWrite(creator, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      'releaseExecutionWorkerLeaseAfterContextUsage', 'timeoutMs',
+    ])
+    || functionHasMemberWrite(releaseAfterUsage, [
+      ['lease', 'drain'], ['lease', 'release'],
+    ])) return false;
+
+  const requestedTimeout = directDeclarator(releaseAfterUsage.body, 'requestedTimeout', 'const');
+  const bounded = directDeclarator(releaseAfterUsage.body, 'boundedTimeout', 'const');
+  if (!requestedTimeout || !bounded
+    || !call(requestedTimeout.declaration.init, ['Number'], [
+      (value) => identifier(value, 'timeoutMs'),
+    ])
+    || !directStatementsOrderedAndReachable(releaseAfterUsage.body, [
+      requestedTimeout.statement, bounded.statement,
+    ])
+    || !finitePositiveTimeoutExpression(
+      bounded.declaration.init,
+      'requestedTimeout',
+      (entry) => identifier(entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS'),
+    )) return false;
+  const drainBranches = releaseAfterUsage.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && binary(
+      statement.test,
+      '===',
+      (left) => unary(left, 'typeof', (entry) => member(entry, ['lease', 'drain'])),
+      (right) => literal(right, 'function'),
+    )
+    && statement.consequent?.type === 'BlockStatement'
+    && statement.consequent.body.length === 1
+    && exactReturn(statement.consequent.body[0], (value) => methodCall(
+      value,
+      'then',
+      (receiver) => call(receiver, ['Promise', 'resolve'], [
+        (entry) => call(entry, ['lease', 'drain'], [
+          (argument) => identifier(argument, 'settlement'),
+          (argument) => exactObject(argument, {
+            timeoutMs: (timeoutValue) => identifier(timeoutValue, 'boundedTimeout'),
+          }),
+        ]),
+      ]),
+      [
+        (callback) => exactIdentifierParameters(unwrap(callback), [])
+          && literal(unwrap(callback).body, true),
+        (callback) => exactIdentifierParameters(unwrap(callback), [])
+          && literal(unwrap(callback).body, false),
+      ],
+    ))
+  ));
+  const missingRelease = releaseAfterUsage.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && binary(
+      statement.test,
+      '!==',
+      (left) => unary(left, 'typeof', (entry) => member(entry, ['lease', 'release'])),
+      (right) => literal(right, 'function'),
+    )
+    && exactReturn(statement.consequent, (value) => call(value, ['Promise', 'resolve'], [
+      (entry) => literal(entry, false),
+    ]))
+  ));
+  const deadline = directDeclarator(releaseAfterUsage.body, 'deadline', 'const');
+  const release = directDeclarator(releaseAfterUsage.body, 'release', 'const');
+  if (drainBranches.length !== 1 || missingRelease.length !== 1
+    || !deadline || !construct(deadline.declaration.init, 'Promise')
+    || !release) return false;
+  const releaseChain = unwrap(release.declaration.init);
+  const releaseChainValid = methodCall(
+    releaseChain,
+    'then',
+    (receiver) => call(receiver, ['Promise', 'race'])
+      && receiver.arguments.length === 1
+      && receiver.arguments[0]?.type === 'ArrayExpression'
+      && receiver.arguments[0].elements.length === 2
+      && methodCall(
+        receiver.arguments[0].elements[0],
+        'catch',
+        (entry) => call(entry, ['Promise', 'resolve'], [
+          (value) => identifier(value, 'settlement'),
+        ]),
+        [(callback) => exactIdentifierParameters(unwrap(callback), [])
+          && unwrap(callback)?.body?.type === 'BlockStatement'
+          && unwrap(callback).body.body.length === 0],
+      )
+      && identifier(receiver.arguments[0].elements[1], 'deadline'),
+    [(callback) => {
+      callback = unwrap(callback);
+      if (callback?.type !== 'ArrowFunctionExpression' || callback.async !== true
+        || !exactIdentifierParameters(callback, [])
+        || callback.body?.type !== 'BlockStatement'
+        || callback.body.body.length !== 2) return false;
+      const [clear, attempt] = callback.body.body;
+      if (clear?.type !== 'IfStatement' || !identifier(clear.test, 'timer')
+        || !directCallStatement(clear.consequent, ['clearTimeout'], [
+          (value) => identifier(value, 'timer'),
+        ])
+        || attempt?.type !== 'TryStatement' || attempt.finalizer
+        || attempt.block.body.length !== 2 || attempt.handler?.body?.body.length !== 1
+        || !directCallStatement(attempt.block.body[0], ['lease', 'release'], [], { await_: true })
+        || !exactReturn(attempt.block.body[1], (value) => literal(value, true))
+        || !exactReturn(attempt.handler.body.body[0], (value) => literal(value, false))) return false;
+      return true;
+    }],
+  );
+  const swallowedRelease = releaseAfterUsage.body.body.filter((statement) => {
+    const expression = unwrap(statement?.expression);
+    if (statement?.type !== 'ExpressionStatement'
+      || expression?.type !== 'UnaryExpression' || expression.operator !== 'void') return false;
+    return methodCall(expression.argument, 'catch', (receiver) => identifier(receiver, 'release'), [
+      (callback) => exactIdentifierParameters(unwrap(callback), [])
+        && unwrap(callback)?.body?.type === 'BlockStatement'
+        && unwrap(callback).body.body.length === 0,
+    ]);
+  });
+  const releaseReturns = releaseAfterUsage.body.body.filter((statement) => exactReturn(
+    statement, (value) => identifier(value, 'release'),
+  ));
+  if (!releaseChainValid || swallowedRelease.length !== 1 || releaseReturns.length !== 1
+    || !directStatementsOrderedAndReachable(releaseAfterUsage.body, [
+      release.statement, swallowedRelease[0], releaseReturns[0],
+    ])) return false;
+
+  const completed = directDeclarator(creator.body, 'completed', 'let');
+  const settle = directDeclarator(creator.body, 'settle', 'let');
+  const settlement = directDeclarator(creator.body, 'settlement', 'const');
+  const settlementExecutor = unwrap(settlement?.declaration?.init?.arguments?.[0]);
+  if (!completed || !literal(completed.declaration.init, false) || !settle
+    || settle.declaration.init !== null || !settlement
+    || !construct(settlement.declaration.init, 'Promise')
+    || settlementExecutor?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(settlementExecutor, ['resolve'])
+    || settlementExecutor.body?.type !== 'BlockStatement'
+    || settlementExecutor.body.body.length !== 1) return false;
+  const settleAssignment = unwrap(settlementExecutor.body.body[0]?.expression);
+  if (settleAssignment?.type !== 'AssignmentExpression'
+    || settleAssignment.operator !== '='
+    || !identifier(settleAssignment.left, 'settle')
+    || !identifier(settleAssignment.right, 'resolve')
+    || countAssignments(creator, (left) => patternNames(left).includes('completed')) !== 1) {
+    return false;
+  }
+  const returned = returnedObject(creator);
+  let releaseFunction = null;
+  if (!returned || !exactObject(returned, {
+    observeTerminal: (value) => {
+      value = unwrap(value);
+      if (value?.type !== 'ArrowFunctionExpression'
+        || !exactIdentifierParameters(value, ['payload'])
+        || value.body?.type !== 'BlockStatement'
+        || value.body.body.length !== 1) return false;
+      const assignment = unwrap(value.body.body[0]?.expression);
+      return assignment?.type === 'AssignmentExpression'
+        && assignment.operator === '='
+        && identifier(assignment.left, 'completed')
+        && binary(
+          assignment.right,
+          '===',
+          (left) => member(left, ['payload', 'outcome']),
+          (right) => literal(right, 'completed'),
+        );
+    },
+    release: (value) => {
+      releaseFunction = unwrap(value);
+      return releaseFunction?.type === 'ArrowFunctionExpression'
+        && releaseFunction.async === true
+        && exactIdentifierParameters(releaseFunction, ['lease'])
+        && releaseFunction.body?.type === 'BlockStatement';
+    },
+    settle: (value) => identifier(value, 'settle'),
+  }) || !releaseFunction
+    || functionHasNestedBinding(releaseFunction, [
+      'completed', 'lease', 'releaseExecutionWorkerLeaseAfterContextUsage',
+      'settlement', 'timeoutMs',
+    ])
+    || functionHasIdentifierWrite(releaseFunction, [
+      'completed', 'lease', 'releaseExecutionWorkerLeaseAfterContextUsage',
+      'settlement', 'timeoutMs',
+    ])
+    || functionHasMemberWrite(releaseFunction, [['lease', 'release']])) return false;
+  const completedBranches = releaseFunction.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && identifier(statement.test, 'completed')
+    && statement.consequent?.type === 'BlockStatement'
+  ));
+  if (completedBranches.length !== 1) return false;
+  const completedBody = completedBranches[0].consequent.body;
+  if (completedBody.length !== 2
+    || !directCallStatement(completedBody[0], ['releaseExecutionWorkerLeaseAfterContextUsage'], [
+      (value) => identifier(value, 'lease'),
+      (value) => identifier(value, 'settlement'),
+      (value) => exactObject(value, { timeoutMs: (entry) => identifier(entry, 'timeoutMs') }),
+    ], { void_: true })
+    || !exactReturn(completedBody[1], (value) => literal(value, true))) return false;
+  const incompleteAttempts = releaseFunction.body.body.filter((statement) => (
+    statement.type === 'TryStatement' && !statement.finalizer
+  ));
+  if (incompleteAttempts.length !== 1) return false;
+  const incomplete = incompleteAttempts[0];
+  return incomplete.block.body.length === 2
+    && directCallStatement(incomplete.block.body[0], ['lease', 'release'], [], { await_: true })
+    && exactReturn(incomplete.block.body[1], (value) => literal(value, true))
+    && incomplete.handler?.body?.body.length === 1
+    && exactReturn(incomplete.handler.body.body[0], (value) => literal(value, false))
+    && directStatementsOrderedAndReachable(releaseFunction.body, [
+      completedBranches[0], incomplete,
+    ]);
+}
+
 function desktopAstContract(sourceByPath) {
   const source = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
   const program = parseProgram(source);
@@ -2971,19 +4541,191 @@ function desktopAstContract(sourceByPath) {
   return delegatedReleases.length === 1 && contextHelperAstContract(sourceByPath);
 }
 
+function currentDesktopAstContract(sourceByPath) {
+  const source = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
+  const program = parseProgram(source);
+  const run = topFunction(program, 'runAgentInExecutionWorker');
+  if (!run || !exactParameterList(run, [
+    (value) => objectPatternIncludesExactBindings(value, {
+      supervisor: (entry) => identifier(entry, 'supervisor'),
+      callbacks: (entry) => identifier(entry, 'callbacks'),
+      identity: (entry) => identifier(entry, 'identity'),
+      contextUsageReleaseTimeoutMs: (entry) => defaultedIdentifierParameter(
+        entry,
+        'contextUsageReleaseTimeoutMs',
+        (fallback) => identifier(fallback, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS'),
+      ),
+    }, { topLevelDefault: true }),
+  ])
+    || !exactTopLevelRequireBinding(
+      program,
+      'createExecutionWorkerContextUsageLease',
+      'createExecutionWorkerContextUsageLease',
+      './execution-worker-context-usage.cjs',
+    )
+    || !exactTopLevelRequireBinding(
+      program,
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      './execution-worker-context-usage.cjs',
+    )
+    || !stableProgramIdentifiers(program, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      'createExecutionWorkerContextUsageLease', 'runAgentInExecutionWorker',
+    ])
+    || functionHasNestedBinding(run, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'callbacks', 'contextUsageLease',
+      'contextUsageReleaseTimeoutMs', 'createExecutionWorkerContextUsageLease',
+      'executionWorkerLease', 'identity', 'supervisor',
+    ], { allowedDirectBindings: ['contextUsageLease', 'executionWorkerLease'] })
+    || functionHasIdentifierWrite(run, [
+      'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'callbacks',
+      'contextUsageReleaseTimeoutMs', 'createExecutionWorkerContextUsageLease', 'identity',
+    ])) return false;
+
+  const lease = directDeclarator(run.body, 'executionWorkerLease', 'let');
+  const contextLease = directDeclarator(run.body, 'contextUsageLease', 'const');
+  const attempts = run.body.body.filter((statement) => (
+    statement.type === 'TryStatement' && statement.finalizer
+  ));
+  if (!lease || !literal(lease.declaration.init, null)
+    || !contextLease || !call(contextLease.declaration.init, [
+      'createExecutionWorkerContextUsageLease',
+    ], [
+      (value) => exactObject(value, {
+        timeoutMs: (entry) => identifier(entry, 'contextUsageReleaseTimeoutMs'),
+      }),
+    ])
+    || attempts.length !== 1
+    || countAssignments(run, (left) => identifier(left, 'executionWorkerLease')) !== 1
+    || countAssignments(run, (left) => identifier(left, 'supervisor')) !== 1) return false;
+
+  const attempt = attempts[0];
+  const acquisitions = attempt.block.body.filter((statement) => {
+    const expression = unwrap(statement?.expression);
+    if (statement?.type !== 'ExpressionStatement'
+      || expression?.type !== 'AssignmentExpression'
+      || expression.operator !== '='
+      || !identifier(expression.left, 'executionWorkerLease')
+      || expression.right?.type !== 'AwaitExpression') return false;
+    return call(expression.right.argument, ['supervisor', 'acquire'], [
+      (value) => exactObject(value, {
+        principalId: (entry) => member(entry, ['identity', 'principalId']),
+        serverScope: (entry) => member(entry, ['identity', 'serverScope']),
+        runtimeGeneration: (entry) => call(entry, ['String'], [
+          (argument) => member(argument, ['identity', 'runtimeGeneration']),
+        ]),
+        runtimeEntry: (entry) => member(entry, ['identity', 'runtimeEntry']),
+        runtimeHome: (entry) => call(entry, ['getRuntimeHome'], []),
+        appRoot: (entry) => logical(
+          entry,
+          '||',
+          (left) => call(left, ['textValue'], [
+            (argument) => member(argument, ['process', 'env', 'QBOT_APP_ROOT']),
+          ]),
+          (right) => call(right, ['getRepoPath'], []),
+        ),
+      }),
+      (value) => identifier(value, 'identity'),
+      (value) => exactObject(value, {
+        signal: (entry) => member(entry, ['callbacks', 'abortController', 'signal']),
+      }),
+    ]);
+  });
+  const supervisorAssignments = directAssignmentStatements(attempt.block, ['supervisor']);
+  if (acquisitions.length !== 1 || supervisorAssignments.length !== 1
+    || !member(
+      supervisorAssignments[0].expression.right, ['executionWorkerLease', 'supervisor'],
+    )) return false;
+  const protectedPaths = [
+    ['contextUsageLease', 'release'],
+    ['executionWorkerLease', 'supervisor'],
+    ['supervisor', 'acquire'],
+  ];
+  const remainingAttempt = {
+    body: {
+      ...attempt.block,
+      body: attempt.block.body.filter((statement) => (
+        statement !== acquisitions[0] && statement !== supervisorAssignments[0]
+      )),
+    },
+  };
+  const outerWithoutAttempt = {
+    body: {
+      ...run.body,
+      body: run.body.body.filter((statement) => statement !== attempt),
+    },
+  };
+  if (functionHasMemberWrite(remainingAttempt, protectedPaths)
+    || functionHasMemberWrite(outerWithoutAttempt, protectedPaths)
+    || functionHasMemberWrite({ body: attempt.finalizer }, protectedPaths)) return false;
+  const terminal = directDeclarator(attempt.block, 'terminal', 'const');
+  let terminalCall = unwrap(terminal?.declaration?.init);
+  if (terminalCall?.type !== 'AwaitExpression') return false;
+  terminalCall = unwrap(terminalCall.argument);
+  if (!call(terminalCall, ['requestExecutionWorkerTurn'], [
+    (value) => identifier(value, 'supervisor'),
+    (value) => literal(value, 'execution.start'),
+    (value) => exactObject(value, {
+      principalId: (entry) => member(entry, ['identity', 'principalId']),
+      serverScope: (entry) => member(entry, ['identity', 'serverScope']),
+      runtimeGeneration: (entry) => call(entry, ['String'], [
+        (argument) => member(argument, ['identity', 'runtimeGeneration']),
+      ]),
+      sessionId: (entry) => member(entry, ['identity', 'sessionId']),
+      turnId: (entry) => member(entry, ['identity', 'turnId']),
+      requestId: (entry) => member(entry, ['identity', 'requestId']),
+    }),
+    (value) => unwrap(value)?.type === 'ObjectExpression'
+      && value.properties.every((property) => property.type === 'Property' && !property.computed),
+    (value) => objectIncludesExactProperties(value, {
+      deadlineMs: (entry) => identifier(entry, 'deadlineMs'),
+      onContextUsage: (entry) => call(entry, ['createHostContextUsageHandler'], [
+        (argument) => exactObject(argument, {
+          supervisor: (item) => identifier(item, 'supervisor'),
+          identity: (item) => identifier(item, 'identity'),
+          callbacks: (item) => identifier(item, 'callbacks'),
+          onSettled: (item) => member(item, ['contextUsageLease', 'settle']),
+        }),
+      ]),
+    }),
+    (value) => member(value, ['callbacks', 'abortController', 'signal']),
+  ])) return false;
+  const observations = attempt.block.body.filter((statement) => directCallStatement(
+    statement, ['contextUsageLease', 'observeTerminal'], [
+      (value) => member(value, ['terminal', 'payload']),
+    ],
+  ));
+  const releases = attempt.finalizer.body.filter((statement) => directCallStatement(
+    statement, ['contextUsageLease', 'release'], [
+      (value) => identifier(value, 'executionWorkerLease'),
+    ], { await_: true },
+  ));
+  return observations.length === 1 && releases.length === 1
+    && directStatementsOrderedAndReachable(attempt.block, [
+      acquisitions[0], supervisorAssignments[0], terminal.statement, observations[0],
+    ])
+    && currentContextHelperAstContract(sourceByPath);
+}
+
 export function auditQworkSuccessorAstContracts(sourceByPath) {
   const read = (path) => sourceByPath.get(path) || '';
   const result = {
     cancellation: cancellationAstContract(read('electron/host-core/agent/execution-worker-cancellation.cjs')),
     controller: controllerAstContract(read('electron/host-core/agent/execution-worker-controller.cjs')),
-    desktop: desktopAstContract(sourceByPath),
+    desktop: desktopAstContract(sourceByPath) || currentDesktopAstContract(sourceByPath),
     manager: managerIsolationAstContract(
+      read('electron/host-core/agent/execution-worker-manager.cjs'),
+    ) || currentManagerIsolationAstContract(
       read('electron/host-core/agent/execution-worker-manager.cjs'),
     ),
     manager_pressure: managerPressureAstContract(
       read('electron/host-core/agent/execution-worker-manager.cjs'),
     ),
-    supervisor: supervisorAstContract(read('electron/host-core/agent/execution-worker-supervisor.cjs')),
+    supervisor: supervisorAstContract(read('electron/host-core/agent/execution-worker-supervisor.cjs'))
+      || currentSupervisorAstContract(
+        read('electron/host-core/agent/execution-worker-supervisor.cjs'),
+      ),
     supervisor_exit: supervisorExitAstContract(
       read('electron/host-core/agent/execution-worker-supervisor.cjs'),
     ),

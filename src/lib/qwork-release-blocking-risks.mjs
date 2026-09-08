@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parse } from 'acorn';
 import { auditQworkSuccessorAstContracts } from './qwork-release-blocking-risk-ast.mjs';
 
 export const QWORK_RELEASE_BLOCKING_RISK_SCHEMA = 'qbot-qwork-release-blocking-risk-attestation/v5';
@@ -1634,15 +1635,33 @@ function exactStringArgument(tokens, call, index, value) {
     && tokens[range[0]].value === value);
 }
 
-function exactIdentifierObjectArgument(tokens, call, index, expectedBindings) {
+function exactIdentifierObjectArgument(
+  tokens,
+  call,
+  index,
+  expectedBindings,
+  optionalBindings = {},
+) {
   const range = splitCallArguments(tokens, call)[index];
   if (!range || tokens[range[0]]?.value !== '{') return false;
   const close = matchingTokenIndex(tokens, range[0], '{', '}', range[1]);
   if (close !== range[1] - 1) return false;
   const properties = objectProperties(tokens, range[0], close) || [];
-  const entries = Object.entries(expectedBindings);
-  if (properties.length !== entries.length || properties.some((property) => property.spread)) return false;
-  return entries.every(([key, identifier]) => {
+  const requiredEntries = Object.entries(expectedBindings);
+  const allowedEntries = [...requiredEntries, ...Object.entries(optionalBindings)];
+  const allowedBindings = new Map(allowedEntries);
+  if (allowedBindings.size !== allowedEntries.length
+    || properties.length < requiredEntries.length
+    || properties.length > allowedBindings.size
+    || properties.some((property) => property.spread)) return false;
+  const everyPropertyIsAllowedAndExact = properties.every((property) => {
+    const identifier = allowedBindings.get(property.key);
+    return Boolean(identifier
+      && property.value_end - property.value_start === 1
+      && tokens[property.value_start]?.type === 'identifier'
+      && tokens[property.value_start].value === identifier);
+  });
+  return everyPropertyIsAllowedAndExact && requiredEntries.every(([key, identifier]) => {
     const property = uniqueEffectiveProperty(properties, key);
     return Boolean(property
       && property.value_end - property.value_start === 1
@@ -2330,7 +2349,7 @@ function supervisorLifecycleIsolationContract(sourceByPath) {
     && ['handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage']
       .includes(call.path[0])
   ));
-  const handlerBranchContract = (operation, handler, bindings) => {
+  const handlerBranchContract = (operation, handler, bindings, optionalBindings = {}) => {
     const candidates = ifStatements(onMessageTokens).filter((statement) => (
       conditionHasSequence(onMessageTokens, statement, [
         'message', '.', 'operation', '===', operation,
@@ -2343,7 +2362,7 @@ function supervisorLifecycleIsolationContract(sourceByPath) {
       call.path.length === 1
       && call.path[0] === handler
       && argumentHasExactTokens(branch, call, 0, ['message'])
-      && exactIdentifierObjectArgument(branch, call, 1, bindings)
+      && exactIdentifierObjectArgument(branch, call, 1, bindings, optionalBindings)
       && callIsOnUnconditionalPath(branch, call)
     ));
     return callsInBranch.length === 1 && branchHasUnconditionalReturn(
@@ -2356,10 +2375,10 @@ function supervisorLifecycleIsolationContract(sourceByPath) {
       postBrokerResult: 'postBrokerResult',
       terminateChild: 'terminateChild',
       child: 'child',
-    })
+    }, { now: 'now' })
     && handlerBranchContract('execution.observer', 'handleExecutionWorkerObserverMessage', {
       pending: 'pending',
-    });
+    }, { now: 'now' });
 
   const terminalBranches = ifStatements(onMessageTokens).filter((statement) => (
     conditionIsExactCall(
@@ -2440,30 +2459,40 @@ function topLevelRequirePathContract(source, requiredPath) {
 }
 
 function topLevelRequireMemberInvocationContract(source, requiredPath, memberName) {
-  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
-  const depths = tokenBraceDepths(tokens);
-  const matches = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (depths[index] !== 0) continue;
-    const requireCall = callAt(tokens, index);
-    if (!requireCall || requireCall.path.length !== 1 || requireCall.path[0] !== 'require') continue;
-    const arguments_ = splitCallArguments(tokens, requireCall);
-    if (arguments_.length !== 1) continue;
-    const [argument] = arguments_;
-    if (argument[1] - argument[0] !== 1
-      || tokens[argument[0]]?.type !== 'string'
-      || tokens[argument[0]].value !== requiredPath
-      || tokens[requireCall.close + 1]?.value !== '.'
-      || tokens[requireCall.close + 2]?.type !== 'identifier'
-      || tokens[requireCall.close + 2].value !== memberName
-      || tokens[requireCall.close + 3]?.value !== '('
-      || tokens[requireCall.close + 4]?.value !== ')'
-      || ![';', undefined].includes(tokens[requireCall.close + 5]?.value)) continue;
-    const previous = tokens[index - 1]?.value;
-    if (previous && previous !== ';' && previous !== '}') continue;
-    matches.push(requireCall);
+  let program;
+  try {
+    program = parse(String(source ?? ''), {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    });
+  } catch {
+    return false;
   }
-  return matches.length === 1;
+
+  if (program.body.length !== 1 || program.body[0]?.type !== 'ExpressionStatement') {
+    return false;
+  }
+  const invocation = program.body[0].expression;
+  if (invocation?.type !== 'CallExpression'
+    || invocation.optional === true
+    || invocation.arguments.length !== 0) return false;
+
+  const member = invocation.callee;
+  if (member?.type !== 'MemberExpression'
+    || member.computed
+    || member.optional === true
+    || member.property?.type !== 'Identifier'
+    || member.property.name !== memberName) return false;
+
+  const requireCall = member.object;
+  return requireCall?.type === 'CallExpression'
+    && requireCall.optional !== true
+    && requireCall.callee?.type === 'Identifier'
+    && requireCall.callee.name === 'require'
+    && requireCall.arguments.length === 1
+    && requireCall.arguments[0]?.type === 'Literal'
+    && typeof requireCall.arguments[0].value === 'string'
+    && requireCall.arguments[0].value === requiredPath;
 }
 
 function argumentHasExactTokens(tokens, call, index, expectedValues) {
@@ -2789,52 +2818,20 @@ function controllerSingleTurnIdentityContract(tokens, scopes) {
     && directionsBound;
 }
 
-function controllerLoadsExecutionWorkerEntry(source) {
-  const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
-  const scopes = collectFunctionScopes(tokens);
-  const entryResolutions = callsInTokens(tokens).filter((call) => {
-    if (call.path.join('.') !== 'require.resolve') return false;
-    const arguments_ = splitCallArguments(tokens, call);
-    if (arguments_.length !== 1) return false;
-    const [argument] = arguments_;
-    return argument[1] - argument[0] === 1
-      && tokens[argument[0]]?.type === 'string'
-      && tokens[argument[0]].value === './execution-worker-entry.cjs';
-  });
-  if (entryResolutions.length !== 1) return false;
-  const [entryResolution] = entryResolutions;
-  const workerCalls = callsInTokens(tokens).filter((call) => {
-    if (call.path.length !== 1
-      || call.path[0] !== 'Worker'
-      || tokens[call.start - 1]?.value !== 'new') return false;
-    const [first] = splitCallArguments(tokens, call);
-    return Boolean(first
-      && expressionIsExactCall(tokens, first[0], first[1], entryResolution));
-  });
-  if (workerCalls.length !== 1
-    || !topLevelFunctionBinding(source, 'startExecutionWorkerController')
-    || !exactModuleExportsIdentifierSet(source, ['startExecutionWorkerController'])) return false;
-  const start = uniqueScope(scopes, 'startExecutionWorkerController');
-  if (!start) return false;
-  const startTokens = scopeReachableTokens(tokens, start, scopes);
-  const startsController = callsInTokens(startTokens).filter((call) => (
-    call.path.length === 1
-    && call.path[0] === 'ExecutionWorkerController'
-    && startTokens[call.start - 1]?.value === 'new'
-    && startTokens[call.start - 2]?.value === 'return'
-    && argumentHasExactTokens(startTokens, call, 0, ['options'])
-  ));
-  return startsController.length === 1 && controllerSingleTurnIdentityContract(tokens, scopes);
-}
-
 function topLevelRequireContract(sourceByPath) {
   const bootstrap = sourceByPath.get('electron/execution-worker.cjs') || '';
-  const controller = sourceByPath.get('electron/host-core/agent/execution-worker-controller.cjs') || '';
   return topLevelRequireMemberInvocationContract(
     bootstrap,
     './host-core/agent/execution-worker-controller.cjs',
     'startExecutionWorkerController',
-  ) && controllerLoadsExecutionWorkerEntry(controller);
+  );
+}
+
+function controllerStartExportContract(sourceByPath) {
+  const controller = sourceByPath.get(
+    'electron/host-core/agent/execution-worker-controller.cjs',
+  ) || '';
+  return exactModuleExportsIdentifierSet(controller, ['startExecutionWorkerController']);
 }
 
 function sharedWorkerRegistryIsAbsent(source) {
@@ -2917,6 +2914,7 @@ function topLevelRequiredIdentifierBinding(source, requiredPath, identifier) {
 function moduleExportsIdentifierBinding(source, identifier) {
   const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
   const depths = tokenBraceDepths(tokens);
+  if (!commonJsModuleBindingsStable(tokens, depths)) return false;
   const exportsAssignments = [];
   for (let index = 0; index + 4 < tokens.length; index += 1) {
     if (depths[index] !== 0
@@ -2943,6 +2941,7 @@ function exactModuleExportsIdentifierSet(source, identifiers) {
   if (expected.length !== identifiers.length) return false;
   const tokens = reachableTokens(tokenizeJavascriptForRiskAudit(source));
   const depths = tokenBraceDepths(tokens);
+  if (!commonJsModuleBindingsStable(tokens, depths)) return false;
   const moduleExportReferences = [];
   for (let index = 0; index + 2 < tokens.length; index += 1) {
     if (depths[index] === 0
@@ -2970,6 +2969,25 @@ function exactModuleExportsIdentifierSet(source, identifiers) {
       && tokens[property.value_start]?.type === 'identifier'
       && tokens[property.value_start].value === identifier);
   });
+}
+
+function commonJsModuleBindingsStable(tokens, depths) {
+  const assignmentOperators = new Set([
+    '=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '&&=', '||=', '??=', '++', '--',
+  ]);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (depths[index] !== 0 || !['module', 'exports'].includes(tokens[index]?.value)) continue;
+    const previous = tokens[index - 1]?.value;
+    const next = tokens[index + 1]?.value;
+    const isModuleExportsReference = tokens[index].value === 'module'
+      ? next === '.' && tokens[index + 2]?.value === 'exports'
+      : previous === '.' && tokens[index - 2]?.value === 'module';
+    if (isModuleExportsReference) continue;
+    if (['const', 'let', 'var', 'function', 'class'].includes(previous)
+      || assignmentOperators.has(next)
+      || ['++', '--'].includes(previous)) return false;
+  }
+  return true;
 }
 
 function topLevelFunctionBinding(source, identifier) {
@@ -3422,6 +3440,7 @@ function auditPerTurnUtilityProcessChecks(sourceByPath) {
     && desktopContract.same_try_finally_scope
     && astContracts.desktop;
   const stableSingleTurnEntry = topLevelRequireContract(sourceByPath)
+    && controllerStartExportContract(sourceByPath)
     && astContracts.controller;
   const sharedWorkerRegistryAbsent = sharedWorkerRegistryIsAbsent(entry);
   const isolationPassed = supervisorCreatedPerAcquire

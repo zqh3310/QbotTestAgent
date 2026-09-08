@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
 
 export const QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-source-contract/v1';
+// Origin-change attestations keep the historical v1 wire contract.  A
+// current-release attestation contains complete protected-file bytes and an
+// independent file-history readback, so it has an intentionally incompatible
+// schema instead of silently widening v1.
+export const QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA = 'qbot-qwork-release-current-source-contract/v2';
+export const QWORK_RELEASE_FILE_PROVENANCE_SCHEMA = 'qbot-qwork-release-file-provenance/v1';
 export const QWORK_RELEASE_SOURCE_CLAIM_SCOPE = 'source_and_test_declarations';
 export const QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED = false;
 export const QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA = 'qbot-qwork-release-source-owner-scope/v1';
@@ -105,20 +111,25 @@ function currentReleaseRegionScope({
   regionEnd,
   ownerRegionOrder,
   requiredFragments,
+  requiredFragmentLineIndexes,
+  regionEndInclusive = true,
   forbiddenFragments = [],
 }) {
+  const lineIndexes = requiredFragmentLineIndexes
+    ?? requiredFragments.map((_, index) => index + 1);
   return {
     schema_version: QWORK_RELEASE_SOURCE_OWNER_SCOPE_SCHEMA,
     boundary: CURRENT_RELEASE_REGION_SCOPE_BOUNDARY,
     owner_start: byteRecord(ownerStart),
     region_start: byteRecord(regionStart),
     region_end: byteRecord(regionEnd),
+    region_end_inclusive: regionEndInclusive,
     owner_region_order: ownerRegionOrder.map((source) => byteRecord(source)),
     required_fragments: requiredFragments.map(([id, source], index) => ({
       id,
       match: 'line',
       value: byteRecord(source),
-      expected_line_index: index + 1,
+      expected_line_index: lineIndexes[index],
     })),
     forbidden_fragments: forbiddenFragments.map(([id, source, match = 'line']) => ({
       id,
@@ -1189,8 +1200,67 @@ const MR1597_PRODUCT_PATHS = [
   'electron/host-core/agent/execution-worker-supervisor.cjs',
 ];
 const MR1597_TEST_PATH = 'test/unit/desktop/execution-worker-supervisor.test.mjs';
+const MR1597_FACADE_PATH = 'electron/desktop-agent-host.cjs';
+const MR1597_SUPERVISOR_PATH = 'electron/host-core/agent/execution-worker-supervisor.cjs';
+const MR1597_LIFECYCLE_PATH = 'electron/host-core/agent/execution-worker-process-lifecycle.cjs';
 const MR1597_CHANGED_PATHS = [...MR1597_PRODUCT_PATHS, MR1597_TEST_PATH];
-const MR1597_TEST_OWNER = "test('worker process environment is allowlisted and excludes bearer/token material', () => {";
+const MR1597_TEST_TITLE = 'worker process environment is allowlisted and excludes bearer/token material';
+const MR1597_TEST_OWNER = `test('${MR1597_TEST_TITLE}', () => {`;
+const MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA = 'qbot-qwork-mr1597-worker-environment-test-semantics/v2';
+const MR1597_TEST_FACADE_REQUIRE_PATH = '../../../electron/desktop-agent-host.cjs';
+const MR1597_FACADE_SUPERVISOR_REQUIRE_PATH = './host-core/agent/execution-worker-supervisor.cjs';
+const MR1597_SUPERVISOR_LIFECYCLE_REQUIRE_PATH = './execution-worker-process-lifecycle.cjs';
+const MR1597_TOP_LEVEL_BINDING_EXPECTATIONS = Object.freeze([
+  Object.freeze({
+    kind: 'import-default', source: 'node:assert/strict', imported: 'default', local: 'assert',
+  }),
+  Object.freeze({
+    kind: 'import-named', source: 'node:module', imported: 'createRequire', local: 'createRequire',
+  }),
+  Object.freeze({
+    kind: 'import-default', source: 'node:test', imported: 'default', local: 'test',
+  }),
+  Object.freeze({
+    kind: 'const-create-require', source: 'import.meta.url', imported: 'createRequire', local: 'require',
+  }),
+  Object.freeze({
+    kind: 'const-require-destructure', source: MR1597_TEST_FACADE_REQUIRE_PATH,
+    imported: 'workerEnvironment', local: 'workerEnvironment',
+  }),
+]);
+const MR1597_EXPORT_CHAIN_EXPECTATIONS = Object.freeze([
+  Object.freeze({
+    role: 'facade-to-supervisor', path: MR1597_FACADE_PATH,
+    kind: 'object-assign-commonjs-forward', source: MR1597_FACADE_SUPERVISOR_REQUIRE_PATH,
+    imported: '*', local: 'exports',
+  }),
+  Object.freeze({
+    role: 'supervisor-to-lifecycle', path: MR1597_SUPERVISOR_PATH,
+    kind: 'const-require-destructure', source: MR1597_SUPERVISOR_LIFECYCLE_REQUIRE_PATH,
+    imported: 'workerEnvironment', local: 'workerEnvironment',
+  }),
+  Object.freeze({
+    role: 'supervisor-export', path: MR1597_SUPERVISOR_PATH,
+    kind: 'commonjs-object-export', source: 'module.exports',
+    imported: 'workerEnvironment', local: 'workerEnvironment',
+  }),
+  Object.freeze({
+    role: 'lifecycle-declaration', path: MR1597_LIFECYCLE_PATH,
+    kind: 'function-declaration', source: 'source=process.env,authority={}',
+    imported: 'workerEnvironment', local: 'workerEnvironment',
+  }),
+  Object.freeze({
+    role: 'lifecycle-export', path: MR1597_LIFECYCLE_PATH,
+    kind: 'commonjs-object-export', source: 'module.exports',
+    imported: 'workerEnvironment', local: 'workerEnvironment',
+  }),
+]);
+const MR1597_EXPECTED_IDENTITY_VALUES = Object.freeze({
+  IM_USER_MDMCODE: 'mdm-user',
+  IM_USER_EMAIL: 'user@example.test',
+  IM_USER_DOMAINACCOUNT: 'EXAMPLE\\user',
+  IM_USER_PROFILE: '{"displayName":"Worker User"}',
+});
 const MR1597_IDENTITY_LINES = [
   ['test_worker_identity_mdmcode_expected', "    IM_USER_MDMCODE: 'mdm-user',"],
   ['test_worker_identity_email_expected', "    IM_USER_EMAIL: 'user@example.test',"],
@@ -1202,7 +1272,7 @@ const MR1597_ACCESS_TOKEN_KEY = 'IM_USER_ACCESS_TOKEN';
 const MR1597_INPUT_REGION_START = '  const env = workerEnvironment({';
 const MR1597_INPUT_REGION_END = '  }, {';
 const MR1597_EXPECTED_REGION_START = '  assert.deepEqual(env, {';
-const MR1597_EXPECTED_REGION_END = '  });';
+const MR1597_EXPECTED_REGION_END = '});';
 const MR1597_OWNER_REGION_ORDER = [
   MR1597_INPUT_REGION_START,
   MR1597_INPUT_REGION_END,
@@ -1218,6 +1288,7 @@ const MR1597_INPUT_SCOPE = currentReleaseRegionScope({
     ...MR1597_IDENTITY_LINES.map(([id, source]) => [`${id}_input`, source]),
     ['access_token_input', MR1597_ACCESS_TOKEN_INPUT_LINE],
   ],
+  requiredFragmentLineIndexes: [8, 9, 10, 11, 12],
 });
 const MR1597_EXPECTED_SCOPE = currentReleaseRegionScope({
   ownerStart: MR1597_TEST_OWNER,
@@ -1225,6 +1296,8 @@ const MR1597_EXPECTED_SCOPE = currentReleaseRegionScope({
   regionEnd: MR1597_EXPECTED_REGION_END,
   ownerRegionOrder: MR1597_OWNER_REGION_ORDER,
   requiredFragments: MR1597_IDENTITY_LINES,
+  requiredFragmentLineIndexes: [9, 10, 11, 12],
+  regionEndInclusive: false,
   forbiddenFragments: [['access_token_expected_forbidden', MR1597_ACCESS_TOKEN_KEY, 'js-property-key']],
 });
 const MR1597_INTEGRATION_BINDINGS = [
@@ -1850,7 +1923,9 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
       ))) {
       throw new Error(`source_contract_current_release_scope_fragments_invalid:${contractId}:${binding.id}`);
     }
-    if (regionScoped && fragments.some((fragment, index) => fragment.expected_line_index !== index + 1)) {
+    if (regionScoped && fragments.some((fragment, index) => (
+      index > 0 && fragments[index - 1].expected_line_index >= fragment.expected_line_index
+    ))) {
       throw new Error(`source_contract_current_release_scope_fragment_positions_invalid:${contractId}:${binding.id}`);
     }
     const forbiddenFragments = Array.isArray(scope.forbidden_fragments)
@@ -1867,6 +1942,7 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
     }
     if (ownerScoped && (scope.region_start !== undefined
       || scope.region_end !== undefined
+      || scope.region_end_inclusive !== undefined
       || scope.forbidden_fragments !== undefined)) {
       throw new Error(`source_contract_current_release_scope_contract_invalid:${contractId}:${binding.id}`);
     }
@@ -1874,6 +1950,7 @@ function validateCurrentReleaseOwnerScopes(contract, contractId) {
       !byteRecordIsExactLine(scope.region_start)
       || !byteRecordIsExactLine(scope.region_end)
       || scope.region_start.source === scope.region_end.source
+      || (scope.region_end_inclusive !== undefined && typeof scope.region_end_inclusive !== 'boolean')
     )) {
       throw new Error(`source_contract_current_release_scope_region_invalid:${contractId}:${binding.id}`);
     }
@@ -2145,12 +2222,18 @@ export function currentReleaseSourceContractProtectedPaths(contract, currentOwne
       .map((file) => text(file?.path))
       .filter(Boolean)
     : []);
-  return [...new Set([
+  const protectedPaths = [...new Set([
     ...releaseSourceContractProtectedPaths(contract),
     ...(text(currentOwner?.contract_id) === text(contract?.contract_id)
       ? []
       : releaseSourceContractProtectedPaths(currentOwner)),
   ].filter((filePath) => !retiredPaths.has(filePath)))];
+  if (text(contract?.contract_id) === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID
+    && !retiredPaths.has(MR1597_FACADE_PATH)
+    && !protectedPaths.includes(MR1597_FACADE_PATH)) {
+    protectedPaths.push(MR1597_FACADE_PATH);
+  }
+  return protectedPaths;
 }
 
 export function releaseSourceContractTrigger(mr, contract) {
@@ -2294,6 +2377,1105 @@ export function reconstructGitLabAddedLinesSource(change) {
   return `${additions.join('\n')}${terminalNewline ? '\n' : ''}`;
 }
 
+function visitJavaScriptAst(root, visitor) {
+  const parents = new WeakMap();
+  const visit = (node, parent = null) => {
+    if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
+    if (parent) parents.set(node, parent);
+    visitor(node, parent, parents);
+    for (const [key, value] of Object.entries(node)) {
+      if (['end', 'loc', 'range', 'start', 'type'].includes(key)) continue;
+      if (Array.isArray(value)) value.forEach((item) => visit(item, node));
+      else if (value && typeof value.type === 'string') visit(value, node);
+    }
+  };
+  visit(root);
+  return parents;
+}
+
+function staticJavaScriptPropertyName(property) {
+  if (property?.type !== 'Property' || property.computed) return null;
+  if (property.key?.type === 'Identifier') return property.key.name;
+  if (property.key?.type === 'Literal' && typeof property.key.value === 'string') {
+    return property.key.value;
+  }
+  return null;
+}
+
+function javaScriptPatternNames(pattern, names = []) {
+  if (!pattern || typeof pattern !== 'object') return names;
+  if (pattern.type === 'Identifier') names.push(pattern.name);
+  else if (pattern.type === 'RestElement') javaScriptPatternNames(pattern.argument, names);
+  else if (pattern.type === 'AssignmentPattern') javaScriptPatternNames(pattern.left, names);
+  else if (pattern.type === 'ArrayPattern') {
+    pattern.elements?.forEach((element) => javaScriptPatternNames(element, names));
+  } else if (pattern.type === 'ObjectPattern') {
+    pattern.properties?.forEach((property) => {
+      if (property.type === 'RestElement') javaScriptPatternNames(property.argument, names);
+      else javaScriptPatternNames(property.value, names);
+    });
+  }
+  return names;
+}
+
+function memberExpressionRootIdentifier(node) {
+  let cursor = node?.type === 'ChainExpression' ? node.expression : node;
+  while (cursor?.type === 'MemberExpression') {
+    cursor = cursor.object?.type === 'ChainExpression' ? cursor.object.expression : cursor.object;
+  }
+  return cursor?.type === 'Identifier' ? cursor.name : null;
+}
+
+function staticMemberExpressionPropertyName(node) {
+  if (node?.type !== 'MemberExpression') return null;
+  if (!node.computed && node.property?.type === 'Identifier') return node.property.name;
+  if (node.computed && node.property?.type === 'Literal' && typeof node.property.value === 'string') {
+    return node.property.value;
+  }
+  return null;
+}
+
+function expressionMayAliasIdentifier(node, aliases) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'Identifier') return aliases.has(node.name);
+  if (node.type === 'ChainExpression' || node.type === 'AwaitExpression' || node.type === 'YieldExpression') {
+    return expressionMayAliasIdentifier(node.expression || node.argument, aliases);
+  }
+  if (node.type === 'ConditionalExpression') {
+    return expressionMayAliasIdentifier(node.consequent, aliases)
+      || expressionMayAliasIdentifier(node.alternate, aliases);
+  }
+  if (node.type === 'LogicalExpression') {
+    return expressionMayAliasIdentifier(node.left, aliases)
+      || expressionMayAliasIdentifier(node.right, aliases);
+  }
+  if (node.type === 'SequenceExpression') {
+    return expressionMayAliasIdentifier(node.expressions?.at(-1), aliases);
+  }
+  if (node.type === 'AssignmentExpression') {
+    return expressionMayAliasIdentifier(node.right, aliases);
+  }
+  if (node.type === 'CallExpression'
+    && node.callee?.type === 'Identifier'
+    && node.callee.name === 'Object'
+    && node.arguments?.length === 1) {
+    return expressionMayAliasIdentifier(node.arguments[0], aliases);
+  }
+  return false;
+}
+
+function expressionCarriesAliasIdentifier(node, aliases) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'Identifier') return aliases.has(node.name);
+  if (node.type === 'MemberExpression') return false;
+  if (node.type === 'Property') return expressionCarriesAliasIdentifier(node.value, aliases);
+  if (node.type === 'SpreadElement' || node.type === 'RestElement') {
+    return expressionCarriesAliasIdentifier(node.argument, aliases);
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (['end', 'key', 'loc', 'range', 'start', 'type'].includes(key)) continue;
+    if (Array.isArray(value) && value.some((item) => expressionCarriesAliasIdentifier(item, aliases))) return true;
+    if (value && typeof value.type === 'string' && expressionCarriesAliasIdentifier(value, aliases)) return true;
+  }
+  return false;
+}
+
+function containsAliasMemberTarget(node, aliases) {
+  let found = false;
+  visitJavaScriptAst(node, (candidate) => {
+    if (candidate.type !== 'MemberExpression') return;
+    let root = candidate;
+    while (root?.type === 'MemberExpression') root = root.object;
+    if (root?.type === 'ChainExpression') root = root.expression;
+    if (aliases.has(memberExpressionRootIdentifier(candidate))
+      || expressionMayAliasIdentifier(root, aliases)
+      || expressionCarriesAliasIdentifier(root, aliases)) found = true;
+  });
+  return found;
+}
+
+function identityPropertyObservations(objectExpression) {
+  const directProperties = objectExpression?.type === 'ObjectExpression'
+    ? objectExpression.properties.filter((property) => property.type === 'Property')
+    : [];
+  return Object.entries(MR1597_EXPECTED_IDENTITY_VALUES).map(([name, expectedValue]) => {
+    const matches = directProperties.filter((property) => staticJavaScriptPropertyName(property) === name);
+    const property = matches[0];
+    const value = property?.value?.type === 'Literal' && typeof property.value.value === 'string'
+      ? property.value.value : null;
+    const verified = matches.length === 1
+      && property.kind === 'init'
+      && property.method === false
+      && property.shorthand === false
+      && value === expectedValue;
+    return { name, expected_value: expectedValue, occurrence_count: matches.length, value, verified };
+  });
+}
+
+function objectExpressionShapeObservation(objectExpression) {
+  const objectExpressions = [];
+  if (objectExpression?.type === 'ObjectExpression') {
+    visitJavaScriptAst(objectExpression, (node) => {
+      if (node.type === 'ObjectExpression') objectExpressions.push(node);
+    });
+  }
+  const properties = objectExpressions.flatMap((node) => node.properties);
+  const ordinary = properties.filter((property) => property.type === 'Property');
+  const spreadCount = properties.filter((property) => property.type === 'SpreadElement').length;
+  const computedCount = ordinary.filter((property) => property.computed).length;
+  const dynamicKeyCount = ordinary.filter((property) => staticJavaScriptPropertyName(property) === null).length;
+  const accessorCount = ordinary.filter((property) => property.kind !== 'init').length;
+  const methodCount = ordinary.filter((property) => property.method === true).length;
+  const shorthandCount = ordinary.filter((property) => property.shorthand === true).length;
+  const duplicateKeyCount = objectExpressions.reduce((count, node) => {
+    const names = node.properties.map(staticJavaScriptPropertyName).filter((name) => name !== null);
+    return count + names.length - new Set(names).size;
+  }, 0);
+  return {
+    property_count: properties.length,
+    spread_count: spreadCount,
+    computed_count: computedCount,
+    dynamic_key_count: dynamicKeyCount,
+    accessor_count: accessorCount,
+    method_count: methodCount,
+    shorthand_count: shorthandCount,
+    duplicate_key_count: duplicateKeyCount,
+    verified: objectExpression?.type === 'ObjectExpression'
+      && spreadCount === 0
+      && computedCount === 0
+      && dynamicKeyCount === 0
+      && accessorCount === 0
+      && methodCount === 0
+      && shorthandCount === 0
+      && duplicateKeyCount === 0,
+  };
+}
+
+function objectHasExactKeys(value, keys) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+    && stableJson(Object.keys(value).sort()) === stableJson([...keys].sort());
+}
+
+function unwrapJavaScriptChain(node) {
+  return node?.type === 'ChainExpression' ? node.expression : node;
+}
+
+function isExactImportMetaUrl(node) {
+  const expression = unwrapJavaScriptChain(node);
+  return expression?.type === 'MemberExpression'
+    && expression.computed === false
+    && expression.object?.type === 'MetaProperty'
+    && expression.object.meta?.name === 'import'
+    && expression.object.property?.name === 'meta'
+    && expression.property?.type === 'Identifier'
+    && expression.property.name === 'url';
+}
+
+function isExactRequireCall(node, source) {
+  const expression = unwrapJavaScriptChain(node);
+  return expression?.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.callee?.type === 'Identifier'
+    && expression.callee.name === 'require'
+    && expression.arguments?.length === 1
+    && expression.arguments[0]?.type === 'Literal'
+    && expression.arguments[0].value === source;
+}
+
+function javaScriptDeclarationRecords(program) {
+  const records = [];
+  visitJavaScriptAst(program, (node) => {
+    if (['ImportDefaultSpecifier', 'ImportNamespaceSpecifier', 'ImportSpecifier'].includes(node.type)) {
+      if (node.local?.type === 'Identifier') records.push({ name: node.local.name, node });
+    } else if (node.type === 'VariableDeclarator') {
+      javaScriptPatternNames(node.id).forEach((name) => records.push({ name, node }));
+    } else if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+      if (node.id?.type === 'Identifier') records.push({ name: node.id.name, node });
+      node.params?.forEach((parameter) => {
+        javaScriptPatternNames(parameter).forEach((name) => records.push({ name, node: parameter }));
+      });
+    } else if (['ClassDeclaration', 'ClassExpression'].includes(node.type)) {
+      if (node.id?.type === 'Identifier') records.push({ name: node.id.name, node });
+    } else if (node.type === 'CatchClause') {
+      javaScriptPatternNames(node.param).forEach((name) => records.push({ name, node: node.param }));
+    }
+  });
+  return records;
+}
+
+function observeMr1597TopLevelBindings(program) {
+  const declarations = javaScriptDeclarationRecords(program);
+  const matchesByLocal = new Map(MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.map(({ local }) => [local, []]));
+  for (const statement of program.body || []) {
+    if (statement.type === 'ImportDeclaration' && statement.source?.type === 'Literal') {
+      for (const specifier of statement.specifiers || []) {
+        for (const expected of MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.slice(0, 3)) {
+          const imported = specifier.type === 'ImportDefaultSpecifier'
+            ? 'default'
+            : specifier.type === 'ImportSpecifier'
+              ? (specifier.imported?.name || specifier.imported?.value)
+              : '*';
+          const kind = specifier.type === 'ImportDefaultSpecifier'
+            ? 'import-default'
+            : specifier.type === 'ImportSpecifier' ? 'import-named' : 'import-namespace';
+          if (kind === expected.kind
+            && statement.source.value === expected.source
+            && imported === expected.imported
+            && specifier.local?.name === expected.local) {
+            matchesByLocal.get(expected.local).push(specifier);
+          }
+        }
+      }
+    }
+    if (statement.type !== 'VariableDeclaration'
+      || statement.kind !== 'const'
+      || statement.declarations?.length !== 1) continue;
+    const [declaration] = statement.declarations;
+    if (declaration.id?.type === 'Identifier'
+      && declaration.id.name === 'require'
+      && declaration.init?.type === 'CallExpression'
+      && declaration.init.optional !== true
+      && declaration.init.callee?.type === 'Identifier'
+      && declaration.init.callee.name === 'createRequire'
+      && declaration.init.arguments?.length === 1
+      && isExactImportMetaUrl(declaration.init.arguments[0])) {
+      matchesByLocal.get('require').push(declaration);
+    }
+    const properties = declaration.id?.type === 'ObjectPattern' ? declaration.id.properties : [];
+    if (properties.length === 1
+      && properties[0].type === 'Property'
+      && properties[0].computed === false
+      && properties[0].kind === 'init'
+      && properties[0].method === false
+      && properties[0].shorthand === true
+      && properties[0].key?.type === 'Identifier'
+      && properties[0].key.name === 'workerEnvironment'
+      && properties[0].value?.type === 'Identifier'
+      && properties[0].value.name === 'workerEnvironment'
+      && isExactRequireCall(declaration.init, MR1597_TEST_FACADE_REQUIRE_PATH)) {
+      matchesByLocal.get('workerEnvironment').push(declaration);
+    }
+  }
+  const allowedDeclarationNodes = new Set();
+  const rows = MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.map((expected) => {
+    const matches = matchesByLocal.get(expected.local);
+    const declarationCount = declarations.filter(({ name }) => name === expected.local).length;
+    const verified = matches.length === 1 && declarationCount === 1;
+    if (verified) allowedDeclarationNodes.add(matches[0]);
+    return { ...expected, count: matches.length, verified };
+  });
+  return { rows, allowedDeclarationNodes };
+}
+
+function expressionAliasesAnyIdentifier(node, aliases) {
+  const expression = unwrapJavaScriptChain(node);
+  if (!expression) return false;
+  if (expression.type === 'Identifier') return aliases.has(expression.name);
+  if (['AwaitExpression', 'YieldExpression'].includes(expression.type)) {
+    return expressionAliasesAnyIdentifier(expression.argument, aliases);
+  }
+  if (expression.type === 'AssignmentExpression') {
+    return expressionAliasesAnyIdentifier(expression.right, aliases);
+  }
+  if (expression.type === 'SequenceExpression') {
+    return expressionAliasesAnyIdentifier(expression.expressions?.at(-1), aliases);
+  }
+  if (expression.type === 'ConditionalExpression') {
+    return expressionAliasesAnyIdentifier(expression.consequent, aliases)
+      || expressionAliasesAnyIdentifier(expression.alternate, aliases);
+  }
+  if (expression.type === 'LogicalExpression') {
+    return expressionAliasesAnyIdentifier(expression.left, aliases)
+      || expressionAliasesAnyIdentifier(expression.right, aliases);
+  }
+  if (expression.type === 'CallExpression'
+    && expression.optional !== true
+    && expression.callee?.type === 'Identifier'
+    && expression.callee.name === 'Object'
+    && expression.arguments?.length === 1) {
+    return expressionAliasesAnyIdentifier(expression.arguments[0], aliases);
+  }
+  return false;
+}
+
+function observeProtectedBindingViolations(program, {
+  protectedNames,
+  allowedDeclarationNodes = new Set(),
+  allowedWriteNodes = new Set(),
+  allowedIndirectNodes = new Set(),
+} = {}) {
+  const aliases = new Set(protectedNames);
+  let changed = true;
+  const nodes = [];
+  visitJavaScriptAst(program, (node) => nodes.push(node));
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      if (node.type === 'VariableDeclarator'
+        && node.id?.type === 'Identifier'
+        && expressionAliasesAnyIdentifier(node.init, aliases)
+        && !aliases.has(node.id.name)) {
+        aliases.add(node.id.name);
+        changed = true;
+      }
+      if (node.type === 'AssignmentExpression'
+        && node.operator === '='
+        && node.left?.type === 'Identifier'
+        && expressionAliasesAnyIdentifier(node.right, aliases)
+        && !aliases.has(node.left.name)) {
+        aliases.add(node.left.name);
+        changed = true;
+      }
+    }
+  }
+  const violations = new Map();
+  const record = (node, kind) => violations.set(`${node?.start ?? -1}:${node?.end ?? -1}:${kind}`, kind);
+  for (const { name, node } of javaScriptDeclarationRecords(program)) {
+    if (protectedNames.has(name) && !allowedDeclarationNodes.has(node)) {
+      record(node, 'duplicate-or-shadow-declaration');
+    }
+  }
+  for (const node of nodes) {
+    if (node.type === 'AssignmentExpression') {
+      if (javaScriptPatternNames(node.left).some((name) => protectedNames.has(name))) {
+        record(node, 'identifier-write');
+      }
+      if (containsAliasMemberTarget(node.left, aliases) && !allowedWriteNodes.has(node)) {
+        record(node, 'member-write');
+      }
+    } else if (node.type === 'UpdateExpression') {
+      if (node.argument?.type === 'Identifier' && protectedNames.has(node.argument.name)) {
+        record(node, 'identifier-write');
+      }
+      if (containsAliasMemberTarget(node.argument, aliases)) record(node, 'member-write');
+    } else if (node.type === 'UnaryExpression' && node.operator === 'delete') {
+      if (node.argument?.type === 'Identifier' && protectedNames.has(node.argument.name)) {
+        record(node, 'identifier-write');
+      }
+      if (containsAliasMemberTarget(node.argument, aliases)) record(node, 'member-write');
+    } else if (['ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const target = node.left?.type === 'VariableDeclaration' ? node.left.declarations?.[0]?.id : node.left;
+      if (javaScriptPatternNames(target).some((name) => protectedNames.has(name))) {
+        record(node, 'identifier-write');
+      }
+      if (containsAliasMemberTarget(target, aliases)) record(node, 'member-write');
+    }
+    if (node.type === 'CallExpression') {
+      const callee = unwrapJavaScriptChain(node.callee);
+      const receiver = callee?.type === 'MemberExpression' ? unwrapJavaScriptChain(callee.object) : null;
+      const receiverName = receiver?.type === 'Identifier' ? receiver.name : null;
+      const operation = staticMemberExpressionPropertyName(callee);
+      const knownIndirectWrite = (receiverName === 'Object'
+        && ['assign', 'defineProperties', 'defineProperty', 'setPrototypeOf'].includes(operation))
+        || (receiverName === 'Reflect'
+          && ['defineProperty', 'deleteProperty', 'set', 'setPrototypeOf'].includes(operation));
+      const dynamicIndirectWrite = ['Object', 'Reflect'].includes(receiverName) && operation === null;
+      if ((knownIndirectWrite || dynamicIndirectWrite)
+        && expressionAliasesAnyIdentifier(node.arguments?.[0], aliases)
+        && !allowedIndirectNodes.has(node)) {
+        record(node, dynamicIndirectWrite ? 'dynamic-indirect-member-write' : 'indirect-member-write');
+      }
+    }
+  }
+  const kinds = [...new Set(violations.values())].sort();
+  return { count: violations.size, kinds };
+}
+
+function isModuleExportsMember(node) {
+  const expression = unwrapJavaScriptChain(node);
+  return expression?.type === 'MemberExpression'
+    && expression.computed === false
+    && expression.object?.type === 'Identifier'
+    && expression.object.name === 'module'
+    && expression.property?.type === 'Identifier'
+    && expression.property.name === 'exports';
+}
+
+function topLevelModuleExportsAssignments(program) {
+  return (program?.body || []).flatMap((statement) => {
+    const expression = statement.type === 'ExpressionStatement' ? statement.expression : null;
+    return expression?.type === 'AssignmentExpression'
+      && expression.operator === '='
+      && isModuleExportsMember(expression.left)
+      && expression.right?.type === 'ObjectExpression' ? [expression] : [];
+  });
+}
+
+function objectHasExactShorthandProperty(objectExpression, name) {
+  const matches = objectExpression?.type === 'ObjectExpression'
+    ? objectExpression.properties.filter((property) => (
+      property.type === 'Property'
+      && property.computed === false
+      && property.kind === 'init'
+      && property.method === false
+      && property.shorthand === true
+      && property.key?.type === 'Identifier'
+      && property.key.name === name
+      && property.value?.type === 'Identifier'
+      && property.value.name === name
+    )) : [];
+  return matches.length === 1;
+}
+
+function observeMr1597ExportChain(sourceByPath) {
+  const programs = new Map();
+  for (const filePath of [MR1597_FACADE_PATH, MR1597_SUPERVISOR_PATH, MR1597_LIFECYCLE_PATH]) {
+    try {
+      programs.set(filePath, parse(String(sourceByPath.get(filePath) || ''), {
+        allowHashBang: true, ecmaVersion: 'latest', sourceType: 'script',
+      }));
+    } catch {
+      programs.set(filePath, null);
+    }
+  }
+  const facade = programs.get(MR1597_FACADE_PATH);
+  const supervisor = programs.get(MR1597_SUPERVISOR_PATH);
+  const lifecycle = programs.get(MR1597_LIFECYCLE_PATH);
+  const facadeForwards = (facade?.body || []).flatMap((statement) => {
+    const call = statement.type === 'ExpressionStatement' ? unwrapJavaScriptChain(statement.expression) : null;
+    const callee = unwrapJavaScriptChain(call?.callee);
+    return call?.type === 'CallExpression'
+      && call.optional !== true
+      && callee?.type === 'MemberExpression'
+      && callee.computed === false
+      && callee.object?.type === 'Identifier'
+      && callee.object.name === 'Object'
+      && callee.property?.name === 'assign'
+      && call.arguments?.length === 2
+      && call.arguments[0]?.type === 'Identifier'
+      && call.arguments[0].name === 'exports'
+      && isExactRequireCall(call.arguments[1], MR1597_FACADE_SUPERVISOR_REQUIRE_PATH) ? [call] : [];
+  });
+  const supervisorImports = [];
+  for (const statement of supervisor?.body || []) {
+    if (statement.type !== 'VariableDeclaration' || statement.kind !== 'const') continue;
+    for (const declaration of statement.declarations || []) {
+      const matches = declaration.id?.type === 'ObjectPattern'
+        ? declaration.id.properties.filter((property) => (
+          property.type === 'Property' && property.computed === false && property.shorthand === true
+          && property.key?.name === 'workerEnvironment' && property.value?.name === 'workerEnvironment'
+        )) : [];
+      if (matches.length === 1
+        && isExactRequireCall(declaration.init, MR1597_SUPERVISOR_LIFECYCLE_REQUIRE_PATH)) {
+        supervisorImports.push(declaration);
+      }
+    }
+  }
+  const supervisorExports = topLevelModuleExportsAssignments(supervisor)
+    .filter((assignment) => objectHasExactShorthandProperty(assignment.right, 'workerEnvironment'));
+  const lifecycleDeclarations = (lifecycle?.body || []).filter((node) => (
+    node.type === 'FunctionDeclaration'
+    && node.id?.name === 'workerEnvironment'
+    && node.async === false
+    && node.generator === false
+    && node.params?.length === 2
+    && node.params[0]?.type === 'AssignmentPattern'
+    && node.params[0].left?.type === 'Identifier'
+    && node.params[0].left.name === 'source'
+    && node.params[0].right?.type === 'MemberExpression'
+    && node.params[0].right.computed === false
+    && node.params[0].right.object?.type === 'Identifier'
+    && node.params[0].right.object.name === 'process'
+    && node.params[0].right.property?.name === 'env'
+    && node.params[1]?.type === 'AssignmentPattern'
+    && node.params[1].left?.type === 'Identifier'
+    && node.params[1].left.name === 'authority'
+    && node.params[1].right?.type === 'ObjectExpression'
+    && node.params[1].right.properties?.length === 0
+  ));
+  const lifecycleExports = topLevelModuleExportsAssignments(lifecycle)
+    .filter((assignment) => objectHasExactShorthandProperty(assignment.right, 'workerEnvironment'));
+  const matches = [facadeForwards, supervisorImports, supervisorExports, lifecycleDeclarations, lifecycleExports];
+  const steps = MR1597_EXPORT_CHAIN_EXPECTATIONS.map((expected, index) => ({
+    ...expected,
+    count: matches[index].length,
+    verified: matches[index].length === 1,
+  }));
+  const chainViolations = [];
+  for (const [filePath, protectedNames, allowedDeclarations, allowedWrites, allowedIndirect] of [
+    [MR1597_FACADE_PATH, new Set(['Object', 'exports', 'require']), new Set(), new Set(), new Set(facadeForwards)],
+    [MR1597_SUPERVISOR_PATH, new Set(['require', 'module', 'exports', 'workerEnvironment']),
+      new Set(supervisorImports), new Set(supervisorExports), new Set()],
+    [MR1597_LIFECYCLE_PATH, new Set(['module', 'exports', 'process', 'workerEnvironment']),
+      new Set(lifecycleDeclarations), new Set(lifecycleExports), new Set()],
+  ]) {
+    const program = programs.get(filePath);
+    if (!program) {
+      chainViolations.push({ count: 1, kinds: [`parse-failed:${filePath}`] });
+      continue;
+    }
+    const observed = observeProtectedBindingViolations(program, {
+      protectedNames,
+      allowedDeclarationNodes: allowedDeclarations,
+      allowedWriteNodes: allowedWrites,
+      allowedIndirectNodes: allowedIndirect,
+    });
+    chainViolations.push({
+      count: observed.count,
+      kinds: observed.kinds.map((kind) => `${filePath}:${kind}`),
+    });
+  }
+  const protectedBindingViolationCount = chainViolations.reduce((sum, item) => sum + item.count, 0);
+  const protectedBindingViolationKinds = [...new Set(chainViolations.flatMap((item) => item.kinds))].sort();
+  return {
+    steps,
+    protected_binding_violation_count: protectedBindingViolationCount,
+    protected_binding_violation_kinds: protectedBindingViolationKinds,
+    verified: steps.every((step) => step.verified)
+      && protectedBindingViolationCount === 0
+      && protectedBindingViolationKinds.length === 0,
+  };
+}
+
+function observeMr1597DynamicCodeExecution(program, ownerCallback) {
+  const executionNodes = new Map();
+  const record = (node, kind) => {
+    const key = `${node?.start ?? -1}:${node?.end ?? -1}`;
+    if (!executionNodes.has(key)) executionNodes.set(key, kind);
+  };
+  const evalAliases = new Set(['eval']);
+  const functionAliases = new Set(['Function']);
+  const vmObjectAliases = new Set();
+  const vmExecutionAliases = new Set();
+  const allNodes = [];
+  visitJavaScriptAst(program, (node) => allNodes.push(node));
+  const isNodeVmSource = (node) => node?.type === 'Literal' && ['node:vm', 'vm'].includes(node.value);
+  for (const node of allNodes) {
+    if (node.type === 'ImportDeclaration' && isNodeVmSource(node.source)) {
+      record(node, 'node_vm_module');
+      for (const specifier of node.specifiers || []) {
+        if (specifier.type === 'ImportSpecifier') vmExecutionAliases.add(specifier.local.name);
+        else vmObjectAliases.add(specifier.local.name);
+      }
+    }
+    if (node.type === 'VariableDeclarator' && isExactRequireCall(node.init, 'node:vm')) {
+      record(node.init, 'node_vm_module');
+      if (node.id?.type === 'Identifier') vmObjectAliases.add(node.id.name);
+      else javaScriptPatternNames(node.id).forEach((name) => vmExecutionAliases.add(name));
+    }
+    if (node.type === 'VariableDeclarator' && isExactRequireCall(node.init, 'vm')) {
+      record(node.init, 'node_vm_module');
+      if (node.id?.type === 'Identifier') vmObjectAliases.add(node.id.name);
+      else javaScriptPatternNames(node.id).forEach((name) => vmExecutionAliases.add(name));
+    }
+  }
+  const expressionIsGlobalMember = (node, propertyName) => {
+    const expression = unwrapJavaScriptChain(node);
+    return expression?.type === 'MemberExpression'
+      && ['global', 'globalThis', 'self', 'window'].includes(memberExpressionRootIdentifier(expression))
+      && staticMemberExpressionPropertyName(expression) === propertyName;
+  };
+  const expressionIsAlias = (node, aliases, globalName) => {
+    const expression = unwrapJavaScriptChain(node);
+    if (expression?.type === 'Identifier') return aliases.has(expression.name);
+    if (expression?.type === 'SequenceExpression') {
+      return expressionIsAlias(expression.expressions?.at(-1), aliases, globalName);
+    }
+    return expressionIsGlobalMember(expression, globalName);
+  };
+  const bindAliasPattern = (pattern, value, aliases, globalName) => {
+    if (pattern?.type === 'Identifier' && expressionIsAlias(value, aliases, globalName)) {
+      const added = !aliases.has(pattern.name);
+      aliases.add(pattern.name);
+      return added;
+    }
+    if (pattern?.type === 'AssignmentPattern') {
+      return bindAliasPattern(pattern.left, value || pattern.right, aliases, globalName);
+    }
+    if (pattern?.type === 'ArrayPattern' && value?.type === 'ArrayExpression') {
+      let added = false;
+      pattern.elements.forEach((element, index) => {
+        added = bindAliasPattern(element, value.elements?.[index], aliases, globalName) || added;
+      });
+      return added;
+    }
+    if (pattern?.type === 'ObjectPattern' && value?.type === 'ObjectExpression') {
+      let added = false;
+      pattern.properties.forEach((property) => {
+        if (property.type === 'RestElement') return false;
+        const key = staticJavaScriptPropertyName(property);
+        const sourceProperty = value.properties.find((candidate) => (
+          staticJavaScriptPropertyName(candidate) === key
+        ));
+        added = bindAliasPattern(property.value, sourceProperty?.value, aliases, globalName) || added;
+      });
+      return added;
+    }
+    if (pattern?.type === 'ObjectPattern'
+      && value?.type === 'Identifier'
+      && ['global', 'globalThis', 'self', 'window'].includes(value.name)) {
+      let added = false;
+      for (const property of pattern.properties) {
+        if (property.type !== 'Property' || staticJavaScriptPropertyName(property) !== globalName) continue;
+        for (const name of javaScriptPatternNames(property.value)) {
+          if (!aliases.has(name)) {
+            aliases.add(name);
+            added = true;
+          }
+        }
+      }
+      return added;
+    }
+    return false;
+  };
+  let aliasesChanged = true;
+  while (aliasesChanged) {
+    aliasesChanged = false;
+    for (const node of allNodes) {
+      for (const [aliases, globalName] of [[evalAliases, 'eval'], [functionAliases, 'Function']]) {
+        if (node.type === 'VariableDeclarator') {
+          aliasesChanged = bindAliasPattern(node.id, node.init, aliases, globalName) || aliasesChanged;
+        } else if (node.type === 'AssignmentExpression' && node.operator === '=') {
+          aliasesChanged = bindAliasPattern(node.left, node.right, aliases, globalName) || aliasesChanged;
+        }
+      }
+    }
+  }
+  const ownerNodes = [];
+  if (ownerCallback) visitJavaScriptAst(ownerCallback.body, (node) => ownerNodes.push(node));
+  const vmOperations = new Set([
+    'Script', 'SourceTextModule', 'SyntheticModule', 'compileFunction',
+    'runInContext', 'runInNewContext', 'runInThisContext',
+  ]);
+  for (const node of ownerNodes) {
+    if (node.type === 'ImportExpression') {
+      record(node, 'dynamic_import');
+      continue;
+    }
+    if (!['CallExpression', 'NewExpression'].includes(node.type)) continue;
+    const callee = unwrapJavaScriptChain(node.callee);
+    const property = staticMemberExpressionPropertyName(callee);
+    const calleeObject = callee?.type === 'MemberExpression' ? unwrapJavaScriptChain(callee.object) : null;
+    const calleeObjectProperty = staticMemberExpressionPropertyName(calleeObject);
+    const directEval = expressionIsAlias(callee, evalAliases, 'eval');
+    const directFunction = expressionIsAlias(callee, functionAliases, 'Function');
+    if (directEval) {
+      record(node, callee?.type === 'Identifier' && callee.name === 'eval' ? 'direct_eval' : 'indirect_eval');
+    } else if (directFunction) {
+      record(node, 'function_constructor');
+    } else if (['call', 'apply'].includes(property)
+      && expressionIsAlias(calleeObject, evalAliases, 'eval')) {
+      record(node, 'eval_call_or_apply');
+    } else if (['call', 'apply'].includes(property)
+      && expressionIsAlias(calleeObject, functionAliases, 'Function')) {
+      record(node, 'function_call_or_apply');
+    } else if (callee?.type === 'MemberExpression'
+      && callee.object?.type === 'Identifier'
+      && callee.object.name === 'Reflect'
+      && ['apply', 'construct'].includes(property)
+      && expressionIsAlias(node.arguments?.[0], evalAliases, 'eval')) {
+      record(node, 'reflect_eval');
+    } else if (callee?.type === 'MemberExpression'
+      && callee.object?.type === 'Identifier'
+      && callee.object.name === 'Reflect'
+      && ['apply', 'construct'].includes(property)
+      && expressionIsAlias(node.arguments?.[0], functionAliases, 'Function')) {
+      record(node, 'reflect_function_constructor');
+    } else if (property === 'constructor' || (['call', 'apply'].includes(property)
+      && calleeObjectProperty === 'constructor')) {
+      record(node, 'member_constructor');
+    } else if (callee?.type === 'MemberExpression' && callee.computed && property === null) {
+      record(node, 'dynamic_computed_callee');
+    } else if (callee?.type === 'Identifier' && vmExecutionAliases.has(callee.name)) {
+      record(node, 'node_vm_execution');
+    } else if (callee?.type === 'MemberExpression'
+      && vmObjectAliases.has(memberExpressionRootIdentifier(callee))
+      && vmOperations.has(property)) {
+      record(node, 'node_vm_execution');
+    }
+    if (isExactRequireCall(node, 'node:vm') || isExactRequireCall(node, 'vm')) {
+      record(node, 'node_vm_module');
+    }
+  }
+  const kinds = [...new Set(executionNodes.values())].sort();
+  return { count: executionNodes.size, kinds };
+}
+
+function mr1597SemanticObservationIsVerified(observation, { requireVerified = true } = {}) {
+  const rootKeys = [
+    'schema_version', 'javascript_parse_verified', 'top_level_bindings',
+    'protected_local_shadow_count', 'protected_binding_violation_count',
+    'protected_binding_violation_kinds', 'worker_environment_export_chain',
+    'dynamic_code_execution_count', 'dynamic_code_execution_kinds',
+    'owner_test_occurrence_count', 'owner_test_top_level', 'owner_callback_parameter_count',
+    'env_binding_occurrence_count', 'env_declaration_occurrence_count',
+    'env_declaration_direct_statement', 'worker_environment_call_occurrence_count',
+    'worker_environment_argument_count', 'input_object_literal', 'input_object_shape',
+    'input_identity_properties', 'input_access_token_occurrence_count',
+    'deep_equal_call_occurrence_count', 'deep_equal_env_assertion_occurrence_count',
+    'assertion_direct_statement', 'assertion_argument_count', 'declaration_precedes_assertion',
+    'expected_object_literal', 'expected_object_shape', 'expected_identity_properties',
+    'expected_access_token_occurrence_count', 'env_aliases', 'env_mutation_count',
+    'env_escape_count', 'verified',
+  ];
+  const identitiesValid = (rows) => Array.isArray(rows)
+    && rows.length === Object.keys(MR1597_EXPECTED_IDENTITY_VALUES).length
+    && rows.every((row, index) => {
+      const [name, expectedValue] = Object.entries(MR1597_EXPECTED_IDENTITY_VALUES)[index];
+      return objectHasExactKeys(row, [
+        'name', 'expected_value', 'occurrence_count', 'value', 'verified',
+      ])
+        && row?.name === name
+        && row?.expected_value === expectedValue
+        && row?.occurrence_count === 1
+        && row?.value === expectedValue
+        && row?.verified === true;
+    });
+  const shapeValid = (shape) => objectHasExactKeys(shape, [
+    'property_count', 'spread_count', 'computed_count', 'dynamic_key_count', 'accessor_count',
+    'method_count', 'shorthand_count', 'duplicate_key_count', 'verified',
+  ])
+    && shape?.verified === true
+    && Number.isSafeInteger(shape?.property_count)
+    && shape.property_count >= Object.keys(MR1597_EXPECTED_IDENTITY_VALUES).length
+    && ['spread_count', 'computed_count', 'dynamic_key_count', 'accessor_count', 'method_count',
+      'shorthand_count', 'duplicate_key_count'].every((field) => shape?.[field] === 0);
+  const expectedTopLevelBindings = MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.map((row) => ({
+    ...row, count: 1, verified: true,
+  }));
+  const expectedExportChain = {
+    steps: MR1597_EXPORT_CHAIN_EXPECTATIONS.map((row) => ({ ...row, count: 1, verified: true })),
+    protected_binding_violation_count: 0,
+    protected_binding_violation_kinds: [],
+    verified: true,
+  };
+  const aliases = observation?.env_aliases;
+  return objectHasExactKeys(observation, rootKeys)
+    && observation?.schema_version === MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA
+    && observation?.javascript_parse_verified === true
+    && stableJson(observation?.top_level_bindings) === stableJson(expectedTopLevelBindings)
+    && observation?.protected_binding_violation_count === 0
+    && Array.isArray(observation?.protected_binding_violation_kinds)
+    && observation.protected_binding_violation_kinds.length === 0
+    && stableJson(observation?.worker_environment_export_chain) === stableJson(expectedExportChain)
+    && observation?.dynamic_code_execution_count === 0
+    && Array.isArray(observation?.dynamic_code_execution_kinds)
+    && observation.dynamic_code_execution_kinds.length === 0
+    && observation?.owner_test_occurrence_count === 1
+    && observation?.owner_test_top_level === true
+    && observation?.owner_callback_parameter_count === 0
+    && observation?.protected_local_shadow_count === 0
+    && observation?.env_binding_occurrence_count === 1
+    && observation?.env_declaration_occurrence_count === 1
+    && observation?.env_declaration_direct_statement === true
+    && observation?.worker_environment_call_occurrence_count === 1
+    && observation?.worker_environment_argument_count === 2
+    && observation?.input_object_literal === true
+    && shapeValid(observation?.input_object_shape)
+    && identitiesValid(observation?.input_identity_properties)
+    && observation?.input_access_token_occurrence_count === 1
+    && observation?.deep_equal_call_occurrence_count === 1
+    && observation?.deep_equal_env_assertion_occurrence_count === 1
+    && observation?.assertion_direct_statement === true
+    && observation?.assertion_argument_count === 2
+    && observation?.declaration_precedes_assertion === true
+    && observation?.expected_object_literal === true
+    && shapeValid(observation?.expected_object_shape)
+    && identitiesValid(observation?.expected_identity_properties)
+    && observation?.expected_access_token_occurrence_count === 0
+    && Array.isArray(aliases)
+    && aliases.includes('env')
+    && new Set(aliases).size === aliases.length
+    && stableJson(aliases) === stableJson([...aliases].sort())
+    && aliases.every((name) => typeof name === 'string' && /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name))
+    && observation?.env_mutation_count === 0
+    && observation?.env_escape_count === 0
+    && (!requireVerified || observation?.verified === true);
+}
+
+function observeMr1597WorkerEnvironmentTestSemantics(sourceByPath, failures) {
+  const source = sourceByPath.get(MR1597_TEST_PATH) || '';
+  const emptyShape = objectExpressionShapeObservation(null);
+  const emptyIdentities = identityPropertyObservations(null);
+  const observation = {
+    schema_version: MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA,
+    javascript_parse_verified: false,
+    top_level_bindings: MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.map((row) => ({
+      ...row, count: 0, verified: false,
+    })),
+    protected_binding_violation_count: 0,
+    protected_binding_violation_kinds: [],
+    worker_environment_export_chain: observeMr1597ExportChain(sourceByPath),
+    dynamic_code_execution_count: 0,
+    dynamic_code_execution_kinds: [],
+    owner_test_occurrence_count: 0,
+    owner_test_top_level: false,
+    owner_callback_parameter_count: null,
+    protected_local_shadow_count: 0,
+    env_binding_occurrence_count: 0,
+    env_declaration_occurrence_count: 0,
+    env_declaration_direct_statement: false,
+    worker_environment_call_occurrence_count: 0,
+    worker_environment_argument_count: null,
+    input_object_literal: false,
+    input_object_shape: emptyShape,
+    input_identity_properties: emptyIdentities,
+    input_access_token_occurrence_count: 0,
+    deep_equal_call_occurrence_count: 0,
+    deep_equal_env_assertion_occurrence_count: 0,
+    assertion_direct_statement: false,
+    assertion_argument_count: null,
+    declaration_precedes_assertion: false,
+    expected_object_literal: false,
+    expected_object_shape: emptyShape,
+    expected_identity_properties: emptyIdentities,
+    expected_access_token_occurrence_count: 0,
+    env_aliases: ['env'],
+    env_mutation_count: 0,
+    env_escape_count: 0,
+    verified: false,
+  };
+  let program;
+  try {
+    program = parse(String(source || ''), {
+      allowHashBang: true,
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+    });
+    observation.javascript_parse_verified = true;
+  } catch {
+    failures.push('current_release_semantics:mr1597:javascript_parse_failed');
+    return observation;
+  }
+
+  const topLevelBindings = observeMr1597TopLevelBindings(program);
+  observation.top_level_bindings = topLevelBindings.rows;
+  const bindingViolations = observeProtectedBindingViolations(program, {
+    protectedNames: new Set(MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.map(({ local }) => local)),
+    allowedDeclarationNodes: topLevelBindings.allowedDeclarationNodes,
+  });
+  observation.protected_binding_violation_count = bindingViolations.count;
+  observation.protected_binding_violation_kinds = bindingViolations.kinds;
+  observation.protected_local_shadow_count = javaScriptDeclarationRecords(program).filter(({ name, node }) => (
+    MR1597_TOP_LEVEL_BINDING_EXPECTATIONS.some((expected) => expected.local === name)
+      && !topLevelBindings.allowedDeclarationNodes.has(node)
+  )).length;
+
+  const parentByNode = new WeakMap();
+  const allNodes = [];
+  visitJavaScriptAst(program, (node, parent) => {
+    allNodes.push(node);
+    if (parent) parentByNode.set(node, parent);
+  });
+  const ownerCalls = allNodes.filter((node) => (
+    node.type === 'CallExpression'
+    && node.callee?.type === 'Identifier'
+    && node.callee.name === 'test'
+    && node.arguments?.[0]?.type === 'Literal'
+    && node.arguments[0].value === MR1597_TEST_TITLE
+  ));
+  observation.owner_test_occurrence_count = ownerCalls.length;
+  const ownerCall = ownerCalls.length === 1 ? ownerCalls[0] : null;
+  const ownerStatement = ownerCall ? parentByNode.get(ownerCall) : null;
+  observation.owner_test_top_level = ownerStatement?.type === 'ExpressionStatement'
+    && parentByNode.get(ownerStatement)?.type === 'Program';
+  const ownerCallback = ownerCall?.arguments?.[1];
+  const callbackValid = ['ArrowFunctionExpression', 'FunctionExpression'].includes(ownerCallback?.type)
+    && ownerCallback.async === false
+    && ownerCallback.generator === false
+    && ownerCallback.body?.type === 'BlockStatement';
+  observation.owner_callback_parameter_count = callbackValid ? ownerCallback.params.length : null;
+  if (!callbackValid || ownerCallback.params.length !== 0) {
+    failures.push('current_release_semantics:mr1597:owner_callback_invalid');
+  }
+  if (!ownerCall || !callbackValid) {
+    failures.push('current_release_semantics:mr1597:owner_test_invalid');
+    return observation;
+  }
+
+  const dynamicExecution = observeMr1597DynamicCodeExecution(program, ownerCallback);
+  observation.dynamic_code_execution_count = dynamicExecution.count;
+  observation.dynamic_code_execution_kinds = dynamicExecution.kinds;
+
+  const ownerNodes = [];
+  const ownerParentByNode = new WeakMap();
+  visitJavaScriptAst(ownerCallback.body, (node, parent) => {
+    ownerNodes.push(node);
+    if (parent) ownerParentByNode.set(node, parent);
+  });
+  const bindingNames = [];
+  for (const node of ownerNodes) {
+    if (node.type === 'VariableDeclarator') javaScriptPatternNames(node.id, bindingNames);
+    else if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+      if (node.id) javaScriptPatternNames(node.id, bindingNames);
+      node.params?.forEach((parameter) => javaScriptPatternNames(parameter, bindingNames));
+    } else if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
+      if (node.id) javaScriptPatternNames(node.id, bindingNames);
+    } else if (node.type === 'CatchClause') javaScriptPatternNames(node.param, bindingNames);
+  }
+  observation.env_binding_occurrence_count = bindingNames.filter((name) => name === 'env').length;
+
+  const envDeclarations = ownerNodes.filter((node) => (
+    node.type === 'VariableDeclarator'
+    && node.id?.type === 'Identifier'
+    && node.id.name === 'env'
+    && ownerParentByNode.get(node)?.type === 'VariableDeclaration'
+    && ownerParentByNode.get(node).kind === 'const'
+    && ownerParentByNode.get(node).declarations?.length === 1
+    && node.init?.type === 'CallExpression'
+    && node.init.callee?.type === 'Identifier'
+    && node.init.callee.name === 'workerEnvironment'
+  ));
+  observation.env_declaration_occurrence_count = envDeclarations.length;
+  const envDeclaration = envDeclarations.length === 1 ? envDeclarations[0] : null;
+  const envDeclarationStatement = envDeclaration ? ownerParentByNode.get(envDeclaration) : null;
+  observation.env_declaration_direct_statement = ownerCallback.body.body.includes(envDeclarationStatement);
+  const workerCalls = ownerNodes.filter((node) => (
+    node.type === 'CallExpression'
+    && node.callee?.type === 'Identifier'
+    && node.callee.name === 'workerEnvironment'
+  ));
+  observation.worker_environment_call_occurrence_count = workerCalls.length;
+  observation.worker_environment_argument_count = envDeclaration?.init?.arguments?.length ?? null;
+  const inputObject = envDeclaration?.init?.arguments?.[0];
+  observation.input_object_literal = inputObject?.type === 'ObjectExpression';
+  observation.input_object_shape = objectExpressionShapeObservation(inputObject);
+  observation.input_identity_properties = identityPropertyObservations(inputObject);
+  observation.input_access_token_occurrence_count = inputObject?.type === 'ObjectExpression'
+    ? inputObject.properties.filter((property) => (
+      staticJavaScriptPropertyName(property) === MR1597_ACCESS_TOKEN_KEY
+    )).length : 0;
+
+  const deepEqualCalls = ownerNodes.filter((node) => (
+    node.type === 'CallExpression'
+    && node.callee?.type === 'MemberExpression'
+    && node.callee.computed === false
+    && node.callee.object?.type === 'Identifier'
+    && node.callee.object.name === 'assert'
+    && node.callee.property?.type === 'Identifier'
+    && node.callee.property.name === 'deepEqual'
+  ));
+  observation.deep_equal_call_occurrence_count = deepEqualCalls.length;
+  const envAssertions = deepEqualCalls.filter((node) => (
+    node.arguments?.length === 2
+    && node.arguments[0]?.type === 'Identifier'
+    && node.arguments[0].name === 'env'
+    && node.arguments[1]?.type === 'ObjectExpression'
+  ));
+  observation.deep_equal_env_assertion_occurrence_count = envAssertions.length;
+  const assertion = envAssertions.length === 1 ? envAssertions[0] : null;
+  const assertionStatement = assertion ? ownerParentByNode.get(assertion) : null;
+  observation.assertion_direct_statement = assertionStatement?.type === 'ExpressionStatement'
+    && ownerCallback.body.body.includes(assertionStatement);
+  observation.assertion_argument_count = assertion?.arguments?.length ?? null;
+  observation.declaration_precedes_assertion = Boolean(
+    envDeclarationStatement && assertionStatement && envDeclarationStatement.start < assertionStatement.start,
+  );
+  const expectedObject = assertion?.arguments?.[1];
+  observation.expected_object_literal = expectedObject?.type === 'ObjectExpression';
+  observation.expected_object_shape = objectExpressionShapeObservation(expectedObject);
+  observation.expected_identity_properties = identityPropertyObservations(expectedObject);
+  let expectedAccessTokenCount = 0;
+  if (expectedObject) {
+    visitJavaScriptAst(expectedObject, (node) => {
+      if (staticJavaScriptPropertyName(node) === MR1597_ACCESS_TOKEN_KEY) expectedAccessTokenCount += 1;
+    });
+  }
+  observation.expected_access_token_occurrence_count = expectedAccessTokenCount;
+
+  const aliases = new Set(['env']);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of ownerNodes) {
+      if (node.type === 'VariableDeclarator'
+        && node.id?.type === 'Identifier'
+        && expressionMayAliasIdentifier(node.init, aliases)
+        && !aliases.has(node.id.name)) {
+        aliases.add(node.id.name);
+        changed = true;
+      }
+      if (node.type === 'AssignmentExpression'
+        && node.operator === '='
+        && node.left?.type === 'Identifier'
+        && expressionMayAliasIdentifier(node.right, aliases)
+        && !aliases.has(node.left.name)) {
+        aliases.add(node.left.name);
+        changed = true;
+      }
+    }
+  }
+  observation.env_aliases = [...aliases].sort();
+  const mutationNodes = new Set();
+  const escapeNodes = new Set();
+  for (const node of ownerNodes) {
+    if (node.type === 'AssignmentExpression' && containsAliasMemberTarget(node.left, aliases)) {
+      mutationNodes.add(node);
+    } else if (node.type === 'UpdateExpression' && containsAliasMemberTarget(node.argument, aliases)) {
+      mutationNodes.add(node);
+    } else if (node.type === 'UnaryExpression'
+      && node.operator === 'delete'
+      && containsAliasMemberTarget(node.argument, aliases)) {
+      mutationNodes.add(node);
+    }
+    if (node.type === 'VariableDeclarator'
+      && node.id?.type !== 'Identifier'
+      && expressionCarriesAliasIdentifier(node.init, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'VariableDeclarator'
+      && node.id?.type === 'Identifier'
+      && expressionCarriesAliasIdentifier(node.init, aliases)
+      && !expressionMayAliasIdentifier(node.init, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'AssignmentExpression'
+      && node.left?.type === 'Identifier'
+      && expressionCarriesAliasIdentifier(node.right, aliases)
+      && !expressionMayAliasIdentifier(node.right, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'AssignmentExpression'
+      && node.left?.type !== 'Identifier'
+      && expressionCarriesAliasIdentifier(node.right, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'AssignmentPattern'
+      && expressionCarriesAliasIdentifier(node.right, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (['ForInStatement', 'ForOfStatement'].includes(node.type)
+      && expressionCarriesAliasIdentifier(node.right, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'CallExpression' || node.type === 'NewExpression') {
+      if (node.callee?.type === 'MemberExpression'
+        && containsAliasMemberTarget(node.callee, aliases)) mutationNodes.add(node);
+      const receiverName = node.callee?.type === 'MemberExpression'
+        && node.callee.object?.type === 'Identifier' ? node.callee.object.name : null;
+      const operationName = staticMemberExpressionPropertyName(node.callee);
+      const knownMutator = (receiverName === 'Object'
+        && ['assign', 'defineProperties', 'defineProperty'].includes(operationName))
+        || (receiverName === 'Reflect' && ['deleteProperty', 'set'].includes(operationName));
+      if (knownMutator && expressionMayAliasIdentifier(node.arguments?.[0], aliases)) {
+        mutationNodes.add(node);
+      }
+      node.arguments?.forEach((argument, index) => {
+        const exactAssertionRead = node === assertion
+          && index === 0
+          && argument?.type === 'Identifier'
+          && argument.name === 'env';
+        if (!exactAssertionRead && expressionCarriesAliasIdentifier(argument, aliases)) {
+          escapeNodes.add(node);
+        }
+      });
+    }
+    if (['ReturnStatement', 'ThrowStatement', 'YieldExpression'].includes(node.type)
+      && expressionCarriesAliasIdentifier(node.argument, aliases)) {
+      escapeNodes.add(node);
+    }
+    if (node.type === 'TaggedTemplateExpression'
+      && expressionCarriesAliasIdentifier(node.quasi, aliases)) {
+      escapeNodes.add(node);
+    }
+  }
+  observation.env_mutation_count = mutationNodes.size;
+  observation.env_escape_count = escapeNodes.size;
+  observation.verified = mr1597SemanticObservationIsVerified(observation, { requireVerified: false });
+  if (!observation.verified) failures.push('current_release_semantics:mr1597:worker_environment_test_mismatch');
+  return observation;
+}
+
 function fragmentOccurrenceCount(source, assertion) {
   const needle = String(assertion?.value?.source ?? '');
   if (!needle) return 0;
@@ -2430,8 +3612,10 @@ function observeCurrentIntegrationBinding(binding, source, failures) {
       failures.push(`current_integration_binding_scope_owner_region_order_mismatch:${binding.id}`);
       failures.push(`current_integration_binding_scope_region_sequence_mismatch:${binding.id}`);
     }
+    const regionEndExclusive = regionEndIndexes[0]
+      + (scope.region_end_inclusive === false ? 0 : 1);
     scopedLines = regionOrdered
-      ? ownerLines.slice(regionStartIndexes[0], regionEndIndexes[0] + 1)
+      ? ownerLines.slice(regionStartIndexes[0], regionEndExclusive)
       : [];
   }
   const scopedSource = scopedLines.join('\n');
@@ -2873,13 +4057,81 @@ function triggerProjection(mergeRequests, contract) {
 }
 
 function strictBase64Decode(value) {
-  const normalized = String(value || '').replace(/\s+/gu, '');
+  const raw = String(value || '');
+  const normalized = raw.replace(/\s+/gu, '');
   if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/u.test(normalized) || normalized.length % 4 !== 0) {
     throw new Error('file_content_base64_invalid');
   }
+  if (raw !== normalized) throw new Error('file_content_base64_noncanonical');
   const bytes = Buffer.from(normalized, 'base64');
   if (bytes.toString('base64') !== normalized) throw new Error('file_content_base64_noncanonical');
   return bytes;
+}
+
+function strictUtf8Decode(bytes) {
+  const source = Buffer.from(bytes).toString('utf8');
+  // Buffer's default decoder replaces malformed sequences.  Source contracts
+  // must attest the exact bytes, so a replacement round-trip is not acceptable.
+  if (!Buffer.from(source, 'utf8').equals(Buffer.from(bytes))) {
+    throw new Error('file_content_utf8_invalid');
+  }
+  return source;
+}
+
+function releaseFileProvenance({ file, expectedPath, releaseHead, payload } = {}) {
+  const expectedEndpoint = `repository/files/${encodeURIComponent(expectedPath)}?ref=${encodeURIComponent(releaseHead)}`;
+  const supplied = file?.last_commit_provenance || payload?.last_commit_provenance;
+  if (supplied && typeof supplied === 'object' && !Array.isArray(supplied)) {
+    return supplied;
+  }
+  // Direct callers/tests may provide a repository-files payload without the
+  // second history read.  Keep that path explicit and distinguish it from the
+  // scanner's independent repository/commits readback.
+  return {
+    schema_version: QWORK_RELEASE_FILE_PROVENANCE_SCHEMA,
+    source: 'gitlab-api-repository-files',
+    endpoint: expectedEndpoint,
+    path: expectedPath,
+    ref: releaseHead,
+    commit_id: text(payload?.commit_id),
+    last_commit_id: text(payload?.last_commit_id),
+  };
+}
+
+function validateReleaseFileProvenance(provenance, {
+  expectedPath,
+  releaseHead,
+  commitId,
+  lastCommitId,
+  requireIndependent = true,
+  failurePrefix,
+} = {}) {
+  const failures = [];
+  const expectedFileEndpoint = `repository/files/${encodeURIComponent(expectedPath)}?ref=${encodeURIComponent(releaseHead)}`;
+  const expectedHistoryEndpoint = `repository/commits?path=${encodeURIComponent(expectedPath)}&ref_name=${encodeURIComponent(releaseHead)}&per_page=1`;
+  if (!objectHasExactKeys(provenance, [
+    'schema_version', 'source', 'endpoint', 'path', 'ref', 'commit_id', 'last_commit_id',
+  ])) {
+    failures.push(`${failurePrefix}:fields_mismatch`);
+    return failures;
+  }
+  if (provenance.schema_version !== QWORK_RELEASE_FILE_PROVENANCE_SCHEMA) {
+    failures.push(`${failurePrefix}:schema_mismatch`);
+  }
+  if (!['gitlab-api-repository-files', 'gitlab-api-repository-commits'].includes(provenance.source)
+    || (requireIndependent && provenance.source !== 'gitlab-api-repository-commits')) {
+    failures.push(`${failurePrefix}:source_mismatch`);
+  }
+  const expectedEndpoint = provenance.source === 'gitlab-api-repository-commits'
+    ? expectedHistoryEndpoint : expectedFileEndpoint;
+  if (provenance.endpoint !== expectedEndpoint) failures.push(`${failurePrefix}:endpoint_mismatch`);
+  if (provenance.path !== expectedPath) failures.push(`${failurePrefix}:path_mismatch`);
+  if (provenance.ref !== releaseHead) failures.push(`${failurePrefix}:ref_mismatch`);
+  if (provenance.commit_id !== commitId) failures.push(`${failurePrefix}:commit_id_mismatch`);
+  if (provenance.last_commit_id !== lastCommitId) failures.push(`${failurePrefix}:last_commit_id_mismatch`);
+  if (!HEX40.test(String(provenance.commit_id || ''))) failures.push(`${failurePrefix}:commit_id_invalid`);
+  if (!HEX40.test(String(provenance.last_commit_id || ''))) failures.push(`${failurePrefix}:last_commit_id_invalid`);
+  return failures;
 }
 
 function observeReleaseFile(file, expectedPath, releaseHead, failures) {
@@ -2892,6 +4144,7 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
   const requestedRef = text(file?.requested_ref);
   const encoding = text(payload?.encoding).toLowerCase();
   const declaredSize = Number(payload?.size);
+  const provenance = releaseFileProvenance({ file, expectedPath, releaseHead, payload });
   let bytes = Buffer.alloc(0);
   if (!error) {
     if (filePath !== expectedPath) failures.push(`${prefix}:path_mismatch`);
@@ -2916,7 +4169,22 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
       failures.push(`${prefix}:blob_id_content_mismatch`);
     }
   }
-  const source = bytes.toString('utf8');
+  let source = '';
+  if (bytes.length) {
+    try {
+      source = strictUtf8Decode(bytes);
+    } catch (decodeError) {
+      failures.push(`${prefix}:${text(decodeError?.message) || 'utf8_decode_failed'}`);
+    }
+  }
+  failures.push(...validateReleaseFileProvenance(provenance, {
+    expectedPath,
+    releaseHead,
+    commitId: text(payload?.commit_id),
+    lastCommitId: text(payload?.last_commit_id),
+    requireIndependent: true,
+    failurePrefix: `${prefix}:last_commit_provenance`,
+  }));
   return {
     source,
     observation: {
@@ -2929,8 +4197,10 @@ function observeReleaseFile(file, expectedPath, releaseHead, failures) {
       encoding,
       declared_size: Number.isFinite(declaredSize) ? declaredSize : null,
       bytes: bytes.length,
+      content_base64: bytes.length ? bytes.toString('base64') : '',
       sha256: bytes.length ? sha256(bytes) : '',
       line_count: source ? source.replace(/\n$/u, '').split('\n').length : 0,
+      last_commit_provenance: provenance,
       error,
     },
   };
@@ -3024,6 +4294,13 @@ export function auditCurrentReleaseSourceContract({
     sourceByPath,
     failures,
   );
+  const currentReleaseSemantics = contract.contract_id
+    === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID
+    ? observeMr1597WorkerEnvironmentTestSemantics(
+      sourceByPath,
+      failures,
+    )
+    : null;
 
   const trigger = triggerProjection(mergeRequests, contract);
   const originIdentityTriggered = trigger.iid_matches.length > 0 || trigger.merge_sha_matches.length > 0;
@@ -3037,7 +4314,7 @@ export function auditCurrentReleaseSourceContract({
   }
 
   const value = {
-    schema_version: QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA,
+    schema_version: QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA,
     claim_scope: contract.claim_scope,
     test_execution_attested: contract.test_execution_attested,
     contract_id: contract.contract_id,
@@ -3101,6 +4378,7 @@ export function auditCurrentReleaseSourceContract({
     headers,
     integration_bindings: integrationBindings,
     forbidden_fragments: forbiddenFragments,
+    ...(currentReleaseSemantics ? { current_release_semantics: currentReleaseSemantics } : {}),
     origin_change_attestation: originAttestation,
     failures,
   };
@@ -3155,7 +4433,21 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   if (!contract) return { ok: false, failures: ['contract_unknown'] };
   const reportHead = text(report?.release?.head);
   const mergeRequests = Array.isArray(report?.merge_requests) ? report.merge_requests : [];
-  if (attestation?.schema_version !== QWORK_RELEASE_SOURCE_CONTRACT_SCHEMA) failures.push('attestation_schema_mismatch');
+  const expectedTopLevelKeys = [
+    'schema_version', 'claim_scope', 'test_execution_attested', 'contract_id', 'status',
+    'verified', 'source', 'contract_sha256', 'mr', 'release', 'current_assertion_owners',
+    'trigger', 'protected_files', 'headers', 'integration_bindings', 'forbidden_fragments',
+    'origin_change_attestation', 'failures', 'attestation_sha256',
+    ...(isAssertionRetirementContract(contract) ? ['retired_files'] : []),
+    ...(contract.contract_id === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID
+      ? ['current_release_semantics'] : []),
+  ];
+  if (!objectHasExactKeys(attestation, expectedTopLevelKeys)) {
+    failures.push('attestation_current_fields_mismatch');
+  }
+  if (attestation?.schema_version !== QWORK_RELEASE_CURRENT_SOURCE_CONTRACT_SCHEMA) {
+    failures.push('attestation_schema_mismatch');
+  }
   if (attestation?.claim_scope !== QWORK_RELEASE_SOURCE_CLAIM_SCOPE) failures.push('attestation_claim_scope_invalid');
   if (attestation?.test_execution_attested !== QWORK_RELEASE_SOURCE_TEST_EXECUTION_ATTESTED) {
     failures.push('attestation_test_execution_attested_invalid');
@@ -3238,12 +4530,20 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
 
   const expectedPaths = currentProtectedPaths(contract, headerResolution.owner);
   const protectedFiles = Array.isArray(attestation?.protected_files) ? attestation.protected_files : [];
+  const replaySourceByPath = new Map();
   if (!Array.isArray(attestation?.protected_files)) failures.push('attestation_protected_files_missing');
   if (stableJson(protectedFiles.map((file) => text(file?.path))) !== stableJson(expectedPaths)) {
     failures.push('attestation_protected_file_paths_mismatch');
   }
   for (const file of protectedFiles) {
     const filePath = text(file?.path) || 'missing';
+    if (!objectHasExactKeys(file, [
+      'path', 'requested_ref', 'ref', 'blob_id', 'commit_id', 'last_commit_id', 'encoding',
+      'declared_size', 'bytes', 'content_base64', 'sha256', 'line_count',
+      'last_commit_provenance', 'error',
+    ])) {
+      failures.push(`attestation_release_file_fields:${filePath}`);
+    }
     if (text(file?.requested_ref) !== reportHead) failures.push(`attestation_release_file_requested_ref:${filePath}`);
     if (text(file?.ref) !== reportHead) failures.push(`attestation_release_file_ref:${filePath}`);
     if (text(file?.commit_id) !== reportHead) failures.push(`attestation_release_file_commit:${filePath}`);
@@ -3262,6 +4562,27 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
       failures.push(`attestation_release_file_line_count:${filePath}`);
     }
     if (text(file?.error)) failures.push(`attestation_release_file_error:${filePath}`);
+    failures.push(...validateReleaseFileProvenance(file?.last_commit_provenance, {
+      expectedPath: filePath,
+      releaseHead: reportHead,
+      commitId: text(file?.commit_id),
+      lastCommitId: text(file?.last_commit_id),
+      failurePrefix: `attestation_release_file_last_commit_provenance:${filePath}`,
+    }));
+    try {
+      const bytes = strictBase64Decode(file?.content_base64);
+      const source = strictUtf8Decode(bytes);
+      replaySourceByPath.set(filePath, source);
+      if (bytes.length !== Number(file?.bytes)
+        || bytes.length !== Number(file?.declared_size)
+        || sha256(bytes) !== text(file?.sha256).toLowerCase()
+        || gitBlobSha1(bytes) !== text(file?.blob_id).toLowerCase()
+        || (source ? source.replace(/\n$/u, '').split('\n').length : 0) !== Number(file?.line_count)) {
+        failures.push(`attestation_release_file_content_mismatch:${filePath}`);
+      }
+    } catch {
+      failures.push(`attestation_release_file_content_invalid:${filePath}`);
+    }
   }
 
   if (isAssertionRetirementContract(contract)) {
@@ -3423,6 +4744,20 @@ export function validateCurrentReleaseSourceContractAttestation(attestation, {
   }));
   if (stableJson(attestation?.forbidden_fragments) !== stableJson(expectedForbiddenFragments)) {
     failures.push('attestation_current_forbidden_fragments_mismatch');
+  }
+  if (contract.contract_id === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT_ID) {
+    const replayFailures = [];
+    const replayedSemantics = observeMr1597WorkerEnvironmentTestSemantics(
+      replaySourceByPath,
+      replayFailures,
+    );
+    if (replayFailures.length > 0
+      || !mr1597SemanticObservationIsVerified(attestation?.current_release_semantics)
+      || stableJson(attestation?.current_release_semantics) !== stableJson(replayedSemantics)) {
+      failures.push('attestation_current_release_semantics_mismatch');
+    }
+  } else if (attestation?.current_release_semantics !== undefined) {
+    failures.push('attestation_current_release_semantics_unexpected');
   }
 
   const originRows = mergeRequests.filter((mr) => {

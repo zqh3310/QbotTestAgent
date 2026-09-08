@@ -826,8 +826,33 @@ for (const [documentName, documentText] of [
   );
   assert.match(
     documentText,
-    /region start 的相对行号固定为 0[\s\S]*expected_line_index[\s\S]*确定性行号[\s\S]*整体平移[\s\S]*JavaScript object property key[\s\S]*不同缩进[\s\S]*表达式值[\s\S]*quoted\/computed key[\s\S]*shorthand/,
+    /region start 的相对行号固定为 0[\s\S]*8\/9\/10\/11\/12[\s\S]*9\/10\/11\/12[\s\S]*确定性行号[\s\S]*整体平移[\s\S]*expected end[\s\S]*唯一[\s\S]*region_end_inclusive=false[\s\S]*JavaScript object property key[\s\S]*不同缩进[\s\S]*表达式值[\s\S]*quoted\/computed key[\s\S]*shorthand/,
     `${documentName} 必须固化 MR1597 相对行号重放与 token property-key 语义`,
+  );
+  assert.match(
+    documentText,
+    /qbot-qwork-mr1597-worker-environment-test-semantics\/v2[\s\S]*五个唯一真实绑定[\s\S]*node:assert\/strict[\s\S]*node:module[\s\S]*node:test[\s\S]*createRequire\(import\.meta\.url\)[\s\S]*desktop-agent-host\.cjs[\s\S]*top_level_bindings/,
+    `${documentName} 必须冻结 MR1597 v2 schema、五个真实 Program 顶层绑定及其公开投影`,
+  );
+  assert.match(
+    documentText,
+    /worker_environment_export_chain[\s\S]*electron\/desktop-agent-host\.cjs[\s\S]*Object\.assign\(exports, require\('\.\/host-core\/agent\/execution-worker-supervisor\.cjs'\)\)[\s\S]*execution-worker-supervisor\.cjs[\s\S]*execution-worker-process-lifecycle\.cjs[\s\S]*function workerEnvironment\(source = process\.env, authority = \{\}\)[\s\S]*lexical binding/,
+    `${documentName} 必须冻结 MR1597 facade 到 supervisor 再到 lifecycle 的真实导出链`,
+  );
+  assert.match(
+    documentText,
+    /五个测试绑定必须在全文件[\s\S]*不可遮蔽[\s\S]*不可重绑[\s\S]*Object\.defineProperty\/defineProperties\/assign[\s\S]*Reflect\.set\/deleteProperty[\s\S]*protected_binding_violation_count\/protected_binding_violation_kinds[\s\S]*计数为 `0`[\s\S]*kinds 为空数组/,
+    `${documentName} 必须冻结 MR1597 五绑定的全文件直接及反射式写入保护和严格零值`,
+  );
+  assert.match(
+    documentText,
+    /owner callback[\s\S]*动态执行零容忍[\s\S]*direct\/indirect\/optional\/global `eval`[\s\S]*Function[\s\S]*Reflect\.apply\/construct[\s\S]*constructor[\s\S]*动态 computed callee[\s\S]*node:vm[\s\S]*ImportExpression[\s\S]*dynamic_code_execution_count=0[\s\S]*dynamic_code_execution_kinds=\[\]/,
+    `${documentName} 必须冻结 MR1597 owner callback 动态执行零容忍和严格零值`,
+  );
+  assert.match(
+    documentText,
+    /current-release attestation 校验[\s\S]*确定性语义重放[\s\S]*重新读取并验证全部[\s\S]*文件 blob[\s\S]*五绑定[\s\S]*导出链[\s\S]*写入\/遮蔽账本[\s\S]*动态执行账本[\s\S]*逐字段结构化全等[\s\S]*重算[\s\S]*attestation 自身 SHA[\s\S]*不得放行/,
+    `${documentName} 必须冻结 MR1597 attestation 字节重放及重哈希防篡改合同`,
   );
 }
 assert.match(
@@ -839,6 +864,76 @@ assert.match(
   qworkReleaseSourceContractsSource,
   /current_release_match[\s\S]*fragmentOccurrenceCount\(source, binding\.current_release_match\)[\s\S]*expectedCurrentOccurrenceCount[\s\S]*if \(!scope\)[\s\S]*occurrenceCount === expectedCurrentOccurrenceCount[\s\S]*nextOwnerOffset[\s\S]*\^test\\\([\s\S]*regionStartOccurrenceCount[\s\S]*regionEndOccurrenceCount[\s\S]*regionOrdered[\s\S]*ownerRegionOrdered[\s\S]*requiredFragmentIndexes[\s\S]*expectedLineIndex[\s\S]*indexes\[0\] === expectedLineIndex[\s\S]*requiredFragmentsOrdered[\s\S]*current_integration_binding_scope_required_fragment_order_mismatch[\s\S]*ownerIndexes\.length === 1[\s\S]*scopedOccurrenceCount === 1[\s\S]*requiredFragments\.every[\s\S]*forbiddenFragments\.every/,
   'current-release continuity 必须保持 key 级全文件计数、双 region 整体顺序和 required fragment 确定性相对位置',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /MR1597_EXPECTED_REGION_END = '\}\);';[\s\S]*requiredFragmentLineIndexes: \[8, 9, 10, 11, 12\][\s\S]*requiredFragmentLineIndexes: \[9, 10, 11, 12\][\s\S]*regionEndInclusive: false/,
+  'MR1597 必须冻结唯一 owner-close 排他终点及 input/expected 真实相对行号',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /const regionEndExclusive = regionEndIndexes\[0\][\s\S]*scope\.region_end_inclusive === false \? 0 : 1[\s\S]*ownerLines\.slice\(regionStartIndexes\[0\], regionEndExclusive\)/,
+  'MR1597 continuity 必须按 region_end_inclusive 执行排他切片并保留可解析断言体',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA = 'qbot-qwork-mr1597-worker-environment-test-semantics\/v2'[\s\S]*MR1597_TOP_LEVEL_BINDING_EXPECTATIONS = Object\.freeze\(\[[\s\S]*kind: 'import-default', source: 'node:assert\/strict', imported: 'default', local: 'assert'[\s\S]*kind: 'import-named', source: 'node:module', imported: 'createRequire', local: 'createRequire'[\s\S]*kind: 'import-default', source: 'node:test', imported: 'default', local: 'test'[\s\S]*kind: 'const-create-require', source: 'import\.meta\.url', imported: 'createRequire', local: 'require'[\s\S]*kind: 'const-require-destructure'[\s\S]*imported: 'workerEnvironment', local: 'workerEnvironment'/,
+  'MR1597 v2 必须冻结五个真实 Program 顶层绑定的精确 kind/source/imported/local',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /MR1597_FACADE_PATH = 'electron\/desktop-agent-host\.cjs'[\s\S]*MR1597_SUPERVISOR_PATH = 'electron\/host-core\/agent\/execution-worker-supervisor\.cjs'[\s\S]*MR1597_LIFECYCLE_PATH = 'electron\/host-core\/agent\/execution-worker-process-lifecycle\.cjs'[\s\S]*MR1597_EXPORT_CHAIN_EXPECTATIONS = Object\.freeze\(\[[\s\S]*role: 'facade-to-supervisor'[\s\S]*role: 'supervisor-to-lifecycle'[\s\S]*role: 'supervisor-export'[\s\S]*role: 'lifecycle-declaration'[\s\S]*role: 'lifecycle-export'/,
+  'MR1597 必须冻结 facade/supervisor/lifecycle 精确路径与五步导出链',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function observeProtectedBindingViolations[\s\S]*javaScriptDeclarationRecords[\s\S]*duplicate-or-shadow-declaration[\s\S]*AssignmentExpression[\s\S]*identifier-write[\s\S]*member-write[\s\S]*UpdateExpression[\s\S]*UnaryExpression[\s\S]*delete[\s\S]*ForInStatement[\s\S]*ForOfStatement[\s\S]*Object[\s\S]*assign[\s\S]*defineProperties[\s\S]*defineProperty[\s\S]*Reflect[\s\S]*deleteProperty[\s\S]*dynamic-indirect-member-write/,
+  'MR1597 五绑定保护必须覆盖声明遮蔽、重绑、成员、循环及 Object/Reflect 间接写入',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /(?=[\s\S]*function observeMr1597DynamicCodeExecution)(?=[\s\S]*ImportExpression)(?=[\s\S]*dynamic_import)(?=[\s\S]*direct_eval)(?=[\s\S]*indirect_eval)(?=[\s\S]*eval_call_or_apply)(?=[\s\S]*function_constructor)(?=[\s\S]*function_call_or_apply)(?=[\s\S]*reflect_eval)(?=[\s\S]*reflect_function_constructor)(?=[\s\S]*member_constructor)(?=[\s\S]*dynamic_computed_callee)(?=[\s\S]*node_vm_execution)(?=[\s\S]*node_vm_module)/,
+  'MR1597 动态执行审计必须覆盖 eval、Function、Reflect、constructor、动态 callee、vm 与 import',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /function mr1597SemanticObservationIsVerified[\s\S]*const rootKeys = \[[\s\S]*top_level_bindings[\s\S]*protected_binding_violation_count[\s\S]*protected_binding_violation_kinds[\s\S]*worker_environment_export_chain[\s\S]*dynamic_code_execution_count[\s\S]*dynamic_code_execution_kinds[\s\S]*objectHasExactKeys\(observation, rootKeys\)[\s\S]*schema_version === MR1597_CURRENT_RELEASE_SEMANTICS_SCHEMA[\s\S]*stableJson\(observation\?\.top_level_bindings\)[\s\S]*protected_binding_violation_count === 0[\s\S]*stableJson\(observation\?\.worker_environment_export_chain\)[\s\S]*dynamic_code_execution_count === 0/,
+  'MR1597 v2 verifier 必须拒绝根字段删减/混入并严格校验绑定、导出链及两类零值',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /const expectedExportChain = \{[\s\S]*steps: MR1597_EXPORT_CHAIN_EXPECTATIONS[\s\S]*protected_binding_violation_count: 0[\s\S]*protected_binding_violation_kinds: \[\][\s\S]*verified: true/,
+  'MR1597 verifier 必须要求导出链五步及其保护账本严格全绿',
+);
+assert.match(
+  qworkReleaseSourceContractsSource,
+  /const replaySourceByPath = new Map\(\)[\s\S]*strictBase64Decode\(file\?\.content_base64\)[\s\S]*replaySourceByPath\.set\(filePath, source\)[\s\S]*observeMr1597WorkerEnvironmentTestSemantics\([\s\S]*replaySourceByPath[\s\S]*stableJson\(attestation\?\.current_release_semantics\) !== stableJson\(replayedSemantics\)[\s\S]*attestation_current_release_semantics_mismatch/,
+  'MR1597 attestation 必须从 protected_files content_base64 重放并与自报语义逐字段全等',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /MR !1597 binds duplicated identity additions[\s\S]*assert import source[\s\S]*createRequire import source[\s\S]*test import source[\s\S]*createRequire authority[\s\S]*fake createRequire helper[\s\S]*facade require source[\s\S]*non-imported assert binding/,
+  'MR1597 专项回归必须拒绝错误导入、错误路径、伪 helper 与无真实 import',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /nested workerEnvironment parameter shadow[\s\S]*assert rebinding[\s\S]*workerEnvironment member write[\s\S]*Object indirect test mutation[\s\S]*Object\.defineProperties indirect assert mutation[\s\S]*Object\.assign indirect workerEnvironment mutation[\s\S]*Reflect indirect require mutation[\s\S]*Reflect\.deleteProperty indirect test mutation[\s\S]*Object-wrapped protected mutation/,
+  'MR1597 专项回归必须覆盖五绑定遮蔽、重绑、成员写入及 Object/Reflect 间接改写',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /facade must forward the exact supervisor[\s\S]*supervisor must import the exact lifecycle workerEnvironment[\s\S]*supervisor must export workerEnvironment[\s\S]*lifecycle declaration must retain exact authority defaults[\s\S]*lifecycle must export workerEnvironment[\s\S]*lifecycle workerEnvironment cannot be rebound/,
+  'MR1597 专项回归必须逐步破坏并拒绝 facade/supervisor/lifecycle 导出链',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /dynamicExecutionScenarios[\s\S]*direct eval[\s\S]*optional eval[\s\S]*indirect eval[\s\S]*global eval[\s\S]*eval call[\s\S]*Function call[\s\S]*new Function[\s\S]*Function apply[\s\S]*Reflect eval[\s\S]*Reflect Function[\s\S]*static constructor[\s\S]*computed constructor[\s\S]*dynamic computed callee[\s\S]*dynamic import[\s\S]*assigned eval alias[\s\S]*destructured eval alias[\s\S]*globalThis destructured eval alias[\s\S]*assigned Function alias[\s\S]*globalThis destructured Function alias[\s\S]*node vm require/,
+  'MR1597 专项回归必须覆盖动态执行与别名绕过矩阵',
+);
+assert.match(
+  qworkReleaseIntakeTestSource,
+  /old v1 semantics schema[\s\S]*missing v2 semantics field[\s\S]*unexpected v2 semantics field[\s\S]*forged top-level binding[\s\S]*forged export chain[\s\S]*forged dynamic execution count[\s\S]*forgedAllGreenObservation[\s\S]*content_base64[\s\S]*eval\('forged'\)[\s\S]*forgedProtectedBindingObservation[\s\S]*content_base64[\s\S]*protected_binding_violation_count, 0[\s\S]*protected_binding_violation_kinds, \[\][\s\S]*attestation_current_release_semantics_mismatch/,
+  'MR1597 专项回归必须证明重算 hash 后仍拒绝 schema、投影、动态执行和绑定保护伪绿',
 );
 assert.match(
   qworkReleaseSourceContractsSource,
@@ -1340,6 +1435,8 @@ require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorke
   const successorControllerSource = `
 const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
 const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
+const { Worker } = require('node:worker_threads');
+const { validateEnvelope } = require('./execution-worker-protocol.cjs');
 const sameIdentity = (message, authority, fields) => authority
   && fields.every((field) => message[field] === authority[field]);
 class ExecutionWorkerController {
@@ -2609,22 +2706,77 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
       scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
     ));
     const lines = [group.owner, ...group.owner_lines];
-    for (const scope of regionScopes) {
-      lines.push(
-        scope.region_start.source,
-        ...scope.required_fragments.map((fragment) => fragment.value.source),
-        scope.region_end.source,
-      );
+    for (const [scopeIndex, scope] of regionScopes.entries()) {
+      lines.push(scope.region_start.source);
+      let nextLineIndex = 1;
+      for (const fragment of scope.required_fragments) {
+        while (nextLineIndex < fragment.expected_line_index) {
+          lines.push(`    QBOT_SCOPE_FIXTURE_${scopeIndex}_${nextLineIndex}: true,`);
+          nextLineIndex += 1;
+        }
+        lines.push(fragment.value.source);
+        nextLineIndex += 1;
+      }
+      if (requiresJavaScriptPropertyAst && scope.region_end_inclusive === false) {
+        lines.push('  });');
+      }
+      lines.push(scope.region_end.source);
       if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
-        lines.push("    platform: 'darwin',", '  } ) ;');
+        lines.push("    platform: 'darwin',", '  });');
       }
     }
-    if (requiresJavaScriptPropertyAst) lines.push('});');
+    if (requiresJavaScriptPropertyAst
+      && !regionScopes.some((scope) => scope.region_end.source === '});')) {
+      lines.push('});');
+    }
     return lines;
   };
 
   const completeCurrentReleaseJavaScriptFixture = (filePath, sourceLines) => {
-    const lines = [...sourceLines];
+    let lines = [...sourceLines];
+    if (filePath === 'test/unit/desktop/execution-worker-supervisor.test.mjs') {
+      lines = [
+        "import assert from 'node:assert/strict';",
+        "import { createRequire } from 'node:module';",
+        "import test from 'node:test';",
+        '',
+        'const require = createRequire(import.meta.url);',
+        'const {',
+        '  workerEnvironment,',
+        "} = require('../../../electron/desktop-agent-host.cjs');",
+        '',
+        ...lines,
+      ];
+    } else if (filePath === 'electron/desktop-agent-host.cjs') {
+      lines = [
+        "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+        ...lines,
+      ];
+    } else if (filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
+      lines = [
+        'const {',
+        '  workerEnvironment,',
+        "} = require('./execution-worker-process-lifecycle.cjs');",
+        ...lines,
+        'module.exports = {',
+        '  WORKER_ENV_ALLOWLIST,',
+        '  workerEnvironment,',
+        '};',
+      ];
+    } else if (filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
+      lines = [
+        ...lines,
+        'function workerEnvironment(source = process.env, authority = {}) {',
+        '  void source;',
+        '  void authority;',
+        '  return {};',
+        '}',
+        'module.exports = {',
+        '  WORKER_ENV_ALLOWLIST,',
+        '  workerEnvironment,',
+        '};',
+      ];
+    }
     const envelopeContract = casebookDesignSourceContracts.find((contract) => (
       contract.integration_bindings?.some((binding) => (
         binding.id === 'test_declares_shared_32_mib_envelope_limit'
@@ -2670,6 +2822,15 @@ const casebookDesignCurrentSourceAttestations = ({ head, mergeRequests }) => {
         commit_id: head,
         blob_id: casebookDesignGitBlobSha1(bytes),
         last_commit_id: createHash('sha1').update(`commit:${filePath}`).digest('hex'),
+        last_commit_provenance: {
+          schema_version: 'qbot-qwork-release-file-provenance/v1',
+          source: 'gitlab-api-repository-commits',
+          endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
+          path: filePath,
+          ref: head,
+          commit_id: head,
+          last_commit_id: createHash('sha1').update(`commit:${filePath}`).digest('hex'),
+        },
         encoding: 'base64',
         size: bytes.length,
         content: bytes.toString('base64'),

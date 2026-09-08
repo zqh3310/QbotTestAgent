@@ -148,7 +148,53 @@ function fixtureRepo() {
 }
 
 function completeCurrentReleaseJavaScriptFixture(filePath, sourceLines, contracts) {
-  const lines = [...sourceLines];
+  let lines = [...sourceLines];
+  const mr1597 = contracts.find((contract) => (
+    contract.contract_id === QWORK_MR1597_WORKER_IM_USER_IDENTITY_FORWARDING_CONTRACT.contract_id
+  ));
+  if (mr1597 && filePath === 'test/unit/desktop/execution-worker-supervisor.test.mjs') {
+    lines = [
+      "import assert from 'node:assert/strict';",
+      "import { createRequire } from 'node:module';",
+      "import test from 'node:test';",
+      '',
+      'const require = createRequire(import.meta.url);',
+      'const {',
+      '  workerEnvironment,',
+      "} = require('../../../electron/desktop-agent-host.cjs');",
+      '',
+      ...lines,
+    ];
+  } else if (mr1597 && filePath === 'electron/desktop-agent-host.cjs') {
+    lines = [
+      "Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'));",
+      ...lines,
+    ];
+  } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-supervisor.cjs') {
+    lines = [
+      'const {',
+      '  workerEnvironment,',
+      "} = require('./execution-worker-process-lifecycle.cjs');",
+      ...lines,
+      'module.exports = {',
+      '  WORKER_ENV_ALLOWLIST,',
+      '  workerEnvironment,',
+      '};',
+    ];
+  } else if (mr1597 && filePath === 'electron/host-core/agent/execution-worker-process-lifecycle.cjs') {
+    lines = [
+      ...lines,
+      'function workerEnvironment(source = process.env, authority = {}) {',
+      '  void source;',
+      '  void authority;',
+      '  return {};',
+      '}',
+      'module.exports = {',
+      '  WORKER_ENV_ALLOWLIST,',
+      '  workerEnvironment,',
+      '};',
+    ];
+  }
   const envelopeContract = contracts.find((contract) => contract.integration_bindings?.some(
     (binding) => binding.id === 'test_declares_shared_32_mib_envelope_limit',
   ));
@@ -236,16 +282,30 @@ function currentReleaseFileFixtures(contracts, head, {
       const requiresJavaScriptPropertyAst = regionScopes.some((scope) => (
         scope.forbidden_fragments?.some((fragment) => fragment.match === 'js-property-key')
       ));
-      for (const scope of regionScopes) {
+      for (const [scopeIndex, scope] of regionScopes.entries()) {
         appendLine(group.path, scope.region_start.source);
-        for (const fragment of scope.required_fragments) appendLine(group.path, fragment.value.source);
+        let nextLineIndex = 1;
+        for (const fragment of scope.required_fragments) {
+          while (nextLineIndex < fragment.expected_line_index) {
+            appendLine(group.path, `    QBOT_SCOPE_FIXTURE_${scopeIndex}_${nextLineIndex}: true,`);
+            nextLineIndex += 1;
+          }
+          appendLine(group.path, fragment.value.source);
+          nextLineIndex += 1;
+        }
+        if (requiresJavaScriptPropertyAst && scope.region_end_inclusive === false) {
+          appendLine(group.path, '  });');
+        }
         appendLine(group.path, scope.region_end.source);
         if (requiresJavaScriptPropertyAst && scope.region_end.source.trim() === '}, {') {
           appendLine(group.path, "    platform: 'darwin',");
-          appendLine(group.path, '  } ) ;');
+          appendLine(group.path, '  });');
         }
       }
-      if (requiresJavaScriptPropertyAst) appendLine(group.path, '});');
+      if (requiresJavaScriptPropertyAst
+        && !regionScopes.some((scope) => scope.region_end.source === '});')) {
+        appendLine(group.path, '});');
+      }
     }
   }
   return new Map([...linesByPath].map(([filePath, lines]) => {
@@ -261,6 +321,15 @@ function currentReleaseFileFixtures(contracts, head, {
       blob_id: gitBlobSha1(source),
       commit_id: head,
       last_commit_id: head,
+      last_commit_provenance: {
+        schema_version: 'qbot-qwork-release-file-provenance/v1',
+        source: 'gitlab-api-repository-commits',
+        endpoint: `repository/commits?path=${encodeURIComponent(filePath)}&ref_name=${encodeURIComponent(head)}&per_page=1`,
+        path: filePath,
+        ref: head,
+        commit_id: head,
+        last_commit_id: head,
+      },
     }];
   }));
 }
@@ -302,7 +371,7 @@ function apiFixture({
       if (from === baseline && to === head && Array.isArray(compareCommits)) {
         return { compare_timeout: false, commits: omitHeadFromCompare ? [] : compareCommits };
       }
-      if (from === head && [QWORK_MR1552_MERGE_COMMIT_SHA, QWORK_MR1559_MERGE_COMMIT_SHA].includes(to)) {
+    if (from === head && [QWORK_MR1552_MERGE_COMMIT_SHA, QWORK_MR1559_MERGE_COMMIT_SHA].includes(to)) {
         if (head === QWORK_MR1559_MERGE_COMMIT_SHA) return { compare_timeout: false, commits: [] };
         return {
           compare_timeout: false,
@@ -329,6 +398,18 @@ function apiFixture({
           committed_date: '2026-09-03T01:00:00Z',
         }],
       };
+    }
+    if (endpoint.startsWith('repository/commits?')) {
+      const query = new URLSearchParams(endpoint.slice(endpoint.indexOf('?') + 1));
+      const filePath = query.get('path');
+      const refName = query.get('ref_name');
+      const payload = releaseFiles.get(filePath);
+      if (!payload || refName !== head) throw new Error(`missing release file history fixture ${filePath}`);
+      return [{
+        id: payload.last_commit_id,
+        parent_ids: ['a'.repeat(40)],
+        committed_date: '2026-09-03T01:00:00Z',
+      }];
     }
     const commitMrMatch = endpoint.match(/^repository\/commits\/([a-f0-9]{40})\/merge_requests$/i);
     if (commitMrMatch) {
@@ -1525,6 +1606,9 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   ));
   assert.equal(identityBindings.length, 4);
   assert.ok(tokenBinding);
+  const identityBinding = identityBindings[0];
+  const inputScope = tokenBinding.current_release_scope;
+  const expectedScope = identityBinding.current_release_scope;
   assert.equal(identityBindings.every((binding) => (
     binding.expected_current_occurrence_count === 2
     && binding.current_release_scope.boundary === 'anchored-line-region-within-next-top-level-test'
@@ -1540,6 +1624,33 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     binding.current_release_scope.forbidden_fragments[0].match === 'js-property-key'
     && binding.current_release_scope.forbidden_fragments[0].value.source === 'IM_USER_ACCESS_TOKEN'
   )), true);
+  assert.deepEqual(
+    inputScope.required_fragments.map((fragment) => fragment.expected_line_index),
+    [8, 9, 10, 11, 12],
+  );
+  assert.deepEqual(
+    expectedScope.required_fragments.map((fragment) => fragment.expected_line_index),
+    [9, 10, 11, 12],
+  );
+  assert.equal(inputScope.region_end_inclusive, true);
+  assert.equal(expectedScope.region_end.source, '});');
+  assert.equal(expectedScope.region_end_inclusive, false);
+  const assertInvalidScopeDefinition = (label, mutate, expectedError) => {
+    const invalid = structuredClone(contract);
+    mutate(invalid.integration_bindings.find((binding) => binding.id === identityBinding.id).current_release_scope);
+    delete invalid.contract_sha256;
+    invalid.contract_sha256 = sha256Text(stableJson(invalid));
+    assert.throws(() => resolveReleaseSourceContracts([invalid]), expectedError, label);
+  };
+  assertInvalidScopeDefinition('line indexes must remain strictly increasing', (scope) => {
+    scope.required_fragments[1].expected_line_index = scope.required_fragments[0].expected_line_index;
+  }, /source_contract_current_release_scope_fragment_positions_invalid/u);
+  assertInvalidScopeDefinition('every fragment must retain an explicit line index', (scope) => {
+    delete scope.required_fragments[0].expected_line_index;
+  }, /source_contract_current_release_scope_fragments_invalid/u);
+  assertInvalidScopeDefinition('region end policy must be boolean', (scope) => {
+    scope.region_end_inclusive = 'false';
+  }, /source_contract_current_release_scope_region_invalid/u);
 
   const originFixture = exactAddedLinesContractFixture(contract);
   const originSource = reconstructGitLabAddedLinesSource(
@@ -1590,15 +1701,29 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   const head = '7'.repeat(40);
   const fixtureMap = currentReleaseFileFixtures([contract], head);
   const files = [...fixtureMap].map(([filePath, payload]) => ({ path: filePath, requested_ref: head, payload }));
-  const rewrite = (transform) => {
+  const fixtureSource = Buffer.from(
+    files.find((item) => item.path === tokenBinding.path).payload.content,
+    'base64',
+  ).toString('utf8');
+  assert.equal(fixtureSource.split('\n').filter((line) => line === '  });').length, 2);
+  assert.equal(fixtureSource.split('\n').filter((line) => line === '});').length, 1);
+  const rewritePath = (filePath, transform) => {
     const copy = structuredClone(files);
-    const file = copy.find((item) => item.path === tokenBinding.path);
+    const file = copy.find((item) => item.path === filePath);
+    assert.ok(file, filePath);
     const source = Buffer.from(file.payload.content, 'base64').toString('utf8');
     const updated = transform(source);
     file.payload.content = Buffer.from(updated, 'utf8').toString('base64');
     file.payload.size = Buffer.byteLength(updated, 'utf8');
     file.payload.blob_id = gitBlobSha1(updated);
     return copy;
+  };
+  const rewrite = (transform) => rewritePath(tokenBinding.path, transform);
+  const replaceFirstExactLine = (source, line, replacements) => {
+    const lines = source.split('\n');
+    const index = lines.indexOf(line);
+    if (index >= 0) lines.splice(index, 1, ...replacements);
+    return lines.join('\n');
   };
   const audit = (auditFiles) => auditCurrentReleaseSourceContract({
     releaseHead: head,
@@ -1619,6 +1744,50 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   });
   const verified = audit(files);
   assert.equal(verified.verified, true, verified.failures.join(','));
+  assert.equal(verified.current_release_semantics.javascript_parse_verified, true);
+  assert.equal(
+    verified.current_release_semantics.schema_version,
+    'qbot-qwork-mr1597-worker-environment-test-semantics/v2',
+  );
+  assert.deepEqual(
+    verified.current_release_semantics.top_level_bindings.map((binding) => (
+      [binding.local, binding.source, binding.count, binding.verified]
+    )),
+    [
+      ['assert', 'node:assert/strict', 1, true],
+      ['createRequire', 'node:module', 1, true],
+      ['test', 'node:test', 1, true],
+      ['require', 'import.meta.url', 1, true],
+      ['workerEnvironment', '../../../electron/desktop-agent-host.cjs', 1, true],
+    ],
+  );
+  assert.equal(verified.current_release_semantics.protected_binding_violation_count, 0);
+  assert.deepEqual(verified.current_release_semantics.protected_binding_violation_kinds, []);
+  assert.deepEqual(
+    verified.current_release_semantics.worker_environment_export_chain.steps.map((step) => (
+      [step.role, step.count, step.verified]
+    )),
+    [
+      ['facade-to-supervisor', 1, true],
+      ['supervisor-to-lifecycle', 1, true],
+      ['supervisor-export', 1, true],
+      ['lifecycle-declaration', 1, true],
+      ['lifecycle-export', 1, true],
+    ],
+  );
+  assert.equal(verified.current_release_semantics.worker_environment_export_chain.verified, true);
+  assert.equal(verified.current_release_semantics.dynamic_code_execution_count, 0);
+  assert.deepEqual(verified.current_release_semantics.dynamic_code_execution_kinds, []);
+  assert.equal(verified.current_release_semantics.owner_test_occurrence_count, 1);
+  assert.equal(verified.current_release_semantics.env_declaration_occurrence_count, 1);
+  assert.equal(verified.current_release_semantics.deep_equal_env_assertion_occurrence_count, 1);
+  assert.equal(verified.current_release_semantics.declaration_precedes_assertion, true);
+  assert.equal(verified.current_release_semantics.expected_object_shape.verified, true);
+  assert.equal(verified.current_release_semantics.expected_access_token_occurrence_count, 0);
+  assert.deepEqual(verified.current_release_semantics.env_aliases, ['env']);
+  assert.equal(verified.current_release_semantics.env_mutation_count, 0);
+  assert.equal(verified.current_release_semantics.env_escape_count, 0);
+  assert.equal(verified.current_release_semantics.verified, true);
   for (const binding of identityBindings) {
     const observation = verified.integration_bindings.find((item) => item.id === binding.id);
     assert.equal(observation.occurrence_count, 2, binding.id);
@@ -1630,21 +1799,31 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     assert.equal(observation.scope_observation.required_fragments_ordered, true, binding.id);
     assert.deepEqual(
       observation.scope_observation.required_fragments.map((fragment) => fragment.line_index),
-      [1, 2, 3, 4],
+      [9, 10, 11, 12],
       binding.id,
     );
     assert.equal(observation.scope_observation.forbidden_fragments[0].occurrence_count, 0, binding.id);
   }
+  const tokenObservation = verified.integration_bindings.find((item) => item.id === tokenBinding.id);
+  assert.deepEqual(
+    tokenObservation.scope_observation.required_fragments.map((fragment) => fragment.line_index),
+    [8, 9, 10, 11, 12],
+  );
 
-  const identityBinding = identityBindings[0];
   const identityLine = identityBinding.addition.source;
-  const inputScope = tokenBinding.current_release_scope;
-  const expectedScope = identityBinding.current_release_scope;
-  const regionSource = (scope) => `${scope.region_start.source}\n${scope.required_fragments
-    .map((fragment) => fragment.value.source).join('\n')}\n${scope.region_end.source}\n`;
+  const fixtureLines = fixtureSource.trimEnd().split('\n');
+  const regionSource = (scope) => {
+    const startIndex = fixtureLines.indexOf(scope.region_start.source);
+    const endIndex = fixtureLines.indexOf(scope.region_end.source);
+    const endExclusive = endIndex + (scope.region_end_inclusive === false ? 0 : 1);
+    return `${fixtureLines.slice(startIndex, endExclusive).join('\n')}\n`;
+  };
   const inputRegion = regionSource(inputScope);
   const expectedRegion = regionSource(expectedScope);
-  const inputRegionCompletion = "    platform: 'darwin',\n  } ) ;\n";
+  const inputEndIndex = fixtureLines.indexOf(inputScope.region_end.source);
+  const expectedStartIndex = fixtureLines.indexOf(expectedScope.region_start.source);
+  const inputRegionCompletion = `${fixtureLines.slice(inputEndIndex + 1, expectedStartIndex).join('\n')}\n`;
+  const expectedOwnerClose = `${expectedScope.region_end.source}\n`;
 
   const missingOwner = audit(rewrite((source) => source.replace(`${ownerLine}\n`, '')));
   assert.equal(missingOwner.verified, false);
@@ -1661,12 +1840,12 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
       ['end', 'region_end', 'region_end_mismatch'],
     ]) {
       const anchor = scope[field].source;
-      const missingAnchor = audit(rewrite((source) => source.replace(`${anchor}\n`, '')));
+      const missingAnchor = audit(rewrite((source) => replaceFirstExactLine(source, anchor, [])));
       assert.equal(missingAnchor.verified, false, `${label} ${kind} missing`);
       assert.equal(missingAnchor.failures.includes(
         `current_integration_binding_scope_${failureSuffix}:${binding.id}`,
       ), true, `${label} ${kind} missing`);
-      const repeatedAnchor = audit(rewrite((source) => source.replace(`${anchor}\n`, `${anchor}\n${anchor}\n`)));
+      const repeatedAnchor = audit(rewrite((source) => replaceFirstExactLine(source, anchor, [anchor, anchor])));
       assert.equal(repeatedAnchor.verified, false, `${label} ${kind} repeated`);
       assert.equal(repeatedAnchor.failures.includes(
         `current_integration_binding_scope_${failureSuffix}:${binding.id}`,
@@ -1704,9 +1883,22 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
     `current_integration_binding_scope_required_fragment_mismatch:${identityBinding.id}:${identityBinding.id}`,
   ), true);
 
-  const reversedRegion = audit(rewrite((source) => source.replace(expectedRegion, (
-    `${expectedScope.region_end.source}\n${expectedScope.required_fragments
-      .map((fragment) => fragment.value.source).join('\n')}\n${expectedScope.region_start.source}\n`
+  for (const [label, scope, region, binding] of [
+    ['input', inputScope, inputRegion, tokenBinding],
+    ['expected', expectedScope, expectedRegion, identityBinding],
+  ]) {
+    const shiftedFields = audit(rewrite((source) => source.replace(
+      region,
+      region.replace(`${scope.region_start.source}\n`, `${scope.region_start.source}\n    INSERTED_SHIFT: true,\n`),
+    )));
+    assert.equal(shiftedFields.verified, false, `${label} fields shifted`);
+    assert.equal(shiftedFields.failures.some((failure) => failure.startsWith(
+      `current_integration_binding_scope_required_fragment_mismatch:${binding.id}:`,
+    )), true, `${label} fields shifted`);
+  }
+
+  const reversedRegion = audit(rewrite((source) => source.replace(`${expectedRegion}${expectedOwnerClose}`, (
+    `${expectedOwnerClose}${expectedRegion}`
   ))));
   assert.equal(reversedRegion.verified, false);
   assert.equal(reversedRegion.failures.includes(
@@ -1739,10 +1931,10 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   ), true);
 
   const interleavedRegions = audit(rewrite((source) => source.replace(
-    `${inputRegion}${inputRegionCompletion}${expectedRegion}`,
+    `${inputRegion}${inputRegionCompletion}${expectedRegion}${expectedOwnerClose}`,
     `${inputScope.region_start.source}\n${inputScope.required_fragments.map((fragment) => fragment.value.source).join('\n')}\n`
       + `${expectedScope.region_start.source}\n${expectedScope.required_fragments.map((fragment) => fragment.value.source).join('\n')}\n`
-      + `${inputScope.region_end.source}\n${inputRegionCompletion}${expectedScope.region_end.source}\n`,
+      + `${inputScope.region_end.source}\n${inputRegionCompletion}  });\n${expectedOwnerClose}`,
   )));
   assert.equal(interleavedRegions.verified, false);
   assert.equal(interleavedRegions.failures.includes(
@@ -1763,6 +1955,204 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assert.equal(tokenMovedIntoExpected.failures.includes(
     `current_integration_binding_scope_forbidden_fragment_mismatch:${identityBinding.id}:access_token_expected_forbidden`,
   ), true);
+
+  const assertSemanticBypassRejected = (label, transform, expectedCounter) => {
+    const result = audit(rewrite(transform));
+    assert.equal(result.verified, false, label);
+    assert.equal(result.current_release_semantics.verified, false, label);
+    assert.equal(result.failures.includes(
+      'current_release_semantics:mr1597:worker_environment_test_mismatch',
+    ), true, `${label}: ${result.failures.join(',')}`);
+    if (expectedCounter) {
+      assert.equal(result.current_release_semantics[expectedCounter] > 0, true, label);
+    }
+    return result;
+  };
+  assertSemanticBypassRejected('expected spread cannot sanitize or repopulate env', (source) => source.replace(
+    expectedRegion,
+    expectedRegion.replace('  });\n', '    ...env,\n  });\n'),
+  ), 'env_escape_count');
+  for (const [label, propertySource] of [
+    ['computed static key', "    ['QBOT_DYNAMIC_EXPECTED']: true,"],
+    ['computed dynamic key', '    [dynamicExpectedKey]: true,'],
+    ['getter', '    get QBOT_DYNAMIC_EXPECTED() { return true; },'],
+    ['setter', '    set QBOT_DYNAMIC_EXPECTED(value) { void value; },'],
+    ['method', '    QBOT_DYNAMIC_EXPECTED() { return true; },'],
+    ['shorthand', '    dynamicExpectedValue,'],
+    ['duplicate key', '    QBOT_DUPLICATE_EXPECTED: true,\n    QBOT_DUPLICATE_EXPECTED: false,'],
+    ['nested dynamic key', '    QBOT_NESTED_EXPECTED: { [dynamicNestedKey]: true },'],
+  ]) {
+    assertSemanticBypassRejected(`expected object rejects ${label}`, (source) => source.replace(
+      expectedRegion,
+      expectedRegion.replace('  });\n', `${propertySource}\n  });\n`),
+    ));
+  }
+  assertSemanticBypassRejected('delete before assertion cannot erase leaked token', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  delete env.IM_USER_ACCESS_TOKEN;\n${expectedStart}\n`,
+  ), 'env_mutation_count');
+  assertSemanticBypassRejected('assignment before assertion cannot erase leaked token', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  env.IM_USER_ACCESS_TOKEN = undefined;\n${expectedStart}\n`,
+  ), 'env_mutation_count');
+  assertSemanticBypassRejected('Object.assign cannot rewrite env before assertion', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  Object.assign(env, { IM_USER_ACCESS_TOKEN: undefined });\n${expectedStart}\n`,
+  ), 'env_mutation_count');
+  assertSemanticBypassRejected('defineProperty cannot rewrite env after assertion', (source) => source.replace(
+    `${expectedRegion}${expectedOwnerClose}`,
+    `${expectedRegion}  Object.defineProperty(env, 'IM_USER_ACCESS_TOKEN', { value: undefined });\n${expectedOwnerClose}`,
+  ), 'env_mutation_count');
+  for (const [label, mutation] of [
+    ['Object.defineProperties', "Object.defineProperties(env, { IM_USER_ACCESS_TOKEN: { value: undefined } });"],
+    ['Reflect.set', "Reflect.set(env, 'IM_USER_ACCESS_TOKEN', undefined);"],
+    ['sequence-expression member assignment', "(0, env).IM_USER_ACCESS_TOKEN = undefined;"],
+  ]) {
+    assertSemanticBypassRejected(`${label} cannot rewrite env`, (source) => source.replace(
+      `${expectedStart}\n`,
+      `  ${mutation}\n${expectedStart}\n`,
+    ), 'env_mutation_count');
+  }
+  assertSemanticBypassRejected('writable alias cannot delete env fields', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  const writableEnvAlias = env;\n  Reflect.deleteProperty(writableEnvAlias, 'IM_USER_ACCESS_TOKEN');\n${expectedStart}\n`,
+  ), 'env_mutation_count');
+  assertSemanticBypassRejected('assigned alias cannot update env fields', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  let assignedEnvAlias;\n  assignedEnvAlias = env;\n  assignedEnvAlias.IM_USER_ACCESS_TOKEN++;\n${expectedStart}\n`,
+  ), 'env_mutation_count');
+  assertSemanticBypassRejected('destructured aliases cannot conceal env mutation', (source) => source.replace(
+    `${expectedStart}\n`,
+    `  const [destructuredEnvAlias] = [env];\n  delete destructuredEnvAlias.IM_USER_ACCESS_TOKEN;\n${expectedStart}\n`,
+  ), 'env_escape_count');
+  assertSemanticBypassRejected('nested identity lines cannot impersonate direct expected properties', (source) => (
+    source
+      .replace('    QBOT_SCOPE_FIXTURE_1_8: true,\n', '    nestedIdentity: {\n')
+      .replace(
+        `${expectedScope.required_fragments.at(-1).value.source}\n  });\n`,
+        `${expectedScope.required_fragments.at(-1).value.source}\n    },\n  });\n`,
+      )
+  ));
+  assertSemanticBypassRejected('a second deepEqual cannot impersonate the unique assertion', (source) => source.replace(
+    `${expectedRegion}${expectedOwnerClose}`,
+    `${expectedRegion}  assert.deepEqual(env, env);\n${expectedOwnerClose}`,
+  ), 'env_escape_count');
+  const readOnlyAlias = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `  const observedEnvAlias = env;\n  void observedEnvAlias;\n${expectedStart}\n`,
+  )));
+  assert.equal(readOnlyAlias.verified, true, readOnlyAlias.failures.join(','));
+  assert.deepEqual(readOnlyAlias.current_release_semantics.env_aliases, ['env', 'observedEnvAlias']);
+  assert.equal(readOnlyAlias.current_release_semantics.env_mutation_count, 0);
+  assert.equal(readOnlyAlias.current_release_semantics.env_escape_count, 0);
+
+  for (const [label, from, to] of [
+    ['assert import source', "from 'node:assert/strict'", "from 'node:assert'"],
+    ['createRequire import source', "from 'node:module'", "from 'node:url'"],
+    ['test import source', "from 'node:test'", "from 'node:test/reporters'"],
+    ['createRequire authority', 'createRequire(import.meta.url)', "createRequire('file:///tmp/fake.mjs')"],
+    ['fake createRequire helper', 'createRequire(import.meta.url)', 'fakeCreateRequire(import.meta.url)'],
+    ['facade require source', "require('../../../electron/desktop-agent-host.cjs')", "require('../../../electron/fake-host.cjs')"],
+    ['non-imported assert binding', "import assert from 'node:assert/strict';", 'const assert = fakeAssert;'],
+  ]) {
+    const result = assertSemanticBypassRejected(`rejects wrong ${label}`, (source) => source.replace(from, to));
+    assert.equal(result.current_release_semantics.top_level_bindings.some((binding) => !binding.verified), true);
+  }
+  for (const [label, statement] of [
+    ['nested workerEnvironment parameter shadow', '  function shadow(workerEnvironment) { return workerEnvironment; }'],
+    ['assert rebinding', '  assert = replacementAssert;'],
+    ['workerEnvironment member write', '  workerEnvironment.compromised = true;'],
+    ['Object indirect test mutation', "  Object.defineProperty(test, 'compromised', { value: true });"],
+    ['Object.defineProperties indirect assert mutation', "  Object.defineProperties(assert, { compromised: { value: true } });"],
+    ['Object.assign indirect workerEnvironment mutation', '  Object.assign(workerEnvironment, { compromised: true });'],
+    ['Reflect indirect require mutation', "  Reflect.set(require, 'compromised', true);"],
+    ['Reflect.deleteProperty indirect test mutation', "  Reflect.deleteProperty(test, 'only');"],
+    ['Object-wrapped protected mutation', "  Reflect.set(Object(assert), 'deepEqual', replacement);"],
+  ]) {
+    const result = assertSemanticBypassRejected(label, (source) => source.replace(
+      `${expectedStart}\n`, `${statement}\n${expectedStart}\n`,
+    ), 'protected_binding_violation_count');
+    assert.equal(result.current_release_semantics.protected_binding_violation_kinds.length > 0, true, label);
+  }
+
+  const assertChainBypassRejected = (label, filePath, transform) => {
+    const result = audit(rewritePath(filePath, transform));
+    assert.equal(result.verified, false, label);
+    assert.equal(result.current_release_semantics.worker_environment_export_chain.verified, false, label);
+    assert.equal(result.failures.includes(
+      'current_release_semantics:mr1597:worker_environment_test_mismatch',
+    ), true, `${label}:${result.failures.join(',')}`);
+  };
+  assertChainBypassRejected('facade must forward the exact supervisor', 'electron/desktop-agent-host.cjs', (source) => (
+    source.replace('./host-core/agent/execution-worker-supervisor.cjs', './host-core/agent/fake-supervisor.cjs')
+  ));
+  assertChainBypassRejected(
+    'supervisor must import the exact lifecycle workerEnvironment',
+    'electron/host-core/agent/execution-worker-supervisor.cjs',
+    (source) => source.replace('./execution-worker-process-lifecycle.cjs', './fake-lifecycle.cjs'),
+  );
+  assertChainBypassRejected(
+    'supervisor must export workerEnvironment',
+    'electron/host-core/agent/execution-worker-supervisor.cjs',
+    (source) => source.replace('  workerEnvironment,\n};', '};'),
+  );
+  assertChainBypassRejected(
+    'lifecycle declaration must retain exact authority defaults',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace(
+      'function workerEnvironment(source = process.env, authority = {}) {',
+      'function workerEnvironment(source = {}, authority = {}) {',
+    ),
+  );
+  assertChainBypassRejected(
+    'lifecycle must export workerEnvironment',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace('  workerEnvironment,\n};', '};'),
+  );
+  assertChainBypassRejected(
+    'lifecycle workerEnvironment cannot be rebound',
+    'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+    (source) => source.replace('  void source;', '  workerEnvironment = replacement;\n  void source;'),
+  );
+
+  const dynamicExecutionScenarios = [
+    ['direct eval', "  eval('1 + 1');", 'direct_eval'],
+    ['optional eval', "  eval?.('1 + 1');", 'direct_eval'],
+    ['indirect eval', "  (0, eval)('1 + 1');", 'indirect_eval'],
+    ['global eval', "  globalThis.eval('1 + 1');", 'indirect_eval'],
+    ['eval call', "  eval.call(null, '1 + 1');", 'eval_call_or_apply'],
+    ['Function call', "  Function('return 1');", 'function_constructor'],
+    ['new Function', "  new Function('return 1');", 'function_constructor'],
+    ['Function apply', "  Function.apply(null, ['return 1']);", 'function_call_or_apply'],
+    ['Reflect eval', "  Reflect.apply(eval, null, ['1 + 1']);", 'reflect_eval'],
+    ['Reflect Function', "  Reflect.construct(Function, ['return 1']);", 'reflect_function_constructor'],
+    ['static constructor', "  target.constructor('return 1');", 'member_constructor'],
+    ['computed constructor', "  target['constructor']('return 1');", 'member_constructor'],
+    ['dynamic computed callee', '  dynamicFns[dynamicName]();', 'dynamic_computed_callee'],
+    ['dynamic import', "  import('./dynamic-test-module.mjs');", 'dynamic_import'],
+    ['assigned eval alias', "  let execute; execute = eval; execute('1 + 1');", 'indirect_eval'],
+    ['destructured eval alias', "  const [execute] = [eval]; execute('1 + 1');", 'indirect_eval'],
+    ['globalThis destructured eval alias', "  const { eval: execute } = globalThis; execute('1 + 1');", 'indirect_eval'],
+    ['assigned Function alias', "  let Constructor; Constructor = Function; new Constructor('return 1');", 'function_constructor'],
+    ['globalThis destructured Function alias', "  const { Function: Constructor } = globalThis; new Constructor('return 1');", 'function_constructor'],
+    ['node vm require', "  const vm = require('node:vm'); vm.runInNewContext('1 + 1');", 'node_vm_module'],
+  ];
+  for (const [label, statement, expectedKind] of dynamicExecutionScenarios) {
+    const result = assertSemanticBypassRejected(label, (source) => source.replace(
+      `${expectedStart}\n`, `${statement}\n${expectedStart}\n`,
+    ), 'dynamic_code_execution_count');
+    assert.equal(
+      result.current_release_semantics.dynamic_code_execution_kinds.includes(expectedKind),
+      true,
+      `${label}:${result.current_release_semantics.dynamic_code_execution_kinds.join(',')}`,
+    );
+  }
+  const harmlessStaticCalls = audit(rewrite((source) => source.replace(
+    `${expectedStart}\n`,
+    `  staticHelper();\n  Object.assign(unrelatedObject, { observed: true });\n  void unrelatedObject.constructor;\n${expectedStart}\n`,
+  )));
+  assert.equal(harmlessStaticCalls.verified, true, harmlessStaticCalls.failures.join(','));
+  assert.equal(harmlessStaticCalls.current_release_semantics.dynamic_code_execution_count, 0);
 
   for (const alternateTokenProperty of [
     "      IM_USER_ACCESS_TOKEN: 'different-secret',",
@@ -1850,6 +2240,136 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   });
   const verifiedValidation = validateAttestation(verified);
   assert.equal(verifiedValidation.ok, true, verifiedValidation.failures.join(','));
+  const forgedCurrentV1 = structuredClone(verified);
+  forgedCurrentV1.schema_version = 'qbot-qwork-release-source-contract/v1';
+  delete forgedCurrentV1.attestation_sha256;
+  forgedCurrentV1.attestation_sha256 = sha256Text(stableJson(forgedCurrentV1));
+  const forgedCurrentV1Validation = validateAttestation(forgedCurrentV1);
+  assert.equal(forgedCurrentV1Validation.ok, false);
+  assert.equal(forgedCurrentV1Validation.failures.includes('attestation_schema_mismatch'), true);
+
+  const forgedCurrentTopLevel = structuredClone(verified);
+  forgedCurrentTopLevel.untrusted_extra = true;
+  delete forgedCurrentTopLevel.attestation_sha256;
+  forgedCurrentTopLevel.attestation_sha256 = sha256Text(stableJson(forgedCurrentTopLevel));
+  const forgedCurrentTopLevelValidation = validateAttestation(forgedCurrentTopLevel);
+  assert.equal(forgedCurrentTopLevelValidation.ok, false);
+  assert.equal(forgedCurrentTopLevelValidation.failures.includes('attestation_current_fields_mismatch'), true);
+
+  const forgedLastCommit = structuredClone(verified);
+  const forgedLastCommitFile = forgedLastCommit.protected_files[0];
+  forgedLastCommitFile.last_commit_id = '8'.repeat(40);
+  delete forgedLastCommit.attestation_sha256;
+  forgedLastCommit.attestation_sha256 = sha256Text(stableJson(forgedLastCommit));
+  const forgedLastCommitValidation = validateAttestation(forgedLastCommit);
+  assert.equal(forgedLastCommitValidation.ok, false);
+  assert.equal(
+    forgedLastCommitValidation.failures.includes(
+      `attestation_release_file_last_commit_provenance:${forgedLastCommitFile.path}:last_commit_id_mismatch`,
+    ),
+    true,
+  );
+
+  const forgedProvenance = structuredClone(verified);
+  forgedProvenance.protected_files[0].last_commit_provenance.last_commit_id = '8'.repeat(40);
+  delete forgedProvenance.attestation_sha256;
+  forgedProvenance.attestation_sha256 = sha256Text(stableJson(forgedProvenance));
+  const forgedProvenanceValidation = validateAttestation(forgedProvenance);
+  assert.equal(forgedProvenanceValidation.ok, false);
+  assert.equal(
+    forgedProvenanceValidation.failures.includes(
+      `attestation_release_file_last_commit_provenance:${forgedProvenance.protected_files[0].path}:last_commit_id_mismatch`,
+    ),
+    true,
+  );
+
+  const forgedSemantics = structuredClone(verified);
+  forgedSemantics.current_release_semantics.expected_object_shape.spread_count = 1;
+  delete forgedSemantics.attestation_sha256;
+  forgedSemantics.attestation_sha256 = sha256Text(stableJson(forgedSemantics));
+  const forgedSemanticsValidation = validateAttestation(forgedSemantics);
+  assert.equal(forgedSemanticsValidation.ok, false);
+  assert.equal(forgedSemanticsValidation.failures.includes(
+    'attestation_current_release_semantics_mismatch',
+  ), true);
+  const assertSemanticAttestationForgeryRejected = (label, mutate) => {
+    const forged = structuredClone(verified);
+    mutate(forged.current_release_semantics);
+    delete forged.attestation_sha256;
+    forged.attestation_sha256 = sha256Text(stableJson(forged));
+    const validation = validateAttestation(forged);
+    assert.equal(validation.ok, false, label);
+    assert.equal(validation.failures.includes(
+      'attestation_current_release_semantics_mismatch',
+    ), true, `${label}:${validation.failures.join(',')}`);
+  };
+  assertSemanticAttestationForgeryRejected('old v1 semantics schema', (semantics) => {
+    semantics.schema_version = 'qbot-qwork-mr1597-worker-environment-test-semantics/v1';
+  });
+  assertSemanticAttestationForgeryRejected('missing v2 semantics field', (semantics) => {
+    delete semantics.dynamic_code_execution_count;
+  });
+  assertSemanticAttestationForgeryRejected('unexpected v2 semantics field', (semantics) => {
+    semantics.untrusted_extra = true;
+  });
+  assertSemanticAttestationForgeryRejected('forged top-level binding', (semantics) => {
+    semantics.top_level_bindings[0].source = 'node:assert';
+  });
+  assertSemanticAttestationForgeryRejected('forged export chain', (semantics) => {
+    semantics.worker_environment_export_chain.steps[0].count = 2;
+  });
+  assertSemanticAttestationForgeryRejected('forged dynamic execution count', (semantics) => {
+    semantics.dynamic_code_execution_count = 1;
+    semantics.dynamic_code_execution_kinds = ['direct_eval'];
+  });
+
+  const forgedAllGreenObservation = structuredClone(verified);
+  const forgedTestFile = forgedAllGreenObservation.protected_files.find((file) => (
+    file.path === tokenBinding.path
+  ));
+  const forgedTestSource = Buffer.from(forgedTestFile.content_base64, 'base64').toString('utf8').replace(
+    `${expectedStart}\n`, `  eval('forged');\n${expectedStart}\n`,
+  );
+  const forgedTestBytes = Buffer.from(forgedTestSource, 'utf8');
+  forgedTestFile.content_base64 = forgedTestBytes.toString('base64');
+  forgedTestFile.declared_size = forgedTestBytes.length;
+  forgedTestFile.bytes = forgedTestBytes.length;
+  forgedTestFile.sha256 = sha256Text(forgedTestSource);
+  forgedTestFile.blob_id = gitBlobSha1(forgedTestSource);
+  forgedTestFile.line_count = forgedTestSource.replace(/\n$/u, '').split('\n').length;
+  delete forgedAllGreenObservation.attestation_sha256;
+  forgedAllGreenObservation.attestation_sha256 = sha256Text(stableJson(forgedAllGreenObservation));
+  const forgedAllGreenValidation = validateAttestation(forgedAllGreenObservation);
+  assert.equal(forgedAllGreenValidation.ok, false);
+  assert.equal(forgedAllGreenValidation.failures.includes(
+    'attestation_current_release_semantics_mismatch',
+  ), true, forgedAllGreenValidation.failures.join(','));
+  const forgedProtectedBindingObservation = structuredClone(verified);
+  const forgedProtectedTestFile = forgedProtectedBindingObservation.protected_files.find((file) => (
+    file.path === tokenBinding.path
+  ));
+  const forgedProtectedSource = Buffer.from(
+    forgedProtectedTestFile.content_base64,
+    'base64',
+  ).toString('utf8').replace(
+    `${expectedStart}\n`, `  Reflect.set(Object(assert), 'deepEqual', replacement);\n${expectedStart}\n`,
+  );
+  const forgedProtectedBytes = Buffer.from(forgedProtectedSource, 'utf8');
+  forgedProtectedTestFile.content_base64 = forgedProtectedBytes.toString('base64');
+  forgedProtectedTestFile.declared_size = forgedProtectedBytes.length;
+  forgedProtectedTestFile.bytes = forgedProtectedBytes.length;
+  forgedProtectedTestFile.sha256 = sha256Text(forgedProtectedSource);
+  forgedProtectedTestFile.blob_id = gitBlobSha1(forgedProtectedSource);
+  forgedProtectedTestFile.line_count = forgedProtectedSource.replace(/\n$/u, '').split('\n').length;
+  assert.equal(forgedProtectedBindingObservation.current_release_semantics.protected_binding_violation_count, 0);
+  assert.deepEqual(forgedProtectedBindingObservation.current_release_semantics.protected_binding_violation_kinds, []);
+  delete forgedProtectedBindingObservation.attestation_sha256;
+  forgedProtectedBindingObservation.attestation_sha256 = sha256Text(stableJson(forgedProtectedBindingObservation));
+  const forgedProtectedValidation = validateAttestation(forgedProtectedBindingObservation);
+  assert.equal(forgedProtectedValidation.ok, false);
+  assert.equal(forgedProtectedValidation.failures.includes(
+    'attestation_current_release_semantics_mismatch',
+  ), true, forgedProtectedValidation.failures.join(','));
   const assertForgedAttestationRejected = (label, mutate, expectedFailure) => {
     const forged = structuredClone(verified);
     const forgedBinding = forged.integration_bindings.find((item) => item.id === identityBinding.id);
@@ -1889,6 +2409,12 @@ test('MR !1597 binds duplicated identity additions to exact input and expected r
   assertForgedAttestationRejected('owner region ordered flag', (binding) => {
     binding.scope_observation.owner_region_ordered = false;
   }, `attestation_current_integration_binding_scope_region_sequence:${identityBinding.id}`);
+  assertForgedAttestationRejected('exclusive region end policy', (binding) => {
+    binding.current_release_scope.region_end_inclusive = true;
+  }, 'attestation_current_integration_bindings_mismatch');
+  assertForgedAttestationRejected('region end scope anchor', (binding) => {
+    binding.current_release_scope.region_end.source = '  });';
+  }, 'attestation_current_integration_bindings_mismatch');
   assertForgedAttestationRejected('required fragment count', (binding) => {
     binding.scope_observation.required_fragments[0].occurrence_count = 2;
   }, `attestation_current_integration_binding_scope_fragment:${identityBinding.id}:${identityBinding.id}`);
@@ -4562,6 +5088,8 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     ['electron/host-core/agent/execution-worker-controller.cjs', `
       const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
       const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
+      const { Worker } = require('node:worker_threads');
+      const { validateEnvelope } = require('./execution-worker-protocol.cjs');
       const sameIdentity = (message, authority, fields) => authority
         && fields.every((field) => message[field] === authority[field]);
       class ExecutionWorkerController {
@@ -4858,7 +5386,13 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
           // This path is protected only by the blocking-risk contract in this fixture.
         }
         if (!inheritedFile) return riskFile;
-        const source = `/* inherited source-contract fixture:\n${inheritedSource}\n*/\n${Buffer.from(riskFile.content, 'base64').toString('utf8')}`;
+        const inheritedContractSource = [
+          'electron/host-core/agent/execution-worker-supervisor.cjs',
+          'electron/host-core/agent/execution-worker-process-lifecycle.cjs',
+        ].includes(filePath)
+          ? inheritedSource
+          : `/* inherited source-contract fixture:\n${inheritedSource}\n*/`;
+        const source = `${inheritedContractSource}\n${Buffer.from(riskFile.content, 'base64').toString('utf8')}`;
         return {
           ...inheritedFile,
           size: Buffer.byteLength(source, 'utf8'),

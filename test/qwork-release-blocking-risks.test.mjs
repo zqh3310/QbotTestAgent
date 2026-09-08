@@ -16,6 +16,7 @@ import {
   auditQworkReleaseBlockingRisk,
   validateQworkReleaseBlockingRisksForReport,
 } from '../src/lib/qwork-release-blocking-risks.mjs';
+import { auditQworkSuccessorAstContracts } from '../src/lib/qwork-release-blocking-risk-ast.mjs';
 import { sha256Text, stableJson, writeQworkReleaseIntake } from '../src/lib/qwork-release-intake.mjs';
 
 const CURRENT_RELEASE_HEAD = '90063782129701951edd90a9df8cf6145f1de425';
@@ -143,6 +144,8 @@ require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorke
 const successorController = `
 const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
 const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
+const { Worker } = require('node:worker_threads');
+const { validateEnvelope } = require('./execution-worker-protocol.cjs');
 const sameIdentity = (message, authority, fields) => authority
   && fields.every((field) => message[field] === authority[field]);
 class ExecutionWorkerController {
@@ -297,6 +300,160 @@ function createExecutionWorkerSupervisor() {
   return { onExit, onMessage, request, stop };
 }
 `;
+
+const successorSupervisorWithNow = successorSupervisor
+  .replace(
+    'function createExecutionWorkerSupervisor() {',
+    'function createExecutionWorkerSupervisor({ now = Date.now } = {}) {',
+  )
+  .replace(
+    'handleExecutionWorkerEventMessage(message, { pending, postBrokerResult, terminateChild, child });',
+    'handleExecutionWorkerEventMessage(message, { pending, postBrokerResult, terminateChild, child, now });',
+  )
+  .replace(
+    'handleExecutionWorkerObserverMessage(message, { pending });',
+    'handleExecutionWorkerObserverMessage(message, { pending, now });',
+  );
+
+const currentShapeSuccessorSupervisor = `
+const { createExecutionWorkerRequestSettlement } = require('./execution-worker-cancellation.cjs');
+const { createExecutionWorkerTerminator } = require('./execution-worker-termination.cjs');
+const {
+  handleExecutionWorkerEventMessage,
+  handleExecutionWorkerObserverMessage,
+} = require('./execution-worker-supervisor-message.cjs');
+function createExecutionWorkerSupervisor({
+  enabled = true,
+  fork,
+  entry = DEFAULT_ENTRY,
+  now = Date.now,
+  cancellationTimeoutMs = 5_000,
+  maxPendingRequests = 32,
+  maxRestarts = 2,
+  onInteractionRequest,
+  onCapabilityRequest,
+  stripMainOwnedCapabilitiesForTest = false,
+  processTreeKiller = killExecutionWorkerProcessTree,
+  processTreeCleanupGraceMs = 250,
+} = {}) {
+  const pending = new Map();
+  let child = null;
+  const terminationCauses = new WeakMap();
+  const contextUsageRoutes = createHostContextUsageRoutes();
+  let ownershipGeneration = null;
+  const terminateOwnedChild = createExecutionWorkerTerminator({
+    processId,
+    processTreeKiller,
+    cleanupGraceMs: processTreeCleanupGraceMs,
+  });
+  const terminateChild = (target = child, reason = 'terminated') => {
+    if (target) terminationCauses.set(target, reason);
+    return terminateOwnedChild(target, reason);
+  };
+  const postBrokerResult = () => {};
+  const onMessage = (raw) => {
+    let message;
+    try {
+      message = validateEnvelope(raw, { direction: 'worker-to-host', now: now() });
+    } catch (error) {
+      return;
+    }
+    if (message.ownershipGeneration !== ownershipGeneration) return;
+    if (message.operation === 'execution.event') {
+      handleExecutionWorkerEventMessage(message, {
+        pending, postBrokerResult, terminateChild, child, now,
+      });
+      return;
+    }
+    if (message.operation === 'execution.observer') {
+      handleExecutionWorkerObserverMessage(message, { pending, now });
+      return;
+    }
+    if (isExecutionWorkerTerminalOperation(message.operation)) {
+      const item = pending.get(message.requestId);
+      if (!item || !item.matches(message)) return;
+      pending.delete(message.requestId);
+      logExecutionWorkerCancellation(logger, item, message, now);
+      contextUsageRoutes.retain(message, item);
+      item.resolve(message);
+      return;
+    }
+  };
+  const onExit = () => {};
+  const start = async (authority) => {
+    child = fork(entry, [], {
+      serviceName: 'QWork Execution Worker',
+      stdio: 'pipe',
+      env: workerEnvironment(process.env, authority),
+    });
+    const spawnedChild = child;
+    child.on('message', onMessage);
+    child.once('exit', (exitCode) => onExit(spawnedChild, { exitCode }));
+    child.once('error', (processError) => onExit(spawnedChild, { processError }));
+  };
+  const request = async (operation, identity, payload, {
+    onEvent,
+    onContextUsage,
+    onInteractionRequest: requestInteractionHandler,
+    onCapabilityRequest: requestCapabilityHandler,
+    deadlineMs = 30_000,
+  } = {}) => {
+    const requestId = identity?.requestId || randomUUID();
+    const message = createEnvelope(
+      operation,
+      { ...identity, requestId, ownershipGeneration },
+      payload,
+      { deadlineMs, now: now() },
+    );
+    return new Promise((resolveRequest, reject) => {
+      const settlement = createExecutionWorkerRequestSettlement({
+        child,
+        operation,
+        deadlineMs,
+        cancellationTimeoutMs,
+        terminateChild,
+        onDeadline: () => pending.delete(requestId),
+        resolve: resolveRequest,
+        reject,
+      });
+      pending.set(requestId, {
+        lastSequence: -1,
+        lastContextUsageSequence: -1,
+        onEvent,
+        onContextUsage,
+        onInteractionRequest: requestInteractionHandler,
+        onCapabilityRequest: requestCapabilityHandler,
+        matches: (candidate) => (
+          candidate.principalId === message.principalId
+          && candidate.serverScope === message.serverScope
+          && candidate.runtimeGeneration === message.runtimeGeneration
+          && candidate.ownershipGeneration === message.ownershipGeneration
+          && candidate.sessionId === message.sessionId
+          && candidate.turnId === message.turnId
+        ),
+        ...settlement,
+      });
+      child.postMessage(message);
+    });
+  };
+  const stop = async () => {
+    const stoppedChild = child;
+    await terminateChild(stoppedChild, 'stop');
+    if (child === stoppedChild) child = null;
+  };
+  return Object.freeze({ enabled: true, request, start, stop });
+}
+`;
+
+const onceDirectFinishSuccessorController = successorController
+  .replace(
+    "this.runner.on('error', (error) => this.onRunnerError(error));",
+    "this.runner.once('error', () => this.finish(1));",
+  )
+  .replace(
+    "this.runner.on('exit', (code) => this.onRunnerExit(code));",
+    "this.runner.once('exit', () => this.finish(1));",
+  );
 
 const helperSpreadSuccessorSupervisor = `
 const {
@@ -666,6 +823,28 @@ function replaceRequired(source, search, replacement, label) {
   return source.replace(search, replacement);
 }
 
+function successorSourceMap(overrides = new Map()) {
+  return new Map(successorFiles(overrides).map(({ path: filePath, source }) => [filePath, source]));
+}
+
+function assertBlockedAcrossLayers({ label, contract, overrides, risk = successorRisk(overrides) }) {
+  const ast = auditQworkSuccessorAstContracts(successorSourceMap(overrides));
+  assert.equal(ast[contract], false, `${label}: AST contract must reject`);
+  assert.equal(risk.status, 'BLOCKED', `${label}: full audit must block`);
+  assert.equal(risk.verified, false, `${label}: full audit must not verify`);
+  const report = reportFor(risk);
+  const replay = validateQworkReleaseBlockingRisksForReport(report);
+  assert.equal(replay.ok, true, `${label}: blocked report must replay`);
+  assert.equal(report.decision, 'BLOCKED', `${label}: blocked report must not release`);
+  const forgedReady = structuredClone(report);
+  forgedReady.decision = 'READY';
+  assert.equal(
+    validateQworkReleaseBlockingRisksForReport(forgedReady).ok,
+    false,
+    `${label}: forged READY report must fail replay`,
+  );
+}
+
 function rehashRisk(risk) {
   const value = structuredClone(risk);
   delete value.attestation_sha256;
@@ -742,10 +921,86 @@ test('MR !1559 exact release head switches to per-turn utilityProcess assertions
   assert.equal(validateQworkReleaseBlockingRisksForReport(reportFor(risk)).ok, true);
 });
 
+test('v5 controller and timeout contracts fail closed across AST, audit, and report replay', () => {
+  const mutateController = (search, replacement, label) => new Map([[
+    'electron/host-core/agent/execution-worker-controller.cjs',
+    replaceRequired(successorController, search, replacement, label),
+  ]]);
+  const controllerVariants = [
+    ['controller initial stopped state', 'controller', mutateController(
+      'heartbeat: null, stopped: false',
+      'heartbeat: null, stopped: true',
+      'controller initial stopped state',
+    )],
+    ['controller pre-bound turn state', 'controller', mutateController(
+      'runner: null, authority: null, turn: null',
+      "runner: null, authority: null, turn: { requestId: 'prebound' }",
+      'controller pre-bound turn state',
+    )],
+    ['controller freezes protected receiver', 'controller', mutateController(
+      '      heartbeat: null, stopped: false });',
+      '      heartbeat: null, stopped: false });\n    Object.freeze(this);',
+      'controller freezes protected receiver',
+    )],
+    ['controller missing Worker import', 'controller', mutateController(
+      "const { Worker } = require('node:worker_threads');\n",
+      '',
+      'controller missing Worker import',
+    )],
+    ['controller missing validateEnvelope import', 'controller', mutateController(
+      "const { validateEnvelope } = require('./execution-worker-protocol.cjs');\n",
+      '',
+      'controller missing validateEnvelope import',
+    )],
+  ];
+  for (const [label, contract, overrides] of controllerVariants) {
+    assertBlockedAcrossLayers({ label, contract, overrides });
+  }
+
+  const timeoutVariants = [
+    ['context timeout Infinity', 'const boundedTimeout = Infinity;'],
+    ['context timeout NaN', 'const boundedTimeout = NaN;'],
+    ['context timeout unproven fallback', 'const boundedTimeout = Math.max(1, Number(timeoutMs) || 1);'],
+    ['context CommonJS module rebind', '__MODULE_REBIND__'],
+  ];
+  for (const [label, replacement] of timeoutVariants) {
+    const contextSource = replacement === '__MODULE_REBIND__'
+      ? `const module = { exports: {} };\n${successorContextUsageLease}`
+      : replaceRequired(
+        successorContextUsageLease,
+        `const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isFinite(requestedTimeout)
+    ? Math.max(1, requestedTimeout)
+    : 1000;`,
+        `const requestedTimeout = Number(timeoutMs);\n  ${replacement}`,
+        label,
+      );
+    const overrides = new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', contextSource],
+    ]);
+    assertBlockedAcrossLayers({ label, contract: 'desktop', overrides });
+  }
+});
+
 test('v5 controller bootstrap and single-turn identity chain rejects disconnected or mixed ownership', () => {
+  const lineSeparator = String.fromCodePoint(0x2028);
+  const paragraphSeparator = String.fromCodePoint(0x2029);
   const variants = [
     new Map([['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-controller.cjs');\n"]]),
+    new Map([['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController;\n"]]),
     new Map([['electron/execution-worker.cjs', "require('./host-core/agent/wrong-controller.cjs').startExecutionWorkerController();\n"]]),
+    new Map([['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-controller.cjs').startWrongController();\n"]]),
+    new Map([['electron/execution-worker.cjs', "require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController({});\n"]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry};\n`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\nrequire('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();\n`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\nstartUnrelatedWorker();\n`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\n/*`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\n\`unterminated`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\n// hidden${lineSeparator}startUnrelatedWorker();\n`]]),
+    new Map([['electron/execution-worker.cjs', `${successorEntry}\n// hidden${paragraphSeparator}startUnrelatedWorker();\n`]]),
     new Map([['electron/host-core/agent/execution-worker-controller.cjs', successorController.replace(
       "require.resolve('./execution-worker-entry.cjs')",
       "require.resolve('./wrong-entry.cjs')",
@@ -779,11 +1034,126 @@ test('v5 controller bootstrap and single-turn identity chain rejects disconnecte
       '      && !message) return;',
     )]]),
   ];
-  for (const overrides of variants) {
+  for (const [index, overrides] of variants.entries()) {
     const risk = successorRisk(overrides);
-    assert.equal(risk.status, 'BLOCKED');
-    assert.equal(risk.checks.at(-1).observations.stable_single_turn_entry, false);
-    assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]]);
+    assert.equal(risk.status, 'BLOCKED', `variant ${index}`);
+    assert.equal(
+      risk.checks.at(-1).observations.stable_single_turn_entry,
+      false,
+      `variant ${index}`,
+    );
+    assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[2]], `variant ${index}`);
+  }
+});
+
+test('v5 bootstrap accepts comments around its sole exact invocation and delegates controller safety to AST', () => {
+  const entries = [`
+// The signed bootstrap owns exactly one controller invocation.
+/* Comments are not executable entry statements. */
+require('./host-core/agent/execution-worker-controller.cjs').startExecutionWorkerController();
+// End of bootstrap.
+`, `
+(require(
+  "./host-core/agent/execution-worker-controller.cjs"
+).startExecutionWorkerController())
+`, `
+require /* module */ (
+  './host-core/agent/execution-worker-controller.cjs'
+).startExecutionWorkerController /* start */ ()
+`];
+  for (const [index, entry] of entries.entries()) {
+    const risk = successorRisk(new Map([
+      ['electron/execution-worker.cjs', entry],
+      ['electron/host-core/agent/execution-worker-controller.cjs', onceDirectFinishSuccessorController],
+    ]));
+    const observations = risk.checks.at(-1).observations;
+    assert.equal(observations.successor_ast_contracts.controller, true, `entry ${index}`);
+    assert.equal(observations.stable_single_turn_entry, true, `entry ${index}`);
+  }
+});
+
+test('v5 supervisor handler bindings allow only an exact optional now forwarding', () => {
+  const lifecycle = (source) => successorRisk(new Map([[
+    'electron/host-core/agent/execution-worker-supervisor.cjs', source,
+  ]])).checks.at(-1).observations.execution_worker_lifecycle_checks;
+  assert.equal(lifecycle(successorSupervisorWithNow).message_handlers_bound, true);
+
+  const variants = [
+    ['missing required binding', '{ pending, now }', '{ now }'],
+    ['wrong optional binding', '{ pending, now }', '{ pending, now: unrelatedNow }'],
+    ['spread binding', '{ pending, now }', '{ pending, ...extra, now }'],
+    ['computed binding', '{ pending, now }', '{ pending, [dynamicNow]: now }'],
+    ['unknown binding', '{ pending, now }', '{ pending, now, unexpected }'],
+    ['expression binding', '{ pending, now }', '{ pending, now: Date.now() }'],
+    ['duplicate binding', '{ pending, now }', '{ pending, now, now }'],
+  ];
+  for (const [label, search, replacement] of variants) {
+    const source = replaceRequired(successorSupervisorWithNow, search, replacement, label);
+    assert.equal(lifecycle(source).message_handlers_bound, false, label);
+  }
+});
+
+test('v5 current supervisor shape preserves one identity-bound pending and child lifecycle', () => {
+  const supervisorContract = (source) => auditQworkSuccessorAstContracts(new Map([[
+    'electron/host-core/agent/execution-worker-supervisor.cjs', source,
+  ]])).supervisor;
+  assert.equal(supervisorContract(currentShapeSuccessorSupervisor), true);
+
+  const variants = [
+    [
+      'pending key uses unrelated requestId',
+      '      pending.set(requestId, {',
+      '      pending.set(unrelatedRequestId, {',
+    ],
+    [
+      'pending matcher loses turn identity',
+      '          && candidate.turnId === message.turnId',
+      '          && candidate.turnId === unrelatedMessage.turnId',
+    ],
+    [
+      'terminal deletes unrelated requestId',
+      '      pending.delete(message.requestId);',
+      '      pending.delete(unrelatedRequestId);',
+    ],
+    [
+      'stop does not await termination',
+      "    await terminateChild(stoppedChild, 'stop');",
+      "    terminateChild(stoppedChild, 'stop');",
+    ],
+    [
+      'stop terminates unrelated child',
+      "    await terminateChild(stoppedChild, 'stop');",
+      "    await terminateChild(unrelatedChild, 'stop');",
+    ],
+    [
+      'start forks unrelated entry',
+      '    child = fork(entry, [], {',
+      '    child = fork(unrelatedEntry, [], {',
+    ],
+    [
+      'creator accepts dynamic rest options',
+      '  processTreeCleanupGraceMs = 250,\n} = {}) {',
+      '  processTreeCleanupGraceMs = 250,\n  ...dynamicOptions\n} = {}) {',
+    ],
+    [
+      'request accepts spread options',
+      '    deadlineMs = 30_000,\n  } = {}) => {',
+      '    deadlineMs = 30_000,\n    ...dynamicRequestOptions\n  } = {}) => {',
+    ],
+    [
+      'pending sequence sentinel drifts',
+      '        lastSequence: -1,',
+      '        lastSequence: -2,',
+    ],
+  ];
+  for (const [label, search, replacement] of variants) {
+    const source = replaceRequired(
+      currentShapeSuccessorSupervisor,
+      search,
+      replacement,
+      label,
+    );
+    assert.equal(supervisorContract(source), false, label);
   }
 });
 
@@ -928,6 +1298,106 @@ test('MR !1559 typed exit assertions after an unconditional terminator remain un
       ])),
     });
     assert.deepEqual(risk.failure_ids, [QWORK_MR1552_FAILURE_IDS[0]], terminator);
+  }
+});
+
+test('MR !1559 reachability analysis folds short-circuit, loop, switch and try terminators', () => {
+  const insertions = [
+    ['short-circuit true', 'if (true || unknown) return;'],
+    ['short-circuit right true', 'if (unknown || true) return;'],
+    ['strict literal true', 'if (1 === 1) return;'],
+    ['infinite while', 'while (true) {}'],
+    ['infinite for', 'for (;;) {}'],
+    ['all switch arms return', `switch (mode) {
+      case 1: return;
+      default: return;
+    }`],
+    ['try finally return', 'try { return; } finally {}'],
+  ];
+  for (const [label, terminator] of insertions) {
+    const source = replaceRequired(
+      successorSupervisor,
+      '  const onExit = (code, signal) => {\n    rejectPending(executionWorkerExitFailure(code, signal));\n  };',
+      `  const onExit = (code, signal) => {\n    ${terminator}\n    rejectPending(executionWorkerExitFailure(code, signal));\n  };`,
+      label,
+    );
+    const ast = auditQworkSuccessorAstContracts(new Map([[
+      'electron/host-core/agent/execution-worker-supervisor.cjs', source,
+    ]]));
+    assert.equal(ast.supervisor_exit, false, label);
+    assert.equal(ast.passed, false, label);
+  }
+});
+
+test('MR !1559 supervisor message forwarding must remain reachable after its guards', () => {
+  const variants = [
+    ['event short-circuit terminator',
+      '  dispatchExecutionEvent(item, message, postBrokerResult);',
+      '  if (true || unknown) return;\n  dispatchExecutionEvent(item, message, postBrokerResult);'],
+    ['event infinite loop terminator',
+      '  dispatchExecutionEvent(item, message, postBrokerResult);',
+      '  while (true) {}\n  dispatchExecutionEvent(item, message, postBrokerResult);'],
+    ['event try terminator',
+      '  dispatchExecutionEvent(item, message, postBrokerResult);',
+      '  try { return; } finally {}\n  dispatchExecutionEvent(item, message, postBrokerResult);'],
+    ['observer short-circuit terminator',
+      '  item.onEvent?.(message);',
+      '  if (unknown || true) return;\n  item.onEvent?.(message);'],
+  ];
+  for (const [label, search, replacement] of variants) {
+    const source = replaceRequired(successorSupervisorMessage, search, replacement, label);
+    const ast = auditQworkSuccessorAstContracts(new Map([[
+      'electron/host-core/agent/execution-worker-supervisor-message.cjs', source,
+    ]]));
+    assert.equal(ast.supervisor_message, false, label);
+    assert.equal(ast.passed, false, label);
+  }
+});
+
+test('MR !1559 current supervisor message pipeline rejects disconnected or dead branches', () => {
+  const variants = [
+    ['current event branch dead',
+      "    if (message.operation === 'execution.event') {",
+      "    if (true || unknown) return;\n    if (message.operation === 'execution.event') {"],
+    ['current terminal branch after infinite loop',
+      "    if (isExecutionWorkerTerminalOperation(message.operation)) {",
+      "    for (;;) {}\n    if (isExecutionWorkerTerminalOperation(message.operation)) {"],
+    ['current decode assignment after unconditional return',
+      "      message = validateEnvelope(raw, { direction: 'worker-to-host', now: now() });",
+      "      return;\n      message = validateEnvelope(raw, { direction: 'worker-to-host', now: now() });"],
+  ];
+  for (const [label, search, replacement] of variants) {
+    const source = replaceRequired(currentShapeSuccessorSupervisor, search, replacement, label);
+    const ast = auditQworkSuccessorAstContracts(new Map([[
+      'electron/host-core/agent/execution-worker-supervisor.cjs', source,
+    ]]));
+    assert.equal(ast.supervisor, false, label);
+    assert.equal(ast.passed, false, label);
+  }
+});
+
+test('MR !1559 legacy supervisor dispatch and stop paths remain reachable', () => {
+  const variants = [
+    ['legacy event branch after return',
+      "    if (message.operation === 'execution.event') {",
+      "    if (true || unknown) return;\n    if (message.operation === 'execution.event') {"],
+    ['legacy terminal branch after infinite loop',
+      '    if (isExecutionWorkerTerminalOperation(message.operation)) {',
+      '    while (true) {}\n    if (isExecutionWorkerTerminalOperation(message.operation)) {'],
+    ['legacy pending set after try return',
+      '    pending.set(requestId, settlement);',
+      '    try { return; } finally {}\n    pending.set(requestId, settlement);'],
+    ['legacy stop call after switch terminator',
+      "    await terminateChild(stoppedChild, 'stop');",
+      "    switch (mode) { case 1: return; default: return; }\n    await terminateChild(stoppedChild, 'stop');"],
+  ];
+  for (const [label, search, replacement] of variants) {
+    const source = replaceRequired(successorSupervisor, search, replacement, label);
+    const ast = auditQworkSuccessorAstContracts(new Map([[
+      'electron/host-core/agent/execution-worker-supervisor.cjs', source,
+    ]]));
+    assert.equal(ast.supervisor, false, label);
+    assert.equal(ast.passed, false, label);
   }
 });
 
@@ -1151,6 +1621,8 @@ test('MR !1559 pending mutation audit rejects aliases and Map/Set prototype disp
     'Map.prototype.clear.call(pending);',
     'Set.prototype.clear.call(pending);',
     'Reflect.apply(Map.prototype.clear, pending, []);',
+    'Map.prototype.clear.bind(pending)();',
+    'Map.prototype.delete.bind(pending)(message.requestId);',
   ];
   for (const mutation of variants) {
     const messageSource = replaceRequired(
@@ -1187,6 +1659,8 @@ test('MR !1559 manager executions mutation audit rejects every non-contract muta
     'Set.prototype.clear.apply(manager.executions, []);',
     'Reflect.apply(Map.prototype.clear, manager.executions, []);',
     'Map.prototype.set.call(manager.executions, requestId, unrelatedRecord);',
+    'Map.prototype.clear.bind(manager.executions)();',
+    'Map.prototype.set.bind(manager.executions)(requestId, unrelatedRecord);',
   ];
   const variants = acquisitionMutations.map((mutation) => replaceRequired(
     currentReleaseSuccessorManager,

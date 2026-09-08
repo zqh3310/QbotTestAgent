@@ -1841,6 +1841,16 @@ framework 不一致，均在 Case 0 前阻断。扫描不会自动修改或追�
 目标 MR 时，才必须直接使用本次 GitLab changes 原文重新生成并验证
 `origin_change_attestation`；目标 MR 不在本次增量范围时该字段必须为空，不得生成。
 两层鉴证均禁止复用历史 attestation、本地 checkout、Casebook 文案或 E2E 结果。
+current-release 持续性鉴证使用独立且不兼容的
+`qbot-qwork-release-current-source-contract/v2`；origin-change 仍使用
+`qbot-qwork-release-source-contract/v1`。不得把含有完整 `protected_files` 字节的
+current-release 结果投影回 v1，也不得只重算 attestation SHA 伪造版本。current-release
+attestation 顶层和每个 protected file 都必须 exact-key；文件内容必须通过规范 Base64 与
+严格 UTF-8 round-trip。每个文件除 Repository Files API 元数据外，还必须通过只读
+`repository/commits?path=<path>&ref_name=<release>&per_page=1` 获取独立的文件最新提交，
+固化 `qbot-qwork-release-file-provenance/v1` 的 endpoint/path/ref/commit_id/last_commit_id，
+并要求其 `last_commit_id` 与文件元数据逐字一致。缺少 provenance、合法 SHA 改写、endpoint
+或字段漂移均在 G0 阻断；不得把文件级 `last_commit_id` 仅当作格式字段。
 current-release 持续性鉴证中的 integration binding 默认仍要求全文件
 `occurrence_count == 1`。唯一例外是 MR !1540 的 `feature_check_body_absent_test` 与
 `test_profile_report_exact_body`：两者必须携带不可变 owner scope，以精确的顶层
@@ -1855,10 +1865,14 @@ URL/method/body 或对其它 binding 产生重复，均必须 `BLOCKED`。MR !15
 `IM_USER_EMAIL`、`IM_USER_DOMAINACCOUNT`、`IM_USER_PROFILE` 四个身份字段必须在 input
 和 expected region 各精确一次，因此 origin changes 的 `expected_addition_count=2`、
 current-release 的 `expected_current_occurrence_count=2`，并逐 region 保存 required fragment
-计数。region start 的相对行号固定为 0，每个 required fragment 必须按合同顺序紧邻排列，
-其 `expected_line_index` 固定为从 1 开始的顺序号；current-release 观察和后续 attestation
-复核都必须与该确定性行号逐项全等，不能接受仅保持递增的整体平移或重算 SHA 后的伪造行号。
-两个 region 的 start/end anchor 各须 `occurrence_count=1`、`verified=true`，完整
+计数。region start 的相对行号固定为 0；input region 的
+`IM_USER_MDMCODE/EMAIL/DOMAINACCOUNT/PROFILE/ACCESS_TOKEN` 冻结行号依次为
+`8/9/10/11/12`，expected region 的四个身份字段冻结行号依次为 `9/10/11/12`。
+current-release 观察和后续 attestation 复核都必须与这些确定性行号逐项全等，不能接受仅
+保持递增的整体平移、单项偏移或重算 SHA 后的伪造行号。input end 继续使用唯一 `  }, {`
+并包含在 region 中；expected end 必须使用 owner 内唯一、无缩进的顶层测试闭合行 `});`
+作为排他终点，固定 `region_end_inclusive=false`，不得退回 owner 内出现两次的含糊
+`  });`。两个 region 的 start/end anchor 各须 `occurrence_count=1`、`verified=true`，完整
 `owner_region_order` 必须严格保持 input start、input end、expected start、expected end，且
 `owner_region_ordered=true`；交换、交错、移区或复制任一完整 region 都必须 `BLOCKED`。
 `IM_USER_ACCESS_TOKEN` 的 input 声明仍须匹配冻结的精确整行；同时 current-release 全文件
@@ -1867,6 +1881,49 @@ current-release 的 `expected_current_occurrence_count=2`，并逐 region 保存
 或 shorthand 都不能绕过；token 进入 expected、离开 input、移到其它 owner 或产生额外副本
 均须 fail-closed。origin changes 鉴证继续
 要求每条新增声明精确出现一次，forbidden fragment 在两层鉴证中都必须精确为 0。
+
+MR !1597 的 current-release 语义鉴证必须使用明确不兼容的
+`qbot-qwork-mr1597-worker-environment-test-semantics/v2`；旧 `v1` 不再有效，缺少 v2
+字段、混入 v1 投影，或只重算报告/attestation 哈希都必须 `BLOCKED`。验证器必须从
+current-release Files API 实读的测试文件字节重新解析整份 module，并在 Program 顶层证明
+以下五个唯一真实绑定，名称、导入类型、source、调用参数和解构目标均须精确一致：
+`import assert from 'node:assert/strict'`、
+`import { createRequire } from 'node:module'`、
+`import test from 'node:test'`、
+`const require = createRequire(import.meta.url)`，以及
+`const { workerEnvironment } = require('../../../electron/desktop-agent-host.cjs')`。
+报告的 `top_level_bindings` 必须逐项固化 `kind/source/imported/local/count/verified`；别名、
+错误 default/named import、错误路径、假 helper、owner 内局部同名函数或未绑定标识符均不得
+提供上述权威性。
+
+`worker_environment_export_chain` 还必须从同一 current release 的真实文件 AST 证明完整
+闭环：`electron/desktop-agent-host.cjs` 唯一通过
+`Object.assign(exports, require('./host-core/agent/execution-worker-supervisor.cjs'))` 转发 facade；
+`electron/host-core/agent/execution-worker-supervisor.cjs` 以唯一顶层 `const` 解构从
+`require('./execution-worker-process-lifecycle.cjs')` 引入 `workerEnvironment`，并在
+`module.exports` 中以同一 shorthand binding 唯一导出；
+`electron/host-core/agent/execution-worker-process-lifecycle.cjs` 唯一顶层声明
+`function workerEnvironment(source = process.env, authority = {})`，并在 `module.exports`
+中以同一 shorthand binding 唯一导出。任一层缺失、重复、改道、假同名实现、导入与导出
+不是同一 lexical binding，或 facade/supervisor/lifecycle 文件身份不匹配均须 fail-closed。
+
+五个测试绑定必须在全文件保持不可遮蔽、不可重绑且不可间接改写，不只检查 owner callback。
+import/变量/函数/类/catch/参数声明，默认值或解构参数，普通/复合/update/解构/循环赋值，
+静态或动态成员写入、`delete`，以及 `Object.defineProperty/defineProperties/assign`、
+`Reflect.set/deleteProperty` 等间接改写都必须计入
+`protected_binding_violation_count/protected_binding_violation_kinds`；正式鉴证只接受计数为 `0`
+且 kinds 为空数组。owner callback（含其全部嵌套函数和不可达分支）同时对动态执行零容忍：
+direct/indirect/optional/global `eval`、`eval.call/apply`、`Function`/`new Function` 及其
+`call/apply`、`Reflect.apply/construct`、成员 `.constructor(...)`、动态 computed callee、
+`node:vm` 模块与执行 API、`ImportExpression`/动态 import，以及无法静态解析的动态 callee
+都必须被拒绝。报告必须精确为 `dynamic_code_execution_count=0`、
+`dynamic_code_execution_kinds=[]`；未知或新增动态执行形态不能按无风险默认放行。
+
+current-release attestation 校验必须对上述 v2 观察执行确定性语义重放：重新读取并验证全部
+文件 blob、重新构建五绑定、导出链、全文件写入/遮蔽账本、owner callback 动态执行账本及
+原有 input/expected 双 region Oracle，再与 attestation 逐字段结构化全等。验证器必须显式
+拒绝 v1、伪造/删减的绑定字段、伪造的零动态执行字段、链路字段漂移和未知 schema；即使
+攻击者同步重算 `content_sha256`、attestation 自身 SHA 或顶层 `verified=true` 也不得放行。
 
 扫描器对仓库重构保持显式路径白名单：`.gitlab/`、`scripts/`、`eval/`、`openspec/`、
 `schemas/`、`deploy/`、`test*` 及目录内 `AGENTS.md`/`CLAUDE.md` 仅做静态合同审计；
