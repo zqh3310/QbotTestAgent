@@ -176,6 +176,7 @@ test('root Casebook, Teams Casebook and G5 CLIs all contend on the same default 
     [path.join(PROJECT_ROOT, 'src', 'cli.mjs'), 'ui-agent-casebook-run'],
     [path.join(TEAMS_ROOT, 'lib', 'casebook-runner.mjs')],
     [path.join(TEAMS_ROOT, 'lib', 'qwork-soak-cli.mjs')],
+    [path.join(TEAMS_ROOT, 'cli.mjs'), 'app-sanity', '--allow-write'],
   ];
   for (const args of commands) {
     const result = await collectChild(
@@ -193,14 +194,17 @@ test('root and Teams Casebook plus G5 direct runners share one lifecycle lock', 
   const rootPackage = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
   const casebook = fs.readFileSync(path.join(TEAMS_ROOT, 'lib', 'casebook-runner.mjs'), 'utf8');
   const soak = fs.readFileSync(path.join(TEAMS_ROOT, 'lib', 'qwork-soak-cli.mjs'), 'utf8');
+  const appSanity = fs.readFileSync(path.join(TEAMS_ROOT, 'cli.mjs'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(TEAMS_ROOT, 'package.json'), 'utf8'));
   const ignore = fs.readFileSync(path.join(PROJECT_ROOT, '.gitignore'), 'utf8').split(/\r?\n/);
   assert.match(rootCli, /if \(command === 'ui-agent-casebook-run'\) \{[\s\S]*executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'root-casebook'/);
   assert.match(casebook, /executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'teams-casebook'/);
   assert.match(soak, /executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'qwork-soak'/);
+  assert.match(appSanity, /options\.command === 'app-sanity'[\s\S]*executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'qwork-app-sanity'/);
   assert.doesNotMatch(rootCli, /lockFile\s*:/);
   assert.doesNotMatch(casebook, /lockFile\s*:/);
   assert.doesNotMatch(soak, /lockFile\s*:/);
+  assert.doesNotMatch(appSanity, /lockFile\s*:/);
   assert.equal(rootPackage.scripts['ui-agent:casebook-run'], 'node src/cli.mjs ui-agent-casebook-run');
   assert.equal(
     rootPackage.scripts['ui-agent:casebook-run-parallel'],
@@ -208,6 +212,7 @@ test('root and Teams Casebook plus G5 direct runners share one lifecycle lock', 
   );
   assert.equal(packageJson.scripts.casebook, 'node lib/casebook-runner.mjs');
   assert.equal(packageJson.scripts.soak, 'node lib/qwork-soak-cli.mjs');
+  assert.equal(packageJson.scripts['app-sanity'], 'node cli.mjs app-sanity');
   assert.match(packageJson.scripts.check, /lib\/managed-runner-lock\.mjs/);
   assert.match(packageJson.scripts.check, /npm test/);
   assert.ok(ignore.includes('/teams360-automation/runtime/.qwork-managed-runner.lock'));

@@ -21,6 +21,12 @@ test('QWork smoke reads running state from the stable composer cancel control', 
   assert.match(QWORK_SMOKE_RUNNING_SELECTOR, /\[data-testid="composer-cancel"\]/u);
   assert.ok(evaluatedSource.includes(`const runningSelector = ${JSON.stringify(QWORK_SMOKE_RUNNING_SELECTOR)};`));
   assert.match(evaluatedSource, /running: visible\(runningSelector\)/u);
+  assert.match(
+    evaluatedSource,
+    /lastAssistantContent\?\.innerText\s*\|\|\s*lastAssistantContent\?\.textContent/u,
+    '正文 innerText 暂不可见时必须先回退正文 textContent，不能误读助手身份标题',
+  );
+  assert.doesNotMatch(evaluatedSource, /lastAssistantRoot\.(?:innerText|textContent)/u);
 });
 
 test('QWork smoke does not settle the loading placeholder observed before the real reply', () => {

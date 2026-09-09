@@ -25,6 +25,18 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
 独立验证源/目标 run metadata 的完整 capabilities baseline 与有序 phase checks，并要求
 两边 canonical signature 全等；缺失、乱序、无效或漂移时不得执行清理导入。
 
+正式 G0 前允许用
+`npm --prefix teams360-automation run app-sanity -- --allow-write --out <new-directory>`
+执行一次独立 App-first 核心诊断。该命令与 Casebook/G5 共用唯一 managed runner lock，
+只写新的 `teams360-automation/output` 子目录，并按顺序验证工作台、干净新任务、一次严格
+发送与精确正文、同 taskId 可见重开、专家/技能/连接器/自动化页面及最终干净新任务。
+每步保存截图、JSONL 和 SHA 证据；助手正文固定从
+`.aui-assistant-message-content` 读取，不能把“QWork”身份标题当回复。
+`PASS_SANITY` 和 `STOP_BEFORE_G0` 都是非发布诊断，必须保持
+`diagnostic_only=true`、`release_gate_eligible=false`；它们不能替代 release intake、
+G0、精确 `READY`、G1 Casebook 或逐 Case 可信复核。该诊断只记录 `capabilities()`；
+其超时不阻止 App 核心动作，正式 G0 的 capabilities 硬门禁保持不变。
+
 ## 1. 当前状态
 
 - 基于框架 `e23ea8fde27eee318c89acb88b730f20f4e0ddb1`、正式 Casebook SHA

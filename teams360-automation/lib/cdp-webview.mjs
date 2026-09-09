@@ -662,6 +662,8 @@ export async function readQworkSmokeChatState(client) {
       .filter((element) => (element.textContent || '').trim());
     const assistantNodes = [...document.querySelectorAll('.aui-assistant-message-root')]
       .filter((element) => (element.textContent || '').trim());
+    const lastAssistantRoot = assistantNodes.at(-1) || null;
+    const lastAssistantContent = lastAssistantRoot?.querySelector('.aui-assistant-message-content') || null;
     return {
       composer: Boolean(document.querySelector('[data-testid="composer-input"][contenteditable="true"]')),
       composerText: document.querySelector('[data-testid="composer-input"]')?.innerText?.trim() || '',
@@ -670,10 +672,9 @@ export async function readQworkSmokeChatState(client) {
       assistantCount: assistantNodes.length,
       running: visible(runningSelector),
       sendButtonVisible,
-      lastAssistant: assistantNodes.length
-        ? (assistantNodes.at(-1).querySelector('.aui-assistant-message-content')?.innerText
-          || assistantNodes.at(-1).innerText
-          || assistantNodes.at(-1).textContent
+      lastAssistant: lastAssistantRoot
+        ? (lastAssistantContent?.innerText
+          || lastAssistantContent?.textContent
           || '')
         : '',
     };

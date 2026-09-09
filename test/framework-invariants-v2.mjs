@@ -19314,4 +19314,44 @@ try {
   fs.rmSync(fixtureSmokeRoot, { recursive: true, force: true });
 }
 
+const appSanitySource = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../teams360-automation/lib/qwork-app-sanity.mjs'),
+  'utf8',
+);
+const teamsCliSource = fs.readFileSync(
+  path.resolve(import.meta.dirname, '../teams360-automation/cli.mjs'),
+  'utf8',
+);
+const teamsPackage = JSON.parse(fs.readFileSync(
+  path.resolve(import.meta.dirname, '../teams360-automation/package.json'),
+  'utf8',
+));
+assert.match(appSanitySource, /qbot-qwork-app-sanity\/v1/);
+assert.match(appSanitySource, /decision:\s*passed\s*\?\s*APP_SANITY_PASS\s*:\s*APP_SANITY_STOP/);
+assert.match(appSanitySource, /diagnostic_only:\s*true/);
+assert.match(appSanitySource, /release_gate_eligible:\s*false/);
+assert.match(appSanitySource, /capabilities_record_only:\s*true/);
+assert.match(appSanitySource, /capabilities_blocks_app_sanity:\s*false/);
+assert.doesNotMatch(appSanitySource, /if \(!capabilities\.ok \|\| !runtime\.ok\)/);
+assert.match(appSanitySource, /QWORK_APP_SANITY_ASSISTANT_BODY_SELECTOR\s*=\s*'\.aui-assistant-message-content'/);
+assert.doesNotMatch(appSanitySource, /\[data-role=["']assistant["']\]/);
+assert.match(appSanitySource, /click_count:\s*1/);
+assert.match(appSanitySource, /retry_count:\s*0/);
+assert.match(appSanitySource, /input_source:\s*'cdp-Input\.dispatchMouseEvent'/);
+assert.match(appSanitySource, /press_count:\s*1/);
+assert.match(appSanitySource, /release_count:\s*1/);
+assert.doesNotMatch(appSanitySource, /\.click\(\)/);
+assert.match(appSanitySource, /controls\.length !== 1/);
+assert.match(appSanitySource, /visibleExactText\('\[role="tab"\]\[aria-selected="true"\]', '\\u4e13\\u5bb6'\)/);
+assert.match(appSanitySource, /intermediate_clean_new_task:\s*allAssertionsPass/);
+assert.match(appSanitySource, /intermediate_new_task:\s*intermediateNewTask\?\.detail/);
+assert.match(appSanitySource, /assertionError\.assertions\s*=\s*assertions/);
+assert.match(appSanitySource, /nonReportEvidenceValid/);
+assert.doesNotMatch(appSanitySource, /if \(!manifest\.evidence_valid\)[\s\S]*writeFileSync\(reportFile/);
+assert.match(appSanitySource, /document\.elementFromPoint\(x, y\)/);
+assert.match(appSanitySource, /x < innerWidth && y < innerHeight/);
+assert.match(teamsCliSource, /runner:\s*'qwork-app-sanity'/);
+assert.match(teamsCliSource, /createNewManagedOutputDirectory/);
+assert.equal(teamsPackage.scripts['app-sanity'], 'node cli.mjs app-sanity');
+
 console.log('framework invariants ok');

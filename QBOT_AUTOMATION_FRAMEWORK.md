@@ -78,6 +78,35 @@ framework/testcase issue、证据缺失、身份漂移或非精确 READY，当�
 所有后续阶段保持 `NOT_STARTED`。当前阶段可按现有安全策略完成独立 Case 诊断，但绝不
 因此解锁下一阶段。raw `passed/failed`、诊断目标通过率和人工口头判断都不能驱动准入。
 
+### 2.2 G0 前 App-first 核心诊断
+
+受管 360Teams/QWork 候选可在正式 G0 前运行独立 App-first sanity：
+
+```bash
+npm --prefix teams360-automation run app-sanity -- \
+  --allow-write \
+  --out teams360-automation/output/<new-app-sanity-directory>
+```
+
+该入口只接受唯一受管 QWork WebView，与 Casebook/G5 runner 共用同一进程生命周期锁，
+且输出必须是 `teams360-automation/output` 下调用前不存在的私有目录。它按固定顺序验证
+工作台、干净新任务、一次严格确认发送与精确回复、按同一非空 taskId 从可见任务列表重开
+及消息持久化、专家、技能、连接器、自动化页面，最后返回零消息、零 taskId、无显式能力
+chip 的干净新任务。回复正文只允许从 `.aui-assistant-message-content` 读取；助手身份
+“QWork”、标题、截图 OCR 或宽泛 `[data-role=assistant]` 都不能冒充回复。
+
+每步必须保存独立断言、PNG 及 SHA-256，并写入 JSONL trace；最终生成
+`qbot-qwork-app-sanity/v1` 与 `qbot-qwork-app-sanity-evidence/v1`。发送动作固定一次真实点击、
+零重试，要求本轮用户消息精确新增一次、至少一项辅助状态变化、非空 taskId、运行态收敛、
+发送入口恢复和助手正文与 marker trim 后全等；随后必须从精确
+`session-item-<taskId>` 可见入口重开并再次证明 taskId、用户消息和精确回复不漂移。
+任一步失败都输出 `STOP_BEFORE_G0` 并尝试安全返回新任务；完整成功只输出
+`PASS_SANITY`。两种结论均永久携带 `diagnostic_only=true`、
+`release_gate_eligible=false`，不得作为 pretest `READY`、G0/G1 准入、Casebook 结果、
+trusted pass 或发布结论，也不得通过 production-gate、继承或 synthetic 参数改变边界。
+公开 `capabilities()` 在此入口只作记录性探针，超时或不可读不得阻止 App 核心动作；
+正式 G0 仍按三阶段 capabilities 合同 fail-closed，不受该诊断例外影响。
+
 状态机只接受 `qbot-core-beta-pretest/v1` 的 Teams/production-gate/mandatory 报告；
 `blockers` 必须显式为空，全部 checks 必须显式 `passed`，且 Git、唯一 runner、Casebook、
 协议、发布身份、capabilities、runtime release、待激活更新和 health 等 G0 关键检查不得

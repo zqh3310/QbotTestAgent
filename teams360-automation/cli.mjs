@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { parseArgs, usage } from './lib/config.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { AUTOMATION_ROOT, parseArgs, usage } from './lib/config.mjs';
 import {
   launchIsolatedTeams,
   launchLiveTeams,
@@ -11,14 +13,68 @@ import {
 } from './lib/launcher.mjs';
 import { writeReport } from './lib/report.mjs';
 import { inspectTeamsCdp } from './lib/targets.mjs';
+import { runManagedQworkAppSanity } from './lib/qwork-app-sanity.mjs';
+import {
+  createNewManagedOutputDirectory,
+  executeUnderManagedRunnerLock,
+  inspectNewManagedOutputPath,
+} from './lib/managed-runner-lock.mjs';
+import { readMacAppBundleIdentity } from './lib/run-metadata.mjs';
 
 let exitCode = 0;
+let appSanityOutputCreated = false;
 try {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(usage());
     process.exit(0);
   }
+  if (options.command === 'app-sanity') {
+    if (!options.allowWrite) {
+      throw new Error('App sanity sends exactly one test message and requires --allow-write.');
+    }
+    const outputRoot = path.join(AUTOMATION_ROOT, 'output');
+    inspectNewManagedOutputPath({ outDir: options.outputDir, outputRoot });
+    const lock = executeUnderManagedRunnerLock({
+      entrypoint: fileURLToPath(import.meta.url),
+      argv: process.argv.slice(2),
+      binding: { runner: 'qwork-app-sanity', argv: process.argv.slice(2) },
+    });
+    if (lock.reexecuted) process.exit(lock.status);
+    createNewManagedOutputDirectory({ outDir: options.outputDir, outputRoot });
+    appSanityOutputCreated = true;
+    const resolved = await resolveSessionCdp(options);
+    await waitForCdp({ cdpUrl: resolved.cdpUrl, timeoutMs: options.timeoutMs });
+    const appSanity = await runManagedQworkAppSanity({
+      cdpUrl: resolved.cdpUrl,
+      outputDir: options.outputDir,
+      prompt: options.prompt,
+      expected: options.expected,
+      timeoutMs: Math.max(options.timeoutMs, 60_000),
+      candidateIdentity: {
+        host: readMacAppBundleIdentity(options.appPath),
+        managed_session: {
+          pid: resolved.session?.pid || null,
+          profile_mode: resolved.session?.profile_mode || options.profileMode,
+          profile_alias: resolved.session?.profile_alias || options.profileAlias || '',
+        },
+        cdp_url: resolved.cdpUrl,
+      },
+    });
+    const report = baseReport(options, {
+      status: appSanity.status,
+      decision: appSanity.decision,
+      reason: appSanity.reason,
+      diagnostic_only: true,
+      release_gate_eligible: false,
+      cdp_url: resolved.cdpUrl,
+      pid: resolved.session?.pid || null,
+      app_sanity: appSanity,
+    });
+    report.files = writeReport(options.outputDir, report);
+    printSummary(report);
+    if (appSanity.status !== 'passed') exitCode = 1;
+  } else {
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   if (options.command === 'launch' || options.command === 'launch-live') {
@@ -92,15 +148,21 @@ try {
     if (status === 'blocked') exitCode = 2;
     if (status === 'failed') exitCode = 1;
   }
+  }
 } catch (error) {
   const fallbackOptions = safeParseOptions();
+  if (fallbackOptions.command === 'app-sanity' && !appSanityOutputCreated) {
+    console.error(error.message);
+  }
   const report = baseReport(fallbackOptions, {
     status: 'blocked',
     reason: error.message,
     error_name: error.name,
   });
   try {
-    report.files = writeReport(fallbackOptions.outputDir, report);
+    if (fallbackOptions.command !== 'app-sanity' || appSanityOutputCreated) {
+      report.files = writeReport(fallbackOptions.outputDir, report);
+    }
   } catch {}
   printSummary(report);
   exitCode = 2;
@@ -136,6 +198,7 @@ function printSummary(report) {
   console.log(JSON.stringify({
     command: report.command,
     status: report.status,
+    decision: report.decision || '',
     reason: report.reason,
     cdp_url: report.cdp_url || '',
     pid: report.pid || null,

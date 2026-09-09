@@ -13,7 +13,7 @@ export const LIVE_PROFILE_ALIAS = path.join(AUTOMATION_ROOT, 'state', 'live-prof
 export const DEFAULT_SESSION = path.join(AUTOMATION_ROOT, 'state', 'session.json');
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
-const COMMANDS = new Set(['launch', 'launch-live', 'doctor', 'smoke', 'stop']);
+const COMMANDS = new Set(['launch', 'launch-live', 'doctor', 'smoke', 'app-sanity', 'stop']);
 const VALUE_OPTIONS = new Set([
   'app',
   'profile',
@@ -85,8 +85,12 @@ export function parseArgs(argv = []) {
     openQbot: Boolean(values['open-qbot']),
     captureHost: Boolean(values['capture-host']),
     allowWrite: Boolean(values['allow-write']),
-    prompt: String(values.prompt || '360Teams 集成自动化冒烟：请只回复 TEAMS_CASE_OK。'),
-    expected: String(values.expect || 'TEAMS_CASE_OK'),
+    prompt: String(values.prompt || (command === 'app-sanity'
+      ? `QWork App 核心诊断：请仅回复 QWORK_APP_SANITY_${stamp}_OK。`
+      : '360Teams 集成自动化冒烟：请只回复 TEAMS_CASE_OK。')),
+    expected: String(values.expect || (command === 'app-sanity'
+      ? `QWORK_APP_SANITY_${stamp}_OK`
+      : 'TEAMS_CASE_OK')),
     controlPlaneUrl,
     environment: controlPlaneUrl ? { DEEPBANK_SERVER: controlPlaneUrl } : {},
     help: Boolean(values.help),
@@ -211,6 +215,7 @@ Usage:
   npm run launch:live -- [--port 9333] [--control-plane-url <url>]
   npm run doctor -- [--open-qbot] [--capture-host]
   npm run smoke -- --allow-write [--prompt <text>] [--expect <text>]
+  npm run app-sanity -- --allow-write [--prompt <text>] [--expect <exact-text>]
   npm run stop
 
 Safety defaults:
@@ -220,5 +225,7 @@ Safety defaults:
   - Never stops a pre-existing 360Teams process.
   - Doctor is read-only unless --open-qbot is explicitly supplied.
   - Smoke refuses to send a message without --allow-write.
+  - App sanity shares the managed runner lock, requires a new output directory,
+    and is diagnostic-only; it never authorizes G0 or a release gate.
 `;
 }

@@ -210,7 +210,7 @@ export function findOtherManagedRunnerProcesses() {
   const excluded = ancestorPids(rows);
   return rows.filter((row) => (
     !excluded.has(row.pid)
-    && /(?:teams360-automation\/lib\/(?:casebook-runner|qwork-soak-cli)\.mjs|src\/cli\.mjs\s+ui-agent-casebook-run)/.test(row.command)
+    && /(?:teams360-automation\/(?:lib\/(?:casebook-runner|qwork-soak-cli)\.mjs|cli\.mjs\s+app-sanity)|src\/cli\.mjs\s+ui-agent-casebook-run)/.test(row.command)
   ));
 }
 
