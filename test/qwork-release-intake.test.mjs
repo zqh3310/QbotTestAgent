@@ -7545,6 +7545,13 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
       function createExecutionWorkerRequestSettlement({
         child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
       }) {
+        const requestedDeadlineMs = Number(deadlineMs);
+        const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+          ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+        const requestedCancellationTimeoutMs = Number(cancellationTimeoutMs);
+        const boundedCancellationTimeoutMs = Number.isSafeInteger(requestedCancellationTimeoutMs)
+          && requestedCancellationTimeoutMs > 0
+          ? Math.min(requestedCancellationTimeoutMs, 2147483647) : 1;
         let cancellationTimer = null;
         const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
         const deadline = setTimeout(() => {
@@ -7552,13 +7559,13 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
           onDeadline();
           reject(new Error('execution worker request deadline exceeded'));
           if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
-        }, deadlineMs + 1);
+        }, boundedDeadlineMs + 1);
         return {
           armCancellation: () => {
             if (cancellationTimer) return;
             cancellationTimer = setTimeout(() => {
               void terminateChild(child, 'cancel-timeout');
-            }, Math.max(1, cancellationTimeoutMs));
+            }, boundedCancellationTimeoutMs);
           },
           resolve: (value) => { clear(); resolve(value); },
           reject: (error) => { clear(); reject(error); },
@@ -7577,11 +7584,15 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
           if (!target) return Promise.resolve(false);
           const existing = flights.get(target);
           if (existing) return existing;
+          const requestedCleanupGraceMs = Number(cleanupGraceMs);
+          const boundedCleanupGraceMs = Number.isSafeInteger(requestedCleanupGraceMs)
+            && requestedCleanupGraceMs > 0
+            ? Math.min(requestedCleanupGraceMs, 2147483647) : 1;
           const pid = processId(target.pid);
           const cleanup = Promise.resolve().then(() => processTreeKiller(pid, { reason }));
           const flight = Promise.race([
             cleanup,
-            new Promise((resolve) => setTimeout(resolve, cleanupGraceMs)),
+            new Promise((resolve) => setTimeout(resolve, boundedCleanupGraceMs)),
           ]).then(() => {
             target.kill?.();
             return true;
@@ -7919,6 +7930,7 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
   });
   const blockedReport = scanFixture();
   assert.equal(blockedReport.decision, 'BLOCKED');
+  assert.equal(blockedReport.policy.api_freshness.verified, true);
   assert.equal(blockedReport.policy.api_freshness.blocking_risks_verified, false);
   assert.equal(
     blockedReport.blocking_risks[0].checks.at(-1)
@@ -7929,8 +7941,14 @@ test('GitLab API intake switches MR !1552 blocking-risk assertions to the proven
     requireFreshRef: true,
     requireReady: false,
   });
-  assert.equal(blockedValidation.ok, false);
-  assert.deepEqual(blockedValidation.failures, ['release_ref_not_freshly_verified']);
+  assert.deepEqual(blockedValidation, { ok: true, failures: [] });
+  assert.deepEqual(blockedReport.blockers, [
+    'release 阻断风险审计未通过，存在必须在 G0 修复的 P1 执行隔离缺陷',
+  ]);
+  assert.deepEqual(validateQworkReleaseIntake(blockedReport, {
+    requireFreshRef: true,
+    requireReady: true,
+  }), { ok: false, failures: ['decision_BLOCKED'] });
 });
 
 test('GitLab API scan binds a verified source contract into MR, summary, and freshness', () => {

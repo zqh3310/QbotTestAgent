@@ -764,8 +764,33 @@ for (const [documentName, documentText] of [
   assert.match(documentText, /qbot-qwork-release-blocking-risk-attestation\/v5/, `${documentName} 必须固定当前 blocking-risk v5`);
   assert.match(
     documentText,
+    /最终导出路径[\s\S]{0,180}只能调用一次[\s\S]{0,180}workbook\.recalculate\(\)[\s\S]{0,180}严格先于[\s\S]{0,220}重算后唯一允许[\s\S]{0,180}SpreadsheetFile\.exportXlsx\(workbook\)[\s\S]{0,180}(?:其余|其它)[\s\S]{0,100}禁止[\s\S]{0,220}落盘文件重新读取/,
+    `${documentName} 必须冻结 Casebook 唯一重算、导出顺序和落盘复核合同`,
+  );
+  assert.match(
+    documentText,
+    /api_freshness\.verified[\s\S]{0,260}blocking-risk[\s\S]{0,260}blocking_risks_verified=false[\s\S]{0,260}decision=BLOCKED[\s\S]{0,260}requireReady=true/,
+    `${documentName} 必须把 GitLab API freshness 与独立 blocking-risk 判定分开`,
+  );
+  assert.match(
+    documentText,
     /Acorn[\s\S]{0,240}AST[\s\S]{0,500}恒假[\s\S]{0,500}(?:shadow|遮蔽)[\s\S]{0,500}(?:rebind|重绑)[\s\S]{0,500}fail-closed/,
     `${documentName} 必须明确词法与 AST 双层语义门禁及 fail-closed 规则`,
+  );
+  assert.match(
+    documentText,
+    /setTimeout[\s\S]{0,120}schedule[\s\S]{0,260}Number\.isSafeInteger\(requested\) && requested > 0[\s\S]{0,300}Math\.min\(requested, 2147483647\)[\s\S]{0,260}bounded \+ 1[\s\S]{0,180}2147483646[\s\S]{0,220}11000ms[\s\S]{0,400}supervisor startup\/restart[\s\S]{0,180}heartbeat\/confirmation[\s\S]{0,360}Number\.MAX_SAFE_INTEGER[\s\S]{0,300}legacy\/current `OR`[\s\S]{0,180}(?:VERIFIED|BLOCKED)/,
+    `${documentName} 必须冻结全部可配置 Node timer sink 的安全整数、上限和值流合同`,
+  );
+  assert.match(
+    documentText,
+    /validateEnvelope\(raw, \{ direction: 'worker-to-host', now: now\(\) \}\)[\s\S]{0,300}execution-worker-deadline\.cjs[\s\S]{0,220}validateExecutionWorkerReply\(raw, pending, now\)[\s\S]{0,300}(?:错误模块|错误 registry)[\s\S]{0,300}deadline AST 子合同[\s\S]{0,120}(?:独立为 true|独立为 true)/,
+    `${documentName} 必须冻结 supervisor 直接解码与 deadline-aware 委托的精确绑定合同`,
+  );
+  assert.match(
+    documentText,
+    /解码拒绝分支[\s\S]{0,180}日志[\s\S]{0,180}隔离异常[\s\S]{0,240}同一 `child`[\s\S]{0,180}terminateChild\(child, 'message-validation-failed'\)[\s\S]{0,300}child\.kill\(\)[\s\S]{0,320}(?:错误 child|日志异常)[\s\S]{0,360}不可达终止[\s\S]{0,280}遮蔽或重绑[\s\S]{0,100}fail-closed/,
+    `${documentName} 必须冻结 supervisor 解码拒绝日志隔离与同 child 受管终止合同`,
   );
   assert.match(
     documentText,
@@ -1679,7 +1704,221 @@ const r16LatestMrMetadataFixtures = [
     ],
     source_contract_ids: [],
   },
+  {
+    iid: '1591',
+    commit: '2db01340ab77371fc82ffccdf888497eda114475',
+    merge_commit_sha: '2db01340ab77371fc82ffccdf888497eda114475',
+    diff_sha256: 'b6cc2db8e5b2c7573ebe74b59590a50fe263e2880c0eff566ffcdc8aa42b8d95',
+    diff_bytes: 156684,
+    labels: [
+      'area/assistant-chat', 'area/assistant-ui', 'area/docs', 'area/e2e', 'area/runtime',
+      'area/test', 'area/ui', 'ci/build-ui', 'ci/e2e-doctor', 'ci/e2e-local',
+      'ci/image-manifest', 'ci/unit', 'e2e-suite/blackbox', 'e2e-suite/conformance',
+      'e2e-suite/contract', 'e2e/assistant-chat', 'e2e/runtime-desktop', 'e2e/uiux',
+      'kind/enhancement', 'milestone/v1', 'priority/high', 'sprint/2026-09-10', 'status/in-review',
+    ],
+    changed_paths: [
+      'docs/assistant-runtime-tail-status-contract.md',
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'server/qbot-core/engine/runtime-tail-e2e-fixture.mjs',
+      'src/components/assistant-ui/runtime-tail-status.tsx',
+      'src/components/assistant-ui/use-runtime-tail-presentation.ts',
+      'src/.architecture.yaml',
+      'src/assistant-runtime-tail-status.ts',
+      'src/optimistic-turn-transaction.ts',
+      'src/runtime-session-reconcile.ts',
+      'src/runtime-tail-presentation-copy.ts',
+      'src/runtime-tail-presentation-tone.ts',
+      'src/runtime-tail-presentation.ts',
+      'src/runtime.tsx',
+      'test/e2e/agent-chat-ask-cancel.local.spec.mjs',
+      'test/eval/fixtures/research/runtime-tail-experience/README.md',
+      'test/eval/fixtures/research/runtime-tail-experience/cases.json',
+      'test/eval/fixtures/research/runtime-tail-experience/evaluator-freeze.json',
+      'test/eval/fixtures/research/runtime-tail-experience/holdout-contract.json',
+      'test/eval/runtime-tail-experience/evaluator.mjs',
+      'test/eval/runtime-tail-experience/runtime-tail-experience.test.mjs',
+      'test/unit/core/optimistic-turn-transaction.test.mjs',
+      'test/unit/desktop/desktop-provider-retry-contract.test.mjs',
+      'test/unit/runtime/runtime-subscription-cleanup.test.mjs',
+      'test/unit/server/runtime-activity.test.mjs',
+      'test/unit/ui/runtime-tail-experience-evaluator.test.mjs',
+      'test/unit/ui/runtime-tail-presentation.test.mjs',
+      'test/unit/ui/runtime-tail-status-contract.test.mjs',
+    ],
+    impact: {
+      direct_case_ids: [
+        'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+        'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+        'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+        'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      ],
+    },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1617',
+    commit: '4744b98730cbdf8899b268dd2fcbfd6c89269582',
+    merge_commit_sha: '4744b98730cbdf8899b268dd2fcbfd6c89269582',
+    diff_sha256: 'eb5e6759e8bdc284cfbc18e09b2366f3329ab2f43acab325729588720ea61fb8',
+    diff_bytes: 27924,
+    labels: ['milestone/v1'],
+    changed_paths: [
+      '.gitlab/guides/labels.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/e2e-child-base.yml',
+      '.gitlab/lightweight-ci.yml',
+      '.gitlab/unit-material-child.yml',
+      'docs/ci-cd-operating-contract.md',
+      'scripts/ci/policy/e2e-selection.mjs',
+      'scripts/ci/policy/e2e-selection.test.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'test/unit/ci/dashboard-package-lane.test.mjs',
+      '.gitlab-ci.yml',
+    ],
+    impact: { direct_case_ids: [] },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1615',
+    commit: '7818a8bf0c8bf3bf26305ead12206962e4bf0de3',
+    merge_commit_sha: '7818a8bf0c8bf3bf26305ead12206962e4bf0de3',
+    diff_sha256: '5a987fb84514419eb266daae65c4a7083ee0ade22261aa22ecd99b90ebf6db9e',
+    diff_bytes: 7278,
+    labels: ['area/ci', 'ci/unit', 'kind/chore', 'milestone/v1', 'status/in-progress'],
+    changed_paths: ['.gitlab-ci.yml'],
+    impact: { direct_case_ids: [] },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1618',
+    commit: '1a6260ad7ed5a84a111bcaee0a6a3dea6d891f43',
+    merge_commit_sha: '1a6260ad7ed5a84a111bcaee0a6a3dea6d891f43',
+    diff_sha256: '6e64516d59530f361203c556561d1c8bac23be68e438e2baab953532a4bbef05',
+    diff_bytes: 5058,
+    labels: [
+      'area/docs', 'area/electron', 'area/runtime', 'area/test', 'ci/unit', 'kind/bug',
+      'milestone/v1', 'sprint/2026-09-10', 'status/in-review',
+    ],
+    changed_paths: [
+      'electron/docs/ai-daily-runtime.md',
+      'electron/host-core/composition/embed-runtime.cjs',
+      'test/unit/runtime/ai-daily-orchestrator.test.mjs',
+    ],
+    impact: {
+      direct_case_ids: [
+        'BETA-ART-001', 'BETA-FILE-005', 'BETA-HOST-003', 'BETA-INIT-001',
+        'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+        'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+        'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      ],
+    },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1545',
+    commit: 'e32af03a4733c88c45728c505f6c5538c160ac8d',
+    merge_commit_sha: 'e32af03a4733c88c45728c505f6c5538c160ac8d',
+    diff_sha256: '29dbf5343f1faae61a54753d06796356e1472b54d7b3dbaae1ee5aeb0a2f0354',
+    diff_bytes: 50766,
+    labels: ['area/ci', 'area/scripts', 'area/test', 'kind/feature', 'milestone/v1', 'sprint/2026-09-03', 'status/in-review'],
+    changed_paths: [
+      'scripts/ci/unit/node-unit-affected.mjs',
+      'scripts/ci/unit/node-unit-affected.test.mjs',
+      'scripts/ci/unit/node-unit-service-lane.mjs',
+      'scripts/ci/unit/node-unit-service-scope.mjs',
+      'scripts/ci/unit/node-unit-service-tests.json',
+      'scripts/ci/unit/node-unit-service-tests.mjs',
+      'scripts/ci/unit/node-unit-service-tests.test.mjs',
+      'scripts/governance/gitlab/local-gate.mjs',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
+    ],
+    impact: { direct_case_ids: [] },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1623',
+    commit: '6b0edb03415839ef6617f39df387a383f8464399',
+    merge_commit_sha: '6b0edb03415839ef6617f39df387a383f8464399',
+    diff_sha256: 'e29c1d929ccf2f1c1eae634d6027c791fdac48e9aff254e920646340740a9664',
+    diff_bytes: 35492,
+    labels: ['area/connectors', 'area/server', 'ci/unit', 'kind/refactor'],
+    changed_paths: [
+      'server/qbot-core/tools/web/builtin-web-budgets.mjs',
+      'server/qbot-core/tools/web/builtin-web-crawl.mjs',
+      'server/qbot-core/tools/web/builtin-web-html-extraction.mjs',
+      'server/qbot-core/tools/web/builtin-web-html-parsing.mjs',
+      'server/qbot-core/tools/web/builtin-web-pdf.mjs',
+      'server/qbot-core/tools/web/builtin-web-representation-targets.mjs',
+      'server/qbot-core/tools/web/builtin-web-tools.mjs',
+      'server/qbot-core/tools/web/builtin-web-transport.mjs',
+    ],
+    impact: {
+      direct_case_ids: [
+        'BETA-HOST-003', 'BETA-INIT-001',
+        'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+        'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+        'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+        'SIT-CONN-016',
+      ],
+    },
+    source_contract_ids: [],
+  },
+  {
+    iid: '1610',
+    commit: '87b6f9110b257c79e5209c01f9f4104f658e430f',
+    merge_commit_sha: '87b6f9110b257c79e5209c01f9f4104f658e430f',
+    diff_sha256: 'eade0ca967d94e54845bb233a9ed756ec7fa743f6fe94ed6d65c702bf4126ece',
+    diff_bytes: 53523,
+    labels: [
+      'area/e2e', 'area/ui', 'ci/build-ui', 'ci/e2e-local', 'ci/unit', 'e2e-suite/contract',
+      'e2e/assistant-chat', 'e2e/ui-shell', 'kind/enhancement', 'milestone/v1', 'platform/mac',
+      'sprint/2026-09-10', 'status/ready-for-review',
+    ],
+    changed_paths: [
+      'scripts/ci/policy/e2e-selection.test.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/unit/node-unit-service-tests.json',
+      'src/.architecture.yaml',
+      'src/ComposerInlineSkillInput.tsx',
+      'src/composer-edit-events.ts',
+      'src/composer-edit-history.ts',
+      'test/e2e/support/composer-ime-input.mjs',
+      'test/e2e/support/module-suites.mjs',
+      'test/e2e/local.spec.mjs',
+      'test/unit/ui/composer-edit-history.test.mjs',
+      'test/unit/ui/composer-paste-attachments.test.mjs',
+      'test/unit/ui/composer-reference-store.test.mjs',
+    ],
+    impact: {
+      direct_case_ids: [
+        'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+        'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+        'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+        'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+        'SIT-SKILL-007',
+      ],
+    },
+    source_contract_ids: [],
+  },
 ];
+const r16NewestMrIds = ['1591', '1617', '1615', '1618', '1545', '1623', '1610'];
+const r16NewestMrMetadataFixtures = r16LatestMrMetadataFixtures.filter(
+  (fixture) => r16NewestMrIds.includes(fixture.iid),
+);
+assert.deepEqual(
+  r16NewestMrMetadataFixtures.map((fixture) => fixture.iid),
+  r16NewestMrIds,
+  '最新 7 个 MR 必须按 first-parent 顺序全部具备权威 metadata 正控 fixture',
+);
+assert.deepEqual(
+  r16NewestMrMetadataFixtures.filter((fixture) => fixture.impact.direct_case_ids.length === 0).map((fixture) => fixture.iid),
+  ['1617', '1615', '1545'],
+  '最新 3 个静态 MR 必须由真实空 direct_case_ids fixture 覆盖，且不得混入桌面 Case',
+);
 for (const fixture of r16LatestMrMetadataFixtures) {
   assert.deepEqual(
     validateExactR16LatestMrMetadataContract(fixture, fixture.iid),
@@ -1704,8 +1943,37 @@ for (const fixture of r16LatestMrMetadataFixtures) {
     assert.equal(validation.ok, false, `MR !${fixture.iid} ${field} 漂移必须 fail-closed`);
     assert.equal(validation.failures.includes(expectedFailure), true, `MR !${fixture.iid} ${field} 漂移必须给出稳定失败 ID`);
   }
+  if (r16NewestMrIds.includes(fixture.iid)) {
+    for (const [field, mutate, expectedFailure] of [
+      ['diff bytes omission', (candidate) => { delete candidate.diff_bytes; }, 'diff_bytes_mismatch'],
+      ['diff bytes drift', (candidate) => { candidate.diff_bytes += 1; }, 'diff_bytes_mismatch'],
+      ['diff bytes numeric-string drift', (candidate) => {
+        candidate.diff_bytes = String(candidate.diff_bytes);
+      }, 'diff_bytes_mismatch'],
+      ['labels omission', (candidate) => { delete candidate.labels; }, 'labels_mismatch'],
+      ['labels order/set drift', (candidate) => {
+        candidate.labels = candidate.labels.length > 1
+          ? [...candidate.labels].reverse()
+          : [...candidate.labels, 'forged/label'];
+      }, 'labels_mismatch'],
+      ['direct Case omission', (candidate) => { delete candidate.impact.direct_case_ids; }, 'direct_case_ids_mismatch'],
+      ['direct Case order/set drift', (candidate) => {
+        candidate.impact.direct_case_ids = candidate.impact.direct_case_ids.length > 1
+          ? [...candidate.impact.direct_case_ids].reverse()
+          : ['FORGED-CASE'];
+      }, 'direct_case_ids_mismatch'],
+    ]) {
+      const candidate = structuredClone(fixture);
+      mutate(candidate);
+      const validation = validateExactR16LatestMrMetadataContract(candidate, fixture.iid);
+      assert.equal(validation.ok, false, `MR !${fixture.iid} ${field} 必须 fail-closed`);
+      assert.equal(validation.failures.includes(expectedFailure), true, `MR !${fixture.iid} ${field} 必须给出 ${expectedFailure}`);
+    }
+  }
 }
-const r16LatestStaticMrIds = new Set(['1608', '1609', '1614', '1554', '1607', '1616', '1613']);
+const r16LatestStaticMrIds = new Set([
+  '1608', '1609', '1614', '1554', '1607', '1616', '1613', '1617', '1615', '1545',
+]);
 const r16ExactStaticMrFixtures = [
   {
     iid: '1571',
@@ -2370,38 +2638,71 @@ module.exports = { startExecutionWorkerController };
 `;
   const successorCancellationSource = `
 async function requestExecutionWorkerTurn(supervisor, operation, identity, payload, options, signal) {
-  const pending = supervisor.request(operation, identity, payload, options);
-  const cancelIdentity = identity;
-  const onAbort = () => {
-    supervisor.cancel(cancelIdentity, 'user-requested');
+  const cancelIdentity = identity && {
+    ...identity,
+    runtimeGeneration: Number(identity.runtimeGeneration),
   };
-  if (!signal) return await pending;
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
+  const cancel = () => {
+    void supervisor.cancel(cancelIdentity, 'user-requested');
+  };
+  signal?.addEventListener?.('abort', cancel, { once: true });
   try {
+    const pending = supervisor.request(operation, identity, payload, options);
+    if (signal?.aborted) cancel();
     return await pending;
   } finally {
-    signal.removeEventListener('abort', onAbort);
+    signal?.removeEventListener?.('abort', cancel);
   }
 }
 function createExecutionWorkerRequestSettlement({
-  child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
+  child, operation, deadlineMs, cancellationTimeoutMs,
+  deadlineCancellationTimeoutMs = cancellationTimeoutMs,
+  terminateChild, onDeadline, onCancellationTimeout, resolve, reject, now = Date.now,
 }) {
-  let cancellationTimer = null;
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const requestedCancellationTimeoutMs = Number(cancellationTimeoutMs);
+  const boundedCancellationTimeoutMs = Number.isSafeInteger(requestedCancellationTimeoutMs)
+    && requestedCancellationTimeoutMs > 0
+    ? Math.min(requestedCancellationTimeoutMs, 2147483647) : 1;
+  const requestedDeadlineCancellationTimeoutMs = Number(deadlineCancellationTimeoutMs);
+  const boundedDeadlineCancellationTimeoutMs = Number.isSafeInteger(
+    requestedDeadlineCancellationTimeoutMs,
+  ) && requestedDeadlineCancellationTimeoutMs > 0
+    ? Math.min(requestedDeadlineCancellationTimeoutMs, 2147483647) : 1;
+  let cancellationTimer = null, deadline = null;
   const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
-  const deadline = setTimeout(() => {
-    clear();
-    onDeadline();
-    reject(new Error('execution worker request deadline exceeded'));
-    if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
-  }, deadlineMs + 1);
+  const armDeadline = () => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      clearTimeout(deadline);
+      deadline = null;
+      onDeadline?.();
+      reject(Object.assign(new Error('execution worker request deadline exceeded'), {
+        code: 'execution_worker_deadline_exceeded',
+      }));
+      if (operation === 'execution.start') {
+        cancellationTimer = setTimeout(() => {
+          onCancellationTimeout?.();
+          if (!onCancellationTimeout) void terminateChild(child, 'cancel-timeout');
+        }, boundedDeadlineCancellationTimeoutMs);
+        cancellationTimer.unref?.();
+      } else clear();
+    }, boundedDeadlineMs + 1);
+    deadline.unref?.();
+  };
+  armDeadline();
   return {
     armCancellation: () => {
       if (cancellationTimer) return;
-      cancellationTimer = setTimeout(() => {
-        void terminateChild(child, 'cancel-timeout');
-      }, Math.max(1, cancellationTimeoutMs));
+      cancellationTimer = setTimeout(
+        () => void terminateChild(child, 'cancel-timeout'),
+        boundedCancellationTimeoutMs,
+      );
+      cancellationTimer.unref?.();
     },
+    renewDeadline: () => { armDeadline(); return now() + boundedDeadlineMs; },
     resolve: (value) => { clear(); resolve(value); },
     reject: (error) => { clear(); reject(error); },
   };
@@ -2439,11 +2740,10 @@ function releaseExecutionRecord(manager, requestId, record) {
   return stopExecutionRecord(manager, requestId, record);
 }
 function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
-  const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1;
   manager.executions.delete(requestId);
+  const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 2147483647) : 1;
   record.finalizationPromise = Promise.race([
     Promise.resolve(settlement),
     new Promise((resolve) => setTimeout(resolve, boundedTimeout)),
@@ -2572,11 +2872,15 @@ function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanup
     if (!target) return Promise.resolve(false);
     const existing = flights.get(target);
     if (existing) return existing;
+    const requestedCleanupGraceMs = Number(cleanupGraceMs);
+    const boundedCleanupGraceMs = Number.isSafeInteger(requestedCleanupGraceMs)
+      && requestedCleanupGraceMs > 0
+      ? Math.min(requestedCleanupGraceMs, 2147483647) : 1;
     const pid = processId(target.pid);
     const cleanup = Promise.resolve().then(() => processTreeKiller(pid, { reason }));
     const flight = Promise.race([
       cleanup,
-      new Promise((resolve) => setTimeout(resolve, cleanupGraceMs)),
+      new Promise((resolve) => setTimeout(resolve, boundedCleanupGraceMs)),
     ]).then(() => {
       target.kill?.();
       return true;
@@ -2626,42 +2930,66 @@ module.exports = {
 };
 `;
   const successorContextUsageLeaseSource = `
-function releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs = 1000 } = {}) {
+const CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS = 11_000;
+function releaseExecutionWorkerLeaseAfterContextUsage(
+  lease,
+  settlement,
+  { timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS } = {},
+) {
   const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS)
+    : CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS;
   if (typeof lease?.drain === 'function') {
     return Promise.resolve(lease.drain(settlement, { timeoutMs: boundedTimeout })).then(
       () => true,
       () => false,
     );
   }
-  return Promise.resolve(false);
+  if (typeof lease?.release !== 'function') return Promise.resolve(false);
+  let timer = null;
+  const deadline = new Promise((resolveDeadline) => {
+    timer = setTimeout(resolveDeadline, boundedTimeout);
+    timer.unref?.();
+  });
+  const release = Promise.race([Promise.resolve(settlement).catch(() => {}), deadline]).then(async () => {
+    if (timer) clearTimeout(timer);
+    try {
+      await lease.release();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  void release.catch(() => {});
+  return release;
 }
-function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {
+function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {}) {
   let completed = false;
   let settle;
   const settlement = new Promise((resolve) => { settle = resolve; });
   return Object.freeze({
     observeTerminal: (payload) => { completed = payload?.outcome === 'completed'; },
-    release: async (executionWorkerLease) => {
-      if (!executionWorkerLease) return false;
+    release: async (lease) => {
+      if (!lease) return false;
       if (completed) {
-        await releaseExecutionWorkerLeaseAfterContextUsage(
-          executionWorkerLease,
-          settlement,
-          { timeoutMs },
-        );
+        void releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs });
         return true;
-    }
-      await executionWorkerLease.release?.();
-      return true;
+      }
+      try {
+        await lease.release?.();
+        return true;
+      } catch {
+        return false;
+      }
     },
     settle,
   });
 }
 module.exports = {
+  CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
   createExecutionWorkerContextUsageLease,
   releaseExecutionWorkerLeaseAfterContextUsage,
 };
@@ -2672,8 +3000,8 @@ module.exports = {
     if (filePath === 'electron/host-core/agent/execution-worker-cancellation.cjs') {
       return blocked
         ? successorCancellationSource.replace(
-          'if (signal.aborted) onAbort();',
-          'if (false && signal.aborted) onAbort();',
+          'if (signal?.aborted) cancel();',
+          'if (false && signal?.aborted) cancel();',
         )
         : successorCancellationSource;
     }
@@ -2907,8 +3235,8 @@ const casebookDesignAstMutation = (targetPath, search, replacement, label) => (f
 };
 const deadAbortMutation = casebookDesignAstMutation(
   'electron/host-core/agent/execution-worker-cancellation.cjs',
-  'if (signal.aborted) onAbort();',
-  'if (false && signal.aborted) onAbort();',
+  'if (signal?.aborted) cancel();',
+  'if (false && signal?.aborted) cancel();',
   '恒假 abort 路径',
 );
 const deadAbortAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
@@ -2939,8 +3267,15 @@ assert.equal(
 const reboundIdentityAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   (filePath, source) => filePath === 'electron/host-core/agent/execution-worker-cancellation.cjs'
     ? source.replace(
-      'const cancelIdentity = identity;',
-      'let cancelIdentity = identity;\n  cancelIdentity = unrelatedIdentity;',
+      `const cancelIdentity = identity && {
+    ...identity,
+    runtimeGeneration: Number(identity.runtimeGeneration),
+  };`,
+      `let cancelIdentity = identity && {
+    ...identity,
+    runtimeGeneration: Number(identity.runtimeGeneration),
+  };
+  cancelIdentity = unrelatedIdentity;`,
     )
     : source,
 ));
@@ -2948,8 +3283,13 @@ assert.equal(reboundIdentityAst.cancellation, false, 'AST 门禁必须拒绝 can
 const shadowedReleaseAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   (filePath, source) => filePath === 'electron/host-core/agent/execution-worker-context-usage-lease.cjs'
     ? source.replace(
-      'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {',
-      'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {\n  const releaseExecutionWorkerLeaseAfterContextUsage = async () => false;',
+      `function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {}) {`,
+      `function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {}) {
+  const releaseExecutionWorkerLeaseAfterContextUsage = async () => false;`,
     )
     : source,
 ));
@@ -2967,8 +3307,8 @@ assert.equal(wrongRunnerFactoryAst.passed, false, '错误 Worker factory 返回�
 const fakeTerminationTimerAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-termination.cjs',
-    'new Promise((resolve) => setTimeout(resolve, cleanupGraceMs))',
-    'Promise.resolve(cleanupGraceMs)',
+    'new Promise((resolve) => setTimeout(resolve, boundedCleanupGraceMs))',
+    'Promise.resolve(boundedCleanupGraceMs)',
     '伪 termination timer',
   ),
 ));
@@ -3003,9 +3343,9 @@ assert.equal(lateManagerAdmissionAst.passed, false, 'manager admission 时序断
 const infiniteContextTimeoutAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    `const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;`,
+    `const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS)
+    : CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS;`,
     'const boundedTimeout = Infinity;',
     'context timeout 无限值',
   ),
@@ -3021,9 +3361,8 @@ for (const [replacement, label] of unsafeManagerTimeoutMutationCases) {
   const ast = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
     casebookDesignAstMutation(
       'electron/host-core/agent/execution-worker-manager.cjs',
-      `const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1;`,
+      `const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 2147483647) : 1;`,
       replacement,
       label,
     ),
@@ -3052,8 +3391,8 @@ assert.equal(
 const unawaitedCompletedDrainAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    '        await releaseExecutionWorkerLeaseAfterContextUsage(',
-    '        releaseExecutionWorkerLeaseAfterContextUsage(',
+    '        void releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs });',
+    '        void Promise.resolve(true);',
     'completed drain 未等待',
   ),
 ));
@@ -3062,8 +3401,8 @@ assert.equal(unawaitedCompletedDrainAst.passed, false, '未等待 completed drai
 const reboundCancellationSupervisorAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-cancellation.cjs',
-    '  const cancelIdentity = identity;',
-    '  const cancelIdentity = identity;\n  supervisor = unrelatedSupervisor;',
+    '  const cancelIdentity = identity && {',
+    '  supervisor = unrelatedSupervisor;\n  const cancelIdentity = identity && {',
     'cancellation supervisor 重绑',
   ),
 ));
@@ -3071,9 +3410,9 @@ assert.equal(reboundCancellationSupervisorAst.cancellation, false, 'AST 门禁�
 assert.equal(reboundCancellationSupervisorAst.passed, false, 'cancellation supervisor 重绑必须阻断整体证明');
 const unreachableAbortListenerMutation = (filePath, source) => {
   if (filePath !== 'electron/host-core/agent/execution-worker-cancellation.cjs') return source;
-  const listener = "  signal.addEventListener('abort', onAbort, { once: true });\n";
+  const listener = "  signal?.addEventListener?.('abort', cancel, { once: true });\n";
   const finallyBlock = `  } finally {
-    signal.removeEventListener('abort', onAbort);
+    signal?.removeEventListener?.('abort', cancel);
   }
 `;
   assert.equal(source.includes(listener), true, 'abort listener 后置变异必须找到 listener');
@@ -3121,8 +3460,8 @@ assert.equal(wrongDesktopSignalAst.passed, false, 'desktop acquire 错误 signal
 const forcedCompletedAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    '      if (!executionWorkerLease) return false;',
-    '      if (!executionWorkerLease) return false;\n      completed = true;',
+    '      if (!lease) return false;',
+    '      if (!lease) return false;\n      completed = true;',
     'context release 强制 completed',
   ),
 ));
@@ -3141,8 +3480,8 @@ assert.equal(destructuredManagerWriteAst.passed, false, 'manager 解构写入必
 const releaseParameterCompletedShadowAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    '    release: async (executionWorkerLease) => {',
-    '    release: async (executionWorkerLease, completed = true) => {',
+    '    release: async (lease) => {',
+    '    release: async (lease, completed = true) => {',
     'release 参数遮蔽 completed',
   ),
 ));
@@ -3151,8 +3490,13 @@ assert.equal(releaseParameterCompletedShadowAst.passed, false, 'release 参数�
 const creatorParameterHelperShadowAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {',
-    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000, releaseExecutionWorkerLeaseAfterContextUsage = async () => false } = {}) {',
+    `function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {}) {`,
+    `function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+  releaseExecutionWorkerLeaseAfterContextUsage = async () => false,
+} = {}) {`,
     'creator 参数遮蔽 release helper',
   ),
 ));
@@ -3161,8 +3505,8 @@ assert.equal(creatorParameterHelperShadowAst.passed, false, 'creator 参数遮�
 const destructuredCompletedWriteAst = auditCasebookDesignSuccessorAstContracts(casebookDesignSuccessorSourceMap(
   casebookDesignAstMutation(
     'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    '      if (!executionWorkerLease) return false;',
-    '      if (!executionWorkerLease) return false;\n      ({ completed } = { completed: true });',
+    '      if (!lease) return false;',
+    '      if (!lease) return false;\n      ({ completed } = { completed: true });',
     'completed 解构写入',
   ),
 ));
@@ -3449,8 +3793,12 @@ const exactBindingMutationCases = [
     'const onExit = (code, signal) =>',
     'const onExit = (renamedCode, renamedSignal) =>', 'onExit 形参改名'],
   ['desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
-    'function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {})',
-    'function createExecutionWorkerContextUsageLease({ timeoutMs: renamedTimeoutMs = 1000 } = {})',
+    `function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {})`,
+    `function createExecutionWorkerContextUsageLease({
+  timeoutMs: renamedTimeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {})`,
     'context timeoutMs 解构别名'],
   ['desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs',
     'observeTerminal: (payload) =>', 'observeTerminal: (renamedPayload) =>',
@@ -4012,7 +4360,7 @@ const casebookDesignIntakeFixture = ({ blocked }) => {
       source_of_truth: 'commit-ancestry-first', fetch_latest: false, metadata_read_only: true,
       require_gitlab_metadata: true,
       api_freshness: {
-        mode: 'gitlab-api', verified: !blocked, branch: 'release/0.1',
+        mode: 'gitlab-api', verified: true, branch: 'release/0.1',
         branch_head_before: head, branch_head_after: head, compare_from: baseline, compare_to: head,
         compare_commit_count: 2,
         first_parent_commit_count: 2, accounted_commit_count: 2,
@@ -4122,7 +4470,13 @@ for (const astKey of r16Mr1592AstKeys) {
 }
 const blockedCasebookDesignIntake = casebookDesignIntakeFixture({ blocked: true });
 const blockedCasebookDesignValidation = validateCasebookDesignReleaseIntake(blockedCasebookDesignIntake, casebookDesignValidationOptions);
-assert.deepEqual(blockedCasebookDesignValidation, { ok: true, acceptance: 'BLOCKED_MR1552_DESIGN_ONLY', failures: [] }, 'Casebook Builder 只可为设计生成接受完整鉴证的 MR !1552 产品阻断风险');
+assert.equal(blockedCasebookDesignValidation.ok, false, 'Casebook Builder 必须拒绝任何 BLOCKED intake，不得以设计生成为由旁路正式门禁');
+assert.equal(blockedCasebookDesignValidation.acceptance, 'REJECTED', 'BLOCKED intake 必须返回稳定 REJECTED 判定');
+assert.equal(
+  blockedCasebookDesignValidation.failures.some((failure) => failure.startsWith('intake:')),
+  true,
+  'BLOCKED intake 必须保留正式 READY 校验失败来源',
+);
 const r16Mr1592BlockedFixture = structuredClone(blockedCasebookDesignIntake);
 r16Mr1592BlockedFixture.merge_requests.push({
   iid: '1592',
@@ -16094,8 +16448,8 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   assert.match(documentText, /r12[\s\S]*134 个[\s\S]*36 个[\s\S]*170 个/, '两份规范必须记录 r12 继承、r14 增量和170个MR总量');
   assert.match(
     documentText,
-    /e3a5de6cf02845cecb80906a8d11a48caf5c2d1b[\s\S]*79 个[\s\S]*213 个[\s\S]*!1613/,
-    '两份规范必须记录 r16 的79个直接MR、213个总MR与!1613 first-parent收尾边界',
+    /87b6f9110b257c79e5209c01f9f4104f658e430f[\s\S]*86 个[\s\S]*220 个[\s\S]*!1610/,
+    '两份规范必须记录 r16 的86个直接MR、220个总MR与!1610 first-parent收尾边界',
   );
   assert.match(
     documentText,
@@ -16104,8 +16458,13 @@ for (const documentText of [automationFramework, coreBetaOperatingGuide]) {
   );
   assert.match(
     documentText,
-    /20260908195414_release01-r12-to-latest-r16-authoritative-intake_framework-73ac5e9_casebook-da9181f\/release-intake\.json[\s\S]{0,400}`BLOCKED`/,
-    '两份规范必须绑定最新79项权威 intake 并保留其 BLOCKED 结论',
+    /20260909064500_release01-r12-to-latest-r16-authoritative-intake_framework-a665751_casebook-da9181f\/release-intake\.json[\s\S]{0,500}`BLOCKED`/,
+    '两份规范必须绑定最新86项权威 intake 并保留其 BLOCKED 结论',
+  );
+  assert.match(
+    documentText,
+    /!1591[\s\S]{0,80}!1617[\s\S]{0,80}!1615[\s\S]{0,80}!1618[\s\S]{0,80}!1545[\s\S]{0,80}!1623[\s\S]{0,80}!1610[\s\S]{0,320}!1591[\s\S]{0,80}!1618[\s\S]{0,80}!1623[\s\S]{0,80}!1610[\s\S]{0,140}相邻回归[\s\S]{0,320}!1617[\s\S]{0,80}!1615[\s\S]{0,80}!1545[\s\S]{0,140}静态合同/,
+    '两份规范必须同序记录最新7个MR及其4项相邻回归、3项静态合同分类',
   );
   assert.match(documentText, /casebook-build-audit\.json[\s\S]*release_intake\.execution_authorized=false[\s\S]*原始 `release-intake\.json` 顶层\s*不\s*定义 `execution_authorized`/, '两份规范必须准确区分构建审计授权包装层与原始 intake 顶层字段');
   assert.match(documentText, /--max-commits 500[\s\S]*!1573[\s\S]*SIT-MEM-001[\s\S]*BETA-CHAT-001[\s\S]*BETA-MCP-001[\s\S]*MRSMOKE-ROUTE-001/, '两份规范必须要求从 r12 全量重扫并冻结 !1573 的显式桌面相邻映射');
@@ -16223,11 +16582,56 @@ assert.match(
 );
 assert.match(productionGrayCasebookBuilder, /let PRODUCT_COMMIT = '';[\s\S]*PRODUCT_COMMIT = releaseIntake\.report\.release\.head;/, 'Casebook生成器必须从通过校验的intake动态冻结最新release/0.1提交');
 assert.match(productionGrayCasebookBuilder, /(?=[\s\S]*EXPECTED_INCREMENTAL_MR_COUNT)(?=[\s\S]*async function loadReleaseIntake\(\)[\s\S]*--release-intake)(?=[\s\S]*requireFreshRef: true)(?=[\s\S]*api_freshness)/, 'Casebook生成器必须强制消费READY的GitLab API freshness intake');
+assert.doesNotMatch(
+  productionGrayCasebookBuilder.slice(
+    productionGrayCasebookBuilder.indexOf('export function validateCasebookDesignReleaseIntake'),
+    productionGrayCasebookBuilder.indexOf('async function loadReleaseIntake'),
+  ),
+  /requireReady:\s*false|BLOCKED_MR1552_DESIGN_ONLY|validateCasebookDesignMr1552BlockedException\(/,
+  'Casebook正式 intake 校验路径不得接受 BLOCKED、关闭 requireReady 或调用历史设计旁路',
+);
 assert.match(productionGrayCasebookBuilder, /assertExpectedProductCommit\(expectedProductCommit, releaseHead\)/, 'Casebook生成器必须强制校验 expected-product-commit 与 intake HEAD 精确一致');
 assert.match(productionGrayCasebookBuilder, /prepareCasebookOutputDirectory\(option\('out'\)\)[\s\S]*outputTransaction\.staging[\s\S]*sha256File\(PREVIOUS_CASEBOOK\)/, 'Casebook生成器必须显式接收 --out，并在读取和构建前锁定调用前不存在的私有 staging 目录');
 assert.doesNotMatch(productionGrayCasebookBuilder, /prepareCasebookOutputDirectory\(option\('out',\s*DEFAULT_OUTPUT_DIR\)\)/, 'Casebook生成器不得通过默认目录绕过显式 --out');
 assert.match(productionGrayCasebookBuilder, /assertExpectedReleaseIntakeSha256\(option\('release-intake-sha256'\), artifactSha256\)/, 'Casebook生成器必须显式接收并校验 --release-intake-sha256');
 assert.match(productionGrayCasebookBuilder, /QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r16\.xlsx/, '下一版生成目标必须升级到全新 r16 文件名');
+assert.match(
+  productionGrayCasebookBuilder,
+  /const outputFile = path\.join\(outputDir, OUTPUT_NAME\);\s*workbook\.recalculate\(\);\s*const xlsx = await SpreadsheetFile\.exportXlsx\(workbook\);/,
+  'Casebook生成器必须在最终 outputFile 确定后立即重算，并紧邻最终 exportXlsx',
+);
+assert.equal(
+  [...productionGrayCasebookBuilder.matchAll(/workbook\.recalculate\(\);/g)].length,
+  1,
+  'Casebook生成器的最终路径必须只重算一次 workbook',
+);
+const finalWorkbookRecalculateIndex = productionGrayCasebookBuilder.indexOf('workbook.recalculate();');
+const finalWorkbookExportIndex = productionGrayCasebookBuilder.indexOf(
+  'SpreadsheetFile.exportXlsx(workbook)',
+  finalWorkbookRecalculateIndex,
+);
+assert.ok(
+  finalWorkbookRecalculateIndex > productionGrayCasebookBuilder.indexOf('async function main()')
+    && finalWorkbookExportIndex > finalWorkbookRecalculateIndex,
+  'Casebook生成器唯一 workbook.recalculate 必须位于 main 最终导出路径且严格先于 exportXlsx',
+);
+const finalWorkbookRecalculateTail = productionGrayCasebookBuilder.slice(
+  finalWorkbookRecalculateIndex + 'workbook.recalculate();'.length,
+);
+const permittedFinalWorkbookUse = 'const xlsx = await SpreadsheetFile.exportXlsx(workbook);';
+assert.equal(
+  finalWorkbookRecalculateTail.trimStart().startsWith(permittedFinalWorkbookUse),
+  true,
+  'workbook.recalculate 后必须立即且只能把同一 workbook 传入最终 exportXlsx',
+);
+const afterFinalWorkbookExport = finalWorkbookRecalculateTail.slice(
+  finalWorkbookRecalculateTail.indexOf(permittedFinalWorkbookUse) + permittedFinalWorkbookUse.length,
+);
+assert.doesNotMatch(
+  afterFinalWorkbookExport,
+  /\bworkbook\b/,
+  '最终 exportXlsx 后禁止再次引用、读取或修改 workbook；落盘审计必须使用重新导入实例',
+);
 assert.match(
   coreBetaProtocolSourceForTaskRegenerate,
   /declaresSkillReinstallReadinessContract[\s\S]*qbot-core-beta-skill-reinstall-product-action-trace\\\/v1\|catalog_observations_\(\?:before\|after\)_action\|send_count_\(\?:before\|after\|unchanged\)/,
@@ -17044,9 +17448,10 @@ assert.deepEqual(r16IncrementalMrOrder, [
   '1593', '1596', '1595', '1597', '1594', '1579',
   '1604', '1603', '1598', '1600', '1602',
   '1605', '1608', '1599', '1601', '1609', '1614', '1554', '1607', '1612', '1616', '1613',
-], 'Casebook生成器必须按权威 intake first-parent 顺序冻结79个增量MR并以!1613收尾');
-assert.equal(r16IncrementalMrOrder.length, 79, 'r16 必须精确包含79个直接合入MR');
-assert.equal(134 + r16IncrementalMrOrder.length, 213, 'r16 必须继承r12的134个MR并形成213个总MR');
+  '1591', '1617', '1615', '1618', '1545', '1623', '1610',
+], 'Casebook生成器必须按权威 intake first-parent 顺序冻结86个增量MR并以!1610收尾');
+assert.equal(r16IncrementalMrOrder.length, 86, 'r16 必须精确包含86个直接合入MR');
+assert.equal(134 + r16IncrementalMrOrder.length, 220, 'r16 必须继承r12的134个MR并形成220个总MR');
 assert.match(productionGrayCasebookBuilder, /\['1523', \['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019'\]\]/, 'Casebook生成器必须精确映射MR !1523且禁止启发式泛化');
 assert.match(productionGrayCasebookBuilder, /\['1522', \['MRSMOKE-ROUTE-001', 'BETA-CHAT-001', 'BETA-ROUTE-001', 'BETA-HOST-003'\]\]/, 'Casebook生成器必须精确映射MR !1522且禁止启发式泛化');
 assert.match(coreBetaProtocolSource, /MRSMOKE-WEB-001', 'qwork_mr_web_search_success'[\s\S]*web_search_quota_trace/, '协议必须注册四轮Web搜索专项证据角色');
@@ -17064,7 +17469,7 @@ assert.match(
   'Casebook生成器必须逐项锁定 r9 的21个静态合同审计MR且禁止冒充桌面E2E',
 );
 assert.match(productionGrayCasebookBuilder, /function sameFileSet\(expectedFiles, actualFiles\)[\s\S]*!sameFileSet\(staticAudit\.expectedFiles, mr\.files\)/, 'Casebook生成器必须按文件集合校验静态MR清单，不能因Git返回顺序漂移误报');
-assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加79条，合计213条');
+assert.match(productionGrayCasebookBuilder, /async function previousCasebookMrRows\(\)[\s\S]*近2天MR覆盖[\s\S]*EXPECTED_PREVIOUS_MR_COUNT[\s\S]*const previousMrRows = await previousCasebookMrRows\(\)[\s\S]*incrementalMrRows\]\.reverse\(\)\.concat\(previousMrRows\)/, 'Casebook生成器必须复用r12的134条冻结覆盖行并按API增量顺序追加86条，合计220条');
 assert.match(
   productionGrayCasebookBuilder,
   /\['1573', \{[\s\S]*?caseIds: \['SIT-MEM-001', 'BETA-CHAT-001', 'BETA-CHAT-002', 'BETA-CHAT-009', 'BETA-SEC-002', 'BETA-MCP-001', 'BETA-MCP-002', 'BETA-HOST-003', 'BETA-INIT-001', 'BETA-ROUTE-001', 'MRSMOKE-ROUTE-001'\][\s\S]*?coverageStrength: '相邻回归\+源码合同'[\s\S]*?requiredSourceContractIds: \['deepbankv2-mr-1573-memory-session-profile-stability\/v1'\][\s\S]*?claim_scope=source_and_test_declarations[\s\S]*?test_execution_attested=false[\s\S]*?禁止把相邻主链通过冒充这些内部合同已执行或通过/,
@@ -17113,14 +17518,34 @@ const r16LatestCoverageContracts = new Map([
   }],
   ['1616', { caseIds: [], coverageStrength: '静态合同' }],
   ['1613', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1591', {
+    caseIds: ['BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001', 'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001', 'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1617', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1615', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1618', {
+    caseIds: ['BETA-ART-001', 'BETA-FILE-005', 'BETA-HOST-003', 'BETA-INIT-001', 'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001', 'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1545', { caseIds: [], coverageStrength: '静态合同' }],
+  ['1623', {
+    caseIds: ['BETA-HOST-003', 'BETA-INIT-001', 'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001', 'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'SIT-CONN-016'],
+    coverageStrength: '相邻回归',
+  }],
+  ['1610', {
+    caseIds: ['BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001', 'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001', 'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001', 'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'SIT-SKILL-007'],
+    coverageStrength: '相邻回归',
+  }],
 ]);
 for (const [iid, expected] of r16LatestCoverageContracts) {
   const contractStart = productionGrayCasebookBuilder.indexOf(`  ['${iid}', {`);
   const contractEnd = productionGrayCasebookBuilder.indexOf('\n  [\'', contractStart + 1);
   const contractSource = productionGrayCasebookBuilder.slice(contractStart, contractEnd);
-  const exactCases = expected.caseIds.map((caseId) => `'${caseId}'`).join(', ');
+  const declaredCaseIds = [...(contractSource.match(/caseIds: \[([\s\S]*?)\]/)?.[1] || '').matchAll(/'([^']+)'/g)]
+    .map((match) => match[1]);
   assert.equal(contractStart >= 0 && contractEnd > contractStart, true, `MR !${iid} 必须存在显式 R16 覆盖合同`);
-  assert.equal(contractSource.includes(`caseIds: [${exactCases}]`), true, `MR !${iid} 必须保持精确有序 Case 映射`);
+  assert.deepEqual(declaredCaseIds, expected.caseIds, `MR !${iid} 必须保持精确有序 Case 映射`);
   assert.equal(contractSource.includes(`coverageStrength: '${expected.coverageStrength}'`), true, `MR !${iid} 必须保持精确覆盖分类`);
   assert.equal(
     contractSource.includes('staticOnly: true'),

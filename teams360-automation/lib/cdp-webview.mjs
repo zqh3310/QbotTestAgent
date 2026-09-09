@@ -400,6 +400,78 @@ export async function withWebviewTargetClient(targetRef, callback) {
   return withTargetClient(endpoint.href, callback);
 }
 
+const QWORK_SMOKE_REPLY_STABLE_MS = 1200;
+const QWORK_SMOKE_REPLY_STABLE_SAMPLES = 3;
+
+export const QWORK_SMOKE_RUNNING_SELECTOR = [
+  '[data-testid="composer-cancel"]',
+  '[data-testid="composer-stop"]',
+  '[data-testid="stop-generation"]',
+  'button[aria-label*="停止"]',
+  'button[title*="停止"]',
+].join(', ');
+
+const QWORK_SMOKE_PENDING_REPLY_PATTERNS = Object.freeze([
+  /思考中|处理中|生成中|正在连接/u,
+  /已经接住了[\s\S]{0,40}正在把回应接回来/u,
+  /开场热身有点久[\s\S]{0,40}已经上场/u,
+]);
+
+export function isQworkSmokePendingReply(value) {
+  const reply = String(value || '').trim();
+  return Boolean(reply && QWORK_SMOKE_PENDING_REPLY_PATTERNS.some((pattern) => pattern.test(reply)));
+}
+
+export function advanceQworkSmokeReplySettlement({
+  beforeAssistantCount,
+  state,
+  stableText = '',
+  stableSince = 0,
+  stableSamples = 0,
+  now = Date.now(),
+  stableWindowMs = QWORK_SMOKE_REPLY_STABLE_MS,
+  requiredStableSamples = QWORK_SMOKE_REPLY_STABLE_SAMPLES,
+}) {
+  const reply = String(state?.lastAssistant || '').trim();
+  const pending = isQworkSmokePendingReply(reply);
+  const candidate = Boolean(
+    Number.isSafeInteger(beforeAssistantCount)
+    && Number.isSafeInteger(state?.assistantCount)
+    && state.assistantCount > beforeAssistantCount
+    && reply
+    && state?.running === false
+    && state?.sendButtonVisible === true
+    && !pending,
+  );
+  if (!candidate) {
+    return {
+      complete: false,
+      candidate: false,
+      pending,
+      reply,
+      stableText: '',
+      stableSince: 0,
+      stableSamples: 0,
+    };
+  }
+  const sameCandidate = reply === stableText && Number.isFinite(stableSince) && stableSince > 0;
+  const candidateSince = sameCandidate ? stableSince : now;
+  const candidateSamples = sameCandidate && Number.isSafeInteger(stableSamples) && stableSamples > 0
+    ? stableSamples + 1
+    : 1;
+  return {
+    complete: sameCandidate
+      && candidateSamples >= requiredStableSamples
+      && now - candidateSince >= stableWindowMs,
+    candidate: true,
+    pending: false,
+    reply,
+    stableText: reply,
+    stableSince: candidateSince,
+    stableSamples: candidateSamples,
+  };
+}
+
 export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, timeoutMs = 120_000 }) {
   if (!targetRef?.webSocketDebuggerUrl) {
     return { status: 'blocked', reason: 'The full QWork QBot WebView target is unavailable.' };
@@ -419,11 +491,11 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
       return true;
     })()`);
     const newTaskDeadline = Date.now() + 15_000;
-    let before = await readChatState(client);
+    let before = await readQworkSmokeChatState(client);
     while (Date.now() < newTaskDeadline
       && (!before.composer || before.userCount > 0 || before.assistantCount > 0 || before.composerText)) {
       await delay(250);
-      before = await readChatState(client);
+      before = await readQworkSmokeChatState(client);
     }
     trace('new-task-ready', before);
     if (!before.composer) return { status: 'blocked', reason: 'The full QWork QBot composer was not found.' };
@@ -462,35 +534,54 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
     let state = before;
     let stableText = '';
     let stableSince = 0;
+    let stableSamples = 0;
     let lastTraceState = '';
+    let replyCompleted = false;
+    let settlement = advanceQworkSmokeReplySettlement({
+      beforeAssistantCount: before.assistantCount,
+      state,
+      stableText,
+      stableSince,
+      stableSamples,
+    });
     while (Date.now() < deadline) {
-      state = await readChatState(client);
-      const traceState = `${state.userCount}:${state.assistantCount}:${state.lastAssistant}`;
+      state = await readQworkSmokeChatState(client);
+      settlement = advanceQworkSmokeReplySettlement({
+        beforeAssistantCount: before.assistantCount,
+        state,
+        stableText,
+        stableSince,
+        stableSamples,
+      });
+      stableText = settlement.stableText;
+      stableSince = settlement.stableSince;
+      stableSamples = settlement.stableSamples;
+      const traceState = `${state.userCount}:${state.assistantCount}:${state.running}:${state.sendButtonVisible}:${state.lastAssistant}`;
       if (traceState !== lastTraceState) {
         trace('poll-change', {
           userCount: state.userCount,
           assistantCount: state.assistantCount,
           replyLength: state.lastAssistant.length,
+          running: state.running,
+          sendButtonVisible: state.sendButtonVisible,
+          pendingReply: settlement.pending,
         });
         lastTraceState = traceState;
       }
-      const newAssistant = state.assistantCount > before.assistantCount;
-      const reply = state.lastAssistant.trim();
-      const pendingReply = /思考中|处理中|生成中|正在连接/.test(reply);
-      if (newAssistant && reply && !pendingReply) {
-        if (reply === stableText) {
-          if (Date.now() - stableSince >= 1200) break;
-        } else {
-          stableText = reply;
-          stableSince = Date.now();
-        }
+      if (settlement.complete) {
+        replyCompleted = true;
+        break;
       }
       await delay(400);
     }
-    trace('reply-settled', {
+    trace(replyCompleted ? 'reply-settled' : 'reply-timeout', {
       userCount: state.userCount,
       assistantCount: state.assistantCount,
       replyLength: state.lastAssistant.length,
+      running: state.running,
+      sendButtonVisible: state.sendButtonVisible,
+      stableSamples,
+      pendingReply: isQworkSmokePendingReply(state.lastAssistant),
     });
     await captureWithClient(client, afterFile);
     const screenshots = [beforeFile, afterFile].filter((file) => fs.existsSync(file));
@@ -498,8 +589,19 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
     if (!userMessageAdded) {
       return { status: 'failed', reason: 'The QWork composer did not add a new user message.', screenshots };
     }
-    if (state.assistantCount <= before.assistantCount || !state.lastAssistant.trim()) {
-      return { status: 'failed', reason: 'No new completed AI reply was observed in the full QWork QBot WebView.', screenshots };
+    if (!replyCompleted) {
+      return {
+        status: 'failed',
+        reason: 'No new completed AI reply was observed in the full QWork QBot WebView before timeout.',
+        reply_excerpt: redactText(state.lastAssistant).slice(0, 500),
+        assertions: {
+          user_message_added: userMessageAdded,
+          assistant_message_added: state.assistantCount > before.assistantCount,
+          reply_completed: false,
+          reply_contains_expected: false,
+        },
+        screenshots,
+      };
     }
     if (/模型未配置|请联系管理员|模型服务暂时不可达|连接公司 VPN/.test(state.lastAssistant)) {
       return {
@@ -509,6 +611,7 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
         assertions: {
           user_message_added: userMessageAdded,
           assistant_message_added: true,
+          reply_completed: true,
           reply_contains_expected: false,
         },
         screenshots,
@@ -522,6 +625,7 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
         assertions: {
           user_message_added: userMessageAdded,
           assistant_message_added: state.assistantCount > before.assistantCount,
+          reply_completed: true,
           reply_contains_expected: false,
         },
         screenshots,
@@ -535,6 +639,7 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
       assertions: {
         user_message_added: userMessageAdded,
         assistant_message_added: state.assistantCount > before.assistantCount,
+        reply_completed: true,
         reply_contains_expected: expected ? state.lastAssistant.includes(expected) : true,
       },
       screenshots,
@@ -542,8 +647,17 @@ export async function runWebviewSmoke({ targetRef, prompt, expected, outputDir, 
   });
 }
 
-async function readChatState(client) {
+export async function readQworkSmokeChatState(client) {
+  const runningSelector = JSON.stringify(QWORK_SMOKE_RUNNING_SELECTOR);
   return client.evaluate(`(() => {
+    const visibleElements = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    });
+    const visible = (selector) => visibleElements(selector).length > 0;
+    const runningSelector = ${runningSelector};
+    const sendButtonVisible = visible('[data-testid="composer-send"], button[type="submit"]');
     const userNodes = [...document.querySelectorAll('.aui-user-message-content')]
       .filter((element) => (element.textContent || '').trim());
     const assistantNodes = [...document.querySelectorAll('.aui-assistant-message-root')]
@@ -554,6 +668,8 @@ async function readChatState(client) {
       userCount: userNodes.length,
       lastUser: userNodes.length ? (userNodes.at(-1).innerText || userNodes.at(-1).textContent || '') : '',
       assistantCount: assistantNodes.length,
+      running: visible(runningSelector),
+      sendButtonVisible,
       lastAssistant: assistantNodes.length
         ? (assistantNodes.at(-1).querySelector('.aui-assistant-message-content')?.innerText
           || assistantNodes.at(-1).innerText

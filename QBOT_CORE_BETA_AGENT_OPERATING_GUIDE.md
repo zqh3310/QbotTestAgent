@@ -88,12 +88,13 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
   `1/16` 执行核心生命线并逐 Case 复核；只有 16/16 可信全绿，才依次独立执行
   `1/12`、`1/70`、`1/160` 和 soak。
 
-- R16 当前仍是“准备态”，不是可执行的正式 Casebook。截至 2026-09-08 的只读 GitLab API
-  权威扫描已稳定观测 `origin/release/0.1@e3a5de6cf02845cecb80906a8d11a48caf5c2d1b`，
-  从 r12 设计基线共有 79 个 first-parent 增量 MR、213 个总 MR，并以 `!1613` 收尾。
+- R16 当前仍是“准备态”，不是可执行的正式 Casebook。截至 2026-09-09 的只读 GitLab API
+  权威扫描已稳定观测 `origin/release/0.1@87b6f9110b257c79e5209c01f9f4104f658e430f`，
+  从 r12 设计基线共有 86 个 first-parent 增量 MR、220 个总 MR，并以 `!1610` 收尾。
   权威 intake 位于
-  `outputs/20260908195414_release01-r12-to-latest-r16-authoritative-intake_framework-73ac5e9_casebook-da9181f/release-intake.json`；
-  其顶层结论仍为 `BLOCKED`，并记录 `!1597` current-release 源码合同未通过以及
+  `outputs/20260909064500_release01-r12-to-latest-r16-authoritative-intake_framework-a665751_casebook-da9181f/release-intake.json`；
+  其顶层结论仍为 `BLOCKED`，并记录旧工具把独立 blocking-risk 失败错误投影为 API freshness
+  blocker，以及
   `execution_runner_message_isolation_missing` blocking-risk 未通过，因此必须保持
   `G0=NO_GO`，禁止生成正式 r16、禁止 pretest 和 runner。最新 `!1612` 必须显式绑定
   `deepbankv2-mr-1552-execution-runner-isolation/v1`；只有 blocking-risk v5 三项检查和
@@ -119,7 +120,12 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
   `!1608`、`!1609`、`!1614`、`!1554`、`!1607`、`!1616`、`!1613` 仅使用精确静态合同。
   `!1612` 的相邻 Case 不能替代 G0 blocking-risk v5 源码证明；IID、merge SHA、
   diff SHA、changed paths、源码合同或 blocking-risk 绑定任一漂移均须 fail-closed。
-- 上述 79/213 只是当前框架修复前的已观测边界。框架全检、提交、推送且
+- 相对 `!1613` 边界，权威扫描再按 first-parent 精确追加 7 个 MR：`!1591`、`!1617`、
+  `!1615`、`!1618`、`!1545`、`!1623`、`!1610`。其中 `!1591`、`!1618`、`!1623`、
+  `!1610` 使用显式相邻回归映射；`!1617`、`!1615`、`!1545` 仅使用精确静态合同。
+  七项的 IID、merge SHA、diff bytes/SHA、GitLab labels、changed paths、空源码合同集合和
+  权威 impact direct Case 顺序必须全等；静态项不得新增桌面 Case，相邻项不得冒充直接 E2E。
+- 上述 86/220 只是当前框架修复前的已观测边界。框架全检、提交、推送且
   `main == origin/main`/tracked clean 后，必须再做一次权威 API 扫描。若 release HEAD 变化，
   继续扩充 R16 而不得复用这份诊断 intake。产品隔离阻断修复后，才能在新目录生成、
   重算、检查 14 个 Sheet、渲染验收并发布正式 r16，然后再把两份规范与状态机的正式
@@ -133,6 +139,11 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
   release observation、当前十字段身份和精确 `READY` 才能授权从 `1/16` 启动唯一 runner。
   r15 生成器显式接收与 intake 文件字节全等的 `--release-intake-sha256`、同一 HEAD 的
   `--expected-product-commit` 和调用前不存在的 `--out`。
+  完成全部单元格、公式、样式和 Sheet 修改后，最终导出路径必须且只能调用一次
+  `workbook.recalculate()`，并且该调用必须严格先于
+  `SpreadsheetFile.exportXlsx(workbook)`；重算后唯一允许的 workbook 引用就是紧邻的该次
+  `SpreadsheetFile.exportXlsx(workbook)`，其余读取、写入、方法调用或传递全部禁止。导出后的协议、
+  runtime、公式错误与渲染审计仍须从落盘文件重新读取，不能以重算或导出成功替代。
   `!1573` 的桌面相邻映射固定同序为 `SIT-MEM-001`、`BETA-CHAT-001`、
   `BETA-CHAT-002`、`BETA-CHAT-009`、`BETA-SEC-002`、`BETA-MCP-001`、
   `BETA-MCP-002`、`BETA-HOST-003`、`BETA-INIT-001`、`BETA-ROUTE-001`、
@@ -1735,7 +1746,12 @@ GitLab 返回的 iid、merge commit SHA、标题、标签和 merged_at。Token �
 正式状态计划只接受 `mode=gitlab-api`，且 branch HEAD 前后稳定、first-parent
 `commit_accounting` 闭合、全部 MR changes、current-release source contracts 和 blocking
 risk 均独立验证通过的 intake。`fetch_latest=true` 的本地 Git 结果不能替代该证明；删除
-或弱化任一证明后即使重新计算内容 SHA 也必须 fail-closed。GitLab changes 中
+或弱化任一证明后即使重新计算内容 SHA 也必须 fail-closed。
+`api_freshness.verified` 只表示 GitLab branch、first-parent、MR changes 和 source contracts
+证据链完整，不得因独立的 blocking-risk 失败而改写为 `false` 或追加 API freshness blocker。
+blocking-risk 必须只投影到 `blocking_risks_verified=false`、对应风险 blocker 和顶层
+`decision=BLOCKED`；正式 `requireReady=true` 仍必须拒绝，诊断性 `requireReady=false`
+则应保留已经成立的 API freshness 结论。GitLab changes 中
 `renamed_file=true` 时必须同时保留 `old_path` 与 `new_path` 参与风险映射和源码合同，不能
 因目标路径变成 docs/static 而遗漏旧产品路径。
 
@@ -1794,6 +1810,27 @@ cancellation/termination/message helper、context wrapper 双 helper 与 desktop
 `Object.defineProperty/defineProperties/assign` 或 `Reflect.set/deleteProperty` 改写受保护
 receiver；动态属性名、动态 descriptor/source 或 spread 必须 fail-closed。对无关对象执行
 同类操作、无关 helper、无关属性只读和等价属性重排不得被误阻断。
+所有进入原生 `setTimeout` 或受保护 `schedule` 的可配置延迟必须共享 Node timer 安全合同：
+来源只求值一次并转为 `requested`，只有
+`Number.isSafeInteger(requested) && requested > 0` 才接受，否则使用固定正安全整数 fallback；
+随后以 `Math.min(requested, 2147483647)` 形成不可遮蔽、不可重绑的 bounded binding。
+sink 若使用 `bounded + 1`，requested 上限必须为 `2147483646`；context lease 还须维持
+11000ms 业务上限。cancellation、deadline、event-flow、manager、termination、context
+lease、supervisor startup/restart 与 process-lifecycle heartbeat/confirmation 的
+timer/envelope/比较/renew 必须共用同一 bounded 值，且 binding 在 sink 前可达并支配。
+`Infinity`、超上限整数、`Number.MAX_SAFE_INTEGER`、小数、负数、`NaN`、raw 值直达 sink、
+未使用的伪归一化或 legacy/current `OR` 的任一弱分支都必须 `BLOCKED`。
+supervisor 的 worker-to-host 解码既可直接调用精确导入的
+`validateEnvelope(raw, { direction: 'worker-to-host', now: now() })`，也可委托给从受保护
+`execution-worker-deadline.cjs` 唯一导入的
+`validateExecutionWorkerReply(raw, pending, now)`。委托必须原样传入当前 raw、同一 pending
+registry 与受保护 clock；错误模块、错误 registry、传入 `now()` 的结果或局部遮蔽都必须
+fail-closed，且 deadline AST 子合同仍须独立为 true，不能由委托调用替代 helper 本体鉴证。
+解码拒绝分支的诊断日志必须隔离异常，并始终对同一 `child` 调用受管
+`terminateChild(child, 'message-validation-failed')`：允许日志 `try/finally`，或独立
+`try/catch` 后 `void` 调用/返回受管终止 Promise。直接 `child.kill()`/可选链 kill、日志异常
+可中断终止、错误 child、动态/错误 reason、不可达终止，以及
+`logger`/`error`/`child`/`terminateChild` 的遮蔽或重绑均须 fail-closed。
 `onExit` 的 typed failure、acquisition 到 pressure admission 的可达
 调用链、同一 supervisor factory 的 `maxPendingRequests:1/maxRestarts:0`、同一 acquisition
 内的 request set/release delete+stop，以及 desktop 同函数同 `try/finally` 的 lease

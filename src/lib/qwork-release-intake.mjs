@@ -1389,8 +1389,7 @@ function scanWithGitLabApi({
     && attributedMrCommitCount === selected.length
     && unverified.length === 0
     && apiErrors.length === 0
-    && sourceContractsVerified
-    && blockingRisksVerified,
+    && sourceContractsVerified,
   );
   return {
     releaseHead,
@@ -1805,8 +1804,7 @@ export function validateQworkReleaseIntake(report, {
     && mergeRequestSemanticsValidation.ok
     && Number(apiFreshness.unattributed_direct_commit_count) === 0
     && Number(apiFreshness.mr_changes_verified_count) === Number(apiFreshness.first_parent_merge_count)
-    && apiFreshness.source_contracts_verified === true
-    && apiFreshness.blocking_risks_verified === true);
+    && apiFreshness.source_contracts_verified === true);
   if (requireGitLabApiFreshness && !apiFreshnessVerified) failures.push('gitlab_api_freshness_required');
   if (requireFreshRef && report?.policy?.fetch_latest !== true && !apiFreshnessVerified) failures.push('release_ref_not_freshly_verified');
   if (!HEX40.test(text(report?.release?.head))) failures.push('release_head_invalid');
@@ -2072,7 +2070,6 @@ export function scanQworkReleaseIntake({
   report.summary.blocking_risk_failure_count = unresolved.blocking_risk_failures.length;
   if (unresolved.blocking_risk_failures.length) {
     if (report.policy.api_freshness) {
-      report.policy.api_freshness.verified = false;
       report.policy.api_freshness.blocking_risks_verified = false;
     }
     if (!blockers.includes('release 阻断风险审计未通过，存在必须在 G0 修复的 P1 执行隔离缺陷')) {

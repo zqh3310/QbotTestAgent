@@ -102,6 +102,7 @@ const R16_INCREMENTAL_MR_ORDER = Object.freeze([
   '1593', '1596', '1595', '1597', '1594',
   '1579', '1604', '1603', '1598', '1600', '1602',
   '1605', '1608', '1599', '1601', '1609', '1614', '1554', '1607', '1612', '1616', '1613',
+  '1591', '1617', '1615', '1618', '1545', '1623', '1610',
 ]);
 const EXPECTED_INCREMENTAL_MR_COUNT = R16_INCREMENTAL_MR_ORDER.length;
 const EXPECTED_TOTAL_MR_COUNT = EXPECTED_PREVIOUS_MR_COUNT + EXPECTED_INCREMENTAL_MR_COUNT;
@@ -560,6 +561,66 @@ const R16_INCREMENTAL_MR_CONTRACTS = new Map([
     coverageStrength: '静态合同',
     reason: '仅补齐 Claude Agent SDK 升级守卫的 release 发布脚本、CI 与单元测试；保留精确 changes 静态审计，实际 SDK/制品身份仍由 G0 权威读回，不新增桌面 Case。',
   }],
+  ['1591', {
+    caseIds: [
+      'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+    ],
+    coverageStrength: '相邻回归',
+    reason: 'runtime tail 连续性跨会话投影、乐观事务、状态文案和 UI 呈现；任务重开、宿主、初始化与完整 12 条新增 MR 冒烟只做用户可见相邻回归，不把内部 fixture、评估器或单元测试声明冒充已执行的直接 E2E。',
+  }],
+  ['1617', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅调整普通 MR 的 CI checkout、E2E 选择和 unit material 负载；按精确 IID、merge SHA、diff 字节/SHA、标签与 12 个 changed paths 静态审计，不新增桌面 Case。',
+  }],
+  ['1615', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅修改 .gitlab-ci.yml 的失败后停止重任务策略；按精确 IID、merge SHA、diff 字节/SHA、标签与单一 changed path 静态审计，不冒充产品桌面执行结果。',
+  }],
+  ['1618', {
+    caseIds: [
+      'BETA-ART-001', 'BETA-FILE-005', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+    ],
+    coverageStrength: '相邻回归',
+    reason: 'AI Daily source launch 禁止 session upload 涉及成果、文件失败、宿主和初始化链；相关核心 Case 与完整 12 条冒烟只做相邻回归，不声称已直接验证内部 source-launch session 上传开关或单元测试执行。',
+  }],
+  ['1545', {
+    caseIds: [],
+    staticOnly: true,
+    coverageStrength: '静态合同',
+    reason: '仅增加 per-service 与 CI-material 定向 unit lanes 及治理接线；按精确 IID、merge SHA、diff 字节/SHA、标签与 11 个 changed paths 静态审计，不新增桌面 Case。',
+  }],
+  ['1623', {
+    caseIds: [
+      'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      'SIT-CONN-016',
+    ],
+    coverageStrength: '相邻回归',
+    reason: 'builtin web tools 拆分覆盖传输、HTML、预算、PDF 与 crawl 内部模块；宿主、初始化、交互工具链和完整 12 条冒烟只做用户可见相邻回归，不把模块拆分或源码测试声明冒充直接 E2E。',
+  }],
+  ['1610', {
+    caseIds: [
+      'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      'SIT-SKILL-007',
+    ],
+    coverageStrength: '相邻回归',
+    reason: 'Composer 换行、撤销与编辑历史影响输入主链和 Skill 输入；任务重开、宿主、初始化、Skill 执行与完整 12 条冒烟只做相邻回归，不把内部编辑事件、历史栈或单元测试声明冒充直接 E2E。',
+  }],
 ]);
 const R16_LATEST_MR_METADATA_CONTRACTS = new Map([
   ['1605', {
@@ -785,6 +846,184 @@ const R16_LATEST_MR_METADATA_CONTRACTS = new Map([
     ],
     sourceContractIds: [],
   }],
+  ['1591', {
+    mergeCommitSha: '2db01340ab77371fc82ffccdf888497eda114475',
+    diffSha256: 'b6cc2db8e5b2c7573ebe74b59590a50fe263e2880c0eff566ffcdc8aa42b8d95',
+    diffBytes: 156684,
+    labels: [
+      'area/assistant-chat', 'area/assistant-ui', 'area/docs', 'area/e2e', 'area/runtime',
+      'area/test', 'area/ui', 'ci/build-ui', 'ci/e2e-doctor', 'ci/e2e-local',
+      'ci/image-manifest', 'ci/unit', 'e2e-suite/blackbox', 'e2e-suite/conformance',
+      'e2e-suite/contract', 'e2e/assistant-chat', 'e2e/runtime-desktop', 'e2e/uiux',
+      'kind/enhancement', 'milestone/v1', 'priority/high', 'sprint/2026-09-10', 'status/in-review',
+    ],
+    changedPaths: [
+      'docs/assistant-runtime-tail-status-contract.md',
+      'scripts/ci/unit/node-unit-test-weights.json',
+      'server/qbot-core/engine/runtime-tail-e2e-fixture.mjs',
+      'src/components/assistant-ui/runtime-tail-status.tsx',
+      'src/components/assistant-ui/use-runtime-tail-presentation.ts',
+      'src/.architecture.yaml',
+      'src/assistant-runtime-tail-status.ts',
+      'src/optimistic-turn-transaction.ts',
+      'src/runtime-session-reconcile.ts',
+      'src/runtime-tail-presentation-copy.ts',
+      'src/runtime-tail-presentation-tone.ts',
+      'src/runtime-tail-presentation.ts',
+      'src/runtime.tsx',
+      'test/e2e/agent-chat-ask-cancel.local.spec.mjs',
+      'test/eval/fixtures/research/runtime-tail-experience/README.md',
+      'test/eval/fixtures/research/runtime-tail-experience/cases.json',
+      'test/eval/fixtures/research/runtime-tail-experience/evaluator-freeze.json',
+      'test/eval/fixtures/research/runtime-tail-experience/holdout-contract.json',
+      'test/eval/runtime-tail-experience/evaluator.mjs',
+      'test/eval/runtime-tail-experience/runtime-tail-experience.test.mjs',
+      'test/unit/core/optimistic-turn-transaction.test.mjs',
+      'test/unit/desktop/desktop-provider-retry-contract.test.mjs',
+      'test/unit/runtime/runtime-subscription-cleanup.test.mjs',
+      'test/unit/server/runtime-activity.test.mjs',
+      'test/unit/ui/runtime-tail-experience-evaluator.test.mjs',
+      'test/unit/ui/runtime-tail-presentation.test.mjs',
+      'test/unit/ui/runtime-tail-status-contract.test.mjs',
+    ],
+    directCaseIds: [
+      'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1617', {
+    mergeCommitSha: '4744b98730cbdf8899b268dd2fcbfd6c89269582',
+    diffSha256: 'eb5e6759e8bdc284cfbc18e09b2366f3329ab2f43acab325729588720ea61fb8',
+    diffBytes: 27924,
+    labels: ['milestone/v1'],
+    changedPaths: [
+      '.gitlab/guides/labels.md',
+      '.gitlab/policies/ci-policy-reference.md',
+      '.gitlab/e2e-child-base.yml',
+      '.gitlab/lightweight-ci.yml',
+      '.gitlab/unit-material-child.yml',
+      'docs/ci-cd-operating-contract.md',
+      'scripts/ci/policy/e2e-selection.mjs',
+      'scripts/ci/policy/e2e-selection.test.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/policy/pipeline-policy.mjs',
+      'test/unit/ci/dashboard-package-lane.test.mjs',
+      '.gitlab-ci.yml',
+    ],
+    directCaseIds: [],
+    sourceContractIds: [],
+  }],
+  ['1615', {
+    mergeCommitSha: '7818a8bf0c8bf3bf26305ead12206962e4bf0de3',
+    diffSha256: '5a987fb84514419eb266daae65c4a7083ee0ade22261aa22ecd99b90ebf6db9e',
+    diffBytes: 7278,
+    labels: ['area/ci', 'ci/unit', 'kind/chore', 'milestone/v1', 'status/in-progress'],
+    changedPaths: ['.gitlab-ci.yml'],
+    directCaseIds: [],
+    sourceContractIds: [],
+  }],
+  ['1618', {
+    mergeCommitSha: '1a6260ad7ed5a84a111bcaee0a6a3dea6d891f43',
+    diffSha256: '6e64516d59530f361203c556561d1c8bac23be68e438e2baab953532a4bbef05',
+    diffBytes: 5058,
+    labels: [
+      'area/docs', 'area/electron', 'area/runtime', 'area/test', 'ci/unit', 'kind/bug',
+      'milestone/v1', 'sprint/2026-09-10', 'status/in-review',
+    ],
+    changedPaths: [
+      'electron/docs/ai-daily-runtime.md',
+      'electron/host-core/composition/embed-runtime.cjs',
+      'test/unit/runtime/ai-daily-orchestrator.test.mjs',
+    ],
+    directCaseIds: [
+      'BETA-ART-001', 'BETA-FILE-005', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1545', {
+    mergeCommitSha: 'e32af03a4733c88c45728c505f6c5538c160ac8d',
+    diffSha256: '29dbf5343f1faae61a54753d06796356e1472b54d7b3dbaae1ee5aeb0a2f0354',
+    diffBytes: 50766,
+    labels: ['area/ci', 'area/scripts', 'area/test', 'kind/feature', 'milestone/v1', 'sprint/2026-09-03', 'status/in-review'],
+    changedPaths: [
+      'scripts/ci/unit/node-unit-affected.mjs',
+      'scripts/ci/unit/node-unit-affected.test.mjs',
+      'scripts/ci/unit/node-unit-service-lane.mjs',
+      'scripts/ci/unit/node-unit-service-scope.mjs',
+      'scripts/ci/unit/node-unit-service-tests.json',
+      'scripts/ci/unit/node-unit-service-tests.mjs',
+      'scripts/ci/unit/node-unit-service-tests.test.mjs',
+      'scripts/governance/gitlab/local-gate.mjs',
+      'scripts/governance/gitlab/mr-local-gate.mjs',
+      'test/ci-policy-files.txt',
+      '.gitlab-ci.yml',
+    ],
+    directCaseIds: [],
+    sourceContractIds: [],
+  }],
+  ['1623', {
+    mergeCommitSha: '6b0edb03415839ef6617f39df387a383f8464399',
+    diffSha256: 'e29c1d929ccf2f1c1eae634d6027c791fdac48e9aff254e920646340740a9664',
+    diffBytes: 35492,
+    labels: ['area/connectors', 'area/server', 'ci/unit', 'kind/refactor'],
+    changedPaths: [
+      'server/qbot-core/tools/web/builtin-web-budgets.mjs',
+      'server/qbot-core/tools/web/builtin-web-crawl.mjs',
+      'server/qbot-core/tools/web/builtin-web-html-extraction.mjs',
+      'server/qbot-core/tools/web/builtin-web-html-parsing.mjs',
+      'server/qbot-core/tools/web/builtin-web-pdf.mjs',
+      'server/qbot-core/tools/web/builtin-web-representation-targets.mjs',
+      'server/qbot-core/tools/web/builtin-web-tools.mjs',
+      'server/qbot-core/tools/web/builtin-web-transport.mjs',
+    ],
+    directCaseIds: [
+      'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      'SIT-CONN-016',
+    ],
+    sourceContractIds: [],
+  }],
+  ['1610', {
+    mergeCommitSha: '87b6f9110b257c79e5209c01f9f4104f658e430f',
+    diffSha256: 'eade0ca967d94e54845bb233a9ed756ec7fa743f6fe94ed6d65c702bf4126ece',
+    diffBytes: 53523,
+    labels: [
+      'area/e2e', 'area/ui', 'ci/build-ui', 'ci/e2e-local', 'ci/unit', 'e2e-suite/contract',
+      'e2e/assistant-chat', 'e2e/ui-shell', 'kind/enhancement', 'milestone/v1', 'platform/mac',
+      'sprint/2026-09-10', 'status/ready-for-review',
+    ],
+    changedPaths: [
+      'scripts/ci/policy/e2e-selection.test.mjs',
+      'scripts/ci/policy/pipeline-policy-catalog.json',
+      'scripts/ci/unit/node-unit-service-tests.json',
+      'src/.architecture.yaml',
+      'src/ComposerInlineSkillInput.tsx',
+      'src/composer-edit-events.ts',
+      'src/composer-edit-history.ts',
+      'test/e2e/support/composer-ime-input.mjs',
+      'test/e2e/support/module-suites.mjs',
+      'test/e2e/local.spec.mjs',
+      'test/unit/ui/composer-edit-history.test.mjs',
+      'test/unit/ui/composer-paste-attachments.test.mjs',
+      'test/unit/ui/composer-reference-store.test.mjs',
+    ],
+    directCaseIds: [
+      'BETA-CHAT-007', 'BETA-HOST-003', 'BETA-INIT-001',
+      'MRSMOKE-ACT-001', 'MRSMOKE-ART-001', 'MRSMOKE-AUTH-001', 'MRSMOKE-AUTO-001',
+      'MRSMOKE-CHART-001', 'MRSMOKE-ENTRY-001', 'MRSMOKE-FAIL-001', 'MRSMOKE-NAV-001',
+      'MRSMOKE-ROUTE-001', 'MRSMOKE-SKILL-001', 'MRSMOKE-WEB-001', 'MRSMOKE-WEB-002',
+      'SIT-SKILL-007',
+    ],
+    sourceContractIds: [],
+  }],
 ]);
 const DIRECT_E2E_MR_CASE_CONTRACTS = new Map([
   ['1523', ['MRSMOKE-WEB-001', 'MRSMOKE-WEB-002', 'BETA-CHAT-005', 'SIT-CONN-019']],
@@ -848,7 +1087,7 @@ const EXACT_STATIC_MR_CONTRACTS = new Map([
       '.gitlab-ci.yml',
     ],
   }],
-  ...['1608', '1609', '1614', '1554', '1607', '1616', '1613']
+  ...['1608', '1609', '1614', '1554', '1607', '1616', '1613', '1617', '1615', '1545']
     .map((iid) => [iid, R16_LATEST_MR_METADATA_CONTRACTS.get(iid)]),
 ]);
 const REQUIRED_SOURCE_CONTRACTS_BY_MR = new Map([
@@ -2969,7 +3208,18 @@ export function validateExactR16LatestMrMetadataContract(
   if (asString(mr?.commit) !== contract.mergeCommitSha) failures.push('commit_mismatch');
   if (asString(mr?.merge_commit_sha) !== contract.mergeCommitSha) failures.push('merge_commit_sha_mismatch');
   if (asString(mr?.diff_sha256) !== contract.diffSha256) failures.push('diff_sha256_mismatch');
+  if (contract.diffBytes !== undefined
+    && (!Number.isSafeInteger(mr?.diff_bytes) || mr.diff_bytes !== contract.diffBytes)) {
+    failures.push('diff_bytes_mismatch');
+  }
+  if (contract.labels !== undefined && !sameOrderedValues(mr?.labels, contract.labels)) {
+    failures.push('labels_mismatch');
+  }
   if (!sameOrderedValues(mr?.changed_paths, contract.changedPaths)) failures.push('changed_paths_mismatch');
+  if (contract.directCaseIds !== undefined
+    && !sameOrderedValues(mr?.impact?.direct_case_ids, contract.directCaseIds)) {
+    failures.push('direct_case_ids_mismatch');
+  }
   if (!sameOrderedValues(actualSourceContractIds, contract.sourceContractIds)) {
     failures.push('source_contract_ids_mismatch');
   }
@@ -3048,7 +3298,7 @@ function validateCasebookDesignMr1552BlockedException(report) {
   rejectUnless(report?.policy?.metadata_read_only === true, 'metadata_not_read_only');
   rejectUnless(report?.policy?.require_gitlab_metadata === true, 'gitlab_metadata_not_required');
   rejectUnless(apiFreshness?.mode === 'gitlab-api', 'freshness_mode_not_gitlab_api');
-  rejectUnless(apiFreshness?.verified === false, 'freshness_decision_not_isolated_blocked');
+  rejectUnless(apiFreshness?.verified === true, 'api_freshness_not_verified');
   rejectUnless(apiFreshness?.branch === expectedBranch, 'freshness_branch_mismatch');
   rejectUnless(/^[a-f0-9]{40}$/iu.test(releaseHead), 'release_head_invalid');
   rejectUnless(apiFreshness?.branch_head_before === releaseHead, 'branch_head_before_mismatch');
@@ -3220,37 +3470,13 @@ export function validateCasebookDesignReleaseIntake(report, validationOptions = 
     ? validateMr1592BlockingRiskV5Ready(report)
     : { ok: true, failures: [] };
   if (readyValidation.ok && mr1592Validation.ok) return { ok: true, acceptance: 'READY', failures: [] };
-  if (includesMr1592) {
-    return {
-      ok: false,
-      acceptance: 'REJECTED',
-      failures: unique([
-        ...readyValidation.failures.map((failure) => `intake:${failure}`),
-        ...mr1592Validation.failures.map((failure) => `mr1592:${failure}`),
-      ]),
-    };
-  }
-  if (report?.decision === 'READY') {
-    return {
-      ok: false,
-      acceptance: 'REJECTED',
-      failures: unique(readyValidation.failures.map((failure) => `intake:${failure}`)),
-    };
-  }
-  const structuralValidation = validateQworkReleaseIntake(report, {
-    ...validationOptions,
-    requireReady: false,
-    requireFreshRef: false,
-  });
-  const blockedException = validateCasebookDesignMr1552BlockedException(report);
-  const failures = unique([
-    ...structuralValidation.failures.map((failure) => `intake:${failure}`),
-    ...blockedException.failures.map((failure) => `design_exception:${failure}`),
-  ]);
   return {
-    ok: structuralValidation.ok && blockedException.ok,
-    acceptance: structuralValidation.ok && blockedException.ok ? 'BLOCKED_MR1552_DESIGN_ONLY' : 'REJECTED',
-    failures,
+    ok: false,
+    acceptance: 'REJECTED',
+    failures: unique([
+      ...readyValidation.failures.map((failure) => `intake:${failure}`),
+      ...mr1592Validation.failures.map((failure) => `mr1592:${failure}`),
+    ]),
   };
 }
 
@@ -4523,6 +4749,7 @@ async function main() {
     '发布判定', '源码依据',
   ];
   const outputFile = path.join(outputDir, OUTPUT_NAME);
+  workbook.recalculate();
   const xlsx = await SpreadsheetFile.exportXlsx(workbook);
   await xlsx.save(outputFile);
   const auditedArtifact = stableRegularFileSnapshot(outputFile, '导出后 runtime audit Casebook artifact');

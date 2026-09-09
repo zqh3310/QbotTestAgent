@@ -389,6 +389,45 @@ function functionHasIdentifierWrite(functionNode, protectedNames) {
   ) > 0;
 }
 
+function identifierReferenceNodes(root, name) {
+  const bindings = new Set();
+  visit(root, (node) => {
+    if (node.type === 'VariableDeclarator') {
+      visit(node.id, (binding) => {
+        if (identifier(binding, name)) bindings.add(binding);
+      });
+    }
+    if (node.type === 'CatchClause') {
+      visit(node.param, (binding) => {
+        if (identifier(binding, name)) bindings.add(binding);
+      });
+    }
+    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
+      if (identifier(node.id, name)) bindings.add(node.id);
+      for (const parameter of node.params || []) {
+        visit(parameter, (binding) => {
+          if (identifier(binding, name)) bindings.add(binding);
+        });
+      }
+    }
+    if (['ClassDeclaration', 'ClassExpression'].includes(node.type) && identifier(node.id, name)) {
+      bindings.add(node.id);
+    }
+  });
+  const references = [];
+  visit(root, (node, parent) => {
+    if (!identifier(node, name) || bindings.has(node)) return;
+    if (parent?.type === 'MemberExpression' && parent.property === node && !parent.computed) return;
+    if (parent?.type === 'Property' && parent.key === node && parent.value !== node
+      && !parent.computed) return;
+    if (parent?.type === 'MethodDefinition' && parent.key === node && !parent.computed) return;
+    if (parent?.type === 'LabeledStatement' || parent?.type === 'BreakStatement'
+      || parent?.type === 'ContinueStatement') return;
+    references.push(node);
+  });
+  return references;
+}
+
 function topLevelBindingCount(program, name) {
   let count = 0;
   for (const statement of program?.body || []) {
@@ -2075,29 +2114,291 @@ function currentCancellationRequestAstContract(request) {
   ]);
 }
 
+function currentCancellationSettlementAstContract(settlement) {
+  const expectedParameters = [
+    'cancellationTimeoutMs', 'child', 'deadlineCancellationTimeoutMs', 'deadlineMs',
+    'now', 'onCancellationTimeout', 'onDeadline', 'operation', 'reject', 'resolve',
+    'terminateChild',
+  ].sort();
+  const timeoutBindingNames = [
+    'boundedCancellationTimeoutMs', 'boundedDeadlineCancellationTimeoutMs',
+    'boundedDeadlineMs', 'requestedCancellationTimeoutMs',
+    'requestedDeadlineCancellationTimeoutMs', 'requestedDeadlineMs',
+  ];
+  const localBindingNames = ['armDeadline', 'cancellationTimer', 'clear', 'deadline'];
+  const parameter = settlement.params.length === 1 ? settlement.params[0] : null;
+  if (!objectPatternBindsExactly(parameter, expectedParameters, {
+    propertyDefaults: {
+      deadlineCancellationTimeoutMs: (value) => identifier(value, 'cancellationTimeoutMs'),
+      now: (value) => member(value, ['Date', 'now']),
+    },
+    requiredPropertyDefaults: ['deadlineCancellationTimeoutMs', 'now'],
+  })
+    || functionHasNestedBinding(settlement, [
+      ...expectedParameters, ...timeoutBindingNames, ...localBindingNames,
+      'Date', 'Error', 'Math', 'Number', 'Object', 'clearTimeout', 'setTimeout',
+    ], { allowedDirectBindings: [...timeoutBindingNames, ...localBindingNames] })
+    || functionHasIdentifierWrite(settlement, [
+      ...expectedParameters, ...timeoutBindingNames, 'Date', 'Error', 'Math', 'Number',
+      'Object', 'clear', 'armDeadline', 'clearTimeout', 'setTimeout',
+    ])) return false;
+
+  if (!safeTimerTimeoutBinding(settlement, {
+    sourceName: 'deadlineMs', requestedName: 'requestedDeadlineMs',
+    boundedName: 'boundedDeadlineMs', maximum: 2_147_483_646,
+  }) || !safeTimerTimeoutBinding(settlement, {
+    sourceName: 'cancellationTimeoutMs', requestedName: 'requestedCancellationTimeoutMs',
+    boundedName: 'boundedCancellationTimeoutMs', maximum: 2_147_483_647,
+  }) || !safeTimerTimeoutBinding(settlement, {
+    sourceName: 'deadlineCancellationTimeoutMs',
+    requestedName: 'requestedDeadlineCancellationTimeoutMs',
+    boundedName: 'boundedDeadlineCancellationTimeoutMs', maximum: 2_147_483_647,
+  })) return false;
+
+  const cancellationTimer = directDeclarator(settlement.body, 'cancellationTimer', 'let');
+  const deadline = directDeclarator(settlement.body, 'deadline', 'let');
+  const clear = directDeclarator(settlement.body, 'clear', 'const');
+  const armDeadline = directDeclarator(settlement.body, 'armDeadline', 'const');
+  if (!cancellationTimer || !deadline
+    || cancellationTimer.statement !== deadline.statement
+    || !literal(cancellationTimer.declaration.init, null)
+    || !literal(deadline.declaration.init, null) || !clear || !armDeadline) return false;
+
+  const clearFunction = unwrap(clear.declaration.init);
+  if (clearFunction?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(clearFunction, [])
+    || clearFunction.body?.type !== 'BlockStatement'
+    || clearFunction.body.body.length !== 2
+    || !directCallStatement(clearFunction.body.body[0], ['clearTimeout'], [
+      (value) => identifier(value, 'deadline'),
+    ])
+    || !directCallStatement(clearFunction.body.body[1], ['clearTimeout'], [
+      (value) => identifier(value, 'cancellationTimer'),
+    ])) return false;
+
+  const armDeadlineFunction = unwrap(armDeadline.declaration.init);
+  if (armDeadlineFunction?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(armDeadlineFunction, [])
+    || armDeadlineFunction.body?.type !== 'BlockStatement'
+    || armDeadlineFunction.body.body.length !== 3
+    || !directCallStatement(armDeadlineFunction.body.body[0], ['clearTimeout'], [
+      (value) => identifier(value, 'deadline'),
+    ])) return false;
+  const deadlineAssignments = directAssignmentStatements(
+    armDeadlineFunction.body, ['deadline'],
+  );
+  if (deadlineAssignments.length !== 1) return false;
+  const deadlineCall = unwrap(deadlineAssignments[0].expression.right);
+  if (!call(deadlineCall, ['setTimeout']) || deadlineCall.arguments.length !== 2
+    || !binary(
+      deadlineCall.arguments[1], '+',
+      (value) => identifier(value, 'boundedDeadlineMs'),
+      (value) => literal(value, 1),
+    )
+    || !directCallStatement(armDeadlineFunction.body.body[2], ['deadline', 'unref'], [])) {
+    return false;
+  }
+
+  const deadlineCallback = unwrap(deadlineCall.arguments[0]);
+  if (deadlineCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(deadlineCallback, [])
+    || deadlineCallback.body?.type !== 'BlockStatement'
+    || deadlineCallback.body.body.length !== 5
+    || !directCallStatement(deadlineCallback.body.body[0], ['clearTimeout'], [
+      (value) => identifier(value, 'deadline'),
+    ])) return false;
+  const deadlineReset = unwrap(deadlineCallback.body.body[1]?.expression);
+  const startBranch = deadlineCallback.body.body[4];
+  if (deadlineReset?.type !== 'AssignmentExpression' || deadlineReset.operator !== '='
+    || !identifier(deadlineReset.left, 'deadline') || !literal(deadlineReset.right, null)
+    || !directCallStatement(deadlineCallback.body.body[2], ['onDeadline'], [])
+    || !directCallStatement(deadlineCallback.body.body[3], ['reject'], [
+      (value) => executionDeadlineError(value),
+    ])
+    || startBranch?.type !== 'IfStatement'
+    || !binary(
+      startBranch.test, '===',
+      (value) => identifier(value, 'operation'),
+      (value) => literal(value, 'execution.start'),
+    )
+    || startBranch.consequent?.type !== 'BlockStatement'
+    || startBranch.consequent.body.length !== 2
+    || !directCallStatement(startBranch.alternate, ['clear'], [])) return false;
+  const deadlineCancellationAssignment = unwrap(
+    startBranch.consequent.body[0]?.expression,
+  );
+  if (deadlineCancellationAssignment?.type !== 'AssignmentExpression'
+    || deadlineCancellationAssignment.operator !== '='
+    || !identifier(deadlineCancellationAssignment.left, 'cancellationTimer')) return false;
+  const deadlineCancellationCall = unwrap(deadlineCancellationAssignment.right);
+  if (!call(deadlineCancellationCall, ['setTimeout'])
+    || deadlineCancellationCall.arguments.length !== 2
+    || !identifier(
+      deadlineCancellationCall.arguments[1], 'boundedDeadlineCancellationTimeoutMs',
+    )
+    || !directCallStatement(
+      startBranch.consequent.body[1], ['cancellationTimer', 'unref'], [],
+    )) return false;
+  const deadlineCancellationCallback = unwrap(deadlineCancellationCall.arguments[0]);
+  if (deadlineCancellationCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(deadlineCancellationCallback, [])
+    || deadlineCancellationCallback.body?.type !== 'BlockStatement'
+    || deadlineCancellationCallback.body.body.length !== 2
+    || !directCallStatement(
+      deadlineCancellationCallback.body.body[0], ['onCancellationTimeout'], [],
+    )) return false;
+  const fallbackTermination = deadlineCancellationCallback.body.body[1];
+  if (fallbackTermination?.type !== 'IfStatement'
+    || !unary(
+      fallbackTermination.test, '!', (value) => identifier(value, 'onCancellationTimeout'),
+    )
+    || !directCallStatement(fallbackTermination.consequent, ['terminateChild'], [
+      (value) => identifier(value, 'child'),
+      (value) => literal(value, 'cancel-timeout'),
+    ], { void_: true })) return false;
+
+  const initialArm = settlement.body.body.filter((statement) => directCallStatement(
+    statement, ['armDeadline'], [],
+  ));
+  const returned = returnedObject(settlement);
+  let armCancellationFunction = null;
+  let renewDeadlineFunction = null;
+  const returnedValid = returned && exactObject(returned, {
+    armCancellation: (value) => {
+      armCancellationFunction = unwrap(value);
+      return armCancellationFunction?.type === 'ArrowFunctionExpression'
+        && !armCancellationFunction.async
+        && exactIdentifierParameters(armCancellationFunction, [])
+        && armCancellationFunction.body?.type === 'BlockStatement';
+    },
+    renewDeadline: (value) => {
+      renewDeadlineFunction = unwrap(value);
+      return renewDeadlineFunction?.type === 'ArrowFunctionExpression'
+        && !renewDeadlineFunction.async
+        && exactIdentifierParameters(renewDeadlineFunction, [])
+        && renewDeadlineFunction.body?.type === 'BlockStatement';
+    },
+    resolve: (value) => {
+      value = unwrap(value);
+      return value?.type === 'ArrowFunctionExpression'
+        && exactIdentifierParameters(value, ['value'])
+        && value.body?.type === 'BlockStatement' && value.body.body.length === 2
+        && directCallStatement(value.body.body[0], ['clear'], [])
+        && directCallStatement(value.body.body[1], ['resolve'], [
+          (entry) => identifier(entry, 'value'),
+        ]);
+    },
+    reject: (value) => {
+      value = unwrap(value);
+      return value?.type === 'ArrowFunctionExpression'
+        && exactIdentifierParameters(value, ['error'])
+        && value.body?.type === 'BlockStatement' && value.body.body.length === 2
+        && directCallStatement(value.body.body[0], ['clear'], [])
+        && directCallStatement(value.body.body[1], ['reject'], [
+          (entry) => identifier(entry, 'error'),
+        ]);
+    },
+  });
+  if (!returnedValid || initialArm.length !== 1
+    || armCancellationFunction.body.body.length !== 3
+    || renewDeadlineFunction.body.body.length !== 2) return false;
+  const cancellationGuard = armCancellationFunction.body.body[0];
+  const cancellationAssignment = unwrap(
+    armCancellationFunction.body.body[1]?.expression,
+  );
+  if (cancellationGuard?.type !== 'IfStatement'
+    || !identifier(cancellationGuard.test, 'cancellationTimer')
+    || !bareReturn(cancellationGuard.consequent)
+    || cancellationAssignment?.type !== 'AssignmentExpression'
+    || cancellationAssignment.operator !== '='
+    || !identifier(cancellationAssignment.left, 'cancellationTimer')) return false;
+  const cancellationCall = unwrap(cancellationAssignment.right);
+  const cancellationCallback = unwrap(cancellationCall?.arguments?.[0]);
+  if (!call(cancellationCall, ['setTimeout']) || cancellationCall.arguments.length !== 2
+    || cancellationCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(cancellationCallback, [])
+    || !directCallStatement(
+      { type: 'ExpressionStatement', expression: cancellationCallback.body },
+      ['terminateChild'], [
+        (value) => identifier(value, 'child'),
+        (value) => literal(value, 'cancel-timeout'),
+      ], { void_: true },
+    )
+    || !identifier(cancellationCall.arguments[1], 'boundedCancellationTimeoutMs')
+    || !directCallStatement(
+      armCancellationFunction.body.body[2], ['cancellationTimer', 'unref'], [],
+    )) return false;
+  if (!directCallStatement(renewDeadlineFunction.body.body[0], ['armDeadline'], [])
+    || !exactReturn(renewDeadlineFunction.body.body[1], (value) => binary(
+      value, '+',
+      (left) => call(left, ['now'], []),
+      (right) => identifier(right, 'boundedDeadlineMs'),
+    ))) return false;
+
+  const timeoutCalls = [];
+  visit(settlement.body, (node) => {
+    if (call(node, ['setTimeout'])) timeoutCalls.push(node);
+  });
+  if (timeoutCalls.length !== 3
+    || !timeoutCalls.includes(deadlineCall)
+    || !timeoutCalls.includes(deadlineCancellationCall)
+    || !timeoutCalls.includes(cancellationCall)
+    || countAssignments(settlement, (left) => identifier(left, 'deadline')) !== 2
+    || countAssignments(settlement, (left) => identifier(left, 'cancellationTimer')) !== 2) {
+    return false;
+  }
+  const returnedStatement = settlement.body.body.filter(
+    (statement) => statement.type === 'ReturnStatement',
+  );
+  return returnedStatement.length === 1 && directStatementsOrderedAndReachable(settlement.body, [
+    directDeclarator(settlement.body, 'requestedDeadlineMs', 'const').statement,
+    directDeclarator(settlement.body, 'boundedDeadlineMs', 'const').statement,
+    directDeclarator(settlement.body, 'requestedCancellationTimeoutMs', 'const').statement,
+    directDeclarator(settlement.body, 'boundedCancellationTimeoutMs', 'const').statement,
+    directDeclarator(
+      settlement.body, 'requestedDeadlineCancellationTimeoutMs', 'const',
+    ).statement,
+    directDeclarator(
+      settlement.body, 'boundedDeadlineCancellationTimeoutMs', 'const',
+    ).statement,
+    cancellationTimer.statement, clear.statement, armDeadline.statement,
+    initialArm[0], returnedStatement[0],
+  ]);
+}
+
 function cancellationAstContract(source) {
   const program = parseProgram(source);
   const request = topFunction(program, 'requestExecutionWorkerTurn');
   const settlement = topFunction(program, 'createExecutionWorkerRequestSettlement');
   if (!request || !settlement
     || !stableProgramIdentifiers(program, [
-      'Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout',
+      'Date', 'Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout',
       'createExecutionWorkerRequestSettlement', 'requestExecutionWorkerTurn', 'setTimeout',
-    ], { globals: ['Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout', 'setTimeout'] })
+    ], { globals: [
+      'Date', 'Error', 'Math', 'Number', 'Object', 'Promise', 'clearTimeout', 'setTimeout',
+    ] })
     || !(legacyCancellationRequestAstContract(request)
       || currentCancellationRequestAstContract(request))) return false;
+
+  if (currentCancellationSettlementAstContract(settlement)) return true;
 
   const settlementParameter = settlement.params.length === 1 ? settlement.params[0] : null;
   const expectedParameters = [
     'cancellationTimeoutMs', 'child', 'deadlineMs', 'onDeadline',
     'operation', 'reject', 'resolve', 'terminateChild',
   ].sort();
+  const timeoutBindingNames = [
+    'boundedCancellationTimeoutMs', 'boundedDeadlineMs',
+    'requestedCancellationTimeoutMs', 'requestedDeadlineMs',
+  ];
   if (!objectPatternBindsExactly(settlementParameter, expectedParameters)
     || functionHasNestedBinding(settlement, [
-      ...expectedParameters, 'Error', 'Math', 'clearTimeout', 'setTimeout',
-    ])
+      ...expectedParameters, ...timeoutBindingNames,
+      'Error', 'Math', 'Number', 'clearTimeout', 'setTimeout',
+    ], { allowedDirectBindings: timeoutBindingNames })
     || functionHasIdentifierWrite(settlement, [
-      ...expectedParameters, 'Error', 'Math', 'clearTimeout', 'setTimeout',
+      ...expectedParameters, ...timeoutBindingNames,
+      'Error', 'Math', 'Number', 'clearTimeout', 'setTimeout',
     ])
     || functionHasNestedBinding(settlement, ['cancellationTimer'], {
       allowedDirectBindings: ['cancellationTimer'],
@@ -2106,7 +2407,15 @@ function cancellationAstContract(source) {
   const clear = directDeclarator(settlement.body, 'clear', 'const');
   const deadline = directDeclarator(settlement.body, 'deadline', 'const');
   if (!cancellationTimer || !literal(cancellationTimer.declaration.init, null)
-    || !clear || !deadline) return false;
+    || !clear || !deadline
+    || !safeTimerTimeoutBinding(settlement, {
+      sourceName: 'deadlineMs', requestedName: 'requestedDeadlineMs',
+      boundedName: 'boundedDeadlineMs', maximum: 2_147_483_646,
+    })
+    || !safeTimerTimeoutBinding(settlement, {
+      sourceName: 'cancellationTimeoutMs', requestedName: 'requestedCancellationTimeoutMs',
+      boundedName: 'boundedCancellationTimeoutMs', maximum: 2_147_483_647,
+    })) return false;
   const clearFunction = unwrap(clear.declaration.init);
   if (clearFunction?.type !== 'ArrowFunctionExpression'
     || !exactIdentifierParameters(clearFunction, [])
@@ -2125,7 +2434,7 @@ function cancellationAstContract(source) {
     || deadlineCall.arguments.length !== 2
     || !binary(
       deadlineCall.arguments[1], '+',
-      (value) => identifier(value, 'deadlineMs'),
+      (value) => identifier(value, 'boundedDeadlineMs'),
       (value) => literal(value, 1),
     )) return false;
   const deadlineCallback = unwrap(deadlineCall.arguments[0]);
@@ -2169,10 +2478,7 @@ function cancellationAstContract(source) {
       const timer = unwrap(expression.right);
       if (timer?.type !== 'CallExpression' || !member(timer.callee, ['setTimeout'])
         || timer.arguments.length !== 2
-        || !call(timer.arguments[1], ['Math', 'max'], [
-          (entry) => literal(entry, 1),
-          (entry) => identifier(entry, 'cancellationTimeoutMs'),
-        ])) return false;
+        || !identifier(timer.arguments[1], 'boundedCancellationTimeoutMs')) return false;
       const callback = unwrap(timer.arguments[0]);
       return callback?.type === 'ArrowFunctionExpression'
         && callback.body?.type === 'BlockStatement'
@@ -2207,7 +2513,13 @@ function cancellationAstContract(source) {
         ]);
     },
   })) return false;
-  return true;
+  return directStatementsOrderedAndReachable(settlement.body, [
+    directDeclarator(settlement.body, 'requestedDeadlineMs', 'const').statement,
+    directDeclarator(settlement.body, 'boundedDeadlineMs', 'const').statement,
+    directDeclarator(settlement.body, 'requestedCancellationTimeoutMs', 'const').statement,
+    directDeclarator(settlement.body, 'boundedCancellationTimeoutMs', 'const').statement,
+    cancellationTimer.statement, clear.statement, deadline.statement,
+  ]);
 }
 
 function graceTimerPromise(node, timeoutName) {
@@ -2264,7 +2576,7 @@ function currentTerminationCleanup(node) {
   );
 }
 
-function currentTerminationDeadline(body) {
+function currentTerminationDeadline(body, timeoutName) {
   const timer = directDeclarator(body, 'timer', 'let');
   const deadline = directDeclarator(body, 'deadline', 'const');
   if (!timer || !literal(timer.declaration.init, null) || !deadline
@@ -2282,63 +2594,8 @@ function currentTerminationDeadline(body) {
   const timeout = unwrap(assignment.right);
   return call(timeout, ['setTimeout'], [
     (entry) => identifier(entry, 'resolveDeadline'),
-    (entry) => finiteBoundedTimeoutExpression(entry, 'cleanupGraceMs', { fallback: 1 }),
+    (entry) => identifier(entry, timeoutName),
   ]);
-}
-
-function finitePositiveTimeoutExpression(node, sourceName, fallback) {
-  node = unwrap(node);
-  return node?.type === 'ConditionalExpression'
-    && call(node.test, ['Number', 'isFinite'], [
-      (entry) => identifier(entry, sourceName)
-        || call(entry, ['Number'], [
-          (argument) => identifier(argument, sourceName),
-        ]),
-    ])
-    && call(node.consequent, ['Math', 'max'], [
-      (entry) => literal(entry, 1),
-      (entry) => identifier(entry, sourceName)
-        || call(entry, ['Number'], [
-          (argument) => identifier(argument, sourceName),
-        ]),
-    ])
-    && (typeof fallback === 'function' ? fallback(node.alternate) : literal(node.alternate, fallback))
-    && (typeof fallback === 'function' || (Number.isFinite(fallback) && fallback > 0));
-}
-
-function finiteBoundedTimeoutExpression(node, sourceName, {
-  fallback = 1,
-  maximum = null,
-} = {}) {
-  node = unwrap(node);
-  if (!call(node, ['Math', 'min']) || node.arguments.length !== 2) return false;
-  const fallbackMatcher = typeof fallback === 'function'
-    ? fallback
-    : (entry) => literal(entry, fallback)
-      && Number.isSafeInteger(fallback) && fallback > 0 && fallback <= 2_147_483_647;
-  const maximumMatcher = typeof maximum === 'function'
-    ? maximum
-    : (entry) => {
-      entry = unwrap(entry);
-      return entry?.type === 'Literal'
-        && typeof entry.value === 'number'
-        && Number.isSafeInteger(entry.value)
-        && entry.value > 0
-        && entry.value <= 2_147_483_647;
-    };
-  const lowerBoundedMatcher = (entry) => call(entry, ['Math', 'max'], [
-    (minimum) => literal(minimum, 1),
-    (candidate) => logical(
-      candidate,
-      '||',
-      (coerced) => call(coerced, ['Number'], [
-        (source) => identifier(source, sourceName),
-      ]),
-      fallbackMatcher,
-    ),
-  ]);
-  return (maximumMatcher(node.arguments[0]) && lowerBoundedMatcher(node.arguments[1]))
-    || (lowerBoundedMatcher(node.arguments[0]) && maximumMatcher(node.arguments[1]));
 }
 
 function deadlineExpiredIdentity(node, candidateName) {
@@ -2359,8 +2616,11 @@ function safeTimerTimeoutBinding(functionNode, {
   sourceName,
   fallback = 1,
 }) {
-  if (!Number.isSafeInteger(maximum) || maximum <= 0
-    || !Number.isSafeInteger(fallback) || fallback <= 0 || fallback > maximum
+  const maximumIsMatcher = typeof maximum === 'function';
+  const fallbackIsMatcher = typeof fallback === 'function';
+  if ((!maximumIsMatcher && (!Number.isSafeInteger(maximum) || maximum <= 0))
+    || (!fallbackIsMatcher && (!Number.isSafeInteger(fallback) || fallback <= 0
+      || (!maximumIsMatcher && fallback > maximum)))
     || functionHasNestedBinding(functionNode, [requestedName, boundedName], {
       allowedDirectBindings: [requestedName, boundedName],
     })
@@ -2374,6 +2634,9 @@ function safeTimerTimeoutBinding(functionNode, {
     || !directStatementsOrderedAndReachable(functionNode.body, [
       requested.statement, bounded.statement,
     ])) return false;
+  const sourceArgument = unwrap(requested.declaration.init)?.arguments?.[0];
+  const sourceReferences = identifierReferenceNodes(functionNode, sourceName);
+  if (sourceReferences.length !== 1 || sourceReferences[0] !== sourceArgument) return false;
   const value = unwrap(bounded.declaration.init);
   if (value?.type !== 'ConditionalExpression'
     || !logical(
@@ -2389,11 +2652,15 @@ function safeTimerTimeoutBinding(functionNode, {
         (entry) => literal(entry, 0),
       ),
     )
-    || !literal(value.alternate, fallback)) return false;
+    || !(fallbackIsMatcher ? fallback(value.alternate) : literal(value.alternate, fallback))) {
+    return false;
+  }
   const boundedValue = unwrap(value.consequent);
   if (!call(boundedValue, ['Math', 'min']) || boundedValue.arguments.length !== 2) return false;
   const requestedMatcher = (entry) => identifier(entry, requestedName);
-  const maximumMatcher = (entry) => literal(entry, maximum);
+  const maximumMatcher = maximumIsMatcher
+    ? maximum
+    : (entry) => literal(entry, maximum);
   return (requestedMatcher(boundedValue.arguments[0]) && maximumMatcher(boundedValue.arguments[1]))
     || (maximumMatcher(boundedValue.arguments[0]) && requestedMatcher(boundedValue.arguments[1]));
 }
@@ -4245,6 +4512,7 @@ function terminationAstContract(source) {
   const returns = creator.body.body.filter((statement) => statement.type === 'ReturnStatement');
   if (returns.length !== 1) return false;
   const terminator = unwrap(returns[0].argument);
+  const timeoutBindingNames = ['requestedCleanupGraceMs', 'boundedCleanupGraceMs'];
   if (terminator?.type !== 'ArrowFunctionExpression'
     || !exactParameterList(terminator, [
       (value) => identifier(value, 'target'),
@@ -4256,11 +4524,17 @@ function terminationAstContract(source) {
     || functionHasNestedBinding(terminator, [
       'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Math', 'Number',
       'Promise', 'clearTimeout', 'reason', 'setTimeout', 'target', 'WeakMap',
-    ])
+      ...timeoutBindingNames,
+    ], { allowedDirectBindings: timeoutBindingNames })
     || functionHasIdentifierWrite(terminator, [
       'cleanupGraceMs', 'flights', 'processId', 'processTreeKiller', 'Math', 'Number',
       'Promise', 'clearTimeout', 'reason', 'setTimeout', 'target', 'WeakMap',
-    ])) return false;
+      ...timeoutBindingNames,
+    ])
+    || !safeTimerTimeoutBinding(terminator, {
+      sourceName: 'cleanupGraceMs', requestedName: 'requestedCleanupGraceMs',
+      boundedName: 'boundedCleanupGraceMs', maximum: 2_147_483_647,
+    })) return false;
   const body = terminator.body;
   const targetGuard = body.body.filter((statement) => (
     statement.type === 'IfStatement'
@@ -4284,8 +4558,15 @@ function terminationAstContract(source) {
     || !call(pid.declaration.init, ['processId'], [
       (value) => member(value, ['target', 'pid']),
     ]) || !cleanup || !flight) return false;
+  const requestedCleanupGraceMs = directDeclarator(
+    body, 'requestedCleanupGraceMs', 'const',
+  );
+  const boundedCleanupGraceMs = directDeclarator(
+    body, 'boundedCleanupGraceMs', 'const',
+  );
   if (!directStatementsOrderedAndReachable(body, [
-    targetGuard[0], existing.statement, existingGuard[0], pid.statement,
+    targetGuard[0], existing.statement, existingGuard[0],
+    requestedCleanupGraceMs.statement, boundedCleanupGraceMs.statement, pid.statement,
   ])) return false;
 
   const cleanupChain = unwrap(cleanup.declaration.init);
@@ -4317,9 +4598,9 @@ function terminationAstContract(source) {
     || race.arguments[0]?.type !== 'ArrayExpression'
     || race.arguments[0].elements.length !== 2
     || !identifier(race.arguments[0].elements[0], 'cleanup')
-    || !(graceTimerPromise(race.arguments[0].elements[1], 'cleanupGraceMs')
+    || !(graceTimerPromise(race.arguments[0].elements[1], 'boundedCleanupGraceMs')
       || (identifier(race.arguments[0].elements[1], 'deadline')
-        && currentTerminationDeadline(body)))) return false;
+        && currentTerminationDeadline(body, 'boundedCleanupGraceMs')))) return false;
   const afterRace = unwrap(flightChain.arguments[0]);
   const legacyAfterRace = afterRace?.type === 'ArrowFunctionExpression'
     && exactIdentifierParameters(afterRace, [])
@@ -4790,10 +5071,250 @@ function currentSupervisorIdentityMatcher(node) {
   ));
 }
 
-function currentSupervisorAstContract(source) {
+function exactSupervisorDecodeFailureLog(statement) {
+  if (statement?.type !== 'ExpressionStatement') return false;
+  return call(statement.expression, ['logger', 'error'], [
+    (value) => literal(value, '[execution-worker] rejected message'),
+    (value) => exactObject(value, {
+      code: (entry) => member(entry, ['error', 'code']),
+    }),
+  ]);
+}
+
+function exactSupervisorDecodeFailureTermination(statement, { allowReturn = false } = {}) {
+  const argumentMatchers = [
+    (value) => identifier(value, 'child'),
+    (value) => literal(value, 'message-validation-failed'),
+  ];
+  return directCallStatement(
+    statement,
+    ['terminateChild'],
+    argumentMatchers,
+    { void_: true },
+  ) || (allowReturn && exactReturn(
+    statement,
+    (value) => call(value, ['terminateChild'], argumentMatchers),
+  ));
+}
+
+function supervisorDecodeFailureCatchContract(handler) {
+  if (handler?.type !== 'CatchClause'
+    || !identifier(handler.param, 'error')
+    || handler.body?.type !== 'BlockStatement'
+    || functionHasNestedBinding({ body: handler.body }, [
+      'child', 'error', 'logger', 'terminateChild',
+    ])
+    || functionHasIdentifierWrite({ body: handler.body }, [
+      'child', 'error', 'logger', 'terminateChild',
+    ])) return false;
+
+  let directChildKill = false;
+  visit(handler.body, (node) => {
+    if (directChildKill || unwrap(node)?.type !== 'CallExpression') return;
+    if (staticMemberPath(unwrap(node).callee).join('.') === 'child.kill') directChildKill = true;
+  });
+  if (directChildKill) return false;
+
+  const statements = handler.body.body;
+  const logAttempt = statements[0];
+  if (logAttempt?.type !== 'TryStatement'
+    || logAttempt.block?.body?.length !== 1
+    || !exactSupervisorDecodeFailureLog(logAttempt.block.body[0])
+    || !directStatementReachable(logAttempt.block, logAttempt.block.body[0])) return false;
+
+  if (!logAttempt.handler && logAttempt.finalizer) {
+    const finalizer = logAttempt.finalizer;
+    return statements.length === 2
+      && finalizer.body.length === 1
+      && exactSupervisorDecodeFailureTermination(finalizer.body[0])
+      && bareReturn(statements[1])
+      && directStatementReachable(finalizer, finalizer.body[0])
+      && directStatementsOrderedAndReachable(handler.body, [logAttempt, statements[1]]);
+  }
+
+  if (!logAttempt.handler || logAttempt.finalizer
+    || logAttempt.handler.param !== null
+    || logAttempt.handler.body?.body?.length !== 0) return false;
+  if (statements.length === 2) {
+    return statements[1].type === 'ReturnStatement'
+      && exactSupervisorDecodeFailureTermination(statements[1], { allowReturn: true })
+      && directStatementsOrderedAndReachable(handler.body, statements);
+  }
+  return statements.length === 3
+    && exactSupervisorDecodeFailureTermination(statements[1])
+    && bareReturn(statements[2])
+    && directStatementsOrderedAndReachable(handler.body, statements);
+}
+
+function heartbeatElapsedComparison(node, tickName, boundedName) {
+  return binary(
+    node,
+    '<',
+    (left) => binary(
+      left,
+      '-',
+      (entry) => call(entry, ['clock'], []),
+      (entry) => identifier(entry, tickName),
+    ),
+    (right) => identifier(right, boundedName),
+  );
+}
+
+function heartbeatWatchdogAstContract(source) {
+  const program = parseProgram(source);
+  const creator = topFunction(program, 'createExecutionWorkerHeartbeatWatchdog');
+  if (!creator || !exactParameterList(creator, [
+    (value) => objectPatternBindsExactly(value, [
+      'now', 'clock', 'timeoutMs', 'confirmationMs', 'isReady',
+      'shouldDeferTimeout', 'onTimeout',
+    ], {
+      propertyDefaults: {
+        clock: (entry) => identifier(entry, 'now'),
+        shouldDeferTimeout: (entry) => {
+          entry = unwrap(entry);
+          return entry?.type === 'ArrowFunctionExpression'
+            && exactIdentifierParameters(entry, [])
+            && literal(entry.body, false);
+        },
+      },
+      requiredPropertyDefaults: ['clock', 'shouldDeferTimeout'],
+    }),
+  ])
+    || !stableProgramIdentifiers(program, [
+      'Math', 'Number', 'Object', 'clearImmediate', 'clearTimeout',
+      'createExecutionWorkerHeartbeatWatchdog', 'setImmediate', 'setTimeout',
+    ], {
+      globals: [
+        'Math', 'Number', 'Object', 'clearImmediate', 'clearTimeout',
+        'setImmediate', 'setTimeout',
+      ],
+    })) return false;
+
+  const boundedNames = [
+    'requestedHeartbeatTimeoutMs', 'boundedHeartbeatTimeoutMs',
+    'requestedHeartbeatConfirmationMs', 'boundedHeartbeatConfirmationMs',
+  ];
+  const protectedNames = [
+    'clock', 'confirmationMs', 'isReady', 'now', 'onTimeout',
+    'shouldDeferTimeout', 'timeoutMs', 'Math', 'Number', 'setImmediate', 'setTimeout',
+    ...boundedNames,
+  ];
+  if (functionHasNestedBinding(creator, protectedNames, { allowedDirectBindings: boundedNames })
+    || functionHasIdentifierWrite(creator, protectedNames)
+    || !safeTimerTimeoutBinding(creator, {
+      sourceName: 'timeoutMs', requestedName: 'requestedHeartbeatTimeoutMs',
+      boundedName: 'boundedHeartbeatTimeoutMs', maximum: 2_147_483_646,
+      fallback: 15_000,
+    })
+    || !safeTimerTimeoutBinding(creator, {
+      sourceName: 'confirmationMs', requestedName: 'requestedHeartbeatConfirmationMs',
+      boundedName: 'boundedHeartbeatConfirmationMs', maximum: 2_147_483_646,
+      fallback: 15_000,
+    })) return false;
+
+  const scheduleBinding = directDeclarator(creator.body, 'schedule', 'const');
+  const schedule = unwrap(scheduleBinding?.declaration?.init);
+  const observeBinding = directDeclarator(creator.body, 'observe', 'const');
+  const observe = unwrap(observeBinding?.declaration?.init);
+  if (!scheduleBinding || schedule?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(schedule, []) || schedule.body?.type !== 'BlockStatement'
+    || schedule.body.body.length !== 2
+    || !directCallStatement(schedule.body.body[0], ['clear'], [])
+    || !observeBinding || observe?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(observe, []) || observe.body?.type !== 'BlockStatement') return false;
+
+  const timerAssignment = unwrap(schedule.body.body[1]?.expression);
+  const timerCall = unwrap(timerAssignment?.right);
+  if (schedule.body.body[1]?.type !== 'ExpressionStatement'
+    || timerAssignment?.type !== 'AssignmentExpression' || timerAssignment.operator !== '='
+    || !identifier(timerAssignment.left, 'timer')
+    || !call(timerCall, ['setTimeout']) || timerCall.arguments.length !== 2
+    || !binary(
+      timerCall.arguments[1],
+      '+',
+      (left) => {
+        left = unwrap(left);
+        return left?.type === 'ConditionalExpression'
+          && binary(
+            left.test,
+            '===',
+            (entry) => identifier(entry, 'suspectAt'),
+            (entry) => literal(entry, null),
+          )
+          && identifier(left.consequent, 'boundedHeartbeatTimeoutMs')
+          && identifier(left.alternate, 'boundedHeartbeatConfirmationMs');
+      },
+      (right) => literal(right, 1),
+    )) return false;
+  const timerCallback = unwrap(timerCall.arguments[0]);
+  if (timerCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(timerCallback, [])
+    || timerCallback.body?.type !== 'BlockStatement') return false;
+
+  const timeoutComparisons = [];
+  const confirmationComparisons = [];
+  const recursiveScheduleReturns = [];
+  const timeoutCalls = [];
+  const immediateCalls = [];
+  visit(creator.body, (node) => {
+    if (heartbeatElapsedComparison(
+      node, 'lastActivityTick', 'boundedHeartbeatTimeoutMs',
+    )) timeoutComparisons.push(node);
+    if (heartbeatElapsedComparison(
+      node, 'suspectAt', 'boundedHeartbeatConfirmationMs',
+    )) confirmationComparisons.push(node);
+    if (exactReturn(node, (value) => call(value, ['schedule'], []))) {
+      recursiveScheduleReturns.push(node);
+    }
+    if (call(node, ['setTimeout'])) timeoutCalls.push(node);
+    if (call(node, ['setImmediate'])) immediateCalls.push(node);
+  });
+  if (timeoutComparisons.length !== 2 || confirmationComparisons.length !== 1
+    || recursiveScheduleReturns.length !== 4
+    || timeoutCalls.length !== 1 || timeoutCalls[0] !== timerCall
+    || immediateCalls.length !== 1) return false;
+
+  const confirmationAssignments = timerCallback.body.body.filter((statement) => {
+    const expression = unwrap(statement?.expression);
+    return statement?.type === 'ExpressionStatement'
+      && expression?.type === 'AssignmentExpression' && expression.operator === '='
+      && identifier(expression.left, 'confirmation')
+      && call(expression.right, ['setImmediate']);
+  });
+  if (confirmationAssignments.length !== 1
+    || unwrap(confirmationAssignments[0].expression).right !== immediateCalls[0]
+    || !directStatementReachable(timerCallback.body, confirmationAssignments[0])) return false;
+
+  const observeSchedules = observe.body.body.filter((statement) => (
+    statement.type === 'IfStatement'
+    && call(statement.test, ['isReady'], [])
+    && directCallStatement(statement.consequent, ['schedule'], [])
+  ));
+  const requestedTimeout = directDeclarator(
+    creator.body, 'requestedHeartbeatTimeoutMs', 'const',
+  );
+  const boundedTimeout = directDeclarator(
+    creator.body, 'boundedHeartbeatTimeoutMs', 'const',
+  );
+  const requestedConfirmation = directDeclarator(
+    creator.body, 'requestedHeartbeatConfirmationMs', 'const',
+  );
+  const boundedConfirmation = directDeclarator(
+    creator.body, 'boundedHeartbeatConfirmationMs', 'const',
+  );
+  return observeSchedules.length === 1
+    && directStatementsOrderedAndReachable(creator.body, [
+      requestedTimeout.statement, boundedTimeout.statement,
+      requestedConfirmation.statement, boundedConfirmation.statement,
+      scheduleBinding.statement, observeBinding.statement,
+    ]);
+}
+
+function currentSupervisorAstContract(source, lifecycleSource) {
   const program = parseProgram(source);
   const creator = topFunction(program, 'createExecutionWorkerSupervisor');
-  if (!creator || !exactParameterList(creator, [
+  if (!heartbeatWatchdogAstContract(lifecycleSource)
+    || !creator || !exactParameterList(creator, [
     (value) => objectPatternIncludesExactBindings(value, {
       enabled: (entry) => defaultedIdentifierParameter(
         entry, 'enabled', (fallback) => literal(fallback, true),
@@ -4804,6 +5325,12 @@ function currentSupervisorAstContract(source) {
       ),
       now: (entry) => defaultedIdentifierParameter(
         entry, 'now', (fallback) => member(fallback, ['Date', 'now']),
+      ),
+      startupTimeoutMs: (entry) => defaultedIdentifierParameter(
+        entry, 'startupTimeoutMs', (fallback) => literal(fallback, 10_000),
+      ),
+      restartDelayMs: (entry) => defaultedIdentifierParameter(
+        entry, 'restartDelayMs', (fallback) => literal(fallback, 250),
       ),
       cancellationTimeoutMs: (entry) => defaultedIdentifierParameter(
         entry, 'cancellationTimeoutMs', (fallback) => literal(fallback, 5_000),
@@ -4829,6 +5356,12 @@ function currentSupervisorAstContract(source) {
       ),
     }, { topLevelDefault: true }),
   ])
+    || !exactTopLevelRequireBinding(
+      program,
+      'createEnvelope',
+      'createEnvelope',
+      './execution-worker-protocol.cjs',
+    )
     || !exactTopLevelRequireBinding(
       program,
       'createExecutionWorkerRequestSettlement',
@@ -4860,26 +5393,49 @@ function currentSupervisorAstContract(source) {
       './execution-worker-supervisor-message.cjs',
     )
     || !stableProgramIdentifiers(program, [
-      'Date', 'Map', 'Object', 'Promise', 'WeakMap',
+      'Date', 'Map', 'Math', 'Number', 'Object', 'Promise', 'WeakMap',
+      'clearTimeout', 'createEnvelope', 'setTimeout',
       'createExecutionWorkerDeadlineCallbacks',
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerSupervisor',
       'createExecutionWorkerTerminator', 'handleExecutionWorkerEventMessage',
       'handleExecutionWorkerObserverMessage',
-    ], { globals: ['Date', 'Map', 'Object', 'Promise', 'WeakMap'] })
+    ], {
+      globals: [
+        'Date', 'Map', 'Math', 'Number', 'Object', 'Promise', 'WeakMap',
+        'clearTimeout', 'setTimeout',
+      ],
+    })
     || functionHasNestedBinding(creator, [
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
       'createExecutionWorkerDeadlineCallbacks',
       'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
       'deadlineCancelGraceMs', 'entry', 'fork', 'processTreeKiller',
-      'processTreeCleanupGraceMs',
-    ])
+      'processTreeCleanupGraceMs', 'restartDelayMs', 'startupTimeoutMs',
+      'requestedRestartDelayMs', 'boundedRestartDelayMs',
+      'requestedStartupTimeoutMs', 'boundedStartupTimeoutMs',
+    ], {
+      allowedDirectBindings: [
+        'requestedRestartDelayMs', 'boundedRestartDelayMs',
+        'requestedStartupTimeoutMs', 'boundedStartupTimeoutMs',
+      ],
+    })
     || functionHasIdentifierWrite(creator, [
       'createExecutionWorkerRequestSettlement', 'createExecutionWorkerTerminator',
       'createExecutionWorkerDeadlineCallbacks',
       'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
       'deadlineCancelGraceMs', 'entry', 'fork', 'processTreeKiller',
-      'processTreeCleanupGraceMs',
-    ])) return false;
+      'processTreeCleanupGraceMs', 'restartDelayMs', 'startupTimeoutMs',
+      'requestedRestartDelayMs', 'boundedRestartDelayMs',
+      'requestedStartupTimeoutMs', 'boundedStartupTimeoutMs',
+    ])
+    || !safeTimerTimeoutBinding(creator, {
+      sourceName: 'restartDelayMs', requestedName: 'requestedRestartDelayMs',
+      boundedName: 'boundedRestartDelayMs', maximum: 2_147_483_647, fallback: 250,
+    })
+    || !safeTimerTimeoutBinding(creator, {
+      sourceName: 'startupTimeoutMs', requestedName: 'requestedStartupTimeoutMs',
+      boundedName: 'boundedStartupTimeoutMs', maximum: 2_147_483_646, fallback: 10_000,
+    })) return false;
 
   const creatorOptions = unwrap(creator.params[0]);
   const creatorOptionPattern = creatorOptions?.type === 'AssignmentPattern'
@@ -4940,15 +5496,69 @@ function currentSupervisorAstContract(source) {
       [(entry) => identifier(entry, 'target'), (entry) => identifier(entry, 'reason')],
     ))) return false;
 
+  const restartBranches = onExit.body?.type === 'BlockStatement'
+    ? onExit.body.body.filter((statement) => (
+      statement.type === 'IfStatement'
+      && logical(
+        statement.test,
+        '&&',
+        (left) => binary(
+          left,
+          '===',
+          (entry) => identifier(entry, 'phase'),
+          (entry) => literal(entry, 'degraded'),
+        ),
+        (right) => identifier(right, 'lastAuthority'),
+      )
+      && statement.consequent?.type === 'BlockStatement'
+    )) : [];
+  const restartBranch = restartBranches.length === 1 ? restartBranches[0] : null;
+  const restartAssignments = restartBranch
+    ? directAssignmentStatements(restartBranch.consequent, ['restartTimer']) : [];
+  const restartCall = unwrap(restartAssignments[0]?.expression?.right);
+  const restartCallback = unwrap(restartCall?.arguments?.[0]);
+  const restartStartExpression = unwrap(restartCallback?.body?.body?.[1]?.expression);
+  const restartStartCall = restartStartExpression?.type === 'UnaryExpression'
+    && restartStartExpression.operator === 'void'
+    ? unwrap(restartStartExpression.argument) : null;
+  const restartUnrefs = restartBranch ? restartBranch.consequent.body.filter((statement) => (
+    directCallStatement(statement, ['restartTimer', 'unref'], [])
+  )) : [];
+  if (!restartBranch || restartAssignments.length !== 1
+    || !call(restartCall, ['setTimeout']) || restartCall.arguments.length !== 2
+    || restartCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(restartCallback, [])
+    || restartCallback.body?.type !== 'BlockStatement'
+    || restartCallback.body.body.length !== 2
+    || !directAssignmentStatements(restartCallback.body, ['restartTimer']).some((statement) => (
+      literal(unwrap(statement.expression).right, null)
+    ))
+    || !methodCall(
+      restartStartCall,
+      'catch',
+      (receiver) => call(receiver, ['start'], [
+        (entry) => identifier(entry, 'lastAuthority'),
+      ]),
+      [(callback) => exactIdentifierParameters(unwrap(callback), [])],
+    )
+    || !identifier(restartCall.arguments[1], 'boundedRestartDelayMs')
+    || restartUnrefs.length !== 1
+    || !directStatementsOrderedAndReachable(restartBranch.consequent, [
+      restartAssignments[0], restartUnrefs[0],
+    ])
+    || !directStatementReachable(onExit.body, restartBranch)) return false;
+
   if (!exactIdentifierParameters(onMessage, ['raw'])
     || onMessage.body?.type !== 'BlockStatement'
     || functionHasNestedBinding(onMessage, [
       'child', 'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
-      'message', 'onMessage', 'pending', 'raw', 'terminateChild',
+      'logger', 'message', 'onMessage', 'pending', 'raw', 'terminateChild',
+      'validateEnvelope', 'validateExecutionWorkerReply',
     ], { allowedDirectBindings: ['message'] })
     || functionHasIdentifierWrite(onMessage, [
       'child', 'handleExecutionWorkerEventMessage', 'handleExecutionWorkerObserverMessage',
-      'onMessage', 'pending', 'raw', 'terminateChild',
+      'logger', 'onMessage', 'pending', 'raw', 'terminateChild',
+      'validateEnvelope', 'validateExecutionWorkerReply',
     ])
     || countAssignments(onMessage, (left) => identifier(left, 'message')) !== 1) return false;
   const decodeAttempts = onMessage.body.body.filter((statement) => (
@@ -4957,13 +5567,35 @@ function currentSupervisorAstContract(source) {
   const message = directDeclarator(onMessage.body, 'message', 'let');
   if (!message || message.declaration.init !== null || decodeAttempts.length !== 1) return false;
   const decoded = directAssignmentStatements(decodeAttempts[0].block, ['message']);
-  if (decoded.length !== 1 || !call(decoded[0].expression.right, ['validateEnvelope'], [
-    (value) => identifier(value, 'raw'),
-    (value) => exactObject(value, {
-      direction: (entry) => literal(entry, 'worker-to-host'),
-      now: (entry) => call(entry, ['now'], []),
-    }),
-  ]) || !directStatementReachable(decodeAttempts[0].block, decoded[0])) return false;
+  const legacyDecode = decoded.length === 1
+    && exactTopLevelRequireBinding(
+      program,
+      'validateEnvelope',
+      'validateEnvelope',
+      './execution-worker-protocol.cjs',
+    )
+    && call(decoded[0].expression.right, ['validateEnvelope'], [
+      (value) => identifier(value, 'raw'),
+      (value) => exactObject(value, {
+        direction: (entry) => literal(entry, 'worker-to-host'),
+        now: (entry) => call(entry, ['now'], []),
+      }),
+    ]);
+  const deadlineAwareDecode = decoded.length === 1
+    && exactTopLevelRequireBinding(
+      program,
+      'validateExecutionWorkerReply',
+      'validateExecutionWorkerReply',
+      './execution-worker-deadline.cjs',
+    )
+    && call(decoded[0].expression.right, ['validateExecutionWorkerReply'], [
+      (value) => identifier(value, 'raw'),
+      (value) => identifier(value, 'pending'),
+      (value) => identifier(value, 'now'),
+    ]);
+  if ((!legacyDecode && !deadlineAwareDecode)
+    || !directStatementReachable(decodeAttempts[0].block, decoded[0])
+    || !supervisorDecodeFailureCatchContract(decodeAttempts[0].handler)) return false;
   const ownershipGuards = onMessage.body.body.filter((statement) => (
     statement.type === 'IfStatement'
     && binary(
@@ -5241,16 +5873,60 @@ function currentSupervisorAstContract(source) {
           (entry) => exactObject(entry, {
             processError: (item) => identifier(item, 'processError'),
           }),
-        ]),
+      ]),
     ],
   ));
+  const initializePosts = start.body.body.filter((statement) => directCallStatement(
+    statement,
+    ['child', 'postMessage'],
+    [(value) => call(value, ['createEnvelope'], [
+      (entry) => literal(entry, 'worker.initialize'),
+      (entry) => identifier(entry, 'identity'),
+      (entry) => exactObject(entry, { protocolVersion: (item) => literal(item, 1) }),
+      (entry) => exactObject(entry, {
+        deadlineMs: (item) => identifier(item, 'boundedStartupTimeoutMs'),
+        now: (item) => call(item, ['now'], []),
+      }),
+    ])],
+  ));
+  const startupAssignments = directAssignmentStatements(start.body, ['startupTimer']);
+  const startupCall = unwrap(startupAssignments[0]?.expression?.right);
+  const startupCallback = unwrap(startupCall?.arguments?.[0]);
+  const startupUnrefs = start.body.body.filter((statement) => directCallStatement(
+    statement, ['startupTimer', 'unref'], [],
+  ));
   if (messageListeners.length !== 1 || exitListeners.length !== 1 || errorListeners.length !== 1
+    || initializePosts.length !== 1 || startupAssignments.length !== 1
+    || !call(startupCall, ['setTimeout']) || startupCall.arguments.length !== 2
+    || startupCallback?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(startupCallback, [])
+    || !arrowCallsExactly(startupCallback, ['terminateChild'], [
+      (entry) => identifier(entry, 'child'),
+      (entry) => literal(entry, 'startup-timeout'),
+    ])
+    || !binary(
+      startupCall.arguments[1], '+',
+      (entry) => identifier(entry, 'boundedStartupTimeoutMs'),
+      (entry) => literal(entry, 1),
+    )
+    || startupUnrefs.length !== 1
     || !directStatementsOrderedAndReachable(start.body, [
       childAssignments[0], spawnedChild.statement, messageListeners[0],
-      exitListeners[0], errorListeners[0],
+      exitListeners[0], errorListeners[0], initializePosts[0],
+      startupAssignments[0], startupUnrefs[0],
     ])) {
     return false;
   }
+  const onExitBinding = directDeclarator(creator.body, 'onExit', 'const');
+  const startBinding = directDeclarator(creator.body, 'start', 'const');
+  if (!onExitBinding || !startBinding
+    || !directStatementsOrderedAndReachable(creator.body, [
+      directDeclarator(creator.body, 'requestedRestartDelayMs', 'const').statement,
+      directDeclarator(creator.body, 'boundedRestartDelayMs', 'const').statement,
+      directDeclarator(creator.body, 'requestedStartupTimeoutMs', 'const').statement,
+      directDeclarator(creator.body, 'boundedStartupTimeoutMs', 'const').statement,
+      onExitBinding.statement, startBinding.statement,
+    ])) return false;
 
   const stoppedChild = directDeclarator(stop.body, 'stoppedChild', 'const');
   const stopCalls = stop.body.body.filter((statement) => directCallStatement(
@@ -6077,27 +6753,13 @@ function finitePositiveTimeoutBinding(functionNode, {
   requestedName = 'requestedTimeout',
   sourceName = 'timeoutMs',
 } = {}) {
-  const requested = directDeclarator(functionNode?.body, requestedName, 'const');
-  const bounded = directDeclarator(functionNode?.body, boundedName, 'const');
-  if (!requested || !bounded
-    || !directStatementsOrderedAndReachable(functionNode.body, [
-      requested.statement, bounded.statement,
-    ])
-    || !call(requested.declaration.init, ['Number'], [
-      (value) => identifier(value, sourceName),
-    ])) return false;
-  const value = unwrap(bounded.declaration.init);
-  return value?.type === 'ConditionalExpression'
-    && call(value.test, ['Number', 'isFinite'], [
-      (entry) => identifier(entry, requestedName),
-    ])
-    && call(value.consequent, ['Math', 'max'], [
-      (entry) => literal(entry, 1),
-      (entry) => identifier(entry, requestedName),
-    ])
-    && literal(value.alternate, fallback)
-    && Number.isFinite(fallback)
-    && fallback > 0;
+  return safeTimerTimeoutBinding(functionNode, {
+    boundedName,
+    fallback,
+    maximum: 2_147_483_647,
+    requestedName,
+    sourceName,
+  });
 }
 
 function managerPressureCondition(node) {
@@ -6252,6 +6914,8 @@ function managerIsolationAstContract(source) {
     || functionHasNestedBinding(waitForSlot, ['manager', 'requestId', 'signal'])
     || functionHasIdentifierWrite(waitForSlot, ['manager', 'requestId', 'signal'])) return false;
   if (drainRecord) {
+    const drainUsesTimeout = drainRecord.params.length === 5;
+    const timeoutBindingNames = ['boundedTimeout', 'requestedTimeout'];
     const drainParametersValid = exactIdentifierParameters(
       drainRecord, ['manager', 'requestId', 'record', 'settlement'],
     ) || exactParameterList(drainRecord, [
@@ -6267,13 +6931,17 @@ function managerIsolationAstContract(source) {
     ]);
     if (!drainParametersValid
       || functionHasNestedBinding(drainRecord, [
-        'boundedTimeout', 'manager', 'Math', 'Number', 'record', 'requestId',
-        'requestedTimeout', 'settlement', 'timeoutMs',
-      ], { allowedDirectBindings: ['boundedTimeout', 'requestedTimeout'] })
+        ...timeoutBindingNames, 'manager', 'Math', 'Number', 'record', 'requestId',
+        'settlement', 'timeoutMs',
+      ], { allowedDirectBindings: timeoutBindingNames })
       || functionHasIdentifierWrite(drainRecord, [
-        'boundedTimeout', 'manager', 'Math', 'Number', 'record', 'requestId',
-        'requestedTimeout', 'settlement', 'timeoutMs',
-      ])) return false;
+        ...timeoutBindingNames, 'manager', 'Math', 'Number', 'record', 'requestId',
+        'settlement', 'timeoutMs',
+      ])
+      || (drainUsesTimeout && !safeTimerTimeoutBinding(drainRecord, {
+        sourceName: 'timeoutMs', requestedName: 'requestedTimeout',
+        boundedName: 'boundedTimeout', maximum: 2_147_483_647,
+      }))) return false;
   }
   const helperNames = (program.body || [])
     .filter((node) => node.type === 'FunctionDeclaration' && node.id)
@@ -6489,6 +7157,7 @@ function currentManagerIsolationAstContract(source) {
     'executionSessionIdentity', 'retireDrainingSession', 'sameExecutionSession',
     'validateAcquisition', 'waitForExecutionSlot',
   ];
+  const drainTimeoutBindings = ['requestedTimeout', 'boundedTimeout'];
   if (!creator || !acquire || !waitForSlot || !validateAcquisition || !stopRecord
     || !releaseRecord || !drainRecord || !createLease || !createRecord || !createSupervisor
     || !managerCreatorParametersValid(creator)
@@ -6528,7 +7197,17 @@ function currentManagerIsolationAstContract(source) {
     || functionHasMemberWrite(program, [
       ['manager', 'executions'], ['manager', 'supervisorFactory'],
       ['manager', 'supervisorOptions'], ['record', 'supervisor'],
-    ])) return false;
+    ])
+    || functionHasNestedBinding(drainRecord, [
+      ...drainTimeoutBindings, 'Math', 'Number', 'setTimeout', 'timeoutMs',
+    ], { allowedDirectBindings: drainTimeoutBindings })
+    || functionHasIdentifierWrite(drainRecord, [
+      ...drainTimeoutBindings, 'Math', 'Number', 'setTimeout', 'timeoutMs',
+    ])
+    || !safeTimerTimeoutBinding(drainRecord, {
+      sourceName: 'timeoutMs', requestedName: 'requestedTimeout',
+      boundedName: 'boundedTimeout', maximum: 2_147_483_647,
+    })) return false;
 
   const validatedRequestId = directDeclarator(validateAcquisition.body, 'requestId', 'const');
   const validatedReturns = validateAcquisition.body.body.filter((statement) => exactReturn(
@@ -6673,7 +7352,8 @@ function currentManagerIsolationAstContract(source) {
   const deadline = directDeclarator(drainRecord.body, 'deadline', 'const');
   const deadlineExecutor = unwrap(deadline?.declaration?.init?.arguments?.[0]);
   const deadlineAssignment = unwrap(deadlineExecutor?.body?.body?.[0]?.expression);
-  const boundedDelay = unwrap(deadlineAssignment?.right)?.arguments?.[1];
+  const requestedTimeout = directDeclarator(drainRecord.body, 'requestedTimeout', 'const');
+  const boundedTimeout = directDeclarator(drainRecord.body, 'boundedTimeout', 'const');
   const drainDeletes = drainRecord.body.body.filter((statement) => directCallStatement(
     statement, ['manager', 'executions', 'delete'], [(value) => identifier(value, 'requestId')],
   ));
@@ -6724,18 +7404,24 @@ function currentManagerIsolationAstContract(source) {
     || !identifier(deadlineAssignment.left, 'timer')
     || !call(deadlineAssignment.right, ['setTimeout'], [
       (entry) => identifier(entry, 'resolveDeadline'),
-      (entry) => finiteBoundedTimeoutExpression(entry, 'timeoutMs', { fallback: 1 }),
+      (entry) => identifier(entry, 'boundedTimeout'),
     ])
-    || !boundedDelay
     || !directCallStatement(deadlineExecutor.body.body[1], ['timer', 'unref'], [])
     || drainDeletes.length !== 1 || finalizationAssignments.length !== 1
     || !finalizationValid) return false;
+  const drainTimeoutCalls = [];
+  visit(drainRecord.body, (node) => {
+    if (call(node, ['setTimeout'])) drainTimeoutCalls.push(node);
+  });
+  if (drainTimeoutCalls.length !== 1
+    || drainTimeoutCalls[0] !== unwrap(deadlineAssignment.right)) return false;
   const drainReturns = drainRecord.body.body.filter((statement) => exactReturn(
     statement, (value) => member(value, ['record', 'finalizationPromise']),
   ));
   if (drainReturns.length < 1
     || !directStatementsOrderedAndReachable(drainRecord.body, [
-      drainDeletes[0], finalizationAssignments[0], drainReturns.at(-1),
+      drainDeletes[0], requestedTimeout.statement, boundedTimeout.statement,
+      deadline.statement, finalizationAssignments[0], drainReturns.at(-1),
     ])) return false;
 
   const requestId = directDeclarator(acquire.body, 'requestId', 'const');
@@ -6966,8 +7652,8 @@ function contextHelperAstContract(sourceByPath) {
     ])
     || functionHasNestedBinding(drain, [
       'lease', 'Math', 'Number', 'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage',
-      'setTimeout', 'settlement', 'timeoutMs',
-    ])
+      'setTimeout', 'settlement', 'timeoutMs', 'requestedTimeout', 'boundedTimeout',
+    ], { allowedDirectBindings: ['requestedTimeout', 'boundedTimeout'] })
     || functionHasIdentifierWrite(drain, [
       'lease', 'Math', 'Number', 'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage',
       'setTimeout', 'settlement', 'timeoutMs',
@@ -6989,19 +7675,11 @@ function contextHelperAstContract(sourceByPath) {
       creator,
       (left) => patternNames(left).includes('completed'),
     ) !== 1
-    || !requested || !call(requested.declaration.init, ['Number'], [
-      (value) => identifier(value, 'timeoutMs'),
-    ]) || !bounded) return false;
-  const boundedValue = unwrap(bounded.declaration.init);
-  if (boundedValue?.type !== 'ConditionalExpression'
-    || !call(boundedValue.test, ['Number', 'isFinite'], [
-      (value) => identifier(value, 'requestedTimeout'),
-    ])
-    || !call(boundedValue.consequent, ['Math', 'max'], [
-      (value) => literal(value, 1),
-      (value) => identifier(value, 'requestedTimeout'),
-    ])
-    || !literal(boundedValue.alternate, 1000)) return false;
+    || !requested || !bounded
+    || !safeTimerTimeoutBinding(drain, {
+      sourceName: 'timeoutMs', requestedName: 'requestedTimeout',
+      boundedName: 'boundedTimeout', maximum: 11_000, fallback: 1000,
+    })) return false;
   const returned = returnedObject(creator);
   if (!returned) return false;
   let releaseFunction = null;
@@ -7125,11 +7803,16 @@ function currentContextHelperAstContract(sourceByPath) {
     ])
     || functionHasNestedBinding(releaseAfterUsage, [
       'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'lease', 'Math', 'Number',
-      'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage', 'settlement', 'timeoutMs',
-    ])
+      'Promise', 'clearTimeout', 'releaseExecutionWorkerLeaseAfterContextUsage',
+      'settlement', 'setTimeout', 'timeoutMs', 'requestedTimeout', 'boundedTimeout',
+      'deadline', 'release', 'timer',
+    ], { allowedDirectBindings: [
+      'requestedTimeout', 'boundedTimeout', 'deadline', 'release', 'timer',
+    ] })
     || functionHasIdentifierWrite(releaseAfterUsage, [
       'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'lease', 'Math', 'Number',
-      'Promise', 'releaseExecutionWorkerLeaseAfterContextUsage', 'settlement', 'timeoutMs',
+      'Promise', 'clearTimeout', 'deadline', 'release',
+      'releaseExecutionWorkerLeaseAfterContextUsage', 'settlement', 'setTimeout', 'timeoutMs',
     ])
     || functionHasNestedBinding(creator, [
       'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS', 'completed',
@@ -7145,18 +7828,16 @@ function currentContextHelperAstContract(sourceByPath) {
 
   const bounded = directDeclarator(releaseAfterUsage.body, 'boundedTimeout', 'const');
   if (!bounded
-    || !finiteBoundedTimeoutExpression(
-      bounded.declaration.init,
-      'timeoutMs',
-      {
-        fallback: (entry) => identifier(
-          entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
-        ),
-        maximum: (entry) => identifier(
-          entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
-        ),
-      },
-    )) return false;
+    || !safeTimerTimeoutBinding(releaseAfterUsage, {
+      sourceName: 'timeoutMs', requestedName: 'requestedTimeout',
+      boundedName: 'boundedTimeout',
+      fallback: (entry) => identifier(
+        entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      ),
+      maximum: (entry) => identifier(
+        entry, 'CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS',
+      ),
+    })) return false;
   const drainBranches = releaseAfterUsage.body.body.filter((statement) => (
     statement.type === 'IfStatement'
     && binary(
@@ -7200,9 +7881,34 @@ function currentContextHelperAstContract(sourceByPath) {
   ));
   const deadline = directDeclarator(releaseAfterUsage.body, 'deadline', 'const');
   const release = directDeclarator(releaseAfterUsage.body, 'release', 'const');
+  const timer = directDeclarator(releaseAfterUsage.body, 'timer', 'let');
   if (drainBranches.length !== 1 || missingRelease.length !== 1
     || !deadline || !construct(deadline.declaration.init, 'Promise')
-    || !release) return false;
+    || !timer || !literal(timer.declaration.init, null) || !release) return false;
+  const deadlineExecutor = unwrap(deadline.declaration.init.arguments?.[0]);
+  const deadlineTimerAssignment = unwrap(deadlineExecutor?.body?.body?.[0]?.expression);
+  if (deadline.declaration.init.arguments.length !== 1
+    || deadlineExecutor?.type !== 'ArrowFunctionExpression'
+    || !exactIdentifierParameters(deadlineExecutor, ['resolveDeadline'])
+    || deadlineExecutor.body?.type !== 'BlockStatement'
+    || deadlineExecutor.body.body.length !== 2
+    || deadlineTimerAssignment?.type !== 'AssignmentExpression'
+    || deadlineTimerAssignment.operator !== '='
+    || !identifier(deadlineTimerAssignment.left, 'timer')
+    || !call(deadlineTimerAssignment.right, ['setTimeout'], [
+      (value) => identifier(value, 'resolveDeadline'),
+      (value) => identifier(value, 'boundedTimeout'),
+    ])
+    || !directCallStatement(deadlineExecutor.body.body[1], ['timer', 'unref'], [])
+    || countAssignments(releaseAfterUsage, (left) => identifier(left, 'timer')) !== 1) {
+    return false;
+  }
+  const timeoutCalls = [];
+  visit(releaseAfterUsage.body, (node) => {
+    if (call(node, ['setTimeout'])) timeoutCalls.push(node);
+  });
+  if (timeoutCalls.length !== 1
+    || timeoutCalls[0] !== unwrap(deadlineTimerAssignment.right)) return false;
   const releaseChain = unwrap(release.declaration.init);
   const releaseChainValid = methodCall(
     releaseChain,
@@ -7256,7 +7962,9 @@ function currentContextHelperAstContract(sourceByPath) {
   ));
   if (!releaseChainValid || swallowedRelease.length !== 1 || releaseReturns.length !== 1
     || !directStatementsOrderedAndReachable(releaseAfterUsage.body, [
-      release.statement, swallowedRelease[0], releaseReturns[0],
+      directDeclarator(releaseAfterUsage.body, 'requestedTimeout', 'const').statement,
+      bounded.statement, drainBranches[0], missingRelease[0], timer.statement,
+      deadline.statement, release.statement, swallowedRelease[0], releaseReturns[0],
     ])) return false;
 
   const completed = directDeclarator(creator.body, 'completed', 'let');
@@ -7328,7 +8036,7 @@ function currentContextHelperAstContract(sourceByPath) {
       (value) => identifier(value, 'lease'),
       (value) => identifier(value, 'settlement'),
       (value) => exactObject(value, { timeoutMs: (entry) => identifier(entry, 'timeoutMs') }),
-    ], { await_: true })
+    ], { void_: true })
     || !exactReturn(completedBody[1], (value) => literal(value, true))) return false;
   const incompleteAttempts = releaseFunction.body.body.filter((statement) => (
     statement.type === 'TryStatement' && !statement.finalizer
@@ -7349,9 +8057,9 @@ function desktopAstContract(sourceByPath) {
   const source = sourceByPath.get('electron/host-core/agent/desktop-host-context.cjs') || '';
   const program = parseProgram(source);
   const run = topFunction(program, 'runAgentInExecutionWorker');
-  const parametersValid = exactIdentifierParameters(run, ['identity', 'signal'])
-    || exactIdentifierParameters(run, ['supervisor', 'identity', 'signal'])
-    || exactParameterList(run, [
+  const directReleaseParametersValid = exactIdentifierParameters(run, ['identity', 'signal'])
+    || exactIdentifierParameters(run, ['supervisor', 'identity', 'signal']);
+  const parametersValid = directReleaseParametersValid || exactParameterList(run, [
       (value) => objectPatternBindsExactly(value, [
         'supervisor', 'identity', 'callbacks', 'contextUsageReleaseTimeoutMs',
       ], {
@@ -7416,7 +8124,7 @@ function desktopAstContract(sourceByPath) {
   const directReleases = attempt.finalizer.body.filter((statement) => directCallStatement(
     statement, ['executionWorkerLease', 'release'], [], { await_: true },
   ));
-  if (directReleases.length === 1) return true;
+  if (directReleases.length === 1) return directReleaseParametersValid;
   if (!exactTopLevelRequireBinding(
     program,
     'createExecutionWorkerContextUsageLease',
@@ -7431,7 +8139,8 @@ function desktopAstContract(sourceByPath) {
     [(value) => identifier(value, 'executionWorkerLease')],
     { await_: true },
   ));
-  return delegatedReleases.length === 1 && contextHelperAstContract(sourceByPath);
+  return delegatedReleases.length === 1
+    && (contextHelperAstContract(sourceByPath) || currentContextHelperAstContract(sourceByPath));
 }
 
 function currentDesktopAstContract(sourceByPath) {
@@ -7621,6 +8330,7 @@ export function auditQworkSuccessorAstContracts(sourceByPath) {
     supervisor: supervisorAstContract(read('electron/host-core/agent/execution-worker-supervisor.cjs'))
       || currentSupervisorAstContract(
         read('electron/host-core/agent/execution-worker-supervisor.cjs'),
+        read('electron/host-core/agent/execution-worker-process-lifecycle.cjs'),
       ),
     supervisor_exit: supervisorExitAstContract(
       read('electron/host-core/agent/execution-worker-supervisor.cjs'),

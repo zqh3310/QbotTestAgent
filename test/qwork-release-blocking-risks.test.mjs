@@ -17,6 +17,7 @@ import {
   validateQworkReleaseBlockingRisksForReport,
 } from '../src/lib/qwork-release-blocking-risks.mjs';
 import {
+  auditQworkSuccessorContextHelperAstContract,
   auditQworkSuccessorAstContracts,
   programHasTrustedGlobalMutation,
 } from '../src/lib/qwork-release-blocking-risk-ast.mjs';
@@ -521,7 +522,7 @@ const successorController = `
 const AUTHORITY_FIELDS = ['principalId', 'serverScope', 'runtimeGeneration', 'ownershipGeneration'];
 const TURN_FIELDS = [...AUTHORITY_FIELDS, 'sessionId', 'turnId'];
 const { Worker } = require('node:worker_threads');
-const { validateEnvelope } = require('./execution-worker-protocol.cjs');
+const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');
 const sameIdentity = (message, authority, fields) => authority
   && fields.every((field) => message[field] === authority[field]);
 class ExecutionWorkerController {
@@ -695,6 +696,7 @@ const currentShapeSuccessorSupervisor = `
 const { createExecutionWorkerRequestSettlement } = require('./execution-worker-cancellation.cjs');
 const { createExecutionWorkerDeadlineCallbacks } = require('./execution-worker-deadline.cjs');
 const { createExecutionWorkerTerminator } = require('./execution-worker-termination.cjs');
+const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');
 const {
   handleExecutionWorkerEventMessage,
   handleExecutionWorkerObserverMessage,
@@ -704,6 +706,8 @@ function createExecutionWorkerSupervisor({
   fork,
   entry = DEFAULT_ENTRY,
   now = Date.now,
+  startupTimeoutMs = 10_000,
+  restartDelayMs = 250,
   cancellationTimeoutMs = 5_000,
   maxPendingRequests = 32,
   maxRestarts = 2,
@@ -716,6 +720,18 @@ function createExecutionWorkerSupervisor({
   const pending = new Map();
   let child = null;
   const terminationCauses = new WeakMap();
+  const requestedRestartDelayMs = Number(restartDelayMs);
+  const boundedRestartDelayMs = Number.isSafeInteger(requestedRestartDelayMs)
+    && requestedRestartDelayMs > 0
+    ? Math.min(requestedRestartDelayMs, 2147483647) : 250;
+  const requestedStartupTimeoutMs = Number(startupTimeoutMs);
+  const boundedStartupTimeoutMs = Number.isSafeInteger(requestedStartupTimeoutMs)
+    && requestedStartupTimeoutMs > 0
+    ? Math.min(requestedStartupTimeoutMs, 2147483646) : 10_000;
+  let restartTimer = null;
+  let startupTimer = null;
+  let phase = 'degraded';
+  let lastAuthority = Object.freeze({ principalId: 'fixture' });
   const contextUsageRoutes = createHostContextUsageRoutes();
   let ownershipGeneration = null;
   const terminateOwnedChild = createExecutionWorkerTerminator({
@@ -733,6 +749,11 @@ function createExecutionWorkerSupervisor({
     try {
       message = validateEnvelope(raw, { direction: 'worker-to-host', now: now() });
     } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } finally {
+        void terminateChild(child, 'message-validation-failed');
+      }
       return;
     }
     if (message.ownershipGeneration !== ownershipGeneration) return;
@@ -756,7 +777,15 @@ function createExecutionWorkerSupervisor({
       return;
     }
   };
-  const onExit = () => {};
+  const onExit = () => {
+    if (phase === 'degraded' && lastAuthority) {
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        void start(lastAuthority).catch(() => {});
+      }, boundedRestartDelayMs);
+      restartTimer.unref?.();
+    }
+  };
   const start = async (authority) => {
     child = fork(entry, [], {
       serviceName: 'QWork Execution Worker',
@@ -767,6 +796,18 @@ function createExecutionWorkerSupervisor({
     child.on('message', onMessage);
     child.once('exit', (exitCode) => onExit(spawnedChild, { exitCode }));
     child.once('error', (processError) => onExit(spawnedChild, { processError }));
+    const identity = { ...authority, requestId: randomUUID(), ownershipGeneration };
+    child.postMessage(createEnvelope(
+      'worker.initialize',
+      identity,
+      { protocolVersion: 1 },
+      { deadlineMs: boundedStartupTimeoutMs, now: now() },
+    ));
+    startupTimer = setTimeout(
+      () => terminateChild(child, 'startup-timeout'),
+      boundedStartupTimeoutMs + 1,
+    );
+    startupTimer.unref?.();
   };
   const request = async (operation, identity, payload, {
     onEvent,
@@ -819,6 +860,74 @@ function createExecutionWorkerSupervisor({
     if (child === stoppedChild) child = null;
   };
   return Object.freeze({ enabled: true, request, start, stop });
+}
+`;
+
+const successorProcessLifecycle = `
+function createExecutionWorkerHeartbeatWatchdog({
+  now,
+  clock = now,
+  timeoutMs,
+  confirmationMs,
+  isReady,
+  shouldDeferTimeout = () => false,
+  onTimeout,
+}) {
+  const requestedHeartbeatTimeoutMs = Number(timeoutMs);
+  const boundedHeartbeatTimeoutMs = Number.isSafeInteger(requestedHeartbeatTimeoutMs)
+    && requestedHeartbeatTimeoutMs > 0
+    ? Math.min(requestedHeartbeatTimeoutMs, 2147483646) : 15000;
+  const requestedHeartbeatConfirmationMs = Number(confirmationMs);
+  const boundedHeartbeatConfirmationMs = Number.isSafeInteger(requestedHeartbeatConfirmationMs)
+    && requestedHeartbeatConfirmationMs > 0
+    ? Math.min(requestedHeartbeatConfirmationMs, 2147483646) : 15000;
+  let timer = null;
+  let confirmation = null;
+  let version = 0;
+  let lastActivityAt = null;
+  let lastActivityTick = null;
+  let suspectAt = null;
+  const clear = () => {
+    clearTimeout(timer);
+    clearImmediate(confirmation);
+    timer = null;
+    confirmation = null;
+    version += 1;
+  };
+  const schedule = () => {
+    clear();
+    timer = setTimeout(() => {
+      if (!isReady()) return;
+      if (clock() - lastActivityTick < boundedHeartbeatTimeoutMs) return schedule();
+      if (shouldDeferTimeout()) {
+        suspectAt = null;
+        return schedule();
+      }
+      if (suspectAt === null) {
+        suspectAt = clock();
+        return schedule();
+      }
+      const confirmedVersion = version;
+      confirmation = setImmediate(() => {
+        confirmation = null;
+        if (version !== confirmedVersion || !isReady()) return;
+        if (shouldDeferTimeout()
+          || clock() - lastActivityTick < boundedHeartbeatTimeoutMs
+          || suspectAt === null
+          || clock() - suspectAt < boundedHeartbeatConfirmationMs) return schedule();
+        onTimeout();
+      });
+    }, (suspectAt === null
+      ? boundedHeartbeatTimeoutMs
+      : boundedHeartbeatConfirmationMs) + 1);
+  };
+  const observe = () => {
+    lastActivityAt = now();
+    lastActivityTick = clock();
+    suspectAt = null;
+    if (isReady()) schedule();
+  };
+  return Object.freeze({ clear, observe, state: () => ({ lastActivityAt, suspectAt }) });
 }
 `;
 
@@ -882,6 +991,13 @@ async function requestExecutionWorkerTurn(supervisor, operation, identity, paylo
 function createExecutionWorkerRequestSettlement({
   child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
 }) {
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const requestedCancellationTimeoutMs = Number(cancellationTimeoutMs);
+  const boundedCancellationTimeoutMs = Number.isSafeInteger(requestedCancellationTimeoutMs)
+    && requestedCancellationTimeoutMs > 0
+    ? Math.min(requestedCancellationTimeoutMs, 2147483647) : 1;
   let cancellationTimer = null;
   const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
   const deadline = setTimeout(() => {
@@ -889,13 +1005,13 @@ function createExecutionWorkerRequestSettlement({
     onDeadline();
     reject(new Error('execution worker request deadline exceeded'));
     if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
-  }, deadlineMs + 1);
+  }, boundedDeadlineMs + 1);
   return {
     armCancellation: () => {
       if (cancellationTimer) return;
       cancellationTimer = setTimeout(() => {
         void terminateChild(child, 'cancel-timeout');
-      }, Math.max(1, cancellationTimeoutMs));
+      }, boundedCancellationTimeoutMs);
     },
     resolve: (value) => { clear(); resolve(value); },
     reject: (error) => { clear(); reject(error); },
@@ -941,6 +1057,93 @@ const currentRequestSuccessorCancellation = replaceRequired(
   'current optional-chain cancellation fixture',
 );
 
+const currentReleaseSuccessorCancellation = replaceRequired(
+  currentRequestSuccessorCancellation,
+  `function createExecutionWorkerRequestSettlement({
+  child, operation, deadlineMs, cancellationTimeoutMs, terminateChild, onDeadline, resolve, reject,
+}) {
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const requestedCancellationTimeoutMs = Number(cancellationTimeoutMs);
+  const boundedCancellationTimeoutMs = Number.isSafeInteger(requestedCancellationTimeoutMs)
+    && requestedCancellationTimeoutMs > 0
+    ? Math.min(requestedCancellationTimeoutMs, 2147483647) : 1;
+  let cancellationTimer = null;
+  const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
+  const deadline = setTimeout(() => {
+    clear();
+    onDeadline();
+    reject(new Error('execution worker request deadline exceeded'));
+    if (operation === 'execution.start') void terminateChild(child, 'execution-deadline');
+  }, boundedDeadlineMs + 1);
+  return {
+    armCancellation: () => {
+      if (cancellationTimer) return;
+      cancellationTimer = setTimeout(() => {
+        void terminateChild(child, 'cancel-timeout');
+      }, boundedCancellationTimeoutMs);
+    },
+    resolve: (value) => { clear(); resolve(value); },
+    reject: (error) => { clear(); reject(error); },
+  };
+}`,
+  `function createExecutionWorkerRequestSettlement({
+  child, operation, deadlineMs, cancellationTimeoutMs,
+  deadlineCancellationTimeoutMs = cancellationTimeoutMs,
+  terminateChild, onDeadline, onCancellationTimeout, resolve, reject, now = Date.now,
+}) {
+  const requestedDeadlineMs = Number(deadlineMs);
+  const boundedDeadlineMs = Number.isSafeInteger(requestedDeadlineMs) && requestedDeadlineMs > 0
+    ? Math.min(requestedDeadlineMs, 2147483646) : 1;
+  const requestedCancellationTimeoutMs = Number(cancellationTimeoutMs);
+  const boundedCancellationTimeoutMs = Number.isSafeInteger(requestedCancellationTimeoutMs)
+    && requestedCancellationTimeoutMs > 0
+    ? Math.min(requestedCancellationTimeoutMs, 2147483647) : 1;
+  const requestedDeadlineCancellationTimeoutMs = Number(deadlineCancellationTimeoutMs);
+  const boundedDeadlineCancellationTimeoutMs = Number.isSafeInteger(
+    requestedDeadlineCancellationTimeoutMs,
+  ) && requestedDeadlineCancellationTimeoutMs > 0
+    ? Math.min(requestedDeadlineCancellationTimeoutMs, 2147483647) : 1;
+  let cancellationTimer = null, deadline = null;
+  const clear = () => { clearTimeout(deadline); clearTimeout(cancellationTimer); };
+  const armDeadline = () => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      clearTimeout(deadline);
+      deadline = null;
+      onDeadline?.();
+      reject(Object.assign(new Error('execution worker request deadline exceeded'), {
+        code: 'execution_worker_deadline_exceeded',
+      }));
+      if (operation === 'execution.start') {
+        cancellationTimer = setTimeout(() => {
+          onCancellationTimeout?.();
+          if (!onCancellationTimeout) void terminateChild(child, 'cancel-timeout');
+        }, boundedDeadlineCancellationTimeoutMs);
+        cancellationTimer.unref?.();
+      } else clear();
+    }, boundedDeadlineMs + 1);
+    deadline.unref?.();
+  };
+  armDeadline();
+  return {
+    armCancellation: () => {
+      if (cancellationTimer) return;
+      cancellationTimer = setTimeout(
+        () => void terminateChild(child, 'cancel-timeout'),
+        boundedCancellationTimeoutMs,
+      );
+      cancellationTimer.unref?.();
+    },
+    renewDeadline: () => { armDeadline(); return now() + boundedDeadlineMs; },
+    resolve: (value) => { clear(); resolve(value); },
+    reject: (error) => { clear(); reject(error); },
+  };
+}`,
+  'current release cancellation settlement fixture',
+);
+
 const successorTermination = `
 function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanupGraceMs = 250 } = {}) {
   const flights = new WeakMap();
@@ -948,11 +1151,15 @@ function createExecutionWorkerTerminator({ processId, processTreeKiller, cleanup
     if (!target) return Promise.resolve(false);
     const existing = flights.get(target);
     if (existing) return existing;
+    const requestedCleanupGraceMs = Number(cleanupGraceMs);
+    const boundedCleanupGraceMs = Number.isSafeInteger(requestedCleanupGraceMs)
+      && requestedCleanupGraceMs > 0
+      ? Math.min(requestedCleanupGraceMs, 2147483647) : 1;
     const pid = processId(target.pid);
     const cleanup = Promise.resolve().then(() => processTreeKiller(pid, { reason }));
     const flight = Promise.race([
       cleanup,
-      new Promise((resolve) => setTimeout(resolve, cleanupGraceMs)),
+      new Promise((resolve) => setTimeout(resolve, boundedCleanupGraceMs)),
     ]).then(() => {
       target.kill?.();
       return true;
@@ -1103,9 +1310,8 @@ const currentReleaseSuccessorManager = delegatedSuccessorManager
     `function drainExecutionRecord(manager, requestId, record, settlement, { timeoutMs = 1 } = {}) {
   manager.executions.delete(requestId);
   const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1;
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 2147483647) : 1;
   record.finalizationPromise = Promise.race([
     Promise.resolve(settlement),
     new Promise((resolve) => setTimeout(resolve, boundedTimeout)),
@@ -1139,9 +1345,8 @@ module.exports = {
 const successorContextUsageLease = `
 function releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs = 1000 } = {}) {
   const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 11000) : 1000;
   if (typeof lease?.drain === 'function') {
     return Promise.resolve(lease.drain(settlement, { timeoutMs: boundedTimeout })).then(
       () => true,
@@ -1173,6 +1378,72 @@ function createExecutionWorkerContextUsageLease({ timeoutMs = 1000 } = {}) {
   });
 }
 module.exports = {
+  createExecutionWorkerContextUsageLease,
+  releaseExecutionWorkerLeaseAfterContextUsage,
+};
+`;
+
+const currentReleaseSuccessorContextUsageLease = `
+const CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS = 11_000;
+function releaseExecutionWorkerLeaseAfterContextUsage(
+  lease,
+  settlement,
+  { timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS } = {},
+) {
+  const requestedTimeout = Number(timeoutMs);
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS)
+    : CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS;
+  if (typeof lease?.drain === 'function') {
+    return Promise.resolve(lease.drain(settlement, { timeoutMs: boundedTimeout })).then(
+      () => true,
+      () => false,
+    );
+  }
+  if (typeof lease?.release !== 'function') return Promise.resolve(false);
+  let timer = null;
+  const deadline = new Promise((resolveDeadline) => {
+    timer = setTimeout(resolveDeadline, boundedTimeout);
+    timer.unref?.();
+  });
+  const release = Promise.race([Promise.resolve(settlement).catch(() => {}), deadline]).then(async () => {
+    if (timer) clearTimeout(timer);
+    try {
+      await lease.release();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  void release.catch(() => {});
+  return release;
+}
+function createExecutionWorkerContextUsageLease({
+  timeoutMs = CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
+} = {}) {
+  let completed = false;
+  let settle;
+  const settlement = new Promise((resolve) => { settle = resolve; });
+  return Object.freeze({
+    observeTerminal: (payload) => { completed = payload?.outcome === 'completed'; },
+    release: async (lease) => {
+      if (!lease) return false;
+      if (completed) {
+        void releaseExecutionWorkerLeaseAfterContextUsage(lease, settlement, { timeoutMs });
+        return true;
+      }
+      try {
+        await lease.release?.();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    settle,
+  });
+}
+module.exports = {
+  CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS,
   createExecutionWorkerContextUsageLease,
   releaseExecutionWorkerLeaseAfterContextUsage,
 };
@@ -1253,8 +1524,11 @@ function successorFiles(overrides = new Map()) {
     ['electron/host-core/agent/execution-worker-manager.cjs', successorManager],
     ['electron/host-core/agent/execution-worker-supervisor.cjs', successorSupervisor],
     ['electron/host-core/agent/execution-worker-supervisor-message.cjs', successorSupervisorMessage],
+    ['electron/host-core/agent/execution-worker-process-lifecycle.cjs', successorProcessLifecycle],
     ['electron/host-core/agent/execution-worker-termination.cjs', successorTermination],
     ['electron/host-core/agent/desktop-host-context.cjs', successorDesktopHost],
+    ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+    ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
     ...overrides,
   ]);
   return QWORK_MR1559_SUCCESSOR_PROTECTED_PATHS.map((filePath) => ({
@@ -1402,8 +1676,8 @@ test('v5 controller and timeout contracts fail closed across AST, audit, and rep
       'controller missing Worker import',
     )],
     ['controller missing validateEnvelope import', 'controller', mutateController(
-      "const { validateEnvelope } = require('./execution-worker-protocol.cjs');\n",
-      '',
+      "const { createEnvelope, validateEnvelope } = require('./execution-worker-protocol.cjs');\n",
+      "const { createEnvelope } = require('./execution-worker-protocol.cjs');\n",
       'controller missing validateEnvelope import',
     )],
   ];
@@ -1423,9 +1697,8 @@ test('v5 controller and timeout contracts fail closed across AST, audit, and rep
       : replaceRequired(
         successorContextUsageLease,
         `const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;`,
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 11000) : 1000;`,
         `const requestedTimeout = Number(timeoutMs);\n  ${replacement}`,
         label,
       );
@@ -1436,6 +1709,255 @@ test('v5 controller and timeout contracts fail closed across AST, audit, and rep
       ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', contextSource],
     ]);
     assertBlockedAcrossLayers({ label, contract: 'desktop', overrides });
+  }
+});
+
+test('v5 timer sinks require safe positive integers within the Node timer range', () => {
+  const cases = [
+    ['cancellation fractional/Infinity guard', 'cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs', successorCancellation,
+      'Number.isSafeInteger(requestedCancellationTimeoutMs)', 'Number.isFinite(requestedCancellationTimeoutMs)'],
+    ['deadline leaves no room for plus one', 'cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs', successorCancellation,
+      'Math.min(requestedDeadlineMs, 2147483646)', 'Math.min(requestedDeadlineMs, 2147483647)'],
+    ['cancellation exceeds Node timer maximum', 'cancellation', 'electron/host-core/agent/execution-worker-cancellation.cjs', successorCancellation,
+      'Math.min(requestedCancellationTimeoutMs, 2147483647)', 'Math.min(requestedCancellationTimeoutMs, 2147483648)'],
+    ['termination accepts unsafe integer', 'termination', 'electron/host-core/agent/execution-worker-termination.cjs', successorTermination,
+      'Number.isSafeInteger(requestedCleanupGraceMs)', 'Number.isFinite(requestedCleanupGraceMs)'],
+    ['termination uses MAX_SAFE_INTEGER', 'termination', 'electron/host-core/agent/execution-worker-termination.cjs', successorTermination,
+      'Math.min(requestedCleanupGraceMs, 2147483647)', 'Math.min(requestedCleanupGraceMs, Number.MAX_SAFE_INTEGER)'],
+    ['termination zero fallback', 'termination', 'electron/host-core/agent/execution-worker-termination.cjs', successorTermination,
+      ': 1;', ': 0;'],
+    ['manager accepts non-integer timeout', 'manager', 'electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager,
+      'Number.isSafeInteger(requestedTimeout)', 'Number.isFinite(requestedTimeout)'],
+    ['manager negative fallback', 'manager', 'electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager,
+      ': 1;', ': -1;'],
+    ['context NaN fallback', 'desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease,
+      ': 1000;', ': NaN;'],
+    ['context exceeds lease business maximum', 'desktop', 'electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease,
+      'Math.min(requestedTimeout, 11000)', 'Math.min(requestedTimeout, 11001)'],
+  ];
+  for (const [label, contract, filePath, source, search, replacement] of cases) {
+    const overrides = new Map([
+      ['electron/host-core/agent/execution-worker-manager.cjs', currentReleaseSuccessorManager],
+      ['electron/host-core/agent/desktop-host-context.cjs', currentReleaseSuccessorDesktopHost],
+      ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+      ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
+      [filePath, replaceRequired(source, search, replacement, label)],
+    ]);
+    assertBlockedAcrossLayers({ label, contract, overrides });
+  }
+});
+
+test('v5 current cancellation, manager, context and event timers are bounded at every sink', () => {
+  const cancellationPath = 'electron/host-core/agent/execution-worker-cancellation.cjs';
+  assert.equal(successorRisk(new Map([[
+    cancellationPath, currentReleaseSuccessorCancellation,
+  ]])).status, 'VERIFIED', 'current cancellation positive control');
+  const cancellationVariants = [
+    ['current cancellation raw deadline sink', 'boundedDeadlineMs + 1', 'deadlineMs + 1'],
+    ['current cancellation raw deadline-cancel sink', '}, boundedDeadlineCancellationTimeoutMs);', '}, deadlineCancellationTimeoutMs);'],
+    ['current cancellation raw explicit-cancel sink', '        boundedCancellationTimeoutMs,', '        cancellationTimeoutMs,'],
+    ['current cancellation pseudo normalization', 'Number.isSafeInteger(requestedCancellationTimeoutMs)', 'Number.isFinite(requestedCancellationTimeoutMs)'],
+    ['current cancellation wrong deadline upper bound', 'Math.min(requestedDeadlineMs, 2147483646)', 'Math.min(requestedDeadlineMs, 2147483647)'],
+    ['current cancellation over timer upper bound', 'Math.min(requestedDeadlineCancellationTimeoutMs, 2147483647)', 'Math.min(requestedDeadlineCancellationTimeoutMs, 2147483648)'],
+    ['current cancellation raw renewal result', 'return now() + boundedDeadlineMs;', 'return now() + deadlineMs;'],
+    ['current cancellation extra raw timer', '  const armDeadline = () => {', '  setTimeout(() => {}, deadlineMs);\n  const armDeadline = () => {'],
+    ['current cancellation bounded deadline rebind', '  let cancellationTimer = null, deadline = null;', '  boundedDeadlineMs = deadlineMs;\n  let cancellationTimer = null, deadline = null;'],
+    ['current cancellation resolve skips shared clear', 'resolve: (value) => { clear(); resolve(value); }', 'resolve: (value) => { clearTimeout(deadline); resolve(value); }'],
+    ['current cancellation reject skips shared clear', 'reject: (error) => { clear(); reject(error); }', 'reject: (error) => { clearTimeout(cancellationTimer); reject(error); }'],
+  ];
+  for (const [label, search, replacement] of cancellationVariants) {
+    assertBlockedAcrossLayers({
+      label,
+      contract: 'cancellation',
+      overrides: new Map([[cancellationPath, replaceRequired(
+        currentReleaseSuccessorCancellation, search, replacement, label,
+      )]]),
+    });
+  }
+
+  const managerPath = 'electron/host-core/agent/execution-worker-manager.cjs';
+  assert.equal(successorRisk(new Map([[
+    managerPath, currentReleaseSuccessorManager,
+  ]])).status, 'VERIFIED', 'current manager positive control');
+  const managerVariants = [
+    ['current manager raw timer sink', 'setTimeout(resolve, boundedTimeout)', 'setTimeout(resolve, timeoutMs)'],
+    ['current manager pseudo normalization', 'const requestedTimeout = Number(timeoutMs);', 'const requestedTimeout = timeoutMs;'],
+    ['current manager wrong timer upper bound', 'Math.min(requestedTimeout, 2147483647)', 'Math.min(requestedTimeout, 2147483646)'],
+    ['current manager over timer upper bound', 'Math.min(requestedTimeout, 2147483647)', 'Math.min(requestedTimeout, 2147483648)'],
+    ['current manager dead timer after return', '  record.finalizationPromise = Promise.race([', '  return Promise.resolve();\n  record.finalizationPromise = Promise.race(['],
+    ['current manager dead timer after throw', '  record.finalizationPromise = Promise.race([', "  throw new Error('dead timer');\n  record.finalizationPromise = Promise.race(["],
+    ['current manager bounded value rebind', '  record.finalizationPromise = Promise.race([', '  boundedTimeout = timeoutMs;\n  record.finalizationPromise = Promise.race(['],
+    ['current manager extra raw timer', '  record.finalizationPromise = Promise.race([', '  setTimeout(() => {}, timeoutMs);\n  record.finalizationPromise = Promise.race(['],
+  ];
+  for (const [label, search, replacement] of managerVariants) {
+    assertBlockedAcrossLayers({
+      label,
+      contract: 'manager',
+      overrides: new Map([[managerPath, replaceRequired(
+        currentReleaseSuccessorManager, search, replacement, label,
+      )]]),
+    });
+  }
+
+  const contextPath = 'electron/host-core/agent/execution-worker-context-usage-lease.cjs';
+  const contextBase = (leaseSource, desktopSource = currentReleaseSuccessorDesktopHost) => new Map([
+    [managerPath, currentReleaseSuccessorManager],
+    ['electron/host-core/agent/desktop-host-context.cjs', desktopSource],
+    ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
+    [contextPath, leaseSource],
+  ]);
+  const currentContextPositiveRisk = successorRisk(
+    contextBase(currentReleaseSuccessorContextUsageLease),
+  );
+  assert.equal(
+    auditQworkSuccessorContextHelperAstContract(successorSourceMap(
+      contextBase(currentReleaseSuccessorContextUsageLease),
+    )),
+    true,
+    'current context helper positive control',
+  );
+  assert.equal(
+    currentContextPositiveRisk.status,
+    'VERIFIED',
+    `current context positive control: ${JSON.stringify(
+      currentContextPositiveRisk.checks.at(-1).observations.successor_ast_contracts,
+    )}`,
+  );
+  const contextVariants = [
+    ['current context raw timer sink', 'setTimeout(resolveDeadline, boundedTimeout)', 'setTimeout(resolveDeadline, timeoutMs)'],
+    ['current context pseudo normalization', 'const requestedTimeout = Number(timeoutMs);', 'const requestedTimeout = timeoutMs;'],
+    ['current context wrong business upper bound', 'Math.min(requestedTimeout, CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS)', 'Math.min(requestedTimeout, 1000)'],
+    ['current context over business upper bound', 'Math.min(requestedTimeout, CONTEXT_USAGE_BACKGROUND_RELEASE_TIMEOUT_MS)', 'Math.min(requestedTimeout, 11001)'],
+    ['current context dead timer after return', '  let timer = null;', '  return Promise.resolve(false);\n  let timer = null;'],
+    ['current context bounded value rebind', '  let timer = null;', '  boundedTimeout = timeoutMs;\n  let timer = null;'],
+    ['current context extra raw timer', '  let timer = null;', '  setTimeout(() => {}, timeoutMs);\n  let timer = null;'],
+    ['current context timer outside executor', '  const deadline = new Promise((resolveDeadline) => {\n    timer = setTimeout(resolveDeadline, boundedTimeout);\n    timer.unref?.();\n  });', '  const deadline = new Promise((resolveDeadline) => {});\n  timer = setTimeout(() => {}, boundedTimeout);'],
+  ];
+  for (const [label, search, replacement] of contextVariants) {
+    assertBlockedAcrossLayers({
+      label,
+      contract: 'desktop',
+      overrides: contextBase(replaceRequired(
+        currentReleaseSuccessorContextUsageLease, search, replacement, label,
+      )),
+    });
+  }
+  const directReleaseDesktop = replaceRequired(
+    currentReleaseSuccessorDesktopHost,
+    '    await contextUsageLease.release(executionWorkerLease);',
+    '    await executionWorkerLease?.release?.();',
+    'structured desktop direct release bypass',
+  );
+  assertBlockedAcrossLayers({
+    label: 'structured desktop direct release cannot bypass an unsafe context helper',
+    contract: 'desktop',
+    overrides: contextBase(
+      replaceRequired(
+        currentReleaseSuccessorContextUsageLease,
+        'setTimeout(resolveDeadline, boundedTimeout)',
+        'setTimeout(resolveDeadline, timeoutMs)',
+        'unsafe context helper for desktop bypass',
+      ),
+      directReleaseDesktop,
+    ),
+  });
+
+  const eventPath = 'electron/host-core/agent/execution-worker-event-flow.cjs';
+  assert.equal(successorRisk(new Map([[
+    eventPath, successorEventFlowV5,
+  ]])).status, 'VERIFIED', 'event-flow positive control');
+  const eventVariants = [
+    ['event window raw assignment', 'this.windowMs = boundedWindowMs;', 'this.windowMs = windowMs;'],
+    ['event timer raw delay sink', 'this.schedule(() => this.flush(key), boundedDelay)', 'this.schedule(() => this.flush(key), delay)'],
+    ['event window pseudo normalization', 'const requestedWindowMs = Number(windowMs);', 'const requestedWindowMs = windowMs;'],
+    ['event delay pseudo normalization', 'const requestedDelay = Number(delay);', 'const requestedDelay = delay;'],
+    ['event wrong timer upper bound', 'Math.min(requestedDelay, 2147483647)', 'Math.min(requestedDelay, 2147483646)'],
+    ['event over timer upper bound', 'Math.min(requestedDelay, 2147483647)', 'Math.min(requestedDelay, 2147483648)'],
+    ['event unreachable schedule', '    try {\n      entry.timer = this.schedule', '    return;\n    try {\n      entry.timer = this.schedule'],
+    ['event bounded delay rebind', '    try {\n      entry.timer = this.schedule', '    boundedDelay = delay;\n    try {\n      entry.timer = this.schedule'],
+  ];
+  for (const [label, search, replacement] of eventVariants) {
+    assertBlockedAcrossLayers({
+      label,
+      contract: 'event_flow',
+      overrides: new Map([[eventPath, replaceRequired(
+        successorEventFlowV5, search, replacement, label,
+      )]]),
+    });
+  }
+});
+
+test('v5 supervisor and heartbeat timers share one bounded value across every sink', () => {
+  const supervisorVariants = [
+    ['supervisor restart accepts fractions',
+      'Number.isSafeInteger(requestedRestartDelayMs)',
+      'Number.isFinite(requestedRestartDelayMs)'],
+    ['supervisor startup leaves no plus-one headroom',
+      'Math.min(requestedStartupTimeoutMs, 2147483646)',
+      'Math.min(requestedStartupTimeoutMs, 2147483647)'],
+    ['supervisor restart uses raw delay',
+      '}, boundedRestartDelayMs);',
+      '}, restartDelayMs);'],
+    ['supervisor startup envelope uses raw delay',
+      '{ deadlineMs: boundedStartupTimeoutMs, now: now() },',
+      '{ deadlineMs: startupTimeoutMs, now: now() },'],
+    ['supervisor startup timer uses raw delay',
+      'boundedStartupTimeoutMs + 1,',
+      'startupTimeoutMs + 1,'],
+    ['supervisor keeps fake normalization beside an extra raw timer',
+      '  const onExit = () => {',
+      '  setTimeout(() => {}, restartDelayMs);\n  const onExit = () => {'],
+    ['supervisor startup bound is unreachable',
+      '  const onExit = () => {',
+      '  return Object.freeze({ enabled: true });\n  const onExit = () => {'],
+  ];
+  for (const [label, search, replacement] of supervisorVariants) {
+    const overrides = new Map([
+      ['electron/host-core/agent/execution-worker-supervisor.cjs', replaceRequired(
+        currentShapeSuccessorSupervisor, search, replacement, label,
+      )],
+      ['electron/host-core/agent/execution-worker-process-lifecycle.cjs', successorProcessLifecycle],
+    ]);
+    assertBlockedAcrossLayers({ label, contract: 'supervisor', overrides });
+  }
+
+  const lifecycleVariants = [
+    ['heartbeat accepts unsafe integer',
+      'Number.isSafeInteger(requestedHeartbeatTimeoutMs)',
+      'Number.isFinite(requestedHeartbeatTimeoutMs)'],
+    ['heartbeat leaves no plus-one headroom',
+      'Math.min(requestedHeartbeatTimeoutMs, 2147483646)',
+      'Math.min(requestedHeartbeatTimeoutMs, 2147483647)'],
+    ['confirmation exceeds Node timer maximum',
+      'Math.min(requestedHeartbeatConfirmationMs, 2147483646)',
+      'Math.min(requestedHeartbeatConfirmationMs, 2147483648)'],
+    ['watchdog sink uses raw timeout',
+      '? boundedHeartbeatTimeoutMs\n      : boundedHeartbeatConfirmationMs) + 1',
+      '? timeoutMs\n      : confirmationMs) + 1'],
+    ['watchdog primary comparison uses raw timeout',
+      'clock() - lastActivityTick < boundedHeartbeatTimeoutMs) return schedule();',
+      'clock() - lastActivityTick < timeoutMs) return schedule();'],
+    ['watchdog confirmation comparison uses raw timeout',
+      'clock() - suspectAt < boundedHeartbeatConfirmationMs) return schedule();',
+      'clock() - suspectAt < confirmationMs) return schedule();'],
+    ['watchdog uses the wrong bounded value in confirmation',
+      'clock() - suspectAt < boundedHeartbeatConfirmationMs) return schedule();',
+      'clock() - suspectAt < boundedHeartbeatTimeoutMs) return schedule();'],
+    ['watchdog keeps fake normalization beside an extra raw timer',
+      '  const schedule = () => {',
+      '  setTimeout(() => {}, timeoutMs);\n  const schedule = () => {'],
+    ['watchdog schedule is unreachable after normalization',
+      '  const schedule = () => {',
+      '  return Object.freeze({ clear });\n  const schedule = () => {'],
+  ];
+  for (const [label, search, replacement] of lifecycleVariants) {
+    const overrides = new Map([
+      ['electron/host-core/agent/execution-worker-supervisor.cjs', currentShapeSuccessorSupervisor],
+      ['electron/host-core/agent/execution-worker-process-lifecycle.cjs', replaceRequired(
+        successorProcessLifecycle, search, replacement, label,
+      )],
+    ]);
+    assertBlockedAcrossLayers({ label, contract: 'supervisor', overrides });
   }
 });
 
@@ -1548,10 +2070,161 @@ test('v5 supervisor handler bindings allow only an exact optional now forwarding
 });
 
 test('v5 current supervisor shape preserves one identity-bound pending and child lifecycle', () => {
-  const supervisorContract = (source) => auditQworkSuccessorAstContracts(new Map([[
-    'electron/host-core/agent/execution-worker-supervisor.cjs', source,
-  ]])).supervisor;
+  const supervisorContract = (source, lifecycle = successorProcessLifecycle) => (
+    auditQworkSuccessorAstContracts(new Map([
+      ['electron/host-core/agent/execution-worker-supervisor.cjs', source],
+      ['electron/host-core/agent/execution-worker-process-lifecycle.cjs', lifecycle],
+    ])).supervisor
+  );
   assert.equal(supervisorContract(currentShapeSuccessorSupervisor), true);
+  const safeDecodeCatch = `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } finally {
+        void terminateChild(child, 'message-validation-failed');
+      }
+      return;
+    }`;
+  const isolatedLogDecodeCatch = `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`;
+  const returnedTerminationDecodeCatch = `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      return terminateChild(child, 'message-validation-failed');
+    }`;
+  assert.equal(supervisorContract(replaceRequired(
+    currentShapeSuccessorSupervisor,
+    safeDecodeCatch,
+    isolatedLogDecodeCatch,
+    'isolated decode rejection log',
+  )), true, 'a throwing diagnostic logger is isolated before managed child termination');
+  assert.equal(supervisorContract(replaceRequired(
+    currentShapeSuccessorSupervisor,
+    safeDecodeCatch,
+    returnedTerminationDecodeCatch,
+    'returned decode rejection termination',
+  )), true, 'the managed termination promise may be returned after isolated logging');
+
+  const unsafeDecodeCatchVariants = [
+    [
+      'current release optional child kill bypasses the managed terminator',
+      `    } catch (error) {
+      logger.error?.('[execution-worker] rejected message', { code: error.code });
+      child?.kill?.();
+      return;
+    }`,
+    ],
+    [
+      'direct child kill bypasses the managed terminator',
+      `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      child.kill();
+      return;
+    }`,
+    ],
+    [
+      'unprotected logger failure can prevent managed termination',
+      `    } catch (error) {
+      logger.error?.('[execution-worker] rejected message', { code: error.code });
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'managed terminator is shadowed inside the rejection branch',
+      `    } catch (error) {
+      const terminateChild = () => Promise.resolve();
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'logger is rebound inside the rejection branch',
+      `    } catch (error) {
+      logger = fallbackLogger;
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'managed child is shadowed inside the rejection branch',
+      `    } catch (error) {
+      const child = unrelatedChild;
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'decode error is rebound before diagnostic logging',
+      `    } catch (error) {
+      error = unrelatedError;
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'protected logger is shadowed by the nested catch parameter',
+      `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch (logger) {}
+      void terminateChild(child, 'message-validation-failed');
+      return;
+    }`,
+    ],
+    [
+      'managed terminator receives an unrelated child',
+      isolatedLogDecodeCatch.replace(
+        "terminateChild(child, 'message-validation-failed')",
+        "terminateChild(unrelatedChild, 'message-validation-failed')",
+      ),
+    ],
+    [
+      'managed terminator reason is dynamic',
+      isolatedLogDecodeCatch.replace(
+        "terminateChild(child, 'message-validation-failed')",
+        'terminateChild(child, failureReason)',
+      ),
+    ],
+    [
+      'managed termination is unreachable after an early return',
+      `    } catch (error) {
+      try {
+        logger.error?.('[execution-worker] rejected message', { code: error.code });
+      } catch {}
+      return;
+      void terminateChild(child, 'message-validation-failed');
+    }`,
+    ],
+  ];
+  for (const [label, replacement] of unsafeDecodeCatchVariants) {
+    assert.equal(supervisorContract(replaceRequired(
+      currentShapeSuccessorSupervisor,
+      safeDecodeCatch,
+      replacement,
+      label,
+    )), false, label);
+  }
   const deadlineSpreadSupervisor = replaceRequired(
     replaceRequired(
       currentShapeSuccessorSupervisor,
@@ -1583,6 +2256,40 @@ test('v5 current supervisor shape preserves one identity-bound pending and child
     'deadline spread settlement',
   );
   assert.equal(supervisorContract(deadlineSpreadSupervisor), true);
+  const deadlineAwareReplySupervisor = replaceRequired(
+    replaceRequired(
+      deadlineSpreadSupervisor,
+      "const { createExecutionWorkerDeadlineCallbacks } = require('./execution-worker-deadline.cjs');",
+      "const { createExecutionWorkerDeadlineCallbacks, validateExecutionWorkerReply } = require('./execution-worker-deadline.cjs');",
+      'deadline-aware reply import',
+    ),
+    "      message = validateEnvelope(raw, { direction: 'worker-to-host', now: now() });",
+    '      message = validateExecutionWorkerReply(raw, pending, now);',
+    'deadline-aware reply call',
+  );
+  assert.equal(
+    supervisorContract(deadlineAwareReplySupervisor),
+    true,
+    'deadline-aware reply helper is accepted when its binding and full authority inputs are exact',
+  );
+  assert.equal(supervisorContract(replaceRequired(
+    deadlineAwareReplySupervisor,
+    "require('./execution-worker-deadline.cjs');",
+    "require('./untrusted-deadline.cjs');",
+    'deadline-aware reply import path',
+  )), false, 'deadline-aware reply helper must come from the protected deadline module');
+  assert.equal(supervisorContract(replaceRequired(
+    deadlineAwareReplySupervisor,
+    'validateExecutionWorkerReply(raw, pending, now)',
+    'validateExecutionWorkerReply(raw, unrelatedPending, now)',
+    'deadline-aware reply pending identity',
+  )), false, 'deadline-aware reply helper must receive the protected pending registry');
+  assert.equal(supervisorContract(replaceRequired(
+    deadlineAwareReplySupervisor,
+    'validateExecutionWorkerReply(raw, pending, now)',
+    'validateExecutionWorkerReply(raw, pending, now())',
+    'deadline-aware reply clock authority',
+  )), false, 'deadline-aware reply helper must receive the protected clock function');
 
   const deadlineSpreadVariants = [
     [
@@ -2383,7 +3090,11 @@ test('MR !1559 current helper delegation preserves manager and desktop lease own
     ['electron/host-core/agent/execution-worker-context-usage.cjs', successorContextUsage],
     ['electron/host-core/agent/execution-worker-context-usage-lease.cjs', successorContextUsageLease],
   ]));
-  assert.equal(risk.status, 'VERIFIED');
+  assert.equal(
+    risk.status,
+    'VERIFIED',
+    JSON.stringify({ failure_ids: risk.failure_ids, observations: risk.checks.at(-1).observations }),
+  );
   assert.deepEqual(risk.failure_ids, []);
 });
 
@@ -2396,7 +3107,11 @@ test('current release controller, manager drain options and destructured desktop
   ]));
   assert.equal(QWORK_RELEASE_BLOCKING_RISK_SCHEMA, 'qbot-qwork-release-blocking-risk-attestation/v5');
   assert.equal(risk.schema_version, QWORK_RELEASE_BLOCKING_RISK_SCHEMA);
-  assert.equal(risk.status, 'VERIFIED');
+  assert.equal(
+    risk.status,
+    'VERIFIED',
+    JSON.stringify({ failure_ids: risk.failure_ids, observations: risk.checks.at(-1).observations }),
+  );
   assert.deepEqual(risk.failure_ids, []);
   assert.deepEqual(
     {
@@ -2422,9 +3137,8 @@ test('current release controller, manager drain options and destructured desktop
 
 test('v5 attributes unsafe current-style context timeouts without denying awaited desktop release', () => {
   const safeTimeout = `const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;`;
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 11000) : 1000;`;
   const unsafeTimeouts = [
     'const requestedTimeout = Number(timeoutMs);\n  const boundedTimeout = Math.max(1, Number(timeoutMs) || 1000);',
     'const requestedTimeout = Number(timeoutMs);\n  const boundedTimeout = Infinity;',
@@ -2930,9 +3644,8 @@ test('v5 AST closure rejects every proven dead-code, shadowing, rebind and wrong
     ['context timeout can be infinite', mutate(
       successorContextUsageLease,
       `const requestedTimeout = Number(timeoutMs);
-  const boundedTimeout = Number.isFinite(requestedTimeout)
-    ? Math.max(1, requestedTimeout)
-    : 1000;`,
+  const boundedTimeout = Number.isSafeInteger(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, 11000) : 1000;`,
       'const requestedTimeout = Number(timeoutMs);\n  const boundedTimeout = Infinity;',
       'context timeout can be infinite',
     )],
@@ -3063,9 +3776,17 @@ test('v5 full audit rejects protected rebind, post-wait listener, late target gu
         `    if (!target) return Promise.resolve(false);
     const existing = flights.get(target);
     if (existing) return existing;
+    const requestedCleanupGraceMs = Number(cleanupGraceMs);
+    const boundedCleanupGraceMs = Number.isSafeInteger(requestedCleanupGraceMs)
+      && requestedCleanupGraceMs > 0
+      ? Math.min(requestedCleanupGraceMs, 2147483647) : 1;
     const pid = processId(target.pid);`,
         `    const existing = flights.get(target);
     if (existing) return existing;
+    const requestedCleanupGraceMs = Number(cleanupGraceMs);
+    const boundedCleanupGraceMs = Number.isSafeInteger(requestedCleanupGraceMs)
+      && requestedCleanupGraceMs > 0
+      ? Math.min(requestedCleanupGraceMs, 2147483647) : 1;
     const pid = processId(target.pid);
     if (!target) return Promise.resolve(false);`,
         'termination target guard after use',
