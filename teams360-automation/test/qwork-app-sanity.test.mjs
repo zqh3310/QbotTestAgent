@@ -11,6 +11,7 @@ import {
   dispatchTrustedVisibleSelectorClick,
   exactAppSanityReplyMatches,
   executeAppSanitySequence,
+  hasUniqueAppSanityExpertTab,
   QWORK_APP_SANITY_ASSISTANT_BODY_SELECTOR,
   QWORK_APP_SANITY_SCHEMA,
   resolveAppSanityAssistantBody,
@@ -113,6 +114,14 @@ test('App sanity reads the explicit assistant body instead of the QWork identity
   assert.notEqual(reply, 'QWork');
 });
 
+test('App sanity accepts exactly one expert tab and rejects missing or ambiguous matches', () => {
+  assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 0, expertSemanticCount: 0 }), false);
+  assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 0, expertSemanticCount: 1 }), true);
+  assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 0, expertSemanticCount: 2 }), false);
+  assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 1, expertSemanticCount: 1 }), true);
+  assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 2, expertSemanticCount: 1 }), false);
+});
+
 test('App sanity CLI requires explicit mutation consent and generates a unique exact marker', () => {
   const safe = parseArgs(['app-sanity']);
   const enabled = parseArgs(['app-sanity', '--allow-write']);
@@ -192,9 +201,10 @@ test('App sanity implementation contains no catalog mutation, install or destruc
   assert.match(source, /Input\.dispatchMouseEvent/u);
   assert.doesNotMatch(source, /\.click\(\)/u);
   assert.match(source, /controls\.length !== 1/u);
-  assert.match(source, /visibleExactText\('\[role="tab"\]\[aria-selected="true"\]', '\\u4e13\\u5bb6'\)/u);
-  assert.match(source, /intermediate_clean_new_task:\s*allAssertionsPass/u);
-  assert.match(source, /intermediate_new_task:\s*intermediateNewTask\?\.detail/u);
+  assert.match(source, /visibleExactTextCount\('\[role="tab"\]\[aria-selected="true"\]', '\\u4e13\\u5bb6'\)/u);
+  assert.match(source, /runStep\('prepare_task_reopen', \(\) => driver\.openCleanNewTask\(\)\)/u);
+  assert.match(source, /before_state:\s*projectState\(before\)/u);
+  assert.match(source, /after_state:\s*projectState\(state\)/u);
   assert.match(source, /assertionError\.assertions\s*=\s*assertions/u);
   assert.match(source, /nonReportEvidenceValid/u);
   assert.doesNotMatch(source, /if \(!manifest\.evidence_valid\)[\s\S]*writeFileSync\(reportFile/u);

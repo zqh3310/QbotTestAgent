@@ -90,8 +90,9 @@ npm --prefix teams360-automation run app-sanity -- \
 
 该入口只接受唯一受管 QWork WebView，与 Casebook/G5 runner 共用同一进程生命周期锁，
 且输出必须是 `teams360-automation/output` 下调用前不存在的私有目录。它按固定顺序验证
-工作台、干净新任务、一次严格确认发送与精确回复、按同一非空 taskId 从可见任务列表重开
-及消息持久化、专家、技能、连接器、自动化页面，最后返回零消息、零 taskId、无显式能力
+工作台、干净新任务、一次严格确认发送与精确回复、重开前独立创建并证明干净新任务、
+按同一非空 taskId 从可见任务列表重开及消息持久化、专家、技能、连接器、自动化页面，
+最后返回零消息、零 taskId、无显式能力
 chip 的干净新任务。回复正文只允许从 `.aui-assistant-message-content` 读取；助手身份
 “QWork”、标题、截图 OCR 或宽泛 `[data-role=assistant]` 都不能冒充回复。
 
@@ -100,6 +101,9 @@ chip 的干净新任务。回复正文只允许从 `.aui-assistant-message-conte
 零重试，要求本轮用户消息精确新增一次、至少一项辅助状态变化、非空 taskId、运行态收敛、
 发送入口恢复和助手正文与 marker trim 后全等；随后必须从精确
 `session-item-<taskId>` 可见入口重开并再次证明 taskId、用户消息和精确回复不漂移。
+重开前的干净新任务是独立 trace 步骤，必须保存动作前后状态、可信点击回执和步骤截图；
+专家 tab 只接受唯一可见的 `experts-tab`，或在其不存在时唯一可见、选中且精确文本为
+“专家”的语义 tab，多匹配或缺失均失败。
 任一步失败都输出 `STOP_BEFORE_G0` 并尝试安全返回新任务；完整成功只输出
 `PASS_SANITY`。两种结论均永久携带 `diagnostic_only=true`、
 `release_gate_eligible=false`，不得作为 pretest `READY`、G0/G1 准入、Casebook 结果、

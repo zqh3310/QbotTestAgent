@@ -29,7 +29,9 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
 `npm --prefix teams360-automation run app-sanity -- --allow-write --out <new-directory>`
 执行一次独立 App-first 核心诊断。该命令与 Casebook/G5 共用唯一 managed runner lock，
 只写新的 `teams360-automation/output` 子目录，并按顺序验证工作台、干净新任务、一次严格
-发送与精确正文、同 taskId 可见重开、专家/技能/连接器/自动化页面及最终干净新任务。
+发送与精确正文、带前后状态/点击回执/截图的独立干净新任务、同 taskId 可见重开、
+专家/技能/连接器/自动化页面及最终干净新任务。专家 tab 必须由唯一 testid，或唯一可见、
+选中且精确文本为“专家”的语义 tab 证明，缺失或多匹配均失败。
 每步保存截图、JSONL 和 SHA 证据；助手正文固定从
 `.aui-assistant-message-content` 读取，不能把“QWork”身份标题当回复。
 `PASS_SANITY` 和 `STOP_BEFORE_G0` 都是非发布诊断，必须保持

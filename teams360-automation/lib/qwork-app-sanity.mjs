@@ -21,6 +21,7 @@ export const APP_SANITY_STEP_IDS = Object.freeze([
   'workbench_ready',
   'clean_new_task',
   'strict_send_exact_reply',
+  'prepare_task_reopen',
   'reopen_by_task_id',
   'experts_page',
   'skills_page',
@@ -58,6 +59,10 @@ export function exactAppSanityReplyMatches(actual, expected) {
 
 export function resolveAppSanityAssistantBody({ assistantBodyTexts = [] } = {}) {
   return [...assistantBodyTexts].map(text).filter(Boolean).at(-1) || '';
+}
+
+export function hasUniqueAppSanityExpertTab({ expertTestIdCount = 0, expertSemanticCount = 0 } = {}) {
+  return expertTestIdCount === 1 || (expertTestIdCount === 0 && expertSemanticCount === 1);
 }
 
 export async function executeAppSanitySequence({ driver, prompt, expected, onStep = async () => {} }) {
@@ -111,6 +116,7 @@ export async function executeAppSanitySequence({ driver, prompt, expected, onSte
     const send = await runStep('strict_send_exact_reply', () => driver.strictSend({ prompt, expected }));
     taskId = text(send?.detail?.task_id);
     if (!taskId) throw new Error('Strict send did not return a non-empty taskId.');
+    await runStep('prepare_task_reopen', () => driver.openCleanNewTask());
     await runStep('reopen_by_task_id', () => driver.reopenByTaskId({ taskId, prompt, expected }));
     await runStep('experts_page', () => driver.openExpertsPage());
     await runStep('skills_page', () => driver.openSkillsPage());
@@ -315,6 +321,7 @@ function createCdpAppSanityDriver(client, timeoutMs) {
       };
     },
     async openCleanNewTask() {
+      const before = await readAppSanityState(client);
       const click = await dispatchTrustedTestIdClick(client, 'nav-new-task');
       const state = await waitForState(client, (value) => value.composer
         && value.composerText === ''
@@ -329,7 +336,11 @@ function createCdpAppSanityDriver(client, timeoutMs) {
           no_active_task_id: state.activeTaskId === '',
           no_explicit_capability_chips: state.capabilityChipCount === 0,
         },
-        detail: { ...projectState(state), click_receipt: click },
+        detail: {
+          before_state: projectState(before),
+          after_state: projectState(state),
+          click_receipt: click,
+        },
       };
     },
     async strictSend({ prompt, expected }) {
@@ -405,13 +416,12 @@ function createCdpAppSanityDriver(client, timeoutMs) {
       };
     },
     async reopenByTaskId({ taskId, prompt, expected }) {
-      const intermediateNewTask = await this.openCleanNewTask();
+      const before = await readAppSanityState(client);
       const click = await dispatchTrustedSessionClick(client, taskId);
       const state = await waitForState(client, (value) => value.activeTaskId === taskId
         && value.userCount > 0 && value.assistantCount > 0, STEP_TIMEOUT_MS);
       return {
         assertions: {
-          intermediate_clean_new_task: allAssertionsPass(intermediateNewTask?.assertions),
           exact_session_clicked: click.evidence_valid === true,
           task_id_stable: state.activeTaskId === taskId,
           user_message_persisted: text(state.lastUser) === text(prompt),
@@ -419,8 +429,8 @@ function createCdpAppSanityDriver(client, timeoutMs) {
           terminal_state_restored: state.running === false && state.sendButtonVisible === true,
         },
         detail: {
-          ...projectState(state),
-          intermediate_new_task: intermediateNewTask?.detail || {},
+          before_state: projectState(before),
+          after_state: projectState(state),
           click_receipt: click,
         },
       };
@@ -587,8 +597,8 @@ async function readAppSanityState(client) {
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     });
     const visible = (selector) => visibleElements(selector).length > 0;
-    const visibleExactText = (selector, expected) => visibleElements(selector)
-      .some((element) => (element.textContent || '').trim() === expected);
+    const visibleExactTextCount = (selector, expected) => visibleElements(selector)
+      .filter((element) => (element.textContent || '').trim() === expected).length;
     let e2e = null;
     try { e2e = await globalThis.__qbotE2E?.getState?.(); } catch {}
     const userNodes = [...document.querySelectorAll('.aui-user-message-content, [data-role="user"]')]
@@ -619,8 +629,8 @@ async function readAppSanityState(client) {
       assistantBodyTexts: assistantBodyNodes.map((element) => element.innerText || element.textContent || ''),
       capabilityChipCount: visibleElements('[data-testid="composer-selection-chips"] [data-testid*="chip"], [data-testid="composer-skill-chip"], [data-testid="composer-connector-chip"], [data-testid="composer-expert-chip"]').length,
       expertsView: visible('[data-testid="experts-view"]'),
-      expertsTab: visible('[data-testid="experts-tab"]')
-        || visibleExactText('[role="tab"][aria-selected="true"]', '\u4e13\u5bb6'),
+      expertTestIdCount: visibleElements('[data-testid="experts-tab"]').length,
+      expertSemanticCount: visibleExactTextCount('[role="tab"][aria-selected="true"]', '\u4e13\u5bb6'),
       skillsTab: visible('[data-testid="skills-tab"]'),
       expertError: visible('[data-testid="expert-center-error"]'),
       skillsView: visible('[data-testid="skills-view"]'),
@@ -634,6 +644,7 @@ async function readAppSanityState(client) {
   })()`);
   return {
     ...state,
+    expertsTab: hasUniqueAppSanityExpertTab(state),
     lastAssistant: resolveAppSanityAssistantBody(state),
   };
 }
@@ -648,6 +659,10 @@ function projectState(state) {
     composer_visible: state.composer,
     composer_text_length: text(state.composerText).length,
     capability_chip_count: state.capabilityChipCount,
+    expert_tab_match_counts: {
+      testid: state.expertTestIdCount,
+      semantic: state.expertSemanticCount,
+    },
     views: {
       experts: state.expertsView,
       skills: state.skillsView,
