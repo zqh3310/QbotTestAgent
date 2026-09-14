@@ -3,10 +3,17 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { assertIsolatedProfile, normalizeCdpUrl, redactText } from './config.mjs';
+import {
+  IS_MACOS,
+  IS_WINDOWS,
+  listProcesses,
+  processIdentity as portableProcessIdentity,
+  terminateProcess,
+} from './platform.mjs';
 
 export function resolveExecutable(appPath) {
   const resolved = path.resolve(appPath);
-  return resolved.endsWith('.app')
+  return IS_MACOS && resolved.endsWith('.app')
     ? path.join(resolved, 'Contents', 'MacOS', '360Teams')
     : resolved;
 }
@@ -17,10 +24,9 @@ export function assertLaunchInputs({ appPath, profileDir }) {
 }
 
 export function assertAppExecutable(appPath) {
-  if (process.platform !== 'darwin') throw new Error('The installed 360Teams launcher currently supports macOS only.');
   const executable = resolveExecutable(appPath);
   if (!fs.existsSync(executable)) throw new Error(`360Teams executable not found: ${executable}`);
-  fs.accessSync(executable, fs.constants.X_OK);
+  if (!IS_WINDOWS) fs.accessSync(executable, fs.constants.X_OK);
   return executable;
 }
 
@@ -276,6 +282,10 @@ export function clearStaleChromiumSingletonLinks(profileDir) {
 export function ensureProfileAlias({ profileDir, aliasPath }) {
   const profile = fs.realpathSync.native(path.resolve(profileDir));
   const alias = path.resolve(aliasPath);
+  // Chromium's default-profile CDP restriction is specific to the packaged
+  // macOS Electron lane. Windows can use the real profile directly; avoiding
+  // a junction/symlink also keeps the adapter usable without Developer Mode.
+  if (IS_WINDOWS) return profile;
   fs.mkdirSync(path.dirname(alias), { recursive: true });
   let stat = null;
   try { stat = fs.lstatSync(alias); } catch {}
@@ -358,9 +368,11 @@ export function processMatchesSession(session) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   const current = processIdentity(pid);
   if (!current.command || !/360Teams/.test(current.command)) return false;
-  if (session.executable
-    && current.command !== session.executable
-    && !current.command.startsWith(`${session.executable} `)) return false;
+  if (session.executable) {
+    const command = IS_WINDOWS ? current.command.toLowerCase() : current.command;
+    const expected = IS_WINDOWS ? String(session.executable).toLowerCase() : session.executable;
+    if (command !== expected && !command.startsWith(`${expected} `)) return false;
+  }
   if (session.process_started && current.started !== session.process_started) return false;
   if (session.profile_mode === 'live') {
     if (!session.profile_alias || !current.command.includes(`--user-data-dir=${session.profile_alias}`)) return false;
@@ -369,7 +381,11 @@ export function processMatchesSession(session) {
     } catch {
       return false;
     }
-  } else if (session.profile_dir && !current.command.includes(session.profile_dir)) return false;
+  } else if (session.profile_dir) {
+    const command = IS_WINDOWS ? current.command.toLowerCase() : current.command;
+    const profile = IS_WINDOWS ? String(session.profile_dir).toLowerCase() : session.profile_dir;
+    if (!command.includes(profile)) return false;
+  }
   return true;
 }
 
@@ -461,16 +477,17 @@ export async function settleRelaunchedLiveTeamsSession(sessionFile, {
 }
 
 export function listRunningTeamsMainProcesses(executable) {
-  try {
-    const output = execFileSync('ps', ['-ax', '-ww', '-o', 'pid=,command='], { encoding: 'utf8' });
-    return parseRunningTeamsMainProcesses(output, executable);
-  } catch {
-    return [];
-  }
+  return listProcesses().filter((item) => {
+    const expected = path.resolve(executable);
+    const command = String(item.command || '');
+    return command === expected || command.startsWith(`${expected} `)
+      || (IS_WINDOWS && command.toLowerCase().includes(expected.toLowerCase()));
+  });
 }
 
 export function parseRunningTeamsMainProcesses(output, executable) {
-  const expected = path.resolve(executable);
+  const rawExpected = String(executable || '');
+  const expected = IS_WINDOWS && rawExpected.startsWith('/') ? rawExpected : path.resolve(rawExpected);
   return String(output || '')
     .split(/\r?\n/)
     .map((line) => line.match(/^\s*(\d+)\s+(.+)$/))
@@ -481,6 +498,17 @@ export function parseRunningTeamsMainProcesses(output, executable) {
 
 function listenerPidForPort(port) {
   try {
+    if (IS_WINDOWS) {
+      const output = execFileSync('netstat.exe', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
+      const match = String(output).split(/\r?\n/).find((line) => {
+        const fields = line.trim().split(/\s+/);
+        return fields[0]?.toUpperCase() === 'TCP'
+          && fields[1]?.endsWith(`:${String(port)}`)
+          && fields[3]?.toUpperCase() === 'LISTENING';
+      });
+      const pid = Number(match?.trim().split(/\s+/).at(-1));
+      return Number.isInteger(pid) && pid > 1 ? pid : null;
+    }
     const output = execFileSync('lsof', ['-nP', '-tiTCP:' + String(port), '-sTCP:LISTEN'], { encoding: 'utf8' }).trim();
     const pid = Number(output.split(/\s+/)[0]);
     return Number.isInteger(pid) && pid > 1 ? pid : null;
@@ -498,28 +526,11 @@ function safeCdpPort(value) {
 }
 
 function processIdentity(pid) {
-  try {
-    const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
-    const command = execFileSync('ps', ['-p', String(pid), '-ww', '-o', 'command='], { encoding: 'utf8' }).trim();
-    return { started, command };
-  } catch {
-    return { started: '', command: '' };
-  }
+  return portableProcessIdentity(pid);
 }
 
 function terminatePid(pid, { forceAfterMs = 5000 } = {}) {
-  if (!Number.isInteger(Number(pid)) || Number(pid) <= 1) return;
-  try { process.kill(Number(pid), 'SIGTERM'); } catch { return; }
-  const deadline = Date.now() + forceAfterMs;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(Number(pid), 0);
-    } catch {
-      return;
-    }
-    sleepSync(100);
-  }
-  try { process.kill(Number(pid), 'SIGKILL'); } catch {}
+  terminateProcess(pid, { forceAfterMs });
 }
 
 function sleepSync(ms) {

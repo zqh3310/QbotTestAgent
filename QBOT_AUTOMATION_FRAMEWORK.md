@@ -2160,3 +2160,13 @@ SHA-256 必须显式提供且为 64 位有效值。pretest 必须再次强制
 都必须从该阶段计划绑定路径重新读取磁盘报告，并强制接收、校验非空 64 位文件 SHA，再核对报告
 内容哈希、release HEAD、Casebook SHA、framework commit 和 `READY` 决策；文件缺失、仅
 重排 JSON、内容或 SHA 被替换、属于旧候选时均 fail-closed，且不得写事件或推进 revision。
+
+## 15. Windows/macOS 双端执行合同
+
+共享 Casebook、动作计划、业务 Oracle、证据 manifest、SHA-256 复核和 G0-G5 状态机在 Windows 与 macOS 上必须保持同一合同；平台差异只能由 `teams360-automation/lib/platform.mjs` 及其受管适配器实现。禁止维护第二套业务 runner 或通过运行时排除 Case 取得全绿。
+
+两端分别在独立受管宿主上执行，并分别冻结应用包、QWork runtime、control plane、模型、Casebook、framework commit、宿主 PID、session、CDP 与输出目录。Windows 和 macOS 的结果不能互相抵扣，也不能把不同平台的轮次拼成连续门禁轮次；双端汇总只引用双方各自已通过可信复核的结果。
+
+平台适配必须覆盖应用路径与版本读取、进程发现与终止、唯一 runner 锁、私有目录/文件与重解析点检查、原子发布、原生输入和宿主前台激活。macOS 使用 Bundle/Accessibility/System Events/`lockf`；Windows 使用 `.exe`/Windows 进程 API、ACL/NTFS reparse-point 检查、具备进程生命周期的 Windows 互斥或等价锁、Windows UI Automation/输入助手。平台能力缺失必须输出明确 `blocked`，不得批量 `skip` 或降级为 synthetic。
+
+共享测试、平台测试和发布门禁测试必须在测试报告中分开统计。每个平台必须先通过 App-first sanity，再执行对应 Casebook pretest 和正式 runner；App-first 只能输出诊断结论，不能替代 G0。任何平台的 framework/testcase issue 都必须冻结该平台目录、保留证据并在新目录重跑，不能覆盖另一平台的历史结论。

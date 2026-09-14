@@ -3,6 +3,14 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+function trySymlink(target, link, type) {
+  try { fs.symlinkSync(target, link, type); return true; }
+  catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') return false;
+    throw error;
+  }
+}
 import {
   CORE_BETA_EXPERT_012_CONTRACT_VARIANTS,
   CORE_BETA_RUN_OWNED_EXPERT_REQUIREMENTS,
@@ -739,8 +747,7 @@ assert.equal(
 
     fs.writeFileSync(traceFile, JSON.stringify(validTrace));
     const traceSymlink = path.join(caseDir, 'expert-maintenance-task-trace-link.json');
-    fs.symlinkSync(traceFile, traceSymlink);
-    assert.equal(
+    if (trySymlink(traceFile, traceSymlink)) assert.equal(
       validateEvidenceFile('expert_maintenance_task_trace', traceSymlink, {
         expectedCaseId: 'BETA-EXPERT-012',
         expectedCaseDir: caseDir,
@@ -765,7 +772,7 @@ assert.equal(
 
     const symlinkScreenshotInput = expertMaintenanceEvidenceInput(screenshot);
     const screenshotSymlink = path.join(caseDir, 'expert-maintenance-entry-link.png');
-    fs.symlinkSync(symlinkScreenshotInput.entry.screenshot.path, screenshotSymlink);
+    if (trySymlink(symlinkScreenshotInput.entry.screenshot.path, screenshotSymlink)) {
     symlinkScreenshotInput.entry.screenshot = {
       ...symlinkScreenshotInput.entry.screenshot,
       path: screenshotSymlink,
@@ -774,7 +781,7 @@ assert.equal(
       coreBetaExpertMaintenanceTaskEvidence(symlinkScreenshotInput),
       'expert_maintenance_task_trace_entry_screenshot_not_regular_file',
       '专家维护截图为符号链接时必须拒绝',
-    );
+    ); }
 
     const bytesMismatchInput = expertMaintenanceEvidenceInput(screenshot);
     bytesMismatchInput.entry.screenshot.bytes += 1;
@@ -1075,7 +1082,7 @@ assert.equal(
   );
 
   const symlinkScreenshot = path.join(caseDir, 'round-symlink.png');
-  fs.symlinkSync(rounds[3].screenshot.path, symlinkScreenshot);
+  if (trySymlink(rounds[3].screenshot.path, symlinkScreenshot)) {
   const symlinked = structuredClone(validTrace);
   symlinked.rounds[3].screenshot = {
     path: symlinkScreenshot,
@@ -1090,12 +1097,11 @@ assert.equal(
     }).valid,
     false,
     'trace 不得把符号链接冒充 Case 内真实截图',
-  );
+  ); }
 
   fs.writeFileSync(traceFile, JSON.stringify(validTrace));
   const traceSymlink = path.join(caseDir, 'web-search-quota-trace-link.json');
-  fs.symlinkSync(traceFile, traceSymlink);
-  assert.equal(
+  if (trySymlink(traceFile, traceSymlink)) assert.equal(
     validateEvidenceFile('web_search_quota_trace', traceSymlink, {
       expectedCaseId: 'MRSMOKE-WEB-001',
       expectedCaseDir: caseDir,

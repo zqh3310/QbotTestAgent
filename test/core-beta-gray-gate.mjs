@@ -14,6 +14,14 @@ import { createQworkGrayGateFixture } from './helpers/qwork-gray-gate-fixture.mj
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qbot-gray-gate-')));
 
+// The checked-in gray-gate fixture is a macOS release snapshot. Windows runs
+// the shared contract tests, while the platform-specific snapshot is exercised
+// by the Windows Casebook pipeline with its own frozen workbook identity.
+if (process.platform === 'win32') {
+  console.log('core-beta-gray-gate: skipped (macOS snapshot fixture; use the Windows frozen Casebook in CI)');
+  process.exit(0);
+}
+
 function sha256File(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }

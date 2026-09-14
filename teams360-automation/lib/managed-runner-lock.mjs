@@ -3,6 +3,15 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  IS_WINDOWS,
+  isPrivateDirectoryStat,
+  isPrivateFileStat,
+  listProcesses,
+  normalizePathForComparison,
+  processIdentity,
+  supportsPosixOwnership,
+} from './platform.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME_ROOT = path.resolve(HERE, '../runtime');
@@ -79,11 +88,12 @@ function ensureSecureLockRoot(root) {
     }
     identities.push(directoryIdentity(ancestor, stat));
   }
-  if (fs.realpathSync.native(root) !== root) {
+  if (normalizePathForComparison(fs.realpathSync.native(root)) !== normalizePathForComparison(root)) {
     throw new Error(`Managed runner lock root has a symbolic-link ancestor: ${root}`);
   }
   const rootStat = assertRealDirectory(root, 'Managed runner lock root');
-  if (rootStat.uid !== currentUid(rootStat.uid) || (rootStat.mode & 0o022) !== 0) {
+  if ((supportsPosixOwnership() && rootStat.uid !== currentUid(rootStat.uid))
+    || (!IS_WINDOWS && (rootStat.mode & 0o022) !== 0)) {
     throw new Error(`Managed runner lock root must be current-user owned and not group/other writable: ${root}`);
   }
   return identities;
@@ -113,7 +123,7 @@ export function inspectNewManagedOutputPath({ outDir, outputRoot }) {
     existing.push(directoryIdentity(ancestor, stat));
   }
   const realRoot = fs.realpathSync.native(root);
-  if (realRoot !== root) {
+  if (normalizePathForComparison(realRoot) !== normalizePathForComparison(root)) {
     throw new Error(`Managed runner output root has a symbolic-link ancestor: ${root}`);
   }
 
@@ -159,7 +169,7 @@ export function createNewManagedOutputDirectory({ outDir, outputRoot }) {
       throw new Error(`Unable to atomically create managed runner output directory ${cursor}: ${error.message}`);
     }
     const created = assertRealDirectory(cursor, 'Managed runner output directory');
-    if ((created.mode & 0o077) !== 0) {
+    if (!IS_WINDOWS && (created.mode & 0o077) !== 0) {
       throw new Error(`Managed runner output directory is not private: ${cursor}`);
     }
     createdIdentities.push(directoryIdentity(cursor, created));
@@ -187,11 +197,7 @@ export function createNewManagedOutputDirectory({ outDir, outputRoot }) {
 }
 
 function processRows() {
-  const output = execFileSync('/bin/ps', ['ax', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' });
-  return output.split('\n').map((line) => {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+([\s\S]+)$/);
-    return match ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] } : null;
-  }).filter(Boolean);
+  return listProcesses();
 }
 
 function ancestorPids(rows, pid = process.pid) {
@@ -221,24 +227,26 @@ function assertSecureLockFile(lockFile) {
   const rootIdentities = ensureSecureLockRoot(root);
   const before = lstatOrNull(resolved);
   if (before && (before.isSymbolicLink() || !before.isFile()
-    || before.uid !== currentUid(before.uid) || (before.mode & 0o077) !== 0)) {
+    || (supportsPosixOwnership() && before.uid !== currentUid(before.uid))
+    || (!IS_WINDOWS && (before.mode & 0o077) !== 0))) {
     throw new Error(`Managed runner lock must be a private current-user regular file: ${resolved}`);
   }
-  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) {
+  if (!IS_WINDOWS && !Number.isInteger(fs.constants.O_NOFOLLOW)) {
     throw new Error('Managed runner lock requires O_NOFOLLOW support.');
   }
   let fd = null;
   try {
     fd = fs.openSync(
       resolved,
-      fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW,
+      fs.constants.O_CREAT | fs.constants.O_RDWR | (IS_WINDOWS ? 0 : fs.constants.O_NOFOLLOW),
       0o600,
     );
     if (!before) fs.fchmodSync(fd, 0o600);
     const opened = fs.fstatSync(fd);
     const after = fs.lstatSync(resolved);
     const expectedUid = currentUid(opened.uid);
-    if (!opened.isFile() || opened.uid !== expectedUid || (opened.mode & 0o077) !== 0
+    if (!opened.isFile() || (supportsPosixOwnership() && opened.uid !== expectedUid)
+      || (!IS_WINDOWS && (opened.mode & 0o077) !== 0)
       || after.isSymbolicLink() || !after.isFile()
       || String(after.dev) !== String(opened.dev) || String(after.ino) !== String(opened.ino)
       || (before && (String(before.dev) !== String(opened.dev) || String(before.ino) !== String(opened.ino)))) {
@@ -282,6 +290,7 @@ export function executeUnderManagedRunnerLock({
   const args = Array.isArray(argv) ? argv.map(String) : [];
   const bindingSha256 = sha256(JSON.stringify(binding || {}));
   const resolvedLockFile = assertSecureLockFile(lockFile);
+  if (IS_WINDOWS) return executeUnderWindowsRunnerLock({ executable, args, bindingSha256, lockFile: resolvedLockFile });
   if (assertHeldByLockf(resolvedLockFile, bindingSha256)) {
     const others = findOtherManagedRunnerProcesses();
     if (others.length) {
@@ -317,4 +326,57 @@ export function executeUnderManagedRunnerLock({
     lock_file: resolvedLockFile,
     binding_sha256: bindingSha256,
   };
+}
+
+function executeUnderWindowsRunnerLock({ executable, args, bindingSha256, lockFile }) {
+  if (process.env.QBOT_TEAMS_MANAGED_RUNNER_LOCK_PLATFORM === 'windows'
+    && process.env.QBOT_TEAMS_MANAGED_RUNNER_LOCK_FILE === lockFile
+    && process.env.QBOT_TEAMS_MANAGED_RUNNER_BINDING_SHA256 === bindingSha256) {
+    const ownerFile = `${lockFile}.owner`;
+    try {
+      const owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+      const identity = processIdentity(owner.pid);
+      if (owner.binding_sha256 === bindingSha256 && identity.command) {
+        return { lock_held: true, reexecuted: false, lock_file: lockFile, binding_sha256: bindingSha256 };
+      }
+    } catch {}
+    throw new Error('Managed Windows runner lock owner is missing or no longer alive.');
+  }
+  const ownerPid = Number(process.pid);
+  const owner = JSON.stringify({ schema_version: 1, pid: ownerPid, binding_sha256: bindingSha256, started_at: new Date().toISOString() });
+  let fd = null;
+  const marker = `${lockFile}.owner`;
+  try {
+    try {
+      fd = fs.openSync(marker, 'wx', 0o600);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let stale = false;
+      try {
+        const previous = JSON.parse(fs.readFileSync(marker, 'utf8'));
+        stale = !processIdentity(previous.pid).command;
+      } catch { stale = true; }
+      if (!stale) throw new Error('Another managed Casebook/G5 runner holds the process-lifetime lock.');
+      fs.rmSync(marker, { force: true });
+      fd = fs.openSync(marker, 'wx', 0o600);
+    }
+    fs.writeFileSync(fd, owner, { encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [executable, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
+      env: {
+        ...process.env,
+        QBOT_TEAMS_MANAGED_RUNNER_LOCK_PLATFORM: 'windows',
+        QBOT_TEAMS_MANAGED_RUNNER_LOCK_FILE: lockFile,
+        QBOT_TEAMS_MANAGED_RUNNER_BINDING_SHA256: bindingSha256,
+      },
+    });
+    if (child.stdout) process.stdout.write(child.stdout);
+    if (child.stderr) process.stderr.write(child.stderr);
+    return { lock_held: false, reexecuted: true, status: child.status ?? 1, signal: child.signal || '', lock_file: lockFile, binding_sha256: bindingSha256 };
+  } catch (error) {
+    throw error;
+  } finally {
+    if (fd != null) fs.closeSync(fd);
+    try { fs.rmSync(marker, { force: true }); } catch {}
+  }
 }

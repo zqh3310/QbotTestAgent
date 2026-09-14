@@ -15224,7 +15224,11 @@ export async function createSkillHubRegressionServer(caseDir) {
         writeTextFile(path.join(root, 'run.js'), 'console.log(JSON.stringify({ runtime: "node", isolated: true }));\n');
       }
       const archivePath = path.join(fixtureRoot, `${skill.slug}-${version}.zip`);
-      const zipped = spawnSync('/usr/bin/zip', ['-q', '-r', archivePath, '.'], { cwd: root, encoding: 'utf8' });
+      const zipped = process.platform === 'win32'
+        ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `Compress-Archive -Path * -DestinationPath '${archivePath.replaceAll("'", "''")}' -Force`],
+          { cwd: root, encoding: 'utf8', windowsHide: true })
+        : spawnSync('/usr/bin/zip', ['-q', '-r', archivePath, '.'], { cwd: root, encoding: 'utf8' });
       if (zipped.status !== 0 || !fs.existsSync(archivePath)) {
         throw new Error(`构建 SkillHub QA Fixture 失败：${skill.slug}@${version}；${zipped.stderr || zipped.stdout || `exit=${zipped.status}`}`);
       }
@@ -26777,7 +26781,11 @@ export function runRestartShellCommand(command, {
     let commandError = null;
     let closed = false;
     let killTimer = null;
-    const child = spawn('/bin/zsh', ['-lc', command], {
+    const child = process.platform === 'win32'
+      ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+        cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      : spawn('/bin/zsh', ['-lc', command], {
       cwd,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],

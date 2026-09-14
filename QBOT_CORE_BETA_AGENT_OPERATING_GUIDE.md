@@ -2114,3 +2114,11 @@ Case ID，路径互异且 release ref、HEAD、仓库和设计基线全等。调
 内容哈希、release HEAD、Casebook SHA、framework commit 和 `READY`；文件缺失、仅重排
 JSON、被替换或属于旧候选时均 fail-closed，且不得写事件或推进 revision，旧 intake 不能
 跨候选复用。
+
+## 12. Windows/macOS 双端落地要求
+
+双端执行采用一个共享项目、两套系统适配。`src/` 中的 Casebook、业务断言、证据合同和可信复核不按平台复制；`teams360-automation/lib/platform.mjs` 负责路径、应用启动、进程/锁、文件安全、原生输入和平台诊断。Windows 与 macOS 必须各自建立受管测试机、独立输出根和独立 release identity，最终只做可信结果汇总。
+
+Windows 不得直接复用 macOS 的 `.app`、`/usr/bin/lockf`、`/bin/ps`、uid/mode 或 Accessibility 实现。Windows 适配需要 `.exe` 与版本信息、Windows 进程查询、ACL/NTFS 重解析点检查、进程生命周期互斥/等价锁、UI Automation/原生输入助手和 Windows 崩溃/资源采样。能力不存在时记录 `blocked`，不能通过批量跳过测试取得全绿。
+
+双端流水线顺序固定为：平台 doctor → App-first sanity → 平台 pretest → 平台 Casebook → 逐 Case 可信复核 → 平台 G0-G5 → 双端汇总。Windows 与 macOS 的门禁轮次不得互相抵扣或拼接；任一端存在可信失败、框架问题、用例问题、证据缺失或身份漂移，双端发布结论均不得放行。

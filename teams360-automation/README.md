@@ -1,10 +1,10 @@
-# 360Teams-hosted QBot automation
+# 360Teams-hosted QBot automation (Windows/macOS)
 
-This folder is an independent adapter for the installed 360Teams application. It does not import or change the existing local-QBot runner under `src/`, does not use port `9224`, and does not reuse the live 360Teams profile.
+This folder is an independent adapter for the installed 360Teams application. It does not import or change the existing local-QBot runner under `src/`, does not use port `9224`, and does not reuse the live 360Teams profile. The shared Casebook runner and evidence contracts are platform-neutral; startup, process identity, locking, filesystem security and native input are selected by `lib/platform.mjs`.
 
 ## Safety model
 
-- Dedicated profile: `teams360-automation/state/profile`
+- Dedicated profile: `teams360-automation/state/profile` (Windows and macOS)
 - Live-profile CDP alias: `teams360-automation/state/live-profile-alias` (symlink only; no credential copy)
 - Dedicated state: `teams360-automation/state/session.json`
 - Dedicated output: `teams360-automation/output/`
@@ -15,6 +15,12 @@ This folder is an independent adapter for the installed 360Teams application. It
 - `doctor` is read-only unless `--open-qbot` is supplied
 - `smoke` refuses to send a message unless `--allow-write` is supplied
 - Reports redact `app_secret`, access tokens, refresh tokens, bearer values, URL query strings, and fragments
+
+On macOS, `launch-live` uses the existing signed-in profile through a symlink alias and
+holds the process lifetime lock with `lockf`. On Windows, it uses the real profile path,
+an exclusive owner marker and the Windows process tooling; NTFS reparse points and ACLs
+remain fail-closed. The business assertions and evidence manifest are identical on both
+platforms.
 
 ## Workflow
 

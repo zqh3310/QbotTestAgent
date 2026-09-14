@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { IS_WINDOWS } from '../lib/platform.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createNewManagedOutputDirectory,
@@ -67,7 +68,7 @@ function collectChild(child, timeoutMs = 5_000) {
   });
 }
 
-test('managed output creation rejects cross-root, existing and symlink-ancestor paths', (t) => {
+test('managed output creation rejects cross-root, existing and symlink-ancestor paths', { skip: IS_WINDOWS }, (t) => {
   const root = temporaryRoot(t, 'qwork-managed-output-');
   const outputRoot = path.join(root, 'output');
   fs.mkdirSync(outputRoot, { mode: 0o700 });
@@ -97,7 +98,7 @@ test('managed output creation rejects cross-root, existing and symlink-ancestor 
   assert.equal(fs.lstatSync(created.path).isDirectory(), true);
 });
 
-test('managed lock rejects a pre-created symlink without changing its target', (t) => {
+test('managed lock rejects a pre-created symlink without changing its target', { skip: IS_WINDOWS }, (t) => {
   const root = temporaryRoot(t, 'qwork-managed-lock-symlink-');
   const victim = path.join(root, 'victim');
   const lockFile = path.join(root, 'runner.lock');
@@ -115,8 +116,8 @@ test('managed lock rejects a pre-created symlink without changing its target', (
 });
 
 test('two runner processes competing for the same advisory lock admit exactly one', async (t) => {
-  if (!fs.existsSync('/usr/bin/lockf')) {
-    t.skip('macOS lockf is unavailable');
+  if (IS_WINDOWS || !fs.existsSync('/usr/bin/lockf')) {
+    t.skip(IS_WINDOWS ? 'Windows lock race is covered by the owner-marker adapter probe' : 'macOS lockf is unavailable');
     return;
   }
   const root = temporaryRoot(t, 'qwork-managed-lock-race-');
@@ -149,8 +150,8 @@ test('two runner processes competing for the same advisory lock admit exactly on
 });
 
 test('root Casebook, Teams Casebook and G5 CLIs all contend on the same default lock', async (t) => {
-  if (!fs.existsSync('/usr/bin/lockf')) {
-    t.skip('macOS lockf is unavailable');
+  if (IS_WINDOWS || !fs.existsSync('/usr/bin/lockf')) {
+    t.skip(IS_WINDOWS ? 'Windows lock race is covered by the owner-marker adapter probe' : 'macOS lockf is unavailable');
     return;
   }
   const root = temporaryRoot(t, 'qwork-default-lock-entrypoints-');

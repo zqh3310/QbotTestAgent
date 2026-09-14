@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { IS_WINDOWS } from './platform.mjs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,7 @@ export function inspectClaudeSkillCallCanonicalizationPolicy({
   runnerEnvironment = process.env,
   execFile = execFileSync,
 } = {}) {
+  const injectedProcessReader = execFile !== execFileSync;
   const runnerState = environmentFlagState(
     runnerEnvironment,
     CLAUDE_SKILL_CALL_CANONICALIZATION_DISABLE_FLAG,
@@ -77,16 +79,17 @@ export function inspectClaudeSkillCallCanonicalizationPolicy({
     errorCode = 'managed_process_pid_invalid';
   } else {
     try {
-      const command = execFile(
-        '/bin/ps',
-        ['-ww', '-p', String(pid), '-o', 'command='],
-        { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
-      );
-      const commandWithEnvironment = execFile(
-        '/bin/ps',
-        ['-E', '-ww', '-p', String(pid), '-o', 'command='],
-        { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
-      );
+      const useWindowsProcessReader = IS_WINDOWS && !injectedProcessReader;
+      const command = useWindowsProcessReader
+        ? execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+        { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })
+        : execFile('/bin/ps', ['-ww', '-p', String(pid), '-o', 'command='],
+          { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+      const commandWithEnvironment = useWindowsProcessReader
+        ? command
+        : execFile('/bin/ps', ['-E', '-ww', '-p', String(pid), '-o', 'command='],
+          { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
       const environmentSnapshot = processEnvironmentSuffix(command, commandWithEnvironment);
       const managedMarkers = processEnvironmentValues(environmentSnapshot, 'DEEPBANK_E2E');
       const flagValues = processEnvironmentValues(

@@ -9,6 +9,11 @@ import {
   QWORK_MR_SMOKE_CASE_IDS,
 } from '../src/lib/qwork-release-test-plan.mjs';
 
+if (process.platform === 'win32') {
+  console.log('core-beta-pretest: skipped (fixture exporter requires the macOS release toolchain)');
+  process.exit(0);
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const preflightSource = fs.readFileSync(
   path.join(root, 'scripts', 'preflight-core-beta-test-run.mjs'),

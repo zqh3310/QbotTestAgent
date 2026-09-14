@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { runUiAgentCasebookCommand } from '../../src/lib/ui-agent-casebook-runner.mjs';
 import { DEFAULT_SESSION, normalizeCdpUrl, validatePinnedQworkUiUrl } from './config.mjs';
@@ -35,6 +35,7 @@ import {
   waitForStagedQbotServer,
 } from './teams-profile-qbot-config.mjs';
 import { remountPinnedManagedQworkUi } from './managed-qwork-ui.mjs';
+import { IS_WINDOWS } from './platform.mjs';
 import {
   createNewManagedOutputDirectory,
   executeUnderManagedRunnerLock,
@@ -49,7 +50,7 @@ const TEAMS_CONTROL_PLANE_HOME = path.resolve(HERE, '../state/control-plane-home
 const TEAMS_RESTART_SHIM = path.join(
   TEAMS_RUNTIME_ROOT,
   'scripts',
-  'restart-qbot-electron-control-plane.sh',
+  IS_WINDOWS ? 'restart-qbot-electron-control-plane.ps1' : 'restart-qbot-electron-control-plane.sh',
 );
 const CURRENT_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-origin-main');
 const LEGACY_FIXTURE_DEEPBANK_ROOT = path.resolve(ROOT, '.runtime/deepbankV2-main-b408a07a');
@@ -255,13 +256,18 @@ export function inspectManagedTeamsRestartCapability() {
     // Report the missing entrypoint below without mutating the runtime.
   }
   const syntax = stat?.isFile()
-    ? spawnSync('/bin/zsh', ['-n', TEAMS_RESTART_SHIM], {
+    ? (IS_WINDOWS
+      ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `$null = [System.Management.Automation.Language.Parser]::ParseFile('${TEAMS_RESTART_SHIM.replaceAll("'", "''")}', [ref]$null, [ref]$null)`], {
+        cwd: TEAMS_RUNTIME_ROOT, encoding: 'utf8', timeout: 10_000,
+      })
+      : spawnSync('/bin/zsh', ['-n', TEAMS_RESTART_SHIM], {
       cwd: TEAMS_RUNTIME_ROOT,
       encoding: 'utf8',
       timeout: 10_000,
-    })
+    }))
     : null;
-  const executable = Boolean(stat?.isFile() && (stat.mode & 0o111));
+  const executable = Boolean(stat?.isFile() && (IS_WINDOWS || (stat.mode & 0o111)));
   return {
     ok: Boolean(stat?.isFile() && executable && syntax?.status === 0),
     mode: 'teams_wrapper_managed_restart',
@@ -1416,10 +1422,11 @@ function applyTeamsFixtureOptions(options, controlPlane, qworkUiUrl) {
 }
 
 function shellArgument(value) {
+  if (IS_WINDOWS) return `"${String(value ?? '').replaceAll('"', '`"')}"`;
   return `'${String(value ?? '').replaceAll("'", `'\\''`)}'`;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const argv = process.argv.slice(2);
     const parsedOptions = parseCasebookRunnerOptions(argv);

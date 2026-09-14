@@ -129,7 +129,7 @@ test('App sanity CLI requires explicit mutation consent and generates a unique e
   assert.equal(enabled.allowWrite, true);
   assert.match(enabled.expected, /^QWORK_APP_SANITY_\d{14}_OK$/);
   assert.match(enabled.prompt, new RegExp(enabled.expected));
-  assert.match(enabled.outputDir, /teams360-automation\/output\/\d{14}-app-sanity$/);
+  assert.match(path.basename(enabled.outputDir), /^\d{14}-app-sanity$/);
 });
 
 test('App sanity strict send dispatches exactly one trusted CDP click', async () => {

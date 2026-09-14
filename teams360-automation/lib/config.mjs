@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { defaultLiveProfilePath, defaultTeamsAppPath, normalizePathForComparison, pathInside } from './platform.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const AUTOMATION_ROOT = path.resolve(HERE, '..');
 export const PROJECT_ROOT = path.resolve(AUTOMATION_ROOT, '..');
-export const DEFAULT_APP = '/Applications/360Teams.app';
+export const DEFAULT_APP = defaultTeamsAppPath();
 export const DEFAULT_PROFILE = path.join(AUTOMATION_ROOT, 'state', 'profile');
-export const LIVE_PROFILE = path.join(os.homedir(), 'Library', 'Application Support', '360Teams');
+export const LIVE_PROFILE = defaultLiveProfilePath();
 export const LIVE_PROFILE_ALIAS = path.join(AUTOMATION_ROOT, 'state', 'live-profile-alias');
 export const DEFAULT_SESSION = path.join(AUTOMATION_ROOT, 'state', 'session.json');
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -116,7 +117,12 @@ export function validatePinnedQworkUiUrl(value, {
   if (url.protocol !== 'file:') {
     throw new Error('The pinned QWork UI must be a local file URL.');
   }
-  const file = fileURLToPath(url);
+  let file;
+  try {
+    file = fileURLToPath(url);
+  } catch {
+    throw new Error('The pinned QWork UI must stay under an allowed runtime home.');
+  }
   const resolved = path.resolve(file);
   const runtimeHomes = runtimeHome
     ? [path.resolve(runtimeHome)]
@@ -128,7 +134,7 @@ export function validatePinnedQworkUiUrl(value, {
     .map((home) => path.resolve(home, 'ui'))
     .find((candidate) => {
       const relative = path.relative(candidate, resolved);
-      return !relative.startsWith('..') && !path.isAbsolute(relative);
+      return pathInside(candidate, resolved);
     });
   if (!uiRoot) {
     throw new Error(`The pinned QWork UI must stay under an allowed runtime home: ${runtimeHomes.join(', ')}.`);
@@ -157,12 +163,17 @@ export function validatePinnedQworkUiUrl(value, {
 
 export function assertIsolatedProfile(profileDir) {
   const resolved = path.resolve(profileDir);
-  const liveProfile = path.resolve(path.join(os.homedir(), 'Library', 'Application Support', '360Teams'));
-  const canonical = canonicalPath(resolved);
-  const canonicalLive = canonicalPath(liveProfile);
-  const relative = path.relative(canonicalLive, canonical);
-  if (canonical === canonicalLive || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
-    throw new Error(`Refusing to use the live 360Teams profile: ${resolved}`);
+  const canonical = normalizePathForComparison(canonicalPath(resolved));
+  const liveProfiles = [
+    defaultLiveProfilePath(),
+    path.join(os.homedir(), 'Library', 'Application Support', '360Teams'),
+    path.join(os.homedir(), 'AppData', 'Roaming', '360Teams'),
+  ];
+  for (const liveProfile of liveProfiles) {
+    const canonicalLive = normalizePathForComparison(canonicalPath(liveProfile));
+    if (pathInside(canonicalLive, canonical)) {
+      throw new Error(`Refusing to use the live 360Teams profile: ${resolved}`);
+    }
   }
   if (resolved === path.parse(resolved).root || resolved === os.homedir()) {
     throw new Error(`Unsafe profile directory: ${resolved}`);

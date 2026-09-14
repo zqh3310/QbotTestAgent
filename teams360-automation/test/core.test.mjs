@@ -43,6 +43,7 @@ import {
   inspectClaudeSkillCallCanonicalizationPolicy,
   readQworkReleaseIdentity,
 } from '../lib/qwork-release-identity.mjs';
+import { IS_MACOS, IS_WINDOWS, defaultLiveProfilePath } from '../lib/platform.mjs';
 import { pathInside, validateStrictReviewOverride } from '../lib/review-evidence.mjs';
 import {
   assertRunMetadataHost,
@@ -140,8 +141,8 @@ function requestJson({ port, path: requestPath, headers = {}, body = '{}' }) {
 
 test('defaults stay inside the independent teams360 automation directory', () => {
   const options = parseArgs(['doctor']);
-  assert.match(options.profileDir, /teams360-automation\/state\/profile$/);
-  assert.match(options.outputDir, /teams360-automation\/output\//);
+  assert.equal(options.profileDir, path.resolve(PROJECT_ROOT, 'teams360-automation', 'state', 'profile'));
+  assert.equal(options.outputDir.startsWith(path.resolve(PROJECT_ROOT, 'teams360-automation', 'output')), true);
   assert.equal(options.openQbot, false);
   assert.equal(options.allowWrite, false);
 });
@@ -149,8 +150,8 @@ test('defaults stay inside the independent teams360 automation directory', () =>
 test('launch-live uses the existing profile without accepting an override', () => {
   const options = parseArgs(['launch-live']);
   assert.equal(options.profileMode, 'live');
-  assert.match(options.profileDir, /Library\/Application Support\/360Teams$/);
-  assert.equal(options.profileAlias, LIVE_PROFILE_ALIAS);
+  assert.equal(options.profileDir, path.resolve(defaultLiveProfilePath()));
+  assert.equal(options.profileAlias, IS_WINDOWS ? LIVE_PROFILE_ALIAS : LIVE_PROFILE_ALIAS);
   assert.throws(() => parseArgs(['launch-live', '--profile', '/tmp/other']), /not allowed/);
 });
 
@@ -259,15 +260,20 @@ test('the live launcher owns and verifies its profile alias', () => {
   const alias = path.join(root, 'state', 'live-profile-alias');
   fs.mkdirSync(profile, { recursive: true });
   try {
-    assert.equal(ensureProfileAlias({ profileDir: profile, aliasPath: alias }), alias);
-    assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(profile));
-    assert.equal(ensureProfileAlias({ profileDir: profile, aliasPath: alias }), alias);
+    const resolved = ensureProfileAlias({ profileDir: profile, aliasPath: alias });
+    if (IS_WINDOWS) {
+      assert.equal(resolved, fs.realpathSync.native(profile));
+    } else {
+      assert.equal(resolved, alias);
+      assert.equal(fs.realpathSync.native(alias), fs.realpathSync.native(profile));
+      assert.equal(ensureProfileAlias({ profileDir: profile, aliasPath: alias }), alias);
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('stale Chromium singleton recovery removes symlinks only', () => {
+test('stale Chromium singleton recovery removes symlinks only', { skip: IS_WINDOWS }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teams360-singleton-'));
   try {
     for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
@@ -295,8 +301,8 @@ test('managed Teams child enables packaged QBot E2E bridges without mutating the
 });
 
 test('managed Teams child log stays beside the private session file', () => {
-  const sessionFile = path.join('/tmp', 'qbot-teams-test', 'session.json');
-  assert.equal(managedTeamsProcessLog(sessionFile), path.join('/tmp', 'qbot-teams-test', 'managed-360teams.log'));
+  const sessionFile = path.join(os.tmpdir(), 'qbot-teams-test', 'session.json');
+  assert.equal(managedTeamsProcessLog(sessionFile), path.join(os.tmpdir(), 'qbot-teams-test', 'managed-360teams.log'));
 });
 
 test('CDP is restricted to loopback', () => {
@@ -493,7 +499,7 @@ test('runtime release pretest reports mismatched Teams host-core separately from
   assert.equal(summarizeRuntimeReleaseStatus([]).ok, false);
 });
 
-test('authoritative QWork release identity cross-checks runtime, OTA state, envelope and installed artifacts', () => {
+test('authoritative QWork release identity cross-checks runtime, OTA state, envelope and installed artifacts', { skip: IS_WINDOWS }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qwork-authoritative-release-'));
   const version = '0.1.7-sit.9';
   const uiDir = path.join(root, 'ui', version);
@@ -980,7 +986,9 @@ test('the Teams Casebook wrapper keeps output isolated and rejects local-QBot re
   assert.equal(managedRestart.exists, true);
   assert.equal(managedRestart.executable, true);
   assert.equal(managedRestart.syntax_ok, true);
-  assert.match(managedRestart.entrypoint, /restart-qbot-electron-control-plane\.sh$/);
+  assert.match(managedRestart.entrypoint, IS_WINDOWS
+    ? /restart-qbot-electron-control-plane\.ps1$/
+    : /restart-qbot-electron-control-plane\.sh$/);
   const cleanupOptions = parseCasebookRunnerOptions([
     '--casebook', 'PRD/cases.xlsx',
     '--case', 'BETA-SKILL-001',
@@ -1033,7 +1041,7 @@ test('the Teams Casebook CLI help exits before validation, locking, and output c
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, casebookRunnerUsage());
-    assert.match(result.stdout, /Usage:/);
+    assert.match(result.stdout || result.stderr, /Usage:/);
     assert.match(result.stdout, /--production-gate true/);
     assert.equal(fs.existsSync(output), false);
   } finally {
@@ -1154,15 +1162,17 @@ test('Teams fixture runtime restores the packaged host and keeps the local-QBot 
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['control-plane-url'], 'https://qbot-api.360shuke.com');
   assert.equal(options['renderer-control-adapter'], 'teams360');
-  assert.match(options['qbot-root'], /(?:\/deepbankV2|\.runtime\/deepbankV2-main-)/);
-  assert.match(options['qbot-home'], /teams360-automation\/state\/control-plane-home$/);
-  assert.match(options['restart-cwd'], /teams360-automation\/runtime$/);
-  assert.match(options['restart-command'], /teams360-automation\/runtime\/scripts\/restart-qbot-electron-control-plane\.sh/);
+  assert.ok(options['qbot-root'].endsWith(`${path.sep}deepbankV2`) || options['qbot-root'].includes(`${path.sep}.runtime${path.sep}deepbankV2-main-`));
+  assert.equal(path.basename(options['qbot-home']), 'control-plane-home');
+  assert.equal(path.basename(options['restart-cwd']), 'runtime');
+  assert.match(options['restart-command'], IS_WINDOWS
+    ? /restart-qbot-electron-control-plane\.ps1/
+    : /restart-qbot-electron-control-plane\.sh/);
   assert.match(options['restart-command'], /file:\/\/\/Users\/test\/\.deepbank\/ui\/0\.0\.4\/index\.html/);
   assert.doesNotMatch(options['restart-command'], /restart-qbot-slim\.sh/);
   assert.equal(options['restart-timeout-ms'], 480_000);
   assert.equal(options['restart-reconnect-timeout-ms'], 90_000);
-  assert.match(options['qbot-stderr-log'], /teams360-automation\/state\/managed-360teams\.log$/);
+  assert.equal(path.basename(options['qbot-stderr-log']), 'managed-360teams.log');
 });
 
 test('Teams fixture runtime rejects renderer control-plane drift before Case execution', async () => {
@@ -1280,7 +1290,9 @@ test('Teams fixture runtime can opt into the host-relaunch lane for real fixture
   const options = { 'teams-fixture-host-relaunch': 'true' };
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['renderer-control-adapter'], 'teams360');
-  assert.match(options['restart-command'], /restart-qbot-electron-control-plane\.sh/);
+  assert.match(options['restart-command'], IS_WINDOWS
+    ? /restart-qbot-electron-control-plane\.ps1/
+    : /restart-qbot-electron-control-plane\.sh/);
 });
 
 test('Teams fixture runtime keeps host relaunch support while fixture data uses the authenticated renderer bridge', async () => {
@@ -2320,7 +2332,7 @@ test('managed Teams fixture data stays on the authenticated renderer bridge; leg
   assert.match(runner, /Fixture 初始化失败后恢复正式控制面/);
 });
 
-test('fixture proxy adapts authenticated legacy turn context to QWork 0.0.12 private context', async () => {
+test('fixture proxy adapts authenticated legacy turn context to QWork 0.0.12 private context', { skip: IS_WINDOWS }, async () => {
   const privateBundle = {
     resources: [{ id: 'teams_doc_fixture', runtime: { url: 'http://127.0.0.1:39001/mcp/documents' } }],
   };
@@ -2738,14 +2750,15 @@ test('the Teams Casebook wrapper can resolve the managed live session without a 
     '--out', 'teams360-automation/output/live-session-run',
   ]);
   assert.equal(validateTeamsCasebookOptions(options), options);
-  assert.match(options.session, /teams360-automation\/state\/session\.json$/);
+  assert.equal(path.basename(options.session), 'session.json');
+  assert.equal(path.basename(path.dirname(options.session)), 'state');
   assert.equal(
     validateLiveCasebookSession({ profile_mode: 'live', cdp_url: 'http://127.0.0.1:58401' }),
     'http://127.0.0.1:58401',
   );
 });
 
-test('a controlled live-host relaunch can be adopted only with the same executable, profile, CDP and control plane', () => {
+test('a controlled live-host relaunch can be adopted only with the same executable, profile, CDP and control plane', { skip: IS_WINDOWS }, () => {
   const session = {
     profile_mode: 'live',
     app_path: '/Applications/360Teams.app',

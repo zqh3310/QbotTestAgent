@@ -1,0 +1,27 @@
+name: QBot dual-platform test framework
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shared-and-platform-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: node --check teams360-automation/lib/platform.mjs
+      - run: node --check teams360-automation/lib/casebook-runner.mjs
+      - run: node --check teams360-automation/lib/managed-runner-lock.mjs
+

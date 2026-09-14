@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { validatePinnedQworkUiUrl } from './config.mjs';
+import { IS_MACOS, IS_WINDOWS } from './platform.mjs';
 import { validateQworkCapabilitiesReadbackEvidence } from '../../src/lib/qwork-capabilities-readback.mjs';
 
 const PINNED_FIELDS = [
@@ -228,7 +230,10 @@ function readGitIdentity(repoRoot, execFile = execFileSync) {
 
 function qworkArtifactPaths(qworkUrl) {
   try {
-    const index = decodeURIComponent(new URL(String(qworkUrl || '')).pathname);
+    const parsed = new URL(String(qworkUrl || ''));
+    const index = parsed.protocol === 'file:'
+      ? fileURLToPath(parsed)
+      : decodeURIComponent(parsed.pathname);
     return {
       index,
       installMetadata: path.join(path.dirname(index), '.installed.json'),
@@ -242,10 +247,21 @@ export function buildReleaseArtifactFingerprints({ host, qworkUiUrl, casebookPat
   const app = path.resolve(String(host?.app_path || ''));
   const qwork = qworkArtifactPaths(qworkUiUrl);
   const executableName = path.basename(app, '.app') || '360Teams';
+  const looksLikeMacBundle = IS_MACOS || fs.existsSync(path.join(app, 'Contents'));
+  const hostInfo = looksLikeMacBundle
+    ? path.join(app, 'Contents', 'Info.plist')
+    : path.join(path.dirname(app), `${path.basename(app, path.extname(app))}.metadata.json`);
+  const hostBinary = looksLikeMacBundle
+    ? path.join(app, 'Contents', 'MacOS', executableName)
+    : (IS_WINDOWS ? app : path.join(app, '360Teams'));
+  // Windows packages do not have an Info.plist. A package-owned metadata sidecar
+  // is preferred; the executable remains the deterministic fallback so every
+  // platform still contributes a release-bound host fingerprint.
+  const hostInfoFallback = !IS_MACOS && !fs.existsSync(hostInfo) ? hostBinary : hostInfo;
   return {
     algorithm: 'sha256',
-    host_info_plist_sha256: sha256File(path.join(app, 'Contents', 'Info.plist')),
-    host_main_binary_sha256: sha256File(path.join(app, 'Contents', 'MacOS', executableName)),
+    host_info_plist_sha256: sha256File(hostInfoFallback),
+    host_main_binary_sha256: sha256File(hostBinary),
     qwork_index_sha256: sha256File(qwork.index),
     qwork_install_metadata_sha256: sha256File(qwork.installMetadata),
     casebook_sha256: sha256File(casebookPath),
