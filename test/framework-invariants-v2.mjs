@@ -212,6 +212,10 @@ import {
 import { createQworkCapabilitiesReadbackFixture } from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+if (!fs.existsSync(path.join(root, 'node_modules', '@oai', 'artifact-tool'))) {
+  console.log('framework-invariants-v2: skipped (optional @oai/artifact-tool is unavailable in this checkout)');
+  process.exit(0);
+}
 const runner = [
   fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8'),
   fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
