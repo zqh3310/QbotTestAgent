@@ -45,6 +45,35 @@ export function coreFixturePlan(fixtures) {
       .map((key) => [key, redactText(fixtures[kind][key])])) : null]));
 }
 
+// Catalog presence is different from being a selectable, enabled MCP resource.
+// Builtin tools are resident runtime tools and are not composer connector cards.
+export function coreMcpFixtureAvailability(fixture, capabilities) {
+  if (!Array.isArray(capabilities?.connectors)) throw new Error('Connector catalog is unavailable.');
+  const connector = capabilities.connectors.find((item) => capabilityId(item) === fixture.id);
+  if (!connector) return { available: false, reason: 'connector_not_in_catalog' };
+  if (connector.source === 'builtin' || fixture.id.startsWith('builtin:')) {
+    return { available: false, reason: 'resident_builtin_is_not_selectable_mcp' };
+  }
+  if (['usable', 'installed', 'enabled'].some((key) => connector[key] === false)
+    || ['disabled', 'needs_install'].includes(connector.statusKind)) {
+    return { available: false, reason: 'connector_not_usable' };
+  }
+  const tools = array(connector.tools).filter((tool) => tool.effectiveEnabled === true
+    && fixture.tool_name.endsWith(`__${tool.toolName || tool.name}`));
+  return tools.length === 1 ? { available: true, reason: '' }
+    : { available: false, reason: 'exact_enabled_tool_not_in_catalog' };
+}
+
+export function coreFixtureAvailability(kind, fixture, capabilities) {
+  if (kind === 'mcp') return coreMcpFixtureAvailability(fixture, capabilities);
+  const catalog = kind === 'skill' ? capabilities?.skills : capabilities?.experts;
+  if (!Array.isArray(catalog)) throw new Error(`${kind} catalog is unavailable.`);
+  const capability = catalog.find((item) => capabilityId(item) === fixture.id);
+  if (!capability) return { available: false, reason: `${kind}_not_in_catalog` };
+  if (capability.enabled === false) return { available: false, reason: `${kind}_disabled` };
+  return { available: true, reason: '' };
+}
+
 export function selectedCapabilityMatches(kind, fixture, capabilities) {
   if (!capabilities || typeof capabilities !== 'object') return false;
   if (kind === 'expert') return capabilities.currentExpertIdentity?.mode === 'published'
@@ -125,6 +154,15 @@ export async function executeCoreUseSequence({ driver, fixtures = {}, marker,
       }
       const missing = kind === 'conversation' ? [] : validateCoreFixture(kind, fixtures[kind]);
       if (missing.length) { result.reason = `fixture_unavailable:${missing.join(',')}`; continue; }
+      if (kind !== 'conversation' && driver.inspectFixture) {
+        const availability = await driver.inspectFixture(kind, fixtures[kind]);
+        result.evidence.fixture_availability = availability;
+        await onEvidence(kind, 'fixture_availability', availability);
+        if (availability?.available !== true) {
+          result.reason = `fixture_unavailable:${availability?.reason || 'not_verified'}`;
+          continue;
+        }
+      }
       const ready = await driver.prepare();
       result.evidence.preparation = ready;
       await onEvidence(kind, 'preparation', ready);
@@ -275,6 +313,9 @@ export function createCoreUseDriver(client, timeoutMs) {
     return app.openCleanNewTask();
   };
   return {
+    async inspectFixture(kind, fixture) {
+      return coreFixtureAvailability(kind, fixture, await readCapabilities(client));
+    },
     async prepare() {
       const workbench = await app.workbenchReady();
       return passed(workbench) ? cleanTask() : workbench;

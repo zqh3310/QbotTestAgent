@@ -1,7 +1,7 @@
 {
   "skill": {
     "id": "qa-readonly-skill",
-    "invocation_name": "qa-readonly-skill",
+    "invocation_name": "qwork-runtime-skills:qa-readonly-skill",
     "safety": "read-only",
     "prompt": "调用 qa-readonly-skill，按技能要求返回固定的 QA_SKILL_OK；不修改文件或外部数据。",
     "expected": "QA_SKILL_OK"

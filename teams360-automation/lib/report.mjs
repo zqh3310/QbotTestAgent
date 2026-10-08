@@ -22,6 +22,29 @@ export function writeReport(outputDir, report) {
 }
 
 function renderMarkdown(report) {
+  const diagnostic = report.core_smoke || report.app_sanity;
+  if (diagnostic) {
+    const entries = diagnostic.results || diagnostic.steps || [];
+    const identity = diagnostic.candidate_identity || {};
+    return [
+      '# 360Teams QWork Diagnostic Report', '',
+      `- Command: ${report.command}`,
+      `- Status: ${report.status}`,
+      `- Generated at: ${report.generated_at}`,
+      `- Diagnostic only: ${report.diagnostic_only === true}`,
+      `- Release gate eligible: ${report.release_gate_eligible === true}`,
+      `- Framework commit: ${identity.framework_commit || 'unavailable'}`,
+      `- QWork version: ${identity.qwork_version || 'unavailable'}`,
+      `- Candidate identity stable: ${diagnostic.identity_stable ?? 'not-recorded'}`,
+      `- Reason: ${diagnostic.reason || report.reason || ''}`, '',
+      '## Results',
+      ...(diagnostic.counts ? [`- Counts: ${JSON.stringify(diagnostic.counts)}`] : []),
+      ...entries.map((entry) => `- ${entry.module || entry.step_id}: ${entry.status}${entry.reason ? ` — ${entry.reason}` : ''}`), '',
+      '## Evidence',
+      `- [Detailed results](${report.core_smoke ? 'qwork-core-smoke-report.json' : 'qwork-app-sanity-report.json'})`,
+      '- [Evidence manifest](evidence-manifest.json)', '',
+    ].join('\n');
+  }
   const targets = report.inspection?.targets || [];
   const profileSafety = report.profile_mode === 'live'
     ? '- The existing signed-in 360Teams profile is reused through an adapter-owned symlink alias; no profile copy or OAuth/token seeding is performed.'

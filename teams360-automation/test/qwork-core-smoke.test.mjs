@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { coreCapabilityExecutionVerdict, coreFixturePlan, coreMcpCallBound, coreIdentityStable, executeCoreUseSequence,
+import { coreCapabilityExecutionVerdict, coreFixtureAvailability, coreFixturePlan, coreMcpCallBound, coreMcpFixtureAvailability, coreIdentityStable, executeCoreUseSequence,
   dismissCoreMenus, selectedCapabilityMatches, validateCoreFixture } from '../lib/qwork-core-smoke.mjs';
 import { managedSessionRecoveryError, resolveSessionCdp } from '../lib/launcher.mjs';
 import { parseArgs } from '../lib/config.mjs';
@@ -38,6 +38,47 @@ test('missing fixtures block only their own modules, never claim full core cover
   assert.equal(result.counts.passed, 1);
   assert.equal(result.counts.blocked, 3);
   assert.ok(validateCoreFixture('mcp', { ...fixtures.mcp, safety: 'write' }).length);
+});
+
+test('unselectable catalog fixtures block only their module before UI selection or sending', async () => {
+  const selected = [];
+  const result = await sequence({ driver: driver({
+    inspectFixture: async (kind) => kind === 'mcp'
+      ? { available: false, reason: 'resident_builtin_is_not_selectable_mcp' } : { available: true },
+    select: async (kind) => { selected.push(kind); return ok(); },
+  }) });
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.counts.passed, 3);
+  assert.equal(result.counts.blocked, 1);
+  assert.equal(result.results[2].executed, false);
+  assert.match(result.results[2].reason, /fixture_unavailable/);
+  assert.deepEqual(selected, ['skill', 'expert']);
+});
+
+test('MCP availability rejects resident, disabled, missing or unavailable tools without hiding catalog errors', () => {
+  const connector = { key: fixtures.mcp.id, source: 'mcphub',
+    tools: [{ name: 'echo', effectiveEnabled: true }] };
+  assert.equal(coreMcpFixtureAvailability(fixtures.mcp, { connectors: [connector] }).available, true);
+  for (const bad of [{ ...connector, source: 'builtin' }, { ...connector, enabled: false },
+    { ...connector, tools: [{ name: 'echo', effectiveEnabled: false }] }, { ...connector, tools: [] }]) {
+    assert.equal(coreMcpFixtureAvailability(fixtures.mcp, { connectors: [bad] }).available, false);
+  }
+  assert.equal(coreMcpFixtureAvailability(fixtures.mcp, { connectors: [] }).available, false);
+  assert.throws(() => coreMcpFixtureAvailability(fixtures.mcp, {}), /catalog is unavailable/);
+});
+
+test('missing Skill or expert catalog resources block only their own modules', async () => {
+  for (const kind of ['skill', 'expert']) {
+    const key = kind === 'skill' ? 'skills' : 'experts';
+    assert.equal(coreFixtureAvailability(kind, fixtures[kind], { [key]: [] }).available, false);
+    assert.equal(coreFixtureAvailability(kind, fixtures[kind], { [key]: [{ name: fixtures[kind].id }] }).available, true);
+    assert.throws(() => coreFixtureAvailability(kind, fixtures[kind], {}), /catalog is unavailable/);
+    const result = await sequence({ driver: driver({ inspectFixture: async (module, fixture) => module === kind
+      ? coreFixtureAvailability(module, fixture, { [key]: [] }) : { available: true } }) });
+    assert.equal(result.counts.passed, 3);
+    assert.equal(result.counts.blocked, 1);
+    assert.equal(result.results.find((item) => item.module === kind).executed, false);
+  }
 });
 
 test('product assertion failure continues independent modules only after clean restoration', async () => {
@@ -93,6 +134,16 @@ test('Skill/MCP require completed structured tool records bound to exact capabil
     if (kind === 'mcp') assert.equal(verdict(kind, { fixture: { ...fixtures.mcp, result_expected: 'MISSING_VALUE' } }).execution_observed, false);
     assert.equal(verdict(kind, { capabilities: {} }).selection_bound, false);
   }
+});
+
+test('Skill selection ID and exact namespaced runtime invocation are separate identities', () => {
+  const session = { id: 't1', messages: [{ role: 'assistant', parts: [{ t: 'tool', id: 'call-1',
+    name: 'Skill', input: { skill: 'qwork-runtime-skills:qa-skill' }, result: 'Launching skill: qwork-runtime-skills:qa-skill' }] }] };
+  assert.equal(verdict('skill', { session }).execution_observed, false);
+  const fixture = { ...fixtures.skill, invocation_name: 'qwork-runtime-skills:qa-skill' };
+  const exact = verdict('skill', { session, fixture });
+  assert.equal(exact.execution_observed && exact.selection_bound && exact.task_bound, true);
+  assert.equal(verdict('skill', { session, fixture: { ...fixture, invocation_name: 'other:qa-skill' } }).execution_observed, false);
 });
 
 test('expert needs exact published identity in both session and assistant turn, not label or chip alone', () => {
