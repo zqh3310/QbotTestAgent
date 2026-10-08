@@ -16,6 +16,7 @@ export const QWORK_APP_SANITY_SCHEMA = 'qbot-qwork-app-sanity/v1';
 export const QWORK_APP_SANITY_EVIDENCE_SCHEMA = 'qbot-qwork-app-sanity-evidence/v1';
 export const APP_SANITY_PASS = 'PASS_SANITY';
 export const APP_SANITY_STOP = 'STOP_BEFORE_G0';
+export const QWORK_APP_SANITY_USER_BODY_SELECTOR = '.aui-user-message-content';
 export const QWORK_APP_SANITY_ASSISTANT_BODY_SELECTOR = '.aui-assistant-message-content';
 export const APP_SANITY_STEP_IDS = Object.freeze([
   'workbench_ready',
@@ -249,7 +250,7 @@ function stepsafe(value) {
   return String(value || '').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
 }
 
-function evidenceEntry(outputDir, file, role) {
+export function evidenceEntry(outputDir, file, role) {
   const resolved = path.resolve(file);
   const relative = path.relative(path.resolve(outputDir), resolved);
   const stat = fs.lstatSync(resolved);
@@ -263,7 +264,7 @@ function evidenceEntry(outputDir, file, role) {
   };
 }
 
-async function readLightweightIdentity(client, target, base) {
+export async function readLightweightIdentity(client, target, base) {
   const raw = await client.evaluate(`(async () => {
     const within = async (factory, timeoutMs) => {
       let timer;
@@ -305,7 +306,7 @@ async function readLightweightIdentity(client, target, base) {
   };
 }
 
-function createCdpAppSanityDriver(client, timeoutMs) {
+export function createCdpAppSanityDriver(client, timeoutMs) {
   const deadlineMs = Math.max(60_000, Number(timeoutMs) || 120_000);
   return {
     async workbenchReady() {
@@ -343,11 +344,12 @@ function createCdpAppSanityDriver(client, timeoutMs) {
         },
       };
     },
-    async strictSend({ prompt, expected }) {
+    async strictSend({ prompt, expected, match = 'exact', skillId = '' }) {
+      if (!['exact', 'contains'].includes(match) || !text(expected)) throw new Error('Invalid reply expectation.');
       const before = await readAppSanityState(client);
-      const prepared = await prepareComposer(client, prompt);
+      const prepared = await prepareComposer(client, prompt, { skillId });
       const preparedState = await readAppSanityState(client);
-      if (!prepared || preparedState.composerText !== text(prompt)) {
+      if (!prepared || (skillId ? preparedState.composerPlainText : preparedState.composerText) !== text(prompt)) {
         throw new Error('App sanity could not prepare the exact prompt.');
       }
       const trustedClick = await dispatchTrustedTestIdClick(client, 'composer-send');
@@ -386,8 +388,14 @@ function createCdpAppSanityDriver(client, timeoutMs) {
           && Number.isSafeInteger(state.messageCount) && state.messageCount > before.messageCount,
         running_observed: sawRunning,
       };
-      const userAdded = state.userCount === before.userCount + 1 && text(state.lastUser) === text(prompt);
-      const replyExact = exactAppSanityReplyMatches(state.lastAssistant, expected);
+      const userText = skillId ? state.lastUserPlainText : state.lastUser;
+      const skillReferencesMatch = !skillId || (state.lastUserSkillIds.length === 0
+        || (state.lastUserSkillIds.length === 1 && state.lastUserSkillIds[0] === skillId));
+      const userAdded = state.userCount === before.userCount + 1
+        && text(userText) === text(prompt) && skillReferencesMatch;
+      const replyExact = match === 'exact'
+        ? exactAppSanityReplyMatches(state.lastAssistant, expected)
+        : text(state.lastAssistant).includes(text(expected));
       return {
         assertions: {
           one_real_click: trustedClick.physical_input === true
@@ -397,12 +405,18 @@ function createCdpAppSanityDriver(client, timeoutMs) {
           exact_user_message_added_once: userAdded,
           auxiliary_state_changed: Object.values(auxiliary).some(Boolean),
           non_empty_task_id: Boolean(state.activeTaskId),
-          assistant_message_added: state.assistantCount === before.assistantCount + 1,
+          assistant_message_added: match === 'exact'
+            ? state.assistantCount === before.assistantCount + 1
+            : state.assistantCount > before.assistantCount,
           reply_settled: complete && state.running === false && state.sendButtonVisible === true,
           exact_reply: replyExact,
         },
         detail: {
           task_id: state.activeTaskId,
+          reply_match: match,
+          user_skill_references: state.lastUserSkillIds,
+          prompt: redactText(prompt),
+          reply: redactText(state.lastAssistant),
           strict_send_receipt: {
             ...trustedClick,
             retry_count: 0,
@@ -485,7 +499,7 @@ function createCdpAppSanityDriver(client, timeoutMs) {
   };
 }
 
-async function prepareComposer(client, prompt) {
+export async function prepareComposer(client, prompt, { skillId = '' } = {}) {
   const prepared = await client.evaluate(`(() => {
     const editor = document.querySelector('[data-testid="composer-input"][contenteditable="true"]');
     if (!editor) return false;
@@ -493,13 +507,22 @@ async function prepareComposer(client, prompt) {
     const selection = getSelection();
     const range = document.createRange();
     range.selectNodeContents(editor);
+    const skillId = ${JSON.stringify(skillId)};
+    if (skillId) {
+      const chips = [...editor.querySelectorAll('[data-skill-name]')];
+      if (chips.length && (chips.length !== 1 || chips[0].dataset.skillName !== skillId)) return false;
+      const plain = editor.cloneNode(true);
+      plain.querySelectorAll('[data-skill-name]').forEach((node) => node.remove());
+      if (plain.textContent.replace(/\\uFEFF/g, '').trim()) return false;
+      range.collapse(false);
+    }
     selection.removeAllRanges();
     selection.addRange(range);
-    document.execCommand('delete', false);
+    if (!skillId) document.execCommand('delete', false);
     return true;
   })()`);
   if (!prepared) return false;
-  await client.send('Input.insertText', { text: String(prompt) });
+  await client.send('Input.insertText', { text: skillId ? ` ${prompt}` : String(prompt) });
   await delay(250);
   return true;
 }
@@ -587,8 +610,9 @@ async function waitForState(client, predicate, timeoutMs) {
   return state;
 }
 
-async function readAppSanityState(client) {
+export async function readAppSanityState(client) {
   const runningSelector = JSON.stringify(QWORK_SMOKE_RUNNING_SELECTOR);
+  const userBodySelector = JSON.stringify(QWORK_APP_SANITY_USER_BODY_SELECTOR);
   const assistantBodySelector = JSON.stringify(QWORK_APP_SANITY_ASSISTANT_BODY_SELECTOR);
   const state = await client.evaluate(`(async () => {
     const visibleElements = (selector) => [...document.querySelectorAll(selector)].filter((element) => {
@@ -601,12 +625,18 @@ async function readAppSanityState(client) {
       .filter((element) => (element.textContent || '').trim() === expected).length;
     let e2e = null;
     try { e2e = await globalThis.__qbotE2E?.getState?.(); } catch {}
-    const userNodes = [...document.querySelectorAll('.aui-user-message-content, [data-role="user"]')]
+    const userNodes = [...document.querySelectorAll(${userBodySelector})]
       .filter((element) => (element.textContent || '').trim());
     const assistantNodes = [...document.querySelectorAll('.aui-assistant-message-root')]
       .filter((element) => (element.textContent || '').trim());
     const assistantBodyNodes = [...document.querySelectorAll(${assistantBodySelector})]
       .filter((element) => (element.textContent || '').trim());
+    const withoutSkills = (element) => {
+      if (!element) return '';
+      const clone = element.cloneNode(true);
+      clone.querySelectorAll('[data-skill-name], .skill-reference-state').forEach((node) => node.remove());
+      return (clone.textContent || '').replace(/\\uFEFF/g, '').trim();
+    };
     const activeTaskId = document.querySelector('[data-testid="qbot-app"]')?.getAttribute('data-active-session-id')
       || e2e?.activeId || '';
     return {
@@ -616,6 +646,7 @@ async function readAppSanityState(client) {
       navConnectors: visible('[data-testid="nav-connectors"]'),
       navAuto: visible('[data-testid="nav-auto"]'),
       composer: visible('[data-testid="composer-input"][contenteditable="true"]'),
+      composerPlainText: withoutSkills(document.querySelector('[data-testid="composer-input"]')),
       composerText: document.querySelector('[data-testid="composer-input"]')?.innerText?.trim() || '',
       sendButtonVisible: visible('[data-testid="composer-send"]'),
       running: typeof e2e?.running === 'boolean' ? e2e.running : visible(${runningSelector}),
@@ -624,10 +655,13 @@ async function readAppSanityState(client) {
       activeTaskId: String(activeTaskId || ''),
       userCount: userNodes.length,
       lastUser: userNodes.length ? (userNodes.at(-1).innerText || userNodes.at(-1).textContent || '') : '',
+      lastUserPlainText: withoutSkills(userNodes.at(-1)),
+      lastUserSkillIds: [...(userNodes.at(-1)?.querySelectorAll('[data-skill-reference-identity]') || [])]
+        .map((node) => node.getAttribute('data-skill-reference-identity')),
       assistantCount: assistantBodyNodes.length,
       assistantRootCount: assistantNodes.length,
       assistantBodyTexts: assistantBodyNodes.map((element) => element.innerText || element.textContent || ''),
-      capabilityChipCount: visibleElements('[data-testid="composer-selection-chips"] [data-testid*="chip"], [data-testid="composer-skill-chip"], [data-testid="composer-connector-chip"], [data-testid="composer-expert-chip"]').length,
+      capabilityChipCount: visibleElements('[data-testid="composer-selection-chips"] [data-testid*="chip"], [data-testid="composer-skill-chip"], [data-testid^="composer-skill-chip-"], [data-testid="composer-connector-chip"], [data-testid="composer-expert-chip"]').length,
       expertsView: visible('[data-testid="experts-view"]'),
       expertTestIdCount: visibleElements('[data-testid="experts-tab"]').length,
       expertSemanticCount: visibleExactTextCount('[role="tab"][aria-selected="true"]', '\u4e13\u5bb6'),
@@ -673,7 +707,7 @@ function projectState(state) {
   };
 }
 
-async function captureClientScreenshot(client, file) {
+export async function captureClientScreenshot(client, file) {
   await client.send('Page.enable');
   const result = await client.send('Page.captureScreenshot', {
     format: 'png',

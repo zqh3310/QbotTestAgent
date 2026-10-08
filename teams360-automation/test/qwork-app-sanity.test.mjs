@@ -13,6 +13,7 @@ import {
   executeAppSanitySequence,
   hasUniqueAppSanityExpertTab,
   QWORK_APP_SANITY_ASSISTANT_BODY_SELECTOR,
+  QWORK_APP_SANITY_USER_BODY_SELECTOR,
   QWORK_APP_SANITY_SCHEMA,
   resolveAppSanityAssistantBody,
 } from '../lib/qwork-app-sanity.mjs';
@@ -114,6 +115,10 @@ test('App sanity reads the explicit assistant body instead of the QWork identity
   assert.notEqual(reply, 'QWork');
 });
 
+test('App sanity counts the user body once instead of counting its nested message root', () => {
+  assert.equal(QWORK_APP_SANITY_USER_BODY_SELECTOR, '.aui-user-message-content');
+});
+
 test('App sanity accepts exactly one expert tab and rejects missing or ambiguous matches', () => {
   assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 0, expertSemanticCount: 0 }), false);
   assert.equal(hasUniqueAppSanityExpertTab({ expertTestIdCount: 0, expertSemanticCount: 1 }), true);
@@ -202,6 +207,8 @@ test('App sanity implementation contains no catalog mutation, install or destruc
   assert.doesNotMatch(source, /\.click\(\)/u);
   assert.match(source, /controls\.length !== 1/u);
   assert.match(source, /visibleExactTextCount\('\[role="tab"\]\[aria-selected="true"\]', '\\u4e13\\u5bb6'\)/u);
+  assert.match(source, /document\.querySelectorAll\(\$\{userBodySelector\}\)/u);
+  assert.doesNotMatch(source, /\.aui-user-message-content, \[data-role="user"\]/u);
   assert.match(source, /runStep\('prepare_task_reopen', \(\) => driver\.openCleanNewTask\(\)\)/u);
   assert.match(source, /before_state:\s*projectState\(before\)/u);
   assert.match(source, /after_state:\s*projectState\(state\)/u);

@@ -13,6 +13,18 @@ This repository contains:
 - Dedicated strict test-case review for granularity, executable paths, expected results, traceability, priority, and evidence requirements.
 - Evidence-quality audit and issue monitor reports.
 
+## 日常 QWork 测试入口
+
+标准顺序：主分支变更白盒审查 → 会话/技能/MCP/专家真实使用 → 变更专项回归 → 按需发布验收。
+详见 [框架 §2.0](QBOT_AUTOMATION_FRAMEWORK.md)。`app-sanity` 是聊天与页面诊断；
+四大模块实际使用运行 `npm --prefix teams360-automation run core-smoke -- --allow-write
+--core-fixtures config/qwork-core-fixtures.local.json --out teams360-automation/output/<new-directory>`。
+先按 `config/qwork-core-fixtures.example.json` 选择已核实只读的真实 QA 资源；缺少资源将如实阻塞对应模块。
+
+GitLab 凭证经用户授权可保存在 Git 忽略的 `config/gitlab.local.json`（参考 example、权限 0600）。
+使用 `npm run gitlab:local -- scan ...` / `observe ...` / `orchestrate ...` 向原入口的 stdin 提供凭证；
+命令行不传 token。本机配置不能提交。诊断结果不代替发布门禁或可信 Casebook 结论。
+
 ## Current Delivery
 
 Final reviewed output:

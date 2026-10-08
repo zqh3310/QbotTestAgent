@@ -338,15 +338,27 @@ export function readSession(sessionFile) {
   }
 }
 
-export async function resolveSessionCdp({ sessionFile, cdpUrl }) {
-  if (cdpUrl) return { cdpUrl, session: readSession(sessionFile) };
+export function managedSessionRecoveryError(code) {
+  const error = new Error(`${code}: No verified managed 360Teams connection. Normally quit the regular client (with existing user authorization), then run npm --prefix teams360-automation run launch:live and doctor -- --open-qbot. Preserve previous outputs and use a new run directory.`);
+  error.code = code;
+  error.recovery = { command: 'npm --prefix teams360-automation run launch:live',
+    normal_quit_regular_client: true, preserve_login_profile: true,
+    never_force_kill: true, reuse_existing_authorization: true };
+  return error;
+}
+
+export async function resolveSessionCdp({ sessionFile, cdpUrl, requireManaged = false }) {
+  if (cdpUrl && !requireManaged) return { cdpUrl, session: readSession(sessionFile) };
   let session = readSession(sessionFile);
-  if (!session?.cdp_url) throw new Error(`No managed 360Teams session found. Run launch or launch-live first: ${sessionFile}`);
+  if (!session?.cdp_url) throw managedSessionRecoveryError('TEAMS_SESSION_MISSING');
   if (!processMatchesSession(session)) {
     session = await adoptRelaunchedLiveTeamsSession(sessionFile, { timeoutMs: 10_000 });
   }
   if (!session || !processMatchesSession(session)) {
-    throw new Error(`The recorded 360Teams session is not running and no verified replacement owns its CDP port.`);
+    throw managedSessionRecoveryError('TEAMS_SESSION_STALE');
+  }
+  if (cdpUrl && normalizeCdpUrl(cdpUrl) !== normalizeCdpUrl(session.cdp_url)) {
+    throw managedSessionRecoveryError('TEAMS_CDP_MISMATCH');
   }
   return { cdpUrl: normalizeCdpUrl(session.cdp_url), session };
 }

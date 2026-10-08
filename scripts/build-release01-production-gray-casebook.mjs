@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { FileBlob, SpreadsheetFile, Workbook } from '@oai/artifact-tool';
+// Pure contract/audit helpers are usable without the optional spreadsheet runtime.
+let FileBlob, SpreadsheetFile, Workbook;
 import {
   CORE_BETA_SCENARIO_REGISTRY,
   FULL_FUNCTION_REGRESSION_LEGACY_CASE_IDS,
@@ -4194,6 +4195,7 @@ async function verifyWorkbook(workbook, outputDir, sheetNames) {
 }
 
 async function main() {
+  ({ FileBlob, SpreadsheetFile, Workbook } = await import('@oai/artifact-tool'));
   const outputTransaction = await prepareCasebookOutputDirectory(option('out'));
   const outputDir = outputTransaction.staging;
   try {

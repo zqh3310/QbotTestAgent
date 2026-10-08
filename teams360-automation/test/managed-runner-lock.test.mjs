@@ -167,9 +167,10 @@ test('root Casebook, Teams Casebook and G5 CLIs all contend on the same default 
     });
     if (result.reexecuted) process.exit(result.status);
     process.stdout.write('DEFAULT_LOCK_ACQUIRED\\n');
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    process.stdin.resume();
+    await new Promise((resolve) => process.stdin.once('end', resolve));
   `, { mode: 0o600 });
-  const holderProcess = spawn(process.execPath, [holder], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const holderProcess = spawn(process.execPath, [holder], { stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => { if (holderProcess.exitCode == null) holderProcess.kill('SIGKILL'); });
   await waitForOutput(holderProcess, 'DEFAULT_LOCK_ACQUIRED');
 
@@ -178,6 +179,7 @@ test('root Casebook, Teams Casebook and G5 CLIs all contend on the same default 
     [path.join(TEAMS_ROOT, 'lib', 'casebook-runner.mjs')],
     [path.join(TEAMS_ROOT, 'lib', 'qwork-soak-cli.mjs')],
     [path.join(TEAMS_ROOT, 'cli.mjs'), 'app-sanity', '--allow-write'],
+    [path.join(TEAMS_ROOT, 'cli.mjs'), 'core-smoke', '--allow-write'],
   ];
   for (const args of commands) {
     const result = await collectChild(
@@ -186,6 +188,7 @@ test('root Casebook, Teams Casebook and G5 CLIs all contend on the same default 
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /holds the process-lifetime lock/);
   }
+  holderProcess.stdin.end();
   const holderResult = await collectChild(holderProcess);
   assert.equal(holderResult.code, 0, holderResult.stderr);
 });
@@ -201,7 +204,8 @@ test('root and Teams Casebook plus G5 direct runners share one lifecycle lock', 
   assert.match(rootCli, /if \(command === 'ui-agent-casebook-run'\) \{[\s\S]*executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'root-casebook'/);
   assert.match(casebook, /executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'teams-casebook'/);
   assert.match(soak, /executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'qwork-soak'/);
-  assert.match(appSanity, /options\.command === 'app-sanity'[\s\S]*executeUnderManagedRunnerLock\(\{[\s\S]*runner: 'qwork-app-sanity'/);
+  assert.match(appSanity, /\['app-sanity', 'core-smoke'\]\.includes\(command\)/);
+  assert.match(appSanity, /isDiagnostic\(options\.command\)[\s\S]*executeUnderManagedRunnerLock\(\{[\s\S]*runner: `qwork-\$\{options\.command\}`/);
   assert.doesNotMatch(rootCli, /lockFile\s*:/);
   assert.doesNotMatch(casebook, /lockFile\s*:/);
   assert.doesNotMatch(soak, /lockFile\s*:/);
@@ -214,6 +218,8 @@ test('root and Teams Casebook plus G5 direct runners share one lifecycle lock', 
   assert.equal(packageJson.scripts.casebook, 'node lib/casebook-runner.mjs');
   assert.equal(packageJson.scripts.soak, 'node lib/qwork-soak-cli.mjs');
   assert.equal(packageJson.scripts['app-sanity'], 'node cli.mjs app-sanity');
+  assert.equal(packageJson.scripts['core-smoke'], 'node cli.mjs core-smoke');
+  assert.match(packageJson.scripts.test, /--test-concurrency=1/);
   assert.match(packageJson.scripts.check, /lib\/managed-runner-lock\.mjs/);
   assert.match(packageJson.scripts.check, /npm test/);
   assert.ok(ignore.includes('/teams360-automation/runtime/.qwork-managed-runner.lock'));

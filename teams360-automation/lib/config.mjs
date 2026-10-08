@@ -14,7 +14,7 @@ export const LIVE_PROFILE_ALIAS = path.join(AUTOMATION_ROOT, 'state', 'live-prof
 export const DEFAULT_SESSION = path.join(AUTOMATION_ROOT, 'state', 'session.json');
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
-const COMMANDS = new Set(['launch', 'launch-live', 'doctor', 'smoke', 'app-sanity', 'stop']);
+const COMMANDS = new Set(['launch', 'launch-live', 'doctor', 'smoke', 'app-sanity', 'core-smoke', 'stop']);
 const VALUE_OPTIONS = new Set([
   'app',
   'profile',
@@ -26,6 +26,7 @@ const VALUE_OPTIONS = new Set([
   'prompt',
   'expect',
   'control-plane-url',
+  'core-fixtures',
 ]);
 const BOOLEAN_OPTIONS = new Set(['open-qbot', 'capture-host', 'allow-write', 'help']);
 
@@ -92,6 +93,7 @@ export function parseArgs(argv = []) {
     expected: String(values.expect || (command === 'app-sanity'
       ? `QWORK_APP_SANITY_${stamp}_OK`
       : 'TEAMS_CASE_OK')),
+    coreFixtures: values['core-fixtures'] ? path.resolve(PROJECT_ROOT, values['core-fixtures']) : '',
     controlPlaneUrl,
     environment: controlPlaneUrl ? { DEEPBANK_SERVER: controlPlaneUrl } : {},
     help: Boolean(values.help),
@@ -227,6 +229,7 @@ Usage:
   npm run doctor -- [--open-qbot] [--capture-host]
   npm run smoke -- --allow-write [--prompt <text>] [--expect <text>]
   npm run app-sanity -- --allow-write [--prompt <text>] [--expect <exact-text>]
+  npm run core-smoke -- --allow-write --core-fixtures <read-only-qa-fixtures.json>
   npm run stop
 
 Safety defaults:
@@ -236,6 +239,8 @@ Safety defaults:
   - Never stops a pre-existing 360Teams process.
   - Doctor is read-only unless --open-qbot is explicitly supplied.
   - Smoke refuses to send a message without --allow-write.
+  - Core smoke verifies real conversation/Skill/MCP/expert usage with per-module fixtures.
+    Missing fixtures block the corresponding module; results cannot authorize release.
   - App sanity shares the managed runner lock, requires a new output directory,
     and is diagnostic-only; it never authorizes G0 or a release gate.
 `;

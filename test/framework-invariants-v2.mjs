@@ -212,10 +212,6 @@ import {
 import { createQworkCapabilitiesReadbackFixture } from './helpers/qwork-soak-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-if (!fs.existsSync(path.join(root, 'node_modules', '@oai', 'artifact-tool'))) {
-  console.log('framework-invariants-v2: skipped (optional @oai/artifact-tool is unavailable in this checkout)');
-  process.exit(0);
-}
 const runner = [
   fs.readFileSync(path.join(root, 'src', 'lib', 'ui-agent-casebook-runner-v2.mjs'), 'utf8'),
   fs.readFileSync(path.join(root, 'src', 'lib', 'qbot-web-runtime-evidence.mjs'), 'utf8'),
@@ -19347,6 +19343,9 @@ assert.match(appSanitySource, /release_count:\s*1/);
 assert.doesNotMatch(appSanitySource, /\.click\(\)/);
 assert.match(appSanitySource, /controls\.length !== 1/);
 assert.match(appSanitySource, /visibleExactTextCount\('\[role="tab"\]\[aria-selected="true"\]', '\\u4e13\\u5bb6'\)/);
+assert.match(appSanitySource, /QWORK_APP_SANITY_USER_BODY_SELECTOR = '\.aui-user-message-content'/);
+assert.match(appSanitySource, /document\.querySelectorAll\(\$\{userBodySelector\}\)/);
+assert.doesNotMatch(appSanitySource, /\.aui-user-message-content, \[data-role="user"\]/);
 assert.match(appSanitySource, /expertTestIdCount === 1 \|\| \(expertTestIdCount === 0 && expertSemanticCount === 1\)/);
 assert.match(appSanitySource, /runStep\('prepare_task_reopen', \(\) => driver\.openCleanNewTask\(\)\)/);
 assert.match(appSanitySource, /before_state:\s*projectState\(before\)/);
@@ -19356,8 +19355,19 @@ assert.match(appSanitySource, /nonReportEvidenceValid/);
 assert.doesNotMatch(appSanitySource, /if \(!manifest\.evidence_valid\)[\s\S]*writeFileSync\(reportFile/);
 assert.match(appSanitySource, /document\.elementFromPoint\(x, y\)/);
 assert.match(appSanitySource, /x < innerWidth && y < innerHeight/);
-assert.match(teamsCliSource, /runner:\s*'qwork-app-sanity'/);
+assert.match(teamsCliSource, /runner:\s*`qwork-\$\{options\.command\}`/);
+assert.match(teamsCliSource, /\['app-sanity', 'core-smoke'\]\.includes\(command\)/);
+assert.match(teamsCliSource, /requireManaged: true/);
 assert.match(teamsCliSource, /createNewManagedOutputDirectory/);
 assert.equal(teamsPackage.scripts['app-sanity'], 'node cli.mjs app-sanity');
 
+assert.equal(teamsPackage.scripts['core-smoke'], 'node cli.mjs core-smoke');
+const coreSmokeSource = fs.readFileSync(path.resolve(import.meta.dirname, '../teams360-automation/lib/qwork-core-smoke.mjs'), 'utf8');
+assert.match(coreSmokeSource, /release_gate_eligible: false/);
+assert.match(coreSmokeSource, /inherited: 0, synthetic: 0/);
+assert.match(coreSmokeSource, /readSession/);
+assert.match(coreSmokeSource, /coreCapabilityExecutionVerdict/);
+const builderSource = fs.readFileSync(path.resolve(import.meta.dirname, '../scripts/build-release01-production-gray-casebook.mjs'), 'utf8');
+assert.doesNotMatch(builderSource, /import .* from '@oai\/artifact-tool'/);
+assert.match(builderSource, /await import\('@oai\/artifact-tool'\)/);
 console.log('framework invariants ok');

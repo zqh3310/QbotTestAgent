@@ -41,6 +41,65 @@
 | QWork 日常回归 | `PRD/QWork日常回归自动化Casebook_最新变更回归_2026-08-18.xlsx` | `日常回归` | 83 个顶层 / 144 个叶子 | `c412ee6fc362cf613d599541151f766390c3e4281f6bcf2ab69f9d59346a76e6` |
 | QWork 新增 MR 核心冒烟 | `PRD/QBot核心生命线与新增MR生产灰度全量回归Casebook_16-12-70-160条_2026-09-05-r15.xlsx` | `新增MR核心冒烟` | 12 | `8523a10715a384f0d321f468a5350b393f19832008f585731fe83e292982ff2a` |
 
+### 2.0 日常测试顺序与最小前置条件
+
+日常开发验证遵循 **白盒审查 → App 核心使用 → 变更专项回归 → 按需发布验收**：
+
+1. 白盒覆盖上次已测基线到远端最新主分支的全部合入提交、改动文件、关键调用链和相关测试。
+   记录起止 SHA、MR、审查发现和未覆盖项。缓存 ref、扫描器 READY 或测试全绿都不等于完成白盒审查。
+   无基线时明确范围，不得声称“全部最新代码已检查”。产品代码只读。
+2. 核心使用执行本节的 `core-smoke`，真实验证会话、Skill、MCP 和专家。`app-sanity`
+   只验证聊天与页面可达性，不得称为四大模块功能通过。
+3. 根据每项变更设计正向、反向、边界和关联场景，绑定相应提交及用例，核心使用通过后执行专项回归。
+   核心出现缺陷时可诊断相互独立的场景，但不能宣布专项准入通过。
+4. 要作发布放行结论时才进入下面的 G0–G5。正式 74/160 Casebook 的精确 pretest READY、
+   fixture-controller、初始化、冻结身份和可信复核要求保持不变。
+
+日常诊断的前置条件仅包括：唯一可验证受管宿主/CDP/WebView、已登录且空闲的工作台、
+可读候选版本、发送授权、唯一 runner 锁、新不可变输出目录及本模块所需的只读 QA 资源。
+不要求先准备四份 release intake、生产风险故障注入或五轮发布材料。缺少某个 Skill/MCP/专家
+fixture 只把对应模块记为 blocked；缺少登录、CDP、证据写入能力或无法恢复干净状态则停止后续动作。
+未执行模块不能填 passed。框架修复后仍须完成自测、提交推送、tracked clean main == origin/main 再实测。
+
+```bash
+npm --prefix teams360-automation run core-smoke -- --allow-write \
+  --core-fixtures config/qwork-core-fixtures.local.json \
+  --out teams360-automation/output/<new-core-use-directory>
+```
+
+`config/qwork-core-fixtures.example.json` 仅是配置格式样例；必须替换成当前环境实际存在、已核实
+只读的 QA 资源，不能把样例 ID 当真实资源。每个模块使用独立非空 taskId，单次真实点击发送、零重试，
+保存动作前后读回、发送和选择回执、回复正文、清理前截图、JSONL、逐模块结果及 SHA manifest。
+会话要求精确 marker 与同 taskId 历史重开；Skill/MCP 要求当前选择、同 taskId 的持久化结构化工具调用、
+非空成功结果及精确技能/工具身份，MCP 结果还必须命中 fixture.result_expected；专家要求已发布的当前、会话和助手轮次中的 expertId 一致。仅 chip、
+页面可见或模型口头声称调用成功都不足。能力任务允许多段回复，但用户消息只增加一次。
+工具输入/结果仅记录哈希及必要身份，不在报告展开第三方原始数据。技能选择若产生输入框内标签，
+发送准备必须保留该标签，只在空文本后输入 prompt；用户正文和结构化技能引用分别核对，禁止全选删除导致取消技能。
+
+失败记录保留。普通业务断言失败、且清理恢复成功时可继续独立模块；框架异常或清理失败则冻结后续模块。
+`qbot-qwork-core-use/v1` / `qbot-qwork-core-use-evidence/v1` 永远携带
+`diagnostic_only=true`、`release_gate_eligible=false`、`inherited=0`、`synthetic=0`，不可计入发布门禁。
+候选 URL、版本、target、host、release/commit、已加载 runtime 必须前后稳定。
+
+失效受管 session 返回 `TEAMS_SESSION_MISSING` / `TEAMS_SESSION_STALE` / `TEAMS_CDP_MISMATCH`
+及具体恢复步骤。复用用户已有重启授权，正常退出普通客户端，再 `launch:live` 和 `doctor -- --open-qbot`；
+不强杀、不循环索取已有授权、不替换登录配置、不把旧 session 或任意 CDP 冒认为可测宿主。
+
+### 2.0.1 经授权的本机 GitLab 凭证
+
+用户明确授权时可把凭证保存在 Git 忽略的 `config/gitlab.local.json`，格式见
+`config/gitlab.example.json`；POSIX 权限必须为 0600 且属于当前用户，Windows 需用户配置私有 ACL。
+禁止提交该文件、记录 token、把 token 传入 argv、环境变量或 Git 配置。文件必须为普通文件且无符号链接。
+`npm run gitlab:local -- <scan|observe|orchestrate> ...` 只接受固定入口，校验配置主机/项目后
+向原入口的 stdin 注入 token；原扫描器的无值 `--gitlab-token-stdin` 合同保持不变。
+此包装器是下文“关闭回显 stdin”凭证来源的明确例外，不改变固定 GitLab HTTPS/TLS 目标、只读 API
+及身份校验；禁止使用旧的通用 curl `-k` 路径传输此凭证。配置不合法时不回显原内容。
+
+自测不能因缺少可选 `@oai/artifact-tool` 跳过整个 v2 invariant 文件。表格运行时只在实际构建
+工作簿时动态加载，纯合同/审计检查必须始终执行。CI 使用已提交的 npm 锁文件安装依赖，npm pretest 自动准备 Chromium；本机已有测试浏览器时直接复用，
+嵌套消息计数回归在真实 DOM 上验证，不只检查选择器字符串。Teams 自测包含全局 runner 锁的真实 CLI
+争用验证，测试文件必须串行执行（--test-concurrency=1）；锁持有 fixture 由完成信号释放，不依赖固定秒数。
+
 ### 2.1 QWork 分层止损发布流程
 
 同一候选发布唯一允许的执行顺序是：
@@ -95,6 +154,8 @@ npm --prefix teams360-automation run app-sanity -- \
 最后返回零消息、零 taskId、无显式能力
 chip 的干净新任务。回复正文只允许从 `.aui-assistant-message-content` 读取；助手身份
 “QWork”、标题、截图 OCR 或宽泛 `[data-role=assistant]` 都不能冒充回复。
+用户消息计数与正文只允许从 `.aui-user-message-content` 读取；外层
+`[data-role="user"]` 包含同一正文节点，禁止把两者合并计数而将一条真实消息误记为两条。
 
 每步必须保存独立断言、PNG 及 SHA-256，并写入 JSONL trace；最终生成
 `qbot-qwork-app-sanity/v1` 与 `qbot-qwork-app-sanity-evidence/v1`。发送动作固定一次真实点击、
@@ -132,7 +193,7 @@ stdin 注入只读 token，固定查询 deepbankV2 GitLab API 两次并证明 HE
 回填期望值。
 `--gitlab-token-stdin` 在扫描器、独立观测器和状态机中都只能作为无值布尔开关单独传入；
 `--gitlab-token-stdin=<value>`、后随参数值或重复开关必须在读取 stdin 前拒绝，错误不得
-回显疑似 token。token 仍只能通过关闭回显的标准输入注入。
+回显疑似 token。token 通过关闭回显的标准输入或 §2.0.1 经授权的本机包装器注入。
 扫描器、独立观测器和编排器都必须使用各自的显式参数白名单；编排器再按子命令收窄。
 历史单报告 `--release-intake`、任意未知参数、属于其它入口或其它子命令的参数，必须在
 返回 `--help`、读取 stdin、发起网络请求、获取控制锁或创建任何输出/控制目录前
@@ -1768,7 +1829,7 @@ npm run qwork-release:scan -- \
 
 扫描器只读刷新 release 引用，枚举 first-parent 的直接合入提交，读取每个提交的真实
 changed paths/diff SHA，并通过一次次独立的 GitLab 只读 API 请求核对 MR iid、标题、标签、
-合并提交 SHA 和时间。GitLab Token 只能使用关闭回显的标准输入临时注入 curl 的 stdin；
+合并提交 SHA 和时间。GitLab Token 使用关闭回显的标准输入或 §2.0.1 包装器临时注入 curl 的 stdin；
 不得出现在命令参数、环境持久化、日志、报告或 Git 配置中。扫描器不修改 deepbankV2，
 不自动改写冻结 Casebook，也不产生任何 Case 结果。
 

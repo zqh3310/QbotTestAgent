@@ -1,0 +1,23 @@
+{
+  "skill": {
+    "id": "qa-readonly-skill",
+    "invocation_name": "qa-readonly-skill",
+    "safety": "read-only",
+    "prompt": "调用 qa-readonly-skill，按技能要求返回固定的 QA_SKILL_OK；不修改文件或外部数据。",
+    "expected": "QA_SKILL_OK"
+  },
+  "mcp": {
+    "id": "qa-readonly",
+    "tool_name": "mcp__qa-readonly__echo",
+    "result_expected": "QA_MCP_OK",
+    "safety": "read-only",
+    "prompt": "调用已选择连接器的 echo 工具读取 QA_MCP_OK，并在回复中包含返回值；不修改任何数据。",
+    "expected": "QA_MCP_OK"
+  },
+  "expert": {
+    "id": "replace-with-published-qa-expert-id",
+    "safety": "read-only",
+    "prompt": "请按你的专家职责提供一项只读测试建议，并在结尾写 QA_EXPERT_OK。不要修改文件或调用外部写入操作。",
+    "expected": "QA_EXPERT_OK"
+  }
+}

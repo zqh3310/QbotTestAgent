@@ -25,21 +25,41 @@ finalization diagnostic，禁止覆盖原停止 Case、reason、progress 或停�
 独立验证源/目标 run metadata 的完整 capabilities baseline 与有序 phase checks，并要求
 两边 canonical signature 全等；缺失、乱序、无效或漂移时不得执行清理导入。
 
+日常验证默认先白盒审查主分支自上次已测基线以来的全部变更，再真实验证会话、Skill、MCP、专家，
+随后执行变更专项回归。四大模块入口是 `npm --prefix teams360-automation run core-smoke -- --allow-write
+--core-fixtures config/qwork-core-fixtures.local.json --out <new-directory>`，使用框架 §2.0 的逐模块
+资源、结构化执行证据和独立清理合同。缺少某项 fixture 只阻塞对应模块；证据/清理失败则停止。
+日常入口不要求四份发布 intake 或生产故障注入；不改变正式 G0–G5 准入。
+用户授权的本机 GitLab 配置与 `npm run gitlab:local -- <scan|observe|orchestrate> ...` 见框架 §2.0.1，
+凭证文件忽略提交，token 仅经子进程 stdin 传递。
+
 正式 G0 前允许用
 `npm --prefix teams360-automation run app-sanity -- --allow-write --out <new-directory>`
-执行一次独立 App-first 核心诊断。该命令与 Casebook/G5 共用唯一 managed runner lock，
+执行一次独立聊天与页面诊断，不能冒充 Skill/MCP/专家实际使用验证。该命令与 Casebook/G5 共用唯一 managed runner lock，
 只写新的 `teams360-automation/output` 子目录，并按顺序验证工作台、干净新任务、一次严格
 发送与精确正文、带前后状态/点击回执/截图的独立干净新任务、同 taskId 可见重开、
 专家/技能/连接器/自动化页面及最终干净新任务。专家 tab 必须由唯一 testid，或唯一可见、
 选中且精确文本为“专家”的语义 tab 证明，缺失或多匹配均失败。
 每步保存截图、JSONL 和 SHA 证据；助手正文固定从
 `.aui-assistant-message-content` 读取，不能把“QWork”身份标题当回复。
+用户消息只从 `.aui-user-message-content` 正文节点计数；不得再同时计入嵌套的
+`[data-role="user"]` 消息根节点。
 `PASS_SANITY` 和 `STOP_BEFORE_G0` 都是非发布诊断，必须保持
 `diagnostic_only=true`、`release_gate_eligible=false`；它们不能替代 release intake、
 G0、精确 `READY`、G1 Casebook 或逐 Case 可信复核。该诊断只记录 `capabilities()`；
 其超时不阻止 App 核心动作，正式 G0 的 capabilities 硬门禁保持不变。
 
 ## 1. 当前状态
+
+- 基于框架 `a2c380951006b47d578505a274d4ac6ce2147964` 启动的 App-first sanity 已冻结在
+  `teams360-automation/output/20260909134115_app-first-core-sanity_teams360-5.6.7_qwork-0.1.9-sit.9_framework-a2c3809`。
+  工作台和干净新任务步骤通过；一次真实发送生成 taskId
+  `3184dc98-4794-468e-bfec-348046ddabac`，send count、message count、running 和助手终态
+  全部变化，产品精确回复期望 marker。旧读回同时选择外层 `[data-role="user"]` 与其
+  内层 `.aui-user-message-content`，将同一条用户消息重复计数为 2，导致
+  `exact_user_message_added_once=false` 并误停，属于确认的 framework issue，不是产品
+  失败。该目录永久冻结；修复必须只按正文节点计数并增加嵌套 DOM 反例 invariant，完成
+  全检、提交推送后在新不可变目录完整重跑 App sanity。
 
 - 基于框架 `e23ea8fde27eee318c89acb88b730f20f4e0ddb1`、正式 Casebook SHA
   `439f14686df4a1623015e3964b61a6943455c804938be2680a8d6fedde9bf2ed` 和冻结候选
@@ -962,7 +982,7 @@ deepbankV2 GitLab API 连续两次读取稳定 HEAD；后续状态机命令继�
 `--gitlab-token-stdin` 做独立实时复核，token 不进入参数、环境、日志或 Git 配置。
 扫描器、独立观测器和状态机只接受单独出现一次的无值布尔开关
 `--gitlab-token-stdin`；内联值、后随值或重复开关必须在读取 stdin 前拒绝，且错误不得
-回显疑似 token。token 只能由关闭回显的标准输入提供。
+回显疑似 token。token 由关闭回显的标准输入或框架 §2.0.1 经用户授权的本机包装器提供。
 扫描器、独立观测器和编排器都必须强制各自的显式参数白名单，编排器再按子命令收窄。
 历史单报告 `--release-intake`、任意未知参数、属于其它入口或其它子命令的参数，都必须在
 返回 `--help`、读取 stdin、发起网络请求、获取控制锁或创建任何输出/控制目录前

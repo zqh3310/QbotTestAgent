@@ -1,5 +1,5 @@
 node_modules/
-package-lock.json
+/teams360-automation/package-lock.json
 
 # Keep only the reviewed final delivery package in git.
 outputs/*
@@ -19,3 +19,6 @@ bug/
 /teams360-automation/runtime/.qwork-managed-runner.lock
 __pycache__/
 *.pyc
+
+# Machine-local authentication; never publish credentials.
+/config/*.local.json

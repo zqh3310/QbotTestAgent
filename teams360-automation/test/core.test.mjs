@@ -1162,7 +1162,7 @@ test('Teams fixture runtime restores the packaged host and keeps the local-QBot 
   await configureTeamsFixtureRuntime(options, browser);
   assert.equal(options['control-plane-url'], 'https://qbot-api.360shuke.com');
   assert.equal(options['renderer-control-adapter'], 'teams360');
-  assert.ok(options['qbot-root'].endsWith(`${path.sep}deepbankV2`) || options['qbot-root'].includes(`${path.sep}.runtime${path.sep}deepbankV2-main-`));
+  assert.ok(options['qbot-root'].endsWith(`${path.sep}deepbankV2`) || options['qbot-root'].includes(`${path.sep}.runtime${path.sep}deepbankV2-main-`) || options['qbot-root'].endsWith(`${path.sep}.runtime${path.sep}deepbankV2-origin-main`));
   assert.equal(path.basename(options['qbot-home']), 'control-plane-home');
   assert.equal(path.basename(options['restart-cwd']), 'runtime');
   assert.match(options['restart-command'], IS_WINDOWS

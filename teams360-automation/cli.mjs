@@ -13,6 +13,7 @@ import {
 } from './lib/launcher.mjs';
 import { writeReport } from './lib/report.mjs';
 import { inspectTeamsCdp } from './lib/targets.mjs';
+import { runManagedQworkCoreSmoke } from './lib/qwork-core-smoke.mjs';
 import { runManagedQworkAppSanity } from './lib/qwork-app-sanity.mjs';
 import {
   createNewManagedOutputDirectory,
@@ -22,6 +23,7 @@ import {
 import { readMacAppBundleIdentity } from './lib/run-metadata.mjs';
 
 let exitCode = 0;
+const isDiagnostic = (command) => ['app-sanity', 'core-smoke'].includes(command);
 let appSanityOutputCreated = false;
 try {
   const options = parseArgs(process.argv.slice(2));
@@ -29,23 +31,27 @@ try {
     console.log(usage());
     process.exit(0);
   }
-  if (options.command === 'app-sanity') {
+  if (isDiagnostic(options.command)) {
     if (!options.allowWrite) {
-      throw new Error('App sanity sends exactly one test message and requires --allow-write.');
+      throw new Error('App diagnostics send test messages and require --allow-write.');
     }
     const outputRoot = path.join(AUTOMATION_ROOT, 'output');
     inspectNewManagedOutputPath({ outDir: options.outputDir, outputRoot });
     const lock = executeUnderManagedRunnerLock({
       entrypoint: fileURLToPath(import.meta.url),
       argv: process.argv.slice(2),
-      binding: { runner: 'qwork-app-sanity', argv: process.argv.slice(2) },
+      binding: { runner: `qwork-${options.command}`, argv: process.argv.slice(2) },
     });
     if (lock.reexecuted) process.exit(lock.status);
     createNewManagedOutputDirectory({ outDir: options.outputDir, outputRoot });
     appSanityOutputCreated = true;
-    const resolved = await resolveSessionCdp(options);
+    const resolved = await resolveSessionCdp({ ...options, requireManaged: true });
     await waitForCdp({ cdpUrl: resolved.cdpUrl, timeoutMs: options.timeoutMs });
-    const appSanity = await runManagedQworkAppSanity({
+    const fixtures = options.coreFixtures ? JSON.parse(fs.readFileSync(options.coreFixtures, 'utf8')) : {};
+    if (!fixtures || typeof fixtures !== 'object' || Array.isArray(fixtures)) throw new Error('Core fixtures must be a JSON object.');
+    const run = options.command === 'core-smoke' ? runManagedQworkCoreSmoke : runManagedQworkAppSanity;
+    const appSanity = await run({
+      fixtures,
       cdpUrl: resolved.cdpUrl,
       outputDir: options.outputDir,
       prompt: options.prompt,
@@ -69,11 +75,11 @@ try {
       release_gate_eligible: false,
       cdp_url: resolved.cdpUrl,
       pid: resolved.session?.pid || null,
-      app_sanity: appSanity,
+      [options.command === 'core-smoke' ? 'core_smoke' : 'app_sanity']: appSanity,
     });
     report.files = writeReport(options.outputDir, report);
     printSummary(report);
-    if (appSanity.status !== 'passed') exitCode = 1;
+    if (appSanity.status !== 'passed') exitCode = appSanity.status === 'blocked' ? 2 : 1;
   } else {
   fs.mkdirSync(options.outputDir, { recursive: true });
 
@@ -151,16 +157,19 @@ try {
   }
 } catch (error) {
   const fallbackOptions = safeParseOptions();
-  if (fallbackOptions.command === 'app-sanity' && !appSanityOutputCreated) {
+  if (isDiagnostic(fallbackOptions.command) && !appSanityOutputCreated) {
     console.error(error.message);
   }
   const report = baseReport(fallbackOptions, {
     status: 'blocked',
     reason: error.message,
     error_name: error.name,
+    error_code: error.code || '',
+    recovery: error.recovery || null,
+    ...(isDiagnostic(fallbackOptions.command) ? { diagnostic_only: true, release_gate_eligible: false } : {}),
   });
   try {
-    if (fallbackOptions.command !== 'app-sanity' || appSanityOutputCreated) {
+    if (!isDiagnostic(fallbackOptions.command) || appSanityOutputCreated) {
       report.files = writeReport(fallbackOptions.outputDir, report);
     }
   } catch {}
