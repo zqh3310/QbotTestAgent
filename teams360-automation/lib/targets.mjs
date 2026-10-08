@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { redactText, safeUrl } from './config.mjs';
+import { ensureQworkHostSurface } from './qwork-host-surface.mjs';
 import {
   captureWebviewScreenshot,
   discoverWebviewProbes,
@@ -44,6 +45,7 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
   fs.mkdirSync(path.join(outputDir, 'screenshots'), { recursive: true });
 
   const browser = await loaded.chromium.connectOverCDP(cdpUrl);
+  let hostSurface = await ensureQworkHostSurface(browser.contexts().flatMap((context) => context.pages()), { openQwork: openQbot });
   let snapshot = await collectTargetProbes(browser);
   let webviewProbes = await discoverWebviewProbes(cdpUrl, { timeoutMs: Math.min(timeoutMs, 10_000) });
   let probes = [...snapshot.probes, ...webviewProbes];
@@ -58,6 +60,7 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
     webviewProbes = await discoverWebviewProbes(cdpUrl, { timeoutMs: Math.min(timeoutMs, 10_000) });
     probes = [...snapshot.probes, ...webviewProbes];
     best = selectBestTarget(probes.filter(isFullQbotProbe));
+    hostSurface = await ensureQworkHostSurface(snapshot.pages);
   }
 
   const scoredProbes = probes.map((probe) => ({ ...probe, score: scoreTargetProbe(probe) }));
@@ -71,9 +74,10 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
     entry_open_attempt: openedEntry,
     targets: serializableProbes,
     qbot_target: best ? stripRuntimeRefs(best) : null,
+    host_surface: hostSurface,
     host_precondition: hostLogin
       ? { status: 'blocked', reason: '360Teams is waiting for QR-code login.' }
-      : { status: 'ready', reason: '' },
+      : { status: hostSurface.status, reason: hostSurface.reason },
     screenshots: {},
     public_capabilities: probePublicCapabilities
       ? await probeWebviewPublicCapabilities(best?.targetRef)
@@ -91,17 +95,19 @@ export async function inspectTeamsCdp({ cdpUrl, outputDir, openQbot = false, cap
     if (fs.existsSync(file)) result.screenshots.teams_host = file;
   }
 
-  if (best?.targetRef) {
+  if (hostSurface.status === 'ready' && best?.targetRef) {
     const file = path.join(outputDir, 'screenshots', 'qbot-target.png');
     if (await captureWebviewScreenshot(best.targetRef, file)) result.screenshots.qbot_target = file;
-  } else if (best?.pageRef) {
+  } else if (hostSurface.status === 'ready' && best?.pageRef) {
     const file = path.join(outputDir, 'screenshots', 'qbot-target.png');
     await best.pageRef.screenshot({ path: file, fullPage: false, timeout: 15_000 }).catch(() => {});
     if (fs.existsSync(file)) result.screenshots.qbot_target = file;
   }
 
   if (smoke) {
-    if (!allowWrite) {
+    if (hostSurface.status !== 'ready' || !result.screenshots.qbot_target) {
+      result.smoke = { status: 'blocked', reason: 'Visible QWork surface and screenshot are required before sending.' };
+    } else if (!allowWrite) {
       result.smoke = { status: 'blocked', reason: 'Smoke sends a test message. Re-run with --allow-write to confirm this scoped mutation.' };
     } else if (best?.targetRef) {
       result.smoke = await runWebviewSmoke({

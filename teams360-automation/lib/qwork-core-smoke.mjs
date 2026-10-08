@@ -416,6 +416,9 @@ export async function runManagedQworkCoreSmoke({ cdpUrl, outputDir, fixtures = {
         evidence.push(evidenceEntry(outputDir, file, `${entry.module}_result`));
       } });
     if (fs.statSync(traceFile).size) evidence.push(evidenceEntry(outputDir, traceFile, 'action_trace'));
+    if (fs.existsSync(path.join(outputDir, 'host-surface.json'))) {
+      evidence.push(evidenceEntry(outputDir, path.join(outputDir, 'host-surface.json'), 'host_surface'));
+    }
     let finalIdentity = null;
     let identityError = '';
     try { finalIdentity = await readLightweightIdentity(client, targets[0], candidateIdentity); }

@@ -14,6 +14,7 @@ import {
 } from './lib/launcher.mjs';
 import { writeReport } from './lib/report.mjs';
 import { inspectTeamsCdp } from './lib/targets.mjs';
+import { inspectionIsReady, prepareQworkHostSurface } from './lib/qwork-host-surface.mjs';
 import { runManagedQworkCoreSmoke } from './lib/qwork-core-smoke.mjs';
 import { runManagedQworkAppSanity } from './lib/qwork-app-sanity.mjs';
 import {
@@ -48,6 +49,9 @@ try {
     appSanityOutputCreated = true;
     const resolved = await resolveSessionCdp({ ...options, requireManaged: true });
     await waitForCdp({ cdpUrl: resolved.cdpUrl, timeoutMs: options.timeoutMs });
+    const hostSurface = await prepareQworkHostSurface(resolved.cdpUrl);
+    fs.writeFileSync(path.join(options.outputDir, 'host-surface.json'), JSON.stringify(hostSurface, null, 2), { flag: 'wx', mode: 0o600 });
+    if (hostSurface.status !== 'ready') throw new Error(`QWork host surface is not ready: ${hostSurface.reason}`);
     const fixtures = options.coreFixtures ? JSON.parse(fs.readFileSync(options.coreFixtures, 'utf8')) : {};
     if (!fixtures || typeof fixtures !== 'object' || Array.isArray(fixtures)) throw new Error('Core fixtures must be a JSON object.');
     const run = options.command === 'core-smoke' ? runManagedQworkCoreSmoke : runManagedQworkAppSanity;
@@ -130,7 +134,7 @@ try {
     const smokeStatus = inspection.smoke?.status;
     const status = options.command === 'smoke'
       ? smokeStatus === 'passed' ? 'passed' : smokeStatus === 'failed' ? 'failed' : 'blocked'
-      : inspection.qbot_target ? 'passed' : 'blocked';
+      : inspectionIsReady(inspection) ? 'passed' : 'blocked';
     const hostBlockedReason = inspection.host_precondition?.status === 'blocked'
       ? inspection.host_precondition.reason
       : '';
@@ -140,7 +144,7 @@ try {
         ? hostBlockedReason
         : options.command === 'smoke'
           ? inspection.smoke?.reason || 'Smoke did not pass.'
-          : 'CDP is reachable, but no QBot page/frame/WebView target was identified.';
+          : 'A visible QBot target and captured screenshot are required; CDP discovery alone is insufficient.';
     const report = baseReport(options, {
       status,
       reason,

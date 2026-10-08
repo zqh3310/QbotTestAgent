@@ -206,6 +206,8 @@ export async function runManagedQworkAppSanity({
     const nonReportEvidence = [
       ...screenshots,
       evidenceEntry(outputDir, traceFile, 'jsonl_trace'),
+      ...(fs.existsSync(path.join(outputDir, 'host-surface.json'))
+        ? [evidenceEntry(outputDir, path.join(outputDir, 'host-surface.json'), 'host_surface')] : []),
     ];
     const nonReportEvidenceValid = nonReportEvidence.length > 0
       && nonReportEvidence.every((item) => item.valid === true);
@@ -313,6 +315,7 @@ export function createCdpAppSanityDriver(client, timeoutMs) {
       const state = await readAppSanityState(client);
       return {
         assertions: {
+          document_visible: state.documentVisible === true,
           qbot_app_visible: state.qbotApp,
           navigation_visible: state.navNewTask && state.navExperts && state.navConnectors && state.navAuto,
           composer_visible: state.composer,
@@ -544,6 +547,7 @@ export async function dispatchTrustedVisibleSelectorClick(client, selector, labe
     throw new Error(`${label} requires a CDP client.`);
   }
   const control = await client.evaluate(`(() => {
+    if (document.visibilityState !== 'visible') return { visible: false, reason: 'document_hidden' };
     const selector = ${JSON.stringify(String(selector))};
     const controls = [...document.querySelectorAll(selector)].filter((element) => {
       const style = getComputedStyle(element);
@@ -640,6 +644,7 @@ export async function readAppSanityState(client) {
     const activeTaskId = document.querySelector('[data-testid="qbot-app"]')?.getAttribute('data-active-session-id')
       || e2e?.activeId || '';
     return {
+      documentVisible: document.visibilityState === 'visible',
       qbotApp: visible('[data-testid="qbot-app"]'),
       navNewTask: visible('[data-testid="nav-new-task"]'),
       navExperts: visible('[data-testid="nav-experts"]'),
@@ -685,6 +690,7 @@ export async function readAppSanityState(client) {
 
 function projectState(state) {
   return {
+    document_visible: state.documentVisible === true,
     active_task_id: state.activeTaskId || '',
     user_count: state.userCount,
     assistant_count: state.assistantCount,
@@ -708,6 +714,9 @@ function projectState(state) {
 }
 
 export async function captureClientScreenshot(client, file) {
+  if (!await client.evaluate(`document.visibilityState === 'visible'`)) {
+    throw new Error('QWork document is hidden; restore the visible host surface before capturing evidence.');
+  }
   await client.send('Page.enable');
   const result = await client.send('Page.captureScreenshot', {
     format: 'png',

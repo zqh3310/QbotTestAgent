@@ -92,6 +92,12 @@ Skill 的选择 `id` 与 `invocation_name` 分开冻结；Claude 运行时插件
 `diagnostic_only=true`、`release_gate_eligible=false`、`inherited=0`、`synthetic=0`，不可计入发布门禁。
 候选 URL、版本、target、host、release/commit、已加载 runtime 必须前后稳定。
 
+360Teams 切回聊天后会保留零尺寸的 QWork WebView；发现 CDP 目标不代表工作台可见。
+日常诊断启动时先核验宿主中唯一、非零尺寸且可见的 QWork WebView，必要时通过真实侧栏点击打开 QWork，
+保存 `host-surface.json` 并纳入 manifest。只读 doctor 不切换页面；显式 `--open-qbot` 可执行该恢复。
+doctor 必须同时具备可见宿主、QWork 目标和成功截图才可返回 passed。隐藏文档禁止发出点击或截图请求，
+缺少可见性或截图能力时记录具体 blocked 原因，禁止把隐藏缓存 DOM 的读回当作 UI 实测证据。
+
 失效受管 session 返回 `TEAMS_SESSION_MISSING` / `TEAMS_SESSION_STALE` / `TEAMS_CDP_MISMATCH`
 及具体恢复步骤。复用用户已有重启授权，正常退出普通客户端，再 `launch:live` 和 `doctor -- --open-qbot`；
 不强杀、不循环索取已有授权、不替换登录配置、不把旧 session 或任意 CDP 冒认为可测宿主。
