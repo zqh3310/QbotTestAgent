@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { availableTestBrowser } from '../../scripts/prepare-test-browser.mjs';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { searchCoreCapability, dismissCoreMenus, hoverCoreExpertCard } from '../lib/qwork-core-smoke.mjs';
+import { searchCoreCapability, dismissCoreMenus, hoverCoreExpertCard, resolveCoreExpertCard } from '../lib/qwork-core-smoke.mjs';
 import { prepareComposer, readAppSanityState } from '../lib/qwork-app-sanity.mjs';
 
 test('real nested message DOM counts each user once and excludes assistant identity text', async () => {
@@ -72,5 +72,22 @@ test('real nested message DOM counts each user once and excludes assistant ident
     await page.setContent('<style>.card .actions{opacity:0;pointer-events:none}.card:hover .actions{opacity:1;pointer-events:auto}</style><div class="card" style="width:300px;height:200px"><button class="actions">召唤</button></div>');
     await hoverCoreExpertCard(client, '.card');
     assert.equal(await page.locator('.actions').evaluate((node) => getComputedStyle(node).pointerEvents), 'auto');
+    await page.setContent(`<style>
+      .exp-card {width:300px;height:180px;position:relative}
+      .exp-card-actions {opacity:0;pointer-events:none}
+      .exp-card:hover .exp-card-actions {opacity:1;pointer-events:auto}
+      [data-testid="experts-recommended"] .exp-card-actions {display:none}
+      </style>
+      <section data-testid="experts-recommended"><div class="exp-card" data-testid="expert-card-qa">
+        Recommended duplicate<div class="exp-card-actions"><button class="exp-card-summon">召唤</button></div></div></section>
+      <section data-testid="experts-market"><div class="exp-card" data-testid="expert-card-qa">
+        Market card<div class="exp-card-actions"><button class="exp-card-summon">召唤</button></div></div></section>`);
+    const market = await resolveCoreExpertCard(client, 'qa');
+    assert.match(market, /experts-market/);
+    await hoverCoreExpertCard(client, market);
+    assert.equal(await page.locator(`${market} .exp-card-actions`).evaluate(node => getComputedStyle(node).pointerEvents), 'auto');
+    await page.locator(`${market} .exp-card-summon`).click();
+    await page.locator('[data-testid="experts-market"]').evaluate(node => node.remove());
+    await assert.rejects(resolveCoreExpertCard(client, 'qa'), /available summon action/);
   } finally { await browser.close(); }
 });

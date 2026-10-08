@@ -304,6 +304,24 @@ export async function hoverCoreExpertCard(client, selector) {
   return { physical_input: true, input_source: 'cdp-Input.dispatchMouseEvent', action: 'hover', ...point };
 }
 
+export async function resolveCoreExpertCard(client, id) {
+  const card = `[data-testid=${JSON.stringify(`expert-card-${id}`)}]`;
+  // Recommended cards deliberately suppress their action strip. Presence of a
+  // duplicate card does not mean it exposes the same interaction as the market.
+  for (const section of ['experts-market', 'experts-recommended']) {
+    const selector = `[data-testid="${section}"] ${card}`;
+    const actionable = await client.evaluate(`(() => {
+      const cards = document.querySelectorAll(${JSON.stringify(selector)});
+      if (cards.length !== 1) return false;
+      const button = cards[0].querySelector('.exp-card-summon');
+      const r = button?.getBoundingClientRect();
+      return !!r && r.width > 0 && r.height > 0;
+    })()`);
+    if (actionable) return selector;
+  }
+  throw new Error('Requested published expert has no unique card with an available summon action.');
+}
+
 export function createCoreUseDriver(client, timeoutMs) {
   const app = createCdpAppSanityDriver(client, timeoutMs);
   const cleanTask = async () => {
@@ -335,15 +353,7 @@ export function createCoreUseDriver(client, timeoutMs) {
         if (!clean(label)) throw new Error('Requested expert has no readable catalog label.');
         await click('nav-experts');
         receipts.push(await searchCoreCapability(client, 'expert', label));
-        const cardId = `[data-testid=${JSON.stringify(`expert-card-${fixture.id}`)}]`;
-        let cardSelector = '';
-        for (const section of ['experts-recommended', 'experts-market']) {
-          const candidate = `[data-testid="${section}"] ${cardId}`;
-          if (await client.evaluate(`document.querySelectorAll(${JSON.stringify(candidate)}).length === 1`)) {
-            cardSelector = candidate; break;
-          }
-        }
-        if (!cardSelector) throw new Error('Requested published expert card is unavailable or ambiguous.');
+        const cardSelector = await resolveCoreExpertCard(client, fixture.id);
         const hover = await hoverCoreExpertCard(client, cardSelector);
         receipts.push(hover);
         const selector = `${cardSelector} .exp-card-summon`;
