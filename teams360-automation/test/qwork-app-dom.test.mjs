@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { availableTestBrowser } from '../../scripts/prepare-test-browser.mjs';
 import test from 'node:test';
 import { chromium } from 'playwright';
+import { searchCoreCapability, dismissCoreMenus, hoverCoreExpertCard } from '../lib/qwork-core-smoke.mjs';
 import { prepareComposer, readAppSanityState } from '../lib/qwork-app-sanity.mjs';
 
 test('real nested message DOM counts each user once and excludes assistant identity text', async () => {
@@ -50,5 +51,26 @@ test('real nested message DOM counts each user once and excludes assistant ident
     // Refuse to erase an existing draft or a different selected Skill.
     assert.equal(await prepareComposer(client, 'replacement', { skillId: 'qa-skill' }), false);
     assert.equal(await prepareComposer(client, 'replacement', { skillId: 'different' }), false);
+    await page.setContent(`<div role="menu"><input placeholder="搜索技能"><div
+      id="option" data-testid="composer-skill-option-caveman" style="margin-top:2500px">caveman</div></div>`);
+    await page.evaluate(() => {
+      document.querySelector('input').addEventListener('input', () => {
+        document.querySelector('#option').style.marginTop = '0';
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') document.querySelector('[role="menu"]')?.remove();
+      });
+    });
+    const receipt = await searchCoreCapability(client, 'skill', 'caveman');
+    assert.equal(receipt.search_input_confirmed, true);
+    assert.equal(await page.locator('input').inputValue(), 'caveman');
+    assert.ok((await page.locator('#option').boundingBox()).y < 500);
+    await searchCoreCapability(client, 'skill', 'another-skill');
+    assert.equal(await page.locator('input').inputValue(), 'another-skill');
+    await dismissCoreMenus(client);
+    assert.equal(await page.locator('[role="menu"]').count(), 0);
+    await page.setContent('<style>.card .actions{opacity:0;pointer-events:none}.card:hover .actions{opacity:1;pointer-events:auto}</style><div class="card" style="width:300px;height:200px"><button class="actions">召唤</button></div>');
+    await hoverCoreExpertCard(client, '.card');
+    assert.equal(await page.locator('.actions').evaluate((node) => getComputedStyle(node).pointerEvents), 'auto');
   } finally { await browser.close(); }
 });

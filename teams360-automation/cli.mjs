@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { AUTOMATION_ROOT, parseArgs, usage } from './lib/config.mjs';
+import { AUTOMATION_ROOT, PROJECT_ROOT, parseArgs, usage } from './lib/config.mjs';
 import {
   launchIsolatedTeams,
   launchLiveTeams,
@@ -58,6 +59,7 @@ try {
       expected: options.expected,
       timeoutMs: Math.max(options.timeoutMs, 60_000),
       candidateIdentity: {
+        framework_commit: readFrameworkCommit(),
         host: readMacAppBundleIdentity(options.appPath),
         managed_session: {
           pid: resolved.session?.pid || null,
@@ -213,4 +215,10 @@ function printSummary(report) {
     pid: report.pid || null,
     report: report.files?.markdown || '',
   }, null, 2));
+}
+
+function readFrameworkCommit() {
+  try { return execFileSync('git', ['-C', PROJECT_ROOT, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim(); } catch { return 'unknown'; }
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { coreCapabilityExecutionVerdict, coreMcpCallBound, coreIdentityStable, executeCoreUseSequence,
-  selectedCapabilityMatches, validateCoreFixture } from '../lib/qwork-core-smoke.mjs';
+import { coreCapabilityExecutionVerdict, coreFixturePlan, coreMcpCallBound, coreIdentityStable, executeCoreUseSequence,
+  dismissCoreMenus, selectedCapabilityMatches, validateCoreFixture } from '../lib/qwork-core-smoke.mjs';
 import { managedSessionRecoveryError, resolveSessionCdp } from '../lib/launcher.mjs';
 import { parseArgs } from '../lib/config.mjs';
 
@@ -132,4 +132,33 @@ test('MCP runtime aliases bind through a unique enabled public catalog tool owne
   assert.equal(coreMcpCallBound(call, fixture, { connectors: [connector] }), true);
   assert.equal(coreMcpCallBound(call, fixture, { connectors: [connector, { ...connector, key: 'mcphub:other' }] }), false);
   assert.equal(coreMcpCallBound(call, fixture, { connectors: [{ ...connector, tools: [] }] }), false);
+});
+
+test('nested capability menus are dismissed before cleanup and stuck overlays fail boundedly', async () => {
+  let menus = 2;
+  const keys = [];
+  await dismissCoreMenus({ evaluate: async () => menus, send: async (method, event) => {
+    assert.equal(method, 'Input.dispatchKeyEvent');
+    keys.push(event.type);
+    if (event.type === 'keyUp') menus--;
+  } });
+  assert.deepEqual(keys, ['keyDown', 'keyUp', 'keyDown', 'keyUp']);
+  await assert.rejects(dismissCoreMenus({ evaluate: async () => 1, send: async () => {} }), /did not dismiss/);
+});
+
+test('a selection exception captures the failure before cleanup and preserves its original reason', async () => {
+  const phases = [];
+  const result = await sequence({ driver: driver({ select: async () => { throw new Error('outside viewport'); } }),
+    onEvidence: async (kind, phase) => phases.push(`${kind}:${phase}`) });
+  assert.equal(result.results[1].primary_outcome.reason, 'outside viewport');
+  assert.ok(phases.indexOf('skill:failure') < phases.indexOf('skill:cleanup'));
+  assert.equal(result.results[2].executed, false);
+});
+
+test('immutable core-use plan records actual fixtures but never copies unrelated credential config', () => {
+  const plan = coreFixturePlan({ ...fixtures, token: 'DO_NOT_COPY', host: 'private' });
+  assert.equal(plan.skill.id, fixtures.skill.id);
+  assert.equal(plan.mcp.result_expected, fixtures.mcp.result_expected);
+  assert.ok(!JSON.stringify(plan).includes('DO_NOT_COPY'));
+  assert.deepEqual(coreFixturePlan({ token: 'DO_NOT_COPY' }), { skill: null, mcp: null, expert: null });
 });

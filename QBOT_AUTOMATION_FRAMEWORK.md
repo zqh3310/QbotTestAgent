@@ -69,14 +69,20 @@ npm --prefix teams360-automation run core-smoke -- --allow-write \
 
 `config/qwork-core-fixtures.example.json` 仅是配置格式样例；必须替换成当前环境实际存在、已核实
 只读的 QA 资源，不能把样例 ID 当真实资源。每个模块使用独立非空 taskId，单次真实点击发送、零重试，
-保存动作前后读回、发送和选择回执、回复正文、清理前截图、JSONL、逐模块结果及 SHA manifest。
+保存 framework_commit、白名单字段组成的不可变 core-use-plan.json（不复制凭证配置字段）、
+动作前后读回、发送和选择回执、回复正文、清理前截图、JSONL、逐模块结果及 SHA manifest。
 会话要求精确 marker 与同 taskId 历史重开；Skill/MCP 要求当前选择、同 taskId 的持久化结构化工具调用、
 非空成功结果及精确技能/工具身份，MCP 结果还必须命中 fixture.result_expected；专家要求已发布的当前、会话和助手轮次中的 expertId 一致。仅 chip、
 页面可见或模型口头声称调用成功都不足。能力任务允许多段回复，但用户消息只增加一次。
 工具输入/结果仅记录哈希及必要身份，不在报告展开第三方原始数据。技能选择若产生输入框内标签，
 发送准备必须保留该标签，只在空文本后输入 prompt；用户正文和结构化技能引用分别核对，禁止全选删除导致取消技能。
 
-失败记录保留。普通业务断言失败、且清理恢复成功时可继续独立模块；框架异常或清理失败则冻结后续模块。
+能力列表先使用真实搜索框过滤（技能/连接器用 ID，专家用公开 label 并继续按精确 ID 绑定卡片），
+已有查询通过真实键盘清空；专家先悬停卡片显示召唤按钮，再点击可见且未遮挡的选项。
+推荐区与市场区同一专家的重复卡片须按明确区块消歧，禁止点击长列表屏幕外节点。
+清理前通过真实 Escape 关闭菜单，不能让残留菜单遮挡新任务按钮；关闭有界，仍无法恢复则阻塞。
+失败记录保留，异常现场必须在清理前尝试截图，primary_outcome 保留首次错误，清理错误单独记录。
+普通业务断言失败、且清理恢复成功时可继续独立模块；框架异常或清理失败则冻结后续模块。
 `qbot-qwork-core-use/v1` / `qbot-qwork-core-use-evidence/v1` 永远携带
 `diagnostic_only=true`、`release_gate_eligible=false`、`inherited=0`、`synthetic=0`，不可计入发布门禁。
 候选 URL、版本、target、host、release/commit、已加载 runtime 必须前后稳定。

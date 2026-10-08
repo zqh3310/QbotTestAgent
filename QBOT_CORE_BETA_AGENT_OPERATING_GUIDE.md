@@ -51,6 +51,20 @@ G0、精确 `READY`、G1 Casebook 或逐 Case 可信复核。该诊断只记录 
 
 ## 1. 当前状态
 
+- 2026-10-08 框架 `b783b7e` 已在受管 Teams `5.8.0` build `2119092283`、QWork `0.1.11`
+  （runtime commit `a20e403e`、stable）完成 App sanity 10/10，目录为
+  `teams360-automation/output/20261008-framework-b783b7e-app-sanity`。这证明聊天、历史重开和页面诊断通过，
+  不构成最新 main 白盒、四大模块全通过或发布结论。GitLab API 401 与 Git 认证失败分别保存在
+  `outputs/2026-10-08-framework-repair/gitlab-auth-result.json`。
+- 同日 `teams360-automation/output/20261008-framework-b783b7e-core-use` 的会话通过；选择 caveman 时，
+  长列表的目标选项位于视口外，旧适配器直接点击失败，残留菜单又遮挡清理按钮，属于 framework issue。
+  首次错误保存在 `primary_outcome`，MCP/专家未执行。目录冻结。后续适配器先搜索能力、专家按区块消歧并
+  悬停显示召唤入口、清理前 Escape 关闭菜单，并在异常发生时保留清理前截图；必须用新目录完整重跑四模块。
+- `teams360-automation/output/20261008-framework-1a56b48-app-sanity` 在推送被 workflow scope 拒绝后
+  被误启动，已终止并判无效。不得据其局部通过作任何有效结论；说明在
+  `outputs/2026-10-08-framework-repair/invalidated-app-sanity.json`。后续已通过 npm 测试入口准备浏览器，
+  无需修改 workflow 文件；不得省略 pushed baseline 的实际相等性验证。
+
 - 基于框架 `a2c380951006b47d578505a274d4ac6ce2147964` 启动的 App-first sanity 已冻结在
   `teams360-automation/output/20260909134115_app-first-core-sanity_teams360-5.6.7_qwork-0.1.9-sit.9_framework-a2c3809`。
   工作台和干净新任务步骤通过；一次真实发送生成 taskId

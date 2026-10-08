@@ -38,6 +38,13 @@ export function validateCoreFixture(kind, fixture) {
   return missing;
 }
 
+export function coreFixturePlan(fixtures) {
+  const keys = ['id', 'label', 'prompt', 'expected', 'safety', 'invocation_name', 'tool_name', 'result_expected'];
+  return Object.fromEntries(CORE_MODULES.filter((kind) => kind !== 'conversation').map((kind) => [kind,
+    fixtures[kind] ? Object.fromEntries(keys.filter((key) => typeof fixtures[kind][key] === 'string')
+      .map((key) => [key, redactText(fixtures[kind][key])])) : null]));
+}
+
 export function selectedCapabilityMatches(kind, fixture, capabilities) {
   if (!capabilities || typeof capabilities !== 'object') return false;
   if (kind === 'expert') return capabilities.currentExpertIdentity?.mode === 'published'
@@ -166,6 +173,8 @@ export async function executeCoreUseSequence({ driver, fixtures = {}, marker,
       result.status = result.executed ? 'framework_issue' : 'blocked';
       result.reason = redactText(error?.message || String(error)).slice(0, 1200);
       foundationLost = true;
+      try { await onEvidence(kind, 'failure', { reason: result.reason }); }
+      catch (evidenceError) { result.evidence.capture_error = redactText(evidenceError.message); }
     } finally {
       if (result.executed) {
         result.primary_outcome = { status: result.status, reason: result.reason };
@@ -180,6 +189,8 @@ export async function executeCoreUseSequence({ driver, fixtures = {}, marker,
         } catch (error) {
           result.status = 'framework_issue'; foundationLost = true;
           result.reason = `cleanup_failed:${redactText(error.message)}`;
+          try { await onEvidence(kind, 'cleanup_failure', { reason: result.reason }); }
+          catch (evidenceError) { result.evidence.cleanup_capture_error = redactText(evidenceError.message); }
         }
       }
       result.ended_at = new Date().toISOString();
@@ -207,11 +218,60 @@ async function readCapabilities(client) {
   ])`);
 }
 
+export async function dismissCoreMenus(client) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const open = await client.evaluate(`([...document.querySelectorAll('[role="menu"]')]
+      .filter((node) => { const r = node.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(node).visibility !== 'hidden'; }).length)`);
+    if (!open) return;
+    if (attempt === 3) throw new Error('Capability menu did not dismiss with Escape.');
+    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await pause(100);
+  }
+}
+
+export async function searchCoreCapability(client, kind, id) {
+  const placeholder = kind === 'expert' ? '搜索专家' : kind === 'skill' ? '搜索技能' : '搜索连接器或技能';
+  const selector = `input[placeholder=${JSON.stringify(placeholder)}]`;
+  const click = await dispatchTrustedVisibleSelectorClick(client, selector, `search ${kind}`);
+  const initial = await client.evaluate(`document.querySelector(${JSON.stringify(selector)})?.value`);
+  if (typeof initial !== 'string') throw new Error('Capability search input is unavailable.');
+  if (initial) {
+    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: process.platform === 'darwin' ? 4 : 2, commands: ['selectAll'] });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+  }
+  await client.send('Input.insertText', { text: id });
+  await pause(250);
+  const actual = await client.evaluate(`document.querySelector(${JSON.stringify(selector)})?.value`);
+  if (actual !== id) throw new Error('Capability search query was not applied.');
+  return { ...click, search_query: id, search_input_confirmed: true };
+}
+
+export async function hoverCoreExpertCard(client, selector) {
+  const point = await client.evaluate(`(() => {
+    const nodes = document.querySelectorAll(${JSON.stringify(selector)});
+    if (nodes.length !== 1) return null;
+    const node = nodes[0], r = node.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+    const hit = document.elementFromPoint(x, y);
+    return hit && node.contains(hit) ? { x, y } : null;
+  })()`);
+  if (!point) throw new Error('Expert card is not uniquely visible and unobscured.');
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, button: 'none', clickCount: 0 });
+  await pause(200);
+  return { physical_input: true, input_source: 'cdp-Input.dispatchMouseEvent', action: 'hover', ...point };
+}
+
 export function createCoreUseDriver(client, timeoutMs) {
   const app = createCdpAppSanityDriver(client, timeoutMs);
   const cleanTask = async () => {
     const state = await readAppSanityState(client);
     if (state.running !== false) throw new Error('Active task is still running; refusing to hide it with a new task.');
+    await dismissCoreMenus(client);
     return app.openCleanNewTask();
   };
   return {
@@ -229,10 +289,25 @@ export function createCoreUseDriver(client, timeoutMs) {
         await pause(250);
       };
       if (kind === 'expert') {
+        const catalog = await readCapabilities(client);
+        const label = fixture.label || array(catalog?.experts).find((item) => capabilityId(item) === fixture.id)?.label;
+        if (!clean(label)) throw new Error('Requested expert has no readable catalog label.');
         await click('nav-experts');
-        const selector = `[data-testid=${JSON.stringify(`expert-card-${fixture.id}`)}] .exp-card-summon`;
-        const label = await client.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.trim()`);
-        if (label !== '召唤') throw new Error('Requested expert has no published summon action.');
+        receipts.push(await searchCoreCapability(client, 'expert', label));
+        const cardId = `[data-testid=${JSON.stringify(`expert-card-${fixture.id}`)}]`;
+        let cardSelector = '';
+        for (const section of ['experts-recommended', 'experts-market']) {
+          const candidate = `[data-testid="${section}"] ${cardId}`;
+          if (await client.evaluate(`document.querySelectorAll(${JSON.stringify(candidate)}).length === 1`)) {
+            cardSelector = candidate; break;
+          }
+        }
+        if (!cardSelector) throw new Error('Requested published expert card is unavailable or ambiguous.');
+        const hover = await hoverCoreExpertCard(client, cardSelector);
+        receipts.push(hover);
+        const selector = `${cardSelector} .exp-card-summon`;
+        const action = await client.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent?.trim()`);
+        if (action !== '召唤') throw new Error('Requested expert has no published summon action.');
         receipts.push(await dispatchTrustedVisibleSelectorClick(client, selector, 'summon QA expert'));
       } else {
         const section = kind === 'mcp' ? 'connector' : 'skill';
@@ -244,9 +319,9 @@ export function createCoreUseDriver(client, timeoutMs) {
           return node && node.getBoundingClientRect().width > 0 && node.getAttribute('aria-checked') !== 'true';
         })()`);
         if (manual) await click(manualId);
+        receipts.push(await searchCoreCapability(client, kind, fixture.id));
         await click(`composer-${section}-option-${fixture.id}`);
-        await client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-        await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await dismissCoreMenus(client);
       }
       let capabilities;
       for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -278,6 +353,10 @@ export async function runManagedQworkCoreSmoke({ cdpUrl, outputDir, fixtures = {
     const identity = await readLightweightIdentity(client, targets[0], candidateIdentity);
     if (!identity.qwork_version) throw new Error('Core smoke requires a readable candidate version.');
     const evidence = [];
+    const planFile = path.join(outputDir, 'core-use-plan.json');
+    fs.writeFileSync(planFile, JSON.stringify({ modules: CORE_MODULES, marker,
+      fixtures: coreFixturePlan(fixtures), fixture_sha256: hash(fixtures) }, null, 2), { flag: 'wx', mode: 0o600 });
+    evidence.push(evidenceEntry(outputDir, planFile, 'execution_plan'));
     const traceFile = path.join(outputDir, 'core-use-trace.jsonl');
     fs.writeFileSync(traceFile, '', { flag: 'wx', mode: 0o600 });
     const result = await executeCoreUseSequence({ driver: createCoreUseDriver(client, timeoutMs), fixtures, marker,
