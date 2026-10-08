@@ -74,10 +74,22 @@ export function coreFixtureAvailability(kind, fixture, capabilities) {
   return { available: true, reason: '' };
 }
 
-export function selectedCapabilityMatches(kind, fixture, capabilities) {
+export function publishedExpertResourceMatches(fixture, view) {
+  return view?.id === fixture.id && view.status === 'active' && view.releaseStatus === 'active'
+    && ['versionId', 'releaseId', 'snapshotDigest', 'dependencyGraphDigest'].every((key) => clean(view[key]));
+}
+
+export function selectedCapabilityMatches(kind, fixture, capabilities, publishedExpert = null) {
   if (!capabilities || typeof capabilities !== 'object') return false;
-  if (kind === 'expert') return capabilities.currentExpertIdentity?.mode === 'published'
-    && capabilityId(capabilities.currentExpertIdentity) === fixture.id;
+  if (kind === 'expert') {
+    const identity = capabilities.currentExpertIdentity;
+    if (identity?.mode === 'published') return capabilityId(identity) === fixture.id;
+    // Before a task exists, the public draft-context readback can contain only
+    // the selected resource name. Full execution authority is checked after send.
+    return !identity?.mode && !identity?.draftId && !identity?.expertId
+      && capabilities.currentExpert === fixture.id && identity?.name === fixture.id
+      && publishedExpertResourceMatches(fixture, publishedExpert);
+  }
   const list = kind === 'skill' ? capabilities.selectedSkills : capabilities.selectedConnectors;
   return Array.isArray(list) && list.length === 1 && capabilityId(list[0]) === fixture.id;
 }
@@ -94,7 +106,7 @@ export function coreMcpCallBound(call, fixture, capabilities) {
 }
 
 // Only structured tool records count. Assistant prose mentioning a Skill/MCP never does.
-export function coreCapabilityExecutionVerdict({ kind, fixture, taskId, session, capabilities }) {
+export function coreCapabilityExecutionVerdict({ kind, fixture, taskId, session, capabilities, publishedExpert = null }) {
   const bound = Boolean(taskId) && clean(session?.id) === taskId;
   const calls = (Array.isArray(session?.messages) ? session.messages : [])
     .filter((message) => message.role === 'assistant')
@@ -126,7 +138,7 @@ export function coreCapabilityExecutionVerdict({ kind, fixture, taskId, session,
   const expert = session?.expertIdentity || session?.currentExpertIdentity || session?.expert;
   return {
     task_bound: bound,
-    selection_bound: selectedCapabilityMatches(kind, fixture, capabilities),
+    selection_bound: selectedCapabilityMatches(kind, fixture, capabilities, publishedExpert),
     execution_observed: kind === 'expert'
       ? expert?.mode === 'published' && capabilityId(expert) === fixture.id && array(session?.messages).some((message) =>
         message.role === 'assistant' && !message.error
@@ -324,6 +336,15 @@ export async function resolveCoreExpertCard(client, id) {
 
 export function createCoreUseDriver(client, timeoutMs) {
   const app = createCdpAppSanityDriver(client, timeoutMs);
+  let publishedExpert = null;
+  const readPublishedExpert = async (fixture) => {
+    const view = await client.evaluate(`window.agent.expertLifecycle.get(${JSON.stringify(fixture.id)}).then(v => ({
+      id: v.id, status: v.status, versionId: v.version?.id, releaseId: v.release?.id,
+      releaseStatus: v.release?.status, snapshotDigest: v.version?.snapshotDigest,
+      dependencyGraphDigest: v.version?.dependencyGraphDigest }))`);
+    publishedExpert = view;
+    return view;
+  };
   const cleanTask = async () => {
     const state = await readAppSanityState(client);
     if (state.running !== false) throw new Error('Active task is still running; refusing to hide it with a new task.');
@@ -332,7 +353,12 @@ export function createCoreUseDriver(client, timeoutMs) {
   };
   return {
     async inspectFixture(kind, fixture) {
-      return coreFixtureAvailability(kind, fixture, await readCapabilities(client));
+      const availability = coreFixtureAvailability(kind, fixture, await readCapabilities(client));
+      if (kind !== 'expert' || !availability.available) return availability;
+      const view = await readPublishedExpert(fixture);
+      return { available: publishedExpertResourceMatches(fixture, view),
+        reason: publishedExpertResourceMatches(fixture, view) ? '' : 'published_expert_resource_not_verified',
+        published_resource: view };
     },
     async prepare() {
       const workbench = await app.workbenchReady();
@@ -348,6 +374,8 @@ export function createCoreUseDriver(client, timeoutMs) {
         await pause(250);
       };
       if (kind === 'expert') {
+        if (!publishedExpertResourceMatches(fixture, publishedExpert)) await readPublishedExpert(fixture);
+        if (!publishedExpertResourceMatches(fixture, publishedExpert)) throw new Error('Published expert resource is not verified.');
         const catalog = await readCapabilities(client);
         const label = fixture.label || array(catalog?.experts).find((item) => capabilityId(item) === fixture.id)?.label;
         if (!clean(label)) throw new Error('Requested expert has no readable catalog label.');
@@ -377,12 +405,13 @@ export function createCoreUseDriver(client, timeoutMs) {
       let capabilities;
       for (let attempt = 0; attempt < 8; attempt += 1) {
         capabilities = await readCapabilities(client);
-        if (selectedCapabilityMatches(kind, fixture, capabilities)) break;
+        if (selectedCapabilityMatches(kind, fixture, capabilities, publishedExpert)) break;
         await pause(250);
       }
       return { assertions: { real_selection_click: receipts.every((r) => r.physical_input === true),
-        exact_capability_selected: selectedCapabilityMatches(kind, fixture, capabilities) },
-      detail: { id: fixture.id, receipts, selected: selectedCapabilityMatches(kind, fixture, capabilities) } };
+        exact_capability_selected: selectedCapabilityMatches(kind, fixture, capabilities, publishedExpert) },
+      detail: { id: fixture.id, receipts, selected: selectedCapabilityMatches(kind, fixture, capabilities, publishedExpert),
+        ...(kind === 'expert' ? { published_resource: publishedExpert, selection_identity: capabilities.currentExpertIdentity } : {}) } };
     },
     async execution(kind, fixture, taskId) {
       const session = await client.evaluate(`Promise.race([
@@ -390,7 +419,7 @@ export function createCoreUseDriver(client, timeoutMs) {
         new Promise((_, reject) => setTimeout(() => reject(new Error('session read timeout')), 5000))
       ])`);
       const capabilities = await readCapabilities(client);
-      return coreCapabilityExecutionVerdict({ kind, fixture, taskId, session, capabilities });
+      return coreCapabilityExecutionVerdict({ kind, fixture, taskId, session, capabilities, publishedExpert });
     },
   };
 }

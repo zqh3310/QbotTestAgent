@@ -156,6 +156,26 @@ test('expert needs exact published identity in both session and assistant turn, 
   assert.equal(selectedCapabilityMatches('expert', fixtures.expert, { currentExpert: 'qa-expert' }), false);
 });
 
+test('pre-task expert display readback needs verified publication, while post-send authority stays strict', () => {
+  const fixture = fixtures.expert;
+  const capabilities = { currentExpert: fixture.id, currentExpertIdentity: { name: fixture.id, label: 'QA expert' } };
+  const publishedExpert = { id: fixture.id, status: 'active', versionId: 'v1', releaseId: 'r1',
+    releaseStatus: 'active', snapshotDigest: 'snapshot', dependencyGraphDigest: 'dependencies' };
+  assert.equal(selectedCapabilityMatches('expert', fixture, capabilities), false);
+  assert.equal(selectedCapabilityMatches('expert', fixture, capabilities, publishedExpert), true);
+  assert.equal(selectedCapabilityMatches('expert', fixture, capabilities, { ...publishedExpert, id: 'other' }), false);
+  assert.equal(selectedCapabilityMatches('expert', fixture, capabilities, { ...publishedExpert, releaseStatus: 'draft' }), false);
+  assert.equal(selectedCapabilityMatches('expert', fixture, { ...capabilities,
+    currentExpertIdentity: { ...capabilities.currentExpertIdentity, mode: 'draft' } }, publishedExpert), false);
+  const legacySession = { id: 't1', expertIdentity: capabilities.currentExpertIdentity,
+    messages: [{ role: 'assistant', metadata: { expertIdentity: capabilities.currentExpertIdentity } }] };
+  assert.equal(verdict('expert', { capabilities, publishedExpert, session: legacySession }).execution_observed, false);
+  const authority = { mode: 'published', expertId: fixture.id };
+  const completed = verdict('expert', { capabilities, publishedExpert,
+    session: { id: 't1', expertIdentity: authority, messages: [{ role: 'assistant', metadata: { expertIdentity: authority } }] } });
+  assert.equal(completed.selection_bound && completed.execution_observed && completed.task_bound, true);
+});
+
 test('identity changes and missing version cannot be hidden by undefined equality', () => {
   const before = { qwork_url: 'file:///ui/v1/index.html', qwork_version: 'v1', webview_target_id: 't1',
     runtime_release: { release_id: 'r1', commit_id: 'abc', loaded_runtime: { version: 'v1' } } };

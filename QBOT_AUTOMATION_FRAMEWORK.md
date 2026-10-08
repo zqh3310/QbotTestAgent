@@ -72,10 +72,14 @@ npm --prefix teams360-automation run core-smoke -- --allow-write \
 保存 framework_commit、白名单字段组成的不可变 core-use-plan.json（不复制凭证配置字段）、
 动作前后读回、发送和选择回执、回复正文、清理前截图、JSONL、逐模块结果及 SHA manifest。
 会话要求精确 marker 与同 taskId 历史重开；Skill/MCP 要求当前选择、同 taskId 的持久化结构化工具调用、
-非空成功结果及精确技能/工具身份，MCP 结果还必须命中 fixture.result_expected；专家要求已发布的当前、会话和助手轮次中的 expertId 一致。仅 chip、
+非空成功结果及精确技能/工具身份，MCP 结果还必须命中 fixture.result_expected；专家要求已发布资源、当前选择、会话和助手轮次中的 expertId 一致。仅 chip、
 页面可见或模型口头声称调用成功都不足。能力任务允许多段回复，但用户消息只增加一次。
 工具输入/结果仅记录哈希及必要身份，不在报告展开第三方原始数据。技能选择若产生输入框内标签，
 发送准备必须保留该标签，只在空文本后输入 prompt；用户正文和结构化技能引用分别核对，禁止全选删除导致取消技能。
+专家草稿上下文在会话创建前可能只返回 `{name,label}`：此时必须同时核验 `currentExpert` 和 `name` 的精确资源 ID，
+并通过公开 `expertLifecycle.get` 证明该资源及其版本/发布处于 active、摘要完整，才能发送只读测试消息。
+完整 `mode=published` / expertId 的执行身份在发送后核验，要求持久化会话与助手轮次一致；禁止在创建会话前要求
+尚未物化的会话身份，也禁止把发送后的 legacy 展示身份降格算作通过。发布资源和选择读回均保存在证据中。
 Skill 的选择 `id` 与 `invocation_name` 分开冻结；Claude 运行时插件可能使用
 `qwork-runtime-skills:<skill-id>`，必须按实际运行时合同填写完整名称，禁止模糊删除命名空间来放宽判定。
 各能力执行前核对公开目录中的资源；MCP 还须核对可选状态和精确启用工具，驻留 builtin 工具不属于可选 MCP 连接器。
